@@ -6,7 +6,7 @@ Pi Alehouse is an **opt-in, local Pi launcher** (`pi-alehouse`) for a managed wo
 
 ## Source build and entrypoint
 
-Requirements: Linux with a local filesystem and a trusted absolute util-linux `flock`, Node 22.19+ or 24+, npm, and a compatible installed host Pi. Node/npm dependencies are installed at the repository root. From a source checkout:
+Requirements: Linux with a local filesystem, Bash, Git, `rg` (ripgrep), a trusted absolute util-linux `flock`, Node 22.19+ or 24+, npm, and a compatible installed host Pi. Node/npm dependencies are installed at the repository root. From a source checkout:
 
 ```sh
 npm ci --ignore-scripts
