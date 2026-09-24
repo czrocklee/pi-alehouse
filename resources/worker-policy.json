@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "readTools": ["read", "bash", "grep", "find", "ls", "web_search", "source_check", "fetch_content", "get_search_content"],
+  "commonGitDenies": [
+    "am *", "apply *", "bisect *", "branch -C *", "branch -D *", "branch -M *", "branch -c *", "branch -d *", "branch -m *", "checkout *", "cherry-pick *", "clean *", "config *", "merge *", "mv *", "pull *", "rebase *", "reflog delete *", "reflog expire *", "reset *", "restore *", "revert *", "rm *", "stash *", "submodule update *", "update-ref *", "worktree add *", "worktree lock *", "worktree move *", "worktree prune *", "worktree remove *", "worktree unlock *"
+  ],
+  "gitSpellingDenies": [
+    "git * --config-env=* *", "git * -c *", "git * -c* *", "git --config-env=* *", "git --git-dir * *", "git --git-dir=* *", "git --no-pager config *", "git --paginate config *", "git --work-tree * *", "git --work-tree=* *", "git -c *", "git -c* *"
+  ],
+  "mutationGitDenies": ["add *", "commit *", "fetch *", "push *", "switch *"],
+  "profiles": {
+    "editor": {
+      "description": "Generic worker with project editing tools; Git mutations stay with the parent.",
+      "edits": true,
+      "extraBashDenies": []
+    },
+    "reader": {
+      "description": "Generic worker without edit/write tools or project writes; inspected Bash proofs still require normal permissions.",
+      "edits": false,
+      "extraBashDenies": ["rm *", "mv *"]
+    }
+  },
+  "disabled": ["Explore", "Plan", "general-purpose"]
+}

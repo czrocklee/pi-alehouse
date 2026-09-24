@@ -1,0 +1,36 @@
+name: Source checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable:
+    name: Linux / Node ${{ matrix.node }} (portable source gate)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: npm run check
+        env:
+          PI_OFFLINE: '1'
+          PI_TELEMETRY: '0'
+          PI_JEV_APPROVAL_MODE: shadow
+          PI_ALEHOUSE_GROK_BILLING: '0'
+
+# Controlled host integration needs a separately reviewed fixture runner and
+# matched generated authority; do not accidentally run legacy private collectors
+# or real-model/approval lanes in public CI. No publish job or npm credentials.

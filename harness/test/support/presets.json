@@ -1,0 +1,53 @@
+{
+  "version": 2,
+  "defaultPreset": "fixture-balanced",
+  "presets": {
+    "fixture-strong": {
+      "version": "fixture-v1",
+      "effort": { "light": "high", "standard": "xhigh", "strong": "high" },
+      "models": {
+        "light": "openai-codex/fixture-standard-model",
+        "standard": "openai-codex/fixture-standard-model",
+        "strong": "openai-codex/fixture-strong-model"
+      }
+    },
+    "fixture-balanced": {
+      "version": "fixture-v1",
+      "effort": { "light": "xhigh", "standard": "high", "strong": "xhigh" },
+      "models": {
+        "light": "openai-codex/fixture-light-model",
+        "standard": "openai-codex/fixture-standard-model",
+        "strong": "openai-codex/fixture-standard-model"
+      }
+    },
+    "fixture-light": {
+      "version": "fixture-v1",
+      "effort": { "light": "xhigh", "standard": "max", "strong": "high" },
+      "models": {
+        "light": "openai-codex/fixture-light-model",
+        "standard": "openai-codex/fixture-light-model",
+        "strong": "openai-codex/fixture-standard-model"
+      }
+    },
+    "fixture-reviewed": {
+      "version": "fixture-v2",
+      "effort": { "light": "xhigh", "standard": "high", "strong": "xhigh" },
+      "models": {
+        "light": "openai-codex/fixture-light-model",
+        "standard": "xai/fixture-review-model",
+        "strong": "openai-codex/fixture-standard-model"
+      },
+      "thinking": { "standard": { "minimal": "low", "max": "xhigh" } }
+    },
+    "fixture-compatible": {
+      "version": "fixture-v1",
+      "effort": { "light": "xhigh", "standard": "max", "strong": "xhigh" },
+      "models": {
+        "light": "openai-codex/fixture-light-model",
+        "standard": "deepseek/fixture-compatible-model",
+        "strong": "openai-codex/fixture-standard-model"
+      },
+      "thinking": { "standard": { "minimal": "high", "low": "high", "medium": "high", "xhigh": "max" } }
+    }
+  }
+}

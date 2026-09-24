@@ -1,0 +1,12 @@
+node_modules/
+harness/dist/
+/runtime/
+coverage/
+artifacts/
+.cache/
+*.tgz
+*.log
+.env
+.env.*
+auth.json
+web-search.json

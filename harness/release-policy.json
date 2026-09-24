@@ -1,0 +1,18 @@
+{
+  "decision": "PENDING",
+  "contract": "cooperative-local-v1",
+  "scope": "explicit-pi-alehouse-launcher",
+  "basis": "public-portable-validation-and-review-pending",
+  "automaticDeploymentGate": false,
+  "guarantees": {
+    "atomicCancellation": false,
+    "zeroPostCancelActivity": false,
+    "forcedExecutionExit": false,
+    "liveOwnerReloadSafety": false
+  },
+  "requirements": {
+    "matchingGeneratedRuntime": true,
+    "freshProcess": true,
+    "closeOwnerBeforeReplacement": true
+  }
+}
