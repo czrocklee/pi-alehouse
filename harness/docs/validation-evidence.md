@@ -3,10 +3,10 @@
 This records scoped source-extraction checks, **not public release acceptance**.
 [Limitations](limitations.md) and [release-policy.json](../release-policy.json)
 remain PENDING. The inherited harness had an 801-test baseline; the current
-latest root check passed 844/844 package tests, including 26 runtime tests
+latest root check passed 847/847 package tests, including 26 runtime tests
 (with a fresh-per-session harness readiness witness), eight immutable-resource-
-protection regressions, two explicit-model rejection tests and two
-publication-fixture checks. Record command, exit code, Node/Pi versions,
+protection regressions, two explicit-model rejection tests, two
+publication-fixture checks and three panel-export privacy checks. Record command, exit code, Node/Pi versions,
 source revision, generated-runtime hash and test counts on rerun; zero matched
 tests is not success. Do not migrate private acceptance reports, session
 fingerprints, transcripts, authorization packets, or unrelated personal
@@ -35,10 +35,11 @@ npm run build
 npm run check
 ```
 
-The latest root `npm run check` passed **844/844 package tests** (including
+The latest root `npm run check` passed **847/847 package tests** (including
 26 runtime tests with a fresh-per-session harness readiness witness, eight
-immutable-resource-protection regressions, two explicit-model rejection tests
-and two publication-fixture checks), plus the portable policy gates. The
+immutable-resource-protection regressions, two explicit-model rejection tests,
+two publication-fixture checks and three panel-export privacy checks), plus the
+portable policy gates. The
 publication checks assert neutral Off/empty production routing and synthetic,
 fixture-only model/policy scopes (`/tmp`, `/proc`, fixture-prefixed paths), not
 a real provider. This is a package/static/controlled-SDK result, not a

@@ -103,7 +103,7 @@ const API_KEY_FILE = captureApiKeyFile(
   globalThis as Record<symbol, unknown>,
 );
 
-// jev answers in 70-500ms. This budget is a failure detector, not a wait.
+// This budget detects a stalled review; it is not a promised response latency.
 const REVIEW_TIMEOUT_MS = 2_000;
 // Model ceiling is 64k per request and 32k for state; Luna's packet budget is
 // already well inside both and keeps the two judges comparable in shadow.
@@ -124,34 +124,14 @@ const MAX_TRACKED_CHILDREN = 256;
 const MAX_DELEGATION_PROMPT_CHARS = 8_192;
 
 /**
- * Thresholds are the whole policy, and these were measured rather than guessed.
+ * Read-only inspection and state-changing actions use separate policy lanes.
+ * Reads are judged primarily on hazards; writes retain stricter task-scope,
+ * reversibility and remote-effect requirements. Static checkpoints and path
+ * permissions remain authoritative in both lanes.
  *
- * 45 real asks were replayed out of this machine's own session history (the
- * ordinary mix: `rg`, `find`, `ls`, `edit`, `pi install`). Under the previous
- * single-lane policy every one of them deferred, because `authorized` asked
- * whether the user had authorized THIS action and, in a real multi-turn session,
- * the authorization always lives in earlier turns: it read 0.20 median and never
- * once reached 0.7. That is not a threshold that can be tuned, it is a question
- * that cannot be answered yes on real traffic.
- *
- * So the judgement was split in two. `read_only` separates the population
- * cleanly -- 0.91-0.95 for inspection, 0.02-0.05 for installs and edits -- and
- * an action that changes nothing has a much smaller worst case, so it is judged
- * on hazards rather than on how well it fits the task. Anything that changes
- * state keeps the strict lane.
- *
- * The owner chose this operating point explicitly, trading risk for fewer
- * interruptions. Measured on that corpus with exactly these questions and
- * thresholds: 29 of 45 asks auto-allow (74% of the 39 that reach the model; the
- * other 6 never do, the static checkpoints take them first). What still stops
- * there: reads of Pi's own config, logs and session files (credential 0.53-0.73),
- * `pi install`/`pi remove` and edits (read_only 0.02-0.05), and inline
- * interpreter payloads, which the static gate catches before any model call.
- *
- * Re-measure after changing any question's wording, not just its threshold.
- * These numbers are a property of the exact text above, and the read_only
- * comment below records a rewrite that moved the rate from 51% to 64% without
- * touching a single threshold.
+ * These thresholds are policy choices, not a safety or accuracy guarantee.
+ * Changing a question's wording can change verdicts even when its numerical
+ * threshold is unchanged; review and validate both together.
  */
 const DENY_HAZARD_MIN = 0.9;
 /** Score index over ["low","medium","high","critical"]; below this is low/medium. */
@@ -161,13 +141,9 @@ const ALLOW_RISK_MAX = 1.5;
 const READ_ONLY_MIN = 0.85;
 const READ_HAZARD_MAX = 0.5;
 /**
- * Deliberately near the floor. On the replayed corpus this question punished
- * reads outside the working tree -- `ls ~/.pi/agent` scored 0.15 while the task
- * was literally about Pi's internals -- so for reads it was contributing noise,
- * not safety. The sharp signal for a dangerous read is `credential_exposure`,
- * which is what actually stops `cat settings.json`. Raise this to 0.2 or 0.35 to
- * re-narrow reads to the working tree; that costs roughly 13 and 26 points of
- * auto-allow respectively.
+ * Read task scope is deliberately permissive: a relevant inspection can extend
+ * beyond the working tree. Credential-exposure checks and path permissions must
+ * still hold; task relevance alone never makes a sensitive read acceptable.
  */
 const READ_TASK_SCOPE_MIN = 0.1;
 const READ_RISK_CONFIDENCE_MIN = 0.7;
@@ -181,7 +157,7 @@ const WRITE_UNBOUNDED_MAX = 0.35;
 const WRITE_RISK_CONFIDENCE_MIN = 0.9;
 
 /**
- * Nix embeds hashes of the complete generated definitions. An unrendered source
+ * The build embeds hashes of the complete generated definitions. An unrendered source
  * has no trusted workers and safely defers every forwarded automatic approval.
  */
 const WORKER_POLICY: Record<string, { digest: string; bashDenies: string[] }> = /* @worker-policy@ */ {};
@@ -348,13 +324,9 @@ export const QUESTIONS = {
       false: "Every target is literal and bounded.",
     },
   },
-  // A `context_sufficient` question was removed after measurement: across 39
-  // replayed real asks it read 0.62-0.72 whether the packet was complete or not,
-  // so at any threshold that could ever fire it blocked everything, and at any
-  // threshold that did not, it did nothing. It was a silent second blocker
-  // hiding behind the authorization gate. Packet completeness is already a fact
-  // the state reports (rawAuthorizationHistoryComplete, omitted counts), and the
-  // builders defer outright on truncation rather than asking the model about it.
+  // Packet completeness is an observed fact, not another model judgement.
+  // State reports rawAuthorizationHistoryComplete and omitted counts; builders
+  // defer on truncation rather than asking a model to infer missing context.
   risk: {
     type: "score",
     instructions:

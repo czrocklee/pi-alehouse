@@ -2,7 +2,7 @@
 
 This document defines Pi Alehouse's public support boundary.
 [release-policy.json](../release-policy.json) remains **PENDING**: the latest
-source-extraction root gate (844/844 package tests), controlled full/readonly,
+root gate (847/847 package tests), controlled full/readonly,
 Jev and SDK-history lanes, and final installed-tarball RPC smoke passed in their
 declared scopes, but public release review is not complete. No private operator's
 local-use decision, inherited test pass, or historical observation grants

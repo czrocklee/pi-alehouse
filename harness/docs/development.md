@@ -104,9 +104,10 @@ not use an arbitrary `flock` from PATH. This is not a sandbox/distributed lock.
 ## Static quality gate
 
 Root `npm run check` runs lint, typecheck, package tests and the portable
-policy suite. The latest source-extraction run passed 844/844 package tests
+policy suite. The latest root run passed 847/847 package tests
 (including 26 runtime tests, eight immutable-resource-protection regressions,
-two explicit-model rejection tests and two publication-fixture checks) plus
+two explicit-model rejection tests, two publication-fixture checks and three
+panel-export privacy checks) plus
 portable policy gates.
 `npm run test:policy` is independently invocable; `npm run test:integration`
 invokes a separate controlled host collector, not a release or live-model gate.
