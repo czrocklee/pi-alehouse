@@ -70,7 +70,8 @@ against opaque programs; see [security](security.md#immutable-resource-floor-in-
 
 The shared policy states only task-fit/total-cost preference. No orchestration
 paragraph or disabled-mode reminder is injected into the model prompt. Tool
-metadata contains API semantics. All eight management tools are registered
+metadata contains API semantics. The `changes` field is part of harness tool
+results, never a rewrite of other context. All nine management tools are registered
 once; the active set follows the chosen preset: initial Off exposes none, Off
 after accepted work keeps the five inspection/cleanup tools. Admission and
 external steering are guarded separately from accepted work, which continues
@@ -140,6 +141,7 @@ paths. Node 22.19+ (or 24+) is needed by ESLint 10.
 | Controlled host collector | `npm run test:integration` | `--all` full/readonly controlled suite passed in scope; not a release gate. |
 | Focused host fixtures | `harness/test/host/session-integration.mjs`, `run-lifecycle.mjs` | Invoke through the isolated collector with required host/fixture paths; never run bare npm scripts as proof. |
 | Init absent resources | `node bin/pi-alehouse.mjs init` | Explicit seven-file seed, no overwrite; inspect conflicts. |
+| Orchestration metrics | `node scripts/analyze-pi-session.mjs [--json] SESSION.jsonl` | Offline aggregates from one local parent transcript: cache hit rate, turns, steer/wait/list usage. Prints no transcript text; transcripts and reports are not source. |
 
 After building/checking, `npm pack` produces a tarball with the generated
 private authority, source composition and runtime assets; verify its contents,

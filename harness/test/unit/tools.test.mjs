@@ -155,7 +155,7 @@ test("simple separate schemas reject mixed and post-gate mutated inputs before a
 test("Agent/Run API has only new names and closed migrated parameter schemas", async (t) => {
   const f = await fixture(t), { tools, tool, call, options } = toolsFor(f);
   assert.deepEqual(tools.map((item) => item.name).sort(), [
-    "spawn_agent", "resume_agent", "list_agents", "release_agent", "wait_runs", "read_run", "steer_run", "cancel_run",
+    "spawn_agent", "resume_agent", "list_agents", "release_agent", "wait_runs", "read_run", "steer_run", "cancel_run", "post_update",
   ].sort());
   assert(Object.isFrozen(blockedDelegationTools));
   for (const name of blockedDelegationTools) assert.throws(() => createOwnerTools({ ...options,
@@ -1006,4 +1006,85 @@ test("thinking incompatibility identifies inherited level and route but hides th
     assert.equal(JSON.stringify(result).includes("fixture/controlled"), false);
     return true;
   });
+});
+
+test("list_agents adds per-Agent history for choosing resume versus a fresh Agent", async (t) => {
+  const f = await fixture(t), { call } = toolsFor(f);
+  const first = await call("spawn_agent", create({ description: "Port tests", name: "otter" }));
+  await until(() => f.ports[0]?.streaming);
+  f.ports[0].callbacks.runtime({ activity: "tool", context: { tokens: 50_000, context_window: 200_000 } });
+  f.ports[0].callbacks.touched("src/a.ts");
+  f.ports[0].finish(); await ended(f.controller, first);
+  const second = await call("resume_agent", { agent_id: first.agent_id, prompt: "more", description: "Fix flaky test" });
+  await until(() => f.ports[0].calls.length === 2); f.ports[0].finish(); await ended(f.controller, second);
+  const [row] = (await call("list_agents", {})).agents;
+  assert.equal(row.description, "Fix flaky test");
+  assert.equal(row.runs, 2); assert.deepEqual(row.earlier_tasks, ["Port tests"]);
+  assert.deepEqual(row.context, { tokens: 50_000, window: 200_000, percent: 25 });
+  assert.deepEqual(row.touched, ["src/a.ts"]); assert.equal(row.observed_cost, 0);
+  assert.equal(typeof row.idle_ms, "number");
+  assert.equal("model" in row.settings, false, "routing details stay hidden");
+});
+
+test("harness replies report other Runs that settled since the previous reply, once", async (t) => {
+  const f = await fixture(t, { controller: { concurrency: 2 } }), { call } = toolsFor(f);
+  const a = await call("spawn_agent", create({ description: "a" }), "a");
+  const b = await call("spawn_agent", create({ description: "b" }), "b");
+  assert.equal(b.changes, undefined);
+  await until(() => f.ports.length === 2 && f.ports.every((port) => port.streaming));
+  f.ports[0].finish("A done"); await ended(f.controller, a);
+  const steered = await call("steer_run", { run_id: b.run_id, message: "hurry" });
+  assert.deepEqual(steered.changes, [{ run_id: a.run_id, agent_id: a.agent_id, status: "completed" }]);
+  assert.equal((await call("steer_run", { run_id: b.run_id, message: "again" }, "s2")).changes, undefined, "reported once");
+  f.ports[1].finish("B done"); await ended(f.controller, b);
+  const waited = await call("wait_runs", { run_ids: [b.run_id] });
+  assert.equal(waited.changes, undefined, "a reply that already covers the Run does not repeat it");
+  const c = await call("spawn_agent", create({ description: "c" }), "c");
+  await until(() => f.ports.length === 3 && f.ports[2].streaming); f.ports[2].finish(); await ended(f.controller, c);
+  await call("list_agents", {});
+  assert.equal((await call("read_run", { run_id: a.run_id })).changes, undefined, "list_agents advances the cursor");
+});
+
+test("post_update reports delivery per Agent and never fails the whole batch for one target", async (t) => {
+  const f = await fixture(t, { controller: { concurrency: 2 } }), { call } = toolsFor(f);
+  const busy = await call("spawn_agent", create({ description: "busy" }), "busy");
+  const idle = await call("spawn_agent", create({ description: "idle" }), "idle");
+  await until(() => f.ports.length === 2 && f.ports.every((port) => port.streaming));
+  f.ports[1].finish(); await ended(f.controller, idle);
+  const reply = await call("post_update", { agent_ids: [busy.agent_id, idle.agent_id, idle.agent_id, "missing"], message: "API renamed" });
+  assert.deepEqual(reply.targets, [
+    { agent_id: busy.agent_id, delivery: "steered", run_id: busy.run_id },
+    { agent_id: idle.agent_id, delivery: "queued", pending_updates: 1 },
+    { agent_id: "missing", delivery: "rejected", error: { code: "AGENT_NOT_FOUND", agent_id: "missing" } },
+  ]);
+  assert.equal(reply.changes, undefined, "targets already cover these Agents");
+  await until(() => f.ports[0].inputs.length === 1);
+  f.ports[0].finish(); await ended(f.controller, busy);
+});
+
+test("spawn_agent handoff_from queues a follow-up that reports what it waits for", async (t) => {
+  const f = await fixture(t), { call } = toolsFor(f);
+  const author = await call("spawn_agent", create({ description: "write" }), "author");
+  const reviewer = await call("spawn_agent", create({ description: "review", prompt: "Review it.", handoff_from: [author.run_id] }), "reviewer");
+  assert.equal(reviewer.status, "queued"); assert.deepEqual(reviewer.blocked_by, [author.run_id]);
+  await until(() => f.ports[0]?.streaming); f.ports[0].finish("diff summary"); await ended(f.controller, author);
+  await until(() => f.ports[1]?.streaming);
+  assert.match(f.ports[1].calls[0].prompt, /diff summary\n\n--- End of handoff ---\n\nReview it\.$/);
+  f.ports[1].finish(); await ended(f.controller, reviewer);
+});
+
+test("a list_agents page consumes only the settlements it shows", async (t) => {
+  const f = await fixture(t, { controller: { concurrency: 2 } }), { call } = toolsFor(f);
+  const first = await call("spawn_agent", create({ description: "first" }), "first");
+  const second = await call("spawn_agent", create({ description: "second" }), "second");
+  await until(() => f.ports.length === 2 && f.ports.every((port) => port.streaming));
+  f.ports[1].finish(); await ended(f.controller, second);
+  const page = await call("list_agents", { limit: 1 });
+  assert.deepEqual(page.agents.map((row) => row.run_id), [first.run_id]);
+  assert.deepEqual(page.changes, [{ run_id: second.run_id, agent_id: second.agent_id, status: "completed" }],
+    "a settlement outside the page is still reported");
+  f.ports[0].finish(); await ended(f.controller, first);
+  const shown = await call("list_agents", { limit: 1 }, "page-2");
+  assert.equal(shown.changes, undefined, "the page shows the first Agent itself");
+  assert.equal((await call("read_run", { run_id: second.run_id })).changes, undefined);
 });

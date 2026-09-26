@@ -1,5 +1,5 @@
 import type { WaitResult } from "../core/owner-controller.js";
-import { terminal, validDifficulty, type ResultPage, type RunView } from "../core/contracts.js";
+import { terminal, validDifficulty, type AgentSummary, type ResultPage, type RunView } from "../core/contracts.js";
 import { HarnessError } from "../core/ports.js";
 
 const runtimeReply = (view: RunView) => {
@@ -38,13 +38,45 @@ export function runReply(view: RunView, showSettings = false) {
     ...(view.pending_messages ? { pending_messages: view.pending_messages } : {}),
     ...((view.owner_blocked || (terminal(view.status) && !resumable)) ? { unavailable_reason: view.unavailable_reason } : {}),
     ...(view.outcome?.reason ? { reason: view.outcome.reason } : {}),
+    ...(view.blocked_by?.length ? { blocked_by: view.blocked_by } : {}),
     ...(showSettings ? { settings: callerSettings(settings) } : {}) };
 }
 /** Caller-supplied task labels belong only in the on-demand roster, not every
  * receipt/result or an automatically injected context snapshot. */
-export function listRunReply(view: RunView) {
+export function listRunReply(view: RunView, summary?: AgentSummary) {
   const description = utf16Prefix(view.description, 256);
-  return { ...runReply(view, true), description, description_truncated: description.length < view.description.length };
+  return { ...runReply(view, true), description, description_truncated: description.length < view.description.length,
+    ...(summary ? agentHistoryReply(summary) : {}) };
+}
+const EARLIER_TASKS_SHOWN = 4;
+const TOUCHED_SHOWN = 8;
+/** What the parent needs to choose resume versus a fresh Agent: what this
+ * Agent already worked on, how full its context is, what it has cost and which
+ * files it changed. Model, preset and effort stay hidden, as in callerSettings. */
+function agentHistoryReply(summary: AgentSummary) {
+  const earlier = summary.earlier_descriptions.slice(0, EARLIER_TASKS_SHOWN).map((text) => utf16Prefix(text, 120));
+  const context = summary.context;
+  const touched = summary.touched.slice(0, TOUCHED_SHOWN).map((path) => utf16Prefix(path, 160));
+  const touchedOmitted = summary.touched.length - touched.length + summary.touched_omitted;
+  return { runs: summary.runs,
+    ...(earlier.length ? { earlier_tasks: earlier } : {}),
+    ...(summary.earlier_descriptions.length > earlier.length ? { earlier_tasks_omitted: summary.earlier_descriptions.length - earlier.length } : {}),
+    ...(context ? { context: { tokens: context.tokens, window: context.context_window,
+      ...(context.tokens === null ? {} : { percent: Math.round(context.tokens / context.context_window * 100) }) } } : {}),
+    observed_cost: Math.round(summary.observed_cost * 10000) / 10000,
+    ...(summary.cost_partial ? { cost_partial: true } : {}),
+    ...(touched.length ? { touched } : {}),
+    ...(touchedOmitted ? { touched_omitted: touchedOmitted } : {}),
+    ...(summary.pending_updates ? { pending_updates: summary.pending_updates } : {}),
+    ...(summary.idle_ms === undefined ? {} : { idle_ms: Math.round(summary.idle_ms) }) };
+}
+/** One line per Run that settled since the parent's previous harness reply. */
+export function changeReply(view: RunView) {
+  return { run_id: view.run_id, agent_id: view.agent_id, ...(view.name ? { name: view.name } : {}),
+    status: view.finalization_pending ? "finishing" : view.status,
+    ...(view.outcome?.reason ? { reason: view.outcome.reason } : {}),
+    ...(view.outcome?.limit_reached ? { limit_reached: true } : {}),
+    ...(view.outcome?.question ? { has_question: true } : {}) };
 }
 /** Identity and lifecycle only; optional names/settings/diagnostics cannot defeat
  * the final envelope bound, including outside a combined reply's wait object. */

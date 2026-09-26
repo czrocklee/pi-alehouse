@@ -110,16 +110,16 @@ still return their original Run. A submission awaiting admission across an
 Off/On transition is rejected rather than revived; ordinary enabled-preset
 switches retain their existing routing semantics.
 
-All eight tools remain registered, but Off hides them from the model if this
+All nine tools remain registered, but Off hides them from the model if this
 Owner has never accepted work. Once it has, only `list_agents`, `read_run`,
 `wait_runs`, `cancel_run`, and `release_agent` remain active while Off, including
 after execution/release so retained results stay accessible. Other active tools
 and the main model/permissions are unchanged. Hidden/cached calls still meet
 the execution gate; hiding a schema alone is not authorization.
 
-The preset owns the active selection of these eight tools. At startup, preset
+The preset owns the active selection of these nine tools. At startup, preset
 changes, acceptance callbacks, `before_agent_start` and `turn_start`, reconciliation
-restores any missing allowed harness tools: all eight when enabled, or the five
+restores any missing allowed harness tools: all nine when enabled, or the five
 result/cleanup tools when Off with accepted work. Individually deactivating one
 of these tools is not a persistent override. Use Off to disable new worker work;
 the current selection and order of non-harness tools are preserved.
