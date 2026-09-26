@@ -42,6 +42,24 @@ npm install --prefix "$INSTALL_DIR/install" --omit=dev --legacy-peer-deps --igno
 
 Do not initialize your real agent directory merely to inspect an artifact.
 
+### Nix and Home Manager
+
+The flake builds the same package and provides a Home Manager module. Host Pi
+stays separately installed; see [`nix/README.md`](../../nix/README.md).
+
+```nix
+# flake.nix
+inputs.pi-alehouse.url = "github:czrocklee/pi-alehouse";
+
+# Home Manager configuration
+imports = [ inputs.pi-alehouse.homeManagerModules.default ];
+programs.pi-alehouse = {
+  enable = true;
+  permissions = ./permissions.json;
+  presets = ./harness-presets.json;
+};
+```
+
 ## Set up your crew
 
 When you are ready to use Alehouse:

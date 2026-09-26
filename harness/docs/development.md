@@ -1,6 +1,7 @@
 # Development
 
-Pi Alehouse is a single Nix-free root npm package. The harness is internal under
+Pi Alehouse is a single root npm package that builds without Nix; optional Nix
+packaging lives in `flake.nix` and `nix/`. The harness is internal under
 `harness/`; it is not another publishable package, standalone Pi extension manifest,
 SDK fork, or second permission authority. The root manifest sets
 `pi.extensions: []`: `composition.ts` is CLI-only, never auto-discovered or
