@@ -45,6 +45,8 @@ export type SubmitRequest = {
   settings: AdmittedAgentConfig;
   max_turns?: number;
   max_duration_ms?: number;
+  after?: string[];
+  handoff_from?: string[];
 } | {
   resume: string;
   prompt: string;
@@ -52,6 +54,8 @@ export type SubmitRequest = {
   max_turns?: number;
   max_duration_ms?: number;
   answer_to_run_id?: string;
+  after?: string[];
+  handoff_from?: string[];
 };
 export interface Output {
   text: string;
@@ -144,6 +148,31 @@ export interface RunView {
   result_ref?: ResultRef;
   cleanup_errors: string[];
   discarded_inputs: string[];
+  /** Runs that must settle before this one starts (after ∪ handoff_from). */
+  after?: string[];
+  /** Runs whose retained result prefixed this Run's first prompt. */
+  handoff_from?: string[];
+  /** Queued only: dependencies that have not settled yet. */
+  blocked_by?: string[];
+  /** Parent updates queued while idle and delivered with this Run's prompt. */
+  delivered_updates?: number;
+}
+/** Per-Agent history for the on-demand roster; never injected into context. */
+export interface AgentSummary {
+  agent_id: string;
+  runs: number;
+  /** Newest first, excluding the latest Run's own description. */
+  earlier_descriptions: string[];
+  /** Last observed SDK context occupancy, retained after the Run settles. */
+  context?: { tokens: number | null; context_window: number };
+  observed_cost: number;
+  cost_partial: boolean;
+  /** Relative paths the Agent edited or wrote successfully, first seen first. */
+  touched: string[];
+  touched_omitted: number;
+  pending_updates: number;
+  /** Wall time since the latest Run settled; absent while busy. */
+  idle_ms?: number;
 }
 export interface ResultPage {
   snapshot: RunView;

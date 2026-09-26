@@ -1,6 +1,6 @@
 export const managementToolNames: readonly string[] = Object.freeze([
   "spawn_agent", "read_run", "steer_run", "wait_runs",
-  "list_agents", "cancel_run", "resume_agent", "release_agent",
+  "list_agents", "cancel_run", "resume_agent", "release_agent", "post_update",
 ]);
 
 /** Off retains inspection/cleanup once this Owner has accepted work, even after

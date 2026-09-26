@@ -165,7 +165,7 @@ try {
   for (const profile of ["editor", "reader"]) {
     assert.equal(resolver.checkPermission("spawn_agent", { profile, difficulty: 3, prompt: "fixture", description: "fixture" }).state, "allow");
   }
-  for (const tool of ["resume_agent", "list_agents", "release_agent", "wait_runs", "read_run", "steer_run", "cancel_run"]) {
+  for (const tool of ["resume_agent", "list_agents", "release_agent", "wait_runs", "read_run", "steer_run", "cancel_run", "post_update"]) {
     assert.equal(resolver.checkPermission(tool, {}).state, "allow", `Harness management: ${tool}`);
   }
   for (const old of ["subagent", "resume_subagent", "list_subagents", "release_subagent", "wait_subagents",

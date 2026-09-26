@@ -17,6 +17,8 @@ export interface RunCallbacks {
   turnEnd(continuing?: boolean): void;
   question(text: string): void;
   notify(text: string): void;
+  /** Observation only: a successful edit/write tool call's path argument. */
+  touched?(path: string): void;
 }
 export interface AgentSessionPort {
   readonly session_id: string;

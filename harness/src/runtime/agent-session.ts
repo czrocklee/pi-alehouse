@@ -181,6 +181,7 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
     let compaction: { model: string; retried: boolean } | undefined;
     let retrying = false;
     const tools = new Set<string>();
+    const writes = new Map<string, string>();
     const accrue = (raw: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number } } | undefined, model: string): void => {
       usage = addToLedger(usage, normalizeUsage({ input: raw?.input, output: raw?.output,
         cache_read: raw?.cacheRead, cache_write: raw?.cacheWrite, cost: raw?.cost?.total }), model);
@@ -233,8 +234,18 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
         if (compaction.retried && event.result?.usage) accrue(undefined, compaction.model);
         compaction = undefined; retrying = false;
       }
-      if (event.type === "tool_execution_start") tools.add(event.toolCallId);
-      if (event.type === "tool_execution_end") tools.delete(event.toolCallId);
+      if (event.type === "tool_execution_start") {
+        tools.add(event.toolCallId);
+        const path = (event.args as { path?: unknown } | undefined)?.path;
+        if ((event.toolName === "edit" || event.toolName === "write") && typeof path === "string") writes.set(event.toolCallId, path);
+      }
+      if (event.type === "tool_execution_end") {
+        tools.delete(event.toolCallId);
+        const path = writes.get(event.toolCallId);
+        writes.delete(event.toolCallId);
+        // Observation for the parent roster only; it cannot affect execution.
+        if (path !== undefined && !event.isError) try { callbacks.touched?.(path); } catch { /* optional */ }
+      }
       if (event.type === "turn_start") control(() => callbacks.turnStart());
       if (event.type === "turn_end") control(() => callbacks.turnEnd(event.message.role === "assistant" && event.message.stopReason === "toolUse"));
       if (event.type === "message_start" && event.message.role === "assistant") {

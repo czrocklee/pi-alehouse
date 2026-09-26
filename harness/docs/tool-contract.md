@@ -1,11 +1,11 @@
 # Tool contract
 
-The trusted host explicitly registers exactly eight parent management tools for
+The trusted host explicitly registers exactly nine parent management tools for
 one Owner.  There is no discovery, owner registry, legacy alias, or child copy.
 Every schema is closed (`additionalProperties: false`) and is validated before
 SDK preparation and again at execution because Pi hooks can mutate arguments.
 The host validates its captured Owner context both before and after work.
-Registration is distinct from model visibility: the `off` preset hides all eight
+Registration is distinct from model visibility: the `off` preset hides all nine
 tools before any work is accepted, or retains only inspection/cleanup tools once
 this Owner has accepted Runs (including completed/released results).
 
@@ -17,6 +17,7 @@ this Owner has accepted Runs (including completed/released results).
 | `wait_runs` | 1--16 `run_ids` | Wait for `all` (default) or `any` Run condition. |
 | `list_agents` | none | Page current resident latest Runs; optionally released Agents. |
 | `steer_run` | `run_id` | Submit additional input only to an accepting running Run. |
+| `post_update` | 1--16 `agent_ids` | Steer each Agent's running Run, or queue for its next prompt. |
 | `cancel_run` | `run_id` | Request cancellation; it is not exit evidence. |
 | `release_agent` | `agent_id` | Permanently release an idle Agent after safe cleanup. |
 
@@ -33,7 +34,8 @@ profile IDs, and lifecycle event contract are compatibility surface.
 - `profile`: `reader` or `editor`;
 - required `difficulty`: integer `1`–`5`;
 - optional `name` (new Agent label), `inherit_context`, `max_turns` (1--10000),
-  `max_duration_ms` (1--86400000), and `wait_ms` (0--300000).
+  `max_duration_ms` (1--86400000), and `wait_ms` (0--300000);
+- optional `after` and `handoff_from`: 1--4 unique known Run IDs each.
 
 The parameter descriptions distinguish instructions, labels and capabilities:
 
@@ -62,6 +64,24 @@ old task label. Existing Agent names and previous Run descriptions are never
 rewritten. For example, `orca` can first have `Review Windows foundations` as its
 description and later `Review GTK direct-entry safety`, with the same Agent ID,
 conversation and routing.
+
+### Ordering and handoff
+
+`after` and `handoff_from` are accepted by both tools. The new Run waits in the
+queue until every listed Run settles; `handoff_from` implies `after`. A waiting
+Run holds no execution slot, its `max_duration_ms` has not started, and replies
+show the unsettled IDs as `blocked_by`. It still counts toward the queue limit
+and, for a resume, keeps its Agent busy. If any dependency settles other than
+`completed` (including `needs_input`), the Run fails with reason
+`dependency_not_completed` without creating a session; a new Agent is released.
+
+`handoff_from` places each source Run's retained final output before `prompt`,
+sharing a 16384-unit budget, with Run ID, label, status and task description,
+and an omitted-character count. The block states that it is another agent's
+output and not instructions. It is not part of the approval witness's
+`task_prompt`, which holds only parent-authored text: queued updates and
+`prompt`. Use it to queue an
+author and a reviewer in one turn without reading and re-pasting the result.
 
 On `spawn_agent`, legacy `strength`, `model`, and `thinking` inputs, as well as
 operator-owned `effort`, `effort_source`, and `effort_overrides`, are rejected
@@ -168,6 +188,50 @@ adds released records. Each row has a 256-unit description preview and
 status, limits, and bounded diagnostics. It does not expose the resolved slot or
 concrete provider/model. A description is a label, not complete instructions;
 question text stays behind `read_run`.
+
+Each row also carries owner-memory Agent history for choosing between resume
+and a fresh Agent: `runs`; up to four `earlier_tasks` (120-unit description
+prefixes, newest first, with `earlier_tasks_omitted`); the last observed
+`context` (`tokens`, `window`, `percent`), retained after the Run settles;
+cumulative `observed_cost` across the Agent's Runs, with `cost_partial`; up to
+eight `touched` paths (relative to cwd when inside it) from successful `edit` or
+`write` calls, with `touched_omitted`; `pending_updates`; and `idle_ms` since
+the latest Run settled. These are observations, not a reservation or a
+recommendation, and exist only in this `list_agents` reply.
+
+`post_update` sends one message (1--16384 units) to 1--16 Agents and reports
+each target's `delivery`: `steered` (as `steer_run` to its accepting Run, with
+`run_id`), `queued` (kept for the Agent's next prompt: its queued Run, shown
+with `run_id`, or the next `resume_agent`), or `rejected` with an `error`. One
+target failing does not fail the batch. Queued updates are memory-only, at most
+eight and 32768 units per Agent (`UPDATE_LIMIT`), and are placed before that
+prompt as the parent's numbered updates; the Run view counts
+`delivered_updates`. A Run whose prompt was sent but whose SDK stream is not yet
+accepting input returns `RUN_INPUT_NOT_READY` rather than silently waiting for
+a later Run. An Agent whose only Run was stopped, quarantined or failed its
+dependencies before taking input is being released, so it returns
+`AGENT_UNAVAILABLE` (`reason: releasing`) instead of queueing. Updates still
+queued when an Agent is released move to that Run's `discarded_inputs`.
+Queued updates delivered with a prompt are parent instructions and are part of
+the approval witness's `task_prompt`, so an automated reviewer sees them;
+steering remains an approval invalidation as before. Delivery is not proof of
+action. Off rejects it with `WORKERS_DISABLED`.
+
+### Settled-Run changes
+
+Every successful management-tool reply may add `changes`: up to eight Runs,
+oldest first, that settled and have not yet been shown (`run_id`, `agent_id`,
+`name`, `status`, `reason`, `limit_reached`, `has_question`), plus
+`changes_omitted` for those left for a later reply or lost to the bounds. A
+settlement is consumed only when a reply shows its Run or Agent (a
+`list_agents` page row, a wait run, a `post_update` target, the Run a tool
+addresses) or lists it under `changes`; a filtered or partial `list_agents` page
+consumes only its own rows. Changes are omitted, and kept for a later reply, when
+adding them would exceed the 65536-byte reply envelope. A thrown error reply does
+not consume them. The log is
+owner-memory, bounded to 256 settlements; this is a convenience in harness
+tools' own results, not a context injection or a delivery guarantee. At most
+256 unshown settlements are kept per tool set.
 
 `steer_run.message` is 1--16384 UTF-16 units.  `accepted:true` is only request
 acceptance, not SDK delivery.  For an already terminal Run it returns

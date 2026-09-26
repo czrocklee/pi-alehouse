@@ -141,7 +141,12 @@ termination, make the parent turn, wake a wait, or bypass a permission dialog.
 Neither ordinary progress nor background completion starts a parent turn. The
 harness does not automatically inject an Agent/Run roster after compaction.
 `list_agents` exposes owner-local state on demand, including released records
-when requested; its bounded labels are not full task assignments.
+when requested; its bounded labels are not full task assignments. Its rows add
+each Agent's earlier task labels, last observed context use, observed cost and
+touched files, so the parent can choose between resume and a fresh Agent. Other
+harness replies name Runs that settled since the previous one (`changes`), which
+reduces steering of Runs that already finished; see the
+[tool contract](tool-contract.md#settled-run-changes).
 
 See [the tool contract](tool-contract.md) for exact budgets and reply behavior,
 and [architecture](architecture.md) for history, accounting, and retention.

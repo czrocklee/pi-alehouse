@@ -98,6 +98,7 @@
     "list_agents": "allow",
     "cancel_run": "allow",
     "release_agent": "allow",
+    "post_update": "allow",
     "notify_parent": "allow",
     "ask_parent": "allow",
     "mcp": {"*": "ask", "mcp_status": "allow", "mcp_list": "allow", "mcp_search": "allow", "mcp_describe": "allow"},

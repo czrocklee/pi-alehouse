@@ -21,10 +21,10 @@ export class FakePort {
   stopped = 0;
   disposed = 0;
   streaming = false;
-  async run(prompt, callbacks) {
+  async run(prompt, callbacks, identity) {
     const done = deferred();
     this.callbacks = callbacks; this.streaming = true;
-    this.calls.push({ prompt, done });
+    this.calls.push({ prompt, done, identity });
     callbacks.inputEntered(); callbacks.turnStart();
     try { return await done.promise; } finally { this.streaming = false; }
   }

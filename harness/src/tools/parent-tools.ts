@@ -7,7 +7,8 @@ import { terminal, validDifficulty, type RunView, type SubmitRequest } from "../
 import { HarnessError } from "../core/ports.js";
 import { digest, textSnapshot } from "../runtime/context-snapshot.js";
 import { invalidDifficultyResolution, resolveRoute, type PresetSelection } from "../routing.js";
-import { compactRunReply, errorReply, listRunReply, resultReply, runReply, waitReply, type WaitProjectionHeader } from "./replies.js";
+import { changeReply, compactRunReply, errorReply, listRunReply, resultReply, runReply, waitEnvelopeBytes, waitReply,
+  WAIT_SERIALIZED_REPLY_LIMIT, type WaitProjectionHeader } from "./replies.js";
 import { agentProfileNames, blockedDelegationToolNames } from "./tool-names.js";
 
 const text = (maxLength: number, description?: string) => Type.String({ minLength: 1, maxLength, pattern: "\\S",
@@ -16,8 +17,21 @@ const optional = Type.Optional;
 const description = text(4096, "Short current-task Run label for the Agent panel and list_agents, not execution instructions. Supply a fresh description on every Run, including resume.");
 const fields = { prompt: text(131072, "Execution instructions for this Run."), max_turns: optional(Type.Integer({ minimum: 1, maximum: 10000, description: "Turn budget; default 256. Reaching it can leave a partial result." })),
   max_duration_ms: optional(Type.Integer({ minimum: 1, maximum: 86400000, description: "Execution deadline from initialization, excluding queue time. Default 1800000. Requests a stop, not proof of exit." })),
-  wait_ms: optional(Type.Integer({ minimum: 0, maximum: 300000, description: "Wait milliseconds after acceptance; omit/0 for a background receipt. Interrupted waiting does not cancel the Run." })) };
+  wait_ms: optional(Type.Integer({ minimum: 0, maximum: 300000, description: "Wait milliseconds after acceptance; omit/0 for a background receipt. Interrupted waiting does not cancel the Run. Use it when your next step needs this Run's result." })),
+  after: optional(Type.Array(text(128), { minItems: 1, maxItems: 4, description: "Run IDs that must settle before this Run starts. It stays queued without a slot or deadline; if any of them ends other than completed, this Run fails with dependency_not_completed and never starts." })),
+  handoff_from: optional(Type.Array(text(128), { minItems: 1, maxItems: 4, description: "Run IDs whose retained final output (16384 chars shared) is placed before prompt, labelled as reference, not instructions. Implies after. Use it to chain author → reviewer without reading and re-pasting the result yourself." })) };
 const runId = { run_id: text(128) };
+const CHANGES_SHOWN = 8;
+const SETTLED_UNSHOWN_LIMIT = 256;
+/** Run and Agent IDs a reply already reports, so changes does not repeat them. */
+const reportedIds = (value: unknown, out = new Set<string>(), depth = 0): Set<string> => {
+  if (!value || typeof value !== "object" || depth > 3) return out;
+  if (Array.isArray(value)) { for (const item of value) reportedIds(item, out, depth + 1); return out; }
+  const record = value as Record<string, unknown>;
+  for (const key of ["run_id", "agent_id"]) if (typeof record[key] === "string") out.add(record[key]);
+  for (const key of ["runs", "wait", "targets", "agents"]) reportedIds(record[key], out, depth + 1);
+  return out;
+};
 export interface ToolProfile { definition: string; tools: readonly string[] }
 export interface OwnerToolsOptions {
   controller: OwnerController;
@@ -84,6 +98,30 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
           controller.identity.owner_id !== identity.owner_id || controller.identity.generation !== identity.generation) throw new Error();
     } catch { throw new HarnessError("STALE_OWNER_CONTEXT"); }
   };
+  // Harness replies say which other Runs settled since they were last shown,
+  // once each. Part of these tools' own results, never a context injection.
+  // A settlement is consumed only by a reply that actually shows its Run or
+  // Agent (a list page, a wait, a target) or lists it under changes.
+  let changesCursor = controller.settledSince(0).cursor, changesMissed = 0;
+  const unshown: string[] = [];
+  const withChanges = (value: object): object => {
+    const since = controller.settledSince(changesCursor);
+    changesCursor = since.cursor; changesMissed += since.missed;
+    unshown.push(...since.run_ids);
+    if (unshown.length > SETTLED_UNSHOWN_LIMIT) changesMissed += unshown.splice(0, unshown.length - SETTLED_UNSHOWN_LIMIT).length;
+    const seen = reportedIds(value);
+    for (let index = unshown.length - 1; index >= 0; index--) {
+      const id = unshown[index]!;
+      if (seen.has(id) || seen.has(controller.view(id).agent_id)) unshown.splice(index, 1);
+    }
+    if (!unshown.length && !changesMissed) return value;
+    const shown = unshown.slice(0, CHANGES_SHOWN), omitted = unshown.length - shown.length + changesMissed;
+    const next = { ...value, changes: shown.map((id) => changeReply(controller.view(id))), ...(omitted ? { changes_omitted: omitted } : {}) };
+    // Keep them for a later, smaller reply rather than exceed the envelope.
+    if (waitEnvelopeBytes(next) > WAIT_SERIALIZED_REPLY_LIMIT) return value;
+    unshown.splice(0, shown.length); changesMissed = 0;
+    return next;
+  };
   const make = <S extends TObject>(name: string, description: string, schema: S,
     action: (args: Static<S>, ctx: ExtensionContext, id: string, signal?: AbortSignal) => object | Promise<object>): ToolDefinition<TSchema, undefined, unknown> => {
     const checked = (raw: unknown): Static<S> => {
@@ -126,12 +164,12 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
           if (name !== "wait_runs" && signal?.aborted) throw new HarnessError("TOOL_INTERRUPTED");
           const value = await action(args, ctx, id, signal);
           assertCurrent(ctx); // No result from an old handle is routed to a replacement parent.
-          return { content: [{ type: "text", text: JSON.stringify(value) }], details: undefined };
+          return { content: [{ type: "text", text: JSON.stringify(withChanges(value)) }], details: undefined };
         } catch (error) { throw toolError(error); }
       } };
   };
   return [
-    make("spawn_agent", "Create an Agent and its first queued Run; the harness allocates resources from difficulty. Agents share the parent's cwd and checkout without isolation; children have local tools only, no web or nested delegation. Positive wait_ms adds a wait envelope: inspect wait.reason, wait.runs and wait.pending_run_ids. Host retries of the same tool-call ID with unchanged task fields reuse accepted work; a fresh call can duplicate the task. If acceptance is unclear, query list_agents before retrying.", createSchema, (args, ctx, id, signal) => {
+    make("spawn_agent", "Create an Agent and its first queued Run; the harness allocates resources from difficulty. Agents share the parent's cwd and checkout without isolation; children have local tools only, no web or nested delegation. Positive wait_ms adds a wait envelope: inspect wait.reason, wait.runs and wait.pending_run_ids. after/handoff_from queue a follow-up (for example a reviewer) in the same turn as the work it depends on. Before spawning, check list_agents: an idle Agent whose earlier_tasks and touched files match may be cheaper to resume; spawn fresh for unrelated work, an independent review of files an Agent touched, or a different difficulty. Host retries of the same tool-call ID with unchanged task fields reuse accepted work; a fresh call can duplicate the task. If acceptance is unclear, query list_agents before retrying.", createSchema, (args, ctx, id, signal) => {
       // Capture every mutable parent input before submitPrepared can await an
       // earlier admission. Retries hit Controller identity before preparation,
       // so they retain the first accepted route even if these values changed.
@@ -158,7 +196,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
           ...(context_snapshot === undefined ? {} : { context_snapshot }) } };
       }).then((view) => waitAfterAcceptance(view, wait_ms, signal));
     }),
-    make("resume_agent", "Start another Run on an idle Agent ID, not a Run ID. Retains conversation and keeps settings fixed, including creation-time difficulty; only task fields may change. New resource allocation requires a new Agent. Keep the nickname and supply a fresh current-task description on every resume. Omitted description becomes 'Follow-up task'. Answer a finished Run's question with answer_to_run_id, not steer_run. Wait and retry semantics match spawn_agent.", resumeSchema,
+    make("resume_agent", "Start another Run on an idle Agent ID, not a Run ID. Retains conversation and keeps settings fixed, including creation-time difficulty; only task fields may change. New resource allocation requires a new Agent. Keep the nickname and supply a fresh current-task description on every resume. Omitted description becomes 'Follow-up task'. Answer a finished Run's question with answer_to_run_id, not steer_run. Updates queued with post_update are placed before prompt. Wait, retry, after and handoff_from semantics match spawn_agent.", resumeSchema,
       (args, ctx, id, signal) => {
         const { wait_ms, ...submission } = args;
         return controller.submitPrepared(`tool:resume_agent:${digest(id)}`, submission, (input) => {
@@ -174,20 +212,21 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
       Type.Object({ ...runId, cursor: optional(text(1024)), max_chars: optional(Type.Integer({ minimum: 1, maximum: 16384,
         description: "Output budget in UTF-16 units, default 4096; may exceed by one for a surrogate pair. Question text is separate." })) }, { additionalProperties: false }),
       ({ run_id, cursor, max_chars }) => resultReply(controller.getResult(run_id, { cursor, limit: max_chars }))),
-    make("wait_runs", "Wait for Run IDs. all (default) returns early for needs_input, failed, cancelled or completed+limit_reached; any also matches already-terminal Runs. Re-wait only pending_run_ids. timeout/interrupted neither means completion nor cancels work. Progress is coalesced, not a wake-up; timeout/interruption claims none. Background completion does not start a parent turn.",
+    make("wait_runs", "Wait for Run IDs. all (default) returns early for needs_input, failed, cancelled or completed+limit_reached; any also matches already-terminal Runs. Re-wait only pending_run_ids. timeout/interrupted neither means completion nor cancels work. Progress is coalesced, not a wake-up; timeout/interruption claims none. Background completion does not start a parent turn. The wait returns as soon as its condition or attention holds, so a short timeout_ms only adds polling turns; when you have nothing else to do, wait for the whole batch in one call.",
       Type.Object({ run_ids: Type.Array(text(128), { minItems: 1, maxItems: 16 }), mode: optional(StringEnum(["any", "all"] as const, { default: "all" })),
         timeout_ms: optional(Type.Integer({ minimum: 0, maximum: 300000, description: "Wait milliseconds; default 300000. Zero returns without waiting." })),
         include_results: optional(Type.Boolean({ description: "Default true. Include bounded terminal questions and output." })) }, { additionalProperties: false }),
       ({ run_ids, mode = "all", ...rest }, _ctx, _id, signal) => controller.wait(run_ids, { ...rest, mode, timeout_ms: rest.timeout_ms ?? 300000, signal,
         include_results: false }).then((value) => waitReply(value, rest.include_results === false ? undefined :
           (run_id, limit) => controller.getResult(run_id, { limit })))),
-    make("list_agents", "List resident Agents and their latest Runs, including busy or uncertain reservations. Route by IDs, not labels. No roster is automatically injected after compaction. Descriptions are bounded task labels, not full assignments. include_released:true adds released Agents; has_question directs you to read_run. Follow next_offset; this live view can shift between pages.",
+    make("list_agents", "List resident Agents and their latest Runs, including busy or uncertain reservations. Route by IDs, not labels. No roster is automatically injected after compaction. Descriptions are bounded task labels, not full assignments. Each Agent also shows runs, earlier_tasks, last observed context use, observed_cost and touched files, to choose between resume and a fresh Agent. include_released:true adds released Agents; has_question directs you to read_run. Follow next_offset; this live view can shift between pages.",
       Type.Object({ offset: optional(Type.Integer({ minimum: 0 })), limit: optional(Type.Integer({ minimum: 1, maximum: 16, description: "Page size; default 8." })), include_released: optional(Type.Boolean()) }, { additionalProperties: false }),
       ({ offset = 0, limit = 8, include_released = false }) => {
         const all = controller.list({ include_released }), end = offset + limit;
-        return { agents: all.slice(offset, end).map(listRunReply), ...(end < all.length ? { next_offset: end } : {}) };
+        return { agents: all.slice(offset, end).map((view) => listRunReply(view, controller.agentSummary(view.agent_id))),
+          ...(end < all.length ? { next_offset: end } : {}) };
       }),
-    make("steer_run", "Send input to a running Run ID. accepted:true is not delivery confirmation. A terminal Run returns accepted:false, RUN_INPUT_CLOSED and a bounded result page; use resume_agent for further work.",
+    make("steer_run", "Send input to a running Run ID. accepted:true is not delivery confirmation. A terminal Run returns accepted:false, RUN_INPUT_CLOSED and a bounded result page; use resume_agent for further work. When the Run may already have finished, or several Agents need the same news, use post_update instead.",
       Type.Object({ ...runId, message: text(16384) }, { additionalProperties: false }),
       ({ run_id, message }) => {
         try { return { accepted: controller.steer(run_id, message).accepted }; }
@@ -202,6 +241,17 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
             ...(run_reason ? { run_reason } : {}) };
         }
       }),
+    make("post_update", "Send one parent update to Agents by agent_id. Per target, delivery is steered (its running Run gets it now, like steer_run), queued (placed before the prompt of that Agent's next Run: a queued Run, or your next resume_agent) or rejected with an error code. Never starts work. At most 8 queued updates per Agent.",
+      Type.Object({ agent_ids: Type.Array(text(128), { minItems: 1, maxItems: 16 }), message: text(16384) }, { additionalProperties: false }),
+      ({ agent_ids, message }) => ({ targets: [...new Set(agent_ids)].map((agent_id) => {
+        try {
+          const result = controller.postUpdate(agent_id, message);
+          return result.delivery === "steered" ? { agent_id, delivery: result.delivery, run_id: result.run_id } : { agent_id, ...result };
+        } catch (error) {
+          if (!(error instanceof HarnessError)) throw error;
+          return { agent_id, delivery: "rejected", ...errorReply(error) };
+        }
+      }) })),
     make("cancel_run", "Request cancellation of a Run ID. Cancellation is not execution exit or Agent release; wait for the Run to settle.",
       Type.Object(runId, { additionalProperties: false }), ({ run_id }) => {
         const value = controller.cancel(run_id); return { ...runReply(value.snapshot), cancel: value.result };
