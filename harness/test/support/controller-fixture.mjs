@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { OwnerController } from "../../dist/core/owner-controller.js";
 import { FileOwnerLease } from "../../dist/runtime/owner-lease.js";
 import { boundedOutput } from "../../dist/core/result-text.js";
+import { assertOwnerInvariants } from "./owner-invariants.mjs";
 import { flock } from "./flock.mjs";
 
 export const deferred = () => Promise.withResolvers();
@@ -61,6 +62,10 @@ export async function fixture(t, options = {}) {
   t.after(async () => {
     for (const port of ports) { port.deliveryGate?.resolve(); if (port.streaming) port.finish("test cleanup", "aborted"); }
     const report = await controller.shutdown(1000);
+    // Every test doubles as an invariant fuzzer: the post-shutdown graph must
+    // satisfy every cross-structure invariant, latched fail-closed owners
+    // included (quarantine is legal state).
+    assertOwnerInvariants(controller);
     if (!report.closed) {
       if (!options.cleanupUncertainExpected || !report.cleanup_uncertain || report.active || report.finalizing || report.cleaning || ports.some((p) => p.streaming)) {
         throw new Error(`fixture retained owner: ${JSON.stringify(report)}`);
