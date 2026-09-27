@@ -346,3 +346,31 @@ test("a synchronous finalization fault settles the Run failed and releases its r
   assert.ok(!row?.resident, "the quarantined Agent is released so the owner can still close");
   assert.equal((await c.shutdown(5000)).closed, true);
 });
+
+test("a parked settle path and an unconfirmed stop are observable, never released early", async (t) => {
+  const { controller: c, ports } = await fixture(t, { controller: { concurrency: 1 } });
+  const run = await c.submit("waiter", task("waiter"));
+  await until(() => ports[0]?.streaming);
+  // Park finish() on the inputs await: a steer delivery held at the gate.
+  ports[0].deliveryGate = deferred();
+  c.steer(run.run_id, "held");
+  ports[0].finish("done");
+  await until(() => (c.stats().finalizing_waits ?? []).some((entry) => entry.run_id === run.run_id && entry.wait === "inputs"));
+  const parked = c.stats().finalizing_waits.find((entry) => entry.run_id === run.run_id);
+  assert.equal(parked.wait, "inputs");
+  assert.ok(parked.elapsed_ms >= 0);
+  assert.equal(c.view(run.run_id).finalization_pending, true, "still finalizing while parked");
+  ports[0].deliveryGate.resolve();
+  await ended(c, run);
+  assert.equal(c.stats().finalizing_waits, undefined, "the wait marker clears once the await settles");
+  // An unconfirmed stop is visible with its reason, including deadline overruns.
+  const second = await c.submit("second", task("second"));
+  await until(() => ports[1]?.streaming);
+  c.cancel(second.run_id);
+  const stopping = (c.stats().stopping ?? []).find((entry) => entry.run_id === second.run_id);
+  assert.ok(stopping, "a stop request with no confirmed exit is visible");
+  assert.equal(stopping.stop_reason, "user_cancel");
+  ports[1].finish("partial", "aborted");
+  await ended(c, second);
+  assert.equal(c.stats().stopping, undefined);
+});
