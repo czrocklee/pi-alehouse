@@ -100,26 +100,24 @@ preset enables new work again. The selected name is the single source of truth;
 there is no separate persisted enable switch or last-preset setting. This is
 independent of Pi's **thinking** level named `off`.
 
-Off blocks new `spawn_agent`/`resume_agent` work before model resolution or new
-Run/session allocation, and rejects external `steer_run` input to accepting Runs
-in the Controller. Unknown/input-closed Runs retain their normal errors, including
-bounded terminal-result replies through cached tool handles while Off. Already
-accepted queued/running work and internal finish-budget instructions continue;
-Off does not cancel, pause, release, or close the Owner. Accepted same-ID retries
-still return their original Run. A submission awaiting admission across an
+Off rejects every `agent_spawn`, `agent_run` and `agent_send` with `WORKERS_DISABLED` before
+model resolution, new Run/session allocation or steering, in the Controller. Unknown Agent names retain their normal errors through cached
+tool handles while Off. Already accepted queued/running work and internal
+finish-budget instructions continue; Off does not cancel, pause, release, or
+close the Owner. Accepted same-ID retries still return their original task. A submission awaiting admission across an
 Off/On transition is rejected rather than revived; ordinary enabled-preset
 switches retain their existing routing semantics.
 
-All nine tools remain registered, but Off hides them from the model if this
-Owner has never accepted work. Once it has, only `list_agents`, `read_run`,
-`wait_runs`, `cancel_run`, and `release_agent` remain active while Off, including
+All eight tools remain registered, but Off hides them from the model if this
+Owner has never accepted work. Once it has, only `agent_wait`, `agent_read`,
+`agent_interrupt`, `agent_kill`, and `agent_list` remain active while Off, including
 after execution/release so retained results stay accessible. Other active tools
 and the main model/permissions are unchanged. Hidden/cached calls still meet
 the execution gate; hiding a schema alone is not authorization.
 
-The preset owns the active selection of these nine tools. At startup, preset
+The preset owns the active selection of these eight tools. At startup, preset
 changes, acceptance callbacks, `before_agent_start` and `turn_start`, reconciliation
-restores any missing allowed harness tools: all nine when enabled, or the five
+restores any missing allowed harness tools: all eight when enabled, or the five
 result/cleanup tools when Off with accepted work. Individually deactivating one
 of these tools is not a persistent override. Use Off to disable new worker work;
 the current selection and order of non-harness tools are preserved.

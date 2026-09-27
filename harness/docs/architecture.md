@@ -186,7 +186,7 @@ They retain inherited reserve/keep settings.  The child cache-warming guard is
 final and returns `stop`, preventing child idle warming outside Runs; parent
 warming policy is unchanged.  Parent compaction never injects a roster, task
 labels, or delegation reminders into model context; live harness state remains
-available on demand through `list_agents`.
+available on demand through `agent_list`.
 
 The patched permission authority, generated worker policy, static guard, search
 policy, and optional Jev review policy are outside the internal harness, but

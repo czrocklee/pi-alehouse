@@ -16,14 +16,15 @@ resident slot nor restores reusability.  Once it expires, released failures
 leave the widget/detail roster and their child render state is dropped.
 
 A row prioritizes warning/drops/pending/exceptional state, then identity and
-statistics: latest Run state, original model ID without provider (`[example-model]`),
-turn count/budget, tool-call count, available context occupancy, cost, current
-turn duration in parentheses, total submission duration, and the current task
-label. The nickname is who; the description after `→` is what that Agent is doing
-on its latest Run. For example:
+statistics: latest Run state, original model ID without provider and its
+creation-time effective effort (`[example-model/high]`), turn count/budget,
+tool-call count, available context occupancy, cost, current turn duration in
+parentheses, total submission duration, and the current task label. The nickname
+is who; the description after `→` is what that Agent is doing on its latest Run.
+For example:
 
 ```text
-orca (editor) [example-model] → Review GTK direct-entry safety · …
+orca (editor) [example-model/high] → Review GTK direct-entry safety · …
 ```
 
 The task uses all remaining columns rather than a fixed 40-column cap. Warnings,

@@ -163,13 +163,15 @@ try {
     assert.equal(resolver.checkPermission("skill", name).state, "allow");
   }
   for (const profile of ["editor", "reader"]) {
-    assert.equal(resolver.checkPermission("spawn_agent", { profile, difficulty: 3, prompt: "fixture", description: "fixture" }).state, "allow");
+    assert.equal(resolver.checkPermission("agent_spawn", { agent: "orca", profile, difficulty: 3, prompt: "fixture" }).state, "allow");
   }
-  for (const tool of ["resume_agent", "list_agents", "release_agent", "wait_runs", "read_run", "steer_run", "cancel_run", "post_update"]) {
+  for (const tool of ["agent_run", "agent_send", "agent_wait", "agent_read", "agent_interrupt", "agent_kill", "agent_list"]) {
     assert.equal(resolver.checkPermission(tool, {}).state, "allow", `Harness management: ${tool}`);
   }
   for (const old of ["subagent", "resume_subagent", "list_subagents", "release_subagent", "wait_subagents",
-    "get_subagent_result", "steer_subagent", "cancel_subagent"]) {
+    "get_subagent_result", "steer_subagent", "cancel_subagent",
+    "spawn_agent", "resume_agent", "read_run", "wait_runs", "steer_run", "cancel_run", "post_update",
+    "delegate", "wait_agents", "read_result", "message_agents", "cancel_task", "release_agent", "list_agents"]) {
     assert.equal(Object.hasOwn(config.permission, old), false, `No stale management allow: ${old}`);
   }
 

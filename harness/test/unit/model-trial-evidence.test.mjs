@@ -4,39 +4,36 @@ import { dialogueFailures, parentRoundEvidence, questionFailures } from "../supp
 import { assertThinkingSupported } from "../support/host.mjs";
 
 const expected = { modelSpec: "fixture/calculator", parentThinking: "off", thinking: "off" };
-const missingAnswer = "parent did not retrieve and report the answer Run's output";
+const missingAnswer = "parent did not retrieve and report the answer task's output";
 function evidence() {
   const settings = { provider: "fixture", model: "calculator", thinking: "off", parent_thinking: "off",
     thinking_resolution: "identity", profile: "reader", difficulty: 3, definition_digest: "fixture" };
-  const question = { run_id: "question", agent_id: "worker", status: "needs_input", execution_exited: true,
+  const question = { run_id: "question", agent_id: "worker-id", name: "worker", status: "needs_input", execution_exited: true,
     effective_settings: settings, outcome: { question: "factor?" } };
   const answer = { ...question, run_id: "answer", status: "completed", outcome: { status: "completed" } };
   const first = { runStates: [question], final: "factor?", stop_reason: "stop",
-    calls: [{ name: "read_run", is_error: false, args: { run_id: "question" },
-      value: { run_id: "question", status: "needs_input", question: "factor?", question_complete: true,
-        question_omitted_chars: 0, text: "", complete: false, omitted_chars: 0 } }],
+    calls: [{ name: "agent_read", is_error: false, args: { agent: "worker" },
+      value: { agent: "worker", status: "needs_input", question: "factor?", result: "" } }],
     childCalls: [{ name: "read", is_error: false, run_id: "question", fixture_match: "source.txt" }] };
   return structuredClone({ first, runStates: [question, answer], final: "7 × 11 × 3 = 231", stop_reason: "stop",
     stats: { active: 0, queued: 0, finalizing: 0, cleaning: 0, cleanup_uncertain: false },
     calls: [...first.calls,
-      { name: "resume_agent", is_error: false, args: { agent_id: "worker", answer_to_run_id: "question" }, value: { run_id: "answer", agent_id: "worker" } },
-      { name: "read_run", is_error: false, args: { run_id: "answer" },
-        value: { run_id: "answer", status: "completed", complete: true, omitted_chars: 0, text: "7 × 11 × 3 = 231" } }] });
+      { name: "agent_send", is_error: false, args: { agent: "worker", message: "3" }, value: { delivery: "answered", agent: "worker", status: "running" } },
+      { name: "agent_read", is_error: false, args: { agent: "worker" },
+        value: { agent: "worker", status: "completed", result: "7 × 11 × 3 = 231" } }] });
 }
 function retrieval(copy, name) {
-  if (name === "resume_agent") {
+  if (name === "agent_send") {
     const result = copy.calls.pop().value;
-    const resume = copy.calls.find((call) => call.name === name);
-    resume.args.wait_ms = 60000;
-    resume.value.wait = { reason: "condition", runs: [result] };
-    return result;
+    const answer = copy.calls.findLast((call) => call.name === name);
+    answer.args.wait_ms = 60000; answer.value = { delivery: "answered", ...result };
+    return answer.value;
   }
   const call = copy.calls.at(-1);
-  if (name === "wait_runs") {
-    call.name = name;
-    call.args = { run_ids: ["answer"], mode: "all" };
-    call.value = { reason: "condition", runs: [call.value] };
-    return call.value.runs[0];
+  if (name === "agent_wait") {
+    call.name = name; call.args = { agents: ["worker"] };
+    call.value = { reason: "done", agents: [call.value] };
+    return call.value.agents[0];
   }
   return call.value;
 }
@@ -44,74 +41,75 @@ function retrieval(copy, name) {
 test("full question is separate from the assistant-output preview completeness", () => {
   assert.deepEqual(questionFailures(evidence().first), []);
 });
-test("accepted create wait may supply the complete question without a get", () => {
+test("an accepted spawn wait may supply the complete question without a read", () => {
   const copy = evidence().first;
-  copy.calls = [{ name: "spawn_agent", is_error: false, args: { wait_ms: 60000 }, value: {
-    run_id: "question", agent_id: "worker", wait: { reason: "condition", runs: [{
-      run_id: "question", status: "needs_input", question: "factor?", question_complete: true,
-      question_omitted_chars: 0, complete: true, omitted_chars: 0, text: "please answer",
-    }] },
-  } }];
+  copy.calls = [{ name: "agent_spawn", is_error: false, args: { agent: "worker", profile: "reader", difficulty: 3, wait_ms: 60000 },
+    value: { agent: "worker", status: "needs_input", question: "factor?", result: "please answer" } }];
   assert.deepEqual(questionFailures(copy), []);
 });
-for (const name of ["read_run", "wait_runs", "spawn_agent"]) {
+for (const name of ["agent_read", "agent_wait", "agent_spawn"]) {
   for (const [label, mutate] of [
-    ["incomplete flag alone", (value) => { value.question_complete = false; }],
-    ["omitted characters alone", (value) => { value.question_omitted_chars = 2; }],
-    ["missing omission count", (value) => { delete value.question_omitted_chars; }],
-    ["shortened question despite complete metadata", (value) => { value.question = "factor"; }],
+    ["truncation flag alone", (value) => { value.question_truncated = true; }],
+    ["shortened question", (value) => { value.question = "factor"; }],
+    ["another Agent", (value) => { value.agent = "otter"; }],
   ]) test(`${name}: rejects question ${label}`, () => {
     const copy = evidence().first, call = copy.calls[0], question = call.value;
-    if (name !== "read_run") {
+    if (name !== "agent_read") {
       call.name = name;
-      const wait = { reason: "condition", runs: [question] };
-      call.args = name === "wait_runs" ? { run_ids: ["question"], mode: "all" } : { wait_ms: 60000 };
-      call.value = name === "wait_runs" ? wait : { run_id: "question", agent_id: "worker", wait };
+      call.args = name === "agent_wait" ? { agents: ["worker"] } : { agent: "worker", profile: "reader", difficulty: 3, wait_ms: 60000 };
+      call.value = name === "agent_wait" ? { reason: "attention", agents: [question] } : question;
     }
     assert.deepEqual(questionFailures(copy), []);
     mutate(question);
-    assert.deepEqual(questionFailures(copy), ["parent did not retrieve that Run's complete question"]);
+    assert.deepEqual(questionFailures(copy), ["parent did not retrieve that task's complete question"]);
   });
 }
-test("accepted resume wait keeps top-level identity and may supply the whole answer", () => {
-  const copy = evidence();
-  const resume = copy.calls.find((call) => call.name === "resume_agent");
-  resume.args.wait_ms = 60000;
-  resume.value.wait = { reason: "condition", runs: [copy.calls.at(-1).value] };
-  copy.calls.pop();
-  assert.equal(resume.value.agent_id, "worker"); assert.equal(resume.value.run_id, "answer");
+test("a send to the same Agent answers it; its wait may supply the whole answer", () => {
+  const copy = evidence(); retrieval(copy, "agent_send");
   assert.deepEqual(dialogueFailures(copy, expected), []);
 });
-for (const name of ["read_run", "wait_runs", "resume_agent"]) {
+test("an answer must be an answered send to the same Agent, not a new Agent or a steer", () => {
+  const steered = evidence();
+  steered.calls.find((call) => call.name === "agent_send").value.delivery = "steered";
+  assert.deepEqual(dialogueFailures(steered, expected), ["user answer did not complete a second task on the same Agent", missingAnswer]);
+  const copy = evidence();
+  const answer = copy.calls.find((call) => call.name === "agent_send");
+  answer.name = "agent_spawn"; Object.assign(answer.args, { agent: "otter", prompt: "3", profile: "reader", difficulty: 3 }); answer.value.agent = "otter";
+  assert.deepEqual(dialogueFailures(copy, expected), ["user answer did not complete a second task on the same Agent", missingAnswer]);
+});
+for (const name of ["agent_read", "agent_wait", "agent_send"]) {
   test(`${name}: a complete terminal result satisfies the short dialogue`, () => {
     const copy = evidence(); retrieval(copy, name);
     assert.deepEqual(dialogueFailures(copy, expected), []);
   });
   for (const [label, mutate] of [
-    ["old running partial despite eventual completion", (value) => { value.status = "running"; value.complete = false; value.text = "我来计算一下"; }],
-    ["unread next page", (value) => { value.complete = false; value.next_cursor = "next-page"; }],
-    ["inconsistent complete with cursor", (value) => { value.next_cursor = "next-page"; }],
+    ["old running partial despite eventual completion", (value) => { value.status = "running"; value.result = "我来计算一下"; }],
+    ["unread next page", (value) => { value.next_cursor = "next-page"; }],
     ["omitted output", (value) => { value.omitted_chars = 1; }],
-    ["missing completeness", (value) => { delete value.complete; }],
-    ["wrong Run", (value) => { value.run_id = "another-run"; }],
-    ["empty final result", (value) => { value.text = " "; }],
-  ]) test(`${name}: rejects ${label}`, () => {
+    ["result left for read_result", (value) => { delete value.result; value.result_omitted = true; }],
+    ["another Agent", (value) => { value.agent = "otter"; }],
+    ["empty final result", (value) => { value.result = " "; }],
+  ].filter(([label]) => name !== "agent_send" || label !== "another Agent")) test(`${name}: rejects ${label}`, () => {
     const copy = evidence(); mutate(retrieval(copy, name));
     assert.equal(copy.runStates[1].status, "completed");
     assert.deepEqual(dialogueFailures(copy, expected), [missingAnswer]);
   });
 }
-test("a timed-out resume receipt does not hide a later complete retry of the same Run", () => {
-  const copy = evidence(); retrieval(copy, "resume_agent");
-  const completed = copy.calls.at(-1), timedOut = structuredClone(completed);
-  timedOut.value.status = "running";
-  timedOut.value.wait = { reason: "timeout", pending_run_ids: ["answer"], runs: [{ run_id: "answer", status: "running" }] };
-  copy.calls.splice(copy.calls.length - 1, 0, timedOut);
-  assert.deepEqual(dialogueFailures(copy, expected), [], "final Run state and any complete retrieval satisfy the oracle");
-  copy.calls.pop();
-  assert.deepEqual(dialogueFailures(copy, expected), [missingAnswer], "timeout alone never proves retrieval");
+test("a reply read before the answer task started cannot stand in for its result", () => {
+  const copy = evidence(), stale = structuredClone(copy.calls.at(-1));
+  copy.calls.pop(); copy.calls.splice(1, 0, stale);
+  assert.deepEqual(dialogueFailures(copy, expected), [missingAnswer]);
 });
-test("a last page marked complete does not prove a whole result was retrieved", () => {
+test("a timed-out send wait does not hide a later complete read", () => {
+  const copy = evidence(); retrieval(copy, "agent_send");
+  const completed = copy.calls.at(-1), timedOut = structuredClone(completed);
+  timedOut.value = { delivery: "answered", agent: "worker", status: "running" };
+  copy.calls.splice(copy.calls.length - 1, 1, timedOut, { name: "agent_read", is_error: false, args: { agent: "worker" }, value: completed.value });
+  assert.deepEqual(dialogueFailures(copy, expected), [], "final task state and any complete retrieval satisfy the oracle");
+  copy.calls.pop();
+  assert.deepEqual(dialogueFailures(copy, expected), [missingAnswer], "a timeout alone never proves retrieval");
+});
+test("a later page does not prove a whole result was retrieved", () => {
   const copy = evidence(); copy.calls.at(-1).args.cursor = "last-page";
   assert.deepEqual(dialogueFailures(copy, expected), [missingAnswer]);
 });
@@ -122,16 +120,15 @@ test("no retrieval and an errored retrieval are rejected", () => {
     assert.deepEqual(dialogueFailures(copy, expected), [missingAnswer]);
   }
 });
-test("ordinary parent follow-up also requires the first Run's whole terminal output", () => {
+test("ordinary parent follow-up also requires the first task's whole terminal output", () => {
   const copy = evidence(), question = copy.first.runStates[0];
   question.status = "completed"; question.outcome = { status: "completed" };
   copy.runStates[0] = structuredClone(question);
   const reply = copy.first.calls[0].value;
-  Object.assign(reply, { status: "completed", complete: true, text: "factor?" }); delete reply.question;
-  delete copy.calls.find((call) => call.name === "resume_agent").args.answer_to_run_id;
+  Object.assign(reply, { status: "completed", result: "factor?" }); delete reply.question;
   assert.deepEqual(dialogueFailures(copy, expected), []);
-  reply.status = "running"; reply.complete = false;
-  assert.deepEqual(dialogueFailures(copy, expected), ["parent did not retrieve the first Run's output before asking the user"]);
+  reply.status = "running";
+  assert.deepEqual(dialogueFailures(copy, expected), ["parent did not retrieve the first task's output before asking the user"]);
 });
 for (const stage of ["question", "answer"]) for (const reason of ["error", "aborted", "length", "toolUse", "pending", "deferred", undefined]) {
   test(`parent ${stage}: nonempty text cannot hide stop reason ${reason}`, () => {

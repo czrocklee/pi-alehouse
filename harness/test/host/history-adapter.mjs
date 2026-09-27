@@ -30,7 +30,7 @@ try {
   const unknownSpend = hostUsage(addToLedger(undefined,
     { input: null, output: null, cache_read: null, cache_write: null, cost: null }, "compaction/fixture/controlled"));
   // Codec fixture only: production still attaches spend to real tool results.
-  parent.manager.appendMessage({ role: "toolResult", toolCallId: "fixture-unknown-spend", toolName: "wait_runs",
+  parent.manager.appendMessage({ role: "toolResult", toolCallId: "fixture-unknown-spend", toolName: "agent_wait",
     content: [{ type: "text", text: "fixture" }], isError: false, usage: unknownSpend, timestamp: Date.now() });
   const storedSpend = parse(parent.manager.getSessionFile()).find((e) => e.type === "message" && e.message.toolCallId === "fixture-unknown-spend").message.usage;
   assert.deepEqual(storedSpend, unknownSpend);

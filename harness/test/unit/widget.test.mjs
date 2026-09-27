@@ -16,7 +16,7 @@ const theme = { fg: (_color, text) => text, bold: (text) => text };
 const owner = { blocked: false, resident: 2, resident_limit: 8 };
 const base = { turns: 3, max_turns: 256, elapsed_ms: 12400, tool_uses: 2, active_tools: [],
   preview: "", question: false, limit_reached: false, pending_messages: 0, notification_drops: 0,
-  has_run_warnings: false, finishing: false, name: "", profile: "editor", model: "m", description: "Task" };
+  has_run_warnings: false, finishing: false, name: "", profile: "editor", model: "m", effort: "high", description: "Task" };
 const run = (id, overrides) => ({ ...base, agent_id: id, run_id: `${id}-run`, ...overrides });
 const render = (runs, options = {}) => renderWidgetLines({ runs, owner, spinnerFrame: 0, width: 120, theme,
   shouldShowFinished: () => true, ...options });
@@ -39,7 +39,7 @@ test("the body is ordered finished, running, queued and the tree closes exactly 
 
 test("a trailing activity line hands its corner to the header above it", () => {
   const lines = render([run("r", { status: "running", name: "solo" })]);
-  assert.deepEqual(lines.slice(1), ["└─ ⠋ solo (editor) [m] → Task · ↻3≤256 · ▸2 · 12.4s",
+  assert.deepEqual(lines.slice(1), ["└─ ⠋ solo (editor) [m/high] → Task · ↻3≤256 · ▸2 · 12.4s",
     "   " + "  ⎿  thinking…"]);
   assert.equal(lines.filter((line) => line.includes("│")).length, 0);
 });
@@ -221,9 +221,9 @@ test("a recorded Run issue does not claim that resources are still unclosed", (t
 });
 
 test("an Agent without a nickname is named by its profile, never labelled twice", () => {
-  assert.match(render([run("a", { status: "completed" })])[1], /^└─ ✓ editor \[m\] → Task/);
+  assert.match(render([run("a", { status: "completed" })])[1], /^└─ ✓ editor \[m\/high\] → Task/);
   assert.match(render([run("a", { status: "completed", name: "scout" })])[1],
-    /^└─ ✓ scout \(editor\) \[m\] → Task/);
+    /^└─ ✓ scout \(editor\) \[m\/high\] → Task/);
 });
 
 test("a fixed nickname points to the current task, which can use more than forty columns", () => {
@@ -231,7 +231,7 @@ test("a fixed nickname points to the current task, which can use more than forty
   for (const status of ["running", "completed"]) {
     const frame = renderWidget({ runs: [run("orca-id", { name: "orca", status, description })],
       owner, spinnerFrame: 0, width: 180, theme, shouldShowFinished: () => true });
-    assert(frame.lines[1].includes(`orca (editor) [m] → ${description} · ↻`), frame.lines[1]);
+    assert(frame.lines[1].includes(`orca (editor) [m/high] → ${description} · ↻`), frame.lines[1]);
     assert.match(frame.lines[1], /▸2 · 12\.4s$/);
     assert.equal(frame.hits[1], "orca-id", "labels and their new separator never become click identities");
     assert(frame.lines.every((line) => visibleWidth(line) <= 180));
@@ -292,11 +292,11 @@ test("a painted row keeps cost but leaves cumulative tokens to the detail pane",
   assert.ok(!paint(undefined).includes("token"), "a Run that reported nothing shows no figures");
 });
 
-test("model labels preserve model ids including hyphens and namespaces", () => {
+test("allocation labels preserve model IDs and show creation-time effort", () => {
   for (const model of ["gpt-5.6-sol", "fixture-strong-model", "gpt-5.6-terra", "gpt-5.6-luna",
     "claude-opus-5", "qwen3.8:27b", "org/custom-model"]) {
     for (const status of ["running", "completed"]) {
-      assert.ok(render([run("a", { model, status })])[1].includes(`[${model}]`));
+      assert.ok(render([run("a", { model, effort: "xhigh", status })])[1].includes(`[${model}/xhigh]`));
     }
   }
 });
@@ -312,7 +312,7 @@ test("painted Agent rows show the resolved model and current context, not cumula
     t.after(() => h.widget.dispose());
     h.widget.wake();
     const line = h.lines()[1];
-    assert.match(line, /\[gpt-5\.6-sol\]/);
+    assert.match(line, /\[gpt-5\.6-sol\/off\]/);
     assert.match(line, /ctx 84\.9% · \$0\.500/);
     assert.doesNotMatch(line, /openai-codex|231k|272k|700|token/);
     assert.deepEqual(view, before, "presentation never changes routing or billing metadata");
@@ -355,10 +355,10 @@ test("a long task yields to warnings and compact metrics at 120 and 160 columns"
     runtime: { activity: "generating", context: { tokens: 231000, context_window: 272000 } } });
   for (const width of [120, 160]) {
     const lines = render([row], { width });
-    for (const text of ["reviewer", "[gpt-5.6-sol]", "run warning", "3 msg", "▸77", "ctx 84.9%", "$0.500", "12.4s"]) {
+    for (const text of ["reviewer", "[gpt-5.6-sol/high]", "run warning", "3 msg", "▸77", "ctx 84.9%", "$0.500", "12.4s"]) {
       assert.ok(lines[1].includes(text), `${width}: missing ${text}: ${lines[1]}`);
     }
-    assert.ok(lines[1].indexOf("run warning") < lines[1].indexOf("[gpt-5.6-sol]"));
+    assert.ok(lines[1].indexOf("run warning") < lines[1].indexOf("[gpt-5.6-sol/high]"));
     assert.doesNotMatch(lines[1], /token|tool use/);
     for (const line of lines) assert.ok(visibleWidth(line) <= width);
   }
@@ -465,7 +465,7 @@ test("the paint loop starts when a Run is there, not when delegation is only abo
   // tool, must not be what decides whether a running worker is visible.
   h.set([viewOf("a", "running")]);
   h.widget.wake();
-  assert.match(h.lines()[1], /^└─ \S editor \[m\] → Task/, "the Run is on screen as soon as it exists");
+  assert.match(h.lines()[1], /^└─ \S editor \[m\/off\] → Task/, "the Run is on screen as soon as it exists");
   t.mock.timers.tick(240);
   assert.ok(h.renders() >= 3, `the spinner keeps animating (${h.renders()} frames)`);
   h.set([viewOf("a", "completed")]);
@@ -483,7 +483,7 @@ test("a reused Agent lingers again for every Run, not only its first", (t) => {
   assert.match(h.lines()[1], /✓ editor/);
   h.widget.onTurnStart();
   assert.equal(h.showing(), false, "one turn is the whole normal linger");
-  // resume_agent: a new Run on the Agent that already spent a linger.
+  // delegate to an existing Agent: a new Run on the Agent that already spent a linger.
   h.set([viewOf("a", "running", "a-2")]);
   h.widget.update();
   h.set([viewOf("a", "completed", "a-2")]);

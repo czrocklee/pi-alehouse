@@ -52,7 +52,7 @@ try {
   assert.equal(service, vendor.getPermissionsService(session.sessionId));
   const extension = loader.getExtensions().extensions[0];
   if (invalidPreset) {
-    assert(!extension.tools.has("spawn_agent"), "preset failure returns before management registration");
+    assert(!extension.tools.has("agent_spawn"), "preset failure returns before management registration");
     const blocked = await session.extensionRunner.emitToolCall({ type: "tool_call", toolCallId: "invalid-preset-read", toolName: "read", input: { path: "fixture.txt" } });
     assert.equal(blocked.block, true);
     assert.match(blocked.reason, /Harness initialization did not complete/);
@@ -62,8 +62,8 @@ try {
   } else {
   assert.equal(await extension.handlers.get("tool_call")[0]({ toolName: "read", input: { path: "fixture.txt" } }), undefined,
     "composition latch becomes ready only after the real authority");
-  assert(extension.tools.has("spawn_agent"), "harness registers its tools during session_start");
-  assert(!session.getActiveToolNames().includes("spawn_agent"), "Off seed keeps workers inactive");
+  assert(extension.tools.has("agent_spawn"), "harness registers its tools during session_start");
+  assert(!session.getActiveToolNames().includes("agent_spawn"), "Off seed keeps workers inactive");
   assert.equal(service.checkPermission("path_read", join(agentDir, "auth.json")).state, "deny");
   assert.equal(service.checkPermission("path_read", join(agentDir, "web-search.json")).state, "deny");
   assert.equal(service.checkPermission("path_write", join(packageRoot, "composition.ts")).state, "deny");

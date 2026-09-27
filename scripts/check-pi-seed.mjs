@@ -42,7 +42,7 @@ try {
       assert((await gatesFor("bash", { command }, agent)).some((gate) => ["ask", "deny"].includes(gate.preCheck?.state)), `${agent}: no automatic arbitrary execution ${command}`); checks++;
     }
     for (const tool of ["write", "edit"]) { assert.equal(resolver.checkPermission(tool, {}, agent).state, agent === "reader" ? "deny" : "allow"); checks++; }
-    for (const tool of ["spawn_agent", "wait_runs", "read_run", "notify_parent", "ask_parent"]) { assert.equal(resolver.checkPermission(tool, {}, agent).state, "allow"); checks++; }
+    for (const tool of ["agent_spawn", "agent_run", "agent_send", "agent_wait", "agent_read", "notify_parent", "ask_parent"]) { assert.equal(resolver.checkPermission(tool, {}, agent).state, "allow"); checks++; }
   }
   console.log(`PASS: ${checks} production seed real-parser/gate checks, no fallback policy`);
 } finally { rmSync(scratch, { recursive: true, force: true }); }

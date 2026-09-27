@@ -325,7 +325,7 @@ try {
         pi.setActiveTools(tools.map((item) => item.name));
       });
       pi.on("tool_call", (event) => {
-        if (event.toolName === "spawn_agent" && event.input.model !== undefined) {
+        if (event.toolName === "agent_spawn" && event.input.model !== undefined) {
           return { block: true, reason: "MODEL_ARGUMENT_OBSOLETE: use the authorized trial preset" };
         }
       });
@@ -385,17 +385,17 @@ try {
       }
 
       const result = (id) => resultById(messages, id);
-      if (!callById(messages, "create-a")) return action("create-a", "spawn_agent", { prompt: "ASK_FACTOR", description: "calculate the source product", profile: "reader", difficulty: 3, wait_ms: 60000 });
-      const a = result("create-a");
+      if (!callById(messages, "create-a")) return action("create-a", "agent_spawn", { agent: "worker", prompt: "ASK_FACTOR", label: "calculate the source product", profile: "reader", difficulty: 3, wait_ms: 60000 });
+      const question = result("create-a");
       if (dialogueStage === "question") {
-        const question = a.wait?.runs[0];
-        assert.equal(question?.status, "needs_input"); assert.equal(question.question_complete, true);
+        assert.equal(question?.status, "needs_input"); assert.equal(question.question_truncated, undefined);
         return { text: question.question };
       }
-      if (!callById(messages, "answer")) return action("answer", "resume_agent", { agent_id: a.agent_id, prompt: "ANSWER_FACTOR 3", answer_to_run_id: a.run_id, wait_ms: 60000 });
-      const answerResult = result("answer").wait?.runs[0];
-      assert.equal(answerResult.status, "completed"); assert.equal(answerResult.complete, true);
-      return { text: answerResult.text, ...(fault === "parent-answer-error" ? { reason: "error", error: "SYNTHETIC_PARENT_ANSWER_ERROR" } : {}) };
+      // A send to the asking Agent answers its question.
+      if (!callById(messages, "answer")) return action("answer", "agent_send", { agent: "worker", message: "ANSWER_FACTOR 3", wait_ms: 60000 });
+      const answerResult = result("answer");
+      assert.equal(answerResult.status, "completed"); assert.equal(answerResult.next_cursor, undefined);
+      return { text: answerResult.result, ...(fault === "parent-answer-error" ? { reason: "error", error: "SYNTHETIC_PARENT_ANSWER_ERROR" } : {}) };
     });
   }
 
@@ -444,7 +444,7 @@ try {
 
   if (controlled && !scenario.failures.length) {
     assert.equal(scenario.final, "7 × 11 × 3 = 231。");
-    assert.deepEqual(report.calls.map((call) => call.name), ["spawn_agent", "resume_agent"]);
+    assert.deepEqual(report.calls.map((call) => call.name), ["agent_spawn", "agent_send"]);
     assert.equal(scenario.parent_turns, 4, "two controlled rounds each dispatch once then report, without wait/get turns");
     assert(report.child_tool_calls.some((call) => call.exact_guard_blocked));
     scenario.task_review = "controlled-fixture-asserted";
@@ -454,31 +454,28 @@ try {
     ordinary.first.runStates[0].status = "completed";
     ordinary.first.runStates[0].outcome = { status: "completed" };
     ordinary.runStates[0] = structuredClone(ordinary.first.runStates[0]);
-    const questionReply = ordinary.first.calls.find((call) => call.name === "spawn_agent").value.wait.runs[0];
-    questionReply.text = questionReply.question;
-    questionReply.status = "completed"; questionReply.complete = true;
+    const questionReply = ordinary.first.calls.find((call) => call.name === "agent_spawn").value;
+    questionReply.result = questionReply.question; questionReply.status = "completed";
     delete questionReply.question;
-    delete ordinary.calls.find((call) => call.name === "resume_agent").args.answer_to_run_id;
     assert.deepEqual(dialogueFailures(ordinary, evidenceExpected), []);
     report.ordinary_followup_oracle = "accepted-without-claiming-ask_parent-coverage";
+    const answerCall = (copy) => copy.calls.findLast((call) => call.name === "agent_send");
+    const noAnswer = ["user answer did not complete a second task on the same Agent", "parent did not retrieve and report the answer task's output"];
     const mutations = {
-      "missing-answer": [["user answer did not complete a second Run on the same Agent (answer_to_run_id is required for needs_input)",
-        "parent did not retrieve and report the answer Run's output"],
-        (copy) => { copy.calls = copy.calls.filter((call) => call.name !== "resume_agent"); }],
-      "wrong-question-run": [["user answer did not complete a second Run on the same Agent (answer_to_run_id is required for needs_input)",
-        "parent did not retrieve and report the answer Run's output"],
-        (copy) => { copy.calls.find((call) => call.name === "resume_agent").args.answer_to_run_id = "another-run"; }],
-      "wrong-read-run": [["question Run did not read the synthetic source through SDK read"],
+      "missing-answer": [noAnswer, (copy) => { copy.calls = copy.calls.filter((call) => call !== answerCall(copy)); }],
+      "answered-another-agent": [noAnswer, (copy) => { const call = answerCall(copy); call.args.agent = call.value.agent = "otter"; }],
+      "not-answered": [noAnswer, (copy) => { answerCall(copy).value.delivery = "not_delivered"; }],
+      "wrong-read-run": [["question task did not read the synthetic source through SDK read"],
         (copy) => { for (const call of copy.first.childCalls) if (call.fixture_match) call.run_id = "another-run"; }],
       "active-at-return": [["active work or uncertain ownership remained before host cleanup"], (copy) => { copy.stats.active = 1; }],
-      "unretrieved-question": [["parent did not retrieve that Run's complete question"],
-        (copy) => { copy.first.calls.find((call) => call.name === "spawn_agent").value.wait.runs[0].question_complete = false; }],
-      "partial-answer": [["parent did not retrieve and report the answer Run's output"],
-        (copy) => { copy.calls.find((call) => call.name === "resume_agent").value.wait.runs[0].complete = false; }],
+      "unretrieved-question": [["parent did not retrieve that task's complete question"],
+        (copy) => { copy.first.calls.find((call) => call.name === "agent_spawn").value.question_truncated = true; }],
+      "partial-answer": [["parent did not retrieve and report the answer task's output"],
+        (copy) => { answerCall(copy).value.next_cursor = "next-page"; }],
       "settings-drift": [["reused Agent settings changed"], (copy) => { copy.runStates[1].effective_settings.definition_digest = "changed"; }],
-      "budget-exceeded": [["Run execution/budget/model scope was not satisfied"], (copy) => { copy.runStates[1].outcome.limit_reached = true; }],
-      "model-mismatch": [["reused Agent settings changed", "Run execution/budget/model scope was not satisfied"], (copy) => { copy.runStates[1].effective_settings.model = "other"; }],
-      "thinking-mismatch": [["reused Agent settings changed", "Run execution/budget/model scope was not satisfied"], (copy) => { copy.runStates[1].effective_settings.thinking = "high"; }],
+      "budget-exceeded": [["task execution/budget/model scope was not satisfied"], (copy) => { copy.runStates[1].outcome.limit_reached = true; }],
+      "model-mismatch": [["reused Agent settings changed", "task execution/budget/model scope was not satisfied"], (copy) => { copy.runStates[1].effective_settings.model = "other"; }],
+      "thinking-mismatch": [["reused Agent settings changed", "task execution/budget/model scope was not satisfied"], (copy) => { copy.runStates[1].effective_settings.thinking = "high"; }],
     };
     report.negative_oracle = [];
     for (const [name, [expected, mutate]] of Object.entries(mutations)) {

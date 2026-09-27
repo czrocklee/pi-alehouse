@@ -109,7 +109,7 @@ for (const [name, failure] of Object.entries(opaqueFailures)) for (const phase o
     const run = await c.submit("opaque", task("opaque")); await until(() => port.streaming);
     port.finish("retained result", phase === "finalizing" ? "invalid" : "success");
     await ended(c, run);
-    // Cleanup uncertainty can wake wait_runs before finalization completes.
+    // Cleanup uncertainty can wake wait_agents before finalization completes.
     await until(() => c.view(run.run_id).phase === "settled");
     if (phase === "release") assert.equal((await c.release(run.agent_id)).released, false);
     if (phase === "shutdown") assert.equal((await c.shutdown(20)).closed, false);

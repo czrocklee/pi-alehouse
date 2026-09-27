@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { OwnerController } from "../../dist/core/owner-controller.js";
 import { FileOwnerLease } from "../../dist/runtime/owner-lease.js";
-import { compactRunReply, runReply } from "../../dist/tools/replies.js";
+import { taskReply } from "../../dist/tools/replies.js";
 import { FakePort, deferred, ended, errorCode, fixture, task, tick, until } from "../support/controller-fixture.mjs";
 import { flock } from "../support/flock.mjs";
 
@@ -130,7 +130,7 @@ test("queue/resident limits, queued cancel, and non-cooperative cancel retain th
   await assert.rejects(c.submit("full", task("full")), errorCode("QUEUE_FULL"));
   const cancel = c.cancel(b.run_id); assert.equal(cancel.execution_exited, true);
   await ended(c, b); assert.equal(c.view(b.run_id).status, "cancelled"); assert.equal(ports.length, 1);
-  assert.equal(c.view(b.run_id).resumable, false);
+  assert.equal(c.view(b.run_id).resumable, true, "an Agent lives until kill, even if its first task never started");
   c.cancel(a.run_id); await tick();
   assert.equal(c.view(a.run_id).status, "cancelling"); assert.equal(c.stats().active, 1);
   const shutdown = await c.shutdown(5); assert.equal(shutdown.closed, false); assert.equal(shutdown.active, 1);
@@ -200,8 +200,8 @@ test("an unrecovered model output limit fails without becoming a turn limit or p
   assert.equal(view.model_stop_reason, "length"); assert.equal(view.outcome.model_stop_reason, "length");
   assert.equal(view.outcome.limit_reached, false); assert.equal(view.stop_reason, undefined);
   assert.equal(c.getResult(limited.run_id).text, "useful partial"); assert.equal(view.resumable, true);
-  assert.equal(runReply(view).model_stop_reason, "length");
-  assert.equal(compactRunReply(view).model_stop_reason, "length");
+  assert.equal(taskReply(view, () => "").reason, "output_limit", "the model sees the outcome, not the provider stop reason");
+  assert.equal("model_stop_reason" in taskReply(view, () => ""), false);
 
   const resumed = await c.submit("after-length", { resume: limited.agent_id, prompt: "continue" });
   await until(() => ports[0].calls.length === 2); ports[0].finish("recovered", "success", undefined, "stop"); await ended(c, resumed);

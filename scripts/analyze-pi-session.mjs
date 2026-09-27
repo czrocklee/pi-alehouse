@@ -4,8 +4,8 @@
 // prints aggregates, not transcript text. Transcripts themselves are not source.
 import { readFileSync } from "node:fs";
 
-const management = new Set(["spawn_agent", "resume_agent", "read_run", "wait_runs", "list_agents",
-  "steer_run", "post_update", "cancel_run", "release_agent"]);
+const management = new Set(["agent_spawn", "agent_run", "agent_send", "agent_wait", "agent_read",
+  "agent_interrupt", "agent_kill", "agent_list"]);
 
 function usage() {
   console.error("Usage: node scripts/analyze-pi-session.mjs [--json] <session.jsonl>");
@@ -24,11 +24,12 @@ const parent = { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cos
 const tools = new Map();
 const calls = new Map(); // toolCallId -> { name, args }
 const harness = {
-  spawn: 0, resume: 0, handoff_runs: 0, after_runs: 0, wait_ms_submits: 0,
-  steer: { accepted: 0, input_closed: 0, other_error: 0 },
-  post_update: { steered: 0, queued: 0, rejected: 0 },
+  spawn: { ok: 0, with_wait_ms: 0, after_agents: 0 },
+  run: { ok: 0, with_wait_ms: 0, after_agents: 0 },
+  send: { steered: 0, joined: 0, answered: 0, not_delivered: 0, with_wait_ms: 0 },
+  errors: {},
   wait: { calls: 0, short_timeout: 0, reasons: {} },
-  list_agents: 0, read_run: 0, changes_seen: 0,
+  agent_list: 0, agent_read: 0, agent_interrupt: 0, agent_kill: 0, finished_seen: 0,
 };
 let childCost = 0, compactions = 0, managementOnlyTurns = 0, toolTurns = 0, userMessages = 0;
 
@@ -65,30 +66,27 @@ for (const entry of entries) {
   const name = message.toolName ?? call?.name;
   if (!management.has(name)) continue;
   const reply = replyOf(message);
-  if (Array.isArray(reply?.changes)) harness.changes_seen += reply.changes.length;
+  if (Array.isArray(reply?.finished)) harness.finished_seen += reply.finished.length;
   const args = call?.args ?? {};
+  if (message.isError) { bump(harness.errors, `${name}:${reply?.error?.code ?? "unknown"}`); continue; }
   switch (name) {
-    case "spawn_agent": case "resume_agent":
-      harness[name === "spawn_agent" ? "spawn" : "resume"]++;
-      if (args.wait_ms) harness.wait_ms_submits++;
-      harness.handoff_runs += Array.isArray(args.handoff_from) ? args.handoff_from.length : 0;
-      harness.after_runs += Array.isArray(args.after) ? args.after.length : 0;
+    case "agent_spawn": case "agent_run": {
+      const record = harness[name === "agent_spawn" ? "spawn" : "run"];
+      record.ok++;
+      if (args.wait_ms) record.with_wait_ms++;
+      record.after_agents += Array.isArray(args.after) ? args.after.length : 0;
       break;
-    case "steer_run":
-      if (reply?.accepted === true) harness.steer.accepted++;
-      else if (reply?.reason === "RUN_INPUT_CLOSED" || reply?.error?.code === "RUN_INPUT_CLOSED") harness.steer.input_closed++;
-      else harness.steer.other_error++;
+    }
+    case "agent_send":
+      bump(harness.send, reply?.delivery ?? "unknown");
+      if (args.wait_ms) harness.send.with_wait_ms++;
       break;
-    case "post_update":
-      for (const target of reply?.targets ?? []) bump(harness.post_update, target.delivery ?? "rejected");
-      break;
-    case "wait_runs":
+    case "agent_wait":
       harness.wait.calls++;
-      if (typeof args.timeout_ms === "number" && args.timeout_ms < 60_000) harness.wait.short_timeout++;
-      bump(harness.wait.reasons, reply?.reason ?? (message.isError ? "error" : "unknown"));
+      if (typeof args.wait_ms === "number" && args.wait_ms < 60_000) harness.wait.short_timeout++;
+      bump(harness.wait.reasons, reply?.reason ?? "unknown");
       break;
-    case "list_agents": harness.list_agents++; break;
-    case "read_run": harness.read_run++; break;
+    default: harness[name]++;
   }
 }
 
@@ -114,10 +112,11 @@ else {
   console.log(`parent LLM calls   ${parent.calls}   cost $${report.parent.cost}   cache hit ${pct(report.parent.cache_hit_rate)}`);
   console.log(`child cost (attached to results) $${report.child_cost_attached}`);
   console.log(`tool turns         ${toolTurns}   management-only ${managementOnlyTurns}`);
-  console.log(`spawn/resume       ${harness.spawn}/${harness.resume}   with wait_ms ${harness.wait_ms_submits}   handoff runs ${harness.handoff_runs}   after runs ${harness.after_runs}`);
-  console.log(`steer_run          accepted ${harness.steer.accepted}   input closed ${harness.steer.input_closed}   other error ${harness.steer.other_error}`);
-  console.log(`post_update        ${JSON.stringify(harness.post_update)}`);
-  console.log(`wait_runs          ${harness.wait.calls}   timeout<60s ${harness.wait.short_timeout}   reasons ${JSON.stringify(harness.wait.reasons)}`);
-  console.log(`list_agents        ${harness.list_agents}   read_run ${harness.read_run}   changes seen ${harness.changes_seen}`);
+  console.log(`agent_spawn        ${JSON.stringify(harness.spawn)}`);
+  console.log(`agent_run          ${JSON.stringify(harness.run)}`);
+  console.log(`agent_send         ${JSON.stringify(harness.send)}`);
+  console.log(`agent_wait         ${harness.wait.calls}   wait<60s ${harness.wait.short_timeout}   reasons ${JSON.stringify(harness.wait.reasons)}`);
+  console.log(`agent_list         ${harness.agent_list}   read ${harness.agent_read}   interrupt ${harness.agent_interrupt}   kill ${harness.agent_kill}   finished seen ${harness.finished_seen}`);
+  console.log(`errors             ${JSON.stringify(harness.errors)}`);
   console.log("tools              " + Object.entries(report.tools).map(([k, v]) => `${k}=${v}`).join(" "));
 }
