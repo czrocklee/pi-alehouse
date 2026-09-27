@@ -342,13 +342,19 @@ test("a synchronous finalization fault settles the Run failed and releases its r
   assert.match(view.outcome?.error ?? "", /poisoned output getter/);
   assert.ok(view.cleanup_errors.some((entry) => /FINALIZATION_FAILED/.test(entry)), "diagnostics land on the Run");
   assert.equal(c.stats().reserved_output_chars, 0, "the output reservation is released, not leaked");
+  // The final report was unreadable: spend is unknown, never zero-filled, and
+  // is still rolled into the parent's ledger exactly once.
+  assert.deepEqual(view.usage?.partial, ["input", "output", "cache_read", "cache_write", "cost"]);
+  assert.deepEqual(c.stats().unreported_usage?.partial, ["input", "output", "cache_read", "cache_write", "cost"]);
   const row = c.list().find((entry) => entry.agent_id === run.agent_id);
   assert.ok(!row?.resident, "the quarantined Agent is released so the owner can still close");
   assert.equal((await c.shutdown(5000)).closed, true);
 });
 
 test("a parked settle path and an unconfirmed stop are observable, never released early", async (t) => {
-  const { controller: c, ports } = await fixture(t, { controller: { concurrency: 1 } });
+  let mono = 0;
+  const { controller: c, ports } = await fixture(t, { controller: { concurrency: 1,
+    clock: { wall: Date.now, mono: () => mono } } });
   const run = await c.submit("waiter", task("waiter"));
   await until(() => ports[0]?.streaming);
   // Park finish() on the inputs await: a steer delivery held at the gate.
@@ -366,10 +372,13 @@ test("a parked settle path and an unconfirmed stop are observable, never release
   // An unconfirmed stop is visible with its reason, including deadline overruns.
   const second = await c.submit("second", task("second"));
   await until(() => ports[1]?.streaming);
+  mono += 600_000; // A long-running task...
   c.cancel(second.run_id);
+  mono += 250; // ...whose stop has gone unconfirmed briefly.
   const stopping = (c.stats().stopping ?? []).find((entry) => entry.run_id === second.run_id);
   assert.ok(stopping, "a stop request with no confirmed exit is visible");
   assert.equal(stopping.stop_reason, "user_cancel");
+  assert.equal(stopping.elapsed_ms, 250, "measured from the stop request, not from execution start");
   ports[1].finish("partial", "aborted");
   await ended(c, second);
   assert.equal(c.stats().stopping, undefined);

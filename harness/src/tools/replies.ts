@@ -40,14 +40,16 @@ export function taskReply(view: RunView, nameOf: NameOf) {
     ...(view.blocked_by?.length ? { waiting_for: view.blocked_by.map(nameOf) } : {}),
     ...(unavailable ? { unavailable } : {}) };
 }
+/** Only a task still awaiting an answer (needs_input) advertises its question:
+ * agent_send answers it. A stopped task's question stays readable through
+ * agent_read, but that Agent's next task is agent_run; agent_send cannot deliver. */
+const answerable = (view: RunView): boolean => view.status === "needs_input" && !!view.outcome?.question;
 /** Settled since last shown; the parent reads the result with agent_wait or agent_read. */
 export function finishedReply(view: RunView) {
   return { agent: view.name, status: statusOf(view),
     ...(view.outcome?.reason ? { reason: view.outcome.reason } : {}),
     ...(view.outcome?.limit_reached ? { limit_reached: true } : {}),
-    // Only a task still awaiting an answer is answerable; a stopped task's
-    // question is readable via agent_read, and its next task is agent_run.
-    ...(view.outcome?.question && view.status === "needs_input" ? { has_question: true } : {}) };
+    ...(answerable(view) ? { has_question: true } : {}) };
 }
 
 const EARLIER_SHOWN = 4;
@@ -64,9 +66,7 @@ export function agentRow(view: RunView, summary: AgentSummary, nameOf: NameOf) {
   const { agent, ...task } = taskReply(view, nameOf);
   return { agent, profile: view.effective_settings.profile, difficulty: view.effective_settings.difficulty,
     label: utf16Prefix(view.description, 120), ...task,
-    // Answerable questions only: a stopped task's question is readable via
-    // agent_read, but the Agent's next task is agent_run, not agent_send.
-    ...(view.outcome?.question && view.status === "needs_input" ? { has_question: true } : {}),
+    ...(answerable(view) ? { has_question: true } : {}),
     ...(running && view.execution_elapsed_ms !== undefined ? { elapsed_s: Math.round(view.execution_elapsed_ms / 1000) } : {}),
     tasks: summary.runs,
     ...(earlier.length ? { earlier_labels: earlier } : {}),
@@ -108,7 +108,7 @@ export function waitReply(value: WaitResult, readResult: ResultReader | undefine
     const agents: Array<Record<string, unknown>> = value.snapshots.map((view) => ({ ...taskReply(view, nameOf) }));
     const byRun = new Map(value.snapshots.map((view, index) => [view.run_id, agents[index]!]));
 
-    const questions = terminalViews.filter((view) => !!view.outcome?.question);
+    const questions = terminalViews.filter(answerable);
     // Whole questions are actionable. Admit every whole question that fits, in
     // order, before sharing the rest; a long one cannot crowd out a short one.
     const deferred: RunView[] = [];
@@ -182,7 +182,7 @@ export function waitReply(value: WaitResult, readResult: ResultReader | undefine
   const compact = { reason,
     agents: value.snapshots.map((view) => ({ agent: view.name, status: statusOf(view),
       ...(view.outcome?.limit_reached ? { limit_reached: true } : {}),
-      ...(view.outcome?.question ? { question_truncated: true } : {}),
+      ...(answerable(view) ? { question_truncated: true } : {}),
       ...((view.result_ref?.total_chars ?? 0) > 0 ? { result_omitted: true } : {}) })),
     ...(pending.length ? { pending } : {}),
     ...(value.progress?.length ? { progress_omitted: value.progress.length } : {}),

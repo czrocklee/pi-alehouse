@@ -104,8 +104,10 @@ ID verbatim) without validating uniqueness. A provider that reuses an ID across
 assistant messages is trusted: identical arguments replay the earlier accepted
 result silently — a repeated `agent_run` would return the old result instead of
 starting a new task — while differing arguments fail `REQUEST_CONFLICT`. The
-harness cannot scope the key more tightly because the tool API only exposes the
-call ID, not its assistant message.
+harness does not currently scope the key more tightly. The tool context can read
+the session branch, so keying on the assistant entry that carries the call may
+be possible, but that depends on Pi persisting the assistant message before
+tool execution, including parallel calls, which has not been verified.
 
 ## Host SDK and runtime scope
 
