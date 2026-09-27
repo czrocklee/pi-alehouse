@@ -251,7 +251,8 @@ export default function harnessExtension(pi: ExtensionAPI) {
   });
 
   // Reconcile after startup/SDK restoration and before the first request, but
-  // never inject orchestration text or an Off message into model context.
+  // never inject orchestration text or an Off message into model context: the
+  // delegation guideline belongs to agent_spawn and follows its visibility.
   pi.on("before_agent_start", () => { if (ready) syncWorkerTools(); });
   pi.on("session_shutdown", async (_event, ctx) => {
     ready = false; routingContext = undefined;

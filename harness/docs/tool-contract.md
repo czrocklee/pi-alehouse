@@ -33,6 +33,21 @@ are retired without aliases; they stay only in deny/exclusion lists. Error
 codes, profile IDs, `harness:*` records and lifecycle events are unchanged
 compatibility surface, including the internal `cancelled` Run status.
 
+`agent_spawn` also carries the one policy no schema can express, as a Pi
+`promptGuidelines` bullet in the parent system prompt:
+
+> Agents let independent work run in parallel with your own. Choose direct
+> work, reuse or delegation by task fit and total cost, including coordination
+> and rework.
+
+Pi renders it only while `agent_spawn` is active and rebuilds the prompt with
+the tool loadout every turn, so it appears and disappears in the same request
+as the tools: `off` has no text either way, and children (which never have
+`agent_spawn`) and Pi without the harness never see it. The text is static so
+it adds no prompt-cache invalidation beyond the tool change itself. Everything
+else a delegating model needs stays in tool and parameter descriptions; do not
+grow this into a briefing.
+
 ## Agent names
 
 An Agent name matches `^[a-z][a-z0-9-]{0,23}$`: a short, task-independent

@@ -17,6 +17,11 @@ import { agentProfileNames, blockedDelegationToolNames } from "./tool-names.js";
 const text = (maxLength: number, description?: string) => Type.String({ minLength: 1, maxLength, pattern: "\\S",
   ...(description ? { description } : {}) });
 const optional = Type.Optional;
+/** The one cross-tool decision no schema can carry. Pi renders it in the parent
+ * system prompt only while agent_spawn is active, so Off, children and bare Pi
+ * never see it. Keep it static: it sits in the cached prompt prefix. */
+export const delegationGuideline = "Agents let independent work run in parallel with your own. Choose direct work, " +
+  "reuse or delegation by task fit and total cost, including coordination and rework.";
 export const AGENT_NAME_PATTERN = "^[a-z][a-z0-9-]{0,23}$";
 const agentName = (description?: string) => Type.String({ pattern: AGENT_NAME_PATTERN, ...(description ? { description } : {}) });
 const agentNames = (maxItems: number, description: string) =>
@@ -175,6 +180,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
       return structuredClone(raw);
     };
     return { name, label: name, description, parameters: schema,
+      ...(name === "agent_spawn" ? { promptGuidelines: [delegationGuideline] } : {}),
       // This is strict validation, not a legacy argument-conversion shim. Pi can
       // mutate arguments in tool_call AFTER its validation, so execute rechecks.
       prepareArguments(raw) { try { return checked(raw); } catch (error) { throw toolError(error); } },

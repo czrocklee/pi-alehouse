@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createChildTools as createCommunicationTools } from "../../dist/tools/child-tools.js";
-import { createOwnerTools } from "../../dist/tools/parent-tools.js";
+import { createOwnerTools, delegationGuideline } from "../../dist/tools/parent-tools.js";
 import { Check } from "typebox/value";
 import { assertCallerTools } from "../support/caller-contract.mjs";
 import { blockedDelegationToolNames as blockedDelegationTools, cleanupToolNames, managementToolNames as delegationTools,
@@ -83,6 +83,14 @@ test("serialized tool schemas explain task fields and independent capability/rou
   const f = await fixture(t), { tools } = toolsFor(f);
   assertCallerTools(tools);
   assert.deepEqual(f.controller.list(), [], "description checks must not dispatch work");
+});
+
+test("only agent_spawn carries the delegation guideline, as static text", async (t) => {
+  const f = await fixture(t), { tools } = toolsFor(f);
+  for (const tool of tools) {
+    assert.deepEqual(tool.promptGuidelines, tool.name === "agent_spawn" ? [delegationGuideline] : undefined, tool.name);
+  }
+  assert.doesNotMatch(delegationGuideline, /\d|\$\{/, "no counts, dates or interpolation in a cached prompt prefix");
 });
 
 test("only prompt carries the assignment; labels, names and default-disabled context do not", async (t) => {
