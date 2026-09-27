@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ChildRunGate as RunInputGate, PiAgentSessionAdapter as SdkRunPort } from "../../dist/runtime/agent-session.js";
+import { ChildRunGate as RunInputGate, PiAgentSessionAdapter as SdkRunPort, STOP_ABORT_TIMEOUT_MS } from "../../dist/runtime/agent-session.js";
 import { PiRunJournal as SdkRunHistory } from "../../dist/history/run-journal.js";
 import { SessionUnavailableError } from "../../dist/core/ports.js";
 import { deferred, ended, fixture, task, until } from "../support/controller-fixture.mjs";
@@ -340,4 +340,104 @@ test("a Run whose responses carried no usage at all reports a floor of nothing",
   assert.deepEqual(facts.usage.partial, ["input", "output", "cache_read", "cache_write", "cost"]);
   // A Run with no assistant response at all owes nothing and says so.
   assert.equal((await run([])).usage, undefined);
+});
+
+// Quarantine and stop-bound coverage that used to live only on the SDK lane.
+test("a throwing control callback quarantines the port, suppresses later callbacks and aborts after revocation", async () => {
+  const gate = new RunInputGate(), order = [];
+  let emit;
+  const session = stubSession([]);
+  const subscribe = session.subscribe;
+  session.subscribe = (listener) => { emit = listener; return subscribe(listener); };
+  session.abort = async () => { order.push("abort"); };
+  session.prompt = async () => {
+    emit({ type: "turn_start" });
+    emit({ type: "turn_start" }); // Suppressed: one failure latches for the whole Run.
+    emit({ type: "turn_end", message: { role: "assistant", stopReason: "stop" } });
+  };
+  let turns = 0;
+  const callbacks = { ...silentCallbacks(), turnStart() { turns++; throw new Error("boom"); } };
+  const port = new SdkRunPort({ session, parentBus: { emit() {} }, gate, readiness: () => {},
+    invalidateApproval: () => { order.push("revoke"); } });
+  await assert.rejects(port.run("go", callbacks), (error) => {
+    assert(error instanceof SessionUnavailableError);
+    assert.match(error.message, /run_callback_failed/);
+    return true;
+  });
+  assert.equal(turns, 1, "the second control callback never reached the throwing consumer");
+  // revoke(quarantine) -> abort(tracked) -> revoke(the Run's own finally gate).
+  assert.deepEqual(order.slice(0, 2), ["revoke", "abort"], "approval is revoked before the tracked abort");
+  // Quarantine is sticky: the port refuses reuse and cannot accept input.
+  assert.equal(port.canInput(), false);
+  await assert.rejects(port.run("again", silentCallbacks()), (error) => error instanceof SessionUnavailableError);
+});
+
+test("a failing approval revocation still aborts and a synchronously throwing abort marks uncertainty", async () => {
+  const gate = new RunInputGate(), order = [];
+  let emit;
+  const session = stubSession([]);
+  const subscribe = session.subscribe;
+  session.subscribe = (listener) => { emit = listener; return subscribe(listener); };
+  session.abort = () => { order.push("abort"); throw new Error("abort exploded"); };
+  session.prompt = async () => { emit({ type: "turn_start" }); };
+  const callbacks = { ...silentCallbacks(), turnStart() { throw new Error("boom"); } };
+  const port = new SdkRunPort({ session, parentBus: { emit() {} }, gate, readiness: () => {},
+    invalidateApproval: () => { order.push("revoke"); throw new Error("cannot revoke"); } });
+  await assert.rejects(port.run("go", callbacks), (error) => {
+    assert(error instanceof SessionUnavailableError);
+    assert.match(error.message, /approval_revocation_failed/);
+    return true;
+  });
+  assert.deepEqual(order.slice(0, 2), ["revoke", "abort"], "the abort is attempted even after revocation fails");
+  assert.equal(gate.uncertain, true, "a synchronous abort throw is still marked uncertain, not swallowed");
+});
+
+test("stop() bounds the SDK abort and reports a timeout as a failure, not as a hang", async () => {
+  assert.equal(STOP_ABORT_TIMEOUT_MS, 30_000, "the stop bound is a documented contract, pin it");
+  const session = stubSession([]);
+  session.abort = () => new Promise(() => {}); // A wedged SDK abort that never settles.
+  const port = new SdkRunPort({ session, parentBus: { emit() {} }, gate: new RunInputGate(),
+    readiness: () => {}, stopTimeoutMs: 25 });
+  await assert.rejects(port.stop(), /SDK_ABORT_TIMEOUT/);
+  const rejected = stubSession([]);
+  rejected.abort = () => Promise.reject(new Error("abort rejected")); // The timer must not leak on rejection either.
+  const rejecting = new SdkRunPort({ session: rejected, parentBus: { emit() {} }, gate: new RunInputGate(),
+    readiness: () => {}, stopTimeoutMs: 60_000 });
+  await assert.rejects(rejecting.stop(), /abort rejected/);
+});
+
+test("a throwing isStreaming getter quarantines the port instead of escaping into the core", async () => {
+  const session = stubSession([]);
+  const held = Promise.withResolvers();
+  session.prompt = () => held.promise; // Keep the Run active while the probe runs.
+  const port = new SdkRunPort({ session, parentBus: { emit() {} }, gate: new RunInputGate(), readiness: () => {} });
+  const running = port.run("go", silentCallbacks());
+  assert.equal(port.canInput(), false, "the stub is not streaming, so no input is accepted");
+  Object.defineProperty(session, "isStreaming", { get() { throw new Error("no stream state"); } });
+  assert.equal(port.canInput(), false, "a throwing getter fails the probe, never the caller");
+  held.resolve();
+  await assert.rejects(running, (error) => {
+    assert(error instanceof SessionUnavailableError);
+    assert.match(error.message, /can_input_failed/);
+    return true;
+  });
+});
+
+test("a throwing session.model getter cannot lose compaction accounting", async () => {
+  const session = stubSession([{ provider: "p", model: "m", usage: priced(2) }]);
+  const subscribe = session.subscribe, originalPrompt = session.prompt;
+  let emit;
+  session.subscribe = (listener) => { emit = listener; return subscribe(listener); };
+  session.prompt = async () => {
+    await originalPrompt(); // Emit the assistant response the Run classifies on.
+    emit({ type: "compaction_start", reason: "threshold" });
+    emit({ type: "compaction_end", reason: "threshold", aborted: false, willRetry: false,
+      result: { usage: priced(0.5) } });
+  };
+  Object.defineProperty(session, "model", { get() { throw new Error("no model"); } });
+  const port = new SdkRunPort({ session, parentBus: { emit() {} }, gate: new RunInputGate(), readiness: () => {} });
+  const facts = await port.run("go", silentCallbacks());
+  assert.equal(facts.kind, "success", "a diagnostics getter cannot fail the Run");
+  assert.equal(facts.usage.byModel["compaction/unknown"].cost, 0.5, "spend lands in the explicit unknown bucket");
+  assert.equal(facts.usage.byModel["p/m"].cost, 2);
 });
