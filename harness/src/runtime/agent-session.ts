@@ -21,6 +21,12 @@ const printableFailure = (cause: unknown): unknown => {
   catch { return new Error("Unprintable failure", { cause }); }
 };
 
+/** The SDK abort() already waits for idle; bound the stop path the same way
+ * child-session cleanup bounds disposal. A cooperative model finishing a turn
+ * fits well inside this; past it the port reports stop_uncertain instead of
+ * hanging the core's drain indefinitely. */
+export const STOP_ABORT_TIMEOUT_MS = 30_000;
+
 /** Child Run gate, loaded LAST by the trusted child assembly.
  * Not an atomic run-token admission API: Pi 0.87.1 still awaits after this
  * handler before queue mutation. We drain every dispatch, close early, and
@@ -77,11 +83,17 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
     invalidateApproval?(): void;
     outputChars?: number;
     shutdownTimeoutMs?: number;
+    /** Bound for the SDK abort in stop(); a timeout is reported, never awaited forever. */
+    stopTimeoutMs?: number;
     history?: RunJournalPort;
   }) { this.session_id = options.session.sessionId; this.history = options.history; }
 
   private abortTracked(): void {
-    const stopping = this.options.session.abort().then(() => false, () => { this.options.gate.uncertain = true; return false; });
+    // Resolve first: a synchronous throw from the SDK abort would otherwise
+    // escape before the rejection handler below can mark the gate uncertain,
+    // and the emitter swallows handler errors.
+    const stopping = Promise.resolve().then(() => this.options.session.abort())
+      .then(() => false, () => { this.options.gate.uncertain = true; return false; });
     this.deliveries.add(stopping);
     // Abort rejection already marks uncertainty above; observe settlement
     // without creating an unhandled rejection through a detached finally().
@@ -98,7 +110,18 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
     }
   }
   canInput(): boolean {
-    return !this.unavailable && this.active && this.options.gate.accepting && !this.options.gate.stopped && this.options.session.isStreaming;
+    try {
+      return !this.unavailable && this.active && this.options.gate.accepting && !this.options.gate.stopped && this.options.session.isStreaming;
+    } catch (cause) {
+      // A throwing SDK getter means the session state is unknowable; treat it
+      // like a readiness failure rather than letting it escape into the core.
+      // Deliberately no abort here, unlike run_callback_failed: this probe is
+      // called synchronously from many call sites (acceptsInput, send
+      // targeting), where a tracked abort could reenter; the sticky
+      // unavailable + closed gate already makes the port fail closed.
+      this.quarantine("can_input_failed", cause);
+      return false;
+    }
   }
   private clear(): void {
     const queue = this.options.session.clearQueue();
@@ -141,7 +164,17 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
     try { this.clear(); } catch (error) { errors.push(printableFailure(error)); }
     // Queue failure cannot suppress abort. Propagate every failure to the core's
     // tracked stop path, which retains ownership and prevents uncertain reuse.
-    try { await this.options.session.abort(); } catch (error) { errors.push(printableFailure(error)); }
+    // The SDK abort() waits for idle (child-session.ts); bound it here so a
+    // wedged SDK cannot hang the drain path indefinitely. A timeout is not
+    // exit evidence: it fails as an error so the core records stop_uncertain.
+    try {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const exited = await Promise.race([this.options.session.abort(),
+          new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), this.options.stopTimeoutMs ?? STOP_ABORT_TIMEOUT_MS); })]);
+        if (exited === false) throw new Error("SDK_ABORT_TIMEOUT");
+      } finally { clearTimeout(timer); }
+    } catch (error) { errors.push(printableFailure(error)); }
     try { this.clear(); } catch (error) { errors.push(printableFailure(error)); }
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, `SDK stop failed: ${errors.map(String).join("; ")}`);
@@ -218,7 +251,11 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
       if (event.type === "compaction_start") {
         // SDK summary usage does not expose responseModel. Use an explicit
         // operation/requested-model bucket, never pretend it is a routed model.
-        const model = session.model;
+        // Guard the getter: the emitter swallows handler throws, which would
+        // silently lose the rest of the Run's compaction accounting.
+        let model: { provider: string; id: string } | undefined;
+        try { model = session.model; }
+        catch { model = undefined; }
         compaction = { model: model ? `compaction/${model.provider}/${model.id}` : "compaction/unknown", retried: false };
         retrying = false;
       }

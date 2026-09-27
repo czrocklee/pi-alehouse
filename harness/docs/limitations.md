@@ -44,7 +44,10 @@ A session that never confirms idle can keep its Run/slot and prevent Owner
 closure indefinitely. The widget, detail pane and `/harness-status` show the
 drain wait and its elapsed time; other healthy slots need not stop. There is no
 new drain timeout, forced release or automatic retry. Pending tracked aborts
-alone are not diagnosed as SDK idle failure.
+alone are not diagnosed as SDK idle failure. The stop path itself is bounded:
+an SDK `abort()` that has not returned within 30 s (configurable by the host)
+is reported as a stop failure, so the Run is quarantined as stop-uncertain
+rather than awaiting the drain indefinitely.
 
 Pi 0.87.1 retains the post-input-hook enqueue race and can continue original prompting
 after pre-prompt compaction abort.  The harness final gate re-aborts and
