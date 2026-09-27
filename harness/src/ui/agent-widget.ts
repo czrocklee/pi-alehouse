@@ -14,6 +14,8 @@ export interface WidgetRun {
   name: string;
   profile: string;
   model: string;
+  /** Effective creation-time effort/thinking level. */
+  effort: string;
   description: string;
   status: RunView["status"];
   /** Execution exited but the Run has not settled: shown as "finishing". */
@@ -87,14 +89,15 @@ function renderHeader(run: WidgetRun, icon: string, state: string, running: bool
   const shortName = truncateToWidth(withoutBreaks(name), nameRoom, "…");
   const identity = `${icon} ${running ? theme.bold(shortName) : theme.fg("dim", shortName)}${attention}`;
   const tagText = tag ? ` ${theme.fg("dim", `(${withoutBreaks(tag)})`)}` : "";
-  const model = run.model ? ` ${theme.fg("dim", `[${withoutBreaks(run.model)}]`)}` : "";
+  const allocation = [run.model, run.effort].filter(Boolean).map(withoutBreaks).join("/");
+  const allocationText = allocation ? ` ${theme.fg("dim", `[${allocation}]`)}` : "";
   const metrics = separator + theme.fg("dim", stats(run, running).join(" · "));
   const taskLead = theme.fg("dim", " → ");
-  const room = width - visibleWidth(withoutBreaks(identity + tagText + model + metrics + taskLead));
+  const room = width - visibleWidth(withoutBreaks(identity + tagText + allocationText + metrics + taskLead));
   const description = withoutBreaks(run.description).trim();
   const task = room >= 4 && description ?
     taskLead + theme.fg(running ? "muted" : "dim", truncateToWidth(description, room, "…")) : "";
-  return identity + tagText + model + task + metrics;
+  return identity + tagText + allocationText + task + metrics;
 }
 
 export function renderFinishedLine(run: WidgetRun, theme: Theme, width = Infinity): string {
@@ -363,7 +366,8 @@ export class HarnessWidget {
   private project(view: RunView): WidgetRun {
     const live = this.activities.get(view.agent_id)?.snapshot() ?? { active_tools: [], tool_uses: 0, preview: "" };
     return { agent_id: view.agent_id, run_id: view.run_id, name: view.name, profile: view.effective_settings.profile,
-      model: view.effective_settings.model, description: view.description, status: view.status, finishing: view.finalization_pending,
+      model: view.effective_settings.model, effort: view.effective_settings.thinking,
+      description: view.description, status: view.status, finishing: view.finalization_pending,
       turns: view.turns, max_turns: view.max_turns, elapsed_ms: view.elapsed_ms, turn_elapsed_ms: view.turn_elapsed_ms,
       cost: reported(view.usage, "cost"), cost_partial: view.usage?.partial.includes("cost"), runtime: view.runtime, drain: view.drain,
       question: !!view.outcome?.question, limit_reached: !!view.outcome?.limit_reached,

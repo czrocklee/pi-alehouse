@@ -43,17 +43,18 @@ IDs do not allocate separate worktrees, indexes or build directories.
 
 An Agent can have only one current Run.  It is reusable only after execution,
 input drain, history boundary handling, and cleanup state allow it.  Cancelling
-is not sufficient.  Releasing an idle Agent is permanent; uncertain cleanup
+is not sufficient.  An Agent lives until it is killed: an interrupted or
+dependency-failed first task leaves it in place.  Killing an Agent is permanent; uncertain cleanup
 leaves it reserved and is never force-released or automatically evicted.
 
-`name` is an optional caller-supplied label for a **new** Agent only (maximum
-256 UTF-16 units).  An omitted name remains omitted: the UI uses the profile,
-not an invented `worker-…` name.  `agent_id` is the stable control identity.
+Every Agent has a caller-chosen **name** (`^[a-z][a-z0-9-]{0,23}$`), unique per
+Owner and never reused after release.  The name is the only model-facing
+address; `agent_id` is the internal control identity.
 
 ## Run
 
-A **Run** is one queued or executing task on an Agent.  It has its own
-`run_id`, request identity/digest, prompt boundary, deadline, turn budget,
+A **Run** is one queued or executing task on an Agent; parent tools call it a
+*task* and never expose its ID.  It has its own internal `run_id`, request identity/digest, prompt boundary, deadline, turn budget,
 outcome, result reference, telemetry, and optional SDK-history links.  A reused
 Agent receives a new Run; it never changes the Agent's admitted routing or
 permission configuration.
@@ -70,7 +71,7 @@ necessarily a complete answer:
 - deadline expiry is `failed` with `deadline` stop/reason;
 - unknown, `pending`, and `deferred` SDK stop reasons fail closed.
 
-`steer_run` acceptance is only admission to the child-input path, not delivery.
+An `agent_send` `steered` report is only admission to the child-input path, not delivery.
 A cancellation request is only a request.  The execution slot is freed only
 after actual execution exit; the Agent reservation and Owner lease remain until
 finalization and required cleanup are confirmed.
@@ -90,22 +91,23 @@ do not keep an SDK execution environment alive.
 
 ## Task fields, not roles
 
-A new Run requires a `prompt` and `description`; resume requires a `prompt` and
-uses `Follow-up task` when `description` is omitted.
+`agent_spawn` requires `agent`, `prompt`, `profile` and `difficulty`; `agent_run`
+requires `agent` and `prompt`. Both take an optional `label`. `agent_send`
+carries only a `message` for the current task.
 
 - **`prompt`** is the execution instruction.  It may be up to 131072 UTF-16
   units at parent-tool admission, although permission provenance has stricter
   review limits.  It is not a name, a policy profile, or a routing request.
-- **`description`** is a short distinguishing task label (up to 4096 UTF-16
-  units) for roster/UI use.  `list_agents` exposes at most its first 256 units
-  plus `description_truncated`; it is neither injected as a summary nor a
+- **`label`** is a short task label (up to 120 UTF-16 units) for roster/UI use,
+  stored as the Run's description and defaulting to the instructions' first
+  nonblank line.  It is neither injected as a summary nor a
   substitute for the prompt.
-- **`name`** labels only a newly created Agent.  It does not alter profile,
-  permissions, routing, or identity.
+- **`agent`** names the Agent.  It does not alter profile, permissions,
+  routing, or identity.
 
-The former **core `role` field is removed**.  `spawn_agent`/`resume_agent` reject
-it; put instructions in `prompt`, the label in `description`, and the optional
-Agent label in `name`.  This does **not** change Pi/SDK assistant messages:
+The former **core `role` field is removed** and the closed `agent_spawn` schema
+rejects it; put instructions in `prompt` and the label in `label`.  This does
+**not** change Pi/SDK assistant messages:
 `assistant message.role` remains the upstream message field and must not be
 renamed or removed.
 
@@ -118,7 +120,7 @@ Agent setting. The user chooses the parent model/thinking and active worker
 preset and per-slot effort policy. The harness resolves one exact registered
 worker model and either a fixed effort or inherited parent thinking (captured
 at submission, with identity or an explicit compatibility map). Session effort
-overrides are operator configuration, not model tool arguments. Resume preserves
+overrides are operator configuration, not model tool arguments. Reuse preserves
 all accepted settings and does not accept or re-score difficulty.
 Callers may choose only profile/difficulty, never a concrete worker model or
 thinking level, cwd, owner, generation, session path, or history path.
@@ -132,7 +134,7 @@ conversation without adding it again.
 
 Results are retained owner-local text with UTF-16/surrogate-safe cursors.  The
 full recorded question and last output are independently readable through
-`read_run`; an omitted result tail is not recoverable.  Progress from
+`agent_read`; an omitted result tail is not recoverable.  Progress from
 `notify_parent` is bounded, coalesced, at-most-once on an appropriate wait
 return, and never a reliable delivery/ack protocol.  `ask_parent` records a
 bounded question and asks the child to finish; it does not force immediate
@@ -140,13 +142,12 @@ termination, make the parent turn, wake a wait, or bypass a permission dialog.
 
 Neither ordinary progress nor background completion starts a parent turn. The
 harness does not automatically inject an Agent/Run roster after compaction.
-`list_agents` exposes owner-local state on demand, including released records
-when requested; its bounded labels are not full task assignments. Its rows add
-each Agent's earlier task labels, last observed context use, observed cost and
-touched files, so the parent can choose between resume and a fresh Agent. Other
-harness replies name Runs that settled since the previous one (`changes`), which
-reduces steering of Runs that already finished; see the
-[tool contract](tool-contract.md#settled-run-changes).
+`agent_list` exposes owner-local state on demand, including killed names;
+its bounded labels are not full task assignments. Its rows add each Agent's
+earlier task labels, last observed context use, observed cost and touched files,
+so the parent can choose between reuse and a fresh Agent. Other harness replies
+name Agents whose tasks finished since they were last shown (`finished`); see
+the [tool contract](tool-contract.md#finished-tasks).
 
 See [the tool contract](tool-contract.md) for exact budgets and reply behavior,
 and [architecture](architecture.md) for history, accounting, and retention.

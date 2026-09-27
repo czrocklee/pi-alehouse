@@ -13,17 +13,17 @@ test("initial Off removes all worker tools without changing unrelated active too
 test("Off keeps cleanup and retained-result access after this Owner accepted work", () => {
   const selected = workerToolSelection(["read", ...managementToolNames], false, true);
   assert.deepEqual(selected.filter((name) => managementToolNames.includes(name)), cleanupToolNames);
-  for (const name of ["spawn_agent", "resume_agent", "steer_run"]) assert(!selected.includes(name));
+  for (const name of ["agent_spawn", "agent_send"]) assert(!selected.includes(name));
   assert(selected.includes("read"));
   assert.deepEqual(workerToolSelection(selected, false, true), selected, "settled/retired workers do not erase result access");
 });
 
 test("reconciliation restores preset-owned tools but preserves other tools and their order", () => {
-  const active = ["read", "wait_runs", "foreign-tool"];
+  const active = ["read", "agent_wait", "foreign-tool"];
   assert.deepEqual(workerToolSelection(active, true, false),
-    [...active, ...managementToolNames.filter((name) => name !== "wait_runs")]);
+    [...active, ...managementToolNames.filter((name) => name !== "agent_wait")]);
   assert.deepEqual(workerToolSelection(active, false, true),
-    [...active, ...cleanupToolNames.filter((name) => name !== "wait_runs")]);
+    [...active, ...cleanupToolNames.filter((name) => name !== "agent_wait")]);
 });
 
 test("reenabling adds only harness tools and uses the current unrelated selection", () => {

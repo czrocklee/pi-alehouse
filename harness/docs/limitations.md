@@ -116,7 +116,7 @@ heap/RSS.  Prompts, settings/context snapshots, metadata, and resident SDK
 memory are outside result accounting.  There is no automatic eviction; hitting
 the limit requires closing the Owner for new admissions.  Progress is bounded,
 coalesced, and at-most-once—not durable messaging or an ACK protocol.
-Queued `post_update` messages, the settled-Run `changes` log, and `list_agents`
+Joined `agent_send` messages, the `finished` log, and `agent_list`
 history (earlier task labels, last context, touched paths) are the same kind of
 owner-memory state: bounded, lost with the Owner, and never replayed from
 history. `touched` lists only paths passed to successful `edit`/`write` calls,

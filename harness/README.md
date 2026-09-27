@@ -7,7 +7,7 @@ The harness is Pi Alehouse's internal, opt-in Owner-local worker backend, not an
 ## Operate
 
 1. Build the root package and generate matching `runtime/{agents,policy,permission-system}` resources. Run `node bin/pi-alehouse.mjs init` from the repository root to create **only absent** resources (five worker definitions, one routing catalogue and one managed permission config). Existing personal files stay intact. The neutral version-2 `harness-presets.json` defaults to `off`; configure your own exact registered provider/model IDs before enabling workers. See [getting started](docs/getting-started.md) and [routing configuration](docs/routing.md#preset-configuration).
-2. Start a **fresh** `pi-alehouse` process. Select the parent model normally and a worker preset independently via `/harness-preset` or `Alt+S`. `off` blocks new delegation, not already accepted Runs. When enabled, the parent has nine fixed harness management tools. Release idle Agents when capacity is needed.
+2. Start a **fresh** `pi-alehouse` process. Select the parent model normally and a worker preset independently via `/harness-preset` or `Alt+S`. `off` blocks new delegation, not already accepted tasks. When enabled, the parent has eight fixed harness management tools (`agent_spawn`, `agent_run`, `agent_send`, `agent_wait`, `agent_read`, `agent_interrupt`, `agent_kill`, `agent_list`) and addresses Agents by name. Release idle Agents when capacity is needed.
 3. Before exit, use `/harness-close` and wait for **confirmed** Owner closure. A never-used Owner closes automatically before session replacement; a used Owner needs literal **Yes** from Pi's UI. `/tree` always needs explicit close because it changes the current session in place. Do not `/reload` with an open Owner. Once a replacement guard returns after closure, Pi does not atomically serialize later teardown/hooks/target loading: finish each replacement before starting another. Unconfirmed drain does not prove execution exit.
 
 Off leaves accepted queued/running work and result/cleanup tools available. A fresh initially Off conversation has no harness tool schemas or orchestration reminder; turning Off later cannot remove historical model context. See [Off](docs/routing.md#off).
@@ -16,9 +16,9 @@ The parent retains normal footer/title, approval queue, health/Stats, and pinned
 
 ## Limits at a glance
 
-- Four execution slots; eight resident Agent reservations, including queued/busy/uncertain-cleanup reservations. `release_agent` is permanent.
+- Four execution slots; eight resident Agent reservations, including queued/busy/uncertain-cleanup reservations. `agent_kill` is permanent.
 - Default Run execution deadline 30 minutes (1 ms–24 h configurable), excluding queue time. Expiry/cancellation requests a stop; it is not forced exit, rollback, or guaranteed zero later provider activity.
-- `wait_ms`/`wait_runs.timeout_ms` bounds only the parent's wait (five minutes max); Esc interrupts waiting, not worker work.
+- `wait_ms` on `agent_spawn`/`agent_run`/`agent_send`/`agent_wait` bounds only the parent's wait (five minutes max); Esc interrupts waiting, not worker work.
 - Owner-local result retention is bounded to 512 cumulative Runs and 64 Mi UTF-16 result units (including reservations for unsettled Runs); this is not a total heap/RSS cap or a durable store.
 - Child usage is observed conservatively and handed to the next parent tool result if available. Spend settling after the last result remains unmerged residue, not fabricated into Pi totals.
 
@@ -37,4 +37,4 @@ The parent retains normal footer/title, approval queue, health/Stats, and pinned
 | Test scope and evidence gaps | [Validation evidence](docs/validation-evidence.md) |
 | Package ownership rationale | [Organization decision](docs/decisions/001-organization-boundaries.md) |
 
-Legacy tool names, profile IDs, config path, `harness:*` records, event names and cross-extension symbols remain compatibility surface, not a second public product. See [notices](THIRD_PARTY_NOTICES.md) and [root notices](../THIRD_PARTY_NOTICES.md).
+Child tool names, profile IDs, config path, `harness:*` records, event names and cross-extension symbols remain compatibility surface, not a second public product. See [notices](THIRD_PARTY_NOTICES.md) and [root notices](../THIRD_PARTY_NOTICES.md).

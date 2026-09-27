@@ -156,7 +156,7 @@ test("SDK tool-result persistence preserves harness unknown-spend metadata", asy
   manager.appendMessage({ role: "assistant", api: "fixture", provider: "p", model: "m", content: [{ type: "text", text: "fixture" }],
     stopReason: "stop", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } }, timestamp: Date.now() });
   const projected = hostUsage(accrue([usage(null, null, null, null, null), "compaction/p/m"]));
-  manager.appendMessage({ role: "toolResult", toolCallId: "fixture", toolName: "wait_runs", content: [{ type: "text", text: "done" }],
+  manager.appendMessage({ role: "toolResult", toolCallId: "fixture", toolName: "agent_wait", content: [{ type: "text", text: "done" }],
     isError: false, usage: projected, timestamp: Date.now() });
   const saved = (await readFile(manager.getSessionFile(), "utf8")).trimEnd().split("\n").map((line) => JSON.parse(line))
     .find((entry) => entry.type === "message" && entry.message.role === "toolResult").message.usage;

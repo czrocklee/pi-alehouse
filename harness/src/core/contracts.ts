@@ -46,7 +46,6 @@ export type SubmitRequest = {
   max_turns?: number;
   max_duration_ms?: number;
   after?: string[];
-  handoff_from?: string[];
 } | {
   resume: string;
   prompt: string;
@@ -55,7 +54,6 @@ export type SubmitRequest = {
   max_duration_ms?: number;
   answer_to_run_id?: string;
   after?: string[];
-  handoff_from?: string[];
 };
 export interface Output {
   text: string;
@@ -148,10 +146,9 @@ export interface RunView {
   result_ref?: ResultRef;
   cleanup_errors: string[];
   discarded_inputs: string[];
-  /** Runs that must settle before this one starts (after ∪ handoff_from). */
+  /** Runs that must complete before this one starts; their retained
+   * results prefix its prompt as reference material. */
   after?: string[];
-  /** Runs whose retained result prefixed this Run's first prompt. */
-  handoff_from?: string[];
   /** Queued only: dependencies that have not settled yet. */
   blocked_by?: string[];
   /** Parent updates queued while idle and delivered with this Run's prompt. */

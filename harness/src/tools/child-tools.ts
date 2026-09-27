@@ -10,7 +10,7 @@ export function createChildTools(current: () => RunCallbacks | undefined,
   return ([["notify_parent", "message"], ["ask_parent", "question"]] as const).map(([name, key]) => {
     const parameters = Type.Object({ [key]: text(8192) }, { additionalProperties: false });
     return { name, label: name, parameters,
-      description: name === "ask_parent" ? "Record a question for the parent, then finish this Run." : "Record ordinary progress for the UI and the parent's next completed wait; this does not interrupt waiting. Use ask_parent for a decision, then finish the Run.",
+      description: name === "ask_parent" ? "Record a question for the parent, then finish this task." : "Record ordinary progress for the UI and the parent's next completed wait; this does not interrupt waiting. Use ask_parent for a decision, then finish the task.",
       async execute(_id: string, args: unknown) {
         // Like owner tools, recheck AFTER mutable SDK tool_call hooks, before
         // callbacks can record a question or evict an existing notification.

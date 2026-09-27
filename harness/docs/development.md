@@ -52,8 +52,10 @@ installed web extension. Generated resources and CLI must match the source
 revision. `pi-alehouse init` seeds only absent files into Pi's agent directory
 (five agent definitions, a version-2 Off routing catalogue and a permission
 config), never changes settings/auth or replaces existing policies/catalogues. Old
-`harness:*` records, tool/config names and `Symbol.for` keys remain compatibility
-protocol, not reasons to rename public schemas.
+`harness:*` records, child tool/config names and `Symbol.for` keys remain
+compatibility protocol, not reasons to rename public schemas. Parent management
+tools are a model-facing API without caller compatibility; retired names stay
+only in deny/exclusion lists.
 
 The patched permission authority's immutable process-local floor protects its
 own executable package, generated resources, dependency/host code and selected
@@ -70,11 +72,11 @@ against opaque programs; see [security](security.md#immutable-resource-floor-in-
 
 The shared policy states only task-fit/total-cost preference. No orchestration
 paragraph or disabled-mode reminder is injected into the model prompt. Tool
-metadata contains API semantics. The `changes` field is part of harness tool
-results, never a rewrite of other context. All nine management tools are registered
+metadata contains API semantics. The `finished` field is part of harness tool
+results, never a rewrite of other context. All eight management tools are registered
 once; the active set follows the chosen preset: initial Off exposes none, Off
 after accepted work keeps the five inspection/cleanup tools. Admission and
-external steering are guarded separately from accepted work, which continues
+external messages are guarded separately from accepted work, which continues
 through Off. Cached tools are still execution-gated. Controlled entry fixtures
 should inspect provider-visible declarations; switching Off cannot erase
 historical context. Keep user workflow choices out of standing policy.
@@ -164,7 +166,7 @@ claim a command passed if it was not run, was interrupted, or matched zero tests
 
 - Assert required host Pi capabilities and exercise host integration; never
   treat a private SDK field or local patch as a supported upstream contract.
-- Preserve public tool names, profile/config IDs, `harness:*` records,
+- Preserve child tool names, profile/config IDs, `harness:*` records,
   permission events and cross-extension symbols without reviewed migration.
 - Keep provider IO synthetic and reports outside the checkout. Never include
   credentials, approval packets or private session content in public evidence.

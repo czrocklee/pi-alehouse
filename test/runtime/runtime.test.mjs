@@ -12,8 +12,8 @@ const temporary = (t) => { const path = mkdtempSync(join(tmpdir(), "alehouse-run
 
 test("portable generator matches original worker bytes and policy digests", () => {
   const { agents, metadata } = renderWorkers();
-  assert.equal(metadata.editor.digest, "dc31159be9bf812bd3f83f42145a7b7fd621af4c0eb2423a373d4c3b50d34172");
-  assert.equal(metadata.reader.digest, "b6756df8ef259f6ec0a41b02ea737a5d07fd691bc56918d26d2c46ffe8ba25ea");
+  assert.equal(metadata.editor.digest, "923a776a9612aa5ddbb2964505a7b466795aab15e09b9be631953a96fdf9a217");
+  assert.equal(metadata.reader.digest, "288ca83d4b78f8ced13bc6c862fea72f3765d9c8cc37a315594a789f4a636eb2");
   for (const [name, source] of Object.entries(agents)) assert.equal(readFileSync(join(packageRoot, "runtime/agents", `${name}.md`), "utf8"), source);
   assert.match(agents.reader, /  write: deny\n  edit: deny\n  path_write:\n    "\*": deny/);
   assert(metadata.editor.bashDenies.includes("git -C * commit *"));

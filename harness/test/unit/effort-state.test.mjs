@@ -117,7 +117,7 @@ test("saving inherit tolerates missing/ambiguous models; every fixed slot still 
     assert.throws(() => validateWorkerEfforts(fixed, unavailable), (error) => {
       assert.equal(error.code, "PRESET_MODEL_UNAVAILABLE"); assert.equal(error.details.slot, "strong");
       assert.match(error.details.error, /unavailable or ambiguous/);
-      assert.doesNotMatch(JSON.stringify(error.details), /difficulty|spawn_agent|parameter/);
+      assert.doesNotMatch(JSON.stringify(error.details), /difficulty|delegate|parameter/);
       return true;
     });
   }
@@ -139,7 +139,7 @@ test("Apply revalidates changed model support before audit and never poisons the
     assert.equal(error.details.slot, "light");
     assert.match(error.details.error, /does not support this fixed effort/);
     assert.match(error.details.resolution, /Choose a supported fixed level or inherit/);
-    assert.doesNotMatch(JSON.stringify(error.details), /difficulty|spawn_agent|parameter/);
+    assert.doesNotMatch(JSON.stringify(error.details), /difficulty|delegate|parameter/);
     return true;
   });
   assert.deepEqual(audited, []); assert.deepEqual(latched, []); assert.deepEqual(router.current(), before);
