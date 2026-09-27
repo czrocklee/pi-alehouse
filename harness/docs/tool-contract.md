@@ -190,7 +190,10 @@ interrupting peers; a provisional outcome still finalizing does not qualify.
 `pending` names the Agents still working. A new Owner fault returns
 `owner_blocked` to already-pending waiters once.
 
-Questions take priority in a shared 16384 UTF-16 text budget. Results follow:
+Questions take priority in a shared 16384 UTF-16 text budget. Only an
+answerable question — a `needs_input` task's — is shown; a task stopped while
+asking (interrupted, failed) keeps its question readable through `agent_read`,
+but its Agent's next task is `agent_run`. Results follow:
 a lone finished task may use the whole budget, several share it with at least
 4096 units each, and running tasks consume none. A question that did not fit is
 marked `question_truncated`; a result that did not fit is marked

@@ -122,7 +122,8 @@ test("the hard envelope fallback preserves questions, limits and explicit retrie
   ports[0].finish("answer"); await ended(c, a);
   const snapshots = Array.from({ length: 16 }, (_, index) => ({ ...c.view(a.run_id), run_id: `run-${index}`,
     name: `a${index}`, owner_error: "\u0000".repeat(512),
-    outcome: { status: "completed", error: "\u0000".repeat(512), limit_reached: true, question: "question?" } }));
+    status: "needs_input",
+    outcome: { status: "needs_input", error: "\u0000".repeat(512), limit_reached: true, question: "question?" } }));
   const value = { reason: "condition", snapshots };
   const reply = waitReply(value, undefined, (id) => id);
   assert(waitEnvelopeBytes(reply) <= WAIT_SERIALIZED_REPLY_LIMIT);
@@ -134,6 +135,14 @@ test("the hard envelope fallback preserves questions, limits and explicit retrie
   assert.equal(measured.at(-1), squeezed, "the returned reply itself was measured with its wrapper");
   assert(waitEnvelopeBytes(wrap(squeezed)) <= WAIT_SERIALIZED_REPLY_LIMIT);
   assert.throws(() => waitReply(value, undefined, (id) => id, (wait) => ({ padding: "x".repeat(65536), wait })), errorCode("WAIT_REPLY_TOO_LARGE"));
+  // A task stopped while asking is not answerable: even the compact fallback
+  // must not send the caller to agent_read for a question agent_send cannot answer.
+  const stopped = { reason: "condition", snapshots: snapshots.map((view) => ({ ...view, status: "cancelled",
+    outcome: { ...view.outcome, status: "cancelled" } })) };
+  const stoppedSqueezed = waitReply(stopped, undefined, (id) => id, wrap);
+  assert.equal(stoppedSqueezed.response_limit_reached, true);
+  assert(stoppedSqueezed.agents.every((entry) => entry.status === "interrupted" && entry.result_omitted && !("error" in entry) &&
+    !entry.question_truncated && !entry.question), "the compact fallback, without an unanswerable question");
 });
 
 test("overfull question batches return complete questions before sharing the remainder", async (t) => {
@@ -250,6 +259,10 @@ test("a stopped task's question is readable but never advertised as answerable",
   // Rows and the finished feed must not point the model at agent_send.
   assert.equal(finishedReply(view).has_question, undefined);
   assert.equal(agentRow(view, c.agentSummary(view.agent_id), namesOf(c)).has_question, undefined);
+  // Nor may the wait reply, the main place questions surface, full or compact.
+  const waited = waitReply({ reason: "condition", snapshots: [view] }, undefined, namesOf(c));
+  assert.equal(waited.agents[0].status, "interrupted");
+  assert.equal(waited.agents[0].question, undefined);
   // The reading path keeps the question text for composing the next agent_run.
   assert.equal(resultReply(c.getResult(a.run_id), namesOf(c)).question, "factor?");
   // And agent_send indeed cannot deliver to a stopped task.
@@ -265,5 +278,6 @@ test("a stopped task's question is readable but never advertised as answerable",
   assert.equal(asked.status, "needs_input");
   assert.equal(finishedReply(asked).has_question, true);
   assert.equal(agentRow(asked, c.agentSummary(asked.agent_id), namesOf(c)).has_question, true);
+  assert.equal(waitReply({ reason: "condition", snapshots: [asked] }, undefined, namesOf(c)).agents[0].question, "why?");
   assert.equal((await c.send("s2", b.agent_id, "because")).delivery, "answered");
 });

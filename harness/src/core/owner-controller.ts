@@ -6,7 +6,7 @@ import { normalizeFacts, normalizeRuntime, terminal, validSettings, type Admitte
 import { HarnessError, ParentHistoryError, SessionInitializationError, SessionUnavailableError, workersDisabled,
   type AgentSessionPort, type OwnerLease, type RunCallbacks } from "./ports.js";
 import { boundedOutput, describeResult, sha256, validOutput } from "./result-text.js";
-import { mergeLedgers, totalOf, USAGE_COMPONENTS, type UsageLedger } from "./usage-ledger.js";
+import { emptyLedger, mergeLedgers, totalOf, USAGE_COMPONENTS, type UsageLedger } from "./usage-ledger.js";
 
 interface RunRecord {
   owner_id: string;
@@ -73,6 +73,8 @@ interface ManagedRun {
   /** Diagnostics only: which settle-path await this Run is parked on. Never
    * gates release — a stuck wait keeps ownership exactly as before. */
   finalizeWait?: { wait: "inputs" | "release" | "history"; startedMono: number };
+  /** Diagnostics only: when the stop was requested, for stats().stopping. */
+  stopRequestedMono?: number;
   /** The first prompt has taken the Agent inbox; later updates need steering. */
   promptComposed?: true;
   /** A dependency settled without completing; this Run never started. */
@@ -677,6 +679,7 @@ export class OwnerController {
     if (run.active) { run.active = false; this.active--; }
     let agent: Agent;
     const stopped = run.record.stop_reason;
+    let accrued = false;
     try {
     const normalized = normalizeFacts(facts, run.output);
     facts = normalized.facts;
@@ -705,6 +708,7 @@ export class OwnerController {
     // only rolls settled Runs together. Attributing here would bill a router
     // alias instead of whatever answered behind it.
     this.unreported = mergeLedgers(this.unreported, run.record.usage);
+    accrued = true;
     agent = this.requireAgent(run.record.agent_id);
     if (agent.question?.reserved_by === run.record.run_id && !run.record.input_entered) agent.question.reserved_by = undefined;
     run.record.outcome = {
@@ -721,17 +725,21 @@ export class OwnerController {
       // A synchronous finalization fault (internal bug or a hostile getter in
       // the port's facts) must not wedge this Run in "finalizing" with its
       // output reservation held forever. Execution exit is already confirmed,
-      // so settle it failed: quarantine the Agent so the tail releases it,
-      // keep only observed usage — the fault may be in accounting itself, and
-      // unknown spend is never zero-filled — and skip the unreported merge
-      // rather than re-run the code path that just failed.
+      // so settle it failed: quarantine the Agent so the tail releases it.
+      // Never touch `facts` again: they may be what threw.
       run.quarantine = "finalization_failed";
       run.record.cleanup_errors.push(`FINALIZATION_FAILED: ${errorText(error)}`);
-      run.record.usage = run.runtime?.usage;
-      run.record.model_stop_reason = facts.model_stop_reason;
+      if (!accrued) {
+        // The final report is unknown: keep the observed floor, marked partial
+        // in every component, and still report it once. Unknown spend is never
+        // zero-filled, in this Run or in the parent's roll-up.
+        run.record.usage = { ...structuredClone(run.runtime?.usage ?? emptyLedger()), partial: [...USAGE_COMPONENTS] };
+        try { this.unreported = mergeLedgers(this.unreported, run.record.usage); }
+        catch { this.unreported = { ...(this.unreported ?? emptyLedger()), partial: [...USAGE_COMPONENTS] }; }
+      }
       agent = this.requireAgent(run.record.agent_id);
       run.record.outcome = { status: stopped === "user_cancel" ? "cancelled" : "failed",
-        model_stop_reason: facts.model_stop_reason, reason: "finalization_failed",
+        model_stop_reason: run.record.model_stop_reason, reason: "finalization_failed",
         error: `FINALIZATION_FAILED: ${errorText(error)}`.slice(0, 2048),
         question: run.question, limit_reached: run.record.limit_reached };
     }
@@ -931,7 +939,7 @@ export class OwnerController {
   private stop(run: ManagedRun, reason: StopReason): void {
     if (run.record.execution_exited || terminal(run.record.status) || run.record.stop_reason) return;
     // Freeze before calling a consumer, which may throw or reenter cancel().
-    run.record.stop_reason = reason; run.inputOpen = false;
+    run.record.stop_reason = reason; run.inputOpen = false; run.stopRequestedMono = this.clock.mono();
     try { this.changed(reason === "user_cancel" ? "cancel" : reason, run); }
     catch (error) { run.quarantine = "context_change_failed"; run.record.cleanup_errors.push(errorText(error)); }
     const queued = run.record.status === "queued";
@@ -1074,7 +1082,7 @@ export class OwnerController {
         elapsed_ms: Math.max(0, this.clock.mono() - run.finalizeWait.startedMono) }] : []);
     const stopping = [...this.runs.values()].filter((run) => run.record.stop_reason && !run.record.execution_exited)
       .map((run) => ({ run_id: run.record.run_id, agent_id: run.record.agent_id, stop_reason: run.record.stop_reason,
-        elapsed_ms: run.executionStartedMono === undefined ? undefined : Math.max(0, this.clock.mono() - run.executionStartedMono) }));
+        elapsed_ms: run.stopRequestedMono === undefined ? undefined : Math.max(0, this.clock.mono() - run.stopRequestedMono) }));
     return { active: this.active, queued: this.queue.length, ...(draining.length ? { draining } : {}),
     ...(finalizingWaits.length ? { finalizing_waits: finalizingWaits } : {}),
     ...(stopping.length ? { stopping } : {}),
