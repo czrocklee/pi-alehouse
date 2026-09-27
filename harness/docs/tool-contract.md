@@ -147,7 +147,8 @@ A duplicate tool-call ID with identical arguments replays its accepted result
 before anything else: a spawn or run replays even if `wait_ms`, the preset file,
 model metadata or parent thinking later changed, or the worker preset is now
 Off, and names in `after` are bound to tasks only at first acceptance; a send
-replays its original `delivery` without steering again. For a new request, the
+replays its original `delivery` without steering again, within a bounded
+window of the most recent 512 sends. For a new request, the
 host context, abort and admission are rechecked after any settle wait and
 before any side effect; a call made while Off fails at once instead of waiting. Different
 arguments under the same ID fail `REQUEST_CONFLICT`. Other representative

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { readdir } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { OwnerController } from "../../dist/core/owner-controller.js";
+import { OwnerController, DELIVERY_LOG_LIMIT } from "../../dist/core/owner-controller.js";
 import { FileOwnerLease } from "../../dist/runtime/owner-lease.js";
 import { taskReply } from "../../dist/tools/replies.js";
 import { FakePort, deferred, ended, errorCode, fixture, task, tick, until } from "../support/controller-fixture.mjs";
@@ -258,4 +260,70 @@ test("initialization cancellation never prompts, cleanup uncertainty is not a re
   assert.equal(port.calls.length, 0); assert.equal(c.view(a.run_id).status, "cancelled");
   assert.equal((await c.shutdown()).closed, true);
   assert.throws(() => owner.assertHeld(), /OWNER_LOCK_CLOSED/);
+});
+
+test("shipped default limits are pinned, not just mechanism", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-p1-defaults-"));
+  const owner = await FileOwnerLease.open({ directory, owner_id: randomUUID(), flock });
+  const controller = await OwnerController.open({ owner, createSession: async () => new FakePort() });
+  try {
+    assert.deepEqual(controller.stats().limits, {
+      concurrency: 4, resident: 8, queue: 16, grace: 5, output: 1_048_576,
+      historyRuns: 512, historyOutput: 64 * 1024 * 1024,
+    }, "the documented headline numbers must not drift silently");
+  } finally {
+    await controller.shutdown(1000);
+    owner.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a queued Run is cancelled by shutdown and the owner still closes", async (t) => {
+  const { controller: c, ports } = await fixture(t, { controller: { concurrency: 1 } });
+  const first = await c.submit("first", task("first"));
+  await until(() => ports[0]?.streaming);
+  const second = await c.submit("second", task("second"));
+  assert.equal(c.stats().queued, 1);
+  ports[0].autoStop = true; // The tracked stop settles the running Run as aborted.
+  const report = await c.shutdown(5000);
+  assert.equal(report.closed, true, "an owner with queued FIFO work must still be able to close");
+  assert.equal(c.view(second.run_id).status, "cancelled", "the queued Run was cancelled, not left hanging");
+  assert.equal(c.view(first.run_id).status, "cancelled");
+  assert.equal(c.stats().queued, 0);
+});
+
+test("a failing release during shutdown keeps the owner open instead of closing on top of it", async (t) => {
+  const { controller: c, ports } = await fixture(t, { cleanupUncertainExpected: true });
+  const run = await c.submit("run", task("run"));
+  await until(() => ports[0]?.streaming);
+  ports[0].finish("done"); await ended(c, run);
+  c.releaseAgent = () => { throw new Error("release exploded"); };
+  const report = await c.shutdown(3000);
+  assert.equal(report.closed, false, "the owner must not hand back the lease with an unreleased Agent");
+  assert.equal(report.cleanup_uncertain, true);
+  assert.equal(report.resident, 1);
+  delete c.releaseAgent; // The fixture's own shutdown then releases normally.
+});
+
+test("send delivery replay is a bounded window: the newest replays, the oldest re-delivers", async (t) => {
+  const { controller: c, ports } = await fixture(t, { controller: { concurrency: 1 } });
+  const run = await c.submit("run", task("run"));
+  await until(() => ports[0]?.streaming);
+  ports[0].finish("done"); await ended(c, run);
+  // Every send to a settled task records a not_delivered delivery without
+  // touching the per-run steer budget, so the replay window can be filled.
+  let prepared = 0;
+  for (let index = 0; index <= DELIVERY_LOG_LIMIT; index++) {
+    const { delivery } = await c.send(`send-${index}`, run.agent_id, `message ${index}`, { prepare: () => prepared++ });
+    assert.equal(delivery, "not_delivered");
+  }
+  assert.equal(prepared, DELIVERY_LOG_LIMIT + 1);
+  // The newest entry is still inside the window: replay prepares nothing new.
+  const replayed = await c.send(`send-${DELIVERY_LOG_LIMIT}`, run.agent_id, `message ${DELIVERY_LOG_LIMIT}`, { prepare: () => prepared++ });
+  assert.equal(replayed.delivery, "not_delivered");
+  assert.equal(prepared, DELIVERY_LOG_LIMIT + 1, "a replayed delivery never re-delivers");
+  // The oldest entry fell out of the window and is treated as a fresh send.
+  const fresh = await c.send("send-0", run.agent_id, "message 0", { prepare: () => prepared++ });
+  assert.equal(fresh.delivery, "not_delivered");
+  assert.equal(prepared, DELIVERY_LOG_LIMIT + 2, "an evicted request id re-delivers instead of growing forever");
 });

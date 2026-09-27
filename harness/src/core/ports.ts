@@ -44,6 +44,10 @@ export class HarnessError extends Error {
     this.name = "HarnessError";
   }
 }
+/** One shared model-facing shape for the delegation-off gate, used by the core
+ * admission checks and the trusted routing module alike. */
+export const workersDisabled = (): HarnessError => new HarnessError("WORKERS_DISABLED",
+  { resolution: "Worker delegation is off in the user's configuration; ask the user to enable it. Already accepted tasks are unaffected." });
 /** A failed write to the shared parent SDK session. */
 export class ParentHistoryError extends Error {
   constructor(cause: unknown) { super(`PARENT_HISTORY_UNAVAILABLE: ${String(cause)}`, { cause }); }
