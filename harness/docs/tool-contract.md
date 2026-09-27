@@ -240,7 +240,12 @@ live detail view without rewriting its outcome or history.
 `agent_list` takes no arguments and returns every resident Agent (at most the
 resident cap) with its current or latest task: `agent`, `profile`, creation-time
 `difficulty`, a 120-unit `label`, the task projection, `has_question`, and
-`elapsed_s` while running. Rows also carry owner-memory history for choosing
+`elapsed_s` while running. `has_question` appears only on a task still
+awaiting an answer (`needs_input`), answerable with `agent_send`; a question
+on a stopped task is readable with `agent_read`, but that Agent's next task is
+`agent_run` — `agent_send` cannot deliver to it. An `unavailable` field
+overrides an otherwise healthy status: the task facts stand, but the Agent
+cannot take another task; report it to the user. Rows also carry owner-memory history for choosing
 between `agent_run` and `agent_spawn`: `tasks` (count), up to four
 `earlier_labels` (newest first), `context_pct` of the last observed context
 window, cumulative observed `cost_usd` (with `cost_partial` when some responses
@@ -255,7 +260,8 @@ stays behind `agent_wait`/`agent_read`.
 
 Every successful management reply may add `finished`: up to eight Agents, oldest
 first, whose tasks settled and have not yet been shown (`agent`, `status`,
-`reason`, `limit_reached`, `has_question`), plus `finished_omitted` for those
+`reason`, `limit_reached`, `has_question` — the last only on an answerable
+`needs_input` task), plus `finished_omitted` for those
 left for a later reply or lost to the bounds. A settlement is consumed only when
 a reply names that Agent (a task projection, wait entry, list row, or killed
 name) or lists it under `finished`. It is kept for a later reply when adding it

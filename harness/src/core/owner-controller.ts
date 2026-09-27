@@ -672,6 +672,9 @@ export class OwnerController {
     run.record.execution_elapsed_ms = run.executionStartedMono === undefined ? undefined :
       Math.max(0, this.clock.mono() - run.executionStartedMono);
     if (run.active) { run.active = false; this.active--; }
+    let agent: Agent;
+    const stopped = run.record.stop_reason;
+    try {
     const normalized = normalizeFacts(facts, run.output);
     facts = normalized.facts;
     if (normalized.invalid) run.quarantine = "invalid_execution_facts";
@@ -699,9 +702,8 @@ export class OwnerController {
     // only rolls settled Runs together. Attributing here would bill a router
     // alias instead of whatever answered behind it.
     this.unreported = mergeLedgers(this.unreported, run.record.usage);
-    const agent = this.requireAgent(run.record.agent_id);
+    agent = this.requireAgent(run.record.agent_id);
     if (agent.question?.reserved_by === run.record.run_id && !run.record.input_entered) agent.question.reserved_by = undefined;
-    const stopped = run.record.stop_reason;
     run.record.outcome = {
       status: stopped === "user_cancel" ? "cancelled" : stopped === "hard_budget" || stopped === "deadline" || facts.kind !== "success" ? "failed" : run.question ? "needs_input" : "completed",
       model_stop_reason: facts.model_stop_reason,
@@ -712,6 +714,24 @@ export class OwnerController {
           facts.kind === "error" ? "execution_error" : undefined,
       error: facts.error?.slice(0, 2048), question: run.question, limit_reached: run.record.limit_reached,
     };
+    } catch (error) {
+      // A synchronous finalization fault (internal bug or a hostile getter in
+      // the port's facts) must not wedge this Run in "finalizing" with its
+      // output reservation held forever. Execution exit is already confirmed,
+      // so settle it failed: quarantine the Agent so the tail releases it,
+      // keep only observed usage — the fault may be in accounting itself, and
+      // unknown spend is never zero-filled — and skip the unreported merge
+      // rather than re-run the code path that just failed.
+      run.quarantine = "finalization_failed";
+      run.record.cleanup_errors.push(`FINALIZATION_FAILED: ${errorText(error)}`);
+      run.record.usage = run.runtime?.usage;
+      run.record.model_stop_reason = facts.model_stop_reason;
+      agent = this.requireAgent(run.record.agent_id);
+      run.record.outcome = { status: stopped === "user_cancel" ? "cancelled" : "failed",
+        model_stop_reason: facts.model_stop_reason, reason: "finalization_failed",
+        error: `FINALIZATION_FAILED: ${errorText(error)}`.slice(0, 2048),
+        question: run.question, limit_reached: run.record.limit_reached };
+    }
     // A freed execution slot belongs to healthy peers, even while this Run's
     // input/finalization/isolated session cleanup drains. Its own Agent stays busy.
     this.wake(); this.pump();

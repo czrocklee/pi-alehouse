@@ -286,7 +286,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         const { state } = await controller.kill(find(agent).agent_id);
         return { agent, status: state === "released" ? "killed" : state };
       }),
-    make("agent_list", "List Agents with their current or latest task and history (earlier labels, context use, cost, edited files), to choose between agent_run and agent_spawn. Nothing is pushed to you: check it after compaction or when unsure.",
+    make("agent_list", "List Agents with their current or latest task and history (earlier labels, context use, cost, edited files), to choose between agent_run and agent_spawn. has_question marks a task still awaiting an answer; answer it with agent_send. A question on a stopped task is readable with agent_read, but its next task is agent_run — agent_send cannot deliver to it. unavailable, when present, overrides an otherwise healthy status: the task facts stand, but the Agent cannot take another task; report it to the user. Nothing is pushed to you: check it after compaction or when unsure.",
       Type.Object({}, { additionalProperties: false }), () => {
         const views = controller.list(), live = views.filter((view) => view.resident);
         const killed = views.filter((view) => !view.resident).map((view) => view.name);
