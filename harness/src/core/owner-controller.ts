@@ -70,6 +70,9 @@ interface ManagedRun {
   inputs: Set<Promise<void>>; inputCount: number; notificationDrops: number; question?: string;
   runtime?: RunTelemetry; session?: AgentSessionPort; hadSession: boolean; quarantine?: string; cleanup?: Promise<void>;
   drain?: { waiting_for: NonNullable<RunView["drain"]>["waiting_for"]; startedMono: number };
+  /** Diagnostics only: which settle-path await this Run is parked on. Never
+   * gates release — a stuck wait keeps ownership exactly as before. */
+  finalizeWait?: { wait: "inputs" | "release" | "history"; startedMono: number };
   /** The first prompt has taken the Agent inbox; later updates need steering. */
   promptComposed?: true;
   /** A dependency settled without completing; this Run never started. */
@@ -737,7 +740,10 @@ export class OwnerController {
     this.wake(); this.pump();
     // No new input can be accepted now. Already accepted async deliveries must
     // settle before SDK queue clearing or reuse. A hung delivery keeps ownership.
-    await Promise.all([...run.inputs]);
+    // Each settle-path await is observable (stats().finalizing_waits) so a
+    // wedged finalization is diagnosable without weakening its fail-closed hold.
+    run.finalizeWait = { wait: "inputs", startedMono: this.clock.mono() };
+    try { await Promise.all([...run.inputs]); } finally { run.finalizeWait = undefined; }
     if (run.session) {
       try { run.record.discarded_inputs.push(...run.session.clearInputs()); }
       catch (error) { run.quarantine = error instanceof SessionUnavailableError ? error.reason : "input_cleanup_uncertain"; run.record.cleanup_errors.push(errorText(error)); }
@@ -752,7 +758,8 @@ export class OwnerController {
     // the Agent in place; only a failed initialization or quarantine ends it.
     if (run.quarantine || (!run.hadSession && !run.record.input_entered && !run.record.stop_reason && !run.dependency)) {
       run.cleanup = this.releaseAgent(agent, run.quarantine ?? "initialization_failed", run);
-      await run.cleanup; // Known cleanup facts precede optional history metadata.
+      run.finalizeWait = { wait: "release", startedMono: this.clock.mono() };
+      try { await run.cleanup; } finally { run.finalizeWait = undefined; } // Known cleanup facts precede optional history metadata.
     }
     const finished: RunRecord = { ...run.record, status: run.record.outcome.status,
       phase: "settled", finished_at: this.clock.wall(), result: describeResult(run.record.run_id, run.output),
@@ -769,7 +776,9 @@ export class OwnerController {
           this.internalError ??= errorText(error);
           throw error;
         }
-        finished.history_ref = await run.session.history.finish(finished.history_ref, { ...finished.outcome! }, { ...run.output }, finished.usage);
+        run.finalizeWait = { wait: "history", startedMono: this.clock.mono() };
+        try { finished.history_ref = await run.session.history.finish(finished.history_ref, { ...finished.outcome! }, { ...run.output }, finished.usage); }
+        finally { run.finalizeWait = undefined; }
       } catch (error) { finished.history_error = this.historyFailed(run, error); }
     }
     // Input drain and history no longer need this per-Run reference. The Agent
@@ -1057,7 +1066,18 @@ export class OwnerController {
       const drain = this.drainView(run);
       return drain ? [{ run_id: run.record.run_id, agent_id: run.record.agent_id, ...drain }] : [];
     });
+    // Settle-path and stop-path diagnostics only: what a finalizing Run is
+    // parked on, and how long a stop request has gone unconfirmed. Neither
+    // gates anything; a stuck wait keeps ownership exactly as before.
+    const finalizingWaits = [...this.runs.values()].flatMap((run) => run.finalizeWait ?
+      [{ run_id: run.record.run_id, agent_id: run.record.agent_id, wait: run.finalizeWait.wait,
+        elapsed_ms: Math.max(0, this.clock.mono() - run.finalizeWait.startedMono) }] : []);
+    const stopping = [...this.runs.values()].filter((run) => run.record.stop_reason && !run.record.execution_exited)
+      .map((run) => ({ run_id: run.record.run_id, agent_id: run.record.agent_id, stop_reason: run.record.stop_reason,
+        elapsed_ms: run.executionStartedMono === undefined ? undefined : Math.max(0, this.clock.mono() - run.executionStartedMono) }));
     return { active: this.active, queued: this.queue.length, ...(draining.length ? { draining } : {}),
+    ...(finalizingWaits.length ? { finalizing_waits: finalizingWaits } : {}),
+    ...(stopping.length ? { stopping } : {}),
     resident: [...this.agents.values()].filter((a) => a.resident).length,
     agents: this.agents.size, runs: this.runs.size, requests: this.requests.size,
     /** Effective limits, so operators can see the real caps, not just defaults. */

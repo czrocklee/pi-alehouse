@@ -49,6 +49,15 @@ an SDK `abort()` that has not returned within 30 s (configurable by the host)
 is reported as a stop failure, so the Run is quarantined as stop-uncertain
 rather than awaiting the drain indefinitely.
 
+The settle path is observable the same way but deliberately not bounded:
+`stats()` reports `finalizing_waits` — which of its awaits (inputs, release,
+history) a finalizing Run is parked on and for how long — and `stopping` for
+stop requests that execution exit has not yet confirmed, including deadline
+overruns. These are diagnostics only; a wedged finalization keeps its
+reservation, its Agent and the Owner lease exactly as before, because
+converting a local wait into a timeout would either assume completion or
+latch the whole Owner over one Agent's fault.
+
 Pi 0.87.1 retains the post-input-hook enqueue race and can continue original prompting
 after pre-prompt compaction abort.  The harness final gate re-aborts and
 quarantines crossings, but cannot make provider admission atomic.  Controlled
@@ -88,6 +97,15 @@ not survive a Pi restart.  There is no force release, force unlock, cleanup retr
 endpoint, restart hydration, automatic expiry, or reliable notification delivery
 service.  A Linux local `flock` lease is not distributed coordination or proof
 that detached children have stopped.
+
+Request idempotence keys on the tool-call ID, which Pi passes through from the
+provider (both the OpenAI-compatible and Anthropic adapters adopt the provider's
+ID verbatim) without validating uniqueness. A provider that reuses an ID across
+assistant messages is trusted: identical arguments replay the earlier accepted
+result silently — a repeated `agent_run` would return the old result instead of
+starting a new task — while differing arguments fail `REQUEST_CONFLICT`. The
+harness cannot scope the key more tightly because the tool API only exposes the
+call ID, not its assistant message.
 
 ## Host SDK and runtime scope
 
