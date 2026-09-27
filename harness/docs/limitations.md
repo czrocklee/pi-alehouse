@@ -132,6 +132,11 @@ for successful summaries; successful summary usage is instead keyed as
 and partial flags; it cannot prove complete provider billing.  Child
 cache-warming is stopped, but parent warming behavior is unchanged.
 
+The delegation guideline on `agent_spawn` (see
+[tool contract](tool-contract.md)) renders in the default system prompt's
+Guidelines section. A custom `SYSTEM.md` or `--system-prompt` replaces that
+prompt, and with it the guideline; the tools themselves are unaffected.
+
 ## Retention, history, and accounting
 
 Owner-memory results are bounded by cumulative Run/result limits but not by
