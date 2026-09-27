@@ -136,7 +136,7 @@ test("closed schemas reject unknown, mutated and malformed inputs before admissi
     assert.throws(() => tool("agent_spawn").prepareArguments(create({ agent })), code("INVALID_PARAMETERS"), String(agent));
   }
   for (const args of [(({ profile: _profile, ...rest }) => rest)(create()), (({ difficulty: _difficulty, ...rest }) => rest)(create()),
-    create({ label: "x".repeat(121) }), create({ prompt: " " })]) {
+    create({ label: "x".repeat(121) }), create({ prompt: " " }), create({ prompt: "x".repeat(131073) })]) {
     assert.throws(() => tool("agent_spawn").prepareArguments(args), code("INVALID_PARAMETERS"));
   }
   const mutated = tool("agent_spawn").prepareArguments(create()); mutated.owner_id = "forged";
