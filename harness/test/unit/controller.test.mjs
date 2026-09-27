@@ -327,3 +327,22 @@ test("send delivery replay is a bounded window: the newest replays, the oldest r
   assert.equal(fresh.delivery, "not_delivered");
   assert.equal(prepared, DELIVERY_LOG_LIMIT + 2, "an evicted request id re-delivers instead of growing forever");
 });
+
+test("a synchronous finalization fault settles the Run failed and releases its reservation", async (t) => {
+  const { controller: c, ports } = await fixture(t);
+  const run = await c.submit("poison", task("poison"));
+  await until(() => ports[0]?.streaming);
+  // A hostile getter in the port's facts: normalizeFacts touches output first.
+  ports[0].calls[0].done.resolve({ kind: "success",
+    get output() { throw new Error("poisoned output getter"); } });
+  await ended(c, run);
+  const view = c.view(run.run_id);
+  assert.equal(view.status, "failed", "the Run settles instead of wedging in finalizing");
+  assert.equal(view.outcome?.reason, "finalization_failed");
+  assert.match(view.outcome?.error ?? "", /poisoned output getter/);
+  assert.ok(view.cleanup_errors.some((entry) => /FINALIZATION_FAILED/.test(entry)), "diagnostics land on the Run");
+  assert.equal(c.stats().reserved_output_chars, 0, "the output reservation is released, not leaked");
+  const row = c.list().find((entry) => entry.agent_id === run.agent_id);
+  assert.ok(!row?.resident, "the quarantined Agent is released so the owner can still close");
+  assert.equal((await c.shutdown(5000)).closed, true);
+});

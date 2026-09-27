@@ -235,3 +235,35 @@ test("the parent's interrupt verb names task statuses; an Esc-stopped wait is ab
   assert.equal(waitReply(settled, undefined, namesOf(c)).agents[0].status, "interrupted");
   assert.equal(finishedReply(c.view(run.run_id)).status, "interrupted");
 });
+
+test("a stopped task's question is readable but never advertised as answerable", async (t) => {
+  const { controller: c, ports } = await fixture(t);
+  const a = await c.submit("a", named("orca"));
+  await until(() => ports[0]?.streaming);
+  ports[0].callbacks.question("factor?");
+  c.cancel(a.run_id);
+  ports[0].finish("partial", "aborted");
+  await ended(c, a);
+  const view = c.view(a.run_id);
+  assert.equal(view.status, "cancelled", "interrupted while asking");
+  assert.ok(view.outcome?.question, "the question text is still recorded");
+  // Rows and the finished feed must not point the model at agent_send.
+  assert.equal(finishedReply(view).has_question, undefined);
+  assert.equal(agentRow(view, c.agentSummary(view.agent_id), namesOf(c)).has_question, undefined);
+  // The reading path keeps the question text for composing the next agent_run.
+  assert.equal(resultReply(c.getResult(a.run_id), namesOf(c)).question, "factor?");
+  // And agent_send indeed cannot deliver to a stopped task.
+  const sent = await c.send("s", a.agent_id, "the answer");
+  assert.equal(sent.delivery, "not_delivered");
+  // The answerable case still advertises: a needs_input task keeps the flag.
+  const b = await c.submit("b", task("b", { name: "otter" }));
+  await until(() => ports[1]?.streaming);
+  ports[1].callbacks.question("why?");
+  ports[1].finish("asked");
+  await ended(c, b);
+  const asked = c.view(b.run_id);
+  assert.equal(asked.status, "needs_input");
+  assert.equal(finishedReply(asked).has_question, true);
+  assert.equal(agentRow(asked, c.agentSummary(asked.agent_id), namesOf(c)).has_question, true);
+  assert.equal((await c.send("s2", b.agent_id, "because")).delivery, "answered");
+});

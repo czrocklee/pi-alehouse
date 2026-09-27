@@ -45,7 +45,9 @@ export function finishedReply(view: RunView) {
   return { agent: view.name, status: statusOf(view),
     ...(view.outcome?.reason ? { reason: view.outcome.reason } : {}),
     ...(view.outcome?.limit_reached ? { limit_reached: true } : {}),
-    ...(view.outcome?.question ? { has_question: true } : {}) };
+    // Only a task still awaiting an answer is answerable; a stopped task's
+    // question is readable via agent_read, and its next task is agent_run.
+    ...(view.outcome?.question && view.status === "needs_input" ? { has_question: true } : {}) };
 }
 
 const EARLIER_SHOWN = 4;
@@ -62,7 +64,9 @@ export function agentRow(view: RunView, summary: AgentSummary, nameOf: NameOf) {
   const { agent, ...task } = taskReply(view, nameOf);
   return { agent, profile: view.effective_settings.profile, difficulty: view.effective_settings.difficulty,
     label: utf16Prefix(view.description, 120), ...task,
-    ...(view.outcome?.question ? { has_question: true } : {}),
+    // Answerable questions only: a stopped task's question is readable via
+    // agent_read, but the Agent's next task is agent_run, not agent_send.
+    ...(view.outcome?.question && view.status === "needs_input" ? { has_question: true } : {}),
     ...(running && view.execution_elapsed_ms !== undefined ? { elapsed_s: Math.round(view.execution_elapsed_ms / 1000) } : {}),
     tasks: summary.runs,
     ...(earlier.length ? { earlier_labels: earlier } : {}),
