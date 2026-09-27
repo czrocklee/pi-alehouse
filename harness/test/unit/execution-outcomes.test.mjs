@@ -241,7 +241,7 @@ test("owner history bounds reserve concurrent output and never evict old Runs or
   const second = await c.submit("history-second", task("history-second"));
   assert.deepEqual({ reserved: c.stats().reserved_output_chars, retained: c.stats().retained_output_chars }, { reserved: 8, retained: 0 });
   await assert.rejects(c.submit("history-full", task("history-full")), (error) => {
-    assert.equal(error.code, "OWNER_HISTORY_LIMIT"); assert.match(error.details.resolution, /Close this owner/); return true;
+    assert.equal(error.code, "OWNER_HISTORY_LIMIT"); assert.match(error.details.resolution, /Tell the user to close this harness session/); return true;
   });
   assert.equal((await c.submit("history-first", task("history-first"))).run_id, first.run_id, "replay precedes the limit gate");
   ports[0].finish("a"); await ended(c, first); await until(() => ports[1]?.streaming);

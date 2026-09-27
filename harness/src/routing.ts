@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import { HarnessError } from "./core/ports.js";
+import { HarnessError, workersDisabled } from "./core/ports.js";
 import { validDifficulty, type Difficulty } from "./core/contracts.js";
 
 export const strengths = ["light", "standard", "strong"] as const;
@@ -338,7 +338,7 @@ interface RouteInput<M extends { provider: string; id: string }> {
 export function resolveRoute<M extends { provider: string; id: string }>(
   input: RouteInput<M> & { difficulty: number },
 ): ResolvedRoute {
-  if (isOffPreset(input.preset)) throw new HarnessError("WORKERS_DISABLED");
+  if (isOffPreset(input.preset)) throw workersDisabled();
   if (!validDifficulty(input.difficulty))
     throw new HarnessError("INVALID_DIFFICULTY", { key: "difficulty",
       resolution: invalidDifficultyResolution });
@@ -358,7 +358,7 @@ export function resolveRoute<M extends { provider: string; id: string }>(
 export function resolveSlotRoute<M extends { provider: string; id: string }>(
   input: RouteInput<M> & { strength: Strength },
 ): Omit<ResolvedRoute, "difficulty"> {
-  if (isOffPreset(input.preset)) throw new HarnessError("WORKERS_DISABLED");
+  if (isOffPreset(input.preset)) throw workersDisabled();
   const strength = input.strength;
   const effort = input.preset.effort[strength];
   const parentValid = typeof input.parentThinking === "string" &&

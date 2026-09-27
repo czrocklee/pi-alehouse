@@ -3,7 +3,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { normalizeFacts, normalizeRuntime, terminal, validSettings, type AdmittedAgentConfig, type AgentSummary, type ExecutionFacts,
   type HistoryRef, type ModelStopReason, type Outcome, type Output, type Phase, type ResultPage, type ResultRef,
   type RunStatus, type RunTelemetry, type RunView, type StopReason, type SubmitRequest } from "./contracts.js";
-import { HarnessError, ParentHistoryError, SessionInitializationError, SessionUnavailableError,
+import { HarnessError, ParentHistoryError, SessionInitializationError, SessionUnavailableError, workersDisabled,
   type AgentSessionPort, type OwnerLease, type RunCallbacks } from "./ports.js";
 import { boundedOutput, describeResult, sha256, validOutput } from "./result-text.js";
 import { mergeLedgers, totalOf, USAGE_COMPONENTS, type UsageLedger } from "./usage-ledger.js";
@@ -158,13 +158,17 @@ export const resultCursorRun = (cursor: string): string => {
     const run = (JSON.parse(Buffer.from(cursor, "base64url").toString()) as { run?: unknown }).run;
     if (typeof run === "string" && run) return run;
   } catch { /* reported below */ }
-  throw new HarnessError("INVALID_CURSOR");
+  throw new HarnessError("INVALID_CURSOR",
+    { resolution: "Pass a next_cursor exactly as a reply returned it; it pages only one Agent's task." });
 };
 /** Bounds for parent-declared Run ordering and result handoff. */
 export const DEPENDENCY_LIMIT = 4;
 export const HANDOFF_CHARS = 16384;
 export const INBOX_LIMIT = 8;
 export const INBOX_CHARS = 32768;
+/** Bounded replay window for send deliveries; like `messages`, the oldest
+ * entries fall out instead of growing for the Owner's whole life. */
+export const DELIVERY_LOG_LIMIT = 512;
 const TOUCHED_LIMIT = 64;
 const SETTLED_LOG_LIMIT = 256;
 const updatesText = (updates: readonly string[]): string => !updates.length ? "" :
@@ -355,10 +359,10 @@ export class OwnerController {
   }
   private assertNewWorkAdmission(captured: { enabled: boolean; revision: number } | undefined): void {
     const current = this.admissionState();
-    if (!captured?.enabled || !current?.enabled || current.revision !== captured.revision) throw new HarnessError("WORKERS_DISABLED");
+    if (!captured?.enabled || !current?.enabled || current.revision !== captured.revision) throw workersDisabled();
   }
   private assertExternalSteerAdmission(): void {
-    if (!this.admissionState()?.enabled) throw new HarnessError("WORKERS_DISABLED");
+    if (!this.admissionState()?.enabled) throw workersDisabled();
   }
 
   submit(request_id: string, input: SubmitRequest): Promise<RunView> {
@@ -420,7 +424,7 @@ export class OwnerController {
     if (!settle) return undefined;
     const agent = this.agents.get(settle.agent_id), run = agent?.current ? this.runs.get(agent.current) : undefined;
     if (!run || terminal(run.record.status) || !(run.record.execution_exited || run.record.stop_reason)) return undefined;
-    if (!admission?.enabled) return Promise.reject(new HarnessError("WORKERS_DISABLED"));
+    if (!admission?.enabled) return Promise.reject(workersDisabled());
     return this.wait([run.record.run_id], { mode: "all", timeout_ms: settle.ms ?? 30000, signal: settle.signal, include_results: false })
       .then(() => { if (settle.signal?.aborted) throw new HarnessError("TOOL_INTERRUPTED"); });
   }
@@ -436,9 +440,10 @@ export class OwnerController {
       throw new HarnessError("OWNER_HISTORY_LIMIT", { agents: this.agents.size, runs: this.runs.size, requests: this.requests.size,
         run_limit: this.limits.historyRuns, retained_output_chars: this.retainedOutputChars,
         reserved_output_chars: this.reservedOutputChars, output_char_limit: this.limits.historyOutput,
-        resolution: "Close this owner and start a fresh session; retained Runs are never evicted." });
+        resolution: "This session's retained task history is full and never evicted. Tell the user to close this harness session and start a fresh one; do not submit more tasks." });
     }
-    if (this.queue.length >= this.limits.queue) throw new HarnessError("QUEUE_FULL");
+    if (this.queue.length >= this.limits.queue) throw new HarnessError("QUEUE_FULL", { queued: this.queue.length, queue_limit: this.limits.queue,
+      resolution: "Too many tasks are already waiting. Use agent_wait on running tasks and retry once one settles." });
     const reuse = "resume" in request;
     // An unnamed Agent stays unnamed. Every surface falls back to the profile,
     // which tells the operator more than a synthesized `worker-<uuid>` handle.
@@ -453,7 +458,10 @@ export class OwnerController {
     if (reuse && (agent.unavailable || agent.release || agent.exiting)) {
       throw new HarnessError("AGENT_UNAVAILABLE", { agent_id: agent.id, reason: agent.unavailable ?? (agent.exiting ? "exiting" : undefined) });
     }
-    if (!reuse && [...this.agents.values()].filter((a) => a.resident).length >= this.limits.resident) throw new HarnessError("RESIDENT_LIMIT");
+    if (!reuse && [...this.agents.values()].filter((a) => a.resident).length >= this.limits.resident) {
+      throw new HarnessError("RESIDENT_LIMIT", { resident_limit: this.limits.resident,
+        resolution: "All Agent slots are in use. Kill an idle Agent with agent_kill to make room; its name stays taken." });
+    }
     if (agent.question) {
       if (!reuse || !request.answer_to_run_id) throw new HarnessError("PENDING_QUESTION", { run_id: agent.question.run_id });
       if (request.answer_to_run_id !== agent.question.run_id || agent.question.reserved_by) throw new HarnessError("STALE_ANSWER");
@@ -826,6 +834,7 @@ export class OwnerController {
       }
       const done = (delivery: Delivery, run_id: string) => {
         this.deliveries.set(request_id, { request_digest, run_id, delivery });
+        if (this.deliveries.size > DELIVERY_LOG_LIMIT) this.deliveries.delete(this.deliveries.keys().next().value!);
         return { delivery, view: this.view(run_id) };
       };
       const record = bound.record;
@@ -855,9 +864,12 @@ export class OwnerController {
     return submission;
   }
   private assertInputOpen(run: ManagedRun): void {
-    if (this.cleanupUncertain) throw new HarnessError("OWNER_CLEANUP_UNCERTAIN");
-    if (this.internalError) throw new HarnessError("OWNER_INTERNAL_ERROR", { error: this.internalError });
-    if (this.parentError) throw new HarnessError("OWNER_PARENT_UNAVAILABLE", { error: this.parentError });
+    if (this.cleanupUncertain) throw new HarnessError("OWNER_CLEANUP_UNCERTAIN",
+      { resolution: "A child cleanup could not be confirmed. This is a harness problem, not a task problem; tell the user. There is no retry or force release." });
+    if (this.internalError) throw new HarnessError("OWNER_INTERNAL_ERROR", { error: this.internalError,
+      resolution: "The harness hit an internal fault and has stopped accepting work. Tell the user; do not retry." });
+    if (this.parentError) throw new HarnessError("OWNER_PARENT_UNAVAILABLE", { error: this.parentError,
+      resolution: "The parent session's history writer is unavailable. Tell the user; do not retry." });
     if (!this.acceptsInput(run)) throw new HarnessError("RUN_INPUT_CLOSED");
   }
   private dispatchInput(run: ManagedRun, message: string, kind: "steer" | "soft_budget"): { accepted: true; event_id: string } {
@@ -1028,6 +1040,8 @@ export class OwnerController {
     return { active: this.active, queued: this.queue.length, ...(draining.length ? { draining } : {}),
     resident: [...this.agents.values()].filter((a) => a.resident).length,
     agents: this.agents.size, runs: this.runs.size, requests: this.requests.size,
+    /** Effective limits, so operators can see the real caps, not just defaults. */
+    limits: { ...this.limits },
     retained_output_chars: this.retainedOutputChars, reserved_output_chars: this.reservedOutputChars,
     unreported_usage: this.unreported ? structuredClone(this.unreported) : undefined,
     finalizing: [...this.runs.values()].filter((r) => r.record.execution_exited && !terminal(r.record.status)).length,
@@ -1039,7 +1053,8 @@ export class OwnerController {
     let offset = 0;
     const version = run.record.result?.digest ?? sha256(run.output.text);
     if (options.cursor) {
-      if (typeof options.cursor !== "string" || options.cursor.length > 1024) throw new HarnessError("INVALID_CURSOR");
+      if (typeof options.cursor !== "string" || options.cursor.length > 1024) throw new HarnessError("INVALID_CURSOR",
+        { resolution: "Pass a next_cursor exactly as a reply returned it; it pages only one Agent's task." });
       if (!terminal(run.record.status)) throw new HarnessError("RESULT_NOT_FINAL");
       try {
         const c = JSON.parse(Buffer.from(options.cursor, "base64url").toString()) as Record<string, unknown>;
@@ -1047,7 +1062,8 @@ export class OwnerController {
             typeof c.offset !== "number" || !Number.isSafeInteger(c.offset) || c.offset < 0 || c.offset > run.output.text.length ||
             (c.offset > 0 && /[\uD800-\uDBFF]/.test(run.output.text[c.offset - 1] ?? "") && /[\uDC00-\uDFFF]/.test(run.output.text[c.offset] ?? ""))) throw new Error();
         offset = c.offset;
-      } catch { throw new HarnessError("INVALID_CURSOR"); }
+      } catch { throw new HarnessError("INVALID_CURSOR",
+        { resolution: "This cursor is stale: the task's retained result changed, or it belongs to another session. Re-read the Agent with agent_read, without a cursor." }); }
     }
     // A one-character page may need two UTF-16 units for a supplementary glyph.
     let end = Math.min(run.output.text.length, offset + limit);
@@ -1207,7 +1223,18 @@ export class OwnerController {
     const settle = (async () => {
       await this.submitTail;
       while (this.tasks.size) await Promise.all([...this.tasks]);
-      for (const agent of this.agents.values()) if (agent.resident) await this.releaseAgent(agent, "owner_closed");
+      for (const agent of this.agents.values()) {
+        if (!agent.resident) continue;
+        try { await this.releaseAgent(agent, "owner_closed"); }
+        catch (error) {
+          // A settle throw must not leave closing=true, closed=false with the
+          // lease still held and no driver. Like track(), latch BOTH flags:
+          // cleanupUncertain is what the close gate below actually checks.
+          this.cleanupUncertain = true;
+          this.internalError = errorText(error);
+          this.wake();
+        }
+      }
     })();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const done = await Promise.race([settle.then(() => true), new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), timeout_ms); })]);
