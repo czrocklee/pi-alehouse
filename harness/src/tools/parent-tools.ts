@@ -46,11 +46,11 @@ const runSchema = Type.Object({
   wait_ms: waitField,
 }, { additionalProperties: false });
 const sendSchema = Type.Object({
-  agent: agentName(),
-  message: text(16384),
+  agent: agentName("An existing Agent; the task it is running (or asking about) when you call receives the message."),
+  message: text(16384, "Your message: a correction or extra instruction for the running task, or an answer to its question. Never a new task; use agent_run for that."),
   wait_ms: optional(waitMs("Wait up to this long for the task that received the message to finish or ask. Default 0.")),
 }, { additionalProperties: false });
-const agentOnly = Type.Object({ agent: agentName() }, { additionalProperties: false });
+const agentOnly = Type.Object({ agent: agentName("An existing Agent by name.") }, { additionalProperties: false });
 /** A label the model omitted: the first nonblank line of its instructions. */
 const labelOf = (label: string | undefined, instructions: string): string =>
   label ?? utf16Prefix(instructions.split("\n").map((line) => line.trim()).find(Boolean) ?? "task", 120);
@@ -135,7 +135,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
           manager.getSessionId() !== identity.owner_id || boundContext.cwd !== cwd || ctx.cwd !== cwd ||
           boundContext.modelRegistry !== registry || ctx.modelRegistry !== registry ||
           controller.identity.owner_id !== identity.owner_id || controller.identity.generation !== identity.generation) throw new Error();
-    } catch { throw new HarnessError("STALE_OWNER_CONTEXT"); }
+    } catch { throw new HarnessError("STALE_OWNER_CONTEXT", { resolution: "The harness session changed underneath this call; it may or may not have been accepted. Check agent_list before repeating it." }); }
   };
   // Replies name Agents whose tasks finished since they were last shown, once
   // each. Part of these tools' own results, never a context injection. A
@@ -170,7 +170,8 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
           throw new HarnessError("INVALID_DIFFICULTY", { key: "difficulty", resolution: invalidDifficultyResolution });
         }
       }
-      if (!Check(schema, raw)) throw new HarnessError("INVALID_PARAMETERS", { allowed: Object.keys(schema.properties) });
+      if (!Check(schema, raw)) throw new HarnessError("INVALID_PARAMETERS", { allowed: Object.keys(schema.properties),
+        resolution: "The arguments do not match this tool's schema; check the required fields, their types and bounds." });
       return structuredClone(raw);
     };
     return { name, label: name, description, parameters: schema,
@@ -253,9 +254,10 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         // Nothing was sent: return the ended task's outcome and result, as a wait would.
         return { delivery, ...terminal(view.status) ? await respond(view, 1, signal) : taskReply(view, nameOf) };
       }),
-    make("agent_wait", "Wait for tasks and return their results and questions. all (default): when every task has ended, or early when one asks, fails, is interrupted or hits its turn limit. any: when the first one ends. Omit agents to wait for every running task. Returns as soon as the condition holds, so one long wait beats many short ones. Timing out never interrupts tasks. Results never arrive on their own; wait for them.",
-      Type.Object({ agents: optional(agentNames(16, "Default: every Agent with a task in progress.")),
-        mode: optional(StringEnum(["all", "any"] as const, { default: "all" })),
+    make("agent_wait", "Wait for tasks and return their results and questions. all (default): when every task has ended, or early when one asks, fails, is interrupted or hits its turn limit. any: when the first one ends, including one that already has. Omit agents to wait for every task not yet ended, queued or running. Returns as soon as the condition holds, so one long wait beats many short ones. Timing out never interrupts tasks. Results never arrive on their own; wait for them.",
+      Type.Object({ agents: optional(agentNames(16, "Default: every Agent with a task not yet ended, queued or running.")),
+        mode: optional(StringEnum(["all", "any"] as const, { default: "all",
+          description: "all: return when every named task has ended, early on a question, failure, interrupt or turn limit. any: return as soon as one named task has ended, including one that already has." })),
         wait_ms: optional(waitMs("Default and maximum 300000. 0 checks without waiting.")) }, { additionalProperties: false }),
       async ({ agents, mode = "all", wait_ms = 300000 }, _ctx, _id, signal) => {
         const ids = agents ? [...new Set(agents)].map((name) => find(name, "agents").run_id) :
@@ -265,12 +267,16 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         return waitReply(waited, readPage, nameOf);
       }),
     make("agent_read", "Read an Agent's latest task: its full question and one page of output. Use it when a reply has question_truncated, result_omitted or next_cursor; pass next_cursor to continue. omitted_chars were too long to keep and cannot be read.",
-      Type.Object({ agent: agentName(), cursor: optional(text(1024)),
+      Type.Object({ agent: agentName("An existing Agent; its latest task is read."),
+        cursor: optional(text(1024, "A next_cursor from an earlier reply or agent_read of this Agent's task; it pages only that task.")),
         max_chars: optional(Type.Integer({ minimum: 1, maximum: 16384, description: "Page size in UTF-16 units, default 16384." })) }, { additionalProperties: false }),
       ({ agent, cursor, max_chars = 16384 }) => {
         const found = find(agent);
         const run_id = cursor ? resultCursorRun(cursor) : found.run_id;
-        if (cursor && controller.view(run_id).agent_id !== found.agent_id) throw new HarnessError("INVALID_CURSOR");
+        if (cursor && controller.view(run_id).agent_id !== found.agent_id) {
+          throw new HarnessError("INVALID_CURSOR", { agent,
+            resolution: "A cursor belongs to one Agent's task and cannot be used for another. Read that Agent with agent_read, without a cursor." });
+        }
         return resultReply(controller.getResult(run_id, { cursor, limit: max_chars }), nameOf);
       }),
     make("agent_interrupt", "Stop an Agent's current task. The Agent keeps its conversation, so agent_run can redirect it. status becomes interrupted once stopped.",
