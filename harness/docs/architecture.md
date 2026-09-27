@@ -59,7 +59,11 @@ Wait for each replacement operation to finish before starting another. `/tree`
 changes the current session in place without a fresh Owner, so it always
 keeps the explicit `/harness-close` gate and never auto-closes. One Owner has one
 FIFO admission queue, four execution slots, eight resident reservations, and
-memory-only request idempotence.
+memory-only request idempotence. Every unsettled task pins its Agent's
+reservation, so the queue can never hold more than the resident cap; under the
+default limits `QUEUE_FULL` is unreachable and the resident cap bounds admission
+first — the queue limit only bites when it is configured below the resident
+limit.
 
 Admission reserves a configured worst-case output budget for each unsettled Run.
 A same tool-call ID with identical task fields returns its accepted Run; a
