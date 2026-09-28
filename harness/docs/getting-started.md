@@ -78,10 +78,10 @@ Start a fresh process:
 pi-alehouse
 ```
 
-Choose the main model normally. Use **Alt+S** to select a worker preset, then **E** to adjust effort. The main model is unchanged. Existing agents keep the configuration they started with.
+Choose the main model normally. Use **Alt+S** to set the delegation mode (how much the main model hands off to Agents) and select a model preset, then **E** to adjust effort. The main model is unchanged. Existing agents keep the configuration they started with.
 
 - **Alt+A**: inspect agents and their conversations.
-- **Alt+S**: worker routing and effort.
+- **Alt+S**: delegation mode, model preset and effort.
 - **`/stats`**: activity, models and tools.
 - **`/harness-close`**: request shutdown; wait for confirmed closure.
 

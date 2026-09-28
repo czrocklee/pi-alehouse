@@ -116,7 +116,7 @@ export default async function alehouse(pi: ExtensionAPI) {
       // not stale tool ownership from a previous session. getAllTools() is also
       // refreshed only after session_start dispatch completes.
       if (managementToolNames.some((name) => !sessionHarnessTools.has(name))) {
-        fail("Harness initialization did not complete; inspect the reported preset error and harness-presets.json");
+        fail("Harness initialization did not complete; inspect the reported startup error (harness-presets.json or a saved preset or delegation record)");
         return;
       }
       started = true;

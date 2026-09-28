@@ -1,6 +1,7 @@
 // Real development SDK prompt assembly with deterministic provider IO; no
 // credentials, network or live model. Proves the delegation guideline follows
-// agent_spawn's visibility request by request, including a mid-run switch.
+// agent_spawn's visibility request by request, including a mid-run switch, and
+// that re-registering agent_spawn (a delegation mode change) replaces it.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -8,7 +9,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as sdk from "@earendil-works/pi-coding-agent";
 import * as ai from "@earendil-works/pi-ai";
-import { delegationGuideline } from "../../dist/tools/parent-tools.js";
+import { defaultDelegation, delegationGuideline as guidelineFor } from "../../dist/delegation.js";
+
+const delegationGuideline = guidelineFor(defaultDelegation);
 import { cleanupToolNames, managementToolNames, workerToolSelection } from "../../dist/tools/tool-names.js";
 
 const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
@@ -98,4 +101,34 @@ test("real SDK: a mid-run switch to Off drops the guideline in the same request 
   assert(before.tools.includes("agent_spawn"));
   assert.equal(count(after.system), 0, "the next turn of the same run already lacks the guideline");
   assert(!after.tools.includes("agent_spawn"));
+});
+
+test("real SDK: re-registering agent_spawn swaps the guideline for the next request only", { timeout: 10000 }, async (t) => {
+  t.mock.method(globalThis, "fetch", () => { assert.fail("guideline fixture attempted network IO"); });
+  const f = await fixture(t, () => stop);
+  const lead = guidelineFor({ mode: "lead", eagerness: "eager" });
+  const spawn = () => f.pi.getAllTools().find((tool) => tool.name === "agent_spawn");
+  f.select(true, false);
+  await f.session.prompt("co-worker");
+  const active = f.pi.getActiveTools();
+  // As the extension does: the same definition with only promptGuidelines changed.
+  f.pi.registerTool({ name: "agent_spawn", label: "agent_spawn", description: "fixture agent_spawn",
+    parameters: { type: "object", properties: {} }, execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    promptGuidelines: [lead] });
+  assert.deepEqual(f.pi.getActiveTools(), active, "re-registration keeps the active tool set");
+  assert(spawn());
+  await f.session.prompt("lead");
+  await f.session.prompt("lead again");
+  f.select(false, false);
+  f.pi.registerTool({ name: "agent_spawn", label: "agent_spawn", description: "fixture agent_spawn",
+    parameters: { type: "object", properties: {} }, execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    promptGuidelines: [guidelineFor({ mode: "manual", eagerness: "balanced" })] });
+  assert(!f.pi.getActiveTools().includes("agent_spawn"), "a mode change never re-exposes agent_spawn while Off");
+  await f.session.prompt("off");
+  const [before, after, again, off] = f.requests;
+  assert.equal(count(before.system), 1);
+  assert.equal(after.system.split(lead).length - 1, 1, "exactly one copy of the new guideline");
+  assert.equal(count(after.system), 0, "the old guideline is gone");
+  assert.equal(again.system, after.system, "the new mode is stable for the prefix cache");
+  assert(!off.system.includes("Start or assign Agent work only"), "Off carries no guideline of any mode");
 });

@@ -244,14 +244,24 @@ test("preserved invalid preset fails closed for real SDK tool and user_bash disp
   assert.match(output, /preserved invalid preset leaves real SDK tool and user_bash latches blocked/);
 });
 
-test("real composition runs researcher, reader and editor Agents with forwarded asks, offline", { timeout: 60000 }, (t) => {
+test("real composition runs researcher, reader and editor Agents with forwarded asks and a mode switch, offline", { timeout: 60000 }, (t) => {
   const dir = temporary(t), agentDir = join(dir, "agent");
   const output = execFileSync(process.execPath, [join(packageRoot, "test/runtime/fixtures/researcher-spawn.mjs")], {
     env: { HOME: dir, PATH: process.env.PATH, PI_CODING_AGENT_DIR: agentDir,
       PI_JEV_API_KEY_FILE: join(dir, "nonexistent-test-key"), PI_OFFLINE: "1", NO_COLOR: "1" },
     encoding: "utf8", timeout: 55000,
   });
-  assert.match(output, /real composition spawns researcher, reader and editor Agents; forwarded asks reach the parent UI; nothing leaves the process/);
+  assert.match(output, /real composition spawns researcher, reader and editor Agents; forwarded asks reach the parent UI; a mode switch reaches the next request; nothing leaves the process/);
+});
+
+test("real composition restores, defaults and fails closed on the delegation mode across restarts, offline", { timeout: 60000 }, (t) => {
+  const dir = temporary(t), agentDir = join(dir, "agent");
+  const output = execFileSync(process.execPath, [join(packageRoot, "test/runtime/fixtures/delegation-mode.mjs")], {
+    env: { HOME: dir, PATH: process.env.PATH, PI_CODING_AGENT_DIR: agentDir,
+      PI_JEV_API_KEY_FILE: join(dir, "nonexistent-test-key"), PI_OFFLINE: "1", NO_COLOR: "1" },
+    encoding: "utf8", timeout: 55000, stdio: ["ignore", "pipe", "pipe"],
+  });
+  assert.match(output, /delegation mode defaults, changes while Off, restores, fails closed on a bad record and on audit failure, offline/);
 });
 
 test("build inputs contain no generated installed-profile hash fallback", () => {

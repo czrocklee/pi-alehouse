@@ -4,6 +4,7 @@ import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import { FOOTER_INDICATOR_CLICK_EVENT, WORKER_PRESET_INDICATOR, type FooterIndicatorClick }
   from "../../../lib/overlay-protocol.mjs";
 import { focusOrigin, focusRevealed, joinPopoverStack, stackedOverlayOptions, type StackMember } from "../../../lib/popover-stack.mjs";
+import type { DelegationSetting } from "../delegation.js";
 import type { EffortOverrides, PresetCandidate, PresetRouter, PresetSnapshot, Strength } from "../routing.js";
 import { DetailPane, type DetailInput } from "./agent-detail.js";
 import { HarnessWidget, type AgentDetail } from "./agent-widget.js";
@@ -20,6 +21,12 @@ export interface PanelCoordinatorOptions {
   publish(candidate: PresetCandidate, name: string, ctx: Pick<ExtensionContext, "ui">, overrides?: EffortOverrides): void;
   showError(error: unknown, ctx: Pick<ExtensionContext, "ui">): void;
   efforts?: (preset: PresetSnapshot, slot: Strength) => EffortCapabilities;
+  /** Delegation mode: read live, and applied at once by the panel's slider. */
+  delegation?: {
+    current(): DelegationSetting;
+    set(next: DelegationSetting, ctx: Pick<ExtensionContext, "ui">): void;
+    guideline(setting: DelegationSetting): string;
+  };
 }
 
 /** Owns only parent UI mounting, selection and approval-yield state. */
@@ -68,7 +75,7 @@ export class PanelCoordinator {
       handler: () => this.mount(),
     });
     options.pi.registerShortcut("alt+s", {
-      description: "Toggle the harness worker preset picker",
+      description: "Toggle the harness delegation panel (mode and model preset)",
       // The SDK observes returned shortcut promises without blocking input,
       // including failures of our error-notification UI itself.
       handler: () => this.togglePreset(),
@@ -272,19 +279,19 @@ export class PanelCoordinator {
     ctx: Pick<ExtensionContext, "ui" | "mode">): Promise<PresetChoice | null> {
     const live = this.options.router();
     if (this.pickerOpen) {
-      ctx.ui.notify("A worker preset picker is already open.", "warning");
+      ctx.ui.notify("The delegation panel is already open.", "warning");
       return null;
     }
     if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
       this.pickerOpen = true;
       try {
-        const selected = await ctx.ui.select("Worker preset (off disables new work)", candidate.names.map((item) =>
+        const selected = await ctx.ui.select("Model preset (off disables new work)", candidate.names.map((item) =>
           item === candidate.activeName ? `${item} (active)` : item));
         return selected?.replace(/ \(active\)$/, "") ?? null;
       } finally { this.pickerOpen = false; }
     }
     if (!this.host || !this.options.ready() || this.paneOpen || !mountable(this.yielding, this.approvals.pending)) {
-      ctx.ui.notify("Worker preset picker is unavailable while another harness panel or approval is active.", "warning");
+      ctx.ui.notify("The delegation panel is unavailable while another harness panel or approval is active.", "warning");
       return null;
     }
     const presets = live.inspect(candidate);
@@ -307,8 +314,15 @@ export class PanelCoordinator {
         // has taken it since.
         const openedFrom = focusOrigin(tui);
         reveal = () => { if (handle) focusRevealed(tui, handle, openedFrom); };
+        const delegation = this.options.delegation;
         return request.own(new PresetPicker({ tui, theme, keybindings, presets,
           activeName: candidate.activeName, done: request.choose, pointer: floating, efforts: this.options.efforts,
+          ...(delegation ? { delegation: { current: () => delegation.current(), guideline: (setting: DelegationSetting) => delegation.guideline(setting),
+            set: (next: DelegationSetting) => {
+              // A pointer or key handler: nothing may escape into pi-tui's dispatch.
+              try { delegation.set(next, ctx); }
+              catch (error) { try { this.options.showError(error, ctx); } catch { /* notification is fallible too */ } }
+            } } } : {}),
           ...(stacked ? { rows: () => stacked.available(), onRender: (height: number) => stacked.measure(height) } : {}) }));
       }, floating
         ? { overlay: true, onHandle: (mounted) => { handle = mounted; }, overlayOptions: () => place

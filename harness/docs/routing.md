@@ -1,4 +1,48 @@
-# Worker routing
+# Delegation mode and model presets
+
+The Delegation panel (`Alt+S`) sets two independent things: how the main model
+divides work with Agents ([delegation mode](#delegation-mode)), and which models
+new Agents run on (model presets, the rest of this page).
+
+## Delegation mode
+
+The mode is a slider of four positions, ordered by how much the main model
+hands off:
+
+| Mode | Main model |
+| --- | --- |
+| Manual | starts Agent work only when the user asks; may suggest it |
+| Co-worker (default) | works alongside Agents; each takes parts of the task |
+| Lead | keeps the critical path and key decisions; Agents take the rest |
+| Supervisor | plans, answers Agents, reviews and integrates; Agents do the tasks |
+
+Eagerness sets how small a piece is still worth handing off: reserved hands off
+only substantial, clearly separable work; balanced (the default) hands off
+independent pieces that would take longer to do than to explain; eager hands
+off even small independent pieces and keeps several Agents running at once. It does not apply to
+Manual. The mode and eagerness compose the one guideline line `agent_spawn`
+carries into the parent system prompt; the panel shows that line (clipped when
+the panel is narrow). This is
+prompt guidance, not enforcement: Manual does not block `agent_spawn` (use
+`off`, or a permission `ask` rule, for that).
+
+A change takes effect at once: `agent_spawn` is re-registered with the new line
+(one prompt-cache miss), and the parent's next run uses it. A run already in
+progress keeps the prompt it started with. Running Agents are unchanged. If the
+re-registration itself fails, the harness warns and retries before each run. `/harness-mode lead eager` sets it without the panel (a mode, an
+eagerness, or one of each); bare `/harness-mode` reports it. Each change
+appends `harness:delegation-mode:v1` (`mode`, `eagerness`, `selected_at`) to
+the active branch; restoring the session restores it, and an invalid saved entry
+fails startup with its own error naming that record. Fresh sessions use the optional
+top-level `defaultMode` and `defaultEagerness` of `harness-presets.json`, else
+Co-worker × balanced. With `off` selected the mode is kept but unused.
+
+The footer shows `co-worker - gpt-medium`: the mode, eagerness only when it is
+not balanced and the mode is not Manual (`lead·eager - gpt-medium`), the preset
+name without its version, and `*` for session effort overrides; `off` shows just
+`off`.
+
+## Model presets
 
 Routing is deterministic, trusted configuration for **new** Agents. It is not
 model benchmarking, authentication, a provider fallback, or permission policy.
@@ -176,7 +220,10 @@ Preset names are 1--64 characters of `[A-Za-z0-9._-]`, beginning alphanumeric;
 `reload` and `off` are reserved. All other valid names are user-configured presets: they may be changed,
 renamed, or removed. `defaultPreset` must name one of these presets or be `off`;
 `{ "version": 2, "defaultPreset": "off", "presets": {} }` is valid. The default
-applies only when starting a session with no saved selection. A preset body
+applies only when starting a session with no saved selection. Optional top-level
+`defaultMode` (`manual`, `co-worker`, `lead`, `supervisor`) and
+`defaultEagerness` (`reserved`, `balanced`, `eager`) set the fresh-session
+[delegation mode](#delegation-mode) the same way. A preset body
 has only `version`, `models`, optional `effort`, and optional `thinking`; model
 slots must contain all three routing slots and exact `provider/model` strings.
 Effort accepts a partial slot map; missing slots default to `inherit`. Thinking slots/source/
@@ -205,7 +252,7 @@ preset labels include their configured version; no name has built-in privileges.
 
 Use `/harness-preset NAME` for a named selection, `/harness-preset reload` to
 reread the file while retaining the active name, or bare `/harness-preset` /
-`Alt+S` (or a click on the footer's worker indicator) for the picker. Model
+`Alt+S` (or a click on the footer's delegation indicator) for the panel. Model
 routes affect new Agents only; Off disables new/resumed/steered work but leaves
 accepted work unchanged. Neither selection changes the main model. `Alt+S` leaves Pi's `Ctrl+S` save actions
 alone.  If a terminal, multiplexer, or reserved global binding intercepts it,
@@ -225,7 +272,8 @@ undo the selection. It reports a warning; core admission already follows the
 committed choice, and the next request retries tool reconciliation.
 
 Successful selections append `harness:preset-selection:v1` to the active parent
-branch and publish `workers: <preset>` under the `harness-preset` footer key.
+branch and publish `delegation: <mode> - <preset>` (or `delegation: off`) under
+the `harness-preset` footer key.
 Off uses the same name/version/digest envelope without model/thinking fields;
 selection entries are non-context metadata. They follow Pi's session storage
 lifecycle: an ephemeral session cannot survive exit, and a fresh persistent
@@ -236,9 +284,9 @@ selected preset's complete session `effort_overrides` (including `{}` after
 reset). Restoration replays these only from the active branch, not abandoned branches. Startup restores Off from the active
 branch before the first model request. Existing saved enabled selections remain
 compatible; a new session with no selection starts at the file's `defaultPreset`.
-Every model preset shows as `<preset>@<version>` in the footer and notices, with
-the version also shown in the picker, so a reload visibly picks up an edited
-revision. The branch later restores the selected **name** and per-preset effort
+Notices and the picker show every model preset's version (`<preset>@<version>`),
+so a reload visibly picks up an edited revision; the footer shows the preset
+name without it. The branch later restores the selected **name** and per-preset effort
 overrides, not historical model pins. On process start the name is resolved
 from the current configuration; a same-name preset
 may therefore have a new version/digest/slots/maps. A missing saved name is a

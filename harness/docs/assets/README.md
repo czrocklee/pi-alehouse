@@ -12,7 +12,7 @@ Keep terminal captures and color palettes outside the repository. Review the vis
 node scripts/render-readme.mjs \
   --screen /path/to/private-local-capture.ansi \
   --colors /path/to/local-kitty-colors.txt \
-  --title 'Worker routing' \
+  --title 'Delegation' \
   --output routing-panel.svg
 ```
 

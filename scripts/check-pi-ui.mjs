@@ -994,7 +994,7 @@ for (const order of [
 });
 
 test("the worker indicator sits in the corner and hands its clicks to the harness", async () => {
-  const statuses = new Map([[WORKER_PRESET_INDICATOR, "workers: fixture-balanced"], ["other-extension", "OTHER"]]);
+  const statuses = new Map([[WORKER_PRESET_INDICATOR, "delegation: lead - fixture-balanced"], ["other-extension", "OTHER"]]);
   const mounted = await mountFooter({ mode: "fullscreen", entries: spendEntries, statuses });
   const claimed = [];
   let claim = true;
@@ -1006,8 +1006,8 @@ test("the worker indicator sits in the corner and hands its clicks to the harnes
     for (const columns of [300, 120]) {
       mounted.tui.terminal.columns = columns;
       const line = mounted.line(columns);
-      assert(line.endsWith("fixture-balanced ▴"), `pinned to the far right: ${line}`);
-      assert(!line.includes("workers:"), "the dock shows the preset value without its label");
+      assert(line.endsWith("lead - fixture-balanced ▴"), `pinned to the far right: ${line}`);
+      assert(!line.includes("delegation:"), "the dock shows the mode and preset without its label");
       assert(line.indexOf("OTHER") < line.indexOf("fixture-balanced"), "after every other status");
       claimed.length = 0;
       mounted.clickFooter(columns - 1);

@@ -593,7 +593,7 @@ const pinned = (key: string): number => (PINNED_INDICATORS as readonly string[])
  * Keep status keys and value styling intact, including YOLO's red/bold warning. */
 const indicatorValue = (key: string, text: string): string =>
   key === APPROVAL_INDICATOR ? text.replace(/^approval: /, "") :
-    key === WORKER_PRESET_INDICATOR ? text.replace(/^workers: /, "") : text;
+    key === WORKER_PRESET_INDICATOR ? text.replace(/^(?:delegation|workers): /, "") : text;
 
 type FooterSegment = { text: string; key?: string; compact?: string };
 const FOOTER_SEPARATOR = " · ";

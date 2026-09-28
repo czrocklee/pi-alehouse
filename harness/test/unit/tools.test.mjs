@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createChildTools as createCommunicationTools } from "../../dist/tools/child-tools.js";
-import { createOwnerTools, delegationGuideline } from "../../dist/tools/parent-tools.js";
+import { createOwnerTools } from "../../dist/tools/parent-tools.js";
+import { defaultDelegation, delegationGuideline, delegationModes, eagernessLevels } from "../../dist/delegation.js";
 import { Check } from "typebox/value";
 import { assertCallerTools } from "../support/caller-contract.mjs";
 import { blockedDelegationToolNames as blockedDelegationTools, cleanupToolNames, managementToolNames as delegationTools,
@@ -88,9 +89,17 @@ test("serialized tool schemas explain task fields and independent capability/rou
 test("only agent_spawn carries the delegation guideline, as static text", async (t) => {
   const f = await fixture(t), { tools } = toolsFor(f);
   for (const tool of tools) {
-    assert.deepEqual(tool.promptGuidelines, tool.name === "agent_spawn" ? [delegationGuideline] : undefined, tool.name);
+    assert.deepEqual(tool.promptGuidelines, tool.name === "agent_spawn" ? [delegationGuideline(defaultDelegation)] : undefined, tool.name);
   }
-  assert.doesNotMatch(delegationGuideline, /\d|\$\{/, "no counts, dates or interpolation in a cached prompt prefix");
+  const lines = new Set();
+  for (const mode of delegationModes) for (const eagerness of eagernessLevels) {
+    const line = delegationGuideline({ mode, eagerness });
+    assert.doesNotMatch(line, /\d|\$\{|undefined|\n/, "no counts, dates or interpolation in a cached prompt prefix");
+    assert.doesNotMatch(line, /agent_(spawn|run|send|wait|read|kill|list|interrupt)|profile|difficulty/,
+      "organization strategy only; tool semantics stay in schemas");
+    lines.add(line);
+  }
+  assert.equal(lines.size, 10, "each autonomous mode × eagerness is distinct; Manual ignores eagerness");
 });
 
 test("only prompt carries the assignment; labels, names and default-disabled context do not", async (t) => {

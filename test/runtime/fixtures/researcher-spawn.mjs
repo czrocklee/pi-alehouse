@@ -10,6 +10,7 @@ import { createAgentSession, DefaultResourceLoader, initTheme, ModelRuntime, Ses
 import { initialize } from "../../../scripts/init.mjs";
 import { packageRoot } from "../../../bin/runtime-support.mjs";
 import { controlledProvider } from "../../../harness/test/support/host.mjs";
+import { delegationGuideline } from "../../../harness/dist/delegation.js";
 
 const agentDir = process.env.PI_CODING_AGENT_DIR, home = process.env.HOME;
 assert(agentDir && home);
@@ -46,7 +47,7 @@ const text = (message) => typeof message?.content === "string" ? message.content
   : (message?.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join("\n");
 const profileOf = (request) => /<active_agent name="(\w+)"\/>/.exec(request.context.systemPrompt ?? "")?.[1];
 const results = (request) => request.context.messages.filter((message) => message.role === "toolResult");
-const parentSteps = [], childTools = {}, childResults = {};
+const parentSteps = [], parentPrompts = [], childTools = {}, childResults = {};
 const call = (id, name, args) => ({ tools: [{ type: "toolCall", id, name, arguments: args }] });
 // A failed step only ends the provider response; keep it for the real report.
 let scriptFailure;
@@ -54,6 +55,7 @@ provider.respond(async (request) => { try { return respond(request); } catch (er
 function respond(request) {
   const profile = profileOf(request);
   if (!profile) {
+    parentPrompts.push(request.context.systemPrompt);
     const step = parentSteps.shift();
     assert(step, "unscripted parent request");
     return step(request.context.messages.at(-1));
@@ -74,7 +76,7 @@ function respond(request) {
 
 // The parent UI answers forwarded permission requests: web_search is denied,
 // the local read of a *.pem path (an ask rule) is approved.
-const dialogs = [];
+const dialogs = [], statuses = [];
 const noop = () => {};
 const uiContext = {
   select: async (title, options) => {
@@ -84,7 +86,7 @@ const uiContext = {
     return /tool\s*:\s*read\b/.test(title) ? "Yes" : "No";
   },
   confirm: async () => false, input: async () => undefined, editor: async () => undefined, custom: async () => undefined,
-  notify: noop, onTerminalInput: () => noop, setStatus: noop, setWorkingMessage: noop, setWorkingVisible: noop,
+  notify: noop, onTerminalInput: () => noop, setStatus: (key, value) => { if (key === "harness-preset") statuses.push(value); }, setWorkingMessage: noop, setWorkingVisible: noop,
   setWorkingIndicator: noop, setHiddenThinkingLabel: noop, setWidget: noop, setFooter: noop, setHeader: noop, setTitle: noop,
   pasteToEditor: noop, setEditorText: noop, getEditorText: () => "", addAutocompleteProvider: noop, setEditorComponent: noop,
   getEditorComponent: () => undefined, getAllThemes: () => [], getTheme: () => undefined, setTheme: () => ({ success: false }),
@@ -142,6 +144,26 @@ try {
   }
   assert.match(dialogs.find((title) => /web_search/.test(title)), /alehouse fixture/, "the parent sees the query it approves");
   assert.equal(lifecycle.filter((event) => event.kind === "disposed").length, 1, "only the killed researcher is disposed so far");
+
+  // Delegation mode: the default guideline, then a command switch that takes
+  // effect in the next request, with an audit entry and footer status.
+  const coWorker = delegationGuideline({ mode: "co-worker", eagerness: "balanced" });
+  const lead = delegationGuideline({ mode: "lead", eagerness: "eager" });
+  // Pi renders tool guidelines in both its rules and Guidelines sections.
+  assert(parentPrompts.every((prompt) => prompt.includes(coWorker)), "the default guideline is in every parent request");
+  assert.equal(statuses.at(-1), "delegation: co-worker - fixture");
+  await session.prompt("/harness-mode lead eager");
+  assert.equal(statuses.at(-1), "delegation: lead·eager - fixture");
+  const saved = session.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "harness:delegation-mode:v1");
+  assert.deepEqual(saved.map(({ data: { mode, eagerness } }) => ({ mode, eagerness })), [{ mode: "lead", eagerness: "eager" }]);
+  const before = parentPrompts.length;
+  parentSteps.push(() => ({ text: "LEAD_DONE" }));
+  await session.prompt("AFTER_SWITCH", { expandPromptTemplates: false });
+  const switched = parentPrompts.slice(before);
+  assert.equal(switched.length, 1);
+  assert.equal(switched[0].split(lead).length, parentPrompts[0].split(coWorker).length, "the next request carries the new guideline in its place");
+  assert(!switched[0].includes(coWorker), "and not the old one");
+  assert(session.getActiveToolNames().includes("agent_spawn"), "a mode change keeps delegation exposed");
 } finally {
   await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
   session.dispose();
@@ -151,4 +173,4 @@ const disposed = lifecycle.filter((event) => event.kind === "disposed").map((eve
 assert.equal(created.length, 4);
 assert.deepEqual([...disposed].sort(), [...created].sort(), "parent shutdown disposes every Agent session");
 assert.deepEqual(network, []);
-console.log("PASS: real composition spawns researcher, reader and editor Agents; forwarded asks reach the parent UI; nothing leaves the process");
+console.log("PASS: real composition spawns researcher, reader and editor Agents; forwarded asks reach the parent UI; a mode switch reaches the next request; nothing leaves the process");
