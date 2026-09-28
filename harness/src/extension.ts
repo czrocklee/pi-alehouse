@@ -5,8 +5,10 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { getAgentDir, getPackageDir, parseFrontmatter, SettingsManager,
-  type ExtensionAPI, type ExtensionContext, type ModelRuntime } from "@earendil-works/pi-coding-agent";
+  type ExtensionAPI, type ExtensionContext, type ModelRuntime, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { OwnerController } from "./core/owner-controller.js";
+import { defaultDelegation, delegationGuideline, delegationLabel, delegationStatus, isDelegationSetting, parseDelegation,
+  restoreDelegation, type DelegationSetting } from "./delegation.js";
 import { HarnessError } from "./core/ports.js";
 import { historicalRunsCommand } from "./history/history-command.js";
 import { reportUnreportedUsage } from "./history/usage-audit.js";
@@ -150,6 +152,33 @@ export default function harnessExtension(pi: ExtensionAPI) {
   const residentLimit = 8;
   historicalRunsCommand(pi);
   const presetEntry = "harness:preset-selection:v1";
+  const delegationEntry = "harness:delegation-mode:v1";
+  let delegation: DelegationSetting = { ...defaultDelegation };
+  /** The registered agent_spawn; re-registered to carry a new guideline. */
+  let spawnTool: ToolDefinition | undefined;
+  /** The guideline agent_spawn actually carries, so a failed re-registration
+   * is retried rather than hidden behind an unchanged setting. */
+  let publishedGuideline: string | undefined;
+  /** The active tools from before a re-registration, kept until they are
+   * restored: with a tool allowlist (--tools), Pi's registry refresh
+   * re-activates every allowed tool, and a failed restore must be retried. */
+  let pendingActive: string[] | undefined;
+  const sameTools = (a: readonly string[], b: readonly string[]): boolean =>
+    a.length === b.length && a.every((name, index) => name === b[index]);
+  const syncGuideline = (): void => {
+    const wanted = delegationGuideline(delegation);
+    if (!spawnTool || (publishedGuideline === wanted && !pendingActive)) return;
+    const active = pendingActive ??= pi.getActiveTools();
+    if (publishedGuideline !== wanted) {
+      pi.registerTool({ ...spawnTool, promptGuidelines: [wanted] });
+      publishedGuideline = wanted;
+    }
+    if (!sameTools(pi.getActiveTools(), active)) pi.setActiveTools(active);
+    pendingActive = undefined;
+    // A snapshot kept across a failure may predate an admission change;
+    // harness tools follow the current admission, not the snapshot.
+    syncWorkerTools();
+  };
   const syncWorkerTools = (): void => {
     if (!controller || !router) return;
     const current = pi.getActiveTools();
@@ -179,17 +208,56 @@ export default function harnessExtension(pi: ExtensionAPI) {
       issues.push(`${part} could not update: ${detail}`);
     };
     try { syncWorkerTools(); } catch (error) { failed("tool visibility", error); }
-    try { ctx.ui.setStatus("harness-preset", `workers: ${presetLabel(snapshot)}`); }
+    try { ctx.ui.setStatus("harness-preset", delegationStatus(snapshot, delegation)); }
     catch (error) { failed("the footer", error); }
     // Audit and live selection already succeeded. Report either presentation
     // failure without pretending the selection rolled back; preflight retries
     // tool reconciliation, while core admission remains authoritative now.
     try { ctx.ui.notify(issues.length
-      ? `Worker preset ${presetLabel(snapshot)} selected; existing agents are unchanged, but ${issues.join("; ")}`
+      ? `Model preset ${presetLabel(snapshot)} selected; existing agents are unchanged, but ${issues.join("; ")}`
       : snapshot.name === "off"
-        ? "Workers off: new, resumed and steered work is disabled; accepted work continues and results remain available."
-        : `Worker preset ${presetLabel(snapshot)} selected; existing agents are unchanged.`, issues.length ? "warning" : "info"); }
+        ? "Delegation off: new, resumed and steered work is disabled; accepted work continues and results remain available."
+        : `Model preset ${presetLabel(snapshot)} selected; existing agents are unchanged.`, issues.length ? "warning" : "info"); }
     catch { /* best-effort UI after a successful selection */ }
+  };
+  /** Audit, then re-register agent_spawn with the new guideline (one
+   * prompt-cache miss). Pi applies it from the next run; a run already in
+   * progress keeps its prompt. Running Agents are unchanged. Returns whether
+   * the setting changed. */
+  const publishDelegation = (next: DelegationSetting, ctx: Pick<ExtensionContext, "ui">): boolean => {
+    if (!ready || !controller || !router || !spawnTool) throw new HarnessError("HARNESS_NOT_READY", {
+      resolution: "Fix the reported startup error and restart Pi before changing the delegation mode.",
+    });
+    if (!isDelegationSetting(next)) throw new HarnessError("INVALID_DELEGATION");
+    const setting: DelegationSetting = { mode: next.mode, eagerness: next.eagerness };
+    if (setting.mode === delegation.mode && setting.eagerness === delegation.eagerness) {
+      // Unchanged, but repair an earlier failed re-registration.
+      try { syncGuideline(); } catch (error) {
+        try { ctx.ui.notify(`The model-facing guideline could not update: ${String(error).slice(0, 256)}`, "warning"); }
+        catch { /* best-effort UI */ }
+      }
+      return false;
+    }
+    controller.assertOwnerAvailable();
+    try { pi.appendEntry(delegationEntry, { ...setting, selected_at: Date.now() }); }
+    catch (error) {
+      // As with presets: the SDK may have changed memory or disk before throwing.
+      controller.latchParentHistoryFailure(error);
+      throw new HarnessError("DELEGATION_AUDIT_FAILED", { error: String(error).slice(0, 512),
+        resolution: "The parent-session audit call failed or had an ambiguous outcome. The delegation mode was not changed. Inspect the parent session and restart Pi before more delegation or mode changes." });
+    }
+    delegation = setting;
+    const issues: string[] = [];
+    // A failure here is retried on the next reselect and before each run.
+    try { syncGuideline(); }
+    catch (error) { issues.push(`the model-facing guideline could not update: ${String(error).slice(0, 256)}`); }
+    try { ctx.ui.setStatus("harness-preset", delegationStatus(router.current(), setting)); }
+    catch (error) { issues.push(`the footer could not update: ${String(error).slice(0, 256)}`); }
+    if (issues.length) {
+      try { ctx.ui.notify(`Delegation ${delegationLabel(setting)} selected, but ${issues.join("; ")}`, "warning"); }
+      catch { /* best-effort UI after a successful selection */ }
+    }
+    return true;
   };
   /** The only readiness gate preset work has: the catalogue is meaningless
    * until session_start resolved the saved selection against disk. */
@@ -205,12 +273,13 @@ export default function harnessExtension(pi: ExtensionAPI) {
     activities.observations, (ids) => activities.retain(ids));
   const panels = new PanelCoordinator({ pi, widget, ready: () => ready, router: requireRouter,
     publish: publishPreset, showError: showPresetError,
+    delegation: { current: () => ({ ...delegation }), set: publishDelegation, guideline: delegationGuideline },
     efforts: (preset, slot) => {
       try { return workerEffortCapabilities(preset, slot, effortInputs()); }
-      catch { return { levels: [], error: "Host model metadata is unavailable; reopen the worker picker." }; }
+      catch { return { levels: [], error: "Host model metadata is unavailable; reopen the delegation panel." }; }
     } });
   pi.registerCommand("harness-preset", {
-    description: "Select a worker preset, 'off' to disable new work, or 'reload' to reread presets",
+    description: "Select a model preset, 'off' to disable new work, or 'reload' to reread presets",
     handler: async (args, ctx) => {
       const requested = args.trim();
       // A host with no UI cannot show a picker, so the bare command reports the
@@ -223,6 +292,22 @@ export default function harnessExtension(pi: ExtensionAPI) {
         return;
       }
       await panels.selectPreset(requested, ctx);
+    },
+  });
+  pi.registerCommand("harness-mode", {
+    description: "Set the delegation mode (manual, co-worker, lead, supervisor) and/or eagerness (reserved, balanced, eager)",
+    handler: async (args, ctx) => {
+      let notice: string;
+      try {
+        requireRouter();
+        if (!args.trim()) notice = JSON.stringify({ ...delegation, guideline: delegationGuideline(delegation) });
+        else {
+          const changed = publishDelegation(parseDelegation(args, delegation), ctx);
+          notice = `Delegation: ${delegationLabel(delegation)}${changed ? "" : " (unchanged)"}`;
+        }
+      } catch (error) { showPresetError(error, ctx); return; }
+      // The change already took effect; its notice is best-effort.
+      try { ctx.ui.notify(notice, "info"); } catch { /* best-effort UI */ }
     },
   });
   // Reads the controller every frame instead of holding a second copy of Run state.
@@ -256,7 +341,16 @@ export default function harnessExtension(pi: ExtensionAPI) {
   // Reconcile after startup/SDK restoration and before the first request, but
   // never inject orchestration text or an Off message into model context: the
   // delegation guideline belongs to agent_spawn and follows its visibility.
-  pi.on("before_agent_start", () => { if (ready) syncWorkerTools(); });
+  pi.on("before_agent_start", (event) => {
+    if (!ready) return;
+    try { syncGuideline(); } catch { /* reported when it first failed; retried next run */ }
+    syncWorkerTools();
+    // Pi snapshots the run's prompt options before this event: a re-registration
+    // recovered here reaches the registry, not this run's rules, so update them.
+    if (spawnTool && publishedGuideline !== undefined) {
+      event.systemPromptOptions.toolGuidelines[spawnTool.name] = [publishedGuideline];
+    }
+  });
   pi.on("session_shutdown", async (_event, ctx) => {
     ready = false; routingContext = undefined;
     // Presentation failures cannot replace Owner drain. Attempt every cleanup
@@ -288,6 +382,18 @@ export default function harnessExtension(pi: ExtensionAPI) {
         ...(error instanceof HarnessError ? error.details : { error: String(error).slice(0, 512) }),
         config_path: presetPath,
         resolution: "Fix the preset configuration or restore the saved preset, then restart Pi. The harness is not initialized.",
+      }), ctx);
+      return;
+    }
+    try {
+      delegation = restoreDelegation(ctx.sessionManager.getBranch().flatMap((entry) =>
+        entry.type === "custom" && entry.customType === delegationEntry ? [entry.data] : []), router.defaultDelegation);
+    } catch (error) {
+      // A session record, not the preset file: say which.
+      router = undefined;
+      showPresetError(new HarnessError(error instanceof HarnessError ? error.code : "INVALID_SAVED_DELEGATION", {
+        record: delegationEntry,
+        resolution: `A saved ${delegationEntry} entry on this branch is invalid. Restore or fork the session from before it, then restart Pi. The harness is not initialized.`,
       }), ctx);
       return;
     }
@@ -359,7 +465,11 @@ export default function harnessExtension(pi: ExtensionAPI) {
         // Keep best-effort visibility repair here too: this callback also runs
         // on accepted-request retries while Off, not only new enabled admissions.
         onRunAccepted: () => { syncWorkerTools(); widget.wake(); },
-      })) pi.registerTool(tool);
+        guideline: delegationGuideline(delegation),
+      })) {
+        if (tool.name === "agent_spawn") { spawnTool = tool as ToolDefinition; publishedGuideline = delegationGuideline(delegation); }
+        pi.registerTool(tool);
+      }
       // Register once, then hide inactive tools before any model request. Later
       // registration of another extension's tools must not reactivate ours.
       syncWorkerTools();
@@ -369,7 +479,7 @@ export default function harnessExtension(pi: ExtensionAPI) {
       panels.attachHost(ctx, pi.events);
       // Publish the worker selection only after initialization has completed.
       // Agent activity and capacity stay in the widget.
-      ctx.ui.setStatus("harness-preset", `workers: ${presetLabel(router.current())}`);
+      ctx.ui.setStatus("harness-preset", delegationStatus(router.current(), delegation));
       routingContext = ctx;
       ready = true;
       const current = router.current();

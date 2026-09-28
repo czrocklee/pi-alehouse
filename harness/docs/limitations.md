@@ -135,7 +135,9 @@ cache-warming is stopped, but parent warming behavior is unchanged.
 
 The delegation guideline on `agent_spawn` (see
 [tool contract](tool-contract.md)) renders in the default system prompt's
-Guidelines section. A custom `SYSTEM.md` or `--system-prompt` replaces that
+Guidelines section. The delegation mode is guidance only: Manual does not block
+delegation, and how strongly a model follows a mode or eagerness has not been
+measured. A custom `SYSTEM.md` or `--system-prompt` replaces that
 prompt, and with it the guideline; the tools themselves are unaffected.
 
 ## Retention, history, and accounting

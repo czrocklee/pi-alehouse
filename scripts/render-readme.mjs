@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Convert ONE captured terminal panel to an SVG. Never commit --screen or --colors.
 // node scripts/render-readme.mjs --screen /tmp/capture.ansi --colors /tmp/kitty-colors.txt \
-//   --title 'Worker routing' --output routing-panel.svg
+//   --title 'Delegation' --output routing-panel.svg
 // For a private Agent pane, add --redact-field run --redact-field cwd and a --caption.
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";

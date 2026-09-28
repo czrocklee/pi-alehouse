@@ -34,19 +34,22 @@ codes, profile IDs, `harness:*` records and lifecycle events are unchanged
 compatibility surface, including the internal `cancelled` Run status.
 
 `agent_spawn` also carries the one policy no schema can express, as a Pi
-`promptGuidelines` bullet in the parent system prompt:
+`promptGuidelines` bullet in the parent system prompt: the user's
+[delegation mode](routing.md#delegation-mode). Manual has its own line; every
+other mode is one division-of-work sentence followed by one eagerness sentence
+(`harness/src/delegation.ts`). The default, Co-worker × balanced, reads:
 
-> Agents let independent work run in parallel with your own. Choose direct
-> work, reuse or delegation by task fit and total cost, including coordination
-> and rework.
+> Work alongside Agents: you and they each take parts of the task. Hand off
+> independent pieces that would take you longer to do than to explain.
 
 Pi renders it only while `agent_spawn` is active and rebuilds the prompt with
 the tool loadout every turn, so it appears and disappears in the same request
 as the tools: `off` has no text either way, and children (which never have
-`agent_spawn`) and Pi without the harness never see it. The text is static so
-it adds no prompt-cache invalidation beyond the tool change itself. Everything
-else a delegating model needs stays in tool and parameter descriptions; do not
-grow this into a briefing.
+`agent_spawn`) and Pi without the harness never see it. Each line is static;
+changing the mode re-registers `agent_spawn` with the new line, which costs one
+prompt-cache miss and nothing else. Everything else a delegating model needs
+stays in tool and parameter descriptions; do not grow these lines into a
+briefing or repeat tool semantics in them.
 
 ## Agent names
 

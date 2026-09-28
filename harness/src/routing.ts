@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { HarnessError, workersDisabled } from "./core/ports.js";
 import { validDifficulty, type Difficulty } from "./core/contracts.js";
+import { defaultDelegation, delegationModes, eagernessLevels, type DelegationSetting } from "./delegation.js";
 
 export const strengths = ["light", "standard", "strong"] as const;
 export type Strength = (typeof strengths)[number];
@@ -71,7 +72,7 @@ export interface PresetCandidate {
 
 type PresetBody = { version: string; models: Record<Strength, string>; thinking?: Partial<Record<Strength, ThinkingMap>>;
   effort?: EffortOverrides };
-type PresetConfig = { defaultPreset: string; presets: Record<string, PresetBody> };
+type PresetConfig = { defaultPreset: string; presets: Record<string, PresetBody>; delegation: DelegationSetting };
 type CandidateData = { owner: object; presets: Map<string, PresetSnapshot> };
 const candidateData = new WeakMap<PresetCandidate, CandidateData>();
 
@@ -148,7 +149,7 @@ function parsePresetConfig(path: string): PresetConfig {
   }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) fail("Top level must be an object");
   const root = raw as Record<string, unknown>;
-  exactKeys(root, ["version", "defaultPreset", "presets"], "Top level");
+  exactKeys(root, ["version", "defaultPreset", "presets", "defaultMode", "defaultEagerness"], "Top level");
   if (root.version !== CONFIG_VERSION) fail(`version must be ${CONFIG_VERSION}; provide the full preset catalogue and defaultPreset (version 1 additive configs must be migrated)`);
   if (!root.presets || typeof root.presets !== "object" || Array.isArray(root.presets)) fail("presets must be an object");
   const parsed: Record<string, PresetBody> = {};
@@ -197,7 +198,14 @@ function parsePresetConfig(path: string): PresetConfig {
   if (typeof root.defaultPreset !== "string" || !validName(root.defaultPreset) ||
     (root.defaultPreset !== "off" && !Object.hasOwn(parsed, root.defaultPreset)))
     return fail("defaultPreset must be 'off' or the name of a configured preset");
-  return { defaultPreset: root.defaultPreset, presets: parsed };
+  // Optional fresh-session delegation defaults; a session's saved choice wins.
+  if (root.defaultMode !== undefined && !(delegationModes as readonly unknown[]).includes(root.defaultMode))
+    fail(`defaultMode must be one of ${delegationModes.join(", ")}`);
+  if (root.defaultEagerness !== undefined && !(eagernessLevels as readonly unknown[]).includes(root.defaultEagerness))
+    fail(`defaultEagerness must be one of ${eagernessLevels.join(", ")}`);
+  const delegation = { mode: (root.defaultMode ?? defaultDelegation.mode) as DelegationSetting["mode"],
+    eagerness: (root.defaultEagerness ?? defaultDelegation.eagerness) as DelegationSetting["eagerness"] };
+  return { defaultPreset: root.defaultPreset, presets: parsed, delegation };
 }
 
 /** Trusted configuration is the sole model catalogue and startup default. Disk
@@ -211,9 +219,12 @@ export class PresetRouter {
   private revision = 0;
   private disableRevision = 0;
   private applying = false;
+  /** The configured fresh-session delegation, read once at startup. */
+  readonly defaultDelegation: Readonly<DelegationSetting>;
 
   constructor(readonly configPath: string, overrides: ReadonlyMap<string, EffortOverrides> = new Map()) {
     const config = parsePresetConfig(configPath);
+    this.defaultDelegation = Object.freeze(config.delegation);
     this.presets = catalogue(config.presets);
     this.activeName = config.defaultPreset;
     this.overrides = new Map();

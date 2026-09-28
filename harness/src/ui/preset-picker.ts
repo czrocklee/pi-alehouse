@@ -1,7 +1,8 @@
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import { matchesKey, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import { OverlayRequest } from "./overlay-request.js";
 import { isPopoverCloseClick, popoverBottom, popoverDivider, popoverRow, popoverTitle } from "./popover.js";
+import { delegationModes, eagernessLevels, modeLabels, usesEagerness, type DelegationMode, type DelegationSetting } from "../delegation.js";
 import { isOffPreset, strengths, thinkingLevels, type Effort, type EffortOverrides, type PresetSelection, type PresetSnapshot, type Strength, type ThinkingLevel } from "../routing.js";
 
 export type PresetChoice = string | { name: string; effort_overrides: EffortOverrides };
@@ -28,6 +29,13 @@ export interface PresetPickerOptions {
   rows?: () => number;
   /** Rows this paint produced, for whoever lays out popovers around it. */
   onRender?: (height: number) => void;
+  /** Delegation mode and eagerness. Unlike a preset, a change applies at once
+   * and leaves the panel open; `set` reports its own failures. */
+  delegation?: {
+    current(): DelegationSetting;
+    set(next: DelegationSetting): void;
+    guideline(setting: DelegationSetting): string;
+  };
 }
 
 /** The pointer event as the picker reads it; a structural subset of pi-tui's. */
@@ -39,9 +47,16 @@ export interface PickerMouseEvent {
   wheelDelta?: number;
 }
 
+/** What the picker asks of pi-tui after a pointer event. */
+export interface PickerMouseResult { handled: boolean; capture?: boolean; render?: boolean }
+
 const MIN_FULL_LINES = 11;
 /** The compact layout: title, selected detail, controls, bottom edge. */
 export const PRESET_PICKER_MIN_ROWS = 7;
+/** Slider, eagerness and divider rows above the preset list. */
+const MODE_ROWS = 3;
+const GUIDELINE_ROWS = 3;
+const MODE_PREFIX = " Mode   ";
 const SLOT_LABEL: Record<Strength, string> = { light: "light", standard: "standard", strong: "strong" };
 const DIFFICULTY: Record<Strength, string> = { light: "d1–2", standard: "d3", strong: "d4–5" };
 const marked = (preset: PresetSnapshot): boolean => Object.keys(preset.effort_overrides ?? {}).length > 0;
@@ -76,6 +91,16 @@ export class PresetPicker implements Component {
   private draft: EffortOverrides = {};
   private slotTargets = new Map<number, { slot: Strength; prev?: number; next?: number }>();
   private actionTargets = new Map<number, { kind: "edit" | "apply" | "reset" | "back"; start: number; end: number }[]>();
+  /** Painted slider nodes by row, in terminal columns (border is column zero). */
+  private modeTargets = new Map<number, { mode: DelegationMode; start: number; end: number }[]>();
+  /** Painted ‹ › arrows that step the mode or eagerness, by row. */
+  private stepTargets = new Map<number, { kind: "mode" | "eagerness"; direction: -1 | 1; x: number }[]>();
+  /** The node under a drag, previewed until the release applies it. */
+  private previewMode: DelegationMode | undefined;
+  private dragging = false;
+  /** A key ended a held slider press: pi-tui still owns that press and turns
+   * an unmoved release into a click, which must not apply the cancelled node. */
+  private cancelledPress = false;
 
   constructor(private readonly options: PresetPickerOptions) {
     const active = options.presets.findIndex((preset) => preset.name === options.activeName);
@@ -86,6 +111,13 @@ export class PresetPicker implements Component {
 
   handleInput(data: string): void {
     if (this.closed) return;
+    // Any key cancels a drag: its preview is dropped and the release ignored.
+    if (this.dragging) {
+      this.cancelledPress = true;
+      this.previewMode = undefined;
+      this.dragging = false;
+      this.options.tui.requestRender();
+    }
     const { keybindings, presets } = this.options;
     // Registered shortcuts belong to the default editor; while this custom
     // component is focused it must implement its own half of the toggle.
@@ -100,6 +132,14 @@ export class PresetPicker implements Component {
     if (keybindings.matches(data, "tui.select.confirm")) {
       if (current) this.finish(current);
       return;
+    }
+    if (this.options.delegation) {
+      const direction = matchesKey(data, "left") || matchesKey(data, "shift+left") ? -1
+        : matchesKey(data, "right") || matchesKey(data, "shift+right") ? 1 : 0;
+      if (direction) {
+        this.stepDelegation(matchesKey(data, "shift+left") || matchesKey(data, "shift+right") ? "eagerness" : "mode", direction);
+        return;
+      }
     }
     if (!presets.length) return;
     let next = this.selected;
@@ -119,11 +159,22 @@ export class PresetPicker implements Component {
    * would; the wheel moves the highlight so its slots can be read first.
    * In the editor a slot row selects it; only visible arrows change its draft.
    */
-  handleMouse(event: PickerMouseEvent): { handled: boolean } | undefined {
+  handleMouse(event: PickerMouseEvent): PickerMouseResult | undefined {
     if (this.closed || !this.options.pointer) return undefined;
+    if (this.cancelledPress) {
+      // The release, and the click pi-tui synthesizes from it, end the
+      // cancelled gesture; a new press starts afresh.
+      if (event.type === "release" || event.type === "drag") return { handled: true };
+      this.cancelledPress = false;
+      if (event.type === "click") return { handled: true };
+    }
     if (isPopoverCloseClick(event, this.paintedWidth)) {
       this.finish(null);
       return { handled: true };
+    }
+    if (!this.editing) {
+      const delegation = this.delegationMouse(event);
+      if (delegation) return delegation;
     }
     const { presets } = this.options;
     if (this.editing) {
@@ -153,8 +204,81 @@ export class PresetPicker implements Component {
     return { handled: true };
   }
 
+  /** A click applies a node; a drag previews the nearest and its release
+   * applies it. Hover does nothing: pi-tui has no pointer-leave event, so a
+   * hover preview could outlive the pointer and read as the current mode. */
+  private delegationMouse(event: PickerMouseEvent): PickerMouseResult | undefined {
+    if (!this.options.delegation) return undefined;
+    const nodes = this.modeTargets.get(event.y);
+    const hit = nodes?.find(({ start, end }) => event.x >= start && event.x < end)?.mode;
+    if (this.dragging) {
+      if (event.type === "drag") {
+        const nearest = this.nearestMode(event.x);
+        this.previewMode = nearest ?? this.previewMode;
+        return { handled: true, render: true, capture: true };
+      }
+      if (event.type === "release") {
+        this.dragging = false;
+        const target = this.previewMode;
+        this.previewMode = undefined;
+        if (target) this.setDelegation({ mode: target });
+        return { handled: true, render: true };
+      }
+    }
+    if (event.button !== "left") return undefined;
+    if (event.type === "press" && nodes) {
+      this.dragging = true;
+      this.previewMode = hit;
+      return { handled: true, capture: true, render: true };
+    }
+    if (event.type !== "click") return undefined;
+    if (hit) {
+      this.previewMode = undefined;
+      this.setDelegation({ mode: hit });
+      return { handled: true };
+    }
+    const step = this.stepTargets.get(event.y)?.find(({ x }) => x === event.x);
+    if (step) {
+      this.stepDelegation(step.kind, step.direction);
+      return { handled: true };
+    }
+    return nodes ? { handled: true } : undefined;
+  }
+
+  private nearestMode(x: number): DelegationMode | undefined {
+    let best: { mode: DelegationMode; distance: number } | undefined;
+    for (const nodes of this.modeTargets.values()) for (const { mode, start, end } of nodes) {
+      const distance = x < start ? start - x : x >= end ? x - end + 1 : 0;
+      if (!best || distance < best.distance) best = { mode, distance };
+    }
+    return best?.mode;
+  }
+
+  private stepDelegation(kind: "mode" | "eagerness", direction: -1 | 1): void {
+    const current = this.options.delegation?.current();
+    if (!current) return;
+    if (kind === "mode") {
+      const index = delegationModes.indexOf(current.mode) + direction;
+      if (index >= 0 && index < delegationModes.length) this.setDelegation({ mode: delegationModes[index]! });
+    } else if (usesEagerness(current.mode)) {
+      const index = eagernessLevels.indexOf(current.eagerness) + direction;
+      if (index >= 0 && index < eagernessLevels.length) this.setDelegation({ eagerness: eagernessLevels[index]! });
+    }
+  }
+
+  private setDelegation(change: Partial<DelegationSetting>): void {
+    const delegation = this.options.delegation;
+    if (!delegation) return;
+    const current = delegation.current();
+    const next = { ...current, ...change };
+    if (next.mode !== current.mode || next.eagerness !== current.eagerness) delegation.set(next);
+    this.options.tui.requestRender();
+  }
+
   render(width: number): string[] {
     this.rowTargets.clear();
+    this.modeTargets.clear();
+    this.stepTargets.clear();
     this.slotTargets.clear();
     this.actionTargets.clear();
     this.paintedWidth = width;
@@ -172,7 +296,8 @@ export class PresetPicker implements Component {
     const share = Math.floor(this.options.tui.terminal.rows * 0.8);
     const maxLines = Math.max(PRESET_PICKER_MIN_ROWS, Math.min(share, this.options.rows?.() ?? share));
     if (this.editing) return this.renderEditor(width, inner, maxLines);
-    return maxLines < MIN_FULL_LINES ? this.renderCompact(width, inner) : this.renderFull(width, inner, maxLines);
+    const modeRows = this.options.delegation ? MODE_ROWS : 0;
+    return maxLines < MIN_FULL_LINES + modeRows ? this.renderCompact(width, inner, maxLines) : this.renderFull(width, inner, maxLines);
   }
 
   private finish(value: PresetChoice | null): void {
@@ -183,16 +308,20 @@ export class PresetPicker implements Component {
 
   private renderFull(width: number, inner: number, maxLines: number): string[] {
     const { presets, activeName, theme } = this.options;
-    this.visibleRows = Math.max(1, Math.min(presets.length, maxLines - 10));
+    const modeRows = this.options.delegation ? MODE_ROWS : 0;
+    // The mode's guideline takes up to three rows; the list keeps at least one.
+    const guidelineRows = this.options.delegation ? Math.max(0, Math.min(GUIDELINE_ROWS, maxLines - MIN_FULL_LINES - modeRows)) : 0;
+    this.visibleRows = Math.max(1, Math.min(presets.length, maxLines - 10 - modeRows - guidelineRows));
     const start = Math.max(0, Math.min(this.selected - Math.floor(this.visibleRows / 2), presets.length - this.visibleRows));
     const end = Math.min(presets.length, start + this.visibleRows);
     const range = presets.length ? `${start + 1}–${end}/${presets.length}` : "0/0";
-    const scope = inner >= 65 ? " New Agents only; main unchanged · * effort override" :
-      " routing or off; main model unchanged";
-    const lines = [this.title(width, "Worker routing"),
-      this.row(this.twoSides(theme.fg("muted", scope),
+    const scope = [" Model preset · new Agents only; main unchanged · * effort", " Model preset · new Agents only",
+      " Model preset"].find((text) => visibleWidth(text) + visibleWidth(range) + 1 <= inner) ?? " Model preset";
+    const lines = [this.title(width, "Delegation")];
+    if (this.options.delegation) this.modeSection(lines, width, inner, guidelineRows);
+    lines.push(this.row(this.twoSides(theme.fg("muted", scope),
         theme.fg("dim", range), inner), inner),
-      this.divider(width)];
+      this.divider(width));
     for (let index = start; index < end; index++) {
       const preset = presets[index]!;
       const selected = index === this.selected;
@@ -213,12 +342,14 @@ export class PresetPicker implements Component {
     return lines;
   }
 
-  private renderCompact(width: number, inner: number): string[] {
+  private renderCompact(width: number, inner: number, maxLines: number): string[] {
     this.visibleRows = 1;
     const { presets, theme } = this.options;
     const current = presets[this.selected];
     const position = current ? `${this.selected + 1}/${presets.length}` : "0/0";
-    const lines = [this.title(width, "Worker routing")];
+    const lines = [this.title(width, "Delegation")];
+    // One row for the mode when the popover has room beyond its minimum.
+    if (this.options.delegation && maxLines > PRESET_PICKER_MIN_ROWS) lines.push(this.compactModeRow(lines.length, inner, true));
     if (!current) lines.push(this.row(theme.fg("warning", " No presets available"), inner));
     else {
       const badge = current.name === this.options.activeName ? theme.fg("success", " ● active") : theme.fg("muted", " ○ inactive");
@@ -232,6 +363,82 @@ export class PresetPicker implements Component {
     this.listControls(lines, inner, true);
     lines.push(this.bottom(width));
     return lines;
+  }
+
+  /** Mode slider, eagerness box, then the guideline the model would receive. */
+  private modeSection(lines: string[], width: number, inner: number, guidelineRows: number): void {
+    const { theme } = this.options;
+    const delegation = this.options.delegation!;
+    const current = delegation.current();
+    const off = this.options.activeName === "off";
+    const tone = (text: string): string => off ? theme.fg("dim", text) : text;
+    const slider = this.sliderRow(lines.length, inner, current.mode, off);
+    lines.push(slider ?? this.compactModeRow(lines.length, inner, false));
+    const eagerY = lines.length, used = usesEagerness(current.mode);
+    const box = `‹ ${current.eagerness} ›`;
+    const left = ` Eagerness  ${box}`;
+    const shown = this.previewMode ?? current.mode;
+    const note = this.previewMode && this.previewMode !== current.mode ? `preview · ${modeLabels[this.previewMode]}`
+      : used ? "" : "not used in Manual";
+    const painted = this.twoSides(used ? tone(left) : theme.fg("dim", left), theme.fg("dim", note), inner);
+    if (used) {
+      const at = 1 + visibleWidth(" Eagerness  ");
+      this.stepTargets.set(eagerY, visibleArrows(painted, [{ kind: "eagerness", direction: -1, x: at },
+        { kind: "eagerness", direction: 1, x: at + visibleWidth(box) - 1 }]));
+    }
+    lines.push(this.row(painted, inner));
+    if (guidelineRows > 0) {
+      const text = delegation.guideline({ mode: shown, eagerness: current.eagerness });
+      const wrapped = [...(off ? [theme.fg("warning", " Off: no Agent work. The mode applies when a model preset is active.")] : []),
+        ...wrapWords(text, inner - 2).map((line) => theme.fg("dim", ` ${line}`))];
+      const shownRows = wrapped.slice(0, guidelineRows);
+      if (wrapped.length > guidelineRows) shownRows[guidelineRows - 1] = truncateToWidth(shownRows[guidelineRows - 1]! + " …", inner, "…");
+      for (const line of shownRows) lines.push(this.row(truncateToWidth(line, inner, "…"), inner));
+    }
+    lines.push(this.divider(width));
+  }
+
+  /** `○ Manual ─── ● Co-worker ─── ○ Lead ─── ○ Supervisor`, or undefined if it cannot fit. */
+  private sliderRow(y: number, inner: number, mode: DelegationMode, off: boolean): string | undefined {
+    const { theme } = this.options;
+    const nodes = delegationModes.map((each) => `${each === mode ? "●" : "○"} ${modeLabels[each]}`);
+    const room = inner - visibleWidth(MODE_PREFIX) - nodes.reduce((sum, node) => sum + visibleWidth(node), 0) - 1;
+    const gap = Math.floor(room / (nodes.length - 1));
+    if (gap < 3) return undefined;
+    const connector = ` ${"─".repeat(gap - 2)} `;
+    let text = MODE_PREFIX, plain = MODE_PREFIX;
+    const targets: { mode: DelegationMode; start: number; end: number }[] = [];
+    delegationModes.forEach((each, index) => {
+      if (index) { text += theme.fg("dim", connector); plain += connector; }
+      const start = 1 + visibleWidth(plain);
+      targets.push({ mode: each, start, end: start + visibleWidth(nodes[index]!) });
+      const label = each === mode ? theme.bold(nodes[index]!) : nodes[index]!;
+      text += each === mode ? theme.fg(off ? "dim" : "accent", label)
+        : each === this.previewMode ? theme.fg("accent", label) : theme.fg(off ? "dim" : "muted", label);
+      plain += nodes[index];
+    });
+    this.modeTargets.set(y, targets);
+    return this.row(text, inner);
+  }
+
+  /** `Mode ‹ Co-worker ›`, plus `‹ balanced ›` when no eagerness row follows,
+   * with clickable arrows, for panels too narrow or short for the slider. */
+  private compactModeRow(y: number, inner: number, withEagerness: boolean): string {
+    const { theme } = this.options;
+    const current = this.options.delegation!.current();
+    const modeBox = `‹ ${modeLabels[current.mode]} ›`;
+    const eagerBox = withEagerness && usesEagerness(current.mode) ? ` ‹ ${current.eagerness} ›` : "";
+    const prefix = " Mode ";
+    const text = truncateToWidth(prefix + modeBox + eagerBox, inner, "…");
+    const at = 1 + visibleWidth(prefix);
+    const targets: { kind: "mode" | "eagerness"; direction: -1 | 1; x: number }[] = [
+      { kind: "mode", direction: -1, x: at }, { kind: "mode", direction: 1, x: at + visibleWidth(modeBox) - 1 }];
+    if (eagerBox) {
+      const eagerAt = at + visibleWidth(modeBox) + 1;
+      targets.push({ kind: "eagerness", direction: -1, x: eagerAt }, { kind: "eagerness", direction: 1, x: eagerAt + visibleWidth(eagerBox) - 2 });
+    }
+    this.stepTargets.set(y, visibleArrows(text, targets));
+    return this.row(this.options.activeName === "off" ? theme.fg("dim", text) : text, inner);
   }
 
   private detailRows(inner: number): string[] {
@@ -274,6 +481,8 @@ export class PresetPicker implements Component {
     const selected = this.options.presets[this.selected];
     if (!this.options.efforts || !selected || isOffPreset(selected)) return;
     this.editing = true;
+    this.dragging = false;
+    this.previewMode = undefined;
     this.slotIndex = 0;
     this.draft = { ...(selected.effort_overrides ?? {}) };
     this.options.tui.requestRender();
@@ -281,6 +490,8 @@ export class PresetPicker implements Component {
 
   private back(): void {
     this.editing = false;
+    this.dragging = false;
+    this.previewMode = undefined;
     this.draft = {};
     this.options.tui.requestRender();
   }
@@ -381,7 +592,7 @@ export class PresetPicker implements Component {
 
   private renderEditor(width: number, inner: number, maxLines: number): string[] {
     const preset = this.options.presets[this.selected];
-    if (!preset || isOffPreset(preset)) { this.back(); return this.renderCompact(width, inner); }
+    if (!preset || isOffPreset(preset)) { this.back(); return this.renderCompact(width, inner, maxLines); }
     const { theme } = this.options;
     const selectedSlot = strengths[this.slotIndex]!;
     const caps = Object.fromEntries(strengths.map((slot) => [slot, this.caps(preset, slot)])) as Record<Strength, EffortCapabilities>;
@@ -436,6 +647,12 @@ export class PresetPicker implements Component {
   }
 
   private controls(inner: number, compact: boolean): string {
+    if (this.options.delegation) {
+      const edit = this.canEdit();
+      if (inner >= 70) return ` ←→ mode · ⇧←→ eagerness · ↑↓ preset${edit ? " · Edit effort" : ""} · Enter · Esc`;
+      if (inner >= 46) return ` ←→ mode · ⇧←→ eager · ↑↓${edit ? " · Edit effort" : ""} · ↵ · Esc`;
+      if (inner >= 22) return edit ? " ←→ ⇧←→ ↑↓ E Edit effort ↵" : " ←→ ⇧←→ ↑↓ ↵ Esc";
+    }
     if (inner < 22) return this.canEdit() ? "Alt+S E ↑↓↵ Esc" : " Alt+S ↑↓ ↵ Esc";
     if (inner < 46) return this.canEdit() ? " Alt+S ↑↓ E Edit effort ↵ Esc" : " Alt+S close · ↑↓ Enter Esc";
     if (this.canEdit()) return ` Alt+S close · E Edit effort · ↑↓ ${compact ? "choose" : "navigate"} · Enter apply · Esc`;
@@ -469,4 +686,26 @@ export class PresetPicker implements Component {
   private row(content: string, inner: number): string {
     return popoverRow(this.options.theme, content, inner);
   }
+}
+
+/** Greedy word wrap by terminal columns; an overlong word is left to the row's truncation. */
+function wrapWords(text: string, width: number): string[] {
+  const lines: string[] = [];
+  let line = "";
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    const next = line ? `${line} ${word}` : word;
+    if (line && visibleWidth(next) > width) { lines.push(line); line = word; }
+    else line = next;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+/** Keep only arrow targets whose column still paints `‹` or `›` after clipping
+ * (a row's border is column zero). */
+function visibleArrows<T extends { x: number }>(row: string, targets: T[]): T[] {
+  return targets.filter(({ x }) => {
+    const cell = stripTerminalSequences(sliceByColumn(row, x - 1, 1, true));
+    return cell === "‹" || cell === "›";
+  });
 }

@@ -88,11 +88,27 @@ floating popover, the pane closes from the `×` at the right end of its top edge
 (` × ─╮`, five columns, all of them the target); below 9 columns the control is
 omitted rather than painted unhittable.
 
-## Preset picker
+## Delegation panel
 
-`Alt+S`, bare `/harness-preset`, or a click on the footer's worker indicator
-(`NAME ▴`, left of approval and health in the bottom-right group) opens the worker
-routing picker; the same key or click closes it.  It uses the same fullscreen
+`Alt+S`, bare `/harness-preset`, or a click on the footer's delegation indicator
+(`co-worker - NAME ▴`, left of approval and health in the bottom-right group)
+opens the Delegation panel; the same key or click closes it.
+
+Its top section is the [delegation mode](routing.md#delegation-mode): a slider
+`○ Manual ── ● Co-worker ── ○ Lead ── ○ Supervisor`, an eagerness box
+`‹ balanced ›`, and the guideline line the main model receives (clipped when
+narrow). `←`/`→`
+move the slider and `Shift+←`/`Shift+→` step eagerness; with the pointer, click
+a node or an arrow, or press on the slider, drag, and release to apply the node
+nearest the pointer's column; while dragging, the guideline rows preview that
+node (marked `preview`), and any key cancels the drag. Hover does nothing: Pi
+reports no pointer leaving the panel, so a hover preview could outlive the
+pointer. A mode or eagerness change applies at once and keeps the panel open. Eagerness is dimmed in
+Manual; with `off` active the section is dimmed and says the mode applies when a
+model preset is active. Narrow or short panels show `Mode ‹ Co-worker ›` with
+clickable arrows instead of the slider, and short ones drop the guideline.
+
+The **Model preset** list below it is the picker described next.  It uses the same fullscreen
 floating / regular docked rule, is serialized to one picker per host, and cannot
 open beside a detail pane or active approval. A zero-row host widget captures the
 renderer independently of Agent activity, so the first open in an empty or Off
@@ -201,13 +217,14 @@ A click on a status segment is first offered to the extension that owns it over
 `pi-footer:indicator-click` (`{ key, handled }`, shared in `lib/overlay-protocol`);
 the harness claims its `harness-preset` indicator synchronously.  Unclaimed
 clicks, and clicks elsewhere on the row, toggle the usage breakdown.  The corner
-keeps a fixed left-to-right order: usage, worker routing, approval, then health
-at the right edge (`my-team@v1 ▴ · YOLO ▴ · ○ idle ▴`). Routing and approval show
-only their values, without the `workers:` / `approval:` labels. Status keys and
+keeps a fixed left-to-right order: usage, delegation, approval, then health
+at the right edge (`co-worker - my-team ▴ · YOLO ▴ · ○ idle ▴`). Delegation and
+approval show only their values, without the `delegation:` / `approval:` labels. Status keys and
 click routing stay unchanged; YOLO retains its red/bold warning styling.
 
-Narrow rows first omit cache detail and shorten the preset with an ellipsis,
-then omit whole usage/other-status items and, if necessary, the worker control.
+Narrow rows first omit cache detail and shorten the delegation value with an
+ellipsis, then omit whole usage/other-status items and, if necessary, the
+delegation control.
 Approval and health have priority. At extreme widths their carets disappear,
 then health collapses to its existing glyph; if both still cannot fit, approval
 is omitted whole rather than displaying a misleading partial mode. Click spans

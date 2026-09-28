@@ -14,7 +14,9 @@ Worker presets map lighter work, everyday reasoning, and the hard problems to yo
 
 Set up your lineups once; select a preset and tune its thinking effort from the panel, not a pile of prompts. New agents take the new settings; agents already working keep theirs.
 
-![Worker routing in a working session](harness/docs/assets/routing-panel.svg)
+The same panel sets how much your main agent hands off: **Manual**, **Co-worker**, **Lead** or **Supervisor**, and how eagerly. Each position is one short line in the main agent's prompt, and the panel shows it.
+
+![The routing panel in a working session (captured before the delegation mode was added)](harness/docs/assets/routing-panel.svg)
 
 *The author's live setup, not a suggested default.*
 
@@ -43,7 +45,7 @@ The rest of the interface follows the same idea:
 | Panel | What it puts in your hands |
 | --- | --- |
 | **Agents** | Who's working, what they're doing, and who needs an answer. |
-| **Routing & effort** | Your worker lineup and how much thinking each kind of task gets. |
+| **Delegation & effort** | How much your main agent hands off, your worker lineup and how much thinking each kind of task gets. |
 | **Usage** | Reported usage across the main conversation and worker models. |
 | **Stats** | Activity, waiting, model timings and tool activity—not just a token counter. |
 | **Approvals** | Permission choices in the same workspace; inspection panes step aside when a decision needs your attention. |
