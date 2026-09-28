@@ -19,11 +19,16 @@ export function renderWorkers(root = packageRoot) {
     assert.match(name, /^[a-z]+$/);
     const bashDenies = [...git(policy.commonGitDenies), ...policy.gitSpellingDenies,
       ...git(policy.mutationGitDenies), ...profile.extraBashDenies];
-    const tools = [...policy.readTools, ...(profile.edits ? ["edit", "write"] : [])];
+    // Optional keys are omitted for reader/editor so their bytes (and digests,
+    // which installed copies must match) stay unchanged.
+    assert(profile.bash === undefined || profile.bash === false, `Invalid bash flag: ${name}`);
+    assert(profile.prompt === undefined || (typeof profile.prompt === "string" && profile.prompt.trim()), `Invalid prompt: ${name}`);
+    const bash = profile.bash !== false;
+    const tools = [...policy.readTools.filter((tool) => bash || tool !== "bash"), ...(profile.edits ? ["edit", "write"] : [])];
     agents[name] = `---\ndisplay_name: Worker\ndescription: ${JSON.stringify(profile.description)}\ntools: ${JSON.stringify(tools)}\nprompt_mode: replace\ninherit_context: false\npermission:\n` +
       (profile.edits ? "" : '  write: deny\n  edit: deny\n  path_write:\n    "*": deny\n') +
-      '  bash:\n    "*": ask\n' + bashDenies.map((p) => `    ${JSON.stringify(p)}: deny`).join("\n") +
-      `\n---\n${prompt}\n`;
+      `  bash:\n    "*": ${bash ? "ask" : "deny"}\n` + bashDenies.map((p) => `    ${JSON.stringify(p)}: deny`).join("\n") +
+      `\n---\n${prompt}${profile.prompt ? `\n${profile.prompt}\n` : ""}\n`;
     // Nix's toJSON sorts attributes; retain that order for byte-for-byte output.
     metadata[name] = { bashDenies, digest: createHash("sha256").update(agents[name]).digest("hex") };
   }

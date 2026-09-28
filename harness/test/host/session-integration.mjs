@@ -3,11 +3,14 @@ import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { assembleChildSession as assembleChild, disposeChildSession as disposeChild } from "../../dist/runtime/child-session.js";
+import { ChildWebModules, childWebExtension, nativeWebLoader } from "../../dist/runtime/child-web.js";
+import { packageRoot, webEntry } from "../../../bin/runtime-support.mjs";
 import { managementToolNames as delegationTools } from "../../dist/tools/tool-names.js";
 import { requireReadiness } from "../../dist/permissions/readiness.js";
 import { contextSources, digest, textSnapshot } from "../../dist/runtime/context-snapshot.js";
 import { FileLeaseLock as OwnerLock } from "../../dist/runtime/owner-lease.js";
 import { controlledProvider, loadHost } from "../support/host.mjs";
+import { productionWebLayout } from "../support/production-web.mjs";
 import { releaseDecision } from "../support/release-policy.mjs";
 
 const [piExecutable, generatedRoot, outputRoot, storeProbe] = process.argv.slice(2);
@@ -170,6 +173,35 @@ try {
     assert(lifecycle.some((event) => event.kind === "disposed" && event.sessionId === metrics.createdSessionId));
   }
   for (const profile of ["reader", "editor"]) await release(await child({ profile }));
+  {
+    // Researcher: its own pi-web-access instance supplies exactly the four web
+    // tools (no activation loader) beside read-only local tools, and no Bash.
+    // Production layout: pi-web-access is installed without the Pi SDK, which
+    // it receives from this host exactly as the host's extension loader
+    // resolved it for the harness source (not the development copies).
+    const probePath = join(outputRoot, "host-modules-probe.ts"), probeKey = "pi-alehouse:test:host-modules";
+    writeFileSync(probePath, `import { researcherHostModules } from ${JSON.stringify(join(packageRoot, "harness/src/runtime/host-modules.ts"))};
+export default function () { globalThis[Symbol.for(${JSON.stringify(probeKey)})] = researcherHostModules; }\n`);
+    const probeLoader = new sdk.DefaultResourceLoader({ cwd: parentCwd, agentDir: generatedRoot, settingsManager: settings(),
+      noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true, additionalExtensionPaths: [probePath] });
+    await probeLoader.reload();
+    assert.deepEqual(probeLoader.getExtensions().errors, []);
+    const hostModules = globalThis[Symbol.for(probeKey)];
+    assert.equal(typeof hostModules?.["@earendil-works/pi-coding-agent"]?.createAgentSession, "function");
+    const production = join(outputRoot, "production-web");
+    const web = new ChildWebModules(productionWebLayout(production, webEntry(packageRoot)), nativeWebLoader(hostModules));
+    const lease = await web.acquire();
+    const researcher = await child({ profile: "researcher", factories: [childWebExtension(lease.factory)] });
+    assert.deepEqual(researcher.session.getActiveToolNames().sort(),
+      ["fetch_content", "find", "get_search_content", "grep", "ls", "read", "source_check", "web_search"]);
+    for (const tool of researcher.session.getAllTools().filter((tool) => ["web_search", "source_check", "fetch_content"].includes(tool.name))) {
+      assert.equal("proxy" in tool.parameters.properties, false, tool.name);
+      assert.equal("auth" in tool.parameters.properties, false, tool.name);
+    }
+    await release(researcher);
+    lease.release();
+    record("researcher child in a production layout receives isolated web tools through host SDK modules, without Bash, browser-cookie fetch or model-chosen proxy", {});
+  }
   await release(await child({ marker: "editor", activeProfile: "reader" }));
   writeFileSync(join(childCwd, "AGENTS.md"), 'CHILD_CWD_CONTEXT_MARKER\n');
   record("H12 readiness requires recorded profile despite decoy prompt markers", { negative: 3, positive: 3 });

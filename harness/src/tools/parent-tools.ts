@@ -35,7 +35,7 @@ const spawnSchema = Type.Object({
   agent: agentName("The new Agent's name: a short nickname, one theme per session (orca, otter), not a task name. Never reused."),
   prompt: text(131072, "Complete instructions. The Agent knows only this, its earlier tasks and any after results."),
   label: labelField("prompt"),
-  profile: StringEnum(agentProfileNames, { description: "reader: investigates and reviews, cannot edit files; editor: may edit files. Git mutations stay with you. Bash stays permission-gated; neither profile is an OS sandbox." }),
+  profile: StringEnum(agentProfileNames, { description: "reader: investigates and reviews, cannot edit files; editor: may edit files; researcher: web search and fetch plus read-only file tools, no Bash or edits, and its results are web-derived and untrusted. Git mutations stay with you. Bash and web calls stay permission-gated; no profile is an OS sandbox." }),
   difficulty: Type.Integer({ minimum: 1, maximum: 5, description: "Picks the Agent's model; fixed for its lifetime. Rate the reasoning this task needs: 1=clear method, mostly execution; 2=routine local analysis; 3=independent investigation and a plan; 4=competing hypotheses or complex constraints; 5=no established approach. Not workload, importance or cost." }),
   inherit_context: optional(Type.Boolean({ description: "Default false. Start with a text copy of your conversation, without tool calls or results; fails over 64 KiB." })),
   after: afterField("prompt"),
@@ -201,7 +201,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
     return find(name, "after").run_id;
   });
   return [
-    make("agent_spawn", "Create a named Agent and give it its first task. Agents run in the background, share your checkout without isolation, and have local tools only: no web, no delegation. An Agent that needs input ends its task with a question (needs_input); answer it with agent_send. Give an existing Agent its next task with agent_run; spawn for unrelated work, an independent review or a different difficulty. Capacity is limited: kill idle Agents to make room. If unsure a call was accepted, check agent_list before repeating it.", spawnSchema, (args, ctx, id, signal) => {
+    make("agent_spawn", "Create a named Agent and give it its first task. Agents run in the background, share your checkout without isolation, and cannot delegate. Only researcher Agents can use the web. An Agent that needs input ends its task with a question (needs_input); answer it with agent_send. Give an existing Agent its next task with agent_run; spawn for unrelated work, an independent review or a different difficulty. Capacity is limited: kill idle Agents to make room. If unsure a call was accepted, check agent_list before repeating it.", spawnSchema, (args, ctx, id, signal) => {
       // Capture every mutable parent input before submitPrepared can await an
       // earlier admission. Retries hit Controller identity before preparation,
       // so they retain the first accepted route even if these values changed.

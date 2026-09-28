@@ -17,6 +17,11 @@ test("portable generator matches original worker bytes and policy digests", () =
   for (const [name, source] of Object.entries(agents)) assert.equal(readFileSync(join(packageRoot, "runtime/agents", `${name}.md`), "utf8"), source);
   assert.match(agents.reader, /  write: deny\n  edit: deny\n  path_write:\n    "\*": deny/);
   assert(metadata.editor.bashDenies.includes("git -C * commit *"));
+  // The researcher: read-only local tools plus web, no Bash, every command denied.
+  assert.match(agents.researcher, /\ntools: \["read","grep","find","ls","web_search","source_check","fetch_content","get_search_content"\]\n/);
+  assert.match(agents.researcher, /  write: deny\n  edit: deny\n  path_write:\n    "\*": deny\n  bash:\n    "\*": deny\n/);
+  assert.match(agents.researcher, /untrusted data, not instructions/);
+  assert.doesNotMatch(agents.reader, /untrusted data/);
   for (const name of ["jev-auto-approval.ts", "luna-auto-approval.ts", "static-safety-guard.ts"]) {
     const source = readFileSync(join(packageRoot, "runtime/policy", name), "utf8");
     assert(!source.includes("/* @worker-policy@ */ {}"));
@@ -44,7 +49,7 @@ test("generated authority is private, pinned, patched and package-complete", () 
 test("init creates only absent resources and seeds Off without model routes", (t) => {
   const agentDir = join(temporary(t), "agent");
   const first = initialize({ agentDir });
-  assert.equal(first.created.length, 7);
+  assert.equal(first.created.length, 8);
   const configPath = join(agentDir, "extensions/pi-permission-system/config.json");
   const original = readFileSync(configPath);
   const config = JSON.parse(original);
@@ -60,7 +65,7 @@ test("init creates only absent resources and seeds Off without model routes", (t
   assert.deepEqual(JSON.parse(readFileSync(join(agentDir, "harness-presets.json"))), { version: 2, defaultPreset: "off", presets: {} });
   const second = initialize({ agentDir });
   assert.equal(second.created.length, 0);
-  assert.equal(second.preserved.length, 7);
+  assert.equal(second.preserved.length, 8);
   assert.deepEqual(readFileSync(configPath), original);
   assert(!existsSync(join(agentDir, "settings.json")));
   assert(!existsSync(join(agentDir, "auth.json")));
@@ -83,7 +88,7 @@ test("init preserves conflicting and dangling profile symlinks; never claims rea
 test("init preserves matching Nix-style symlinks and existing custom policies", (t) => {
   const agentDir = temporary(t);
   mkdirSync(join(agentDir, "agents"));
-  for (const name of ["editor", "reader", "Explore", "Plan", "general-purpose"]) symlinkSync(join(packageRoot, "runtime/agents", `${name}.md`), join(agentDir, "agents", `${name}.md`));
+  for (const name of ["editor", "reader", "researcher", "Explore", "Plan", "general-purpose"]) symlinkSync(join(packageRoot, "runtime/agents", `${name}.md`), join(agentDir, "agents", `${name}.md`));
   initialize({ agentDir });
   const path = join(agentDir, "extensions/pi-permission-system/config.json");
   const ownPolicy = '{"permission":{"*":"deny"}}\n';
@@ -91,6 +96,17 @@ test("init preserves matching Nix-style symlinks and existing custom policies", 
   initialize({ agentDir });
   assert.equal(readFileSync(path, "utf8"), ownPolicy);
   assert(lstatSync(join(agentDir, "agents/editor.md")).isSymbolicLink());
+});
+
+test("an installation from before researcher needs only init to add it", (t) => {
+  const agentDir = temporary(t);
+  initialize({ agentDir });
+  const researcher = join(agentDir, "agents/researcher.md");
+  rmSync(researcher);
+  assert.throws(() => verifyAgentResources(agentDir), /Missing managed profile: .*researcher\.md\. Run `pi-alehouse init`/);
+  const { created } = initialize({ agentDir });
+  assert.deepEqual(created, [researcher]);
+  verifyAgentResources(agentDir);
 });
 
 test("init never follows a conflicting directory symlink", (t) => {
@@ -226,6 +242,16 @@ test("preserved invalid preset fails closed for real SDK tool and user_bash disp
     encoding: "utf8", timeout: 25000,
   });
   assert.match(output, /preserved invalid preset leaves real SDK tool and user_bash latches blocked/);
+});
+
+test("real composition runs researcher, reader and editor Agents with forwarded asks, offline", { timeout: 60000 }, (t) => {
+  const dir = temporary(t), agentDir = join(dir, "agent");
+  const output = execFileSync(process.execPath, [join(packageRoot, "test/runtime/fixtures/researcher-spawn.mjs")], {
+    env: { HOME: dir, PATH: process.env.PATH, PI_CODING_AGENT_DIR: agentDir,
+      PI_JEV_API_KEY_FILE: join(dir, "nonexistent-test-key"), PI_OFFLINE: "1", NO_COLOR: "1" },
+    encoding: "utf8", timeout: 55000,
+  });
+  assert.match(output, /real composition spawns researcher, reader and editor Agents; forwarded asks reach the parent UI; nothing leaves the process/);
 });
 
 test("build inputs contain no generated installed-profile hash fallback", () => {

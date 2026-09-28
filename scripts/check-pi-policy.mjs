@@ -133,6 +133,23 @@ try {
     assert.equal((await check("rg --no-config -d 0 -- fixture .env", agent)).path?.preCheck?.state, "deny", `Worker rg secret path: ${agent}`);
     assert.equal((await check("cat /var/lib/pi-policy-fixture/input.txt", agent)).external?.preCheck?.state, "ask", `Worker external reader: ${agent}`);
   }
+  // The researcher has no Bash tool at all (the harness child table). As depth,
+  // its definition turns every Bash ask into a deny; explicit global read-only
+  // allowances stay as they are for other workers. Web tools keep global rules.
+  assert.deepEqual(manager.getConfigIssues("researcher"), [], "Worker policy must load: researcher");
+  for (const tool of ["write", "edit"]) assert.equal(resolver.checkPermission(tool, {}, "researcher").state, "deny", `Direct editing boundary: researcher: ${tool}`);
+  for (const tool of ["notify_parent", "ask_parent", "get_search_content"]) assert.equal(resolver.checkPermission(tool, {}, "researcher").state, "allow", `Researcher: ${tool}`);
+  for (const tool of ["web_search", "source_check", "fetch_content"]) {
+    assert.equal(resolver.checkPermission(tool, {}, "researcher").state, resolver.checkPermission(tool, {}).state, `Researcher inherits the global web rule: ${tool}`);
+    assert.equal(resolver.checkPermission(tool, {}, "researcher").state, "ask", `Fixture web tools ask: ${tool}`);
+  }
+  for (const command of ["node --version", "git diff --stat --output=ordinary.txt", "curl https://example.com", "rm ordinary.txt"]) {
+    assert.equal((await check(command, "researcher")).bash.state, "deny", `Researcher Bash denial: ${command}`);
+  }
+  for (const command of [...fixedCommands, "ls -la .", "cat ordinary.txt"]) {
+    assert.equal((await check(command, "researcher")).bash.state, (await check(command, "reader")).bash.state, `Researcher global allowance: ${command}`);
+  }
+  assert.equal((await check("printf '%s' fixture > ordinary.txt", "researcher")).path?.preCheck?.state, "deny", "Researcher path-write gate");
 
   // Even with the Bash gate allowed, redirection/file and external-directory
   // checks must still see the parser's effects and retain their own decisions.
@@ -162,7 +179,7 @@ try {
   for (const name of ["fixture-skill", "unlisted/vendor-skill"]) {
     assert.equal(resolver.checkPermission("skill", name).state, "allow");
   }
-  for (const profile of ["editor", "reader"]) {
+  for (const profile of ["editor", "reader", "researcher"]) {
     assert.equal(resolver.checkPermission("agent_spawn", { agent: "orca", profile, difficulty: 3, prompt: "fixture" }).state, "allow");
   }
   for (const tool of ["agent_run", "agent_send", "agent_wait", "agent_read", "agent_interrupt", "agent_kill", "agent_list"]) {

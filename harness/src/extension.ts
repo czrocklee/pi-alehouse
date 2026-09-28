@@ -15,12 +15,15 @@ import { isOffPreset, presetLabel, PresetRouter, resolveSlotRoute, strengths, th
   type EffortOverrides, type PresetCandidate, type PresetSelection, type PresetSnapshot, type Strength } from "./routing.js";
 import { ChildActivityRegistry } from "./runtime/activity-observer.js";
 import { createChildSessionFactory } from "./runtime/child-factory.js";
+import { ChildWebModules, nativeWebLoader } from "./runtime/child-web.js";
 import { configureChildRuntime } from "./runtime/execution-policy.js";
+import { researcherHostModules } from "./runtime/host-modules.js";
 import { FileOwnerLease } from "./runtime/owner-lease.js";
 import { ownerSessionReplacementGuard } from "./runtime/owner-lifecycle.js";
 import { hostUsage } from "./runtime/tool-usage.js";
 import { createOwnerTools } from "./tools/parent-tools.js";
-import { agentProfileNames, blockedDelegationToolNames, managementToolNames, workerToolSelection } from "./tools/tool-names.js";
+import { agentProfileNames, blockedDelegationToolNames, managementToolNames, webProfileNames, webToolNames,
+  workerToolSelection } from "./tools/tool-names.js";
 import { HarnessWidget } from "./ui/agent-widget.js";
 import { PanelCoordinator } from "./ui/panel-coordinator.js";
 import type { EffortCapabilities } from "./ui/preset-picker.js";
@@ -315,9 +318,21 @@ export default function harnessExtension(pi: ExtensionAPI) {
       const definition = readFileSync(join(agentDir, "agents", `${name}.md`), "utf8");
       const parsed = parseFrontmatter<{ tools: string[] }>(definition);
       assert(Array.isArray(parsed.frontmatter.tools), `Invalid tools in ${name}`);
-      return [name, { definition, body: parsed.body,
-        tools: [...parsed.frontmatter.tools.filter((tool) => localTools.has(tool)), "notify_parent", "ask_parent"] }];
+      // Declared definitions may list web tools; only web profiles receive
+      // them, and those must have every web tool and no Bash or direct edits.
+      const web = webProfileNames.includes(name);
+      const tools = parsed.frontmatter.tools.filter((tool) => localTools.has(tool) || (web && webToolNames.includes(tool)));
+      if (web) {
+        assert(webToolNames.every((tool) => tools.includes(tool)) && !["bash", "edit", "write"].some((tool) => tools.includes(tool)),
+          `Invalid tools in ${name}`);
+      }
+      return [name, { definition, body: parsed.body, tools: [...tools, "notify_parent", "ask_parent"] }];
     })) as Record<typeof agentProfileNames[number], { definition: string; body: string; tools: string[] }>;
+    // The launcher's verified pi-web-access entry; a researcher spawn fails
+    // closed without it. Each researcher session loads its own instance, which
+    // imports the Pi SDK modules this extension received from the host.
+    const webEntry = process.env.PI_HARNESS_WEB_ENTRY;
+    const web = webEntry && isAbsolute(webEntry) ? new ChildWebModules(webEntry, nativeWebLoader(researcherHostModules)) : undefined;
     const settings = () => {
       const manager = SettingsManager.create(ctx.cwd, agentDir, { projectTrusted: ctx.isProjectTrusted() });
       // Native recovery remains inside the same Run and its accounting/drain.
@@ -330,7 +345,7 @@ export default function harnessExtension(pi: ExtensionAPI) {
     const approvalBindings = new ApprovalBindings(pi.events, owner);
     const createSession = createChildSessionFactory({ ctx, parentBus: pi.events, agentDir, permissionRoot, policyRoot,
       parentId, runtime, profiles, settings, parentHistory, approvalBindings, activities,
-      parentPermission, getPermissionsService: permission.getPermissionsService });
+      parentPermission, getPermissionsService: permission.getPermissionsService, web });
     try {
       controller = await OwnerController.open({ owner, concurrency: 4, resident_limit: residentLimit, grace_turns: 5,
         admission: () => router!.admissionState(),

@@ -17,7 +17,7 @@ the public contract.
 | --- | --- | --- |
 | Composition | `src/extension.ts`, `src/routing.ts` | explicit host registration; trusted preset catalogue and resolution |
 | Core | `core/{owner-controller,contracts,ports,usage-ledger,result-text}` | SDK-free Owner state, FIFO, identity/idempotence, limits, result paging, port contracts, conservative ledgers |
-| Runtime | `runtime/{agent-session,child-session,child-factory,owner-lifecycle,owner-lease,activity-observer,execution-policy,context-snapshot,tool-usage}` | host SDK adapter, child assembly/disposal, lease/lifecycle, observable activity, native compaction/retry policy, text snapshots |
+| Runtime | `runtime/{agent-session,child-session,child-factory,child-web,host-module-bridge,host-modules,owner-lifecycle,owner-lease,activity-observer,execution-policy,context-snapshot,tool-usage}` | host SDK adapter, child assembly/disposal, researcher web instances, lease/lifecycle, observable activity, native compaction/retry policy, text snapshots |
 | Tools | `tools/{parent-tools,child-tools,tool-names,replies}` | fixed parent/child schemas and bounded model-facing projections |
 | Permissions | `permissions/{readiness,approval-provenance}` | readiness and Run-bound approval witness only |
 | History | `history/{run-journal,history-reader,usage-audit,history-command}` | SDK metadata links/boundaries, bounded cold reads, unmerged-usage audit |

@@ -34,7 +34,7 @@ const until = async (condition, message = "fixture condition timed out") => {
 };
 const cwd = join(outputRoot, "tools-project"), sessionDirectory = join(outputRoot, "tools-sessions");
 for (const path of [cwd, sessionDirectory]) mkdirSync(path, { recursive: true, mode: 0o700 });
-const profiles = Object.fromEntries(["editor", "reader"].map((name) => {
+const profiles = Object.fromEntries(["editor", "reader", "researcher"].map((name) => {
   const definition = readFileSync(join(generatedRoot, "agents", `${name}.md`), "utf8");
   const declared = JSON.parse(/^tools: (.*)$/m.exec(definition)[1]);
   // A fixture-selected subset of available built-ins, not a new agent parser or

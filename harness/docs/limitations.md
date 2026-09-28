@@ -123,7 +123,8 @@ without a model request. Pinned parent-only web access can warn that dynamic
 tool activation is unavailable when upstream host-version detection cannot
 resolve the aliased SDK; its eagerly available tools remain under normal parent
 permissions. This warning does not authorize child web, a permission bypass,
-or a second Pi runtime.
+or a second Pi runtime. Researcher children register no activation loader and
+suppress their repeat of that warning.
 
 Native compaction/retry remains SDK behavior inside a Run.  The SDK does not
 expose all failed/cancelled/retried summary attempts or the actual routed model
@@ -173,9 +174,13 @@ The harness depends on, but does not own, generated worker policy, permission
 authority, static guards, search policy, and Jev review policy.  Profiles are
 not an OS sandbox; `reader` has no direct edit tools and denies detectable
 path writes, but an opaque program remains an inspected shell ask, while OS permissions and global policy still
-matter.  Child web/nested delegation is deliberately excluded by the harness
-allowlist even though declared definitions may include web capability elsewhere.
-Tool availability is not authorization.
+matter.  Nested delegation is excluded for every child.  Child web is limited
+to `researcher`, which has no Bash; `reader`/`editor` web stays excluded by the
+harness allowlist even though their declared definitions include it.  Researcher
+file reads and web calls together can move project content to the network; its
+prompt forbids that but cannot enforce it (see
+[researcher web access](security.md#researcher-web-access)).  Tool availability
+is not authorization.
 
 Automated review requires its external policy, key, complete current provenance,
 and supported context.  It can defer and leave a human ask; it is not calibrated

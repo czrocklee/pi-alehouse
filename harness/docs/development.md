@@ -41,7 +41,7 @@ not a developer's personal model inventory. Shared independent helpers in
 root `lib/` are bundled for both harness and footer; never make the footer
 import harness runtime. Permission/policy code lives outside `harness/`.
 
-The build generates `runtime/agents/{editor,reader,Explore,Plan,general-purpose}.md`,
+The build generates `runtime/agents/{editor,reader,researcher,Explore,Plan,general-purpose}.md`,
 `runtime/worker-policy.json`, `runtime/policy/`, `runtime/lib/`, and a **private
 patched** `runtime/permission-system/vendor/` copy of pinned 32.0.3. Retain
 upstream LICENSE, package imports and WASM assets in that copy. The
@@ -88,7 +88,7 @@ historical context. Keep user workflow choices out of standing policy.
 | `harness/test/unit` | helpers, in-process mocks, isolated local lease tests |
 | `harness/test/sdk` | real pinned development SDK with controlled IO |
 | `harness/test/host` | controlled installed-host SDK runs; **not** default package tests |
-| `harness/test/packaging`, `test/runtime` | package/resource/CLI and legacy wrapper contracts |
+| `harness/test/packaging`, `test/runtime` | package/resource/CLI and legacy wrapper contracts; offline real-composition Agent spawns (child factory, researcher web, forwarded asks) with a scripted provider |
 | `harness/test/tui` | explicitly invoked PTY/terminal interaction |
 | `harness/test/support` | synthetic providers and fixtures |
 

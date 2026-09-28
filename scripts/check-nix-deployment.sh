@@ -40,7 +40,7 @@ assert.notEqual(dirname(bootstrap), dirname(selector.entryPoint));
 const { verifyRuntime, verifyAgentResources } = await import(pathToFileURL(join(root, "bin/runtime-support.mjs")));
 verifyRuntime(root);
 verifyAgentResources(resources, root);
-for (const name of ["editor", "reader", "Explore", "Plan", "general-purpose"]) {
+for (const name of ["editor", "reader", "researcher", "Explore", "Plan", "general-purpose"]) {
   assert.equal(realpathSync(join(resources, "agents", `${name}.md`)), join(runtime, "agents", `${name}.md`));
 }
 const policyExtensions = ["status-footer", "approval-mode", "stats", "terminal-title-status", "ui-prompt-queue", "luna-auto-approval", "static-safety-guard", "policy-grep"];
@@ -84,7 +84,7 @@ try {
   const agent = join(scratch, "agent");
   mkdirSync(join(agent, "agents"), { recursive: true });
   mkdirSync(join(agent, "extensions/pi-permission-system"), { recursive: true });
-  for (const name of ["editor", "reader", "Explore", "Plan", "general-purpose"]) copyFileSync(join(resources, "agents", `${name}.md`), join(agent, "agents", `${name}.md`));
+  for (const name of ["editor", "reader", "researcher", "Explore", "Plan", "general-purpose"]) copyFileSync(join(resources, "agents", `${name}.md`), join(agent, "agents", `${name}.md`));
   for (const name of ["harness-presets.json", "extensions/pi-permission-system/config.json"]) copyFileSync(join(resources, name), join(agent, name));
   const record = join(scratch, "launch.json"), host = join(scratch, "record-host.mjs");
   writeFileSync(host, `#!${process.execPath}\nimport { writeFileSync } from "node:fs"; writeFileSync(process.env.RECORD, JSON.stringify({ argv: process.argv.slice(2), permission: process.env.PI_HARNESS_PERMISSION_ROOT, policy: process.env.PI_HARNESS_POLICY_ROOT, luna: process.env.PI_AUTO_APPROVAL_MODE, jev: process.env.PI_JEV_APPROVAL_MODE }));\n`, { mode: 0o700 });

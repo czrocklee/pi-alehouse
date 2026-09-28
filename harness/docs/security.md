@@ -15,30 +15,114 @@ absolute `composition.ts` path, rejecting additional extension paths. It supplie
 matched generated authority/policy paths and an absolute trusted util-linux
 `flock`; direct harness extension loading without the launcher fails rather than
 guessing paths. Parent web integration uses package-local pinned `pi-web-access`
-0.31.0; children have no web tools. The CLI does not make a temporary npm install,
+0.31.0; only `researcher` children receive web tools (below). The CLI does not make a temporary npm install,
 copy authentication, overwrite existing user resources, or enable arbitrary
 extension discovery. Explicit initialization creates only absent resources;
-neutral worker routing defaults to `off`. Install a **built tarball** with
+the neutral routing catalogue defaults to `off`. Install a **built tarball** with
 `--omit=dev --legacy-peer-deps --ignore-scripts` to avoid pulling a second Pi
 SDK/runtime through dependency peer auto-installation; the host Pi is separate.
 
 The parent's four web tools stay subject to the global permission policy.
 Children receive only their profile's local `read`/Bash/search/edit tools as
 filtered by the harness, plus fixed `notify_parent`/`ask_parent`.  They receive
-no parent management tools, no nested delegation, no arbitrary extensions, and
-no web tool table.  This intentionally differs from the **declared** generated
-worker definitions: those definitions can include web capability under the
-broader shared worker policy, while the effective harness child allowlist
+no parent management tools, no nested delegation and no arbitrary extensions.
+`reader` and `editor` receive no web tool table.  This intentionally differs
+from their **declared** generated definitions, which list web capability under
+the broader shared worker policy while the effective harness child allowlist
 excludes it.  Tool availability is never network authorization.  Plain `pi`
 has no delegation tools at all.
 
-Supported profiles are `reader` and `editor`; Git mutations stay with the
-parent in both, since Agents share one checkout:
+Supported profiles are `reader`, `editor` and `researcher`; Git mutations stay
+with the parent in all of them, since Agents share one checkout:
 
 | Profile | Direct edit/write | Ordinary Git mutation | Meaning |
 | --- | --- | --- | --- |
 | `reader` | denied; detectable Bash path writes denied | denied | no writes a judge or session yolo could approve; not an OS read-only sandbox |
 | `editor` | parent-configured workspace/scratch scope | denied | bounded writer capability, subject to existing guards |
+| `researcher` | denied; no Bash tool (its definition also turns Bash asks into denies) | denied | `read`/`grep`/`find`/`ls` plus the four web tools |
+
+### Researcher web access
+
+`researcher` is the only profile with web tools, and has no Bash, so its only
+effects outside file reads are the web tools themselves.  They keep the global
+permission rules: the seeded policy asks for `web_search`, `source_check` and
+`fetch_content` and allows `get_search_content`.  Its generated definition adds
+no web rule.  Forwarded child asks reach the parent's human approval, or Jev
+where the approval mode enables it for subagents; Jev never auto-allows
+`fetch_content`.  Local reads keep the normal secret-path denies and
+external-directory asks.
+
+pi-web-access itself limits fetches to `http(s)`, blocks loopback, private,
+link-local (including cloud metadata), CGNAT and multicast targets after DNS
+resolution, revalidates every redirect, restricts `auth` to configured
+per-host profiles, and replaces inline `data:` payloads in fetched text.  It
+does not inspect what a URL or query carries.
+
+The residual risk is deliberate: a researcher reads both project files and
+untrusted pages, and a URL or query can carry data out to any public host.
+Keep `fetch_content` approval human, or do not use `researcher` on projects
+whose contents must not reach the network.  pi-web-access's
+`fetchContent.domainPolicy.allow` in `web-search.json` limits `fetch_content`
+to listed hosts for the parent and every researcher alike; the harness does not
+set it.  Its prompt treats web content as data, not instructions,
+and forbids putting local contents into URLs or queries; that is guidance, not
+enforcement.  Treat its results as web-derived and untrusted.
+
+The harness enforces the rest:
+
+- The child loads its own pi-web-access instance (a query-keyed ESM import of
+  the launcher-verified entry, checked to differ from the parent's). The
+  extension keeps stored results and pending fetches in module scope and clears
+  them on session start/shutdown, so a shared instance would cancel the
+  parent's fetches and drop its stored results.  Instances are reused only
+  after a confirmed child shutdown.
+- A native import bypasses the host's extension loader, and production installs
+  omit the Pi SDK.  The entry's own imports of the Pi SDK and TypeBox therefore
+  resolve, through a process-wide Node module hook, to the modules the host
+  supplied to the harness (the same export values, re-exported); any other host
+  module fails the import.  The
+  hook only acts on imports from an entry the harness tagged (its URL carries
+  `alehouse-host=<generation>`); it stays installed for the process.
+- `fetch_content` has no `auth` (browser-cookie) parameter and accepts only
+  absolute `http(s)` URLs.  Upstream accepts local video paths (by extension,
+  default 50 MB) and uploads them for analysis or extracts frames, outside the
+  path permission gates; a researcher cannot.
+- `web_search`, `source_check` and `fetch_content` have no `proxy` parameter.
+  Upstream checks only its scheme, not its host, so a model-chosen proxy could
+  reach loopback or private services, or bypass the configured proxy.  A proxy
+  configured in `web-search.json` still applies.
+- These three schemas are closed (`get_search_content` is left as upstream
+  registers it): violations fail validation before any permission prompt, and
+  execution checks again.
+- The dynamic `web_enable` loader is not registered, so the admitted child tool
+  table cannot change; background-fetch notices never start a model turn outside
+  a Run.  Renamed or disabled web tools fail researcher assembly.
+- Curator review has no UI in a child and resolves to no curator.
+
+One approved call can still do more than fetch a page.  These are upstream
+pi-web-access behaviors the harness does not restrict; the approval prompt
+shows only the tool input:
+
+- A `github.com` repository URL is cloned (by default when the repository is
+  small, always with `forceClone`) with `gh repo clone`, using the user's
+  stored `gh` credentials, or `git clone`, into `/tmp/pi-github-repos`; issue
+  and pull-request URLs are read with `gh`.  A private repository the user can
+  access is therefore readable, and outside the path permission gates.
+  `githubClone.enabled: false` in `web-search.json` turns cloning off for the
+  parent and every researcher.
+- YouTube URLs run `yt-dlp`/`ffmpeg`.  If `allowBrowserCookies` (or
+  `PI_ALLOW_BROWSER_COOKIES=1`) is set, the Gemini Web path reads local Chrome
+  cookies for Google origins; removing `auth` does not remove this path.
+- `mode: "answer"` with `answerModel`, video/YouTube analysis, and summary
+  workflows send fetched content to another configured model, outside the
+  child's routed model and its accounting.
+- Fetched pages are cached for an hour in `<agent dir>/web-search-cache`,
+  shared by the parent and every researcher and kept after the session ends.
+- SSRF checks resolve the host before connecting and the connection resolves it
+  again, so a rebinding DNS record can pass validation and reach a private
+  address.
+- The launcher checks the pinned pi-web-access version and location, not a
+  digest of its code.
 
 The profiles express enforced capabilities, not work roles, model tiers, or
 permission grants.  They share policy body; they do not pin a model, thinking,
@@ -97,7 +181,7 @@ separate immutable resource floor or a profile's whole-surface write ceiling;
 otherwise they need not monotonically restrict the global definition.
 Jev can disqualify changed definitions/overrides from automatic
 approval and defer, but defer does not turn an existing configured allow into ask.
-See the [integration overview](../../README.md#worker-and-permissions).
+See [limitations](limitations.md) for what the permission chain does not cover.
 
 Separately, the harness records an optional Run approval witness at admission
 and at the child SDK's real prompt boundary.  The child loads only that small
