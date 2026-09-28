@@ -1,7 +1,7 @@
 import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { agentDirectory, packageRoot, protectionResources, verifyAgentResources, verifyRuntime } from "../bin/runtime-support.mjs";
+import { agentDirectory, managedAgentNames, packageRoot, protectionResources, verifyAgentResources, verifyRuntime } from "../bin/runtime-support.mjs";
 
 function ensureDirectory(path) {
   const parent = dirname(path);
@@ -21,7 +21,7 @@ export function initialize({ agentDir = agentDirectory(), root = packageRoot } =
   agentDir = resolve(agentDir);
   const runtime = verifyRuntime(root);
   const files = new Map();
-  for (const name of ["editor", "reader", "Explore", "Plan", "general-purpose"]) files.set(`agents/${name}.md`, readFileSync(join(runtime, "agents", `${name}.md`)));
+  for (const name of managedAgentNames) files.set(`agents/${name}.md`, readFileSync(join(runtime, "agents", `${name}.md`)));
   files.set("harness-presets.json", readFileSync(join(runtime, "seeds/harness-presets.json")));
   const policy = JSON.parse(readFileSync(join(runtime, "seeds/permissions.json"), "utf8"));
   // Visible seed rules mirror the immutable authority floor. Existing config

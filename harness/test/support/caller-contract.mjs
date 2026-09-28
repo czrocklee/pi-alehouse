@@ -17,9 +17,9 @@ export function assertCallerTools(tools) {
   assert.match(fields.agent.description, /short nickname, one theme per session.*not a task name. Never reused/);
   assert.match(fields.prompt.description, /Complete instructions/);
   assert.match(fields.label.description, /agent_list, not instructions. Default: the prompt's first line/);
-  assert.deepEqual(fields.profile.enum, ["editor", "reader"]);
-  assert.match(fields.profile.description, /reader:.*cannot edit files; editor: may edit files. Git mutations stay with you/);
-  assert.match(fields.profile.description, /permission-gated; neither profile is an OS sandbox/);
+  assert.deepEqual(fields.profile.enum, ["editor", "reader", "researcher"]);
+  assert.match(fields.profile.description, /reader:.*cannot edit files; editor: may edit files; researcher: web search and fetch.*no Bash or edits.*untrusted. Git mutations stay with you/);
+  assert.match(fields.profile.description, /permission-gated; no profile is an OS sandbox/);
   const difficulty = fields.difficulty.description;
   assert.match(difficulty, /Picks the Agent's model; fixed for its lifetime/);
   assert.match(difficulty, /1=clear method.*2=routine local analysis.*3=independent investigation.*4=competing hypotheses.*5=no established approach/);
@@ -31,7 +31,7 @@ export function assertCallerTools(tools) {
   assert.match(fields.max_turns.description, /per task, default 256.*partial result/);
   assert.match(fields.max_duration_ms.description, /per task.*asked to stop/);
   for (const key of ["model", "effort", "strength", "thinking", "name", "description", "message"]) assert.equal(key in fields, false, key);
-  assert.match(spawn.description, /share your checkout without isolation.*no web, no delegation/);
+  assert.match(spawn.description, /share your checkout without isolation, and cannot delegate. Only researcher Agents can use the web/);
   assert.match(spawn.description, /ends its task with a question \(needs_input\); answer it with agent_send/);
   assert.match(spawn.description, /Capacity is limited: kill idle Agents/);
   assert.match(spawn.description, /check agent_list before repeating it/);

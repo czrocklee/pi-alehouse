@@ -47,7 +47,7 @@ const preset = (name = "fixture", modelId = "fixture/controlled", version = "v1"
   effort: { light: "inherit", standard: "inherit", strong: "inherit" },
   effort_defaults: { light: "inherit", standard: "inherit", strong: "inherit" }, effort_overrides: {},
 });
-const profiles = () => Object.fromEntries(["editor", "reader"].map((name) => [name, { definition: `${name} definition`, tools: ["read"] }]));
+const profiles = () => Object.fromEntries(["editor", "reader", "researcher"].map((name) => [name, { definition: `${name} definition`, tools: ["read"] }]));
 const code = (value) => (error) => JSON.parse(error.message).error.code === value;
 // Replies name Agents only; tests reach the host-side view through the controller.
 const runOf = (f, agent) => f.controller.findAgent(agent).run_id;
@@ -246,7 +246,7 @@ test("resolver exposes bounded abstract choices and incompatibility without mode
   }
   await assert.rejects(call("agent_spawn", create({ profile: "unknown" })), (error) => {
     const result = JSON.parse(error.message).error; assert.equal(result.code, "INVALID_PROFILE");
-    assert.deepEqual(result.allowed, ["editor", "reader"]);
+    assert.deepEqual(result.allowed, ["editor", "reader", "researcher"]);
     assert.equal(JSON.stringify(result).includes("fixture/controlled"), false); return true;
   });
   state.thinking = "low";

@@ -9,9 +9,11 @@ import { PiRunJournal } from "../history/run-journal.js";
 import type { ApprovalBindings } from "../permissions/approval-provenance.js";
 import { requireReadiness } from "../permissions/readiness.js";
 import { createChildTools } from "../tools/child-tools.js";
+import { webProfileNames, type AgentProfileName } from "../tools/tool-names.js";
 import { PiAgentSessionAdapter, ChildRunGate } from "./agent-session.js";
 import type { ChildActivityRegistry } from "./activity-observer.js";
 import { assembleChildSession, disposeChildSession } from "./child-session.js";
+import { childWebExtension, type ChildWebModules, type WebLease } from "./child-web.js";
 import { digest } from "./context-snapshot.js";
 import { WorkerStatsObserver } from "./worker-stats.js";
 
@@ -37,6 +39,8 @@ export function createChildSessionFactory(options: {
   activities: ChildActivityRegistry;
   parentPermission(): unknown;
   getPermissionsService: (id: string) => unknown;
+  /** Isolated pi-web-access instances; required only by web profiles. */
+  web?: ChildWebModules;
 }): (agent: { agent_id: string; name: string; settings: AdmittedAgentConfig }) => Promise<AgentSessionPort> {
   return async (agent): Promise<AgentSessionPort> => {
     assert(options.parentPermission(), "Parent permission service is missing");
@@ -45,6 +49,21 @@ export function createChildSessionFactory(options: {
     assert.deepEqual(agent.settings.tools, profile.tools);
     const model = options.runtime.getModel(agent.settings.provider, agent.settings.model);
     assert(model, "Agent model is no longer available");
+    let web: WebLease | undefined;
+    if (webProfileNames.includes(agent.settings.profile as AgentProfileName)) {
+      assert(options.web, "Researcher web access is unavailable; start through the pi-alehouse launcher");
+      web = await options.web.acquire();
+    }
+    try {
+      return await assemble(agent, profile, model, web);
+    } catch (error) {
+      // An unconfirmed child shutdown keeps its instance out of the pool.
+      if (!(error instanceof SessionInitializationError)) web?.release();
+      throw error;
+    }
+  };
+  async function assemble(agent: { agent_id: string; name: string; settings: AdmittedAgentConfig }, profile: ChildProfile,
+    model: NonNullable<ReturnType<ModelRuntime["getModel"]>>, web: WebLease | undefined): Promise<AgentSessionPort> {
     const bus = createEventBus(), gate = new ChildRunGate(), childSettings = options.settings();
     // Held, not re-fetched: this is the observer instance bound to the child.
     const activity = options.activities.track(agent.agent_id, agent.settings.cwd);
@@ -69,7 +88,7 @@ export function createChildSessionFactory(options: {
       // the final handler's stop is authoritative. The activity observer has no
       // decision handler today; preserve this order so the veto remains final
       // for any handlers added beside it later.
-      extensionFactories: [activity.extension,
+      extensionFactories: [...(web ? [childWebExtension(web.factory)] : []), activity.extension,
         options.approvalBindings.childExtension(manager.getSessionId()), stats.extension, gate.extension] });
     await loader.reload();
     manager.appendCustomEntry("active_agent", { name: agent.settings.profile, routing: {
@@ -128,6 +147,7 @@ export function createChildSessionFactory(options: {
         clearInputs: () => port.clearInputs(), dispose: async () => {
           const report = await port.dispose();
           stats.dispose();
+          if (report.shutdownExited) web?.release();
           return report;
         } };
     } catch (error) {
@@ -140,5 +160,5 @@ export function createChildSessionFactory(options: {
       } catch (cleanup) { throw new SessionInitializationError(error, cleanup); }
       throw error;
     }
-  };
+  }
 }

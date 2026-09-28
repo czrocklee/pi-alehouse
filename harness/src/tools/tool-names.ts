@@ -28,4 +28,11 @@ export const blockedDelegationToolNames: readonly string[] = Object.freeze([
   "list_subagents", "cancel_subagent", "resume_subagent", "release_subagent",
 ]);
 
-export const agentProfileNames = ["editor", "reader"] as const;
+export const agentProfileNames = ["editor", "reader", "researcher"] as const;
+export type AgentProfileName = typeof agentProfileNames[number];
+
+/** The only child tools besides local ones and notify/ask_parent. Only the
+ * researcher receives them, from its own pi-web-access instance; its
+ * definition must list all four and no Bash or direct edit tool. */
+export const webToolNames: readonly string[] = Object.freeze(["web_search", "source_check", "fetch_content", "get_search_content"]);
+export const webProfileNames: readonly AgentProfileName[] = Object.freeze(["researcher"]);

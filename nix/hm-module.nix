@@ -18,7 +18,7 @@
   bootstrap = pkgs.callPackage ./permission-bootstrap {pi-alehouse = package;};
 
   # Generated worker profiles; the launcher preflight requires exact copies.
-  agents = ["editor" "reader" "Explore" "Plan" "general-purpose"];
+  agents = ["editor" "reader" "researcher" "Explore" "Plan" "general-purpose"];
   # Policy/UI extensions that ordinary Pi autoloads from its extensions dir.
   policyExtensions = [
     "status-footer"

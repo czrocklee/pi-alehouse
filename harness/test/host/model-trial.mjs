@@ -82,7 +82,7 @@ export default function (pi) {
   });
 }
 `);
-const profileNames = ["editor", "reader"];
+const profileNames = ["editor", "reader", "researcher"];
 const profiles = Object.fromEntries(profileNames.map((name) => {
   const definition = readFileSync(join(agentDir, "agents", `${name}.md`), "utf8");
   // Identical explicit trial subset; this is not the complete production profile.

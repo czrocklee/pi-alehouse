@@ -9,6 +9,9 @@ import { fileURLToPath } from "node:url";
 
 export const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+// Generated worker profiles installed into the agent directory, plus disabled
+// built-ins. Keep in step with nix/hm-module.nix and the harness profile names.
+export const managedAgentNames = Object.freeze(["editor", "reader", "researcher", "Explore", "Plan", "general-purpose"]);
 export function agentDirectory(env = process.env) {
   const path = env.PI_CODING_AGENT_DIR;
   return resolve(path ? path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path : join(homedir(), ".pi/agent"));
@@ -70,15 +73,20 @@ export function verifyRuntime(root = packageRoot) {
     assert.equal(digest(regular(target)), expected, `Runtime resource mismatch: ${path}; rebuild Alehouse`);
   }
   for (const required of ["worker-policy.json", "permission-system/index.ts", "permission-system/vendor/package.json",
-    "policy/jev-auto-approval.ts", "policy/static-safety-guard.ts", "policy/policy-grep.ts", "agents/editor.md", "agents/reader.md"]) {
+    "policy/jev-auto-approval.ts", "policy/static-safety-guard.ts", "policy/policy-grep.ts", "agents/editor.md", "agents/reader.md",
+    "agents/researcher.md"]) {
     assert(Object.hasOwn(manifest.files, required), `Incomplete runtime manifest: ${required}`);
   }
   return runtime;
 }
 export function verifyAgentResources(agentDir = agentDirectory(), root = packageRoot) {
   const runtime = join(root, "runtime");
-  for (const name of ["editor", "reader", "Explore", "Plan", "general-purpose"]) {
+  for (const name of managedAgentNames) {
     const path = join(agentDir, "agents", `${name}.md`);
+    try { statSync(path); } catch (error) {
+      if (error.code === "ENOENT") throw new Error(`Missing managed profile: ${path}. Run \`pi-alehouse init\` to create missing resources.`, { cause: error });
+      throw error;
+    }
     assert.equal(digest(regular(path)), digest(regular(join(runtime, "agents", `${name}.md`))),
       `Managed profile mismatch: ${path}. Preserve your file; reconcile it manually before launching.`);
   }
@@ -153,7 +161,7 @@ export function protectionResources(paths = {}, env = process.env, root = packag
 export function runtimeEnvironment(paths, env = process.env) {
   return { ...env, PI_CODING_AGENT_DIR: paths.agentDir,
     PI_HARNESS_PERMISSION_ROOT: paths.permissionRoot, PI_HARNESS_POLICY_ROOT: paths.policyRoot,
-    PI_HARNESS_FLOCK: paths.flock, PI_AUTO_APPROVAL_MODE: "shadow",
+    PI_HARNESS_FLOCK: paths.flock, PI_HARNESS_WEB_ENTRY: paths.web, PI_AUTO_APPROVAL_MODE: "shadow",
     ...(env.PI_JEV_API_KEY_FILE ? { PI_JEV_API_KEY_FILE: absoluteUserPath(env.PI_JEV_API_KEY_FILE) } : {}),
     PI_JEV_APPROVAL_MODE: env.PI_JEV_APPROVAL_MODE || "enforce-subagents" };
 }

@@ -34,6 +34,8 @@ for (const fault of ["widget", "panel", "all"]) test(`quit drains before later S
   for (const name of ["editor", "reader"]) {
     await writeFile(join(agentDir, "agents", `${name}.md`), "---\ntools: [read]\n---\nFixture only.\n");
   }
+  await writeFile(join(agentDir, "agents", "researcher.md"),
+    "---\ntools: [read, web_search, source_check, fetch_content, get_search_content]\n---\nFixture only.\n");
   const authority = join(permissionRoot, "node_modules/@gotgenes/pi-permission-system");
   await mkdir(authority, { recursive: true });
   await writeFile(join(permissionRoot, "package.json"), "{}");

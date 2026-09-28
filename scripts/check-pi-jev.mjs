@@ -62,7 +62,7 @@ for (const path of [repo, piExecutable, generatedRoot]) assert(existsSync(path),
 // boundedProfileIsValid fail merely because its managed definitions are absent.
 // Copy only the rendered public profiles, never settings/auth or real logs.
 mkdirSync(join(offlineAgentDir, "agents"), { recursive: true });
-for (const profile of ["editor", "reader"]) {
+for (const profile of ["editor", "reader", "researcher"]) {
   writeFileSync(join(offlineAgentDir, "agents", `${profile}.md`),
     readFileSync(join(generatedRoot, "agents", `${profile}.md`)));
 }

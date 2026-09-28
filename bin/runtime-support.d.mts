@@ -1,5 +1,6 @@
 export const packageRoot: string;
 export function digest(bytes: string | Uint8Array): string;
+export const managedAgentNames: readonly string[];
 export function agentDirectory(env?: NodeJS.ProcessEnv): string;
 export function executable(name: string, override?: string, env?: NodeJS.ProcessEnv): string;
 export function resolveFlock(env?: NodeJS.ProcessEnv): string;

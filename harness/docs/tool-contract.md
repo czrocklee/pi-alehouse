@@ -65,7 +65,7 @@ and a pointer to `agent_spawn`.
 ## Spawn
 
 `agent_spawn` accepts `agent`, `prompt` (1--131072 UTF-16 units), `profile`
-(`reader` or `editor`) and `difficulty` (integer `1`–`5`), all required, plus
+(`reader`, `editor` or `researcher`) and `difficulty` (integer `1`–`5`), all required, plus
 optional `label` (1--120), `inherit_context`, `after` (1--4 other Agent names),
 `wait_ms` (0--300000), and the per-task budgets `max_turns` (1--10000, default
 256) and `max_duration_ms` (1--86400000, default 1800000).
@@ -79,9 +79,11 @@ the harness.
   label in the panel and `agent_list`, defaulting to the first nonblank line of
   the instructions. Labels are never forwarded as instructions.
 - `reader` investigates/reviews without direct edit/write tools or detectable
-  project writes; `editor` performs authorized file edits. Git mutations stay
-  with the parent in both. Bash remains permission-gated; no profile is an OS
-  sandbox.
+  project writes; `editor` performs authorized file edits; `researcher` searches
+  and fetches the web with read-only file tools and no Bash, and the description
+  tells the parent its results are web-derived and untrusted. Git mutations stay
+  with the parent in all three. Bash and web calls remain permission-gated; no
+  profile is an OS sandbox.
 - `difficulty` describes the reasoning needed for this prompt's concrete task
   and requested quality, independently of permissions. It maps 1–2 to the
   preset's `light` slot, 3 to `standard`, and 4–5 to `strong`; see
@@ -298,7 +300,8 @@ child to finish; it does not force immediate termination or wake the parent.
 The former records ordinary progress.  Both recheck the Run gate after SDK tool
 hooks and fail `RUN_INPUT_CLOSED` when no bound task can accept them.
 
-Declared worker definitions can expose web capability under the broader
+Declared `reader`/`editor` definitions expose web capability under the broader
 permission configuration, but the effective **harness child allowlist excludes
-web**.  Plain `pi` has no delegation at all.  See [security](security.md) for
+their web**; only `researcher` receives web tools, from its own pi-web-access
+instance.  Plain `pi` has no delegation at all.  See [security](security.md) for
 the distinction between definition/policy authority and this fixed child table.

@@ -25,7 +25,9 @@ export async function assembleChildSession(input: {
   const errors: string[] = [];
   try {
     input.parentBus.emit("subagents:child:session-created", identity);
-    if (extensionsResult.errors.length) throw new Error(`EXTENSION_LOAD_FAILED: ${extensionsResult.errors.map((e) => e.path).join(", ")}`);
+    if (extensionsResult.errors.length) {
+      throw new Error(`EXTENSION_LOAD_FAILED: ${extensionsResult.errors.map((e) => `${e.path}: ${String(e.error).slice(0, 512)}`).join("; ")}`);
+    }
     // Runner logs and swallows many handler errors; a resolved bind is not
     // proof of readiness. Capture these errors as well as loader diagnostics.
     await session.bindExtensions({ onError: (error) => errors.push(error.error) });

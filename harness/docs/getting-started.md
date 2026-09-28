@@ -68,7 +68,7 @@ When you are ready to use Alehouse:
 pi-alehouse init
 ```
 
-Initialization creates only absent resources: five worker definitions, a routing catalogue and a permission configuration. It preserves existing files and symlinks and does not modify settings or credentials. Conflicting or incompatible existing resources require your explicit attention; they are not silently replaced.
+Initialization creates only absent resources: six worker definitions, a routing catalogue and a permission configuration. It preserves existing files and symlinks and does not modify settings or credentials. Conflicting or incompatible existing resources require your explicit attention; they are not silently replaced. An agent directory initialized before the `researcher` profile existed fails launch with `Missing managed profile`; run `pi-alehouse init` again to add only that definition.
 
 The routing catalogue is `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/harness-presets.json`. It starts with `off` and no model presets. Add your own registered provider/model IDs using the [routing configuration guide](routing.md#preset-configuration). The README's images show an existing personal setup, not built-in model recommendations.
 
