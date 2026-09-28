@@ -15,6 +15,7 @@ import type { ChildActivityRegistry } from "./activity-observer.js";
 import { assembleChildSession, disposeChildSession } from "./child-session.js";
 import { childWebExtension, type ChildWebModules, type WebLease } from "./child-web.js";
 import { digest } from "./context-snapshot.js";
+import { orderFreeToolSchemaExtension } from "./provider-schema.js";
 import { WorkerStatsObserver } from "./worker-stats.js";
 
 export interface ChildProfile {
@@ -88,7 +89,7 @@ export function createChildSessionFactory(options: {
       // the final handler's stop is authoritative. The activity observer has no
       // decision handler today; preserve this order so the veto remains final
       // for any handlers added beside it later.
-      extensionFactories: [...(web ? [childWebExtension(web.factory)] : []), activity.extension,
+      extensionFactories: [orderFreeToolSchemaExtension, ...(web ? [childWebExtension(web.factory)] : []), activity.extension,
         options.approvalBindings.childExtension(manager.getSessionId()), stats.extension, gate.extension] });
     await loader.reload();
     manager.appendCustomEntry("active_agent", { name: agent.settings.profile, routing: {

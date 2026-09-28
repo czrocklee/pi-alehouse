@@ -126,6 +126,14 @@ permissions. This warning does not authorize child web, a permission bypass,
 or a second Pi runtime. Researcher children register no activation loader and
 suppress their repeat of that warning.
 
+Mistral-hosted GLM constrains all tool arguments to declared property order
+(and whole-string patterns) whenever a request carries a strict tool, which
+Pi's built-in tools are; arguments written out of order are dropped silently.
+For `mistral-conversations` requests the parent and every child therefore send
+non-strict tool schemas open (`additionalProperties: true`) and without
+`pattern`. Only the wire copy changes: Pi validates arguments against the
+registered schemas, and strict tools are sent unchanged.
+
 Native compaction/retry remains SDK behavior inside a Run.  The SDK does not
 expose all failed/cancelled/retried summary attempts or the actual routed model
 for successful summaries; successful summary usage is instead keyed as
