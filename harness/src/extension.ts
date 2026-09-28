@@ -22,6 +22,7 @@ import { configureChildRuntime } from "./runtime/execution-policy.js";
 import { researcherHostModules } from "./runtime/host-modules.js";
 import { FileOwnerLease } from "./runtime/owner-lease.js";
 import { ownerSessionReplacementGuard } from "./runtime/owner-lifecycle.js";
+import { registerOrderFreeToolSchemas } from "./runtime/provider-schema.js";
 import { hostUsage } from "./runtime/tool-usage.js";
 import { createOwnerTools } from "./tools/parent-tools.js";
 import { agentProfileNames, blockedDelegationToolNames, managementToolNames, webProfileNames, webToolNames,
@@ -150,6 +151,7 @@ export default function harnessExtension(pi: ExtensionAPI) {
   };
   let parentPermission: () => unknown = () => undefined;
   const residentLimit = 8;
+  registerOrderFreeToolSchemas(pi);
   historicalRunsCommand(pi);
   const presetEntry = "harness:preset-selection:v1";
   const delegationEntry = "harness:delegation-mode:v1";
