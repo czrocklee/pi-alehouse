@@ -65,7 +65,7 @@ const leadEager = delegationGuideline({ mode: "lead", eagerness: "eager" });
 let first = await parent(SessionManager.create(cwd, sessions));
 let file;
 try {
-  assert.equal(first.ui.statuses.at(-1), "delegation: supervisor·reserved - fixture");
+  assert.equal(first.ui.statuses.at(-1), "delegation: supervisor·reserved/fixture");
   assert((await first.ask("HELLO"))[0].includes(supervisorReserved), "the configured default reaches the first request");
   // 2. While Off the mode changes and is audited, but the footer stays off and
   // agent_spawn stays hidden; enabling again shows the new mode.
@@ -76,7 +76,7 @@ try {
   assert(!first.session.getActiveToolNames().includes("agent_spawn"), "a mode change never re-exposes delegation while Off");
   assert.deepEqual(saved(first.session), ["lead/eager"]);
   await first.session.prompt("/harness-preset fixture");
-  assert.equal(first.ui.statuses.at(-1), "delegation: lead·eager - fixture");
+  assert.equal(first.ui.statuses.at(-1), "delegation: lead·eager/fixture");
   const enabled = await first.ask("AFTER_ENABLE");
   assert(enabled[0].includes(leadEager) && !enabled[0].includes(supervisorReserved));
   await first.session.prompt("/harness-mode lead eager");
@@ -89,7 +89,7 @@ try {
 // 3. Restoring the session restores the saved mode, not the file default.
 let second = await parent(SessionManager.open(file));
 try {
-  assert.equal(second.ui.statuses.at(-1), "delegation: lead·eager - fixture");
+  assert.equal(second.ui.statuses.at(-1), "delegation: lead·eager/fixture");
   const restored = await second.ask("RESTORED");
   assert(restored[0].includes(leadEager) && !restored[0].includes(supervisorReserved), "the restored mode reaches the first request");
   // 4a. A failed active-tool restore is retried on reselect. With the tool
@@ -137,7 +137,7 @@ try {
   };
   await second.session.prompt("/harness-mode manual");
   assert.match(second.ui.notices.at(-1).message, /DELEGATION_AUDIT_FAILED/);
-  assert.equal(second.ui.statuses.at(-1), "delegation: lead·eager - fixture");
+  assert.equal(second.ui.statuses.at(-1), "delegation: lead·eager/fixture");
   second.session.sessionManager.appendCustomEntry = append;
   await second.session.prompt("/harness-mode manual");
   assert.match(second.ui.notices.at(-1).message, /PARENT_HISTORY|OWNER|unavailable/i, "the latched Owner refuses later changes");

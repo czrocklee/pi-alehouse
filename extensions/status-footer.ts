@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { getAgentDir, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
-import type { Usage } from "@earendil-works/pi-ai";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext, type SessionEntry, type Theme } from "@earendil-works/pi-coding-agent";
+import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import type { OverlayHandle, TuiMouseEvent } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatTokenCount } from "../lib/token-format.mjs";
@@ -17,6 +17,12 @@ import { SPEND_FIELDS, usageTotals, readUsageAttribution as attribution,
   type UsageTotals, type HostModelSpend as SpendAttribution } from "../lib/usage-attribution.mjs";
 
 const FOOTER_MARKER = "\u0000pi-status-footer\u0000";
+// Pi assigns this API id to virtual catalog entries. It is not a package export;
+// any other API is a physical model, and a missing API is not treated as virtual.
+const VIRTUAL_MODEL_API = "pi-virtual";
+// A settled assistant turn. error/aborted are failures, pending/deferred are not
+// a completed route, and a virtual API means routing itself failed.
+const SETTLED_ROUTE_STOPS = new Set(["stop", "length", "toolUse"]);
 // Optional integrations are explicitly configured, never ambient network work.
 const DASHBOARD_BASE_URL = (process.env.AGENT_DASHBOARD_URL ?? "").replace(/\/+$/, "");
 const GROK_BILLING_ENABLED = process.env.PI_ALEHOUSE_GROK_BILLING === "1";
@@ -460,6 +466,103 @@ function alignFooter(left: string, right: string, width: number): string {
   return `${shortenedLeft}${" ".repeat(Math.max(0, start - visibleWidth(shortenedLeft)))}${right}`;
 }
 
+function activeBranch(ctx: ExtensionContext): readonly SessionEntry[] | undefined {
+  const getBranch = ctx.sessionManager?.getBranch;
+  if (typeof getBranch !== "function") return undefined;
+  try {
+    const branch = getBranch.call(ctx.sessionManager);
+    return Array.isArray(branch) ? branch : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function assistantMessage(entry: SessionEntry): AssistantMessage | undefined {
+  if (entry.type !== "message" || entry.message.role !== "assistant") return undefined;
+  return entry.message;
+}
+
+/** The latest context edit on this branch wins. Null drops the target from the live route. */
+function branchOmits(branch: readonly SessionEntry[], id: string): boolean {
+  let omitted = false;
+  for (const entry of branch) {
+    if (entry.type === "context_edit" && entry.targetId === id) omitted = entry.replacement === null;
+  }
+  return omitted;
+}
+
+/**
+ * Physical model and thinking level dispatched for the current virtual selection.
+ * Only a settled assistant message after that selection's model_change on the
+ * active branch counts. Failed, omitted, abandoned, or pre-selection calls are
+ * not the current route, and neither is a message the branch has not recorded
+ * under this selection.
+ */
+function physicalRoute(ctx: ExtensionContext): { id: string; thinkingLevel?: string } | undefined {
+  const selected = ctx.model;
+  if (!selected || selected.api !== VIRTUAL_MODEL_API) return undefined;
+  const branch = activeBranch(ctx);
+  if (!branch) return undefined;
+
+  let boundary = -1;
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    const entry = branch[index];
+    if (!entry || entry.type !== "model_change") continue;
+    if (entry.provider === selected.provider && entry.modelId === selected.id) boundary = index;
+    break;
+  }
+  if (boundary < 0) return undefined;
+
+  for (let index = branch.length - 1; index > boundary; index -= 1) {
+    const entry = branch[index];
+    if (!entry) continue;
+    const message = assistantMessage(entry);
+    if (!message) continue;
+    if (branchOmits(branch, entry.id)) return undefined;
+    if (message.api === VIRTUAL_MODEL_API || !SETTLED_ROUTE_STOPS.has(message.stopReason) || !message.model) {
+      return undefined;
+    }
+    return {
+      id: message.model,
+      ...(message.thinkingLevel ? { thinkingLevel: message.thinkingLevel } : {}),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Subscription marker from the public registry only. `isUsingOAuth` is the
+ * in-memory auth snapshot; `getProvider().auth.oauth.isSubscription` is catalog
+ * metadata. Neither resolves a key. Kimi Coding remains subscription-backed
+ * even when its stored credential is an API key.
+ */
+function subscriptionSuffix(ctx: ExtensionContext): string {
+  const provider = ctx.model?.provider;
+  if (!provider) return "";
+  if (provider === "kimi-coding") return " sub";
+  const model = ctx.model;
+  const registry = ctx.modelRegistry;
+  if (!model || typeof registry?.isUsingOAuth !== "function" || typeof registry.getProvider !== "function") {
+    return "";
+  }
+  try {
+    if (!registry.isUsingOAuth(model)) return "";
+    return registry.getProvider(provider)?.auth.oauth?.isSubscription === true ? " sub" : "";
+  } catch {
+    return "";
+  }
+}
+
+function modelLabel(ctx: ExtensionContext, theme: Theme): string {
+  const selected = ctx.model?.id ?? "no-model";
+  const thinking = ctx.model?.reasoning ? ` (${ctx.thinkingLevel ?? "off"})` : "";
+  const route = physicalRoute(ctx);
+  const selection = `${theme.fg("accent", selected)}${thinking ? theme.fg("muted", thinking) : ""}`;
+  if (!route) return selection;
+  const level = route.thinkingLevel ? theme.fg("muted", ` (${route.thinkingLevel})`) : "";
+  return `${selection}${theme.fg("muted", " \u2192 ")}${theme.fg("accent", route.id)}${level}`;
+}
+
 type BreakdownColumn = {
   label: string;
   /** Order in which a column is given up when the overlay will not fit; the
@@ -703,6 +806,8 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.on("after_provider_response", (event, ctx) => {
+    // Codex quota headers belong to openai-codex only. OpenAI ChatGPT
+    // subscription auth does not publish or display them.
     if (ctx.model?.provider !== "openai-codex") return;
 
     const headers = quotaHeaders(event.headers);
@@ -905,14 +1010,7 @@ export default function (pi: ExtensionAPI) {
             branch ? ` ${theme.fg("success", `(${branch})`)}` : ""
           }`;
           const provider = ctx.model?.provider;
-          const model = ctx.model?.id ?? "no-model";
-          const thinking = ctx.model?.reasoning
-            ? ` (${ctx.thinkingLevel ?? "off"})`
-            : "";
-          const subscription =
-            provider === "openai-codex" || provider === "kimi-coding"
-              ? " sub"
-              : "";
+          const subscription = subscriptionSuffix(ctx);
           const totalInput = promptTokens(totals);
           const rate = cacheHitRate(totals);
           const cacheWrite =
@@ -931,9 +1029,7 @@ export default function (pi: ExtensionAPI) {
             `${formatTokens(totals.cacheRead)}${cacheWrite}`,
           )}, ${cacheHitDisplay})`;
 
-          const modelDisplay = `${theme.fg("accent", model)}${
-            thinking ? theme.fg("muted", thinking) : ""
-          }`;
+          const modelDisplay = modelLabel(ctx, theme);
           const caret = ` ${theme.fg("dim", "▴")}`;
           const statuses = [...footerData.getExtensionStatuses()]
             // Subagent status belongs in its own widget, not in this footer.

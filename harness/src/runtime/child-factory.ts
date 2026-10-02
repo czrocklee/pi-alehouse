@@ -48,8 +48,12 @@ export function createChildSessionFactory(options: {
     const profile = options.profiles[agent.settings.profile];
     assert(profile && digest(profile.definition) === agent.settings.definition_digest, "Agent profile changed");
     assert.deepEqual(agent.settings.tools, profile.tools);
-    const model = options.runtime.getModel(agent.settings.provider, agent.settings.model);
-    assert(model, "Agent model is no longer available");
+    const listed = options.runtime.getModel(agent.settings.provider, agent.settings.model);
+    assert(listed, "Agent model is no longer available");
+    // Admission pinned a concrete id. A later virtual catalogue entry hides the
+    // physical model; do not construct a child on a per-request router.
+    const model = options.runtime.getPhysicalModel(agent.settings.provider, agent.settings.model);
+    assert(model, "Agent model is no longer physical");
     let web: WebLease | undefined;
     if (webProfileNames.includes(agent.settings.profile as AgentProfileName)) {
       assert(options.web, "Researcher web access is unavailable; start through the pi-alehouse launcher");

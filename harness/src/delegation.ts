@@ -49,12 +49,12 @@ export function delegationLabel(setting: DelegationSetting): string {
     ? setting.mode : `${setting.mode}·${setting.eagerness}`;
 }
 
-/** Footer status: `co-worker - gpt-medium`, `lead·eager - gpt-medium*`, or `off`. */
+/** Footer status: `co-worker/gpt-medium`, `lead·eager/gpt-medium*`, or `off`; never preset versions. */
 export function delegationStatus(preset: PresetSelection, setting: DelegationSetting): string {
   // Type-only routing import: routing parses the configured default from here.
   if (!("models" in preset)) return "delegation: off";
   const marked = Object.keys(preset.effort_overrides).length > 0 ? "*" : "";
-  return `delegation: ${delegationLabel(setting)} - ${preset.name}${marked}`;
+  return `delegation: ${delegationLabel(setting)}/${preset.name}${marked}`;
 }
 
 export function isDelegationSetting(value: unknown): value is DelegationSetting {

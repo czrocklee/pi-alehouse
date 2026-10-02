@@ -56,7 +56,7 @@ export function webEntry(root = packageRoot) {
   }
   assert(installed, "pi-web-access must belong to this install, not NODE_PATH or an ambient global package");
   const pkg = JSON.parse(regular(manifest));
-  assert.equal(pkg.version, "0.31.0", "Package-local pi-web-access must be pinned to 0.31.0");
+  assert.equal(pkg.version, "0.35.0", "Package-local pi-web-access must be pinned to 0.35.0");
   assert.deepEqual(pkg.pi.extensions, ["./dist"], "Pinned web extension manifest drift");
   const entry = join(web, "dist/index.js");
   regular(entry);

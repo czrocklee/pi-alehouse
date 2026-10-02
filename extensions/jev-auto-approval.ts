@@ -56,12 +56,9 @@ import type {
 } from "@gotgenes/pi-permission-system";
 import { hardCheckpointReason } from "./luna-auto-approval.ts";
 import { APPROVAL_SET_JUDGE_EVENT, publishJudgeState, readSetJudgeMode } from "./lib/approval-protocol.ts";
+import { JEV_MODEL_ID as MODEL_ID, reviewWithNativeJev } from "./lib/jev-classifier.ts";
 
 const AUTHORIZER_NAME = "jev-model-judge";
-// Pinned, never `jev-latest`: a permission gate must not change its decision
-// surface because an alias moved. Bump deliberately and re-run shadow.
-const MODEL_ID = "jev-1.13.0";
-const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 const POLICY_VERSION = "jev-auto-approval-v1";
 const AUDIT_EVENT = "jev_model_judge.decision";
 const MODE_STATUS_KEY = "jev-auto-approval";
@@ -1295,32 +1292,12 @@ async function callJev(packet: unknown, signal: AbortSignal | undefined): Promis
   (timer as unknown as { unref?: () => void }).unref?.();
 
   try {
-    const response = await fetch(ENDPOINT, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: MODEL_ID, state: packet, questions: QUESTIONS }),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      return { failureCode: "http_error", latencyMs: Date.now() - startedAt };
-    }
-    const body = asRecord(await response.json());
-    const answers = asRecord(body?.answers);
-    if (!answers) return { failureCode: "invalid_model_response", latencyMs: Date.now() - startedAt };
-    const usage = asRecord(body?.usage);
-    return {
-      answers: answers as JevAnswers,
-      latencyMs: Date.now() - startedAt,
-      inputTokens: typeof usage?.input_tokens === "number" ? usage.input_tokens : undefined,
-    };
-  } catch (error) {
-    const aborted = (error as { name?: string })?.name === "AbortError";
-    // Three distinct things abort a review and only one is jev's fault. An
-    // upstream abort is the user withdrawing the ask; counting it as a service
-    // failure let three cancellations in a row open the circuit and stop
-    // reviewing for 30s, which reads in the audit exactly like an outage.
-    const failureCode = signal?.aborted ? "cancelled" : aborted ? "timeout" : "network_error";
-    return { failureCode, latencyMs: Date.now() - startedAt };
+    const review = await reviewWithNativeJev(packet as Record<string, unknown>, QUESTIONS, key, controller.signal);
+    return { ...review, failureCode: signal?.aborted ? "cancelled" : review.failureCode,
+      latencyMs: Date.now() - startedAt };
+  } catch {
+    return { failureCode: signal?.aborted ? "cancelled" : controller.signal.aborted ? "timeout" : "network_error",
+      latencyMs: Date.now() - startedAt };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", abort);

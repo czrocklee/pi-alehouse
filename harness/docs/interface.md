@@ -91,7 +91,7 @@ omitted rather than painted unhittable.
 ## Delegation panel
 
 `Alt+S`, bare `/harness-preset`, or a click on the footer's delegation indicator
-(`co-worker - NAME ▴`, left of approval and health in the bottom-right group)
+(`co-worker/NAME ▴`, left of approval and health in the bottom-right group)
 opens the Delegation panel; the same key or click closes it.
 
 Its top section is the [delegation mode](routing.md#delegation-mode): a slider
@@ -199,8 +199,13 @@ Owner is open.
 The status footer remains an independently bundled sibling extension and works
 without the harness.  Its one clipped, never-wrapped row includes main-session
 usage plus worker totals delivered through normal Pi `usage`.  It groups model
-rows by `provider/model` that actually answered.  Harness-provided
-`usage.harnessModels` permits per-worker model rows; unattributed totals stay in
+rows by `provider/model` that actually answered. For a Pi virtual parent
+selection the model label shows `selection → physical` after a successful
+response on the active branch; before that it shows only the selection.
+Subscription marks use the provider's OAuth subscription metadata and actual
+OAuth state, plus the existing Kimi exception. Native OpenAI ChatGPT login does
+not imply Codex quota headers: `x-codex-*` handling remains Codex-only.
+Harness-provided `usage.harnessModels` permits per-worker model rows; unattributed totals stay in
 the `tools` lump.  Main compaction/branch summary uses `main · compact/summaries`;
 model-attributed child compaction displays `worker compact · model`, avoiding
 duplicate-looking rows.  The widget and detail pane use `≥` where they render a
@@ -218,8 +223,9 @@ A click on a status segment is first offered to the extension that owns it over
 the harness claims its `harness-preset` indicator synchronously.  Unclaimed
 clicks, and clicks elsewhere on the row, toggle the usage breakdown.  The corner
 keeps a fixed left-to-right order: usage, delegation, approval, then health
-at the right edge (`co-worker - my-team ▴ · YOLO ▴ · ○ idle ▴`). Delegation and
-approval show only their values, without the `delegation:` / `approval:` labels. Status keys and
+at the right edge (`co-worker/my-team ▴ · YOLO ▴ · ○ idle ▴`). Delegation and
+approval show only their values, without the `delegation:` / `approval:` labels. The footer banner
+omits preset versions; the picker and Agent details retain their versions. Status keys and
 click routing stay unchanged; YOLO retains its red/bold warning styling.
 
 Narrow rows first omit cache detail and shorten the delegation value with an

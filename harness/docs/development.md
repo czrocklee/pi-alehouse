@@ -8,7 +8,7 @@ SDK fork, or second permission authority. The root manifest sets
 installed as an extension by `pi install`. The CLI explicitly launches a host
 Pi process with `--no-extensions -e <absolute composition.ts>`, keeping its
 runtime and credentials host-provided. Development Pi/AI/TUI SDK packages are
-pinned to 0.87.1. There is no npm publication automation or
+pinned to 1.0.0. There is no npm publication automation or
 public release acceptance. See the [root README](../../README.md).
 
 ## Layout and responsibilities
@@ -47,10 +47,10 @@ patched** `runtime/permission-system/vendor/` copy of pinned 32.0.3. Retain
 upstream LICENSE, package imports and WASM assets in that copy. The
 `runtime/permission-system/index.ts` wrapper is the single authority entry;
 all consumers must use that identity. Root dependencies include the parser
-runtime and pinned `pi-web-access` 0.31.0; do not resolve an ambient globally
+runtime and pinned `pi-web-access` 0.35.0; do not resolve an ambient globally
 installed web extension. Generated resources and CLI must match the source
 revision. `pi-alehouse init` seeds only absent files into Pi's agent directory
-(five agent definitions, a version-2 Off routing catalogue and a permission
+(six agent definitions, a version-2 Off routing catalogue and a permission
 config), never changes settings/auth or replaces existing policies/catalogues. Old
 `harness:*` records, child tool/config names and `Symbol.for` keys remain
 compatibility protocol, not reasons to rename public schemas. Parent management
@@ -108,7 +108,7 @@ not use an arbitrary `flock` from PATH. This is not a sandbox/distributed lock.
 ## Static quality gate
 
 Root `npm run check` runs lint, typecheck, package tests and the portable
-policy suite. The latest root run passed 847/847 package tests
+policy suite. The recorded pre-1.0 root run passed 847/847 package tests
 (including 26 runtime tests, eight immutable-resource-protection regressions,
 two explicit-model rejection tests, two publication-fixture checks and three
 panel-export privacy checks) plus
@@ -142,7 +142,7 @@ paths. Node 22.19+ (or 24+) is needed by ESLint 10.
 | Portable policy separately | `npm run test:policy` | Synthetic policy/authority checks. |
 | Controlled host collector | `npm run test:integration` | `--all` full/readonly controlled suite passed in scope; not a release gate. |
 | Focused host fixtures | `harness/test/host/session-integration.mjs`, `run-lifecycle.mjs` | Invoke through the isolated collector with required host/fixture paths; never run bare npm scripts as proof. |
-| Init absent resources | `node bin/pi-alehouse.mjs init` | Explicit seven-file seed, no overwrite; inspect conflicts. |
+| Init absent resources | `node bin/pi-alehouse.mjs init` | Explicit eight-file seed, no overwrite; inspect conflicts. |
 | Orchestration metrics | `node scripts/analyze-pi-session.mjs [--json] SESSION.jsonl` | Offline aggregates from one local parent transcript: cache hit rate, turns, steer/wait/list usage. Prints no transcript text; transcripts and reports are not source. |
 
 After building/checking, `npm pack` produces a tarball with the generated

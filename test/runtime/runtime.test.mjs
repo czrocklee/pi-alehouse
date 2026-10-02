@@ -196,10 +196,10 @@ test("help and version work before init without creating any resources", (t) => 
 test("web dependency lookup supports npm-hoisted production installs", (t) => {
   const install = temporary(t), root = join(install, "node_modules/pi-alehouse");
   mkdirSync(root, { recursive: true });
-  writeFileSync(join(root, "package.json"), '{"name":"pi-alehouse","dependencies":{"pi-web-access":"0.31.0"}}');
+  writeFileSync(join(root, "package.json"), '{"name":"pi-alehouse","dependencies":{"pi-web-access":"0.35.0"}}');
   const web = join(install, "node_modules/pi-web-access");
   mkdirSync(join(web, "dist"), { recursive: true });
-  writeFileSync(join(web, "package.json"), '{"name":"pi-web-access","version":"0.31.0","pi":{"extensions":["./dist"]}}');
+  writeFileSync(join(web, "package.json"), '{"name":"pi-web-access","version":"0.35.0","pi":{"extensions":["./dist"]}}');
   writeFileSync(join(web, "dist/index.js"), 'export default () => {};');
   assert.equal(webEntry(root), join(web, "dist/index.js"));
 });

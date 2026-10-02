@@ -6,7 +6,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import test from "node:test";
-import { isOffPreset, presetLabel, PresetRouter, resolveRoute, resolveSlotRoute, strengths, validEffortOverrides } from "../../dist/routing.js";
+import { isOffPreset, presetLabel, PresetRouter, resolveRoute, resolveSlotRoute, selectPhysicalWorkerModel, strengths, validEffortOverrides } from "../../dist/routing.js";
+import { digest } from "../../dist/runtime/context-snapshot.js";
+import { createChildSessionFactory } from "../../dist/runtime/child-factory.js";
 import { presetConfig, starterConfig, writePresetConfig } from "../support/preset-config.mjs";
 import harnessExtension, { applyAuditedPreset, restorePresetRouter } from "../../dist/extension.js";
 import { validDifficulty } from "../../dist/core/contracts.js";
@@ -670,4 +672,98 @@ test("effort changes audit atomically, reject malformed/Off/stale, and resist re
   assert.throws(() => new PresetRouter(router.configPath, new Map([["off", {}]])), { code: "INVALID_PRESET_CONFIG" });
   assert.throws(() => new PresetRouter(router.configPath, new Map([["fixture-balanced", changing]])),
     { code: "INVALID_PRESET_CONFIG" });
+});
+
+const virtualResolution = "Ask the user to configure a physical model for this worker preset slot. Virtual models route each request and cannot be pinned to an Agent. Do not change difficulty to bypass configuration errors.";
+
+test("virtual selected presets are rejected before thinking; physical chat models stay pinned", async (t) => {
+  const path = await fixture(t);
+  await writeFile(path, JSON.stringify(config({ team: { ...body("v1", "fixture", { standard: { low: "high" } }),
+    effort: { light: "off", standard: "high" } } })));
+  const preset = new PresetRouter(path).select("team");
+  const physical = {
+    light: { provider: "fixture", id: "light", api: "anthropic-messages" },
+    standard: { provider: "fixture", id: "standard", api: "openai-completions" },
+    strong: { provider: "fixture", id: "strong" },
+  };
+  const nonchat = [
+    { provider: "typesafe", id: "jev-latest", api: "typesafe-system-one", type: "classifier" },
+    { provider: "openrouter", id: "flux", api: "openrouter-images", type: "image" },
+  ];
+  const parentVirtual = { provider: "router", id: "auto", api: "pi-virtual", levels: ["off", "high", "max"] };
+  const consulted = [];
+  const catalogue = [parentVirtual, ...nonchat, physical.light, physical.standard, physical.strong];
+  const supportedThinking = (model) => {
+    consulted.push(`${model.provider}/${model.id}`);
+    return ["off", "high"];
+  };
+  const input = { preset, parentThinking: "off", models: catalogue, supportedThinking };
+  // Difficulty mapping is unchanged: 1–2 light, 3 standard, 4–5 strong. Non-chat rows are not candidates.
+  assert.equal(resolveRoute({ ...input, difficulty: 1 }).model, "light");
+  assert.equal(resolveRoute({ ...input, difficulty: 2 }).thinking, "off");
+  const fixed = resolveRoute({ ...input, difficulty: 3, parentThinking: undefined });
+  assert.equal(fixed.provider, "fixture"); assert.equal(fixed.model, "standard");
+  assert.equal(fixed.thinking, "high"); assert.equal(fixed.thinking_resolution, "preset_fixed");
+  assert.equal(resolveRoute({ ...input, difficulty: 5, parentThinking: "high" }).model, "strong");
+  assert.deepEqual(consulted, ["fixture/light", "fixture/light", "fixture/standard", "fixture/strong"]);
+  for (const api of [undefined, "openai-completions", "anthropic-messages", "pi-messages", "custom-physical"]) {
+    const model = { provider: "fixture", id: "standard", ...(api === undefined ? {} : { api }) };
+    assert.equal(resolveRoute({ preset, difficulty: 3, parentThinking: undefined, models: [model],
+      supportedThinking: () => ["high"] }).model, "standard", String(api));
+  }
+
+  const virtual = { provider: "fixture", id: "standard", api: "pi-virtual" };
+  const rejectVirtual = (run, difficulty) => {
+    assert.throws(run, (error) => {
+      assert.equal(error.code, "PRESET_MODEL_UNAVAILABLE");
+      assert.equal(error.details.reason, "virtual_model");
+      assert.equal(error.details.model_kind, "virtual");
+      assert.equal(error.details.resolution, virtualResolution);
+      assert.equal(error.details.preset, "team");
+      assert.doesNotMatch(JSON.stringify(error.details), /fixture\/standard|pi-virtual|jev-latest|flux/);
+      if (difficulty === undefined) assert.equal(Object.hasOwn(error.details, "difficulty"), false);
+      else assert.equal(error.details.difficulty, difficulty);
+      return true;
+    });
+  };
+  let thinkingLookups = 0;
+  const supported = () => { thinkingLookups++; return ["off", "minimal", "low", "medium", "high", "xhigh", "max"]; };
+  rejectVirtual(() => resolveRoute({ preset, difficulty: 3, parentThinking: "high", models: [virtual], supportedThinking: supported }), 3);
+  rejectVirtual(() => resolveRoute({ preset, difficulty: 3, parentThinking: undefined, models: [virtual], supportedThinking: supported }), 3);
+  rejectVirtual(() => resolveSlotRoute({ preset, strength: "standard", parentThinking: "high", models: [virtual], supportedThinking: supported }));
+  assert.equal(thinkingLookups, 0, "supported thinking must not admit a virtual worker");
+  assert.throws(() => selectPhysicalWorkerModel([virtual], "fixture/standard", preset), (error) =>
+    error.code === "PRESET_MODEL_UNAVAILABLE" && error.details.reason === "virtual_model" &&
+    error.details.model_kind === "virtual" && !Object.hasOwn(error.details, "difficulty"));
+  assert.throws(() => resolveRoute({ preset, difficulty: 3, parentThinking: "off", models: [virtual, { ...virtual, api: "openai-completions" }],
+    supportedThinking: supported }), (error) => error.code === "PRESET_MODEL_UNAVAILABLE" &&
+    !Object.hasOwn(error.details, "reason") && error.details.difficulty === 3,
+  "a virtual and physical twin stay ambiguous; do not prefer either");
+  assert.equal(thinkingLookups, 0);
+  // Another virtual model in the chat catalogue is not a global parent rejection.
+  assert.equal(resolveRoute({ ...input, difficulty: 1 }).provider, "fixture");
+});
+
+test("child construction rejects a runtime model that is no longer physical", async () => {
+  const definition = "reader definition";
+  const settings = { profile: "reader", definition_digest: digest(definition), tools: ["read"],
+    provider: "fixture", model: "controlled" };
+  const options = {
+    ctx: {}, parentBus: {}, agentDir: "/tmp", permissionRoot: "tmp", policyRoot: "/tmp", parentId: "parent",
+    profiles: { reader: { definition, body: "", tools: ["read"] } },
+    settings() { throw new Error("settings unused"); }, parentHistory: {}, approvalBindings: {}, activities: {},
+    parentPermission: () => ({}), getPermissionsService() { throw new Error("unused"); },
+  };
+  const calls = [];
+  const virtual = createChildSessionFactory({ ...options, runtime: {
+    getModel: (provider, id) => { calls.push(["listed", provider, id]); return { api: "pi-virtual", provider, id }; },
+    getPhysicalModel: (provider, id) => { calls.push(["physical", provider, id]); return undefined; },
+  } });
+  await assert.rejects(virtual({ agent_id: "a", name: "orca", settings }), /no longer physical/);
+  assert.deepEqual(calls, [["listed", "fixture", "controlled"], ["physical", "fixture", "controlled"]]);
+  const missing = createChildSessionFactory({ ...options, runtime: {
+    getModel: () => undefined,
+    getPhysicalModel: () => { throw new Error("missing model must not ask for a physical twin"); },
+  } });
+  await assert.rejects(missing({ agent_id: "a", name: "orca", settings }), /no longer available/);
 });

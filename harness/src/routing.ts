@@ -338,7 +338,33 @@ export interface ResolvedRoute {
   strength: Strength;
 }
 
-interface RouteInput<M extends { provider: string; id: string }> {
+const VIRTUAL_WORKER_API = "pi-virtual";
+const unavailableResolution = "Ask the user to check the worker preset and model configuration. Do not change difficulty to bypass configuration errors.";
+const virtualWorkerResolution = "Ask the user to configure a physical model for this worker preset slot. Virtual models route each request and cannot be pinned to an Agent. Do not change difficulty to bypass configuration errors.";
+
+/** Chat-catalogue identity only. Classifier and image catalogues are not workers. */
+export type WorkerModelRef = { provider: string; id: string; api?: string };
+
+/** Exact provider/id match that can be pinned to an Agent.
+ * A unique virtual catalogue entry is unavailable even when its thinking levels
+ * would otherwise match: Pi routes it per request. Missing and ambiguous matches
+ * keep the existing unavailable error and are not reclassified as virtual. */
+export function selectPhysicalWorkerModel<M extends WorkerModelRef>(
+  models: readonly M[], exact: string, preset: { name: string; version: string },
+): M {
+  const matches = models.filter((model) => `${model.provider}/${model.id}` === exact);
+  if (matches.length !== 1) throw new HarnessError("PRESET_MODEL_UNAVAILABLE", {
+    preset: preset.name, preset_version: preset.version, resolution: unavailableResolution,
+  });
+  const model = matches[0]!;
+  if (model.api !== VIRTUAL_WORKER_API) return model;
+  throw new HarnessError("PRESET_MODEL_UNAVAILABLE", {
+    reason: "virtual_model", model_kind: "virtual",
+    preset: preset.name, preset_version: preset.version, resolution: virtualWorkerResolution,
+  });
+}
+
+interface RouteInput<M extends WorkerModelRef> {
   preset: PresetSelection;
   parentThinking: string | undefined;
   models: readonly M[];
@@ -346,7 +372,7 @@ interface RouteInput<M extends { provider: string; id: string }> {
 }
 
 /** The caller supplies a task rating; only this boundary maps it to a slot. */
-export function resolveRoute<M extends { provider: string; id: string }>(
+export function resolveRoute<M extends WorkerModelRef>(
   input: RouteInput<M> & { difficulty: number },
 ): ResolvedRoute {
   if (isOffPreset(input.preset)) throw workersDisabled();
@@ -366,7 +392,7 @@ export function resolveRoute<M extends { provider: string; id: string }>(
 /** Exact-ID lookup for a trusted preset slot, also used by operator previews.
  * No task score is invented. Inherit uses explicit compatibility maps only
  * when identity is unsupported; fixed effort never maps or falls back. */
-export function resolveSlotRoute<M extends { provider: string; id: string }>(
+export function resolveSlotRoute<M extends WorkerModelRef>(
   input: RouteInput<M> & { strength: Strength },
 ): Omit<ResolvedRoute, "difficulty"> {
   if (isOffPreset(input.preset)) throw workersDisabled();
@@ -380,11 +406,9 @@ export function resolveSlotRoute<M extends { provider: string; id: string }>(
       resolution: "Ask the user to check Pi's thinking setting or restart Pi. Do not change difficulty to bypass configuration errors.",
     });
   const exact = input.preset.models[strength];
-  const matches = input.models.filter((model) => `${model.provider}/${model.id}` === exact);
-  if (matches.length !== 1) throw new HarnessError("PRESET_MODEL_UNAVAILABLE", {
-    preset: input.preset.name, preset_version: input.preset.version,
-    resolution: "Ask the user to check the worker preset and model configuration. Do not change difficulty to bypass configuration errors.",
-  });
+  // Physical check is shared with operator previews. Thinking support is not
+  // consulted for a virtual slot, including one that advertises the level.
+  const model = selectPhysicalWorkerModel(input.models, exact, input.preset);
   const incompatible = (reason: string, thinking?: string): never => {
     throw new HarnessError("THINKING_INCOMPATIBLE", { key: "parent_thinking", reason,
       preset: input.preset.name, preset_version: input.preset.version,
@@ -393,7 +417,6 @@ export function resolveSlotRoute<M extends { provider: string; id: string }>(
     });
   };
   const parent = parentValid ? input.parentThinking as ThinkingLevel : undefined;
-  const model = matches[0]!;
   const supported = [...input.supportedThinking(model)];
   const effort_source = Object.hasOwn(input.preset.effort_overrides, strength) ? "user_override" : "preset";
   if (effort !== "inherit") {

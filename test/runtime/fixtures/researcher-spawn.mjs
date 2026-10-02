@@ -151,9 +151,9 @@ try {
   const lead = delegationGuideline({ mode: "lead", eagerness: "eager" });
   // Pi renders tool guidelines in both its rules and Guidelines sections.
   assert(parentPrompts.every((prompt) => prompt.includes(coWorker)), "the default guideline is in every parent request");
-  assert.equal(statuses.at(-1), "delegation: co-worker - fixture");
+  assert.equal(statuses.at(-1), "delegation: co-worker/fixture");
   await session.prompt("/harness-mode lead eager");
-  assert.equal(statuses.at(-1), "delegation: lead·eager - fixture");
+  assert.equal(statuses.at(-1), "delegation: lead·eager/fixture");
   const saved = session.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "harness:delegation-mode:v1");
   assert.deepEqual(saved.map(({ data: { mode, eagerness } }) => ({ mode, eagerness })), [{ mode: "lead", eagerness: "eager" }]);
   const before = parentPrompts.length;

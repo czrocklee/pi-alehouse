@@ -2,7 +2,7 @@
 
 The harness is Pi Alehouse's internal, opt-in Owner-local worker backend, not another npm package or a separate Pi runtime. Launch through the explicit built `pi-alehouse` CLI, not direct extension discovery: root `pi.extensions: []` intentionally prevents source composition autoload or `pi install` extension loading. The CLI supplies `--no-extensions -e <absolute composition.ts>`. It uses the host Pi SDK and the matched generated permission authority and worker definitions. Ordinary `pi` is unchanged; this launcher does not copy authentication or rewrite Pi settings.
 
-**Release acceptance remains PENDING.** The latest root portable check (847/847 package tests), controlled full/readonly, Jev and SDK-history repeats, and final installed-tarball RPC smoke passed in their declared scopes. The inherited cooperative-local operating contract documents limitations, not public acceptance. See [limitations](docs/limitations.md), [release policy](release-policy.json) and [validation scope](docs/validation-evidence.md).
+**Release acceptance remains PENDING.** The recorded pre-1.0 root portable check (847/847 package tests), controlled full/readonly, Jev and SDK-history repeats, and final installed-tarball RPC smoke passed in their declared scopes. The inherited cooperative-local operating contract documents limitations, not public acceptance. See [limitations](docs/limitations.md), [release policy](release-policy.json) and [validation scope](docs/validation-evidence.md).
 
 ## Operate
 
@@ -12,7 +12,7 @@ The harness is Pi Alehouse's internal, opt-in Owner-local worker backend, not an
 
 Off leaves accepted queued/running work and result/cleanup tools available. A fresh initially Off conversation has no harness tool schemas or orchestration reminder; turning Off later cannot remove historical model context. See [Off](docs/routing.md#off).
 
-The parent retains normal footer/title, approval queue, health/Stats, and pinned `pi-web-access` 0.31.0 tools. Child sessions have no nested delegation; only `researcher` children have web tools, from their own pi-web-access instance and without Bash. Luna is not loaded; its shared checkpoint helper is imported by Jev without registering a second authorizer. See [security](docs/security.md). Leaving this launcher and starting ordinary `pi` does not retroactively stop its children; close the Owner first.
+The parent retains normal footer/title, approval queue, health/Stats, and pinned `pi-web-access` 0.35.0 tools. Child sessions have no nested delegation; only `researcher` children have web tools, from their own pi-web-access instance and without Bash. Luna is not loaded; its shared checkpoint helper is imported by Jev without registering a second authorizer. See [security](docs/security.md). Leaving this launcher and starting ordinary `pi` does not retroactively stop its children; close the Owner first.
 
 ## Limits at a glance
 

@@ -2,9 +2,9 @@
 
 Pi Alehouse is © 2026 Yang Li and MIT licensed; see [LICENSE](LICENSE). Dependencies remain subject to their own licenses. This document records direct integration notices; the copied display vocabulary and Pi/permission-system/subagents MIT text are documented in [harness/THIRD_PARTY_NOTICES.md](harness/THIRD_PARTY_NOTICES.md). The patched permission-system runtime includes an Alehouse-authored immutable resource/credential floor (`permission-system/managed-resource-protection.ts`) applied after composed permission rules. Retain the upstream `LICENSE` in its generated vendor artifact; this notice does not replace that file or change upstream attribution. Inspect the lockfile and redistributed package licenses before distribution.
 
-## pi-web-access 0.31.0
+## pi-web-access 0.35.0
 
-Parent-only web integration uses pinned `pi-web-access` 0.31.0 (https://github.com/nicobailon/pi-web-access). Its installed `package.json` declares MIT; the text below is from its installed `LICENSE`. Child workers do not receive web tools.
+Parent and isolated researcher integration use pinned `pi-web-access` 0.35.0 (https://github.com/nicobailon/pi-web-access). Its installed `package.json` declares MIT; the text below is from its installed `LICENSE`. Reader/editor workers do not receive web tools.
 
 MIT License
 
