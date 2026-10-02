@@ -1,7 +1,6 @@
 import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-const TITLE_WIDTH = 12;
 const TITLE_WIDGET_KEY = "terminal-title-controller";
 const WORK_INTERVAL_MS = 33;
 const WORK_PAUSE_MS = 1_980;
@@ -10,6 +9,8 @@ type AnimatedState = "working";
 
 const SINGLE_UNDERLINE = "\u0332";
 const DOUBLE_UNDERLINE = "\u0333";
+const SINGLE_OVERLINE = "\u0305";
+const DOUBLE_OVERLINE = "\u033f";
 
 function requestIdFrom(value: unknown): string | undefined {
   if (typeof value !== "object" || value === null || !("requestId" in value)) {
@@ -19,7 +20,7 @@ function requestIdFrom(value: unknown): string | undefined {
   return typeof requestId === "string" && requestId ? requestId : undefined;
 }
 
-function compactTitle(value: string, width = TITLE_WIDTH): string {
+function sanitizeTitle(value: string): string {
   const clean = Array.from(value)
     .filter((character) => {
       const codePoint = character.codePointAt(0) ?? 0;
@@ -28,39 +29,46 @@ function compactTitle(value: string, width = TITLE_WIDTH): string {
     .join("")
     .replace(/\s+/g, " ")
     .trim();
-  const characters = Array.from(clean || "pi");
-  return characters.length <= width
-    ? characters.join("")
-    : `${characters.slice(0, width - 1).join("")}…`;
+  return clean || "pi";
 }
 
-function underlineCharacter(character: string, double: boolean): string {
-  return /\s/.test(character)
-    ? character
-    : `${character}${double ? DOUBLE_UNDERLINE : SINGLE_UNDERLINE}`;
+function highlightCharacter(character: string, double: boolean, overline: boolean): string {
+  if (/\s/.test(character)) return character;
+  const singleMark = overline ? SINGLE_OVERLINE : SINGLE_UNDERLINE;
+  const doubleMark = overline ? DOUBLE_OVERLINE : DOUBLE_UNDERLINE;
+  return `${character}${double ? doubleMark : singleMark}`;
 }
 
 function spotlightTitle(title: string, frameIndex: number): string {
   const characters = Array.from(title);
-  const firstCenter = -2;
-  const lastCenter = characters.length + 1;
-  const motionFrames = (lastCenter - firstCenter) * 2 + 1;
+  // Bottom cells run left-to-right, then top cells return right-to-left.
+  // Circular distance lets the highlight straddle both edges at each corner.
+  const perimeter = characters.length * 2;
+  const motionFrames = perimeter * 2;
   const pauseFrames = Math.round(WORK_PAUSE_MS / WORK_INTERVAL_MS);
   const cycleFrame = frameIndex % (motionFrames + pauseFrames);
 
-  // Let the highlight leave the title completely before the next sweep.
+  // Preserve the quiet pause, but only after completing the entire circuit.
   if (cycleFrame >= motionFrames) return title;
 
-  // Half-cell frames contract the three-character highlight to two characters,
+  // Half-cell frames contract the three-cell highlight to two cells,
   // creating a simple temporal cross-fade without changing glyph widths.
-  const center = firstCenter + cycleFrame / 2;
+  const center = cycleFrame / 2;
   const radius = Number.isInteger(center) ? 1 : 0.5;
+  const distanceFromCenter = (position: number) => {
+    const distance = Math.abs(position - center);
+    return Math.min(distance, perimeter - distance);
+  };
   return characters
     .map((character, index) => {
-      const distance = Math.abs(index - center);
-      if (distance === 0) return underlineCharacter(character, true);
-      if (distance <= radius) return underlineCharacter(character, false);
-      return character;
+      const bottomDistance = distanceFromCenter(index);
+      const topDistance = distanceFromCenter(perimeter - index - 1);
+      const bottom = bottomDistance <= radius
+        ? highlightCharacter(character, bottomDistance === 0, false)
+        : character;
+      return topDistance <= radius
+        ? highlightCharacter(bottom, topDistance === 0, true)
+        : bottom;
     })
     .join("");
 }
@@ -78,8 +86,8 @@ export default function (pi: ExtensionAPI) {
     return pi.getSessionName()?.trim() || basename(context?.cwd ?? process.cwd());
   }
 
-  function label(width = TITLE_WIDTH): string {
-    return compactTitle(rawLabel(), width);
+  function label(): string {
+    return sanitizeTitle(rawLabel());
   }
 
   function currentState(): AnimatedState | "approval" | "idle" {
