@@ -117,18 +117,20 @@ test("title highlight circles the bottom and top with connected corner frames", 
   f.rename("abcd");
   await f.emit("session_start");
   await f.emit("agent_start");
-  const firstFrame = "π - a\u0333\u0305b\u0332cd";
-  assert.equal(f.titles.at(-1), firstFrame, "starts at the bottom-left corner");
-  t.mock.timers.tick(33 * 6);
+  const firstFrame = "π\u0333\u0305 - abcd";
+  assert.equal(f.titles.at(-1), firstFrame, "starts at the bottom-left corner on π");
+  t.mock.timers.tick(33 * 4);
+  assert.equal(f.titles.at(-1), "π -\u0333 abcd", "the prefix separator participates in the sweep");
+  t.mock.timers.tick(33 * 10);
   assert.equal(f.titles.at(-1), "π - abc\u0332d\u0333\u0305", "bottom sweep reaches the right corner");
   t.mock.timers.tick(33);
   assert.equal(f.titles.at(-1), "π - abcd\u0332\u0305", "half-cell frame bridges the right corner");
   t.mock.timers.tick(33);
   assert.equal(f.titles.at(-1), "π - abc\u0305d\u0332\u033f", "top sweep starts on the right");
-  t.mock.timers.tick(33 * 6);
-  assert.equal(f.titles.at(-1), "π - a\u0332\u033fb\u0305cd", "top sweep returns to the left corner");
+  t.mock.timers.tick(33 * 14);
+  assert.equal(f.titles.at(-1), "π\u0332\u033f - abcd", "top sweep returns to π at the left corner");
   t.mock.timers.tick(33);
-  assert.equal(f.titles.at(-1), "π - a\u0332\u0305bcd", "half-cell frame bridges the left corner");
+  assert.equal(f.titles.at(-1), "π\u0332\u0305 - abcd", "half-cell frame bridges the left corner");
   t.mock.timers.tick(33);
   assert.equal(f.titles.at(-1), "π - abcd", "pause starts only after a complete circuit");
   const pausedCount = f.titles.length;
@@ -148,7 +150,7 @@ for (const label of ["a", "ab", "project", "two words", "项目配置", "abcdefg
     await f.emit("session_start");
     const idleTitle = f.titles.at(-1);
     assert.equal(idleTitle, `π - ${label}`, "the full label is preserved without truncation");
-    const characters = Array.from(idleTitle.slice(4));
+    const characters = Array.from(idleTitle);
     // Describe the traversal explicitly, independently of the implementation's
     // circular-distance calculation. Each glyph has a bottom and a top slot.
     const bottom = characters.map((_, index) => ({ index, single: "\u0332", double: "\u0333" }));
@@ -158,13 +160,11 @@ for (const label of ["a", "ab", "project", "two words", "项目配置", "abcdefg
     const firstFrame = f.titles.at(-1);
     for (let frame = 0; frame < characters.length * 4; frame += 1) {
       const title = f.titles.at(-1);
-      assert(title.startsWith("π - "), "application prefix is never animated");
-      assert.equal(plainTitle(title), idleTitle, `label unchanged at frame ${frame}`);
+      assert.equal(plainTitle(title), idleTitle, `full title including prefix unchanged at frame ${frame}`);
       assert.equal(visibleWidth(title), visibleWidth(idleTitle), `width unchanged at frame ${frame}`);
       assert(!/\s[\u0305\u0332\u0333\u033f]/u.test(title), "spaces are not decorated");
       const position = Math.floor(frame / 2);
       const offsets = frame % 2 === 0 ? [-1, 0, 1] : [0, 1];
-      // A one-glyph circuit has only two slots: its two neighbors coincide.
       const activeSlots = new Set(offsets.map((offset) =>
         (position + offset + circuit.length) % circuit.length));
       const expectedMarks = characters.map(() => []);
@@ -173,7 +173,7 @@ for (const label of ["a", "ab", "project", "two words", "项目配置", "abcdefg
         if (/\s/u.test(characters[index])) continue;
         expectedMarks[index].push(frame % 2 === 0 && slot === position ? double : single);
       }
-      const cells = [...title.slice(4).matchAll(/([^\u0305\u0332\u0333\u033f])([\u0305\u0332\u0333\u033f]*)/gu)];
+      const cells = [...title.matchAll(/([^\u0305\u0332\u0333\u033f])([\u0305\u0332\u0333\u033f]*)/gu)];
       assert.equal(cells.length, characters.length);
       for (let index = 0; index < characters.length; index += 1) {
         assert.deepEqual([...cells[index][2]].sort(), expectedMarks[index].sort(),
@@ -203,7 +203,7 @@ test("title keeps π while working and replaces it with ! during approval", asyn
   assert.equal(f.titles.at(-1), "π - project");
   assert.deepEqual([...f.widgets.values()][0].render(80), []);
   await f.emit("agent_start");
-  t.mock.timers.tick(33 * 8);
+  t.mock.timers.tick(33 * 18);
   assert.match(f.titles.at(-1), TITLE_MARKS);
   assert.equal(plainTitle(f.titles.at(-1)), "π - project");
   // A core title write during streaming must preserve the current frame too.
@@ -224,15 +224,60 @@ test("title keeps π while working and replaces it with ! during approval", asyn
   f.pi.events.emit("permissions:decision", { requestId: "a" });
   assert.equal(f.titles.at(-1), "! - 新任务");
   f.pi.events.emit("permissions:decision", { requestId: "b" });
-  t.mock.timers.tick(33 * 8);
+  t.mock.timers.tick(33 * 18);
   assert.match(f.titles.at(-1), /[\u0305\u033f]/, "working title resumes its upper sweep after approval");
   await f.emit("agent_settled");
-  assert.equal(f.titles.at(-1), "π - 新任务");
+  assert.equal(f.titles.at(-1), "✓ - 新任务");
   const settledCount = f.titles.length;
   t.mock.timers.tick(330);
   assert.equal(f.titles.length, settledCount, "settlement stops animation");
-  assert(f.titles.every((title) => /^(π|!) - /.test(title)));
+  assert(f.titles.every((title) => /^(π|!|✓) - /.test(plainTitle(title))));
 });
+
+for (const sdkDispatch of [false, true]) {
+  test(`settled title persists until the next run or session (SDK dispatch: ${sdkDispatch})`, async (t) => {
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    const f = fixture("tui", sdkDispatch);
+    titleExtension(f.pi);
+    t.after(() => f.emit("session_shutdown"));
+    await f.emit("session_start");
+    await f.emit("agent_settled");
+    assert.equal(f.titles.at(-1), "π - project", "no completion marker before a run");
+    await f.emit("agent_start");
+    await f.emit("agent_end");
+    assert.equal(plainTitle(f.titles.at(-1)), "π - project", "agent_end is not final settlement");
+    assert.match(f.titles.at(-1), TITLE_MARKS);
+    await f.emit("agent_settled");
+    assert.equal(f.titles.at(-1), "✓ - project");
+    const writes = f.titles.length;
+    await f.emit("agent_settled");
+    t.mock.timers.tick(10_000);
+    assert.equal(f.titles.length, writes, "settled title is static and duplicate events are harmless");
+    f.terminal.setTitle("core rewrite");
+    assert.equal(f.titles.at(-1), "✓ - project", "core cannot erase the marker");
+    f.rename("a long completed task 项目配置");
+    await f.emit("session_info_changed");
+    assert.equal(f.titles.at(-1), "✓ - a long completed task 项目配置");
+    for (const channel of ["permissions:decision", "managed-permissions:ui_prompt_end:v1"]) {
+      f.pi.events.emit("permissions:ui_prompt", { requestId: channel });
+      assert.equal(f.titles.at(-1), "! - a long completed task 项目配置");
+      f.pi.events.emit(channel, { requestId: channel });
+      assert.equal(f.titles.at(-1), "✓ - a long completed task 项目配置", "approval restores the settled marker");
+    }
+    await f.emit("agent_start");
+    assert.equal(plainTitle(f.titles.at(-1)), "π - a long completed task 项目配置");
+    assert.match(f.titles.at(-1), TITLE_MARKS, "the next run restarts animation");
+    await f.emit("agent_settled");
+    await f.emit("session_start");
+    assert.equal(f.titles.at(-1), "π - a long completed task 项目配置", "a new session clears settlement");
+    await f.emit("agent_start");
+    await f.emit("agent_settled");
+    await f.emit("session_shutdown");
+    assert.equal(f.titles.at(-1), "π - a long completed task 项目配置", "shutdown clears the managed marker");
+    assert.equal(f.terminal.setTitle, f.originalSetTitle);
+    assert.deepEqual(f.errors, []);
+  });
+}
 
 for (const running of [false, true]) {
   test(`expired approval restores the ${running ? "working" : "idle"} title without a matching decision`, async (t) => {
@@ -261,6 +306,7 @@ test("ending one approval never clears another, including a worker ask after par
   titleExtension(f.pi);
   t.after(() => f.emit("session_shutdown"));
   await f.emit("session_start");
+  await f.emit("agent_start");
   f.pi.events.emit("permissions:ui_prompt", { requestId: "local" });
   f.pi.events.emit("permissions:ui_prompt", { requestId: "worker", forwarding: { requesterSessionId: "child" } });
   await f.emit("agent_settled");
@@ -274,7 +320,7 @@ test("ending one approval never clears another, including a worker ask after par
   f.pi.events.emit("permissions:decision", { requestId: "local" });
   assert.equal(f.titles.at(-1), "! - project", "late/duplicate local events leave the worker ask intact");
   f.pi.events.emit("managed-permissions:ui_prompt_end:v1", { requestId: "worker" });
-  assert.equal(f.titles.at(-1), "π - project");
+  assert.equal(f.titles.at(-1), "✓ - project", "completion appears only after the final pending approval ends");
   const writes = f.titles.length;
   f.pi.events.emit("permissions:decision", { requestId: "worker" });
   assert.equal(f.titles.length, writes, "the eventual decision is an idempotent fallback");
