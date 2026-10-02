@@ -26,5 +26,5 @@ try {
   writeFileSync(join(stage, "manifest.json"), JSON.stringify({ version: 1, files }, null, 2) + "\n");
   rmSync(join(packageRoot, "runtime"), { recursive: true, force: true });
   renameSync(stage, join(packageRoot, "runtime"));
-  console.log("Generated private Alehouse runtime (permission authority 32.0.3; web access 0.31.0)");
+  console.log("Generated private Alehouse runtime (permission authority 32.0.3; web access 0.35.0)");
 } finally { rmSync(stage, { recursive: true, force: true }); }

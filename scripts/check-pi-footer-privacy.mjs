@@ -41,6 +41,9 @@ try {
   await emit("after_provider_response", {}, "xai");
   await emit("agent_settled", {}, "xai");
   await emit("after_provider_response", { headers: { "x-codex-primary-used-percent": "10", "x-codex-primary-window-minutes": "300", "x-codex-primary-reset-at": "2000000000" } }, "openai-codex");
+  // OpenAI ChatGPT auth is not a Codex quota source. The same headers must not
+  // publish, and must not read a credential, just because the provider is openai.
+  await emit("after_provider_response", { headers: { "x-codex-primary-used-percent": "10", "x-codex-primary-window-minutes": "300", "x-codex-primary-reset-at": "2000000000" } }, "openai");
   await new Promise((done) => setTimeout(done, 10));
   if (mode === "default") { assert.deepEqual(authReads, []); assert.deepEqual(requests, []); }
   if (mode === "billing") {

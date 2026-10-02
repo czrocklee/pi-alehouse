@@ -37,10 +37,11 @@ fails startup with its own error naming that record. Fresh sessions use the opti
 top-level `defaultMode` and `defaultEagerness` of `harness-presets.json`, else
 Co-worker × balanced. With `off` selected the mode is kept but unused.
 
-The footer shows `co-worker - gpt-medium`: the mode, eagerness only when it is
-not balanced and the mode is not Manual (`lead·eager - gpt-medium`), the preset
-name without its version, and `*` for session effort overrides; `off` shows just
-`off`.
+The footer status value is `delegation: co-worker/gpt-medium`: the mode, eagerness only when it is
+not balanced and the mode is not Manual (`delegation: lead·eager/gpt-medium`), the preset
+name without its version, and `*` for session effort overrides. Off's status value is
+`delegation: off`, displayed as `off` in the footer. The banner deliberately omits the preset
+version; the picker, selection notices, and Agent detail retain it.
 
 ## Model presets
 
@@ -49,7 +50,11 @@ model benchmarking, authentication, a provider fallback, or permission policy.
 The user selects the parent Pi model and thinking normally. The parent tool
 selects only a profile, required integer `difficulty` (1–5), and task. The fixed
 mapping is difficulty 1–2 → the preset's `light` slot, 3 → `standard`, and 4–5
-→ `strong`. The harness resolves one exact worker model from that slot and its
+→ `strong`. Pi virtual selections (`api: "pi-virtual"`) are not supported in
+worker slots: admission rejects them with `PRESET_MODEL_UNAVAILABLE` before
+child creation, rather than allowing a later per-request physical route change.
+Configure an exact physical model; the parent may still use Pi virtual routing.
+The harness resolves one exact worker model from that slot and its
 effort policy: a fixed level or `inherit` from parent thinking. Only inherited
 thinking may use the preset's explicit compatibility map. The fixed difficulty
 mapping, effort defaults, and session overrides participate in `selection_digest`.
@@ -272,7 +277,7 @@ undo the selection. It reports a warning; core admission already follows the
 committed choice, and the next request retries tool reconciliation.
 
 Successful selections append `harness:preset-selection:v1` to the active parent
-branch and publish `delegation: <mode> - <preset>` (or `delegation: off`) under
+branch and publish `delegation: <mode>/<preset>` (or `delegation: off`) under
 the `harness-preset` footer key.
 Off uses the same name/version/digest envelope without model/thinking fields;
 selection entries are non-context metadata. They follow Pi's session storage

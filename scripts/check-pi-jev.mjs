@@ -28,7 +28,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { createRequire, findPackageJSON } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -80,6 +80,7 @@ const jiti = createJiti(import.meta.url, {
   // validator Pi loads, so a version skew must fail here rather than be mocked.
   alias: {
     "@earendil-works/pi-coding-agent": join(piRoot, "dist/index.js"),
+    "@earendil-works/pi-ai/providers/all": join(dirname(findPackageJSON("@earendil-works/pi-ai", pathToFileURL(realpathSync(piExecutable)).href)), "dist/providers/all.js"),
     typebox: require.resolve("typebox"),
     "@earendil-works/pi-tui": require.resolve("@earendil-works/pi-tui"),
   },
@@ -112,10 +113,13 @@ const pinned = (name) => {
   assert(match, `Cannot read ${name} from the rendered extension`);
   return match[1];
 };
-const MODEL_ID = pinned("MODEL_ID");
-const ENDPOINT = pinned("ENDPOINT");
-check("model is version-pinned", /^jev-\d+\.\d+\.\d+$/.test(MODEL_ID), true);
-check("endpoint is the System One decision API", ENDPOINT, "https://api.typesafe.ai/v1/systemone");
+const { JEV_MODEL, JEV_MODEL_ID: MODEL_ID, JEV_ENDPOINT, normalizedAnswers, nativeQuestions, reviewWithNativeJev } = await jiti.import(
+  join(generatedRoot, "extensions/lib/jev-classifier.ts"));
+check("model is version-pinned", MODEL_ID, "jev-1.13.0");
+check("native model metadata is immutable", [JEV_MODEL, JEV_MODEL.input, JEV_MODEL.cost].every(Object.isFrozen), true);
+check("private native model matches audit identity", JEV_MODEL.id, MODEL_ID);
+check("private native model uses the System One API", JEV_MODEL.api, "typesafe-system-one");
+check("endpoint is the System One decision API", JEV_ENDPOINT, "https://api.typesafe.ai/v1/systemone");
 
 /* ---------------------------------------------------------------- *
  * Activation
@@ -354,10 +358,80 @@ const allowAnswers = (taskScope = 0.95) => ({
   constraint_conflict: { noul: 0.01 }, policy_evasion: { noul: 0.01 },
   unbounded_target: { noul: 0.01 }, risk: { score: 0, confidence: 0.99 },
 });
-const mockResponse = (answers) => ({
-  ok: true,
-  json: async () => ({ answers, usage: { input_tokens: 1 } }),
+// Only HTTP mocks use native wire types. Policy unit inputs above remain noul.
+const wireAnswers = (answers) => Object.fromEntries(Object.entries(answers).map(([id, answer]) => [id,
+  id === "risk" ? { type: "score", score: answer.score, confidence: answer.confidence }
+    : { type: "noul", noul: answer.noul },
+]));
+const mockResponse = (answers) => new Response(JSON.stringify({
+  answers: wireAnswers(answers), usage: { input_tokens: 1 },
+}), { status: 200, headers: { "content-type": "application/json" } });
+// Classifier transport regressions are separate from policy-unit noul inputs.
+// Every probe replaces fetch, so none can escape to the network.
+const classifierPacket = { action: "synthetic inspection" };
+const classifierReview = async (handler, signal = new AbortController().signal) => {
+  globalThis.fetch = handler;
+  return reviewWithNativeJev(classifierPacket, QUESTIONS, "offline-test-key-not-a-credential", signal);
+};
+const goodWire = () => wireAnswers(allowAnswers());
+const responseOf = (body, status = 200) => new Response(JSON.stringify(body), { status });
+for (const [label, answers] of [
+  ["missing", (() => { const wire = goodWire(); delete wire.task_scope; return wire; })()],
+  ["wrong wire type", { ...goodWire(), task_scope: { type: "bool", probability: 0.99 } }],
+  ["wrong score type", { ...goodWire(), risk: { type: "noul", noul: 0.99 } }],
+  ["infinite probability", { ...goodWire(), read_only: { type: "noul", noul: "Infinity" } }],
+  ["out-of-range score", { ...goodWire(), risk: { type: "score", score: 5, confidence: 0.99 } }],
+]) {
+  const result = await classifierReview(() => responseOf({ answers }));
+  check(`${label} typed HTTP answer defers`, result.failureCode, "invalid_model_response");
+}
+const billedMalformed = await classifierReview(() => responseOf({
+  answers: { ...goodWire(), task_scope: { type: "bool", probability: 0.99 } },
+  usage: { input_tokens: 41 },
+}));
+check("billed malformed response retains audit usage but no answers", billedMalformed,
+  { failureCode: "invalid_model_response", inputTokens: 41 });
+check("non-2xx status is http_error", (await classifierReview(() => responseOf({}, 503))).failureCode, "http_error");
+check("transport throw is network_error", (await classifierReview(() => { throw new Error("offline transport failure"); })).failureCode, "network_error");
+check("successful HTTP with parser error is invalid_model_response",
+  (await classifierReview(() => new Response("{invalid JSON", { status: 200 }))).failureCode, "invalid_model_response");
+const deadline = new AbortController();
+check("deadline abort is timeout", (await classifierReview((_url, init) => new Promise((_resolve, reject) => {
+  init.signal.addEventListener("abort", () => reject(Object.assign(new Error("synthetic abort"), { name: "AbortError" })));
+  deadline.abort();
+}), deadline.signal)).failureCode, "timeout");
+const wrongIdentity = { api: JEV_MODEL.api, provider: "wrong-provider", model: MODEL_ID,
+  stopReason: "stop", answers: { task_scope: { type: "bool", probability: 0.99 } } };
+check("wrong result identity is rejected before policy composition",
+  normalizedAnswers(wrongIdentity, nativeQuestions(QUESTIONS)), undefined);
+const abortBefore = new AbortController(); abortBefore.abort();
+check("caller abort is cancelled", (await classifierReview(() => { throw new Error("fetch must not run"); }, abortBefore.signal)).failureCode,
+  "cancelled");
+let guardedUrl, guardedInit;
+const guardedResult = await classifierReview((url, init) => {
+  guardedUrl = String(url); guardedInit = init;
+  return mockResponse(allowAnswers());
 });
+check("native typed answers become noul for unchanged policy", guardedResult.answers?.task_scope?.noul, 0.95);
+check("native classifier retains input token audit", guardedResult.inputTokens, 1);
+check("native classifier pins endpoint", guardedUrl, JEV_ENDPOINT);
+check("native classifier blocks redirects", guardedInit.redirect, "error");
+check("native classifier sends the pinned model", JSON.parse(guardedInit.body).model, MODEL_ID);
+check("native classifier sends wire noul", JSON.parse(guardedInit.body).questions.task_scope.type, "noul");
+
+// A shadow review returns its ask immediately. The native provider may await a
+// lazy import before dispatch, while the next review installs its own HTTP mock.
+// Each request must retain the transport present at its own admission point.
+let firstTransportCalls = 0, secondTransportCalls = 0;
+globalThis.fetch = async () => { firstTransportCalls++; return mockResponse(allowAnswers(0.01)); };
+const firstTransport = reviewWithNativeJev(classifierPacket, QUESTIONS, "offline-test-key-not-a-credential", new AbortController().signal);
+globalThis.fetch = async () => { secondTransportCalls++; return mockResponse(allowAnswers()); };
+const secondTransport = reviewWithNativeJev(classifierPacket, QUESTIONS, "offline-test-key-not-a-credential", new AbortController().signal);
+const [firstAnswer, secondAnswer] = await Promise.all([firstTransport, secondTransport]);
+check("first overlapping review keeps its under-threshold HTTP response", firstAnswer.answers?.task_scope?.noul, 0.01);
+check("second overlapping review keeps its own HTTP response", secondAnswer.answers?.task_scope?.noul, 0.95);
+check("overlapping reviews each use only their bound fetch", [firstTransportCalls, secondTransportCalls], [1, 1]);
+
 let harnessSerial = 0;
 const defaultSystemPrompt = () => `<project_context>
 <project_instructions path="/fixture/AGENTS.md">
@@ -1128,13 +1202,9 @@ assert(keyFile && existsSync(keyFile),
 const apiKey = readFileSync(keyFile, "utf8").trim();
 
 const ask = async (state) => {
-  const response = await fetch(ENDPOINT, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: MODEL_ID, state, questions: QUESTIONS }),
-  });
-  assert(response.ok, `${ENDPOINT} returned HTTP ${response.status}`);
-  return response.json();
+  const result = await reviewWithNativeJev(state, QUESTIONS, apiKey, new AbortController().signal);
+  assert(result.answers, `Jev classification failed: ${result.failureCode}`);
+  return result;
 };
 
 const packet = (userText, command, extra = {}) => ({
@@ -1300,7 +1370,7 @@ if (wants("--replay")) {
   const decision = combineVerdict(result.answers, call.name);
   console.log(`\nverdict: ${decision.verdict.toUpperCase()}  reason: ${decision.reasonCode}  lane: ${decision.lane ?? "-"}`);
   console.table([scores(result.answers)]);
-  console.log(`input_tokens: ${result.usage?.input_tokens}`);
+  console.log(`input_tokens: ${result.inputTokens}`);
 }
 
 if (wants("--corpus")) {
@@ -1347,7 +1417,7 @@ if (wants("--corpus")) {
     if (sample.failureCode) { bump(failures, sample.failureCode); continue; }
     const result = await ask(sample.state);
     reviewed++;
-    tokens += result.usage?.input_tokens ?? 0;
+    tokens += result.inputTokens ?? 0;
     const decision = combineVerdict(result.answers, sample.call.name);
     bump(verdicts, decision.verdict);
     bump(reasons, decision.reasonCode);

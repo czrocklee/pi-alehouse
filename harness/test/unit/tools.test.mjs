@@ -730,6 +730,25 @@ test("missing preset models fail without exposing the catalogue", async (t) => {
   });
 });
 
+test("a virtual selected preset is rejected even when its thinking levels match", async (t) => {
+  const f = await fixture(t), { state, call } = toolsFor(f);
+  state.thinking = "high";
+  state.catalog = [
+    { provider: "router", id: "auto", api: "pi-virtual", levels: ["off", "high", "xhigh", "max"] },
+    { provider: "typesafe", id: "jev-latest", api: "typesafe-system-one", type: "classifier", levels: ["high"] },
+  ];
+  state.preset = preset("virtual-team", "router/auto", "v9");
+  await assert.rejects(call("agent_spawn", create()), (error) => {
+    assert.deepEqual(JSON.parse(error.message).error, {
+      code: "PRESET_MODEL_UNAVAILABLE", reason: "virtual_model", difficulty: 3,
+      resolution: "Ask the user to configure a physical model for this worker preset slot. Virtual models route each request and cannot be pinned to an Agent. Do not change difficulty to bypass configuration errors.",
+    });
+    assert.doesNotMatch(error.message, /router\/auto|pi-virtual|jev-latest|model_kind/);
+    return true;
+  });
+  assert.equal(f.ports.length, 0);
+});
+
 test("wait defaults are tool-local; waiting on delegate does not alter task identity", async (t) => {
   const f = await fixture(t), { call } = toolsFor(f);
   assert.deepEqual(await call("agent_wait", {}, "empty"), { reason: "nothing_running", agents: [] });

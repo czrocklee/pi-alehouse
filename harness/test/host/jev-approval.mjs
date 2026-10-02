@@ -90,11 +90,16 @@ let review = async () => ({ answers: allowAnswers, usage: { input_tokens: 41 } }
 globalThis.fetch = async (url, options = {}) => {
   assert.equal(String(url), "https://api.typesafe.ai/v1/systemone");
   assert.equal(options.method, "POST");
-  assert.equal(options.headers?.Authorization, `Bearer ${fakeKey}`);
-  assert.equal(options.headers?.["Content-Type"], "application/json");
+  assert.equal(new Headers(options.headers).get("authorization"), `Bearer ${fakeKey}`);
+  assert.equal(new Headers(options.headers).get("content-type"), "application/json");
+  assert.equal(options.redirect, "error", "Jev must refuse redirect-following");
   const body = JSON.parse(options.body);
   assert.equal(body.model, "jev-1.13.0");
   assert(body.state && body.questions);
+  for (const [id, question] of Object.entries(body.questions)) {
+    assert.equal(question.type, id === "risk" ? "score" : "noul",
+      "native bool questions must use wire noul");
+  }
   const witnessRegistry = globalThis[Symbol.for("@rocklee/jev-auto-approval:child-runtime-facts")];
   const witnesses = witnessRegistry instanceof Map
     ? [...witnessRegistry.entries()].map(([sessionId, facts]) => ({ sessionId, facts: structuredClone(facts) }))
@@ -102,7 +107,9 @@ globalThis.fetch = async (url, options = {}) => {
   const call = { state: structuredClone(body.state), witnesses, signal: options.signal, at: Date.now() };
   fetchCalls.push(call);
   const response = await review(call);
-  return { ok: true, status: 200, json: async () => structuredClone(response) };
+  return new Response(JSON.stringify(structuredClone(response)), {
+    status: 200, headers: { "content-type": "application/json" },
+  });
 };
 
 const host = await loadHost(piExecutable), { sdk, ai, permission } = host;

@@ -83,6 +83,23 @@ test("effort editor capabilities use exact host metadata and distinguish inherit
   }
 });
 
+test("virtual worker effort preview exposes no levels and fixed selection fails before audit", async (t) => {
+  const { router } = await fixture(t), preset = router.current();
+  const input = { ...registry(), models: [{ provider: "fixture", id: "worker", api: "pi-virtual" }],
+    supportedThinking: () => assert.fail("virtual effort must not be queried") };
+  assert.deepEqual(workerEffortCapabilities(preset, "standard", input), {
+    levels: [], error: "Choose a physical worker model; virtual models route each request.",
+  });
+  const audited = [], latched = [];
+  assert.throws(() => applyAuditedPreset({
+    controller: { assertOwnerAvailable() {}, latchParentHistoryFailure: (error) => latched.push(error) },
+    router, candidate: router.prepare(), name: "team", effort_overrides: { light: "high" },
+    validate: (selected) => validateWorkerEfforts(selected, input), audit: (snapshot) => audited.push(snapshot),
+  }), (error) => error.code === "PRESET_MODEL_UNAVAILABLE" && /physical worker model/.test(error.details.error));
+  assert.deepEqual(audited, []); assert.deepEqual(latched, []);
+  assert.deepEqual(router.current(), preset);
+});
+
 test("light-only Apply and restored validation ignore strong inherit/off incompatibility; admission still resolves it", async (t) => {
   const { path } = await fixture(t), custom = team();
   custom.models.strong = "openai-codex/fixture-strong-model";

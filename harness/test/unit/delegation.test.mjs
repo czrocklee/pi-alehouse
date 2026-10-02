@@ -27,10 +27,13 @@ test("each autonomous guideline is one division sentence plus one eagerness sent
   assert.deepEqual(defaultDelegation, { mode: "co-worker", eagerness: "balanced" });
 });
 
-test("status is `mode - preset`, adds eagerness only off its default, and Off hides the mode", () => {
-  assert.equal(delegationStatus(preset("gpt-medium"), defaultDelegation), "delegation: co-worker - gpt-medium");
+test("status is versionless `mode/preset`, adds eagerness only off its default, and Off hides the mode", () => {
+  assert.equal(delegationStatus(preset("gpt-medium"), defaultDelegation), "delegation: co-worker/gpt-medium");
+  const selected = { ...preset("glm-mix"), version: "2026-10-v7" };
+  assert.equal(delegationStatus(selected, { mode: "lead", eagerness: "balanced" }), "delegation: lead/glm-mix");
+  assert.equal(selected.version, "2026-10-v7", "hiding a version must not mutate the selected preset");
   assert.equal(delegationStatus(preset("gpt-medium", { light: "high" }), { mode: "lead", eagerness: "eager" }),
-    "delegation: lead·eager - gpt-medium*");
+    "delegation: lead·eager/gpt-medium*");
   assert.equal(delegationStatus(off, { mode: "supervisor", eagerness: "eager" }), "delegation: off");
   assert.equal(delegationLabel({ mode: "manual", eagerness: "eager" }), "manual", "eagerness is meaningless in Manual");
 });

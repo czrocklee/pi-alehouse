@@ -329,7 +329,7 @@ try {
   await parent.prompt("/harness-preset entry-fixture");
   expectedWorkers = "on";
   assert.deepEqual(parent.getActiveToolNames().filter((name) => !delegationTools.includes(name)), selectedOtherTools);
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture");
   const shortcuts = parent.extensionRunner.getShortcuts(keybindings.getEffectiveConfig());
   assert(shortcuts.has("alt+s"), "Alt+S worker-preset shortcut is registered");
   assert(shortcuts.has("alt+a"), "Alt+A detail shortcut is retained");
@@ -341,23 +341,23 @@ try {
   const initialAudit = selectedEntries().length;
   await parent.prompt("/harness-preset typo");
   assert.equal(JSON.parse(notices.at(-1)).code, "PRESET_NOT_FOUND");
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture"); assert.equal(selectedEntries().length, initialAudit);
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture"); assert.equal(selectedEntries().length, initialAudit);
   presetSelections.push(undefined);
   await parent.prompt("/harness-preset");
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture"); assert.equal(selectedEntries().length, initialAudit);
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture"); assert.equal(selectedEntries().length, initialAudit);
 
   // Reload commits v2 atomically. Removing the active preset makes reload fail
   // without changing status/audit, while an explicit switch-away succeeds.
   await parent.prompt("/harness-preset reload");
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture");
   assert.equal(selectedEntries().at(-1).data.version, "v2");
   const reloadAudit = selectedEntries().length;
   writePresets({ "entry-other": preset("v3") });
   await parent.prompt("/harness-preset reload");
   assert.equal(JSON.parse(notices.at(-1)).code, "PRESET_NOT_FOUND");
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture"); assert.equal(selectedEntries().length, reloadAudit);
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture"); assert.equal(selectedEntries().length, reloadAudit);
   await parent.prompt("/harness-preset entry-other");
-  assert.equal(presetStatus(), "delegation: co-worker - entry-other"); assert.equal(selectedEntries().at(-1).data.version, "v3");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-other"); assert.equal(selectedEntries().at(-1).data.version, "v3");
   // Drive the registered shortcut through the packaged extension. Reintroduce
   // two presets and choose the lexically earlier row to cover backward targets;
   // the mock presses Home before deterministic downward navigation.
@@ -367,7 +367,7 @@ try {
   presetSelections.push("entry-fixture");
   shortcuts.get("alt+s").handler({});
   await waitUntil(() => selectedEntries().length === shortcutAudit + 1, "Alt+S preset selection");
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture");
   assert.equal(parent.model, model, "worker picker must not change the parent model");
 
   // The same registered shortcut closes its own mounted picker without commit
@@ -379,7 +379,7 @@ try {
   shortcuts.get("alt+s").handler({});
   await waitUntil(() => !focusedPicker && activePickerCustoms === 0, "focused picker toggle close");
   assert.equal(selectedEntries().length, toggleAudit); assert.equal(notices.length, noticesBeforeToggle);
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture");
 
   const queued = { queued: true, entered: Promise.withResolvers(), release: Promise.withResolvers() };
   presetSelections.push(queued);
@@ -405,7 +405,7 @@ try {
   failPresetStatus = false;
   assert.equal(selectedEntries().length, beforeFooterAudit + 1);
   assert.equal(selectedEntries().at(-1).data.version, "v5");
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture", "failed footer paint leaves only stale UI, not stale routing");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture", "failed footer paint leaves only stale UI, not stale routing");
   assert.match(notices.at(-1), /entry-fixture@v5 selected.*footer could not update.*ENTRY_FOOTER_PAINT_FAILURE/);
 
   // The nonreasoning model in the installed registry supports only "off".
@@ -422,18 +422,18 @@ try {
     expectPaint: { 3: "standard:off" }, expectResult: null });
   await parent.prompt("/harness-preset");
   assert.equal(selectedEntries().length, beforeEdit);
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture", "cancel cannot repair a previously failed footer paint");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture", "cancel cannot repair a previously failed footer paint");
   presetSelections.push({ target: "entry-fixture", steps: ["e", "down", "right", "right", "right", "enter"],
     expectPaint: { 0: "Effort · entry-fixture", 2: "standard:inherit", 3: "standard:off", 4: "standard:off" },
     expectResult: { name: "entry-fixture", effort_overrides: { standard: "off" } } });
   await parent.prompt("/harness-preset");
   assert.equal(selectedEntries().length, beforeEdit + 1);
   assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { standard: "off" });
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture*");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
   await parent.prompt("/harness-preset entry-other");
-  assert.equal(presetStatus(), "delegation: co-worker - entry-other");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-other");
   await parent.prompt("/harness-preset entry-fixture");
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture*", "switch-away/back remembers this preset's effort");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*", "switch-away/back remembers this preset's effort");
   assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { standard: "off" });
 
   // A fresh unused Owner permits a real SDK InteractiveMode replacement. Fork
@@ -446,7 +446,7 @@ try {
   assert.notEqual(parent, beforeEffortReplacement);
   assert.equal(permission.getPermissionsService(beforeEffortReplacement.sessionId), undefined);
   assert.notEqual(permission.getPermissionsService(parent.sessionId), beforeEffortService);
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture*");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
   assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { standard: "off" });
   assert.equal(parent.model, model, "editing worker effort must not change the parent model");
   assert.equal(notices.slice(beforeEffortRestoreNotices).some((message) => message.includes("Saved worker effort needs attention")), false,
@@ -455,7 +455,7 @@ try {
   // rereads metadata without changing the successfully saved standard override.
   writePresets({ "entry-fixture": preset("v5"), "entry-other": preset("v3") });
   await parent.prompt("/harness-preset reload");
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture*");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
   // Pi's transient active-tool choice is not saved in the session journal;
   // reselect the same unrelated tools after replacement before testing Off.
   parent.setActiveToolsByName([...selectedOtherTools, ...parent.getActiveToolNames().filter((name) => delegationTools.includes(name))]);
@@ -537,7 +537,7 @@ try {
   assert.deepEqual(next, { agent: "entry", status: "completed", result: "ENTRY_READ_OK" });
   assert.deepEqual(lastLink().data.routing, fixedLink.data.routing, "reenabling a different preset must not reconfigure a reused fixed-effort Agent");
   await parent.prompt("/harness-preset entry-fixture");
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture*");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
   // An explicit inherit is distinct from the preset default in the audit, but
   // has identity resolution. Reset removes that override and clears the star.
   const inheritAudit = selectedEntries().length;
@@ -547,7 +547,7 @@ try {
   await parent.prompt("/harness-preset");
   assert.equal(selectedEntries().length, inheritAudit + 1);
   assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { standard: "inherit" });
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture*");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
   const inherited = await invoke("agent_spawn", { agent: "inherit", profile: "reader", difficulty: 3,
     prompt: "Read source.txt", label: "Explicit inherit control", max_turns: 4, wait_ms: 60000 });
   assert.deepEqual(inherited, { agent: "inherit", status: "completed", result: "ENTRY_READ_OK" }, "effort provenance never reaches the model");
@@ -560,7 +560,7 @@ try {
     expectPaint: { 1: "standard:default" }, expectResult: { name: "entry-fixture", effort_overrides: {} } });
   await parent.prompt("/harness-preset");
   assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, {});
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture");
   // Reset affects only future Agents, not the resident child whose Run was
   // fixed at admission. Read-only list projection must keep that old setting.
   const retained = await invoke("agent_list", {});
@@ -568,7 +568,7 @@ try {
   assert.deepEqual(uiEvidence.pickerModes, Array(9).fill("docked"),
     "all edited/cancelled choices used the installed component, not a fabricated UI return");
   const effortEditing = { fixed_routing: fixedLink.data.routing, inherited_routing: inheritedLink.data.routing,
-    restored_status: "delegation: co-worker - entry-fixture*", reset_status: presetStatus(),
+    restored_status: "delegation: co-worker/entry-fixture*", reset_status: presetStatus(),
     reset_overrides: selectedEntries().at(-1).data.effort_overrides };
   // Positive control: require a NEW parent refresh after this resume completes;
   // an older refresh cannot stand in for the child's newly reset idle timer.
@@ -627,7 +627,7 @@ try {
   // call still throws before AgentSession can emit entry_appended. The live
   // router remains v5 and the shared owner is latched permanently.
   await parent.prompt("/harness-preset reload");
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture");
   writePresets({ "entry-fixture": preset("v5"), "entry-other": preset("v6") });
   const appendCustomEntry = parent.sessionManager.appendCustomEntry.bind(parent.sessionManager);
   const beforeAmbiguousAudit = selectedEntries().length;
@@ -647,7 +647,7 @@ try {
   assert.match(auditFailure.resolution, /ambiguous outcome.*live worker preset was not published.*restart Pi/);
   assert.equal(selectedEntries().length, beforeAmbiguousAudit + 1,
     "SDK ambiguity may leave historical evidence even though live publication was withheld");
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture", "ambiguous audit failure preserves the old live router/footer");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture", "ambiguous audit failure preserves the old live router/footer");
   await parent.prompt("/harness-status");
   assert.match(JSON.parse(notices.at(-1)).parent_error, /ENTRY_AUDIT_AFTER_APPEND_FAILURE/);
   const blockedAuditCount = selectedEntries().length;
@@ -679,7 +679,7 @@ try {
   // Readiness can be re-announced on queries; every distinct parent must pass.
   assert.deepEqual([...new Set(readyParents)], [...priorReadyParents, parent.sessionId]);
   const fresh = await status(); assert.equal(fresh.closed, false); assert.equal(fresh.resident, 0);
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture", "fresh session uses the configured default without the previous branch's selection or effort overrides");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture", "fresh session uses the configured default without the previous branch's selection or effort overrides");
   const replacementList = await invoke("agent_list", {});
   assert.deepEqual(replacementList.agents, []);
   await parent.prompt("/harness-preset entry-other");
@@ -708,7 +708,7 @@ try {
   restoreManager.appendCustomEntry(presetEntry, { name: "entry-fixture", effort_overrides: { standard: "off" } });
   const restored = await createRuntime({ cwd, sessionManager: restoreManager, sessionStartEvent: { type: "session_start", reason: "startup" } });
   await bind(restored.session);
-  assert.equal(presetStatus(), "delegation: co-worker - entry-fixture*");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
   for (const name of delegationTools) assert(restored.session.getActiveToolNames().includes(name));
   assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { standard: "off" },
     "active SDK branch must not replay the abandoned preset's effort");

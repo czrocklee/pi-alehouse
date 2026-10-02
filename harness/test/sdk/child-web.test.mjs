@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { validateToolArguments } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { ChildWebModules, childWebExtension, nativeWebLoader, researcherWebProblem } from "../../dist/runtime/child-web.js";
 import { researcherHostModules } from "../../dist/runtime/host-modules.js";
 import { webToolNames } from "../../dist/tools/tool-names.js";
@@ -91,6 +92,32 @@ export const unsupplied = () => import("@earendil-works/pi-agent-core");`);
     assert.equal((await nativeWebLoader({ ...firstHost })(href)).agent, probe.agent, "the same objects reuse their generation");
     await assert.rejects(nativeWebLoader({ "not-host": {} })(href), /Not a host module/);
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("supported dynamic activation never changes the researcher's fixed tool table", async () => {
+  const config = join(process.env.PI_CODING_AGENT_DIR, "web-search.json");
+  mkdirSync(dirname(config), { recursive: true });
+  try {
+    for (const mode of ["auto", "dynamic", "eager"]) {
+      writeFileSync(config, JSON.stringify({ toolActivation: mode }));
+      const { factory } = await new ChildWebModules(entry, load).acquire();
+      const { api, tools } = recordingApi(), handlers = new Map(), changes = [];
+      api.on = (event, handler) => {
+        const set = handlers.get(event) ?? new Set(); set.add(handler); handlers.set(event, set);
+        return () => set.delete(handler);
+      };
+      api.setActiveTools = (names) => changes.push([...names]);
+      await childWebExtension(factory)(api);
+      assert.deepEqual([...tools.keys()].sort(), [...webToolNames].sort(), mode);
+      const ctx = { sessionManager: SessionManager.inMemory(home), model: { api: "openai-responses", compat: {
+        supportsMidConvoSystemMessages: true, supportsAdditionalTools: true,
+      } } };
+      for (const event of ["session_start", "session_tree", "before_agent_start"]) {
+        for (const handler of handlers.get(event) ?? []) await handler({}, ctx);
+      }
+      assert.deepEqual(changes, [], `${mode}: dropped loader must prevent activation handlers changing child tools`);
+    }
+  } finally { rmSync(config, { force: true }); }
 });
 
 test("a loader that collapses the instance query fails closed", async () => {

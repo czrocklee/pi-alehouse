@@ -15,7 +15,7 @@ absolute `composition.ts` path, rejecting additional extension paths. It supplie
 matched generated authority/policy paths and an absolute trusted util-linux
 `flock`; direct harness extension loading without the launcher fails rather than
 guessing paths. Parent web integration uses package-local pinned `pi-web-access`
-0.31.0; only `researcher` children receive web tools (below). The CLI does not make a temporary npm install,
+0.35.0; only `researcher` children receive web tools (below). The CLI does not make a temporary npm install,
 copy authentication, overwrite existing user resources, or enable arbitrary
 extension discovery. Explicit initialization creates only absent resources;
 the neutral routing catalogue defaults to `off`. Install a **built tarball** with
@@ -202,7 +202,14 @@ available, calibrated, or authorized for every request. Without a protected
 defers to ordinary human permission handling; stale/incomplete provenance,
 project-rule omissions, and over-limit material also defer. When configured
 and invoked, Jev sends bounded action and relevant review context (including
-potentially sensitive instructions/prompt material) to its external endpoint.
+potentially sensitive instructions/prompt material) to
+`https://api.typesafe.ai/v1/systemone` using fixed `jev-1.13.0`. Transport uses
+a private TypeSafe provider from the host Pi 1.0 classifier API, not the shared
+model/auth registry. The protected key-file is read lazily; environment keys
+and provider fallbacks are not used. Requests retain a two-second cancellation
+budget, no retries and exact-endpoint/no-redirect checks. Native boolean answers
+are validated and converted to the existing policy verdict inputs; native
+transport does not confer approval authority.
 Opt in only after evaluating that data handling.  Never reinterpret the harness profile or
 Run identity as the retired subagents authorization protocol to obtain a grant.
 

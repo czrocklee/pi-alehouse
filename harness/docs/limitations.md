@@ -111,7 +111,7 @@ tool execution, including parallel calls, which has not been verified.
 
 ## Host SDK and runtime scope
 
-Development API checks target Pi/AI/TUI 0.87.1 and TypeBox 1.3.27.  The launcher
+Development API checks target Pi/AI/TUI 1.0.0 and TypeBox 1.3.27.  The launcher
 uses the installed host SDK, not a bundled second SDK or a runtime version lock.
 There is no version allowlist, compatibility fallback, or historical support
 matrix.  Required APIs fail closed when absent/changed.  In particular, the
@@ -131,7 +131,10 @@ Mistral-hosted GLM constrains all tool arguments to declared property order
 Pi's built-in tools are; arguments written out of order are dropped silently.
 For `mistral-conversations` requests the parent and every child therefore send
 non-strict tool schemas open (`additionalProperties: true`) and without
-`pattern`. Only the wire copy changes: Pi validates arguments against the
+`pattern`. This shim keys on `ctx.model.api`; a virtual parent selection that
+routes to Mistral does not expose that physical API at this boundary, so the
+virtual-to-Mistral workaround remains unvalidated. Worker virtual slots are
+rejected rather than relying on per-request dispatch. Only the wire copy changes: Pi validates arguments against the
 registered schemas, and strict tools are sent unchanged.
 
 Native compaction/retry remains SDK behavior inside a Run.  The SDK does not

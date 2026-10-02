@@ -75,7 +75,7 @@ for (const fault of ["widget", "panel", "all"]) test(`quit drains before later S
   const theme = { fg: (_color, text) => text, bold: (text) => text };
   const ctx = { cwd: root, mode: "tui", hasUI: true, isProjectTrusted: () => false,
     sessionManager: { getSessionId: () => h.owner_id, getBranch: () => [], getSessionFile: () => undefined },
-    modelRegistry: { runtime: { getModel() {}, streamSimple() {} } },
+    modelRegistry: { runtime: { getModel() {}, getPhysicalModel() {}, streamSimple() {} } },
     ui: {
       setStatus(_key, value) {
         if (value !== undefined) return;

@@ -13,7 +13,7 @@ import { HarnessError } from "./core/ports.js";
 import { historicalRunsCommand } from "./history/history-command.js";
 import { reportUnreportedUsage } from "./history/usage-audit.js";
 import { ApprovalBindings } from "./permissions/approval-provenance.js";
-import { isOffPreset, presetLabel, PresetRouter, resolveSlotRoute, strengths, thinkingLevels, validEffortOverrides,
+import { isOffPreset, presetLabel, PresetRouter, resolveSlotRoute, selectPhysicalWorkerModel, strengths, thinkingLevels, validEffortOverrides,
   type EffortOverrides, type PresetCandidate, type PresetSelection, type PresetSnapshot, type Strength } from "./routing.js";
 import { ChildActivityRegistry } from "./runtime/activity-observer.js";
 import { createChildSessionFactory } from "./runtime/child-factory.js";
@@ -86,7 +86,7 @@ export function restorePresetRouter(path: string, selections: readonly unknown[]
   return router;
 }
 
-type EffortModels<M extends { provider: string; id: string }> = {
+type EffortModels<M extends { provider: string; id: string; api?: string }> = {
   models: readonly M[];
   parentThinking: string | undefined;
   supportedThinking: (model: M) => readonly string[];
@@ -95,7 +95,9 @@ type EffortModels<M extends { provider: string; id: string }> = {
 function effortIssue(error: unknown): string {
   if (error instanceof HarnessError) {
     if (error.code === "PARENT_THINKING_UNAVAILABLE") return "Parent thinking is unavailable.";
-    if (error.code === "PRESET_MODEL_UNAVAILABLE") return "Worker model is unavailable or ambiguous in Pi's registry.";
+    if (error.code === "PRESET_MODEL_UNAVAILABLE") return error.details.reason === "virtual_model"
+      ? "Choose a physical worker model; virtual models route each request."
+      : "Worker model is unavailable or ambiguous in Pi's registry.";
     if (error.code === "THINKING_INCOMPATIBLE") return error.details.reason === "fixed_effort_unsupported"
       ? "The worker model does not support this fixed effort."
       : "Current parent thinking has no supported inherited level or compatibility mapping.";
@@ -105,12 +107,16 @@ function effortIssue(error: unknown): string {
 
 /** UI capability data comes from the host registry, not another model catalogue.
  * Inherited effort is advisory only; admission resolves it at spawn time. */
-export function workerEffortCapabilities<M extends { provider: string; id: string }>(
+export function workerEffortCapabilities<M extends { provider: string; id: string; api?: string }>(
   preset: PresetSnapshot, slot: Strength, input: EffortModels<M>,
 ): EffortCapabilities {
-  const models = input.models.filter((model) => `${model.provider}/${model.id}` === preset.models[slot]);
-  if (models.length !== 1) return { levels: [], error: "Worker model is unavailable or ambiguous in Pi's registry." };
-  const supported = input.supportedThinking(models[0]!);
+  let model: M;
+  try { model = selectPhysicalWorkerModel(input.models, preset.models[slot], preset); }
+  catch (error) {
+    if (!(error instanceof HarnessError)) throw error;
+    return { levels: [], error: effortIssue(error) };
+  }
+  const supported = input.supportedThinking(model);
   const levels = thinkingLevels.filter((level) => supported.includes(level));
   try {
     const inherited = resolveSlotRoute({ ...input, strength: slot,
@@ -421,7 +427,8 @@ export default function harnessExtension(pi: ExtensionAPI) {
     parentPermission = () => permission.getPermissionsService(parentId);
     // No public canonical-runtime getter: reuse the parent's runtime, not copied auth.
     const runtime = (ctx.modelRegistry as unknown as { runtime: ModelRuntime }).runtime;
-    assert(runtime && typeof runtime.getModel === "function" && typeof runtime.streamSimple === "function", "SDK ModelRegistry.runtime is unavailable");
+    assert(runtime && typeof runtime.getModel === "function" && typeof runtime.getPhysicalModel === "function" &&
+      typeof runtime.streamSimple === "function", "SDK ModelRegistry.runtime physical-model capabilities are unavailable");
     const profiles = Object.fromEntries(agentProfileNames.map((name) => {
       const definition = readFileSync(join(agentDir, "agents", `${name}.md`), "utf8");
       const parsed = parseFrontmatter<{ tools: string[] }>(definition);
