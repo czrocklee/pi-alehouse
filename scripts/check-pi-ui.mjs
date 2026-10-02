@@ -106,7 +106,90 @@ function fixture(mode = "tui", sdkDispatch = false) {
   };
 }
 
-const plainTitle = (title) => title.replace(/[\u0332\u0333]/g, "");
+const TITLE_MARKS = /[\u0305\u0332\u0333\u033f]/;
+const plainTitle = (title) => title.replace(/[\u0305\u0332\u0333\u033f]/g, "");
+
+test("title highlight circles the bottom and top with connected corner frames", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const f = fixture();
+  titleExtension(f.pi);
+  t.after(() => f.emit("session_shutdown"));
+  f.rename("abcd");
+  await f.emit("session_start");
+  await f.emit("agent_start");
+  const firstFrame = "π - a\u0333\u0305b\u0332cd";
+  assert.equal(f.titles.at(-1), firstFrame, "starts at the bottom-left corner");
+  t.mock.timers.tick(33 * 6);
+  assert.equal(f.titles.at(-1), "π - abc\u0332d\u0333\u0305", "bottom sweep reaches the right corner");
+  t.mock.timers.tick(33);
+  assert.equal(f.titles.at(-1), "π - abcd\u0332\u0305", "half-cell frame bridges the right corner");
+  t.mock.timers.tick(33);
+  assert.equal(f.titles.at(-1), "π - abc\u0305d\u0332\u033f", "top sweep starts on the right");
+  t.mock.timers.tick(33 * 6);
+  assert.equal(f.titles.at(-1), "π - a\u0332\u033fb\u0305cd", "top sweep returns to the left corner");
+  t.mock.timers.tick(33);
+  assert.equal(f.titles.at(-1), "π - a\u0332\u0305bcd", "half-cell frame bridges the left corner");
+  t.mock.timers.tick(33);
+  assert.equal(f.titles.at(-1), "π - abcd", "pause starts only after a complete circuit");
+  const pausedCount = f.titles.length;
+  t.mock.timers.tick(33 * 59);
+  assert.equal(f.titles.length, pausedCount, "the existing 1,980ms pause does not repaint");
+  t.mock.timers.tick(33);
+  assert.equal(f.titles.at(-1), firstFrame, "next circuit restarts at the bottom-left corner");
+});
+
+for (const label of ["a", "ab", "project", "two words", "项目配置", "abcdefghijklmnop", "long-title-".repeat(8)]) {
+  test(`circling title preserves glyphs and width for ${JSON.stringify(label)}`, async (t) => {
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    const f = fixture();
+    titleExtension(f.pi);
+    t.after(() => f.emit("session_shutdown"));
+    f.rename(label);
+    await f.emit("session_start");
+    const idleTitle = f.titles.at(-1);
+    assert.equal(idleTitle, `π - ${label}`, "the full label is preserved without truncation");
+    const characters = Array.from(idleTitle.slice(4));
+    // Describe the traversal explicitly, independently of the implementation's
+    // circular-distance calculation. Each glyph has a bottom and a top slot.
+    const bottom = characters.map((_, index) => ({ index, single: "\u0332", double: "\u0333" }));
+    const top = characters.map((_, index) => ({ index, single: "\u0305", double: "\u033f" })).reverse();
+    const circuit = [...bottom, ...top];
+    await f.emit("agent_start");
+    const firstFrame = f.titles.at(-1);
+    for (let frame = 0; frame < characters.length * 4; frame += 1) {
+      const title = f.titles.at(-1);
+      assert(title.startsWith("π - "), "application prefix is never animated");
+      assert.equal(plainTitle(title), idleTitle, `label unchanged at frame ${frame}`);
+      assert.equal(visibleWidth(title), visibleWidth(idleTitle), `width unchanged at frame ${frame}`);
+      assert(!/\s[\u0305\u0332\u0333\u033f]/u.test(title), "spaces are not decorated");
+      const position = Math.floor(frame / 2);
+      const offsets = frame % 2 === 0 ? [-1, 0, 1] : [0, 1];
+      // A one-glyph circuit has only two slots: its two neighbors coincide.
+      const activeSlots = new Set(offsets.map((offset) =>
+        (position + offset + circuit.length) % circuit.length));
+      const expectedMarks = characters.map(() => []);
+      for (const slot of activeSlots) {
+        const { index, single, double } = circuit[slot];
+        if (/\s/u.test(characters[index])) continue;
+        expectedMarks[index].push(frame % 2 === 0 && slot === position ? double : single);
+      }
+      const cells = [...title.slice(4).matchAll(/([^\u0305\u0332\u0333\u033f])([\u0305\u0332\u0333\u033f]*)/gu)];
+      assert.equal(cells.length, characters.length);
+      for (let index = 0; index < characters.length; index += 1) {
+        assert.deepEqual([...cells[index][2]].sort(), expectedMarks[index].sort(),
+          `exact center and neighbor marks at frame ${frame}, glyph ${index}`);
+      }
+      t.mock.timers.tick(33);
+    }
+    assert.equal(f.titles.at(-1), idleTitle, "full circuit finishes on the static title");
+    const pausedCount = f.titles.length;
+    t.mock.timers.tick(33 * 59);
+    assert.equal(f.titles.length, pausedCount, "pause does not repaint at any label length");
+    t.mock.timers.tick(33);
+    assert.equal(f.titles.length, pausedCount + 1, "pause ends after exactly 1,980ms");
+    assert.equal(f.titles.at(-1), firstFrame, "next circuit restarts at the same corner");
+  });
+}
 
 test("title keeps π while working and replaces it with ! during approval", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
@@ -121,7 +204,7 @@ test("title keeps π while working and replaces it with ! during approval", asyn
   assert.deepEqual([...f.widgets.values()][0].render(80), []);
   await f.emit("agent_start");
   t.mock.timers.tick(33 * 8);
-  assert.match(f.titles.at(-1), /[\u0332\u0333]/);
+  assert.match(f.titles.at(-1), TITLE_MARKS);
   assert.equal(plainTitle(f.titles.at(-1)), "π - project");
   // A core title write during streaming must preserve the current frame too.
   const animated = f.titles.at(-1);
@@ -131,6 +214,7 @@ test("title keeps π while working and replaces it with ! during approval", asyn
   f.terminal.setTitle("π - 新任务 - project");
   await f.emit("session_info_changed");
   assert.equal(plainTitle(f.titles.at(-1)), "π - 新任务");
+  assert.match(f.titles.at(-1), /[\u0305\u033f]/, "renamed short label is on the upper sweep");
   f.pi.events.emit("permissions:ui_prompt", { requestId: "a" });
   f.pi.events.emit("permissions:ui_prompt", { requestId: "b" });
   assert.equal(f.titles.at(-1), "! - 新任务");
@@ -141,7 +225,7 @@ test("title keeps π while working and replaces it with ! during approval", asyn
   assert.equal(f.titles.at(-1), "! - 新任务");
   f.pi.events.emit("permissions:decision", { requestId: "b" });
   t.mock.timers.tick(33 * 8);
-  assert.match(f.titles.at(-1), /[\u0332\u0333]/);
+  assert.match(f.titles.at(-1), /[\u0305\u033f]/, "working title resumes its upper sweep after approval");
   await f.emit("agent_settled");
   assert.equal(f.titles.at(-1), "π - 新任务");
   const settledCount = f.titles.length;
@@ -166,7 +250,7 @@ for (const running of [false, true]) {
     f.pi.events.emit("managed-permissions:ui_prompt_end:v1", { requestId: "expired" });
     assert.equal(plainTitle(f.titles.at(-1)), "π - project");
     t.mock.timers.tick(33 * 8);
-    assert.equal(/[\u0332\u0333]/.test(f.titles.at(-1)), running, "only actual work resumes animation");
+    assert.equal(TITLE_MARKS.test(f.titles.at(-1)), running, "only actual work resumes animation");
     f.terminal.setTitle("core rewrite");
     assert.equal(plainTitle(f.titles.at(-1)), "π - project", "core writes cannot resurrect the expired marker");
   });
@@ -200,13 +284,15 @@ test("title sanitizes labels and releases timers/listeners at shutdown", async (
   t.mock.timers.enable({ apis: ["setInterval"] });
   const f = fixture();
   titleExtension(f.pi);
-  f.rename("abcdefghijklmnop\n\x07");
+  f.rename("  abcdefghijklmnop\n\x07  项目配置  ");
   await f.emit("session_start");
-  assert.equal(f.titles.at(-1), "π - abcdefghijk…");
+  assert.equal(f.titles.at(-1), "π - abcdefghijklmnop 项目配置");
   await f.emit("agent_start");
   t.mock.timers.tick(330);
+  f.pi.events.emit("permissions:ui_prompt", { requestId: "long-title" });
+  assert.equal(f.titles.at(-1), "! - abcdefghijklmnop 项目配置", "approval also preserves the full label");
   await f.emit("session_shutdown");
-  assert.equal(f.titles.at(-1), "π - abcdefghijk…");
+  assert.equal(f.titles.at(-1), "π - abcdefghijklmnop 项目配置");
   const count = f.titles.length;
   t.mock.timers.tick(330);
   f.pi.events.emit("permissions:ui_prompt", { requestId: "late" });
