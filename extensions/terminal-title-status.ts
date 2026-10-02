@@ -76,6 +76,7 @@ function spotlightTitle(title: string, frameIndex: number): string {
 export default function (pi: ExtensionAPI) {
   let context: ExtensionContext | undefined;
   let running = false;
+  let settled = false;
   let animatedState: AnimatedState | undefined;
   let frameIndex = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -90,24 +91,18 @@ export default function (pi: ExtensionAPI) {
     return sanitizeTitle(rawLabel());
   }
 
-  function currentState(): AnimatedState | "approval" | "idle" {
+  function currentState(): AnimatedState | "approval" | "settled" | "idle" {
     if (pendingPermissionRequests.size > 0) return "approval";
-    return running ? "working" : "idle";
+    if (running) return "working";
+    return settled ? "settled" : "idle";
   }
 
   function currentTitle(): string {
     const state = currentState();
-    let title: string;
-    if (state === "working") {
-      title = spotlightTitle(label(), frameIndex);
-    } else if (state === "approval") {
-      return `! - ${label()}`;
-    } else {
-      title = label();
-    }
-
-    // Keep the application prefix stable while the task label animates.
-    return `π - ${title}`;
+    if (state === "approval") return `! - ${label()}`;
+    if (state === "settled") return `✓ - ${label()}`;
+    const title = `π - ${label()}`;
+    return state === "working" ? spotlightTitle(title, frameIndex) : title;
   }
 
   function setTitle(): void {
@@ -175,6 +170,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     context = ctx;
     running = false;
+    settled = false;
     lastTitle = undefined;
     pendingPermissionRequests.clear();
     if (ctx.mode === "tui") {
@@ -210,11 +206,14 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_start", (_event, ctx) => {
     context = ctx;
     running = true;
+    settled = false;
     syncTitle();
   });
 
   pi.on("agent_settled", (_event, ctx) => {
     context = ctx;
+    // Settlement means the run ended, not that the task succeeded.
+    settled ||= running;
     running = false;
     syncTitle();
   });
@@ -223,6 +222,7 @@ export default function (pi: ExtensionAPI) {
     stopAnimation();
     pendingPermissionRequests.clear();
     running = false;
+    settled = false;
     if (ctx.mode === "tui") {
       ctx.ui.setTitle(`π - ${label()}`);
       ctx.ui.setWidget(TITLE_WIDGET_KEY, undefined);
