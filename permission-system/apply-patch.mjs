@@ -15,6 +15,7 @@ function patch(file, edits) {
   writeFileSync(join(root, file), text);
 }
 copyFileSync(join(dirname(fileURLToPath(import.meta.url)), "managed-read-policy.ts"), join(root, "src/access-intent/bash/managed-read-policy.ts"));
+copyFileSync(join(dirname(fileURLToPath(import.meta.url)), "../extensions/lib/git-read-grammar.ts"), join(root, "src/access-intent/bash/git-read-grammar.ts"));
 patch("src/access-intent/effect.ts", [
   ['export type EffectSource = "syntax" | "core" | "retracted" | "unproven";', 'export type EffectSource = "syntax" | "core" | "retracted" | "unproven" | "managed-literal";'],
 ]);
@@ -23,27 +24,45 @@ patch("src/access-intent/bash/token-collection.ts", [
   ['const effect = proveCommandEffect(', 'const effect = managedReaderEffect(node.text) ?? proveCommandEffect('],
 ]);
 patch("src/access-intent/bash/command-enumeration.ts", [
-  ['export interface BashCommand {', 'export interface BashCommand {\n  /** Private managed normalization provenance; original policy still applies. */\n  readonly managedOriginal?: string;\n  /** Local proof after complete static scope inspection. */\n  readonly managedReadOnly?: true;\n  /** Exact mkdir/cp effects came from private mutable-input provenance. */\n  readonly managedStaticFileEffects?: true;'],
+  ['import type { BashCommandContext, FloorExemption } from "#src/types";', 'import type { BashCommandContext, FloorExemption } from "#src/types";\nimport type { ManagedGitDiagnostic } from "./managed-read-policy";'],
+  ['export interface BashCommand {', 'export interface BashCommand {\n  /** Private managed normalization provenance; original policy still applies. */\n  readonly managedOriginal?: string;\n  /** Local proof after complete static scope inspection. */\n  readonly managedReadOnly?: true;\n  /** Hardened inner spelling for this exact, completely proven env Git unit. */\n  readonly managedGitInner?: string;\n  /** Raw original inner spelling; never reconstructed from decoded words. */\n  readonly managedGitOriginalInner?: string;\n  /** Proof failure is presentation only, not a permission decision. */\n  readonly managedGitDiagnostic?: ManagedGitDiagnostic;\n  /** Exact mkdir/cp effects came from private mutable-input provenance. */\n  readonly managedStaticFileEffects?: true;'],
 ]);
 patch("src/access-intent/bash/program.ts", [
-  ['import { getParser } from "./parser";', 'import { getParser } from "./parser";\nimport { managedProgramProof, managedStaticFileProof, type ManagedStaticFileScope } from "./managed-read-policy";'],
+  ['import { getParser } from "./parser";', 'import { getParser } from "./parser";\nimport { managedGitInnerCommand, managedGitSyntaxDiagnostic, managedProgramAnalysis, managedStaticFileProof, type ManagedStaticFileScope } from "./managed-read-policy";'],
   ['options?: { workdir?: string },', 'options?: { workdir?: string; originalCommands?: string[]; newScope?: ManagedStaticFileScope },'],
   ['      return new BashProgram(\n        command,\n        collectCommands(tree.rootNode),\n        externalAccesses,\n        ruleCandidates,\n      );', `      const commands = collectCommands(tree.rootNode);
       const fileCandidate = managedStaticFileProof(options?.newScope, command, normalizer);
-      const readCandidate = fileCandidate ? undefined : managedProgramProof(tree.rootNode, normalizer, options?.workdir);
-      const candidate = fileCandidate ?? readCandidate;
-      const proof = candidate?.marked.length === commands.length &&
-        commands.every(cmd => !cmd.wrapperKind && !cmd.parseUnresolved && !cmd.context) ? candidate : undefined;
-      const fileProof = proof && fileCandidate === proof ? proof : undefined;
+      const analysis = fileCandidate ? undefined : managedProgramAnalysis(tree.rootNode, normalizer, options?.workdir);
+      const readCandidate = analysis?.proof;
+      // Indirection is admitted only for the exact env Git unit marked by a
+      // COMPLETE program proof. No other wrapper inherits this exception.
+      const readProof = readCandidate?.marked.length === commands.length &&
+        readCandidate.gitWrappers.length === commands.length &&
+        commands.every((cmd, index) => !cmd.parseUnresolved && !cmd.context &&
+          (!cmd.wrapperKind || (cmd.wrapperKind === "indirection" &&
+            readCandidate.marked[index] && readCandidate.gitWrappers[index] !== undefined &&
+            managedGitInnerCommand(cmd.text) === readCandidate.gitWrappers[index]))) ? readCandidate : undefined;
+      const fileProof = fileCandidate?.marked.length === commands.length &&
+        commands.every(cmd => !cmd.wrapperKind && !cmd.parseUnresolved && !cmd.context) ? fileCandidate : undefined;
+      const proof = fileProof ?? readProof;
+      const diagnostics = analysis?.diagnostics.length === commands.length ? analysis.diagnostics : undefined;
       const originals = options?.originalCommands;
       if (originals && originals.length !== commands.length) throw new Error("Managed normalization provenance mismatch");
       return new BashProgram(
         command,
-        commands.map((cmd, index) => ({ ...cmd,
+        commands.map((cmd, index) => {
+          const diagnostic = diagnostics?.[index] ?? (proof ? undefined : managedGitSyntaxDiagnostic(cmd.text));
+          return { ...cmd,
           ...(originals ? { managedOriginal: originals[index] } : {}),
+          ...(readProof?.marked[index] && cmd.wrapperKind === "indirection" ? {
+            managedGitInner: readProof.gitWrappers[index],
+            ...(originals ? { managedGitOriginalInner: managedGitInnerCommand(originals[index]!) } : {}),
+          } : {}),
+          ...(diagnostic ? { managedGitDiagnostic: diagnostic } : {}),
           ...(fileProof?.marked[index] ? { managedStaticFileEffects: true as const } :
             proof?.marked[index] ? { managedReadOnly: true as const } : {}),
-        })),
+          };
+        }),
         fileProof ? fileProof.externalAccesses :
           proof ? [...externalAccesses.map(item => ({ ...item, effect: { effect: "read" as const, source: "managed-literal" as const } })), ...proof.externalAccesses] : externalAccesses,
         fileProof ? fileProof.ruleCandidates :
@@ -53,8 +72,20 @@ patch("src/access-intent/bash/program.ts", [
 patch("src/handlers/gates/tool-call-gate-pipeline.ts", [
   ['import { BashProgram } from "#src/access-intent/bash/program";', 'import { BashProgram } from "#src/access-intent/bash/program";\nimport { managedStaticFileScope, originalGitCommands } from "#src/access-intent/bash/managed-read-policy";'],
   ['workdir: shell.workdir,', 'workdir: shell.workdir,\n          originalCommands: originalGitCommands(tcc.input),\n          newScope: managedStaticFileScope(tcc.input),'],
+  ['import { resolveBashCommandCheck } from "./bash-command";', 'import { resolveBashCommandCheck } from "./bash-command";\nimport { managedGitDiagnosticEvidence } from "#src/presentation/agent-renderer";'],
+  ['        toolDescriptor.preCheck = toolCheck;', `        // The winning spelling may be the normalized unit or its original.
+        // Do not attribute an unrelated unit's failure to a command-specific deny.
+        const diagnostic = bashProgram?.commands().find(cmd =>
+          cmd.text === toolCheck.command || cmd.managedOriginal === toolCheck.command)?.managedGitDiagnostic;
+        if (diagnostic) {
+          toolDescriptor.payload = { ...toolDescriptor.payload,
+            evidence: [...toolDescriptor.payload.evidence, ...managedGitDiagnosticEvidence(diagnostic)] };
+          toolDescriptor.logContext.managedGitDiagnostic = diagnostic;
+        }
+        toolDescriptor.preCheck = toolCheck;`],
 ]);
 patch("src/handlers/gates/bash-command.ts", [
+  ['import type { ScopedPermissionResolver } from "#src/policy/permission-resolver";', 'import type { ScopedPermissionResolver } from "#src/policy/permission-resolver";\nimport { managedGitInnerCommand } from "#src/access-intent/bash/managed-read-policy";'],
   ['  const base = resolveOnBashSurface(cmd.text, agentName, resolver);', `  const configured = resolveOnBashSurface(cmd.text, agentName, resolver);
   // Dedicated internal surfaces opt into deterministic effects over only the
   // ordinary Bash catch-all. Neither is a registered tool or command allowance.
@@ -64,8 +95,19 @@ patch("src/handlers/gates/bash-command.ts", [
   const enabledFile = fileOptIn.state === "allow" && fileOptIn.source === "tool";
   const enabled = (cmd.managedReadOnly && enabledRead) || (cmd.managedStaticFileEffects && enabledFile);
   const sentinel = cmd.managedStaticFileEffects ? "<managed-static-file-effects>" : "<managed-static-read>";
-  // Command-specific asks/denies, session decisions, wrapper floors and invalid
-  // policy remain upstream. Set the corresponding managed surface to ask to opt out.
+  // Provenance and exact parsing exclude flags/assignments, other wrappers
+  // and any spelling not covered by the complete program proof. Both rules
+  // are still checked when opt-in is off; only the floor exemption needs it.
+  const managedGit = cmd.managedReadOnly &&
+    cmd.wrapperKind === "indirection" && !cmd.parseUnresolved && !cmd.context &&
+    cmd.managedGitInner !== undefined && managedGitInnerCommand(cmd.text) === cmd.managedGitInner &&
+    (cmd.managedOriginal === undefined || (cmd.managedGitOriginalInner !== undefined &&
+      managedGitInnerCommand(cmd.managedOriginal) === cmd.managedGitOriginalInner));
+  const managedGitFloorExempt = managedGit && enabledRead &&
+    "getConfigIssues" in resolver && typeof resolver.getConfigIssues === "function" &&
+    resolver.getConfigIssues(agentName).length === 0;
+  // Command-specific asks/denies, session decisions and invalid policy remain
+  // upstream. Set the corresponding managed surface to ask to opt out.
   let base = enabled && configured.state === "ask" &&
     configured.matchedPattern === "*" && configured.source === "bash" &&
     "getConfigIssues" in resolver && typeof resolver.getConfigIssues === "function" &&
@@ -87,7 +129,70 @@ patch("src/handlers/gates/bash-command.ts", [
     !(original.state === "ask" && original.matchedPattern === "*" && original.source === "bash" &&
       enabled && "getConfigIssues" in resolver && typeof resolver.getConfigIssues === "function" &&
       resolver.getConfigIssues(agentName).length === 0);
-  if (originalRestricted) return pickMostRestrictive([base, original]) ?? original;`],
+  if (originalRestricted) {
+    const restricted = pickMostRestrictive([base, original]) ?? original;
+    if (!managedGit) return restricted;
+    base = restricted;
+  }`],
+  ['  const floored =\n    cmd.wrapperKind && base.state === "allow"', `  // Resolve BOTH spellings, even when the wrapper itself asks or denies.
+  // A bare inner unit avoids re-applying the wrapper floor recursively, while
+  // retaining read opt-in and exact original-inner asks/denies/session rules.
+  // Keep the outer unit as the decision/session value: no grant to a fragment.
+  const managedGitCheck = managedGit
+    ? { ...(pickMostRestrictive([base, resolveCommandUnit({
+        text: cmd.managedGitInner!, managedReadOnly: true,
+        ...(cmd.managedGitOriginalInner === undefined ? {} : { managedOriginal: cmd.managedGitOriginalInner }),
+      }, cmd.managedGitInner!, agentName, resolver)]) ?? base), command: cmd.text }
+    : undefined;
+  const floored = managedGitCheck
+    ? (!managedGitFloorExempt && managedGitCheck.state === "allow"
+        ? { ...managedGitCheck, state: "ask" as const, matchedPattern: WRAPPER_SENTINEL.indirection }
+        : managedGitCheck)
+    : cmd.wrapperKind && base.state === "allow"`],
+]);
+// Missing proof is a reason to explain, never an authorizer. The deciding
+// surface/token/rule and the session-approval scope remain exactly upstream.
+patch("src/handlers/gates/bash-path.ts", [
+  ['import { buildPathAskPayload } from "#src/presentation/path-ask-payload";', 'import { buildPathAskPayload } from "#src/presentation/path-ask-payload";\nimport { managedGitDiagnosticEvidence } from "#src/presentation/agent-renderer";'],
+  ['  const pattern = normalizer.approvalPatternFor(worstEntry.path);', `  // One failed unit withholds the complete program proof. This diagnostic
+  // describes that loss, not the identity or authority of the deciding path.
+  const diagnostic = worstEntry.effect.effect === "unproven"
+    ? bashProgram.commands().find(cmd => cmd.managedGitDiagnostic)?.managedGitDiagnostic : undefined;
+  const pattern = normalizer.approvalPatternFor(worstEntry.path);`],
+  ['    payload,\n    sessionApproval:', '    payload: { ...payload, evidence: [...payload.evidence, ...managedGitDiagnosticEvidence(diagnostic)] },\n    sessionApproval:'],
+  ['      effectSource: worstEntry.effect.source,', '      effectSource: worstEntry.effect.source,\n      ...(diagnostic ? { managedGitDiagnostic: diagnostic } : {}),'],
+]);
+patch("src/presentation/agent-renderer.ts", [
+  ['import type { BashCommandContext } from "#src/types";', 'import type { BashCommandContext } from "#src/types";\nimport type { ManagedGitDiagnostic } from "#src/access-intent/bash/managed-read-policy";'],
+  ['  type PromptPayload,', '  type PromptPayload,\n  type PromptEvidence,'],
+  ['export function renderRefusal(', `export function renderRefusal(
+  payload: PromptPayload,
+  decidedBy: DecisionSource,
+  denialReason: string | null,
+  budget: AgentRenderBudget = DEFAULT_RENDER_BUDGET,
+): string {
+  return renderRefusalVerdict(payload, decidedBy, denialReason, budget) +
+    managedGitProofClause(payload, budget);
+}
+
+function renderRefusalVerdict(`],
+  ['/** The agent-facing render of a policy deny. */', `/** Presentation-only facts; no permission or session-grant semantics. */
+export function managedGitDiagnosticEvidence(diagnostic: ManagedGitDiagnostic | undefined): PromptEvidence[] {
+  return diagnostic ? [{ label: "managed Git proof unavailable",
+    text: "[" + diagnostic.code + "] " + diagnostic.reason, detail: diagnostic.token ?? null }] : [];
+}
+
+/** A missing proof must never be described as a promised approval route. */
+function managedGitProofClause(payload: PromptPayload, budget: AgentRenderBudget): string {
+  const failure = findEvidence(payload, "managed Git proof unavailable");
+  if (!failure) return "";
+  const token = failure.detail === null ? "" : " (token '" + cap(failure.detail, budget) + "')";
+  return " Complete managed Git read-only proof unavailable" + token + ": " + cap(failure.text, budget) +
+    ". Missing proof does not override the deciding gate; env does not override denies or guarantee approval.";
+}
+
+/** The agent-facing render of a policy deny. */`],
+  ['    ruleReason,\n  );', '    ruleReason,\n  ) + managedGitProofClause(payload, budget);'],
 ]);
 // A prompt can fail after its start broadcast (for example when the managed
 // inline-prompt queue times out). End that exact displayed request regardless

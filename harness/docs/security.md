@@ -42,6 +42,29 @@ with the parent in all of them, since Agents share one checkout:
 | `editor` | parent-configured workspace/scratch scope | denied | bounded writer capability, subject to existing guards |
 | `researcher` | denied; no Bash tool (its definition also turns Bash asks into denies) | denied | `read`/`grep`/`find`/`ls` plus the four web tools |
 
+### Managed Git read proof
+
+The [Git read-proof contract](git-read-proof.md) supplies bounded read scopes,
+not permission grants. Historical-file show uses the exact bare `env git`
+managed route; literal log pathspecs may also use bare `git log -- path...`, with
+every path word checked against the restricted shared grammar. Path/external
+rules still decide the outcome. The static query floor remains status/log/show,
+with commit-only patch-free show; diff is not part of that query check. A Bash session grant skips
+only its own gate, not path/external gates. Ordinary session rules can override
+ordinary configuration denies; immutable-resource and reader write floors are
+separate. Unsupported forms and probe failures receive no proof and may be denied
+without an ask. Env does not override denies or guarantee approval.
+
+All proved diff execution and diff-related probes disable replacement objects,
+including summary-only diff. Status/diff with a checked-out indexed submodule
+receive no proof without explicit exact `--ignore-submodules=all`; short
+submodule output alone cannot prevent nested helpers. No Git probes run from an
+effective cwd outside the session working-directory boundary, except the narrow
+linked-worktree `mainRoot` layout verification query. That exception still
+leaves the primary root subject to its path/external rules. Probes are
+synchronous and block the event loop; the per-probe five-second/4 MiB limits do
+not provide an aggregate deadline or immediate cancellation.
+
 ### Researcher web access
 
 `researcher` is the only profile with web tools, and has no Bash, so its only

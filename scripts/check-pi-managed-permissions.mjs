@@ -398,8 +398,12 @@ try {
     assert.deepEqual(originalGitCommands(input), [command]);
     fixedPositive.push(input.command);
   }
-  const diff = "git --no-lazy-fetch diff --no-ext-diff --no-textconv --ignore-submodules=all";
-  const positive = [...fixedPositive, "git status --short", "git status --short -- ordinary.txt", "git status --short --ignored", "git log -5 --oneline", "git log --oneline -n 20 HEAD", "git show -s --format=%ci HEAD~1", "git ls-files", "git ls-files -- src", ...["", " --stat", " --check", " --name-only", " --name-status", " --cached --stat", " --cached --check", " --unified=0", " --unified=9999", " --unified=3 --stat", " --no-renames -- ordinary.txt"].map(suffix => diff + suffix), "cut -d : -f 1 ordinary.txt", "nl -ba ordinary.txt", "readlink ordinary.txt", "sha256sum ordinary.txt", "cat ordinary.txt", "head -n 1 ordinary.txt", "sed -n '1p;2,4p' ordinary.txt", "sed -n '1,2p;2,$p' ordinary.txt", `sed -n '${Array(32).fill("1p").join(";")}' ordinary.txt`].map(command => command.startsWith("git ") && !command.startsWith("git --no-lazy-fetch ") ? command.replace(/^git /, "git --no-lazy-fetch ") : command);
+  const diff = "git --no-lazy-fetch --no-optional-locks --no-pager --no-replace-objects diff --no-ext-diff --no-textconv --ignore-submodules=all";
+  const positive = await Promise.all([...fixedPositive, "git status --short", "git status --short -- ordinary.txt", "git status --short --ignored", "git log -5 --oneline", "git log --oneline -n 20 HEAD", "git show -s --format=%ci HEAD~1", "git ls-files", "git ls-files -- src", `env ${diff}`, ...["", " --stat", " --check", " --name-only", " --name-status", " --cached --stat", " --cached --check", " --unified=0", " --unified=9999", " --unified=3 --stat", " --no-renames -- ordinary.txt"].map(suffix => diff + suffix), "cut -d : -f 1 ordinary.txt", "nl -ba ordinary.txt", "readlink ordinary.txt", "sha256sum ordinary.txt", "cat ordinary.txt", "head -n 1 ordinary.txt", "sed -n '1p;2,4p' ordinary.txt", "sed -n '1,2p;2,$p' ordinary.txt", `sed -n '${Array(32).fill("1p").join(";")}' ordinary.txt`].map(async command => {
+    const input = { command };
+    await hardenGitInput(input, cwd);
+    return input.command;
+  }));
   const negative = [
     ...["--unified", "--unified=", "--unified=-1", "--unified=10000", "--unified=3x", "--unif=3", "--unified 3", "-U", "-U-1", "-U10000", "-U3x", "-U 3"].map(flag => `${diff} --stat ${flag}`),
     ...["1p;", ";1p", "1p;;2p", "0,2p;3p", "1p;2q", "1p;2e", "1p;w output.txt", "1p;r .env", "1p;s/a/b/e", "1p;#comment", "1p\\n2p", Array(33).fill("1p").join(";")].map(program => `sed -n '${program}' ordinary.txt`),
@@ -407,7 +411,7 @@ try {
     "command -v", "command -v git", "command -v ../pi", "command -v -- pi", "command pi", "bash -n", "bash -n syntax.sh extra", "bash -c syntax.sh", "bash -n .", "bash -n $FILE",
     "printenv", "printenv HOME", "printenv PI_OTHER", "printenv PI_MODEL HOME", "env", "env printenv HOME", "env FOO=bar printenv PI_MODEL",
     "ruff check syntax.sh", "ruff check --fix syntax.sh", "ruff check --output-file out syntax.sh", "ruff format --check syntax.sh",
-    "git log -5 --oneline", "git diff --no-ext-diff --no-textconv --ignore-submodules=all", "git diff", "git diff --stat", "git diff --check", `${diff} --output=ordinary.txt`, `${diff} --out=ordinary.txt`, `${diff} --o ordinary.txt`, `${diff} --ext-diff`, `${diff} --textconv`, `${diff} HEAD~1`, `${diff} --no-renames -- ../repo/ordinary.txt`, `${diff} --no-renames -- ':(top)*'`, `${diff} --no-renames -- "$INPUT"`, `${diff} > ordinary.txt`, `${diff} && touch ordinary.txt`, `env ${diff}`, `timeout 5 ${diff}`, "git -c core.pager=cat status --short", "git -C . status --short", "git --no-pager log -5 --oneline", "git show HEAD:.env", "git show HEAD", "git blame ordinary.txt", "git log -p -1", "git ls-files --with-tree=HEAD", "git ls-files --recurse-submodules"];
+    "git log -5 --oneline", "git diff --no-ext-diff --no-textconv --ignore-submodules=all", "git diff", "git diff --stat", "git diff --check", `${diff} --output=ordinary.txt`, `${diff} --out=ordinary.txt`, `${diff} --o ordinary.txt`, `${diff} --ext-diff`, `${diff} --textconv`, `${diff} HEAD~1`, `${diff} --no-renames -- ../repo/ordinary.txt`, `${diff} --no-renames -- ':(top)*'`, `${diff} --no-renames -- "$INPUT"`, `${diff} > ordinary.txt`, `${diff} && touch ordinary.txt`, `env FOO=1 ${diff}`, `env -i ${diff}`, `timeout 5 ${diff}`, "git -c core.pager=cat status --short", "git -C . status --short", "git --no-pager log -5 --oneline", "git show HEAD:.env", "git show HEAD", "git blame ordinary.txt", "git log -p -1", "git ls-files --with-tree=HEAD", "git ls-files --recurse-submodules"];
   for (const agent of [undefined, "editor", "reader"]) {
     for (const command of positive) {
       const result = await check(command, agent);
@@ -486,9 +490,9 @@ try {
   // An explicit deny/ask and an invalid scope may never be replaced by proof.
   for (const action of ["ask", "deny"]) {
     const file = join(scratch, `policy-${action}.json`);
-    writeFileSync(file, JSON.stringify({ ...config, permission: { ...config.permission, bash: { ...config.permission.bash, "git --no-lazy-fetch log *": action } } }));
+    writeFileSync(file, JSON.stringify({ ...config, permission: { ...config.permission, bash: { ...config.permission.bash, "git --no-lazy-fetch --no-optional-locks --no-pager log *": action } } }));
     const local = new PermissionResolver(new PermissionManager({ globalConfigPath: file, agentsDir: join(agentDir, "agents"), mcpServerNames: [] }), { getRuleset: () => [] });
-    const p = await BashProgram.parse("git --no-lazy-fetch log -5 --oneline", normalizer);
+    const p = await BashProgram.parse("git --no-lazy-fetch --no-optional-locks --no-pager log --no-show-signature -5 --oneline --", normalizer);
     assert.equal(resolveBashCommandCheck(p.commandText(), p.commands(), undefined, local).state, action);
   }
   for (const [index, requested] of ["bash -n syntax.sh", "env printenv PI_MODEL PI_MODEL_ID PI_PROVIDER", ...weeklyRequested.filter(command => !command.includes("|"))].entries()) {
@@ -526,7 +530,7 @@ try {
   const brokenManager = new PermissionManager({ globalConfigPath: configPath, projectGlobalConfigPath: brokenConfig, agentsDir: brokenAgents, mcpServerNames: [] });
   assert(brokenManager.getConfigIssues("broken").length > 0);
   const brokenResolver = new PermissionResolver(brokenManager, { getRuleset: () => [] });
-  const p = await BashProgram.parse("git --no-lazy-fetch log -5 --oneline", normalizer);
+  const p = await BashProgram.parse("git --no-lazy-fetch --no-optional-locks --no-pager log --no-show-signature -5 --oneline --", normalizer);
   assert.notEqual(resolveBashCommandCheck(p.commandText(), p.commands(), "broken", brokenResolver).state, "allow");
   const brokenFixed = { command: "bash -n syntax.sh" }; await hardenGitInput(brokenFixed);
   const brokenFixedProgram = await BashProgram.parse(brokenFixed.command, normalizer, { originalCommands: originalGitCommands(brokenFixed) });
@@ -591,7 +595,8 @@ try {
   assert(existsSync(canary), "Fixture must demonstrate Git's implicit remote-helper invocation");
   rmSync(canary);
   const partialNormalizer = new PathNormalizer(posixPathFlavor, partial);
-  assert((await BashProgram.parse(diff, partialNormalizer)).commands()[0].managedReadOnly, "Missing blobs do not require reading their contents during proof");
+  assert(!(await BashProgram.parse(diff, partialNormalizer)).commands().some(command => command.managedReadOnly), "Partial-clone content proof declines even when name probes could avoid missing blobs");
+  assert(!existsSync(canary), "Rejected partial-clone proof must not invoke its remote helper");
   const hardened = { command: "git diff" };
   assert(await hardenGitInput(hardened));
   assert.deepEqual(originalGitCommands(hardened), ["git diff"]);
@@ -604,7 +609,7 @@ try {
   assert(!existsSync(canary), "Pre-gate filename probes must never lazy-fetch missing trees");
   process.env.PATH = previousPath;
   delete process.env.PI_GIT_FETCH_CANARY;
-  console.log("PASS: real partial-clone missing blob/tree canary; proof and execution never lazy-fetch");
+  console.log("PASS: real partial-clone content proof rejected; missing blob/tree probes and hardened execution never lazy-fetch");
   const localCd = join(cwd, "nested"), cdBase = join(scratch, "cdpath"), outsideCd = join(cdBase, "nested");
   mkdirSync(localCd); mkdirSync(outsideCd, { recursive: true });
   for (const path of [localCd, outsideCd]) execFileSync("git", ["init", "-q"], { cwd: path });
@@ -767,6 +772,7 @@ try {
     "git --no-pager diff -- ordinary.txt | head -20", "git -C . diff --check",
     "cd . && git diff --stat | tail -5", "git diff -- ordinary.txt | sed -n '1,20p'",
     "git log --oneline HEAD~5..HEAD", "nl -ba ordinary.txt | sed -n '1,20p'",
+    "env git log --format='%H %P %s' HEAD~1..HEAD", "env git log --oneline -- ordinary.txt", "env git show HEAD:ordinary.txt",
     "git diff HEAD~1 HEAD -- ordinary.txt", "git rev-parse --verify main", "git branch -vv && git remote",
     "git diff --no-renames --name-only --diff-filter=U",
     "git diff --no-renames --cached --diff-filter=R --name-status",
@@ -842,7 +848,7 @@ try {
   const executedBash = executed.filter(item => item.tool === "bash").map(item => item.input.command);
   const executedRead = executed.filter(item => item.tool === "read").map(item => item.input.path).sort();
   const gitExecution = executedBash.find(command => command.startsWith("git "));
-  assert.match(gitExecution, /^git --no-lazy-fetch --no-optional-locks --no-pager diff /);
+  assert.match(gitExecution, /^git --no-lazy-fetch --no-optional-locks --no-pager --no-replace-objects diff /);
   assert(gitExecution.includes("--no-ext-diff --no-textconv --submodule=short"));
   assert(!gitExecution.includes("--ignore-submodules="), "No automatic suppression of gitlink or dirty-state changes");
   assert(executedBash.includes("type -P -- pi"));
