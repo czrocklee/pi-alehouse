@@ -31,10 +31,12 @@ for (const fault of ["parent-answer-error", "post-assembly", "post-assembly-clea
     assert.equal(scenario.final, "7 × 11 × 3 = 231。");
     assert.equal(scenario.stop_reason, "error"); assert.equal(scenario.error_message, "SYNTHETIC_PARENT_ANSWER_ERROR");
     assert.deepEqual(scenario.failures, ["parent answer did not finish with stop"]);
-    const answer = report.calls.filter((call) => call.name === "agent_send" && call.is_error === false).at(-1);
-    assert.equal(answer.value.delivery, "answered");
-    assert.equal(answer.value.status, "completed"); assert.equal(answer.value.next_cursor, undefined);
-    assert.equal(answer.value.result, scenario.final);
+    const answer = report.calls.filter((call) => call.name === "agent_answer" && call.is_error === false).at(-1);
+    assert.match(answer.args.question_id, /^q_[0-9a-f]{32}$/);
+    assert.deepEqual(answer.value.action, { type: "agent_answer", agent: "worker", task: 2 });
+    assert.equal(answer.value.reason, "done");
+    assert.equal(answer.value.agents[0].status, "completed"); assert.equal(answer.value.agents[0].next_cursor, undefined);
+    assert.equal(answer.value.agents[0].result, scenario.final);
     const transcript = JSON.parse(readFileSync(join(output, "controlled-parent.json"), "utf8"));
     const last = transcript.findLast((message) => message.role === "assistant");
     assert.equal(last.stopReason, "error"); assert.equal(last.errorMessage, scenario.error_message);

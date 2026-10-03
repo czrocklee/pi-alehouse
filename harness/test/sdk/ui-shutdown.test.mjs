@@ -107,7 +107,8 @@ for (const fault of ["widget", "panel", "all"]) test(`quit drains before later S
     for (const stop of handlers.get("session_shutdown")) await stop({ reason: "quit" }, ctx);
   });
   for (const start of handlers.get("session_start")) await start({}, ctx);
-  const run = await h.controller.submit("shutdown-ui", task("Hold until quit"));
+  // session_start assembled the model tools and bound their naming contract.
+  const run = await h.controller.submit("shutdown-ui", task("Hold until quit", { name: "otter" }));
   await until(() => h.ports[0]?.streaming);
   const child = h.ports[0], dispose = child.dispose.bind(child);
   t.mock.method(child, "dispose", async () => {

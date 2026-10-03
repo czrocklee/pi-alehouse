@@ -92,14 +92,20 @@ const uiContext = {
   getEditorComponent: () => undefined, getAllThemes: () => [], getTheme: () => undefined, setTheme: () => ({ success: false }),
 };
 
-const management = ["agent_spawn", "agent_run", "agent_send", "agent_wait", "agent_read", "agent_interrupt", "agent_kill", "agent_list"];
+const management = ["agent_spawn", "agent_run", "agent_send", "agent_answer", "agent_wait", "agent_read", "agent_interrupt", "agent_kill", "agent_list"];
 const { session } = await createAgentSession({ cwd, agentDir, resourceLoader: loader, modelRuntime: runtime,
   model, thinkingLevel: "off", settingsManager, sessionManager: SessionManager.create(cwd, sessions), tools: ["read", ...management] });
 const errors = [];
 const spawned = (message, agent, profile) => {
   assert.equal(message?.toolName, management[0]);
   assert.equal(message.isError, false, text(message));
-  assert.deepEqual(JSON.parse(text(message)), { agent, status: "completed", result: `${profile}_DONE` });
+  const reply = JSON.parse(text(message));
+  assert.equal(reply.reason, "done");
+  assert.deepEqual(reply.action, { type: "agent_spawn", agent, task: 1 });
+  assert.deepEqual(reply.agents, [{ agent, task: 1, status: "completed", result: `${profile}_DONE` }]);
+  assert.equal(reply.alerts_pending, 0);
+  assert.equal(reply.alerts, undefined);
+  assert.equal(reply.workers_disabled, undefined);
 };
 const spawn = (agent, profile, key) => call(`spawn-${agent}`, "agent_spawn",
   { agent, prompt: `Do ${key} now.`, profile, difficulty: 1, wait_ms: 60000 });
@@ -120,12 +126,17 @@ try {
   assert.deepEqual(parentSteps, [], "every scripted parent step ran");
 
   const web = ["web_search", "source_check", "fetch_content", "get_search_content"];
-  const researcherTools = ["read", "grep", "find", "ls", ...web, "notify_parent", "ask_parent"];
+  const researcherTools = ["read", "grep", "find", "ls", ...web, "alert_parent", "ask_parent"];
   assert.deepEqual(childTools.RESEARCH_TASK, researcherTools);
   assert.deepEqual(childTools.SECOND_TASK, researcherTools, "a reused web instance serves the next researcher");
   for (const key of ["READER_TASK", "EDITOR_TASK"]) {
     assert(!childTools[key].some((tool) => web.includes(tool)), `${key} has no web tools`);
-    assert(childTools[key].includes("bash") && childTools[key].includes("notify_parent"), key);
+    assert(childTools[key].includes("bash") && childTools[key].includes("alert_parent"), key);
+  }
+  for (const tools of Object.values(childTools)) {
+    assert(tools.includes("ask_parent"));
+    assert(!tools.includes("notify_parent"), "no retired runtime communication alias");
+    assert(!tools.some((tool) => management.includes(tool)), "children cannot answer or delegate");
   }
   assert(childTools.EDITOR_TASK.includes("edit") && !childTools.READER_TASK.includes("edit"));
 

@@ -55,7 +55,8 @@ if (!controlled) {
     }
   }
   const config = JSON.parse(readFileSync(configPath, "utf8"));
-  for (const name of [...delegationTools, "notify_parent", "ask_parent"]) config.permission[name] = "allow";
+  for (const name of [...delegationTools, "alert_parent", "ask_parent"]) config.permission[name] = "allow";
+  config.permission.notify_parent = "deny"; // retired name, never a runtime alias
   mkdirSync(join(agentDir, "extensions/pi-permission-system"), { recursive: true });
   writeFileSync(join(agentDir, "extensions/pi-permission-system/config.json"), JSON.stringify(config));
 }
@@ -86,7 +87,7 @@ const profileNames = ["editor", "reader", "researcher"];
 const profiles = Object.fromEntries(profileNames.map((name) => {
   const definition = readFileSync(join(agentDir, "agents", `${name}.md`), "utf8");
   // Identical explicit trial subset; this is not the complete production profile.
-  return [name, { definition, tools: ["read", "notify_parent", "ask_parent"] }];
+  return [name, { definition, tools: ["read", "alert_parent", "ask_parent"] }];
 }));
 const settings = () => sdk.SettingsManager.inMemory({ compaction: { enabled: false },
   retry: { enabled: false, provider: { timeoutMs: 45000, maxRetries: 0 } } });
@@ -134,7 +135,7 @@ const report = { authority, versions, runtime: { node: process.version, platform
     "No Bash, writes, Luna, reload, production admission, backend switch, private conversation, or deployment",
     "SDK catalogue membership is not authentication/availability proof",
     "Parent-only maxTokens metadata is not a verified provider cap; child metadata comes from the catalogue; wall time is not a token/fee limit",
-    "Notifications are owner-local at-most-once claims; this trial does not add durable delivery",
+    "Alerts are bounded Owner-local pending facts consumed only after complete local presentation; no SDK persistence/model receipt/ACK guarantee",
     ...(!controlled ? ["OAuth refresh may update the explicit existing authPath in place; credentials are never copied or logged"] : []),
   ] };
 const reportPath = join(outputRoot, controlled ? "controlled-model-trial.json" : "model-trial.json");
@@ -228,16 +229,18 @@ try {
     bus.on("model-trial:cleanup-held", () => { report.factory_cleanup_held = true; });
     let callbacks;
     const communicate = (name, key, action) => sdk.defineTool({ name, label: name,
-      description: name === "ask_parent" ? "Record one question, then finish this Run." : "Send progress to the parent.",
+      description: name === "ask_parent" ? "Record a first-write question, then finish this Run." : "Queue an important decision-relevant alert, then continue working.",
       parameters: T.Object({ [key]: stringParameter() }, { additionalProperties: false }),
       execute: async (_id, args) => {
         assert(callbacks && gate.accepting && !gate.stopped, "RUN_INPUT_CLOSED");
-        report.child_events.push({ agent_id: agent.agent_id, kind: name, text: args[key], at_ms: performance.now() });
-        action(callbacks, args[key]); save();
-        return textResult({ recorded: true, ...(name === "ask_parent" ? { instruction: "Finish this Run now." } : {}) });
+        const status = action(callbacks, args[key]);
+        report.child_events.push({ agent_id: agent.agent_id, kind: name, text: args[key], status, at_ms: performance.now() }); save();
+        return textResult(name === "ask_parent"
+          ? { status, instruction: status === "already_recorded" ? "This task already has a question; it was not replaced. Finish this Run now." : "Question recorded. Finish this Run now." }
+          : { queued: true, instruction: "Alert queued; continue working." });
       },
     });
-    const customTools = [communicate("notify_parent", "message", (cb, value) => cb.notify(value)),
+    const customTools = [communicate("alert_parent", "message", (cb, value) => cb.alert(value)),
       communicate("ask_parent", "question", (cb, value) => cb.question(value))];
     const childLoader = await loaderFor(bus, {
       // Load the exact trial path guard before permission/static guard so the
@@ -314,7 +317,7 @@ try {
 
   const parentLoader = await loaderFor(parentBus, {
     systemPromptOverride: () => controlled ? "SYNTHETIC_MODEL_TRIAL_PARENT" :
-      "You coordinate read-only workers. Use returned IDs and ask the user for missing information rather than guessing.",
+      "You coordinate read-only workers. Address Agent names; answer a pending question only with agent_answer and its exact question_id. Ask the user for missing information rather than guessing.",
     extensionFactories: [(pi) => {
       pi.on("session_start", (_event, ctx) => {
         parentContext = ctx;
@@ -364,10 +367,10 @@ try {
         const last = messages.at(-1), body = messageText(last);
         if (prompt.includes("ASK_FACTOR")) {
           if (last?.role === "toolResult" && last.toolName === "ask_parent") return { text: "QUESTION_RECORDED" };
-          if (last?.role === "toolResult" && last.toolName === "notify_parent") return action("child-a-question", "ask_parent", { question: "缺少的 factor 是多少🚀？" });
+          if (last?.role === "toolResult" && last.toolName === "alert_parent") return action("child-a-question", "ask_parent", { question: "缺少的 factor 是多少🚀？" });
           if (last?.role === "toolResult" && last.toolName === "read" && !last.isError) {
             assert.equal(body, sourceText, "A must consume the SDK read result for source.txt");
-            return action("child-a-progress", "notify_parent", { message: "已读取合成输入，等待 factor" });
+            return action("child-a-alert", "alert_parent", { message: "已读取合成输入，等待 factor" });
           }
           if (last?.role === "toolResult" && last.toolName === "read" && last.isError) {
             assert(report.child_guard_blocks.some((block) => block.path === forbiddenReadPath), "out-of-scope read must reach the exact trial guard");
@@ -386,14 +389,27 @@ try {
 
       const result = (id) => resultById(messages, id);
       if (!callById(messages, "create-a")) return action("create-a", "agent_spawn", { agent: "worker", prompt: "ASK_FACTOR", label: "calculate the source product", profile: "reader", difficulty: 3, wait_ms: 60000 });
-      const question = result("create-a");
+      const publications = messages.filter((message) => message.role === "toolResult")
+        .map((message) => parseJson(messageText(message)));
+      const question = publications.flatMap((value) => value?.agents ?? [])
+        .findLast((row) => row.agent === "worker" && row.task === 1 && row.status === "needs_input" && row.question_id);
       if (dialogueStage === "question") {
-        assert.equal(question?.status, "needs_input"); assert.equal(question.question_truncated, undefined);
+        if (!question) {
+          const row = publications.flatMap((value) => value?.agents ?? []).findLast((entry) => entry.agent === "worker" && entry.task === 1);
+          assert(row && !["failed", "interrupted"].includes(row.status), "question task did not settle needs_input");
+          // An accepted alert intentionally returns before settlement; continue
+          // the same task observation rather than mistaking it for a question.
+          return action(`question-wait-${publications.length}`, "agent_wait", { agents: ["worker"], wait_ms: 60000 });
+        }
+        assert.equal(question.question_truncated, undefined); assert.match(question.question_id, /^q_[0-9a-f]{32}$/);
         return { text: question.question };
       }
-      // A send to the asking Agent answers its question.
-      if (!callById(messages, "answer")) return action("answer", "agent_send", { agent: "worker", message: "ANSWER_FACTOR 3", wait_ms: 60000 });
-      const answerResult = result("answer");
+      assert(question, "explicit answer requires the observed pending reference");
+      if (!callById(messages, "answer")) return action("answer", "agent_answer", { agent: "worker", question_id: question.question_id,
+        answer: "ANSWER_FACTOR 3", wait_ms: 60000 });
+      const answerEnvelope = result("answer"), answerResult = answerEnvelope.agents[0];
+      assert.deepEqual(answerEnvelope.action, { type: "agent_answer", agent: "worker", task: 2 });
+      assert.equal(answerEnvelope.reason, "done");
       assert.equal(answerResult.status, "completed"); assert.equal(answerResult.next_cursor, undefined);
       return { text: answerResult.result, ...(fault === "parent-answer-error" ? { reason: "error", error: "SYNTHETIC_PARENT_ANSWER_ERROR" } : {}) };
     });
@@ -444,8 +460,10 @@ try {
 
   if (controlled && !scenario.failures.length) {
     assert.equal(scenario.final, "7 × 11 × 3 = 231。");
-    assert.deepEqual(report.calls.map((call) => call.name), ["agent_spawn", "agent_send"]);
-    assert.equal(scenario.parent_turns, 4, "two controlled rounds each dispatch once then report, without wait/get turns");
+    assert.equal(report.calls.filter((call) => call.name === "agent_spawn").length, 1);
+    assert.equal(report.calls.filter((call) => call.name === "agent_answer").length, 1);
+    assert(report.calls.every((call) => ["agent_spawn", "agent_wait", "agent_answer"].includes(call.name)));
+    assert.equal(scenario.parent_turns, report.calls.length + 2, "each observation dispatch and two final user-round reports have their own controlled turn");
     assert(report.child_tool_calls.some((call) => call.exact_guard_blocked));
     scenario.task_review = "controlled-fixture-asserted";
     // A worker may simply report missing data. Parent-led clarification and
@@ -453,25 +471,32 @@ try {
     const ordinary = structuredClone(evidence);
     ordinary.first.runStates[0].status = "completed";
     ordinary.first.runStates[0].outcome = { status: "completed" };
+    delete ordinary.first.runStates[0].question_id;
     ordinary.runStates[0] = structuredClone(ordinary.first.runStates[0]);
-    const questionReply = ordinary.first.calls.find((call) => call.name === "agent_spawn").value;
-    questionReply.result = questionReply.question; questionReply.status = "completed";
-    delete questionReply.question;
+    for (const call of ordinary.first.calls) for (const row of call.value?.agents ?? []) {
+      if (row.agent === "worker" && row.task === 1 && row.question) {
+        row.result = row.question; row.status = "completed"; delete row.question; delete row.question_id;
+      }
+    }
+    const ordinaryAnswer = ordinary.calls.findLast((call) => call.name === "agent_answer");
+    ordinaryAnswer.name = "agent_run"; ordinaryAnswer.args = { agent: "worker", prompt: "ANSWER_FACTOR 3", wait_ms: 60000 };
+    ordinaryAnswer.value.action.type = "agent_run";
     assert.deepEqual(dialogueFailures(ordinary, evidenceExpected), []);
     report.ordinary_followup_oracle = "accepted-without-claiming-ask_parent-coverage";
-    const answerCall = (copy) => copy.calls.findLast((call) => call.name === "agent_send");
+    const answerCall = (copy) => copy.calls.findLast((call) => call.name === "agent_answer");
     const noAnswer = ["user answer did not complete a second task on the same Agent", "parent did not retrieve and report the answer task's output"];
     const mutations = {
       "missing-answer": [noAnswer, (copy) => { copy.calls = copy.calls.filter((call) => call !== answerCall(copy)); }],
-      "answered-another-agent": [noAnswer, (copy) => { const call = answerCall(copy); call.args.agent = call.value.agent = "otter"; }],
-      "not-answered": [noAnswer, (copy) => { answerCall(copy).value.delivery = "not_delivered"; }],
+      "answered-another-agent": [noAnswer, (copy) => { const call = answerCall(copy); call.args.agent = call.value.action.agent = "otter"; }],
+      "stale-question-reference": [noAnswer, (copy) => { answerCall(copy).args.question_id = `q_${"0".repeat(32)}`; }],
+      "not-answered": [noAnswer, (copy) => { answerCall(copy).value.action.type = "agent_send"; }],
       "wrong-read-run": [["question task did not read the synthetic source through SDK read"],
         (copy) => { for (const call of copy.first.childCalls) if (call.fixture_match) call.run_id = "another-run"; }],
       "active-at-return": [["active work or uncertain ownership remained before host cleanup"], (copy) => { copy.stats.active = 1; }],
       "unretrieved-question": [["parent did not retrieve that task's complete question"],
-        (copy) => { copy.first.calls.find((call) => call.name === "agent_spawn").value.question_truncated = true; }],
+        (copy) => { for (const call of copy.first.calls) for (const row of call.value?.agents ?? []) if (row.question) row.question_truncated = true; }],
       "partial-answer": [["parent did not retrieve and report the answer task's output"],
-        (copy) => { answerCall(copy).value.next_cursor = "next-page"; }],
+        (copy) => { answerCall(copy).value.agents[0].next_cursor = "next-page"; }],
       "settings-drift": [["reused Agent settings changed"], (copy) => { copy.runStates[1].effective_settings.definition_digest = "changed"; }],
       "budget-exceeded": [["task execution/budget/model scope was not satisfied"], (copy) => { copy.runStates[1].outcome.limit_reached = true; }],
       "model-mismatch": [["reused Agent settings changed", "task execution/budget/model scope was not satisfied"], (copy) => { copy.runStates[1].effective_settings.model = "other"; }],

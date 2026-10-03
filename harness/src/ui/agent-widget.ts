@@ -36,8 +36,8 @@ export interface WidgetRun {
   limit_reached: boolean;
   error?: string;
   reason?: string;
+  /** Accepted alerts still pending from this Run; not a delivery-loss count. */
   pending_messages: number;
-  notification_drops: number;
   /** Recorded cleanup/input/output issues, not proof that resources remain held. */
   has_run_warnings: boolean;
 }
@@ -69,8 +69,7 @@ const stats = (run: WidgetRun, running: boolean): string[] => {
 const notes = (run: WidgetRun, theme: Theme): string[] => {
   const out: string[] = [];
   if (run.has_run_warnings) out.push(theme.fg("error", "run warning"));
-  if (run.notification_drops > 0) out.push(theme.fg("error", `${run.notification_drops} dropped`));
-  if (run.pending_messages > 0) out.push(theme.fg("warning", `${run.pending_messages} msg`));
+  if (run.pending_messages > 0) out.push(theme.fg("warning", `${run.pending_messages} pending`));
   return out;
 };
 
@@ -372,7 +371,7 @@ export class HarnessWidget {
       cost: reported(view.usage, "cost"), cost_partial: view.usage?.partial.includes("cost"), runtime: view.runtime, drain: view.drain,
       question: !!view.outcome?.question, limit_reached: !!view.outcome?.limit_reached,
       error: view.outcome?.error, reason: view.outcome?.reason, pending_messages: view.pending_messages,
-      notification_drops: view.notification_drops, has_run_warnings: view.cleanup_errors.length > 0, ...live };
+      has_run_warnings: view.cleanup_errors.length > 0, ...live };
   }
   private views(): RunView[] {
     const all = this.controller.list({ include_released: true });

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { assembleChildSession as assembleChild, disposeChildSession as disposeChild } from "../../dist/runtime/child-session.js";
 import { SessionInitializationError } from "../../dist/core/ports.js";
+import { blockedDelegationToolNames, managementToolNames } from "../../dist/tools/tool-names.js";
 import { deferred } from "../support/controller-fixture.mjs";
 
 function setup() {
@@ -21,6 +22,22 @@ function setup() {
     profile: "reader", definitionDigest: "1".repeat(64), getPermissionsService() {}, shutdownTimeoutMs: 1000 };
   return { session, input, calls, reports, listeners };
 }
+
+test("child assembly excludes all management and retired communication names before SDK creation", async () => {
+  const { input, session } = setup();
+  let supplied;
+  const options = { excludeTools: ["fixture-excluded", "agent_answer"] };
+  await assert.rejects(assembleChild({ ...input, options, createSession: async (value) => {
+    supplied = value;
+    return { session, extensionsResult: { errors: [] } };
+  } }), /EXTENSION_BIND_FAILED/);
+  assert(managementToolNames.includes("agent_answer"));
+  assert(blockedDelegationToolNames.includes("notify_parent"));
+  assert.deepEqual(supplied.excludeTools, [...new Set([...options.excludeTools, ...blockedDelegationToolNames])]);
+  assert(!supplied.excludeTools.includes("alert_parent"));
+  assert(!supplied.excludeTools.includes("ask_parent"));
+  assert.deepEqual(options.excludeTools, ["fixture-excluded", "agent_answer"], "assembly preserves caller-owned options");
+});
 
 test("failed non-idle bind aborts, drains, shuts down and disposes; original bind error survives", async () => {
   const { input, calls, reports, session } = setup();

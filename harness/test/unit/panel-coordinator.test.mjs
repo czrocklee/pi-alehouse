@@ -183,7 +183,7 @@ test("an open queued pane follows late child history and streaming without remou
   const activities = new ChildActivityRegistry();
   const view = { agent_id: "a", run_id: "r", name: "scout", description: "queued fixture", status: "queued",
     phase: "queued", execution_exited: false, finalization_pending: false, resident: true, resumable: false,
-    owner_blocked: false, notification_drops: 0, pending_messages: 0, isolation: "shared", elapsed_ms: 1,
+    owner_blocked: false, pending_messages: 0, isolation: "shared", elapsed_ms: 1,
     turns: 0, max_turns: 8, cleanup_errors: [], discarded_inputs: [], effective_settings: settings };
   const widget = new HarnessWidget({ list: () => [view], stats: () => ({ resident: 1, cleanup_uncertain: false }) },
     8, activities.observations, (ids) => activities.retain(ids));

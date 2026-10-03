@@ -40,7 +40,7 @@ const profiles = Object.fromEntries(["editor", "reader", "researcher"].map((name
   // A fixture-selected subset of available built-ins, not a new agent parser or
   // permission policy. The exact generated definition/digest still reaches SDK.
   const tools = declared.filter((tool) => ["read", "bash", "write", "edit", "grep", "find", "ls"].includes(tool));
-  return [name, { definition, tools: [...tools, "notify_parent", "ask_parent"] }];
+  return [name, { definition, tools: [...tools, "alert_parent", "ask_parent"] }];
 }));
 const settings = () => sdk.SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
 const runtime = await sdk.ModelRuntime.create({ credentials: new ai.InMemoryCredentialStore(), modelsPath: null,
@@ -82,8 +82,8 @@ provider.respond(async (call) => {
   const last = call.context.messages.at(-1);
   if (prompt?.includes("ASK_FACTOR")) {
     if (last?.role === "toolResult" && last.toolName === "ask_parent") return { text: "QUESTION_RECORDED" };
-    if (last?.role === "toolResult" && last.toolName === "notify_parent") return { tools: [{ type: "toolCall", id: "child-question", name: "ask_parent", arguments: { question: "What is the factor?" } }] };
-    return { tools: [{ type: "toolCall", id: "child-notice", name: "notify_parent", arguments: { message: "SYNTHETIC_PROGRESS_BEFORE_WAIT" } }] };
+    if (last?.role === "toolResult" && last.toolName === "alert_parent") return { tools: [{ type: "toolCall", id: "child-question", name: "ask_parent", arguments: { question: "What is the factor?" } }] };
+    return { tools: [{ type: "toolCall", id: "child-alert", name: "alert_parent", arguments: { message: "SYNTHETIC_ALERT_BEFORE_WAIT" } }] };
   }
   if (prompt?.includes("ANSWER_FACTOR")) return { text: receipt };
   if (prompt?.includes("HOLD_AFTER_PARENT_ABORT")) {
@@ -225,28 +225,40 @@ try {
   const firstArgs = newTask("ASK_FACTOR", "reader", { agent: "orca", inherit_context: true, label: "Find the missing factor 🚀" });
   const first = await invoke("agent_spawn", firstArgs, { id: "stable-call", prompt: inheritedMarker }); await settled("orca");
   const firstRun = runOf("orca");
-  assert.deepEqual(Object.keys(first).sort(), ["agent", "status"], "a receipt carries no IDs or settings");
+  assert.equal(first.reason, "snapshot");
+  assert.deepEqual(first.action, { type: "agent_spawn", agent: "orca", task: 1 });
+  assert.equal(first.agents[0].agent, "orca"); assert.equal(first.agents[0].task, 1);
+  assert.equal(JSON.stringify(first).includes(firstRun), false, "a receipt carries no internal Run UUID");
   assert.equal(controller.view(firstRun).status, "needs_input");
-  assert.equal(controller.view(firstRun).pending_messages, 1);
   const roster = await invoke("agent_list", {});
   assert.deepEqual([roster.agents[0].agent, roster.agents[0].label, roster.agents[0].has_question], ["orca", firstArgs.label, true]);
   assert.equal(JSON.stringify(roster).includes(firstRun), false);
   claim("actual SDK roster names Agents and shows task labels on demand, without internal IDs");
   const waited = await invoke("agent_wait", { agents: ["orca"] });
-  assert.equal(waited.reason, "done"); assert.deepEqual(waited.agents[0].progress, ["SYNTHETIC_PROGRESS_BEFORE_WAIT"]);
+  assert.equal(waited.reason, "question");
+  assert.deepEqual([...(first.alerts ?? []), ...(waited.alerts ?? [])],
+    [{ agent: "orca", task: 1, label: firstArgs.label, message: "SYNTHETIC_ALERT_BEFORE_WAIT" }]);
+  assert.equal(waited.alerts_pending, 0); assert.equal(controller.view(firstRun).pending_messages, 0);
   assert.equal(waited.agents[0].question, "What is the factor?"); assert.equal(waited.agents[0].question_truncated, undefined);
+  assert.match(waited.agents[0].question_id, /^q_[0-9a-f]{32}$/);
   assert.equal("label" in waited.agents[0], false);
   const questionResult = await invoke("agent_read", { agent: "orca" });
-  assert.equal(questionResult.question, "What is the factor?"); assert.equal(questionResult.result, "QUESTION_RECORDED");
+  assert.equal(questionResult.reason, "snapshot");
+  const question = questionResult.agents[0];
+  assert.equal(question.question, "What is the factor?"); assert.equal(question.result, "QUESTION_RECORDED");
+  assert.equal(question.question_id, waited.agents[0].question_id);
   assert.equal(controller.view(firstRun).effective_settings.context_mode, "text_snapshot");
   assert.equal(children[0].agent.settings.context_snapshot.split(inheritedMarker).length - 1, 1);
   const firstRequests = provider.requests.filter((call) => !isParent(call)); assert(firstRequests.length > 0);
   for (const call of firstRequests) assert.equal(inheritedOccurrences(call.context.messages), 1, "snapshot reaches actual child IO exactly once");
-  claim("real child notify/ask finish before first wait; terminal question and buffered notification are distinct");
+  claim("real child alert/ask finish before first wait; top-level alerts and explicit pending question identity are distinct");
 
   await parent.setModel(reasoning); parent.setThinkingLevel("high");
   const duplicate = await invoke("agent_spawn", { ...firstArgs, wait_ms: 300000 }, { id: "stable-call" });
-  assert.equal(duplicate.status, "needs_input"); assert.equal(duplicate.question, "What is the factor?");
+  assert.equal(duplicate.reason, "question");
+  assert.deepEqual(duplicate.action, first.action);
+  assert.equal(duplicate.agents[0].status, "needs_input"); assert.equal(duplicate.agents[0].question, "What is the factor?");
+  assert.equal(duplicate.alerts, undefined, "acceptance replay does not restore a consumed alert");
   assert.equal(runOf("orca"), firstRun); assert.equal(children.length, 1);
   await invoke("agent_spawn", { ...firstArgs, prompt: "CONFLICT" }, { id: "stable-call", error: "REQUEST_CONFLICT" });
   await invoke("agent_send", { agent: "orca", message: "ANSWER_FACTOR", model: "other" }, { error: "INVALID_PARAMETERS" });
@@ -254,8 +266,17 @@ try {
   await invoke("agent_spawn", newTask("ANSWER_FACTOR", "editor", { agent: "orca" }), { error: "AGENT_EXISTS" });
   const beforeAnswer = provider.requests.length;
   await invoke("agent_run", { agent: "orca", prompt: "ANSWER_FACTOR 3" }, { error: "PENDING_QUESTION" });
-  const answered = await invoke("agent_send", { agent: "orca", message: "ANSWER_FACTOR 3", wait_ms: 300000 });
-  assert.equal(answered.delivery, "answered"); assert.equal(answered.status, "completed"); assert.equal(answered.result, receipt, "a lone result arrives whole in the combined wait");
+  const notDelivered = await invoke("agent_send", { agent: "orca", message: "ANSWER_FACTOR 3" });
+  assert.deepEqual(notDelivered.action, { type: "agent_send", agent: "orca", task: 1, delivery: "not_delivered" });
+  assert.equal(runOf("orca"), firstRun, "send never starts a question continuation");
+  for (const extra of [{ difficulty: 4 }, { profile: "editor" }, { label: "replacement" }]) {
+    await invoke("agent_answer", { agent: "orca", question_id: question.question_id, answer: "ANSWER_FACTOR 3", ...extra },
+      { error: "INVALID_PARAMETERS" });
+  }
+  const answered = await invoke("agent_answer", { agent: "orca", question_id: question.question_id, answer: "ANSWER_FACTOR 3", wait_ms: 300000 });
+  assert.equal(answered.reason, "done");
+  assert.deepEqual(answered.action, { type: "agent_answer", agent: "orca", task: 2 });
+  assert.equal(answered.agents[0].status, "completed"); assert.equal(answered.agents[0].result, receipt, "a lone result arrives whole in the combined wait");
   const answerRequests = provider.requests.slice(beforeAnswer).filter((call) => !isParent(call)); assert(answerRequests.length > 0);
   for (const call of answerRequests) {
     assert.equal(inheritedOccurrences(call.context.messages), 1, "reuse retains only the original inherited context in history");
@@ -263,13 +284,13 @@ try {
   }
   claim("inherited context reaches actual child IO once, with no new snapshot prefix on reuse", { first_requests: firstRequests.length, reuse_requests: answerRequests.length });
   const answeredRun = runOf("orca"); assert.notEqual(answeredRun, firstRun);
-  assert.equal("settings" in answered, false, "replies carry no routing");
+  assert.equal("settings" in answered.agents[0], false, "task rows carry no routing");
   const answeredRoute = controller.view(answeredRun).effective_settings;
   assert.equal(answeredRoute.preset, "controlled-team"); assert.equal(answeredRoute.parent_thinking, "off");
   assert.equal(answeredRoute.thinking, "off"); assert.equal(answeredRoute.thinking_resolution, "identity");
   assert.equal(children.length, 1);
-  const page = await invoke("agent_read", { agent: "orca", max_chars: 1000 }); assert(page.next_cursor);
-  const rest = await invoke("agent_read", { agent: "orca", cursor: page.next_cursor });
+  const page = (await invoke("agent_read", { agent: "orca", max_chars: 1000 })).agents[0]; assert(page.next_cursor);
+  const rest = (await invoke("agent_read", { agent: "orca", cursor: page.next_cursor })).agents[0];
   assert.equal(page.result + rest.result, receipt); assert.equal(rest.next_cursor, undefined);
   assert.equal(controller.getResult(firstRun).text, "QUESTION_RECORDED", "the earlier result is retained");
   claim("same tool ID survives changed parent defaults; reuse answers the question with fixed settings and cursors reconstruct exact final text");
@@ -278,11 +299,13 @@ try {
   activePreset = route("reasoning-team", "harness-fixture/reasoning", "v2");
   const blocking = await invoke("agent_spawn", newTask("BLOCK_FOR_CANCEL", "editor"));
   await until(() => children.length === 2 && children[1].session.isStreaming);
-  assert.deepEqual(blocking, { agent: "block-for-cancel", status: "running" });
+  assert.equal(blocking.reason, "snapshot");
+  assert.deepEqual(blocking.action, { type: "agent_spawn", agent: "block-for-cancel", task: 1 });
+  assert.equal(blocking.agents[0].status, "running");
   const blockingRoute = controller.view(runOf("block-for-cancel")).effective_settings;
   assert.equal(blockingRoute.preset, "reasoning-team"); assert.equal(blockingRoute.parent_thinking, "high");
   assert.equal(blockingRoute.thinking, "high"); assert.equal(blockingRoute.thinking_resolution, "identity");
-  assert.equal((await invoke("agent_send", { agent: "block-for-cancel", message: "SYNTHETIC_STEERING" })).delivery, "steered");
+  assert.equal((await invoke("agent_send", { agent: "block-for-cancel", message: "SYNTHETIC_STEERING" })).action.delivery, "steered");
   await invoke("agent_spawn", newTask("TRY_PARENT_CONTROL", "reader"), { error: "RESIDENT_LIMIT" });
   assert.equal((await invoke("agent_kill", { agent: "orca" })).status, "killed");
   const orcaId = controller.findAgent("orca").agent_id;
@@ -294,12 +317,12 @@ try {
   assert(children[2].session.messages.some((m) => m.role === "toolResult" && m.toolName === "agent_spawn" && m.isError));
   await invoke("agent_interrupt", { agent: "block-for-cancel" }); await settled("block-for-cancel");
   assert.equal(controller.view(runOf("block-for-cancel")).status, "cancelled");
-  assert.equal((await invoke("agent_read", { agent: "orca" })).result, receipt, "a released Agent's last result stays readable");
+  assert.equal((await invoke("agent_read", { agent: "orca" })).agents[0].result, receipt, "a released Agent's last result stays readable");
   const listed = await invoke("agent_list", {});
   assert.deepEqual(listed.agents.map((row) => row.agent), ["block-for-cancel", "try-parent-control"]);
   assert.deepEqual(listed.killed, ["orca"]);
   const batch = await invoke("agent_wait", { agents: ["orca", "block-for-cancel", "try-parent-control"] });
-  assert.equal(batch.reason, "done", "every task has settled");
+  assert.equal(batch.reason, "task_issue", "an interrupted task takes priority over the all-terminal done condition");
   assert(batch.agents.reduce((count, entry) => count + (entry.result?.length ?? 0) + (entry.question?.length ?? 0), 0) <= 16384);
   assert.deepEqual(batch.agents.map((entry) => entry.status), ["completed", "interrupted", "completed"]);
   claim("actual SDK waits return results by Agent name within the shared text budget");
@@ -331,8 +354,11 @@ try {
   await parent.abort(); await waitPrompt; await parent.waitForIdle(); request = undefined;
   assert.equal(waitPromptError, undefined);
   assert.equal(abortProbe.wait.signal.aborted, true);
-  assert.deepEqual(abortProbe.wait.reply, { agent: "shutdown-probe", status: "running" },
-    "an interrupted combined wait still names the accepted task");
+  assert.equal(abortProbe.wait.reply.reason, "aborted");
+  assert.deepEqual(abortProbe.wait.reply.action, { type: "agent_spawn", agent: "shutdown-probe", task: 1 });
+  assert.equal(abortProbe.wait.reply.agents[0].agent, "shutdown-probe");
+  assert.equal(abortProbe.wait.reply.agents[0].status, "running");
+  assert.equal(abortProbe.wait.reply.alerts, undefined, "an aborted observation consumes no alerts");
   assert.equal(abortProbe.childSignal.aborted, false, "parent abort must not pretend to cancel a managed child");
   assert.equal(parent.isIdle, true); assert.equal(heldChild.isIdle, false);
   assert.equal(controller.view(held.run_id).status, "running");

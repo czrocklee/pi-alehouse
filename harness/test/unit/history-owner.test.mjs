@@ -78,17 +78,18 @@ for (const kind of ["success", "invalid"]) test(`pending child END after ${kind}
 for (const parentFailure of [false, true]) {
   test(`synchronous reused START failure is ${parentFailure ? "owner-blocking for parent damage" : "local for child damage"}`, async (t) => {
     const { controller: c, ports } = await fixture(t, { history: () => {} });
-    const warm = await c.submit("warm", task("warm")); await until(() => ports[0]?.streaming);
+    const warm = await c.submit("warm", task("warm", { name: "warm" })); await until(() => ports[0]?.streaming);
     ports[0].finish("warm"); await ended(c, warm);
-    await c.submit("blocker", task("blocker")); await until(() => ports[1]?.streaming);
+    await c.submit("blocker", task("blocker", { name: "blocker" })); await until(() => ports[1]?.streaming);
     const damaged = await c.submit("reuse", { resume: warm.agent_id, prompt: "reuse" });
-    const queued = await c.submit("queued", task("queued"));
+    const queued = await c.submit("queued", task("queued", { name: "queued" }));
     ports[0].history.begin = () => { throw parentFailure ? new ParentHistoryError("shared SDK write failed") : new Error("child SDK write failed"); };
     ports[1].finish("unblock"); await until(() => c.view(damaged.run_id).phase === "settled");
     assert.equal(ports[0].calls.length, 1); assert.equal(c.view(damaged.run_id).resumable, false);
     if (parentFailure) {
       assert.equal(c.view(queued.run_id).status, "queued"); assert.equal(ports.length, 2);
-      assert.equal((await c.wait([queued.run_id], { mode: "all" })).reason, "owner_blocked");
+      const observed = await c.observe({ kind: "wait", agent_ids: [queued.agent_id], mode: "all" }, { validate() {} });
+      assert.equal(JSON.parse(observed.content[0].text).reason, "owner_blocked");
       await assert.rejects(c.submit("new", task("new")), errorCode("OWNER_PARENT_UNAVAILABLE"));
     } else {
       await until(() => ports[2]?.streaming); ports[2].finish("healthy"); await ended(c, queued);
@@ -105,10 +106,10 @@ test("external parent audit failure blocks sessions returning from initializatio
     if (creates++ === 0) return warmPort;
     initialized.resolve(); await release.promise; return port;
   } } });
-  const warm = await c.submit("warm-before-audit-fault", task("warm"));
+  const warm = await c.submit("warm-before-audit-fault", task("warm", { name: "warm" }));
   await until(() => warmPort.streaming); warmPort.finish("inspectable"); await ended(c, warm);
-  const awaiting = await c.submit("awaiting-audit-fault", task("must not run"));
-  const queued = await c.submit("queued-audit-fault", task("must stay queued"));
+  const awaiting = await c.submit("awaiting-audit-fault", task("must not run", { name: "awaiting" }));
+  const queued = await c.submit("queued-audit-fault", task("must stay queued", { name: "queued" }));
   await initialized.promise;
   c.latchParentHistoryFailure(new Error("PRESET_AUDIT_APPEND_AMBIGUOUS"));
   release.resolve();
@@ -118,7 +119,8 @@ test("external parent audit failure blocks sessions returning from initializatio
   assert.equal(failed.owner_blocked, true); assert.match(failed.owner_error, /PRESET_AUDIT_APPEND_AMBIGUOUS/);
   assert.equal(c.view(queued.run_id).status, "queued");
   await assert.rejects(c.submit("apparent-recovery", task("still blocked")), errorCode("OWNER_PARENT_UNAVAILABLE"));
-  assert.equal((await c.wait([queued.run_id], { mode: "all" })).reason, "owner_blocked");
+  const observed = await c.observe({ kind: "wait", agent_ids: [queued.agent_id], mode: "all" }, { validate() {} });
+  assert.equal(JSON.parse(observed.content[0].text).reason, "owner_blocked");
   assert.equal(c.getResult(warm.run_id).text, "inspectable", "result inspection remains available");
   assert.equal((await c.release(warm.agent_id)).released, true, "idle Agent release remains available");
   c.cancel(queued.run_id); assert.equal((await ended(c, queued)).snapshots[0].status, "cancelled");

@@ -169,8 +169,8 @@ export function renderDetailFields(input: DetailInput, theme: Theme, width: numb
   };
   field("tokens", u ? `in ${count("input")} · out ${count("output")} · ` +
     `cache r ${count("cache_read")} · w ${count("cache_write")}` : "not reported");
-  // Reported to the host once, when the Run settles, so it reaches Pi's own
-  // footer and cost breakdown rather than vanishing with the child session.
+  // Observed spend reaches the host through a later tool_result usage hook.
+  // Rendering neither drains that accounting nor acknowledges communication.
   const spent = reported(u, "cost");
   field("cost", spent === undefined ? "not reported"
     : `${u?.partial.includes("cost") ? "≥ " : ""}${formatCost(spent)}`);
@@ -194,8 +194,7 @@ export function renderDetailFields(input: DetailInput, theme: Theme, width: numb
   if (view.unavailable_reason) notes.push(["session", "error", view.unavailable_reason]);
   if (view.owner_error) notes.push(["owner", "error", view.owner_error]);
   if (view.history_error) notes.push(["history", "warning", view.history_error]);
-  if (view.pending_messages > 0) notes.push(["queued", "warning", `${view.pending_messages} message(s) waiting for this Run`]);
-  if (view.notification_drops > 0) notes.push(["dropped", "error", `${view.notification_drops} notification(s) never reached you`]);
+  if (view.pending_messages > 0) notes.push(["pending", "warning", `${view.pending_messages} alert(s) from this Run awaiting local presentation`]);
   for (const note of view.cleanup_errors) notes.push(["cleanup", "error", note]);
   for (const note of view.discarded_inputs) notes.push(["discarded", "warning", note]);
   if (notes.length) {

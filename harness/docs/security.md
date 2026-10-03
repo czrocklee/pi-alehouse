@@ -24,7 +24,8 @@ SDK/runtime through dependency peer auto-installation; the host Pi is separate.
 
 The parent's four web tools stay subject to the global permission policy.
 Children receive only their profile's local `read`/Bash/search/edit tools as
-filtered by the harness, plus fixed `notify_parent`/`ask_parent`.  They receive
+filtered by the harness, plus fixed `alert_parent`/`ask_parent`. `notify_parent`
+is retired and explicitly denied, not a runtime alias. They receive
 no parent management tools, no nested delegation and no arbitrary extensions.
 `reader` and `editor` receive no web tool table.  This intentionally differs
 from their **declared** generated definitions, which list web capability under
@@ -283,10 +284,77 @@ provider network access, rotate OAuth credentials, and update the host's model
 cache, independently of the preference writer. See
 [routing](routing.md#scoped-user-preferences) for the schema and paths.
 
+## Communication observation and admission
+
+The [tool contract](tool-contract.md) has nine parent tools, including
+explicit `agent_answer`; child delegation remains excluded/denied for all nine
+and all retired names. Initial Off hides all nine. After accepted work, only
+wait/read/interrupt/kill/list remain visible. Off gates new tasks, steering and
+answers, not accepted child alert/ask callbacks or inspection. Observations carry
+`workers_disabled: true` separately from Owner faults; asking the user to enable
+delegation is required before answering, not calling a hidden cached answer tool.
+
+Questions are immutable first-write-wins per original Run. Only a truly settled,
+current pending, unreserved needs-input question on a healthy reusable Agent
+with no current Run receives a token. Off does not erase its identity but still
+forbids answer admission. `question_id` is q_ plus the first 128 bits of a SHA256
+digest over the version tag, Owner ID, generation and original Run ID (34-character
+lowercase form). It rejects stale/cross-generation references, not a permission
+credential or collision-free proof. Answer reserves/admit atomically through
+normal context/revision/approval checks. Before real `inputEntered`, failed or
+cancelled continuations can release reservation if the Agent stays reusable;
+after it, they cannot reopen the old question. Kill/quarantine/Owner loss never
+restore authority. A new answer checks sticky Owner availability before token
+eligibility and after preparation; the non-latching read-only lease probe is not
+an admission gate. Send never creates an answer continuation; run cannot bypass
+a pending question. Child messages are data, not permission grants.
+
+Alerts are accepted only at an open Run/generation gate, after parameter, quota
+and SDK-free retained-envelope byte checks. A single FIFO bounds pending memory
+at Owner 64 / Agent 16, including historical/killed sources. Full queues reject
+new messages without evicting accepted ones; only successful scoped publication
+releases quota. No deny, Git/path/web boundary, immutable resource floor or lease
+rule is relaxed. Task-condition targets bind once; alert scopes are separately
+typed Owner/Agents/Run. Read spans one Agent's pending alerts independently of
+its page cursor; inline command observations see only their bound Run.
+
+Entry/default-admission validation, return validation and publication are
+synchronous read-only phases. Supported Owner effecting entries reject reentrancy
+before any mutation or async enqueue, even if a guarded getter catches the
+nested error. Invalid/throwing/asynchronous admission readers reject observations
+without publication; only a valid enabled=false state represents Off. Command
+admission remains fail-closed and accepted-request replay is preserved.
+Real abort/timer signals only latch and defer the shared drain.
+Plain snapshots are projected and byte-checked before all reference validation
+and a callback-free all-or-none commit. Task ordinals, labels and original object
+membership are checked against retained Run authority, not snapshot/body agreement.
+Compact result cursors bind Owner/generation/Run/version using a domain-separated
+128-bit digest and exact offset; they are locators, not permission credentials.
+Lookup derives from retained Runs, rejects ambiguous/foreign matches, and grants
+no restart hydration or additional access. One failed observer rejects and cleans
+itself without consuming alerts/finished/fault facts, rejecting accepted child
+callbacks, stalling lifecycle settlement or latching an Owner fault. Lifecycle
+observations share the drain, not model validation/publication; shutdown still
+needs actual execution/cleanup evidence.
+
+This phase gate protects supported Harness entrypoints, not trusted code that
+mutates internals directly, bypasses wrappers or never returns. It is not an OS
+sandbox or forced interruption. Successful publication proves only local final
+content construction before consumption: not SDK persistence, later hook fidelity,
+model receipt, user ACK or crash recovery. Usage may be appended in tool_result
+without body changes; it is accounting, not a message acknowledgement.
+
+Matched migration must reconcile existing managed definitions/permission sources
+manually and start a new Pi process; absent-only init does not replace files or
+resolve digest mismatch. Historical notify/progress/send-answered journals are
+read-only display, never pending-state hydration. See
+[matched resource migration](development.md#matched-resource-migration).
+
 ## Context, identity, and data handling
 
 The parent tool captures the real `ExtensionContext`; all relevant identity is
-rechecked after awaits. A parent-tool caller may choose profile and difficulty,
+rechecked after preparation/awaits and before publication commit, never by a
+success wrapper after consumption. A parent-tool caller may choose profile and difficulty,
 but cannot choose the concrete provider/model/thinking resolution, parent/child
 cwd, owner, generation, session ID, history path, or profile tool table.
 Optional inherited context is a bounded 64 KiB text snapshot with an aggregate

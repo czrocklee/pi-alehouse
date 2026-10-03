@@ -127,7 +127,9 @@ export interface RunView {
   unavailable_reason?: string;
   owner_blocked: boolean;
   owner_error?: string;
-  notification_drops: number;
+  task: number;
+  has_question: boolean;
+  question_id?: string;
   pending_messages: number;
   isolation: "shared";
   elapsed_ms: number;

@@ -321,6 +321,13 @@ try {
   const manager = new PermissionManager({ globalConfigPath: configPath, agentsDir: join(agentDir, "agents"), mcpServerNames: [] });
   const resolver = new PermissionResolver(manager, { getRuleset: () => [] });
   const normalizer = new PathNormalizer(posixPathFlavor, cwd);
+  const management = ["agent_spawn", "agent_run", "agent_send", "agent_answer", "agent_wait", "agent_read", "agent_interrupt", "agent_kill", "agent_list"];
+  const childDenies = JSON.parse(readFileSync(join(repo, "resources/worker-policy.json"), "utf8")).childToolDenies;
+  assert.equal(config.permission.notify_parent, "deny", "Retired communication name must be explicitly denied");
+  for (const agent of ["editor", "reader", "researcher"]) {
+    for (const tool of childDenies) assert.equal(resolver.checkPermission(tool, {}, agent).state, "deny", `${agent}: ${tool}`);
+    for (const tool of ["alert_parent", "ask_parent"]) assert.equal(resolver.checkPermission(tool, {}, agent).state, "allow", `${agent}: ${tool}`);
+  }
   const check = async (command, agentName) => {
     const program = await BashProgram.parse(command, normalizer);
     const context = { toolCallId: "fixture", toolName: "bash", cwd, agentName };
@@ -691,12 +698,23 @@ try {
   let uiCalls = 0, modelCalls = 0, grantWhole = false;
   const errors = [];
   const { getPermissionsService } = await load("service");
+  // Registry-only probes, never executable Harness tools or runtime aliases.
+  // The SDK rejects unknown names before permissions; registering even retired
+  // names here proves their explicit deny, not merely that they are absent.
+  const communicationProbe = join(scratch, "communication-permission-probe.ts");
+  writeFileSync(communicationProbe, `export default function (pi) {
+    for (const name of ${JSON.stringify([...new Set([...management, ...childDenies, "alert_parent", "ask_parent"])])})
+      pi.registerTool({ name, label: name, description: "Offline permission registry probe; never execute",
+        parameters: { type: "object", properties: {}, additionalProperties: true },
+        execute() { throw new Error("Permission probe must not execute"); } });
+  }`);
   const make = async (agent, parent, duplicate, suppliedSessionManager, guardFirst = false) => {
     const eventBus = createEventBus();
     const settingsManager = SettingsManager.inMemory();
     const extensions = (guardFirst
       ? ["static-safety-guard.ts", "managed-permissions/index.ts", "policy-grep.ts"]
       : ["managed-permissions/index.ts", "static-safety-guard.ts", "policy-grep.ts"]).map(name => join(agentDir, "extensions", name));
+    extensions.push(communicationProbe);
     const unpatched = join(dirname(publicServicePath), "index.ts");
     if (duplicate === "before") extensions.unshift(unpatched);
     if (duplicate === "after") extensions.push(unpatched);
@@ -757,6 +775,14 @@ try {
   ];
   for (const agent of [undefined, "editor", "reader"]) {
     const node = agent ? await make(agent, root) : root;
+    for (const tool of ["alert_parent", "ask_parent"]) {
+      const decision = await node.call(tool, tool === "alert_parent" ? { message: "synthetic" } : { question: "synthetic" });
+      assert.equal(decision?.block, undefined, `Actual communication gate: ${agent}: ${tool}: ${JSON.stringify(decision)}`);
+    }
+    assert.equal((await node.call("notify_parent", { message: "retired" }))?.block, true, "Retired communication cannot reach execute");
+    for (const tool of agent ? childDenies : management) {
+      assert.equal((await node.call(tool, {}))?.block, agent ? true : undefined, `Actual management exclusion: ${agent}: ${tool}`);
+    }
     for (const command of [...positive, ...fixedRequested, ...weeklyRequested, ...nativeReads]) {
       assert.equal((await node.call("bash", { command }))?.block, undefined, `Actual gate allows ${agent}: ${command}`);
     }

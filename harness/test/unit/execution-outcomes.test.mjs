@@ -73,12 +73,13 @@ test("initialization cleanup uncertainty survives failure before a port was retu
   assert.equal((await c.shutdown()).closed, false); owner.assertHeld();
 });
 
-test("wait always rejects via its Promise, including unknown Run IDs", async (t) => {
+test("lifecycle and model wait entry validation rejects invalid targets before registration", async (t) => {
   const { controller: c } = await fixture(t);
-  let unknown;
-  assert.doesNotThrow(() => { unknown = c.wait(["unknown"], { mode: "all" }); });
-  await assert.rejects(unknown, errorCode("RUN_NOT_FOUND"));
-  await assert.rejects(c.wait([], { mode: "all" }), errorCode("INVALID_WAIT"));
+  assert.throws(() => c.waitForRuns(["unknown"], { mode: "all" }), errorCode("RUN_NOT_FOUND"));
+  assert.throws(() => c.waitForRuns([], { mode: "all" }), errorCode("INVALID_WAIT"));
+  assert.throws(() => c.observe({ kind: "wait", agent_ids: ["unknown"] }, { validate() {} }), errorCode("AGENT_NOT_FOUND"));
+  assert.throws(() => c.observe({ kind: "wait", agent_ids: [] }, { validate() {} }), errorCode("INVALID_WAIT"));
+  assert.equal(c.stats().internal_error, undefined);
 });
 
 test("initialization failure is not labelled cancellation", async (t) => {
@@ -177,8 +178,8 @@ test("normal exit clears its deadline and a resumed Run owns a fresh timer", asy
 
 test("runtime snapshots are validated, projected live, and billed once at finish", async (t) => {
   const { controller: c, ports } = await fixture(t);
-  const run = await c.submit("runtime", task("runtime")); await until(() => ports[0]?.streaming);
-  const waiting = c.wait([run.run_id], { mode: "all", timeout_ms: 20 });
+  const run = await c.submit("runtime", task("runtime", { name: "runtime" })); await until(() => ports[0]?.streaming);
+  const waiting = c.observe({ kind: "wait", agent_ids: [run.agent_id], mode: "all", wait_ms: 20 }, { validate() {} });
   ports[0].callbacks.runtime({ activity: "unknown", context: { tokens: -1, context_window: 0 } });
   assert.equal(c.view(run.run_id).runtime, undefined);
   const usage = { byModel: { "p/m": { input: 2, output: 1, cache_read: 0, cache_write: 0, cost: 0.25 } }, partial: ["cost"] };
@@ -191,7 +192,7 @@ test("runtime snapshots are validated, projected live, and billed once at finish
   // A structurally valid cumulative regression cannot erase already observed spend.
   ports[0].callbacks.runtime({ activity: "tool", usage: { byModel: { "p/m": { input: 1, output: 0, cache_read: 0, cache_write: 0, cost: 0 } }, partial: ["cost"] } });
   assert.equal(c.view(run.run_id).usage.total.cost, 0.25);
-  assert.equal((await waiting).reason, "timeout", "runtime telemetry does not wake model waits");
+  assert.equal(JSON.parse((await waiting).content[0].text).reason, "timeout", "runtime telemetry does not wake model waits");
   ports[0].calls[0].done.resolve({ kind: "success", output: { text: "done", total_chars: 4, truncated: false } });
   await ended(c, run);
   ports[0].callbacks.runtime({ activity: "retrying", usage: { byModel: { "p/m": { input: 99, output: 99, cache_read: 0, cache_write: 0, cost: 99 } } } });

@@ -370,10 +370,11 @@ const controller = await Controller.open({
 
 const terminal = (status) => ["completed", "needs_input", "failed", "cancelled"].includes(status);
 async function finish(run) {
-  const waited = await controller.wait([run.run_id], { mode: "all", timeout_ms: 10_000 });
-  assert.equal(waited.reason, "condition", JSON.stringify(waited));
-  assert(terminal(waited.snapshots[0].status));
-  return waited;
+  assert.equal(await controller.waitForRuns([run.run_id], { mode: "all", timeout_ms: 10_000 }), "ready");
+  const snapshot = controller.view(run.run_id);
+  assert(terminal(snapshot.status));
+  // Internal lifecycle evidence only: no model publication or inbox drain.
+  return { snapshots: [snapshot], results: [controller.getResult(run.run_id, { limit: 16384 })] };
 }
 function scriptedBash(id, finalText) {
   let count = 0;

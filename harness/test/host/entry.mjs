@@ -477,14 +477,17 @@ try {
     entry.customType === "harness:run-link:v1");
   const first = await invoke("agent_spawn", { agent: "entry", profile: "reader", difficulty: 3,
     prompt: "Read source.txt", label: "Entry smoke", max_turns: 4, wait_ms: 60000 });
-  assert.deepEqual(first, { agent: "entry", status: "completed", result: "ENTRY_READ_OK" },
-    "replies name the Agent and carry no routing");
+  assert.equal(first.reason, "done");
+  assert.deepEqual(first.action, { type: "agent_spawn", agent: "entry", task: 1 });
+  assert.deepEqual(first.agents, [{ agent: "entry", task: 1, status: "completed", result: "ENTRY_READ_OK" }],
+    "unified replies name the Agent/task and carry no routing");
   const fixedLink = lastLink();
   assert(fixedLink, "the real SDK child must record a parent run link");
   assert.equal(fixedLink.data.routing.thinking_resolution, "preset_fixed");
   assert.equal(fixedLink.data.routing.effort_source, "user_override");
   assert.equal(fixedLink.data.routing.parent_thinking, "off");
-  const finish = async (reply) => {
+  const finish = async (envelope) => {
+    const [reply] = envelope.agents; assert(reply);
     if (reply.status === "completed" && reply.result !== undefined && !reply.next_cursor) return reply;
     for (let i = 0; i < 8; i++) {
       const [waited] = (await invoke("agent_wait", { agents: [reply.agent], wait_ms: 1000 })).agents;
@@ -499,7 +502,7 @@ try {
   await waitUntil(() => heldResponseEntered, "accepting child before Off");
   // Cached definitions bypass active-tool visibility, so these rejections prove
   // execution-side admission rather than merely an unavailable schema.
-  const cachedTools = new Map(["agent_spawn", "agent_run", "agent_send"].map((name) => [name, parent.getToolDefinition(name)]));
+  const cachedTools = new Map(["agent_spawn", "agent_run", "agent_send", "agent_answer"].map((name) => [name, parent.getToolDefinition(name)]));
   const setActiveTools = parent.setActiveToolsByName.bind(parent);
   let visibilityFailureReached = false;
   parent.setActiveToolsByName = () => { visibilityFailureReached = true; throw new Error("ENTRY_TOOL_VISIBILITY_FAILURE"); };
@@ -518,6 +521,7 @@ try {
     ["agent_spawn", { agent: "blocked", profile: "reader", difficulty: 3, prompt: "Must not start", label: "Blocked" }],
     ["agent_run", { agent: "entry", prompt: "Must not start" }],
     ["agent_send", { agent: "entry", message: "Must not steer" }],
+    ["agent_answer", { agent: "entry", question_id: `q_${"0".repeat(32)}`, answer: "Must not answer" }],
   ]) {
     await assert.rejects(cachedTools.get(name).execute(`off-block-${name}-${args.agent}`, args, undefined, undefined,
       parent.extensionRunner.createContext()), /WORKERS_DISABLED/);
@@ -528,13 +532,16 @@ try {
   const offResult = await invoke("agent_read", { agent: "entry" });
   assert.deepEqual(parent.getActiveToolNames().filter((name) => delegationTools.includes(name)), cleanupToolNames,
     "the next request must repair tool visibility without changing the Off selection");
-  assert.equal(offResult.status, "running", "Off keeps inspection of the accepted task");
+  assert.equal(offResult.reason, "snapshot"); assert.equal(offResult.workers_disabled, true);
+  assert.equal(offResult.agents[0].status, "running", "Off keeps inspection of the accepted task");
   heldResponse.resolve();
   assert.equal((await finish(held)).result, "ENTRY_HOLD_DONE", "accepted work must finish while Off");
   await parent.prompt("/harness-preset entry-other");
   expectedWorkers = "on";
   const next = await invoke("agent_run", { agent: "entry", prompt: "Read source.txt again", label: "Entry again", wait_ms: 60000 });
-  assert.deepEqual(next, { agent: "entry", status: "completed", result: "ENTRY_READ_OK" });
+  assert.equal(next.reason, "done");
+  assert.deepEqual(next.action, { type: "agent_run", agent: "entry", task: 3 });
+  assert.deepEqual(next.agents, [{ agent: "entry", task: 3, status: "completed", result: "ENTRY_READ_OK" }]);
   assert.deepEqual(lastLink().data.routing, fixedLink.data.routing, "reenabling a different preset must not reconfigure a reused fixed-effort Agent");
   await parent.prompt("/harness-preset entry-fixture");
   assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
@@ -549,7 +556,9 @@ try {
   assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
   const inherited = await invoke("agent_spawn", { agent: "inherit", profile: "reader", difficulty: 3,
     prompt: "Read source.txt", label: "Explicit inherit control", max_turns: 4, wait_ms: 60000 });
-  assert.deepEqual(inherited, { agent: "inherit", status: "completed", result: "ENTRY_READ_OK" }, "effort provenance never reaches the model");
+  assert.equal(inherited.reason, "done");
+  assert.deepEqual(inherited.action, { type: "agent_spawn", agent: "inherit", task: 1 });
+  assert.deepEqual(inherited.agents, [{ agent: "inherit", task: 1, status: "completed", result: "ENTRY_READ_OK" }], "effort provenance never reaches the model");
   const inheritedLink = lastLink();
   assert.equal(inheritedLink?.data.routing.effort_source, "user_override");
   assert.equal(inheritedLink?.data.routing.thinking_resolution, "identity",

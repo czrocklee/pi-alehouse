@@ -1,6 +1,13 @@
 {
   "version": 1,
   "readTools": ["read", "bash", "grep", "find", "ls", "web_search", "source_check", "fetch_content", "get_search_content"],
+  "childToolDenies": [
+    "agent_spawn", "agent_run", "agent_send", "agent_answer", "agent_wait", "agent_read", "agent_interrupt", "agent_kill", "agent_list",
+    "delegate", "wait_agents", "read_result", "message_agents", "cancel_task", "release_agent", "list_agents",
+    "spawn_agent", "resume_agent", "read_run", "wait_runs", "steer_run", "cancel_run", "post_update",
+    "subagent", "get_subagent_result", "steer_subagent", "wait_subagents",
+    "list_subagents", "cancel_subagent", "resume_subagent", "release_subagent", "notify_parent"
+  ],
   "commonGitDenies": [
     "am *", "apply *", "bisect *", "branch -C *", "branch -D *", "branch -M *", "branch -c *", "branch -d *", "branch -m *", "checkout *", "cherry-pick *", "clean *", "config *", "merge *", "mv *", "pull *", "rebase *", "reflog delete *", "reflog expire *", "reset *", "restore *", "revert *", "rm *", "stash *", "submodule update *", "update-ref *", "worktree add *", "worktree lock *", "worktree move *", "worktree prune *", "worktree remove *", "worktree unlock *"
   ],

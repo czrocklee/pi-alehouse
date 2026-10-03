@@ -1,9 +1,9 @@
 # Current limitations and release scope
 
 This document defines Pi Alehouse's public support boundary.
-[release-policy.json](../release-policy.json) remains **PENDING**: the latest
+[release-policy.json](../release-policy.json) remains **PENDING**: the historical
 root gate (847/847 package tests), controlled full/readonly,
-Jev and SDK-history lanes, and final installed-tarball RPC smoke passed in their
+Jev and SDK-history lanes, and installed-tarball RPC smoke passed in their
 declared scopes, but public release review is not complete. No private operator's
 local-use decision, inherited test pass, or historical observation grants
 public acceptance. Test reports must declare their own scope.
@@ -92,7 +92,7 @@ retains reservations and lease semantics. The guard is opt-in and not a reload
 guard. Do not promise atomic cancellation, reload safety, or input admission
 safety.
 
-Live IDs, resident reservations, idempotence memory, and queued notifications do
+Live IDs, resident reservations, idempotence memory, and pending alerts do
 not survive a Pi restart.  There is no force release, force unlock, cleanup retry
 endpoint, restart hydration, automatic expiry, or reliable notification delivery
 service.  A Linux local `flock` lease is not distributed coordination or proof
@@ -102,8 +102,10 @@ Request idempotence keys on the tool-call ID, which Pi passes through from the
 provider (both the OpenAI-compatible and Anthropic adapters adopt the provider's
 ID verbatim) without validating uniqueness. A provider that reuses an ID across
 assistant messages is trusted: identical arguments replay the earlier accepted
-result silently — a repeated `agent_run` would return the old result instead of
-starting a new task — while differing arguments fail `REQUEST_CONFLICT`. The
+command fact — a repeated `agent_run` observes the old task instead of starting
+a new one — while differing arguments fail `REQUEST_CONFLICT`. Observations are
+not cached: a retry cannot restore alerts already consumed by successful local
+publication. The
 harness does not currently scope the key more tightly. The tool context can read
 the session branch, so keying on the assistant entry that carries the call may
 be possible, but that depends on Pi persisting the assistant message before
@@ -154,14 +156,76 @@ prompt, and with it the guideline; the tools themselves are unaffected.
 ## Retention, history, and accounting
 
 Owner-memory results are bounded by cumulative Run/result limits but not by
-heap/RSS.  Prompts, settings/context snapshots, metadata, and resident SDK
-memory are outside result accounting.  There is no automatic eviction; hitting
-the limit requires closing the Owner for new admissions.  Progress is bounded,
-coalesced, and at-most-once—not durable messaging or an ACK protocol.
-Joined `agent_send` messages, the `finished` log, and `agent_list`
-history (earlier task labels, last context, touched paths) are the same kind of
-owner-memory state: bounded, lost with the Owner, and never replayed from
-history. `touched` lists only paths passed to successful `edit`/`write` calls,
+heap/RSS. Prompts, settings/context snapshots, metadata, and resident SDK
+memory are outside result accounting. There is no automatic eviction; hitting
+the limit requires closing the Owner for new admissions.
+
+The [tool contract](tool-contract.md) defines communication and retention.
+One FIFO bounds accepted pending alerts at 64 per Owner / 16 per source Agent
+across Runs; no per-Run queue, coalescing, eviction or rejected-call drop counter.
+Old/killed sources still occupy quota. Multiple Agents/history can fill the
+Owner; the per-Agent cap does not promise every Agent reserved space. Full queues
+reject new alerts and advise retaining information in the final result rather
+than loop-retrying. Repeat valid calls may create distinct events; no alert
+call-ID deduplication or durable outbox/ACK protocol is provided.
+
+Wait/read/inline observation scopes differ, and only fully displayed FIFO-prefix
+alerts are consumed. Bound tasks never drift. No bound tasks/scoped alerts
+returns nothing_pending without a timer. On default questions remain
+level-triggered, independent of their finished bit; Off excludes already-terminal
+questions only at first default binding, while explicit observation can still
+show question identity with workers_disabled. Unanswered questions return again;
+to defer one, explicitly name other Agents in `agents`, which also limits alerts
+to those Agents. Preset changes do not rebind a wait. Alert wakes matching
+observers, not the parent model, parent Bash or a new
+turn; ask asks the child to end rather than forcing suspension. Only a true
+healthy pending needs-input settlement can be explicitly answered. Historical
+questions are not permission or an actionable continuation.
+
+Question/result/alert text shares 16384 UTF-16 units and the double-JSON content
+envelope is capped at 65536 UTF-8 bytes. Labels/tokens/diagnostics count against
+the byte limit, even when outside the text budget. A complete first alert is
+reserved for reason=alert; full worst-case question and alert cannot always fit
+together. Read prioritizes the complete recorded question; unshown alerts stay
+pending. Mandatory control rows, pending names and truncation flags stay intact;
+the model tool adapter requires resident ≤16 (production eight), while core can
+support more. Model tool assembly also explicitly binds lifetime-valid unique
+model names, rejecting incompatible existing generic history before exposing
+tools; final admission prevents later incompatible work. Generic core names
+remain optional/repeatable display text. Low-level `observe` requires
+model-representable snapshots; it is not generic identity conversion. A refused
+binding preserves pending alerts but does not make their bodies model-readable;
+`getResult` reads retained result text, not the alert FIFO. No accepted facts are
+silently filtered or renamed. Increasing adapter bounds needs a new packing
+proof, not silent truncation. Fixed-width recovery cursors are reserved for bound terminal
+windows with remaining text, including wholly omitted pages after Agent reuse;
+the conservative reservation bound is 65045 bytes. Keep returned cursors: task
+ordinals are not historical-read parameters, and a convenience-only finished row
+or wholly shown/empty result does not newly acquire an all-history selector.
+Cursors are stateless 128-bit Owner/generation/Run/version locators with accepted
+negligible collision risk, not permission grants. Timeout/abort do not drain
+alerts or finished reminders.
+
+Publication consumes only after constructing final local content and validating
+all references, not after proof of SDK persistence, later tool_result hook fidelity,
+model receipt, human ACK or crash durability. SDK loss after commit does not
+requeue an alert. Reentrancy guards reject effects via supported synchronous
+entrypoints before mutation/enqueue; observer failure is isolated. They do not
+stop arbitrary trusted code directly mutating SDK internals or never returning.
+Timer expiry is latched once and readiness wins over timeout; Node timer
+resolution is not an exact absolute-time guarantee. Lifecycle waits share the
+drain but never model publication; empty observations are not child-exit or
+Owner-closure proof. Cooperative execution/lease limits above are unchanged.
+
+Finished reminders use each original Run's fixed finished_presented bit and
+settled_seq, not a second log or cursor. Showing that original task's terminal
+row commits its bit; a running row with the same Agent name, alert/list/UI/count
+never does. Result/history remain rereadable and pending questions can reopen
+without resetting the bit. Joined `agent_send` messages and `agent_list`
+history (earlier task labels, last context, touched paths) likewise are bounded
+Owner-memory state, lost with the Owner and never replayed from journals. Old
+notify/progress/send-answered logs stay readable literally, never rewritten or
+hydrated as new pending work. `touched` lists only paths passed to successful `edit`/`write` calls,
 not files a shell command changed. Handed-off text is another child's retained
 final output, bounded and framed as reference; it is not verified.
 
@@ -175,7 +239,9 @@ Pi's public extension context lacks a parent usage writer.  `UsageLedger.total`
 is derived from its `byModel` shares; live runtime observations and final facts
 merge as a non-regressing observed-floor envelope.  That observation state is
 distinct from parent handoff: child spend can be merged only into a later parent
-tool result.  Spend settling after the last such result remains
+tool result. This usage hook may append accounting without modifying the
+already-published communication body; it is not a message ACK. Spend settling
+after the last such result remains
 `unreported_usage` and gets a non-billable audit snapshot when possible; abrupt
 process loss may prevent even that.  Partial usage means incomplete observation,
 not zero price; unreported residue is a separate gap.  Neither is repaired by a
@@ -226,6 +292,18 @@ runtimes, not live providers.
 The prompt queue yield protects permission dialogs only within the known process
 queue protocol.  It is not an atomic global UI transaction and `/reload` does
 not replace its existing wrapper.
+
+## Matched migration scope
+
+New package, generated agents/policy/seeds/integrity manifest and managed user
+definitions/permissions must match in a fresh Pi process; no open-Owner reload or
+runtime swap. The launcher verifies managed definition digests, including worker
+body changes. Absent-only init never repairs existing mismatches automatically;
+reconcile deliberately without replacing user symlinks or weakening permission
+floors. Rollback must coordinate the same resources; see
+[matched resource migration](development.md#matched-resource-migration).
+Nix validation/activation, host collectors, live model/network trials, human
+approval and publication require separate authorization and scoped evidence.
 
 ## Routing and configuration scope
 

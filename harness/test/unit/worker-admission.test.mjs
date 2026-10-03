@@ -46,7 +46,7 @@ test("accepted queued and running Runs drain after admission closes", async (t) 
 test("off rejects external steer but preserves accepted input, soft-budget delivery, reads, waits and release", async (t) => {
   const state = { enabled: true, revision: 0 };
   const { controller: c, ports, events } = await fixture(t, { controller: { admission: admission(state) } });
-  const run = await c.submit("budget", task("budget", { max_turns: 1 }));
+  const run = await c.submit("budget", task("budget", { name: "budget", max_turns: 1 }));
   await until(() => ports[0]?.streaming);
   ports[0].deliveryGate = deferred();
   c.steer(run.run_id, "accepted before off"); await tick();
@@ -60,15 +60,15 @@ test("off rejects external steer but preserves accepted input, soft-budget deliv
   await until(() => ports[0].inputs.includes(softBudgetMessage));
   assert.deepEqual(events.map((event) => event.kind), ["submit", "steer", "soft_budget"]);
   ports[0].finish("done");
-  const waited = await c.wait([run.run_id], { mode: "all" });
-  assert.equal(waited.reason, "condition"); assert.equal(c.getResult(run.run_id).text, "done");
+  const waited = JSON.parse((await c.observe({ kind: "wait", agent_ids: [run.agent_id], mode: "all" }, { validate() {} })).content[0].text);
+  assert.equal(waited.reason, "task_issue"); assert.equal(waited.workers_disabled, true); assert.equal(c.getResult(run.run_id).text, "done");
   assert.throws(() => c.steer(run.run_id, "already finished"), errorCode("RUN_INPUT_CLOSED"));
   assert.deepEqual(events.map((event) => event.kind), ["submit", "steer", "soft_budget"]);
   assert.equal((await c.release(run.agent_id)).released, true);
   assert.equal(c.list({ include_released: true }).length, 1);
 });
 
-for (const fault of ["cancel", "parent-history"]) test(`steer rechecks input/Owner guards after admission callback reentry (${fault})`, async (t) => {
+for (const fault of ["cancel", "parent-history"]) test(`steer forbids effects from a guarded admission callback (${fault})`, async (t) => {
   let reenter = () => {};
   const { controller: c, ports, events } = await fixture(t, { controller: {
     admission: () => { reenter(); return { enabled: true, revision: 0 }; },
@@ -79,11 +79,13 @@ for (const fault of ["cancel", "parent-history"]) test(`steer rechecks input/Own
     if (fault === "cancel") c.cancel(run.run_id);
     else c.latchParentHistoryFailure(new Error("synthetic parent failure"));
   };
-  assert.throws(() => c.steer(run.run_id, "must not accept"),
-    errorCode(fault === "cancel" ? "RUN_INPUT_CLOSED" : "OWNER_PARENT_UNAVAILABLE"));
+  assert.throws(() => c.steer(run.run_id, "must not accept"), errorCode("OBSERVATION_REENTRANCY"));
+  reenter = () => {};
   await tick();
-  assert.deepEqual(events.map((event) => event.kind), fault === "cancel" ? ["submit", "cancel"] : ["submit"]);
+  assert.deepEqual(events.map((event) => event.kind), ["submit"]);
   assert.deepEqual(ports[0].inputs, []);
+  assert.equal(c.view(run.run_id).status, "running");
+  assert.equal(c.stats().parent_error, undefined); assert.equal(c.stats().internal_error, undefined);
 });
 
 test("off retains accepted request idempotence and conflict detection", async (t) => {

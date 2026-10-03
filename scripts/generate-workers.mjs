@@ -13,20 +13,26 @@ const git = (commands) => [...commands.map((c) => `git ${c}`), ...commands.map((
 export function renderWorkers(root = packageRoot) {
   const policy = JSON.parse(readFileSync(join(root, "resources/worker-policy.json"), "utf8"));
   assert.equal(policy.version, 1);
+  assert(Array.isArray(policy.childToolDenies) && policy.childToolDenies.length > 0 &&
+    policy.childToolDenies.every((tool) => typeof tool === "string" && /^[a-z][a-z0-9_]*$/.test(tool)), "Invalid child tool denies");
+  assert.equal(new Set(policy.childToolDenies).size, policy.childToolDenies.length, "Duplicate child tool deny");
+  assert(policy.childToolDenies.includes("agent_answer") && policy.childToolDenies.includes("notify_parent"), "Missing communication boundary deny");
+  const toolDenies = policy.childToolDenies.map((tool) => `  ${tool}: deny\n`).join("");
   const prompt = readFileSync(join(root, "resources/worker.md"), "utf8");
   const agents = {}, metadata = {};
   for (const [name, profile] of Object.entries(policy.profiles)) {
     assert.match(name, /^[a-z]+$/);
     const bashDenies = [...git(policy.commonGitDenies), ...policy.gitSpellingDenies,
       ...git(policy.mutationGitDenies), ...profile.extraBashDenies];
-    // Optional keys are omitted for reader/editor so their bytes (and digests,
-    // which installed copies must match) stay unchanged.
+    // Optional profile capabilities remain opt-in; communication changes must
+    // never widen Bash, editing, or web access.
     assert(profile.bash === undefined || profile.bash === false, `Invalid bash flag: ${name}`);
     assert(profile.prompt === undefined || (typeof profile.prompt === "string" && profile.prompt.trim()), `Invalid prompt: ${name}`);
     const bash = profile.bash !== false;
     const tools = [...policy.readTools.filter((tool) => bash || tool !== "bash"), ...(profile.edits ? ["edit", "write"] : [])];
+    assert(tools.every((tool) => !policy.childToolDenies.includes(tool)), `Denied tool in profile: ${name}`);
     agents[name] = `---\ndisplay_name: Worker\ndescription: ${JSON.stringify(profile.description)}\ntools: ${JSON.stringify(tools)}\nprompt_mode: replace\ninherit_context: false\npermission:\n` +
-      (profile.edits ? "" : '  write: deny\n  edit: deny\n  path_write:\n    "*": deny\n') +
+      toolDenies + (profile.edits ? "" : '  write: deny\n  edit: deny\n  path_write:\n    "*": deny\n') +
       `  bash:\n    "*": ${bash ? "ask" : "deny"}\n` + bashDenies.map((p) => `    ${JSON.stringify(p)}: deny`).join("\n") +
       `\n---\n${prompt}${profile.prompt ? `\n${profile.prompt}\n` : ""}\n`;
     // Nix's toJSON sorts attributes; retain that order for byte-for-byte output.

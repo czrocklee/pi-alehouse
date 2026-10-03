@@ -10,8 +10,6 @@ import { DELIVERY_LOG_LIMIT, INBOX_CHARS, INBOX_LIMIT } from "../../dist/core/ow
 // fail-closed owner is legal state, and `reserved_by` is checked in its weak
 // form because the answer-reservation window legitimately outlives statuses.
 
-const SETTLED_LOG_LIMIT = 256;
-
 export function assertOwnerInvariants(controller, where = "teardown") {
   const violations = [];
   const bad = (label) => violations.push(label);
@@ -91,16 +89,27 @@ export function assertOwnerInvariants(controller, where = "teardown") {
   if (deliveries.size > DELIVERY_LOG_LIMIT) bad(`delivery log ${deliveries.size}`);
   for (const entry of deliveries.values()) if (!runs.has(entry.run_id)) bad("delivery names a dead run");
 
-  // I10: settled log — strictly increasing, unique, terminal, cursor at max.
-  let lastSeq = 0;
-  for (const entry of controller.settled) {
-    if (entry.seq <= lastSeq) bad(`settled seq ${entry.seq}`);
-    lastSeq = entry.seq;
-    const run = runs.get(entry.run_id);
-    if (!run || !terminal(run.record.status)) bad(`settled entry ${entry.run_id}`);
+  // I10: settlement sequence lives on each original Run, without a second log.
+  const settledSequences = [];
+  for (const run of runs.values()) {
+    const settled = terminal(run.record.status);
+    if (typeof run.finished_presented !== "boolean") bad(`finished bit ${run.record.run_id}`);
+    if (run.finished_presented && !settled) bad(`presented unsettled ${run.record.run_id}`);
+    if (settled !== (run.settled_seq !== undefined)) bad(`settled sequence presence ${run.record.run_id}`);
+    if (run.settled_seq !== undefined) settledSequences.push(run.settled_seq);
   }
-  if (controller.settledSeq !== lastSeq) bad(`settledSeq ${controller.settledSeq} != ${lastSeq}`);
-  if (controller.settled.length > SETTLED_LOG_LIMIT) bad(`settled log ${controller.settled.length}`);
+  settledSequences.sort((a, b) => a - b);
+  if (settledSequences.some((seq, index) => seq !== index + 1)) bad("settlement sequence gaps or duplicates");
+  if (controller.settledSeq !== settledSequences.length) bad(`settledSeq ${controller.settledSeq} != ${settledSequences.length}`);
+
+  // Pending alerts retain original Run identity; quotas are derived from the FIFO.
+  if (controller.alerts.length > 64) bad("Owner alert quota");
+  for (const alert of controller.alerts) {
+    if (runs.get(alert.run.record.run_id) !== alert.run) bad("alert names a dead Run");
+  }
+  for (const agent of agents.values()) {
+    if (controller.alerts.filter((alert) => alert.run.record.agent_id === agent.id).length > 16) bad(`Agent alert quota ${agent.id}`);
+  }
 
   // I13/I14: release bookkeeping and closed implications.
   if (!Number.isInteger(controller.cleaning) || controller.cleaning < 0) bad("cleaning counter");

@@ -281,7 +281,7 @@ export default function harnessExtension(pi: ExtensionAPI) {
     try { ctx.ui.notify(issues.length
       ? `Model preset ${presetLabel(snapshot)} selected; existing agents are unchanged, but ${issues.join("; ")}`
       : snapshot.name === "off"
-        ? "Delegation off: new, resumed and steered work is disabled; accepted work continues and results remain available."
+        ? "Delegation off: new tasks, answers and steering are disabled; accepted work continues and results remain available."
         : `Model preset ${presetLabel(snapshot)} selected; existing agents are unchanged.`, issues.length ? "warning" : "info"); }
     catch { /* best-effort UI after a successful selection */ }
     return publication;
@@ -418,6 +418,8 @@ export default function harnessExtension(pi: ExtensionAPI) {
   // see, so the ledger rides out on the next tool result of ANY kind rather than
   // waiting for a delegation one. Returning `usage` alone is safe: the runner
   // merges into a copy of the event, so content, details and isError survive.
+  // Communication publication already committed before this hook; usage is
+  // separate accounting, never a body rewrite or a message acknowledgement.
   // See docs/architecture.md, "Accounting".
   pi.on("tool_result", (event) => {
     // Admission wakes the widget before any tool-local wait. Wake again for
@@ -553,7 +555,7 @@ export default function harnessExtension(pi: ExtensionAPI) {
         assert(webToolNames.every((tool) => tools.includes(tool)) && !["bash", "edit", "write"].some((tool) => tools.includes(tool)),
           `Invalid tools in ${name}`);
       }
-      return [name, { definition, body: parsed.body, tools: [...tools, "notify_parent", "ask_parent"] }];
+      return [name, { definition, body: parsed.body, tools: [...tools, "alert_parent", "ask_parent"] }];
     })) as Record<typeof agentProfileNames[number], { definition: string; body: string; tools: string[] }>;
     // The launcher's verified pi-web-access entry; a researcher spawn fails
     // closed without it. Each researcher session loads its own instance, which

@@ -80,15 +80,24 @@ test("agent summary keeps task history, last context, cost and touched paths acr
     touched: ["src/a.ts", "/etc/hosts"], touched_omitted: 0, pending_updates: 0, idle_ms: 5_000 });
 });
 
-test("settledSince reports each settled Run once, in order, and counts what fell out of the log", async (t) => {
-  const f = await fixture(t);
-  const start = f.controller.settledSince(0);
-  assert.deepEqual(start, { cursor: 0, run_ids: [], missed: 0 });
-  const run = await f.controller.submit("a", task("work"));
-  await until(() => f.ports[0]?.streaming); f.ports[0].finish(); await ended(f.controller, run);
-  const next = f.controller.settledSince(start.cursor);
-  assert.deepEqual(next, { cursor: 1, run_ids: [run.run_id], missed: 0 });
-  assert.deepEqual(f.controller.settledSince(next.cursor), { cursor: 1, run_ids: [], missed: 0 });
+test("finished reminders report original Runs once in settlement order without a second log", async (t) => {
+  const f = await fixture(t, { controller: { concurrency: 2 } });
+  const start = JSON.parse((await f.controller.observe({ kind: "wait", wait_ms: 0 }, { validate() {} })).content[0].text);
+  assert.equal(start.reason, "nothing_pending"); assert.equal(start.finished, undefined);
+  const a = await f.controller.submit("a", task("work a", { name: "alpha" }));
+  const b = await f.controller.submit("b", task("work b", { name: "beta" }));
+  await until(() => f.ports.length === 2 && f.ports.every((port) => port.streaming));
+  f.ports[1].finish("B"); await ended(f.controller, b);
+  f.ports[0].finish("A"); await ended(f.controller, a);
+  assert.equal(f.controller.runs.get(b.run_id).settled_seq, 1);
+  assert.equal(f.controller.runs.get(a.run_id).settled_seq, 2);
+  assert.equal(f.controller.runs.get(a.run_id).finished_presented, false, "lifecycle settlement is not presentation");
+  const next = JSON.parse((await f.controller.observe({ kind: "wait", wait_ms: 0 }, { validate() {} })).content[0].text);
+  assert.deepEqual(next.finished.map(({ agent, task }) => ({ agent, task })), [{ agent: "beta", task: 1 }, { agent: "alpha", task: 1 }]);
+  assert.equal(f.controller.runs.get(a.run_id).finished_presented, true);
+  const again = JSON.parse((await f.controller.observe({ kind: "wait", wait_ms: 0 }, { validate() {} })).content[0].text);
+  assert.equal(again.finished, undefined);
+  assert.equal(f.controller.getResult(a.run_id).text, "A", "presentation does not consume results");
 });
 
 
@@ -151,25 +160,31 @@ test("an ending target is waited out and reported, and the message never moves t
   f.ports[0].finish("partial", "aborted"); await ended(f.controller, started);
 });
 
-test("send answers a pending question with a new Run on the same conversation, once", async (t) => {
+test("send does not answer; explicit answer continues the same conversation once", async (t) => {
   const f = await fixture(t);
   const asking = await f.controller.submit("a", task("compute"));
   await until(() => f.ports[0]?.streaming);
   f.ports[0].callbacks.question("Which factor?"); f.ports[0].finish("need a factor");
   assert.equal((await ended(f.controller, asking)).snapshots[0].status, "needs_input");
   await assert.rejects(resume(f.controller, "r", asking.agent_id, "unrelated"), errorCode("PENDING_QUESTION"));
-  const answer = await f.controller.send("s", asking.agent_id, "3");
-  assert.equal(answer.delivery, "answered"); assert.notEqual(answer.view.run_id, asking.run_id);
-  assert.equal(answer.view.description, "compute", "the answer continues the asking task's label");
+  const unsent = await f.controller.send("s", asking.agent_id, "3");
+  assert.equal(unsent.delivery, "not_delivered"); assert.equal(unsent.view.run_id, asking.run_id);
+  assert.equal(f.controller.stats().runs, 1, "send creates no continuation or reservation");
+  const questionId = f.controller.view(asking.run_id).question_id;
+  const answer = await f.controller.answer("answer", asking.agent_id, questionId, "3");
+  assert.notEqual(answer.run_id, asking.run_id);
+  assert.equal(answer.description, "compute", "the answer continues the asking task's label");
   await until(() => f.ports[0].calls.length === 2);
   assert.equal(f.ports[0].calls[1].prompt, "3");
-  assert.equal((await f.controller.send("s", asking.agent_id, "3")).view.run_id, answer.view.run_id, "a retry replays");
+  assert.equal((await f.controller.answer("answer", asking.agent_id, questionId, "3")).run_id, answer.run_id, "a retry replays");
+  await assert.rejects(f.controller.answer("answer", asking.agent_id, questionId, "4"), errorCode("REQUEST_CONFLICT"));
+  await assert.rejects(f.controller.answer("competing", asking.agent_id, questionId, "4"), errorCode("STALE_ANSWER"));
   f.ports[0].finish("231");
-  assert.equal((await ended(f.controller, answer.view)).snapshots[0].status, "completed");
+  assert.equal((await ended(f.controller, answer)).snapshots[0].status, "completed");
   assert.equal((await f.controller.send("s2", asking.agent_id, "4")).delivery, "not_delivered", "an answered question is gone");
 });
 
-test("the prepare hook and abort are checked after the settle wait and before any side effect", async (t) => {
+test("send and answer prepare hooks and aborts are checked before any side effect", async (t) => {
   const f = await fixture(t);
   const asking = await f.controller.submit("a", task("compute"));
   await until(() => f.ports[0]?.streaming);
@@ -180,8 +195,12 @@ test("the prepare hook and abort are checked after the settle wait and before an
   const aborted = f.controller.send("aborted", asking.agent_id, "3", { signal: abort.signal });
   abort.abort();
   await assert.rejects(aborted, errorCode("TOOL_INTERRUPTED"));
+  const questionId = f.controller.view(asking.run_id).question_id;
+  await assert.rejects(f.controller.answer("stale-answer", asking.agent_id, questionId, "3", { prepare: () => { throw new Error("STALE_OWNER_CONTEXT"); } }), /STALE_OWNER_CONTEXT/);
+  await assert.rejects(f.controller.answer("aborted-answer", asking.agent_id, questionId, "3", { signal: abort.signal }), errorCode("TOOL_INTERRUPTED"));
   assert.equal(f.ports[0].calls.length, 1, "no answer task started");
   assert.equal(f.controller.stats().runs, 1);
+  assert.equal(f.controller.view(asking.run_id).question_id, questionId, "failed admission leaves the original question available");
 });
 
 test("send is bounded and rejects killed Agents", async (t) => {
@@ -233,7 +252,9 @@ test("kill releases an idle Agent now and a busy one once its task stops", async
   const f = await fixture(t);
   const idle = await f.controller.submit("a", task("one"));
   await until(() => f.ports[0]?.streaming); f.ports[0].finish(); await ended(f.controller, idle);
+  const idleStarted = performance.now();
   assert.deepEqual(await f.controller.kill(idle.agent_id), { agent_id: idle.agent_id, state: "released" });
+  assert(performance.now() - idleStarted < 1000, "confirmed idle cleanup wakes kill before its deadline");
   assert.equal(f.ports[0].disposed, 1);
 
   const busy = await f.controller.submit("b", task("two"));
@@ -241,7 +262,7 @@ test("kill releases an idle Agent now and a busy one once its task stops", async
   assert.deepEqual(await f.controller.kill(busy.agent_id, 10), { agent_id: busy.agent_id, state: "exiting" });
   assert.equal(f.controller.view(busy.run_id).status, "cancelling");
   assert.equal(f.controller.view(busy.run_id).unavailable_reason, "exiting");
-  await assert.rejects(f.controller.send("s", busy.agent_id, "late"), errorCode("AGENT_UNAVAILABLE"));
+  await assert.rejects(f.controller.send("s", busy.agent_id, "late", { settle_ms: 10 }), errorCode("AGENT_UNAVAILABLE"));
   f.ports[1].finish("partial", "aborted");
   await ended(f.controller, busy);
   await until(() => !f.controller.view(busy.run_id).resident);
@@ -251,8 +272,10 @@ test("kill releases an idle Agent now and a busy one once its task stops", async
   const quick = await f.controller.submit("c", task("three"));
   await until(() => f.ports[2]?.streaming);
   f.ports[2].autoStop = true;
+  const quickStarted = performance.now();
   assert.deepEqual(await f.controller.kill(quick.agent_id), { agent_id: quick.agent_id, state: "released" },
     "a task that stops promptly is waited for");
+  assert(performance.now() - quickStarted < 1000, "confirmed stop and cleanup wake kill before its deadline");
 });
 
 test("kill has one deadline for stopping and cleanup; unconfirmed cleanup stays tracked and reserved", async (t) => {
