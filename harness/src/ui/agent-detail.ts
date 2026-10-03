@@ -57,7 +57,7 @@ export interface DetailInput { view: RunView; live: DetailLive }
  * what lets the field rendering above stay a pure, directly testable function.
  */
 const shortId = (value: string): string => value.length <= 14 ? value : `${value.slice(0, 6)}…${value.slice(-4)}`;
-const statusWord = (view: RunView): string =>
+const statusWord = (view: RunView): RunView["status"] | "finishing" =>
   view.status === "running" && view.finalization_pending ? "finishing" : view.status;
 
 /**
@@ -67,15 +67,32 @@ const statusWord = (view: RunView): string =>
  * rule would read as a divider the pane does not have.
  */
 const spanRow = (left: string, right: string, width: number, theme: Theme, rule: boolean): string => {
-  const gap = Math.max(1, width - visibleWidth(left) - visibleWidth(right));
-  // A rule needs the two spaces that keep it off the text; below that, only spaces fit.
-  // Framed, the gap is the same accent rule as the rest of the outer edge.
-  const filler = rule && gap >= 3 ? ` ${theme.fg("borderAccent", POPOVER.h.repeat(gap - 2))} ` : " ".repeat(gap);
+  const rightWidth = visibleWidth(right);
+  const gap = Math.max(rightWidth ? 1 : 0, width - visibleWidth(left) - rightWidth);
+  // A trailing rule has no right label to separate: run it to the inlay's end,
+  // rather than leaving extra spaces beside the frame's close control.
+  const tail = rightWidth ? " " : "";
+  const filler = rule && gap >= 3 ? ` ${theme.fg("borderAccent", POPOVER.h.repeat(gap - 1 - tail.length))}${tail}` :
+    rule && !rightWidth ? theme.fg("borderAccent", POPOVER.h.repeat(gap)) : " ".repeat(gap);
   return truncateToWidth(left + filler + right, width);
 };
 
-/** The pane's own title row: who this is and what it is doing right now. */
-export function renderDetailTitle(input: DetailInput, spinnerFrame: number, theme: Theme, width: number,
+/** Live status chrome, shared by docked and framed lower-left footers. */
+const renderDetailStatus = (view: RunView, spinnerFrame: number, theme: Theme, width: number): string => {
+  const word = statusWord(view);
+  const compact = { queued: "queued", running: "run", finishing: "finish", cancelling: "cancel",
+    completed: "done", needs_input: "input", failed: "failed", cancelled: "cancel" };
+  const label = visibleWidth(word) + 2 <= width ? word : compact[word];
+  const running = !terminal(view.status);
+  const icon = running ? theme.fg("accent", SPINNER[spinnerFrame % SPINNER.length]!) :
+    view.status === "completed" ? theme.fg("success", GLYPHS.success) :
+    view.status === "needs_input" ? theme.fg("warning", GLYPHS.question) :
+    view.status === "cancelled" ? theme.fg("dim", GLYPHS.stopped) : theme.fg("error", GLYPHS.failure);
+  return `${icon} ${theme.fg(running ? "accent" : "dim", label)}`;
+};
+
+/** The pane's own title row: identity and task, without live status. */
+export function renderDetailTitle(input: DetailInput, _spinnerFrame: number, theme: Theme, width: number,
   rule = false): string {
   const { view } = input;
   // The title is one row -- inlaid into the top border when the pane floats, so
@@ -84,23 +101,17 @@ export function renderDetailTitle(input: DetailInput, spinnerFrame: number, them
   // Without a nickname the profile is already the title; repeating it as a tag
   // would label one fact twice, the same way the widget row avoids it.
   const tags = [view.name ? view.effective_settings.profile : ""].filter(Boolean).map(withoutBreaks);
-  const running = !terminal(view.status);
-  const icon = running ? theme.fg("accent", SPINNER[spinnerFrame % SPINNER.length]!) :
-    view.status === "completed" ? theme.fg("success", GLYPHS.success) :
-    view.status === "needs_input" ? theme.fg("warning", GLYPHS.question) :
-    view.status === "cancelled" ? theme.fg("dim", GLYPHS.stopped) : theme.fg("error", GLYPHS.failure);
   const identity = tags.length ? `${theme.bold(name)} ${theme.fg("dim", `(${tags.join(" · ")})`)}` : theme.bold(name);
-  const right = `${icon} ${theme.fg(running ? "accent" : "dim", statusWord(view))}`;
   // The task follows the identity and tags in the title. The widget adds
   // model/signals too; this is not a copy of its whole row. The chrome never
   // scrolls: the `task` field can be scrolled out of the body, and
   // a profile like `reader` names a capability, never the work. It
-  // takes only the room the identity and the status leave, so it can crowd out
-  // neither -- below that it is dropped rather than shown as an ellipsis.
-  const room = width - visibleWidth(identity) - visibleWidth(right) - 6;
+  // takes only the room the identity leaves; below that it is dropped rather
+  // than shown as an ellipsis. Live status belongs to the lower-left footer.
+  const room = width - visibleWidth(identity) - 6;
   const task = view.description && room >= 12 ?
     `  ${theme.fg("muted", truncateToWidth(withoutBreaks(view.description), room))}` : "";
-  return spanRow(identity + task, right, width, theme, rule);
+  return spanRow(identity + task, "", width, theme, rule);
 }
 
 /**
@@ -407,7 +418,7 @@ export class DetailPane {
     const start = this.scrollOffset;
     return this.dress(renderDetailTitle(entry.input, this.frame, this.options.theme, titleWidth, !!this.options.frame),
       this.window(fields, rows, inner, start, viewportHeight),
-      this.footer(chrome, index + 1, entries.length, start + viewportHeight, total), width, inner);
+      this.footer(chrome, index + 1, entries.length, start + viewportHeight, total, entry.input.view), width, inner);
   }
 
   invalidate(): void {}
@@ -464,10 +475,14 @@ export class DetailPane {
     const viewportHeight = Math.max(MIN_VIEWPORT, Math.min(total, cap));
     return { viewportHeight, maxScroll: Math.max(0, total - viewportHeight) };
   }
-  private footer(width: number, position: number, count: number, shown: number, total: number): string {
+  private footer(width: number, position: number, count: number, shown: number, total: number, view?: RunView): string {
     const th = this.options.theme;
-    const left = th.fg("dim", count ? `${position}/${count} agents · ${Math.min(shown, total)}/${total} lines` : "no agents");
-    const right = th.fg("dim", "←→ agent · ↑↓ scroll · Esc close");
-    return spanRow(left, right, width, th, !!this.options.frame);
+    const counts = th.fg("dim", count ? `${position}/${count} agents · ${Math.min(shown, total)}/${total} lines` : "no agents");
+    const status = view ? renderDetailStatus(view, this.frame, th, width) : undefined;
+    const left = status === undefined ? counts : visibleWidth(status) + 3 + visibleWidth(counts) > width ? status :
+      `${status}${th.fg("dim", " · ")}${counts}`;
+    const hints = ["←→ agent · ↑↓ scroll · Esc close", "←→ · ↑↓ · Esc", "Esc", ""]
+      .find((text) => visibleWidth(left) + 1 + visibleWidth(text) <= width) ?? "";
+    return spanRow(left, th.fg("dim", hints), width, th, !!this.options.frame);
   }
 }

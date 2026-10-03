@@ -548,7 +548,9 @@ test("a real Controller's automatic release frees capacity but retains clickable
     transcript: () => undefined,
   });
   t.after(() => pane.dispose());
-  assert.match(pane.render(120)[0], /running/);
+  const runningPane = pane.render(120);
+  assert.match(runningPane.at(-1), /running/);
+  assert.doesNotMatch(runningPane[0], /running/);
   ports[0].calls[0].done.reject(new SessionUnavailableError("sdk_error", new Error("SDK broke")));
   await ended(controller, run);
   widget.update();
@@ -567,7 +569,9 @@ test("a real Controller's automatic release frees capacity but retains clickable
   assert.deepEqual(agent.entries(), entries, "the existing transcript remains inspectable");
   assert.equal(activities.observations.get(run.agent_id), child, "release retains failure diagnostics through linger");
   assert.match(renderDetailFields({ view: agent.view, live: agent.live }, theme, 120).join("\n"), /SDK broke/);
-  assert.match(pane.render(120)[0], /failed/, "the already-open pane retains the retired agent");
+  const failedPane = pane.render(120);
+  assert.match(failedPane.at(-1), /failed/, "the already-open pane retains the retired agent in its lower-left status");
+  assert.doesNotMatch(failedPane[0], /failed/);
   assert.match(pane.render(120).join("\n"), /SDK broke/);
   for (let i = 0; i < 3; i++) widget.onTurnStart();
   assert.deepEqual(widget.agents(), []);

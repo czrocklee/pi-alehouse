@@ -55,7 +55,7 @@ const inlayClosable = (width: number, kind: "top" | "bottom", closable: boolean)
 
 /** Columns `popoverInlay` leaves for its inlay at this width. */
 export function popoverInlayWidth(width: number, kind: "top" | "bottom", closable = false): number {
-  return Math.max(0, width - (inlayClosable(width, kind, closable) ? 4 + POPOVER_CLOSE_COLUMNS : 6));
+  return Math.max(0, width - (inlayClosable(width, kind, closable) ? 3 + POPOVER_CLOSE_COLUMNS : 6));
 }
 
 /**
@@ -67,8 +67,14 @@ export function popoverInlay(theme: PopoverTheme, width: number, inlay: string, 
   closable = false): string {
   const chrome = popoverInlayWidth(width, kind, closable);
   const text = truncateToWidth(inlay, chrome);
-  const fill = POPOVER.h.repeat(Math.max(0, chrome - visibleWidth(text)));
-  const left = outer(theme, (kind === "top" ? POPOVER.tl : POPOVER.bl) + POPOVER.h) + " " + text + " ";
-  if (inlayClosable(width, kind, closable)) return left + outer(theme, fill) + popoverCloseTail(theme);
-  return left + outer(theme, fill + POPOVER.h + (kind === "top" ? POPOVER.tr : POPOVER.br));
+  const remaining = Math.max(0, chrome - visibleWidth(text));
+  const left = outer(theme, (kind === "top" ? POPOVER.tl : POPOVER.bl) + POPOVER.h) + " " + text;
+  if (inlayClosable(width, kind, closable)) {
+    // The close tail already starts with a space. Separate a short title from
+    // the rule, but don't add another pad when the inlay fills its whole width.
+    const fill = remaining >= 2 ? " " + outer(theme, POPOVER.h.repeat(remaining - 1)) :
+      outer(theme, POPOVER.h.repeat(remaining));
+    return left + fill + popoverCloseTail(theme);
+  }
+  return left + " " + outer(theme, POPOVER.h.repeat(remaining) + POPOVER.h + (kind === "top" ? POPOVER.tr : POPOVER.br));
 }

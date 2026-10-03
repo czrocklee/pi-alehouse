@@ -469,6 +469,22 @@ async function mountFooter({ mode = "regular", entries = [], sessionManager, sta
   };
 }
 
+for (const mode of ["regular", "fullscreen"]) test(`footer input parentheses show only the cache-hit rate (${mode})`, async () => {
+  const entry = { type: "message", message: { role: "assistant", provider: "fixture", model: "cache-model" } };
+  const mounted = await mountFooter({ mode, entries: [entry] });
+  try {
+    for (const [reported, expected] of [
+      [usage(500, 20, 9000, 500, 0.25), "10k (90.0%)"],
+      [usage(0, 20, 0, 1100000, 0.25), "1.1M (0.0%)"],
+      [usage(0, 20, 0, 0, 0.25), "0 (?)"],
+    ]) {
+      entry.message.usage = reported;
+      const line = mounted.line();
+      assert(line.includes(`↑ ${expected} · ↓ 20 · $0.250`), line);
+    }
+  } finally { mounted.footer.dispose(); }
+});
+
 test("footer hides subagent indicators but retains unrelated status and metrics", async () => {
   const mounted = await mountFooter({
     statuses: new Map([
@@ -598,7 +614,9 @@ test("native SDK UsageEntries, including unknown kinds, match session totals wit
     }
     const prompt = native.tokens.input + native.tokens.cacheRead + native.tokens.cacheWrite;
     const line = mounted.line(), lines = mounted.overlayLines();
-    assert(line.includes(`↑ ${prompt} (${native.tokens.cacheRead} +${native.tokens.cacheWrite}, 25.2%)`), line);
+    // Cache reads and writes still count toward prompt totals and the hit-rate
+    // denominator; only the hit rate is shown inside the footer parentheses.
+    assert(line.includes(`↑ ${prompt} (25.2%)`), line);
     assert(line.includes(`↓ ${native.tokens.output}`), line);
     assert(line.includes(`$${native.cost.toFixed(3)}`), line);
     assert.deepEqual(spendKeys(lines), ["model", "shared-model", "tools", "main · compact/summaries", "shared-model", "warm-only", "total"]);
