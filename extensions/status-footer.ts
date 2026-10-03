@@ -710,7 +710,7 @@ function fitFooterSegments(segments: FooterSegment[], width: number, caret: stri
     Math.max(0, selected.length - 1) * FOOTER_SEPARATOR.length);
   if (used() <= width) return selected;
 
-  // Shed cache detail first, keeping honest, complete token/cost figures.
+  // Shed the hit rate first, keeping honest, complete token/cost figures.
   for (const segment of selected) if (segment.key === undefined && segment.compact) segment.text = segment.compact;
   if (used() <= width) return selected;
   const worker = selected.find((segment) => segment.key === WORKER_PRESET_INDICATOR);
@@ -1013,10 +1013,6 @@ export default function (pi: ExtensionAPI) {
           const subscription = subscriptionSuffix(ctx);
           const totalInput = promptTokens(totals);
           const rate = cacheHitRate(totals);
-          const cacheWrite =
-            totals.cacheWrite > 0
-              ? ` +${formatTokens(totals.cacheWrite)}`
-              : "";
           const cacheHitDisplay = theme.fg(hitRateColor(rate), formatHitRate(rate));
           const label = (text: string) => theme.fg("muted", text);
           const value = (text: string) => theme.fg("text", text);
@@ -1024,10 +1020,7 @@ export default function (pi: ExtensionAPI) {
             "warning",
             `$${totals.cost.toFixed(3)}`,
           )}${subscription ? theme.fg("dim", subscription) : ""}`;
-          const input = `${value(formatTokens(totalInput))} (${theme.fg(
-            "accent",
-            `${formatTokens(totals.cacheRead)}${cacheWrite}`,
-          )}, ${cacheHitDisplay})`;
+          const input = `${value(formatTokens(totalInput))} (${cacheHitDisplay})`;
 
           const modelDisplay = modelLabel(ctx, theme);
           const caret = ` ${theme.fg("dim", "▴")}`;

@@ -51,6 +51,8 @@ not a new lifecycle phase or permission to release ownership.
 Agent, or closes it when clicking the selected Agent.  `←`/`→` choose an Agent,
 `↑`/`↓` scroll, and **only** `Esc` closes it, restoring typed editor text.  The
 pane keeps focus: printable input is for the editor, not an accidental dismiss.
+The title carries identity/task; live status and its spinner or outcome glyph
+sit at the lower left, before the Agent/line counts, in both docked and floating layouts.
 
 The pane shows the fields a row cannot: identity, profile/name/task, internally
 resolved `dN→slot`, model, actual effort and its recorded source (fixed preset,

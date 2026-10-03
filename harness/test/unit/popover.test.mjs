@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { POPOVER, isPopoverCloseClick, popoverBottom, popoverCloseHit, popoverDivider, popoverInlay, popoverInlayWidth,
   popoverRow, popoverSide, popoverTitle } from "../../dist/ui/popover.js";
 
@@ -54,6 +54,25 @@ test("an inlaid edge keeps the same outer colors and never leaves the box open",
   }
 });
 
+test("a filled closable inlay keeps exactly one space before × without shifting its hit area", () => {
+  const { theme } = record();
+  const styled = { ...theme, fg: (_color, text) => `\u001b[36m${text}\u001b[39m` };
+  for (const th of [theme, styled]) for (const width of [9, 14, 24, 40, 80]) {
+    const room = popoverInlayWidth(width, "top", true);
+    for (const caption of [POPOVER.h.repeat(room), "x".repeat(Math.max(0, room - 1)), "x".repeat(room + 10), "标题".repeat(40), ""]) {
+      const top = popoverInlay(th, width, caption, "top", true);
+      const plain = stripTerminalSequences(top);
+      assert.equal(visibleWidth(top), width, plain);
+      assert.match(plain, / × ─╮$/);
+      assert.doesNotMatch(plain, / {2}×/, plain);
+      const closeColumn = visibleWidth(plain.slice(0, plain.indexOf(POPOVER.close)));
+      assert.equal(closeColumn, width - 4, plain);
+      assert.ok(isPopoverCloseClick({ type: "click", button: "left", x: width - 5, y: 0 }, width));
+      assert.ok(!isPopoverCloseClick({ type: "click", button: "left", x: width - 6, y: 0 }, width));
+    }
+  }
+});
+
 test("a closable edge ends in ` × ─╮` exactly where the shared hit test looks", () => {
   const { theme } = record();
   for (const width of [9, 24, 80]) {
@@ -81,6 +100,6 @@ test("a closable edge ends in ` × ─╮` exactly where the shared hit test loo
   // Bottom edges never carry it, and opting out keeps the old edge.
   assert.ok(!popoverInlay(theme, 40, "footer", "bottom", true).includes(POPOVER.close));
   assert.ok(!popoverTitle(theme, 40, "Worker routing").includes(POPOVER.close));
-  assert.equal(popoverInlayWidth(40, "top", true), 31);
+  assert.equal(popoverInlayWidth(40, "top", true), 32);
   assert.equal(popoverInlayWidth(40, "top"), 34);
 });

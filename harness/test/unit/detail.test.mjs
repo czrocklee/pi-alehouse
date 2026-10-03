@@ -44,28 +44,25 @@ test("wrapText breaks latin at spaces and keeps every explicit newline", () => {
   assert.deepEqual(wrapText("one\ntwo", 40), ["one", "two"]);
 });
 
-test("the title pairs the agent with its live state and fits the width", () => {
+test("the title keeps identity/task while leaving live status to the footer", () => {
   const title = renderDetailTitle({ view: view(), live: live() }, 0, theme, 60);
   assert.match(title, /^reviewer \(reader\)/);
-  // Given room the title also carries the task, which the chrome never scrolls away;
-  // too narrow for a useful fragment, it is dropped rather than shown as a stub.
-  assert.match(renderDetailTitle({ view: view(), live: live() }, 0, theme, 100), /\) {2}审查 controller\.ts/);
-  assert.match(title, /审查/, "removing the obsolete role leaves room for the task label");
-  assert.match(title, /⠋ running$/);
+  assert.match(title, /审查/);
   assert.equal(visibleWidth(title) <= 60, true);
-  assert.match(renderDetailTitle({ view: view({ status: "completed" }), live: live() }, 0, theme, 60), /✓ completed$/);
-  // Our own finalization is a distinct fact from the model still streaming.
-  assert.match(renderDetailTitle({ view: view({ finalization_pending: true }), live: live() }, 0, theme, 60), /finishing$/);
-  // An Agent the model never named is titled by its profile, once and without empty parentheses.
+  assert.match(renderDetailTitle({ view: view(), live: live() }, 0, theme, 100), /\) {2}审查 controller\.ts/);
+  for (const overrides of [{}, { status: "completed" }, { finalization_pending: true }]) {
+    const header = renderDetailTitle({ view: view(overrides), live: live() }, 0, theme, 60);
+    assert.doesNotMatch(header, /running|completed|finishing|⠋|✓/);
+  }
   const unnamed = renderDetailTitle({ view: view({ name: "" }), live: live() }, 0, theme, 60);
-  assert.match(unnamed, /^reader {2}审查/, "a capability name is not a readable one; the task is");
+  assert.match(unnamed, /^reader {2}审查/, "an unnamed Agent shows its profile only once");
   assert.doesNotMatch(unnamed, /\(/);
-  // The task takes only what identity and status leave, and never their room.
   for (const width of [60, 44, 30]) {
     const long = view({ name: "", description: "审查".repeat(60) });
     const tight = renderDetailTitle({ view: long, live: live() }, 0, theme, width);
     assert.equal(visibleWidth(tight), width, JSON.stringify(tight));
-    assert.match(tight, /⠋ running$/, `a long task crowded out the status at ${width}: ${JSON.stringify(tight)}`);
+    assert.match(tight, /^reader {2}审查/);
+    assert.doesNotMatch(tight, /⠋ running/);
   }
 });
 
@@ -432,12 +429,82 @@ test("a short body is not padded into a tall pane, and a tall one is capped", (t
   assert.ok(short.render(80).length < tall.render(80).length, "content-sized, not a fixed share");
 });
 
+for (const frame of [false, true]) test(`live status stays at the lower left with original glyphs/colors (frame=${frame})`, (t) => {
+  let current = view(); const colors = [];
+  const recording = { ...theme, fg: (color, text) => { colors.push([color, text]); return text; } };
+  const p = pane(40, 30, { frame, theme: recording,
+    snapshot: () => [{ agent_id: "a", input: { view: current, live: live() } }] });
+  t.after(() => p.dispose());
+  for (const [status, pending, icon, label, color] of [
+    ["queued", false, "⠋", "queued", "accent"], ["running", false, "⠋", "running", "accent"],
+    ["running", true, "⠋", "finishing", "accent"], ["cancelling", false, "⠋", "cancelling", "accent"],
+    ["completed", false, "✓", "completed", "success"], ["needs_input", false, "?", "needs_input", "warning"],
+    ["failed", false, "✗", "failed", "error"], ["cancelled", false, "■", "cancelled", "dim"],
+  ]) {
+    current = view({ status, finalization_pending: pending }); colors.length = 0;
+    const lines = p.render(80), badge = `${icon} ${label}`;
+    assert(lines.at(-1).startsWith(`${frame ? "╰─ " : ""}${badge} · 1/1 agents`), lines.at(-1));
+    assert(!lines[0].includes(badge), lines[0]);
+    assert.match(lines.at(-1), /←→ agent · ↑↓ scroll · Esc close/);
+    assert(colors.some(([used, text]) => used === color && text === icon));
+    assert(colors.some(([used, text]) => used === (color === "accent" ? "accent" : "dim") && text === label));
+  }
+});
+
+for (const frame of [false, true]) test(`narrow chrome prioritizes lower-left status without adding rows (frame=${frame})`, (t) => {
+  const p = pane(40, 30, { frame,
+    snapshot: () => [{ agent_id: "a", input: { view: view({ status: "needs_input" }), live: live() } }] });
+  t.after(() => p.dispose());
+  const height = p.render(80).length;
+  for (const width of [80, 61, 40, 24, 14]) {
+    const lines = p.render(width);
+    assert.equal(lines.length, height);
+    assert(lines.every((line) => visibleWidth(line) <= width));
+    assert(lines.at(-1).startsWith(`${frame ? "╰─ " : ""}? ${frame && width === 14 ? "input" : "needs_input"}`), lines.at(-1));
+    assert(!lines[0].includes("needs_input"));
+    if (frame && width === 24) {
+      assert.doesNotMatch(lines.at(-1), /agents|lines|\d\/|…/, "omit counters rather than clipping mid-value");
+      assert.match(lines.at(-1), /Esc/, "spare room still shows the close hint");
+    }
+  }
+});
+
+test("minimum-width framed footers keep every status readable without crowding it with counts", (t) => {
+  let current = view();
+  const p = pane(40, 30, { frame: true,
+    snapshot: () => [{ agent_id: "a", input: { view: current, live: live() } }] });
+  t.after(() => p.dispose());
+  for (const [status, pending, badge] of [
+    ["queued", false, "⠋ queued"], ["running", false, "⠋ run"], ["running", true, "⠋ finish"],
+    ["cancelling", false, "⠋ cancel"], ["completed", false, "✓ done"], ["needs_input", false, "? input"],
+    ["failed", false, "✗ failed"], ["cancelled", false, "■ cancel"],
+  ]) {
+    current = view({ status, finalization_pending: pending });
+    const bottom = p.render(14).at(-1);
+    assert(bottom.startsWith(`╰─ ${badge}`), bottom);
+    assert(!bottom.includes("…"), bottom);
+    assert.equal(visibleWidth(bottom), 14);
+  }
+});
+
+test("an empty roster never retains the previous Agent's footer status", (t) => {
+  let available = true;
+  const p = pane(40, 30, { frame: true,
+    snapshot: () => available ? [{ agent_id: "a", input: { view: view({ status: "needs_input" }), live: live() } }] : [] });
+  t.after(() => p.dispose());
+  assert.match(p.render(80).at(-1), /\? needs_input/);
+  available = false;
+  const lines = p.render(80);
+  assert.match(lines.at(-1), /^╰─ no agents/);
+  assert.doesNotMatch(lines.at(-1), /needs_input/);
+});
+
 test("the footer counts the whole body, fields and transcript together", (t) => {
   const p = pane(40);
   t.after(() => p.dispose());
   const fields = renderDetailFields({ view: view(), live: live() }, theme, 80);
   assert.match(p.render(80).at(-1), new RegExp(`/${fields.length + 1 + 40} lines`));
-  assert.match(p.render(80).at(-1), /^1\/1 agents/);
+  assert.match(p.render(80).at(-1), /^⠋ running · 1\/1 agents/);
 });
 
 test("a pane row drops the terminal's turn markers but keeps hyperlinks and colour", () => {
@@ -528,6 +595,7 @@ test("the floating pane draws a frame that costs columns but never rows", (t) =>
   assert.match(b.at(-1), /agents/);
   // Riding on the border does not open it: what the inlay does not use is rule.
   assert.doesNotMatch(b[0], / {3}/, `top border left open: ${JSON.stringify(b[0])}`);
+  assert.doesNotMatch(b[0], / {2}×/, `extra space before close: ${JSON.stringify(b[0])}`);
   assert.doesNotMatch(b.at(-1), / {3}/, `bottom border left open: ${JSON.stringify(b.at(-1))}`);
   // The divider is a rule of the same row, so it reaches the frame it sits inside.
   assert.equal(visibleWidth(transcriptRule(theme, 78)), 78);
