@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { generateWorkers, packageRoot } from "./generate-workers.mjs";
@@ -11,6 +12,10 @@ try {
   webEntry(packageRoot);
   generateWorkers(stage);
   prepareAuthority(join(stage, "permission-system"));
+  const grammarDigest = digest(readFileSync(join(packageRoot, "extensions/lib/git-read-grammar.ts")));
+  for (const copy of ["policy/lib/git-read-grammar.ts", "permission-system/vendor/src/access-intent/bash/git-read-grammar.ts"]) {
+    assert.equal(digest(readFileSync(join(stage, copy))), grammarDigest, `Git grammar drift: ${copy}`);
+  }
   mkdirSync(join(stage, "seeds"));
   for (const name of ["harness-presets.json", "permissions.json"]) cpSync(join(packageRoot, "resources", name), join(stage, "seeds", name));
   const files = {};

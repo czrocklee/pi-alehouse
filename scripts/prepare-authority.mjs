@@ -32,6 +32,7 @@ import permissions from "./vendor/src/index.ts";
 import { guardSingleAuthority } from "./authority-guard.ts";
 import { installManagedScratch } from "./managed-scratch.ts";
 import { hardenGitInput, hardenStaticFileInput } from "./vendor/src/access-intent/bash/managed-read-policy.ts";
+import { originalBashDeny } from "../policy/static-safety-guard.ts";
 export { getPermissionsService } from "./vendor/src/service.ts";
 export { initializeManagedResourceProtection, getManagedResourceProtection };
 export default function (pi: ExtensionAPI) {
@@ -39,9 +40,13 @@ export default function (pi: ExtensionAPI) {
   // floor. Internal children may request only an already-covered subset.
   initializeManagedResourceProtection(protectionResources({}, process.env, packageRoot, getPackageDir()));
   guardSingleAuthority(pi);
-  pi.on("tool_call", async (event) => {
+  pi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "bash") return;
-    const audit = await hardenGitInput(event.input);
+    if (typeof event.input.command === "string") {
+      const reason = originalBashDeny(event.input.command, ctx);
+      if (reason) return { block: true, reason };
+    }
+    const audit = await hardenGitInput(event.input, ctx.cwd);
     if (audit) pi.appendEntry("managed-git-read", audit);
   });
   installManagedScratch(pi, hardenStaticFileInput);

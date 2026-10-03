@@ -261,6 +261,27 @@ prompt forbids that but cannot enforce it (see
 [researcher web access](security.md#researcher-web-access)).  Tool availability
 is not authorization.
 
+[Managed Git read proof](git-read-proof.md) covers a restricted literal language,
+not arbitrary Git syntax or unsafe configuration equivalence. Content proof
+declines bare/separate-git-dir layouts, subdirectory execution and partial/promisor
+configuration; configured index helpers can also withhold proof. Historical-file
+show retains the exact `env git` lane, disables replacements and pins its tree at
+hardening time. Bare log pathspecs after `--` are supported only when every word
+passes the restricted literal grammar and normal path/external rules. Default
+history formatting is explicitly medium. All proved diff execution and its
+probes disable replacements, including summary-only diff; replacement-dependent
+output equivalence is not promised. Status/diff with checked-out indexed
+submodules receive no proof without explicit exact `--ignore-submodules=all`;
+short submodule output is not protection from nested helpers. Probes do not run
+from an effective cwd outside the session working-directory boundary, except
+linked-worktree `mainRoot` layout verification. That exception grants no path
+permission or other external probes. Each synchronous Git probe blocks the Node
+event loop and can delay cancellation/timers; its five-second timeout and 4 MiB
+output cap do not bound the whole multi-probe call. Probe failure returns to normal gates,
+which may deny instead of asking. Unsupported env-wrapped configuration spellings
+gain no managed proof, but the existing static deny-parity gap is not fixed by
+this scope. No OS isolation or general inherited-environment guarantee follows.
+
 Automated review requires its external policy, key, complete current provenance,
 and supported context.  It can defer and leave a human ask; it is not calibrated
 model-quality evidence or a new grant authority.  Luna is not loaded by the

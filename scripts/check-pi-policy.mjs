@@ -70,9 +70,32 @@ try {
       external: describeBashExternalDirectoryGate(context, program, resolver, normalizer),
     };
   };
-  const metadataQueries = ["git log -5 --oneline", "git log --oneline -n 20 HEAD", "git status --short -- ordinary.txt", "git status --short --ignored"].map(command => command.replace(/^git /, "git --no-lazy-fetch "));
+  const { hardenGitInput } = await load("access-intent/bash/managed-read-policy");
+  // This scratch directory is not a repository. Status can avoid submodule
+  // inspection only with the exact explicit ignore-all option; unqualified
+  // hardened status below must fall back when its repository probe fails.
+  const metadataQueries = await Promise.all(["git log -5 --oneline", "git log --oneline -n 20 HEAD", "git log -- ordinary.txt",
+    "git status --short --ignore-submodules=all -- ordinary.txt", "git status --short --ignored --ignore-submodules=all"].map(async command => {
+    const input = { command };
+    assert(await hardenGitInput(input, scratch), `Metadata fixture must exercise complete hardening: ${command}`);
+    return input.command;
+  }));
   for (const agent of [undefined, "editor", "reader"]) {
     for (const command of metadataQueries) assert.equal((await check(command, agent)).bash.state, "allow", `Proven metadata query: ${agent}: ${command}`);
+  }
+  for (const command of ["git status --short -- ordinary.txt", "git status --short --ignored"]) {
+    const input = { command };
+    assert(await hardenGitInput(input, scratch), `Status fixture must exercise hardening: ${command}`);
+    for (const agent of [undefined, "editor", "reader"]) {
+      assert.equal((await check(input.command, agent)).bash.state, "ask", `Failed status repository probe gives no proof: ${agent}: ${command}`);
+    }
+  }
+  const secretLog = { command: "git log -- .env" };
+  assert(await hardenGitInput(secretLog, scratch), "Bare literal log pathspec must harden");
+  for (const agent of [undefined, "editor", "reader"]) {
+    const result = await check(secretLog.command, agent);
+    assert.equal(result.bash.state, "allow", `Literal log pathspec metadata proof: ${agent}`);
+    assert.equal(result.path?.preCheck?.state, "deny", `Literal log pathspec retains secret path denial: ${agent}`);
   }
   const readerCommands = ["nl -ba ordinary.txt", "sha256sum ordinary.txt", "sha256sum --tag ordinary.txt", "sha256sum - < ordinary.txt", "echo ok", "printf 'exit=%s\\n' \"$?\"", "head -45 ordinary.txt", "head ordinary.txt", "wc ordinary.txt", "wc -l -c ordinary.txt", "head -n 10 < ordinary.txt", "cat -n ordinary.txt", "tail -n 20 ordinary.txt", "cut -d : -f 1 ordinary.txt", "tr a-z A-Z < ordinary.txt", "tr '[:upper:]' '[:lower:]' < ordinary.txt", "basename ordinary.txt", "dirname ordinary.txt", "readlink ordinary.txt", "realpath ordinary.txt", "uname -m", "ls -la .", "stat ordinary.txt", "rg --no-config -n -d 0 -- fixture ordinary.txt", "rg --no-config -F -d 0 -- fixture ordinary.txt", "rg --no-config -n -d 0 -- '[ab]*$|x(y)' ordinary.txt", "rg --no-config -d 0 -- 'fixture with spaces' ordinary.txt", "rg --no-config --files --hidden -g '*.txt' -- .", "rg --no-config -- fixture - < ordinary.txt"];
   for (const command of [...fixedCommands, ...readerCommands, "cd .", `cd '${scratch}'`]) {
@@ -432,8 +455,15 @@ try {
         const { default: searchExtension } = await isolatedJiti.import(join(resources, "extensions/policy-grep.ts"));
         searchExtension(api);
       }, stub.includes("function") ? /fixture unavailable/ : /createGrepToolDefinition/);
-      for (const command of ["sudo true", "GIT_EXTERNAL_DIFF=./x.sh git log -p -1 --ext-diff", "git show -s", "git show -s HEAD", "git -P show -s deadbeef", "git --bare show -s HEAD", "command git -P show -s deadbeef"]) {
+      for (const command of ["sudo true", "GIT_EXTERNAL_DIFF=./x.sh git log -p -1 --ext-diff", "git show -s", "git show -s HEAD", "git -P show -s deadbeef", "git --bare show -s HEAD", "command git -P show -s deadbeef",
+        "git log -- ordinary.txt ../private.txt", "git log -- ordinary.txt ':(literal)file'", "git log -- ordinary.txt 'dir/*'",
+        "git status --ignore-submodules=dirty", "git status --ignore-submodules=al"]) {
         assert(guardHandlers.get("tool_call")({ toolName: "bash", input: { command } }, guardCtx)?.block, `Independent guard still loaded: ${command}`);
+      }
+      for (const command of ["git log -- ordinary.txt", "git log HEAD -- ordinary.txt .env", "git log -- 'docs/a b.txt' ./-file",
+        "git status --short --ignore-submodules=all"]) {
+        assert.equal(guardHandlers.get("tool_call")({ toolName: "bash", input: { command } }, guardCtx), undefined,
+          `Independent guard accepts restricted literal spelling, not a permission grant: ${command}`);
       }
       assert(guardHandlers.get("tool_call")({ toolName: "grep", input: { pattern: "fixture" } }, guardCtx)?.block, "Unchecked grep fallback must fail closed");
       for (const toolName of ["read", "write", "edit", "ls", "find", "grep"]) {

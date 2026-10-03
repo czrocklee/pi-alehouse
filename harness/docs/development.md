@@ -68,6 +68,32 @@ build and installed runtime separate; a changed protected generation requires a
 fresh Pi process. This is a permission floor, not an OS sandbox or protection
 against opaque programs; see [security](security.md#immutable-resource-floor-in-writable-installations).
 
+## Git read-proof integration
+
+The [Git read-proof contract](git-read-proof.md) separates shared literal grammar,
+Git-only decoding, execution hardening, repository probes and final permission
+verdicts. `extensions/lib/git-read-grammar.ts` must remain import-free; the build
+checks both generated policy/vendor copies against its source digest. Keep the
+non-Git decoder unchanged, preserve original-request WeakMap provenance, and
+validate complete program and gate behavior rather than only grammar acceptance.
+Keep the exact `env git` lane for historical-file show; bare log pathspecs after
+`--` are allowed only by checking every word with `gitPathWord`, not by treating
+the terminator as unconditional acceptance. Status accepts only exact
+`--ignore-submodules=all` among submodule-ignore forms. Every proved diff and
+its probes, including summary-only paths, must disable replacements. Status/diff
+must withhold proof for checked-out indexed submodules without that explicit
+ignore-all option; do not inject it or treat short output as helper isolation.
+Check the effective cwd boundary before probes, including hardening-time probes;
+only linked-worktree `mainRoot` layout verification may query outside it. Keep
+that primary root as a path/external candidate. Synchronous probes block the
+event loop; per-invocation timeout/output caps are not aggregate deadlines or
+prompt cancellation guarantees.
+
+Generated copies are not source; use the matched migration and single validation
+owner described below. `node scripts/check-pi-git-grammar.mjs` is a source-only
+grammar/tokenizer check; it does not exercise repository probes or complete
+permission gates.
+
 ## Tool metadata and Off
 
 The [tool contract](tool-contract.md) defines model-visible behavior;

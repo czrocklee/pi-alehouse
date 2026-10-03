@@ -11,6 +11,7 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PermissionsService } from "@gotgenes/pi-permission-system";
 import { isGitQuery, parseGitInvocation, unknownGlobalsMayHideQuery, type GitInvocation } from "./lib/git-invocation.ts";
+import { gitHistoryOptionLength, gitHistoryOptionProblem, gitLogRevision, gitPathWord, gitStatusFlags } from "./lib/git-read-grammar.ts";
 
 // Populated from the same Nix declaration as worker definitions and approval hashes.
 const WORKER_POLICY: Record<string, { digest: string; bashDenies: string[] }> = /* @worker-policy@ */ {};
@@ -284,6 +285,20 @@ function bashDenied(command: string, agent: string | undefined, denies: Denies):
   return canonicalCommands(command).some((value) => patterns.some((pattern) => matchesDeny(value, pattern)));
 }
 
+// The authority calls this before normalizing execution. In particular, a
+// pinned blob query or injected flags must not hide an exact declarative deny
+// on the original spelling behind a Bash-surface session grant. This reuses the
+// deny-only floor; it is not a permission decision or a factory registration.
+export function originalBashDeny(command: string, ctx: ExtensionContext,
+  root = resolve(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi/agent"))): string | undefined {
+  try {
+    if (bashDenied(command, activeAgent(ctx), loadDenies(root)))
+      return "A declarative Bash deny applies to the original command before managed hardening; session approvals cannot override it.";
+  } catch {
+    return "Cannot verify the original command against the static Bash deny policy.";
+  }
+}
+
 function inlineEnvironmentOverridesWhitelist(command: string, denies: Denies): boolean {
   return (literalCommands(command) ?? []).some((original) => {
     const words = [...original];
@@ -410,42 +425,65 @@ function unsafeRipgrep(command: string): boolean {
   return blocked;
 }
 
-// Check literal Git queries even after session approval bypasses the Bash gate.
-// Unsupported forms retain an explicit `env git ...` normal-review route: the
-// upstream matcher keys wrapped commands by the wrapper, so no `git ...` grant
-// covers them, and Luna still checkpoints wrapped show/config forms.
-// In particular, show must be metadata-only: its default includes file contents.
-function unsafeGitQuery(source: string): boolean {
-  let blocked = false;
+// Independent tool-entry metadata floor, including after a Bash-surface session
+// grant. Such a grant does not skip the remaining path gates or explicit denies.
+// Only status/log/show are checked here; diff keeps its existing gate route.
+// Wrapped queries keep the normal managed/approval route, not an approval grant.
+// This grammar cannot verify object types or authorize paths: show remains
+// commit-constrained and patch-free, and literal log pathspecs still need path gates.
+export function staticGitQueryProblem(source: string): string | undefined {
+  let problem: string | undefined;
   literalCommands(source, undefined, undefined, (original, expansions) => {
+    if (problem !== undefined) return;
     const git = parseGitInvocation(original, expansions);
     if (!git || git.wrapped) return;
     if (!isGitQuery(git)) {
-      if (unknownGlobalsMayHideQuery(git)) blocked = true;
+      if (unknownGlobalsMayHideQuery(git)) problem = "unrecognized Git global option; query position is not proven";
       return;
     }
     const kind = git.subcommand!.toLowerCase();
-    if (git.unknownGlobals || git.configOverride || git.expansions) { blocked = true; return; }
+    if (git.unknownGlobals) { problem = "unrecognized Git global option; query position is not proven"; return; }
+    if (git.configOverride) { problem = "Git configuration override (-c/--config-env or GIT_CONFIG_* assignment)"; return; }
+    if (git.expansions) {
+      problem = `nonliteral shell expansion in Git argument ${JSON.stringify(original.find((_, index) => expansions[index]))}`;
+      return;
+    }
     const args = git.args;
     let showCommit = false;
-    const statusFlags = new Set(["-s", "-b", "--short", "--branch", "--porcelain", "--porcelain=v1", "--porcelain=v2", "--untracked-files=no", "--untracked-files=normal", "--untracked-files=all", "--ignored", "--ignored=matching", "--ignored=traditional"]);
-    const historyFlags = new Set(["--oneline", "--no-decorate", "--decorate", "--decorate=short", "--decorate=full", "--no-walk", "--no-patch", "-s", "--format=%ci", "--format=%cI", "--format=%H", "--format=%h", "--format=%s", "--format=fuller"]);
     for (let i = 0; i < args.length; i += 1) {
       const arg = args[i];
-      if (arg === "--" && (kind === "status" || (kind === "log" && i === args.length - 1))) return;
-      if ((kind === "status" ? statusFlags : historyFlags).has(arg)) continue;
-      if (kind !== "status" && /^-[1-9]\d{0,2}$/.test(arg)) continue;
-      if (kind !== "status" && /^(?:-n|--max-count=)[1-9]\d{0,2}$/.test(arg)) continue;
-      if (kind !== "status" && ["-n", "--max-count"].includes(arg) && /^[1-9]\d{0,2}$/.test(args[i + 1] ?? "")) { i += 1; continue; }
+      if (arg === "--") {
+        if (kind === "status") return;
+        if (kind === "log") {
+          const badPath = args.slice(i + 1).find(path => !gitPathWord(path));
+          if (badPath !== undefined) problem = `unsupported log pathspec ${JSON.stringify(badPath)}; only restricted literal paths are accepted`;
+          return;
+        }
+        problem = "show option terminator -- is outside the static commit-only metadata grammar";
+        return;
+      }
+      if (kind === "status") {
+        if (gitStatusFlags.has(arg)) continue;
+        problem = `unsupported status argument ${JSON.stringify(arg)}`;
+        return;
+      }
+      const optionLength = gitHistoryOptionLength(args, i);
+      if (optionLength) { i += optionLength - 1; continue; }
+      if (arg.startsWith("-")) { problem = gitHistoryOptionProblem(args, i); return; }
       // `git show -s <blob>` still prints its contents. Only commit-constrained
       // show revisions are metadata queries; log itself traverses commits only.
-      if (kind === "show" && (/^HEAD(?:[~^][0-9]*)+$/.test(arg) || /^[A-Za-z0-9_@][A-Za-z0-9_./~^@{}+-]*\^\{commit\}$/.test(arg))) { showCommit = true; continue; }
-      if (kind === "log" && /^[A-Za-z0-9_@][A-Za-z0-9_./~^@{}+-]*$/.test(arg)) continue;
-      blocked = true;
+      if (kind === "show" && gitLogRevision(arg) && (/^HEAD(?:[~^][0-9]*)+$/.test(arg) || /^[A-Za-z0-9_@][A-Za-z0-9_./~^@{}+-]*\^\{commit\}$/.test(arg))) { showCommit = true; continue; }
+      if (kind === "log" && gitLogRevision(arg)) continue;
+      problem = kind === "show" ? `show argument ${JSON.stringify(arg)} is not an explicit commit-constrained revision (for example HEAD^0)` :
+        `unsupported log revision ${JSON.stringify(arg)}`;
+      return;
     }
-    if (kind === "show" && (!showCommit || !args.some((arg) => arg === "-s" || arg === "--no-patch"))) blocked = true;
+    if (kind === "show" && !showCommit) problem = "show requires an explicit commit-constrained revision such as HEAD^0";
+    else if (kind === "show" && !args.some((arg) => arg === "-s" || arg === "--no-patch")) {
+      problem = "show requires -s/--no-patch; default output may include file contents";
+    }
   });
-  return blocked;
+  return problem;
 }
 
 // Upstream misses a new bare output filename when classifying worker writes.
@@ -556,8 +594,9 @@ function registerGuard(pi: ExtensionAPI, root = resolve(process.env.PI_CODING_AG
       if (unsafeOutputUtility(event.input.command)) {
         return { block: true, reason: "Static printf requires a literal text/%s/%% format; sha256sum requires direct input and supported output flags. Use an env wrapper for normal approval of other forms." };
       }
-      if (unsafeGitQuery(event.input.command)) {
-        return { block: true, reason: "Static Git status/log/show accepts only literal read-only metadata arguments; show needs -s/--no-patch and an explicit commit-constrained revision such as HEAD^0. Use env git for normal approval of other forms." };
+      const gitProblem = staticGitQueryProblem(event.input.command);
+      if (gitProblem !== undefined) {
+        return { block: true, reason: `Static Git metadata grammar: ${gitProblem}. Use env git ... for the normal managed/approval route; env does not override denies or guarantee approval.` };
       }
       if (unsafeRipgrep(event.input.command)) {
         return { block: true, reason: "Static rg requires --no-config, safe flags, -d 0, then -- and a pattern plus literal paths (or stdin - without -d 0); --files lists only the current directory. Use an env wrapper for normal approval of other forms." };
@@ -726,7 +765,7 @@ function safetySelfTest(root: string): void {
       "head -45 normal.txt", "wc -l -c normal.txt", "head -n 10 < normal.txt",
       "env wc --files0-from=names", "env head *.txt",
       "env PATH=./fixture-bin git status --short",
-      // Wrapped Git keeps the documented normal-review route (Luna checkpoints show).
+      // Wrapped Git keeps the normal managed/approval route, not a permission grant.
       "env git show HEAD", "env git -P show -s deadbeef", "timeout 5 git -P show -s deadbeef",
       "FOO=bar python3 -c 'print(1); print(2)'",
       "echo ok >./sudo", "echo ok 2>&1", "echo ok 2>&-", "git diff -- path", "git --no-pager status && git diff --stat",
