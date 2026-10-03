@@ -212,6 +212,17 @@ tool renderers mean child transcripts fall back to plain tool argument/output
 blocks for built-in tools.  PTY/UI fixtures and scripted permission RPC are not
 human-TUI acceptance.
 
+Interactive preset editing reuses the host's native `/model` selector with a
+physical-model-only view; RPC uses a standard list instead. The native selector
+may refresh provider catalogues and update host credential/cache state, just as
+`/model` does. Selection itself does not switch the main model or save Pi's model
+defaults. Fullscreen model selection is a near-click/centered popover that
+yields to known permission prompts; regular TUI stays docked. Mouse item matching
+uses the native public component tree and rendered labels, not private list
+state; unknown layouts or ambiguous items stay keyboard-only. Very small
+viewports refuse unseen selections. Controlled selector tests use synthetic
+runtimes, not live providers.
+
 The prompt queue yield protects permission dialogs only within the known process
 queue protocol.  It is not an atomic global UI transaction and `/reload` does
 not replace its existing wrapper.
@@ -219,11 +230,38 @@ not replace its existing wrapper.
 ## Routing and configuration scope
 
 Presets validate local routing configuration and current SDK metadata, not
-provider credentials or remote availability.  A successful selection's audit
-ordering is in-memory ordering, not fsync, atomic persistence, or rollback.  An
-ambiguous parent audit failure deliberately latches the Owner unavailable rather
-than guessing what persisted.  Restart resolves the saved preset name against
-current disk; records are evidence, not immutable catalogue pins.
+provider credentials or remote availability. The required
+`harness-presets.json` base catalogue remains separate and is never overwritten
+by the UI. Optional version-1 scoped preferences live in
+`<agentDir>/extensions/pi-alehouse/config.json` and, only for a trusted project,
+`<current-cwd>/.pi/extensions/pi-alehouse/config.json`; workspace lookup does
+not search for a Git root. Fresh sessions use preferences before catalogue
+defaults, while valid existing branch records keep precedence. Saved names
+resolve against the current base catalogue directory, except for custom model
+definitions explicitly stored in preferences/session records. Existing branch
+records are evidence, not immutable catalogue pins.
+
+Startup/restoration never writes preferences and abandoned UI drafts are not
+saved. Explicit persistent-scope user actions queue leaf patches; ordinary
+`session_shutdown` flushes them, or **Save pending now** can do so sooner. A
+settings conflict rejects all patches in that scope, while another scope may
+flush independently. The writer uses a cooperative exclusive lock, refuses
+symlink/read-only replacement, and publishes by atomic rename after identity
+checks. Valid read-only settings can load; invalid settings fail visibly and
+are not overwritten. Filesystem calls have no hard timeout, and atomic rename
+is not a crash-durability guarantee. A failed write is reported; it is not
+silently treated as saved. This preference writer is distinct from preset
+selection's parent-session audit: that audit's synchronous in-memory ordering
+is not fsync, filesystem persistence, or rollback. An ambiguous parent audit
+failure deliberately latches the Owner unavailable rather than guessing what
+was persisted.
+
+A persistent approval preference is a request only. A same-session approval
+record wins; judge restoration cannot exceed its launch cap, a wider saved
+judge preference needs UI confirmation, and yolo always needs explicit
+confirmation. These records and preferences do not bypass the permission
+authority. Saving scoped settings does not make live-Owner `/reload`
+supported; normal `session_shutdown` flushing is not a reload-safety guarantee.
 
 These constraints define support.  If an operation needs a guarantee not listed
 here—especially default-entrypoint replacement, atomic stop/reload, durable recovery,

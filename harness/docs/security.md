@@ -213,20 +213,44 @@ transport does not confer approval authority.
 Opt in only after evaluating that data handling.  Never reinterpret the harness profile or
 Run identity as the retired subagents authorization protocol to obtain a grant.
 
-`PI_JEV_APPROVAL_MODE` is only each session's launch mode.  The footer's
-approval indicator (`approval-mode.ts`) changes the current session at runtime: manual (shadow), Jev for the root, Jev
-for the root and forwarded subagent asks, or session yolo.  Any change that
-widens what is approved without a human takes a second, deliberate choice or
-Pi's confirm dialog; narrowing takes one.  A change retires every in-flight
-review (a monotonic mode revision, so a round trip back to the same mode
-still invalidates it) but keeps human denials, retry pauses and the denial
-fuse, which only new direct input reopens.  Jev announces each change.
+`PI_JEV_APPROVAL_MODE` is only each session's launch mode. The footer's
+approval indicator (`approval-mode.ts`) changes the current session at runtime:
+manual (shadow), Jev for the root, Jev for the root and forwarded subagent
+asks, or session yolo. Any change that widens what is approved without a human
+takes a second, deliberate choice or Pi's confirm dialog; narrowing takes one.
+Yolo always requires confirmation when enabled. A change retires every
+in-flight review (a monotonic mode revision, so a round trip back to the same
+mode still invalidates it) but keeps human denials, retry pauses and the denial
+fuse, which only new direct input reopens. Jev announces each change.
 
-The choice is recorded in the session under its own session id.  Resuming
-restores the judge mode no wider than the launch mode, and offers yolo back
-behind a confirmation instead of resuming it; a fork or clone inherits
-nothing.  The record is therefore a request, not authority: anything that can
-append to the session file can at most cause a prompt or a narrower mode.
+The current choice is recorded in the session under its own session id. An
+explicit choice records evidence even when equal to the launch mode. On
+resume, that same-session branch record wins over a saved preference. The judge
+mode is restored no wider than the session's launch mode; yolo is offered again
+behind confirmation, never silently resumed. A fork or clone does not inherit
+a record for the former session id. If there is no valid same-session record,
+an optional saved approval preference may seed startup: a judge preference at
+or below the launch cap may apply, one wider than the cap requires confirmation,
+and yolo always requires explicit confirmation in a UI. Without UI, a judge
+preference above the launch cap cannot widen the mode and yolo cannot be enabled.
+If no judge is loaded, a saved judge preference is not applied and is reported.
+A saved preference is a request, not permission authority. Startup narrowing
+is applied synchronously when the judge binds. Ambiguous cached same-session
+state is provisionally clamped to manual before startup returns; this does not
+replace a later fresh launch cap, and consent dialogs wait until startup completes.
+
+Only an explicit approval choice or explicit remember operation stages an
+approval preference; startup restoration, `/tree`, and judge-observer updates
+do not write preferences. With a persistent save scope, choosing an approval
+mode stages that live choice. The approval menu's **Save as global/project
+default** and `/approval save [global|workspace]` instead show the target and
+current value for explicit confirmation, then stage the preference without
+changing the live mode or save scope. Saving a default never enables an armed
+popover choice; only the actual live mode is saved. Workspace saving requires
+project trust. A pending save dialog owns its entry: the approval popover cannot
+reopen over it, and obsolete callbacks cannot save for a later session. This storage never grants a permission rule; the
+approval extension enforces the launch cap, and the managed authority still
+enforces explicit denies, the static guard and fail-closed floor.
 
 Session yolo lives in the managed permission authority, not in a judge: for
 the session and its ancestors in the in-process permission subagent registry,
@@ -234,6 +258,30 @@ asks become allows without reaching Jev or a human.  Explicit denies, the static
 safety guard and the fail-closed floor (allows clamped to ask by an invalid
 config scope, which this build keeps as asks under any yolo) still hold.  A
 child not in that registry is not covered and keeps asking.
+
+## Scoped settings and trust
+
+Optional user preferences are read from `<agentDir>/extensions/pi-alehouse/config.json`
+and, only for a trusted project, `<current-cwd>/.pi/extensions/pi-alehouse/config.json`.
+The workspace lookup is the current working directory only, not a Git-root
+search. It contains user-selected routing, delegation, effort, approval, and
+custom model definitions; it is not a credential store and does not change the
+required, read-only-to-the-UI base `harness-presets.json` catalogue. Valid
+read-only settings can load. Invalid settings fail visibly and are not
+replaced. Startup/restoration makes no configuration writes; persistent
+changes are queued only by explicit user actions. The settings writer uses a
+cooperative lock, leaf-conflict rejection per scope, and atomic rename, refuses
+symlink/read-only replacement, and reports failures. These safeguards do not
+provide a hard filesystem timeout or crash-durability guarantee. The preset
+editor's native `/model` selector uses the already-acquired parent model runtime,
+not another runtime or copied credentials. Its model queries and scoped list
+exclude virtual models. The scoped list comes directly from the session's
+read-only `ctx.scopedModels` snapshot; no separate settings/trust lookup or
+scope mutation occurs. Its callbacks neither switch the main model nor set Pi's
+model defaults. Native catalogue refresh is preserved: opening the selector can use
+provider network access, rotate OAuth credentials, and update the host's model
+cache, independently of the preference writer. See
+[routing](routing.md#scoped-user-preferences) for the schema and paths.
 
 ## Context, identity, and data handling
 

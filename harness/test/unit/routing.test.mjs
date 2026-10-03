@@ -73,7 +73,7 @@ for (const scenario of [
   }, registerCommand: (name, command) => commands.set(name, command),
     registerShortcut() {}, getAllTools: () => [], registerTool: (tool) => tools.push(tool),
     appendEntry: (...entry) => entries.push(entry) });
-  const ctx = { hasUI: true, sessionManager: { getSessionId: () => "startup-fixture",
+  const ctx = { hasUI: true, cwd: dirname(path), isProjectTrusted: () => true, sessionManager: { getSessionId: () => "startup-fixture",
     getBranch: () => scenario.saved ? [{ type: "custom", customType: "harness:preset-selection:v1", data: { name: scenario.saved } }] : [] },
     ui: { notify: (message, level) => notices.push({ message, level }), setStatus: (...args) => statuses.push(args) } };
   const start = () => handlers.get("session_start")({}, ctx);

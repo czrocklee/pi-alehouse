@@ -52,7 +52,10 @@ export function checkLibraryPairs(pairs) {
     const check = join(scratch, "contracts.mts");
     writeFileSync(check, checks.join("\n")); roots.push(check);
     const program = ts.createProgram(roots, {
-      target: ts.ScriptTarget.ES2023, lib: ["lib.es2023.d.ts"], types: [],
+      // Shared storage is SDK-free but uses Node's filesystem/crypto APIs.
+      // Resolve the pinned development types from this checkout, not /tmp.
+      target: ts.ScriptTarget.ES2023, lib: ["lib.es2023.d.ts"], types: ["node"],
+      typeRoots: [resolve(sharedLibraryDirectory, "../node_modules/@types")],
       module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext,
       allowJs: true, checkJs: true, strict: true, noUncheckedIndexedAccess: true,
       noEmit: true, skipLibCheck: false,

@@ -49,6 +49,14 @@ rollback; disabling the module does not remove the bootstrap or settings entry.
 
 ## Validation
 
+For a local Git-backed flake, newly created source files must be known to Git
+before building, including when this checkout is used as an input override.
+Nix omits untracked files even though `npm run build` in the working tree can
+see them. Use `git add --intent-to-add -- <new-source-files>` (or stage them
+normally); no commit is required for a local build. Missing modules followed by
+TypeScript inference errors can indicate an incomplete flake source, not a need
+to disable `npmBuildScript` or loosen the type checks.
+
 `scripts/check-nix-deployment.sh HM_GENERATION [PI]` inspects an already-built
 generation without activating it: selector and bootstrap, worker links and
 extension shims, installed preset schema, host-only SDK and the store launcher.

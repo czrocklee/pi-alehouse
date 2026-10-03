@@ -1,3 +1,4 @@
+import type { PersistentScope } from "../../../lib/settings-store.mjs";
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import { OverlayRequest } from "./overlay-request.js";
@@ -5,7 +6,22 @@ import { isPopoverCloseClick, popoverBottom, popoverDivider, popoverRow, popover
 import { delegationModes, eagernessLevels, modeLabels, usesEagerness, type DelegationMode, type DelegationSetting } from "../delegation.js";
 import { isOffPreset, strengths, thinkingLevels, type Effort, type EffortOverrides, type PresetSelection, type PresetSnapshot, type Strength, type ThinkingLevel } from "../routing.js";
 
-export type PresetChoice = string | { name: string; effort_overrides: EffortOverrides };
+export type PresetChoice
+  = string
+  /** A settings/preset management route: the picker closes and the host
+   * opens its own dialog; no preset is published. */
+  | { action: "settings" | "create-preset" | "edit-preset"; name?: string }
+  /** Confirm switching to an inactive preset before entering its live editor. */
+  | { action: "edit-effort"; name: string }
+  /** Save the host's live worker settings, not this picker's highlight/preview. */
+  | { action: "save-default"; scope: PersistentScope }
+  /** A single-slot model route: the picker closes and the host opens its own
+   * model selector, ideally near the click; no preset is published. */
+  | { action: "edit-model"; name: string; slot: Strength; position?: ModelPickerPosition };
+
+/** Where a click happened in absolute terminal coordinates, so the host can
+ * open its own selector near the model text the operator clicked. */
+export type ModelPickerPosition = { row: number; col: number };
 
 export interface EffortCapabilities {
   levels: readonly ThinkingLevel[];
@@ -23,6 +39,11 @@ export interface PresetPickerOptions {
   done: (choice: PresetChoice | null) => void;
   /** Live capabilities for each worker model; absent on legacy read-only hosts. */
   efforts?: (preset: PresetSnapshot, slot: Strength) => EffortCapabilities;
+  /** Host-owned validated audit/publication. Only its committed snapshot paints;
+   * absent on read-only hosts. Rejection leaves the previous values unchanged. */
+  setEffort?: (name: string, overrides: EffortOverrides) => PresetSelection | undefined;
+  /** A confirmed inactive-preset continuation starts on the live effort page. */
+  startInEffort?: boolean;
   /** Floating under the pointer: paint the close control and take clicks. */
   pointer?: boolean;
   /** Rows the picker may use, when something else below it already took some. */
@@ -36,6 +57,18 @@ export interface PresetPickerOptions {
     set(next: DelegationSetting): void;
     guideline(setting: DelegationSetting): string;
   };
+  /** Settings/preset management entry points. The picker only routes to
+   * them and paints its status line; the host implements the dialogs after
+   * the picker closes. Absent on read-only hosts. `models` gates the
+   * single-slot model routes in this UI only; it is not authorization. */
+  management?: {
+    summary(): string;
+    settings: boolean;
+    presets: boolean;
+    models?: boolean;
+    saveDefaults?: boolean;
+    canSaveWorkspace?(): boolean;
+  };
 }
 
 /** The pointer event as the picker reads it; a structural subset of pi-tui's. */
@@ -45,12 +78,18 @@ export interface PickerMouseEvent {
   x: number;
   y: number;
   wheelDelta?: number;
+  /** Absolute screen coordinates, when the host reports them; the model route
+   * forwards them so its own selector can open near the click. */
+  screenX?: number;
+  screenY?: number;
 }
 
 /** What the picker asks of pi-tui after a pointer event. */
 export interface PickerMouseResult { handled: boolean; capture?: boolean; render?: boolean }
 
 const MIN_FULL_LINES = 11;
+/** Every clickable control on the picker's two pages. */
+type PickerAction = "edit" | "reset" | "back" | "settings" | "create" | "editPreset" | "saveGlobal" | "saveWorkspace";
 /** The compact layout: title, selected detail, controls, bottom edge. */
 export const PRESET_PICKER_MIN_ROWS = 7;
 /** Slider, eagerness and divider rows above the preset list. */
@@ -77,8 +116,8 @@ export class PresetPickerRequest extends OverlayRequest<PresetChoice | null> {
   }
 }
 
-/** A picker with a staged effort editor. Publishing either choice remains the
- * caller's separate, validated transaction. */
+/** A picker with a live effort editor. The host still owns every validated,
+ * audited publication; UI only proposes changes and paints committed values. */
 export class PresetPicker implements Component {
   private selected: number;
   private visibleRows = 1;
@@ -88,26 +127,32 @@ export class PresetPicker implements Component {
   private paintedWidth = 0;
   private editing = false;
   private slotIndex = 0;
-  private draft: EffortOverrides = {};
+  private effortError: string | undefined;
   private slotTargets = new Map<number, { slot: Strength; prev?: number; next?: number }>();
-  private actionTargets = new Map<number, { kind: "edit" | "apply" | "reset" | "back"; start: number; end: number }[]>();
+  private actionTargets = new Map<number, { kind: PickerAction; start: number; end: number }[]>();
   /** Painted slider nodes by row, in terminal columns (border is column zero). */
   private modeTargets = new Map<number, { mode: DelegationMode; start: number; end: number }[]>();
   /** Painted ‹ › arrows that step the mode or eagerness, by row. */
   private stepTargets = new Map<number, { kind: "mode" | "eagerness"; direction: -1 | 1; x: number }[]>();
   /** The node under a drag, previewed until the release applies it. */
   private previewMode: DelegationMode | undefined;
+  /** Painted model-text spans by row, in terminal columns, refreshed every
+   * render; only actually painted model text is a target. */
+  private modelTargets = new Map<number, { preset: string; slot: Strength; start: number; end: number }[]>();
   private dragging = false;
   /** A key ended a held slider press: pi-tui still owns that press and turns
    * an unmoved release into a click, which must not apply the cancelled node. */
   private cancelledPress = false;
 
   constructor(private readonly options: PresetPickerOptions) {
+    this.options = { ...options, presets: [...options.presets] };
     const active = options.presets.findIndex((preset) => preset.name === options.activeName);
     this.selected = active < 0 ? 0 : active;
+    if (options.startInEffort) this.openEditor();
   }
 
   selection(): string | undefined { return this.options.presets[this.selected]?.name; }
+  isOpen(): boolean { return !this.closed; }
 
   handleInput(data: string): void {
     if (this.closed) return;
@@ -122,12 +167,37 @@ export class PresetPicker implements Component {
     // Registered shortcuts belong to the default editor; while this custom
     // component is focused it must implement its own half of the toggle.
     if (matchesKey(data, "alt+s") || (this.editing && matchesKey(data, "ctrl+c"))) return this.finish(null);
+    const management = this.options.management;
+    if (management?.saveDefaults) {
+      if (matchesKey(data, "g") || matchesKey(data, "shift+g")) return this.saveDefault("global");
+      if (matchesKey(data, "w") || matchesKey(data, "shift+w")) return this.saveDefault("workspace");
+    }
     if (this.editing) return this.editInput(data);
     if (keybindings.matches(data, "tui.select.cancel")) return this.finish(null);
     const current = this.selection();
-    if (this.options.efforts && (matchesKey(data, "e") || matchesKey(data, "shift+e"))) {
+    if (this.canEdit() && (matchesKey(data, "e") || matchesKey(data, "shift+e"))) {
       this.openEditor();
       return;
+    }
+    // Settings/model routes remain list-page keys; saving is available on
+    // either page and always uses the host's already-applied choices.
+    if (management?.settings && (matchesKey(data, "p") || matchesKey(data, "shift+p")))
+      return this.finish({ action: "settings" });
+    if (management?.presets) {
+      if (matchesKey(data, "n") || matchesKey(data, "shift+n"))
+        return this.finish({ action: "create-preset" });
+      if (matchesKey(data, "c") || matchesKey(data, "shift+c")) {
+        const highlighted = presets[this.selected];
+        if (highlighted && !isOffPreset(highlighted))
+          return this.finish({ action: "edit-preset", name: highlighted.name });
+      }
+    }
+    // 1/2/3 route the highlighted preset's slot model, list page only, and
+    // never for off (a control state with no models to pick).
+    if (this.canPickModels()) {
+      for (let index = 0; index < strengths.length; index++) {
+        if (data === String(index + 1)) { this.pickModel(strengths[index]!); return; }
+      }
     }
     if (keybindings.matches(data, "tui.select.confirm")) {
       if (current) this.finish(current);
@@ -157,7 +227,7 @@ export class PresetPicker implements Component {
   /**
    * The close control cancels; a click on a preset applies it, as a menu
    * would; the wheel moves the highlight so its slots can be read first.
-   * In the editor a slot row selects it; only visible arrows change its draft.
+   * In the editor a slot row selects it; only visible arrows propose live changes.
    */
   handleMouse(event: PickerMouseEvent): PickerMouseResult | undefined {
     if (this.closed || !this.options.pointer) return undefined;
@@ -189,6 +259,12 @@ export class PresetPicker implements Component {
       return { handled: true };
     }
     if (event.type === "click" && event.button === "left" && this.clickAction(event)) return { handled: true };
+    // A click on painted model text routes the slot's model, not a selection;
+    // padding, effort values, labels and a pure ellipsis are never targets.
+    if (event.type === "click" && event.button === "left") {
+      const model = this.modelTargets.get(event.y)?.find(({ start, end }) => event.x >= start && event.x < end);
+      if (model) { this.pickModel(model.slot, event, model.preset); return { handled: true }; }
+    }
     if (event.type === "wheel" && event.wheelDelta && presets.length) {
       this.selected = Math.max(0, Math.min(presets.length - 1, this.selected + Math.sign(event.wheelDelta)));
       this.options.tui.requestRender();
@@ -281,6 +357,7 @@ export class PresetPicker implements Component {
     this.stepTargets.clear();
     this.slotTargets.clear();
     this.actionTargets.clear();
+    this.modelTargets.clear();
     this.paintedWidth = width;
     const lines = this.layout(width);
     this.options.onRender?.(lines.length);
@@ -309,9 +386,14 @@ export class PresetPicker implements Component {
   private renderFull(width: number, inner: number, maxLines: number): string[] {
     const { presets, activeName, theme } = this.options;
     const modeRows = this.options.delegation ? MODE_ROWS : 0;
+    // Saving the live defaults takes a spare row before summary/guideline;
+    // neither management control raises the minimum or hides the last preset.
+    const saveRows = this.canSaveDefault("global") && maxLines >= MIN_FULL_LINES + modeRows + 1 ? 1 : 0;
+    const summary = this.managementSummary();
+    const summaryRows = summary !== undefined && maxLines >= MIN_FULL_LINES + modeRows + saveRows + 1 ? 1 : 0;
     // The mode's guideline takes up to three rows; the list keeps at least one.
-    const guidelineRows = this.options.delegation ? Math.max(0, Math.min(GUIDELINE_ROWS, maxLines - MIN_FULL_LINES - modeRows)) : 0;
-    this.visibleRows = Math.max(1, Math.min(presets.length, maxLines - 10 - modeRows - guidelineRows));
+    const guidelineRows = this.options.delegation ? Math.max(0, Math.min(GUIDELINE_ROWS, maxLines - MIN_FULL_LINES - modeRows - saveRows - summaryRows)) : 0;
+    this.visibleRows = Math.max(1, Math.min(presets.length, maxLines - 10 - modeRows - guidelineRows - saveRows - summaryRows));
     const start = Math.max(0, Math.min(this.selected - Math.floor(this.visibleRows / 2), presets.length - this.visibleRows));
     const end = Math.min(presets.length, start + this.visibleRows);
     const range = presets.length ? `${start + 1}–${end}/${presets.length}` : "0/0";
@@ -320,8 +402,9 @@ export class PresetPicker implements Component {
     const lines = [this.title(width, "Delegation")];
     if (this.options.delegation) this.modeSection(lines, width, inner, guidelineRows);
     lines.push(this.row(this.twoSides(theme.fg("muted", scope),
-        theme.fg("dim", range), inner), inner),
-      this.divider(width));
+        theme.fg("dim", range), inner), inner));
+    if (summaryRows) lines.push(this.row(theme.fg("dim", ` ${summary}`), inner));
+    lines.push(this.divider(width));
     for (let index = start; index < end; index++) {
       const preset = presets[index]!;
       const selected = index === this.selected;
@@ -336,8 +419,9 @@ export class PresetPicker implements Component {
       lines.push(this.row(selected ? theme.bg("selectedBg", content) : content, inner));
     }
     lines.push(this.divider(width));
-    lines.push(...this.detailRows(inner));
-    this.listControls(lines, inner, false);
+    lines.push(...this.detailRows(inner, lines.length));
+    const saveShown = saveRows > 0 && this.saveControls(lines, inner);
+    this.listControls(lines, inner, false, saveShown);
     lines.push(this.bottom(width));
     return lines;
   }
@@ -358,9 +442,15 @@ export class PresetPicker implements Component {
       lines.push(this.row(this.twoSides(` › ${theme.bold(label)}${badge}`,
         theme.fg("dim", [this.version(current), position].filter(Boolean).join(" · ")), inner), inner));
       if (isOffPreset(current)) lines.push(...this.offNoticeRows(inner));
-      else for (const strength of strengths) lines.push(this.slotRow(strength, current.models[strength], current, inner));
+      else for (const strength of strengths)
+        lines.push(this.slotRow(strength, current.models[strength], current, inner, lines.length));
     }
-    this.listControls(lines, inner, true);
+    // Save controls and summary use spare rows only; the minimum is unchanged.
+    const saveShown = this.canSaveDefault("global") && lines.length + 3 <= maxLines && this.saveControls(lines, inner);
+    const summary = this.managementSummary();
+    if (summary !== undefined && lines.length + 3 <= maxLines)
+      lines.push(this.row(theme.fg("dim", ` ${summary}`), inner));
+    this.listControls(lines, inner, true, saveShown);
     lines.push(this.bottom(width));
     return lines;
   }
@@ -441,7 +531,7 @@ export class PresetPicker implements Component {
     return this.row(this.options.activeName === "off" ? theme.fg("dim", text) : text, inner);
   }
 
-  private detailRows(inner: number): string[] {
+  private detailRows(inner: number, offset: number): string[] {
     const { presets, activeName, theme } = this.options;
     const current = presets[this.selected];
     if (!current) return [this.row(theme.fg("warning", " No presets available"), inner)];
@@ -449,7 +539,10 @@ export class PresetPicker implements Component {
     const label = current.name + (!isOffPreset(current) && marked(current) ? "*" : "");
     const heading = this.twoSides(` ${theme.bold(label)}  ${badge}`, theme.fg("dim", this.version(current)), inner);
     if (isOffPreset(current)) return [this.row(heading, inner), ...this.offNoticeRows(inner)];
-    return [this.row(heading, inner), ...strengths.map((strength) => this.slotRow(strength, current.models[strength], current, inner))];
+    const rows = [this.row(heading, inner)];
+    for (const strength of strengths)
+      rows.push(this.slotRow(strength, current.models[strength], current, inner, offset + rows.length));
+    return rows;
   }
 
   private offNoticeRows(inner: number): string[] {
@@ -458,33 +551,66 @@ export class PresetPicker implements Component {
       this.row(theme.fg("muted", " Accepted work continues."), inner)];
   }
 
-  private slotRow(strength: Strength, model: string, preset: PresetSnapshot, inner: number): string {
+  /** The slot's current effective level plus the session-override star —
+   * never the whole compatibility map. Fixed policies show their raw value
+   * (marked when live metadata says the model does not support it); inherit
+   * resolves through the host's capabilities or says unavailable. Legacy
+   * read-only hosts keep their configured policy instead of inventing a
+   * resolution at spawn time. */
+  private slotEffort(preset: PresetSnapshot, strength: Strength): string {
+    const policy = effectiveEffort(preset, strength);
+    const star = preset.effort_overrides?.[strength] !== undefined ? "*" : "";
+    if (!this.options.efforts) return policy + star;
+    const caps = this.caps(preset, strength); // one metadata snapshot per row
+    const supported = this.levels(caps);
+    if (policy === "inherit") {
+      const inherited = caps.inherited;
+      return inherited !== undefined && supported.includes(inherited) ? inherited + star : `unavailable${star}`;
+    }
+    return policy + (supported.includes(policy) ? "" : "!") + star;
+  }
+
+  private slotRow(strength: Strength, model: string, preset: PresetSnapshot, inner: number, y: number): string {
     const { theme } = this.options;
     const label = SLOT_LABEL[strength].padEnd(8);
-    const mappings = Object.entries(preset.thinking[strength]).map(([from, to]) => `${from}→${to}`).join(",");
-    const policy = mappings ? ` · think ${mappings}` : "";
-    const effort = effectiveEffort(preset, strength) + (preset.effort_overrides?.[strength] !== undefined ? "*" : "");
+    const effort = this.slotEffort(preset, strength);
     // Preserve the slot and effective effort at narrow widths; the long model
-    // (and then compatibility map) gives way first.
+    // gives way first, and model text that no longer fits paints no target.
     if (inner < 26) return this.row(`${SLOT_LABEL[strength]}:${theme.fg("dim", effort)}`, inner);
-    const right = inner < 36 ? effort : `${effort}${policy}`;
-    return this.row(this.twoSides(` ${theme.fg(strength === "strong" ? "accent" : "muted", label)} ${model}`,
-      theme.fg("dim", right), inner), inner);
+    const left = ` ${theme.fg(strength === "strong" ? "accent" : "muted", label)} ${model}`;
+    const right = theme.fg("dim", effort);
+    const row = this.row(this.twoSides(left, right, inner), inner);
+    if (this.options.management?.models) {
+      // The model starts after the border, space, the 8-column label and one
+      // separating space. A clipped row measures the REAL fitted width
+      // (truncateToWidth drops a wide character that cannot fit), so the
+      // target covers only painted model columns — never the ellipsis, and
+      // never the padding a shorter fitted row leaves behind.
+      const room = Math.max(1, inner - visibleWidth(right) - 1);
+      const start = visibleWidth(` ${label} `) + 1; // border is column zero
+      const truncated = visibleWidth(left) > room; // a model id ending in … is not “truncated”
+      const fitted = truncated ? visibleWidth(truncateToWidth(left, room, "…")) : visibleWidth(left);
+      const painted = truncated ? fitted - (start - 1) - 1 : visibleWidth(model);
+      if (painted > 0 && start + painted <= inner + 1)
+        this.modelTargets.set(y, [{ preset: preset.name, slot: strength, start, end: start + painted }]);
+    }
+    return row;
   }
 
   private canEdit(): boolean {
     const selected = this.options.presets[this.selected];
-    return !!this.options.efforts && !!selected && !isOffPreset(selected);
+    return !!this.options.efforts && !!this.options.setEffort && !!selected && !isOffPreset(selected);
   }
 
   private openEditor(): void {
     const selected = this.options.presets[this.selected];
-    if (!this.options.efforts || !selected || isOffPreset(selected)) return;
+    if (!this.canEdit() || !selected) return;
+    if (selected.name !== this.options.activeName) return this.finish({ action: "edit-effort", name: selected.name });
     this.editing = true;
     this.dragging = false;
     this.previewMode = undefined;
     this.slotIndex = 0;
-    this.draft = { ...(selected.effort_overrides ?? {}) };
+    this.effortError = undefined;
     this.options.tui.requestRender();
   }
 
@@ -492,7 +618,7 @@ export class PresetPicker implements Component {
     this.editing = false;
     this.dragging = false;
     this.previewMode = undefined;
-    this.draft = {};
+    this.effortError = undefined;
     this.options.tui.requestRender();
   }
 
@@ -506,11 +632,12 @@ export class PresetPicker implements Component {
   }
 
   private chosen(preset: PresetSnapshot, slot: Strength): Effort {
-    return this.draft[slot] ?? defaultEffort(preset, slot);
+    return preset.effort_overrides?.[slot] ?? defaultEffort(preset, slot);
   }
 
-  private fixedIssue(preset: PresetSnapshot, slot: Strength, caps: EffortCapabilities): string | undefined {
-    const value = this.chosen(preset, slot);
+  private fixedIssue(preset: PresetSnapshot, slot: Strength, caps: EffortCapabilities,
+    overrides: EffortOverrides = preset.effort_overrides ?? {}): string | undefined {
+    const value = overrides[slot] ?? defaultEffort(preset, slot);
     if (value === "inherit") return undefined;
     if (caps.error) return caps.error;
     return this.levels(caps).includes(value) ? undefined : `Unsupported effort: ${value}`;
@@ -526,35 +653,41 @@ export class PresetPicker implements Component {
     const preset = this.options.presets[this.selected];
     if (!preset || isOffPreset(preset)) return;
     const values: (Effort | "default")[] = ["default", "inherit", ...this.levels(this.caps(preset, slot))];
-    const current = this.draft[slot] ?? "default";
+    const current = preset.effort_overrides?.[slot] ?? "default";
     const index = values.indexOf(current);
     // An obsolete/unsupported policy is shown as invalid, never silently
     // accepted. One adjustment starts from the explicit default choice.
     const next = values[Math.max(0, Math.min(values.length - 1, (index < 0 ? 0 : index) + (index < 0 ? 0 : direction)))];
-    if (next === "default") delete this.draft[slot];
-    else this.draft[slot] = next;
-    this.options.tui.requestRender();
+    const overrides = { ...preset.effort_overrides };
+    if (next === "default") delete overrides[slot];
+    else overrides[slot] = next;
+    this.setEffort(overrides);
   }
 
-  private applyDraft(): void {
+  private setEffort(overrides: EffortOverrides): void {
     const preset = this.options.presets[this.selected];
-    if (!preset || isOffPreset(preset)) return;
-    if (strengths.some((slot) => this.fixedIssue(preset, slot, this.caps(preset, slot)))) {
-      this.options.tui.requestRender();
-      return;
+    if (!this.editing || !preset || isOffPreset(preset) || !this.options.setEffort) return;
+    if (strengths.every((slot) => overrides[slot] === preset.effort_overrides?.[slot])) return;
+    const issues = strengths.flatMap((slot) => {
+      const issue = this.fixedIssue(preset, slot, this.caps(preset, slot), overrides);
+      return issue ? [`${SLOT_LABEL[slot]}: ${issue}`] : [];
+    });
+    this.effortError = issues.length ? `Change not applied: ${issues.join("; ")}` : undefined;
+    if (!issues.length) {
+      try {
+        const applied = this.options.setEffort(preset.name, { ...overrides });
+        if (applied && !isOffPreset(applied) && applied.name === preset.name) {
+          this.options.presets = this.options.presets.map((each) => each.name === applied.name ? applied : each);
+        } else this.effortError = "Change not applied; previous settings kept.";
+      } catch { this.effortError = "Change not applied; previous settings kept."; }
     }
-    this.finish({ name: preset.name, effort_overrides: { ...this.draft } });
+    this.options.tui.requestRender();
   }
 
   private editInput(data: string): void {
     const { keybindings } = this.options;
-    if (matchesKey(data, "escape")) return this.back();
-    if (keybindings.matches(data, "tui.select.confirm")) return this.applyDraft();
-    if (matchesKey(data, "r") || matchesKey(data, "shift+r")) {
-      this.draft = {};
-      this.options.tui.requestRender();
-      return;
-    }
+    if (matchesKey(data, "escape") || keybindings.matches(data, "tui.select.confirm")) return this.back();
+    if (matchesKey(data, "r") || matchesKey(data, "shift+r")) return this.setEffort({});
     if (matchesKey(data, "left")) return this.step(strengths[this.slotIndex]!, -1);
     if (matchesKey(data, "right")) return this.step(strengths[this.slotIndex]!, 1);
     if (keybindings.matches(data, "tui.select.up")) this.slotIndex = Math.max(0, this.slotIndex - 1);
@@ -564,7 +697,7 @@ export class PresetPicker implements Component {
   }
 
   private addAction(lines: string[], inner: number, text: string,
-    actions: { kind: "edit" | "apply" | "reset" | "back"; label: string }[]): void {
+    actions: { kind: PickerAction; label: string }[]): void {
     const y = lines.length;
     this.actionTargets.set(y, actions.map(({ kind, label }) => {
       const start = text.indexOf(label) + 1; // border is column zero
@@ -578,16 +711,165 @@ export class PresetPicker implements Component {
     if (!action) return false;
     switch (action.kind) {
       case "edit": this.openEditor(); break;
-      case "apply": this.applyDraft(); break;
-      case "reset": this.draft = {}; this.options.tui.requestRender(); break;
+      case "reset": this.setEffort({}); break;
       case "back": this.back(); break;
+      case "settings": this.managementChoice("settings"); break;
+      case "create": this.managementChoice("create-preset"); break;
+      case "editPreset": this.managementChoice("edit-preset"); break;
+      case "saveGlobal": this.saveDefault("global"); break;
+      case "saveWorkspace": this.saveDefault("workspace"); break;
     }
     return true;
   }
 
-  private listControls(lines: string[], inner: number, compact: boolean): void {
-    const text = this.controls(inner, compact);
-    this.addAction(lines, inner, text, this.canEdit() ? [{ kind: "edit", label: inner < 22 ? "E" : "Edit effort" }] : []);
+  private canSaveDefault(scope: PersistentScope): boolean {
+    if (!this.options.management?.saveDefaults) return false;
+    if (scope === "global") return true;
+    try { return this.options.management.canSaveWorkspace?.() === true; }
+    catch { return false; }
+  }
+
+  private saveDefault(scope: PersistentScope): void {
+    if (this.canSaveDefault(scope)) this.finish({ action: "save-default", scope });
+  }
+
+  /** Only whole painted labels are targets. Project saving stays inert without
+   * trust, including when it changed since the last paint. */
+  private saveLabels(inner: number): { text: string; actions: { kind: PickerAction; label: string }[] } | undefined {
+    const workspace = this.canSaveDefault("workspace");
+    const variants = [
+      { global: "[G] Save as global default", workspace: workspace ? "[W] Save as project default" : "[W] Project default (trust required)", suffix: " (on exit)" },
+      { global: "[G] Global default", workspace: workspace ? "[W] Project default" : "[W] Project (trust required)", suffix: " (on exit)" },
+      { global: "G global", workspace: workspace ? "W project" : "W trust required", suffix: " · on exit" },
+      { global: "G global", workspace: workspace ? "W project" : "W trust", suffix: "" },
+      { global: "G", workspace: workspace ? "W" : "W trust", suffix: "", prefix: " " },
+      { global: "G", workspace: "W", suffix: "", prefix: " " },
+    ];
+    for (const variant of variants) {
+      const text = `${variant.prefix ?? " Save: "}${variant.global} · ${variant.workspace}${variant.suffix}`;
+      if (visibleWidth(text) > inner) continue;
+      return { text, actions: [{ kind: "saveGlobal", label: variant.global },
+        ...(workspace ? [{ kind: "saveWorkspace" as const, label: variant.workspace }] : [])] };
+    }
+    return undefined;
+  }
+
+  private saveControls(lines: string[], inner: number): boolean {
+    const saving = this.saveLabels(inner);
+    if (!saving) return false;
+    this.addAction(lines, inner, saving.text, saving.actions);
+    return true;
+  }
+
+  /** A management label was clicked. The same gating as its key applies:
+   * only routes the host enabled, and edit-preset needs a highlighted
+   * non-off preset. */
+  private managementChoice(kind: "settings" | "create-preset" | "edit-preset"): void {
+    const management = this.options.management;
+    if (!management) return;
+    if (kind === "settings") {
+      if (management.settings) this.finish({ action: "settings" });
+      return;
+    }
+    if (!management.presets) return;
+    if (kind === "create-preset") return this.finish({ action: "create-preset" });
+    const highlighted = this.options.presets[this.selected];
+    if (highlighted && !isOffPreset(highlighted))
+      this.finish({ action: "edit-preset", name: highlighted.name });
+  }
+
+  /** Edit-preset routes to the host's own preset dialog, not the effort
+   * editor; off is a control state, not an editable preset. */
+  private canEditPreset(): boolean {
+    const highlighted = this.options.presets[this.selected];
+    return !!this.options.management?.presets && !!highlighted && !isOffPreset(highlighted);
+  }
+
+  /** Whether the highlighted preset's slot models can be routed to the host's
+   * own selector: a UI gate only, never authorization. */
+  private canPickModels(): boolean {
+    const highlighted = this.options.presets[this.selected];
+    return !!this.options.management?.models && !!highlighted && !isOffPreset(highlighted);
+  }
+
+  /** Route one slot's model to the host's own selector. A click carries its
+   * absolute screen position so that selector can open nearby; a keyboard
+   * route has none. */
+  private pickModel(slot: Strength, event?: PickerMouseEvent, paintedPreset?: string): void {
+    // A wheel/key can move the highlight before the scheduled repaint. Mouse
+    // routes belong to what was painted, while keyboard routes use highlight.
+    const highlighted = paintedPreset === undefined ? this.options.presets[this.selected]
+      : this.options.presets.find((preset) => preset.name === paintedPreset);
+    if (!highlighted || isOffPreset(highlighted)) return;
+    const position = event && typeof event.screenX === "number" && typeof event.screenY === "number"
+      ? { row: event.screenY, col: event.screenX } : undefined;
+    this.finish({ action: "edit-model", name: highlighted.name, slot, ...(position ? { position } : {}) });
+  }
+
+  /** Management hint labels in paint order; empty without the option. */
+  private managementLabels(): { kind: PickerAction; label: string }[] {
+    const management = this.options.management;
+    if (!management) return [];
+    const labels: { kind: PickerAction; label: string }[] = [];
+    if (management.settings) labels.push({ kind: "settings", label: "P Settings" });
+    if (management.presets) {
+      labels.push({ kind: "create", label: "N New" });
+      if (this.canEditPreset()) labels.push({ kind: "editPreset", label: "C Edit" });
+    }
+    return labels;
+  }
+
+  /** The host's one-line management scope/pending status, when it supplies a
+   * nonempty one. Rendering must never fail on a status callback. */
+  private managementSummary(): string | undefined {
+    try {
+      const summary = this.options.management?.summary?.();
+      return typeof summary === "string" && summary.trim() ? summary : undefined;
+    } catch { return undefined; }
+  }
+
+  private listControls(lines: string[], inner: number, compact: boolean, saveShown = false): void {
+    // At the minimum height use the existing controls row for saving instead
+    // of silently dropping it. Verbose navigation hints yield first.
+    if (!saveShown && this.canSaveDefault("global")) {
+      const saving = this.saveLabels(inner);
+      if (saving) {
+        let text = saving.text;
+        const edit = this.canEdit();
+        const hints = edit ? [" · E effort · ↑↓↵ Esc", " · E ↑↓↵ Esc", " · E"] : [" · ↑↓↵ Esc", " · ↵ Esc"];
+        const hint = hints.find((each) => visibleWidth(text) + visibleWidth(each) <= inner);
+        if (hint) text += hint;
+        this.addAction(lines, inner, text, [...saving.actions, ...(edit && hint ? [{ kind: "edit" as const, label: "E" }] : [])]);
+        return;
+      }
+    }
+    const base = this.controls(inner, compact);
+    const labels = this.managementLabels();
+    let text = base;
+    if (labels.length) {
+      // The hint appears only when its labels fit whole; when even they do
+      // not, the keys remain reachable without painted targets.
+      const full = labels.map(({ label }) => ` · ${label}`).join("");
+      if (visibleWidth(base) + visibleWidth(full) <= inner) text = base + full;
+      else {
+        const min = ` · ${labels.map(({ label }) => label.slice(0, 1)).join(" ")}`;
+        if (visibleWidth(base) + visibleWidth(min) <= inner) {
+          text = base + min;
+          for (const label of labels) label.label = label.label.slice(0, 1);
+        }
+      }
+    }
+    // The model route's hint rides along when it fits; the digits stay
+    // reachable even without it, and it is never a click target.
+    if (this.canPickModels()) {
+      for (const hint of [" · 1/2/3 model", " · 123"]) {
+        if (visibleWidth(text) + visibleWidth(hint) <= inner) { text += hint; break; }
+      }
+    }
+    this.addAction(lines, inner, text, [
+      ...(this.canEdit() ? [{ kind: "edit" as const, label: inner < 22 ? "E" : "Edit effort" }] : []),
+      ...labels,
+    ]);
   }
 
   private renderEditor(width: number, inner: number, maxLines: number): string[] {
@@ -604,14 +886,14 @@ export class PresetPicker implements Component {
       const warning = this.inheritWarning(preset, slot, caps[slot]);
       return warning ? [`${SLOT_LABEL[slot]}: ${warning}`] : [];
     });
-    const changed = strengths.some((slot) => this.draft[slot] !== preset.effort_overrides?.[slot]);
+    const saveRows = this.canSaveDefault("global") && maxLines >= 8 ? 1 : 0;
     const lines = [this.title(width, `Effort · ${preset.name}`)];
-    if (maxLines >= 8) lines.push(this.row(theme.fg("muted", " New Agents only; main unchanged"), inner));
-    if (maxLines >= 9) lines.push(this.row(theme.fg("dim", ` source: preset defaults + session overrides · ${changed ? "unsaved" : "unchanged"}`), inner));
-    if (maxLines >= 10) lines.push(this.divider(width));
+    if (maxLines >= 8 + saveRows) lines.push(this.row(theme.fg("muted", " New Agents only; main unchanged"), inner));
+    if (maxLines >= 9 + saveRows) lines.push(this.row(theme.fg("dim", " source: preset defaults + session overrides · changes apply immediately"), inner));
+    if (maxLines >= 10 + saveRows) lines.push(this.divider(width));
     for (const slot of strengths) {
       const selected = slot === selectedSlot;
-      const value = this.draft[slot] === undefined ? "default" : this.draft[slot];
+      const value = preset.effort_overrides?.[slot] ?? "default";
       const short = inner < 27;
       const label = short ? ({ light: "light", standard: "std", strong: "str" } as const)[slot] : SLOT_LABEL[slot];
       const problem = this.fixedIssue(preset, slot, caps[slot]) ?? this.inheritWarning(preset, slot, caps[slot]);
@@ -630,20 +912,33 @@ export class PresetPicker implements Component {
       lines.push(this.row(selected ? theme.bg("selectedBg", text) : text, inner));
     }
     const inherited = caps[selectedSlot].error ?? caps[selectedSlot].inheritError ?? caps[selectedSlot].inherited ?? "unavailable";
-    if (maxLines >= 11) lines.push(this.row(theme.fg("dim", ` default: ${defaultEffort(preset, selectedSlot)} · inherit → ${inherited} · model: ${preset.models[selectedSlot]}`), inner));
-    const info = errors.length ? ` ! Cannot apply: ${errors.join("; ")}` : warnings.length
-      ? ` Preview only; checked at spawn: ${warnings.join("; ")}`
-      : ` ${changed ? "unsaved · " : ""}default: ${defaultEffort(preset, selectedSlot)} · inherit → ${inherited}`;
-    lines.push(this.row(theme.fg(errors.length || warnings.length ? "warning" : "muted", info), inner));
-    const apply = preset.name === this.options.activeName ? "Apply" : "Apply & enable";
-    const controls = inner < 23 ? " Apply R Esc" : ` ${apply} · R reset · Esc back · Alt+S close · ←→ adjust · ↑↓ slot`;
-    this.addAction(lines, inner, controls, [
-      { kind: "apply", label: inner < 23 ? "Apply" : apply },
-      { kind: "reset", label: inner < 23 ? "R" : "R reset" },
-      { kind: "back", label: inner < 23 ? "Esc" : "Esc back" },
-    ]);
+    if (maxLines >= 11 + saveRows) lines.push(this.row(theme.fg("dim", ` default: ${defaultEffort(preset, selectedSlot)} · inherit → ${inherited} · model: ${preset.models[selectedSlot]}`), inner));
+    const info = this.effortError ? ` ! ${this.effortError}` : errors.length ? ` ! Current policy unavailable: ${errors.join("; ")}` : warnings.length
+      ? ` Inherit checked at spawn: ${warnings.join("; ")}`
+      : ` Changes apply immediately · default: ${defaultEffort(preset, selectedSlot)} · inherit → ${inherited}`;
+    lines.push(this.row(theme.fg(this.effortError || errors.length || warnings.length ? "warning" : "muted", info), inner));
+    const saveShown = saveRows > 0 && this.saveControls(lines, inner);
+    this.editorControls(lines, inner, saveShown);
     lines.push(this.bottom(width));
     return lines;
+  }
+
+  private editorControls(lines: string[], inner: number, saveShown: boolean): void {
+    if (!saveShown && this.canSaveDefault("global")) {
+      const saving = this.saveLabels(inner);
+      if (saving) {
+        const hints = [" · R reset · Esc back", " · R Esc"];
+        const hint = hints.find((each) => visibleWidth(saving.text) + visibleWidth(each) <= inner);
+        this.addAction(lines, inner, saving.text + (hint ?? ""), [...saving.actions,
+          ...(hint ? [{ kind: "reset" as const, label: "R" }, { kind: "back" as const, label: "Esc" }] : [])]);
+        return;
+      }
+    }
+    const controls = inner < 14 ? " R Esc" : inner < 23 ? " R reset · Esc" : " R reset · Enter/Esc back · Alt+S close · ←→ adjust · ↑↓ slot";
+    this.addAction(lines, inner, controls, [
+      { kind: "reset", label: inner < 14 ? "R" : "R reset" },
+      { kind: "back", label: inner < 23 ? "Esc" : "Esc back" },
+    ]);
   }
 
   private controls(inner: number, compact: boolean): string {

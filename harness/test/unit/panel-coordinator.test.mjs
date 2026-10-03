@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PresetRouter, thinkingLevels } from "../../dist/routing.js";
+import { applyAuditedPreset } from "../../dist/extension.js";
+import { SettingsStore } from "../../../lib/settings-store.mjs";
+import { stageWorkerSelection } from "../../dist/ui/preferences-controls.js";
 import { createEventBus, initTheme, SessionManager } from "@earendil-works/pi-coding-agent";
-import { matchesKey } from "@earendil-works/pi-tui";
+import { matchesKey, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { HarnessWidget } from "../../dist/ui/agent-widget.js";
 import { ChildActivityRegistry } from "../../dist/runtime/activity-observer.js";
 import { settings } from "../support/controller-fixture.mjs";
@@ -284,50 +291,201 @@ test("the footer's worker indicator toggles a picker stacked in the bottom-right
   assert.deepEqual(published, ["fixture-light"], "a clicked preset is applied through the audited publish path");
 });
 
-for (const action of ["apply", "cancel", "approval", "stale"]) test(`effort editor coordinator forwards an audited draft only on apply (${action})`, { timeout: 2000 }, async (t) => {
-  const { PresetRouter, thinkingLevels } = await import("../../dist/routing.js");
-  const bus = createEventBus(), router = new PresetRouter(starterPath);
-  const before = router.current(), audits = [], errors = [];
-  let component, capabilities = 0;
+function liveEffortPanels(t, options = {}) {
+  const bus = createEventBus(), audits = [], errors = [], notices = [], latched = [], components = [], factories = [], confirmations = [];
+  let router = options.router ?? new PresetRouter(starterPath), ready = true, capabilities = 0;
+  const controller = { assertOwnerAvailable() {
+    if (latched.length) throw Object.assign(new Error("OWNER_FAILED"), { code: "PARENT_SESSION_UNAVAILABLE" });
+  }, latchParentHistoryFailure: (error) => latched.push(error) };
   const panels = new PanelCoordinator({
     pi: { events: bus, registerShortcut() {} }, widget: { onOpen() {}, agents: () => [], tuiMode: () => "regular" },
-    ready: () => true, router: () => router,
-    // Test coordinator transactions, not a particular built-in effort table.
+    ready: () => ready, router: () => router,
     efforts() { capabilities++; return { levels: thinkingLevels, inherited: "high" }; },
-    publish: (candidate, name, _ctx, overrides) => router.apply(candidate, name, (snapshot) => audits.push(snapshot), overrides),
+    publish: (candidate, name, _ctx, overrides) => {
+      const before = router.current(), targetBefore = router.inspect(candidate).find((item) => item.name === name);
+      const selection = applyAuditedPreset({ controller, router, candidate, name, effort_overrides: overrides,
+        validate: () => { if (options.validationError) throw options.validationError; },
+        audit: (snapshot) => { if (options.auditError) throw options.auditError; audits.push(structuredClone(snapshot)); } });
+      const publication = { selection, candidate: router.rebase(candidate) };
+      try {
+        if (options.store) stageWorkerSelection(options.store, selection, before, overrides !== undefined, targetBefore?.effort_overrides ?? {});
+        options.afterCommit?.(selection);
+      } catch (error) { notices.push(String(error)); } // presentation/persistence warning, never rollback
+      return publication;
+    },
     showError: (error) => errors.push(error),
+    ...(options.management ? { management: options.management } : {}),
   });
   const keys = { matches: (data, binding) => matchesKey(data, {
     "tui.select.up": "up", "tui.select.down": "down", "tui.select.confirm": "enter", "tui.select.cancel": "escape",
   }[binding] ?? "f12") };
-  const ctx = { mode: "tui", ui: { notify() {}, custom(factory) {
-    return new Promise((resolve) => { component = factory({ terminal: { columns: 100, rows: 40 }, requestRender() {} },
-      { ...theme, bg: (_color, text) => text }, keys, resolve); });
-  } } };
+  const ctx = { mode: "tui", ui: { notify: (text) => notices.push(text),
+    confirm: async (title, text) => { confirmations.push({ title, text, closed: components.at(-1)?.isOpen() === false });
+      return await options.confirm?.(title, text) ?? false; },
+    custom(factory) {
+      return new Promise((resolve) => {
+        const mount = () => components.push(factory({ terminal: { columns: 100, rows: 40 }, requestRender() {} },
+          { ...theme, bg: (_color, text) => text }, keys, resolve));
+        if (options.deferMount) factories.push(mount); else mount();
+      });
+    } } };
   panels.attachHost(ctx, bus); t.after(() => panels.dispose());
-  const opening = panels.selectPreset("", ctx);
-  component.handleInput("e"); component.render(76);
-  component.handleInput("\u001b[C"); // preset default -> explicit inherit
-  assert.equal(audits.length, 0, "editing is draft-only");
-  assert.deepEqual(router.current(), before);
-  assert(capabilities > 0, "coordinator must forward registry capabilities to the picker");
-  if (action === "cancel") component.handleInput("\u001bs");
-  else if (action === "approval") bus.emit("permissions:ui_prompt", { requestId: "effort-approval" });
-  else {
-    if (action === "stale") router.select("fixture-light");
-    component.handleInput("\r");
-  }
+  return { panels, ctx, bus, audits, errors, notices, latched, components, confirmations,
+    get router() { return router; }, get component() { return components.at(-1); }, get capabilities() { return capabilities; },
+    replaceRouter: (value) => { router = value; }, retire: () => { ready = false; }, mount: () => factories.shift()?.() };
+}
+
+for (const closing of ["escape", "toggle", "approval"]) test(`immediate effort audits survive ${closing} without an extra Apply`, async (t) => {
+  const h = liveEffortPanels(t), before = h.router.current(), opening = h.panels.selectPreset("", h.ctx);
+  h.component.handleInput("e"); h.component.handleInput("\u001b[C");
+  assert.equal(h.audits.length, 1);
+  assert.deepEqual(h.router.current().effort_overrides, { light: "inherit" });
+  assert.deepEqual(before.effort_overrides, {}, "an already allocated snapshot is unchanged");
+  assert(h.capabilities > 0);
+  if (closing === "escape") { h.component.handleInput("\u001b"); h.component.handleInput("\u001b"); }
+  else if (closing === "toggle") h.component.handleInput("\u001bs");
+  else h.bus.emit("permissions:ui_prompt", { requestId: "effort-approval" });
   await opening;
-  if (action === "apply") {
-    assert.equal(audits.length, 1); assert.deepEqual(router.current().effort_overrides, { light: "inherit" });
-    assert.deepEqual(errors, []);
+  assert.equal(h.audits.length, 1);
+  assert.deepEqual(h.router.current().effort_overrides, { light: "inherit" });
+  assert.deepEqual(h.errors, []);
+});
+
+test("multiple live edits, reset, Enter/back and later preset selection use the latest own commit", async (t) => {
+  const h = liveEffortPanels(t), opening = h.panels.selectPreset("", h.ctx);
+  h.component.handleInput("e"); h.component.handleInput("\u001b[C");
+  h.component.handleInput("\u001b[B"); h.component.handleInput("\u001b[C");
+  assert.deepEqual(h.router.current().effort_overrides, { light: "inherit", standard: "inherit" });
+  h.component.handleInput("r");
+  assert.deepEqual(h.router.current().effort_overrides, {});
+  assert.equal(h.audits.length, 3);
+  h.component.handleInput("\r"); // back, not publication
+  assert.equal(h.audits.length, 3);
+  const names = h.router.names(), next = names[names.indexOf(h.router.current().name) + 1];
+  h.component.handleInput("\u001b[B"); h.component.handleInput("\r");
+  await opening;
+  assert.equal(h.router.current().name, next);
+  assert.equal(h.audits.length, 4);
+  assert.deepEqual(h.errors, []);
+});
+
+for (const failure of ["validation", "audit"]) test(`a live ${failure} failure paints only the last committed values`, async (t) => {
+  const error = Object.assign(new Error("CONTROLLED_REJECTION"), { code: "THINKING_INCOMPATIBLE" });
+  const h = liveEffortPanels(t, { [failure === "validation" ? "validationError" : "auditError"]: error });
+  const before = h.router.current(), opening = h.panels.selectPreset("", h.ctx);
+  h.component.handleInput("e");
+  assert.doesNotThrow(() => h.component.handleInput("\u001b[C"));
+  assert.deepEqual(h.router.current(), before);
+  assert.deepEqual(h.audits, []);
+  assert.equal(h.errors[0].code, failure === "validation" ? "THINKING_INCOMPATIBLE" : "PRESET_AUDIT_FAILED");
+  assert.equal(h.latched.length, failure === "audit" ? 1 : 0);
+  assert.match(h.component.render(76).join("\n"), /light:default/);
+  assert.match(h.component.render(76).join("\n"), /Change not applied/);
+  h.component.handleInput("\u001bs"); await opening;
+});
+
+for (const invalidation of ["external", "round-trip", "router", "retire", "dispose", "settled"]) {
+  test(`old effort callbacks cannot publish after ${invalidation}`, async (t) => {
+    const h = liveEffortPanels(t), original = h.router, opening = h.panels.selectPreset("", h.ctx);
+    const setter = h.component.options.setEffort;
+    if (invalidation === "external") h.router.select("fixture-light");
+    else if (invalidation === "round-trip") { h.router.select("fixture-light"); h.router.select("fixture-balanced"); }
+    else if (invalidation === "router") h.replaceRouter(new PresetRouter(starterPath));
+    else if (invalidation === "retire") h.retire();
+    else if (invalidation === "dispose") h.panels.dispose();
+    else h.component.handleInput("\u001b"); // settled, before the awaiting continuation runs
+    const before = original.current();
+    assert.equal(setter("fixture-balanced", { light: "off" }), undefined);
+    assert.deepEqual(original.current(), before);
+    assert.deepEqual(h.audits, []);
+    if (h.component.isOpen()) h.component.handleInput("\u001bs");
+    await opening;
+  });
+}
+
+test("a queued factory drops an externally invalidated effort editor before it mounts", async (t) => {
+  const h = liveEffortPanels(t, { deferMount: true }), opening = h.panels.selectPreset("", h.ctx);
+  h.router.select("fixture-light"); h.mount(); await opening;
+  assert.deepEqual(h.audits, []);
+  assert.equal(h.component.isOpen, undefined, "the obsolete factory returns an inert component");
+});
+
+for (const accepted of [false, true]) test(`inactive effort entry confirms after picker closure (accepted=${accepted})`, async (t) => {
+  const h = liveEffortPanels(t, { confirm: async () => accepted }); h.router.select("off");
+  const opening = h.panels.selectPreset("", h.ctx);
+  h.component.handleInput("\u001b[B"); h.component.handleInput("e");
+  await tick();
+  assert.equal(h.confirmations.length, 1);
+  assert.equal(h.confirmations[0].closed, true, "standard confirm never nests under custom");
+  if (!accepted) {
+    await opening;
+    assert.equal(h.router.current().name, "off"); assert.deepEqual(h.audits, []); assert.equal(h.components.length, 1);
   } else {
-    assert.deepEqual(audits, []);
-    assert.deepEqual(router.current().effort_overrides, {});
-    assert.equal(errors.length, action === "stale" ? 1 : 0);
-    if (action === "stale") assert.equal(errors[0].code, "STALE_PRESET_SELECTION");
-    else assert.deepEqual(router.current(), before);
+    assert.equal(h.components.length, 2, "confirmed selection reopens directly on its effort page");
+    assert.match(h.component.render(76).join("\n"), /Effort · fixture-balanced/);
+    assert.equal(h.audits.length, 1, "enabling is explicitly audited once");
+    h.component.handleInput("\u001b[C");
+    assert.deepEqual(h.router.current().effort_overrides, { light: "inherit" });
+    assert.equal(h.audits.length, 2);
+    h.component.handleInput("\u001bs"); await opening;
   }
+  assert.deepEqual(h.errors, []);
+});
+
+for (const invalidation of ["external", "round-trip", "router", "retire", "dispose", "approval"]) {
+  test(`inactive effort consent cannot enable after ${invalidation}`, async (t) => {
+    let answer;
+    const h = liveEffortPanels(t, { confirm: () => new Promise((resolve) => { answer = resolve; }) });
+    h.router.select("off");
+    const opening = h.panels.selectPreset("", h.ctx);
+    h.component.handleInput("\u001b[B"); h.component.handleInput("e"); await tick();
+    let entered = false;
+    await h.panels.withManagement(async () => { entered = true; });
+    assert.equal(entered, false, "consent owns the management latch");
+    if (invalidation === "external") h.router.select("fixture-light");
+    else if (invalidation === "round-trip") { h.router.select("fixture-light"); h.router.select("off"); }
+    else if (invalidation === "router") h.replaceRouter(new PresetRouter(starterPath));
+    else if (invalidation === "retire") h.retire();
+    else if (invalidation === "dispose") h.panels.dispose();
+    else h.bus.emit("permissions:ui_prompt", { requestId: "inactive-effort-ask" });
+    answer(true); await opening;
+    assert.deepEqual(h.audits, []);
+    assert.equal(h.components.length, 1, "no obsolete reopen");
+  });
+}
+
+test("live effort continuations do not reread changed or missing catalogue files", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "harness-live-effort-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, "presets.json"), body = { version: "v1", models: { light: "fixture/old", standard: "fixture/old", strong: "fixture/old" } };
+  await writeFile(path, JSON.stringify({ version: 2, defaultPreset: "team", presets: { team: body, other: body } }));
+  const h = liveEffortPanels(t, { router: new PresetRouter(path) }), opening = h.panels.selectPreset("", h.ctx);
+  h.component.handleInput("e"); h.component.handleInput("\u001b[C");
+  await writeFile(path, "invalid JSON must not be reread");
+  h.component.handleInput("\u001b[B"); h.component.handleInput("\u001b[C");
+  assert.deepEqual(h.router.current().effort_overrides, { light: "inherit", standard: "inherit" });
+  assert.equal(h.router.current().models.light, "fixture/old");
+  await rm(path);
+  h.component.handleInput("r"); h.component.handleInput("\r"); h.component.handleInput("\u001b[A"); h.component.handleInput("\r");
+  await opening;
+  assert.equal(h.router.current().name, "other");
+  assert.deepEqual(h.errors, []);
+});
+
+test("immediate efforts stage explicit persistent leaves without writing files or undoing on close", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "harness-live-effort-settings-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SettingsStore({ agentDir: join(root, "agent"), cwd: root, projectTrusted: true }); store.setScope("workspace");
+  const h = liveEffortPanels(t, { store, afterCommit: () => { throw new Error("FOOTER_FAILED_AFTER_COMMIT"); } });
+  const opening = h.panels.selectPreset("", h.ctx);
+  h.component.handleInput("e"); h.component.handleInput("\u001b[C");
+  assert.deepEqual(store.get("workspace").effort["fixture-balanced"], { light: "inherit" });
+  assert.match(h.component.render(76).join("\n"), /light:inherit/);
+  h.component.handleInput("r");
+  assert.equal(store.get("workspace").effort["fixture-balanced"].light, null);
+  h.component.handleInput("\u001bs"); await opening;
+  assert.deepEqual(h.router.current().effort_overrides, {});
+  assert.equal(h.audits.length, 2);
+  assert.deepEqual(h.errors, []);
+  assert(h.notices.some((notice) => notice.includes("FOOTER_FAILED_AFTER_COMMIT")));
 });
 
 test("a picker opened behind a tall usage panel appears with the keyboard when that panel closes", async (t) => {
@@ -377,4 +535,412 @@ test("a picker opened behind a tall usage panel appears with the keyboard when t
   assert.match(lines.at(-1), /╰─+╯$/, "painted whole, bottom edge included");
   picker.handleInput("\u001b");
   await tick();
+});
+
+// Settings/preset management routing: the coordinator forwards the picker's
+// management choices to the host integration's standard dialogs, only after
+// the ui.custom interaction has fully settled, and never publishes for them.
+async function managementPanels(t, overrides = {}) {
+  const { PresetRouter } = await import("../../dist/routing.js");
+  const bus = createEventBus(), router = new PresetRouter(starterPath);
+  const notices = [], errors = [], published = [], calls = [];
+  let component, settled = false, mounts = 0, ready = true;
+  const panels = new PanelCoordinator({
+    pi: { events: bus, registerShortcut() {} },
+    widget: { onOpen() {}, agents: () => [], tuiMode: () => overrides.fullscreen ? "fullscreen" : "regular" },
+    ready: () => ready, router: () => router,
+    publish: (_candidate, name) => published.push(name),
+    showError: (error) => errors.push(error),
+    management: {
+      summary: () => " presets: controlled fixture · pending: none",
+      // Overrides wrap the recording, so a test can defer or fail the dialog
+      // while the route itself stays observable.
+      settings: async () => { await overrides.settings?.(); calls.push(["settings", undefined, settled, mounts]); },
+      ...(overrides.saveDefault ? {
+        saveDefault: async (scope) => { await overrides.saveDefault(scope); calls.push(["save", scope, settled, mounts]); },
+        canSaveWorkspace: () => overrides.canSaveWorkspace?.() ?? true,
+      } : {}),
+      editPreset: overrides.editPreset === null ? undefined
+        : async (name) => { await overrides.editPreset?.(name); calls.push(["edit", name, settled, mounts]); },
+      editModel: overrides.editModel === null ? undefined
+        : async (name, slot, position) => { await overrides.editModel?.(name, slot, position);
+          calls.push(["editModel", name, slot, position, settled, mounts]); },
+      ...(overrides.cancelModelSelection === null ? {} : {
+        cancelModelSelection: () => { overrides.cancelModelSelection?.(); },
+      }),
+    },
+  });
+  const keys = { matches: (data, binding) => matchesKey(data, {
+    "tui.select.up": "up", "tui.select.down": "down",
+    "tui.select.confirm": "enter", "tui.select.cancel": "escape",
+  }[binding] ?? "f12") };
+  const ctx = { mode: "tui", ui: { notify: (message) => notices.push(message), custom(factory) {
+    mounts++;
+    return new Promise((resolve) => { component = factory({ terminal: { columns: 100, rows: 40 }, requestRender() {} },
+      { ...theme, bg: (_color, text) => text }, keys, (value) => { settled = true; resolve(value); }); });
+  } } };
+  panels.attachHost(ctx, bus);
+  t.after(() => panels.dispose());
+  return { panels, bus, ctx, calls, errors, published, notices,
+    get component() { return component; }, get mounts() { return mounts; },
+    loseReadiness: () => { ready = false; } };
+}
+
+test("management routes run the host dialogs after the picker settles, never publishing", async (t) => {
+  const settings = await managementPanels(t);
+  const opening = settings.panels.selectPreset("", settings.ctx);
+  assert.match(settings.component.render(76).join("\n"), /controlled fixture · pending: none/,
+    "the coordinator forwards the summary to the picker");
+  settings.component.handleInput("p");
+  await opening;
+  assert.deepEqual(settings.calls, [["settings", undefined, true, 1]],
+    "the dialog runs only after ui.custom settled, with no reopen");
+  assert.deepEqual(settings.published, [], "a management route never publishes a candidate");
+  assert.deepEqual(settings.errors, []); assert.deepEqual(settings.notices, []);
+  assert.equal(settings.mounts, 1, "no automatic reopen after the dialog");
+
+  const created = await managementPanels(t);
+  const creating = created.panels.selectPreset("", created.ctx);
+  created.component.handleInput("n");
+  await creating;
+  assert.deepEqual(created.calls, [["edit", undefined, true, 1]], "create reaches editPreset(undefined)");
+
+  const edited = await managementPanels(t);
+  const editing = edited.panels.selectPreset("", edited.ctx);
+  edited.component.render(76);
+  edited.component.handleInput("c"); // the highlighted active preset
+  await editing;
+  assert.deepEqual(edited.calls.map(([kind, name]) => [kind, name]), [["edit", "fixture-balanced"]],
+    "edit-preset carries the highlighted preset's name");
+});
+
+test("a host without the preset dialog keeps preset routes inert, settings still routes", async (t) => {
+  const h = await managementPanels(t, { editPreset: null });
+  const opening = h.panels.selectPreset("", h.ctx);
+  h.component.render(76);
+  h.component.handleInput("n"); // inert: the picker stays open
+  h.component.handleInput("c");
+  assert.deepEqual(h.calls, []);
+  h.component.handleInput("p");
+  await opening;
+  assert.deepEqual(h.calls.map(([kind]) => [kind]), [["settings"]]);
+  assert.deepEqual(h.published, []); assert.deepEqual(h.errors, []); assert.deepEqual(h.notices, []);
+});
+
+test("worker save routes settle before the host callback and do not carry an inactive highlight", async (t) => {
+  for (const [key, scope] of [["g", "global"], ["w", "workspace"]]) {
+    const h = await managementPanels(t, { saveDefault: async () => {} });
+    const opening = h.panels.selectPreset("", h.ctx);
+    h.component.handleInput("\u001b[B");
+    h.component.handleInput(key);
+    await opening;
+    assert.deepEqual(h.calls, [["save", scope, true, 1]]);
+    assert.deepEqual(h.published, []);
+    assert.deepEqual(h.errors, []);
+    assert.equal(h.mounts, 1);
+  }
+});
+
+for (const interruption of ["trust", "readiness", "dispose", "approval"]) {
+  test(`a settled worker save route is dropped on ${interruption} before its dialog`, async (t) => {
+    let trusted = true;
+    const h = await managementPanels(t, { saveDefault: async () => {}, canSaveWorkspace: () => trusted });
+    const opening = h.panels.selectPreset("", h.ctx);
+    h.component.handleInput("w");
+    if (interruption === "trust") trusted = false;
+    else if (interruption === "readiness") h.loseReadiness();
+    else if (interruption === "dispose") h.panels.dispose();
+    else h.bus.emit("permissions:ui_prompt", { requestId: "worker-save-ask" });
+    await opening;
+    assert.deepEqual(h.calls, []);
+    assert.deepEqual(h.published, []);
+    assert.deepEqual(h.errors, []);
+    if (interruption === "approval") h.bus.emit("permissions:decision", { requestId: "worker-save-ask" });
+  });
+}
+
+test("worker save dialogs share the management latch and release it after errors", async (t) => {
+  let reject;
+  const failure = new Error("SAVE_DIALOG_FAILED");
+  const h = await managementPanels(t, { saveDefault: () => new Promise((_resolve, decline) => { reject = decline; }) });
+  const opening = h.panels.selectPreset("", h.ctx);
+  h.component.handleInput("g");
+  await tick();
+  let entered = false;
+  await h.panels.withManagement(async () => { entered = true; });
+  await h.panels.selectPreset("", h.ctx);
+  assert.equal(entered, false);
+  assert.equal(h.mounts, 1, "a pending save owns the interaction");
+  reject(failure); await opening;
+  assert.deepEqual(h.errors, [failure]);
+  await h.panels.withManagement(async () => { entered = true; });
+  assert(entered, "the failed save released the latch");
+  assert.deepEqual(h.published, []);
+});
+
+test("the management latch serializes dialog sequences and releases afterwards", async (t) => {
+  let release;
+  const h = await managementPanels(t, { settings: () => new Promise((resolve) => { release = resolve; }) });
+  const opening = h.panels.selectPreset("", h.ctx);
+  h.component.handleInput("p");
+  await tick(); // let the settled picker hand the route to the latched sequence
+  const blocked = h.panels.selectPreset("", h.ctx); // a second picker over the dialog
+  await blocked;
+  assert.ok(h.notices.some((message) => message.includes("unavailable")),
+    "the picker refuses to open while a management dialog is active");
+  assert.equal(h.mounts, 1);
+  assert.deepEqual(h.published, []); assert.deepEqual(h.errors, []);
+  release();
+  await opening;
+  assert.deepEqual(h.calls.map(([kind]) => [kind]), [["settings"]], "exactly one dialog sequence ran");
+
+  const again = h.panels.selectPreset("", h.ctx); // the latch released
+  assert.equal(h.mounts, 2);
+  assert.deepEqual(h.notices.filter((message) => message.includes("unavailable")).length, 1);
+  h.component.handleInput("p");
+  await tick();
+  release();
+  await again;
+  assert.deepEqual(h.calls.map(([kind]) => [kind]), [["settings"], ["settings"]]);
+});
+
+test("direct management uses the same latch and releases it on error, permission yield and disposal", async (t) => {
+  const h = await managementPanels(t);
+  let release;
+  const active = h.panels.withManagement(() => new Promise((resolve) => { release = resolve; }));
+  let entered = false;
+  await h.panels.withManagement(async () => { entered = true; });
+  await h.panels.selectPreset("", h.ctx);
+  assert.equal(entered, false);
+  assert.equal(h.mounts, 0, "direct dialogs block competing picker mounts");
+  release(); await active;
+  const failure = new Error("DIRECT_MANAGEMENT_FAILED");
+  await assert.rejects(h.panels.withManagement(async () => { throw failure; }), (error) => error === failure);
+  await h.panels.withManagement(async () => { entered = true; });
+  assert(entered, "failure releases the shared latch");
+  h.bus.emit("permissions:ui_prompt", { requestId: "direct-management-ask" });
+  assert.equal(h.panels.modelSelectionAllowed(), false);
+  entered = false;
+  await h.panels.withManagement(async () => { entered = true; });
+  assert.equal(entered, false, "new direct dialogs cannot cover a pending ask");
+  h.bus.emit("permissions:decision", { requestId: "direct-management-ask" });
+  assert.equal(h.panels.modelSelectionAllowed(), true);
+  let reject;
+  const stale = h.panels.withManagement(() => new Promise((_resolve, decline) => { reject = decline; }));
+  h.panels.dispose(); reject(failure);
+  await stale; // A retired host cannot receive the late error callback.
+  assert.equal(h.panels.modelSelectionAllowed(), false);
+  assert.deepEqual(h.errors, []);
+});
+
+test("a failing management dialog reports through showError and releases the latch", async (t) => {
+  const failure = new Error("SETTINGS_DIALOG_FAILED");
+  const h = await managementPanels(t, { settings: async () => { throw failure; } });
+  const opening = h.panels.selectPreset("", h.ctx);
+  h.component.handleInput("p");
+  await opening;
+  assert.deepEqual(h.errors, [failure], "dialog failures surface through showError");
+  assert.deepEqual(h.published, []); assert.deepEqual(h.notices, []);
+  const again = h.panels.selectPreset("", h.ctx);
+  assert.equal(h.mounts, 2, "the latch released despite the failure");
+  h.component.handleInput("\u001b");
+  await again;
+  assert.deepEqual(h.calls, []);
+});
+
+test("routes chosen across teardown or lost readiness never reach the dialogs", async (t) => {
+  const stale = await managementPanels(t);
+  const opening = stale.panels.selectPreset("", stale.ctx);
+  stale.component.handleInput("p");
+  stale.loseReadiness(); // the Owner went away after the picker settled
+  await opening;
+  assert.deepEqual(stale.calls, [], "no dialog after readiness was lost");
+  assert.deepEqual(stale.published, []); assert.deepEqual(stale.errors, []);
+
+  const disposed = await managementPanels(t);
+  const pending = disposed.panels.selectPreset("", disposed.ctx);
+  disposed.panels.dispose(); // closes the open picker
+  disposed.component.handleInput("p"); // a retained component: already cancelled
+  await pending;
+  assert.deepEqual(disposed.calls, [], "an old picker cannot invoke a newer session's callbacks");
+  assert.deepEqual(disposed.published, []); assert.deepEqual(disposed.errors, []);
+  assert.deepEqual(disposed.notices, []);
+});
+
+test("disposing mid-dialog ends the sequence without publishes or reopens", async (t) => {
+  let release;
+  const h = await managementPanels(t, { settings: () => new Promise((resolve) => { release = resolve; }) });
+  const opening = h.panels.selectPreset("", h.ctx);
+  h.component.handleInput("p");
+  await tick();
+  h.panels.dispose();
+  release();
+  await opening;
+  assert.deepEqual(h.calls.map(([kind]) => [kind]), [["settings"]], "the host's own dialog completes");
+  assert.deepEqual(h.published, [], "nothing is published after teardown");
+  assert.deepEqual(h.errors, []);
+  assert.equal(h.mounts, 1, "no reopen after the dialog or the teardown");
+});
+
+test("a host disposed while the dialog was awaited receives no further callbacks", async (t) => {
+  let reject;
+  const failure = new Error("DIALOG_FAILED_AFTER_DISPOSE");
+  const h = await managementPanels(t, { settings: () => new Promise((_resolve, decline) => { reject = decline; }) });
+  const opening = h.panels.selectPreset("", h.ctx);
+  h.component.handleInput("p");
+  await tick();
+  h.panels.dispose(); // the host goes away mid-dialog
+  reject(failure); // the host's own dialog then fails against the retired UI
+  await opening;
+  assert.deepEqual(h.calls, [], "the route is not recorded as completed for the retired host");
+  assert.deepEqual(h.errors, [], "no showError callback through the disposed host, nothing reported after teardown");
+  assert.deepEqual(h.published, []);
+  assert.equal(h.mounts, 1);
+});
+
+test("an edit-model route reaches the host callback after the picker settles with exact slot and position", async (t) => {
+  const keyboard = await managementPanels(t);
+  const opening = keyboard.panels.selectPreset("", keyboard.ctx);
+  assert.match(keyboard.component.render(76).join("\n"), /123/, "the callback's presence gates the picker's model routes");
+  keyboard.component.handleInput("2"); // keyboard: the standard slot, no position
+  await opening;
+  assert.deepEqual(keyboard.calls.map(([kind, name, slot, position]) => [kind, name, slot, position]),
+    [["editModel", "fixture-balanced", "standard", undefined]]);
+  assert.equal(keyboard.calls[0][4], true, "the dialog runs only after ui.custom settled");
+  assert.equal(keyboard.calls[0][5], 1, "no automatic reopen of the worker panel");
+  assert.deepEqual(keyboard.published, [], "a model route never publishes a candidate");
+  assert.deepEqual(keyboard.errors, []); assert.deepEqual(keyboard.notices, []);
+
+  // A floating click carries the pointer's absolute screen position through.
+  const clicked = await managementPanels(t, { fullscreen: true });
+  const clickOpening = clicked.panels.selectPreset("", clicked.ctx);
+  assert.equal(clicked.panels.isFullscreen(), true, "the renderer projection reads the captured mode");
+  const lines = clicked.component.render(76).map(stripTerminalSequences);
+  const y = lines.findIndex((line) => line.includes("fixture-light-model"));
+  assert(y > 0, lines.join("\n"));
+  clicked.component.handleMouse({ type: "click", button: "left",
+    x: lines[y].indexOf("fixture-light-model"), y, screenX: 33, screenY: 9 });
+  await clickOpening;
+  assert.deepEqual(clicked.calls.map(([kind, name, slot, position]) => [kind, name, slot, position]),
+    [["editModel", "fixture-balanced", "light", { row: 9, col: 33 }]],
+    "the click's absolute coordinates reach the callback verbatim");
+  assert.deepEqual(clicked.published, []);
+});
+
+test("model routes share the management latch, error reporting and stale-host guards", async (t) => {
+  const failure = new Error("MODEL_DIALOG_FAILED");
+  const failing = await managementPanels(t, { editModel: async () => { throw failure; } });
+  const opening = failing.panels.selectPreset("", failing.ctx);
+  failing.component.render(76);
+  failing.component.handleInput("1");
+  await opening;
+  assert.deepEqual(failing.errors, [failure], "model dialog failures surface through showError");
+  assert.deepEqual(failing.published, []);
+  const again = failing.panels.selectPreset("", failing.ctx);
+  assert.equal(failing.mounts, 2, "the latch released despite the failure");
+  assert.deepEqual(failing.notices.filter((message) => message.includes("unavailable")), []);
+  failing.component.handleInput("\u001b");
+  await again;
+
+  const stale = await managementPanels(t);
+  const staleOpening = stale.panels.selectPreset("", stale.ctx);
+  stale.component.render(76);
+  stale.component.handleInput("3");
+  stale.loseReadiness();
+  await staleOpening;
+  assert.deepEqual(stale.calls, [], "no dialog after readiness was lost");
+  assert.deepEqual(stale.published, []);
+
+  const denied = await managementPanels(t, { editModel: null });
+  const deniedOpening = denied.panels.selectPreset("", denied.ctx);
+  const text = denied.component.render(76).join("\n");
+  assert.doesNotMatch(text, /123/, "no model hint without the host callback");
+  denied.component.handleInput("1"); // gated off: the picker stays open
+  denied.component.handleInput("\u001b");
+  await deniedOpening;
+  assert.deepEqual(denied.calls, []);
+  assert.deepEqual(denied.published, []);
+});
+
+test("a permission ask releases an open model selection first, best-effort", async (t) => {
+  const cancelled = [];
+  const h = await managementPanels(t, { cancelModelSelection: () => cancelled.push("cancel") });
+  const opening = h.panels.selectPreset("", h.ctx);
+  h.bus.emit("permissions:ui_prompt", { requestId: "model-ask" });
+  await opening;
+  assert.deepEqual(cancelled, ["cancel"], "the model selection is cancelled before the ordinary yield");
+  assert.deepEqual(h.published, [], "the cancelled selection publishes nothing");
+  assert.deepEqual(h.errors, []);
+  // The ask itself still registered and holds the queue.
+  await h.panels.selectPreset("", h.ctx);
+  assert(h.notices.some((message) => message.includes("unavailable")), "the pending ask refuses a new picker");
+  assert.equal(h.mounts, 1);
+  h.bus.emit("permissions:decision", { requestId: "model-ask" });
+  const reopened = h.panels.selectPreset("", h.ctx);
+  assert.equal(h.mounts, 2, "the decision frees the queue again");
+  h.component.handleInput("\u001b");
+  await reopened;
+});
+
+test("a throwing model-selection cancel never blocks the yield or later asks", async (t) => {
+  const h = await managementPanels(t, { cancelModelSelection: () => { throw new Error("CANCEL_MODEL_FAILED"); } });
+  const opening = h.panels.selectPreset("", h.ctx);
+  h.bus.emit("permissions:ui_prompt", { requestId: "model-ask" });
+  await opening;
+  assert(h.notices.some((message) => message.includes("CANCEL_MODEL_FAILED")),
+    "the cleanup failure is reported through the observer, not thrown");
+  assert.deepEqual(h.published, []);
+  await h.panels.selectPreset("", h.ctx);
+  assert(h.notices.some((message) => message.includes("unavailable")), "the ask registered despite the throwing cancel");
+  assert.equal(h.mounts, 1, "the picker still closed");
+  h.bus.emit("permissions:decision", { requestId: "model-ask" });
+  const reopened = h.panels.selectPreset("", h.ctx);
+  assert.equal(h.mounts, 2, "the queue recovered from the failed cleanup");
+  h.component.handleInput("\u001b");
+  await reopened;
+});
+
+test("without the cancel callback a permission ask just yields as before", async (t) => {
+  const h = await managementPanels(t, { cancelModelSelection: null });
+  const opening = h.panels.selectPreset("", h.ctx);
+  h.bus.emit("permissions:ui_prompt", { requestId: "plain-ask" });
+  await opening;
+  assert.deepEqual(h.published, []);
+  assert.deepEqual(h.errors, []);
+  assert(h.notices.every(({ message }) => !message.includes("Harness panel UI failed")), "no cleanup failure is invented");
+  h.bus.emit("permissions:decision", { requestId: "plain-ask" });
+  const reopened = h.panels.selectPreset("", h.ctx);
+  assert.equal(h.mounts, 2);
+  h.component.handleInput("\u001b");
+  await reopened;
+});
+
+test("a route finishing while a permission ask appears is dropped, and works again after idle", async (t) => {
+  const h = await managementPanels(t);
+  const opening = h.panels.selectPreset("", h.ctx);
+  h.component.render(76);
+  h.component.handleInput("1"); // the picker finishes an edit-model route
+  h.bus.emit("permissions:ui_prompt", { requestId: "race-ask" }); // before the route's dialog runs
+  await opening;
+  assert.deepEqual(h.calls, [], "the model route is dropped while the ask is pending");
+  assert.deepEqual(h.published, [], "nothing is published for a dropped route");
+  h.bus.emit("permissions:decision", { requestId: "race-ask" });
+  const next = h.panels.selectPreset("", h.ctx);
+  h.component.render(76);
+  h.component.handleInput("1");
+  await next;
+  assert.deepEqual(h.calls.map(([kind, name, slot]) => [kind, name, slot]),
+    [["editModel", "fixture-balanced", "light"]], "the route works once the ask has settled");
+  assert.deepEqual(h.published, []);
+
+  // The same pane gate drops a settings route finishing into a pending ask.
+  const settings = await managementPanels(t);
+  const settingsOpening = settings.panels.selectPreset("", settings.ctx);
+  settings.component.render(76);
+  settings.component.handleInput("p");
+  settings.bus.emit("permissions:ui_prompt", { requestId: "settings-ask" });
+  await settingsOpening;
+  assert.deepEqual(settings.calls, [], "a settings route never covers the pending ask either");
+  assert.deepEqual(settings.published, []);
+  settings.bus.emit("permissions:decision", { requestId: "settings-ask" });
 });
