@@ -14,7 +14,7 @@ import { historicalRunsCommand } from "./history/history-command.js";
 import { reportUnreportedUsage } from "./history/usage-audit.js";
 import { ApprovalBindings } from "./permissions/approval-provenance.js";
 import { isOffPreset, presetLabel, PresetRouter, resolveSlotRoute, selectPhysicalWorkerModel, strengths, thinkingLevels, validEffortOverrides,
-  type EffortOverrides, type PresetCandidate, type PresetSelection, type PresetSnapshot, type Strength } from "./routing.js";
+  type EffortOverrides, type PresetCandidate, type PresetPublication, type PresetSelection, type PresetSnapshot, type Strength } from "./routing.js";
 import { ChildActivityRegistry } from "./runtime/activity-observer.js";
 import { createChildSessionFactory } from "./runtime/child-factory.js";
 import { ChildWebModules, nativeWebLoader } from "./runtime/child-web.js";
@@ -23,13 +23,17 @@ import { researcherHostModules } from "./runtime/host-modules.js";
 import { FileOwnerLease } from "./runtime/owner-lease.js";
 import { ownerSessionReplacementGuard } from "./runtime/owner-lifecycle.js";
 import { registerOrderFreeToolSchemas } from "./runtime/provider-schema.js";
+import { createPresetModelSelector } from "./runtime/preset-model-selector.js";
 import { hostUsage } from "./runtime/tool-usage.js";
 import { createOwnerTools } from "./tools/parent-tools.js";
 import { agentProfileNames, blockedDelegationToolNames, managementToolNames, webProfileNames, webToolNames,
   workerToolSelection } from "./tools/tool-names.js";
 import { HarnessWidget } from "./ui/agent-widget.js";
 import { PanelCoordinator } from "./ui/panel-coordinator.js";
+import { HIDE_TRANSIENT_OVERLAYS_EVENT } from "./ui/overlay-request.js";
 import type { EffortCapabilities } from "./ui/preset-picker.js";
+import { PreferencesControls, stageWorkerSelection } from "./ui/preferences-controls.js";
+import { SettingsStore, registerSettingsStore, validateSettings, type PresetDefinition, type SettingsDocument } from "../../lib/settings-store.mjs";
 const localTools = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
 
 export function applyAuditedPreset(input: {
@@ -67,22 +71,42 @@ export function applyAuditedPreset(input: {
 /** Reconstruct only the active branch's per-preset overrides. Older selection
  * entries have no override field; they retain their original name-only meaning.
  * The caller must pass getBranch(), never the entire session tree. */
-export function restorePresetRouter(path: string, selections: readonly unknown[]): PresetRouter {
+export function restorePresetDefinitions(selections: readonly unknown[]): Record<string, PresetDefinition> {
+  let definitions: Record<string, PresetDefinition> = {};
+  for (const entry of selections) {
+    if (!entry || typeof entry !== "object" || !("custom_presets" in entry) || !Object.hasOwn(entry, "custom_presets")) continue;
+    try { definitions = validateSettings({ version: 1, presets: entry.custom_presets }).presets ?? {}; }
+    catch { throw new HarnessError("INVALID_SAVED_PRESETS"); }
+  }
+  return definitions;
+}
+
+export function restorePresetRouter(path: string, selections: readonly unknown[], preferences?: SettingsDocument): PresetRouter {
   const overrides = new Map<string, EffortOverrides>();
+  for (const [name, slots] of Object.entries(preferences?.effort ?? {})) {
+    overrides.set(name, Object.fromEntries(Object.entries(slots).filter(([, value]) => value !== null)));
+  }
+  const historical = new Set<string>();
   let selected: string | undefined;
   for (const entry of selections) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
     const data = entry as Record<string, unknown>;
-    if (typeof data.name === "string") selected = data.name;
+    if (typeof data.name === "string") {
+      selected = data.name;
+      // Preferences seed fresh choices only. A historical name-only record
+      // keeps its original catalogue-default meaning, not today's global pins.
+      if (!historical.has(data.name)) { overrides.delete(data.name); historical.add(data.name); }
+    }
     if (!Object.hasOwn(data, "effort_overrides")) continue;
     if (typeof data.name !== "string" || data.name === "off" || !validEffortOverrides(data.effort_overrides))
       throw new HarnessError("INVALID_SAVED_EFFORT", { resolution: "Repair the saved worker effort selection before restoring this session." });
     overrides.set(data.name, structuredClone(data.effort_overrides));
   }
-  const router = new PresetRouter(path, overrides);
-  // Fresh sessions use the configured default; a saved name takes precedence.
+  const router = new PresetRouter(path, overrides, { ...preferences?.presets, ...restorePresetDefinitions(selections) });
+  // Fresh sessions use explicitly saved preferences, then catalogue defaults.
   // A removed saved preset is still an error, never a default fallback.
-  if (selected !== undefined) router.select(selected);
+  const name = selected ?? preferences?.preset;
+  if (name !== undefined) router.select(name);
   return router;
 }
 
@@ -150,6 +174,16 @@ export default function harnessExtension(pi: ExtensionAPI) {
   let controller: OwnerController | undefined, ready = false;
   let router: PresetRouter | undefined;
   let routingContext: ExtensionContext | undefined;
+  let settingsStore: SettingsStore | undefined, settingsUi: PreferencesControls | undefined;
+  let unregisterSettings: (() => void) | undefined;
+  let sessionDefinitions: Record<string, PresetDefinition> = {};
+  const stageSettings = (action: () => void, ctx: Pick<ExtensionContext, "ui">): void => {
+    try { action(); }
+    catch (error) {
+      try { ctx.ui.notify(`The session change is live, but defaults were not queued: ${String(error).slice(0, 512)}`, "warning"); }
+      catch { /* persistence feedback cannot undo a live audited choice */ }
+    }
+  };
   const effortInputs = () => {
     if (!ready || !routingContext) throw new HarnessError("HARNESS_NOT_READY");
     return { parentThinking: routingContext.thinkingLevel, models: routingContext.modelRegistry.getAll(),
@@ -198,15 +232,38 @@ export default function harnessExtension(pi: ExtensionAPI) {
     ctx.ui.notify(JSON.stringify(body), "error");
   };
   const publishPreset = (candidate: PresetCandidate, name: string, ctx: Pick<ExtensionContext, "ui">,
-    effort_overrides?: EffortOverrides): void => {
-    if (!controller || !router) throw new HarnessError("HARNESS_NOT_READY");
+    effort_overrides?: EffortOverrides, definition?: PresetDefinition): PresetPublication => {
+    if (!ready || !controller || !router) throw new HarnessError("HARNESS_NOT_READY");
+    const previous = router.current();
+    const targetBefore = router.inspect(candidate).find((preset) => preset.name === name);
+    const nextDefinitions = definition
+      ? validateSettings({ version: 1, presets: { ...sessionDefinitions, [name]: definition } }).presets ?? {}
+      : sessionDefinitions;
     const snapshot = applyAuditedPreset({ controller, router, candidate, name, effort_overrides,
-      ...(effort_overrides === undefined ? {} : { validate: (selected: PresetSelection) => validateWorkerEfforts(selected, effortInputs()) }),
+      ...(effort_overrides === undefined && !definition ? {} : { validate: (selected: PresetSelection) => {
+        if (definition && !isOffPreset(selected)) for (const slot of strengths) {
+          selectPhysicalWorkerModel(effortInputs().models, selected.models[slot], selected);
+        }
+        validateWorkerEfforts(selected, effortInputs());
+      } }),
       // Full immutable slot selection is user audit metadata, never model context.
       // Success means this synchronous SDK call returned; it is not an fsync or
       // a rollback guarantee if the SDK itself throws after changing state.
-      audit: (selected) => pi.appendEntry(presetEntry, { ...selected, selected_at: Date.now() }),
+      audit: (selected) => pi.appendEntry(presetEntry, { ...selected, selected_at: Date.now(),
+        ...(Object.keys(nextDefinitions).length ? { custom_presets: structuredClone(nextDefinitions) } : {}) }),
     });
+    const publication = { selection: snapshot, candidate: router.rebase(candidate) };
+    sessionDefinitions = nextDefinitions;
+    if (settingsStore) stageSettings(() => {
+      const store = settingsStore!;
+      // A remembered name must not depend on a session-only or workspace-only
+      // definition absent from its target scope on the next fresh startup.
+      const definitions = router!.customPresets();
+      const rememberedDefinition = Object.hasOwn(definitions, name) ? definitions[name] : undefined;
+      if (rememberedDefinition && store.scope !== "session") store.stage(store.scope, ["presets", name], rememberedDefinition);
+      stageWorkerSelection(store, snapshot, previous, effort_overrides !== undefined,
+        targetBefore && !isOffPreset(targetBefore) ? targetBefore.effort_overrides : {});
+    }, ctx);
     // Tool exposure is not the execution gate. A stale SDK tool handle still
     // reaches the Controller's current selection/disable-revision checks.
     const issues: string[] = [];
@@ -227,6 +284,7 @@ export default function harnessExtension(pi: ExtensionAPI) {
         ? "Delegation off: new, resumed and steered work is disabled; accepted work continues and results remain available."
         : `Model preset ${presetLabel(snapshot)} selected; existing agents are unchanged.`, issues.length ? "warning" : "info"); }
     catch { /* best-effort UI after a successful selection */ }
+    return publication;
   };
   /** Audit, then re-register agent_spawn with the new guideline (one
    * prompt-cache miss). Pi applies it from the next run; a run already in
@@ -254,7 +312,14 @@ export default function harnessExtension(pi: ExtensionAPI) {
       throw new HarnessError("DELEGATION_AUDIT_FAILED", { error: String(error).slice(0, 512),
         resolution: "The parent-session audit call failed or had an ambiguous outcome. The delegation mode was not changed. Inspect the parent session and restart Pi before more delegation or mode changes." });
     }
+    const previous = delegation;
     delegation = setting;
+    if (settingsStore && settingsStore.scope !== "session") stageSettings(() => {
+      const store = settingsStore!;
+      if (store.scope === "session") return;
+      if (previous.mode !== setting.mode) store.stage(store.scope, ["delegation", "mode"], setting.mode);
+      if (previous.eagerness !== setting.eagerness) store.stage(store.scope, ["delegation", "eagerness"], setting.eagerness);
+    }, ctx);
     const issues: string[] = [];
     // A failure here is retried on the next reselect and before each run.
     try { syncGuideline(); }
@@ -282,6 +347,13 @@ export default function harnessExtension(pi: ExtensionAPI) {
   const panels = new PanelCoordinator({ pi, widget, ready: () => ready, router: requireRouter,
     publish: publishPreset, showError: showPresetError,
     delegation: { current: () => ({ ...delegation }), set: publishDelegation, guideline: delegationGuideline },
+    management: { summary: () => settingsUi?.summary() ?? "Save: session",
+      settings: async () => { await settingsUi?.open(); },
+      saveDefault: async (scope) => { await settingsUi?.saveDefault(scope); },
+      canSaveWorkspace: () => settingsStore?.canWriteWorkspace() === true,
+      editPreset: async (name?: string) => { await settingsUi?.editPreset(name); },
+      editModel: async (name, slot, position) => { await settingsUi?.editModel(name, slot, position); },
+      cancelModelSelection: () => { settingsUi?.cancelModelSelection(); } },
     efforts: (preset, slot) => {
       try { return workerEffortCapabilities(preset, slot, effortInputs()); }
       catch { return { levels: [], error: "Host model metadata is unavailable; reopen the delegation panel." }; }
@@ -316,6 +388,20 @@ export default function harnessExtension(pi: ExtensionAPI) {
       } catch (error) { showPresetError(error, ctx); return; }
       // The change already took effect; its notice is best-effort.
       try { ctx.ui.notify(notice, "info"); } catch { /* best-effort UI */ }
+    },
+  });
+  pi.registerCommand("harness-settings", {
+    description: "Choose Session/Global/Workspace save scope, remember settings, save now or discard pending writes",
+    handler: async (_args, ctx) => {
+      try { requireRouter(); await panels.withManagement(async () => { await settingsUi?.open(); }); }
+      catch (error) { showPresetError(error, ctx); }
+    },
+  });
+  pi.registerCommand("harness-preset-edit", {
+    description: "Create a model preset (no args) or edit a named preset; permission profiles stay fixed",
+    handler: async (args, ctx) => {
+      try { requireRouter(); await panels.withManagement(async () => { await settingsUi?.editPreset(args.trim() || undefined); }); }
+      catch (error) { showPresetError(error, ctx); }
     },
   });
   // Reads the controller every frame instead of holding a second copy of Run state.
@@ -361,6 +447,18 @@ export default function harnessExtension(pi: ExtensionAPI) {
   });
   pi.on("session_shutdown", async (_event, ctx) => {
     ready = false; routingContext = undefined;
+    settingsUi?.dispose();
+    settingsStore?.seal();
+    // Save preferences independently of child drain, which may never confirm
+    // closure. No process-exit hook, background write or timeout-as-cancellation.
+    try {
+      for (const result of settingsStore?.flush() ?? []) if (result.error) {
+        const message = `Settings not saved: ${result.path}: ${result.error}`;
+        try { if (ctx.hasUI) ctx.ui.notify(message, "error"); else console.error(message); }
+        catch { console.error(message); }
+      }
+    } catch (error) { console.error(`Settings flush failed: ${String(error).slice(0, 512)}`); }
+    finally { unregisterSettings?.(); unregisterSettings = undefined; }
     // Presentation failures cannot replace Owner drain. Attempt every cleanup
     // independently before awaiting shutdown, while parent authority still exists.
     for (const cleanup of [() => ctx.ui.setStatus("harness-preset", undefined),
@@ -381,10 +479,23 @@ export default function harnessExtension(pi: ExtensionAPI) {
     assert(!pi.getAllTools().some((tool) => blockedDelegationToolNames.includes(tool.name)), "Old and new delegation backends must not be co-loaded");
     const agentDir = getAgentDir(), parentId = ctx.sessionManager.getSessionId();
     const presetPath = join(agentDir, "harness-presets.json");
+    let preferences: SettingsDocument;
+    try {
+      settingsStore = new SettingsStore({ agentDir, cwd: ctx.cwd, projectTrusted: ctx.isProjectTrusted() });
+      preferences = settingsStore.effective();
+    } catch (error) {
+      showPresetError(new HarnessError("SETTINGS_LOAD_FAILED", {
+        error: String(error).slice(0, 1024),
+        config_paths: [join(agentDir, "extensions/pi-alehouse/config.json"), join(ctx.cwd, ".pi/extensions/pi-alehouse/config.json")],
+        resolution: "Repair the named preferences file; no existing configuration was overwritten. Restart Pi afterward.",
+      }), ctx);
+      return;
+    }
     try {
       const selections = ctx.sessionManager.getBranch().flatMap((entry) =>
         entry.type === "custom" && entry.customType === presetEntry ? [entry.data] : []);
-      router = restorePresetRouter(presetPath, selections);
+      sessionDefinitions = restorePresetDefinitions(selections);
+      router = restorePresetRouter(presetPath, selections, preferences);
     } catch (error) {
       showPresetError(new HarnessError(error instanceof HarnessError ? error.code : "PRESET_ERROR", {
         ...(error instanceof HarnessError ? error.details : { error: String(error).slice(0, 512) }),
@@ -395,7 +506,8 @@ export default function harnessExtension(pi: ExtensionAPI) {
     }
     try {
       delegation = restoreDelegation(ctx.sessionManager.getBranch().flatMap((entry) =>
-        entry.type === "custom" && entry.customType === delegationEntry ? [entry.data] : []), router.defaultDelegation);
+        entry.type === "custom" && entry.customType === delegationEntry ? [entry.data] : []),
+        { ...router.defaultDelegation, ...preferences.delegation });
     } catch (error) {
       // A session record, not the preset file: say which.
       router = undefined;
@@ -491,6 +603,18 @@ export default function harnessExtension(pi: ExtensionAPI) {
       ctx.ui.setStatus("harness-preset", delegationStatus(router.current(), delegation));
       routingContext = ctx;
       ready = true;
+      unregisterSettings = registerSettingsStore(parentId, settingsStore);
+      settingsUi = new PreferencesControls({ ctx, store: settingsStore, ready: () => ready && routingContext === ctx,
+        createModelSelector: (options) => createPresetModelSelector({ ...options, runtime }),
+        modelPopover: () => panels.isFullscreen(),
+        modelSelectionAllowed: () => panels.modelSelectionAllowed(),
+        beforeModelClose: () => pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {}),
+        router: requireRouter, delegation: () => ({ ...delegation }),
+        publishDefinition: (candidate, name, definition) => {
+          const selected = requireRouter().inspect(candidate).find((preset) => preset.name === name);
+          publishPreset(candidate, name, ctx, selected && !isOffPreset(selected) ? selected.effort_overrides : {}, definition);
+        } });
+      if (!ctx.isProjectTrusted()) ctx.ui.notify("Workspace preferences are not loaded or writable until this project is trusted.", "info");
       const current = router.current();
       if (!isOffPreset(current) && Object.keys(current.effort_overrides).length) {
         // Fixed-policy model support may have changed since saving. Inherit
@@ -504,6 +628,7 @@ export default function harnessExtension(pi: ExtensionAPI) {
       }
     } catch (error) {
       ready = false; router = undefined; routingContext = undefined;
+      settingsUi?.dispose(); settingsStore?.seal(); unregisterSettings?.(); unregisterSettings = undefined;
       // Startup can fail after UI binding too; presentation must not skip drain.
       for (const cleanup of [() => panels.dispose(), () => widget.dispose(), () => activities.clear()]) {
         try { cleanup(); } catch { /* continue Owner teardown */ }

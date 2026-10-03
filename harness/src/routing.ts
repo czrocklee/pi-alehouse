@@ -3,6 +3,7 @@ import { readFileSync, statSync } from "node:fs";
 import { HarnessError, workersDisabled } from "./core/ports.js";
 import { validDifficulty, type Difficulty } from "./core/contracts.js";
 import { defaultDelegation, delegationModes, eagernessLevels, type DelegationSetting } from "./delegation.js";
+import { validateSettings, type PresetDefinition } from "../../lib/settings-store.mjs";
 
 export const strengths = ["light", "standard", "strong"] as const;
 export type Strength = (typeof strengths)[number];
@@ -70,10 +71,16 @@ export interface PresetCandidate {
   readonly names: readonly string[];
 }
 
+/** A successful audited publication plus its no-I/O continuation. */
+export interface PresetPublication {
+  selection: PresetSelection;
+  candidate: PresetCandidate;
+}
+
 type PresetBody = { version: string; models: Record<Strength, string>; thinking?: Partial<Record<Strength, ThinkingMap>>;
   effort?: EffortOverrides };
 type PresetConfig = { defaultPreset: string; presets: Record<string, PresetBody>; delegation: DelegationSetting };
-type CandidateData = { owner: object; presets: Map<string, PresetSnapshot> };
+type CandidateData = { owner: object; presets: Map<string, PresetSnapshot>; definitions: Record<string, PresetDefinition> };
 const candidateData = new WeakMap<PresetCandidate, CandidateData>();
 
 /** Every model route comes from configuration; its version makes reloads
@@ -219,13 +226,19 @@ export class PresetRouter {
   private revision = 0;
   private disableRevision = 0;
   private applying = false;
+  private appliedCandidate: PresetCandidate | undefined;
+  private definitions: Record<string, PresetDefinition>;
   /** The configured fresh-session delegation, read once at startup. */
   readonly defaultDelegation: Readonly<DelegationSetting>;
 
-  constructor(readonly configPath: string, overrides: ReadonlyMap<string, EffortOverrides> = new Map()) {
+  constructor(readonly configPath: string, overrides: ReadonlyMap<string, EffortOverrides> = new Map(),
+    definitions: Readonly<Record<string, PresetDefinition>> = {}) {
     const config = parsePresetConfig(configPath);
+    // Two scoped preference layers plus explicit session-only definitions.
+    // Stored files and session records keep their independent one-layer caps.
+    this.definitions = validateSettings({ version: 1, presets: definitions }, 3).presets ?? {};
     this.defaultDelegation = Object.freeze(config.delegation);
-    this.presets = catalogue(config.presets);
+    this.presets = catalogue({ ...config.presets, ...this.definitions });
     this.activeName = config.defaultPreset;
     this.overrides = new Map();
     for (const [name, slots] of overrides) {
@@ -235,12 +248,23 @@ export class PresetRouter {
     }
   }
 
-  prepare(): PresetCandidate {
-    const presets = catalogue(parsePresetConfig(this.configPath).presets);
+  prepare(definitions: Readonly<Record<string, PresetDefinition>> = this.definitions): PresetCandidate {
+    const checked = validateSettings({ version: 1, presets: definitions }, 3).presets ?? {};
+    const presets = catalogue({ ...parsePresetConfig(this.configPath).presets, ...checked });
     const candidate: PresetCandidate = Object.freeze({ revision: this.revision, activeName: this.activeName,
       names: Object.freeze(orderedNames(presets)) });
-    candidateData.set(candidate, { owner: this, presets });
+    candidateData.set(candidate, { owner: this, presets, definitions: checked });
     return candidate;
+  }
+
+  /** User-defined model presets, never worker permission profiles. */
+  customPresets(): Record<string, PresetDefinition> { return structuredClone(this.definitions); }
+
+  definition(name: string): PresetDefinition {
+    const preset = this.presets.get(name);
+    if (!preset) throw missing(name, this.names());
+    return structuredClone({ version: preset.version, models: preset.models,
+      effort: preset.effort_defaults, thinking: preset.thinking });
   }
 
   /** Read-only snapshots for a prepared catalogue. Inspecting never publishes
@@ -284,11 +308,32 @@ export class PresetRouter {
     finally { this.applying = false; }
     const wasEnabled = this.activeName !== "off";
     this.presets = data.presets;
+    this.definitions = data.definitions;
     if (overrides !== undefined) this.overrides.set(name, selectedOverrides);
     this.activeName = name;
+    this.appliedCandidate = candidate;
     this.revision++;
     if (wasEnabled && name === "off") this.disableRevision++;
     return snapshot;
+  }
+
+  /** Read-only liveness check for an already-acquired candidate; no disk read. */
+  isCurrent(candidate: PresetCandidate): boolean {
+    return candidateData.get(candidate)?.owner === this && candidate.revision === this.revision;
+  }
+
+  /** Continue only the candidate just published by this router, without
+   * rereading the catalogue or adopting a concurrent selection's revision. */
+  rebase(candidate: PresetCandidate): PresetCandidate {
+    const data = candidateData.get(candidate);
+    if (!data || data.owner !== this) throw new HarnessError("INVALID_PRESET_CANDIDATE");
+    if (this.appliedCandidate !== candidate || this.revision !== candidate.revision + 1 ||
+        this.presets !== data.presets || this.definitions !== data.definitions) {
+      throw new HarnessError("STALE_PRESET_SELECTION", { resolution: "Reopen the panel against the current selection." });
+    }
+    const continuation: PresetCandidate = Object.freeze({ revision: this.revision, activeName: this.activeName, names: candidate.names });
+    candidateData.set(continuation, data);
+    return continuation;
   }
 
   /** Core-only convenience for callers with no parent audit contract. The Pi
@@ -310,6 +355,7 @@ export class PresetRouter {
     if (!validName(name) || (name !== "off" && !this.presets.has(name))) throw missing(name, names);
     const wasEnabled = this.activeName !== "off";
     this.activeName = name;
+    this.appliedCandidate = undefined;
     this.revision++;
     if (wasEnabled && name === "off") this.disableRevision++;
     return this.current();

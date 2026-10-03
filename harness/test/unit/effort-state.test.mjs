@@ -21,6 +21,27 @@ async function fixture(t) {
   return { path, router };
 }
 
+test("committed candidate continuations require the exact own publication, never an external selection", async (t) => {
+  const { path, router } = await fixture(t), original = router.prepare();
+  assert(router.isCurrent(original));
+  assert.throws(() => router.rebase(original), { code: "STALE_PRESET_SELECTION" });
+  router.apply(original, "team", () => {}, { light: "high" });
+  const continued = router.rebase(original);
+  assert(!router.isCurrent(original)); assert(router.isCurrent(continued));
+  assert.equal(continued.activeName, "team");
+  router.apply(continued, "team", () => {}, { light: "off" });
+  const next = router.rebase(continued);
+  assert.deepEqual(router.current().effort_overrides, { light: "off" });
+  router.select("other");
+  assert(!router.isCurrent(next));
+  assert.throws(() => router.rebase(next), { code: "STALE_PRESET_SELECTION" }, "select must not masquerade as an own apply");
+  router.select("team");
+  assert.throws(() => router.apply(next, "team", () => {}, {}), { code: "STALE_PRESET_SELECTION" });
+  const foreign = new PresetRouter(path).prepare();
+  assert(!router.isCurrent(foreign));
+  assert.throws(() => router.rebase(foreign), { code: "INVALID_PRESET_CANDIDATE" });
+});
+
 test("session effort replay is branch-local, per preset, resettable and backward-readable", async (t) => {
   const { path, router } = await fixture(t);
   const session = SessionManager.inMemory("/tmp");

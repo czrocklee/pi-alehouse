@@ -88,7 +88,13 @@ for (const declaration of [
 test("neutral helpers and the ordinary footer have no harness dependency", () => {
   const shared = new URL("../../../lib/", import.meta.url);
   for (const name of files(shared, ".mjs")) {
-    assert.deepEqual(imports(new URL(name, shared)), [], `${name} must remain a dependency-free leaf`);
+    const edges = imports(new URL(name, shared));
+    if (name === "settings-store.mjs") {
+      // Shared persistent preferences are an SDK-free Node adapter, not a
+      // harness dependency. Keep this exception restricted to its native IO.
+      assert.deepEqual(edges.map(({ specifier }) => specifier).sort(), ["node:crypto", "node:fs", "node:path"]);
+      assert(edges.every(({ broad }) => !broad), "storage must name its native dependencies");
+    } else assert.deepEqual(edges, [], `${name} must remain a dependency-free leaf`);
   }
   const footer = new URL("../../../extensions/status-footer.ts", import.meta.url);
   const edges = imports(footer).map(({ specifier }) => specifier);

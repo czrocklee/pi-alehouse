@@ -118,55 +118,181 @@ popover column (below) and takes the pointer too: `×` cancels, a left click on
 a preset applies it as a menu would, and the wheel moves the highlight so a
 preset's slots can be read before choosing.  It displays the active
 marker, each configured preset's version, exact
-`light`/`standard`/`strong` slot IDs with their difficulty ranges and effective
-efforts, explicit inherited-thinking maps, and new-Agent routing scope, clipping
-long names to the terminal width. A `*` marks applied session effort overrides. Difficulty maps to
+`light`/`standard`/`strong` slot IDs with their difficulty ranges and current
+effective thinking levels, plus new-Agent routing scope, clipping long names
+to the terminal width. Inherited levels show the resolved current preview, not
+the full compatibility map; an unresolved preview says `unavailable`. A `*` marks applied session effort overrides. Difficulty maps to
 these existing slots; the picker remains the operator view of resolved routing.
 Model-facing tool replies report only `settings.profile` and
 `settings.difficulty`. The first option is `off`: its detail explains that it disables new,
 resumed, and steered work while accepted work continues, instead of showing
 model slots. It appears as `off` in the footer; activity remains visible in
 the existing widget rather than a duplicate roster. Choosing a model preset
-enables new work again. The picker
-returns a candidate name or a name plus a complete effort-override draft;
-routing code owns validated audited commit.
+enables new work again. **Save as global default** (`G`) and **Save as project
+default** (`W`) remember the current applied worker settings, just like the
+approval menu's save controls. They save the live preset, mode/eagerness and
+active effort overrides—not the highlighted preset or slider preview. Project saving requires trust. Save labels shorten on narrow panels;
+at minimum height they replace verbose navigation hints rather than adding rows.
+**P Settings** routes to preferences; **N New** and
+**C Edit** route to custom model-preset editing (C is unavailable on `off`).
+Click a slot's model text, or press **1 / 2 / 3** for light / standard / strong,
+to edit only that model. These routes close the picker before opening their
+next dialog; permission prompts cancel an open model selection without applying.
+The picker returns a candidate name or management route. Effort changes use a
+synchronous callback; routing code owns validated audited publication.
 
 ### Effort editor
 
-With a model preset highlighted, press `E` or click **Edit effort**. The picker
-switches pages inside the same custom component, not a second overlay. `off`
-has no effort editor. The editor always states **new Agents only; main unchanged**:
+With a model preset highlighted, press `E` or click **Edit effort**. For the
+active preset this switches pages inside the same custom component. An inactive
+preset first closes the picker and asks to select/enable it; cancelling changes
+nothing. Confirming audits the selection and reopens its effort page. `off` has
+no effort editor. The editor always states **new Agents only; main unchanged**:
 accepted running, queued, idle and resumed Agents keep their original allocation.
 
-- `↑`/`↓` chooses light, standard, or strong; `←`/`→` adjusts the selected policy.
-  Pointer controls offer the same changes; scrolling never commits a draft.
+- `↑`/`↓` chooses light, standard, or strong; `←`/`→` changes the selected policy
+  immediately after validation and synchronous audit. Pointer arrows behave the
+  same; scrolling and slot-label clicks only move the selection. Bounded arrows
+  that cannot change the value do not audit.
 - **preset default** removes that slot's override. **inherit** explicitly follows
   parent thinking at creation, with a current resolved preview or advisory warning.
-  Inheritance warnings (including unavailable models) never block Apply; the
+  Inheritance warnings (including unavailable models) never block saving; the
   actual check happens at spawn. Other values are fixed levels supported by
   that model in Pi's registry.
-- `R` / **Reset** stages all three rows back to preset defaults. Reset is a draft
-  operation too; it does not necessarily select `inherit`.
-- `Enter` / **Apply** validates all effective **fixed** slots against current model
-  metadata, then audits and publishes together. Editing an inactive preset says
-  **Apply & enable**. A fixed slot's unavailable model or unsupported level blocks
-  Apply with an operator-facing error, not an automatic downgrade or another model.
-  Unchanged or newly selected `inherit` slots are saved without resolving the
-  current parent thinking.
-- `Esc` discards the draft and returns to the list. `Alt+S`, the footer toggle or
-  `×` cancels the whole picker. Permission dialogs also close it without applying.
+- `R` / **Reset** immediately removes all three overrides, restoring preset
+  defaults. It does not necessarily select `inherit`.
+- Every proposed change validates all effective **fixed** slots against fresh
+  model metadata before audit/publication. An unavailable model or unsupported
+  fixed level rejects the whole change and retains the last committed values;
+  nothing is automatically downgraded. Multiple invalid overrides may require
+  Reset; invalid defaults require model/preset or base-catalogue repair.
+  `inherit` slots are saved without resolving current parent thinking.
+- `Enter` or `Esc` returns to the list without undoing changes. `Alt+S`, the
+  footer toggle, `×` or a permission dialog closes the picker, also without undo.
+- `G` / `W` offers the same confirmed global/project snapshot saving on either page.
 
-Draft changes have an explicit unsaved indication. Only successful Apply changes
-the footer; `preset*` means an applied session override, not pending edits. Each
-preset remembers its own overrides in the current session branch. Restoring that
-session restores them; fresh sessions use the configured `defaultPreset` and
-its effort defaults. This UI does not write the global preset JSON. A stale picker cannot overwrite a newer
-selection, and validation failures do not mark parent history as uncertain.
+There is no effort draft or Apply step. Successful changes update the footer;
+`preset*` means an applied session override. Each preset remembers its own
+overrides in the current session branch. Restoring that session restores them;
+a fresh session uses scoped preferences if present, then the catalogue
+`defaultPreset` and its effort defaults. This editor never writes the base
+`harness-presets.json`; explicit persistent-scope changes queue preferences in
+`config.json`, otherwise changes remain session-only. A stale picker cannot
+overwrite a newer selection. Repeated edits continue the already-presented
+catalogue without rereading configuration, and validation failures do not mark
+parent history as uncertain.
 
 Narrow layouts retain effort controls and trim model text first. Fullscreen uses
 the existing bottom-right popover column; regular mode stays docked and every
 action remains keyboard-accessible. Agent details separately display the actual
 creation-time route, which may differ from the current picker defaults.
+
+## Settings and preset editor
+
+Open **P Settings** in the Delegation panel or run `/harness-settings`. Every
+new Pi session starts with save scope **session**. The menu offers **Change save
+scope**, **Remember current worker settings**, **Save pending now**, **Discard
+pending writes**, **Remove a saved override**, and **Show paths and pending
+changes**. Choosing global or workspace as the future scope requires a
+confirmation; changing scope alone copies and writes nothing. Workspace scope
+is available only for a trusted project and targets the current working
+directory, not a discovered Git root.
+
+The Delegation panel's **Save as global/project default** (`G`/`W`) and
+**Remember current worker settings** use the same snapshot confirmation. The
+picker closes before the dialog opens; the dialog shows the exact patch and
+destination. Saving changes neither the live choices nor the future save scope.
+If the worker settings or session change while confirmation is pending, nothing
+is staged. G/W work on both the list and effort pages; successful effort edits
+are already live before snapshot saving.
+The snapshot can remember the selected preset, delegation
+mode/eagerness, explicit effort overrides (including `null` to mask a lower
+scope and use the preset default), and the custom definition when the selected
+preset is user-defined. Approval defaults are saved in the approval menu (or
+with `/approval save`). A saved
+preset name resolves against the current base catalogue when next loaded; an
+explicit custom definition is stored in the preference layer. Branch records
+from an existing session still take precedence over fresh-session preferences.
+
+Persistent settings are staged only after an explicit, successful live user
+action. Nothing is written during startup or session restoration, and a
+highlighted preset, slider preview or unconfirmed custom-preset draft is never saved. **Save pending now** attempts the
+queued writes immediately; **Discard pending writes** leaves current live and
+session choices alone. **Remove a saved override** removes a selected leaf so
+the next startup follows a lower layer; removing a custom preset can leave a
+saved selection unresolved. **Show paths and pending changes** displays the
+active scope, targets, staged patches, trust state, and effective preferences.
+Normal `session_shutdown` flushes pending writes, including ordinary `/new`,
+`/resume`, `/fork`, or reload shutdown. This does not make live-Owner `/reload`
+supported; see [session replacement](#session-replacement-confirmation) and
+[limitations](limitations.md).
+
+Use **N New** or `/harness-preset-edit` to create a user model preset; use **C
+Edit** on a highlighted preset or `/harness-preset-edit NAME` to edit it. The
+interactive editor reuses Pi's native `/model` selector, including fuzzy search
+and the active keybindings, separately for `light`, `standard`, and `strong`.
+The title names the preset and slot; the current slot model is preselected when
+available. It uses the session's public `scopedModels` snapshot—the same current
+range `/model` uses, including `--models` and `enabledModels`. **Tab** switches
+between **all** and **scoped** through the native component; with no configured
+scope it shows all available models, just like `/model`. Virtual models are
+removed from both lists. Scope is read again for each slot, not copied from
+settings at startup. Choosing a model returns it to the preset draft: it does not change the main model or Pi's
+model defaults, and the native main-model default-save action is not connected.
+Escape cancels the draft. RPC clients retain the standard model-list dialog.
+Each slot still has its own catalogue effort default. After confirmation, it audits and selects the edited/created preset;
+this changes only the user model catalogue: permission profiles `reader`,
+`editor`, and `researcher` remain fixed and are not editable. Changing a preset
+affects future Agent admissions; accepted Agents keep their allocated
+configuration, and the main model is unchanged. If a slot's model changes, its
+old thinking compatibility map is cleared because the map belongs to that
+model. Existing session effort overrides are retained and may mask newly edited
+catalogue defaults; use **E Edit effort** to change or reset session overrides.
+For a single-slot edit, selecting the model applies immediately to an active
+preset through the same validated audit. Editing an inactive preset asks before
+enabling it and replacing the current selection. Cancel or selecting the same
+model changes nothing. Other models, default efforts and session overrides are
+kept; unsupported fixed efforts block the change, never downgrade silently.
+In fullscreen the native selector uses a closable rounded popover near the
+clicked model (centered for keyboard entry), clamped to the terminal. Painted
+model items are clickable; search, IME focus and Tab remain native. Short screens
+reduce the list around its selected item; a too-small viewport cannot apply an
+unseen choice. Regular TUI stays docked. The worker panel is not auto-reopened.
+Direct settings/editor commands and picker routes share one interaction latch;
+Agent detail and Delegation panels cannot open over that dialog sequence.
+Permission yield is rechecked before each model selector, including queued factories.
+
+Preset definitions are additive to the required base catalogue and do not
+rewrite it. Editing a base preset creates a same-name custom definition that
+shadows subsequent base-file changes until removed. As with `/model`, the native selector may refresh provider catalogues
+using the host's normal credential and model-cache handling; those operations
+are separate from Alehouse's exit-time preference saves.
+
+See [routing](routing.md#scoped-user-preferences) for file paths, schema,
+layering, and filesystem safeguards.
+
+## Approval menu
+
+Click the footer's approval indicator or run `/approval`. In fullscreen
+Alehouse, choose a mode; the menu stays open and `●` marks the live mode.
+Click **Save as global default** (`G`) or **Save as project default** (`W`) to
+use that live choice in future sessions. The confirmation shows the value and
+full destination path. Normal exit writes it; no separate settings menu or
+save-now action is required. Just closing the menu keeps a session-only choice
+unless a persistent save scope was explicitly selected in worker settings.
+Project saving requires project trust.
+
+Saving a default does not change the current live mode or the shared settings
+scope. It saves the live `●` choice, not a highlighted or first-click-armed
+mode. Wider judge defaults may need startup confirmation, and YOLO always needs
+fresh confirmation for each session. Existing sessions keep their branch
+choices; project defaults take precedence over global defaults. In ordinary Pi
+without an Alehouse settings store the save controls do not appear and a mode
+choice still closes the menu.
+
+The command alternative is `/approval save [global|workspace]`; without a target
+it asks **All projects** or **This project**. Regular-renderer Pi uses standard
+dialogs rather than a floating menu.
 
 ## Session replacement confirmation
 

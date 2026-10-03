@@ -264,6 +264,16 @@ test("real composition restores, defaults and fails closed on the delegation mod
   assert.match(output, /delegation mode defaults, changes while Off, restores, fails closed on a bad record and on audit failure, offline/);
 });
 
+test("real composition persists scoped settings, custom presets and the approval preference across parents, offline", { timeout: 60000 }, (t) => {
+  const dir = temporary(t), agentDir = join(dir, "agent");
+  const output = execFileSync(process.execPath, [join(packageRoot, "test/runtime/fixtures/scoped-settings.mjs")], {
+    env: { HOME: dir, PATH: process.env.PATH, PI_CODING_AGENT_DIR: agentDir,
+      PI_JEV_API_KEY_FILE: join(dir, "nonexistent-test-key"), PI_OFFLINE: "1", NO_COLOR: "1" },
+    encoding: "utf8", timeout: 55000, stdio: ["ignore", "pipe", "pipe"],
+  });
+  assert.match(output, /PASS: scoped settings save nothing until a confirmed global scope queues them, flush on quit, restore across fresh parents, branch precedence on resume, and fail closed on a malformed preference, offline/);
+});
+
 test("build inputs contain no generated installed-profile hash fallback", () => {
   const source = readFileSync(join(packageRoot, "scripts/generate-workers.mjs"), "utf8");
   assert.doesNotMatch(source, /PI_CODING_AGENT_DIR|getAgentDir/);

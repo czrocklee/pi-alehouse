@@ -411,9 +411,9 @@ try {
   // The nonreasoning model in the installed registry supports only "off".
   // Strong deliberately has an unresolved inherited model: it must not block
   // saving another slot or warn on session restoration before any spawn.
-  // Esc abandons an edited draft (without closing the picker or auditing), and
-  // Alt+S from inside the editor cancels the whole picker. A plain Enter still
-  // selects a name rather than manufacturing an override record.
+  // Arrows audit immediately; Esc returns without undoing, and Alt+S closes.
+  // Editor Enter only returns to the list. List Enter still selects a name
+  // rather than manufacturing an override record.
   const beforeEdit = selectedEntries().length;
   presetSelections.push({ target: "entry-fixture", steps: ["e", "down", "right", "right", "esc", "esc"],
     expectPaint: { 0: "Effort · entry-fixture", 3: "standard:off", 4: "Delegation" }, expectResult: null });
@@ -421,13 +421,13 @@ try {
   presetSelections.push({ target: "entry-fixture", steps: ["e", "down", "right", "right", "alt+s"],
     expectPaint: { 3: "standard:off" }, expectResult: null });
   await parent.prompt("/harness-preset");
-  assert.equal(selectedEntries().length, beforeEdit);
-  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture", "cancel cannot repair a previously failed footer paint");
-  presetSelections.push({ target: "entry-fixture", steps: ["e", "down", "right", "right", "right", "enter"],
-    expectPaint: { 0: "Effort · entry-fixture", 2: "standard:inherit", 3: "standard:off", 4: "standard:off" },
-    expectResult: { name: "entry-fixture", effort_overrides: { standard: "off" } } });
+  assert.equal(selectedEntries().length, beforeEdit + 2, "arrows audit inherit/off; bounded arrows and closing do not");
+  assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*", "live arrows repaint and closing retains them");
+  presetSelections.push({ target: "entry-fixture", steps: ["e", "down", "left", "right", "right", "enter", "esc"],
+    expectPaint: { 0: "Effort · entry-fixture", 2: "standard:inherit", 3: "standard:off", 4: "standard:off", 5: "Delegation" },
+    expectResult: null });
   await parent.prompt("/harness-preset");
-  assert.equal(selectedEntries().length, beforeEdit + 1);
+  assert.equal(selectedEntries().length, beforeEdit + 4);
   assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { standard: "off" });
   assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
   await parent.prompt("/harness-preset entry-other");
@@ -541,9 +541,8 @@ try {
   // An explicit inherit is distinct from the preset default in the audit, but
   // has identity resolution. Reset removes that override and clears the star.
   const inheritAudit = selectedEntries().length;
-  presetSelections.push({ target: "entry-fixture", steps: ["e", "down", "left", "enter"],
-    expectPaint: { 0: "Effort · entry-fixture", 2: "standard:inherit" },
-    expectResult: { name: "entry-fixture", effort_overrides: { standard: "inherit" } } });
+  presetSelections.push({ target: "entry-fixture", steps: ["e", "down", "left", "enter", "esc"],
+    expectPaint: { 0: "Effort · entry-fixture", 2: "standard:inherit", 3: "Delegation" }, expectResult: null });
   await parent.prompt("/harness-preset");
   assert.equal(selectedEntries().length, inheritAudit + 1);
   assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { standard: "inherit" });
@@ -556,9 +555,11 @@ try {
   assert.equal(inheritedLink?.data.routing.thinking_resolution, "identity",
     "new Agent at the same slot inherits parent off; the old fixed Agent retains its original resolution");
   assert.equal((await invoke("agent_kill", { agent: "inherit" })).status, "killed");
-  presetSelections.push({ target: "entry-fixture", steps: ["e", "r", "enter"],
-    expectPaint: { 1: "standard:default" }, expectResult: { name: "entry-fixture", effort_overrides: {} } });
+  const resetAudit = selectedEntries().length;
+  presetSelections.push({ target: "entry-fixture", steps: ["e", "r", "enter", "esc"],
+    expectPaint: { 1: "standard:default", 2: "Delegation" }, expectResult: null });
   await parent.prompt("/harness-preset");
+  assert.equal(selectedEntries().length, resetAudit + 1);
   assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, {});
   assert.equal(presetStatus(), "delegation: co-worker/entry-fixture");
   // Reset affects only future Agents, not the resident child whose Run was
@@ -777,7 +778,7 @@ try {
     childToolsByProfile, emptyOwner, initialOff: { requests: offRequests, directRead: text(directRead), child_sessions: 0 },
     offRetainedResult: offResult }, null, 2));
   writeFileSync(join(outputRoot, "entry-smoke.json"), JSON.stringify({ checks: "passed", versions, entry, real_model: false,
-    cases: ["portable launcher and historical component wiring (composition separately tested)", "actual SDK InteractiveMode handleResumeSession and showSessionSelector replace fresh unused Owners with fresh authority", "active-branch Off restores before the first real SDK request with zero harness prompt/schema content", "preset reconciliation restores a separately deactivated harness tool on the same request", "Off blocks cached new/reused delegation and messages per Agent while inspection stays available", "tool-visibility failure cannot roll back Off or bypass admission; next-request reconciliation repairs exposure", "reenabling another preset preserves resident Agent settings", "enabled active-branch selection restores current disk content rather than historical slots", "atomic preset typo/cancel/reload/removal/switch-away", "synchronous preset audit precedes live publication; ambiguous append latches owner", "successful selection survives footer paint failure with warning", "Alt+S packaged picker selection leaves parent model unchanged", "packaged effort editor cancels drafts, commits fixed off, restores across SDK branch replacement, remembers per-preset settings, explicitly inherits and resets defaults without changing resident Agent policy", "parent UI/web restored; child web excluded", "synthetic parent warming succeeds; child warming vetoed despite global idle mode", "readonly create/wait/read/result", "same-Agent reuse/wait", "worker write and resumed edit", "wait/reuse use managed allow rules without UI grants", "used Owner with a missing confirm UI remains closed to replacement", "release and normal shutdown before parent authority", "harness-close then actual SDK newSession with fresh authority/owner and successful delegation"],
+    cases: ["portable launcher and historical component wiring (composition separately tested)", "actual SDK InteractiveMode handleResumeSession and showSessionSelector replace fresh unused Owners with fresh authority", "active-branch Off restores before the first real SDK request with zero harness prompt/schema content", "preset reconciliation restores a separately deactivated harness tool on the same request", "Off blocks cached new/reused delegation and messages per Agent while inspection stays available", "tool-visibility failure cannot roll back Off or bypass admission; next-request reconciliation repairs exposure", "reenabling another preset preserves resident Agent settings", "enabled active-branch selection restores current disk content rather than historical slots", "atomic preset typo/cancel/reload/removal/switch-away", "synchronous preset audit precedes live publication; ambiguous append latches owner", "successful selection survives footer paint failure with warning", "Alt+S packaged picker selection leaves parent model unchanged", "packaged effort editor audits live changes, retains them on close, restores across SDK branch replacement, remembers per-preset settings, explicitly inherits and resets defaults without changing resident Agent policy", "parent UI/web restored; child web excluded", "synthetic parent warming succeeds; child warming vetoed despite global idle mode", "readonly create/wait/read/result", "same-Agent reuse/wait", "worker write and resumed edit", "wait/reuse use managed allow rules without UI grants", "used Owner with a missing confirm UI remains closed to replacement", "release and normal shutdown before parent authority", "harness-close then actual SDK newSession with fresh authority/owner and successful delegation"],
     presetStatus: statuses.filter((entry) => entry.key === "harness-preset"), uiEvidence, cacheWarming, readyParents, startupFailure,
     restoredSelection, restoredCleanup, baselineCleanup, effortEditing,
     webTools, networkAttempts, human_ui: false, first, next, inherited, idle, edited, replacement, cleanup, parentPresentOnDisposal }, null, 2));

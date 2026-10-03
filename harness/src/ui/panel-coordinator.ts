@@ -1,3 +1,4 @@
+import type { PersistentScope } from "../../../lib/settings-store.mjs";
 import { buildContextEntries, sessionEntryToContextMessages, getMarkdownTheme, type EventBus, type ExtensionAPI, type ExtensionContext,
   type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
@@ -5,12 +6,14 @@ import { FOOTER_INDICATOR_CLICK_EVENT, WORKER_PRESET_INDICATOR, type FooterIndic
   from "../../../lib/overlay-protocol.mjs";
 import { focusOrigin, focusRevealed, joinPopoverStack, stackedOverlayOptions, type StackMember } from "../../../lib/popover-stack.mjs";
 import type { DelegationSetting } from "../delegation.js";
-import type { EffortOverrides, PresetCandidate, PresetRouter, PresetSnapshot, Strength } from "../routing.js";
+import { HarnessError } from "../core/ports.js";
+import type { EffortOverrides, PresetCandidate, PresetPublication, PresetRouter, PresetSnapshot, Strength } from "../routing.js";
 import { DetailPane, type DetailInput } from "./agent-detail.js";
 import { HarnessWidget, type AgentDetail } from "./agent-widget.js";
 import { HIDE_TRANSIENT_OVERLAYS_EVENT } from "./overlay-request.js";
 import { ApprovalWatch, mountable, PaneRequest, PaneYield, paneYieldHandlers } from "./permission-dialog-yield.js";
-import { PRESET_PICKER_MIN_ROWS, PresetPicker, PresetPickerRequest, type EffortCapabilities, type PresetChoice } from "./preset-picker.js";
+import { PRESET_PICKER_MIN_ROWS, PresetPicker, PresetPickerRequest,
+  type EffortCapabilities, type ModelPickerPosition, type PresetChoice } from "./preset-picker.js";
 import { TranscriptContent } from "./transcript.js";
 
 export interface PanelCoordinatorOptions {
@@ -18,7 +21,7 @@ export interface PanelCoordinatorOptions {
   widget: HarnessWidget;
   ready(): boolean;
   router(): PresetRouter;
-  publish(candidate: PresetCandidate, name: string, ctx: Pick<ExtensionContext, "ui">, overrides?: EffortOverrides): void;
+  publish(candidate: PresetCandidate, name: string, ctx: Pick<ExtensionContext, "ui">, overrides?: EffortOverrides): PresetPublication;
   showError(error: unknown, ctx: Pick<ExtensionContext, "ui">): void;
   efforts?: (preset: PresetSnapshot, slot: Strength) => EffortCapabilities;
   /** Delegation mode: read live, and applied at once by the panel's slider. */
@@ -27,12 +30,35 @@ export interface PanelCoordinatorOptions {
     set(next: DelegationSetting, ctx: Pick<ExtensionContext, "ui">): void;
     guideline(setting: DelegationSetting): string;
   };
+  /** Settings/preset management, implemented by the host integration with
+   * standard Pi dialogs. The coordinator only routes a picker action to them
+   * after the picker has fully settled; it never publishes a candidate for
+   * them and never runs two dialog sequences at once. `editModel` receives
+   * the slot and, when available, the click's screen position; its presence
+   * alone gates the picker's model routes, which is a UI gate, not
+   * authorization. The picker is not reopened afterwards. */
+  management?: {
+    summary(): string;
+    settings(): Promise<void>;
+    saveDefault?(scope: PersistentScope): Promise<void>;
+    canSaveWorkspace?(): boolean;
+    editPreset(name?: string): Promise<void>;
+    editModel?(name: string, slot: Strength, position?: ModelPickerPosition): Promise<void>;
+    /** Release a model selector that holds the custom queue, so a permission
+     * dialog can be shown. Best-effort: a failure never blocks the ordinary
+     * picker close, the pane yield or later asks. */
+    cancelModelSelection?(): void;
+  };
 }
+
+type PickerState = { router: PresetRouter; candidate: PresetCandidate };
 
 /** Owns only parent UI mounting, selection and approval-yield state. */
 export class PanelCoordinator {
   private paneOpen = false;
   private pickerOpen = false;
+  /** One management dialog sequence at a time; released when its callback settles. */
+  private managementOpen = false;
   private closePane: (() => void) | undefined;
   private detailPane: DetailPane | undefined;
   private closePreset: (() => void) | undefined;
@@ -67,7 +93,15 @@ export class PanelCoordinator {
       },
     });
     this.approvals = new ApprovalWatch({
-      onPrompt: (pending) => { this.closePreset?.(); this.yieldHandlers.onPrompt(pending); },
+      onPrompt: (pending) => {
+        // An ask for permission must reach the human: cancel any open model
+        // selection first, but never let that best-effort cleanup block the
+        // ordinary close/yield or the ask's own registration.
+        try { this.options.management?.cancelModelSelection?.(); }
+        catch (error) { this.observeDetailError(error); }
+        this.closePreset?.();
+        this.yieldHandlers.onPrompt(pending);
+      },
       onIdle: () => this.yieldHandlers.onIdle(),
     });
     options.pi.registerShortcut("alt+a", {
@@ -85,6 +119,9 @@ export class PanelCoordinator {
   /** Alt+S and the footer's worker indicator are the same toggle. */
   private togglePreset(): Promise<void> | undefined {
     if (this.pickerOpen) { this.closePreset?.(); return; }
+    // A management dialog owns the interaction until it settles; the picker
+    // must not open over it.
+    if (this.managementOpen) return;
     if (this.host && this.options.ready()) return this.selectPreset("", this.host);
   }
 
@@ -133,6 +170,10 @@ export class PanelCoordinator {
     return (this.tui ? this.tui.mode : this.options.widget.tuiMode()) === "fullscreen";
   }
 
+  /** Readonly renderer projection for other controls (a model popover is
+   * fullscreen-only, so regular scrollback is never polluted). */
+  isFullscreen(): boolean { return this.floating(); }
+
   dispose(): void {
     const ctx = this.host;
     const cleanups = [this.unwatchIndicator, this.unwatchApprovals, this.closePreset, this.closePane,
@@ -151,6 +192,7 @@ export class PanelCoordinator {
     this.paneAgent = undefined;
     this.paneOpen = false;
     this.pickerOpen = false;
+    this.managementOpen = false;
     this.yielding.end();
     if (this.yieldTimer) { clearTimeout(this.yieldTimer); this.yieldTimer = undefined; }
     for (const cleanup of cleanups) {
@@ -160,17 +202,89 @@ export class PanelCoordinator {
 
   async selectPreset(requested: string, ctx: Pick<ExtensionContext, "ui" | "mode">): Promise<void> {
     try {
-      const candidate = this.options.router().prepare();
-      let name = requested === "reload" ? candidate.activeName : requested;
-      let overrides: EffortOverrides | undefined;
-      if (!requested) {
-        const selected = await this.choosePreset(candidate, ctx);
-        if (!selected) return;
-        if (typeof selected === "string") name = selected;
-        else { name = selected.name; overrides = selected.effort_overrides; }
-      }
-      this.options.publish(candidate, name, ctx, overrides);
+      const router = this.options.router(), candidate = router.prepare();
+      if (requested) this.options.publish(candidate, requested === "reload" ? candidate.activeName : requested, ctx);
+      else await this.pickPreset({ router, candidate }, ctx);
     } catch (error) { this.options.showError(error, ctx); }
+  }
+
+  private async pickPreset(state: PickerState, ctx: Pick<ExtensionContext, "ui" | "mode">,
+    startInEffort = false): Promise<void> {
+    const host = this.host;
+    const selected = await this.choosePreset(state, ctx, startInEffort);
+    if (!selected || this.host !== host || !this.options.ready()) return;
+    if (typeof selected === "string") {
+      if (!this.modelSelectionAllowed()) return;
+      if (this.options.router() !== state.router) throw new HarnessError("STALE_PRESET_SELECTION");
+      this.options.publish(state.candidate, selected, ctx);
+    } else if (selected.action === "edit-effort") {
+      await this.enableEffortEditor(selected.name, state, host, ctx);
+    } else {
+      // choosePreset's finally has released the custom queue before any dialog.
+      await this.runManagement(selected, host);
+    }
+  }
+
+  private async enableEffortEditor(name: string, state: PickerState,
+    host: Pick<ExtensionContext, "ui" | "mode"> | undefined, ctx: Pick<ExtensionContext, "ui" | "mode">): Promise<void> {
+    if (!host || this.host !== host || !this.options.ready()) return;
+    let enabled = false;
+    await this.withManagement(async () => {
+      if (this.options.router() !== state.router || !state.router.isCurrent(state.candidate)) throw new HarnessError("STALE_PRESET_SELECTION");
+      const accepted = await host.ui.confirm(`Enable ${name} to edit effort?`,
+        `This replaces the active preset (${state.candidate.activeName}) and enables new worker work.\n` +
+        "Effort changes then apply immediately. Existing Agents and the main model are unchanged.");
+      if (accepted !== true || this.host !== host || !this.modelSelectionAllowed()) return;
+      if (this.options.router() !== state.router || !state.router.isCurrent(state.candidate)) throw new HarnessError("STALE_PRESET_SELECTION");
+      const publication = this.options.publish(state.candidate, name, ctx);
+      state.candidate = publication.candidate;
+      enabled = true;
+    });
+    // Release management ownership before re-entering the custom queue. Keep
+    // the same audited catalogue; reopening must not reread or adopt new files.
+    if (enabled && this.host === host && this.options.router() === state.router && state.router.isCurrent(state.candidate) && this.modelSelectionAllowed())
+      await this.pickPreset(state, ctx, true);
+  }
+
+  /** One settings/preset management route: dialog sequences never overlap,
+   * the latch releases in finally, a disposed or replaced host drops the
+   * request, and errors surface through showError rather than a publish. */
+  private async runManagement(action: Exclude<Extract<PresetChoice, { action: string }>, { action: "edit-effort" }>,
+    host: Pick<ExtensionContext, "ui" | "mode"> | undefined): Promise<void> {
+    const management = this.options.management;
+    if (!management || this.host !== host || !this.options.ready()) return;
+    await this.withManagement(async () => {
+      if (action.action === "settings") {
+        if (typeof management.settings === "function") await management.settings();
+      } else if (action.action === "save-default") {
+        if (action.scope === "workspace" && management.canSaveWorkspace?.() !== true) return;
+        if (typeof management.saveDefault === "function") await management.saveDefault(action.scope);
+      } else if (action.action === "edit-model") {
+        if (typeof management.editModel === "function") await management.editModel(action.name, action.slot, action.position);
+      } else if (typeof management.editPreset === "function") {
+        await management.editPreset(action.action === "edit-preset" ? action.name : undefined);
+      }
+    });
+  }
+
+  /** One UI owner for both slash commands and picker routes. Acquire before
+   * any await so footer/widget clicks cannot stack another harness custom UI. */
+  async withManagement(action: () => Promise<void>): Promise<void> {
+    const host = this.host;
+    if (!host || !this.options.ready() || this.managementOpen || this.pickerOpen || this.paneOpen ||
+        !this.modelSelectionAllowed()) return;
+    this.managementOpen = true;
+    try { await action(); }
+    catch (error) {
+      if (this.host !== host) return; // No callbacks through a retired host.
+      throw error;
+    } finally { this.managementOpen = false; }
+  }
+
+  /** A management sequence may span several dialogs. Recheck the permission
+   * yield before every model factory, not just when that sequence starts. */
+  modelSelectionAllowed(): boolean {
+    return !!this.host && this.options.ready() && mountable(this.yielding, this.approvals.pending);
   }
 
   private messagesOf(agent: AgentDetail): readonly unknown[] {
@@ -182,7 +296,7 @@ export class PanelCoordinator {
   }
 
   private async openDetail(agent_id?: string): Promise<void> {
-    if (this.paneOpen || this.pickerOpen || !this.options.ready() || !this.host) return;
+    if (this.paneOpen || this.pickerOpen || this.managementOpen || !this.options.ready() || !this.host) return;
     const ctx = this.host;
     if (!mountable(this.yielding, this.approvals.pending)) return;
     const agents = this.options.widget.agents();
@@ -275,11 +389,15 @@ export class PanelCoordinator {
     await this.mount(agent_id);
   }
 
-  private async choosePreset(candidate: PresetCandidate,
-    ctx: Pick<ExtensionContext, "ui" | "mode">): Promise<PresetChoice | null> {
-    const live = this.options.router();
+  private async choosePreset(state: PickerState,
+    ctx: Pick<ExtensionContext, "ui" | "mode">, startInEffort: boolean): Promise<PresetChoice | null> {
+    const live = state.router, candidate = state.candidate;
     if (this.pickerOpen) {
       ctx.ui.notify("The delegation panel is already open.", "warning");
+      return null;
+    }
+    if (this.managementOpen) {
+      ctx.ui.notify("The delegation panel is unavailable while a settings or preset dialog is open.", "warning");
       return null;
     }
     if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
@@ -300,13 +418,16 @@ export class PanelCoordinator {
     this.closePreset = request.close;
     // Floating, the picker joins the bottom-right popover column above the
     // footer indicator that opens it, beside whatever is already pinned there.
+    const host = this.host;
+    let picker: PresetPicker | undefined;
     let place: StackMember | undefined;
     let handle: OverlayHandle | undefined;
     let reveal: (() => void) | undefined;
     try {
       const floating = this.floating();
       return await this.host.ui.custom<PresetChoice | null>((tui, theme, keybindings, done) => {
-        if (!request.mount(done, this.paneOpen || !this.options.ready() || !mountable(this.yielding, this.approvals.pending)))
+        if (!request.mount(done, this.host !== host || this.options.router() !== live || !live.isCurrent(state.candidate) ||
+            this.paneOpen || !this.options.ready() || !mountable(this.yielding, this.approvals.pending)))
           return { render: () => [], invalidate() {} };
         const stacked = floating ? (place = joinPopoverStack(tui)) : undefined;
         // Opened behind taller popovers, it waits off screen; when room
@@ -315,8 +436,29 @@ export class PanelCoordinator {
         const openedFrom = focusOrigin(tui);
         reveal = () => { if (handle) focusRevealed(tui, handle, openedFrom); };
         const delegation = this.options.delegation;
-        return request.own(new PresetPicker({ tui, theme, keybindings, presets,
-          activeName: candidate.activeName, done: request.choose, pointer: floating, efforts: this.options.efforts,
+        const management = this.options.management;
+        return request.own(picker = new PresetPicker({ tui, theme, keybindings, presets,
+          activeName: candidate.activeName, done: request.choose, pointer: floating, efforts: this.options.efforts, startInEffort,
+          ...(this.options.efforts ? { setEffort: (name: string, overrides: EffortOverrides) => {
+            if (!picker?.isOpen() || this.host !== host || this.closePreset !== request.close || !this.modelSelectionAllowed()) return undefined;
+            try {
+              if (this.options.router() !== live || !live.isCurrent(state.candidate) || name !== state.candidate.activeName) throw new HarnessError("STALE_PRESET_SELECTION");
+              const publication = this.options.publish(state.candidate, name, ctx, overrides);
+              state.candidate = publication.candidate;
+              return publication.selection;
+            } catch (error) {
+              try { this.options.showError(error, ctx); } catch { /* notification cannot escape a pointer/key callback */ }
+              return undefined;
+            }
+          } } : {}),
+          ...(management ? { management: {
+            summary: () => management.summary(),
+            settings: typeof management.settings === "function",
+            presets: typeof management.editPreset === "function",
+            models: typeof management.editModel === "function",
+            saveDefaults: typeof management.saveDefault === "function",
+            canSaveWorkspace: () => management.canSaveWorkspace?.() === true,
+          } } : {}),
           ...(delegation ? { delegation: { current: () => delegation.current(), guideline: (setting: DelegationSetting) => delegation.guideline(setting),
             set: (next: DelegationSetting) => {
               // A pointer or key handler: nothing may escape into pi-tui's dispatch.
