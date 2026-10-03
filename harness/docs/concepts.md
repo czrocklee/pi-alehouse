@@ -47,9 +47,15 @@ is not sufficient.  An Agent lives until it is killed: an interrupted or
 dependency-failed first task leaves it in place.  Killing an Agent is permanent; uncertain cleanup
 leaves it reserved and is never force-released or automatically evicted.
 
-Every Agent has a caller-chosen **name** (`^[a-z][a-z0-9-]{0,23}$`), unique per
-Owner and never reused after release.  The name is the only model-facing
-address; `agent_id` is the internal control identity.
+Through model tools, every Agent has a caller-chosen **name**
+(`^[a-z][a-z0-9-]{0,23}$`), unique per Owner and never reused after release.
+The name is the model-facing address; `agent_id` remains the internal control
+identity. Generic core names are optional display text and may repeat. Model
+tool assembly explicitly binds the stricter naming/capacity contract for that
+Owner's lifetime, after checking all retained Agents. An incompatible generic
+Owner is rejected at assembly without renaming or consuming its history; its
+ID-based lifecycle and result APIs remain available. Low-level model-envelope
+packing is not a generic-name conversion API.
 
 ## Run
 
@@ -57,12 +63,16 @@ A **Run** is one queued or executing task on an Agent; parent tools call it a
 *task* and never expose its ID.  It has its own internal `run_id`, request identity/digest, prompt boundary, deadline, turn budget,
 outcome, result reference, telemetry, and optional SDK-history links.  A reused
 Agent receives a new Run; it never changes the Agent's admitted routing or
-permission configuration.
+permission configuration. Model replies derive a 1-based `task` sequence within
+that Agent from enqueue order, without exposing the internal Run UUID. Labels
+are auxiliary, not task identity. A question continuation is a new Run admitted
+only by explicit `agent_answer`, never by `agent_send`.
 
-The public lifecycle states are `queued`, `running`, `cancelling`, `completed`,
+Core lifecycle states are `queued`, `running`, `cancelling`, `completed`,
 `needs_input`, `failed`, and `cancelled`; phases further distinguish
-`initializing`, `executing`, `finalizing`, and `settled`.  Terminal status is not
-necessarily a complete answer:
+`initializing`, `executing`, `finalizing`, and `settled`. Model-facing task rows
+project cancelling/cancelled as interrupting/interrupted and show finishing
+until true settlement. A terminal outcome is not necessarily a complete answer:
 
 - `completed` with `limit_reached` was stopped at the harness turn budget;
 - `needs_input` has a separately recorded question;
@@ -93,7 +103,10 @@ do not keep an SDK execution environment alive.
 
 `agent_spawn` requires `agent`, `prompt`, `profile` and `difficulty`; `agent_run`
 requires `agent` and `prompt`. Both take an optional `label`. `agent_send`
-carries only a `message` for the current task.
+joins/steers the task bound when called; it never starts a continuation.
+`agent_answer` takes `agent`, the exact pending `question_id`, and `answer`,
+with optional wait_ms. It preserves the asking task's label and Agent settings;
+run cannot bypass an unanswered question.
 
 - **`prompt`** is the execution instruction.  It may be up to 131072 UTF-16
   units at parent-tool admission, although permission provenance has stricter
@@ -130,24 +143,59 @@ not an SDK history fork and carries neither tools nor routing settings.  It is
 prefixed only on the Agent's first Run; reuse retains the original child
 conversation without adding it again.
 
-## Results, progress, and questions
+## Alerts, questions, results and presentation
 
-Results are retained owner-local text with UTF-16/surrogate-safe cursors.  The
-full recorded question and last output are independently readable through
-`agent_read`; an omitted result tail is not recoverable.  Progress from
-`notify_parent` is bounded, coalesced, at-most-once on an appropriate wait
-return, and never a reliable delivery/ack protocol.  `ask_parent` records a
-bounded question and asks the child to finish; it does not force immediate
-termination, make the parent turn, wake a wait, or bypass a permission dialog.
+Results are retained Owner-local text with UTF-16/surrogate-safe cursors.
+`agent_read` independently reads a recorded question and a result page; cursors
+pin the original Run, even after Agent reuse. Each selected terminal result with
+unread retained text reserves a fixed-width cursor before optional text packing;
+a wholly omitted page keeps its starting offset. Text never retained
+(omitted_chars) cannot be recovered; text omitted only by packing can be fetched
+on a later page. Keep returned cursors: task ordinals are not historical-read
+selectors. See [result cursor identity](tool-contract.md#result-cursors).
 
-Neither ordinary progress nor background completion starts a parent turn. The
-harness does not automatically inject an Agent/Run roster after compaction.
-`agent_list` exposes owner-local state on demand, including killed names;
-its bounded labels are not full task assignments. Its rows add each Agent's
-earlier task labels, last observed context use, observed cost and touched files,
-so the parent can choose between reuse and a fresh Agent. Other harness replies
-name Agents whose tasks finished since they were last shown (`finished`); see
-the [tool contract](tool-contract.md#finished-tasks).
+`alert_parent` records decision-relevant facts and wakes matching observations
+while the child continues, without starting a parent turn or interrupting parent
+Bash. One FIFO bounds accepted pending alerts at Owner 64 / Agent 16 across all
+Runs, including old/killed sources. Full/closed gates reject new calls, never
+evict accepted messages or count rejection as delivery loss. Only complete
+scoped FIFO-prefix messages successfully published in local final content leave
+the queue. This is not SDK persistence, model receipt, a durable outbox or ACK.
+Historical notify/progress/send-answered journals remain read-only display, not
+aliases or new pending-state hydration.
+
+`ask_parent` records an immutable first-write question on the original Run and
+asks the child to end; later valid asks succeed without replacing/comparing the
+body. It does not force suspension or declare settlement. Only truly settled,
+healthy pending needs-input questions, unreserved with no current Run, can be
+answered. Their q_ + 32-hex token binds Owner/generation/original Run using a
+128-bit SHA256 prefix; it is identity, not a permission credential. Explicit
+answer reserves a continuation under normal admission/approval checks. Before
+inputEntered, failure may reopen the same question on a reusable Agent; after
+it, failure cannot. Historical questions remain readable without actionable
+tokens. Off forbids new tasks/steering/answers but accepted child work continues.
+
+Spawn/run/send/answer/wait/read share one envelope with reason, complete bound
+Agent/task rows, optional action fact, top-level alerts, scoped pending count
+and bounded finished reminders. Task conditions bind once; alert scopes are
+separate: inline sees its selected Run only, explicit wait/read span the chosen
+Agents' Runs, default wait receives all Owner alerts. Default On also selects
+healthy pending questions level-triggered, independent of finished presentation;
+unanswered questions return again. To defer one, pass `agents` naming other
+Agents; this also limits alerts to those Agents. Off excludes already-terminal
+questions only at first default binding. Explicit observations still show them
+with workers_disabled. All-empty returns nothing_pending immediately, not
+vacuous done. Timeout or abort ends observation, not worker execution. UI/list
+are count/read-only projections and never consume communication.
+
+The harness does not inject an Agent/Run roster after compaction. `agent_list`
+exposes Owner-local state, including killed names, labels, earlier tasks, context,
+cost and touched paths, not full assignments or admission authority. Finished
+reminders use fixed finished_presented and settled_seq on each original Run;
+only explicitly showing that task's terminal row commits its bit. Running rows
+with the same Agent name, alerts/list/UI/count do not. Results stay rereadable
+and pending questions can reopen without resetting that bit. See
+[finished presentation](tool-contract.md#finished-presentation).
 
 See [the tool contract](tool-contract.md) for exact budgets and reply behavior,
 and [architecture](architecture.md) for history, accounting, and retention.

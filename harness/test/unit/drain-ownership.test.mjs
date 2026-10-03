@@ -78,7 +78,7 @@ for (const [waitFails, idleThrows] of [[true, false], [false, false], [false, tr
   const { controller: c, owner } = await fixture(t, { controller: { createSession: async () => port,
     clock: { wall: Date.now, mono: () => mono } } });
   const run = await c.submit("idle-proof", task("idle-proof")); await waited.promise;
-  assert.equal((await c.wait([run.run_id], { mode: "all", timeout_ms: 10 })).reason, "timeout");
+  assert.equal(await c.waitForRuns([run.run_id], { mode: "all", timeout_ms: 10 }), "timeout");
   assert.equal(c.view(run.run_id).execution_exited, false);
   mono += 5000;
   assert.deepEqual(c.view(run.run_id).drain, { waiting_for: "sdk_idle", elapsed_ms: 5000 });

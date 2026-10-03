@@ -9,14 +9,32 @@ initTheme(undefined, false);
 const tui = { requestRender() {}, terminal: { columns: 80, rows: 24 } };
 
 /** A pane over a fixed message list, read back as the text it would paint. */
-const paneOver = (messages) => {
+const paneOver = (messages, width = 80) => {
   const content = new TranscriptContent({ tui, cwd: "/w", markdownTheme: getMarkdownTheme(),
     source: { messages: () => messages, inFlight: () => undefined, toolDefinition: () => undefined } });
-  return () => content.slice(80, 0, content.lineCount(80)).join("\n");
+  return () => content.slice(width, 0, content.lineCount(width)).join("\n");
 };
 
 const call = (id, name = "bash") => ({ type: "toolCall", id, name, arguments: { command: "npm test" } });
 const assistant = (content, extra = {}) => ({ role: "assistant", content, stopReason: "toolUse", ...extra });
+
+test("historical notification/progress/send-answer data renders literally without mutation", () => {
+  const messages = [
+    assistant([{ type: "toolCall", id: "old-notify", name: "notify_parent", arguments: { message: "OLD_NOTICE" } }]),
+    { role: "toolResult", toolCallId: "old-notify", toolName: "notify_parent",
+      content: [{ type: "text", text: "OLD_NOTICE_RECORDED" }], isError: false },
+    assistant([{ type: "toolCall", id: "old-send", name: "agent_send", arguments: { agent: "otter", message: "answer" } }]),
+    { role: "toolResult", toolCallId: "old-send", toolName: "agent_send", content: [{ type: "text",
+      text: JSON.stringify({ delivery: "answered", agent: "otter", status: "completed", progress: ["OLD_PROGRESS"] }) }], isError: false },
+  ];
+  const before = structuredClone(messages), render = paneOver(messages, 160); // Keep literal markers clear of line wrapping.
+  for (let paint = 0; paint < 2; paint++) {
+    const text = render();
+    for (const literal of ["notify_parent", "OLD_NOTICE", "answered", "progress", "OLD_PROGRESS"]) assert.ok(text.includes(literal), text);
+    assert.doesNotMatch(text, /alert_parent|question_id|alerts_pending/);
+  }
+  assert.deepEqual(messages, before, "rendering does not rewrite historical records or hydrate live communication");
+});
 
 test("a tool call still waiting for its result keeps rendering as pending", () => {
   const text = paneOver([assistant([call("t1")])])();

@@ -6,6 +6,8 @@
  * One gap that is not ours to close: Pi's built-in tool renderers live behind a
  * path its `exports` map does not expose, and a built-in definition carries
  * none of its own, so `read`/`bash`/`edit` fall back to plain text.
+ * Historical notify_parent calls, progress fields and send delivery=answered
+ * remain literal journal data. Rendering never hydrates alerts or questions.
  */
 
 import { AssistantMessageComponent, BashExecutionComponent, BranchSummaryMessageComponent,

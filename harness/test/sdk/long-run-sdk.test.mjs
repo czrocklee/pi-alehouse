@@ -97,8 +97,8 @@ async function fixture(t, respond, { window = 8192, retry = false, controllerOpt
     tools: ["blob"], definition_digest: "a".repeat(64) } });
   const submit = (request = task()) => controller.submit(randomUUID(), request);
   const end = async (run) => {
-    const waited = await controller.wait([run.run_id], { mode: "all", timeout_ms: 3000 });
-    assert.equal(waited.reason, "condition"); return controller.view(run.run_id);
+    const waited = await controller.waitForRuns([run.run_id], { mode: "all", timeout_ms: 3000 });
+    assert.equal(waited, "ready"); return controller.view(run.run_id);
   };
   const historical = (run) => readSdkRun({ sessionManager: sdk.SessionManager, parentFile: parent.getSessionFile(), sessionDirectory: root, run_id: run.run_id });
   return { root, session, manager, controller, port, gate, requests, events, submit, end, historical, task };
@@ -177,7 +177,7 @@ for (const rejects of [false, true]) for (const revokeThrows of [false, true]) t
   assert.equal(held.usage.total.cost, 1);
   assert.equal(disposed.mock.callCount(), 0);
   await assert.rejects(f.port.dispose(), /EXECUTION_NOT_EXITED/);
-  assert.equal((await f.controller.wait([run.run_id], { mode: "all", timeout_ms: 10 })).reason, "timeout");
+  assert.equal(await f.controller.waitForRuns([run.run_id], { mode: "all", timeout_ms: 10 }), "timeout");
   released.resolve(); const result = await f.end(run);
   assert.equal(result.status, "failed"); assert.equal(result.unavailable_reason, "run_callback_failed");
   assert.equal(result.resumable, false); assert.equal(result.execution_exited, true);
@@ -215,7 +215,7 @@ for (const revokeThrows of [false, true]) test(`real SDK: callback failure attem
   assert.equal(f.controller.view(run.run_id).execution_exited, false);
   assert.equal(f.controller.stats().active, 1); assert.equal(disposed.mock.callCount(), 0);
   await assert.rejects(f.port.dispose(), /EXECUTION_NOT_EXITED/);
-  assert.equal((await f.controller.wait([run.run_id], { mode: "all", timeout_ms: 10 })).reason, "timeout");
+  assert.equal(await f.controller.waitForRuns([run.run_id], { mode: "all", timeout_ms: 10 }), "timeout");
   released.resolve(); const result = await f.end(run);
   assert.equal(result.status, "failed"); assert.equal(result.unavailable_reason, "run_callback_failed");
   assert.equal(result.resumable, false); assert.equal(result.usage.total.cost, 1);

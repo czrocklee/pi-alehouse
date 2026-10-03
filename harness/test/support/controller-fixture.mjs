@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -86,4 +87,8 @@ export async function until(predicate) {
     await tick();
   }
 }
-export const ended = (controller, run) => controller.wait([run.run_id], { mode: "all", timeout_ms: 3000 });
+// Lifecycle assertion helper only: never publishes alerts, finished reminders or faults.
+export async function ended(controller, run) {
+  assert.equal(await controller.waitForRuns([run.run_id], { mode: "all", timeout_ms: 3000 }), "ready");
+  return { snapshots: [controller.view(run.run_id)], results: [controller.getResult(run.run_id)] };
+}

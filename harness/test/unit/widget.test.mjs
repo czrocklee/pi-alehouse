@@ -15,7 +15,7 @@ const ROW_BREAK = new RegExp("[\\t\\n\\v\\f\\r\\u0085\\u2028\\u2029]");
 const theme = { fg: (_color, text) => text, bold: (text) => text };
 const owner = { blocked: false, resident: 2, resident_limit: 8 };
 const base = { turns: 3, max_turns: 256, elapsed_ms: 12400, tool_uses: 2, active_tools: [],
-  preview: "", question: false, limit_reached: false, pending_messages: 0, notification_drops: 0,
+  preview: "", question: false, limit_reached: false, pending_messages: 0,
   has_run_warnings: false, finishing: false, name: "", profile: "editor", model: "m", effort: "high", description: "Task" };
 const run = (id, overrides) => ({ ...base, agent_id: id, run_id: `${id}-run`, ...overrides });
 const render = (runs, options = {}) => renderWidgetLines({ runs, owner, spinnerFrame: 0, width: 120, theme,
@@ -136,6 +136,8 @@ test("activity prefers live tools, then streamed prose, then thinking", () => {
   assert.equal(describeActivity([tool("read")], ""), "reading…");
   assert.equal(describeActivity([tool("bash", "npm test")], ""), "running npm test");
   assert.equal(describeActivity([tool("ask_parent", "which factor?")], ""), "asking you: which factor?");
+  assert.equal(describeActivity([tool("alert_parent", "interface changed")], ""), "alerting you: interface changed");
+  assert.equal(describeActivity([tool("notify_parent", "old progress")], ""), "notifying you: old progress");
   assert.equal(describeActivity([tool("read", "a.ts"), tool("edit", "b.ts")], ""), "reading a.ts, editing b.ts");
   assert.equal(describeActivity([tool("grep", '"x"'), tool("grep", '"y"'), tool("read", "a")], ""),
     "searching 2 patterns, reading…");
@@ -184,7 +186,8 @@ test("each tool contributes the argument that identifies its work, and nothing e
   assert.equal(at("grep", { pattern: "x", glob: "**/*.ts" }), '"x" in **/*.ts');
   assert.equal(at("find", { pattern: "*.mjs" }), '"*.mjs"');
   assert.equal(at("ask_parent", { question: "factor 的值是多少？" }), "factor 的值是多少？");
-  assert.equal(at("notify_parent", { message: "done" }), "done");
+  assert.equal(at("alert_parent", { message: "interface changed" }), "interface changed");
+  assert.equal(at("notify_parent", { message: "done" }), "done", "historical name is display-only");
   // Absent, malformed and unknown inputs degrade to the bare verb, never to a crash.
   for (const args of [undefined, null, "string", 7, {}, { path: 3 }]) assert.equal(at("read", args), undefined);
   assert.equal(at("mystery", { path: "a" }), undefined);
@@ -202,12 +205,13 @@ test("a path that cannot fit keeps its tail, because the file name is the inform
   assert(visibleWidth(shortPath(`${cwd}/${"n".repeat(90)}.ts`, cwd, 20)) <= 20);
 });
 
-test("pending messages, drops and recorded warnings are surfaced per Agent", () => {
-  const line = render([run("a", { status: "needs_input", pending_messages: 2, notification_drops: 1,
+test("pending alerts and recorded warnings are surfaced per Agent", () => {
+  const line = render([run("a", { status: "needs_input", pending_messages: 2,
     has_run_warnings: true })])[1];
-  assert.match(line, /run warning · 1 dropped · 2 msg · needs input/);
+  assert.match(line, /run warning · 2 pending · needs input/);
   assert.ok(line.indexOf("run warning") < line.indexOf("↻"));
-  assert.doesNotMatch(render([run("a", { status: "completed" })])[1], /msg|dropped|warning/);
+  assert.doesNotMatch(line, /dropped|never reached/);
+  assert.doesNotMatch(render([run("a", { status: "completed" })])[1], /pending|warning/);
 });
 
 test("a recorded Run issue does not claim that resources are still unclosed", (t) => {
@@ -355,7 +359,7 @@ test("a long task yields to warnings and compact metrics at 120 and 160 columns"
     runtime: { activity: "generating", context: { tokens: 231000, context_window: 272000 } } });
   for (const width of [120, 160]) {
     const lines = render([row], { width });
-    for (const text of ["reviewer", "[gpt-5.6-sol/high]", "run warning", "3 msg", "▸77", "ctx 84.9%", "$0.500", "12.4s"]) {
+    for (const text of ["reviewer", "[gpt-5.6-sol/high]", "run warning", "3 pending", "▸77", "ctx 84.9%", "$0.500", "12.4s"]) {
       assert.ok(lines[1].includes(text), `${width}: missing ${text}: ${lines[1]}`);
     }
     assert.ok(lines[1].indexOf("run warning") < lines[1].indexOf("[gpt-5.6-sol/high]"));
@@ -364,18 +368,18 @@ test("a long task yields to warnings and compact metrics at 120 and 160 columns"
   }
 });
 
-test("long identities and diagnostics cannot hide warnings, drops or pending messages", () => {
+test("long identities and diagnostics cannot hide warnings or pending alerts", () => {
   const styled = { fg: (_color, text) => `\x1b[33m${text}\x1b[0m`, bold: text => `\x1b[1m${text}\x1b[0m` };
   for (const status of ["running", "failed", "needs_input", "cancelling", "completed"]) {
     for (const width of [80, 120, 160]) {
       for (const th of [theme, styled]) {
         const frame = renderWidget({
           runs: [run("a", { status, name: "审查\n".repeat(80), model: "gpt-5.6-sol",
-            description: "Review the entire workspace ".repeat(50), pending_messages: 3, notification_drops: 2,
+            description: "Review the entire workspace ".repeat(50), pending_messages: 3,
             has_run_warnings: true, error: "SDK broke: ".repeat(40) })],
           width, owner, spinnerFrame: 0, theme: th, shouldShowFinished: () => true,
         });
-        for (const text of ["run warning", "2 dropped", "3 msg"]) assert.ok(frame.lines[1].includes(text), frame.lines[1]);
+        for (const text of ["run warning", "3 pending"]) assert.ok(frame.lines[1].includes(text), frame.lines[1]);
         if (status === "failed") assert.ok(frame.lines[1].includes("failed: SDK broke"));
         if (status === "needs_input") assert.ok(frame.lines[1].includes("needs input"));
         if (status === "cancelling") assert.ok(frame.lines[1].includes("cancelling"));
@@ -402,7 +406,7 @@ test("cost is written the way Pi's own footer writes it, and is silent when noth
 test("the widget reports the renderer it painted into, so the pane can choose how to mount", (t) => {
   const run = { run_id: "r", agent_id: "a", name: "scout", description: "d",
     status: "running", phase: "streaming", execution_exited: false, finalization_pending: false,
-    resident: true, resumable: false, owner_blocked: false, notification_drops: 0, pending_messages: 0,
+    resident: true, resumable: false, owner_blocked: false, pending_messages: 0,
     isolation: "shared", elapsed_ms: 1, turns: 1, max_turns: 8, cleanup_errors: [], discarded_inputs: [],
     effective_settings: { provider: "p", model: "m", thinking: "off", parent_thinking: "off",
       thinking_resolution: "identity", profile: "editor",
@@ -431,7 +435,7 @@ test("the widget reports the renderer it painted into, so the pane can choose ho
 const viewOf = (agent_id, status, run_id = `${agent_id}-1`) => ({
   run_id, agent_id, name: "", description: "Task", status,
   phase: status === "running" ? "streaming" : "settled", execution_exited: false, finalization_pending: false,
-  resident: true, resumable: false, owner_blocked: false, notification_drops: 0, pending_messages: 0, isolation: "shared",
+  resident: true, resumable: false, owner_blocked: false, pending_messages: 0, isolation: "shared",
   elapsed_ms: 1000, turns: 1, max_turns: 8, cleanup_errors: [], discarded_inputs: [],
   effective_settings: { provider: "p", model: "m", thinking: "off", parent_thinking: "off",
     thinking_resolution: "identity", profile: "editor", difficulty: 3, strength: "standard",
@@ -728,7 +732,7 @@ test("a detail title stays one row however it is labelled", () => {
       thinking_resolution: "identity", profile: "worker\nreadonly",
       difficulty: 5, strength: "strong", preset: "fixture", preset_version: "v1", selection_digest: "1".repeat(64),
       cwd: "/w", tools: [], context_mode: "none" },
-    owner_blocked: false, notification_drops: 0, pending_messages: 0, cleanup_errors: [], discarded_inputs: [],
+    owner_blocked: false, pending_messages: 0, cleanup_errors: [], discarded_inputs: [],
     execution_exited: false, finalization_pending: false, resumable: true, isolation: "shared", phase: "executing" };
   const live = { active_tools: [], tool_uses: 0, preview: "" };
   const title = renderDetailTitle({ view, live }, 0, theme, 120);

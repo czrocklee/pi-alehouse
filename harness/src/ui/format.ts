@@ -15,7 +15,9 @@ const TOOL_ACTION: Record<string, { verb: string; noun?: string; joiner?: string
   edit: { verb: "editing", noun: "files" }, write: { verb: "writing", noun: "files" },
   grep: { verb: "searching", noun: "patterns" }, find: { verb: "finding", noun: "patterns" },
   ls: { verb: "listing", noun: "directories" },
-  ask_parent: { verb: "asking you", joiner: ": " }, notify_parent: { verb: "notifying you", joiner: ": " },
+  ask_parent: { verb: "asking you", joiner: ": " }, alert_parent: { verb: "alerting you", joiner: ": " },
+  // Historical journals only: display the retired name without registering it.
+  notify_parent: { verb: "notifying you", joiner: ": " },
 };
 const oneLine = (value: string): string => value.replace(/\s+/g, " ").trim();
 
@@ -48,7 +50,7 @@ export function describeToolArgs(name: string, args: unknown, cwd: string, colum
       return bounded(`"${pattern}"${where ? ` in ${where}` : ""}`);
     }
     case "ask_parent": { const question = str("question"); return question ? bounded(question) : undefined; }
-    case "notify_parent": { const message = str("message"); return message ? bounded(message) : undefined; }
+    case "alert_parent": case "notify_parent": { const message = str("message"); return message ? bounded(message) : undefined; }
     default: return undefined;
   }
 }

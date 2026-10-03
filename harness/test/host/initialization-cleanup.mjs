@@ -100,9 +100,8 @@ for (const mode of ["cooperative", "abort-timeout", "shutdown-error"]) {
         thinking_resolution: "identity", profile: "reader",
         difficulty: 3, strength: "standard", preset: "fixture", preset_version: "v1", selection_digest: "1".repeat(64),
         cwd, tools: [], definition_digest: definitionDigest } });
-    let result = await controller.wait([run.run_id], { mode: "all", timeout_ms: 10000 });
-    if (result.reason === "owner_blocked") result = await controller.wait([run.run_id], { mode: "all", timeout_ms: 10000 });
-    assert.equal(result.reason, "condition"); data.run = result.snapshots[0];
+    assert.equal(await controller.waitForRuns([run.run_id], { mode: "all", timeout_ms: 10000 }), "ready");
+    data.run = controller.view(run.run_id);
     assert.equal(data.run.status, "failed"); assert.match(data.run.outcome.error, /BIND_FAILED_AFTER_STARTING_WORK/);
     assert.equal(data.nonIdleAtBindFailure, true); assert.equal(data.abortCalls, 1); assert.equal(data.disposeCalls, 1);
     assert.equal(data.providerAbortObserved, true); assert.equal(provider.requests.length - beforeRequests, 1);

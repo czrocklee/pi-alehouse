@@ -2,7 +2,7 @@
 // Production seed through the actual private patched parser/gates, independent
 // of the historical conservative-policy fixture. No commands are executed.
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createJiti } from "jiti";
@@ -26,8 +26,10 @@ try {
     await pipeline.evaluate({ toolCallId: "seed-fixture", toolName, input, cwd: scratch, agentName }, { run: async (gate) => { if (gate) gates.push(gate); return { action: "allow" }; } });
     return gates;
   };
+  const management = ["agent_spawn", "agent_run", "agent_send", "agent_answer", "agent_wait", "agent_read", "agent_interrupt", "agent_kill", "agent_list"];
+  const childDenies = JSON.parse(readFileSync(join(repo, "resources/worker-policy.json"), "utf8")).childToolDenies;
   let checks = 0;
-  for (const agent of [undefined, "editor", "reader"]) {
+  for (const agent of [undefined, "editor", "reader", "researcher"]) {
     assert.deepEqual(manager.getConfigIssues(agent), []);
     for (const path of [".env", "~/.pi/agent/auth.json", "~/.ssh/id_ed25519", "/run/secrets/token"]) {
       assert((await gatesFor("read", { path }, agent)).some((gate) => gate.preCheck?.state === "deny"), `${agent}: secret read ${path}`); checks++;
@@ -41,8 +43,11 @@ try {
     for (const command of ["curl https://example.invalid", "node -e 'process.exit()'", "git show HEAD:.env"]) {
       assert((await gatesFor("bash", { command }, agent)).some((gate) => ["ask", "deny"].includes(gate.preCheck?.state)), `${agent}: no automatic arbitrary execution ${command}`); checks++;
     }
-    for (const tool of ["write", "edit"]) { assert.equal(resolver.checkPermission(tool, {}, agent).state, agent === "reader" ? "deny" : "allow"); checks++; }
-    for (const tool of ["agent_spawn", "agent_run", "agent_send", "agent_wait", "agent_read", "notify_parent", "ask_parent"]) { assert.equal(resolver.checkPermission(tool, {}, agent).state, "allow"); checks++; }
+    for (const tool of ["write", "edit"]) { assert.equal(resolver.checkPermission(tool, {}, agent).state, agent === "reader" || agent === "researcher" ? "deny" : "allow"); checks++; }
+    for (const tool of ["alert_parent", "ask_parent"]) { assert.equal(resolver.checkPermission(tool, {}, agent).state, "allow"); checks++; }
+    for (const tool of management) { assert.equal(resolver.checkPermission(tool, {}, agent).state, agent ? "deny" : "allow", `${agent}: management boundary ${tool}`); checks++; }
+    assert.equal(resolver.checkPermission("notify_parent", {}, agent).state, "deny"); checks++;
+    if (agent) for (const tool of childDenies) { assert.equal(resolver.checkPermission(tool, {}, agent).state, "deny", `${agent}: child exclusion ${tool}`); checks++; }
   }
   console.log(`PASS: ${checks} production seed real-parser/gate checks, no fallback policy`);
 } finally { rmSync(scratch, { recursive: true, force: true }); }

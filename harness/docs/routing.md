@@ -161,27 +161,42 @@ preset enables new work again. The selected name is the single source of truth;
 there is no separate persisted enable switch or last-preset setting. This is
 independent of Pi's **thinking** level named `off`.
 
-Off rejects every `agent_spawn`, `agent_run` and `agent_send` with `WORKERS_DISABLED` before
-model resolution, new Run/session allocation or steering, in the Controller. Unknown Agent names retain their normal errors through cached
-tool handles while Off. Already accepted queued/running work and internal
-finish-budget instructions continue; Off does not cancel, pause, release, or
-close the Owner. Accepted same-ID retries still return their original task. A submission awaiting admission across an
-Off/On transition is rejected rather than revived; ordinary enabled-preset
-switches retain their existing routing semantics.
+Off rejects new `agent_spawn`, `agent_run`, `agent_send` and `agent_answer`
+with `WORKERS_DISABLED` before model resolution, new Run/session allocation,
+steering or question continuation, in the Controller. Unknown Agent names retain
+normal errors through cached handles. Accepted queued/running work, child
+alert_parent/ask_parent and internal finish-budget instructions continue; Off
+does not cancel, pause, release or close the Owner. Same-ID retries replay their
+original acceptance/delivery fact, not cached observations or consumed alerts.
+A submission crossing an Off/On admission revision is rejected, not revived;
+ordinary enabled-preset switches retain existing routing semantics.
 
-All eight tools remain registered, but Off hides them from the model if this
+All nine tools remain registered, but Off hides them from the model if this
 Owner has never accepted work. Once it has, only `agent_wait`, `agent_read`,
 `agent_interrupt`, `agent_kill`, and `agent_list` remain active while Off, including
 after execution/release so retained results stay accessible. Other active tools
 and the main model/permissions are unchanged. Hidden/cached calls still meet
 the execution gate; hiding a schema alone is not authorization.
 
-The preset owns the active selection of these eight tools. At startup, preset
+The preset owns the active selection of these nine tools. At startup, preset
 changes, acceptance callbacks, `before_agent_start` and `turn_start`, reconciliation
-restores any missing allowed harness tools: all eight when enabled, or the five
+restores any missing allowed harness tools: all nine when enabled, or the five
 result/cleanup tools when Off with accepted work. Individually deactivating one
 of these tools is not a persistent override. Use Off to disable new worker work;
 the current selection and order of non-harness tools are preserved.
+
+Under the [tool contract](tool-contract.md), default wait selects current
+nonterminal tasks while Off; when initially On it also binds healthy settled
+pending questions. This choice is made once: switching during a wait neither
+adds nor removes targets. Explicit wait/read still show pending question identity
+with workers_disabled=true; Off does not consume it or make it answerable through
+send. Enable delegation before explicit agent_answer. On questions remain
+level-triggered independent of finished presentation: unanswered questions return
+again. To defer one, pass `agents` naming other Agents; this also limits alerts
+to those Agents. A selected running task that later asks can return its question
+even after switching Off. A fresh On wait can recover a question excluded by an
+earlier Off binding. No selected tasks and no relevant alerts returns nothing_pending
+immediately without a timer.
 
 The harness adds no orchestration system-prompt paragraph or disabled-mode
 message in either mode. Essential API facts live in the relevant tool metadata.
@@ -369,8 +384,8 @@ built-in privileges.
 Use `/harness-preset NAME` for a named selection, `/harness-preset reload` to
 reread the file while retaining the active name, or bare `/harness-preset` /
 `Alt+S` (or a click on the footer's delegation indicator) for the panel. Model
-routes affect new Agents only; Off disables new/resumed/steered work but leaves
-accepted work unchanged. Neither selection changes the main model. `Alt+S` leaves Pi's `Ctrl+S` save actions
+routes affect new Agents only; Off disables new tasks, answers and steering but
+leaves accepted work unchanged. Neither selection changes the main model. `Alt+S` leaves Pi's `Ctrl+S` save actions
 alone.  If a terminal, multiplexer, or reserved global binding intercepts it,
 the command remains the fallback.
 

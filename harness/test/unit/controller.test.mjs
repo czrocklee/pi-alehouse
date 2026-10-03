@@ -31,8 +31,8 @@ test("new and reuse share FIFO, request identity, immutable snapshots and exact 
   ports[1].finish("second result"); await ended(c, second);
   await until(() => ports[0].calls.length === 2);
   assert.equal(ports.length, 2); assert.equal(ports[0].calls[1].prompt, "follow up");
-  const oldWait = await c.wait([first.run_id], { mode: "all", timeout_ms: 0 });
-  assert.equal(oldWait.reason, "condition"); assert.equal(oldWait.results[0].text, "first result");
+  assert.equal(await c.waitForRuns([first.run_id], { mode: "all", timeout_ms: 0 }), "ready");
+  assert.equal(c.getResult(first.run_id).text, "first result");
   assert.equal(c.view(first.run_id).resumable, false);
   ports[0].finish("review result"); await ended(c, reuse);
   assert.equal(c.view(first.run_id).resumable, true); // Agent availability is current, Run state immutable.
@@ -49,61 +49,63 @@ test("new and reuse share FIFO, request identity, immutable snapshots and exact 
   await ended(c, snapshot);
 });
 
-test("wait read/subscribe is gap-free; any/all, timeout, interrupt and progress stay distinct", async (t) => {
+test("lifecycle any/all, timeout and abort stay gap-free and never consume alerts", async (t) => {
   const { controller: c, ports } = await fixture(t, { controller: { concurrency: 2 } });
-  const a = await c.submit("a", task("a")), b = await c.submit("b", task("b"));
+  const a = await c.submit("a", task("a", { name: "alpha" })), b = await c.submit("b", task("b", { name: "beta" }));
   await until(() => ports.length === 2 && ports.every((p) => p.streaming));
-  const waitAny = c.wait([a.run_id, b.run_id], { mode: "any" });
-  const waitAll = c.wait([a.run_id, b.run_id], { mode: "all" });
+  const waitAny = c.waitForRuns([a.run_id, b.run_id], { mode: "any" });
+  const waitAll = c.waitForRuns([a.run_id, b.run_id], { mode: "all" });
   ports[0].finish("A");
-  assert.equal((await waitAny).reason, "condition");
-  assert.equal((await c.wait([b.run_id], { mode: "all", timeout_ms: 0 })).reason, "timeout");
+  assert.equal(await waitAny, "ready");
+  assert.equal(await c.waitForRuns([b.run_id], { mode: "all", timeout_ms: 0 }), "timeout");
   const abort = new AbortController();
-  const interrupt = c.wait([b.run_id], { mode: "all", signal: abort.signal }); abort.abort();
-  assert.equal((await interrupt).reason, "interrupted"); assert.equal(c.view(b.run_id).status, "running");
-  ports[1].callbacks.notify("progress, not an answer");
-  ports[1].callbacks.notify("still active");
+  const interrupt = c.waitForRuns([b.run_id], { mode: "all", signal: abort.signal }); abort.abort();
+  assert.equal(await interrupt, "aborted"); assert.equal(c.view(b.run_id).status, "running");
+  ports[1].callbacks.alert("important fact, not an answer");
+  ports[1].callbacks.alert("still active");
   let resolved = false; void waitAll.then(() => { resolved = true; }); await tick(); assert.equal(resolved, false);
-  assert.equal((await c.wait([b.run_id], { mode: "all", timeout_ms: 0 })).progress, undefined,
-    "timeouts do not claim buffered progress");
+  assert.equal(await c.waitForRuns([b.run_id], { mode: "all", timeout_ms: 0 }), "timeout");
+  assert.equal(c.view(b.run_id).pending_messages, 2, "lifecycle timeout leaves alerts pending");
+  const observed = JSON.parse((await c.observe({ kind: "wait", agent_ids: [b.agent_id], wait_ms: 0 }, { validate() {} })).content[0].text);
+  assert.equal(observed.reason, "alert");
+  assert.deepEqual(observed.alerts.map((event) => event.message), ["important fact, not an answer", "still active"]);
+  assert.equal(c.view(b.run_id).status, "running");
   ports[1].finish("B");
-  const all = await waitAll; assert.equal(all.reason, "condition");
-  assert.deepEqual(all.progress.map((event) => event.text), ["progress, not an answer", "still active"]);
-  assert.equal((await c.wait([a.run_id, b.run_id], { mode: "all" })).reason, "condition");
-  assert.equal((await c.wait([a.run_id, b.run_id], { mode: "all", include_results: false })).results, undefined);
+  assert.equal(await waitAll, "ready");
+  assert.equal(await c.waitForRuns([a.run_id, b.run_id], { mode: "all" }), "ready");
+  assert.equal(c.getResult(a.run_id).text, "A"); assert.equal(c.getResult(b.run_id).text, "B");
 });
 
-test("all waits continue past normal completion but return attention for actionable terminal peers", async (t) => {
+test("all model waits continue past normal completion but prioritize questions and task issues", async (t) => {
   const { controller: c, ports } = await fixture(t, { controller: { concurrency: 6 } });
-  const peer = await c.submit("peer", task("peer"));
-  const normal = await c.submit("normal", task("normal"));
-  const question = await c.submit("question-attention", task("question-attention"));
-  const failed = await c.submit("failed-attention", task("failed-attention"));
-  const cancelled = await c.submit("cancel-attention", task("cancel-attention"));
-  const limited = await c.submit("limit-attention", task("limit-attention", { max_turns: 1 }));
+  const peer = await c.submit("peer", task("peer", { name: "peer" }));
+  const normal = await c.submit("normal", task("normal", { name: "normal" }));
+  const question = await c.submit("question-attention", task("question-attention", { name: "question" }));
+  const failed = await c.submit("failed-attention", task("failed-attention", { name: "failed" }));
+  const cancelled = await c.submit("cancel-attention", task("cancel-attention", { name: "cancelled" }));
+  const limited = await c.submit("limit-attention", task("limit-attention", { name: "limited", max_turns: 1 }));
   await until(() => ports.length === 6 && ports.every((port) => port.streaming));
   ports[1].finish("ordinary"); await ended(c, normal);
-  assert.equal((await c.wait([normal.run_id, peer.run_id], { mode: "all", timeout_ms: 0 })).reason, "timeout");
+  assert.equal(JSON.parse((await c.observe({ kind: "wait", agent_ids: [normal.agent_id, peer.agent_id], mode: "all", wait_ms: 0 }, { validate() {} })).content[0].text).reason, "timeout");
 
   ports[2].callbacks.question("need input"); ports[2].finish("please answer"); await ended(c, question);
-  let value = await c.wait([question.run_id, peer.run_id], { mode: "all" });
-  assert.equal(value.reason, "attention"); assert.equal(value.snapshots[0].status, "needs_input");
+  let value = JSON.parse((await c.observe({ kind: "wait", agent_ids: [question.agent_id, peer.agent_id], mode: "all" }, { validate() {} })).content[0].text);
+  assert.equal(value.reason, "question"); assert.equal(value.agents[0].status, "needs_input");
 
   ports[3].finish("partial", "error", "provider failed"); await ended(c, failed);
-  value = await c.wait([failed.run_id, peer.run_id], { mode: "all" });
-  assert.equal(value.reason, "attention"); assert.equal(value.snapshots[0].status, "failed");
+  value = JSON.parse((await c.observe({ kind: "wait", agent_ids: [failed.agent_id, peer.agent_id], mode: "all" }, { validate() {} })).content[0].text);
+  assert.equal(value.reason, "task_issue"); assert.equal(value.agents[0].status, "failed");
 
   c.cancel(cancelled.run_id); ports[4].finish("partial", "aborted"); await ended(c, cancelled);
-  value = await c.wait([cancelled.run_id, peer.run_id], { mode: "all" });
-  assert.equal(value.reason, "attention"); assert.equal(value.snapshots[0].status, "cancelled");
+  value = JSON.parse((await c.observe({ kind: "wait", agent_ids: [cancelled.agent_id, peer.agent_id], mode: "all" }, { validate() {} })).content[0].text);
+  assert.equal(value.reason, "task_issue"); assert.equal(value.agents[0].status, "interrupted");
 
   ports[5].callbacks.turnEnd(true); ports[5].finish("best effort"); await ended(c, limited);
-  value = await c.wait([limited.run_id, peer.run_id], { mode: "all" });
-  assert.equal(value.reason, "attention"); assert.equal(value.snapshots[0].outcome.limit_reached, true);
-  assert.deepEqual(value.snapshots.filter((run) => !["completed", "needs_input", "failed", "cancelled"].includes(run.status)).map((run) => run.run_id), [peer.run_id]);
-  // any is level-triggered and keeps its existing condition spelling even when
-  // the terminal Run predates the wait.
-  assert.equal((await c.wait([failed.run_id, peer.run_id], { mode: "any" })).reason, "condition");
+  value = JSON.parse((await c.observe({ kind: "wait", agent_ids: [limited.agent_id, peer.agent_id], mode: "all" }, { validate() {} })).content[0].text);
+  assert.equal(value.reason, "task_issue"); assert.equal(value.agents[0].limit_reached, true);
+  assert.deepEqual(value.pending, ["peer"]);
+  // Task issues outrank done even for any and already-terminal targets.
+  assert.equal(JSON.parse((await c.observe({ kind: "wait", agent_ids: [failed.agent_id, peer.agent_id], mode: "any" }, { validate() {} })).content[0].text).reason, "task_issue");
 });
 
 test("questions only interrupt all after finalization and never authorize early reuse", async (t) => {
@@ -112,17 +114,32 @@ test("questions only interrupt all after finalization and never authorize early 
     if (point === "finish") { entered.resolve(); await gate.promise; }
   } });
   t.after(() => gate.resolve());
-  const question = await c.submit("question", task("question")), peer = await c.submit("peer", task("peer"));
+  const question = await c.submit("question", task("question", { name: "question" })), peer = await c.submit("peer", task("peer", { name: "peer" }));
   await until(() => ports.length === 2 && ports.every((port) => port.streaming));
-  ports[0].callbacks.question("choice?");
-  assert.equal((await c.wait([question.run_id, peer.run_id], { mode: "all", timeout_ms: 0 })).reason, "timeout");
+  assert.equal(ports[0].callbacks.question("choice?"), "recorded");
+  assert.equal(JSON.parse((await c.observe({ kind: "wait", agent_ids: [question.agent_id, peer.agent_id], mode: "all", wait_ms: 0 }, { validate() {} })).content[0].text).reason, "timeout");
   ports[0].finish("please choose"); await entered.promise;
   assert.equal(c.view(question.run_id).finalization_pending, true);
-  assert.equal((await c.wait([question.run_id, peer.run_id], { mode: "all", timeout_ms: 0 })).reason, "timeout");
-  await assert.rejects(c.submit("early", { resume: question.agent_id, prompt: "yes", answer_to_run_id: question.run_id }), errorCode("AGENT_BUSY"));
-  const waiting = c.wait([question.run_id, peer.run_id], { mode: "all" }); gate.resolve();
-  assert.equal((await waiting).reason, "attention");
+  assert.equal(c.view(question.run_id).question_id, undefined);
+  assert.equal(JSON.parse((await c.observe({ kind: "wait", agent_ids: [question.agent_id, peer.agent_id], mode: "all", wait_ms: 0 }, { validate() {} })).content[0].text).reason, "timeout");
+  await assert.rejects(c.answer("early", question.agent_id, `q_${"0".repeat(32)}`, "yes"), errorCode("STALE_ANSWER"));
+  const waiting = c.observe({ kind: "wait", agent_ids: [question.agent_id, peer.agent_id], mode: "all" }, { validate() {} }); gate.resolve();
+  assert.equal(JSON.parse((await waiting).content[0].text).reason, "question");
   assert.equal(c.view(question.run_id).resumable, true); assert.equal(ports[1].stopped, 0);
+});
+
+test("core lifecycle waits support more than sixteen resident Agents without model publication", async (t) => {
+  const { controller: c, ports } = await fixture(t, { controller: { resident_limit: 17, queue_limit: 17 } });
+  const runs = [];
+  for (let index = 0; index < 17; index++) runs.push(await c.submit(`large-${index}`, task(`task ${index}`)));
+  await until(() => ports[0]?.streaming);
+  assert.equal(c.stats().resident, 17);
+  const waiting = c.waitForRuns(runs.map((run) => run.run_id), { mode: "all", timeout_ms: 3000 });
+  for (const run of runs) c.cancel(run.run_id);
+  ports[0].finish("partial", "aborted");
+  assert.equal(await waiting, "ready");
+  assert(runs.every((run) => c.view(run.run_id).status === "cancelled"));
+  assert(runs.every((run) => !c.runs.get(run.run_id).finished_presented), "lifecycle waits do not mark finished presentation");
 });
 
 test("queue/resident limits, queued cancel, and non-cooperative cancel retain the execution slot and lock", async (t) => {
@@ -186,10 +203,11 @@ test("first accepted stop reason wins; provider errors, question, soft and hard 
   ports[0].callbacks.question("Which branch?"); ports[0].finish("need answer"); await ended(c, q);
   assert.equal(c.view(q.run_id).status, "needs_input"); assert.equal(c.view(q.run_id).outcome.limit_reached, false);
   await assert.rejects(c.submit("pending", { resume: a.agent_id, prompt: "unrelated" }), errorCode("PENDING_QUESTION"));
-  await assert.rejects(c.submit("stale", { resume: a.agent_id, prompt: "answer", answer_to_run_id: a.run_id }), errorCode("STALE_ANSWER"));
-  const answer = await c.submit("answer", { resume: a.agent_id, prompt: "main", answer_to_run_id: q.run_id });
+  await assert.rejects(c.answer("stale", a.agent_id, `q_${"0".repeat(32)}`, "answer"), errorCode("STALE_ANSWER"));
+  const questionId = c.view(q.run_id).question_id;
+  const answer = await c.answer("answer", a.agent_id, questionId, "main");
   await until(() => ports[0].calls.length === 4); ports[0].finish("answered"); await ended(c, answer);
-  await assert.rejects(c.submit("again", { resume: a.agent_id, prompt: "main", answer_to_run_id: q.run_id }), errorCode("STALE_ANSWER"));
+  await assert.rejects(c.answer("again", a.agent_id, questionId, "main"), errorCode("STALE_ANSWER"));
 });
 
 test("an unrecovered model output limit fails without becoming a turn limit or poisoning reuse", async (t) => {
@@ -243,10 +261,12 @@ test("queued answer reservation reopens on cancellation without entering history
   const q = await c.submit("q", task("q")); await until(() => ports[0]?.streaming);
   ports[0].callbacks.question("Choose?"); ports[0].finish("waiting"); await ended(c, q);
   const blocker = await c.submit("block", task("block")); await until(() => ports[1]?.streaming);
-  const answer = await c.submit("answer", { resume: q.agent_id, prompt: "yes", answer_to_run_id: q.run_id });
+  const questionId = c.view(q.run_id).question_id;
+  const answer = await c.answer("answer", q.agent_id, questionId, "yes");
   c.cancel(answer.run_id); await ended(c, answer);
   assert.equal(ports[0].calls.length, 1);
-  const retry = await c.submit("retry", { resume: q.agent_id, prompt: "no", answer_to_run_id: q.run_id });
+  assert.equal(c.view(q.run_id).question_id, questionId, "pre-input cancellation restores the same question");
+  const retry = await c.answer("retry", q.agent_id, questionId, "no");
   ports[1].finish(); await ended(c, blocker); await until(() => ports[0].calls.length === 2);
   ports[0].finish("no accepted"); await ended(c, retry);
 });

@@ -10,6 +10,7 @@ import { assembleChildSession as assembleChild } from "../../dist/runtime/child-
 import { ownerSessionReplacementGuard } from "../../dist/runtime/owner-lifecycle.js";
 import { requireReadiness } from "../../dist/permissions/readiness.js";
 import { loadHost, controlledProvider } from "../support/host.mjs";
+import { createModelFixtureSubmit } from "../support/model-fixture-names.mjs";
 
 const [piExecutable, generatedRoot, outputRoot] = process.argv.slice(2);
 assert(outputRoot, "Use script/check-pi-harness.sh");
@@ -27,11 +28,11 @@ const definition = readFileSync(join(generatedRoot, "agents/reader.md"), "utf8")
 const effective = { provider: model.provider, model: model.id, thinking: "off", parent_thinking: "off",
   thinking_resolution: "identity", profile: "reader",
   difficulty: 3, strength: "standard", preset: "fixture", preset_version: "v1", selection_digest: "1".repeat(64), cwd: root,
-  tools: ["notify_parent"], definition_digest: definitionDigest };
+  tools: ["alert_parent"], definition_digest: definitionDigest };
 const childInit = Promise.withResolvers(), initEntered = Promise.withResolvers(), childHold = Promise.withResolvers();
 const childEntered = Promise.withResolvers(), parentEntered = Promise.withResolvers();
 const children = [], owners = [], events = [], claims = [], replacementNotices = [], confirmations = [];
-let hosted, runtimeHost, notifySent = false, confirmReplacement = async () => false;
+let hosted, runtimeHost, alertSent = false, confirmReplacement = async () => false;
 const replacementUI = {
   select: async () => undefined, input: async () => undefined, editor: async () => undefined, custom: async () => undefined,
   confirm: async (...args) => { confirmations.push(args); return confirmReplacement(...args); },
@@ -60,8 +61,8 @@ provider.respond(async ({ context, signal }) => {
       if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true });
     });
   }
-  if (text.includes("NOTIFY_AND_HOLD_CHILD")) {
-    if (!notifySent) { notifySent = true; return { tools: [{ type: "toolCall", id: "notify-before-wait", name: "notify_parent", arguments: { message: "REAL_SDK_NOTIFY_BEFORE_WAIT" } }] }; }
+  if (text.includes("ALERT_AND_HOLD_CHILD")) {
+    if (!alertSent) { alertSent = true; return { tools: [{ type: "toolCall", id: "alert-before-wait", name: "alert_parent", arguments: { message: "REAL_SDK_ALERT_BEFORE_WAIT" } }] }; }
     childEntered.resolve(signal); await childHold.promise; // Deliberately non-cooperative provider until released.
     return { text: "child exited", reason: signal.aborted ? "aborted" : "stop" };
   }
@@ -73,10 +74,10 @@ const createRuntime = async ({ cwd, sessionManager, sessionStartEvent }) => {
   const controller = await Controller.open({ owner, concurrency: 1, createSession: async () => {
     initEntered.resolve(); await childInit.promise;
     const bus = sdk.createEventBus(), gate = new RunInputGate(); let callbacks;
-    const customTools = [sdk.defineTool({ name: "notify_parent", label: "notify", description: "Synthetic notification, not authorization",
-      parameters: ai.Type.Object({ message: ai.Type.String() }), execute: async (_id, { message }) => {
-        assert(callbacks && gate.accepting); callbacks.notify(message);
-        return { content: [{ type: "text", text: "recorded" }], details: {} };
+    const customTools = [sdk.defineTool({ name: "alert_parent", label: "alert", description: "Synthetic decision alert, not authorization",
+      parameters: ai.Type.Object({ message: ai.Type.String({ minLength: 1, maxLength: 8192 }) }, { additionalProperties: false }), execute: async (_id, { message }) => {
+        assert(callbacks && gate.accepting && !gate.stopped); callbacks.alert(message);
+        return { content: [{ type: "text", text: "Alert queued; continue working." }], details: {} };
       } })];
     const loader = new sdk.DefaultResourceLoader({ cwd, agentDir: generatedRoot, settingsManager: settings(), eventBus: bus,
       noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true,
@@ -143,15 +144,24 @@ try {
     assert.equal(confirmations.length, confirmationsBefore + 5, `${phase}: every target needs its own literal confirmation`);
     assert.equal(controller.stats().closed, false); save();
   };
-  const run = await controller.submit("child", { prompt: "NOTIFY_AND_HOLD_CHILD", description: "synthetic child", settings: effective });
+  const submit = createModelFixtureSubmit(controller, effective, "foal");
+  const run = await submit("child", "ALERT_AND_HOLD_CHILD", undefined, { description: "synthetic child" });
   await initEntered.promise;
-  const queued = await controller.submit("queued", { prompt: "MUST_NOT_START", description: "queued", settings: effective });
-  await rejectAll("initializing-and-queued"); childInit.resolve(); const childSignal = await childEntered.promise;
-  assert.equal(controller.view(run.run_id).pending_messages, 1);
-  const notification = await controller.wait([run.run_id], { mode: "all", timeout_ms: 0 });
-  assert.equal(notification.reason, "timeout"); assert.equal(notification.progress, undefined);
-  assert.equal(controller.view(run.run_id).pending_messages, 1);
-  claims.push("real notify tool buffers progress without ending a wait or losing it on timeout");
+  const queued = await submit("queued", "MUST_NOT_START", undefined, { description: "queued" });
+  assert.notEqual(run.name, queued.name, "all Agents, including future finished candidates, need distinct model names");
+  await rejectAll("initializing-and-queued");
+  const observeRun = (wait_ms) => controller.observe({ kind: "wait", agent_ids: [run.agent_id], wait_ms },
+    { validate: () => { assert.equal(original.sessionManager.getSessionId(), run.owner_id); } });
+  const waiting = observeRun(10000);
+  childInit.resolve(); const childSignal = await childEntered.promise;
+  const alert = JSON.parse((await waiting).content[0].text);
+  assert.equal(alert.reason, "alert");
+  assert.deepEqual(alert.alerts, [{ agent: run.name, task: 1, label: "synthetic child", message: "REAL_SDK_ALERT_BEFORE_WAIT" }]);
+  assert.equal(alert.agents[0].status, "running"); assert.equal(alert.alerts_pending, 0);
+  assert.equal(controller.view(run.run_id).pending_messages, 0);
+  const timeout = JSON.parse((await observeRun(0)).content[0].text);
+  assert.equal(timeout.reason, "timeout"); assert.equal(timeout.alerts, undefined);
+  claims.push("real alert tool wakes a matching model observation once while child execution continues");
   await rejectAll("running-and-queued"); assert.equal(childSignal.aborted, false);
   confirmReplacement = async () => undefined;
   assert.equal((await runtimeHost.newSession()).cancelled, true, "undefined confirmation never authorizes used replacement");
@@ -188,9 +198,8 @@ try {
   approval.resolve(true); childHold.resolve();
   assert.equal((await approved).cancelled, false); await parentPrompt;
   await until(() => controller.view(run.run_id).phase === "settled" && controller.view(queued.run_id).phase === "settled");
-  const finished = await controller.wait([run.run_id], { mode: "all" });
-  assert.equal(finished.progress[0].text, "REAL_SDK_NOTIFY_BEFORE_WAIT");
-  assert.equal((await controller.wait([run.run_id], { mode: "all" })).progress, undefined);
+  assert.equal(await controller.waitForRuns([run.run_id], { mode: "all" }), "ready");
+  assert.equal(controller.view(run.run_id).pending_messages, 0, "already presented alert is not restored at settlement");
   assert.equal(controller.stats().closed, true);
   assert.equal(events.filter((e) => e.type === "session_shutdown").length, shutdowns + 1);
   assert.notEqual(runtimeHost.session, original); assert.equal(permission.getPermissionsService(original.sessionId), undefined);

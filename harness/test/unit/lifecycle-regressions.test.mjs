@@ -8,8 +8,8 @@ test("history failure preserves live outcome; late cleanup uncertainty still ret
   const { controller: c, ports, directory, owner_id } = await fixture(t, { cleanupUncertainExpected: true, history: (point) => {
     if (point === "finish") throw new Error("synthetic journal failure");
   } });
-  const a = await c.submit("a", task("a")); await until(() => ports[0]?.streaming);
-  const b = await c.submit("b", task("b")), queued = await c.submit("queued", task("queued"));
+  const a = await c.submit("a", task("a", { name: "alpha" })); await until(() => ports[0]?.streaming);
+  const b = await c.submit("b", task("b", { name: "beta" })), queued = await c.submit("queued", task("queued", { name: "queued" }));
   const cleanup = deferred(), cleanupEntered = deferred();
   ports[0].dispose = async () => { ports[0].disposed++; cleanupEntered.resolve(); await cleanup.promise; return { shutdownExited: false, errors: ["late cleanup failure"] }; };
   ports[0].finish("preserve output"); await ended(c, a); await cleanupEntered.promise;
@@ -21,7 +21,9 @@ test("history failure preserves live outcome; late cleanup uncertainty still ret
   assert.equal(c.view(a.run_id).owner_blocked, true);
   assert(c.view(a.run_id).cleanup_errors.includes("late cleanup failure"));
   assert.equal(c.stats().resident, 3);
-  assert.equal(c.view(queued.run_id).status, "queued"); assert.equal((await c.wait([queued.run_id], { mode: "all" })).reason, "owner_blocked");
+  assert.equal(c.view(queued.run_id).status, "queued");
+  const observed = await c.observe({ kind: "wait", agent_ids: [queued.agent_id], mode: "all" }, { validate() {} });
+  assert.equal(JSON.parse(observed.content[0].text).reason, "owner_blocked");
   await assert.rejects(c.submit("new", task("new")), errorCode("OWNER_CLEANUP_UNCERTAIN"));
   await c.release(a.agent_id); assert.equal(ports[0].disposed, 1); assert.equal(c.stats().resident, 3);
   ports[1].finish("peer drains after uncertainty"); await ended(c, b);
@@ -76,7 +78,9 @@ test("monotonic timing freezes old Runs; stale callbacks cannot change reuse, sn
   assert.equal(Object.hasOwn(historical.effective_settings, "context_snapshot"), false);
   mono = 80; wall = 20000;
   const b = await c.submit("b", { resume: a.agent_id, prompt: "b" }); await until(() => ports[0].calls.length === 2);
-  oldCallbacks.turnStart(); oldCallbacks.output({ text: "STALE", total_chars: 5, truncated: false }); oldCallbacks.question("STALE?");
+  oldCallbacks.turnStart(); oldCallbacks.output({ text: "STALE", total_chars: 5, truncated: false });
+  assert.throws(() => oldCallbacks.question("STALE?"), errorCode("RUN_INPUT_CLOSED"));
+  assert.throws(() => oldCallbacks.alert("STALE!"), errorCode("RUN_INPUT_CLOSED"));
   assert.equal(c.view(b.run_id).turns, 1); assert.equal(c.getResult(b.run_id).text, "");
   mono = 90; assert.equal(c.view(b.run_id).turn_elapsed_ms, 10); assert.equal(c.view(a.run_id).elapsed_ms, 50);
   ports[0].finish("b"); await ended(c, b); assert.equal(c.view(b.run_id).status, "completed");

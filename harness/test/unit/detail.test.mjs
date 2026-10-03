@@ -20,7 +20,7 @@ const view = (overrides = {}) => ({
     difficulty: 5, strength: "strong", preset: "team", preset_version: "v2", selection_digest: "1".repeat(64),
     cwd, tools: ["read", "grep", "find", "ls"], definition_digest: "0".repeat(64), context_mode: "none" },
   status: "running", phase: "executing", execution_exited: false, finalization_pending: false, resumable: true,
-  owner_blocked: false, notification_drops: 0, pending_messages: 0, isolation: "shared",
+  owner_blocked: false, pending_messages: 0, isolation: "shared",
   elapsed_ms: 93000, turn_elapsed_ms: 1100, turns: 3, max_turns: 256, max_duration_ms: 1800000, execution_elapsed_ms: 93000,
   usage: spend(61200, 3100, 19900, 0, null),
   cleanup_errors: [], discarded_inputs: [], ...overrides,
@@ -208,11 +208,12 @@ test("warnings the operator must not miss are all listed, never summarised away"
   const text = joined({
     outcome: { status: "needs_input", question: "用哪个分支？", limit_reached: true },
     unavailable_reason: "SESSION_UNAVAILABLE", owner_error: "flock lost", history_error: "disk full",
-    pending_messages: 2, notification_drops: 1, cleanup_errors: ["child did not exit"], discarded_inputs: ["stale steer"],
+    pending_messages: 2, cleanup_errors: ["child did not exit"], discarded_inputs: ["stale steer"],
   });
   for (const expected of [/asked\s+用哪个分支？/, /limit\s+stopped at the turn limit/, /session\s+SESSION_UNAVAILABLE/,
-    /owner\s+flock lost/, /history\s+disk full/, /queued\s+2 message\(s\) waiting/, /dropped\s+1 notification\(s\) never reached/,
+    /owner\s+flock lost/, /history\s+disk full/, /pending\s+2 alert\(s\) from this Run awaiting local presentation/,
     /cleanup\s+child did not exit/, /discarded\s+stale steer/]) assert.match(text, expected);
+  assert.doesNotMatch(text, /dropped|never reached/);
   // A label as wide as its own column must still leave a gap before the value.
   assert.ok(!/discardedstale/.test(text));
   // `joined()` is the field block alone -- a sibling test pins that it carries
@@ -233,7 +234,7 @@ test("every field line fits the width, counting CJK by the columns it occupies",
 
 test("a click on an Agent row resolves to that Agent, and chrome rows resolve to none", () => {
   const base = { turns: 3, max_turns: 256, elapsed_ms: 1, tool_uses: 0, active_tools: [], preview: "",
-    question: false, limit_reached: false, pending_messages: 0, notification_drops: 0, has_run_warnings: false,
+    question: false, limit_reached: false, pending_messages: 0, has_run_warnings: false,
     finishing: false, name: "", profile: "editor", description: "Task" };
   const run = (id, overrides) => ({ ...base, agent_id: id, run_id: `${id}-run`, ...overrides });
   const { lines, hits } = renderWidget({
@@ -252,7 +253,7 @@ test("a click on an Agent row resolves to that Agent, and chrome rows resolve to
 
 test("an overflowing widget still answers correctly for the rows it did paint", () => {
   const base = { turns: 1, max_turns: 256, elapsed_ms: 1, tool_uses: 0, active_tools: [], preview: "",
-    question: false, limit_reached: false, pending_messages: 0, notification_drops: 0, has_run_warnings: false,
+    question: false, limit_reached: false, pending_messages: 0, has_run_warnings: false,
     finishing: false, name: "", profile: "editor", description: "Task", status: "running" };
   const runs = Array.from({ length: 8 }, (_, i) => ({ ...base, agent_id: `a${i}`, run_id: `a${i}-run` }));
   const { lines, hits } = renderWidget({ runs, owner: { blocked: false, resident: 8, resident_limit: 8 },

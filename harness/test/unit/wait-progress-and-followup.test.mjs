@@ -2,157 +2,119 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { softBudgetMessage } from "../../dist/core/owner-controller.js";
 import { ParentHistoryError } from "../../dist/core/ports.js";
-import { errorReply, resultReply, taskReply, waitReply } from "../../dist/tools/replies.js";
+import { errorReply, taskReply } from "../../dist/tools/replies.js";
 import { deferred, ended, errorCode, fixture, task, tick, until } from "../support/controller-fixture.mjs";
 
-const namesOf = (c) => (run_id) => c.view(run_id).name;
+const namesOf = (c) => (id) => c.view(id).name;
+const named = (name, extra = {}) => task(name, { name, ...extra });
+const observe = async (c, request, signal) => JSON.parse((await c.observe(request, { validate() {}, signal })).content[0].text);
+const wait = (c, runs, extra = {}, signal) => observe(c, { kind: "wait", agent_ids: runs.map((run) => run.agent_id), ...extra }, signal);
+const read = (c, run, extra = {}) => observe(c, { kind: "read", agent_id: run.agent_id, ...extra });
 
-test("notifications survive absent waiters, never wake them, and are claimed only once by concurrent normal returns", async (t) => {
+test("alerts survive absent waiters, wake matching observations, and are presented exactly once", async (t) => {
   const { controller: c, ports } = await fixture(t, { controller: { concurrency: 2 } });
-  const a = await c.submit("a", task("a")), b = await c.submit("b", task("b"));
-  await until(() => ports.length === 2 && ports.every((p) => p.streaming));
-  ports[1].callbacks.notify("B before wait");
-  assert.equal((await c.wait([a.run_id], { mode: "all", timeout_ms: 0 })).reason, "timeout");
-  assert.equal((await c.wait([b.run_id], { mode: "all", timeout_ms: 0 })).progress, undefined);
-  const cancelled = AbortSignal.abort(); ports[0].callbacks.notify("A buffered");
-  assert.equal((await c.wait([a.run_id], { mode: "all", signal: cancelled })).reason, "interrupted");
-  const one = c.wait([a.run_id], { mode: "all" }), two = c.wait([a.run_id], { mode: "all" });
-  ports[0].callbacks.notify("one claim");
-  let resolved = false; void one.then(() => { resolved = true; }); await tick(); assert.equal(resolved, false);
-  ports[0].finish("A");
-  const [first, second] = await Promise.all([one, two]);
-  assert.deepEqual(first.progress.map((event) => event.text), ["A buffered", "one claim"]);
-  assert.equal(second.progress, undefined, "concurrent waiter cannot duplicate a claim");
-  ports[1].finish("B"); const final = await ended(c, b);
-  assert.deepEqual(final.progress.map((event) => event.text), ["B before wait"]);
+  const a = await c.submit("a", named("a")), b = await c.submit("b", named("b"));
+  await until(() => ports.length === 2 && ports.every((port) => port.streaming));
+  ports[1].callbacks.alert("B before wait");
+  assert.equal((await wait(c, [a], { wait_ms: 0 })).reason, "timeout");
+  assert.equal(c.view(b.run_id).pending_messages, 1);
+  ports[0].callbacks.alert("A buffered");
+  assert.equal((await wait(c, [a], {}, AbortSignal.abort())).reason, "aborted");
+  const first = await wait(c, [a]); assert.deepEqual(first.alerts.map((entry) => entry.message), ["A buffered"]);
+  const one = wait(c, [a]), two = wait(c, [a]);
+  ports[0].callbacks.alert("one publication");
+  assert.deepEqual((await one).alerts.map((entry) => entry.message), ["one publication"]);
+  let resolved = false; const completion = two.then((value) => { resolved = true; return value; });
+  await tick(); assert.equal(resolved, false, "the loser keeps waiting on the same task");
+  ports[0].finish("A"); assert.equal((await completion).reason, "done");
+  assert.equal(c.view(a.run_id).pending_messages, 0);
+  ports[1].finish("B"); await ended(c, b);
+  assert.deepEqual((await read(c, b)).alerts.map((entry) => entry.message), ["B before wait"]);
+});
+
+test("a terminal any return can present alerts from all explicitly scoped Agents without losing control rows", async (t) => {
+  const { controller: c, ports } = await fixture(t, { controller: { concurrency: 16, resident_limit: 16 } });
+  const runs = [];
+  for (let index = 0; index < 16; index++) runs.push(await c.submit(`r${index}`, named(`r${index}`)));
+  await until(() => ports.length === 16 && ports.every((port) => port.streaming));
+  for (const port of ports) { port.callbacks.alert("first"); port.callbacks.alert("second"); }
+  ports[0].finish("done"); await ended(c, runs[0]);
+  const reply = await wait(c, runs, { mode: "any" });
+  assert.equal(reply.reason, "done"); assert.equal(reply.agents.length, 16); assert.equal(reply.alerts.length, 32);
+  assert.deepEqual(reply.pending, runs.slice(1).map((_, index) => `r${index + 1}`));
+  assert.equal(reply.alerts_pending, 0);
+  assert(runs.every((run) => c.view(run.run_id).pending_messages === 0));
+});
+
+test("pending questions remain level-triggered across concurrent and repeated publications", async (t) => {
+  const { controller: c, ports } = await fixture(t, { controller: { concurrency: 2 } });
+  const a = await c.submit("a", named("a")), b = await c.submit("b", named("b"));
+  await until(() => ports.length === 2 && ports.every((port) => port.streaming));
+  const one = wait(c, [a, b]), two = wait(c, [a, b]);
+  ports[0].callbacks.question("which option?"); ports[0].finish("please choose");
+  for (const reply of await Promise.all([one, two])) {
+    assert.equal(reply.reason, "question"); assert.equal(reply.agents[0].question, "which option?"); assert(reply.agents[0].question_id);
+  }
+  const again = await wait(c, [a, b], { wait_ms: 0 });
+  assert.equal(again.reason, "question"); assert.deepEqual(again.pending, ["b"]);
+  assert.equal((await wait(c, [b], { wait_ms: 0 })).reason, "timeout");
+});
+
+test("repeated asks validate then preserve the original full question", async (t) => {
+  const { controller: c, ports } = await fixture(t);
+  const a = await c.submit("a", named("a")); await until(() => ports[0]?.streaming);
+  const question = "Q".repeat(8190) + "🚀";
+  assert.equal(ports[0].callbacks.question(question), "recorded");
+  assert.equal(ports[0].callbacks.question("replacement?"), "already_recorded");
+  for (const invalid of ["Q".repeat(8191) + "🚀", "Q".repeat(8193), " ", null])
+    assert.throws(() => ports[0].callbacks.question(invalid), errorCode("INVALID_QUESTION"));
+  ports[0].finish("please answer"); await ended(c, a);
+  const reply = await read(c, a); assert.equal(reply.agents[0].question, question); assert.equal(reply.agents[0].question_truncated, undefined);
+});
+
+test("full Agent inbox rejects without evicting accepted alerts; stale callbacks cannot claim success", async (t) => {
+  const { controller: c, ports } = await fixture(t);
+  const a = await c.submit("a", named("a")); await until(() => ports[0]?.streaming);
+  const old = ports[0].callbacks;
+  for (let index = 0; index < 16; index++) old.alert(`message ${index}`);
+  assert.throws(() => old.alert("overflow"), (error) => error.code === "ALERT_QUEUE_FULL" && error.details.scope === "agent");
+  assert.equal(c.view(a.run_id).pending_messages, 16); assert.equal(c.view(a.run_id).notification_drops, undefined);
+  ports[0].finish("FINAL"); await ended(c, a);
+  const reply = await read(c, a);
+  assert.deepEqual(reply.alerts.map((entry) => entry.message), Array.from({ length: 16 }, (_, index) => `message ${index}`));
+  assert.equal(reply.alerts_pending, 0); assert.equal(reply.agents[0].result, "FINAL");
+  const b = await c.submit("b", { resume: a.agent_id, prompt: "b" }); await until(() => ports[0].calls.length === 2);
+  assert.throws(() => old.alert("STALE"), errorCode("RUN_INPUT_CLOSED"));
+  assert.throws(() => old.question("STALE?"), errorCode("RUN_INPUT_CLOSED"));
   assert.equal(c.view(b.run_id).pending_messages, 0);
 });
 
-test("an unrelated terminal return preserves all 15 running peers' progress", async (t) => {
-  const { controller: c, ports } = await fixture(t, { controller: { concurrency: 16, resident_limit: 16 } });
-  const runs = [];
-  for (let index = 0; index < 16; index++) runs.push(await c.submit(`run-${index}`, task(`run-${index}`, { name: `r${index}` })));
-  await until(() => ports.length === 16 && ports.every((port) => port.streaming));
-  ports[0].callbacks.notify("terminal notice");
-  for (const port of ports.slice(1)) { port.callbacks.notify("first"); port.callbacks.notify("second"); }
-  ports[0].finish("done"); await until(() => c.view(runs[0].run_id).phase === "settled");
-  const reply = waitReply(await c.wait(runs.map((run) => run.run_id), { mode: "any" }), undefined, namesOf(c));
-  assert.equal(reply.reason, "done"); assert.equal(reply.progress_omitted, undefined);
-  assert.deepEqual(reply.agents[0].progress, ["terminal notice"]);
-  assert(reply.agents.slice(1).every((entry) => entry.progress === undefined));
-  assert.deepEqual(reply.pending, runs.slice(1).map((_, index) => `r${index + 1}`));
-  for (let index = 1; index < 16; index++) {
-    assert.equal(c.view(runs[index].run_id).pending_messages, 2);
-    ports[index].finish("done");
-    const result = await ended(c, runs[index]);
-    assert.deepEqual(result.progress.map((event) => event.text), ["first", "second"]);
-    assert.equal(c.view(runs[index].run_id).pending_messages, 0);
-  }
-});
-
-test("attention is per-wait level readiness, not an owner-wide consumed edge", async (t) => {
-  const { controller: c, ports } = await fixture(t, { controller: { concurrency: 2 } });
-  const a = await c.submit("question", task("question", { name: "a" })), b = await c.submit("peer", task("peer", { name: "b" }));
-  await until(() => ports.length === 2 && ports.every((port) => port.streaming));
-  const ids = [a.run_id, b.run_id];
-  const one = c.wait(ids, { mode: "all", timeout_ms: 1000 });
-  const two = c.wait(ids, { mode: "all", timeout_ms: 1000 });
-  ports[0].callbacks.question("which option?"); ports[0].finish("please choose");
-  for (const value of await Promise.all([one, two])) {
-    assert.equal(value.reason, "attention");
-    assert.equal(value.snapshots[0].outcome.question, "which option?");
-  }
-  const again = waitReply(await c.wait(ids, { mode: "all", timeout_ms: 0 }), undefined, namesOf(c));
-  assert.equal(again.reason, "attention", "readiness survives an unobserved or stale previous reply");
-  assert.deepEqual(again.pending, ["b"]);
-  assert.equal((await c.wait([b.run_id], { mode: "all", timeout_ms: 0 })).reason, "timeout");
-  assert.equal(ports[1].stopped, 0);
-});
-
-test("core question recording rejects overlong inputs rather than claiming a sliced question is complete", async (t) => {
-  const { controller: c, ports } = await fixture(t);
-  const run = await c.submit("question", task("question")); await until(() => ports[0]?.streaming);
-  const question = "Q".repeat(8190) + "🚀";
-  ports[0].callbacks.question(question);
-  for (const invalid of ["Q".repeat(8191) + "🚀", "Q".repeat(8193), " ", null]) {
-    assert.throws(() => ports[0].callbacks.question(invalid), errorCode("INVALID_QUESTION"));
-  }
-  ports[0].finish("please answer"); await ended(c, run);
-  const result = resultReply(c.getResult(run.run_id), namesOf(c));
-  assert.equal(result.status, "needs_input"); assert.equal(result.question, question);
-  assert.equal(result.question_truncated, undefined);
-});
-
-test("bounded inbox reports loss; terminal replies retain progress and remaining-message counts", async (t) => {
-  const { controller: c, ports } = await fixture(t);
-  const a = await c.submit("a", task("a")); await until(() => ports[0]?.streaming);
-  const old = ports[0].callbacks;
-  for (let i = 0; i < 66; i++) old.notify(`message ${i}`);
-  assert.equal(c.view(a.run_id).pending_messages, 64); assert.equal(c.view(a.run_id).notification_drops, 2);
-  ports[0].finish("FINAL"); await until(() => c.view(a.run_id).phase === "settled");
-  const reply = waitReply(await c.wait([a.run_id], { mode: "all" }), undefined, namesOf(c));
-  assert.equal(reply.reason, "done");
-  assert.deepEqual(reply.agents[0].progress, ["message 64", "message 65"], "projection keeps the latest bounded progress per task");
-  assert.equal(reply.progress_omitted, 62);
-  assert.equal(reply.agents[0].result, "FINAL");
-  assert.equal((await ended(c, a)).progress, undefined, "one normal return claims the whole bounded inbox");
-  const b = await c.submit("b", { resume: a.agent_id, prompt: "b" }); await until(() => ports[0].calls.length === 2);
-  old.notify("STALE"); assert.equal(c.view(a.run_id).pending_messages, 0); assert.equal(c.view(b.run_id).pending_messages, 0);
-});
-
-test("a new owner block wakes every pending waiter, but not a later retry", async (t) => {
+test("new owner fault broadcasts to registered observers without requiring an unchanged reported marker", async (t) => {
   let starts = 0;
   const { controller: c, ports } = await fixture(t, { controller: { concurrency: 3 }, history: (point) => {
     if (point === "begin" && ++starts === 3) throw new ParentHistoryError("broadcast parent write unavailable");
   } });
-  const a = await c.submit("a", task("a")), b = await c.submit("b", task("b"));
+  const a = await c.submit("a", named("a")), b = await c.submit("b", named("b"));
   await until(() => ports.length === 2 && ports.every((port) => port.streaming));
-  ports[0].callbacks.notify("A still running"); ports[1].callbacks.notify("B still running");
-  const one = c.wait([a.run_id], { mode: "all", timeout_ms: 1000 });
-  const two = c.wait([b.run_id], { mode: "all", timeout_ms: 1000 });
-  await c.submit("damaged", task("damaged"));
+  const one = wait(c, [a]), two = wait(c, [b]);
+  await c.submit("damaged", named("damaged"));
   const replies = await Promise.all([one, two]);
   assert.deepEqual(replies.map((reply) => reply.reason), ["owner_blocked", "owner_blocked"]);
-  for (const reply of replies) {
-    assert.equal(reply.snapshots[0].owner_blocked, true);
-    assert.equal(reply.snapshots[0].pending_messages, 1);
-    assert.equal(reply.progress, undefined, "owner faults must not consume running peers' progress");
-  }
-  const late = await c.wait([a.run_id, b.run_id], { mode: "all", timeout_ms: 0 });
-  assert.equal(late.reason, "timeout", "the same owner fault remains an edge for later waits");
-  assert(late.snapshots.every((run) => run.owner_blocked && run.pending_messages === 1));
-  assert.equal(ports[0].stopped, 0); assert.equal(ports[1].stopped, 0);
+  assert(replies.every((reply) => reply.agents[0].unavailable === true));
+  assert.equal((await wait(c, [a, b], { wait_ms: 0 })).reason, "timeout");
+  ports[0].callbacks.alert("A still running");
+  assert.equal((await wait(c, [a])).reason, "alert", "accepted work can still communicate after a host history fault");
 });
 
-test("releasing an Agent retains bounded notifications for a later historical Run wait", async (t) => {
+test("release preserves accepted alerts for Agent-scoped read or default Owner inbox", async (t) => {
   const { controller: c, ports } = await fixture(t);
-  const run = await c.submit("history", task("history")); await until(() => ports[0]?.streaming);
-  ports[0].callbacks.notify("recorded before release"); ports[0].finish("done");
-  await until(() => c.view(run.run_id).phase === "settled");
-  assert.equal((await c.release(run.agent_id)).released, true);
-  assert.equal(c.view(run.run_id).pending_messages, 1);
-  const reply = await c.wait([run.run_id], { mode: "all" });
-  assert.deepEqual(reply.progress.map((event) => event.text), ["recorded before release"]);
-  assert.equal((await c.wait([run.run_id], { mode: "all" })).progress, undefined);
-});
-
-test("owner block is an edge, not an immediate-return loop; later waits still receive messages or interruption", async (t) => {
-  let starts = 0;
-  const { controller: c, ports } = await fixture(t, { controller: { concurrency: 2 }, history: (point) => {
-    if (point === "begin" && ++starts === 2) throw new ParentHistoryError("parent write unavailable");
-  } });
-  const a = await c.submit("a", task("a")); await until(() => ports[0]?.streaming);
-  await c.submit("damaged", task("damaged")); await until(() => c.stats().parent_error);
-  // A is still executing. The first wait reports the owner edge, not a fake exit.
-  assert.equal((await c.wait([a.run_id], { mode: "all" })).reason, "owner_blocked");
-  const abort = new AbortController(); const next = c.wait([a.run_id], { mode: "all", signal: abort.signal });
-  let resolved = false; void next.then(() => { resolved = true; }); await tick(); assert.equal(resolved, false);
-  ports[0].callbacks.notify("still executing"); await tick(); assert.equal(resolved, false);
-  abort.abort(); assert.equal((await next).reason, "interrupted");
-  assert.equal(c.view(a.run_id).pending_messages, 1, "interruption preserves progress");
-  ports[0].finish("done"); const final = await ended(c, a);
-  assert.deepEqual(final.progress.map((event) => event.text), ["still executing"]);
-  assert.match(taskReply(c.view(a.run_id), namesOf(c)).owner_error, /parent write unavailable/);
+  const a = await c.submit("a", named("a")); await until(() => ports[0]?.streaming);
+  ports[0].callbacks.alert("recorded before release"); ports[0].finish("done"); await ended(c, a);
+  assert.equal((await c.release(a.agent_id)).released, true); assert.equal(c.view(a.run_id).pending_messages, 1);
+  const reply = await observe(c, { kind: "wait" });
+  assert.equal(reply.reason, "alert"); assert.deepEqual(reply.agents, []);
+  assert.deepEqual(reply.alerts.map((entry) => entry.message), ["recorded before release"]);
+  assert.equal((await observe(c, { kind: "wait" })).reason, "nothing_pending");
 });
 
 for (const clean of [true, false]) test(`prequeued peers start during pending cleanup; later clean=${clean} keeps correct fault domain`, async (t) => {
@@ -193,13 +155,13 @@ for (const before of [63, 64]) test(`automatic soft budget has its own provenanc
   assert.equal(ports[0].inputs.filter((s) => s === softBudgetMessage).length, 1);
 });
 
-test("thin results distinguish paging from omission and preserve actionable error details", async (t) => {
+test("thin results distinguish paging from retention omission and preserve actionable diagnostics", async (t) => {
   const { controller: c, ports } = await fixture(t, { controller: { output_chars: 5 } });
-  const a = await c.submit("a", task("a")); await until(() => ports[0]?.streaming);
+  const a = await c.submit("a", named("a")); await until(() => ports[0]?.streaming);
   ports[0].finish("0123456789"); await ended(c, a);
-  const first = resultReply(c.getResult(a.run_id, { limit: 2 }), namesOf(c));
-  assert.equal(first.omitted_chars, 5); assert(first.next_cursor); assert.equal(Object.hasOwn(first, "truncated"), false);
-  const last = resultReply(c.getResult(a.run_id, { cursor: first.next_cursor }), namesOf(c));
+  const first = (await read(c, a, { max_chars: 2 })).agents[0];
+  assert.equal(first.omitted_chars, 5); assert(first.next_cursor); assert.equal(first.truncated, undefined);
+  const last = (await read(c, a, { cursor: first.next_cursor })).agents[0];
   assert.equal(first.result + last.result, "01234"); assert.equal(last.next_cursor, undefined); assert.equal(last.omitted_chars, 5);
   await c.release(a.agent_id);
   try { await c.submit("released", { resume: a.agent_id, prompt: "x" }); assert.fail(); }
@@ -207,4 +169,5 @@ test("thin results distinguish paging from omission and preserve actionable erro
   try { await c.submit("unsupported", { ...task("x"), wait: true }); assert.fail(); }
   catch (error) { assert(errorReply(error).error.allowed.includes("prompt")); assert.equal(errorReply(error).error.parameter, "wait"); }
   assert.equal(errorReply({ code: "OWNER_PARENT_UNAVAILABLE", details: { error: "x".repeat(1000), secret_fixture: "hidden" } }).error.message.length, 512);
+  assert.equal(taskReply(c.view(a.run_id), namesOf(c)).unavailable, true);
 });

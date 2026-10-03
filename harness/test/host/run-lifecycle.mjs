@@ -15,6 +15,7 @@ import { assembleChildSession as assembleChild, disposeChildSession as disposeCh
 import { abortAndWaitForIdle, controlledProvider, loadHost } from "../support/host.mjs";
 import { pollStep, restoreFaultedLogs } from "../support/run-lifecycle-support.mjs";
 import { releaseDecision } from "../support/release-policy.mjs";
+import { createModelFixtureSubmit } from "../support/model-fixture-names.mjs";
 
 const [piExecutable, generatedRoot, outputRoot, scenario] = process.argv.slice(2);
 const initializationFailure = scenario === "--initialization-failure";
@@ -316,10 +317,14 @@ const controller = await Controller.open({ owner, concurrency: 1,
     throw original;
   }
 } });
-const submit = (id, prompt, resume) => controller.submit(id, resume ? { resume, prompt } : { prompt, description: prompt, name: "月兔", settings: effective });
+// The regular lane publishes a model observation after many earlier Runs have
+// settled: every fresh Agent must have a valid unique name, not just its target.
+const submit = createModelFixtureSubmit(controller, effective, "hare");
 const finish = async (run) => {
-  const result = await controller.wait([run.run_id], { mode: "all", timeout_ms: 10000 });
-  assert.equal(result.reason, "condition", JSON.stringify(result)); report.runs.push(result.snapshots[0]); return result;
+  assert.equal(await controller.waitForRuns([run.run_id], { mode: "all", timeout_ms: 10000 }), "ready");
+  const snapshot = controller.view(run.run_id); report.runs.push(snapshot);
+  // Internal lifecycle evidence, not a model envelope or presentation commit.
+  return { snapshots: [snapshot], results: [controller.getResult(run.run_id, { limit: 16384 })] };
 };
 const blocked = ({ signal }) => new Promise((resolve) => {
   const abort = () => resolve({ text: "synthetic partial", reason: "aborted" });
@@ -360,11 +365,14 @@ try {
       if (boundaryKind === "soft-budget" && calls === 1) return { tools: [{ type: "toolCall", id: "post-guard-budget-read", name: "read", arguments: { path: join(cwd, "AGENTS.md") } }] };
       return { text: "post-guard provider observed", reason: request.signal?.aborted ? "aborted" : "stop" };
     });
+    // This isolated scenario uses only lifecycle waits/history, never observe.
+    // Preserve the core's Unicode naming coverage outside model projection.
     const run = await controller.submit("post-guard", { prompt: boundaryKind === "initial" ? boundary.target : "POST_GUARD_ROOT",
       name: "月兔", description: `Post-guard ${boundaryKind}`, settings: effective, ...(boundaryKind === "soft-budget" ? { max_turns: 1 } : {}) });
+    assert.equal(run.name, "月兔");
     const held = async () => {
       assert.equal(controller.view(run.run_id).execution_exited, false);
-      assert.equal((await controller.wait([run.run_id], { mode: "all", timeout_ms: 0 })).reason, "timeout");
+      assert.equal(await controller.waitForRuns([run.run_id], { mode: "all", timeout_ms: 0 }), "timeout");
       await assert.rejects(submit("post-guard-premature-reuse", "MUST_NOT_START", run.agent_id), { code: "AGENT_BUSY" });
       assert.equal(controller.stats().active, 1); assert.equal(controller.stats().resident, 1);
       assert(permission.getPermissionsService(parent.sessionId));
@@ -449,8 +457,10 @@ try {
         item.provider_calls.push(call); observeNatural(item, "provider_entered", call);
         return { text: target_in_context ? `NATURAL_TARGET_RESULT_${depth}` : `NATURAL_ROOT_RESULT_${depth}` };
       });
+      // Like the post-guard scenario, this is lifecycle-only Unicode coverage.
       const run = await controller.submit(`natural-finish-${depth}`, { prompt: `NATURAL_ROOT_${depth}`,
         name: `潮兔${depth}`, description: `Natural finish scheduling point ${depth}`, settings: effective });
+      assert.equal(run.name, `潮兔${depth}`);
       natural.pending = undefined;
       assert.equal(item.run_id, run.run_id); assert.equal(item.agent_id, run.agent_id);
       const done = await finish(run);
@@ -592,7 +602,7 @@ try {
   const recovered = await submit("retry", "RETRY_THIS_RUN", a.agent_id); await retryEntered.promise;
   assert(report.events.some((event) => event.type === "message_end" && event.text === "FAILED_RETRY_DRAFT" && event.stopReason === "error"));
   assert.equal(controller.view(recovered.run_id).execution_exited, false);
-  assert.equal((await controller.wait([recovered.run_id], { mode: "all", timeout_ms: 0 })).reason, "timeout");
+  assert.equal(await controller.waitForRuns([recovered.run_id], { mode: "all", timeout_ms: 0 }), "timeout");
   retryHold.resolve(); const retried = await finish(recovered);
   assert.equal(retried.snapshots[0].status, "completed"); assert.equal(retried.snapshots[0].outcome.error, undefined);
   assert.equal(retried.results[0].text, "RECOVERED_RESULT");
@@ -609,7 +619,7 @@ try {
 
   let budgetCalls = 0;
   provider.respond(async () => ({ tools: [{ type: "toolCall", id: `p1-budget-${budgetCalls++}`, name: "read", arguments: { path: join(cwd, "AGENTS.md") } }] }));
-  const budget = await controller.submit("budget", { resume: a.agent_id, prompt: "SYNTHETIC_BUDGET_LOOP", max_turns: 1 });
+  const budget = await submit("budget", "SYNTHETIC_BUDGET_LOOP", a.agent_id, { max_turns: 1 });
   const budgetResult = await finish(budget);
   assert.equal(budgetResult.snapshots[0].status, "failed"); assert.equal(budgetResult.snapshots[0].outcome.reason, "turn_limit");
   assert.equal(budgetResult.snapshots[0].stop_reason, "hard_budget"); assert.equal(budgetResult.snapshots[0].turns, 7);
@@ -767,7 +777,9 @@ try {
   assert.equal(controller.view(parentDamaged.run_id).status, "failed");
   assert.match(controller.stats().parent_error, /PARENT_HISTORY_UNAVAILABLE.*EISDIR/);
   assert.equal(controller.view(frozen.run_id).status, "queued"); assert.equal(provider.requests.length, requestsAtFault);
-  assert.equal((await controller.wait([frozen.run_id], { mode: "all" })).reason, "owner_blocked");
+  const blockedObservation = await controller.observe({ kind: "wait", agent_ids: [frozen.agent_id], wait_ms: 0 },
+    { validate: () => { assert.equal(parent.sessionManager.getSessionId(), ownerOptions.owner_id); } });
+  assert.equal(JSON.parse(blockedObservation.content[0].text).reason, "owner_blocked");
   await assert.rejects(submit("parent-unavailable", "NO_NEW_WORK"), { code: "OWNER_PARENT_UNAVAILABLE" });
   record("shared parent SDK LINK failure still blocks owner admission before provider IO", { damaged: controller.view(parentDamaged.run_id), frozen: controller.view(frozen.run_id) });
   }

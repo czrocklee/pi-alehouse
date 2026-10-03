@@ -111,7 +111,7 @@ try {
   assert.equal((await check("git commit --amend", "editor")).bash.state, "deny");
   for (const agent of ["editor", "reader"]) {
     assert.deepEqual(manager.getConfigIssues(agent), [], `Worker policy must load: ${agent}`);
-    for (const tool of ["notify_parent", "ask_parent"]) {
+    for (const tool of ["alert_parent", "ask_parent"]) {
       assert.equal(resolver.checkPermission(tool, {}, agent).state, "allow", `Internal communication: ${agent}: ${tool}`);
     }
     for (const tool of ["write", "edit"]) {
@@ -138,7 +138,7 @@ try {
   // allowances stay as they are for other workers. Web tools keep global rules.
   assert.deepEqual(manager.getConfigIssues("researcher"), [], "Worker policy must load: researcher");
   for (const tool of ["write", "edit"]) assert.equal(resolver.checkPermission(tool, {}, "researcher").state, "deny", `Direct editing boundary: researcher: ${tool}`);
-  for (const tool of ["notify_parent", "ask_parent", "get_search_content"]) assert.equal(resolver.checkPermission(tool, {}, "researcher").state, "allow", `Researcher: ${tool}`);
+  for (const tool of ["alert_parent", "ask_parent", "get_search_content"]) assert.equal(resolver.checkPermission(tool, {}, "researcher").state, "allow", `Researcher: ${tool}`);
   for (const tool of ["web_search", "source_check", "fetch_content"]) {
     assert.equal(resolver.checkPermission(tool, {}, "researcher").state, resolver.checkPermission(tool, {}).state, `Researcher inherits the global web rule: ${tool}`);
     assert.equal(resolver.checkPermission(tool, {}, "researcher").state, "ask", `Fixture web tools ask: ${tool}`);
@@ -182,9 +182,15 @@ try {
   for (const profile of ["editor", "reader", "researcher"]) {
     assert.equal(resolver.checkPermission("agent_spawn", { agent: "orca", profile, difficulty: 3, prompt: "fixture" }).state, "allow");
   }
-  for (const tool of ["agent_run", "agent_send", "agent_wait", "agent_read", "agent_interrupt", "agent_kill", "agent_list"]) {
+  for (const tool of ["agent_run", "agent_send", "agent_answer", "agent_wait", "agent_read", "agent_interrupt", "agent_kill", "agent_list"]) {
     assert.equal(resolver.checkPermission(tool, {}).state, "allow", `Harness management: ${tool}`);
   }
+  assert.equal(config.permission.notify_parent, "deny", "Retired child communication is explicitly denied in every seed");
+  const childDenies = JSON.parse(readFileSync(join(root, "resources/worker-policy.json"), "utf8")).childToolDenies;
+  for (const agent of ["editor", "reader", "researcher"]) {
+    for (const tool of childDenies) assert.equal(resolver.checkPermission(tool, {}, agent).state, "deny", `Child exclusion: ${agent}: ${tool}`);
+  }
+  assert.equal(resolver.checkPermission("notify_parent", {}).state, "deny", "No root retired alias allowance");
   for (const old of ["subagent", "resume_subagent", "list_subagents", "release_subagent", "wait_subagents",
     "get_subagent_result", "steer_subagent", "cancel_subagent",
     "spawn_agent", "resume_agent", "read_run", "wait_runs", "steer_run", "cancel_run", "post_update",

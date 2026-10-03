@@ -7,16 +7,16 @@ import { FakePort, deferred, ended, errorCode, fixture, task, until } from "../s
 
 test("authority loss first observed during admission latches, wakes waiters and preserves replay", async (t) => {
   const { controller: c, ports, owner } = await fixture(t);
-  const live = await c.submit("live", task("live")); await until(() => ports[0]?.streaming);
-  const queued = await c.submit("queued", task("queued"));
-  const waiting = c.wait([queued.run_id], { mode: "all", timeout_ms: 3000 });
+  const live = await c.submit("live", task("live", { name: "live" })); await until(() => ports[0]?.streaming);
+  const queued = await c.submit("queued", task("queued", { name: "queued" }));
+  const waiting = c.observe({ kind: "wait", agent_ids: [queued.agent_id], mode: "all", wait_ms: 3000 }, { validate() {} });
   const broken = t.mock.method(owner, "assertHeld", () => { throw new Error("ADMISSION_AUTHORITY_FAILURE"); });
   await assert.rejects(c.submit("rejected", task("rejected")), /ADMISSION_AUTHORITY_FAILURE/);
   broken.mock.restore();
-  assert.equal((await waiting).reason, "owner_blocked");
+  assert.equal(JSON.parse((await waiting).content[0].text).reason, "owner_blocked");
   assert.match(c.stats().internal_error, /ADMISSION_AUTHORITY_FAILURE/);
   await assert.rejects(c.submit("after-recovery", task("after-recovery")), errorCode("OWNER_INTERNAL_ERROR"));
-  assert.equal((await c.submit("live", task("live"))).run_id, live.run_id);
+  assert.equal((await c.submit("live", task("live", { name: "live" }))).run_id, live.run_id);
   assert.equal(c.stats().runs, 2); assert.equal(c.view(queued.run_id).status, "queued");
   ports[0].finish("retained"); await ended(c, live);
   assert.equal(c.getResult(live.run_id).text, "retained");
@@ -109,8 +109,8 @@ for (const [name, failure] of Object.entries(opaqueFailures)) for (const phase o
     const run = await c.submit("opaque", task("opaque")); await until(() => port.streaming);
     port.finish("retained result", phase === "finalizing" ? "invalid" : "success");
     await ended(c, run);
-    // Cleanup uncertainty can wake wait_agents before finalization completes.
-    await until(() => c.view(run.run_id).phase === "settled");
+    // Lifecycle waits require actual settlement even when cleanup is uncertain.
+    assert.equal(c.view(run.run_id).phase, "settled");
     if (phase === "release") assert.equal((await c.release(run.agent_id)).released, false);
     if (phase === "shutdown") assert.equal((await c.shutdown(20)).closed, false);
     const view = c.view(run.run_id);

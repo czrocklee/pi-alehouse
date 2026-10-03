@@ -15,8 +15,8 @@ export interface RunCallbacks {
   drain?(waiting_for: DrainWait): void;
   turnStart(): void;
   turnEnd(continuing?: boolean): void;
-  question(text: string): void;
-  notify(text: string): void;
+  question(text: string): "recorded" | "already_recorded";
+  alert(text: string): void;
   /** Observation only: a successful edit/write tool call's path argument. */
   touched?(path: string): void;
 }
