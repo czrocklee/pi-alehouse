@@ -164,6 +164,46 @@ test("bounded error choices retain remainder counts and hide concrete routing in
   for (const allowed of ["not an array", [], undefined]) assert.equal(errorReply({ code: "X", details: { allowed } }).error.allowed, undefined);
 });
 
+test("independent task/roster replies show optional whole dispatch notes and live or final time warning without a turn-limit flag", () => {
+  const base = { name: "otter", task: 1, status: "running", description: "task", resumable: true,
+    owner_blocked: false, has_question: false, effective_settings: { profile: "reader", difficulty: 3 } };
+  const notes = Object.freeze(["tree_shared", "x".repeat(118) + "🚀"]);
+  const live = { ...base, time_wrapped: true, dispatch_notes: notes }, reply = taskReply(live, () => "otter");
+  assert.deepEqual(reply, { agent: "otter", task: 1, status: "running", time_wrapped: true, dispatch_notes: notes });
+  assert.notEqual(reply.dispatch_notes, notes, "independent projections cannot alias retained view arrays");
+  reply.dispatch_notes[0] = "changed output"; assert.equal(notes[0], "tree_shared");
+  const terminalView = { ...base, status: "completed", dispatch_notes: notes,
+    outcome: { status: "completed", limit_reached: false, time_wrapped: true } };
+  const final = taskReply(terminalView, () => "otter");
+  assert.equal(final.time_wrapped, true); assert.equal(final.limit_reached, undefined);
+  assert.equal(final.dispatch_notes[1].length, 120); assert.equal(final.next_cursor, undefined);
+  const summary = { runs: 1, earlier_descriptions: [], touched: [], touched_omitted: 0, observed_cost: 0, cost_partial: false };
+  const roster = agentRow(terminalView, summary, () => "otter");
+  assert.equal(roster.time_wrapped, true); assert.deepEqual(roster.dispatch_notes, notes); compact(roster);
+  assert.equal(taskReply(base, () => "otter").dispatch_notes, undefined);
+  assert.equal(taskReply({ ...base, dispatch_notes: [] }, () => "otter").dispatch_notes, undefined);
+});
+
+test("dispatch error replies name concrete raw or normalized paths with a bounded 512-unit whole-declaration projection", () => {
+  const raw = "a".repeat(510) + "/x";
+  for (const code of ["PREFLIGHT_DENIED", "DISPATCH_INPUT_MISSING", "INVALID_DISPATCH"]) {
+    const result = errorReply({ code, details: { key: "inputs", requested: raw, path: "/tmp/" + raw } }).error;
+    assert.equal(result.parameter, "inputs"); assert.equal(result.path, raw, "every legal 512-unit raw declaration remains visible, even with a longer normalized alias");
+    assert.equal(result.requested, raw.slice(0, 128), "the existing abstract-choice field retains its published bound");
+  }
+  for (const code of ["RESOURCE_OWNED", "BUILD_TREE_BUSY"]) {
+    const path = "/" + "normalized".repeat(100), result = errorReply({ code, details: { path } }).error;
+    assert.equal(result.path, path.slice(0, 512)); assert.equal(result.requested, undefined);
+  }
+  const compatibility = errorReply({ code: "INVALID_DISPATCH", details: { parameter: "ownership", requested: "src/file.ts" } }).error;
+  assert.equal(compatibility.parameter, "ownership"); assert.equal(compatibility.path, "src/file.ts");
+  assert.equal(errorReply({ code: "INVALID_DISPATCH", details: { key: "tree", parameter: "ownership" } }).error.parameter, "tree");
+  const paired = "x".repeat(510) + "🚀", clipped = "x".repeat(511) + "🚀";
+  assert.equal(errorReply({ code: "DISPATCH_TREE_TYPE", details: { requested: paired } }).error.path, paired);
+  assert.equal(errorReply({ code: "BUILD_TREE_BUSY", details: { path: clipped } }).error.path, "x".repeat(511));
+  assert.equal(errorReply({ code: "INVALID_MODEL", details: { requested: raw } }).error.path, undefined, "routing choices do not become filesystem declarations");
+});
+
 test("Esc abort is not task interruption, and neither consumes finished presentation", async (t) => {
   const { controller: c, ports } = await fixture(t);
   const run = await c.submit("a", named("orca")); await until(() => ports[0]?.streaming);

@@ -76,7 +76,15 @@ Spawn requires `agent`, `prompt` (1--131072 UTF-16 units), `profile`
 (`reader`, `editor`, `researcher`) and integer `difficulty` (1--5). Optional
 fields are `label` (1--120), `inherit_context`, `after` (1--4 other names),
 `wait_ms` (0--300000), `max_turns` (1--10000, default 256) and
-`max_duration_ms` (1--86400000, default 1800000).
+`max_duration_ms` (1--86400000, default 1800000), plus optional `dispatch`.
+
+Spawn/run `dispatch` is closed plain data: `inputs` ≤8 paths, `ownership` ≤16
+paths, `tree` one build-root path and `checks` ≤16 parent-declared identifiers;
+supplied arrays are nonempty with unique entries, and each string is bounded
+to 512 UTF-16 units. Paths have no leading/trailing whitespace and are literal,
+not shell globs or expansions. See [task dispatch](task-dispatch.md) for exact path language,
+profile/external preflight, claims, after rechecks and validation observations.
+These declarations do not grant permissions or prove that checks ran.
 
 Profile, difficulty, context and budgets are fixed for the Agent at spawn;
 later tasks cannot silently change them. Prompt is the full task instruction;
@@ -101,7 +109,7 @@ permission grant. Oversize fails `CONTEXT_SNAPSHOT_TOO_LARGE` before creation.
 
 ## Run, send and explicit answer
 
-`agent_run({agent, prompt, label?, after?, wait_ms?})` admits a new task only
+`agent_run({agent, prompt, label?, after?, wait_ms?, dispatch?})` admits a new task only
 when idle. Finishing/stopping is waited out for at most 30 s outside the submit
 queue. Running fails `AGENT_BUSY`; a pending question fails `PENDING_QUESTION`
 and points to explicit answer. Run never delivers into an existing task.
@@ -131,7 +139,15 @@ or after is accepted. The original task must already be truly settled
 `needs_input`, still pending and unreserved, with no current Run and a healthy,
 reusable Agent/Owner. Answer does not wait and then silently answer a future
 question. It reserves the original question and admits a continuation with the
-Agent's fixed settings/budgets and the asking task's label. New admission still
+Agent's fixed settings/budgets and the asking task's label and dispatch. Its
+resource claim lineage remains held across the pending question; pre-input
+rollback that reopens the question also restores that claim, including any
+existing tree lease. Final termination/required cleanup, not a stop request,
+permits release. Resolve a needs-input claim conflict by answering its question,
+or explicitly abandoning it, killing the Agent and awaiting confirmed release;
+passive wait/after on that original Run is not a remedy. See
+[claim lifecycle](task-dispatch.md#dependencies-claims-and-continuations).
+New admission still
 requires On, unchanged revision/context/generation and normal approval witness;
 child output grants no authority. New answers check and latch real Owner lease
 loss before eligibility and after preparation; apparent recovery does not clear
@@ -170,6 +186,12 @@ hold no execution slot and their duration budget has not started; `waiting_for`
 names unsettled dependencies. They still count toward queue capacity. Any
 dependency not completing (including needs-input) fails the task with
 `dependency_not_completed` without creating a session; the Agent remains.
+Dispatch predecessor conflict exemptions use the fixed Run-ID transitive closure
+at admission, not dynamic Agent names, and allow queuing rather than premature
+execution. Inputs for after tasks defer existence checks; all dispatched tasks
+recheck at pump when it can progress. Missing dependency input produces
+`dependency_input_missing`; other deferred preflight failures produce
+`dispatch_preflight_failed`, without a session/slot and with a reusable Agent.
 
 Retained final output of dependencies shares a 16384-unit handoff budget, with
 Agent/label/status and never-retained character count. It is framed as reference,
@@ -189,7 +211,17 @@ health. Other errors include `QUEUE_FULL`, `RESIDENT_LIMIT`,
 `OWNER_HISTORY_LIMIT`, `AGENT_UNAVAILABLE`, `STALE_OWNER_CONTEXT` and
 `OWNER_CLEANUP_UNCERTAIN`.
 
-Duration begins at slot assignment/initialization, not queue admission. Optional
+Duration begins at slot assignment/initialization, not queue admission. The
+[wall-clock soft wrap](task-dispatch.md#wall-clock-soft-wrap) uses a bounded Δ
+warning window without changing the hard deadline. Guarded `soft_budget` input
+invalidates the approval witness (`pi-harness:approval:invalidated`). Optional
+`time_wrapped` records a warning attempt, not receipt/checkpoint or the turn
+`limit_reached`; it is not a thin control-row flag. Timer due remains Run-local
+until original inputEntered plus canInput readiness, or a post-budget turnStart
+boundary, permits a single attempt before hard deadline. It never injects ahead
+of port.run, retries a rejected attempt or carries due across Runs.
+
+Optional
 observation time starts at registration **after** command acceptance/preparation
 and any lifecycle settle. All wait_ms are 0--300000; commands default to zero,
 wait defaults to 300000. Esc/abort cancels the observation, not accepted work.
@@ -328,9 +360,20 @@ Result text yields before its reserved cursor; wholly omitted pages keep their
 original offset, partial pages advance by shown units, and EOF needs no cursor.
 Packing retains thin controls and, for reason=alert, a complete first scoped
 FIFO alert. Then it adds questions (marked if truncated), further complete FIFO
-prefix alerts, result pages, bounded diagnostics and up to eight finished rows.
+prefix alerts, optional time_wrapped attempts across tasks, result pages,
+bounded string diagnostics/notes and up to eight finished rows.
 It stops at the first alert that cannot fit, never skips to a smaller later one.
 Unshown alerts remain pending; fat diagnostics/finished entries yield first.
+`dispatch_notes` (at most 2 × 120 units) and `time_wrapped` are optional task
+diagnostics, not additions to the reserved thin controls. The time flag is
+attempted after questions/FIFO alerts but before results; notes stay lower
+priority. Saturated bytes can omit the flag, but a long ASCII result reaching
+the text cap does not inherently do so. They are constructed before publication
+commit. A later
+observation of a still-locatable task may try them again; there is no guaranteed
+recovery, notes paging or persistence. Validation receipts stay in trusted
+history/offline audit, not automatic parent-model context; see
+[notes and receipts](task-dispatch.md#notes-receipts-and-coverage).
 Each diagnostic has a fixed 512-unit display cap. That cap alone does not set
 response_limit_reached; actual packing pressure does. Diagnostics are not
 paginated, so repeated reads cannot retrieve text beyond this display cap.

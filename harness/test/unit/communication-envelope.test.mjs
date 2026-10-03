@@ -113,6 +113,17 @@ for (const message of ["\0".repeat(8192), "\ud800".repeat(8192), "\udfff".repeat
     assert.equal(communicationTextUnits(value), 8192, "cursor recovery metadata never spends body units");
   });
 
+test("optional warning bytes do not alter the 65045-byte mandatory fixture or turn it into a seven-flag reservation", () => {
+  const retained = retainedEnvelopeFixture("\0".repeat(8192), true, true), before = structuredClone(retained);
+  const optional = { ...retained, agents: retained.agents.map((row) => ({ ...row, time_wrapped: true })) };
+  assert.equal(communicationEnvelopeBytes(retained), 65045);
+  assert.equal(communicationEnvelopeBytes(optional), 65045 + 16 * 22, "an optional flag only spends double-JSON bytes");
+  assert(communicationBudget(optional).fits); assert.equal(communicationTextUnits(optional), 8192);
+  assert.deepEqual(retained, before);
+  assert(retained.agents.every((row) => !Object.hasOwn(row, "time_wrapped")));
+  assert.equal(communicationEnvelopeBytes(retainedEnvelopeFixture("\0".repeat(8192), true, true)), 65045);
+});
+
 test("admission measures a complete retained envelope, not message-only JSON", () => {
   const message = "\u0000".repeat(8192);
   const admitted = alertAdmissionBudget(message);
@@ -130,7 +141,8 @@ test("UTF-16 body accounting includes only questions, results, and alert message
     action: { type: "agent_run", agent: "otter", task: 2 },
     agents: [{ agent: "otter", task: 2, status: "running", question_id: "q_" + "f".repeat(32),
       question: "😀", result: "甲😀乙", next_cursor: "opaque cursor", omitted_chars: 99,
-      error: "diagnostic", owner_error: "owner diagnostic", unavailable_reason: "not reusable" }],
+      error: "diagnostic", owner_error: "owner diagnostic", unavailable_reason: "not reusable",
+      time_wrapped: true, dispatch_notes: ["\0".repeat(120), "\ud800".repeat(120)] }],
     alerts: [{ agent: "otter", task: 1, label: "\u0000".repeat(120), message: "ab" }],
     pending: ["otter"], finished: [{ agent: "otter", task: 1, status: "completed" }], finished_pending: 99,
   };

@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 import { normalizeLedger, type UsageLedger } from "./usage-ledger.js";
 import { validOutput } from "./result-text.js";
+import type { Dispatch } from "./dispatch.js";
 
 export type RunStatus = "queued" | "running" | "cancelling" | "completed" | "needs_input" | "failed" | "cancelled";
 export type StopReason = "user_cancel" | "hard_budget" | "deadline";
@@ -45,6 +46,7 @@ export type SubmitRequest = {
   settings: AdmittedAgentConfig;
   max_turns?: number;
   max_duration_ms?: number;
+  dispatch?: Dispatch;
   after?: string[];
 } | {
   resume: string;
@@ -53,6 +55,7 @@ export type SubmitRequest = {
   max_turns?: number;
   max_duration_ms?: number;
   answer_to_run_id?: string;
+  dispatch?: Dispatch;
   after?: string[];
 };
 export interface Output {
@@ -83,6 +86,8 @@ export interface Outcome {
   error?: string;
   question?: string;
   limit_reached: boolean;
+  /** A wall-clock hint was attempted; not proof it was received. */
+  time_wrapped?: true;
 }
 export interface ResultRef {
   scope: "owner_memory";
@@ -131,6 +136,9 @@ export interface RunView {
   has_question: boolean;
   question_id?: string;
   pending_messages: number;
+  dispatch?: Dispatch;
+  dispatch_notes?: string[];
+  time_wrapped?: true;
   isolation: "shared";
   elapsed_ms: number;
   execution_elapsed_ms?: number;

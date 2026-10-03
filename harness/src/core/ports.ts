@@ -1,11 +1,15 @@
 import type { AdmittedAgentConfig, DrainWait, ExecutionFacts, HistoryRef, Outcome, Output, RunExecutionIdentity, RunIdentity, RunTelemetry } from "./contracts.js";
 import type { UsageLedger } from "./usage-ledger.js";
+import type { ValidationReceipt } from "./dispatch.js";
 
 export interface HistoryPort {
   /** Local SDK writer uncertainty. It does not by itself stop other Agents. */
   readonly error?: string;
   begin(run: RunIdentity, settings?: AdmittedAgentConfig): HistoryRef | undefined | Promise<HistoryRef | undefined>;
-  finish(ref: HistoryRef, outcome: Outcome, output: Output, usage?: UsageLedger): HistoryRef | Promise<HistoryRef>;
+  /** Optional receipt rejection is reported during finish, not a failed end.
+   * The diagnostic callback must return normally; append uncertainty still fails. */
+  finish(ref: HistoryRef, outcome: Outcome, output: Output, usage?: UsageLedger, receipt?: ValidationReceipt,
+    onReceiptRejected?: () => void): HistoryRef | Promise<HistoryRef>;
 }
 export interface RunCallbacks {
   inputEntered(): void;

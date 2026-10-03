@@ -86,6 +86,46 @@ A cancellation request is only a request.  The execution slot is freed only
 after actual execution exit; the Agent reservation and Owner lease remain until
 finalization and required cleanup are confirmed.
 
+## Dispatch, claims and validation observations
+
+Optional spawn/run `dispatch` declares inputs (≤8), ownership (≤16), one tree
+and checks (≤16), with strings bounded to 512 UTF-16 units. Inputs are existing
+ordinary files/directories; output ownership/tree may be new. Literal paths
+are not shell globs/expansions; lexical and nearest-existing-ancestor canonical
+aliases identify scope/conflicts. Profile/external preflight is approximate,
+not permission or a guarantee of successful tools.
+
+A **claim** is Owner-local declared resource ownership, not the UI `touched`
+list or OS isolation. It survives queued/running/finalizing phases and a healthy
+pending question. Explicit answer inherits dispatch/the same claim lineage;
+pre-input rollback that restores a question also restores its claim and existing
+tree lease. Final termination and required confirmed cleanup permit release. A needs-input
+claim conflict requires answer, or explicit abandonment/kill followed by
+confirmed release, not after/passive waiting on the original question Run.
+After exemptions bind predecessor Run IDs at admission, not dynamic names;
+pump still rechecks inputs/resources before execution.
+
+Wall-clock **soft wrap** is a guarded warning attempt with a bounded Δ window,
+not receipt/checkpoint or turn limit_reached. Its soft-budget input invalidates
+the approval witness without changing the hard deadline. Optional time_wrapped
+and notes yield during packing, with no guaranteed recovery or persistence.
+The time flag is optionally tried after questions/FIFO alerts and before
+results; long ASCII results do not inherently omit it. Run-local due may wait
+for real original inputEntered/canInput or post-budget turnStart, never pre-run
+injection or retry after a rejected attempt.
+
+A validation **receipt** is optional valid-boundary run-end observation, not a
+passed-check or permission certificate. Parent-declared checks trigger a
+superproject-only partial metadata source observation, with submodules ignored,
+not a content fingerprint. Status includes non-ignored untracked entries via
+fixed --untracked-files=normal, not all disk contents. Invalid optional receipts
+are locally dropped with an end marker/live diagnostic/recorded-history warning;
+mandatory history and append errors remain strict, with no retry.
+Missing boundaries mean coverage gaps; consumption
+is trusted history/offline, not automatic parent-model context. Local tree locks
+are advisory within one host/agentDir/canonical identity and synchronous flock
+still blocks. See [task dispatch](task-dispatch.md) for the full contract.
+
 ## Session
 
 A **Session** is Pi SDK conversation state.  The parent session belongs to Pi;
@@ -102,10 +142,10 @@ do not keep an SDK execution environment alive.
 ## Task fields, not roles
 
 `agent_spawn` requires `agent`, `prompt`, `profile` and `difficulty`; `agent_run`
-requires `agent` and `prompt`. Both take an optional `label`. `agent_send`
+requires `agent` and `prompt`. Both take optional `label` and `dispatch`. `agent_send`
 joins/steers the task bound when called; it never starts a continuation.
 `agent_answer` takes `agent`, the exact pending `question_id`, and `answer`,
-with optional wait_ms. It preserves the asking task's label and Agent settings;
+with optional wait_ms. It preserves the asking task's label, dispatch and Agent settings;
 run cannot bypass an unanswered question.
 
 - **`prompt`** is the execution instruction.  It may be up to 131072 UTF-16

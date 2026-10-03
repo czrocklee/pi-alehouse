@@ -10,11 +10,16 @@ import { renderWorkers } from "../../scripts/generate-workers.mjs";
 
 const temporary = (t) => { const path = mkdtempSync(join(tmpdir(), "alehouse-runtime-")); t.after(() => rmSync(path, { recursive: true, force: true })); return path; };
 
-test("portable generator matches unified-communication worker bytes and policy digests", () => {
+test("portable generator matches dispatch-aware worker bytes and policy digests", () => {
   const { agents, metadata } = renderWorkers();
-  assert.equal(metadata.editor.digest, "7d13456ecc560725a224024ccbffd3d82f46089004a3c66de8d820635a0e586d");
-  assert.equal(metadata.reader.digest, "6298e219893abef4075a0e19186be3845e73f73c4d18de9da1216117c9a6d62c");
-  assert.equal(metadata.researcher.digest, "4db433614564990749ca94639965525ad312c3f45c95b7c40f39192fcb6b8ed0");
+  assert.equal(metadata.editor.digest, "b604be9000c802091effa8dcd7e8f0de59b6230ab32f4f00f92fb9de42e7c7cf");
+  assert.equal(metadata.reader.digest, "f4efe70421afa70db9e267366efb2a954fe211ba333a774c2d78b49f987ce1c5");
+  assert.equal(metadata.researcher.digest, "48b90c27e775cc029992a837380594775e7bbe83baa77f450086ac6da047bc28");
+  for (const name of Object.keys(metadata)) {
+    const worker = agents[name];
+    assert.match(worker, /A denied operation stays denied; do not retry the same class of request/);
+    assert.match(worker, /full validation gate/);
+  }
   for (const [name, source] of Object.entries(agents)) assert.equal(readFileSync(join(packageRoot, "runtime/agents", `${name}.md`), "utf8"), source);
   assert.match(agents.reader, /  write: deny\n  edit: deny\n  path_write:\n    "\*": deny/);
   assert(metadata.editor.bashDenies.includes("git -C * commit *"));

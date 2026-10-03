@@ -169,6 +169,9 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
       for (const key of diagnostics) if (task.diagnostics[key] !== undefined && typeof task.diagnostics[key] !== "string")
         invalid("Invalid diagnostic text");
     }
+    if (task.time_wrapped !== undefined && task.time_wrapped !== true) invalid("Invalid time_wrapped diagnostic flag");
+    if (task.dispatch_notes !== undefined && (!Array.isArray(task.dispatch_notes) || task.dispatch_notes.length > 2 ||
+        Array.from(task.dispatch_notes).some((note: unknown) => typeof note !== "string" || !nonblank(note) || note.length > 120))) invalid("Invalid bounded dispatch notes");
     return row;
   });
   const alerts = snapshot.alerts.map((alert) => {
@@ -245,6 +248,16 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     }
   }
 
+  // Warning attempts are optional metadata, NOT reserved thin controls. Try
+  // every task now, after questions/FIFO alerts but before any result or string
+  // diagnostic can saturate bytes. Previously fitted bodies/cursors never yield.
+  for (let index = 0; index < snapshot.tasks.length; index++) {
+    if (snapshot.tasks[index]!.time_wrapped !== true) continue;
+    const candidate = replaceRow(envelope, index, { ...envelope.agents[index]!, time_wrapped: true });
+    if (communicationBudget(candidate).fits) envelope = candidate;
+    else limited = true;
+  }
+
   // A stable cursor describes the actual shown endpoint, not the captured
   // window's endpoint. Even wholly omitted terminal pages retain the reserved
   // original-Run cursor at the unchanged offset; no cursorless recovery guess.
@@ -295,6 +308,14 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
       const fitted = fitPrefix(bounded, bounded.length, 1, (shown) => replaceRow(envelope, index, { ...base, [key]: shown }));
       if (fitted) envelope = fitted.envelope;
       if (!fitted || fitted.shown.length < bounded.length) limited = true;
+    }
+    // Notes remain low-priority whole diagnostics, not reserved controls.
+    // A later locatable observation can try again, but no cursor is introduced.
+    for (const note of task.dispatch_notes ?? []) {
+      const base = envelope.agents[index]!;
+      const candidate = replaceRow(envelope, index, { ...base, dispatch_notes: [...(base.dispatch_notes ?? []), note] });
+      if (!communicationBudget(candidate).fits) { limited = true; break; }
+      envelope = candidate;
     }
   }
 

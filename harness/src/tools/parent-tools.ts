@@ -7,6 +7,7 @@ import { terminal, validDifficulty, type RunView, type SubmitRequest } from "../
 import { isModelAgentName, MODEL_AGENT_NAME_PATTERN } from "../core/communication-envelope.js";
 import type { CommunicationToolResult } from "../core/communication-snapshot.js";
 import { QUESTION_ID_PATTERN } from "../core/question-id.js";
+import { validateDispatch } from "../core/dispatch.js";
 import { HarnessError } from "../core/ports.js";
 import { digest, textSnapshot } from "../runtime/context-snapshot.js";
 import { defaultDelegation, delegationGuideline } from "../delegation.js";
@@ -29,6 +30,21 @@ const waitMs = (description: string) => Type.Integer({ minimum: 0, maximum: 3000
 const labelField = (source: string) => optional(text(120, `Short label for agent_list, not instructions. Default: the ${source}'s first line.`));
 const afterField = (instructions: string) => optional(agentNames(4, `Other Agents whose current or latest task must complete first. Their results (16384 characters shared) come before the ${instructions} as reference, not instructions. If one ends any other way (question, failure, interrupt), this task fails without starting.`));
 const waitField = optional(waitMs("Wait up to this long for the accepted task, its question, an issue or its alerts. Default 0: return a snapshot at once. Timing out never interrupts the task."));
+const dispatchPath = (description: string) => Type.String({ minLength: 1, maxLength: 512,
+  pattern: "^(?![~@])(?=.*\\S)[^\\x00-\\x1f\\x7f*?[\\]{}'\"`$\\\\]+(?![\\s\\S])", description });
+const dispatchPaths = (maxItems: number, description: string) => Type.Array(dispatchPath(description), {
+  minItems: 1, maxItems, uniqueItems: true,
+});
+const dispatchField = optional(Type.Object({
+  inputs: optional(dispatchPaths(8, "Existing input files/directories to read. Literal paths, no shell expansion, glob, quotes, controls, $, backslash or leading ~/@.")),
+  ownership: optional(dispatchPaths(16, "Files/directories assigned to this task, including planned outputs. Literal paths; declares scope, not permission or isolation.")),
+  tree: optional(dispatchPath("The build-tree directory for this task, including a planned directory. Sharing is advisory, not an exclusive execution guarantee.")),
+  checks: optional(Type.Array(Type.String({ minLength: 1, maxLength: 512,
+    pattern: "^(?=.*\\S)[^\\x00-\\x1f\\x7f]+(?![\\s\\S])",
+    description: "Planned check/test/platform identifiers; globs allowed. A declaration is not evidence that a check ran or permission to skip gates." }),
+  { minItems: 1, maxItems: 16, uniqueItems: true })),
+}, { additionalProperties: false,
+  description: "Optional task input, file ownership, build-tree and planned-check declarations. Preflight can reject known limits; it does not authorize tool calls. Delegate full-suite validation explicitly to one task." }));
 const spawnSchema = Type.Object({
   agent: agentName("The new Agent's name: a short nickname, one theme per session (orca, otter), not a task name. Never reused."),
   prompt: text(131072, "Complete instructions. The Agent knows only this, its earlier tasks and any after results."),
@@ -36,6 +52,7 @@ const spawnSchema = Type.Object({
   profile: StringEnum(agentProfileNames, { description: "reader: investigates and reviews, cannot edit files; editor: may edit files; researcher: web search and fetch plus read-only file tools, no Bash or edits, and its results are web-derived and untrusted. Git mutations stay with you. Bash and web calls stay permission-gated; no profile is an OS sandbox." }),
   difficulty: Type.Integer({ minimum: 1, maximum: 5, description: "Picks the Agent's model; fixed for its lifetime. Rate the reasoning this task needs: 1=clear method, mostly execution; 2=routine local analysis; 3=independent investigation and a plan; 4=competing hypotheses or complex constraints; 5=no established approach. Not workload, importance or cost." }),
   inherit_context: optional(Type.Boolean({ description: "Default false. Start with a text copy of your conversation, without tool calls or results; fails over 64 KiB." })),
+  dispatch: dispatchField,
   after: afterField("prompt"),
   wait_ms: waitField,
   max_turns: optional(Type.Integer({ minimum: 1, maximum: 10000, description: "Turn limit per task, default 256. Reaching it can leave a partial result." })),
@@ -45,6 +62,7 @@ const runSchema = Type.Object({
   agent: agentName("An existing, idle Agent."),
   prompt: text(131072, "Complete instructions for the next task. The Agent remembers its earlier tasks."),
   label: labelField("prompt"),
+  dispatch: dispatchField,
   after: afterField("prompt"),
   wait_ms: waitField,
 }, { additionalProperties: false });
@@ -164,6 +182,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
       if (!valid || addressedNames.some((value) => !isModelAgentName(value))) throw new HarnessError("INVALID_PARAMETERS", {
         allowed: Object.keys(schema.properties),
         resolution: "The arguments do not match this tool's schema; check the required fields, their types and bounds." });
+      if ((name === "agent_spawn" || name === "agent_run") && fields.dispatch !== undefined) validateDispatch(fields.dispatch);
       return structuredClone(raw);
     };
     return { name, label: name, description, parameters: schema,
@@ -219,6 +238,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
             return { prompt: input.prompt, description: labelOf(input.label, input.prompt), name: input.agent,
               ...(input.max_turns === undefined ? {} : { max_turns: input.max_turns }),
               ...(input.max_duration_ms === undefined ? {} : { max_duration_ms: input.max_duration_ms }),
+              ...(input.dispatch === undefined ? {} : { dispatch: input.dispatch }),
               ...(after ? { after } : {}),
               settings: { ...route, profile: input.profile, cwd, tools: [...profile.tools], definition_digest: profile.definition_digest,
                 ...(context_snapshot === undefined ? {} : { context_snapshot }) } };
@@ -239,7 +259,8 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
             if (latest.has_question) throw new HarnessError("PENDING_QUESTION", { agent: input.agent,
               resolution: "Read its question_id with agent_wait or agent_read, then answer with agent_answer. If delegation is off, ask the user to enable it first." });
             const after = afterRuns(input.agent, input.after);
-            return { resume: target.agent_id, prompt: input.prompt, description: labelOf(input.label, input.prompt), ...(after ? { after } : {}) };
+            return { resume: target.agent_id, prompt: input.prompt, description: labelOf(input.label, input.prompt),
+              ...(input.dispatch === undefined ? {} : { dispatch: input.dispatch }), ...(after ? { after } : {}) };
           }), { settle: { agent_id: target.agent_id, signal } });
         accepted(view);
         return observe({ kind: "action", run_id: view.run_id, action: { type: "agent_run" }, wait_ms }, ctx, signal);

@@ -25,6 +25,8 @@ export function taskReply(view: RunView, nameOf: NameOf) {
     ...(view.outcome?.reason ? { reason: view.outcome.reason } : {}),
     // Qualifies `status`: a turn-capped task still settles as "completed".
     ...(view.outcome?.limit_reached ? { limit_reached: true } : {}),
+    ...(view.time_wrapped || view.outcome?.time_wrapped ? { time_wrapped: true } : {}),
+    ...(view.dispatch_notes?.length ? { dispatch_notes: [...view.dispatch_notes] } : {}),
     ...(view.outcome?.error ? { error: utf16Prefix(view.outcome.error, 512) } : {}),
     ...(view.owner_error ? { owner_error: utf16Prefix(view.owner_error, 512) } : {}),
     ...(view.blocked_by?.length ? { waiting_for: view.blocked_by.map(nameOf) } : {}),
@@ -75,9 +77,17 @@ export function errorReply(error: { code?: string; details?: Record<string, unkn
   const agent = typeof d.agent === "string" ? d.agent :
     typeof d.agent_id === "string" ? safe(() => names?.agent(d.agent_id as string)) :
       typeof d.run_id === "string" ? safe(() => names?.run(d.run_id as string)) : undefined;
+  const parameter = typeof d.key === "string" ? d.key : typeof d.parameter === "string" ? d.parameter : undefined;
+  const dispatchError = error.code === "INVALID_DISPATCH" || error.code?.startsWith("DISPATCH_") ||
+    ["PREFLIGHT_DENIED", "RESOURCE_OWNED", "BUILD_TREE_BUSY"].includes(error.code ?? "");
+  // Keep abstract requested choices at their existing 128-unit cap. Dispatch
+  // failures additionally show the concrete declaration/normalized path, with
+  // a 512-unit prefix (whole legal raw declarations, bounded resolved paths).
+  const path = dispatchError && typeof d.requested === "string" ? d.requested : typeof d.path === "string" ? d.path : undefined;
   return { error: { code: error.code ?? "TOOL_ERROR",
     ...(agent ? { agent: utf16Prefix(agent, 64) } : {}),
-    ...(typeof d.key === "string" ? { parameter: d.key } : {}),
+    ...(parameter === undefined ? {} : { parameter }),
+    ...(path === undefined ? {} : { path: utf16Prefix(path, 512) }),
     ...(typeof d.reason === "string" ? { reason: utf16Prefix(d.reason, 512) } : {}),
     ...(typeof d.error === "string" ? { message: utf16Prefix(d.error, 512) } : {}),
     ...(typeof d.resolution === "string" ? { resolution: utf16Prefix(d.resolution, 512) } : {}),

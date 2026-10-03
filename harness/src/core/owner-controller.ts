@@ -16,6 +16,8 @@ import { COMMUNICATION_LIMITS, isModelAgentName, type CommunicationAction, type 
 import type { CommunicationSnapshot, CommunicationToolResult, ResultWindow, TaskSnapshot } from "./communication-snapshot.js";
 import { isQuestionId } from "./question-id.js";
 import { decodeResultCursor, invalidResultCursor, resultCursorKey, type ResultCursorIdentity } from "./result-cursor.js";
+import { dispatchText, pathsOverlap, validateDispatch, validSourceState, type Dispatch, type DispatchLease,
+  type DispatchPort, type PreparedDispatch, type SourceState, type ValidationReceipt } from "./dispatch.js";
 
 interface RunRecord {
   owner_id: string;
@@ -55,6 +57,17 @@ interface RunRecord {
   discarded_inputs: string[];
   after?: string[];
   delivered_updates?: number;
+  dispatch?: Dispatch;
+  dispatch_notes?: string[];
+  source_state?: SourceState;
+  time_wrapped?: true;
+}
+interface ResourceClaim {
+  run_id: string;
+  agent_id: string;
+  prepared: PreparedDispatch;
+  lease?: DispatchLease;
+  releaseFailed?: true;
 }
 interface Agent {
   id: string; name: string; settings: AdmittedAgentConfig; resident: boolean;
@@ -75,6 +88,12 @@ interface Agent {
 interface ManagedRun {
   record: RunRecord; output: Output; submittedMono: number;
   executionStartedMono?: number; deadlineTimer?: ReturnType<typeof setTimeout>;
+  softDeadlineTimer?: ReturnType<typeof setTimeout>;
+  softDeadlineDue?: true;
+  /** Real budget time; the injected clock is observation-only. */
+  budgetStartedMono?: number;
+  prepared?: PreparedDispatch;
+  claim?: ResourceClaim;
   turnStarted?: number; inputOpen: boolean; active: boolean; outputReserved: boolean;
   inputs: Set<Promise<void>>; inputCount: number; question?: string;
   finished_presented: boolean; settled_seq?: number;
@@ -87,8 +106,8 @@ interface ManagedRun {
   stopRequestedMono?: number;
   /** The first prompt has taken the Agent inbox; later updates need steering. */
   promptComposed?: true;
-  /** A dependency settled without completing; this Run never started. */
-  dependency?: string;
+  /** A prestart rejection must not retire an otherwise reusable Agent. */
+  prestartFailure?: { reason: "dependency_not_completed" | "dependency_input_missing" | "dispatch_preflight_failed"; error: string };
 }
 export interface ContextChange {
   event_id: string; owner_id: string; generation: string; agent_id: string; run_id: string;
@@ -97,6 +116,8 @@ export interface ContextChange {
 export interface OwnerControllerOptions {
   owner: OwnerLease;
   createSession: (agent: { agent_id: string; name: string; settings: AdmittedAgentConfig }) => Promise<AgentSessionPort>;
+  /** Optional host filesystem/permission/observation adapter. No SDK IO in core. */
+  dispatch?: DispatchPort;
   /** Synchronous post-accept/pre-dispatch effect, not an admission transaction.
    * Must return undefined; failure prevents dispatch, never rolls back a Run ID. */
   onContextChange?: (event: ContextChange) => undefined;
@@ -186,6 +207,9 @@ const updatesText = (updates: readonly string[]): string => !updates.length ? ""
   `Messages from the parent, sent before this task started (oldest first):\n\n${
     updates.map((text, index) => `[${index + 1}] ${text}`).join("\n\n")}\n\n--- End of messages ---`;
 export const softBudgetMessage = "The turn budget has been reached. Finish now with your best supported final answer, noting unfinished work. Do not start new work.";
+export const softTimeBudgetMessage = "The wall-clock deadline is approaching. Finish with a checkpoint now: supported findings, exact evidence paths, checks actually run and their results, unfinished work, and the next safe step. Do not start new work. This hint does not extend the deadline.";
+export const softDeadlineDelay = (duration: number): number | undefined => duration <= 1000 ? undefined :
+  Math.max(1000, duration - Math.max(1000, Math.min(30000, duration / 5)));
 const settingsView = (settings: AdmittedAgentConfig): RunView["effective_settings"] => {
   const { context_snapshot, ...visible } = settings;
   return { ...visible, context_mode: context_snapshot === undefined ? "none" : "text_snapshot",
@@ -204,6 +228,8 @@ export class OwnerController {
   /** send() identity: a retried call replays its delivery, never re-steers. */
   private readonly deliveries = new Map<string, { request_digest: string; run_id: string; delivery: Delivery }>();
   private readonly queue: string[] = [];
+  /** Includes queued/finalizing work and settled answerable questions. */
+  private readonly claims = new Set<ResourceClaim>();
   private readonly tasks = new Set<Promise<void>>();
   private readonly observations = new ObservationScheduler();
   /** The sole Owner FIFO. Origin and quota identity derive from original Runs. */
@@ -318,8 +344,8 @@ export class OwnerController {
 
   private validate(request: SubmitRequest): void {
     const reuse = "resume" in request;
-    const allowed = reuse ? ["resume", "prompt", "description", "max_turns", "max_duration_ms", "answer_to_run_id", "after"] :
-      ["prompt", "description", "max_turns", "max_duration_ms", "name", "settings", "after"];
+    const allowed = reuse ? ["resume", "prompt", "description", "max_turns", "max_duration_ms", "answer_to_run_id", "after", "dispatch"] :
+      ["prompt", "description", "max_turns", "max_duration_ms", "name", "settings", "after", "dispatch"];
     for (const key of Object.keys(request)) {
       if (allowed.includes(key)) continue;
       if (reuse && ["settings", "model", "provider", "thinking", "effort", "effort_source", "effort_overrides", "difficulty", "strength", "preset", "subagent_type", "profile", "inherit_context", "cwd", "tools", "name"].includes(key)) {
@@ -339,6 +365,7 @@ export class OwnerController {
     if (request.max_duration_ms !== undefined && (!positive(request.max_duration_ms) || request.max_duration_ms > 86_400_000))
       throw new HarnessError("INVALID_PARAMETER", { key: "max_duration_ms" });
     if (!reuse && !validSettings(request.settings)) throw new HarnessError("INVALID_EFFECTIVE_SETTINGS");
+    if (request.dispatch !== undefined) validateDispatch(request.dispatch);
     const ids = request.after;
     if (ids !== undefined) {
       if (!Array.isArray(ids) || !ids.length || ids.length > DEPENDENCY_LIMIT || new Set(ids).size !== ids.length ||
@@ -521,6 +548,16 @@ export class OwnerController {
       if (request.answer_to_run_id !== agent.question.run_id ||
           !canAnswerQuestion(agent, this.requireRun(agent.question.run_id), this.communicationHealthy())) throw new HarnessError("STALE_ANSWER");
     } else if (reuse && request.answer_to_run_id) throw new HarnessError("STALE_ANSWER");
+    const original = reuse && request.answer_to_run_id ? this.requireRun(request.answer_to_run_id) : undefined;
+    if (original && request.dispatch !== undefined) throw new HarnessError("IMMUTABLE_DISPATCH");
+    const declaration = original ? original.record.dispatch : request.dispatch;
+    const prepared = declaration === undefined ? undefined : this.prepareDispatch(declaration, agent.settings, !!request.after?.length);
+    const inheritedClaim = original?.claim;
+    if (inheritedClaim && !this.claims.has(inheritedClaim)) throw new HarnessError("DISPATCH_CLAIM_LOST");
+    if (prepared) {
+      if (inheritedClaim && !this.sameResources(prepared, inheritedClaim.prepared)) throw new HarnessError("DISPATCH_RESOURCE_CHANGED");
+      this.checkClaims(prepared, inheritedClaim, this.predecessors(request.after ?? []));
+    }
     const record: RunRecord = {
       owner_id: this.options.owner.owner_id, generation: this.options.owner.generation,
       run_id: randomUUID(), agent_id: agent.id, request_id, request_digest, enqueue_sequence: ++this.sequence,
@@ -529,12 +566,18 @@ export class OwnerController {
       max_duration_ms: request.max_duration_ms ?? agent.limits.max_duration_ms ?? 1_800_000,
       ...(reuse && request.answer_to_run_id ? { answer_to_run_id: request.answer_to_run_id } : {}),
       ...(request.after ? { after: [...request.after] } : {}),
+      ...(declaration === undefined ? {} : { dispatch: structuredClone(declaration) }),
       input_entered: false, status: "queued", phase: "queued", execution_exited: false,
       submitted_at: this.clock.wall(), turns: 0, limit_reached: false, cleanup_errors: [], discarded_inputs: [],
     };
     const run: ManagedRun = { record, output: emptyOutput(), submittedMono: this.clock.mono(), inputOpen: false,
       active: false, outputReserved: true, inputs: new Set(), inputCount: 0, finished_presented: false,
-      hadSession: !!agent.session, session: agent.session };
+      hadSession: !!agent.session, session: agent.session, prepared };
+    if (prepared && (prepared.ownership.length || prepared.tree)) {
+      run.claim = inheritedClaim ?? { run_id: record.run_id, agent_id: agent.id, prepared };
+      run.claim.run_id = record.run_id;
+      this.claims.add(run.claim);
+    }
     agent.current = record.run_id;
     if (agent.question) agent.question.reserved_by = record.run_id;
     this.agents.set(agent.id, agent);
@@ -549,6 +592,124 @@ export class OwnerController {
     if (this.closing) this.cancel(record.run_id);
     this.pump(); this.wake();
     return this.view(record.run_id);
+  }
+
+  private prepareDispatch(declaration: Dispatch, settings: AdmittedAgentConfig, deferInputs: boolean): PreparedDispatch {
+    validateDispatch(declaration);
+    const port = this.options.dispatch;
+    if (!port) throw new HarnessError("DISPATCH_UNAVAILABLE");
+    const prepared = this.validateObservationEntry(() => structuredClone(synchronousObservationPort(port.prepare(
+      structuredClone(declaration), { cwd: settings.cwd, profile: settings.profile, deferInputs }))));
+    const path = (item: unknown): boolean => !!item && typeof item === "object" &&
+      ["path", "canonical"].every(key => {
+        const value = (item as Record<string, unknown>)[key];
+        // eslint-disable-next-line no-control-regex -- reject unsupported control-bearing filesystem paths
+        return typeof value === "string" && value.length <= 4096 && isAbsolute(value) && !/[\x00-\x1f\x7f]/.test(value);
+      });
+    if (!prepared || !Array.isArray(prepared.inputs) || !Array.isArray(prepared.ownership) ||
+        prepared.inputs.length !== (declaration.inputs?.length ?? 0) || prepared.ownership.length !== (declaration.ownership?.length ?? 0) ||
+        !Array.from(prepared.inputs).every(path) || !Array.from(prepared.ownership).every(path) ||
+        ((prepared.tree !== undefined) !== (declaration.tree !== undefined)) || (prepared.tree && !path(prepared.tree)))
+      throw new HarnessError("INVALID_PREPARED_DISPATCH");
+    prepared.declaration = structuredClone(declaration);
+    return prepared;
+  }
+  private predecessors(ids: readonly string[]): Set<string> {
+    const result = new Set<string>(), pending = [...ids];
+    while (pending.length) {
+      const id = pending.pop()!;
+      if (result.has(id)) continue;
+      result.add(id); pending.push(...this.dependencies(this.requireRun(id).record));
+    }
+    return result;
+  }
+  private sameResources(left: PreparedDispatch, right: PreparedDispatch): boolean {
+    return stable({ ownership: left.ownership, tree: left.tree }) === stable({ ownership: right.ownership, tree: right.tree });
+  }
+  private checkClaims(prepared: PreparedDispatch, own?: ResourceClaim, predecessors = new Set<string>(), futureOf?: string): void {
+    const entries = (p: PreparedDispatch) => [
+      ...p.ownership.map((path, i) => ({ path, tree: false, requested: p.declaration.ownership?.[i] })),
+      ...(p.tree ? [{ path: p.tree, tree: true, requested: p.declaration.tree }] : []),
+    ];
+    for (const claim of this.claims) {
+      if (claim === own || predecessors.has(claim.run_id)) continue;
+      const other = this.requireRun(claim.run_id);
+      const ancestors = this.predecessors(this.dependencies(other.record));
+      // A fixed failed/questioned ancestor cannot later become completed. A
+      // doomed queued successor may wait for a pump slot to settle, but cannot
+      // block an answer or new owner in the meantime. Never rebind its after.
+      if (other.record.status === "queued" && [...ancestors].some(id => {
+        const status = this.requireRun(id).record.status;
+        return terminal(status) && status !== "completed";
+      })) continue;
+      // Accepted successors reserve their place, not a concurrent execution.
+      if (futureOf && other.record.status === "queued" && ancestors.has(futureOf)) continue;
+      for (const wanted of entries(prepared)) for (const held of entries(claim.prepared)) {
+        if (pathsOverlap(wanted.path, held.path)) throw new HarnessError(wanted.tree && held.tree ? "BUILD_TREE_BUSY" : "RESOURCE_OWNED", {
+          agent: other.record.name, key: wanted.tree ? "tree" : "ownership", requested: wanted.requested, path: wanted.path.path,
+          resolution: other.record.status === "needs_input" ?
+            "Read the pending question and use agent_answer; or explicitly abandon the task with agent_kill and wait for confirmed release. An after dependency on this question will fail." :
+            "Wait for this resource's owner, or declare an after dependency. Ownership declarations do not grant permissions.",
+        });
+      }
+    }
+  }
+  private dispatchNote(run: ManagedRun, note: string): void {
+    const notes = run.record.dispatch_notes ??= [];
+    const bounded = note.slice(0, 120);
+    if (bounded.trim() && notes.length < 2 && !notes.includes(bounded)) notes.push(bounded);
+  }
+  private async observeDispatch(run: ManagedRun): Promise<void> {
+    const prepared = run.prepared!;
+    const capture = !!prepared.declaration.checks?.length;
+    const claim = run.claim;
+    try {
+      if (claim?.lease) {
+        try { claim.lease.assertHeld(); } catch { this.dispatchNote(run, "tree_lock_unknown"); }
+      }
+      const result = await this.options.dispatch?.start?.(structuredClone(prepared), {
+        cwd: run.record.settings.cwd, profile: run.record.settings.profile, acquireTree: !!prepared.tree && !claim?.lease,
+      });
+      // This await is owned by execute: stop cannot settle or close the Owner
+      // until late observations/handles have been classified and released.
+      if (result?.lease) {
+        if (claim && !claim.lease) claim.lease = result.lease;
+        else result.lease.close();
+      }
+      if (capture) run.record.source_state = validSourceState(result?.source_state) ? structuredClone(result.source_state) :
+        { state: "unknown", reason: "capture_unavailable" };
+      if (Array.isArray(result?.notes)) for (const note of result.notes.slice(0, 2)) if (typeof note === "string") this.dispatchNote(run, note);
+      if (prepared.tree && !claim?.lease && !run.record.dispatch_notes?.length) this.dispatchNote(run, "tree_lock_unknown");
+    } catch {
+      if (capture) run.record.source_state = { state: "unknown", reason: "capture_failed" };
+      this.dispatchNote(run, prepared.tree ? "tree_lock_unknown" : "source_state_unknown");
+    }
+  }
+  private releaseClaimsIfIdle(agent: Agent): void {
+    if (agent.current || agent.question || ((agent.unavailable || agent.exiting || agent.release) && !agent.cleanupComplete)) return;
+    for (const claim of this.claims) {
+      if (claim.agent_id !== agent.id || claim.releaseFailed) continue;
+      try { claim.lease?.close(); claim.lease = undefined; this.claims.delete(claim); }
+      catch (error) {
+        // A failed close is sticky uncertainty. A later no-op close or successful
+        // SDK disposal cannot prove that this separate resource was released.
+        claim.releaseFailed = true;
+        this.cleanupUncertain = true; agent.unavailable = "cleanup_uncertain"; agent.resident = true;
+        this.requireRun(claim.run_id).record.cleanup_errors.push(`TREE_RELEASE_FAILED: ${errorText(error)}`);
+      }
+    }
+  }
+  private uncertainClaim(agent: Agent): boolean {
+    return [...this.claims].some(claim => claim.agent_id === agent.id && claim.releaseFailed);
+  }
+  private validationReceipt(run: ManagedRun, outcome: Outcome): ValidationReceipt | undefined {
+    const checks = run.record.dispatch?.checks;
+    if (!checks?.length) return;
+    return { version: 1, checks: [...checks], cwd: run.record.settings.cwd,
+      ...(run.prepared?.tree ? { tree: run.prepared.tree.canonical } : {}),
+      source_state: run.record.source_state ?? { state: "unknown", reason: "not_captured" },
+      outcome: { status: outcome.status, ...(outcome.reason ? { reason: outcome.reason } : {}),
+        ...(outcome.time_wrapped ? { time_wrapped: true } : {}) } };
   }
 
   private removeQueued(id: string): void {
@@ -573,17 +734,38 @@ export class OwnerController {
       const unmet = this.dependencies(run.record).map((id) => this.requireRun(id).record).find((dep) => dep.status !== "completed");
       if (unmet) {
         // Model-visible through the task's error: name the Agent, never a Run ID.
-        run.dependency = `DEPENDENCY_NOT_COMPLETED: ${unmet.name || unmet.settings.profile}`;
-        this.track(this.finish(run, { kind: "error", error: run.dependency, output: run.output }));
+        run.prestartFailure = { reason: "dependency_not_completed", error: `DEPENDENCY_NOT_COMPLETED: ${unmet.name || unmet.settings.profile}` };
+        this.track(this.finish(run, { kind: "error", error: run.prestartFailure.error, output: run.output }));
         continue;
+      }
+      if (run.record.dispatch) {
+        try {
+          const prepared = this.prepareDispatch(run.record.dispatch, run.record.settings, false);
+          if (run.prepared && !this.sameResources(prepared, run.prepared)) throw new HarnessError("DISPATCH_RESOURCE_CHANGED");
+          // Predecessor exemption permits queuing, never unsafe early handoff.
+          this.checkClaims(prepared, run.claim, new Set(), run.record.run_id);
+          run.prepared = prepared;
+          if (run.claim) run.claim.prepared = prepared;
+        } catch (error) {
+          run.prestartFailure = { reason: error instanceof HarnessError && error.code === "DISPATCH_INPUT_MISSING" ?
+            "dependency_input_missing" : "dispatch_preflight_failed", error: errorText(error) };
+          this.track(this.finish(run, { kind: "error", error: run.prestartFailure.error, output: run.output }));
+          continue;
+        }
       }
       run.active = true; this.active++;
       run.executionStartedMono = this.clock.mono();
+      run.budgetStartedMono = performance.now();
       run.record.status = "running"; run.record.phase = "initializing"; run.record.started_at = this.clock.wall();
       // Real event-loop time, like wait(): a stop request, not a hard interrupt.
       // A late callback cannot demote a Run whose execution exit was recorded.
       run.deadlineTimer = setTimeout(() => this.stop(run, "deadline"), run.record.max_duration_ms);
       run.deadlineTimer.unref?.();
+      const softDelay = softDeadlineDelay(run.record.max_duration_ms);
+      if (softDelay !== undefined) {
+        run.softDeadlineTimer = setTimeout(() => this.timeWrapUp(run, true), softDelay);
+        run.softDeadlineTimer.unref?.();
+      }
       this.track(this.execute(run));
     }
   }
@@ -608,6 +790,23 @@ export class OwnerController {
     try { this.dispatchInput(run, softBudgetMessage, "soft_budget"); }
     catch (error) { run.record.cleanup_errors.push(`SOFT_BUDGET_MESSAGE_REJECTED: ${errorText(error)}`); }
   }
+  private timeWrapUp(run: ManagedRun, timerExpired = false): void {
+    this.assertEffectAllowed();
+    if (!this.current(run) || run.record.time_wrapped || run.record.limit_reached || run.record.stop_reason || run.record.execution_exited) return;
+    const delay = softDeadlineDelay(run.record.max_duration_ms);
+    if (delay === undefined || run.budgetStartedMono === undefined) return;
+    if (timerExpired) run.softDeadlineDue = true;
+    const elapsed = performance.now() - run.budgetStartedMono;
+    if ((!run.softDeadlineDue && elapsed < delay) || elapsed >= run.record.max_duration_ms || !run.record.input_entered) return;
+    try {
+      if (!this.acceptsInput(run)) return;
+      // Only actual readiness after the original input boundary can consume the
+      // attempt. This also puts approval invalidation after the fresh run binding.
+      run.softDeadlineDue = undefined;
+      run.record.time_wrapped = true;
+      this.dispatchInput(run, softTimeBudgetMessage, "soft_budget");
+    } catch (error) { run.record.cleanup_errors.push(`SOFT_TIME_MESSAGE_REJECTED: ${errorText(error)}`); }
+  }
   private execute(run: ManagedRun): Promise<void> {
     this.assertEffectAllowed();
     return this.executeRun(run);
@@ -616,6 +815,11 @@ export class OwnerController {
     const agent = this.requireAgent(run.record.agent_id);
     let facts: ExecutionFacts;
     try {
+      if (run.prepared && (run.prepared.tree || run.prepared.declaration.checks?.length)) {
+        await this.observeDispatch(run);
+        this.assertOwnerAvailable();
+        if (run.record.stop_reason) { await this.finish(run, { kind: "aborted", output: run.output }); return; }
+      }
       const port = agent.session ?? await this.options.createSession({ agent_id: agent.id, name: agent.name, settings: structuredClone(agent.settings) });
       agent.session = run.session = port;
       // Session creation can await arbitrary SDK initialization. Recheck even
@@ -647,6 +851,7 @@ export class OwnerController {
             if (!this.current(run) || run.record.execution_exited) return;
             run.record.input_entered = true;
             if (agent.question?.reserved_by === run.record.run_id) agent.question = undefined;
+            this.timeWrapUp(run);
           },
           output: (value) => { this.assertEffectAllowed(); if (this.current(run) && !run.record.execution_exited) this.output(run, value); },
           runtime: (value) => {
@@ -671,6 +876,7 @@ export class OwnerController {
             if (run.record.turns > run.record.max_turns + this.limits.grace) {
               run.record.limit_reached = true; this.stop(run, "hard_budget");
             } else if (run.record.turns > run.record.max_turns) this.wrapUp(run);
+            this.timeWrapUp(run);
           },
           turnEnd: (continuing) => {
             this.assertEffectAllowed();
@@ -705,8 +911,9 @@ export class OwnerController {
         run.promptComposed = true;
         const first = !agent.prompted; agent.prompted = true;
         if (updates.length) run.record.delivered_updates = updates.length;
-        const instructions = [updatesText(updates), run.record.prompt].filter(Boolean).join("\n\n");
-        const task = [updatesText(updates), this.handoffText(run.record), run.record.prompt].filter(Boolean).join("\n\n");
+        const declaration = dispatchText(run.record.dispatch);
+        const instructions = [updatesText(updates), declaration, run.record.prompt].filter(Boolean).join("\n\n");
+        const task = [updatesText(updates), this.handoffText(run.record), declaration, run.record.prompt].filter(Boolean).join("\n\n");
         const prompt = first && run.record.settings.context_snapshot ?
           `${run.record.settings.context_snapshot}\n\n${task}` : task;
         facts = await port.run(prompt, callbacks, { owner_id: run.record.owner_id, generation: run.record.generation,
@@ -736,6 +943,7 @@ export class OwnerController {
     if (!this.current(run) || run.record.execution_exited) return;
     run.inputOpen = false; run.record.execution_exited = true;
     clearTimeout(run.deadlineTimer); run.deadlineTimer = undefined;
+    clearTimeout(run.softDeadlineTimer); run.softDeadlineTimer = undefined; run.softDeadlineDue = undefined;
     run.record.exited_at = this.clock.wall(); run.record.phase = "finalizing"; run.turnStarted = undefined;
     run.record.execution_elapsed_ms = run.executionStartedMono === undefined ? undefined :
       Math.max(0, this.clock.mono() - run.executionStartedMono);
@@ -779,10 +987,11 @@ export class OwnerController {
       model_stop_reason: facts.model_stop_reason,
       reason: stopped === "hard_budget" ? "turn_limit" : stopped === "deadline" ? "deadline" : stopped ? undefined :
         facts.model_stop_reason === "length" ? "output_limit" :
-        run.quarantine === "context_change_failed" ? "context_change_failed" : run.dependency ? "dependency_not_completed" :
+        run.quarantine === "context_change_failed" ? "context_change_failed" : run.prestartFailure ? run.prestartFailure.reason :
           facts.kind === "aborted" ? "unexpected_abort" :
           facts.kind === "error" ? "execution_error" : undefined,
       error: facts.error?.slice(0, 2048), question: run.question, limit_reached: run.record.limit_reached,
+      ...(run.record.time_wrapped ? { time_wrapped: true } : {}),
     };
     } catch (error) {
       // A synchronous finalization fault (internal bug or a hostile getter in
@@ -804,7 +1013,8 @@ export class OwnerController {
       run.record.outcome = { status: stopped === "user_cancel" ? "cancelled" : "failed",
         model_stop_reason: run.record.model_stop_reason, reason: "finalization_failed",
         error: `FINALIZATION_FAILED: ${errorText(error)}`.slice(0, 2048),
-        question: run.question, limit_reached: run.record.limit_reached };
+        question: run.question, limit_reached: run.record.limit_reached,
+        ...(run.record.time_wrapped ? { time_wrapped: true } : {}) };
     }
     // A freed execution slot belongs to healthy peers, even while this Run's
     // input/finalization/isolated session cleanup drains. Its own Agent stays busy.
@@ -827,7 +1037,7 @@ export class OwnerController {
     if (!run.promptComposed) run.record.discarded_inputs.push(...agent.inbox.splice(0));
     // A task stopped or failed by its dependencies before taking input leaves
     // the Agent in place; only a failed initialization or quarantine ends it.
-    if (run.quarantine || (!run.hadSession && !run.record.input_entered && !run.record.stop_reason && !run.dependency)) {
+    if (run.quarantine || (!run.hadSession && !run.record.input_entered && !run.record.stop_reason && !run.prestartFailure)) {
       run.cleanup = this.releaseAgent(agent, run.quarantine ?? "initialization_failed", run);
       run.finalizeWait = { wait: "release", startedMono: this.clock.mono() };
       try { await run.cleanup; } finally { run.finalizeWait = undefined; } // Known cleanup facts precede optional history metadata.
@@ -848,7 +1058,12 @@ export class OwnerController {
           throw error;
         }
         run.finalizeWait = { wait: "history", startedMono: this.clock.mono() };
-        try { finished.history_ref = await run.session.history.finish(finished.history_ref, { ...finished.outcome! }, { ...run.output }, finished.usage); }
+        try { finished.history_ref = await run.session.history.finish(finished.history_ref, { ...finished.outcome! }, { ...run.output }, finished.usage,
+          this.validationReceipt(run, finished.outcome!), () => {
+            this.assertEffectAllowed();
+            if (run.finalizeWait?.wait === "history" && !run.record.cleanup_errors.includes("VALIDATION_RECEIPT_INVALID"))
+              run.record.cleanup_errors.push("VALIDATION_RECEIPT_INVALID");
+          }); }
         finally { run.finalizeWait = undefined; }
       } catch (error) { finished.history_error = this.historyFailed(run, error); }
     }
@@ -867,8 +1082,10 @@ export class OwnerController {
     }
     if (run.record.status === "needs_input" && agent.session && !agent.unavailable && !agent.exiting) agent.question = { run_id: run.record.run_id };
     agent.current = undefined;
+    if (agent.question && run.claim) run.claim.run_id = agent.question.run_id;
+    this.releaseClaimsIfIdle(agent);
     if (agent.exiting && !agent.release) this.track(this.releaseAgent(agent, "explicitly_released"));
-    if (agent.cleanupComplete) agent.resident = false;
+    if (agent.cleanupComplete && !this.uncertainClaim(agent)) agent.resident = false;
     run.settled_seq = ++this.settledSeq;
     this.wake(); this.pump();
   }
@@ -1101,6 +1318,9 @@ export class OwnerController {
       stop_reason: record.stop_reason, model_stop_reason: record.model_stop_reason, outcome: record.outcome,
       usage: record.usage ?? run.runtime?.usage, result_ref: record.result,
       cleanup_errors: record.cleanup_errors, discarded_inputs: record.discarded_inputs,
+      ...(record.dispatch === undefined ? {} : { dispatch: record.dispatch }),
+      ...(record.dispatch_notes?.length ? { dispatch_notes: record.dispatch_notes } : {}),
+      ...(record.time_wrapped ? { time_wrapped: true } : {}),
       task, has_question: agent.question?.run_id === run_id,
       question_id: actionableQuestionId(agent, run, this.communicationHealthy() && leaseHeld),
       pending_messages: this.alerts.filter((alert) => alert.run === run).length,
@@ -1196,7 +1416,15 @@ export class OwnerController {
     const stopping = [...this.runs.values()].filter((run) => run.record.stop_reason && !run.record.execution_exited)
       .map((run) => ({ run_id: run.record.run_id, agent_id: run.record.agent_id, stop_reason: run.record.stop_reason,
         elapsed_ms: run.stopRequestedMono === undefined ? undefined : Math.max(0, this.clock.mono() - run.stopRequestedMono) }));
-    return { active: this.active, queued: this.queue.length, ...(draining.length ? { draining } : {}),
+    const settled_reasons: Record<string, number> = {};
+    let time_wrapped_attempts = 0;
+    for (const run of this.runs.values()) if (terminal(run.record.status)) {
+      const key = `${run.record.status}/${run.record.outcome?.reason ?? "none"}`;
+      settled_reasons[key] = (settled_reasons[key] ?? 0) + 1;
+      if (run.record.outcome?.time_wrapped) time_wrapped_attempts++;
+    }
+    return { active: this.active, queued: this.queue.length, time_wrapped_attempts, ...(draining.length ? { draining } : {}),
+    ...(Object.keys(settled_reasons).length ? { settled_reasons } : {}),
     ...(finalizingWaits.length ? { finalizing_waits: finalizingWaits } : {}),
     ...(stopping.length ? { stopping } : {}),
     resident: [...this.agents.values()].filter((a) => a.resident).length,
@@ -1342,6 +1570,8 @@ export class OwnerController {
       ...(question_id ? { question_id } : {}),
       ...(run.question !== undefined && (historical || isCommunicationSettled(run)) ? { question: run.question } : {}),
       result: this.communicationWindow(run, limit, cursor),
+      ...(run.record.dispatch_notes?.length ? { dispatch_notes: [...run.record.dispatch_notes] } : {}),
+      ...(run.record.time_wrapped ? { time_wrapped: true as const } : {}),
       diagnostics: { error: run.record.outcome?.error, owner_error: this.parentError ?? this.internalError,
         unavailable_reason: !healthy ? "owner_unavailable" : agent.unavailable ?? (agent.exiting ? "exiting" : run.quarantine) } };
   }
@@ -1427,7 +1657,9 @@ export class OwnerController {
       finally {
         if (clean) {
           agent.cleanupComplete = true;
-          if (!agent.current) agent.resident = false;
+          this.releaseClaimsIfIdle(agent);
+          if (this.uncertainClaim(agent)) { agent.unavailable = "cleanup_uncertain"; agent.resident = true; }
+          else if (!agent.current) agent.resident = false;
         } else { this.cleanupUncertain = true; agent.unavailable = "cleanup_uncertain"; }
         // Unknown shutdown retains its reservation AND the owner lock, regardless
         // of whether history is available. There is no retry/force-unlock API.

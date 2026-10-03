@@ -39,6 +39,39 @@ export function resolveFlock(env = process.env) {
   }
   throw new Error("Linux util-linux flock unavailable; set an explicit absolute PI_HARNESS_FLOCK (PATH is not trusted)");
 }
+// Optional observation dependency, never found through a project's PATH. A
+// missing/unsupported Git only makes checks' source_state unknown at runtime.
+export function resolveGit(env = process.env) {
+  const candidates = env.PI_HARNESS_GIT ? [env.PI_HARNESS_GIT] :
+    ["/usr/bin/git", "/bin/git", "/run/current-system/sw/bin/git"];
+  /** @type {NodeJS.ProcessEnv} */
+  const clean = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (/^(?:GIT_|LD_|DYLD_|_RLD|LDR_|BASH_FUNC_)/i.test(key) ||
+        /^(?:LIBPATH|SHLIB_PATH|GCONV_PATH|GLIBC_TUNABLES|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|CDPATH|SHELLOPTS|BASHOPTS|PATH)$/i.test(key)) continue;
+    clean[key] = value;
+  }
+  // /dev/null is an ENOTDIR search sentinel, NOT a system executable directory.
+  // An empty PATH would let a trusted shell wrapper search the project cwd.
+  clean.PATH = "/dev/null";
+  clean.LC_ALL = "C";
+  // Trace2's global/system config can select write targets even with no trace
+  // env inherited. Zero values disable those targets before any Git setup.
+  clean.GIT_TRACE = "0";
+  clean.GIT_TRACE2 = "0";
+  clean.GIT_TRACE2_EVENT = "0";
+  clean.GIT_TRACE2_PERF = "0";
+  for (const candidate of candidates) {
+    if (!isAbsolute(candidate)) continue;
+    try {
+      const path = realpathSync(executable("git", candidate, env));
+      const result = spawnSync(path, ["--version"], { env: clean, encoding: "utf8", timeout: 2000,
+        maxBuffer: 64 * 1024, killSignal: "SIGKILL" });
+      if (!result.error && result.status === 0 && /^git version [0-9]+\.[0-9]+\.[0-9]+[^\r\n]*\n?$/.test(result.stdout ?? "")) return path;
+    } catch { /* Optional; do not fall back to PATH, including bad overrides. */ }
+  }
+  return undefined;
+}
 function regular(path) {
   assert(statSync(path).isFile(), `Required resource is not a file: ${path}`);
   return readFileSync(path);
@@ -101,6 +134,7 @@ export function preflight({ root = packageRoot, env = process.env, agentDir = ag
   const runtime = verifyRuntime(root);
   verifyAgentResources(agentDir, root);
   const flock = resolveFlock(env);
+  const git = resolveGit(env);
   const permissionRoot = realpathSync(join(runtime, "permission-system"));
   const policyRoot = realpathSync(join(runtime, "policy"));
   // Old environment names remain the internal contract, not an unchecked
@@ -111,7 +145,7 @@ export function preflight({ root = packageRoot, env = process.env, agentDir = ag
     assert(isAbsolute(env[key]), `${key} must be absolute`);
     assert.equal(realpathSync(env[key]), expected, `${key} does not identify this verified runtime generation; unset the override`);
   }
-  return { runtime, permissionRoot, policyRoot, flock, web: webEntry(root), agentDir };
+  return { runtime, permissionRoot, policyRoot, flock, ...(git ? { git } : {}), web: webEntry(root), agentDir };
 }
 // Resolve executable dependency code using this installation's module graph,
 // including npm hoisting and canonical targets of package-manager symlinks.
@@ -161,7 +195,7 @@ export function protectionResources(paths = {}, env = process.env, root = packag
 export function runtimeEnvironment(paths, env = process.env) {
   return { ...env, PI_CODING_AGENT_DIR: paths.agentDir,
     PI_HARNESS_PERMISSION_ROOT: paths.permissionRoot, PI_HARNESS_POLICY_ROOT: paths.policyRoot,
-    PI_HARNESS_FLOCK: paths.flock, PI_HARNESS_WEB_ENTRY: paths.web, PI_AUTO_APPROVAL_MODE: "shadow",
+    PI_HARNESS_FLOCK: paths.flock, PI_HARNESS_GIT: paths.git, PI_HARNESS_WEB_ENTRY: paths.web, PI_AUTO_APPROVAL_MODE: "shadow",
     ...(env.PI_JEV_API_KEY_FILE ? { PI_JEV_API_KEY_FILE: absoluteUserPath(env.PI_JEV_API_KEY_FILE) } : {}),
     PI_JEV_APPROVAL_MODE: env.PI_JEV_APPROVAL_MODE || "enforce-subagents" };
 }

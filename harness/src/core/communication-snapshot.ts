@@ -24,6 +24,9 @@ export interface TaskSnapshot {
   readonly question?: string;
   readonly result?: ResultWindow;
   readonly diagnostics?: Pick<TaskEntry, "error" | "owner_error" | "unavailable_reason">;
+  /** Optional whole diagnostics, outside the required thin control row. */
+  readonly dispatch_notes?: readonly string[];
+  readonly time_wrapped?: true;
 }
 export interface AlertSnapshot {
   readonly agent: string;

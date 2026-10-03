@@ -162,6 +162,41 @@ opaque program (a script that writes files itself) is an ordinary Bash ask,
 which a judge or yolo can approve, so `reader` must not be represented as a
 container/sandbox.
 
+## Dispatch preflight and validation observations
+
+[Task dispatch](task-dispatch.md) performs read-only preflight against the target
+profile, including path and canonical-alias external-directory surfaces. Known
+deny rejects before extra input-classification stat; ask/unknown is not approval
+or a grant. Permission lookup may itself canonicalize. Interface failures are
+not policy unknown. Claims detect declared lexical/canonical overlap, not opaque
+program effects or OS isolation, and remain through pending questions/answer
+rollback until final termination and necessary cleanup are confirmed.
+
+Checks-only execution-start source capture uses trusted absolute Git, never
+project PATH, with isolated redirection/config/executable/trace environment,
+helper/partial configuration guards before status overrides, and disabled lazy
+fetch/locks/paging/replacements. Fixed `--ignore-submodules=all` makes this
+superproject-only partial metadata, not whole-tree clean or content identity.
+Fixed `--untracked-files=normal` includes non-ignored untracked entries despite
+configured suppression; ignores/indexes/Git semantics still apply. Global LFS
+clean/process keys and configured fsmonitor=false still withhold known state;
+this conservative guard is not narrowed.
+Unknown capture does not authorize anything. Tree leases coordinate only the
+same host/agentDir/canonical tree and are advisory; synchronous flock can still
+delay event-loop cancellation. Source Git subprocess probes are asynchronous,
+with per-probe 2-second/4 MiB and aggregate 8-second/8 MiB limits, not
+hard-realtime bounds or guaranteed cancellation/kill. Receipts are bounded trusted history/offline
+observations with valid boundary/end coverage, not grant or gate-skip tokens.
+Invalid optional receipts are locally dropped with a bounded end marker/live
+cleanup diagnostic and cold-reader warning; mandatory history validation and
+append failures remain strict, with no retry.
+
+Wall-clock `soft_budget` warning attempts invalidate the automatic-approval
+witness and emit `pi-harness:approval:invalidated`, like turn wrap. This is not
+just a harmless reminder or a guarantee that a model received it. Worker
+same-class denied-operation escalation is L1 guidance only; no L2 deny counter
+or new authority channel is introduced.
+
 ## Immutable resource floor in writable installations
 
 The private 32.0.3 permission-system patch installs a deny-only, process-local

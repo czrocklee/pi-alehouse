@@ -77,15 +77,27 @@ export const historicalRunsCommand = ((pi) => {
             "The 64 MiB per-file hard limit was reached. This command cannot read larger parent/child logs.",
         } : {}) }), "warning"); return;
       }
+      const { validation_receipt: receipt, ...historical } = result;
+      // Human projection only: checks were planned; source metadata was observed
+      // at execution start, not atomically captured validation inputs or a pass.
+      const validation_observation = receipt ? { planned_checks: receipt.checks, cwd: receipt.cwd,
+        ...(receipt.tree ? { tree: receipt.tree } : {}),
+        source: receipt.source_state.state === "unknown" ? receipt.source_state : {
+          state: "observed", scope: "superproject_only", submodules: "ignored",
+          head: receipt.source_state.head.slice(0, 12), dirty: receipt.source_state.dirty,
+          observed_at: receipt.source_state.observed_at },
+        note: "Parent-planned checks; execution-start source observation only, not executed/passed validation." } : undefined;
       const { text, ...output } = result.output;
       if (offset > text.length || (offset > 0 && /[\uD800-\uDBFF]/.test(text[offset - 1] ?? "") && /[\uDC00-\uDFFF]/.test(text[offset] ?? ""))) {
         ctx.ui.notify("Invalid history offset (outside retained text or inside a surrogate pair).", "warning"); return;
       }
       const page = boundedOutput(text.slice(offset), 16384);
       const next = offset + page.text.length;
-      ctx.ui.notify(JSON.stringify({ ...result, max_mib: maxMiB, output: { ...output, text: page.text, retained_chars: text.length, offset,
+      ctx.ui.notify(JSON.stringify({ ...historical, ...(validation_observation ? { validation_observation } : {}),
+        max_mib: maxMiB, output: { ...output, text: page.text, retained_chars: text.length, offset,
         ...(next < text.length ? { next_offset: next,
-          next_command: `/harness-history ${run_id} ${next} --max-mib ${maxMiB}` } : {}) } }), "info");
+          next_command: `/harness-history ${run_id} ${next} --max-mib ${maxMiB}` } : {}) } }),
+        result.validation_receipt_error ? "warning" : "info");
     },
   });
 }) satisfies ExtensionFactory;

@@ -496,6 +496,225 @@ test("inconsistent windows, oversize alerts, and wrong finished links fail witho
   }
 });
 
+for (const [name, glyph, byteLimited] of [["ASCII", "a", false], ["CJK", "字", false], ["NUL", "\0", true], ["backslash", "\\", true]]) {
+  test(`time warning precedes a long ${name} result while its cursor advances only by shown units`, () => {
+    const text = glyph.repeat(20000), plain = snapshot({ tasks: [task(row("otter", 1, "completed"), {
+      result: window(text, { cursor: cursorIdentity }),
+    })] });
+    const baseline = pack(plain), flagged = structuredClone(plain); flagged.tasks[0].time_wrapped = true;
+    const { envelope } = pack(flagged), entry = envelope.agents[0];
+    assert.equal(entry.time_wrapped, true, "result byte saturation cannot hide an already fitted warning attempt");
+    assert.equal(entry.result, text.slice(0, entry.result.length));
+    assert.equal(entry.result_omitted, undefined); assert.equal(entry.omitted_chars, undefined);
+    assert.equal(entry.result_truncated, undefined, "stable paging uses the reserved original result cursor");
+    assert.deepEqual(decodeCursor(entry.next_cursor), { ...cursorIdentity, offset: entry.result.length });
+    assert.equal(entry.next_cursor.length, 37); assert.equal(envelope.response_limit_reached, true);
+    if (byteLimited) {
+      assert(entry.result.length < 16384);
+      assert(entry.result.length < baseline.envelope.agents[0].result.length, "flag bytes reduce the page rather than being appended beyond the limit");
+      assert(bytes(envelope) <= 65536 && bytes(envelope) > 65536 - 7, "packing still uses the available whole-glyph bytes");
+    } else {
+      assert.equal(entry.result.length, 16384); assert.equal(entry.result, baseline.envelope.agents[0].result);
+    }
+    assert.equal(bodyUnits(envelope), entry.result.length, "warning metadata does not spend body units");
+  });
+}
+
+test("a full ASCII question and FIFO alert keep their bodies before an optional warning, even with an omitted result cursor", () => {
+  const input = snapshot({ reason: "question", tasks: [task(row("otter", 1, "needs_input", { has_question: true }), {
+    time_wrapped: true, question_id: questionId(), question: "Q".repeat(8192),
+    result: window("retained", { offset: 5, retained_chars: 20, total_chars: 20, cursor: cursorIdentity }),
+  })], alerts: [alert("A".repeat(8192))] });
+  const { envelope, references } = pack(input), entry = envelope.agents[0];
+  assert.equal(entry.question, input.tasks[0].question); assert.equal(envelope.alerts[0].message, input.alerts[0].message);
+  assert.equal(bodyUnits(envelope), 16384); assert.deepEqual(references.alerts, [0]);
+  assert.equal(entry.time_wrapped, true); assert.equal(entry.result_omitted, true);
+  assert.deepEqual(decodeCursor(entry.next_cursor), { ...cursorIdentity, offset: 5 });
+});
+
+test("sixteen optional warnings can fit without displacing the mandatory worst-byte alert or reserved original cursors", () => {
+  const tasks = Array.from({ length: 16 }, (_, index) => task(
+    row(`a${String(index).padStart(2, "0")}${"x".repeat(21)}`, Number.MAX_SAFE_INTEGER, "needs_input", controls), {
+      time_wrapped: true, question_id: questionId(index + 1),
+      result: window("", { offset: Number.MAX_SAFE_INTEGER - 1000, retained_chars: Number.MAX_SAFE_INTEGER,
+        total_chars: Number.MAX_SAFE_INTEGER, cursor: { ...cursorIdentity, run: `reserved-${index}` } }),
+    }));
+  const input = snapshot({ reason: "alert", tasks, workers_disabled: true,
+    action: { type: "agent_send", agent: tasks[0].row.agent, task: Number.MAX_SAFE_INTEGER, delivery: "not_delivered" },
+    alerts: [alert("\0".repeat(8192), Number.MAX_SAFE_INTEGER, tasks[0].row.agent, "\0".repeat(120))] });
+  const { envelope } = pack(input);
+  assert.equal(envelope.alerts[0].message, input.alerts[0].message);
+  assert.equal(envelope.agents.length, 16);
+  for (const [index, entry] of envelope.agents.entries()) {
+    assert.equal(entry.time_wrapped, true);
+    for (const [flag, value] of Object.entries(controls)) assert.equal(entry[flag], value);
+    assert.equal(entry.next_cursor.length, 37);
+    const decoded = decodeResultCursor(entry.next_cursor);
+    assert.equal(decoded.key, resultCursorKey(tasks[index].result.cursor)); assert.equal(decoded.offset, tasks[index].result.offset);
+  }
+});
+
+test("all task warning attempts are tried before any task's results or string diagnostics", () => {
+  const tasks = [task(row("otter", 1, "completed"), { time_wrapped: true,
+    result: window("\0".repeat(20000), { cursor: cursorIdentity }), diagnostics: { error: "\0".repeat(512) }, dispatch_notes: ["tree_shared"] }),
+  task(row("orca", 1, "completed"), { time_wrapped: true,
+    result: window("second", { offset: 5, retained_chars: 11, total_chars: 11, cursor: { ...cursorIdentity, run: "second" } }) }),
+  task(row("dolphin", 1, "failed"), { time_wrapped: true, diagnostics: { owner_error: "\0".repeat(512) } })];
+  const { envelope } = pack(snapshot({ tasks }));
+  assert(envelope.agents.every((entry) => entry.time_wrapped === true), "a later task's warning must not wait behind the first result");
+  assert((envelope.agents[0].error?.length ?? 0) < 512, "only remaining bytes may hold a diagnostic prefix");
+  assert.equal(envelope.agents[0].dispatch_notes, undefined);
+  assert((envelope.agents[2].owner_error?.length ?? 0) < 512, "string diagnostics remain below every warning attempt");
+  const shown = envelope.agents[1].result ?? "";
+  assert.equal(shown, "second".slice(0, shown.length));
+  if (shown.length < 6) {
+    assert.equal(decodeResultCursor(envelope.agents[1].next_cursor).offset, 5 + shown.length);
+    assert.equal(decodeResultCursor(envelope.agents[1].next_cursor).key, resultCursorKey(tasks[1].result.cursor));
+  } else {
+    // Reaching EOF releases the reserved cursor's bytes; a small second result
+    // and a short diagnostic prefix can then fit without displacing any flag.
+    assert.equal(envelope.agents[1].next_cursor, undefined);
+  }
+  assert.equal(envelope.agents[2].next_cursor, undefined, "the flag introduces no result/notes recovery locator");
+});
+
+test("all warning attempts also precede a byte-saturating collection of string diagnostics", () => {
+  const tasks = Array.from({ length: 16 }, (_, index) => task(row(`worker-${index}`, 1, "failed"), {
+    time_wrapped: true, diagnostics: { error: "\0".repeat(512), owner_error: "\0".repeat(512), unavailable_reason: "\0".repeat(512) },
+    dispatch_notes: ["\0".repeat(120)],
+  }));
+  const { envelope } = pack(snapshot({ tasks }));
+  assert(envelope.agents.every((entry) => entry.time_wrapped === true));
+  assert(envelope.agents.some((entry) => entry.error === undefined || entry.error.length < 512));
+  assert.equal(envelope.response_limit_reached, true);
+  assert(envelope.agents.every((entry) => entry.next_cursor === undefined && entry.limit_reached === undefined));
+});
+
+test("without a warning the rich question/alert/result/diagnostic publication bytes stay unchanged", () => {
+  const input = snapshot({ tasks: [task(row("otter", 1, "completed"), { question_id: questionId(), question: "question",
+    result: window("result", { cursor: cursorIdentity }), diagnostics: { error: "error" }, dispatch_notes: ["note"] })], alerts: [alert("alert")] });
+  const expected = { reason: "snapshot", agents: [{ agent: "otter", task: 1, status: "completed", question_id: questionId(),
+    question: "question", result: "result", error: "error", dispatch_notes: ["note"] }], alerts_pending: 0, finished_pending: 0, alerts: [alert("alert")] };
+  const before = pack(input);
+  assert.equal(before.result.content[0].text, JSON.stringify(expected), "preserve the prior key order, bodies and optional diagnostics exactly");
+  const explicitUndefined = structuredClone(input); explicitUndefined.tasks[0].time_wrapped = undefined;
+  assert.deepEqual(pack(explicitUndefined), before);
+});
+
+test("dispatch notes and time warning roundtrip as whole optional diagnostics, not body text or thin flags", () => {
+  const notes = ["tree_shared", "x".repeat(118) + "🚀"];
+  const input = snapshot({ tasks: [task(row("otter", 1, "completed"), { time_wrapped: true, dispatch_notes: notes })],
+    finished: [{ row: row("otter", 1, "completed"), task_index: 0 }] });
+  const first = pack(input), entry = first.envelope.agents[0];
+  assert.equal(entry.time_wrapped, true); assert.deepEqual(entry.dispatch_notes, notes);
+  assert.equal(entry.dispatch_notes[1].length, 120); assert.equal(bodyUnits(first.envelope), 0);
+  assert.equal(entry.next_cursor, undefined); assert.equal(entry.result_omitted, undefined);
+  assert.equal(first.envelope.response_limit_reached, undefined);
+  assert.deepEqual(first.envelope.finished ?? [], [], "linked presentation still uses the thin original task identity");
+  assert.deepEqual(JSON.parse(first.result.content[0].text).agents[0].dispatch_notes, notes);
+  assert.notEqual(entry.dispatch_notes, input.tasks[0].dispatch_notes);
+  entry.dispatch_notes[0] = "changed output";
+  assert.equal(input.tasks[0].dispatch_notes[0], "tree_shared");
+  assert.deepEqual(pack(input).envelope.agents[0].dispatch_notes, notes, "a later locatable observation can try to display the original notes again");
+});
+
+test("absent/empty optional notes preserve existing packed bytes without adding metadata or recovery cursors", () => {
+  const input = snapshot({ tasks: [task(row())] }), before = pack(input);
+  for (const rest of [{ time_wrapped: undefined, dispatch_notes: undefined }, { dispatch_notes: [] }]) {
+    const next = pack(snapshot({ tasks: [task(row(), rest)] }));
+    assert.deepEqual(next, before);
+    assert.equal(next.envelope.agents[0].dispatch_notes, undefined);
+    assert.equal(next.envelope.agents[0].time_wrapped, undefined);
+    assert.equal(next.envelope.agents[0].next_cursor, undefined);
+  }
+});
+
+test("malformed optional dispatch diagnostics fail before returning publication references", () => {
+  for (const rest of [
+    { time_wrapped: false }, { time_wrapped: 1 }, { time_wrapped: "true" },
+    { dispatch_notes: "tree_shared" }, { dispatch_notes: null }, { dispatch_notes: ["a", "b", "c"] },
+    { dispatch_notes: ["x".repeat(121)] }, { dispatch_notes: [""] }, { dispatch_notes: [" "] },
+    { dispatch_notes: [42] }, { dispatch_notes: [null] }, { dispatch_notes: [undefined] }, { dispatch_notes: Array(1) },
+    { diagnostics: { time_wrapped: true } }, { diagnostics: { dispatch_notes: ["tree_shared"] } },
+  ]) {
+    const input = snapshot({ tasks: [task(row(), rest)], alerts: [alert("preserved")], finished: [{ row: row("otter", 1, "completed") }] });
+    const before = structuredClone(input); deepFreeze(input);
+    assert.throws(() => packCommunication(input), { code: "INVALID_COMMUNICATION_SNAPSHOT" });
+    assert.deepEqual(input, before);
+  }
+  for (const field of ["time_wrapped", "dispatch_notes"]) {
+    const value = field === "time_wrapped" ? true : ["tree_shared"];
+    for (const input of [snapshot({ tasks: [task(row("otter", 1, "running", { [field]: value }))] }),
+      snapshot({ finished: [{ row: row("otter", 1, "completed", { [field]: value }) }] })])
+      assert.throws(() => packCommunication(input), { code: "INVALID_COMMUNICATION_SNAPSHOT" }, "optional fields are NEVER thin controls or finished convenience fields");
+  }
+});
+
+function byteSaturatedSnapshot() {
+  const input = maximalSnapshot("\0".repeat(8192)); input.alerts = input.alerts.slice(0, 1);
+  input.tasks[0].question = "q";
+  const seed = pack(input).envelope;
+  const remaining = 65536 - bytes({ ...seed, response_limit_reached: true });
+  const full = structuredClone(input); full.tasks[0].question = "q".repeat(1 + remaining);
+  const complete = pack(full);
+  assert.equal(complete.envelope.agents[0].question, full.tasks[0].question);
+  assert.equal(complete.envelope.response_limit_reached, undefined);
+  assert.equal(bytes({ ...complete.envelope, response_limit_reached: true }), 65536);
+  return { input: full, complete };
+}
+
+test("optional notes/time warning yield entirely at exact byte saturation and alone set response_limit_reached", () => {
+  const { input, complete } = byteSaturatedSnapshot(), pressured = structuredClone(input);
+  for (const entry of pressured.tasks) { entry.time_wrapped = true; entry.dispatch_notes = ["tree_shared", "tree_lock_unknown"]; }
+  const packed = pack(pressured), { envelope } = packed;
+  assert.equal(envelope.response_limit_reached, true, "optional diagnostics alone cause the limitation");
+  assert.equal(bytes(envelope), 65536);
+  assert.deepEqual(envelope.agents, complete.envelope.agents, "all control and question bodies remain identical");
+  assert.deepEqual(envelope.alerts, complete.envelope.alerts);
+  assert.deepEqual(envelope.pending, complete.envelope.pending);
+  assert.deepEqual(packed.references, complete.references, "diagnostic displacement cannot change consumed presentation facts");
+  for (const entry of envelope.agents) {
+    assert.equal(entry.time_wrapped, undefined); assert.equal(entry.dispatch_notes, undefined);
+    assert.equal(entry.next_cursor, undefined, "notes do not invent a recoverability locator");
+  }
+});
+
+test("dispatch notes are packed as a whole prefix, never clipped to fit or skipped for a shorter tail", () => {
+  const { input, complete } = byteSaturatedSnapshot(), first = "first complete note", second = "\0".repeat(120);
+  const withFirst = { ...complete.envelope, response_limit_reached: true,
+    agents: complete.envelope.agents.map((entry, index) => index === 1 ? { ...entry, dispatch_notes: [first] } : entry) };
+  const cost = bytes(withFirst) - bytes({ ...complete.envelope, response_limit_reached: true });
+  const pressured = structuredClone(input); pressured.tasks[0].question = pressured.tasks[0].question.slice(0, -cost);
+  pressured.tasks[1].dispatch_notes = [first, second];
+  const { envelope } = pack(pressured);
+  assert.deepEqual(envelope.agents[1].dispatch_notes, [first]);
+  assert.equal(envelope.agents[0].question, pressured.tasks[0].question);
+  assert.equal(envelope.response_limit_reached, true); assert.equal(bytes(envelope), 65536);
+  const omitFirst = structuredClone(pressured); omitFirst.tasks[1].dispatch_notes = [second, "small-tail"];
+  assert.equal(pack(omitFirst).envelope.agents[1].dispatch_notes, undefined, "an unfit whole first note does not expose a misleading later-only fragment");
+});
+
+test("optional dispatch diagnostics never displace sixteen reserved stable cursors or a worst-case whole alert", () => {
+  const tasks = Array.from({ length: 16 }, (_, index) => task(
+    row(`a${String(index).padStart(2, "0")}${"x".repeat(21)}`, Number.MAX_SAFE_INTEGER, "needs_input", controls), {
+      question_id: questionId(index + 1), question: "Q".repeat(8192), time_wrapped: true,
+      dispatch_notes: ["\0".repeat(120), "\ud800".repeat(120)],
+      result: window("retained", { offset: Number.MAX_SAFE_INTEGER - 1000, retained_chars: Number.MAX_SAFE_INTEGER,
+        total_chars: Number.MAX_SAFE_INTEGER, cursor: { ...cursorIdentity, run: `old-run-${index}` } }),
+    }));
+  const { envelope } = pack(snapshot({ reason: "alert", tasks, workers_disabled: true,
+    alerts: [alert("\0".repeat(8192), Number.MAX_SAFE_INTEGER, "a".repeat(24), "\0".repeat(120))] }));
+  assert.equal(envelope.alerts[0].message, "\0".repeat(8192));
+  for (const [index, entry] of envelope.agents.entries()) {
+    for (const [flag, value] of Object.entries(controls)) assert.equal(entry[flag], value);
+    assert.equal(entry.next_cursor.length, 37);
+    assert.equal(decodeResultCursor(entry.next_cursor).key, resultCursorKey(tasks[index].result.cursor));
+    for (const note of entry.dispatch_notes ?? []) assert(tasks[index].dispatch_notes.includes(note), "only complete original notes may be displayed");
+  }
+  assert(envelope.agents.some((entry) => entry.dispatch_notes === undefined));
+  assert.equal(envelope.response_limit_reached, true);
+});
+
 test("packing is deterministic and independent across invocations, with no mutation through output arrays", () => {
   const input = snapshot({ reason: "alert", tasks: [task(row())], alerts: [alert("repeatable")],
     finished: [{ row: row("otter", 1, "completed") }] });
