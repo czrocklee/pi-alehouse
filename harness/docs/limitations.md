@@ -289,6 +289,62 @@ normal launcher.  Context snapshots are bounded text, not history forks, and
 history/diagnostics may contain sensitive model content.  The harness does not
 copy credentials, although authorized real SDK use can refresh an auth file.
 
+## Task dispatch and validation scope
+
+[Task dispatch](task-dispatch.md) is bounded declaration/observation, not a DAG,
+OS sandbox or general test scheduler. Only a single explicitly delegated
+validation owner may run the full gate; others stay focused. Declared `checks`
+do not prove execution, and undeclared effects or different agentDir/host/tree
+identities are not automatically coordinated. Profile/external preflight is
+approximate: ask/unknown is not a grant; child gates may be stricter. Literal
+paths and lexical/canonical aliases do not provide hardlink tracking or atomic
+filesystem protection. Inputs must exist when checked, whereas ownership/tree
+may name new outputs. Pump rechecks can wait for a free slot.
+
+Claims and existing tree leases span healthy pending questions and answer
+continuations; reopening a question before input entry restores its claim.
+Cleanup uncertainty, including sticky tree-lease close failure, still retains
+resources; later SDK cleanup success does not clear that failure. Local tree
+contention is advisory, not exclusivity evidence. Synchronous flock blocks the
+event loop even when contention is nonblocking. A guarded wall-clock warning may
+invalidate approval yet never reach the model before deadline; `time_wrapped`
+means an attempt, not a checkpoint. Due is retained only for the original Run
+until the real inputEntered/canInput boundary or post-budget turnStart permits
+one guarded pre-deadline attempt; rejected attempts are not retried. Optional
+time flags are tried after questions/FIFO alerts and before results, but may
+yield at byte saturation; long ASCII results do not inherently hide them.
+The hard stop remains cooperative.
+
+Checks-only `source_state` is superproject-only partial non-atomic metadata,
+with submodules ignored: not a content fingerprint, validated source version
+or whole-tree clean proof. Capture only supports repository-root conventional
+`.git` directories; other layouts remain unknown. Fixed --untracked-files=normal
+covers non-ignored untracked entries but ignores/global excludes, indexes and
+Git/platform semantics remain; empty status is not whole-disk clean. Even global
+LFS clean/process configuration or core.fsmonitor=false makes capture unknown
+under the conservative key-presence guard, without blocking ordinary tasks.
+Source Git subprocess probes
+are asynchronous with per-probe 2-second/4 MiB and aggregate 8-second/8 MiB
+limits, not hard-realtime bounds or cancellation/kill guarantees. Trusted Git
+absence/unsafe configuration/failed capture is unknown, not a failure of
+ordinary tasks. A receipt requires a valid history boundary and a successful
+sole end append; the returned SDK append ID is not disk/fsync proof.
+Unstarted/missing-boundary Runs leave offline coverage gaps. A bad optional
+receipt is dropped with validation_receipt_error: 'invalid_validation_receipt',
+a live cleanup diagnostic and recorded-history warning; mandatory core checks
+and append failures stay strict and never trigger a second append. It is consumed through trusted history/offline
+audit, not automatically by the parent model, and skips no validation gate.
+Run data and optional notes/time_wrapped projections are memory-only; they may
+yield during packing and cannot be guaranteed recoverable after omission or
+Agent reuse. No new notes cursor, persistent ACK or task hydration is promised.
+Derived time_wrapped_attempts counts attempts, not delivery/checkpoint rates.
+The journal analyzer remains strict JSON-only; --json is an explicit alias, not
+salvage mode, and failure does not mean zero usage. A needs-input resource
+conflict needs answer or explicit abandonment/kill with confirmed release,
+not passive waiting/after on the original question Run.
+Worker L1 guidance says report a denied-operation limit without retrying the
+same class; runtime L2 counting is not implemented in this scope.
+
 ## UI scope
 
 Fullscreen alternate-screen rendering is required for floating worker panels and

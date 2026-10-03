@@ -104,6 +104,38 @@ processes exited, a distributed lock, or recovery from abrupt process loss.
 Lock files/directories persist to preserve inode identity and have no automatic
 pruning.  Do not remove them while a Pi process could hold a lease.
 
+## Task dispatch boundary
+
+[Task dispatch](task-dispatch.md) adds optional inputs/ownership/tree/checks
+without moving lifecycle authority out of core. Synchronous read-only runtime
+preflight returns ordinary data for the target profile and lexical/canonical
+path identities; core finally validates and atomically installs claims. Claims
+span queue/execution/finalization/pending questions, transfer through answer
+lineage and restore with pre-input question rollback. Fixed Run-ID predecessor
+closures permit admission queuing only; pump rechecks before startup. Confirmed
+final termination/necessary cleanup controls release, not optional observation
+success or a requested stop.
+
+Runtime owns checks-only execution-start superproject metadata capture through
+trusted Git and tree-only local advisory leases. Core owns their tracked timing,
+lineage and cleanup. Source Git subprocess probes are asynchronous with
+per-probe 2-second/4 MiB and aggregate 8-second/8 MiB limits, not hard-realtime
+or kill guarantees; synchronous tree flock still blocks the event loop.
+A failed optional observation is unknown/advisory, not an Owner fault. Wall-clock
+soft-budget input invalidates approval; Run-local due waits for the real
+original inputEntered/canInput or post-budget turnStart boundary, not pre-run
+injection. time_wrapped is an attempted warning fact, never delivery.
+Notes/time_wrapped use the existing pre-commit projection/packer path,
+not reserved thin rows or post-publication mutation.
+
+Receipts extend the sole valid run-end append only when its history boundary
+exists and append succeeds. Invalid optional receipts alone are soft-dropped
+with validation_receipt_error: 'invalid_validation_receipt', a live cleanup
+diagnostic and a recorded-history warning. Mandatory history/append errors
+remain strict without retry. Receipts do not create sessions for unstarted tasks,
+repair journals or guarantee coverage; trusted history/offline consumption does
+not automatically feed a parent model. Claims/Run data remain memory-local.
+
 ## State, retention, and history
 
 Live Agent/Run state, requests, results, and notifications are in memory.  No

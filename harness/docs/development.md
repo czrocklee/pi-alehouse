@@ -94,6 +94,35 @@ owner described below. `node scripts/check-pi-git-grammar.mjs` is a source-only
 grammar/tokenizer check; it does not exercise repository probes or complete
 permission gates.
 
+## Task floor and validation ownership
+
+[Task dispatch](task-dispatch.md) is the central contract for literal inputs,
+resource claims, wall-clock soft wrap and validation observations. Core owns
+atomic claim admission, dependency/answer lineage and confirmed cleanup;
+runtime ports own synchronous profile/external preflight, path aliases, trusted
+Git capture and local tree locks. Do not put claim/IO side effects into tool
+preparation or accepted-request replay. Checks capture superproject-only partial
+metadata at execution start; optional failures are unknown/advisory, not Owner
+faults. Preserve pending-question claims and any lease on pre-input answer
+rollback. Keep notes/time_wrapped in pre-commit optional packing, never thin
+controls or post-observe additions. Receipts require a valid history boundary
+and the sole successful end append; its SDK append ID is not disk/fsync proof,
+and missing boundaries remain coverage gaps. Offline journal audit uses
+`scripts/analyze-pi-harness-journal.mjs`, distinct from session analysis: strict
+batch validation, JSON-only output, with `--json` an explicit alias. Optional
+receipt corruption drops only that receipt with an invalid_validation_receipt
+marker/live cleanup diagnostic; mandatory history checks and append failures
+stay strict without retry. Derive time_wrapped_attempts from recorded attempts,
+not delivery. Source status fixes --untracked-files=normal; global LFS helpers
+and configured fsmonitor=false still conservatively withhold known state.
+
+Worker L1 guidance forbids same-class retries after denial; L2 counters are not
+implemented by this package. Delivery reports name platform, tool versions,
+key configuration, exact evidence and unrun/blocked/interrupted/zero-match
+checks. A worker-body edit changes generated definition digests: coordinate
+matched resources and a fresh process separately; never replace user files
+or treat a documentation change as validation/deployment acceptance.
+
 ## Tool metadata and Off
 
 The [tool contract](tool-contract.md) defines model-visible behavior;
@@ -201,10 +230,14 @@ rewrite content or serve as alert ACK. UI projects pending counts only and never
 consumes alerts or finished facts. Historical notify/progress/send-answered
 formatting is read-only.
 
-Coordinate one validation owner for build → focused tests → full portable gate
-after shared source/policy/schema changes are frozen. Do not repeat the full gate
-against an inconsistent shared checkout. Report unrun, interrupted and zero-match
-checks honestly; synthetic seams do not establish host/model acceptance.
+Coordinate one **explicitly delegated, unique validation owner** for build →
+focused tests → full portable gate after shared source/policy/schema changes are
+frozen. Other tasks run only their assigned focused checks; dispatch `checks`
+and advisory tree leases are not a mechanical full-suite lock. Do not repeat
+the full gate against an inconsistent shared checkout. Report platform/tool
+versions/key configuration, exact command/evidence paths and unrun, blocked,
+interrupted and zero-match checks honestly; synthetic seams do not establish
+host/model acceptance.
 
 ## Matched resource migration
 

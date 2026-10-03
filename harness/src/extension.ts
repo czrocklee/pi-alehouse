@@ -19,6 +19,7 @@ import { ChildActivityRegistry } from "./runtime/activity-observer.js";
 import { createChildSessionFactory } from "./runtime/child-factory.js";
 import { ChildWebModules, nativeWebLoader } from "./runtime/child-web.js";
 import { configureChildRuntime } from "./runtime/execution-policy.js";
+import { createDispatchRuntime } from "./runtime/dispatch-runtime.js";
 import { researcherHostModules } from "./runtime/host-modules.js";
 import { FileOwnerLease } from "./runtime/owner-lease.js";
 import { ownerSessionReplacementGuard } from "./runtime/owner-lifecycle.js";
@@ -579,6 +580,7 @@ export default function harnessExtension(pi: ExtensionAPI) {
       controller = await OwnerController.open({ owner, concurrency: 4, resident_limit: residentLimit, grace_turns: 5,
         admission: () => router!.admissionState(),
         onContextChange: approvalBindings.contextChanged,
+        dispatch: createDispatchRuntime({ agentDir, flock, git: process.env.PI_HARNESS_GIT, getPermissionsService: parentPermission }),
         createSession });
       ownerSessionReplacementGuard(controller)(pi);
       for (const tool of createOwnerTools({ controller, context: ctx, profiles, getSupportedThinkingLevels,

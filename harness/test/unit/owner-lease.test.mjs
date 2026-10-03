@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, lstatSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import fs, { chmodSync, lstatSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -57,6 +58,22 @@ test("H11 short-lived flock exits; owner fd retains lock until closed", (t) => {
   const next = new OwnerLock(dir, flock);
   assert.notEqual(next.generation, lock.generation);
   next.close();
+});
+
+test("lease close failure is sticky and never retries a potentially reused descriptor", t => {
+  const dir = fixture(t), lock = new OwnerLock(dir, flock);
+  const close = fs.closeSync, failure = new Error("injected post-close failure");
+  let calls = 0;
+  fs.closeSync = fd => { calls++; close(fd); throw failure; };
+  syncBuiltinESMExports();
+  try {
+    assert.throws(() => lock.close(), e => e.message === "LOCK_CLEANUP_UNCERTAIN" && e.cause === failure);
+    assert.equal(lock.fd, undefined);
+    assert.throws(() => lock.close(), /LOCK_CLEANUP_UNCERTAIN/);
+    assert.equal(calls, 1, "a later close must not become false success or retry the fd");
+  } finally { fs.closeSync = close; syncBuiltinESMExports(); }
+  // The fixture closed before throwing; real close errors do not prove this.
+  assert.equal(compete(lock.path), 0);
 });
 
 test("H11 killed owner releases lock (no long-lived holding helper)", { timeout: 5000 }, async (t) => {

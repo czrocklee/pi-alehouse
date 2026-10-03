@@ -11,6 +11,8 @@ export class FileLeaseLock {
   readonly generation = randomUUID();
   readonly path: string;
   private fd: number | undefined;
+  /** close(2) failure is not retryable exit evidence; never reuse its fd. */
+  private closeFailure?: Error;
 
   constructor(directory: string, flock: string, timeoutMs = 2_000) {
     if (process.platform !== "linux") throw new Error("UNSUPPORTED_LOCK_PLATFORM");
@@ -71,10 +73,15 @@ export class FileLeaseLock {
 
   /** Caller must first establish controlled execution exit AND finalization. */
   close(): void {
+    if (this.closeFailure) throw this.closeFailure;
     if (this.fd === undefined) return;
     const fd = this.fd;
     this.fd = undefined;
-    closeSync(fd);
+    try { closeSync(fd); }
+    catch (cause) {
+      this.closeFailure = new Error("LOCK_CLEANUP_UNCERTAIN", { cause });
+      throw this.closeFailure;
+    }
     // Deliberately never unlink/rename/truncate the lock file, including cleanup.
   }
 }

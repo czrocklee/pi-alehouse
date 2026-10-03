@@ -3,11 +3,12 @@ import { constants } from "node:fs";
 import { open, realpath } from "node:fs/promises";
 import { isAbsolute, sep } from "node:path";
 import type { HistoryRef, Outcome, Output, ResultRef, RunIdentity } from "../core/contracts.js";
+import type { ValidationReceipt } from "../core/dispatch.js";
 import { HarnessError } from "../core/ports.js";
 import { describeResult, isId } from "../core/result-text.js";
 import { normalizeLedger, type UsageLedger } from "../core/usage-ledger.js";
 import { dataOf, entryId, finalMessage, historyTypes, invalidHistory, sameRun, textOf,
-  validIdentity, validModelStopReason, validRef, validRouting, type HistoricalRouting } from "./run-journal.js";
+  receiptOf, validationReceiptError, validIdentity, validModelStopReason, validRef, validRouting, type HistoricalRouting } from "./run-journal.js";
 
 export interface HistoricalRun {
   state: "recorded" | "unknown" | "unavailable";
@@ -17,6 +18,8 @@ export interface HistoricalRun {
   output?: Output;
   usage?: UsageLedger;
   routing?: HistoricalRouting;
+  validation_receipt?: ValidationReceipt;
+  validation_receipt_error?: typeof validationReceiptError;
   error?: string;
 }
 
@@ -91,11 +94,12 @@ export async function readSdkRun(input: {
       ...(start!.routing ? { routing: start!.routing } : {}) };
     if (ends.length !== 1 || (ref.end_entry_id && ref.end_entry_id !== ends[0]!.id)) invalidHistory();
     const data = dataOf(ends[0], historyTypes.end) as { ref: HistoryRef; through: string; final_entry_id: string | null;
-      result: ResultRef; outcome: Outcome; usage?: UsageLedger };
+      result: ResultRef; outcome: Outcome; usage?: UsageLedger; validation_receipt?: unknown; validation_receipt_error?: unknown };
     if (!validRef(data.ref) || !sameRun(data.ref, ref) || data.ref.session_id !== ref.session_id ||
         data.ref.start_entry_id !== ref.start_entry_id || !entryId(data.through) ||
         !data.outcome || !["completed", "needs_input", "failed", "cancelled"].includes(data.outcome.status) ||
         typeof data.outcome.limit_reached !== "boolean" || !validModelStopReason(data.outcome.model_stop_reason) ||
+        (data.outcome.time_wrapped !== undefined && data.outcome.time_wrapped !== true) ||
         ![data.outcome.reason, data.outcome.error, data.outcome.question].every((v) => v === undefined || typeof v === "string")) invalidHistory();
     if (data.through === ends[0]!.id) invalidHistory();
     const final = finalMessage(session, ref.start_entry_id, data.through, ends[0]!.id), result = data.result;
@@ -109,8 +113,18 @@ export async function readSdkRun(input: {
         describeResult(ref.run_id, output).digest !== result.digest) invalidHistory();
     const usage = normalizeLedger(data.usage);
     if (data.usage !== undefined && !usage) invalidHistory();
+    let validation_receipt: ValidationReceipt | undefined, validation_receipt_error: typeof validationReceiptError | undefined;
+    // All mandatory checks above still fail closed. Optional corruption cannot
+    // hide valid outcome/output/usage; neither raw receipt nor raw marker leaks.
+    if (Object.hasOwn(data, "validation_receipt_error")) validation_receipt_error = validationReceiptError;
+    else if (Object.hasOwn(data, "validation_receipt")) {
+      try { validation_receipt = receiptOf(data.validation_receipt, data.outcome); }
+      catch { validation_receipt_error = validationReceiptError; }
+    }
     return { state: "recorded", resumable: false, ref: { ...ref, end_entry_id: ends[0]!.id }, outcome: data.outcome, output,
-      ...(start!.routing ? { routing: start!.routing } : {}), ...(usage ? { usage } : {}) };
+      ...(start!.routing ? { routing: start!.routing } : {}), ...(usage ? { usage } : {}),
+      ...(validation_receipt ? { validation_receipt } : {}),
+      ...(validation_receipt_error ? { validation_receipt_error } : {}) };
   } catch (error) {
     return { state: "unavailable", resumable: false, error: error instanceof HarnessError ? error.code :
       (error as NodeJS.ErrnoException)?.code ?? "INVALID_SDK_HISTORY" };

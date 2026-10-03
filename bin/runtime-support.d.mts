@@ -4,6 +4,7 @@ export const managedAgentNames: readonly string[];
 export function agentDirectory(env?: NodeJS.ProcessEnv): string;
 export function executable(name: string, override?: string, env?: NodeJS.ProcessEnv): string;
 export function resolveFlock(env?: NodeJS.ProcessEnv): string;
+export function resolveGit(env?: NodeJS.ProcessEnv): string | undefined;
 export function webEntry(root?: string): string;
 export function verifyRuntime(root?: string): string;
 export function verifyAgentResources(agentDir?: string, root?: string): void;
@@ -12,6 +13,7 @@ export interface RuntimePaths {
   permissionRoot: string;
   policyRoot: string;
   flock: string;
+  git?: string;
   web: string;
   agentDir: string;
 }

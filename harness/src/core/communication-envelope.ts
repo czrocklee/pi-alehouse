@@ -42,6 +42,11 @@ export interface ThinTaskEntry {
 
 /** Optional text/metadata can yield to the retained control layer when packing. */
 export interface TaskEntry extends ThinTaskEntry {
+  /** Whole bounded notes (at most two, each 1..120 nonblank UTF-16 units).
+   * Optional diagnostics yield to retained controls/body; no recovery promise. */
+  readonly dispatch_notes?: readonly string[];
+  /** Warning was attempted, not proof of delivery or a checkpoint. */
+  readonly time_wrapped?: true;
   readonly question_id?: QuestionId;
   readonly question?: string;
   readonly result?: string;

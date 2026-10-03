@@ -38,8 +38,24 @@ export function assertCallerTools(tools) {
   assert.match(spawn.description, /action, reason, agents and alerts/);
   const run = byName.get("agent_run"), runFields = run.parameters.properties;
   assert.deepEqual(run.parameters.required.sort(), ["agent", "prompt"]);
-  assert.deepEqual(Object.keys(runFields).sort(), ["after", "agent", "label", "prompt", "wait_ms"],
-    "profile, difficulty, context and budgets belong to the Agent");
+  assert.deepEqual(Object.keys(runFields).sort(), ["after", "agent", "dispatch", "label", "prompt", "wait_ms"],
+    "profile, difficulty, context and budgets belong to the Agent; dispatch belongs to each task");
+  for (const tool of [spawn, run]) {
+    const dispatch = tool.parameters.properties.dispatch;
+    assert.equal(dispatch.type, "object"); assert.equal(dispatch.additionalProperties, false);
+    assert(!tool.parameters.required.includes("dispatch"));
+    assert.deepEqual(Object.keys(dispatch.properties).sort(), ["checks", "inputs", "ownership", "tree"]);
+    assert.match(dispatch.description, /not authorize tool calls.*full-suite validation explicitly to one task/);
+    for (const [field, limit] of [["inputs", 8], ["ownership", 16], ["checks", 16]]) {
+      const array = dispatch.properties[field];
+      assert.equal(array.type, "array"); assert.equal(array.minItems, 1); assert.equal(array.maxItems, limit);
+      assert.equal(array.uniqueItems, true); assert.equal(array.items.minLength, 1); assert.equal(array.items.maxLength, 512);
+      assert.equal(typeof array.items.pattern, "string");
+    }
+    assert.equal(dispatch.properties.tree.type, "string"); assert.equal(dispatch.properties.tree.minLength, 1);
+    assert.equal(dispatch.properties.tree.maxLength, 512);
+    assert.match(dispatch.properties.checks.items.description, /globs allowed.*not evidence.*skip gates/);
+  }
   assert.match(run.description, /existing, idle Agent its next task.*A running Agent is busy.*agent_send.*cannot bypass an unanswered question.*agent_answer/);
   const send = byName.get("agent_send"), sendFields = send.parameters.properties;
   assert.deepEqual(send.parameters.required.sort(), ["agent", "message"]);

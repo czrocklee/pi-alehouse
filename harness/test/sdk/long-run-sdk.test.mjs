@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as sdk from "@earendil-works/pi-coding-agent";
 import * as ai from "@earendil-works/pi-ai";
-import { OwnerController } from "../../dist/core/owner-controller.js";
+import { OwnerController, softTimeBudgetMessage } from "../../dist/core/owner-controller.js";
+import { ApprovalBindings } from "../../dist/permissions/approval-provenance.js";
 import { ChildRunGate, PiAgentSessionAdapter } from "../../dist/runtime/agent-session.js";
 import { PiRunJournal } from "../../dist/history/run-journal.js";
 import { readSdkRun } from "../../dist/history/history-reader.js";
@@ -104,6 +105,115 @@ async function fixture(t, respond, { window = 8192, retry = false, controllerOpt
   return { root, session, manager, controller, port, gate, requests, events, submit, end, historical, task };
 }
 const blob = { tools: [{ type: "toolCall", id: "large-output", name: "blob", arguments: {} }] };
+
+test("real SDK: delayed initialization warns after original input and fresh approval binding, once, without stealing the Run", { timeout: 10000 }, async t => {
+  const sessionRelease = latch(), responseRelease = latch(), timeline = [], approvals = [], begins = [], deliveries = [];
+  t.after(() => { sessionRelease.resolve(); responseRelease.resolve(); });
+  const fetch = t.mock.method(globalThis, "fetch", () => { assert.fail("delayed soft warning fixture attempted network IO"); });
+  const factsKey = Symbol.for("@rocklee/jev-auto-approval:child-runtime-facts");
+  let mono = 0, initializations = 0, f, bindings;
+  const facts = () => globalThis[factsKey]?.get(f.port.session_id);
+  f = await fixture(t, async request => {
+    if (!request.summary && request.index === 1) await responseRelease.promise;
+    return { text: `SDK_DELAYED_FINAL_${request.index}` };
+  }, { window: 128000, controllerOptions: {
+    concurrency: 1,
+    // This clock controls observation values ONLY, never the real budget.
+    clock: { wall: Date.now, mono: () => mono },
+    createSession: async () => { initializations++; await sessionRelease.promise; return f.port; },
+    onContextChange(event) {
+      const before = facts()?.contextChanged;
+      bindings.contextChanged(event);
+      timeline.push({ point: "context", kind: event.kind, run_id: event.run_id, before, after: facts()?.contextChanged });
+    },
+  } });
+  bindings = new ApprovalBindings({ emit(name, payload) { approvals.push({ name, payload }); } }, f.controller.identity);
+  assert(f.port instanceof PiAgentSessionAdapter, "initialization must return the real pinned-SDK adapter");
+  const text = message => typeof message.content === "string" ? message.content :
+    message.content.filter(part => part.type === "text").map(part => part.text).join("");
+  const unsubscribe = f.session.subscribe(event => {
+    if (event.type === "turn_start") timeline.push({ point: "sdk_turn_start" });
+    if (event.type === "message_end" && event.message.role === "user") timeline.push({ point: "sdk_user_end", text: text(event.message) });
+  });
+  t.after(unsubscribe);
+  const originalRun = f.port.run.bind(f.port), originalSteer = f.port.steer.bind(f.port);
+  const request = { ...f.task("SDK_DELAYED_ORIGINAL_TASK"), max_duration_ms: 240000 };
+  t.mock.method(f.port, "run", async (prompt, callbacks, identity) => {
+    const fresh = bindings.begin(identity, { sessionId: f.port.session_id, cwd: f.root,
+      profile: request.settings.profile, definitionDigest: request.settings.definition_digest, prompt });
+    try {
+      assert.equal(fresh, true, "the new Run must begin with a fresh witness");
+      const witness = facts(); assert.equal(witness.contextChanged, false);
+      begins.push({ run_id: identity.run_id, witness });
+      timeline.push({ point: "begin", run_id: identity.run_id });
+      // No synthetic callbacks: adapter.run observes the real SDK input/turn events.
+      return await originalRun(prompt, callbacks);
+    } finally { bindings.end(f.port.session_id, identity); }
+  });
+  t.mock.method(f.port, "steer", async (message, valid) => {
+    timeline.push({ point: "steer", text: message });
+    const queued = await originalSteer(message, valid);
+    deliveries.push({ message, queued }); return queued;
+  });
+  const run = await f.submit(request);
+  await until(() => initializations === 1);
+  assert.equal(f.controller.view(run.run_id).phase, "initializing");
+  assert.equal(f.controller.view(run.run_id).execution_elapsed_ms, 0);
+  assert.equal(f.controller.view(run.run_id).time_wrapped, undefined);
+  assert.equal(f.requests.length, 0); assert.equal(begins.length, 0); assert.equal(facts(), undefined);
+  mono = 210000;
+  assert.equal(f.controller.view(run.run_id).execution_elapsed_ms, 210000);
+  assert.equal(f.controller.view(run.run_id).time_wrapped, undefined, "observation clock advancement cannot warn");
+  const managed = f.controller.runs.get(run.run_id);
+  assert.equal(typeof managed.budgetStartedMono, "number");
+  // Test-only private seam: skip the 3.5 minute wait, not SDK readiness/order.
+  // Production exposes no injected budget clock, and real timers remain real.
+  managed.budgetStartedMono = performance.now() - 210000;
+  sessionRelease.resolve();
+  await until(() => f.requests.length > 0 && deliveries.length === 1);
+  assert.deepEqual(deliveries, [{ message: softTimeBudgetMessage, queued: true }]);
+  const invalidations = approvals.filter(event => event.name === "pi-harness:approval:invalidated");
+  assert.equal(invalidations.length, 1); assert.equal(invalidations[0].payload.kind, "soft_budget");
+  assert.equal(invalidations[0].payload.run_id, run.run_id);
+  const warning = timeline.find(event => event.point === "context" && event.kind === "soft_budget");
+  assert.equal(warning.before, false); assert.equal(warning.after, true, "warning must invalidate the fresh witness, not precede begin");
+  assert.equal(begins[0].witness.contextChanged, true);
+  const firstInput = f.requests[0].context.messages.filter(message => message.role === "user");
+  assert.equal(text(firstInput[0]), request.prompt, "the task, never its warning, is the first provider input");
+  assert.equal(firstInput.filter(message => text(message) === request.prompt).length, 1);
+  responseRelease.resolve();
+  const result = await f.end(run);
+  assert.equal(result.status, "completed"); assert.equal(result.outcome.time_wrapped, true);
+  assert.equal(result.outcome.limit_reached, false); assert.equal(result.resumable, true);
+  assert.equal(result.execution_exited, true); assert.equal(result.finalization_pending, false);
+  assert.deepEqual(result.cleanup_errors, []); assert.deepEqual(result.discarded_inputs, []);
+  assert.match(f.controller.getResult(run.run_id).text, /^SDK_DELAYED_FINAL_/);
+  const originalAt = timeline.findIndex(event => event.point === "sdk_user_end" && event.text === request.prompt);
+  const beginAt = timeline.findIndex(event => event.point === "begin" && event.run_id === run.run_id);
+  const warningAt = timeline.findIndex(event => event.point === "context" && event.kind === "soft_budget");
+  const steerAt = timeline.findIndex(event => event.point === "steer" && event.text === softTimeBudgetMessage);
+  const warningInputAt = timeline.findIndex(event => event.point === "sdk_user_end" && event.text === softTimeBudgetMessage);
+  assert(beginAt >= 0 && originalAt > beginAt && warningAt > originalAt && steerAt > warningAt && warningInputAt > steerAt);
+  assert.equal(timeline.filter(event => event.point === "sdk_user_end" && event.text === request.prompt).length, 1);
+  assert.equal(timeline.filter(event => event.point === "sdk_user_end" && event.text === softTimeBudgetMessage).length, 1);
+  assert.equal(result.turns, timeline.filter(event => event.point === "sdk_turn_start").length);
+  assert(result.turns > 0); assert(f.requests.every(item => !item.summary));
+  assert.equal(f.session.isIdle, true); assert.deepEqual(f.session.getSteeringMessages(), []);
+  assert.deepEqual(f.session.getFollowUpMessages(), []); assert.deepEqual(f.port.clearInputs(), []);
+  assert.equal(f.gate.tickets.size, 0); assert.equal(f.gate.uncertain, false); assert.equal(facts(), undefined);
+  const next = await f.submit({ resume: run.agent_id, prompt: "SDK_REUSED_TASK", max_duration_ms: 240000 });
+  const reused = await f.end(next);
+  assert.equal(initializations, 1); assert.equal(reused.status, "completed"); assert.equal(reused.outcome.time_wrapped, undefined);
+  assert.equal(begins.length, 2); assert.equal(begins[1].witness.contextChanged, false);
+  assert.equal(deliveries.length, 1, "reuse must not inherit a pending old warning");
+  assert.equal(text(f.requests.at(-1).context.messages.filter(message => message.role === "user").at(-1)), "SDK_REUSED_TASK");
+  assert.equal(timeline.filter(event => event.point === "sdk_user_end" && event.text === softTimeBudgetMessage).length, 1);
+  assert.equal(f.session.isIdle, true); assert.deepEqual(f.port.clearInputs(), []); assert.equal(facts(), undefined);
+  const stats = f.controller.stats();
+  assert.equal(stats.active + stats.queued + stats.finalizing + stats.cleaning, 0);
+  assert.equal(stats.cleanup_uncertain, false); assert.equal(stats.time_wrapped_attempts, 1);
+  assert.equal(fetch.mock.callCount(), 0);
+});
 
 const callbackFaults = [
   ["inputEntered", "inputEntered", () => true],

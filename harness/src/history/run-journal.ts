@@ -2,6 +2,7 @@ import type { SessionEntry, SessionManager } from "@earendil-works/pi-coding-age
 import { validDifficulty, type AdmittedAgentConfig, type Difficulty, type HistoryRef,
   type Outcome, type Output, type RunIdentity } from "../core/contracts.js";
 import { HarnessError, ParentHistoryError, type HistoryPort } from "../core/ports.js";
+import { validValidationReceipt, type ValidationReceipt } from "../core/dispatch.js";
 import { describeResult, isId } from "../core/result-text.js";
 import { normalizeLedger, type UsageLedger } from "../core/usage-ledger.js";
 
@@ -46,6 +47,19 @@ export const validRouting = (value: unknown): value is HistoricalRouting => {
     (!Object.hasOwn(r, "difficulty") || validDifficulty(r.difficulty)) &&
     ["light", "standard", "strong"].includes(r.strength) && /^[0-9a-f]{64}$/.test(r.selection_digest);
 };
+export const validationReceiptError = "invalid_validation_receipt" as const;
+/** Receipts are declarations/observations, never proof of executed or passed checks. */
+export function receiptOf(value: unknown, outcome: Outcome): ValidationReceipt {
+  if (!validValidationReceipt(value) || value.outcome.status !== outcome.status ||
+      value.outcome.reason !== outcome.reason || value.outcome.time_wrapped !== outcome.time_wrapped) invalidHistory();
+  const r = value as ValidationReceipt, s = r.source_state;
+  return { version: 1, checks: [...r.checks], cwd: r.cwd, ...(r.tree !== undefined ? { tree: r.tree } : {}),
+    source_state: s.state === "unknown" ? { state: "unknown", reason: s.reason } : {
+      state: "observed", scope: s.scope, submodules: s.submodules, head: s.head, dirty: s.dirty,
+      status_digest: s.status_digest, observed_at: s.observed_at },
+    outcome: { status: r.outcome.status, ...(r.outcome.reason !== undefined ? { reason: r.outcome.reason } : {}),
+      ...(r.outcome.time_wrapped ? { time_wrapped: true } : {}) } };
+}
 export const validModelStopReason = (value: unknown): value is string | undefined =>
   value === undefined || (typeof value === "string" && value.length > 0 && value.length <= 128);
 export const validRef = (value: unknown): value is HistoryRef => {
@@ -94,7 +108,8 @@ export class PiRunJournal implements HistoryPort {
   seal(): void {
     if (this.active && !this.failure) this.active.through = this.options.session.getLeafId() ?? undefined;
   }
-  finish(ref: HistoryRef, outcome: Outcome, output: Output, usage?: UsageLedger): HistoryRef {
+  finish(ref: HistoryRef, outcome: Outcome, output: Output, usage?: UsageLedger, receipt?: ValidationReceipt,
+    onReceiptRejected?: () => void): HistoryRef {
     this.usable();
     const { session } = this.options, active = this.active;
     if (!active || !validRef(ref) || !sameRun(ref, active.ref) ||
@@ -104,10 +119,20 @@ export class PiRunJournal implements HistoryPort {
       const final = finalMessage(session, ref.start_entry_id, through, session.getLeafId() ?? invalidHistory());
       const text = textOf(final);
       if (text.slice(0, output.text.length) !== output.text || text.length !== output.total_chars) invalidHistory();
-      const observedUsage = normalizeLedger(usage);
+      const observedUsage = normalizeLedger(usage), result = describeResult(ref.run_id, output);
+      let validation_receipt: ValidationReceipt | undefined, rejected = false;
+      if (receipt !== undefined) {
+        try { validation_receipt = receiptOf(receipt, outcome); }
+        catch { rejected = true; }
+      }
+      // Only optional normalization is isolated. A diagnostic port exception is
+      // an interface failure, not another optional error to silently discard.
+      // Invoke before the sole append; never retry an uncertain append.
+      if (rejected) onReceiptRejected?.();
       const end_entry_id = session.appendCustomEntry(historyTypes.end, { ref: active!.ref, through,
-        final_entry_id: final?.id ?? null, result: describeResult(ref.run_id, output), outcome,
-        ...(observedUsage ? { usage: observedUsage } : {}) });
+        final_entry_id: final?.id ?? null, result, outcome,
+        ...(observedUsage ? { usage: observedUsage } : {}), ...(validation_receipt ? { validation_receipt } : {}),
+        ...(rejected ? { validation_receipt_error: validationReceiptError } : {}) });
       this.active = undefined;
       return { ...ref, end_entry_id };
     } catch (error) { this.invalidate(error); throw error; }
