@@ -25,9 +25,8 @@ export function assertCallerTools(tools) {
   assert.equal(fields.reasoning_difficulty.minimum, 1); assert.equal(fields.reasoning_difficulty.maximum, 5);
   assert.equal(Object.hasOwn(fields, "difficulty"), false, "the legacy score parameter is not a provider-visible alias");
   assert.match(difficulty, /Picks the Agent's model; fixed for its lifetime/);
-  assert.match(difficulty, /from easiest \(1\) to hardest \(5\)/);
-  assert.match(difficulty, /1=clear method.*2=routine local analysis.*3=independent investigation.*4=competing hypotheses.*5=no established approach/);
-  assert.match(difficulty, /Not workload, importance or cost/);
+  assert.match(difficulty, /not its workload, importance or cost, from easiest \(1\) to hardest \(5\)/);
+  assert.match(difficulty, /1=run given checks or apply decided changes.*2=small, well-scoped fix or check.*3=implement a given design, review a change.*4=competing hypotheses or complex constraints.*5=no known approach/);
   assert.doesNotMatch(difficulty, /light|standard|strong|slot/i);
   assert.match(fields.inherit_context.description, /Default false.*text copy.*without tool calls or results.*64 KiB/);
   assert.match(fields.after.description, /must complete first.*reference, not instructions.*\(question, failure, interrupt\).*fails without starting/);
