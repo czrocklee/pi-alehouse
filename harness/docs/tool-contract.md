@@ -73,7 +73,8 @@ while accepted-request replay remains intact. This is an adapter opt-in, not a
 restriction on optional/repeated display names in an unbound generic core Owner.
 
 Spawn requires `agent`, `prompt` (1--131072 UTF-16 units), `profile`
-(`reader`, `editor`, `researcher`) and integer `difficulty` (1--5). Optional
+(`reader`, `editor`, `researcher`) and integer `reasoning_difficulty` (1--5,
+from easiest to hardest). Optional
 fields are `label` (1--120), `inherit_context`, `after` (1--4 other names),
 `wait_ms` (0--300000), `max_turns` (1--10000, default 256) and
 `max_duration_ms` (1--86400000, default 1800000), plus optional `dispatch`.
@@ -86,7 +87,7 @@ not shell globs or expansions. See [task dispatch](task-dispatch.md) for exact p
 profile/external preflight, claims, after rechecks and validation observations.
 These declarations do not grant permissions or prove that checks ran.
 
-Profile, difficulty, context and budgets are fixed for the Agent at spawn;
+Profile, reasoning difficulty, context and budgets are fixed for the Agent at spawn;
 later tasks cannot silently change them. Prompt is the full task instruction;
 label defaults to its first nonblank line and is never forwarded as an
 instruction. Reader denies direct/detectable writes; editor edits within
@@ -94,13 +95,17 @@ parent-configured scope; researcher has read-only file tools and web, no Bash,
 and returns web-derived untrusted material. Git mutations stay with the parent.
 Bash/web remain permission-gated; no profile is an OS sandbox.
 
-Difficulty describes reasoning and quality, not permissions: 1--2 resolve to
-`light`, 3 to `standard`, 4--5 to `strong`. Model-facing descriptions give the
-five anchors, not this routing detail. Model/thinking/preset/effort and retired
+Difficulty describes reasoning and quality, not permissions: 1--5 resolve
+one-to-one to `d1`--`d5`. Model-facing descriptions give the
+five anchors, not this routing detail. The caller field is
+`reasoning_difficulty`; the former `difficulty` argument is rejected, not an
+alias. Internal admitted settings and historical `harness:*` journal records
+retain their `difficulty` field; only the model-facing projection uses the new
+name. Model/thinking/preset/effort and retired
 `role`, `strength`, `name`, `description` are not schema inputs. Trusted routing
 captures parent thinking before queued admission; neither later tasks nor
 spawning change the main model/thinking. Resolution errors are configuration
-problems, not reasons to change difficulty. Fixed effort need not inherit
+problems, not reasons to change `reasoning_difficulty`. Fixed effort need not inherit
 parent thinking; inherited effort requires it. See [routing](routing.md).
 
 `inherit_context` is at most 64 KiB of model-visible text (user/assistant text
@@ -134,7 +139,7 @@ Delivery is not proof of action.
 agent_answer({ agent, question_id, answer, wait_ms? })
 ```
 
-Answer is 1--16384 nonblank UTF-16 units. No profile, difficulty, budgets, label
+Answer is 1--16384 nonblank UTF-16 units. No profile, reasoning_difficulty, budgets, label
 or after is accepted. The original task must already be truly settled
 `needs_input`, still pending and unreserved, with no current Run and a healthy,
 reusable Agent/Owner. Answer does not wait and then silently answer a future
@@ -433,7 +438,7 @@ cleanup diagnostics do not rewrite historical outcomes. Lifecycle waits share
 the drain but have no model validator/publisher or presentation commit. Shutdown
 still waits for actual execution/cleanup promises, not an empty observer set.
 
-List is a read-only roster with profile/difficulty, label/task projection,
+List is a read-only roster with `profile`/`reasoning_difficulty`, label/task projection,
 current pending-question identity via has_question, and elapsed_s when running.
 Unavailable is a boolean availability fact with unavailable_reason diagnostics.
 History observations include tasks count, four newest earlier_labels,

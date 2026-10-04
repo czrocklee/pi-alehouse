@@ -12,6 +12,25 @@ import { flock } from "../support/flock.mjs";
 
 // These are scheduler/lifecycle tests with an explicit fake SessionPort/journal.
 // They are not SDK permission, Bash cancellation or real-model acceptance.
+test("new Agent admission rejects legacy and mismatched difficulty slots before allocation", async (t) => {
+  const { controller: c, ports } = await fixture(t);
+  const baseline = c.stats();
+  for (const strength of ["light", "standard", "strong", "d1", "d2", "d4", "d5"]) {
+    const request = task("invalid route");
+    request.settings = { ...request.settings, difficulty: 3, strength };
+    await assert.rejects(c.submit(`invalid-${strength}`, request), errorCode("INVALID_EFFECTIVE_SETTINGS"));
+    assert.equal(c.stats().agents, baseline.agents); assert.equal(c.stats().runs, baseline.runs);
+    assert.equal(c.stats().resident, baseline.resident); assert.equal(ports.length, 0);
+  }
+  for (const difficulty of [1, 2, 3, 4, 5]) {
+    const request = task("valid route");
+    request.settings = { ...request.settings, difficulty, strength: `d${difficulty}` };
+    const accepted = await c.submit(`valid-${difficulty}`, request);
+    assert.equal(accepted.effective_settings.strength, `d${difficulty}`);
+    assert.equal(accepted.effective_settings.difficulty, difficulty);
+  }
+});
+
 test("new and reuse share FIFO, request identity, immutable snapshots and exact Run waits", async (t) => {
   const { controller: c, ports } = await fixture(t);
   const first = await c.submit("a", task("first", { name: "月兔" }));
@@ -47,6 +66,45 @@ test("new and reuse share FIFO, request identity, immutable snapshots and exact 
   c.cancel(snapshot.run_id); await until(() => ports.at(-1)?.streaming || c.view(snapshot.run_id).execution_exited);
   if (ports.at(-1).streaming) ports.at(-1).finish("", "aborted");
   await ended(c, snapshot);
+});
+
+test("accepted automatic and historical preset routes stay immutable on reuse", { timeout: 5000 }, async (t) => {
+  const { controller: c, ports } = await fixture(t);
+  const mapped = task("automatic");
+  mapped.settings = { ...mapped.settings, thinking: "high", parent_thinking: "low",
+    thinking_resolution: "automatic_mapping", effort_source: "preset" };
+  const first = await c.submit("auto", mapped);
+  assert.equal(first.effective_settings.thinking, "high");
+  assert.equal(first.effective_settings.parent_thinking, "low");
+  assert.equal(first.effective_settings.thinking_resolution, "automatic_mapping");
+  await until(() => ports[0]?.streaming);
+  ports[0].finish("done"); await ended(c, first);
+  const accepted = structuredClone(c.view(first.run_id).effective_settings);
+  const reuse = await c.submit("auto-reuse", { resume: first.agent_id, prompt: "again" });
+  assert.deepEqual(reuse.effective_settings, accepted);
+  assert.deepEqual(c.view(first.run_id).effective_settings, accepted, "the accepted route is not re-resolved");
+  await assert.rejects(c.submit("mutate-route", { resume: first.agent_id, prompt: "x", thinking: "max" }),
+    errorCode("IMMUTABLE_SETTING"));
+  await assert.rejects(c.submit("mutate-settings", { resume: first.agent_id, prompt: "x",
+    settings: { ...accepted, thinking: "max", thinking_resolution: "identity" } }), errorCode("IMMUTABLE_SETTING"));
+  await until(() => ports[0].calls.length === 2);
+  ports[0].finish("again"); await ended(c, reuse);
+
+  const historical = task("historical map");
+  historical.settings = { ...historical.settings, thinking: "medium", parent_thinking: "minimal",
+    thinking_resolution: "preset_mapping" };
+  const old = await c.submit("historical", historical);
+  assert.equal(old.effective_settings.thinking_resolution, "preset_mapping");
+  assert.equal(old.effective_settings.thinking, "medium");
+  assert.equal(old.effective_settings.parent_thinking, "minimal");
+  await until(() => ports[1]?.streaming);
+  ports[1].finish("old"); await ended(c, old);
+  const reusedOld = await c.submit("historical-reuse", { resume: old.agent_id, prompt: "still mapped" });
+  assert.equal(reusedOld.effective_settings.thinking_resolution, "preset_mapping");
+  assert.equal(reusedOld.effective_settings.parent_thinking, "minimal");
+  assert.equal(reusedOld.effective_settings.thinking, "medium");
+  await until(() => ports[1].calls.length === 2);
+  ports[1].finish("still"); await ended(c, reusedOld);
 });
 
 test("lifecycle any/all, timeout and abort stay gap-free and never consume alerts", async (t) => {

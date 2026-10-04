@@ -8,19 +8,21 @@ The point isn't to spawn more agents. It's to make a team of them worth working 
 
 ## Give the task a difficulty, not a model name
 
-Your main agent assesses how hard a task is. **You decide which models and how much thinking those tasks get.**
+Your main agent assesses a task's reasoning difficulty (`reasoning_difficulty`, 1 easiest → 5 hardest). **You decide which models and how much thinking those tasks get.**
 
-Worker presets map lighter work, everyday reasoning, and the hard problems to your choice of models—even across providers. Thinking effort is a separate control. A quick lookup and a difficult design decision don't have to get the same treatment, and neither has to use your main model.
+Worker presets map difficulty 1–5 one-to-one to five independently configurable slots, `d1`–`d5`, using your choice of models—even across providers. Slots can share a model; thinking effort is a separate control. A quick lookup and a difficult design decision don't have to get the same treatment, and neither has to use your main model.
 
 Set up your lineups once; select a preset and tune its thinking effort from the panel, not a pile of prompts. New agents take the new settings; agents already working keep theirs.
 
 The same panel sets how much your main agent hands off: **Manual**, **Co-worker**, **Lead** or **Supervisor**, and how eagerly. Each position is one short line in the main agent's prompt, and the panel shows it.
 
-![The routing panel in a working session (captured before the delegation mode was added)](harness/docs/assets/routing-panel.svg)
+![Historical three-slot routing panel, captured before delegation mode and five-slot routing](harness/docs/assets/routing-panel.svg)
 
-*The author's live setup, not a suggested default.*
+*Historical capture of the author's three-slot setup, not the current UI or a suggested default.*
 
-![Thinking effort controls in the same working session](harness/docs/assets/effort-panel.svg)
+![Five-slot thinking effort editor, rendered with illustrative models](harness/docs/assets/effort-panel.svg)
+
+*Current UI renderer with example models, not a live-provider capture. Slots display d5→d1; reasoning difficulty still increases from 1 to 5.*
 
 ## Keep the teammate, not just the answer
 

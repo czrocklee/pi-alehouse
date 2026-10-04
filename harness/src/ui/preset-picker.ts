@@ -87,17 +87,21 @@ export interface PickerMouseEvent {
 /** What the picker asks of pi-tui after a pointer event. */
 export interface PickerMouseResult { handled: boolean; capture?: boolean; render?: boolean }
 
-const MIN_FULL_LINES = 11;
+/** UI-only hardest-first order. Never reverse the canonical routing tuple in place;
+ * numeric keys still address slot identity, not a position in this view. */
+export const workerSlotDisplayOrder: readonly Strength[] = Object.freeze([...strengths].reverse());
+
+/** Full chrome/detail overhead plus one preset row; never assume three slots. */
+const MIN_FULL_LINES = strengths.length + 8;
 /** Every clickable control on the picker's two pages. */
 type PickerAction = "edit" | "reset" | "back" | "settings" | "create" | "editPreset" | "saveGlobal" | "saveWorkspace";
-/** The compact layout: title, selected detail, controls, bottom edge. */
+/** Compact chrome plus a selected-slot window, controls and bottom edge. */
 export const PRESET_PICKER_MIN_ROWS = 7;
 /** Slider, eagerness and divider rows above the preset list. */
 const MODE_ROWS = 3;
 const GUIDELINE_ROWS = 3;
 const MODE_PREFIX = " Mode   ";
-const SLOT_LABEL: Record<Strength, string> = { light: "light", standard: "standard", strong: "strong" };
-const DIFFICULTY: Record<Strength, string> = { light: "d1–2", standard: "d3", strong: "d4–5" };
+const SLOT_LABEL: Record<Strength, string> = { d1: "d1", d2: "d2", d3: "d3", d4: "d4", d5: "d5" };
 const marked = (preset: PresetSnapshot): boolean => Object.keys(preset.effort_overrides ?? {}).length > 0;
 const defaultEffort = (preset: PresetSnapshot, slot: Strength): Effort => preset.effort_defaults?.[slot] ?? "inherit";
 const effectiveEffort = (preset: PresetSnapshot, slot: Strength): Effort =>
@@ -124,7 +128,7 @@ export class PresetPicker implements Component {
   private closed = false;
   /** Which preset each painted row shows, so a click hits what is on screen. */
   private rowTargets = new Map<number, number>();
-  private paintedWidth = 0;
+  private paintedWidth: number | undefined;
   private editing = false;
   private slotIndex = 0;
   private effortError: string | undefined;
@@ -166,14 +170,18 @@ export class PresetPicker implements Component {
     const { keybindings, presets } = this.options;
     // Registered shortcuts belong to the default editor; while this custom
     // component is focused it must implement its own half of the toggle.
-    if (matchesKey(data, "alt+s") || (this.editing && matchesKey(data, "ctrl+c"))) return this.finish(null);
+    if (matchesKey(data, "alt+s") || matchesKey(data, "ctrl+c")) return this.finish(null);
+    // Back/cancel remains available without a viewport, but nothing else may
+    // navigate, edit or route an invisible picker (including before first paint).
+    if (this.editing && (matchesKey(data, "escape") || keybindings.matches(data, "tui.select.confirm"))) return this.back();
+    if (!this.editing && keybindings.matches(data, "tui.select.cancel")) return this.finish(null);
+    if (!this.usable()) return;
     const management = this.options.management;
     if (management?.saveDefaults) {
       if (matchesKey(data, "g") || matchesKey(data, "shift+g")) return this.saveDefault("global");
       if (matchesKey(data, "w") || matchesKey(data, "shift+w")) return this.saveDefault("workspace");
     }
     if (this.editing) return this.editInput(data);
-    if (keybindings.matches(data, "tui.select.cancel")) return this.finish(null);
     const current = this.selection();
     if (this.canEdit() && (matchesKey(data, "e") || matchesKey(data, "shift+e"))) {
       this.openEditor();
@@ -192,15 +200,20 @@ export class PresetPicker implements Component {
           return this.finish({ action: "edit-preset", name: highlighted.name });
       }
     }
-    // 1/2/3 route the highlighted preset's slot model, list page only, and
+    // 1–5 route the highlighted preset's slot model, list page only, and
     // never for off (a control state with no models to pick).
     if (this.canPickModels()) {
       for (let index = 0; index < strengths.length; index++) {
         if (data === String(index + 1)) { this.pickModel(strengths[index]!); return; }
       }
     }
+    if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
+      this.slotIndex = (this.slotIndex + (matchesKey(data, "shift+tab") ? strengths.length - 1 : 1)) % strengths.length;
+      this.options.tui.requestRender();
+      return;
+    }
     if (keybindings.matches(data, "tui.select.confirm")) {
-      if (current) this.finish(current);
+      if (current && this.usable()) this.finish(current);
       return;
     }
     if (this.options.delegation) {
@@ -238,20 +251,26 @@ export class PresetPicker implements Component {
       this.cancelledPress = false;
       if (event.type === "click") return { handled: true };
     }
-    if (isPopoverCloseClick(event, this.paintedWidth)) {
+    if (isPopoverCloseClick(event, this.paintedWidth ?? 0)) {
       this.finish(null);
       return { handled: true };
     }
+    if (!this.usable()) return { handled: true };
     if (!this.editing) {
       const delegation = this.delegationMouse(event);
       if (delegation) return delegation;
     }
     const { presets } = this.options;
     if (this.editing) {
+      if (event.type === "wheel" && event.wheelDelta) {
+        this.slotIndex = Math.max(0, Math.min(strengths.length - 1, this.slotIndex + Math.sign(event.wheelDelta)));
+        this.options.tui.requestRender();
+        return { handled: true };
+      }
       if (event.type !== "click" || event.button !== "left") return undefined;
       const slot = this.slotTargets.get(event.y);
       if (slot) {
-        this.slotIndex = strengths.indexOf(slot.slot);
+        this.slotIndex = workerSlotDisplayOrder.indexOf(slot.slot);
         if (slot.prev !== undefined && event.x === slot.prev) this.step(slot.slot, -1);
         else if (slot.next !== undefined && event.x === slot.next) this.step(slot.slot, 1);
         else this.options.tui.requestRender();
@@ -344,7 +363,7 @@ export class PresetPicker implements Component {
 
   private setDelegation(change: Partial<DelegationSetting>): void {
     const delegation = this.options.delegation;
-    if (!delegation) return;
+    if (!delegation || !this.usable()) return;
     const current = delegation.current();
     const next = { ...current, ...change };
     if (next.mode !== current.mode || next.eagerness !== current.eagerness) delegation.set(next);
@@ -370,11 +389,32 @@ export class PresetPicker implements Component {
   private layout(width: number): string[] {
     if (width < 8) return [];
     const inner = width - 2;
-    const share = Math.floor(this.options.tui.terminal.rows * 0.8);
-    const maxLines = Math.max(PRESET_PICKER_MIN_ROWS, Math.min(share, this.options.rows?.() ?? share));
+    const maxLines = this.rowBudget();
+    // No usable selection can be painted; do not overflow the actual viewport.
+    if (maxLines < PRESET_PICKER_MIN_ROWS) return [];
     if (this.editing) return this.renderEditor(width, inner, maxLines);
     const modeRows = this.options.delegation ? MODE_ROWS : 0;
     return maxLines < MIN_FULL_LINES + modeRows ? this.renderCompact(width, inner, maxLines) : this.renderFull(width, inner, maxLines);
+  }
+
+  private rowBudget(): number {
+    const rows = this.options.tui.terminal.rows;
+    const share = Math.max(PRESET_PICKER_MIN_ROWS, Math.floor(rows * 0.8));
+    return Math.min(rows, share, this.options.rows?.() ?? share);
+  }
+
+  private usable(): boolean {
+    return this.rowBudget() >= PRESET_PICKER_MIN_ROWS && this.options.tui.terminal.columns >= 8 &&
+      (this.paintedWidth === undefined || this.paintedWidth >= 8);
+  }
+
+  /** A centered window always includes the keyboard-selected slot, including
+   * after a resize. The title/status supplies the navigation hint, not an extra
+   * row that could displace the selected control. */
+  private slotWindow(count: number): readonly Strength[] {
+    const size = Math.max(1, Math.min(strengths.length, count));
+    const start = Math.max(0, Math.min(this.slotIndex - Math.floor(size / 2), strengths.length - size));
+    return workerSlotDisplayOrder.slice(start, start + size);
   }
 
   private finish(value: PresetChoice | null): void {
@@ -393,7 +433,7 @@ export class PresetPicker implements Component {
     const summaryRows = summary !== undefined && maxLines >= MIN_FULL_LINES + modeRows + saveRows + 1 ? 1 : 0;
     // The mode's guideline takes up to three rows; the list keeps at least one.
     const guidelineRows = this.options.delegation ? Math.max(0, Math.min(GUIDELINE_ROWS, maxLines - MIN_FULL_LINES - modeRows - saveRows - summaryRows)) : 0;
-    this.visibleRows = Math.max(1, Math.min(presets.length, maxLines - 10 - modeRows - guidelineRows - saveRows - summaryRows));
+    this.visibleRows = Math.max(1, Math.min(presets.length, maxLines - (MIN_FULL_LINES - 1) - modeRows - guidelineRows - saveRows - summaryRows));
     const start = Math.max(0, Math.min(this.selected - Math.floor(this.visibleRows / 2), presets.length - this.visibleRows));
     const end = Math.min(presets.length, start + this.visibleRows);
     const range = presets.length ? `${start + 1}–${end}/${presets.length}` : "0/0";
@@ -442,8 +482,14 @@ export class PresetPicker implements Component {
       lines.push(this.row(this.twoSides(` › ${theme.bold(label)}${badge}`,
         theme.fg("dim", [this.version(current), position].filter(Boolean).join(" · ")), inner), inner));
       if (isOffPreset(current)) lines.push(...this.offNoticeRows(inner));
-      else for (const strength of strengths)
-        lines.push(this.slotRow(strength, current.models[strength], current, inner, lines.length));
+      else {
+        // Reserve controls/bottom first. A tiny viewport scrolls the slot window
+        // with Tab/Shift+Tab without changing the highlighted preset.
+        const slots = this.slotWindow(maxLines - lines.length - 2);
+        for (const strength of slots)
+          lines.push(this.slotRow(strength, current.models[strength], current, inner, lines.length,
+            slots.length < strengths.length && strength === workerSlotDisplayOrder[this.slotIndex]));
+      }
     }
     // Save controls and summary use spare rows only; the minimum is unchanged.
     const saveShown = this.canSaveDefault("global") && lines.length + 3 <= maxLines && this.saveControls(lines, inner);
@@ -540,7 +586,7 @@ export class PresetPicker implements Component {
     const heading = this.twoSides(` ${theme.bold(label)}  ${badge}`, theme.fg("dim", this.version(current)), inner);
     if (isOffPreset(current)) return [this.row(heading, inner), ...this.offNoticeRows(inner)];
     const rows = [this.row(heading, inner)];
-    for (const strength of strengths)
+    for (const strength of workerSlotDisplayOrder)
       rows.push(this.slotRow(strength, current.models[strength], current, inner, offset + rows.length));
     return rows;
   }
@@ -551,8 +597,8 @@ export class PresetPicker implements Component {
       this.row(theme.fg("muted", " Accepted work continues."), inner)];
   }
 
-  /** The slot's current effective level plus the session-override star —
-   * never the whole compatibility map. Fixed policies show their raw value
+  /** The slot's current effective level plus the session-override star.
+   * Fixed policies show their raw value
    * (marked when live metadata says the model does not support it); inherit
    * resolves through the host's capabilities or says unavailable. Legacy
    * read-only hosts keep their configured policy instead of inventing a
@@ -570,14 +616,14 @@ export class PresetPicker implements Component {
     return policy + (supported.includes(policy) ? "" : "!") + star;
   }
 
-  private slotRow(strength: Strength, model: string, preset: PresetSnapshot, inner: number, y: number): string {
+  private slotRow(strength: Strength, model: string, preset: PresetSnapshot, inner: number, y: number, selected = false): string {
     const { theme } = this.options;
     const label = SLOT_LABEL[strength].padEnd(8);
     const effort = this.slotEffort(preset, strength);
     // Preserve the slot and effective effort at narrow widths; the long model
     // gives way first, and model text that no longer fits paints no target.
-    if (inner < 26) return this.row(`${SLOT_LABEL[strength]}:${theme.fg("dim", effort)}`, inner);
-    const left = ` ${theme.fg(strength === "strong" ? "accent" : "muted", label)} ${model}`;
+    if (inner < 26) return this.row(`${selected ? "›" : " "}${SLOT_LABEL[strength]}:${theme.fg("dim", effort)}`, inner);
+    const left = `${selected ? "›" : " "}${theme.fg(selected ? "accent" : "muted", label)} ${model}`;
     const right = theme.fg("dim", effort);
     const row = this.row(this.twoSides(left, right, inner), inner);
     if (this.options.management?.models) {
@@ -605,7 +651,12 @@ export class PresetPicker implements Component {
   private openEditor(): void {
     const selected = this.options.presets[this.selected];
     if (!this.canEdit() || !selected) return;
-    if (selected.name !== this.options.activeName) return this.finish({ action: "edit-effort", name: selected.name });
+    if (selected.name !== this.options.activeName) {
+      // A startup continuation may initialize the active effort page before
+      // paint, but may not route an invisible inactive preset to confirmation.
+      if (this.usable()) this.finish({ action: "edit-effort", name: selected.name });
+      return;
+    }
     this.editing = true;
     this.dragging = false;
     this.previewMode = undefined;
@@ -651,7 +702,7 @@ export class PresetPicker implements Component {
 
   private step(slot: Strength, direction: -1 | 1): void {
     const preset = this.options.presets[this.selected];
-    if (!preset || isOffPreset(preset)) return;
+    if (!preset || isOffPreset(preset) || !this.usable()) return;
     const values: (Effort | "default")[] = ["default", "inherit", ...this.levels(this.caps(preset, slot))];
     const current = preset.effort_overrides?.[slot] ?? "default";
     const index = values.indexOf(current);
@@ -666,7 +717,7 @@ export class PresetPicker implements Component {
 
   private setEffort(overrides: EffortOverrides): void {
     const preset = this.options.presets[this.selected];
-    if (!this.editing || !preset || isOffPreset(preset) || !this.options.setEffort) return;
+    if (!this.editing || !preset || isOffPreset(preset) || !this.options.setEffort || !this.usable()) return;
     if (strengths.every((slot) => overrides[slot] === preset.effort_overrides?.[slot])) return;
     const issues = strengths.flatMap((slot) => {
       const issue = this.fixedIssue(preset, slot, this.caps(preset, slot), overrides);
@@ -688,9 +739,12 @@ export class PresetPicker implements Component {
     const { keybindings } = this.options;
     if (matchesKey(data, "escape") || keybindings.matches(data, "tui.select.confirm")) return this.back();
     if (matchesKey(data, "r") || matchesKey(data, "shift+r")) return this.setEffort({});
-    if (matchesKey(data, "left")) return this.step(strengths[this.slotIndex]!, -1);
-    if (matchesKey(data, "right")) return this.step(strengths[this.slotIndex]!, 1);
-    if (keybindings.matches(data, "tui.select.up")) this.slotIndex = Math.max(0, this.slotIndex - 1);
+    if (matchesKey(data, "left")) return this.step(workerSlotDisplayOrder[this.slotIndex]!, -1);
+    if (matchesKey(data, "right")) return this.step(workerSlotDisplayOrder[this.slotIndex]!, 1);
+    if (/^[1-5]$/.test(data)) this.slotIndex = workerSlotDisplayOrder.indexOf(strengths[Number(data) - 1]!);
+    else if (matchesKey(data, "tab") || matchesKey(data, "shift+tab"))
+      this.slotIndex = (this.slotIndex + (matchesKey(data, "shift+tab") ? strengths.length - 1 : 1)) % strengths.length;
+    else if (keybindings.matches(data, "tui.select.up")) this.slotIndex = Math.max(0, this.slotIndex - 1);
     else if (keybindings.matches(data, "tui.select.down")) this.slotIndex = Math.min(strengths.length - 1, this.slotIndex + 1);
     else return;
     this.options.tui.requestRender();
@@ -699,8 +753,11 @@ export class PresetPicker implements Component {
   private addAction(lines: string[], inner: number, text: string,
     actions: { kind: PickerAction; label: string }[]): void {
     const y = lines.length;
+    // An edge label may be replaced by the truncation ellipsis even when its
+    // original span fits. Only the exact surviving label is a click target.
+    const painted = truncateToWidth(text, inner, "…");
     this.actionTargets.set(y, actions.map(({ kind, label }) => {
-      const start = text.indexOf(label) + 1; // border is column zero
+      const start = painted.indexOf(label) + 1; // border is column zero
       return { kind, start, end: start + label.length };
     }).filter(({ start, end }) => start > 0 && end <= inner + 1));
     lines.push(this.row(this.options.theme.fg("dim", text), inner));
@@ -735,7 +792,7 @@ export class PresetPicker implements Component {
 
   /** Only whole painted labels are targets. Project saving stays inert without
    * trust, including when it changed since the last paint. */
-  private saveLabels(inner: number): { text: string; actions: { kind: PickerAction; label: string }[] } | undefined {
+  private saveLabels(inner: number, reserve = 0): { text: string; actions: { kind: PickerAction; label: string }[] } | undefined {
     const workspace = this.canSaveDefault("workspace");
     const variants = [
       { global: "[G] Save as global default", workspace: workspace ? "[W] Save as project default" : "[W] Project default (trust required)", suffix: " (on exit)" },
@@ -747,7 +804,7 @@ export class PresetPicker implements Component {
     ];
     for (const variant of variants) {
       const text = `${variant.prefix ?? " Save: "}${variant.global} · ${variant.workspace}${variant.suffix}`;
-      if (visibleWidth(text) > inner) continue;
+      if (visibleWidth(text) + reserve > inner) continue;
       return { text, actions: [{ kind: "saveGlobal", label: variant.global },
         ...(workspace ? [{ kind: "saveWorkspace" as const, label: variant.workspace }] : [])] };
     }
@@ -800,7 +857,7 @@ export class PresetPicker implements Component {
     // routes belong to what was painted, while keyboard routes use highlight.
     const highlighted = paintedPreset === undefined ? this.options.presets[this.selected]
       : this.options.presets.find((preset) => preset.name === paintedPreset);
-    if (!highlighted || isOffPreset(highlighted)) return;
+    if (!highlighted || isOffPreset(highlighted) || !this.usable()) return;
     const position = event && typeof event.screenX === "number" && typeof event.screenY === "number"
       ? { row: event.screenY, col: event.screenX } : undefined;
     this.finish({ action: "edit-model", name: highlighted.name, slot, ...(position ? { position } : {}) });
@@ -832,29 +889,50 @@ export class PresetPicker implements Component {
     // At the minimum height use the existing controls row for saving instead
     // of silently dropping it. Verbose navigation hints yield first.
     if (!saveShown && this.canSaveDefault("global")) {
-      const saving = this.saveLabels(inner);
+      // Six inner columns must retain both save letters and slot navigation.
+      // A locked W may paint, but gets no action; saving rechecks live trust.
+      if (compact && inner < 12) {
+        this.addAction(lines, inner, "GW Tab", [
+          { kind: "saveGlobal", label: "G" },
+          ...(this.canSaveDefault("workspace") ? [{ kind: "saveWorkspace" as const, label: "W" }] : []),
+        ]);
+        return;
+      }
+      const edit = this.canEdit();
+      // Prefer shorter save prose when it can also fit the mode keys. If even
+      // bare save letters cannot share that hint, retain the mandatory Tab.
+      const minimumHint = compact && this.options.delegation ? ` · Tab · ←→ ⇧←→${edit ? " · E" : ""}` : " · Tab";
+      const saving = this.saveLabels(inner, compact ? visibleWidth(minimumHint) : 0)
+        ?? this.saveLabels(inner, compact ? visibleWidth(" · Tab") : 0);
       if (saving) {
         let text = saving.text;
-        const edit = this.canEdit();
-        const hints = edit ? [" · E effort · ↑↓↵ Esc", " · E ↑↓↵ Esc", " · E"] : [" · ↑↓↵ Esc", " · ↵ Esc"];
+        const hints = compact
+          ? [...this.delegationControlHints().map((hint) => ` · Tab${hint}${edit ? " · E" : ""}`),
+            ...(edit ? [" · Tab slots · E effort · ↑↓↵ Esc", " · Tab · E ↑↓↵ Esc", " · Tab · E", " · Tab"]
+              : [" · Tab slots · ↑↓↵ Esc", " · Tab · ↵ Esc", " · Tab"])]
+          : edit ? [" · E effort · ↑↓↵ Esc", " · E ↑↓↵ Esc", " · E"] : [" · ↑↓↵ Esc", " · ↵ Esc"];
         const hint = hints.find((each) => visibleWidth(text) + visibleWidth(each) <= inner);
         if (hint) text += hint;
-        this.addAction(lines, inner, text, [...saving.actions, ...(edit && hint ? [{ kind: "edit" as const, label: "E" }] : [])]);
+        this.addAction(lines, inner, text, [...saving.actions, ...(edit && hint?.includes(" · E") ? [{ kind: "edit" as const, label: "E" }] : [])]);
         return;
       }
     }
     const base = this.controls(inner, compact);
     const labels = this.managementLabels();
     let text = base;
+    if (compact) {
+      const hint = this.delegationControlHints().find((each) => visibleWidth(text) + visibleWidth(each) <= inner);
+      if (hint) text += hint;
+    }
     if (labels.length) {
       // The hint appears only when its labels fit whole; when even they do
       // not, the keys remain reachable without painted targets.
       const full = labels.map(({ label }) => ` · ${label}`).join("");
-      if (visibleWidth(base) + visibleWidth(full) <= inner) text = base + full;
+      if (visibleWidth(text) + visibleWidth(full) <= inner) text += full;
       else {
         const min = ` · ${labels.map(({ label }) => label.slice(0, 1)).join(" ")}`;
-        if (visibleWidth(base) + visibleWidth(min) <= inner) {
-          text = base + min;
+        if (visibleWidth(text) + visibleWidth(min) <= inner) {
+          text += min;
           for (const label of labels) label.label = label.label.slice(0, 1);
         }
       }
@@ -862,12 +940,12 @@ export class PresetPicker implements Component {
     // The model route's hint rides along when it fits; the digits stay
     // reachable even without it, and it is never a click target.
     if (this.canPickModels()) {
-      for (const hint of [" · 1/2/3 model", " · 123"]) {
+      for (const hint of [" · 1/2/3/4/5 model", " · 12345"]) {
         if (visibleWidth(text) + visibleWidth(hint) <= inner) { text += hint; break; }
       }
     }
     this.addAction(lines, inner, text, [
-      ...(this.canEdit() ? [{ kind: "edit" as const, label: inner < 22 ? "E" : "Edit effort" }] : []),
+      ...(this.canEdit() ? [{ kind: "edit" as const, label: this.effortControlLabel(inner, compact) }] : []),
       ...labels,
     ]);
   }
@@ -876,7 +954,7 @@ export class PresetPicker implements Component {
     const preset = this.options.presets[this.selected];
     if (!preset || isOffPreset(preset)) { this.back(); return this.renderCompact(width, inner, maxLines); }
     const { theme } = this.options;
-    const selectedSlot = strengths[this.slotIndex]!;
+    const selectedSlot = workerSlotDisplayOrder[this.slotIndex]!;
     const caps = Object.fromEntries(strengths.map((slot) => [slot, this.caps(preset, slot)])) as Record<Strength, EffortCapabilities>;
     const errors = strengths.flatMap((slot) => {
       const issue = this.fixedIssue(preset, slot, caps[slot]);
@@ -886,19 +964,23 @@ export class PresetPicker implements Component {
       const warning = this.inheritWarning(preset, slot, caps[slot]);
       return warning ? [`${SLOT_LABEL[slot]}: ${warning}`] : [];
     });
-    const saveRows = this.canSaveDefault("global") && maxLines >= 8 ? 1 : 0;
+    // Base: title + five slots + status + controls + bottom. Spare chrome/save
+    // rows cannot steal space from the five slots; smaller viewports scroll.
+    const baseRows = strengths.length + 4;
+    const saveRows = this.canSaveDefault("global") && maxLines >= baseRows + 1 ? 1 : 0;
     const lines = [this.title(width, `Effort · ${preset.name}`)];
-    if (maxLines >= 8 + saveRows) lines.push(this.row(theme.fg("muted", " New Agents only; main unchanged"), inner));
-    if (maxLines >= 9 + saveRows) lines.push(this.row(theme.fg("dim", " source: preset defaults + session overrides · changes apply immediately"), inner));
-    if (maxLines >= 10 + saveRows) lines.push(this.divider(width));
-    for (const slot of strengths) {
+    if (maxLines >= baseRows + 1 + saveRows) lines.push(this.row(theme.fg("muted", " New Agents only; main unchanged"), inner));
+    if (maxLines >= baseRows + 2 + saveRows) lines.push(this.row(theme.fg("dim", " source: preset defaults + session overrides · changes apply immediately"), inner));
+    if (maxLines >= baseRows + 3 + saveRows) lines.push(this.divider(width));
+    const slots = this.slotWindow(maxLines - lines.length - 3 - saveRows);
+    for (const slot of slots) {
       const selected = slot === selectedSlot;
       const value = preset.effort_overrides?.[slot] ?? "default";
       const short = inner < 27;
-      const label = short ? ({ light: "light", standard: "std", strong: "str" } as const)[slot] : SLOT_LABEL[slot];
+      const label = SLOT_LABEL[slot];
       const problem = this.fixedIssue(preset, slot, caps[slot]) ?? this.inheritWarning(preset, slot, caps[slot]);
       const base = ` ${selected ? "›" : " "}‹${label}:${value}›${problem ? " !" : ""}`;
-      const suffix = short ? "" : ` ${DIFFICULTY[slot]} · ${preset.models[slot]}`;
+      const suffix = short ? "" : ` · ${preset.models[slot]}`;
       const text = truncateToWidth(base + suffix, inner, "…");
       // Hit-test only arrows that survived clipping, in visible terminal
       // columns (not UTF-16 offsets). The leading selection marker is not a
@@ -912,36 +994,69 @@ export class PresetPicker implements Component {
       lines.push(this.row(selected ? theme.bg("selectedBg", text) : text, inner));
     }
     const inherited = caps[selectedSlot].error ?? caps[selectedSlot].inheritError ?? caps[selectedSlot].inherited ?? "unavailable";
-    if (maxLines >= 11 + saveRows) lines.push(this.row(theme.fg("dim", ` default: ${defaultEffort(preset, selectedSlot)} · inherit → ${inherited} · model: ${preset.models[selectedSlot]}`), inner));
+    if (maxLines >= baseRows + 4 + saveRows) lines.push(this.row(theme.fg("dim", ` default: ${defaultEffort(preset, selectedSlot)} · inherit → ${inherited} · model: ${preset.models[selectedSlot]}`), inner));
     const info = this.effortError ? ` ! ${this.effortError}` : errors.length ? ` ! Current policy unavailable: ${errors.join("; ")}` : warnings.length
       ? ` Inherit checked at spawn: ${warnings.join("; ")}`
       : ` Changes apply immediately · default: ${defaultEffort(preset, selectedSlot)} · inherit → ${inherited}`;
-    lines.push(this.row(theme.fg(this.effortError || errors.length || warnings.length ? "warning" : "muted", info), inner));
+    const scope = maxLines < baseRows + 1 + saveRows ? " New Agents only; main unchanged ·" : "";
+    lines.push(this.row(theme.fg(this.effortError || errors.length || warnings.length ? "warning" : "muted", scope + info), inner));
     const saveShown = saveRows > 0 && this.saveControls(lines, inner);
-    this.editorControls(lines, inner, saveShown);
+    this.editorControls(lines, inner, saveShown, slots.length < strengths.length);
     lines.push(this.bottom(width));
     return lines;
   }
 
-  private editorControls(lines: string[], inner: number, saveShown: boolean): void {
+  private editorControls(lines: string[], inner: number, saveShown: boolean, windowed: boolean): void {
+    // Hidden slots need a visible navigation hint before optional reset/back
+    // prose. Reserve it even when saving shares the minimum-height control row.
+    const navigation = !windowed ? "" : inner >= 27 ? " · ↑↓/1–5 slot" : inner >= 14 ? " · ↑↓/1–5" : " ↑↓";
     if (!saveShown && this.canSaveDefault("global")) {
-      const saving = this.saveLabels(inner);
+      const saving = this.saveLabels(inner, visibleWidth(navigation));
       if (saving) {
-        const hints = [" · R reset · Esc back", " · R Esc"];
+        const hints = [navigation + " · R reset · Esc back", navigation + " · R Esc", navigation];
         const hint = hints.find((each) => visibleWidth(saving.text) + visibleWidth(each) <= inner);
         this.addAction(lines, inner, saving.text + (hint ?? ""), [...saving.actions,
-          ...(hint ? [{ kind: "reset" as const, label: "R" }, { kind: "back" as const, label: "Esc" }] : [])]);
+          ...(hint?.includes("R") ? [{ kind: "reset" as const, label: "R" }] : []),
+          ...(hint?.includes("Esc") ? [{ kind: "back" as const, label: "Esc" }] : [])]);
+        return;
+      }
+      // `G · W` cannot share six columns with a navigation hint. Keep both
+      // letters and the hint, without a separator that would hide one of them.
+      const tight = `GW${navigation.trim()}`;
+      if (navigation && this.canSaveDefault("workspace") && visibleWidth(tight) <= inner) {
+        this.addAction(lines, inner, tight, [
+          { kind: "saveGlobal", label: "G" }, { kind: "saveWorkspace", label: "W" },
+        ]);
         return;
       }
     }
-    const controls = inner < 14 ? " R Esc" : inner < 23 ? " R reset · Esc" : " R reset · Enter/Esc back · Alt+S close · ←→ adjust · ↑↓ slot";
+    const controls = windowed ? inner < 14 ? " ↑↓ R Esc" : inner < 23 ? " ↑↓/1–5 · R Esc" : " ↑↓/1–5 slot · ←→ · R Esc"
+      : inner < 14 ? " R Esc" : inner < 23 ? " R reset · Esc" : " R reset · Enter/Esc back · Alt+S close · ←→ adjust · ↑↓/1–5 slot";
     this.addAction(lines, inner, controls, [
-      { kind: "reset", label: inner < 14 ? "R" : "R reset" },
-      { kind: "back", label: inner < 23 ? "Esc" : "Esc back" },
+      { kind: "reset", label: windowed || inner < 14 ? "R" : "R reset" },
+      { kind: "back", label: windowed || inner < 23 ? "Esc" : "Esc back" },
     ]);
   }
 
+  private effortControlLabel(inner: number, compact: boolean): string {
+    return inner < (compact ? 46 : 22) ? "E" : "Edit effort";
+  }
+
+  private delegationControlHints(): readonly string[] {
+    return this.options.delegation ? [" · ←→ mode · ⇧←→ eagerness", " · ←→ mode · ⇧←→ eager", " · ←→ ⇧←→"] : [];
+  }
+
   private controls(inner: number, compact: boolean): string {
+    const effortLabel = this.effortControlLabel(inner, compact);
+    // Slot-window navigation stays discoverable even with delegation or saving.
+    if (compact) {
+      // Below 12 columns the surviving prefix is the only hint, so slot
+      // navigation leads. Wider compact rows keep Alt+S and that hint.
+      if (inner < 12) return " Tab↑↓";
+      if (inner < 22) return ` Alt+S Tab ↑↓${this.canEdit() ? ` ${effortLabel}` : ""}↵`;
+      if (inner < 46) return ` Alt+S · Tab slots · ↑↓${this.canEdit() ? ` ${effortLabel}` : ""} ↵ Esc`;
+      return ` Alt+S · Tab slots · ↑↓ preset${this.canEdit() ? ` · E ${effortLabel}` : ""} · Enter Esc`;
+    }
     if (this.options.delegation) {
       const edit = this.canEdit();
       if (inner >= 70) return ` ←→ mode · ⇧←→ eagerness · ↑↓ preset${edit ? " · Edit effort" : ""} · Enter · Esc`;
@@ -950,9 +1065,8 @@ export class PresetPicker implements Component {
     }
     if (inner < 22) return this.canEdit() ? "Alt+S E ↑↓↵ Esc" : " Alt+S ↑↓ ↵ Esc";
     if (inner < 46) return this.canEdit() ? " Alt+S ↑↓ E Edit effort ↵ Esc" : " Alt+S close · ↑↓ Enter Esc";
-    if (this.canEdit()) return ` Alt+S close · E Edit effort · ↑↓ ${compact ? "choose" : "navigate"} · Enter apply · Esc`;
-    return compact ? " Alt+S close · ↑↓ choose · Enter apply · Esc cancel" :
-      " Alt+S close · ↑↓ navigate · Enter apply · Esc cancel";
+    if (this.canEdit()) return " Alt+S close · E Edit effort · ↑↓ navigate · Enter apply · Esc";
+    return " Alt+S close · ↑↓ navigate · Enter apply · Esc cancel";
   }
 
   /** Off is a control state; every configured model preset has a version. */

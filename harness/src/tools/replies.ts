@@ -46,7 +46,7 @@ export function agentRow(view: RunView, summary: AgentSummary, nameOf: NameOf) {
   const touchedOmitted = summary.touched.length - touched.length + summary.touched_omitted;
   const running = view.status === "running" && !view.execution_exited;
   const { agent, ...task } = taskReply(view, nameOf);
-  return { agent, profile: view.effective_settings.profile, difficulty: view.effective_settings.difficulty,
+  return { agent, profile: view.effective_settings.profile, reasoning_difficulty: view.effective_settings.difficulty,
     label: utf16Prefix(view.description, 120), ...task,
     ...(running && view.execution_elapsed_ms !== undefined ? { elapsed_s: Math.round(view.execution_elapsed_ms / 1000) } : {}),
     tasks: summary.runs,
@@ -77,7 +77,9 @@ export function errorReply(error: { code?: string; details?: Record<string, unkn
   const agent = typeof d.agent === "string" ? d.agent :
     typeof d.agent_id === "string" ? safe(() => names?.agent(d.agent_id as string)) :
       typeof d.run_id === "string" ? safe(() => names?.run(d.run_id as string)) : undefined;
-  const parameter = typeof d.key === "string" ? d.key : typeof d.parameter === "string" ? d.parameter : undefined;
+  const internalParameter = typeof d.key === "string" ? d.key : typeof d.parameter === "string" ? d.parameter : undefined;
+  // The caller vocabulary is separate from admitted settings and journal keys.
+  const parameter = internalParameter === "difficulty" ? "reasoning_difficulty" : internalParameter;
   const dispatchError = error.code === "INVALID_DISPATCH" || error.code?.startsWith("DISPATCH_") ||
     ["PREFLIGHT_DENIED", "RESOURCE_OWNED", "BUILD_TREE_BUSY"].includes(error.code ?? "");
   // Keep abstract requested choices at their existing 128-unit cap. Dispatch
@@ -92,7 +94,7 @@ export function errorReply(error: { code?: string; details?: Record<string, unkn
     ...(typeof d.error === "string" ? { message: utf16Prefix(d.error, 512) } : {}),
     ...(typeof d.resolution === "string" ? { resolution: utf16Prefix(d.resolution, 512) } : {}),
     ...(typeof d.requested === "string" ? { requested: utf16Prefix(d.requested, 128) } : {}),
-    ...(validDifficulty(d.difficulty) ? { difficulty: d.difficulty } : {}),
+    ...(validDifficulty(d.difficulty) ? { reasoning_difficulty: d.difficulty } : {}),
     ...allowedFields(d.allowed),
     ...(typeof d.parent_thinking === "string" ? { parent_thinking: utf16Prefix(d.parent_thinking, 32) } : {}) } };
 }

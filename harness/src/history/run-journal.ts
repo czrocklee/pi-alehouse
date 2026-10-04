@@ -1,6 +1,6 @@
 import type { SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
-import { validDifficulty, type AdmittedAgentConfig, type Difficulty, type HistoryRef,
-  type Outcome, type Output, type RunIdentity } from "../core/contracts.js";
+import { difficultySlots, validDifficulty, type AdmittedAgentConfig, type Difficulty, type HistoryRef,
+  type Outcome, type Output, type RunIdentity, type WorkerSlot } from "../core/contracts.js";
 import { HarnessError, ParentHistoryError, type HistoryPort } from "../core/ports.js";
 import { validValidationReceipt, type ValidationReceipt } from "../core/dispatch.js";
 import { describeResult, isId } from "../core/result-text.js";
@@ -17,11 +17,13 @@ export const validIdentity = (value: unknown): value is RunIdentity => {
 export const entryId = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{8}$/.test(value);
 export interface HistoricalRouting {
   preset: string; preset_version: string; selection_digest: string;
-  strength: "light" | "standard" | "strong"; thinking: string; provider: string; model: string; profile: string;
+  /** Retired slots remain display-only journal data, never live configuration. */
+  strength: WorkerSlot | "light" | "standard" | "strong"; thinking: string; provider: string; model: string; profile: string;
   /** Absent in older journals; never infer a rating from their slot. */
   difficulty?: Difficulty;
   parent_thinking?: string;
-  thinking_resolution?: "identity" | "preset_mapping" | "preset_fixed";
+  /** `preset_mapping` is historical only. Absence is legacy effort provenance, independent of difficulty. */
+  thinking_resolution?: "identity" | "automatic_mapping" | "preset_mapping" | "preset_fixed";
   /** Absent in older journals; never infer provenance from a preset name. */
   effort_source?: "preset" | "user_override";
 }
@@ -39,13 +41,15 @@ export const validRouting = (value: unknown): value is HistoricalRouting => {
     !Object.hasOwn(r ?? {}, "effort_source");
   const fixed = r?.thinking_resolution === "preset_fixed" &&
     (!Object.hasOwn(r, "parent_thinking") || (typeof r.parent_thinking === "string" && !!r.parent_thinking));
-  const inherited = ["identity", "preset_mapping"].includes(r?.thinking_resolution ?? "") &&
+  const inherited = ["identity", "automatic_mapping", "preset_mapping"].includes(r?.thinking_resolution ?? "") &&
     typeof r?.parent_thinking === "string" && !!r.parent_thinking;
   return !!r && [r.preset, r.preset_version, r.thinking, r.provider, r.model, r.profile].every((v) => typeof v === "string" && !!v) &&
     (legacy || fixed || inherited) &&
     (!Object.hasOwn(r, "effort_source") || ["preset", "user_override"].includes(r.effort_source ?? "")) &&
     (!Object.hasOwn(r, "difficulty") || validDifficulty(r.difficulty)) &&
-    ["light", "standard", "strong"].includes(r.strength) && /^[0-9a-f]{64}$/.test(r.selection_digest);
+    [...difficultySlots, "light", "standard", "strong"].includes(r.strength) &&
+    (!Object.hasOwn(r, "difficulty") || !difficultySlots.includes(r.strength as WorkerSlot) ||
+      difficultySlots[r.difficulty! - 1] === r.strength) && /^[0-9a-f]{64}$/.test(r.selection_digest);
 };
 export const validationReceiptError = "invalid_validation_receipt" as const;
 /** Receipts are declarations/observations, never proof of executed or passed checks. */

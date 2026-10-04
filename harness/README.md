@@ -6,7 +6,7 @@ The harness is Pi Alehouse's internal, opt-in Owner-local worker backend, not an
 
 ## Operate
 
-1. Build the root package and generate matching `runtime/{agents,policy,permission-system}` resources. Run `node bin/pi-alehouse.mjs init` from the repository root to create **only absent** resources (six worker definitions, one routing catalogue and one managed permission config). Existing personal files stay intact. The neutral version-2 `harness-presets.json` defaults to `off`; configure your own exact registered provider/model IDs before enabling workers. See [getting started](docs/getting-started.md) and [routing configuration](docs/routing.md#preset-configuration).
+1. Build the root package and generate matching `runtime/{agents,policy,permission-system}` resources. Run `node bin/pi-alehouse.mjs init` from the repository root to create **only absent** resources (six worker definitions, one routing catalogue and one managed permission config). Existing personal files stay intact. The neutral version-3 `harness-presets.json` defaults to `off`; configure your own exact registered provider/model IDs before enabling workers. See [getting started](docs/getting-started.md) and [routing configuration](docs/routing.md#preset-configuration).
 2. Start a **fresh** `pi-alehouse` process. Select the parent model normally, and the delegation mode and a model preset independently via `Alt+S` (or `/harness-mode` and `/harness-preset`). `off` blocks new delegation, not already accepted tasks. When enabled, the parent has eight fixed harness management tools (`agent_spawn`, `agent_run`, `agent_send`, `agent_wait`, `agent_read`, `agent_interrupt`, `agent_kill`, `agent_list`) and addresses Agents by name. Release idle Agents when capacity is needed.
 3. Before exit, use `/harness-close` and wait for **confirmed** Owner closure. A never-used Owner closes automatically before session replacement; a used Owner needs literal **Yes** from Pi's UI. `/tree` always needs explicit close because it changes the current session in place. Do not `/reload` with an open Owner. Once a replacement guard returns after closure, Pi does not atomically serialize later teardown/hooks/target loading: finish each replacement before starting another. Unconfirmed drain does not prove execution exit.
 
@@ -29,7 +29,7 @@ The parent retains normal footer/title, approval queue, health/Stats, and pinned
 | Ownership, lifecycle, SDK adapters, history and accounting | [Architecture](docs/architecture.md) |
 | Owner / Agent / Run / Session vocabulary | [Concepts](docs/concepts.md) |
 | Eight parent tools and two child tools | [Tool contract](docs/tool-contract.md) |
-| Slots, effort, Off, version-2 configuration | [Routing](docs/routing.md) |
+| Slots, effort, Off, version-3 configuration | [Routing](docs/routing.md) |
 | Widget, panels, footer and Stats | [Interface](docs/interface.md) |
 | Permission, provenance, leases and data handling | [Security](docs/security.md) |
 | Layout and quality gates | [Development](docs/development.md) |

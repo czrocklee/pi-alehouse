@@ -12,7 +12,7 @@ import { flock } from "./flock.mjs";
 export const deferred = () => Promise.withResolvers();
 export const settings = { provider: "fixture", model: "controlled", thinking: "off", parent_thinking: "off",
   thinking_resolution: "identity", profile: "reader",
-  difficulty: 3, strength: "standard", preset: "fixture", preset_version: "v1", selection_digest: "2".repeat(64),
+  difficulty: 3, strength: "d3", preset: "fixture", preset_version: "v1", selection_digest: "2".repeat(64),
   cwd: "/tmp", tools: ["read"], definition_digest: "1".repeat(64) };
 export const task = (prompt, rest = {}) => ({ prompt, description: prompt, settings, ...rest });
 export const errorCode = (code) => (error) => error.code === code;

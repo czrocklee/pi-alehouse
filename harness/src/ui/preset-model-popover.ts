@@ -9,6 +9,8 @@ type NativeSelector = Component & Focusable & { dispose(): void; children: Compo
 type Group = { size: number; target?: { provider: string; id: string } };
 type Row = { text: string; plain: string; model: boolean; selected: boolean; group?: Group; first?: boolean };
 type Target = { start: number; end: number; provider: string; id: string };
+type SelectionProjection = { targets: Map<number, Target>; selectedVisible: boolean; structured: boolean; visibleModel: Group["target"] };
+type SelectionIssue = "closed" | "not_visible" | "identity_unverified";
 
 /** Only public terminal geometry. The host clamps row/col to the visible area
  * again after measuring the component, including on terminal resize. */
@@ -34,12 +36,18 @@ export class PresetModelPopover implements Component, Focusable {
   private closed = false;
   private targets = new Map<number, Target>();
   private selectedVisible = false;
+  /** False when the public tree could not be identified; keyboard then remains
+   * available whenever the arrow itself is visible. */
+  private structured = false;
+  private visibleModel?: { provider: string; id: string };
 
   constructor(private readonly options: {
     native: NativeSelector;
     theme: PopoverTheme;
     title: string;
     height(): number;
+    /** Current overlay width. Absent callers use the last rendered width. */
+    currentWidth?(): number;
     models(): readonly Model[];
     select(model: Model): void;
     cancel(): void;
@@ -47,14 +55,51 @@ export class PresetModelPopover implements Component, Focusable {
 
   get focused(): boolean { return this.options.native.focused; }
   set focused(value: boolean) { this.options.native.focused = value; }
-  /** In an unusably small viewport, do not accept an unseen native choice. */
-  canSelect(): boolean { return !this.closed && this.selectedVisible; }
+  /** Never expand a hit map before the host paints that wider layout. A wider
+   * dry layout could unwrap prose and move a click to another row. */
+  private selectionWidth(): number {
+    return Math.min(this.width, this.options.currentWidth?.() ?? this.width);
+  }
+  /** A dry layout validates current eligibility, but must not replace the
+   * host's last-painted hit map. Otherwise a rejected stale click could grant
+   * a second click on an item the host has never painted. */
+  private recheck(): SelectionProjection {
+    const painted = { width: this.width, targets: this.targets, selectedVisible: this.selectedVisible,
+      structured: this.structured, visibleModel: this.visibleModel };
+    this.targets = new Map();
+    try {
+      this.render(this.selectionWidth());
+      return { targets: this.targets, selectedVisible: this.selectedVisible,
+        structured: this.structured, visibleModel: this.visibleModel };
+    } finally {
+      this.width = painted.width;
+      this.targets = painted.targets;
+      this.selectedVisible = painted.selectedVisible;
+      this.structured = painted.structured;
+      this.visibleModel = painted.visibleModel;
+    }
+  }
+  /** Recheck the current viewport and, when the tree is identified, the exact
+   * submitted model. A caller can explain a rejection instead of silently
+   * leaving a native selector waiting after it has disposed itself. */
+  selectionIssue(model?: { provider: string; id: string }): SelectionIssue | undefined {
+    if (this.closed) return "closed";
+    const current = this.recheck();
+    if (!current.selectedVisible) return "not_visible";
+    if (!model || !current.structured) return undefined;
+    return current.visibleModel?.provider === model.provider && current.visibleModel.id === model.id
+      ? undefined : "identity_unverified";
+  }
+  canSelect(model?: { provider: string; id: string }): boolean {
+    return this.selectionIssue(model) === undefined;
+  }
   handleInput(data: string): void { if (!this.closed) this.options.native.handleInput?.(data); }
   invalidate(): void { this.options.native.invalidate(); }
   dispose(): void {
     this.closed = true;
     this.targets.clear();
     this.selectedVisible = false;
+    this.visibleModel = undefined;
     this.options.native.dispose();
   }
 
@@ -62,6 +107,8 @@ export class PresetModelPopover implements Component, Focusable {
     this.width = width;
     this.targets.clear();
     this.selectedVisible = false;
+    this.structured = false;
+    this.visibleModel = undefined;
     if (this.closed) return [];
     const height = Math.max(1, this.options.height());
     if (width < 12 || height < 5) return [truncateToWidth("Too small · Esc to cancel", width)];
@@ -78,7 +125,10 @@ export class PresetModelPopover implements Component, Focusable {
       ...context.map((text) => popoverRow(this.options.theme, text, inner))];
     for (const row of body) {
       const painted = popoverRow(this.options.theme, row.text, inner);
-      if (row.selected && (!row.group || complete(row.group)) && stripTerminalSequences(painted).startsWith("│→ ")) this.selectedVisible = true;
+      if (row.selected && (!row.group || complete(row.group)) && stripTerminalSequences(painted).startsWith("│→ ")) {
+        this.selectedVisible = true;
+        if (row.group?.target) this.visibleModel = row.group.target;
+      }
       if (row.group?.target && complete(row.group) && visibleWidth(row.plain) <= inner) {
         this.targets.set(result.length, { start: row.first ? 5 : 1, end: 1 + visibleWidth(row.plain), ...row.group.target });
       }
@@ -128,7 +178,10 @@ export class PresetModelPopover implements Component, Focusable {
     // In that case preserve native keyboard presentation, with no mouse hits.
     const modelRow = (text: string): boolean => /^(?:→ | {2})(?:✓ | {2})\S/u.test(stripTerminalSequences(text));
     if (tree.length === painted.length && tree.every((line, index) => line.text === painted[index]) &&
-        (tree.some((line) => line.model) || !painted.some(modelRow))) return tree;
+        (tree.some((line) => line.model) || !painted.some(modelRow))) {
+      this.structured = true;
+      return tree;
+    }
     return painted.map((text) => ({ ...row(text), model: /^(?:→ | {2})(?:✓ | {2})\S/u.test(stripTerminalSequences(text)),
       selected: stripTerminalSequences(text).startsWith("→ ") }));
   }
@@ -159,10 +212,16 @@ export class PresetModelPopover implements Component, Focusable {
     if (event.type === "click" && event.button === "left") {
       const target = this.targets.get(event.y);
       if (target && event.x >= target.start && event.x < target.end) {
-        // Recheck freshness and uniqueness at click time as well as paint time.
-        const models = this.options.models().filter((model) => model.api !== "pi-virtual" &&
-          model.provider === target.provider && model.id === target.id);
-        if (models.length === 1) this.options.select(models[0]!);
+        // A pointer may choose any complete visible item, not just the native
+        // keyboard arrow. Repaint at the current viewport and require the
+        // same item under this click; stale rows must not choose replacements.
+        const current = this.recheck().targets.get(event.y);
+        if (current?.provider === target.provider && current.id === target.id &&
+            event.x >= current.start && event.x < current.end) {
+          const models = this.options.models().filter((model) => model.api !== "pi-virtual" &&
+            model.provider === target.provider && model.id === target.id);
+          if (models.length === 1) this.options.select(models[0]!);
+        }
       }
     }
     return { handled: true, ...(event.type === "click" ? { focus: true } : {}) };

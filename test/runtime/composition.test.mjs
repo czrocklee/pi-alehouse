@@ -84,7 +84,7 @@ test("a later invalid preset cannot reuse a previous session's successful regist
       });
     }` });
   const presetPath = join(root, "harness-presets.json");
-  writeFileSync(presetPath, JSON.stringify({ version: 2, defaultPreset: "off", presets: {} }));
+  writeFileSync(presetPath, JSON.stringify({ version: 3, defaultPreset: "off", presets: {} }));
   const previous = globalThis[registryKey];
   globalThis[registryKey] = new Map([["first", {}], ["second", {}]]);
   t.after(() => { globalThis[registryKey] = previous; });
@@ -102,7 +102,7 @@ test("a later invalid preset cannot reuse a previous session's successful regist
   assert.equal(await bash(), undefined);
   await emit({ type: "session_shutdown", reason: "quit" });
   assert(extension.tools.has("fixture-management"), "the old registration remains in Pi's extension map");
-  writeFileSync(presetPath, JSON.stringify({ version: 2, defaultPreset: "missing", presets: {} }));
+  writeFileSync(presetPath, JSON.stringify({ version: 3, defaultPreset: "missing", presets: {} }));
   ctx = sessionContext("second");
   await emit({ type: "session_start" });
   assert.deepEqual(errors, [], "the fixture returns early rather than throwing");

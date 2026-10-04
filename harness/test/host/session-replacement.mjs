@@ -27,7 +27,7 @@ const permissionPath = permissionEntry, guardPath = join(generatedRoot, "extensi
 const definition = readFileSync(join(generatedRoot, "agents/reader.md"), "utf8"), definitionDigest = digest(definition);
 const effective = { provider: model.provider, model: model.id, thinking: "off", parent_thinking: "off",
   thinking_resolution: "identity", profile: "reader",
-  difficulty: 3, strength: "standard", preset: "fixture", preset_version: "v1", selection_digest: "1".repeat(64), cwd: root,
+  difficulty: 3, strength: "d3", preset: "fixture", preset_version: "v1", selection_digest: "1".repeat(64), cwd: root,
   tools: ["alert_parent"], definition_digest: definitionDigest };
 const childInit = Promise.withResolvers(), initEntered = Promise.withResolvers(), childHold = Promise.withResolvers();
 const childEntered = Promise.withResolvers(), parentEntered = Promise.withResolvers();

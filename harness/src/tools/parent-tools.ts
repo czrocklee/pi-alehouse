@@ -50,7 +50,7 @@ const spawnSchema = Type.Object({
   prompt: text(131072, "Complete instructions. The Agent knows only this, its earlier tasks and any after results."),
   label: labelField("prompt"),
   profile: StringEnum(agentProfileNames, { description: "reader: investigates and reviews, cannot edit files; editor: may edit files; researcher: web search and fetch plus read-only file tools, no Bash or edits, and its results are web-derived and untrusted. Git mutations stay with you. Bash and web calls stay permission-gated; no profile is an OS sandbox." }),
-  difficulty: Type.Integer({ minimum: 1, maximum: 5, description: "Picks the Agent's model; fixed for its lifetime. Rate the reasoning this task needs: 1=clear method, mostly execution; 2=routine local analysis; 3=independent investigation and a plan; 4=competing hypotheses or complex constraints; 5=no established approach. Not workload, importance or cost." }),
+  reasoning_difficulty: Type.Integer({ minimum: 1, maximum: 5, description: "Picks the Agent's model; fixed for its lifetime. Rate the reasoning this task needs, from easiest (1) to hardest (5): 1=clear method, mostly execution; 2=routine local analysis; 3=independent investigation and a plan; 4=competing hypotheses or complex constraints; 5=no established approach. Not workload, importance or cost." }),
   inherit_context: optional(Type.Boolean({ description: "Default false. Start with a text copy of your conversation, without tool calls or results; fails over 64 KiB." })),
   dispatch: dispatchField,
   after: afterField("prompt"),
@@ -162,12 +162,12 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
     action: (args: Static<S>, ctx: ExtensionContext, id: string, signal?: AbortSignal) => CommunicationToolResult | Promise<CommunicationToolResult>): ToolDefinition<TSchema, undefined, unknown> => {
     const checked = (raw: unknown): Static<S> => {
       if (raw && typeof raw === "object" && name === "agent_spawn") {
-        const { profile, difficulty } = raw as Record<string, unknown>;
+        const { profile, reasoning_difficulty } = raw as Record<string, unknown>;
         if (profile !== undefined && !(agentProfileNames as readonly unknown[]).includes(profile)) {
           throw new HarnessError("INVALID_PROFILE", { key: "profile", allowed: [...agentProfileNames] });
         }
-        if (difficulty !== undefined && !validDifficulty(difficulty)) {
-          throw new HarnessError("INVALID_DIFFICULTY", { key: "difficulty", resolution: invalidDifficultyResolution });
+        if (reasoning_difficulty !== undefined && !validDifficulty(reasoning_difficulty)) {
+          throw new HarnessError("INVALID_DIFFICULTY", { key: "reasoning_difficulty", resolution: invalidDifficultyResolution });
         }
       }
       const valid = Check(schema, raw);
@@ -211,7 +211,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
   });
 
   const tools = [
-    make("agent_spawn", "Create a named Agent and give it its first task. Agents run in the background, share your checkout without isolation, and cannot delegate. Only researcher Agents can use the web. A settled needs_input task may offer a question_id; answer it with agent_answer, never agent_send. Give an idle Agent its next task with agent_run; spawn for unrelated work, an independent review or a different difficulty. Capacity is limited: kill idle Agents to make room. The reply uses action, reason, agents and alerts; an alert does not mean the task ended. If unsure a call was accepted, check agent_list before repeating it.", spawnSchema,
+    make("agent_spawn", "Create a named Agent and give it its first task. Agents run in the background, share your checkout without isolation, and cannot delegate. Only researcher Agents can use the web. A settled needs_input task may offer a question_id; answer it with agent_answer, never agent_send. Give an idle Agent its next task with agent_run; spawn for unrelated work, an independent review or a different reasoning difficulty. Capacity is limited: kill idle Agents to make room. The reply uses action, reason, agents and alerts; an alert does not mean the task ended. If unsure a call was accepted, check agent_list before repeating it.", spawnSchema,
       async (args, ctx, id, signal) => {
         // Capture mutable SDK inputs before admission can await an earlier call.
         // Route/context resolution still happens only on first acceptance.
@@ -228,7 +228,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
               resolution: "Give an existing Agent its next task with agent_run. A killed Agent's name stays taken; choose another." });
             const after = afterRuns(input.agent, input.after);
             const profile = profiles.get(input.profile)!;
-            const route = resolveRoute({ preset: options.getPreset(), difficulty: input.difficulty,
+            const route = resolveRoute({ preset: options.getPreset(), difficulty: input.reasoning_difficulty,
               parentThinking, models: ctx.modelRegistry.getAll(), supportedThinking: getSupportedThinkingLevels });
             let context_snapshot: string | undefined;
             if (messages) {
@@ -246,7 +246,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         accepted(view);
         return observe({ kind: "action", run_id: view.run_id, action: { type: "agent_spawn" }, wait_ms }, ctx, signal);
       }),
-    make("agent_run", "Give an existing, idle Agent its next task. It keeps its conversation, profile, difficulty and budgets. A task that is ending is waited out (up to 30 s). A running Agent is busy: add to its task with agent_send, or agent_wait first. agent_run cannot bypass an unanswered question; use agent_answer with its question_id. Returns the shared action/reason/agents/alerts envelope.",
+    make("agent_run", "Give an existing, idle Agent its next task. It keeps its conversation, profile, reasoning difficulty and budgets. A task that is ending is waited out (up to 30 s). A running Agent is busy: add to its task with agent_send, or agent_wait first. agent_run cannot bypass an unanswered question; use agent_answer with its question_id. Returns the shared action/reason/agents/alerts envelope.",
       runSchema, async (args, ctx, id, signal) => {
         const target = find(args.agent);
         const { wait_ms, ...submission } = args;

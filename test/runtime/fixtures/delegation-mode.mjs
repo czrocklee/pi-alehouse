@@ -18,8 +18,8 @@ assert(agentDir && home);
 globalThis.fetch = () => { throw new Error("Unexpected network request in offline delegation fixture"); };
 initialize({ agentDir });
 const fixtureModel = "harness-fixture/controlled";
-const writePresets = (extra = {}) => writeFileSync(join(agentDir, "harness-presets.json"), JSON.stringify({ version: 2, defaultPreset: "fixture",
-  presets: { fixture: { version: "v1", models: { light: fixtureModel, standard: fixtureModel, strong: fixtureModel } } }, ...extra }));
+const writePresets = (extra = {}) => writeFileSync(join(agentDir, "harness-presets.json"), JSON.stringify({ version: 3, defaultPreset: "fixture",
+  presets: { fixture: { version: "v1", slots: Object.fromEntries(["d1", "d2", "d3", "d4", "d5"].map((slot) => [slot, { model: fixtureModel }])) } }, ...extra }));
 writePresets({ defaultMode: "supervisor", defaultEagerness: "reserved" });
 initTheme(undefined, false);
 const runtime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json"), allowModelNetwork: false });

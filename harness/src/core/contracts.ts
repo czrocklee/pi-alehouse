@@ -13,6 +13,9 @@ export type DrainWait = "deliveries" | "sdk_idle";
 
 /** Parent's assessment of the initial assignment, not a per-Run resource knob. */
 export type Difficulty = 1 | 2 | 3 | 4 | 5;
+/** Each reasoning rating has its own independently configured worker route. */
+export const difficultySlots = Object.freeze(["d1", "d2", "d3", "d4", "d5"] as const);
+export type WorkerSlot = (typeof difficultySlots)[number];
 export const validDifficulty = (value: unknown): value is Difficulty =>
   typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 5;
 
@@ -23,14 +26,16 @@ export interface AdmittedAgentConfig {
   thinking: string;
   /** Required for inherited effort, optional for a preset's fixed effort. */
   parent_thinking?: string;
-  thinking_resolution: "identity" | "preset_mapping" | "preset_fixed";
+  /** `automatic_mapping` is the current non-identity inherit route.
+   * `preset_mapping` remains valid for literal admitted records; it is not rewritten. */
+  thinking_resolution: "identity" | "automatic_mapping" | "preset_mapping" | "preset_fixed";
   /** Creation-time provenance; older internal settings may omit it. */
   effort_source?: "preset" | "user_override";
   profile: string;
   /** Creation-time assessment, retained unchanged on resume. */
   difficulty: Difficulty;
   /** Internal preset slot; not a model-facing choice. */
-  strength: "light" | "standard" | "strong";
+  strength: WorkerSlot;
   preset: string;
   preset_version: string;
   selection_digest: string;
@@ -224,13 +229,13 @@ export const validSettings = (value: unknown): value is AdmittedAgentConfig => {
   const s = value as AdmittedAgentConfig;
   return [s.provider, s.model, s.thinking, s.profile, s.preset, s.preset_version, s.cwd,
     s.definition_digest, s.selection_digest].every((v) => typeof v === "string" && !!v) &&
-    ["identity", "preset_mapping", "preset_fixed"].includes(s.thinking_resolution) &&
+    ["identity", "automatic_mapping", "preset_mapping", "preset_fixed"].includes(s.thinking_resolution) &&
     (s.thinking_resolution === "preset_fixed" ?
       (!Object.hasOwn(s, "parent_thinking") || (typeof s.parent_thinking === "string" && !!s.parent_thinking)) :
       typeof s.parent_thinking === "string" && !!s.parent_thinking) &&
     (!Object.hasOwn(s, "effort_source") || ["preset", "user_override"].includes(s.effort_source ?? "")) &&
     validDifficulty(s.difficulty) &&
-    ["light", "standard", "strong"].includes(s.strength) && isAbsolute(s.cwd) &&
+    difficultySlots[s.difficulty - 1] === s.strength && isAbsolute(s.cwd) &&
     Array.isArray(s.tools) && s.tools.every((v) => typeof v === "string") &&
     /^[0-9a-f]{64}$/.test(s.definition_digest) && /^[0-9a-f]{64}$/.test(s.selection_digest) && (s.context_snapshot === undefined ||
       (typeof s.context_snapshot === "string" && Buffer.byteLength(s.context_snapshot) <= 65536));

@@ -158,9 +158,12 @@ test("bounded error choices retain remainder counts and hide concrete routing in
   const whole = errorReply({ code: "INVALID_MODEL", details: { allowed: many.slice(0, 32) } }).error;
   assert.equal(whole.allowed_omitted, undefined);
   const levels = errorReply({ code: "THINKING_INCOMPATIBLE", details: { parent_thinking: "minimal", thinking: "medium",
-    model: "secret-model", preset: "team", difficulty: 2, strength: "light" } }).error;
+    model: "secret-model", preset: "team", difficulty: 2, strength: "d2" } }).error;
   assert.equal(levels.model, undefined); assert.equal(levels.preset, undefined); assert.equal(levels.strength, undefined);
-  assert.equal(levels.parent_thinking, "minimal"); assert.equal(levels.thinking, undefined); assert.equal(levels.difficulty, 2);
+  assert.equal(levels.parent_thinking, "minimal"); assert.equal(levels.thinking, undefined); assert.equal(levels.reasoning_difficulty, 2);
+  assert.equal(Object.hasOwn(levels, "difficulty"), false);
+  const invalid = errorReply({ code: "INVALID_DIFFICULTY", details: { key: "difficulty" } }).error;
+  assert.equal(invalid.parameter, "reasoning_difficulty"); assert.equal(invalid.code, "INVALID_DIFFICULTY");
   for (const allowed of ["not an array", [], undefined]) assert.equal(errorReply({ code: "X", details: { allowed } }).error.allowed, undefined);
 });
 
@@ -180,6 +183,7 @@ test("independent task/roster replies show optional whole dispatch notes and liv
   const summary = { runs: 1, earlier_descriptions: [], touched: [], touched_omitted: 0, observed_cost: 0, cost_partial: false };
   const roster = agentRow(terminalView, summary, () => "otter");
   assert.equal(roster.time_wrapped, true); assert.deepEqual(roster.dispatch_notes, notes); compact(roster);
+  assert.equal(roster.reasoning_difficulty, 3); assert.equal(Object.hasOwn(roster, "difficulty"), false);
   assert.equal(taskReply(base, () => "otter").dispatch_notes, undefined);
   assert.equal(taskReply({ ...base, dispatch_notes: [] }, () => "otter").dispatch_notes, undefined);
 });

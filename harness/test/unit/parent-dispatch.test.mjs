@@ -40,10 +40,9 @@ function adapter({ notes = false, pressure = false } = {}) {
     async observe() { state.active = false; return published; },
   };
   const preset = { name: "fixture", version: "v1", digest: "a".repeat(64),
-    models: { light: "fixture/controlled", standard: "fixture/controlled", strong: "fixture/controlled" },
-    thinking: { light: {}, standard: {}, strong: {} },
-    effort: { light: "inherit", standard: "inherit", strong: "inherit" },
-    effort_defaults: { light: "inherit", standard: "inherit", strong: "inherit" }, effort_overrides: {},
+    models: { d1: "fixture/controlled", d2: "fixture/controlled", d3: "fixture/controlled", d4: "fixture/controlled", d5: "fixture/controlled" },
+    effort: { d1: "inherit", d2: "inherit", d3: "inherit", d4: "inherit", d5: "inherit" },
+    effort_defaults: { d1: "inherit", d2: "inherit", d3: "inherit", d4: "inherit", d5: "inherit" }, effort_overrides: {},
   };
   const tools = createOwnerTools({ controller, context,
     profiles: Object.fromEntries(["reader", "editor", "researcher"].map((name) => [name, { definition: `${name} definition`, tools: ["read"] }])),
@@ -51,7 +50,7 @@ function adapter({ notes = false, pressure = false } = {}) {
   });
   const tool = (name) => tools.find((value) => value.name === name);
   const args = (name, rest = {}) => name === "agent_spawn" ?
-    { agent: "otter", prompt: "task", profile: "reader", difficulty: 3, ...rest } : { agent: "orca", prompt: "task", ...rest };
+    { agent: "otter", prompt: "task", profile: "reader", reasoning_difficulty: 3, ...rest } : { agent: "orca", prompt: "task", ...rest };
   const execute = (name, raw, id = "dispatch") => tool(name).execute(id, raw, undefined, undefined, context);
   return { tool, args, execute, submissions, published, state };
 }

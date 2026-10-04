@@ -12,11 +12,11 @@ import { ParentHistoryError } from "../../dist/core/ports.js";
 import { deferred, ended, fixture, task, tick, until } from "../support/controller-fixture.mjs";
 
 const model = { provider: "fixture", id: "controlled", levels: ["off", "high"] };
-const preset = (name = "fixture", modelId = "fixture/controlled", version = "v1", thinking = {}) => ({
-  name, version, models: { light: modelId, standard: modelId, strong: modelId },
-  thinking: { light: {}, standard: {}, strong: {}, ...thinking }, digest: "a".repeat(64),
-  effort: { light: "inherit", standard: "inherit", strong: "inherit" },
-  effort_defaults: { light: "inherit", standard: "inherit", strong: "inherit" }, effort_overrides: {},
+const preset = (name = "fixture", modelId = "fixture/controlled", version = "v1") => ({
+  name, version, models: { d1: modelId, d2: modelId, d3: modelId, d4: modelId, d5: modelId },
+  digest: "a".repeat(64),
+  effort: { d1: "inherit", d2: "inherit", d3: "inherit", d4: "inherit", d5: "inherit" },
+  effort_defaults: { d1: "inherit", d2: "inherit", d3: "inherit", d4: "inherit", d5: "inherit" }, effort_overrides: {},
 });
 const profiles = () => Object.fromEntries(["editor", "reader", "researcher"].map((name) => [name, { definition: `${name} definition`, tools: ["read"] }]));
 const code = (value) => (error) => JSON.parse(error.message).error.code === value;
@@ -53,7 +53,7 @@ function toolsFor(f, hooks = {}) {
   };
   return { state, ctx, source, options, tools, tool, call };
 }
-const create = (rest = {}) => ({ agent: "orca", prompt: "task", label: "task", profile: "reader", difficulty: 3, ...rest });
+const create = (rest = {}) => ({ agent: "orca", prompt: "task", label: "task", profile: "reader", reasoning_difficulty: 3, ...rest });
 const send = (agent, rest = {}) => ({ agent, message: "task", ...rest });
 const run = (agent, rest = {}) => ({ agent, prompt: "task", label: "task", ...rest });
 
@@ -108,12 +108,12 @@ test("only prompt carries the assignment; labels, names and default-disabled con
 
 test("the same host call ID replays accepted work; a fresh call cannot duplicate a named Agent", async (t) => {
   const f = await fixture(t, { controller: { concurrency: 2 } }), { call } = toolsFor(f);
-  const args = create({ label: "Recoverable task label", difficulty: 1 });
+  const args = create({ label: "Recoverable task label", reasoning_difficulty: 1 });
   assert.equal((await call("agent_spawn", args, "host-call-1")).action.agent, "orca");
   assert.equal((await call("agent_spawn", args, "host-call-1")).action.agent, "orca");
   assert.equal(f.controller.stats().runs, 1);
-  await assert.rejects(call("agent_spawn", { ...args, difficulty: 2 }, "host-call-1"), code("REQUEST_CONFLICT"),
-    "a different rating conflicts even when both ratings use the light slot");
+  await assert.rejects(call("agent_spawn", { ...args, reasoning_difficulty: 2 }, "host-call-1"), code("REQUEST_CONFLICT"),
+    "a different rating conflicts even when both slots share a model");
   await assert.rejects(call("agent_spawn", args, "host-call-2"), code("AGENT_EXISTS"));
   await until(() => f.ports[0]?.streaming);
   assert.deepEqual(await call("agent_send", send("orca", { message: "also check docs" }), "host-call-3"),
@@ -145,13 +145,13 @@ test("closed schemas reject unknown, mutated and malformed inputs before admissi
   for (const agent of ["Orca", "orca windows", "1orca", "orca-windows-foundations-x", "", 42]) {
     assert.throws(() => tool("agent_spawn").prepareArguments(create({ agent })), code("INVALID_PARAMETERS"), String(agent));
   }
-  for (const args of [(({ profile: _profile, ...rest }) => rest)(create()), (({ difficulty: _difficulty, ...rest }) => rest)(create()),
+  for (const args of [(({ profile: _profile, ...rest }) => rest)(create()), (({ reasoning_difficulty: _difficulty, ...rest }) => rest)(create()),
     create({ label: "x".repeat(121) }), create({ prompt: " " }), create({ prompt: "x".repeat(131073) })]) {
     assert.throws(() => tool("agent_spawn").prepareArguments(args), code("INVALID_PARAMETERS"));
   }
   const mutated = tool("agent_spawn").prepareArguments(create()); mutated.owner_id = "forged";
   await assert.rejects(call("agent_spawn", mutated), code("INVALID_PARAMETERS"));
-  const rescored = tool("agent_spawn").prepareArguments(create()); rescored.difficulty = 2.5;
+  const rescored = tool("agent_spawn").prepareArguments(create()); rescored.reasoning_difficulty = 2.5;
   await assert.rejects(call("agent_spawn", rescored), code("INVALID_DIFFICULTY"));
   const reprofiled = tool("agent_spawn").prepareArguments(create()); reprofiled.profile = "admin";
   await assert.rejects(call("agent_spawn", reprofiled), code("INVALID_PROFILE"));
@@ -179,7 +179,7 @@ test("closed schemas reject unknown, mutated and malformed inputs before admissi
     ["agent_answer", { agent: "orca", question_id: "q_bad", answer: "yes" }],
     ["agent_answer", { agent: "orca", question_id: `q_${"a".repeat(32)}`, answer: " " }],
     ["agent_answer", { agent: "orca", question_id: `q_${"a".repeat(32)}`, answer: "x".repeat(16385) }],
-    ...["profile", "difficulty", "budgets", "label", "after"].map((key) => ["agent_answer", {
+    ...["profile", "reasoning_difficulty", "difficulty", "budgets", "label", "after"].map((key) => ["agent_answer", {
       agent: "orca", question_id: `q_${"a".repeat(32)}`, answer: "yes", [key]: "forbidden",
     }]),
   ]) {
@@ -189,6 +189,32 @@ test("closed schemas reject unknown, mutated and malformed inputs before admissi
   assert.equal(tool("agent_wait").parameters.properties.mode.default, "all");
   assert(Check(tool("agent_wait").parameters, {})); assert(Check(tool("agent_list").parameters, {}));
   assert.deepEqual(f.controller.list(), []); assert.equal(f.ports.length, 0);
+});
+
+test("legacy difficulty and mixed score keys reject before allocation or preparation side effects", async (t) => {
+  const f = await fixture(t), { tool, call } = toolsFor(f);
+  const { reasoning_difficulty: _score, ...legacy } = create();
+  for (const args of [{ ...legacy, difficulty: 3 }, create({ difficulty: 3 }), create({ difficulty: undefined })]) {
+    assert.throws(() => tool("agent_spawn").prepareArguments(args), code("INVALID_PARAMETERS"));
+    await assert.rejects(call("agent_spawn", args), code("INVALID_PARAMETERS"));
+    assert.deepEqual(f.controller.list(), []); assert.equal(f.ports.length, 0);
+    assert.equal(f.controller.stats().runs, 0); assert.equal(f.controller.stats().resident, 0);
+  }
+});
+
+test("reasoning_difficulty cannot change an accepted Agent on reuse", async (t) => {
+  const f = await fixture(t), { tool, call } = toolsFor(f);
+  await call("agent_spawn", create({ reasoning_difficulty: 1 }));
+  await until(() => f.ports[0]?.streaming); f.ports[0].finish(); await settle(f, "orca");
+  const settings = routed(f, "orca");
+  for (const scoreKey of ["reasoning_difficulty", "difficulty"]) {
+    const args = run("orca", { [scoreKey]: 5 });
+    assert.throws(() => tool("agent_run").prepareArguments(args), code("INVALID_PARAMETERS"));
+    await assert.rejects(call("agent_run", args), code("INVALID_PARAMETERS"));
+    assert.deepEqual(routed(f, "orca"), settings); assert.equal(f.ports[0].calls.length, 1);
+  }
+  await call("agent_run", run("orca"));
+  assert.deepEqual(routed(f, "orca"), settings); assert.equal(settings.difficulty, 1);
 });
 
 test("spawn creates and send addresses: each rejects the other's names with a pointer to the right tool", async (t) => {
@@ -248,9 +274,9 @@ test("read_result pages UTF-16 output and returns the separate full question", a
 test("resolver exposes bounded abstract choices and incompatibility without model inventory", async (t) => {
   const f = await fixture(t), { state, call } = toolsFor(f);
   for (const invalid of [null, "3", 0, -1, 6, 1.5, NaN, Infinity]) {
-    await assert.rejects(call("agent_spawn", create({ difficulty: invalid })), (error) => {
-      assert.deepEqual(JSON.parse(error.message).error, { code: "INVALID_DIFFICULTY", parameter: "difficulty",
-        resolution: "Use an integer from 1 to 5 to rate the task difficulty." });
+    await assert.rejects(call("agent_spawn", create({ reasoning_difficulty: invalid })), (error) => {
+      assert.deepEqual(JSON.parse(error.message).error, { code: "INVALID_DIFFICULTY", parameter: "reasoning_difficulty",
+        resolution: "Use an integer from 1 to 5 for reasoning_difficulty." });
       return true;
     });
   }
@@ -259,11 +285,11 @@ test("resolver exposes bounded abstract choices and incompatibility without mode
     assert.deepEqual(result.allowed, ["editor", "reader", "researcher"]);
     assert.equal(JSON.stringify(result).includes("fixture/controlled"), false); return true;
   });
-  state.thinking = "low";
+  state.model = { ...model, levels: ["off"] }; state.catalog = [state.model]; state.thinking = "low";
   await assert.rejects(call("agent_spawn", create(), "unsupported-parent"), (error) => {
     assert.deepEqual(JSON.parse(error.message).error, { code: "THINKING_INCOMPATIBLE", parameter: "parent_thinking",
-      reason: "identity_unsupported_no_mapping", difficulty: 3, parent_thinking: "low",
-      resolution: "Ask the user to change the parent Pi thinking level or worker preset. Do not change difficulty to bypass configuration errors." });
+      reason: "no_supported_thinking_level", reasoning_difficulty: 3, parent_thinking: "low",
+      resolution: "Ask the user to set this worker preset slot's fixed effort to \"off\", or change the parent Pi thinking level or worker preset. Do not change reasoning_difficulty to bypass configuration errors." });
     return true;
   });
   assert.deepEqual(f.controller.list(), []); assert.equal(f.ports.length, 0);
@@ -280,7 +306,7 @@ test("missing or invalid parent thinking is a host error and cannot reinterpret 
       const result = JSON.parse(error.message).error;
       assert.equal(result.code, "PARENT_THINKING_UNAVAILABLE");
       assert.match(result.message, /Pi did not provide/); assert.match(result.resolution, /Ask the user/);
-      assert.match(result.resolution, /Do not change difficulty to bypass configuration errors\.$/);
+      assert.match(result.resolution, /Do not change reasoning_difficulty to bypass configuration errors\.$/);
       assert.equal(result.parameter, undefined); assert.equal(result.parent_thinking, undefined);
       return true;
     });
@@ -296,38 +322,53 @@ test("missing or invalid parent thinking is a host error and cannot reinterpret 
   await until(() => f.ports[0].streaming); f.ports[0].finish(); await settle(f, "orca");
 });
 
-test("thinking resolution is identity-first and uses only explicit compatible mappings", async (t) => {
+test("thinking resolution is identity-first and otherwise uses the automatic ceiling", async (t) => {
   const f = await fixture(t), { state, call } = toolsFor(f);
   state.thinking = "low";
-  state.preset = preset("mapped", "fixture/controlled", "v2", { standard: { low: "high", high: "off" } });
+  state.model = { ...model, levels: ["off", "high"] }; state.catalog = [state.model];
+  // A stale config map must not change the ceiling or override a supported identity.
+  state.preset = { ...preset("mapped", "fixture/controlled", "v2"), thinking: { d3: { low: "off", high: "off" } } };
   const mapped = await call("agent_spawn", create({ agent: "mapped" }), "mapped");
   assert.equal("settings" in mapped, false);
   const route = routed(f, "mapped");
   assert.deepEqual([route.preset, route.preset_version, route.parent_thinking, route.thinking, route.thinking_resolution],
-    ["mapped", "v2", "low", "high", "preset_mapping"]);
+    ["mapped", "v2", "low", "high", "automatic_mapping"]);
   await until(() => f.ports[0]?.streaming); f.ports[0].finish(); await settle(f, "mapped");
 
   state.thinking = "high";
   await call("agent_spawn", create({ agent: "identity" }), "identity");
-  assert.equal(routed(f, "identity").thinking, "high", "a configured map cannot override supported identity");
+  assert.equal(routed(f, "identity").thinking, "high", "supported identity is not rounded or overridden by a stale map");
   assert.equal(routed(f, "identity").thinking_resolution, "identity");
   await until(() => f.ports[1]?.streaming); f.ports[1].finish(); await settle(f, "identity");
 
   state.thinking = "low";
-  state.preset = preset("bad-target", "fixture/controlled", "v3", { standard: { low: "medium" } });
-  await assert.rejects(call("agent_spawn", create({ agent: "bad" }), "bad-target"), (error) => {
+  state.model = { ...model, levels: ["off"] }; state.catalog = [state.model];
+  state.preset = preset("no-positive", "fixture/controlled", "v3");
+  await assert.rejects(call("agent_spawn", create({ agent: "bad" }), "no-positive"), (error) => {
     const result = JSON.parse(error.message).error;
-    assert.equal(result.code, "THINKING_INCOMPATIBLE"); assert.equal(result.reason, "mapped_target_unsupported");
+    assert.equal(result.code, "THINKING_INCOMPATIBLE"); assert.equal(result.reason, "no_supported_thinking_level");
     assert.equal(result.parent_thinking, "low"); assert.equal("thinking" in result, false);
+    assert.match(result.resolution, /fixed effort to "off"/);
     assert.match(result.resolution, /change the parent Pi thinking level or worker preset/);
-    assert.match(result.resolution, /Do not change difficulty to bypass configuration errors/);
+    assert.match(result.resolution, /Do not change reasoning_difficulty to bypass configuration errors\.$/);
     assert.equal(JSON.stringify(result).includes("fixture/controlled"), false); return true;
   });
+  for (const [index, levels] of [[], ["unknown"]].entries()) {
+    state.model = { ...model, levels }; state.catalog = [state.model];
+    await assert.rejects(call("agent_spawn", create({ agent: `empty${index}` }), `empty-levels-${index}`), (error) => {
+      const result = JSON.parse(error.message).error;
+      assert.equal(result.reason, "no_supported_thinking_level");
+      assert.doesNotMatch(result.resolution, /fixed effort/);
+      assert.match(result.resolution, /Do not change reasoning_difficulty to bypass configuration errors\.$/);
+      assert.equal(JSON.stringify(result).includes("fixture/controlled"), false); return true;
+    });
+  }
+  assert.equal(f.controller.list().length, 2); assert.equal(f.ports.length, 2, "invalid metadata must not create a child");
   state.thinking = "off"; state.model = { ...model, levels: ["high"] }; state.catalog = [state.model];
   state.preset = preset("no-off", "fixture/controlled", "v4");
   await assert.rejects(call("agent_spawn", create({ agent: "no-off" }), "no-off"), (error) => {
     const result = JSON.parse(error.message).error;
-    assert.equal(result.code, "THINKING_INCOMPATIBLE"); assert.equal(result.reason, "identity_unsupported_no_mapping");
+    assert.equal(result.code, "THINKING_INCOMPATIBLE"); assert.equal(result.reason, "off_unsupported");
     assert.equal(result.parent_thinking, "off"); assert.match(result.resolution, /change the parent Pi thinking level/); return true;
   });
 });
@@ -387,7 +428,7 @@ test("preset/profile/context snapshots pin at admission; same ID keeps first acc
   assert.equal(view.effective_settings.parent_thinking, "off");
   assert.equal(view.effective_settings.thinking_resolution, "identity");
   assert.equal(view.effective_settings.preset, "fixture"); assert.equal(view.effective_settings.difficulty, 3);
-  assert.equal(view.effective_settings.strength, "standard", "internal route retains its slot");
+  assert.equal(view.effective_settings.strength, "d3", "internal route retains its slot");
   assert.equal(view.effective_settings.definition_digest, digest("reader definition"));
   assert.deepEqual(view.effective_settings.tools, ["read"]);
   assert.equal(view.effective_settings.context_digest, digest("[user]\nUSER_CONTEXT\n\n[assistant]\nASSISTANT_CONTEXT"));
@@ -756,36 +797,37 @@ test("whole wait replies bound questions, results, alerts and diagnostics withou
   for (const max_chars of [0, -1, 1.5, 16385, NaN]) await assert.rejects(call("agent_read", { agent: "q0", max_chars }), code("INVALID_PARAMETERS"));
 });
 
-test("all difficulty ratings route exact registered IDs, including a non-OpenAI fixture provider", async (t) => {
-  const f = await fixture(t, { controller: { concurrency: 3 } }), { state, call } = toolsFor(f);
-  const catalog = [
-    { provider: "fixture-local", id: "small", levels: ["off"] },
-    { provider: "fixture-local", id: "middle", levels: ["off", "high"] },
-    { provider: "fixture-local", id: "large", levels: ["high"] },
-  ];
+test("all difficulty ratings route independent registered IDs and efforts, including a non-OpenAI fixture provider", async (t) => {
+  const f = await fixture(t, { controller: { concurrency: 5 } }), { state, call, tool } = toolsFor(f);
+  const slots = ["d1", "d2", "d3", "d4", "d5"], levels = ["off", "low", "medium", "high", "max"];
+  const catalog = slots.map((slot, index) => ({ provider: "fixture-local", id: slot, levels: [levels[index]] }));
   state.catalog = catalog;
-  state.preset = { ...preset(), name: "cross-provider", version: "v7", digest: "c".repeat(64), models: {
-    light: "fixture-local/small", standard: "fixture-local/middle", strong: "fixture-local/large",
-  }, thinking: { light: {}, standard: {}, strong: {} } };
-  const difficulties = [1, 3, 5], inherited = ["off", "high", "high"];
-  for (let index = 0; index < 3; index++) {
+  state.preset = { ...preset(), name: "cross-provider", version: "v7", digest: "c".repeat(64),
+    models: Object.fromEntries(slots.map((slot) => [slot, `fixture-local/${slot}`])),
+    effort: Object.fromEntries(slots.map((slot, index) => [slot, levels[index]])) };
+  const difficulties = [1, 2, 3, 4, 5], inherited = ["off", "off", "off", "off", "off"];
+  for (let index = 0; index < 5; index++) {
     state.thinking = inherited[index];
-    const reply = await call("agent_spawn", create({ agent: `d${index}`, difficulty: difficulties[index] }), `difficulty-${index}`);
+    const args = create({ agent: `d${index}`, reasoning_difficulty: difficulties[index] });
+    assert(Check(tool("agent_spawn").parameters, args));
+    assert.deepEqual(tool("agent_spawn").prepareArguments(args), args);
+    const reply = await call("agent_spawn", create({ agent: `d${index}`, reasoning_difficulty: difficulties[index] }), `difficulty-${index}`);
     assert.equal("settings" in reply, false, "ordinary output hides routing");
   }
-  await until(() => f.ports.length === 3 && f.ports.every((port) => port.streaming));
-  for (let index = 0; index < 3; index++) {
+  await until(() => f.ports.length === 5 && f.ports.every((port) => port.streaming));
+  for (let index = 0; index < 5; index++) {
     const settings = routed(f, `d${index}`);
     assert.equal(settings.model, catalog[index].id); assert.equal(settings.provider, "fixture-local");
     assert.equal(settings.difficulty, difficulties[index]);
-    assert.equal(settings.strength, ["light", "standard", "strong"][index]);
-    assert.equal(settings.parent_thinking, inherited[index]); assert.equal(settings.thinking, inherited[index]);
-    assert.equal(settings.thinking_resolution, "identity"); assert.equal(settings.preset, "cross-provider");
+    assert.equal(settings.strength, slots[index]);
+    assert.equal(settings.parent_thinking, inherited[index]); assert.equal(settings.thinking, levels[index]);
+    assert.equal(settings.thinking_resolution, "preset_fixed"); assert.equal(settings.preset, "cross-provider");
     f.ports[index].finish("done");
   }
-  for (let index = 0; index < 3; index++) await settle(f, `d${index}`);
+  for (let index = 0; index < 5; index++) await settle(f, `d${index}`);
   const rows = (await call("agent_list", {})).agents;
-  assert.deepEqual(rows.map((row) => row.difficulty), [1, 3, 5]);
+  assert.deepEqual(rows.map((row) => row.reasoning_difficulty), [1, 2, 3, 4, 5]);
+  assert(rows.every((row) => !Object.hasOwn(row, "difficulty")), "legacy score field is never projected");
   assert(rows.every((row) => !JSON.stringify(row).includes("fixture-local")), "the roster hides concrete models");
 });
 
@@ -794,8 +836,8 @@ test("missing preset models fail without exposing the catalogue", async (t) => {
   state.preset = preset("missing", "unregistered/exact", "v9");
   state.catalog = Array.from({ length: 50 }, (_, i) => ({ provider: "private", id: `secret-${i}`, levels: ["off"] }));
   await assert.rejects(call("agent_spawn", create()), (error) => {
-    assert.deepEqual(JSON.parse(error.message).error, { code: "PRESET_MODEL_UNAVAILABLE", difficulty: 3,
-      resolution: "Ask the user to check the worker preset and model configuration. Do not change difficulty to bypass configuration errors." });
+    assert.deepEqual(JSON.parse(error.message).error, { code: "PRESET_MODEL_UNAVAILABLE", reasoning_difficulty: 3,
+      resolution: "Ask the user to check the worker preset and model configuration. Do not change reasoning_difficulty to bypass configuration errors." });
     return true;
   });
 });
@@ -810,8 +852,8 @@ test("a virtual selected preset is rejected even when its thinking levels match"
   state.preset = preset("virtual-team", "router/auto", "v9");
   await assert.rejects(call("agent_spawn", create()), (error) => {
     assert.deepEqual(JSON.parse(error.message).error, {
-      code: "PRESET_MODEL_UNAVAILABLE", reason: "virtual_model", difficulty: 3,
-      resolution: "Ask the user to configure a physical model for this worker preset slot. Virtual models route each request and cannot be pinned to an Agent. Do not change difficulty to bypass configuration errors.",
+      code: "PRESET_MODEL_UNAVAILABLE", reason: "virtual_model", reasoning_difficulty: 3,
+      resolution: "Ask the user to configure a physical model for this worker preset slot. Virtual models route each request and cannot be pinned to an Agent. Do not change reasoning_difficulty to bypass configuration errors.",
     });
     assert.doesNotMatch(error.message, /router\/auto|pi-virtual|jev-latest|model_kind/);
     return true;
@@ -1022,8 +1064,8 @@ test("effort changes only new Agents; queued work, same-ID retries and reuse kee
   await call("agent_spawn", create({ agent: "first" }), "effort-first");
   await until(() => f.ports[0]?.streaming);
   assert.equal((await call("agent_spawn", create({ agent: "queued" }), "effort-queued")).agents[0].status, "queued");
-  state.preset.effort = { light: "inherit", standard: "high", strong: "inherit" };
-  state.preset.effort_overrides = { standard: "high" };
+  state.preset.effort = { d1: "inherit", d2: "inherit", d3: "high", d4: "inherit", d5: "inherit" };
+  state.preset.effort_overrides = { d3: "high" };
   assert.equal((await call("agent_spawn", create({ agent: "queued" }), "effort-queued")).agents[0].status, "queued");
   assert.equal(routed(f, "queued").thinking, "off");
   await call("agent_spawn", create({ agent: "fresh" }), "effort-fresh");
@@ -1035,7 +1077,7 @@ test("effort changes only new Agents; queued work, same-ID retries and reuse kee
     await until(() => f.ports[index]?.streaming);
     f.ports[index].finish(); await settle(f, agent);
   }
-  state.preset.effort.standard = "off";
+  state.preset.effort.d3 = "off";
   await call("agent_run", run("fresh", { prompt: "Continue" }), "effort-reuse");
   assert.equal(routed(f, "fresh").thinking, "high");
   assert.equal(routed(f, "fresh").thinking_resolution, "preset_fixed");
@@ -1049,35 +1091,36 @@ test("effort changes only new Agents; queued work, same-ID retries and reuse kee
 test("fixed user effort works without a parent level but inherited policies still require it", async (t) => {
   const f = await fixture(t), { state, call } = toolsFor(f);
   state.thinking = undefined;
-  state.preset.effort = { light: "inherit", standard: "high", strong: "inherit" };
+  state.preset.effort = { d1: "inherit", d2: "inherit", d3: "high", d4: "inherit", d5: "inherit" };
   await call("agent_spawn", create(), "fixed-without-parent");
   assert.equal(routed(f, "orca").thinking, "high");
   assert.equal(routed(f, "orca").parent_thinking, undefined);
   await until(() => f.ports[0]?.streaming);
   f.ports[0].finish(); await settle(f, "orca");
-  state.preset.effort.standard = "inherit";
+  state.preset.effort.d3 = "inherit";
   await assert.rejects(call("agent_spawn", create({ agent: "b" }), "inherit-without-parent"), code("PARENT_THINKING_UNAVAILABLE"));
-  state.preset.effort.standard = "max";
+  state.preset.effort.d3 = "max";
   await assert.rejects(call("agent_spawn", create({ agent: "c" }), "fixed-unsupported"), (error) => {
     const details = JSON.parse(error.message).error;
     assert.equal(details.code, "THINKING_INCOMPATIBLE");
     assert.equal(Object.hasOwn(details, "parameter"), false, "preset policy failure must not advertise an effort tool parameter");
     assert.equal(details.reason, "fixed_effort_unsupported");
     assert.equal(details.model, undefined); assert.equal(details.strength, undefined);
-    assert.match(details.resolution, /Do not change difficulty/);
+    assert.match(details.resolution, /Do not change reasoning_difficulty/);
     return true;
   });
 });
 
 test("thinking incompatibility identifies inherited level and route but hides the concrete model", async (t) => {
   const f = await fixture(t), { state, call } = toolsFor(f);
-  state.thinking = "low";
+  state.thinking = "off"; state.model = { ...model, levels: ["high"] }; state.catalog = [state.model];
   await assert.rejects(call("agent_spawn", create()), (error) => {
     const result = JSON.parse(error.message).error;
     assert.equal(result.code, "THINKING_INCOMPATIBLE");
-    assert.equal("preset" in result, false); assert.equal(result.difficulty, 3);
+    assert.equal("preset" in result, false); assert.equal(result.reasoning_difficulty, 3);
+    assert.equal(Object.hasOwn(result, "difficulty"), false);
     assert.equal("strength" in result, false);
-    assert.equal(result.parent_thinking, "low"); assert.equal(result.reason, "identity_unsupported_no_mapping");
+    assert.equal(result.parent_thinking, "off"); assert.equal(result.reason, "off_unsupported");
     assert.equal(result.allowed, undefined); assert.equal(result.model, undefined);
     assert.equal(JSON.stringify(result).includes("fixture/controlled"), false);
     return true;
@@ -1095,7 +1138,7 @@ test("list_agents adds per-Agent history for choosing reuse versus a new Agent",
   await call("agent_run", run("orca", { prompt: "more", label: "Fix flaky test" }), "second");
   await until(() => f.ports[0].calls.length === 2); f.ports[0].finish(); await settle(f, "orca");
   now += 7_000;
-  assert.deepEqual((await call("agent_list", {})).agents, [{ agent: "orca", profile: "reader", difficulty: 3,
+  assert.deepEqual((await call("agent_list", {})).agents, [{ agent: "orca", profile: "reader", reasoning_difficulty: 3,
     label: "Fix flaky test", task: 2, status: "completed", tasks: 2, earlier_labels: ["Port tests"], context_pct: 25,
     cost_usd: 0, touched: ["src/a.ts"], idle_s: 7 }]);
 });

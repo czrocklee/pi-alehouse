@@ -5,8 +5,8 @@ import type { createPresetModelSelector } from "../runtime/preset-model-selector
 import { type PersistentScope, type PresetDefinition, type SettingsStore, type SettingsDocument, validateSettings } from "../../../lib/settings-store.mjs";
 import type { DelegationSetting } from "../delegation.js";
 import { HarnessError } from "../core/ports.js";
-import { isOffPreset, strengths, thinkingLevels, type PresetCandidate, type PresetRouter, type PresetSelection, type EffortOverrides, type Strength } from "../routing.js";
-import type { ModelPickerPosition } from "./preset-picker.js";
+import { isOffPreset, strengths, thinkingLevels, type PresetCandidate, type PresetRouter, type PresetSelection, type EffortOverrides, type Effort, type Strength } from "../routing.js";
+import { workerSlotDisplayOrder, type ModelPickerPosition } from "./preset-picker.js";
 import { modelPopoverOptions, PresetModelPopover } from "./preset-model-popover.js";
 
 export interface PreferencesControlsOptions {
@@ -152,7 +152,7 @@ export class PreferencesControls {
   private workerSnapshot(router: PresetRouter): SettingsDocument {
     const current = router.current(), definitions = router.customPresets();
     const body = Object.hasOwn(definitions, current.name) ? definitions[current.name] : undefined;
-    return { version: 1, preset: current.name, delegation: { ...this.options.delegation() },
+    return { version: 2, preset: current.name, delegation: { ...this.options.delegation() },
       ...(!isOffPreset(current) ? { effort: { [current.name]: Object.fromEntries(strengths.map((slot) =>
         [slot, current.effort_overrides[slot] ?? null])) } } : {}),
       ...(body ? { presets: { [current.name]: body } } : {}) };
@@ -242,8 +242,21 @@ export class PreferencesControls {
           try { picker?.dispose(); } finally { done(model); }
         };
         const select = (model: RegistryModel): void => {
-          if (!floating || view?.canSelect()) finish(model);
-          else tui.requestRender(); // Never apply a choice hidden by a tiny viewport.
+          if (settled) return;
+          if (!floating) return finish(model);
+          const issue = view ? view.selectionIssue(model) : "not_visible";
+          if (issue === undefined) return finish(model);
+          if (issue === "closed") return;
+          if (issue === "identity_unverified") {
+            // Native Enter disposes its selector before calling us. A failed
+            // identity check must settle the draft, not strand a dead refresh.
+            try {
+              ctx.ui.notify("The selected model could not be verified against Pi's current registry and visible item. Nothing changed; reopen the model selector to refresh it.", "warning");
+            } finally { finish(); }
+          } else {
+            ctx.ui.notify("The selected model is not fully visible. Enlarge the terminal or press Esc to cancel; nothing changed.", "warning");
+            tui.requestRender();
+          }
         };
         picker = createSelector({ tui, scopedModels,
           current: models.find((model) => `${model.provider}/${model.id}` === previous), select, cancel: ownedCancel });
@@ -254,7 +267,10 @@ export class PreferencesControls {
         if (floating) {
           view = new PresetModelPopover({ native, theme, title: `${target}: ${slot} model`,
             height: () => Number(modelPopoverOptions(terminal, position).maxHeight),
-            models: () => ctx.modelRegistry.getAll(), select, cancel: ownedCancel });
+            currentWidth: () => Number(modelPopoverOptions(terminal, position).width),
+            // The view revalidates pointer targets itself. Only native
+            // keyboard submission must match its current selected arrow.
+            models: () => ctx.modelRegistry.getAll(), select: finish, cancel: ownedCancel });
           return view;
         }
         const title = new Text(theme.fg("accent", `${target}: ${slot} model · new Agents only; main unchanged`), 0, 0);
@@ -293,18 +309,16 @@ export class PreferencesControls {
       const originalCandidate = router.prepare();
       const models = ctx.modelRegistry.getAll().filter((model) => model.api !== "pi-virtual");
       if (!models.length) throw new HarnessError("PRESET_MODEL_UNAVAILABLE");
-      const previous = existing.models[slot];
+      const previous = existing.slots[slot].model;
       const selected = await this.selectModel(name, slot, previous, models, position);
       this.assertLive();
       if (!selected || selected === previous) return;
       const matches = ctx.modelRegistry.getAll().filter((model) => model.api !== "pi-virtual" && `${model.provider}/${model.id}` === selected);
       if (matches.length !== 1) throw new HarnessError("PRESET_MODEL_UNAVAILABLE");
       const body = structuredClone(existing);
-      body.models[slot] = selected;
-      // Compatibility maps belong to their model; never carry one across IDs.
-      if (body.thinking) delete body.thinking[slot];
+      body.slots[slot].model = selected;
       body.version = `user-${Date.now()}`;
-      validateSettings({ version: 1, presets: { [name]: body } });
+      validateSettings({ version: 2, presets: { [name]: body } });
       if (router.current().name !== name && !await ctx.ui.confirm(`Change ${slot} model and enable ${name}?`,
         `${previous} → ${selected}\nThis replaces the current active preset.\n` +
         "New Agents only; existing Agents and main model are unchanged.\n" +
@@ -334,32 +348,35 @@ export class PreferencesControls {
       if (name === undefined && router.names().includes(target)) throw new HarnessError("PRESET_ALREADY_EXISTS", { name: target });
       const models = ctx.modelRegistry.getAll().filter((model) => model.api !== "pi-virtual");
       if (!models.length) throw new HarnessError("PRESET_MODEL_UNAVAILABLE");
-      const body: PresetDefinition = existing ? structuredClone(existing) : { version: "1", models: { light: "", standard: "", strong: "" } };
-      for (const slot of strengths) {
-        const previous = body.models[slot];
+      const body: PresetDefinition = existing ? structuredClone(existing) : { version: "1", slots: {
+        d1: { model: "" }, d2: { model: "" }, d3: { model: "" }, d4: { model: "" }, d5: { model: "" },
+      } };
+      for (const slot of workerSlotDisplayOrder) {
+        const previous = body.slots[slot].model;
         const selected = await this.selectModel(target, slot, previous, models);
         this.assertLive();
         if (!selected) return;
-        body.models[slot] = selected;
+        body.slots[slot].model = selected;
         // /model may refresh the host catalog while open: validate against the
         // new snapshot, not the stale list captured before its first dialog.
         const model = ctx.modelRegistry.getAll().find((candidate) => candidate.api !== "pi-virtual" &&
           `${candidate.provider}/${candidate.id}` === selected);
         if (!model) throw new HarnessError("PRESET_MODEL_UNAVAILABLE");
         const levels = getSupportedThinkingLevels(model);
-        const policies = ["inherit", ...thinkingLevels.filter((level) => levels.includes(level))];
-        const old = body.effort?.[slot] ?? "inherit";
+        const policies: Effort[] = ["inherit", ...thinkingLevels.filter((level) => levels.includes(level))];
+        const old = body.slots[slot].effort ?? "inherit";
         const keepEffort = policies.includes(old) ? `Keep ${old}` : undefined;
         const effort = await ctx.ui.select(`${target}: ${slot} default effort`, [...(keepEffort ? [keepEffort] : []), ...policies]);
         this.assertLive();
         if (!effort) return;
-        body.effort = { ...body.effort, [slot]: effort === keepEffort ? old : effort };
-        // Compatibility maps belong to a model. Never silently carry a map to
-        // a different one; exact inherited support is still checked at spawn.
-        if (previous !== body.models[slot] && body.thinking) delete body.thinking[slot];
+        const chosen = policies.find((policy) => policy === (effort === keepEffort ? old : effort));
+        if (chosen === undefined) throw new HarnessError("THINKING_INCOMPATIBLE", {
+          slot, reason: "fixed_effort_unsupported", resolution: "Choose an effort policy supported by this slot's model, or inherit.",
+        });
+        body.slots[slot].effort = chosen;
       }
       body.version = `user-${Date.now()}`;
-      validateSettings({ version: 1, presets: { [target]: body } });
+      validateSettings({ version: 2, presets: { [target]: body } });
       if (!await ctx.ui.confirm(`${name ? "Edit" : "Create"} and select ${target}?`,
         `${JSON.stringify(body, null, 2)}\nNew Agents only; existing Agents and main model are unchanged.\n` +
         "Existing session effort overrides are kept; use Edit effort to reset them.\n" +

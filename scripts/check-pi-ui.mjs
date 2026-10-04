@@ -1122,8 +1122,8 @@ for (const order of [
           ? new ApprovalPopover({ theme, choices: () => approvalChoices("jev"), current: () => "manual", warning: () => undefined,
             choose() {}, close, requestRender() {}, onRender: (height) => member.measure(height) })
           : new PresetPicker({ tui, theme, keybindings: { matches: () => false }, activeName: "fixture", pointer: true,
-            presets: [{ name: "fixture", version: "starter-v2", models: { light: "fixture/light", standard: "fixture/standard", strong: "fixture/strong" },
-              thinking: { light: {}, standard: {}, strong: {} } }],
+            presets: [{ name: "fixture", version: "starter-v3", models: Object.fromEntries(
+              ["d1", "d2", "d3", "d4", "d5"].map((slot) => [slot, `fixture/${slot}`])) }],
             done: close, rows: () => member.available(), onRender: (height) => member.measure(height) });
         handle = tui.showOverlay(component, stackedOverlayOptions(member, { width: kind === "approval" ? 60 : 76 }));
         panels.push({ bounds: () => handle.getBounds(), close });

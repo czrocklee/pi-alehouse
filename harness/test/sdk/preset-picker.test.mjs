@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Container, matchesKey, stripTerminalSequences, TuiAltScreen, TuiMainScreen, visibleWidth } from "@earendil-works/pi-tui";
 import { createEventBus, initTheme } from "@earendil-works/pi-coding-agent";
-import { PresetPicker, PresetPickerRequest } from "../../dist/ui/preset-picker.js";
+import { PresetPicker, PresetPickerRequest, workerSlotDisplayOrder } from "../../dist/ui/preset-picker.js";
 import { PanelCoordinator } from "../../dist/ui/panel-coordinator.js";
 import { PreferencesControls } from "../../dist/ui/preferences-controls.js";
 import { createPresetModelSelector } from "../../dist/runtime/preset-model-selector.js";
 import { HarnessWidget } from "../../dist/ui/agent-widget.js";
-import { PresetRouter, thinkingLevels } from "../../dist/routing.js";
+import { PresetRouter, strengths, thinkingLevels } from "../../dist/routing.js";
 import { delegationGuideline } from "../../dist/delegation.js";
 import { starterPath } from "../support/preset-config.mjs";
 import { joinPopoverStack, stackedOverlayOptions } from "../../../lib/popover-stack.mjs";
@@ -40,8 +40,9 @@ const keys = {
 };
 const preset = (name, version = "starter-v2", suffix = name) => ({
   name, version, digest: "0".repeat(64), models: {
-    light: `provider/${suffix}-light`, standard: `provider/${suffix}-standard`, strong: `provider/${suffix}-strong`,
-  }, thinking: { light: { low: "medium" }, standard: {}, strong: {} },
+    d1: `provider/${suffix}-light`, d2: `provider/${suffix}-d2`, d3: `provider/${suffix}-standard`,
+    d4: `provider/${suffix}-d4`, d5: `provider/${suffix}-strong`,
+  },
 });
 const offPreset = () => ({ name: "off", version: "off-v1", digest: "f".repeat(64) });
 const fixture = ({ rows = 24, presets = [preset("alpha"), preset("beta"), preset("gamma")], activeName, theme: th = theme,
@@ -53,7 +54,7 @@ const fixture = ({ rows = 24, presets = [preset("alpha"), preset("beta"), preset
       const selected = presets.find((item) => item.name === name);
       assert(selected && selected.name !== "off");
       const snapshot = { ...structuredClone(selected), effort_overrides: { ...overrides },
-        effort: Object.fromEntries(["light", "standard", "strong"].map((slot) =>
+        effort: Object.fromEntries(strengths.map((slot) =>
           [slot, overrides[slot] ?? selected.effort_defaults?.[slot] ?? "inherit"])) };
       applied.push(snapshot); return snapshot;
     } } : {}), ...extra });
@@ -312,7 +313,13 @@ test("preset dashboard fits narrow, normal and wide terminals without hiding slo
       assert.ok(lines.length <= Math.max(7, Math.floor(rows * 0.8)), `height ${rows}x${width}: ${lines.length}`);
       for (const line of lines) assert.ok(visibleWidth(line) <= width, `${rows}x${width}: ${JSON.stringify(line)}`);
       const plain = stripTerminalSequences(lines.join("\n"));
-      for (const slot of ["light", "standard", "strong"]) assert.match(plain, new RegExp(slot), `${rows}x${width}`);
+      const seen = new Set();
+      for (let index = 0; index < strengths.length; index++) {
+        const frame = picker.render(width).map(stripTerminalSequences).join("\n");
+        for (const slot of strengths) if (frame.includes(slot)) seen.add(slot);
+        picker.handleInput("\t");
+      }
+      assert.deepEqual([...seen].sort(), strengths, `${rows}x${width}: Tab reaches all five slots`);
       assert.match(plain, /Alt\+S/);
     }
   }
@@ -358,8 +365,8 @@ test("active marker, version and all exact model IDs follow the highlighted pres
   assert.equal(picker.selection(), "gamma");
   assert.match(text, /gamma.*○ inactive/);
   assert.match(text, /provider\/gamma-standard/);
-  assert.doesNotMatch(text, /think |→/, "the whole compatibility map is no longer printed");
-  assert.match(text, /light.*inherit/, "the slot row shows only the current effective level");
+  assert.doesNotMatch(text, /think |→/, "auto-preview prints no config map");
+  assert.match(text, /d1.*inherit/, "the slot row shows only the current effective level");
 });
 
 test("off has no routing slots in full or compact layouts and selects by keyboard or pointer", () => {
@@ -372,7 +379,7 @@ test("off has no routing slots in full or compact layouts and selects by keyboar
   assert.match(fullText, /No new, resumed, or steered work\./);
   assert.match(fullText, /Accepted work continues\./);
   assert.doesNotMatch(fullText, /provider\//);
-  assert.doesNotMatch(fullText, /light|standard|strong|think/);
+  assert.doesNotMatch(fullText, /d[1-5]|think/);
   full.picker.handleInput("\r");
   assert.deepEqual(full.result, ["off"]);
 
@@ -382,7 +389,7 @@ test("off has no routing slots in full or compact layouts and selects by keyboar
   assert.match(compactText, /No new, resumed, or steered work\./);
   assert.match(compactText, /Accepted work continues\./);
   assert.doesNotMatch(compactText, /provider\//);
-  assert.doesNotMatch(compactText, /light|standard|strong|think/);
+  assert.doesNotMatch(compactText, /d[1-5]|think/);
   assert(target > 0, compactText);
   compact.picker.handleMouse(mouse("click", 5, target));
   assert.deepEqual(compact.result, ["off"]);
@@ -464,7 +471,7 @@ test("a stacked picker fits the rows left for it and reports what it painted", (
   const make = (room) => new PresetPicker({ tui, theme, keybindings: keys, presets, activeName: "team-0", done() {},
     pointer: true, rows: room === undefined ? undefined : () => room, onRender: (height) => heights.push(height) });
   const free = make().render(76).length;
-  assert.equal(free, 22, "unconstrained, the terminal share decides");
+  assert.equal(free, 24, "unconstrained, the five-slot detail decides");
   for (const room of [16, 11, 9]) {
     const lines = make(room).render(76);
     assert.equal(heights.at(-1), lines.length);
@@ -473,9 +480,9 @@ test("a stacked picker fits the rows left for it and reports what it painted", (
 });
 
 test("all configured presets show versions, including fixture names and overridden selections", () => {
-  const builtIn = { ...preset("fixture-balanced", "fixture-v3"), effort_overrides: { light: "high" } };
+  const builtIn = { ...preset("fixture-balanced", "fixture-v3"), effort_overrides: { d1: "high" } };
   const { picker } = fixture({ presets: [builtIn, preset("fixture-light", "fixture-v1"),
-    { ...preset("mine", "v7"), effort_overrides: { strong: "low" } }], activeName: "fixture-balanced" });
+    { ...preset("mine", "v7"), effort_overrides: { d5: "low" } }], activeName: "fixture-balanced" });
   const text = picker.render(76).map(stripTerminalSequences);
   assert(text.some((line) => line.includes("fixture-v3")), text.join("\n"));
   assert(text.some((line) => line.includes("fixture-v1")), text.join("\n"));
@@ -487,12 +494,12 @@ test("all configured presets show versions, including fixture names and overridd
 });
 
 const effortPreset = (name = "alpha") => ({ ...preset(name),
-  effort: { light: "high", standard: "inherit", strong: "low" },
-  effort_defaults: { light: "high", standard: "inherit", strong: "low" },
-  effort_overrides: { light: "high" },
+  effort: { d1: "high", d2: "inherit", d3: "inherit", d4: "inherit", d5: "low" },
+  effort_defaults: { d1: "high", d2: "inherit", d3: "inherit", d4: "inherit", d5: "low" },
+  effort_overrides: { d1: "high" },
 });
-const effortCaps = (_preset, slot) => ({ levels: slot === "strong" ? ["off", "low", "high"] : ["off", "low", "medium", "high"],
-  inherited: slot === "strong" ? "low" : "medium" });
+const effortCaps = (_preset, slot) => ({ levels: slot === "d5" ? ["off", "low", "high"] : ["off", "low", "medium", "high"],
+  inherited: slot === "d5" ? "low" : "medium" });
 const painted = (picker, width = 76) => picker.render(width).map(stripTerminalSequences);
 const clickText = (picker, label, width = 76) => {
   const lines = painted(picker, width);
@@ -500,6 +507,81 @@ const clickText = (picker, label, width = 76) => {
   assert(y >= 0, `missing clickable ${label}: ${lines.join("\n")}`);
   picker.handleMouse(mouse("click", lines[y].indexOf(label), y));
 };
+
+const descendingSlots = ["d5", "d4", "d3", "d2", "d1"];
+const paintedSlots = (lines) => lines.flatMap((line) => {
+  const slot = line.match(/^│[ ›]?(d[1-5])(?:\s|:)/)?.[1] ?? line.match(/‹(d[1-5]):/)?.[1];
+  return slot ? [slot] : [];
+});
+
+test("routing and effort rows paint hardest first without changing canonical or numeric slot identity", () => {
+  assert.deepEqual(strengths, ["d1", "d2", "d3", "d4", "d5"]);
+  assert.deepEqual(workerSlotDisplayOrder, descendingSlots);
+  assert.notEqual(workerSlotDisplayOrder, strengths, "the view owns a detached order");
+  for (const width of [18, 34, 76, 120]) {
+    const h = fixture({ rows: 40, presets: [effortPreset()], efforts: effortCaps });
+    assert.deepEqual(paintedSlots(painted(h.picker, width)), descendingSlots);
+    h.picker.handleInput("e");
+    assert.deepEqual(paintedSlots(painted(h.picker, width)), descendingSlots);
+    assert(painted(h.picker, width).some((line) => line.includes("›‹d5:default")), "effort starts at d5");
+    h.picker.handleInput("\u001b[C");
+    assert.deepEqual(h.applied.at(-1).effort_overrides, { d1: "high", d5: "inherit" });
+    for (const slot of descendingSlots) {
+      h.picker.handleInput(slot.slice(1));
+      assert(painted(h.picker, width).some((line) => line.includes(`›‹${slot}:`)), `${slot} key selects its identity`);
+    }
+  }
+  for (const slot of descendingSlots) {
+    const h = fixture({ rows: 40, pointer: true, management: managementOption({ models: true }) });
+    const lines = painted(h.picker);
+    assert.deepEqual(paintedSlots(lines), descendingSlots);
+    const y = lines.findIndex((line) => new RegExp(`^│ ${slot}\\s`).test(line));
+    assert(y > 0, lines.join("\n"));
+    h.picker.handleMouse(mouse("click", lines[y].indexOf("provider/"), y));
+    assert.deepEqual(h.result, [{ action: "edit-model", name: "beta", slot }], "mouse keeps painted slot identity");
+  }
+  assert.deepEqual(strengths, ["d1", "d2", "d3", "d4", "d5"], "painting/editing never reverses the core tuple");
+});
+
+test("seven-row slot windows follow descending Tab/arrows/wheel order and retain both endpoints on resize", () => {
+  for (const width of [18, 34, 76]) {
+    const h = fixture({ rows: 40, pointer: true, presets: [effortPreset()], efforts: effortCaps });
+    // Row allowance is separate from the terminal's row count.
+    h.picker.options.rows = () => 7;
+    assert.deepEqual(paintedSlots(painted(h.picker, width)), ["d5", "d4", "d3"]);
+    for (const [index, slot] of descendingSlots.entries()) {
+      assert(painted(h.picker, width).some((line) => line.includes(`›${slot}`)));
+      if (index < 4) h.picker.handleInput("\t");
+    }
+    assert.deepEqual(paintedSlots(painted(h.picker, width)), ["d3", "d2", "d1"]);
+    h.picker.handleInput("\t");
+    assert(painted(h.picker, width).some((line) => line.includes("›d5")), "Tab wraps to hardest");
+    h.picker.handleInput("\u001b[Z");
+    assert(painted(h.picker, width).some((line) => line.includes("›d1")), "Shift+Tab wraps to easiest");
+    h.picker.handleInput("e");
+    assert.deepEqual(paintedSlots(painted(h.picker, width)), ["d5", "d4", "d3"]);
+    for (const slot of descendingSlots) {
+      assert(painted(h.picker, width).some((line) => line.includes(`›‹${slot}:`)));
+      h.picker.handleInput("\u001b[B");
+    }
+    assert(painted(h.picker, width).some((line) => line.includes("›‹d1:")), "Down clamps at the bottom");
+    assert.deepEqual(paintedSlots(painted(h.picker, width)), ["d3", "d2", "d1"]);
+    h.picker.options.rows = () => 19;
+    assert.deepEqual(paintedSlots(painted(h.picker, width)), descendingSlots);
+    h.picker.options.rows = () => 7;
+    h.picker.handleInput("\u001b[A");
+    assert(painted(h.picker, width).some((line) => line.includes("›‹d2:")));
+    h.picker.handleMouse(mouse("wheel", 4, 2, { wheelDelta: -1 }));
+    assert(painted(h.picker, width).some((line) => line.includes("›‹d3:")));
+    h.picker.handleInput("\t");
+    assert(painted(h.picker, width).some((line) => line.includes("›‹d2:")));
+    h.picker.handleInput("\u001b[Z");
+    assert(painted(h.picker, width).some((line) => line.includes("›‹d3:")));
+    h.picker.handleInput("5"); h.picker.handleInput("\u001b[A");
+    assert(painted(h.picker, width).some((line) => line.includes("›‹d5:")), "Up clamps at the top");
+    assert.deepEqual(h.applied, [], "selection and scrolling never edit effort");
+  }
+});
 
 test("legacy hosts remain read-only, while arrows immediately publish immutable effort snapshots", () => {
   const selected = effortPreset();
@@ -511,7 +593,7 @@ test("legacy hosts remain read-only, while arrows immediately publish immutable 
     assert.deepEqual(legacy.result, ["alpha"]);
   }
   const original = structuredClone(selected), edit = fixture({ presets: [selected], efforts: effortCaps });
-  edit.picker.handleInput("e");
+  edit.picker.handleInput("e"); edit.picker.handleInput("1");
   const text = painted(edit.picker).join("\n");
   assert.match(text, /New Agents only; main unchanged/);
   assert.match(text, /source: preset defaults \+ session overrides/);
@@ -520,12 +602,12 @@ test("legacy hosts remain read-only, while arrows immediately publish immutable 
   edit.picker.handleInput("\u001b[C"); // upper bound is a no-op
   assert.deepEqual(edit.applied, []);
   edit.picker.handleInput("\u001b[D");
-  assert.deepEqual(edit.applied.at(-1).effort_overrides, { light: "medium" });
-  assert.match(painted(edit.picker).join("\n"), /light:medium/);
+  assert.deepEqual(edit.applied.at(-1).effort_overrides, { d1: "medium" });
+  assert.match(painted(edit.picker).join("\n"), /d1:medium/);
   edit.picker.handleInput("\u001b"); // return, never undo
-  assert.match(painted(edit.picker).join("\n"), /light.*medium\*/);
-  edit.picker.handleInput("e"); edit.picker.handleInput("\u001b[D");
-  assert.deepEqual(edit.applied.at(-1).effort_overrides, { light: "low" });
+  assert.match(painted(edit.picker).join("\n"), /d1.*medium\*/);
+  edit.picker.handleInput("e"); edit.picker.handleInput("1"); edit.picker.handleInput("\u001b[D");
+  assert.deepEqual(edit.applied.at(-1).effort_overrides, { d1: "low" });
   edit.picker.handleInput("\r"); // Enter also returns, no extra publication
   assert.equal(edit.applied.length, 2);
   assert.deepEqual(edit.result, []);
@@ -536,16 +618,16 @@ test("legacy hosts remain read-only, while arrows immediately publish immutable 
 test("pointer arrows and reset publish immediately; inactive editing is a confirm-only route", () => {
   const selected = effortPreset(), h = fixture({ pointer: true, presets: [selected], efforts: effortCaps });
   clickText(h.picker, "Edit effort");
-  let lines = painted(h.picker), y = lines.findIndex((line) => line.includes("‹light:high›"));
+  let lines = painted(h.picker), y = lines.findIndex((line) => line.includes("‹d1:high›"));
   h.picker.handleMouse(mouse("click", lines[y].indexOf("‹"), y));
-  assert.deepEqual(h.applied.at(-1).effort_overrides, { light: "medium" });
+  assert.deepEqual(h.applied.at(-1).effort_overrides, { d1: "medium" });
   clickText(h.picker, "R reset");
   assert.deepEqual(h.applied.at(-1).effort_overrides, {});
-  lines = painted(h.picker); y = lines.findIndex((line) => line.includes("‹light:default›"));
+  lines = painted(h.picker); y = lines.findIndex((line) => line.includes("‹d1:default›"));
   h.picker.handleMouse(mouse("click", lines[y].indexOf("default"), y));
   assert.equal(h.applied.length, 2, "value/label clicks only select the slot");
   h.picker.handleMouse(mouse("click", lines[y].indexOf("›", lines[y].indexOf("‹")), y));
-  assert.deepEqual(h.applied.at(-1).effort_overrides, { light: "inherit" });
+  assert.deepEqual(h.applied.at(-1).effort_overrides, { d1: "inherit" });
   clickText(h.picker, "R reset");
   assert.deepEqual(h.applied.at(-1).effort_overrides, {});
   clickText(h.picker, "Esc back");
@@ -566,49 +648,49 @@ test("pointer arrows and reset publish immediately; inactive editing is a confir
 test("effort row label, value, model and blank clicks select only; the painted arrows alone adjust", () => {
   const { picker, result, applied } = fixture({ pointer: true, presets: [effortPreset()], activeName: "alpha", efforts: effortCaps });
   picker.handleInput("e");
-  picker.handleInput("\u001b[B"); // select standard, then select light by mouse
-  for (const target of ["light", "high", "provider/alpha-light"]) {
+  picker.handleInput("3"); // select d3, then select d1 by mouse
+  for (const target of ["d1", "high", "provider/alpha-light"]) {
     const lines = painted(picker);
-    const y = lines.findIndex((line) => line.includes("‹light:high›"));
+    const y = lines.findIndex((line) => line.includes("‹d1:high›"));
     assert(y >= 0, lines.join("\n"));
     picker.handleMouse(mouse("click", lines[y].indexOf(target), y));
-    assert.match(painted(picker)[y], /›‹light:high›/, `${target} selects light without editing it`);
+    assert.match(painted(picker)[y], /›‹d1:high›/, `${target} selects d1 without editing it`);
   }
   let lines = painted(picker);
-  let y = lines.findIndex((line) => line.includes("‹light:high›"));
+  let y = lines.findIndex((line) => line.includes("‹d1:high›"));
   picker.handleMouse(mouse("click", 74, y)); // padding beyond the model
-  assert.match(painted(picker)[y], /light:high/);
-  lines = painted(picker); y = lines.findIndex((line) => line.includes("‹light:high›"));
+  assert.match(painted(picker)[y], /d1:high/);
+  lines = painted(picker); y = lines.findIndex((line) => line.includes("‹d1:high›"));
   picker.handleMouse(mouse("click", lines[y].indexOf("‹"), y));
-  assert.match(painted(picker)[y], /light:medium/);
-  lines = painted(picker); y = lines.findIndex((line) => line.includes("‹light:medium›"));
+  assert.match(painted(picker)[y], /d1:medium/);
+  lines = painted(picker); y = lines.findIndex((line) => line.includes("‹d1:medium›"));
   picker.handleMouse(mouse("click", lines[y].indexOf("›", lines[y].indexOf("‹")), y));
-  assert.match(painted(picker)[y], /light:high/);
+  assert.match(painted(picker)[y], /d1:high/);
   picker.handleInput("\r");
   assert.deepEqual(result, []);
-  assert.deepEqual(applied.map((item) => item.effort_overrides), [{ light: "medium" }, { light: "high" }]);
+  assert.deepEqual(applied.map((item) => item.effort_overrides), [{ d1: "medium" }, { d1: "high" }]);
 });
 
 test("clipped effort arrows never create invisible pointer controls at narrow widths", () => {
   for (const width of [8, 10, 12, 14, 18, 34]) {
     const { picker } = fixture({ pointer: true, rows: 8, presets: [effortPreset()], efforts: effortCaps });
-    picker.handleInput("e");
+    picker.handleInput("e"); picker.handleInput("1");
     picker.handleInput("\u001b[D"); // medium; next arrow should return to high if visible
     const lines = painted(picker, width);
-    const y = lines.findIndex((line) => line.includes("‹"));
+    const y = lines.findIndex((line) => line.includes("›‹d1"));
     assert(y > 0, lines.join("\n"));
     const prev = lines[y].indexOf("‹"), next = lines[y].indexOf("›", prev + 1);
     picker.handleMouse(mouse("click", width + 3, y)); // theoretical offscreen next arrow
-    assert.match(painted(picker, 76).join("\n"), /‹light:medium›/, `offscreen click at ${width}`);
+    assert.match(painted(picker, 76).join("\n"), /‹d1:medium›/, `offscreen click at ${width}`);
     const narrow = painted(picker, width);
     picker.handleMouse(mouse("click", width - 1, y)); // right border, not an arrow
-    assert.match(painted(picker, 76).join("\n"), /‹light:medium›/, `border click at ${width}`);
+    assert.match(painted(picker, 76).join("\n"), /‹d1:medium›/, `border click at ${width}`);
     if (next < 0) {
       assert(!narrow[y].includes("›", prev + 1), `next is clipped at ${width}`);
     } else {
       painted(picker, width); // restore narrow pointer targets after wider inspection
       picker.handleMouse(mouse("click", next, y));
-      assert.match(painted(picker, 76).join("\n"), /‹light:high›/, `visible next arrow at ${width}`);
+      assert.match(painted(picker, 76).join("\n"), /‹d1:high›/, `visible next arrow at ${width}`);
     }
   }
 });
@@ -621,52 +703,52 @@ test("Off has no effort editor; Alt+S closes without undoing live changes", () =
   assert.deepEqual(off.result, ["off"]);
 
   const cancelled = fixture({ presets: [effortPreset()], efforts: effortCaps });
-  cancelled.picker.handleInput("e");
+  cancelled.picker.handleInput("e"); cancelled.picker.handleInput("1");
   cancelled.picker.handleInput("\u001b[D");
   cancelled.picker.handleInput("\u001bs");
   assert.deepEqual(cancelled.result, [null]);
-  assert.deepEqual(cancelled.applied.at(-1).effort_overrides, { light: "medium" });
+  assert.deepEqual(cancelled.applied.at(-1).effort_overrides, { d1: "medium" });
 });
 
 test("default and explicit inherit remain distinct even when default is literal inherit", () => {
   const selected = effortPreset();
   const { picker, result, applied } = fixture({ presets: [selected], activeName: "alpha", efforts: effortCaps });
   picker.handleInput("e");
-  picker.handleInput("\u001b[B"); // standard configured default inherit
+  picker.handleInput("3"); // d3 configured default inherit
   assert.match(painted(picker).join("\n"), /default: inherit · inherit → medium/);
   picker.handleInput("\u001b[C"); // publish explicit inherit, not deletion
-  assert.match(painted(picker).join("\n"), /standard:inherit/);
+  assert.match(painted(picker).join("\n"), /d3:inherit/);
   picker.handleInput("\r");
   assert.deepEqual(result, []);
-  assert.deepEqual(applied.at(-1).effort_overrides, { light: "high", standard: "inherit" });
+  assert.deepEqual(applied.at(-1).effort_overrides, { d1: "high", d3: "inherit" });
 });
 
 test("fixed validation rejects live proposals while inheritance warnings remain advisory", () => {
-  const selected = { ...effortPreset(), effort_overrides: { light: "max", standard: "inherit" } };
+  const selected = { ...effortPreset(), effort_overrides: { d1: "max", d3: "inherit" } };
   let unavailable = false;
-  const caps = (_preset, slot) => slot === "light" ? { levels: ["low", "high"], inherited: "low" } :
-    slot === "standard" ? { levels: ["off", "low", "high"], inheritError: "Parent thinking unavailable" } :
+  const caps = (_preset, slot) => slot === "d1" ? { levels: ["low", "high"], inherited: "low" } :
+    slot === "d3" ? { levels: ["off", "low", "high"], inheritError: "Parent thinking unavailable" } :
       unavailable ? { levels: [], error: "Missing model" } : { levels: ["low", "high"], inherited: "low" };
   const { picker, result, applied } = fixture({ presets: [selected], efforts: caps });
   picker.handleInput("e");
   assert.match(painted(picker).join("\n"), /Unsupported effort: max/);
-  picker.handleInput("\u001b[D"); // invalid -> preset default high, immediately validated
-  assert.deepEqual(applied.at(-1).effort_overrides, { standard: "inherit" });
-  picker.handleInput("\u001b[B");
+  picker.handleInput("1"); picker.handleInput("\u001b[D"); // invalid -> preset default high, immediately validated
+  assert.deepEqual(applied.at(-1).effort_overrides, { d3: "inherit" });
+  picker.handleInput("3");
   assert.match(painted(picker).join("\n"), /Parent thinking unavailable/);
   unavailable = true;
-  picker.handleInput("\u001b[C"); // proposed fixed off is blocked by missing fixed strong model
+  picker.handleInput("\u001b[C"); // proposed fixed off is blocked by missing fixed d5 model
   assert.equal(applied.length, 1);
   assert.match(painted(picker).join("\n"), /Change not applied/);
-  assert.match(painted(picker).join("\n"), /standard:inherit/);
+  assert.match(painted(picker).join("\n"), /d3:inherit/);
   unavailable = false;
   picker.handleInput("\u001b[C");
-  assert.deepEqual(applied.at(-1).effort_overrides, { standard: "off" });
+  assert.deepEqual(applied.at(-1).effort_overrides, { d3: "off" });
   assert.deepEqual(result, []);
 });
 
 test("inherit warnings never block editing another slot, explicit inherit, or resetting to inherited defaults", () => {
-  const inherited = { light: "inherit", standard: "inherit", strong: "inherit" };
+  const inherited = Object.fromEntries(strengths.map((slot) => [slot, "inherit"]));
   for (const warning of [
     { levels: ["high"], inheritError: "Parent off is unsupported" },
     { levels: ["high"], inheritError: "Parent thinking unavailable" },
@@ -674,19 +756,19 @@ test("inherit warnings never block editing another slot, explicit inherit, or re
     { levels: [], error: "Ambiguous model" },
   ]) {
     const selected = { ...preset("alpha"), effort: { ...inherited }, effort_defaults: { ...inherited }, effort_overrides: {} };
-    const caps = (_preset, slot) => slot === "light" ? { levels: ["high"], inherited: "high" } : warning;
+    const caps = (_preset, slot) => slot === "d1" ? { levels: ["high"], inherited: "high" } : warning;
     const { picker, result, applied } = fixture({ presets: [selected], efforts: caps });
-    picker.handleInput("e");
+    picker.handleInput("e"); picker.handleInput("1");
     picker.handleInput("\u001b[C"); // default -> explicit inherit
     picker.handleInput("\u001b[C"); // -> high
     const text = painted(picker, 120).join("\n");
     assert.match(text, /Inherit checked at spawn/);
     assert.doesNotMatch(text, /Change not applied/);
-    assert.deepEqual(applied.at(-1).effort_overrides, { light: "high" });
+    assert.deepEqual(applied.at(-1).effort_overrides, { d1: "high" });
     picker.handleInput("\r");
     assert.deepEqual(result, []);
 
-    const reset = fixture({ presets: [{ ...selected, effort_overrides: { standard: "max" } }], efforts: caps });
+    const reset = fixture({ presets: [{ ...selected, effort_overrides: { d3: "max" } }], efforts: caps });
     reset.picker.handleInput("e");
     reset.picker.handleInput("r");
     assert.deepEqual(reset.applied.at(-1).effort_overrides, {});
@@ -694,9 +776,9 @@ test("inherit warnings never block editing another slot, explicit inherit, or re
     assert.deepEqual(reset.result, []);
 
     const explicit = fixture({ presets: [selected], efforts: caps });
-    explicit.picker.handleInput("e"); explicit.picker.handleInput("\u001b[B");
+    explicit.picker.handleInput("e"); explicit.picker.handleInput("3");
     explicit.picker.handleInput("\u001b[C");
-    assert.deepEqual(explicit.applied.at(-1).effort_overrides, { standard: "inherit" });
+    assert.deepEqual(explicit.applied.at(-1).effort_overrides, { d3: "inherit" });
     explicit.picker.handleInput("\r");
     assert.deepEqual(explicit.result, []);
   }
@@ -707,14 +789,58 @@ for (const rejection of ["throw", "undefined"]) test(`a ${rejection} host reject
     if (rejection === "throw") throw new Error("AUDIT_REJECTED");
     return undefined;
   } });
-  h.picker.handleInput("e");
+  h.picker.handleInput("e"); h.picker.handleInput("1");
   assert.doesNotThrow(() => h.picker.handleInput("\u001b[D"));
   const text = painted(h.picker).join("\n");
-  assert.match(text, /light:high/);
+  assert.match(text, /d1:high/);
   assert.match(text, /Change not applied/);
   h.picker.handleInput("\u001b");
-  assert.match(painted(h.picker).join("\n"), /light.*high\*/);
+  assert.match(painted(h.picker).join("\n"), /d1.*high\*/);
   assert.deepEqual(h.applied, []);
+});
+
+test("compact effort click targets use the exact visible short or long label, including saving", () => {
+  for (const width of [28, 30, 34, 40, 47, 76, 120]) {
+    const h = fixture({ pointer: true, rows: 8, presets: [effortPreset()], efforts: effortCaps });
+    const lines = painted(h.picker, width), y = lines.length - 2;
+    const label = width - 2 < 46 ? "E" : "Edit effort";
+    const x = label === "E" ? lines[y].indexOf(" E") + 1 : lines[y].indexOf(label);
+    assert(x > 0 && lines[y].slice(x, x + label.length) === label, lines.join("\n"));
+    h.picker.handleMouse(mouse("click", x, y));
+    assert.match(painted(h.picker, width).join("\n"), /Effort/, `${width}: painted ${label} opens the editor`);
+    assert.deepEqual(h.result, []);
+    assert.deepEqual(h.applied, []);
+  }
+  for (const width of [24, 26, 27]) {
+    const h = fixture({ pointer: true, rows: 8, presets: [effortPreset()], efforts: effortCaps });
+    const lines = painted(h.picker, width), y = lines.length - 2;
+    assert(!lines[y].includes(" E"), "the short E is wholly clipped");
+    h.picker.handleMouse(mouse("click", 25, y)); // theoretical E column, not painted
+    assert.match(painted(h.picker, width)[0], /Delegation/);
+    assert.deepEqual(h.result, []);
+  }
+  for (const width of [18, 76, 120]) {
+    const h = fixture({ pointer: true, rows: 8, presets: [effortPreset()], efforts: effortCaps, management: savingOption() });
+    const lines = painted(h.picker, width), y = lines.length - 2, x = lines[y].indexOf(" · E") + 3;
+    assert(x > 0 && lines[y][x] === "E", lines.join("\n"));
+    h.picker.handleMouse(mouse("click", x, y));
+    assert.match(painted(h.picker, width).join("\n"), /Effort/);
+    assert.deepEqual(h.result, [], "effort entry is not a save route");
+  }
+});
+
+test("compact controls restore mode and eagerness hints where they fit without displacing Tab", () => {
+  for (const saving of [false, true]) for (const edit of [false, true]) for (const width of [76, 120]) {
+    const h = fixture({ rows: 8, presets: [effortPreset()], delegation: delegationState().option,
+      ...(edit ? { efforts: effortCaps } : {}), ...(saving ? { management: savingOption() } : {}) });
+    const lines = painted(h.picker, width), controls = lines.at(-2);
+    assert.equal(lines.length, 7);
+    assert(lines.every((line) => visibleWidth(line) <= width));
+    assert.match(controls, /Tab/);
+    assert.match(controls, /←→.*⇧←→/, `${width}, save=${saving}, edit=${edit}: ${controls}`);
+    if (width === 120) assert.match(controls, /mode.*eagerness/);
+    if (saving) assert(controls.includes("G") && controls.includes("W"));
+  }
 });
 
 test("editor save controls preserve seven-row budgeting and hit only visible G/W labels", () => {
@@ -732,22 +858,40 @@ test("editor save controls preserve seven-row budgeting and hit only visible G/W
   }
 });
 
-test("compact/narrow editor keeps three editable rows, bounded paint and live controls", () => {
+test("minimum-height effort editor keeps hidden-slot navigation visible with and without saving", () => {
+  for (const save of [false, true]) for (const width of [18, 34]) {
+    const h = fixture({ rows: 7, presets: [effortPreset()], efforts: effortCaps,
+      ...(save ? { management: savingOption() } : {}) });
+    h.picker.handleInput("e");
+    for (const key of ["1", "5"]) {
+      h.picker.handleInput(key);
+      const lines = painted(h.picker, width), text = lines.join("\n");
+      assert.equal(lines.length, 7);
+      assert(lines.every((line) => visibleWidth(line) <= width));
+      assert.match(text, /↑↓\/1–5/, `saving=${save}, width=${width}: ${text}`);
+      assert.match(text, new RegExp(`‹d${key}:`));
+      assert.equal(lines.filter((line) => /‹d[1-5]:/.test(line)).length, 3);
+      if (save) assert(lines.some((line) => line.includes("G") && line.includes("W")));
+    }
+  }
+});
+
+test("compact/narrow editor keeps the selected slot editable, bounded paint and live controls", () => {
   for (const rows of [8, 10, 12, 24]) for (const width of [18, 34, 76, 120]) {
     const { picker, result, applied } = fixture({ pointer: true, rows, presets: [effortPreset()], activeName: "alpha",
       efforts: effortCaps });
-    picker.handleInput("e");
+    picker.handleInput("e"); picker.handleInput("1");
     let lines = painted(picker, width);
     assert(lines.length <= Math.max(7, Math.floor(rows * 0.8)), `${rows}x${width}`);
     assert(lines.every((line) => visibleWidth(line) <= width), `${rows}x${width}: ${lines.join("\n")}`);
-    assert.match(lines.join("\n"), /light:high/);
+    assert.match(lines.join("\n"), /d1:high/);
     assert.doesNotMatch(lines.join("\n"), /Apply|unsaved/);
-    const value = lines.findIndex((line) => line.includes("‹light:high›"));
+    const value = lines.findIndex((line) => line.includes("‹d1:high›"));
     assert(value > 0, lines.join("\n"));
     picker.handleMouse(mouse("click", lines[value].indexOf("‹"), value));
     lines = painted(picker, width);
-    assert.match(lines.join("\n"), /light:medium/);
-    assert.deepEqual(applied.at(-1).effort_overrides, { light: "medium" });
+    assert.match(lines.join("\n"), /d1:medium/);
+    assert.deepEqual(applied.at(-1).effort_overrides, { d1: "medium" });
     picker.handleInput("\u001b");
     assert.deepEqual(result, []);
   }
@@ -1056,20 +1200,20 @@ test("the management summary paints where it fits and never raises the height", 
     "a capped list spends a row on the summary instead of growing");
 
   // At the full layout's minimum the summary is dropped, not squeezed in.
-  const boundary = fixture({ rows: 14, management: managementOption() });
-  const boundaryPlain = fixture({ rows: 14 });
+  const boundary = fixture({ rows: 17, management: managementOption() });
+  const boundaryPlain = fixture({ rows: 17 });
   assert.equal(painted(boundary.picker, 76).length, painted(boundaryPlain.picker, 76).length);
   assert.doesNotMatch(painted(boundary.picker, 76).join("\n"), /controlled fixture/);
   assert.doesNotMatch(painted(boundary.picker, 76).join("\n"), /No presets available/);
 
   // One row past the boundary the summary fits, and it follows the callback's text.
-  const fitted = fixture({ rows: 15, management: managementOption({ summary: () => " presets: scope session · pending: 2 edits" }) });
+  const fitted = fixture({ rows: 18, management: managementOption({ summary: () => " presets: scope session · pending: 2 edits" }) });
   assert.match(painted(fitted.picker, 76).join("\n"), /scope session · pending: 2 edits/);
 
   // Compact layouts show it only in a spare row, never above their minimum.
-  const spare = fixture({ rows: 13, management: managementOption() });
+  const spare = fixture({ rows: 14, management: managementOption() });
   assert.match(painted(spare.picker, 76).join("\n"), /controlled fixture · pending: none/);
-  assert.ok(painted(spare.picker, 76).length <= Math.floor(13 * 0.8));
+  assert.ok(painted(spare.picker, 76).length <= Math.floor(14 * 0.8));
   const minimum = fixture({ rows: 8, management: managementOption() });
   const minimumPlain = fixture({ rows: 8 });
   assert.equal(painted(minimum.picker, 34).length, painted(minimumPlain.picker, 34).length);
@@ -1100,7 +1244,7 @@ test("G/W save routes from either page carry only scope, never a highlighted pre
   for (const [key, scope] of [["g", "global"], ["w", "workspace"]]) {
     const editing = fixture({ management: savingOption(), efforts: effortCaps });
     editing.picker.handleInput("e"); editing.picker.handleInput("\u001b[C");
-    assert.deepEqual(editing.applied.at(-1).effort_overrides, { light: "inherit" });
+    assert.deepEqual(editing.applied.at(-1).effort_overrides, { d5: "inherit" });
     assert.match(painted(editing.picker).join("\n"), /Save as .* default/);
     editing.picker.handleInput(key);
     assert.deepEqual(editing.result, [{ action: "save-default", scope }]);
@@ -1140,7 +1284,8 @@ test("global/project save labels remain painted, clickable and bounded at full, 
       project.picker.handleMouse(mouse("click", projectLines[projectY].indexOf("W"), projectY));
       assert.deepEqual(project.result, trusted ? [{ action: "save-default", scope: "workspace" }] : [],
         `${rows}x${width}: painted W (mode=${withMode}, trusted=${trusted})`);
-      if (width >= 18) for (const slot of ["light", "standard", "strong"]) assert(lines.some((line) => line.includes(slot)));
+      if (width >= 18 && Math.floor(rows * 0.8) >= 9 + (withMode ? 1 : 0))
+        for (const slot of strengths) assert(lines.some((line) => line.includes(slot)));
     }
   }
   const normal = fixture({ rows: 24, management: savingOption(), delegation: delegationState().option });
@@ -1208,7 +1353,7 @@ for (const mode of ["fullscreen", "regular"]) for (const accepted of [false, tru
       assert.equal(h.tui.getFocusedComponent(), h.mounts[1].component);
       assert.match(h.mounts[1].component.render(76).map(stripTerminalSequences).join("\n"), /Effort · fixture-balanced/);
       h.tui.getFocusedComponent().handleInput("\u001b[C");
-      assert.deepEqual(h.router.current().effort_overrides, { light: "inherit" });
+      assert.deepEqual(h.router.current().effort_overrides, { d5: "inherit" });
       h.tui.getFocusedComponent().handleInput("\u001b"); // back, same component/focus
       assert.equal(h.tui.getFocusedComponent(), h.mounts[1].component);
       h.tui.getFocusedComponent().handleInput("\u001b"); await opening;
@@ -1230,10 +1375,10 @@ for (const mode of ["fullscreen", "regular"]) test(`G saving from the live effor
   h.panels.attachHost(h.ctx, h.bus);
   const opening = h.shortcuts.get("alt+s").handler(); await tick();
   h.tui.getFocusedComponent().handleInput("e"); h.tui.getFocusedComponent().handleInput("\u001b[C");
-  assert.deepEqual(h.router.current().effort_overrides, { light: "inherit" });
+  assert.deepEqual(h.router.current().effort_overrides, { d5: "inherit" });
   h.tui.getFocusedComponent().handleInput("g"); await opening;
   assert.equal(saved.length, 1); assert.equal(saved[0].scope, "global");
-  assert.deepEqual(saved[0].selection.effort_overrides, { light: "inherit" });
+  assert.deepEqual(saved[0].selection.effort_overrides, { d5: "inherit" });
   assert.deepEqual(h.published, ["fixture-balanced"], "saving is not a second live publication");
   assert.equal(h.tui.getFocusedComponent(), h.host.editor);
 });
@@ -1300,7 +1445,7 @@ test("through the real SDK the management routes settle the picker before the ho
     h.mounts[2].component.handleInput("1");
     await routed;
     assert.equal(calls.filter((entry) => typeof entry === "string" && entry.startsWith("model:")).length, 1);
-    assert.match(order.at(-1), /^model:fixture-[a-z]+:light:center:3$/, `${mode}: the slot route settled before its dialog`);
+    assert.match(order.at(-1), /^model:fixture-[a-z]+:d1:center:3$/, `${mode}: the slot route settled before its dialog`);
     assert.equal(h.mounts.length, 3, `${mode}: the model dialog is an independent route, no panel reopen`);
     assert.deepEqual(h.published, []);
     h.panels.dispose();
@@ -1360,11 +1505,242 @@ for (const movement of ["keyboard", "wheel"]) {
     else h.picker.handleMouse(mouse("wheel", x, y, { wheelDelta: 1 }));
     assert.equal(h.picker.selection(), "beta");
     h.picker.handleMouse(mouse("click", x, y)); // No repaint: alpha is still displayed.
-    assert.deepEqual(h.result, [{ action: "edit-model", name: "alpha", slot: "light" }]);
+    assert.deepEqual(h.result, [{ action: "edit-model", name: "alpha", slot: "d1" }]);
   });
 }
 
-test("slot rows show only the current effective level, never the compatibility map", () => {
+test("all five effort slots edit independently and Reset removes even the fifth override", () => {
+  const selected = { ...preset("alpha"), effort_defaults: Object.fromEntries(strengths.map((slot) => [slot, "inherit"])), effort_overrides: {} };
+  const h = fixture({ presets: [selected], efforts: () => ({ levels: ["off", "low"], inherited: "low" }) });
+  h.picker.handleInput("e");
+  for (const [index, slot] of strengths.entries()) {
+    h.picker.handleInput(String(index + 1));
+    assert(painted(h.picker).some((line) => line.includes(`›‹${slot}:default›`)));
+    h.picker.handleInput("\u001b[C"); // explicit inherit
+    h.picker.handleInput("\u001b[C"); // fixed off, independently of same-model peers
+    assert.deepEqual(h.applied.at(-1).effort_overrides,
+      Object.fromEntries(strengths.slice(0, index + 1).map((key) => [key, "off"])));
+  }
+  assert.equal(h.applied.length, 10);
+  h.picker.handleInput("r");
+  assert.deepEqual(h.applied.at(-1).effort_overrides, {});
+  assert.equal(h.applied.length, 11);
+});
+
+test("tiny slot windows follow the selection and resize without overflow or hidden mouse effects", () => {
+  for (const room of [7, 8, 9, 10, 12, 13, 16, 19]) for (const width of [8, 18, 34, 76, 120]) {
+    const h = fixture({ rows: 40, pointer: true, presets: [effortPreset()], efforts: effortCaps });
+    // The actual row allowance can shrink independently of the terminal share.
+    h.picker.options.rows = () => room;
+    h.picker.handleInput("e");
+    for (let index = 0; index < strengths.length; index++) {
+      h.picker.handleInput(String(index + 1));
+      const lines = painted(h.picker, width);
+      assert(lines.length <= room, `${room}x${width}: ${lines.length}`);
+      assert(lines.every((line) => visibleWidth(line) <= width));
+      assert(lines.some((line) => line.includes(`›‹${strengths[index]}`)), lines.join("\n"));
+    }
+    const lines = painted(h.picker, width), y = lines.findIndex((line) => line.includes("›‹d5"));
+    h.picker.handleMouse(mouse("click", width + 1, y));
+    assert.deepEqual(h.applied, [], "unpainted arrow columns never publish");
+    if (width >= 18) {
+      const next = lines[y].indexOf("›", lines[y].indexOf("‹") + 1);
+      assert(next > 0, lines[y]);
+      h.picker.handleMouse(mouse("click", next, y));
+      assert.deepEqual(h.applied.at(-1).effort_overrides, { d1: "high", d5: "inherit" });
+    }
+    h.picker.options.rows = () => 7;
+    assert(painted(h.picker, 18).some((line) => line.includes("›‹d5")), "shrinking keeps the fifth selected slot visible");
+    h.picker.handleMouse(mouse("wheel", 4, 3, { wheelDelta: 1 }));
+    assert(painted(h.picker, 18).some((line) => line.includes("›‹d4")), "the editor wheel selects, not edits");
+    h.picker.handleInput("\u001b");
+    h.picker.handleInput("\u001b[Z");
+    assert(painted(h.picker, 34).some((line) => line.includes("›d5")), "Shift+Tab moves up to d5 after resize");
+    assert(painted(h.picker, 76).some((line) => line.includes("provider/alpha-strong")));
+  }
+});
+
+test("a subminimum viewport paints nothing and cannot edit or reset unseen effort", () => {
+  for (const room of [0, 1, 3, 6]) {
+    const h = fixture({ pointer: true, presets: [effortPreset()], efforts: effortCaps, rows: 40 });
+    h.picker.handleInput("e");
+    h.picker.options.rows = () => room;
+    assert.deepEqual(painted(h.picker), []);
+    h.picker.handleInput("5"); h.picker.handleInput("\u001b[C"); h.picker.handleInput("r");
+    assert.deepEqual(h.applied, []);
+    h.picker.handleInput("\u001bs");
+    assert.deepEqual(h.result, [null], "cancellation always remains available");
+  }
+});
+
+test("terminal/width minima refuse invisible selection and effort but keep cancellation", () => {
+  for (const [rows, width] of [[4, 76], [6, 76], [24, 7]]) {
+    const selecting = fixture({ rows, management: managementOption({ models: true }) });
+    assert.deepEqual(painted(selecting.picker, width), []);
+    selecting.picker.handleInput("\r"); selecting.picker.handleInput("5");
+    assert.deepEqual(selecting.result, []);
+    selecting.picker.handleInput("\u001b");
+    assert.deepEqual(selecting.result, [null]);
+    const editing = fixture({ rows, presets: [effortPreset()], efforts: effortCaps });
+    editing.picker.handleInput("e");
+    assert.deepEqual(painted(editing.picker, width), []);
+    editing.picker.handleInput("5"); editing.picker.handleInput("\u001b[C"); editing.picker.handleInput("r");
+    assert.deepEqual(editing.applied, []);
+    editing.picker.handleInput("\u001bs");
+    assert.deepEqual(editing.result, [null]);
+  }
+});
+
+const invisibleKeys = ["g", "G", "w", "W", "p", "P", "n", "N", "c", "C", "e", "E", "1", "5", "r", "\t",
+  "\u001b[Z", "\u001b[A", "\u001b[B", "\u001b[C", "\u001b[D", "\u001b[1;2C", "\u001b[1;2D"];
+const hidePicker = (h, kind) => {
+  if (kind === "terminal rows") h.tui.terminal.rows = 6;
+  else if (kind === "terminal width") h.tui.terminal.columns = 7;
+  else if (kind === "allocation rows") h.picker.options.rows = () => 6;
+  else painted(h.picker, kind === "zero paint width" ? 0 : 7);
+};
+const restoreViewport = (h) => {
+  h.tui.terminal.rows = 40; h.tui.terminal.columns = 120; h.picker.options.rows = undefined;
+};
+
+test("unusable list pickers gate all routes and changes before first paint and after resize", () => {
+  for (const kind of ["terminal rows", "terminal width", "allocation rows", "paint width", "zero paint width"]) {
+    for (const previouslyPainted of [false, true]) {
+      const state = delegationState(), h = fixture({ rows: 40, pointer: true, presets: [effortPreset("alpha"), effortPreset("beta")],
+        activeName: "alpha", efforts: effortCaps, delegation: state.option, management: savingOption() });
+      if (previouslyPainted) painted(h.picker);
+      hidePicker(h, kind);
+      const selection = h.picker.selection(), slotIndex = h.picker.slotIndex;
+      for (const key of [...invisibleKeys, "\r"]) h.picker.handleInput(key);
+      assert.deepEqual(h.result, [], `${kind}, prior paint=${previouslyPainted}: no invisible route`);
+      assert.deepEqual(h.applied, []);
+      assert.deepEqual(state.sets, []);
+      assert.equal(h.picker.selection(), selection);
+      assert.equal(h.picker.slotIndex, slotIndex, "invisible navigation is inert too");
+      restoreViewport(h);
+      assert.match(painted(h.picker)[0], /Delegation/, "E never opened an invisible page");
+      h.picker.handleInput("g");
+      assert.deepEqual(h.result, [{ action: "save-default", scope: "global" }], "routes recover with a usable viewport");
+    }
+    for (const cancel of ["\u001bs", "\u0003", "\u001b"]) {
+      const h = fixture({ rows: 40, presets: [effortPreset()], efforts: effortCaps, management: savingOption() });
+      hidePicker(h, kind); h.picker.handleInput(cancel);
+      assert.deepEqual(h.result, [null], `${kind}: cancellation is still usable`);
+    }
+  }
+});
+
+test("invisible effort pages retain live edits, allow back/cancel, and never save or route", () => {
+  for (const kind of ["terminal rows", "terminal width", "allocation rows", "paint width", "zero paint width"]) {
+    for (const back of ["\u001b", "\r"]) {
+      const state = delegationState(), h = fixture({ rows: 40, presets: [effortPreset()], efforts: effortCaps,
+        delegation: state.option, management: savingOption() });
+      h.picker.handleInput("e"); h.picker.handleInput("\u001b[C");
+      const applied = structuredClone(h.applied), slotIndex = h.picker.slotIndex;
+      hidePicker(h, kind);
+      for (const key of invisibleKeys) h.picker.handleInput(key);
+      assert.deepEqual(h.result, []);
+      assert.deepEqual(h.applied, applied);
+      assert.deepEqual(state.sets, []);
+      assert.equal(h.picker.slotIndex, slotIndex);
+      h.picker.handleInput(back);
+      assert.deepEqual(h.result, [], "Esc/Enter backs out instead of saving or cancelling");
+      assert.deepEqual(h.applied, applied, "back never undoes a live effort");
+      restoreViewport(h);
+      assert.match(painted(h.picker)[0], /Delegation/);
+    }
+    for (const cancel of ["\u001bs", "\u0003"]) {
+      const h = fixture({ rows: 40, presets: [effortPreset()], efforts: effortCaps, management: savingOption() });
+      h.picker.handleInput("e"); hidePicker(h, kind); h.picker.handleInput(cancel);
+      assert.deepEqual(h.result, [null]);
+    }
+  }
+  for (const back of ["\u001b", "\r"]) {
+    const h = fixture({ rows: 6, startInEffort: true, presets: [effortPreset()], efforts: effortCaps, management: savingOption() });
+    assert.equal(h.picker.editing, true, "active startup continuation may initialize its passive page before paint");
+    for (const key of invisibleKeys) h.picker.handleInput(key);
+    assert.deepEqual(h.result, []); assert.deepEqual(h.applied, []);
+    h.picker.handleInput(back); restoreViewport(h);
+    assert.match(painted(h.picker)[0], /Delegation/);
+  }
+  const inactive = fixture({ rows: 6, startInEffort: true, activeName: "off", presets: [effortPreset()], efforts: effortCaps });
+  assert.deepEqual(inactive.result, [], "an invisible inactive startup cannot invoke a confirmation route");
+});
+
+test("eight-column compact save controls keep Tab and exact G/W click targets with live trust gating", () => {
+  for (const rows of [7, 8, 10]) for (const trusted of [false, true]) for (const withMode of [false, true]) {
+    const make = (management = savingOption(trusted)) => fixture({ rows, pointer: true, presets: [effortPreset()],
+      efforts: effortCaps, management, ...(withMode ? { delegation: delegationState().option } : {}) });
+    const h = make();
+    let lines = painted(h.picker, 8), y = lines.findIndex((line) => line === "│GW Tab│");
+    assert(y > 0, `${rows}, trusted=${trusted}, mode=${withMode}: ${lines.join("\n")}`);
+    assert(lines.every((line) => visibleWidth(line) <= 8));
+    assert(lines.length <= Math.max(7, Math.floor(rows * 0.8)));
+    assert(lines.some((line) => line.includes("›d5")));
+    for (let index = 0; index < 4; index++) h.picker.handleInput("\t");
+    lines = painted(h.picker, 8); y = lines.findIndex((line) => line === "│GW Tab│");
+    assert(lines.some((line) => line.includes("›d1")), "Tab still reaches the easiest slot");
+    h.picker.handleMouse(mouse("click", lines[y].indexOf("Tab"), y));
+    h.picker.handleMouse(mouse("click", 0, y));
+    h.picker.handleMouse(mouse("click", 7, y));
+    assert.deepEqual(h.result, [], "navigation text and borders are not save targets");
+    h.picker.handleMouse(mouse("click", lines[y].indexOf("G"), y));
+    assert.deepEqual(h.result, [{ action: "save-default", scope: "global" }]);
+
+    const project = make(), projectLines = painted(project.picker, 8);
+    const projectY = projectLines.findIndex((line) => line === "│GW Tab│");
+    project.picker.handleMouse(mouse("click", projectLines[projectY].indexOf("W"), projectY));
+    assert.deepEqual(project.result, trusted ? [{ action: "save-default", scope: "workspace" }] : [],
+      "a painted locked W remains inert");
+    if (!trusted) {
+      project.picker.handleInput("w");
+      assert.deepEqual(project.result, []);
+      assert.equal(project.picker.isOpen(), true);
+    }
+
+    let liveTrust = true;
+    const stale = make(managementOption({ saveDefaults: true, canSaveWorkspace: () => liveTrust }));
+    const staleLines = painted(stale.picker, 8), staleY = staleLines.findIndex((line) => line === "│GW Tab│");
+    liveTrust = false;
+    stale.picker.handleMouse(mouse("click", staleLines[staleY].indexOf("W"), staleY));
+    assert.deepEqual(stale.result, [], "tight targets cannot reuse trust from the last paint");
+  }
+});
+
+test("tiny compact and effort rows keep a visible slot-navigation hint", () => {
+  const list = fixture({ rows: 8, pointer: true, presets: [effortPreset()], efforts: effortCaps,
+    delegation: delegationState().option, management: savingOption() });
+  assert(painted(list.picker, 8).some((line) => line.includes("Tab")), painted(list.picker, 8).join("\n"));
+  const effort = fixture({ rows: 7, pointer: true, activeName: "alpha", presets: [effortPreset()],
+    efforts: effortCaps, management: savingOption() });
+  effort.picker.handleInput("e");
+  const effortLines = painted(effort.picker, 8).join("\n");
+  assert(effortLines.includes("↑"), effortLines);
+  assert(effortLines.includes("G") && effortLines.includes("W"), effortLines);
+});
+
+test("compact delegation/save layouts start at d5 and Tab reaches d1 through their slot window", () => {
+  for (const saving of [false, true]) for (const width of [18, 34, 76, 120]) {
+    const h = fixture({ rows: 8, pointer: true, presets: [effortPreset()], efforts: effortCaps,
+      delegation: delegationState().option, management: saving ? savingOption() : managementOption({ models: true }) });
+    let lines = painted(h.picker, width);
+    assert(lines.some((line) => line.includes("Tab")), `${width}: ${lines.join("\n")}`);
+    assert(lines.length <= 7);
+    assert(lines.some((line) => line.includes("›d5")), "hardest slot is selected first");
+    for (let index = 0; index < 4; index++) h.picker.handleInput("\t");
+    lines = painted(h.picker, width);
+    assert(lines.some((line) => line.includes("›d1")), "easiest slot is reachable without changing preset");
+    assert.equal(h.picker.selection(), "alpha");
+    if (!saving && width >= 34) {
+      const y = lines.findIndex((line) => line.includes("›d1") && line.includes("provider/"));
+      assert(y >= 0, lines.join("\n"));
+      h.picker.handleMouse(mouse("click", lines[y].indexOf("provider/"), y));
+      assert.deepEqual(h.result, [{ action: "edit-model", name: "alpha", slot: "d1" }]);
+    }
+  }
+});
+
+test("slot rows show the auto-preview effective level and no config map", () => {
   const resolved = fixture({ presets: [effortPreset("alpha")], activeName: "alpha", efforts: effortCaps });
   const lines = painted(resolved.picker, 76);
   const light = lines.find((line) => line.includes("provider/alpha-light"));
@@ -1373,17 +1749,17 @@ test("slot rows show only the current effective level, never the compatibility m
   assert.match(light, /high\*/, "a fixed policy keeps its raw value and session star");
   assert.match(standard, /medium/, "inherit resolves through the live capabilities");
   assert.match(strong, /[^a-z]low[^a-z]*│?/, "a supported fixed level shows as-is");
-  assert.doesNotMatch(lines.join("\n"), /think |→/, "no compatibility map is printed anywhere");
+  assert.doesNotMatch(lines.join("\n"), /think |→/, "auto-preview prints no config map");
   assert(!lines.some((line) => line.includes("minimal")), "other levels never leak into the row");
 
   // A fixed level the live metadata does not support: raw value, marked, never clamped.
   const unsupported = fixture({ presets: [effortPreset("alpha")], activeName: "alpha", efforts: (_preset, slot) =>
-    slot === "light" ? { levels: ["off", "low", "medium"], inherited: "medium" } : effortCaps(_preset, slot) });
+    slot === "d1" ? { levels: ["off", "low", "medium"], inherited: "medium" } : effortCaps(_preset, slot) });
   assert.match(painted(unsupported.picker, 76).find((line) => line.includes("provider/alpha-light")), /high!/);
 
   // An inherit that cannot resolve says unavailable; no level is invented.
   const unavailable = fixture({ presets: [effortPreset("alpha")], activeName: "alpha", efforts: (_preset, slot) =>
-    slot === "standard" ? { levels: ["off", "low"], inheritError: "Parent thinking unavailable" } : effortCaps(_preset, slot) });
+    slot === "d3" ? { levels: ["off", "low"], inheritError: "Parent thinking unavailable" } : effortCaps(_preset, slot) });
   assert.match(painted(unavailable.picker, 76).find((line) => line.includes("provider/alpha-standard")), /unavailable/);
 
   // Legacy read-only hosts keep their configured policy instead of inventing a resolution.
@@ -1393,8 +1769,9 @@ test("slot rows show only the current effective level, never the compatibility m
   assert.doesNotMatch(legacyLines.find((line) => line.includes("provider/alpha-light")), /!|unavailable/);
 });
 
-test("digits 1/2/3 route the highlighted preset's slot models on the list page only", () => {
-  for (const [key, slot] of [["1", "light"], ["2", "standard"], ["3", "strong"]]) {
+test("digits 1–5 route the highlighted preset's independent slot models on the list page only", () => {
+  for (const [index, slot] of strengths.entries()) {
+    const key = String(index + 1);
     const routed = fixture({ management: managementOption({ models: true }) });
     routed.picker.render(76);
     routed.picker.handleInput(key);
@@ -1425,14 +1802,14 @@ test("painted model text is the only click target; labels, values and ellipses a
     { screenX: 40, screenY: 12 })); // the space before the model: not a target
   assert.deepEqual(full.result, []);
   full.picker.handleMouse(mouse("click", lines[y].indexOf("provider/beta-light"), y, { screenX: 40, screenY: 12 }));
-  assert.deepEqual(full.result, [{ action: "edit-model", name: "beta", slot: "light", position: { row: 12, col: 40 } }],
+  assert.deepEqual(full.result, [{ action: "edit-model", name: "beta", slot: "d1", position: { row: 12, col: 40 } }],
     "a model click routes the slot with the pointer's absolute position");
 
   const noScreen = fixture({ pointer: true, management: managementOption({ models: true }) });
   lines = painted(noScreen.picker, 76);
   y = lines.findIndex((line) => line.includes("provider/beta-standard"));
   noScreen.picker.handleMouse(mouse("click", lines[y].indexOf("provider/beta-standard"), y));
-  assert.deepEqual(noScreen.result, [{ action: "edit-model", name: "beta", slot: "standard" }],
+  assert.deepEqual(noScreen.result, [{ action: "edit-model", name: "beta", slot: "d3" }],
     "without screen coordinates the route carries no position, so the host centers its popover");
 
   const value = fixture({ pointer: true, management: managementOption({ models: true }) });
@@ -1449,7 +1826,7 @@ test("painted model text is the only click target; labels, values and ellipses a
   assert(lines[y].includes("…"), "the model text is clipped at this width");
   const start = lines[y].indexOf("provider/");
   clipped.picker.handleMouse(mouse("click", start, y, { screenX: 7, screenY: 4 }));
-  assert.deepEqual(clipped.result, [{ action: "edit-model", name: "beta", slot: "light", position: { row: 4, col: 7 } }],
+  assert.deepEqual(clipped.result, [{ action: "edit-model", name: "beta", slot: "d5", position: { row: 4, col: 7 } }],
     "the painted prefix is a target");
   clipped.result.length = 0;
   clipped.picker.handleMouse(mouse("click", start + 9, y, { screenX: 20, screenY: 4 })); // the ellipsis column
@@ -1458,10 +1835,10 @@ test("painted model text is the only click target; labels, values and ellipses a
   // The compact layout's slot rows are the same targets.
   const compact = fixture({ pointer: true, management: managementOption({ models: true }), rows: 10 });
   lines = painted(compact.picker, 60);
-  y = lines.findIndex((line) => line.includes("provider/beta-light"));
+  y = lines.findIndex((line) => line.includes("provider/beta-strong"));
   assert(y > 0, lines.join("\n"));
-  compact.picker.handleMouse(mouse("click", lines[y].indexOf("provider/beta-light"), y, { screenX: 2, screenY: 30 }));
-  assert.deepEqual(compact.result, [{ action: "edit-model", name: "beta", slot: "light", position: { row: 30, col: 2 } }]);
+  compact.picker.handleMouse(mouse("click", lines[y].indexOf("provider/beta-strong"), y, { screenX: 2, screenY: 30 }));
+  assert.deepEqual(compact.result, [{ action: "edit-model", name: "beta", slot: "d5", position: { row: 30, col: 2 } }]);
 
   // Read-only hosts keep the old behavior: model text never routes.
   const readOnly = fixture({ pointer: true, management: managementOption() });
@@ -1474,30 +1851,29 @@ test("painted model text is the only click target; labels, values and ellipses a
   const minimum = fixture({ pointer: true, management: managementOption({ models: true }) });
   lines = painted(minimum.picker, 24);
   assert(!lines.join("\n").includes("provider/"), "no model text survives this width");
-  minimum.picker.handleMouse(mouse("click", 11, lines.findIndex((line) => line.includes("light:"))));
+  minimum.picker.handleMouse(mouse("click", 11, lines.findIndex((line) => line.includes("d1:"))));
   assert.deepEqual(minimum.result, []);
 });
 
 test("the controls hint mentions the model digits only while the gate and the room allow it", () => {
   const wide = fixture({ management: managementOption({ models: true }) });
-  assert.match(painted(wide.picker, 120).join("\n"), /1\/2\/3 model/);
-  assert.match(painted(wide.picker, 76).join("\n"), / · 123/, "a shorter hint appears when the full one cannot fit");
+  assert.match(painted(wide.picker, 120).join("\n"), /1\/2\/3\/4\/5 model/);
+  assert.match(painted(wide.picker, 76).join("\n"), / · 12345/, "a shorter hint appears when the full one cannot fit");
   const narrow = painted(fixture({ management: managementOption({ models: true }) }).picker, 26);
-  assert.doesNotMatch(narrow.join("\n"), /123/, "no hint without room, but the keys stay reachable");
+  assert.doesNotMatch(narrow.join("\n"), /12345/, "no hint without room, but the keys stay reachable");
   const off = fixture({ management: managementOption({ models: true }), presets: [offPreset(), preset("alpha")], activeName: "alpha" });
   off.picker.render(76);
   off.picker.handleInput("\u001b[A"); // highlight off
-  assert.doesNotMatch(painted(off.picker, 120).join("\n"), /1\/2\/3 model| · 123/, "off highlights no model hint");
+  assert.doesNotMatch(painted(off.picker, 120).join("\n"), /1\/2\/3\/4\/5 model| · 12345/, "off highlights no model hint");
   const legacy = fixture({ management: managementOption() });
-  assert.doesNotMatch(painted(legacy.picker, 120).join("\n"), /1\/2\/3 model| · 123/, "no gate, no hint");
+  assert.doesNotMatch(painted(legacy.picker, 120).join("\n"), /1\/2\/3\/4\/5 model| · 12345/, "no gate, no hint");
 });
 
 test("a CJK model clipped at a wide-character boundary never makes the ellipsis or padding clickable", () => {
-  const cjk = { ...preset("cjk"), models: { light: `fixture/${"中".repeat(10)}`,
-    standard: "fixture/cjk-standard", strong: "fixture/cjk-strong" } };
+  const cjk = { ...preset("cjk"), models: { ...preset("cjk").models, d1: `fixture/${"中".repeat(10)}` } };
   const clipped = fixture({ pointer: true, management: managementOption({ models: true }), presets: [cjk], activeName: "cjk" });
   const lines = painted(clipped.picker, 38);
-  const y = lines.findIndex((line) => line.includes("fixture/"));
+  const y = lines.findIndex((line) => /d1\s+fixture\//.test(line));
   assert(y > 0, lines.join("\n"));
   const line = lines[y];
   assert(line.includes("…"), "the model is clipped at this width");
@@ -1508,7 +1884,7 @@ test("a CJK model clipped at a wide-character boundary never makes the ellipsis 
   // The dropped wide character leaves the fitted row shorter than its room:
   // only real model columns may answer, not the ellipsis or the padding.
   clipped.picker.handleMouse(mouse("click", modelStart, y, { screenX: 0, screenY: 5 }));
-  assert.deepEqual(clipped.result, [{ action: "edit-model", name: "cjk", slot: "light", position: { row: 5, col: 0 } }],
+  assert.deepEqual(clipped.result, [{ action: "edit-model", name: "cjk", slot: "d1", position: { row: 5, col: 0 } }],
     "a painted model character is a target");
   clipped.result.length = 0;
   clipped.picker.handleMouse(mouse("click", ellipsis, y));

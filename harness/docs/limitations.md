@@ -387,14 +387,34 @@ approval and publication require separate authorization and scoped evidence.
 Presets validate local routing configuration and current SDK metadata, not
 provider credentials or remote availability. The required
 `harness-presets.json` base catalogue remains separate and is never overwritten
-by the UI. Optional version-1 scoped preferences live in
+by the UI. It requires version 3 with five independent `slots.d1`–`slots.d5`
+objects containing `model` and optional `effort`. Any per-slot `thinking` field
+is rejected, including an empty `thinking: {}` from the intermediate unpublished
+editor, as are flat preset-level model/effort/thinking tables. Inherited
+thinking uses current SDK metadata: identity first, otherwise the nearest
+higher supported enabled level capped at the highest enabled level. It never
+crosses the off boundary and does not guarantee equivalent compute or cost.
+A non-reasoning model that supports only `off` fails `inherit` of an enabled
+parent on purpose; set fixed `effort` to `off` for that slot if that is intended.
+Empty or unknown-only capability metadata is not support for `off` and does not
+automatically disable enabled thinking. Fixed efforts remain strict. Effort
+override tables remain separate from these definitions.
+Optional version-2 scoped preferences live in
 `<agentDir>/extensions/pi-alehouse/config.json` and, only for a trusted project,
 `<current-cwd>/.pi/extensions/pi-alehouse/config.json`; workspace lookup does
 not search for a Git root. Fresh sessions use preferences before catalogue
 defaults, while valid existing branch records keep precedence. Saved names
 resolve against the current base catalogue directory, except for custom model
 definitions explicitly stored in preferences/session records. Existing branch
-records are evidence, not immutable catalogue pins.
+records are evidence, not immutable catalogue pins. Older configuration versions
+and three-slot definitions/effort overrides are rejected, including those in
+restored session selections, as is any per-slot `thinking` field. No
+compatibility expansion or automatic file migration is performed. Already-written
+catalogue and preference configuration files must be corrected explicitly.
+Amending or squashing the unpublished cutover does not repair those local files.
+If a restored selection contains a retired definition, start a fresh session or
+fork from before that invalid record. Historical Run journals retain their old
+slots and digests as display-only data and are never rewritten.
 
 Startup/restoration never writes preferences and abandoned UI drafts are not
 saved. Explicit persistent-scope user actions queue leaf patches; ordinary

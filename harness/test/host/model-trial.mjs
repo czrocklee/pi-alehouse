@@ -112,10 +112,9 @@ assertThinkingSupported(catalogModel, parentThinking, ai.getSupportedThinkingLev
 // does not send max_output_tokens. Children keep the catalogue metadata.
 const model = controlled ? catalogModel : { ...catalogModel, maxTokens: 2048 };
 const trialPreset = { name: controlled ? "controlled-trial" : "authorized-trial", version: "v1",
-  digest: digest(`trial:${modelSpec}`), models: { light: modelSpec, standard: modelSpec, strong: modelSpec },
-  thinking: { light: {}, standard: {}, strong: {} },
-  effort: { light: "inherit", standard: "inherit", strong: "inherit" },
-  effort_defaults: { light: "inherit", standard: "inherit", strong: "inherit" }, effort_overrides: {} };
+  digest: digest(`trial:${modelSpec}`), models: { d1: modelSpec, d2: modelSpec, d3: modelSpec, d4: modelSpec, d5: modelSpec },
+  effort: { d1: "inherit", d2: "inherit", d3: "inherit", d4: "inherit", d5: "inherit" },
+  effort_defaults: { d1: "inherit", d2: "inherit", d3: "inherit", d4: "inherit", d5: "inherit" }, effort_overrides: {} };
 const permissionPath = permissionEntry;
 const parentBus = sdk.createEventBus();
 const parentManager = sdk.SessionManager.create(cwd, sessionDirectory);
@@ -388,7 +387,7 @@ try {
       }
 
       const result = (id) => resultById(messages, id);
-      if (!callById(messages, "create-a")) return action("create-a", "agent_spawn", { agent: "worker", prompt: "ASK_FACTOR", label: "calculate the source product", profile: "reader", difficulty: 3, wait_ms: 60000 });
+      if (!callById(messages, "create-a")) return action("create-a", "agent_spawn", { agent: "worker", prompt: "ASK_FACTOR", label: "calculate the source product", profile: "reader", reasoning_difficulty: 3, wait_ms: 60000 });
       const publications = messages.filter((message) => message.role === "toolResult")
         .map((message) => parseJson(messageText(message)));
       const question = publications.flatMap((value) => value?.agents ?? [])

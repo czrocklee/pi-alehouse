@@ -141,7 +141,7 @@ do not keep an SDK execution environment alive.
 
 ## Task fields, not roles
 
-`agent_spawn` requires `agent`, `prompt`, `profile` and `difficulty`; `agent_run`
+`agent_spawn` requires `agent`, `prompt`, `profile` and `reasoning_difficulty`; `agent_run`
 requires `agent` and `prompt`. Both take optional `label` and `dispatch`. `agent_send`
 joins/steers the task bound when called; it never starts a continuation.
 `agent_answer` takes `agent`, the exact pending `question_id`, and `answer`,
@@ -166,16 +166,18 @@ renamed or removed.
 
 ## Routing and context vocabulary
 
-The parent tool caller picks `profile` and required `difficulty` (integer 1–5)
-for a new Agent. The fixed mapping is 1–2 → `light`, 3 → `standard`, and 4–5 →
-`strong`; these remain preset routing slots, while difficulty is the immutable
-Agent setting. The user chooses the parent model/thinking and active worker
+The parent tool caller picks `profile` and required `reasoning_difficulty`
+(integer 1–5, easiest to hardest)
+for a new Agent. The fixed mapping is one-to-one, 1 → `d1` through 5 → `d5`;
+each preset slot independently selects a model and effort policy, while
+difficulty is the immutable Agent setting. Slots may share models. The user chooses the parent model/thinking and active worker
 preset and per-slot effort policy. The harness resolves one exact registered
 worker model and either a fixed effort or inherited parent thinking (captured
-at submission, with identity or an explicit compatibility map). Session effort
+at submission, with identity or the automatic supported-level rule; inheritance
+never crosses the off boundary). Session effort
 overrides are operator configuration, not model tool arguments. Reuse preserves
 all accepted settings and does not accept or re-score difficulty.
-Callers may choose only profile/difficulty, never a concrete worker model or
+Callers may choose only profile/reasoning_difficulty, never a concrete worker model or
 thinking level, cwd, owner, generation, session path, or history path.
 
 `inherit_context: true` copies a bounded (64 KiB) **text** snapshot only.  It is

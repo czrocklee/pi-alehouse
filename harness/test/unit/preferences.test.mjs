@@ -5,19 +5,25 @@ import { join } from "node:path";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, TuiAltScreen, visibleWidth } from "@earendil-works/pi-tui";
-import { SettingsStore } from "../../../lib/settings-store.mjs";
-import { PresetRouter } from "../../dist/routing.js";
+import { SettingsStore, validateSettings } from "../../../lib/settings-store.mjs";
+import { PresetRouter, strengths } from "../../dist/routing.js";
 import { restorePresetRouter, restorePresetDefinitions } from "../../dist/extension.js";
 import { PreferencesControls, stageWorkerSelection } from "../../dist/ui/preferences-controls.js";
 import { createPresetModelSelector } from "../../dist/runtime/preset-model-selector.js";
 import { PresetModelPopover } from "../../dist/ui/preset-model-popover.js";
 
-const team = (model = "worker") => ({ version: "v1", models: { light: `fixture/${model}`, standard: `fixture/${model}`, strong: `fixture/${model}` }, effort: { light: "low", standard: "inherit", strong: "high" } });
+const defaultEfforts = { d1: "low", d2: "low", d3: "inherit", d4: "high", d5: "high" };
+const team = (model = "worker") => ({ version: "v1", slots: Object.fromEntries(strengths.map((slot) =>
+  [slot, { model: `fixture/${model}`, effort: defaultEfforts[slot] }])) });
+const allSlots = (value) => Object.fromEntries(strengths.map((slot) => [slot, value]));
+const allSlotDefinitions = (model, effort) => Object.fromEntries(strengths.map((slot) =>
+  [slot, { model, ...(effort === undefined ? {} : { effort }) }]));
+const descendingSlots = ["d5", "d4", "d3", "d2", "d1"];
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "alehouse-preferences-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const path = join(root, "harness-presets.json");
-  const config = { version: 2, defaultPreset: "off", presets: { team: team() } };
+  const config = { version: 3, defaultPreset: "off", presets: { team: team() } };
   await writeFile(path, JSON.stringify(config));
   const store = new SettingsStore({ agentDir: join(root, "agent"), cwd: join(root, "work"), projectTrusted: true });
   return { root, path, store, config, router: new PresetRouter(path), after: (cleanup) => t.after(cleanup) };
@@ -25,36 +31,39 @@ async function fixture(t) {
 
 test("preferences seed fresh selections; historical effort/name-only records keep their original meaning", async (t) => {
   const f = await fixture(t);
-  const prefs = { version: 1, preset: "team", effort: { team: { light: "max", strong: null } } };
+  const prefs = { version: 2, preset: "team", effort: { team: { d1: "max", d5: null } } };
   const fresh = restorePresetRouter(f.path, [], prefs).current();
   assert.equal(fresh.name, "team");
-  assert.deepEqual(fresh.effort_overrides, { light: "max" });
-  assert.equal(fresh.effort.strong, "high");
+  assert.deepEqual(fresh.effort_overrides, { d1: "max" });
+  assert.equal(fresh.effort.d5, "high");
   for (const entries of [[{ name: "team" }], [{ name: "team", effort_overrides: {} }]]) {
     const restored = restorePresetRouter(f.path, entries, prefs).current();
     assert.deepEqual(restored.effort_overrides, {});
-    assert.equal(restored.effort.light, "low");
+    assert.equal(restored.effort.d1, "low");
   }
-  const restored = restorePresetRouter(f.path, [{ name: "team", effort_overrides: { strong: "off" } }, { name: "team" }], prefs).current();
-  assert.deepEqual(restored.effort_overrides, { strong: "off" }, "later legacy name-only records retain earlier session overrides");
+  const restored = restorePresetRouter(f.path, [{ name: "team", effort_overrides: { d5: "off" } }, { name: "team" }], prefs).current();
+  assert.deepEqual(restored.effort_overrides, { d5: "off" }, "later name-only records retain earlier session overrides");
   assert.equal(restorePresetRouter(f.path, [{ name: "off" }], prefs).current().name, "off");
-  assert.throws(() => restorePresetRouter(f.path, [], { version: 1, preset: "removed" }), { code: "PRESET_NOT_FOUND" });
+  assert.throws(() => restorePresetRouter(f.path, [], { version: 2, preset: "removed" }), { code: "PRESET_NOT_FOUND" });
 });
 
 test("custom model preset candidates are transactional, immutable to callers and survive branch restoration", async (t) => {
   const f = await fixture(t), before = await readFile(f.path, "utf8");
   const definitions = { custom: team("other") };
   const candidate = f.router.prepare(definitions);
-  definitions.custom.models.light = "mutated/no";
+  definitions.custom.slots.d1.model = "mutated/no";
   assert(!f.router.names().includes("custom"), "preparation alone must not publish");
-  assert.equal(f.router.inspect(candidate).find((x) => x.name === "custom").models.light, "fixture/other");
+  assert.equal(f.router.inspect(candidate).find((x) => x.name === "custom").models.d1, "fixture/other");
   assert.throws(() => f.router.apply(candidate, "custom", () => { throw new Error("audit failed"); }), /audit failed/);
   assert(!f.router.names().includes("custom"));
   const records = [];
   f.router.apply(candidate, "custom", (selection) => records.push({ ...selection, custom_presets: { custom: team("other") } }));
-  assert.equal(f.router.current().models.light, "fixture/other");
-  assert.equal(restorePresetRouter(f.path, records).current().models.light, "fixture/other");
+  assert.equal(f.router.current().models.d1, "fixture/other");
+  assert.equal(restorePresetRouter(f.path, records).current().models.d1, "fixture/other");
   assert.deepEqual(restorePresetDefinitions(records), { custom: team("other") });
+  assert.throws(() => restorePresetDefinitions([{ custom_presets: { legacy: { version: "v1",
+    models: allSlots("fixture/worker"), effort: { d3: "high" }, thinking: { d3: { high: "high" } } } } }]),
+  { code: "INVALID_SAVED_PRESETS" }, "retired flat definitions are rejected rather than expanded or aliased");
   assert.throws(() => restorePresetDefinitions([{ custom_presets: { off: team() } }]), { code: "INVALID_SAVED_PRESETS" });
   assert.equal(await readFile(f.path, "utf8"), before, "catalogue file is never rewritten");
   const old = f.router.prepare({ custom: team("old") });
@@ -62,20 +71,48 @@ test("custom model preset candidates are transactional, immutable to callers and
   assert.throws(() => f.router.commit(old, "custom"), { code: "STALE_PRESET_SELECTION" });
 });
 
+test("saved thinking fields, including editor-generated empty maps, fail restoration without mutations", { timeout: 5000 }, async (t) => {
+  const f = await fixture(t), before = await readFile(f.path, "utf8"), live = f.router.current();
+  const definitions = [{}, null, { low: "high" }].map((thinking) => {
+    const definition = team();
+    definition.slots.d3.thinking = thinking;
+    return definition;
+  });
+  // The unpublished intermediate editor removed only the changed slot's map.
+  const edited = team();
+  for (const slot of strengths) if (slot !== "d3") edited.slots[slot].thinking = {};
+  definitions.push(edited);
+  for (const definition of definitions) {
+    const records = [{ name: "team", custom_presets: { team: definition } }], original = structuredClone(records);
+    for (const restore of [() => restorePresetDefinitions(records), () => restorePresetRouter(f.path, records)]) {
+      assert.throws(restore, (error) => {
+        assert.equal(error.code, "INVALID_SAVED_PRESETS");
+        assert.match(error.details.resolution, /including editor-generated empty thinking: \{\}/);
+        assert.match(error.details.resolution, /Correct configuration files explicitly/);
+        assert.match(error.details.resolution, /fresh session or fork/);
+        assert.match(error.details.resolution, /Do not rewrite historical journal records/);
+        return true;
+      });
+    }
+    assert.deepEqual(records, original, "restoration must not remove or convert a recorded thinking field");
+    assert.deepEqual(f.router.current(), live);
+    assert.deepEqual(f.store.pending(), []);
+  }
+  assert.equal(await readFile(f.path, "utf8"), before);
+});
+
 test("workspace preset definitions replace by name, and explicit branch edits override startup definitions", async (t) => {
   const f = await fixture(t);
-  const prefs = { version: 1, preset: "team", presets: { team: team("global") } };
-  assert.equal(restorePresetRouter(f.path, [], prefs).current().models.strong, "fixture/global");
+  const prefs = { version: 2, preset: "team", presets: { team: team("global") } };
+  assert.equal(restorePresetRouter(f.path, [], prefs).current().models.d5, "fixture/global");
   const records = [{ name: "team", custom_presets: { team: team("session") } }];
-  assert.equal(restorePresetRouter(f.path, records, prefs).current().models.strong, "fixture/session");
+  assert.equal(restorePresetRouter(f.path, records, prefs).current().models.d5, "fixture/session");
 });
 
 test("routing accepts bounded global, workspace and session definitions together without enlarging stored records", async (t) => {
   const f = await fixture(t);
-  const definitions = (prefix) => Object.fromEntries(Array.from({ length: 400 }, (_unused, index) =>
-    [`${prefix}${index}`, { version: "v".repeat(64), models: {
-      light: `fixture/${"m".repeat(100)}`, standard: `fixture/${"m".repeat(100)}`, strong: `fixture/${"m".repeat(100)}`,
-    } }]));
+  const definitions = (prefix) => Object.fromEntries(Array.from({ length: 270 }, (_unused, index) =>
+    [`${prefix}${index}`, { version: "v".repeat(64), slots: allSlotDefinitions(`fixture/${"m".repeat(100)}`) }]));
   f.store.stage("global", ["presets"], definitions("global"));
   f.store.stage("workspace", ["presets"], definitions("workspace"));
   assert(f.store.flush().every((result) => !result.error));
@@ -83,7 +120,7 @@ test("routing accepts bounded global, workspace and session definitions together
   const records = [{ name: "session0", custom_presets: definitions("session") }];
   const router = restorePresetRouter(f.path, records, preferences);
   assert.equal(router.current().name, "session0");
-  assert.equal(router.names().length, 1202, "base + three custom layers + off");
+  assert.equal(router.names().length, 812, "base + three custom layers + off");
   assert(Buffer.byteLength(JSON.stringify(router.customPresets())) > 512 * 1024);
   assert.equal(router.prepare().names.length, router.names().length);
   assert.throws(() => restorePresetDefinitions([{ custom_presets: router.customPresets() }]), { code: "INVALID_SAVED_PRESETS" },
@@ -93,20 +130,20 @@ test("routing accepts bounded global, workspace and session definitions together
 test("applied changes stage only explicit fields; reset masks pins and Off preserves all effort preferences", async (t) => {
   const { router, store } = await fixture(t);
   const off = router.current();
-  const first = router.apply(router.prepare(), "team", () => {}, { light: "high" });
+  const first = router.apply(router.prepare(), "team", () => {}, { d1: "high" });
   stageWorkerSelection(store, first, off, true);
   assert.deepEqual(store.pending(), [], "Session is the initial scope");
   store.setScope("workspace");
   stageWorkerSelection(store, first, off, true);
-  assert.deepEqual(store.get("workspace"), { version: 1, preset: "team", effort: { team: { light: "high" } } });
+  assert.deepEqual(store.get("workspace"), { version: 2, preset: "team", effort: { team: { d1: "high" } } });
   store.flush();
   const reset = router.apply(router.prepare(), "team", () => {}, {});
   stageWorkerSelection(store, reset, first, true, first.effort_overrides);
-  assert.equal(store.get("workspace").effort.team.light, null);
+  assert.equal(store.get("workspace").effort.team.d1, null);
   const next = router.apply(router.prepare(), "off", () => {});
   stageWorkerSelection(store, next, reset, false);
   assert.equal(store.get("workspace").preset, "off");
-  assert.equal(store.get("workspace").effort.team.light, null);
+  assert.equal(store.get("workspace").effort.team.d1, null);
 });
 
 function controls(f, answers = [], confirmations = []) {
@@ -134,7 +171,7 @@ test("scope consent stages nothing; explicit remember previews and queues a snap
   const remember = controls(f, ["Remember current worker settings", "global"], [true]);
   await remember.ui.open();
   assert.equal(f.store.scope, "workspace", "one-shot remember never changes the ongoing scope");
-  assert.deepEqual(f.store.get("global").effort.team, { light: null, standard: null, strong: null });
+  assert.deepEqual(f.store.get("global").effort.team, allSlots(null));
   assert.deepEqual(f.store.get("global").delegation, { mode: "lead", eagerness: "eager" });
   await assert.rejects(readFile(f.store.paths.global), { code: "ENOENT" });
   f.store.seal();
@@ -172,17 +209,81 @@ test("discard only drops pending persistence, while no-UI and untrusted workspac
 
 test("preset editor creates a physical model preset only after confirmation and rejects stale publication", async (t) => {
   const f = await fixture(t);
-  const c = controls(f, ["custom", "fixture/worker", "inherit", "fixture/worker", "inherit", "fixture/worker", "inherit"], [true]);
+  const c = controls(f, ["custom", ...strengths.flatMap(() => ["fixture/worker", "inherit"])], [true]);
   await c.ui.editPreset();
   assert.equal(c.published.length, 1);
   assert.equal(c.published[0].name, "custom");
-  assert.deepEqual(c.published[0].definition.models, team().models);
-  assert.deepEqual(c.published[0].definition.effort, { light: "inherit", standard: "inherit", strong: "inherit" });
+  assert.deepEqual(c.published[0].definition.slots, allSlotDefinitions("fixture/worker", "inherit"));
   assert.deepEqual(f.store.pending(), [], "the editor only returns an audited commit request");
-  const stale = controls(f, ["other", "fixture/worker", "inherit", "fixture/worker", "inherit", "fixture/worker", "inherit"]);
+  const stale = controls(f, ["other", ...strengths.flatMap(() => ["fixture/worker", "inherit"])]);
   stale.ctx.ui.confirm = async () => { f.router.select("team"); return true; };
   await assert.rejects(stale.ui.editPreset(), { code: "STALE_PRESET_SELECTION" });
   assert.equal(stale.published.length, 0);
+});
+
+for (const name of [undefined, "team"]) test(`preset ${name ? "editing" : "creation"} pairs model/effort dialogs d5 to d1 without changing slot identities`, async (t) => {
+  const f = await fixture(t), policies = { d1: "off", d2: "low", d3: "medium", d4: "high", d5: "inherit" };
+  const answers = descendingSlots.flatMap((slot) => [`fixture/${slot}`, policies[slot]]);
+  const c = controls(f, [...(name ? [] : ["custom"]), ...answers], [true]);
+  c.ctx.modelRegistry.getAll = () => strengths.map((slot) => ({ provider: "fixture", id: slot, api: "fixture", reasoning: true }));
+  await c.ui.editPreset(name);
+  const target = name ?? "custom";
+  assert.deepEqual(c.selectPrompts.map(({ prompt }) => prompt), descendingSlots.flatMap((slot) =>
+    [`${target}: ${slot} model (new Agents only)`, `${target}: ${slot} default effort`]));
+  assert.equal(c.published.length, 1);
+  assert.deepEqual(c.published[0].definition.slots, Object.fromEntries(strengths.map((slot) =>
+    [slot, { model: `fixture/${slot}`, effort: policies[slot] }])), "each effort stays with the chosen slot, not the visual index");
+  assert.deepEqual(strengths, ["d1", "d2", "d3", "d4", "d5"], "dialog sequencing must not mutate canonical routing order");
+  assert.deepEqual(f.store.pending(), []);
+});
+
+test("preset effort dialogs reject unoffered policies and forged Keep choices before publication", async (t) => {
+  const f = await fixture(t), original = f.router.definition("team"), before = f.router.current();
+  for (const name of [undefined, "team"]) for (const policy of ["ultra", "high", "Keep high", "Keep inherit "]) {
+    const c = controls(f, [...(name ? [] : ["custom"]), "fixture/worker", policy], [true]);
+    await assert.rejects(c.ui.editPreset(name), { code: "THINKING_INCOMPATIBLE" }, `${policy} is not an offered effort choice`);
+    assert.deepEqual(c.published, []);
+    assert.deepEqual(c.confirmPrompts, [], "invalid policy never reaches Apply consent");
+    assert.deepEqual(f.store.pending(), []);
+    assert.deepEqual(f.router.definition("team"), original);
+    assert.deepEqual(f.router.current(), before);
+  }
+});
+
+test("slot-object creation, model edit, save and restoration keep external definitions separate from normalized snapshots", async (t) => {
+  const f = await fixture(t), records = [];
+  const created = controls(f, ["custom", ...descendingSlots.flatMap(() => ["fixture/worker", "inherit"])], [true]);
+  await created.ui.editPreset();
+  const first = created.published[0];
+  assert.deepEqual(Object.keys(first.definition).sort(), ["slots", "version"]);
+  assert.deepEqual(first.definition.slots, allSlotDefinitions("fixture/worker", "inherit"));
+  const overrides = { d1: "off", d5: "inherit" };
+  const audit = (definition) => (selection) => records.push({ ...selection, custom_presets: { custom: definition } });
+  f.router.apply(first.candidate, "custom", audit(first.definition), overrides);
+  const original = f.router.definition("custom");
+  const edited = controls(f, ["fixture/other"]);
+  edited.ctx.modelRegistry.getAll = () => ["worker", "other"].map((id) => ({ provider: "fixture", id, api: "fixture", reasoning: false }));
+  await edited.ui.editModel("custom", "d3");
+  const next = edited.published[0];
+  assertOnlySlotChanged(next.definition, original, "d3", "fixture/other");
+  f.router.apply(next.candidate, "custom", audit(next.definition), overrides);
+  const saving = controls(f, [], [true]);
+  await saving.ui.saveDefault("global");
+  const preferences = f.store.get("global");
+  assert.deepEqual(preferences.presets.custom, next.definition);
+  assert.deepEqual(preferences.effort.custom, { d1: "off", d2: null, d3: null, d4: null, d5: "inherit" });
+  assert.deepEqual(restorePresetDefinitions(records), { custom: next.definition });
+  for (const branch of [[], records]) {
+    const restored = restorePresetRouter(f.path, branch, preferences);
+    assert.deepEqual(restored.definition("custom"), { version: next.definition.version, slots: Object.fromEntries(strengths.map((slot) =>
+      [slot, { model: next.definition.slots[slot].model, effort: next.definition.slots[slot].effort ?? "inherit" }])) },
+    "definition projection normalizes optional effort and does not store thinking");
+    assert.equal(Object.hasOwn(restored.current(), "thinking"), false, "normalized snapshots drop thinking");
+    assert.deepEqual(restored.current().models, { ...allSlots("fixture/worker"), d3: "fixture/other" });
+    assert.deepEqual(restored.current().effort_defaults, allSlots("inherit"));
+    assert.deepEqual(restored.current().effort_overrides, overrides);
+  }
+  await assert.rejects(readFile(f.store.paths.global), { code: "ENOENT" }, "saving still queues instead of writing the definition immediately");
 });
 
 test("preset editor cancellation and duplicate/reserved names never modify catalogue", async (t) => {
@@ -206,10 +307,10 @@ test("preset editor cancellation and duplicate/reserved names never modify catal
 for (const scope of ["global", "workspace"]) test(`one-shot ${scope} saving remembers only applied worker settings without changing scope or writing files`, async (t) => {
   const f = await fixture(t);
   f.router = new PresetRouter(f.path, new Map(), { team: team("custom"), unused: team("unused") });
-  f.router.apply(f.router.prepare(), "team", () => {}, { light: "inherit", strong: "off" });
+  f.router.apply(f.router.prepare(), "team", () => {}, { d1: "inherit", d5: "off" });
   f.store.setScope(scope === "global" ? "workspace" : "global");
   f.store.stage(scope, ["approval"], "manual");
-  f.store.stage(scope, ["effort", "other", "light"], "high");
+  f.store.stage(scope, ["effort", "other", "d1"], "high");
   const before = f.router.current(), ongoingScope = f.store.scope, c = controls(f, [], [true]);
   await c.ui.saveDefault(scope);
   assert.equal(f.store.scope, ongoingScope);
@@ -219,9 +320,9 @@ for (const scope of ["global", "workspace"]) test(`one-shot ${scope} saving reme
   assert.equal(c.confirmPrompts.length, 1);
   assert(c.confirmPrompts[0].text.includes(f.store.paths[scope]), "the exact destination is confirmed");
   assert.match(c.confirmPrompts[0].text, /current applied worker settings.*not a highlighted preset, slider preview or live parent thinking/);
-  assert.deepEqual(f.store.get(scope), { version: 1, approval: "manual", preset: "team",
+  assert.deepEqual(f.store.get(scope), { version: 2, approval: "manual", preset: "team",
     delegation: { mode: "lead", eagerness: "eager" }, presets: { team: team("custom") },
-    effort: { other: { light: "high" }, team: { light: "inherit", standard: null, strong: "off" } } });
+    effort: { other: { d1: "high" }, team: { d1: "inherit", d2: null, d3: null, d4: null, d5: "off" } } });
   await assert.rejects(readFile(f.store.paths[scope]), { code: "ENOENT" });
   assert(c.notifications.some(({ text }) => text.includes(`${scope} on normal exit`)));
 });
@@ -239,7 +340,7 @@ for (const source of ["base", "custom"]) test(`saving a ${source} preset named t
   const saved = f.store.get("global");
   assert.equal(saved.preset, "toString");
   assert(Object.hasOwn(saved.effort, "toString"));
-  assert.deepEqual(saved.effort.toString, { light: null, standard: null, strong: null });
+  assert.deepEqual(saved.effort.toString, allSlots(null));
   assert.equal(Object.hasOwn(saved.presets ?? {}, "toString"), source === "custom");
   if (source === "custom") assert.deepEqual(saved.presets.toString, team("custom"));
   assert.deepEqual(Object.getOwnPropertyDescriptors(Object.prototype.toString), before, "built-in functions remain untouched");
@@ -247,7 +348,7 @@ for (const source of ["base", "custom"]) test(`saving a ${source} preset named t
 
 test("saving Off defaults preserves every effort and unrelated preference", async (t) => {
   const f = await fixture(t);
-  f.store.stage("global", ["effort", "team"], { light: "high", standard: "inherit", strong: null });
+  f.store.stage("global", ["effort", "team"], { d1: "high", d3: "inherit", d5: null });
   f.store.stage("global", ["approval"], "judge");
   const effort = f.store.get("global").effort, c = controls(f, [], [true]);
   await c.ui.saveDefault("global");
@@ -279,7 +380,7 @@ for (const change of ["preset", "effort", "definition", "delegation", "router", 
     const pending = f.store.pending(), c = controls(f);
     c.ctx.ui.confirm = async () => {
       if (change === "preset") f.router.select("off");
-      else if (change === "effort") f.router.apply(f.router.prepare(), "team", () => {}, { light: "off" });
+      else if (change === "effort") f.router.apply(f.router.prepare(), "team", () => {}, { d1: "off" });
       else if (change === "definition") f.router.commit(f.router.prepare({ team: team("new") }), "team");
       else if (change === "delegation") f.delegation = { mode: "manual", eagerness: "reserved" };
       else if (change === "router") f.router = new PresetRouter(f.path);
@@ -303,7 +404,7 @@ test("worker save confirmation owns one destination, not the shared future save 
   await c.ui.saveDefault("global");
   assert.equal(f.store.scope, "workspace");
   assert.equal(f.store.get("global").preset, "off");
-  assert.deepEqual(f.store.get("workspace"), { version: 1 });
+  assert.deepEqual(f.store.get("workspace"), { version: 2 });
 });
 
 test("one pending worker save owns its dialog and releases after cancellation", async (t) => {
@@ -319,22 +420,20 @@ test("one pending worker save owns its dialog and releases after cancellation", 
   answer(false); await saving;
   c.ctx.ui.confirm = async () => true;
   await c.ui.saveDefault("workspace");
-  assert.deepEqual(f.store.get("global"), { version: 1 });
+  assert.deepEqual(f.store.get("global"), { version: 2 });
   assert.equal(f.store.get("workspace").preset, "off");
 });
 
 function nearLimitPreferences(initial, spareBytes) {
   const document = { ...initial, presets: {} }, max = 256 * 1024;
   const bytes = () => Buffer.byteLength(JSON.stringify(document)) + 1;
-  const large = { version: "v".repeat(64), models: {
-    light: `fixture/${"m".repeat(248)}`, standard: `fixture/${"m".repeat(248)}`, strong: `fixture/${"m".repeat(248)}`,
-  } };
+  const large = { version: "v".repeat(64), slots: allSlotDefinitions(`fixture/${"m".repeat(248)}`) };
   let index = 0;
   while (bytes() < max) document.presets[`filler${index++}`] = structuredClone(large);
   let excess = bytes() - (max - spareBytes);
-  for (const body of Object.values(document.presets).slice(-2)) for (const slot of ["light", "standard", "strong"]) {
-    const cut = Math.min(excess, body.models[slot].length - "fixture/m".length);
-    body.models[slot] = body.models[slot].slice(0, body.models[slot].length - cut);
+  for (const body of Object.values(document.presets).slice(-2)) for (const slot of strengths) {
+    const cut = Math.min(excess, body.slots[slot].model.length - "fixture/m".length);
+    body.slots[slot].model = body.slots[slot].model.slice(0, body.slots[slot].model.length - cut);
     excess -= cut;
   }
   assert.equal(excess, 0);
@@ -343,7 +442,7 @@ function nearLimitPreferences(initial, spareBytes) {
 }
 
 test("worker snapshot preflight prevents partially queued saves at the single-file byte cap", async (t) => {
-  const f = await fixture(t), document = nearLimitPreferences({ version: 1 }, 30);
+  const f = await fixture(t), document = nearLimitPreferences({ version: 2 }, 30);
   f.store.stage("global", ["presets"], document.presets);
   f.router.select("team");
   const pending = f.store.pending(), c = controls(f, [], [true]);
@@ -353,8 +452,8 @@ test("worker snapshot preflight prevents partially queued saves at the single-fi
 });
 
 test("a final-fitting worker snapshot cannot partially stage an overflowing intermediate prefix", async (t) => {
-  const f = await fixture(t), document = nearLimitPreferences({ version: 1, preset: "a",
-    delegation: { mode: "manual", eagerness: "balanced" }, effort: { team: { light: null, standard: null, strong: null } } }, 5);
+  const f = await fixture(t), document = nearLimitPreferences({ version: 2, preset: "a",
+    delegation: { mode: "manual", eagerness: "balanced" }, effort: { team: allSlots(null) } }, 5);
   for (const [key, value] of Object.entries(document)) if (key !== "version") f.store.stage("global", [key], value);
   f.router.select("team");
   f.delegation = { mode: "supervisor", eagerness: "eager" };
@@ -371,7 +470,7 @@ test("toString effort preflight respects the byte cap and leaves built-ins and p
   f.config.presets.toString = team();
   await writeFile(f.path, JSON.stringify(f.config));
   f.router = new PresetRouter(f.path); f.router.select("toString");
-  const document = nearLimitPreferences({ version: 1, preset: "a", delegation: { mode: "lead", eagerness: "eager" } }, 30);
+  const document = nearLimitPreferences({ version: 2, preset: "a", delegation: { mode: "lead", eagerness: "eager" } }, 30);
   for (const [key, value] of Object.entries(document)) if (key !== "version") f.store.stage("global", [key], value);
   const pending = f.store.pending(), c = controls(f, [], [true]);
   await assert.rejects(c.ui.saveDefault("global"), /document exceeds/);
@@ -486,11 +585,11 @@ const paint = (entry, width = 100) => entry.component.render(width).map((line) =
 
 test("TUI slots pick through the native selector: titled, searchable, virtual-free, no default-setting path", async (t) => {
   const f = await fixture(t), before = await readFile(f.path, "utf8");
-  const c = tuiControls(f, { inputs: ["custom"], selects: ["inherit", "inherit", "inherit"], confirms: [true] });
+  const c = tuiControls(f, { inputs: ["custom"], selects: strengths.map(() => "inherit"), confirms: [true] });
   const editing = c.ui.editPreset();
   try {
     const light = await waitForPicker(c, 0);
-    assert.match(paint(light), /custom: light model · new Agents only; main unchanged/, "the wrapper carries its context title");
+    assert.match(paint(light), /custom: d5 model · new Agents only; main unchanged/, "the wrapper starts with the hardest slot");
     assert(!paint(light).includes("set as default"), "no save-as-default handler is offered");
     assert.equal(light.component.focused, false, "the wrapper is IME-focusable");
     light.component.focused = true;
@@ -509,24 +608,22 @@ test("TUI slots pick through the native selector: titled, searchable, virtual-fr
     for (const key of ["w", "o", "r", "k"]) light.component.handleInput(key);
     assert(paint(light).includes("worker"), "typing filters to the physical model");
     light.component.handleInput("\r");
-    const standard = await waitForPicker(c, 1);
-    assert.match(paint(standard), /custom: standard model · new Agents only; main unchanged/);
-    standard.component.handleInput("\r"); // no query: the first physical model
-    const strong = await waitForPicker(c, 2);
-    assert.match(paint(strong), /custom: strong model · new Agents only; main unchanged/);
-    strong.component.handleInput("\r");
+    for (let index = 1; index < strengths.length; index++) {
+      const slotPicker = await waitForPicker(c, index);
+      assert(paint(slotPicker).includes(`custom: ${descendingSlots[index]} model · new Agents only; main unchanged`));
+      slotPicker.component.handleInput("\r"); // no query: the first physical model
+    }
   } finally {
     for (const entry of c.pickers) entry.component.dispose?.();
   }
   await editing;
   assert.deepEqual(c.selectPrompts.map(({ prompt }) => prompt),
-    ["custom: light default effort", "custom: standard default effort", "custom: strong default effort"],
-    "the effort dialog still follows every native model choice");
+    descendingSlots.map((slot) => `custom: ${slot} default effort`),
+    "the effort dialog follows every native model choice in descending slot order");
   assert.deepEqual(c.selectPrompts[0].choices, ["Keep inherit", "inherit", "off"],
     "effort policies come from the selected model's metadata");
   assert.equal(c.published.length, 1);
-  assert.deepEqual(c.published[0].definition.models, { light: "fixture/worker", standard: "fixture/worker", strong: "fixture/worker" });
-  assert.deepEqual(c.published[0].definition.effort, { light: "inherit", standard: "inherit", strong: "inherit" });
+  assert.deepEqual(c.published[0].definition.slots, allSlotDefinitions("fixture/worker", "inherit"));
   assert.ok(c.state.refreshCalls.length >= 1, "the native selector keeps its automatic catalog refresh");
   assert.deepEqual(f.store.pending(), [], "the editor only returns an audited commit request");
   assert.equal(await readFile(f.path, "utf8"), before, "the catalogue file is never rewritten");
@@ -538,13 +635,14 @@ test("editing an existing preset preselects its current model in the native list
   const editing = c.ui.editPreset("team");
   const light = await waitForPicker(c, 0);
   const text = paint(light);
+  assert.match(text, /team: d5 model/, "C/edit starts at the hardest slot too");
   assert(text.includes("✓"), "the current model is marked");
   assert(text.indexOf("✓") < text.indexOf("worker"), "the current model leads the list");
   light.component.handleInput("\r"); // no query: Enter takes the preselected model
   const standard = await waitForPicker(c, 1);
   standard.component.handleInput("\u001b");
   await editing;
-  assert.deepEqual(c.selectPrompts.map(({ prompt }) => prompt), ["team: light default effort"]);
+  assert.deepEqual(c.selectPrompts.map(({ prompt }) => prompt), ["team: d5 default effort"]);
   assert.deepEqual(c.published, [], "the flow is cancelled at the next slot");
 });
 
@@ -622,12 +720,12 @@ test("a model that only the runtime snapshot knows fails fresh registry validati
 
 test("a catalog refresh that adds a physical model feeds fresh metadata into the effort dialog", async (t) => {
   const f = await fixture(t);
-  const c = tuiControls(f, { inputs: ["custom"], selects: ["high", "high", "high"], confirms: [true],
+  const c = tuiControls(f, { inputs: ["custom"], selects: strengths.map(() => "high"), confirms: [true],
     runtimeDouble: (models) => runtimeDouble({ models,
       onRefresh: (state) => { state.models.push(fresh); } }) });
   const editing = c.ui.editPreset();
   try {
-    for (const slot of [0, 1, 2]) {
+    for (const slot of [0, 1, 2, 3, 4]) {
       const picker = await waitForPicker(c, slot);
       await tick(3); // let the automatic refresh publish the new model
       for (const key of ["f", "r", "e", "s", "h"]) picker.component.handleInput(key);
@@ -640,9 +738,7 @@ test("a catalog refresh that adds a physical model feeds fresh metadata into the
   await editing;
   assert.deepEqual(c.selectPrompts[0].choices, ["Keep inherit", "inherit", "off", "minimal", "low", "medium", "high"],
     "effort policies follow the refreshed model's metadata");
-  assert.deepEqual(c.published[0].definition.models,
-    { light: "fixture/fresh", standard: "fixture/fresh", strong: "fixture/fresh" });
-  assert.deepEqual(c.published[0].definition.effort, { light: "high", standard: "high", strong: "high" });
+  assert.deepEqual(c.published[0].definition.slots, allSlotDefinitions("fixture/fresh", "high"));
 });
 
 test("a host runtime without the selector's four methods fails closed", async (t) => {
@@ -657,13 +753,11 @@ test("a host runtime without the selector's four methods fails closed", async (t
 test("rpc mode keeps the supported legacy list and never mounts the native picker", async (t) => {
   const f = await fixture(t);
   const c = tuiControls(f, { mode: "rpc", inputs: ["custom"],
-    selects: ["fixture/worker", "inherit", "fixture/worker", "inherit", "fixture/worker", "inherit"], confirms: [true] });
+    selects: strengths.flatMap(() => ["fixture/worker", "inherit"]), confirms: [true] });
   await c.ui.editPreset();
   assert.deepEqual(c.pickers, [], "no native component in rpc mode");
   assert.deepEqual(c.selectPrompts.map(({ prompt }) => prompt),
-    ["custom: light model (new Agents only)", "custom: light default effort",
-      "custom: standard model (new Agents only)", "custom: standard default effort",
-      "custom: strong model (new Agents only)", "custom: strong default effort"]);
+    descendingSlots.flatMap((slot) => [`custom: ${slot} model (new Agents only)`, `custom: ${slot} default effort`]));
   assert.equal(c.published.length, 1);
 });
 
@@ -676,7 +770,7 @@ const heavy = { provider: "fixture", id: "heavy", name: "Fixture Heavy", api: "f
 test("Tab toggles the native scope; scoped and all selections both reach the definition", async (t) => {
   const f = await fixture(t);
   const c = tuiControls(f, { registry: [worker, heavy, virtual], inputs: ["custom"],
-    selects: ["inherit", "inherit", "inherit"], confirms: [true],
+    selects: strengths.map(() => "inherit"), confirms: [true],
     scopedModels: [{ model: heavy, thinkingLevel: "high" }] });
   const editing = c.ui.editPreset();
   try {
@@ -700,15 +794,17 @@ test("Tab toggles the native scope; scoped and all selections both reach the def
     standard.component.handleInput("\t"); // all
     for (const key of ["w", "o", "r", "k"]) standard.component.handleInput(key);
     standard.component.handleInput("\r");
-    const strong = await waitForPicker(c, 2);
-    assert(paint(strong).includes("heavy") && !paint(strong).includes("worker"), "the scoped default returns");
-    strong.component.handleInput("\r"); // scoped: the heavy model itself
+    for (let index = 2; index < strengths.length; index++) {
+      const slotPicker = await waitForPicker(c, index);
+      assert(paint(slotPicker).includes("heavy") && !paint(slotPicker).includes("worker"), "the scoped default returns");
+      slotPicker.component.handleInput("\r"); // scoped: the heavy model itself
+    }
   } finally {
     for (const entry of c.pickers) entry.component.dispose?.();
   }
   await editing;
   assert.deepEqual(c.selectPrompts.map(({ prompt }) => prompt),
-    ["custom: light default effort", "custom: standard default effort", "custom: strong default effort"]);
+    descendingSlots.map((slot) => `custom: ${slot} default effort`));
   // Effort stays its own dialog: options follow each selected model's
   // metadata, never the scoped entry's thinkingLevel hint.
   assert.deepEqual(c.selectPrompts[0].choices, ["Keep inherit", "inherit", "off", "minimal", "low", "medium", "high"],
@@ -717,9 +813,11 @@ test("Tab toggles the native scope; scoped and all selections both reach the def
   assert.deepEqual(c.selectPrompts[1].choices, ["Keep inherit", "inherit", "off"],
     "the worker model's metadata drives its effort options");
   assert.equal(c.published.length, 1);
-  assert.deepEqual(c.published[0].definition.models,
-    { light: "fixture/heavy", standard: "fixture/worker", strong: "fixture/heavy" });
-  assert.deepEqual(c.published[0].definition.effort, { light: "inherit", standard: "inherit", strong: "inherit" });
+  assert.deepEqual(c.published[0].definition.slots, {
+    d1: { model: "fixture/heavy", effort: "inherit" }, d2: { model: "fixture/heavy", effort: "inherit" },
+    d3: { model: "fixture/heavy", effort: "inherit" }, d4: { model: "fixture/worker", effort: "inherit" },
+    d5: { model: "fixture/heavy", effort: "inherit" },
+  });
 });
 
 test("a scoped virtual entry is filtered once and never leaks through Tab", async (t) => {
@@ -804,6 +902,36 @@ test("a host whose scope getter yields no array fails closed instead of fabricat
 
 // Single-slot edits use the real router candidate/audit primitives and the real
 // native selector. Doubles supply only catalogue IO and the operator's answers.
+test("config slot.thinking is rejected exactly and does not rewrite live catalogues", async (t) => {
+  const f = await fixture(t);
+  const catalogueBefore = await readFile(f.path, "utf8");
+  const revision = f.router.prepare().revision;
+  const message = "Invalid settings: preset slot d3 thinking is not configurable; inherited thinking is resolved by the consumer (no automatic migration)";
+  const body = team();
+  body.slots.d3 = { ...body.slots.d3, thinking: { low: "medium" } };
+  assert.throws(() => validateSettings({ version: 2, presets: { team: body } }), (error) => {
+    assert.equal(error.message, message);
+    return true;
+  });
+  assert.equal(validateSettings({ version: 2, presets: { team: team() } }).presets.team.slots.d1.model, "fixture/worker");
+  assert.deepEqual(f.store.pending(), []);
+  const rejectedPath = join(f.root, "rejected-presets.json");
+  const rejected = structuredClone(f.config);
+  rejected.presets.team.slots.d3 = { ...rejected.presets.team.slots.d3, thinking: { low: "high" } };
+  const bytes = JSON.stringify(rejected);
+  await writeFile(rejectedPath, bytes);
+  assert.throws(() => new PresetRouter(rejectedPath), (error) => {
+    assert.equal(error.code, "INVALID_PRESET_CONFIG");
+    assert.equal(error.details.error, "Preset team.slots.d3 has unsupported field: thinking");
+    return true;
+  });
+  assert.equal(await readFile(rejectedPath, "utf8"), bytes, "rejection does not rewrite the rejected config");
+  assert.equal(await readFile(f.path, "utf8"), catalogueBefore, "the loaded catalogue is not rewritten");
+  assert.equal(f.router.current().name, "off");
+  assert.equal(f.router.prepare().revision, revision);
+  assert.deepEqual(f.store.pending(), []);
+});
+
 const lightBase = { ...fresh, id: "light-base", name: "Light Base" };
 const standardBase = { ...fresh, id: "standard-base", name: "Standard Base" };
 const strongBase = { ...fresh, id: "strong-base", name: "Strong Base" };
@@ -811,10 +939,14 @@ const richModels = [lightBase, standardBase, strongBase, fresh, virtual];
 async function singleSlotFixture(t, { active = true, overrides = {} } = {}) {
   const f = await fixture(t);
   f.config.presets.team = {
-    version: "fixed-and-mapped-v1",
-    models: { light: "fixture/light-base", standard: "fixture/standard-base", strong: "fixture/strong-base" },
-    effort: { light: "low", standard: "inherit", strong: "high" },
-    thinking: { light: { off: "off", max: "low" }, standard: { high: "medium" }, strong: { xhigh: "high" } },
+    version: "fixed-v1",
+    slots: {
+      d1: { model: "fixture/light-base", effort: "low" },
+      d2: { model: "fixture/light-base", effort: "low" },
+      d3: { model: "fixture/standard-base", effort: "inherit" },
+      d4: { model: "fixture/strong-base", effort: "high" },
+      d5: { model: "fixture/strong-base", effort: "high" },
+    },
   };
   await writeFile(f.path, JSON.stringify(f.config));
   f.router = new PresetRouter(f.path, new Map([["team", overrides]]));
@@ -830,14 +962,44 @@ const assertOnlySlotChanged = (definition, original, slot, model) => {
   assert.match(definition.version, /^user-\d+$/);
   const expected = structuredClone(original);
   expected.version = definition.version;
-  expected.models[slot] = model;
-  delete expected.thinking[slot];
-  assert.deepEqual(definition, expected, "only the requested model and its compatibility map can change");
+  expected.slots[slot].model = model;
+  for (const key of strengths) assert.equal(Object.hasOwn(definition.slots[key], "thinking"), false);
+  assert.deepEqual(definition, expected, "only the requested model changes; default effort stays and thinking is not stored");
 };
 
-for (const slot of ["light", "standard", "strong"]) {
-  test(`single-slot ${slot} edit preserves other models, fixed defaults, maps and session effort overrides`, async (t) => {
-    const overrides = { light: "medium", strong: "off" };
+test("full slot-object preset editing preserves kept models and default effort without storing thinking", async (t) => {
+  const overrides = { d1: "medium", d5: "off" };
+  const f = await singleSlotFixture(t, { overrides }), original = f.router.definition("team");
+  const answers = descendingSlots.flatMap((slot) => [slot === "d3" ? "fixture/fresh" : `Keep ${original.slots[slot].model}`,
+    `Keep ${original.slots[slot].effort}`]);
+  const c = controls(f, answers, [true]);
+  c.ctx.modelRegistry.getAll = () => richModels;
+  await c.ui.editPreset("team");
+  assert.equal(c.published.length, 1);
+  assertOnlySlotChanged(c.published[0].definition, original, "d3", "fixture/fresh");
+  assert.deepEqual(f.router.definition("team"), original, "unpublished editor data cannot mutate the catalogue");
+  assert.deepEqual(f.router.current().effort_overrides, overrides, "slot defaults never rewrite session overrides");
+});
+
+test("a single model edit retains an omitted inherit default and other slots' models", async (t) => {
+  const f = await fixture(t);
+  f.config.presets.team.slots.d3 = { model: "fixture/worker" };
+  await writeFile(f.path, JSON.stringify(f.config));
+  f.router = new PresetRouter(f.path); f.router.select("team");
+  const original = f.router.definition("team"), c = controls(f, ["fixture/other"]);
+  c.ctx.modelRegistry.getAll = () => ["worker", "other"].map((id) => ({ provider: "fixture", id, api: "fixture", reasoning: false }));
+  await c.ui.editModel("team", "d3");
+  assertOnlySlotChanged(c.published[0].definition, original, "d3", "fixture/other");
+  assert.deepEqual(c.published[0].definition.slots.d3, { model: "fixture/other", effort: "inherit" }, "an omitted default keeps its inherited meaning");
+  assert.deepEqual(c.published[0].definition.slots.d2, { model: "fixture/worker", effort: "low" });
+  assert.equal(Object.hasOwn(f.router.current(), "thinking"), false, "normalized snapshots do not carry thinking maps");
+  assert.deepEqual(f.router.current().effort_defaults.d3, "inherit", "normalized snapshots still resolve the omitted policy");
+  assert.deepEqual(f.router.current().effort_overrides, {}, "a model edit does not rewrite independent session overrides");
+});
+
+for (const slot of strengths) {
+  test(`single-slot ${slot} edit preserves other models, fixed defaults and independent session effort overrides`, async (t) => {
+    const overrides = { d1: "medium", d2: "high", d3: "off", d4: "low", d5: "off" };
     const f = await singleSlotFixture(t, { overrides }), original = f.router.definition("team");
     const before = await readFile(f.path, "utf8"), revision = f.router.prepare().revision, audits = [];
     f.store.setScope("global");
@@ -856,7 +1018,7 @@ for (const slot of ["light", "standard", "strong"]) {
     assert.deepEqual(f.router.definition("team"), original, "a mounted picker is not a publication");
     chooseNative(picker, "fresh");
     await editing;
-    assert.equal(c.pickers.length, 1, "one click edits exactly one slot, not the full three-slot workflow");
+    assert.equal(c.pickers.length, 1, "one click edits exactly one slot, not the full five-slot workflow");
     assert.deepEqual(c.selectPrompts, [], "fixed default effort is not edited or silently clamped");
     assert.deepEqual(c.inputPrompts, []);
     assert.deepEqual(c.confirmPrompts, [], "explicit native selection for the active preset needs no second approval");
@@ -866,7 +1028,7 @@ for (const slot of ["light", "standard", "strong"]) {
     assert.equal(audits.length, 1);
     assert.deepEqual(audits[0].effort_overrides, overrides);
     assert.deepEqual(f.router.current().effort_overrides, overrides);
-    assert.deepEqual(f.router.current().effort_defaults, original.effort);
+    assert.deepEqual(f.router.current().effort_defaults, Object.fromEntries(strengths.map((key) => [key, original.slots[key].effort])));
     assert.deepEqual(f.store.pending(), [{ scope: "global", path: ["presets", "team"], value: c.published[0].definition }]);
     assert.equal(await readFile(f.path, "utf8"), before, "the base catalogue and permission profiles are not rewritten");
     await assert.rejects(readFile(f.store.paths.global), { code: "ENOENT" });
@@ -876,7 +1038,7 @@ for (const slot of ["light", "standard", "strong"]) {
 test("single-slot same-model selection is an exact no-op without confirmation, publication or dirty state", async (t) => {
   const f = await singleSlotFixture(t), original = f.router.definition("team"), revision = f.router.prepare().revision;
   const c = tuiControls(f, { registry: richModels });
-  const editing = c.ui.editModel("team", "light");
+  const editing = c.ui.editModel("team", "d1");
   const picker = await waitForPicker(c, 0);
   assert(paint(picker).includes("✓"), "the exact existing model is preselected by the native component");
   picker.component.handleInput("\r");
@@ -892,7 +1054,7 @@ test("single-slot same-model selection is an exact no-op without confirmation, p
 test("single-slot native cancellation leaves the definition, defaults and catalogue unchanged", async (t) => {
   const f = await singleSlotFixture(t), original = f.router.definition("team"), before = await readFile(f.path, "utf8");
   const c = tuiControls(f, { registry: richModels });
-  const editing = c.ui.editModel("team", "standard");
+  const editing = c.ui.editModel("team", "d3");
   const picker = await waitForPicker(c, 0);
   picker.component.handleInput("\u001b");
   await editing;
@@ -909,17 +1071,17 @@ for (const accepted of [false, true]) {
     const f = await singleSlotFixture(t, { active: false }), original = f.router.definition("team");
     const c = tuiControls(f, { registry: richModels, confirms: [accepted],
       publishDefinition: (candidate, name) => f.router.apply(candidate, name, () => {}) });
-    const editing = c.ui.editModel("team", "standard");
+    const editing = c.ui.editModel("team", "d3");
     const picker = await waitForPicker(c, 0);
     chooseNative(picker, "fresh");
     await editing;
     assert.equal(c.confirmPrompts.length, 1);
-    assert.equal(c.confirmPrompts[0].title, "Change standard model and enable team?");
+    assert.equal(c.confirmPrompts[0].title, "Change d3 model and enable team?");
     assert(c.confirmPrompts[0].text.includes("fixture/fresh"));
     assert.equal(c.published.length, accepted ? 1 : 0);
     assert.deepEqual(f.store.pending(), []);
     assert.equal(f.router.current().name, accepted ? "team" : "off");
-    if (accepted) assertOnlySlotChanged(c.published[0].definition, original, "standard", "fixture/fresh");
+    if (accepted) assertOnlySlotChanged(c.published[0].definition, original, "d3", "fixture/fresh");
     else assert.deepEqual(f.router.definition("team"), original);
   });
 }
@@ -929,7 +1091,7 @@ for (const change of ["removed", "virtual"]) {
     const f = await singleSlotFixture(t), original = f.router.definition("team");
     const c = tuiControls(f, { registry: richModels,
       runtimeDouble: (models) => runtimeDouble({ models: [...models] }) });
-    const editing = c.ui.editModel("team", "light");
+    const editing = c.ui.editModel("team", "d1");
     const rejected = assert.rejects(editing, { code: "PRESET_MODEL_UNAVAILABLE" });
     const picker = await waitForPicker(c, 0);
     const index = c.registry.models.findIndex((model) => model.id === "fresh");
@@ -946,7 +1108,7 @@ for (const change of ["removed", "virtual"]) {
 test("single-slot stale routing revision fails closed instead of overwriting a newer selection", async (t) => {
   const f = await singleSlotFixture(t), original = f.router.definition("team");
   const c = tuiControls(f, { registry: richModels, confirms: [true] });
-  const editing = c.ui.editModel("team", "strong");
+  const editing = c.ui.editModel("team", "d5");
   const rejected = assert.rejects(editing, { code: "STALE_PRESET_SELECTION" });
   const picker = await waitForPicker(c, 0);
   f.router.select("off");
@@ -961,7 +1123,7 @@ test("single-slot stale routing revision fails closed instead of overwriting a n
 test("single-slot session retirement and missing UI cannot publish or stage a model choice", async (t) => {
   const f = await singleSlotFixture(t);
   const c = tuiControls(f, { registry: richModels });
-  const editing = c.ui.editModel("team", "light");
+  const editing = c.ui.editModel("team", "d1");
   const rejected = assert.rejects(editing, { code: "SETTINGS_SESSION_CHANGED" });
   const picker = await waitForPicker(c, 0);
   c.retire();
@@ -971,13 +1133,13 @@ test("single-slot session retirement and missing UI cannot publish or stage a mo
   assert.deepEqual(f.store.pending(), []);
   const noUi = tuiControls(f, { registry: richModels });
   noUi.ctx.hasUI = false;
-  await assert.rejects(noUi.ui.editModel("team", "light"), { code: "SETTINGS_UI_REQUIRED" });
+  await assert.rejects(noUi.ui.editModel("team", "d1"), { code: "SETTINGS_UI_REQUIRED" });
   assert.deepEqual(noUi.pickers, []);
 });
 
 test("single-slot invalid preset/off/slot arguments throw HarnessError before opening any native picker", async (t) => {
   const f = await singleSlotFixture(t);
-  for (const [name, slot] of [["missing", "light"], ["off", "light"], ["team", "all"]]) {
+  for (const [name, slot] of [["missing", "d1"], ["off", "d1"], ["team", "all"], ["team", "light"]]) {
     const c = tuiControls(f, { registry: richModels });
     await assert.rejects(c.ui.editModel(name, slot), { name: "HarnessError" });
     assert.deepEqual(c.pickers, []);
@@ -1031,7 +1193,7 @@ const measuredOverlay = (entry, terminal) => {
 test("native model popover uses dynamic near-click absolute placement and clamps after resize", async (t) => {
   const f = await singleSlotFixture(t);
   const c = tuiControls(f, { ...floating, registry: richModels });
-  const editing = c.ui.editModel("team", "light", { row: 3, col: 5 });
+  const editing = c.ui.editModel("team", "d1", { row: 3, col: 5 });
   const picker = await waitForPicker(c, 0), before = overlayConfig(picker);
   boundedOverlay(before, c.tui.terminal);
   assert.equal(before.row, 4, "the picker opens immediately below the absolute click row");
@@ -1052,7 +1214,7 @@ test("native model popover uses dynamic near-click absolute placement and clamps
 test("native model popover with no click position is centered rather than using stale coordinates", async (t) => {
   const f = await singleSlotFixture(t);
   const c = tuiControls(f, { ...floating, registry: richModels });
-  const editing = c.ui.editModel("team", "light");
+  const editing = c.ui.editModel("team", "d1");
   const picker = await waitForPicker(c, 0), config = overlayConfig(picker);
   boundedOverlay(config, c.tui.terminal);
   assert.equal(config.anchor ?? "center", "center");
@@ -1069,10 +1231,10 @@ for (const modelPopover of [undefined, () => false]) {
   test(`native model picker stays docked when popover capability is ${modelPopover ? "false" : "absent"}`, async (t) => {
     const f = await singleSlotFixture(t);
     const c = tuiControls(f, { registry: richModels, modelPopover, tuiMode: "regular" });
-    const editing = c.ui.editModel("team", "light", { row: 8, col: 20 });
+    const editing = c.ui.editModel("team", "d1", { row: 8, col: 20 });
     const picker = await waitForPicker(c, 0);
     assert.notEqual(picker.options?.overlay, true);
-    assert.match(paint(picker), /team: light model/);
+    assert.match(paint(picker), /team: d1 model/);
     picker.component.handleInput("\u001b");
     await editing;
     assert.deepEqual(c.published, []);
@@ -1082,7 +1244,7 @@ for (const modelPopover of [undefined, () => false]) {
 test("floating native selector retains rounded frame, IME search focus and native Tab scope filtering", async (t) => {
   const f = await fixture(t); f.router.select("team");
   const c = tuiControls(f, { ...floating, registry: [worker, heavy, virtual], scopedModels: [{ model: worker }] });
-  const editing = c.ui.editModel("team", "light");
+  const editing = c.ui.editModel("team", "d1");
   const picker = await waitForPicker(c, 0), native = c.selectors[0];
   const lines = picker.component.render(74).map(stripTerminalSequences);
   assert(lines[0].startsWith("╭") && lines[0].endsWith("╮"));
@@ -1109,7 +1271,7 @@ test("floating native selector retains rounded frame, IME search focus and nativ
   assert.match(paint(picker), /→.*heavy/, "the restored selection is painted before Enter can accept it");
   picker.component.handleInput("\r");
   await editing;
-  assert.equal(c.published[0].definition.models.light, "fixture/heavy");
+  assert.equal(c.published[0].definition.slots.d1.model, "fixture/heavy");
   assert.deepEqual(c.confirmPrompts, []);
   assert.deepEqual(f.store.pending(), []);
 });
@@ -1119,7 +1281,7 @@ for (const input of ["keyboard", "continuation click"]) {
     const f = await fixture(t); f.router.select("team");
     const long = { ...worker, id: "very-long-physical-model-id-which-exceeds-the-popover-width", name: "Long" };
     const c = tuiControls(f, { ...floating, rows: 24, columns: 34, registry: [worker, long] });
-    const editing = c.ui.editModel("team", "light");
+    const editing = c.ui.editModel("team", "d1");
     const picker = await waitForPicker(c, 0);
     picker.component.render(34);
     picker.component.handleInput("\u001b[B");
@@ -1133,7 +1295,7 @@ for (const input of ["keyboard", "continuation click"]) {
       mouseClick(picker, 3, y, 34, lines.length);
     }
     await editing;
-    assert.equal(c.published[0].definition.models.light, `fixture/${long.id}`);
+    assert.equal(c.published[0].definition.slots.d1.model, `fixture/${long.id}`);
     assert.deepEqual(f.store.pending(), []);
   });
 }
@@ -1154,7 +1316,7 @@ test("permission yield is rechecked between slot dialogs and before queued model
   const queued = tuiControls(f, { ...floating, registry: [worker, heavy], deferCustom: true,
     modelSelectionAllowed: () => allowed });
   allowed = true;
-  const pending = queued.ui.editModel("team", "light");
+  const pending = queued.ui.editModel("team", "d1");
   await tick(); allowed = false;
   queued.runQueuedFactory();
   await pending;
@@ -1163,10 +1325,10 @@ test("permission yield is rechecked between slot dialogs and before queued model
   assert.deepEqual(queued.published, []);
 });
 
-test("floating native mouse selection hits actual model/provider text, never padding or stale rows", async (t) => {
+test("floating native mouse selection hits actual model/provider text, never padding or stale rows", { timeout: 5000 }, async (t) => {
   const f = await fixture(t); f.router.select("team");
   const c = tuiControls(f, { ...floating, registry: [worker, heavy] });
-  const editing = c.ui.editModel("team", "standard");
+  const editing = c.ui.editModel("team", "d3");
   const picker = await waitForPicker(c, 0), width = 72;
   let lines = picker.component.render(width).map(stripTerminalSequences);
   const oldRow = lines.findIndex((line) => line.includes("heavy") && line.includes("[fixture]"));
@@ -1176,27 +1338,27 @@ test("floating native mouse selection hits actual model/provider text, never pad
   mouseClick(picker, 0, oldRow, width, lines.length);
   assert.equal(picker.settled, false, "right padding and the frame edge have no model target");
   for (const key of "work") picker.component.handleInput(key);
-  lines = picker.component.render(width).map(stripTerminalSequences);
   mouseClick(picker, oldX, oldRow, width, lines.length);
-  assert.equal(picker.settled, false, "a formerly-painted heavy row cannot survive a filtered repaint");
+  assert.equal(picker.settled, false, "a formerly-painted heavy row cannot survive filtering even before repaint");
   for (const key of ["\x7f", "\x7f", "\x7f", "\x7f"]) picker.component.handleInput(key);
   lines = picker.component.render(width).map(stripTerminalSequences);
   const row = lines.findIndex((line) => line.includes("heavy") && line.includes("[fixture]"));
   const providerX = lines[row].indexOf("[fixture]") + 1;
+  assert(!lines[row].includes("→"), "pointer selection need not match the keyboard arrow");
   mouseClick(picker, providerX, row, width, lines.length);
+  assert.equal(picker.settled, true, "clicking another visible model must settle the picker");
   await editing;
   assert.equal(c.published.length, 1);
-  assert.equal(c.published[0].definition.models.standard, "fixture/heavy");
-  assert.equal(c.published[0].definition.models.light, "fixture/worker");
-  assert.equal(c.published[0].definition.models.strong, "fixture/worker");
+  assert.equal(c.published[0].definition.slots.d3.model, "fixture/heavy");
+  for (const slot of ["d1", "d2", "d4", "d5"]) assert.equal(c.published[0].definition.slots[slot].model, "fixture/worker");
   assert.deepEqual(c.confirmPrompts, []);
   assert.deepEqual(f.store.pending(), []);
 });
 
-test("floating native × closes only its own model selection without publishing or dirtying settings", async (t) => {
+test("floating native × closes only its own model selection without publishing or dirtying settings", { timeout: 5000 }, async (t) => {
   const f = await fixture(t); f.router.select("team");
   const c = tuiControls(f, { ...floating, registry: [worker, heavy] });
-  const editing = c.ui.editModel("team", "light");
+  const editing = c.ui.editModel("team", "d1");
   const picker = await waitForPicker(c, 0), width = 68;
   const lines = picker.component.render(width).map(stripTerminalSequences), x = lines[0].indexOf("×");
   assert(x > 0);
@@ -1208,12 +1370,12 @@ test("floating native × closes only its own model selection without publishing 
   assert.deepEqual(f.store.pending(), []);
 });
 
-test("short native popovers keep the selected arrow, input and scope visible rather than blindly accepting a hidden model", async (t) => {
+test("short native popovers keep the selected arrow, input and scope visible rather than blindly accepting a hidden model", { timeout: 5000 }, async (t) => {
   const f = await fixture(t); f.router.select("team");
   const many = Array.from({ length: 24 }, (_unused, index) => ({ ...worker,
     id: `slot-${String(index).padStart(2, "0")}`, name: `Slot ${index}` }));
   const c = tuiControls(f, { ...floating, registry: [worker, ...many], scopedModels: [{ model: worker }] });
-  const editing = c.ui.editModel("team", "strong");
+  const editing = c.ui.editModel("team", "d5");
   const picker = await waitForPicker(c, 0);
   picker.component.handleInput("\t");
   for (const key of "slot") picker.component.handleInput(key);
@@ -1228,14 +1390,14 @@ test("short native popovers keep the selected arrow, input and scope visible rat
   assert(lines.some((line) => line.includes("> slot")), "the actual search Input stays visible");
   picker.component.handleInput("\r");
   await editing;
-  assert.equal(c.published[0].definition.models.strong, "fixture/slot-18", "Enter accepts exactly the visible arrow row");
+  assert.equal(c.published[0].definition.slots.d5.model, "fixture/slot-18", "Enter accepts exactly the visible arrow row");
   assert.deepEqual(f.store.pending(), []);
 });
 
 test("permission yield cancels a queued model request without mounting or refreshing, and keeps the controls reusable", async (t) => {
   const f = await fixture(t); f.router.select("team");
   const c = tuiControls(f, { ...floating, registry: [worker, heavy], deferCustom: true });
-  const editing = c.ui.editModel("team", "light");
+  const editing = c.ui.editModel("team", "d1");
   await tick();
   c.ui.cancelModelSelection();
   c.runQueuedFactory();
@@ -1246,7 +1408,7 @@ test("permission yield cancels a queued model request without mounting or refres
   assert.deepEqual(c.published, []);
   assert.deepEqual(f.store.pending(), []);
   const nextIndex = c.pickers.length;
-  const next = c.ui.editModel("team", "standard");
+  const next = c.ui.editModel("team", "d3");
   c.runQueuedFactory();
   const picker = await waitForPicker(c, nextIndex);
   assert.equal(c.selectors.length, 1, "cancelModelSelection is not dispose");
@@ -1259,7 +1421,7 @@ test("permission yield aborts an opened refresh without dirtying; old callbacks 
   const f = await fixture(t); f.router.select("team");
   const c = tuiControls(f, { ...floating, registry: [worker, heavy],
     runtimeDouble: (models) => runtimeDouble({ models: [...models], pending: true }) });
-  const editing = c.ui.editModel("team", "light");
+  const editing = c.ui.editModel("team", "d1");
   const old = await waitForPicker(c, 0);
   await tick(3);
   assert(c.state.refreshCalls.length >= 1);
@@ -1268,7 +1430,7 @@ test("permission yield aborts an opened refresh without dirtying; old callbacks 
   assert.equal(c.state.refreshCalls[0].signal.aborted, true);
   assert.deepEqual(c.published, []);
   assert.deepEqual(f.store.pending(), []);
-  const next = c.ui.editModel("team", "standard");
+  const next = c.ui.editModel("team", "d3");
   const current = await waitForPicker(c, 1);
   old.component.handleInput("\u001b"); old.component.handleInput("\r");
   const oldLines = old.component.render(70).map(stripTerminalSequences), closeX = oldLines[0]?.indexOf("×");
@@ -1278,17 +1440,121 @@ test("permission yield aborts an opened refresh without dirtying; old callbacks 
   chooseNative(current, "heavy");
   await next;
   assert.equal(c.published.length, 1);
-  assert.equal(c.published[0].definition.models.standard, "fixture/heavy");
-  assert.equal(c.published[0].definition.models.light, "fixture/worker");
+  assert.equal(c.published[0].definition.slots.d3.model, "fixture/heavy");
+  assert.equal(c.published[0].definition.slots.d1.model, "fixture/worker");
   assert.deepEqual(f.store.pending(), []);
 });
 
 // These view-only cases never start a terminal or a provider. Keep every
 // interaction bounded so a broken selection cannot hang the portable gate.
+for (const viewport of [{ rows: 4, columns: 100 }, { rows: 28, columns: 10 }]) {
+  test(`a painted pointer model cannot be applied after shrinking to ${viewport.rows}x${viewport.columns} before repaint`, { timeout: 5000 }, async (t) => {
+    const f = await fixture(t); f.router.select("team");
+    const c = tuiControls(f, { ...floating, registry: [worker, heavy] });
+    const editing = c.ui.editModel("team", "d1");
+    const picker = await waitForPicker(c, 0), width = 72;
+    const lines = picker.component.render(width).map(stripTerminalSequences);
+    const row = lines.findIndex((line) => line.includes("heavy") && line.includes("[fixture]"));
+    assert(row >= 0);
+    Object.assign(c.tui.terminal, viewport);
+    mouseClick(picker, lines[row].indexOf("heavy"), row, width, lines.length);
+    assert.equal(picker.settled, false, "a pointer must recheck the current viewport, not the previous paint");
+    assert.deepEqual(c.published, []);
+    c.ui.cancelModelSelection();
+    await editing;
+    assert.deepEqual(f.store.pending(), []);
+  });
+}
+
+for (const keyboardRecheck of [false, true]) {
+  test(`dry ${keyboardRecheck ? "keyboard" : "pointer"} rechecks cannot authorize repeated clicks on an unpainted replacement`, { timeout: 5000 }, async (t) => {
+    const f = await fixture(t); f.router.select("team");
+    const c = tuiControls(f, { ...floating, registry: [worker, heavy] });
+    const editing = c.ui.editModel("team", "d1");
+    const picker = await waitForPicker(c, 0), width = 72;
+    const lines = picker.component.render(width).map(stripTerminalSequences);
+    const row = lines.findIndex((line) => line.includes("worker") && line.includes("[fixture]"));
+    assert(row >= 0);
+    const x = lines[row].indexOf("worker");
+    for (const key of "hea") picker.component.handleInput(key);
+    if (keyboardRecheck) assert.equal(picker.component.canSelect(worker), false);
+    for (let click = 0; click < 2; click++) {
+      mouseClick(picker, x, row, width, lines.length);
+      assert.equal(picker.settled, false, "dry rechecks cannot replace the last-painted model identity");
+    }
+    assert.deepEqual(c.published, []);
+    c.ui.cancelModelSelection();
+    await editing;
+    assert.deepEqual(f.store.pending(), []);
+  });
+}
+
+for (const change of ["removed", "ambiguous"]) {
+  test(`Enter on an unverified ${change} registry item warns and settles without applying`, { timeout: 5000 }, async (t) => {
+    const f = await fixture(t); f.router.select("team");
+    const before = f.router.definition("team");
+    const c = tuiControls(f, { ...floating, registry: [worker, heavy],
+      runtimeDouble: (models) => runtimeDouble({ models: [...models], pending: true }) });
+    const editing = c.ui.editModel("team", "d1");
+    const picker = await waitForPicker(c, 0);
+    picker.component.render(74);
+    c.registry.models.splice(0, 1, ...(change === "ambiguous" ? [worker, { ...worker }] : []));
+    picker.component.handleInput("\r");
+    assert.equal(picker.settled, true, "a disposed native selector must not strand the edit on identity failure");
+    await editing;
+    assert(c.notifications.some(({ text, level }) => level === "warning" && /could not be verified.*Nothing changed.*reopen/.test(text)));
+    assert.deepEqual(c.published, []);
+    assert.deepEqual(f.store.pending(), []);
+    assert.deepEqual(f.router.definition("team"), before);
+  });
+}
+
+test("a previously visible model cannot be applied after the viewport shrinks before repaint", { timeout: 5000 }, async (t) => {
+  const f = await singleSlotFixture(t);
+  const c = tuiControls(f, { ...floating, registry: richModels });
+  const editing = c.ui.editModel("team", "d1");
+  const picker = await waitForPicker(c, 0);
+  picker.component.render(74);
+  assert.equal(picker.component.canSelect(), true);
+  assert.equal(picker.component.canSelect({ provider: "missing", id: "hidden" }), false,
+    "an identified tree cannot authorize a different model");
+  c.tui.terminal.rows = 4;
+  c.tui.terminal.columns = 10;
+  picker.component.handleInput("\r");
+  await tick();
+  assert.equal(picker.settled, false, "Enter must recheck the current viewport, not the previous paint");
+  assert.equal(picker.component.canSelect(), false);
+  assert(c.notifications.some(({ text, level }) => level === "warning" && /not fully visible/.test(text)));
+  assert.deepEqual(c.published, []);
+  c.ui.cancelModelSelection();
+  await editing;
+  assert.deepEqual(f.store.pending(), []);
+});
+
+test("a hidden keyboard choice warns then can apply after enlarging and repainting", { timeout: 5000 }, async (t) => {
+  const f = await fixture(t); f.router.select("team");
+  const c = tuiControls(f, { ...floating, rows: 4, columns: 10, registry: [worker, heavy] });
+  const editing = c.ui.editModel("team", "d1");
+  const picker = await waitForPicker(c, 0);
+  picker.component.render(8);
+  picker.component.handleInput("\r");
+  assert.equal(picker.settled, false);
+  assert(c.notifications.some(({ text, level }) => level === "warning" && /not fully visible/.test(text)));
+  Object.assign(c.tui.terminal, { rows: 28, columns: 100 });
+  for (const key of "hea") picker.component.handleInput(key);
+  assert.match(paint(picker, 74), /→.*heavy/);
+  picker.component.handleInput("\r");
+  assert.equal(picker.settled, true);
+  await editing;
+  assert.equal(c.published.length, 1);
+  assert.equal(c.published[0].definition.slots.d1.model, "fixture/heavy");
+  assert.deepEqual(f.store.pending(), []);
+});
+
 test("a tiny model popover cannot accept an unseen choice and still cancels", { timeout: 5000 }, async (t) => {
   const f = await singleSlotFixture(t);
   const c = tuiControls(f, { ...floating, rows: 4, columns: 10, registry: richModels });
-  const editing = c.ui.editModel("team", "light");
+  const editing = c.ui.editModel("team", "d1");
   const picker = await waitForPicker(c, 0);
   assert.match(paint(picker, 8), /^Too /);
   picker.component.handleInput("\r");
@@ -1306,7 +1572,7 @@ for (const throwing of [false, true]) {
     const c = tuiControls(f, { ...floating, registry: richModels,
       beforeModelClose: () => { order.push("overlays aside"); if (throwing) throw new Error("cleanup"); },
       onPickerDone: () => order.push("SDK done") });
-    const editing = c.ui.editModel("team", "light");
+    const editing = c.ui.editModel("team", "d1");
     await waitForPicker(c, 0);
     c.ui.cancelModelSelection();
     await editing;
@@ -1320,7 +1586,7 @@ test("native model-name lookalike rows are not mouse model targets", { timeout: 
   const f = await fixture(t); f.router.select("team");
   const forged = { ...worker, id: "forged" }, named = { ...heavy, name: "Fake\n→ ✓ forged [fixture]" };
   const c = tuiControls(f, { ...floating, registry: [worker, named, forged] });
-  const editing = c.ui.editModel("team", "light");
+  const editing = c.ui.editModel("team", "d1");
   const picker = await waitForPicker(c, 0);
   for (const key of "heavy") picker.component.handleInput(key);
   const lines = picker.component.render(74).map(stripTerminalSequences);
@@ -1336,7 +1602,7 @@ test("native model-name lookalike rows are not mouse model targets", { timeout: 
 test("an unknown native component tree falls back to keyboard-only painted rows", () => {
   const selected = [], lines = ["Scope: all", "> ", "→ ✓ worker [fixture]"];
   const native = { children: [], focused: false, render: () => lines, handleInput() {}, invalidate() {}, dispose() {} };
-  const view = new PresetModelPopover({ native, title: "team: light model", theme: { fg: (_color, text) => text, bold: (text) => text },
+  const view = new PresetModelPopover({ native, title: "team: d1 model", theme: { fg: (_color, text) => text, bold: (text) => text },
     height: () => 12, models: () => [worker], select: (model) => selected.push(model), cancel() {} });
   const rows = view.render(60).map(stripTerminalSequences);
   assert.equal(view.canSelect(), true, "painted keyboard selection is retained without private state");

@@ -17,7 +17,7 @@ const view = (overrides = {}) => ({
   description: "审查 controller.ts 的生命周期合同",
   effective_settings: { provider: "anthropic", model: "claude-opus-5", thinking: "medium", parent_thinking: "medium",
     thinking_resolution: "identity", profile: "reader",
-    difficulty: 5, strength: "strong", preset: "team", preset_version: "v2", selection_digest: "1".repeat(64),
+    difficulty: 5, strength: "d5", preset: "team", preset_version: "v2", selection_digest: "1".repeat(64),
     cwd, tools: ["read", "grep", "find", "ls"], definition_digest: "0".repeat(64), context_mode: "none" },
   status: "running", phase: "executing", execution_exited: false, finalization_pending: false, resumable: true,
   owner_blocked: false, pending_messages: 0, isolation: "shared",
@@ -70,7 +70,7 @@ test("the body carries the identity, configuration and lifecycle the widget line
   const text = joined();
   assert.match(text, /task\s+审查 controller\.ts 的生命周期合同/);
   assert.match(text, /run\s+r-8f3a · agent a-19b7/);
-  assert.match(text, /routing\s+team@v2 · d5→strong/);
+  assert.match(text, /routing\s+team@v2 · d5(?:\n|$)/);
   assert.match(text, /effort\s+medium · parent identity · fixed at creation/);
   assert.doesNotMatch(text, /source:/, "older settings cannot acquire invented provenance");
   assert.match(text, /model\s+claude-opus-5/);
@@ -110,10 +110,38 @@ test("detail context and all billed-token components promote their rounded unit 
   }
 });
 
-test("detail routing shows the admitted difficulty beside its resolved slot", () => {
+test("detail routing shows each matching admitted difficulty slot once without changing settings", () => {
+  for (const difficulty of [1, 2, 3, 4, 5]) {
+    const settings = { ...view().effective_settings, difficulty, strength: `d${difficulty}` };
+    const before = structuredClone(settings);
+    const text = joined({ effective_settings: settings });
+    const routing = text.split("\n").find((line) => /^ {2}routing\s/.test(line));
+    assert.match(routing, new RegExp(`team@v2 · d${difficulty}$`));
+    assert.doesNotMatch(routing, /→/);
+    assert.deepEqual(settings, before);
+  }
+});
+
+test("historical detail renders its recorded old slot without converting immutable settings", () => {
   for (const [difficulty, strength] of [[1, "light"], [2, "light"], [3, "standard"], [4, "strong"], [5, "strong"]]) {
-    const text = joined({ effective_settings: { ...view().effective_settings, difficulty, strength } });
-    assert.ok(text.includes(`team@v2 · d${difficulty}→${strength}`), text);
+    const settings = { ...view().effective_settings, difficulty, strength };
+    const before = structuredClone(settings);
+    assert.ok(joined({ effective_settings: settings }).includes(`team@v2 · d${difficulty}→${strength}`));
+    assert.deepEqual(settings, before, "history is display-only, not a configuration migration");
+  }
+});
+
+test("historical detail without an available difficulty shows only its recorded slot", () => {
+  for (const strength of ["light", "standard", "strong", "d1", "d5"]) {
+    for (const difficulty of [undefined, null, 0, 6, "5", NaN]) {
+      const settings = { ...view().effective_settings, difficulty, strength };
+      if (difficulty === undefined) delete settings.difficulty;
+      const before = structuredClone(settings);
+      const routing = joined({ effective_settings: settings }).split("\n").find((line) => /^ {2}routing\s/.test(line));
+      assert.ok(routing.endsWith(`team@v2 · ${strength}`), routing);
+      assert.doesNotMatch(routing, /→|undefined|NaN/);
+      assert.deepEqual(settings, before, "display must not infer or restore an unavailable historical rating");
+    }
   }
 });
 
@@ -124,6 +152,10 @@ test("detail effort distinguishes inherited identity, mapped override and fixed 
   const mapped = joined({ effective_settings: { ...settings, parent_thinking: "low", thinking: "high",
     thinking_resolution: "preset_mapping", effort_source: "user_override" } });
   assert.match(mapped, /effort\s+high · low→high \(preset map\) · source: user override · fixed at creation/);
+  const automatic = joined({ effective_settings: { ...settings, parent_thinking: "low", thinking: "high",
+    thinking_resolution: "automatic_mapping", effort_source: "preset" } });
+  assert.match(automatic, /effort\s+high · low→high \(auto map\) · source: preset · fixed at creation/);
+  assert.doesNotMatch(automatic, /preset map/);
   for (const parent of [undefined, "off"]) {
     const fixed = { ...settings, thinking: "high", thinking_resolution: "preset_fixed", effort_source: "preset" };
     if (parent === undefined) delete fixed.parent_thinking;
@@ -135,19 +167,22 @@ test("detail effort distinguishes inherited identity, mapped override and fixed 
 });
 
 test("effort provenance wraps on narrow panes without clipping or inventing a source", () => {
-  const settings = { ...view().effective_settings, thinking: "high", parent_thinking: "low",
-    thinking_resolution: "preset_mapping", effort_source: "user_override" };
-  for (const width of [32, 40, 62]) {
-    const lines = body({ effective_settings: settings }, {}, width);
-    assert.ok(lines.every((line) => visibleWidth(line) <= width), `${width}: ${JSON.stringify(lines)}`);
-    const effortAt = lines.findIndex((line) => /^ {2}effort\s/.test(line));
-    assert.ok(effortAt >= 0);
-    const following = lines.slice(effortAt, lines.findIndex((line, i) => i > effortAt && /^ {2}model\s/.test(line)));
-    assert.match(following.join(" "), /user\s+override/);
-    assert.match(following.join(" "), /fixed\s+at\s+creation/);
-    const oldSettings = { ...settings };
-    delete oldSettings.effort_source;
-    assert.doesNotMatch(body({ effective_settings: oldSettings }, {}, width).join(" "), /source:/);
+  for (const [resolution, label] of [["preset_mapping", "preset map"], ["automatic_mapping", "auto map"]]) {
+    const settings = { ...view().effective_settings, thinking: "high", parent_thinking: "low",
+      thinking_resolution: resolution, effort_source: "user_override" };
+    for (const width of [32, 40, 62]) {
+      const lines = body({ effective_settings: settings }, {}, width);
+      assert.ok(lines.every((line) => visibleWidth(line) <= width), `${resolution} ${width}: ${JSON.stringify(lines)}`);
+      const effortAt = lines.findIndex((line) => /^ {2}effort\s/.test(line));
+      assert.ok(effortAt >= 0);
+      const following = lines.slice(effortAt, lines.findIndex((line, i) => i > effortAt && /^ {2}model\s/.test(line)));
+      assert.match(following.join(" "), new RegExp(label.replace(" ", "\\s+")));
+      assert.match(following.join(" "), /user\s+override/);
+      assert.match(following.join(" "), /fixed\s+at\s+creation/);
+      const oldSettings = { ...settings };
+      delete oldSettings.effort_source;
+      assert.doesNotMatch(body({ effective_settings: oldSettings }, {}, width).join(" "), /source:/);
+    }
   }
 });
 

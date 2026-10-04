@@ -25,10 +25,9 @@ function toolOptions(f) {
     thinkingLevel: "off", modelRegistry: { getAll: () => [model] } }, profiles: profiles(),
   getSupportedThinkingLevels: (selected) => selected.levels,
   getPreset: () => ({ name: "fixture", version: "v1", digest: "a".repeat(64),
-    models: { light: "fixture/controlled", standard: "fixture/controlled", strong: "fixture/controlled" },
-    thinking: { light: {}, standard: {}, strong: {} },
-    effort: { light: "inherit", standard: "inherit", strong: "inherit" },
-    effort_defaults: { light: "inherit", standard: "inherit", strong: "inherit" }, effort_overrides: {} }) };
+    models: { d1: "fixture/controlled", d2: "fixture/controlled", d3: "fixture/controlled", d4: "fixture/controlled", d5: "fixture/controlled" },
+    effort: { d1: "inherit", d2: "inherit", d3: "inherit", d4: "inherit", d5: "inherit" },
+    effort_defaults: { d1: "inherit", d2: "inherit", d3: "inherit", d4: "inherit", d5: "inherit" }, effort_overrides: {} }) };
 }
 function assemble(f, options = toolOptions(f)) {
   const tools = createOwnerTools(options);

@@ -66,7 +66,7 @@ const definition = readFileSync(definitionPath, "utf8"), definitionDigest = dige
 const tools = JSON.parse(/^tools: (.*)$/m.exec(definition)[1]);
 const effective = { provider: model.provider, model: model.id, thinking: "off", parent_thinking: "off",
   thinking_resolution: "identity", profile: "editor",
-  difficulty: 3, strength: "standard", preset: "fixture", preset_version: "v1", selection_digest: "1".repeat(64), cwd,
+  difficulty: 3, strength: "d3", preset: "fixture", preset_version: "v1", selection_digest: "1".repeat(64), cwd,
   tools, definition_digest: definitionDigest };
 const ports = [];
 const gatesToRelease = [];
