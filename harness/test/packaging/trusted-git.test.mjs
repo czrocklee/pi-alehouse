@@ -74,7 +74,8 @@ test("launcher supplies optional PI_HARNESS_GIT and removes stale inherited sele
     flock: "/trusted/flock", git: "/trusted/git", web: "/package/web", agentDir: "/agent" };
   assert.equal(runtimeEnvironment(paths, { PI_HARNESS_GIT: "/unverified/git" }).PI_HARNESS_GIT, paths.git);
   const { git: _git, ...withoutGit } = paths;
-  assert.equal(runtimeEnvironment(withoutGit, { PI_HARNESS_GIT: "/unverified/git" }).PI_HARNESS_GIT, undefined);
+  // Absent, not undefined: process.execve rejects undefined environment values.
+  assert(!Object.hasOwn(runtimeEnvironment(withoutGit, { PI_HARNESS_GIT: "/unverified/git" }), "PI_HARNESS_GIT"));
 });
 
 test("Nix wrapper pins gitMinimal alongside flock; source declarations retain optional Git", () => {
