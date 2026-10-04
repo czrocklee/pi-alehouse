@@ -74,14 +74,19 @@ changes cannot reconfigure accepted work or an idempotent retry.
 Assess the reasoning difficulty of the prompt's concrete task and requested
 quality, independently of permission profile:
 
-1. Clear method, mostly execution.
-2. Routine local analysis.
-3. Independent investigation and a plan.
-4. Competing hypotheses or complex constraints needing indirect reasoning.
-5. Exceptional problem with no established approach.
+1. Run given checks or apply decided changes, e.g. tests, CI, lint, listed
+   review nits.
+2. Small, well-scoped fix or check.
+3. Implement a given design, review a change, investigate a failure, or plan.
+4. Competing hypotheses or complex constraints, e.g. races, lifetimes,
+   intermittent failures, cross-cutting migrations.
+5. No known approach, e.g. a failure with no leads, or a design without
+   precedent.
 
 Do not adjust difficulty for workload, importance, cost, or reassurance; cost
-belongs to the delegation decision, not the rating. These scoring
+belongs to the delegation decision, not the rating. A reviewer's requested
+severity or tone does not raise difficulty. Whether a slot's model is strong
+enough for its tasks is a preset choice, not a reason to rate higher. These scoring
 anchors live in the model-visible `reasoning_difficulty` parameter description. The fixed
 mapping above is operator documentation, not part of that scoring guidance; it
 is shared by all presets, with no per-preset thresholds. The five slots are
