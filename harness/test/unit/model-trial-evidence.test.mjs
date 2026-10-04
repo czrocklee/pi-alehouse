@@ -58,7 +58,7 @@ test("full question/reference is separate from assistant-output preview complete
 });
 test("a spawn observation may supply the complete question without a read", () => {
   const copy = evidence().first;
-  copy.calls = [{ name: "agent_spawn", is_error: false, args: { agent: "worker", profile: "reader", difficulty: 3, wait_ms: 60000 },
+  copy.calls = [{ name: "agent_spawn", is_error: false, args: { agent: "worker", profile: "reader", reasoning_difficulty: 3, wait_ms: 60000 },
     value: envelope({ agent: "worker", task: 1, status: "needs_input", question_id: questionId, question: "factor?", result: "please answer" },
       { reason: "question", action: { type: "agent_spawn", agent: "worker", task: 1 } }) }];
   assert.deepEqual(questionFailures(copy), []);
@@ -75,7 +75,7 @@ for (const name of ["agent_read", "agent_wait", "agent_spawn"]) {
     const copy = evidence().first, call = copy.calls[0], question = call.value.agents[0];
     if (name !== "agent_read") {
       call.name = name;
-      call.args = name === "agent_wait" ? { agents: ["worker"] } : { agent: "worker", profile: "reader", difficulty: 3, wait_ms: 60000 };
+      call.args = name === "agent_wait" ? { agents: ["worker"] } : { agent: "worker", profile: "reader", reasoning_difficulty: 3, wait_ms: 60000 };
       call.value.reason = "question";
     }
     assert.deepEqual(questionFailures(copy), []);

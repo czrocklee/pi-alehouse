@@ -8,7 +8,8 @@ const source = new URL("./presets.json", import.meta.url);
 export const starterPath = fileURLToPath(source);
 
 // Parse afresh so test mutations never contaminate another fixture; never
-// consult the developer's ~/.pi/agent.
+// consult the developer's ~/.pi/agent. Definitions use only version/slots;
+// this helper does not convert or admit retired flat definition inputs.
 export const starterConfig = () => JSON.parse(readFileSync(source, "utf8"));
 export const presetConfig = (presets = {}, rest = {}) => {
   const starter = starterConfig();

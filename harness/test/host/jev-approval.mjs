@@ -249,7 +249,7 @@ const effective = {
   parent_thinking: "off",
   thinking_resolution: "identity",
   profile: "reader",
-  difficulty: 3, strength: "standard",
+  difficulty: 3, strength: "d3",
   preset: "fixture",
   preset_version: "v1",
   selection_digest: "1".repeat(64),

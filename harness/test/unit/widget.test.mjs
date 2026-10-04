@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { HarnessWidget, renderWidget, renderWidgetLines } from "../../dist/ui/agent-widget.js";
 import { describeActivity, describeToolArgs, formatContextTokens, formatMs, formatTurns, shortPath }
   from "../../dist/ui/format.js";
@@ -16,7 +16,8 @@ const theme = { fg: (_color, text) => text, bold: (text) => text };
 const owner = { blocked: false, resident: 2, resident_limit: 8 };
 const base = { turns: 3, max_turns: 256, elapsed_ms: 12400, tool_uses: 2, active_tools: [],
   preview: "", question: false, limit_reached: false, pending_messages: 0,
-  has_run_warnings: false, finishing: false, name: "", profile: "editor", model: "m", effort: "high", description: "Task" };
+  has_run_warnings: false, finishing: false, name: "", profile: "editor", difficulty: 3, model: "m",
+  effort: "high", description: "Task" };
 const run = (id, overrides) => ({ ...base, agent_id: id, run_id: `${id}-run`, ...overrides });
 const render = (runs, options = {}) => renderWidgetLines({ runs, owner, spinnerFrame: 0, width: 120, theme,
   shouldShowFinished: () => true, ...options });
@@ -39,7 +40,7 @@ test("the body is ordered finished, running, queued and the tree closes exactly 
 
 test("a trailing activity line hands its corner to the header above it", () => {
   const lines = render([run("r", { status: "running", name: "solo" })]);
-  assert.deepEqual(lines.slice(1), ["└─ ⠋ solo (editor) [m/high] → Task · ↻3≤256 · ▸2 · 12.4s",
+  assert.deepEqual(lines.slice(1), ["└─ ⠋ solo (editor/d3) [m/high] → Task · ↻3≤256 · ▸2 · 12.4s",
     "   " + "  ⎿  thinking…"]);
   assert.equal(lines.filter((line) => line.includes("│")).length, 0);
 });
@@ -225,9 +226,125 @@ test("a recorded Run issue does not claim that resources are still unclosed", (t
 });
 
 test("an Agent without a nickname is named by its profile, never labelled twice", () => {
-  assert.match(render([run("a", { status: "completed" })])[1], /^└─ ✓ editor \[m\/high\] → Task/);
+  assert.match(render([run("a", { status: "completed" })])[1], /^└─ ✓ editor \(d3\) \[m\/high\] → Task/);
   assert.match(render([run("a", { status: "completed", name: "scout" })])[1],
-    /^└─ ✓ scout \(editor\) \[m\/high\] → Task/);
+    /^└─ ✓ scout \(editor\/d3\) \[m\/high\] → Task/);
+});
+
+test("the widget shows every profile's admitted difficulty beside its nickname in every Run state", () => {
+  const profiles = ["reader", "editor", "researcher"];
+  const statuses = ["running", "completed", "failed"];
+  for (const profile of profiles) for (const difficulty of [1, 2, 3, 4, 5]) for (const status of statuses) {
+    const line = render([run("a", { name: "orca", profile, difficulty, status })])[1];
+    const identity = `orca${status === "failed" ? " · failed" : ""} (${profile}/d${difficulty})`;
+    assert.ok(line.includes(identity), `${status} ${profile}/d${difficulty}: ${line}`);
+  }
+
+  const styled = { fg: (_color, text) => `\x1b[33m${text}\x1b[0m`, bold: text => `\x1b[1m${text}\x1b[0m` };
+  for (const width of [8, 16, 24, 40]) {
+    const lines = render([run("a", { name: "orca", profile: "researcher", difficulty: 5,
+      status: "running", description: "Review source and tests" })], { width, theme: styled });
+    for (const line of lines) assert(visibleWidth(line) <= width, `${width}: ${visibleWidth(line)} ${line}`);
+  }
+});
+
+test("the main widget projects difficulty from effective settings without changing or reusing them", (t) => {
+  const view = viewOf("orca-id", "running");
+  view.name = "orca";
+  // Deliberately unlike the slot: the UI must show the assessment, not infer it.
+  view.effective_settings = { ...view.effective_settings, profile: "researcher", difficulty: 5,
+    strength: "d3", thinking: "xhigh" };
+  const before = structuredClone(view);
+  const h = mounted([view]); t.after(() => h.widget.dispose());
+  h.widget.wake();
+  const line = h.lines()[1];
+  assert.match(line, /orca \(researcher\/d5\) \[m\/xhigh\]/);
+  assert.equal(h.lines()[1], line, "repainting the same Run reuses its admitted difficulty");
+  assert.deepEqual(view, before, "projection never rewrites effective settings or the Run");
+});
+
+test("a long nickname yields before the difficulty tag", () => {
+  const line = render([run("a", { name: "n".repeat(32), status: "completed", description: "" })], { width: 40 })[1];
+  assert.match(line, /\(editor\/d3\)/, line);
+  assert.ok(visibleWidth(line) <= 40, line);
+  assert.doesNotMatch(line, /n{32}/);
+});
+
+test("crowded 40/56-column warning rows keep a name prefix, complete tag and counted pending facts", () => {
+  const styled = { fg: (color, text) => `\x1b[${color === "error" ? 31 : color === "warning" ? 33 : 90}m${text}\x1b[0m`,
+    bold: (text) => `\x1b[1m${text}\x1b[0m` };
+  for (const width of [40, 56]) for (const name of ["otter", "复核者", "复核审查者".repeat(8)]) {
+    for (const status of ["completed", "failed"]) for (const th of [theme, styled]) {
+      const row = run("immutable-id", { name, profile: "reader", difficulty: 3, status,
+        has_run_warnings: true, pending_messages: 1, error: "SDK broke: 失败说明".repeat(20) });
+      const before = structuredClone(row);
+      const frame = renderWidget({ runs: [row], width, theme: th, owner, spinnerFrame: 0, shouldShowFinished: () => true });
+      const text = stripTerminalSequences(frame.lines[1]);
+      assert(text.includes(name === "otter" ? "ott" : "复"), text);
+      assert(text.includes("(reader/d3)"), text);
+      const warning = text.match(/run warning|warn|!/)?.index;
+      const pending = text.match(/1 pending|1pend/)?.index;
+      assert.notEqual(warning, undefined, text);
+      assert.notEqual(pending, undefined, text);
+      assert(warning < pending, text);
+      if (status === "failed") {
+        assert.match(text, /failed/);
+        assert(pending < text.indexOf("failed"), text);
+        assert.doesNotMatch(text, /SDK broke: 失败说明SDK broke: 失败说明/);
+      }
+      for (const optional of ["[m/high]", "→", "↻"]) {
+        if (text.includes(optional)) assert(pending < text.indexOf(optional), text);
+      }
+      assert.doesNotMatch(text, /dropped|lost|never reached/);
+      if (th === styled) assert(["run warning", "warn", "!"].some((signal) =>
+        frame.lines[1].includes(styled.fg("error", signal))), frame.lines[1]);
+      assert.equal(frame.hits[1], "immutable-id");
+      assert.deepEqual(row, before);
+      assert(frame.lines.every((line) => visibleWidth(line) <= width));
+    }
+  }
+});
+
+test("crowded attention retains questions, cancellation, finishing and turn limits before optional metadata", () => {
+  for (const width of [40, 56]) for (const [status, extra, state] of [
+    ["needs_input", { question: true }, /needs answer|answer\?/],
+    ["needs_input", { question: false }, /needs input|input\?/],
+    ["cancelling", {}, /cancelling/],
+    ["running", { finishing: true }, /finishing/],
+    ["completed", { limit_reached: true }, /turn limit|limit/],
+    ["cancelled", {}, /cancelled/],
+  ]) {
+    const frame = renderWidget({ runs: [run("identity", { name: "otter", profile: "reader", difficulty: 3,
+      status, ...extra, has_run_warnings: true, pending_messages: 1 })], width, theme, owner,
+    spinnerFrame: 0, shouldShowFinished: () => true });
+    const text = stripTerminalSequences(frame.lines[1]);
+    assert.match(text, /ot(?:t|…)/);
+    assert.match(text, /\(reader\/d3\)/);
+    assert.match(text, /run warning|warn|!/);
+    assert.match(text, /1 pending|1pend/);
+    assert.match(text, state);
+    assert(text.search(/1 pending|1pend/) < text.search(state), text);
+    assert.equal(frame.hits[1], "identity");
+    assert(frame.lines.every((line) => visibleWidth(line) <= width));
+  }
+});
+
+test("wide attention wording and failed explanation stay unchanged", () => {
+  for (const [status, state] of [["completed", ""], ["failed", " · failed: SDK broke"]]) {
+    const line = render([run("a", { name: "otter", profile: "reader", difficulty: 3, status,
+      has_run_warnings: true, pending_messages: 1, error: "SDK broke" })], { width: 180 })[1];
+    assert.equal(line, `└─ ${status === "failed" ? "✗" : "✓"} otter · run warning · 1 pending${state} (reader/d3) [m/high] → Task · ↻3≤256 · ▸2 · 12.4s`);
+  }
+});
+
+test("impossible-width rows keep a nickname prefix before clipped attention and omit the whole tag", () => {
+  for (const width of [8, 12, 20]) {
+    const lines = render([run("a", { name: "otter", profile: "researcher", difficulty: 5, status: "failed",
+      has_run_warnings: true, pending_messages: 1, error: "Detailed failure" })], { width });
+    assert.match(lines[1], /^└─ ✗ o/);
+    assert.doesNotMatch(lines[1], /\(research/);
+    assert(lines.every((line) => visibleWidth(line) <= width));
+  }
 });
 
 test("a fixed nickname points to the current task, which can use more than forty columns", () => {
@@ -235,7 +352,7 @@ test("a fixed nickname points to the current task, which can use more than forty
   for (const status of ["running", "completed"]) {
     const frame = renderWidget({ runs: [run("orca-id", { name: "orca", status, description })],
       owner, spinnerFrame: 0, width: 180, theme, shouldShowFinished: () => true });
-    assert(frame.lines[1].includes(`orca (editor) [m/high] → ${description} · ↻`), frame.lines[1]);
+    assert(frame.lines[1].includes(`orca (editor/d3) [m/high] → ${description} · ↻`), frame.lines[1]);
     assert.match(frame.lines[1], /▸2 · 12\.4s$/);
     assert.equal(frame.hits[1], "orca-id", "labels and their new separator never become click identities");
     assert(frame.lines.every((line) => visibleWidth(line) <= 180));
@@ -410,7 +527,7 @@ test("the widget reports the renderer it painted into, so the pane can choose ho
     isolation: "shared", elapsed_ms: 1, turns: 1, max_turns: 8, cleanup_errors: [], discarded_inputs: [],
     effective_settings: { provider: "p", model: "m", thinking: "off", parent_thinking: "off",
       thinking_resolution: "identity", profile: "editor",
-      difficulty: 3, strength: "standard", preset: "fixture", preset_version: "v1", selection_digest: "1".repeat(64),
+      difficulty: 3, strength: "d3", preset: "fixture", preset_version: "v1", selection_digest: "1".repeat(64),
       cwd: "/tmp", tools: [], definition_digest: "0".repeat(64), context_mode: "none" } };
   const widget = new HarnessWidget({ list: () => [run],
     stats: () => ({ resident: 1, cleanup_uncertain: false }) }, 8);
@@ -438,7 +555,7 @@ const viewOf = (agent_id, status, run_id = `${agent_id}-1`) => ({
   resident: true, resumable: false, owner_blocked: false, pending_messages: 0, isolation: "shared",
   elapsed_ms: 1000, turns: 1, max_turns: 8, cleanup_errors: [], discarded_inputs: [],
   effective_settings: { provider: "p", model: "m", thinking: "off", parent_thinking: "off",
-    thinking_resolution: "identity", profile: "editor", difficulty: 3, strength: "standard",
+    thinking_resolution: "identity", profile: "editor", difficulty: 3, strength: "d3",
     preset: "fixture", preset_version: "v1", selection_digest: "1".repeat(64), cwd: "/w",
     tools: [], definition_digest: "0".repeat(64), context_mode: "none" },
 });
@@ -469,7 +586,7 @@ test("the paint loop starts when a Run is there, not when delegation is only abo
   // tool, must not be what decides whether a running worker is visible.
   h.set([viewOf("a", "running")]);
   h.widget.wake();
-  assert.match(h.lines()[1], /^└─ \S editor \[m\/off\] → Task/, "the Run is on screen as soon as it exists");
+  assert.match(h.lines()[1], /^└─ \S editor \(d3\) \[m\/off\] → Task/, "the Run is on screen as soon as it exists");
   t.mock.timers.tick(240);
   assert.ok(h.renders() >= 3, `the spinner keeps animating (${h.renders()} frames)`);
   h.set([viewOf("a", "completed")]);
@@ -730,7 +847,7 @@ test("a detail title stays one row however it is labelled", () => {
     description: "Check\nthe\ttests", status: "running", turns: 1, max_turns: 8, elapsed_ms: 10,
     effective_settings: { provider: "p", model: "m", thinking: "high", parent_thinking: "high",
       thinking_resolution: "identity", profile: "worker\nreadonly",
-      difficulty: 5, strength: "strong", preset: "fixture", preset_version: "v1", selection_digest: "1".repeat(64),
+      difficulty: 5, strength: "d5", preset: "fixture", preset_version: "v1", selection_digest: "1".repeat(64),
       cwd: "/w", tools: [], context_mode: "none" },
     owner_blocked: false, pending_messages: 0, cleanup_errors: [], discarded_inputs: [],
     execution_exited: false, finalization_pending: false, resumable: true, isolation: "shared", phase: "executing" };

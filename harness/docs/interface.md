@@ -24,8 +24,16 @@ is who; the description after `→` is what that Agent is doing on its latest Ru
 For example:
 
 ```text
-orca (editor) [example-model/high] → Review GTK direct-entry safety · …
+orca (editor/d3) [example-model/high] → Review GTK direct-entry safety · …
 ```
+
+The identity tag joins permission profile and creation-time reasoning difficulty:
+`(reader/d1)`, `(editor/d3)`, or `(researcher/d5)`. The slash separates two
+independent properties; `d1` is easiest and `d5` hardest. The rating is not
+thinking effort or permission strength, and reuse keeps it unchanged. A long
+nickname is shortened before this tag. Crowded rows shorten warning/status
+wording before losing a recognizable nickname and the tag; full diagnostics
+remain in Agent details.
 
 The task uses all remaining columns rather than a fixed 40-column cap. Warnings,
 identity and compact metrics retain priority; when no readable task fits, both
@@ -55,8 +63,9 @@ The title carries identity/task; live status and its spinner or outcome glyph
 sit at the lower left, before the Agent/line counts, in both docked and floating layouts.
 
 The pane shows the fields a row cannot: identity, profile/name/task, internally
-resolved `dN→slot`, model, actual effort and its recorded source (fixed preset,
-parent identity, or compatibility map; user override when present). Effort is
+resolved difficulty slot `d1`–`d5`, model, actual effort and its recorded source (fixed preset,
+parent identity, or automatic mapping; user override when present). Historical
+manual maps retain the distinct `preset map` label. Effort is
 labelled fixed at creation, not editable on a resident Agent. The pane also shows
 tool facts, phase, full cumulative usage split, active-tool arguments, streaming
 draft, each stalling condition, and a child transcript.  Context occupancy is
@@ -120,13 +129,15 @@ popover column (below) and takes the pointer too: `×` cancels, a left click on
 a preset applies it as a menu would, and the wheel moves the highlight so a
 preset's slots can be read before choosing.  It displays the active
 marker, each configured preset's version, exact
-`light`/`standard`/`strong` slot IDs with their difficulty ranges and current
-effective thinking levels, plus new-Agent routing scope, clipping long names
-to the terminal width. Inherited levels show the resolved current preview, not
-the full compatibility map; an unresolved preview says `unavailable`. A `*` marks applied session effort overrides. Difficulty maps to
-these existing slots; the picker remains the operator view of resolved routing.
-Model-facing tool replies report only `settings.profile` and
-`settings.difficulty`. The first option is `off`: its detail explains that it disables new,
+slot IDs in hardest-first order (`d5`, `d4`, `d3`, `d2`, `d1`), one per
+reasoning difficulty, and current effective thinking levels, plus new-Agent
+routing scope, clipping long names
+to the terminal width. Inherited levels show the current preview after the
+automatic supported-level rule; an unresolved preview says `unavailable`.
+A `*` marks applied session effort overrides. Difficulty maps to
+these slots one-to-one; the picker remains the operator view of resolved routing.
+Model-facing roster replies report only `profile` and
+`reasoning_difficulty` as their allocation fields. The first option is `off`: its detail explains that it disables new,
 resumed, and steered work while accepted work continues, instead of showing
 model slots. It appears as `off` in the footer; activity remains visible in
 the existing widget rather than a duplicate roster. Choosing a model preset
@@ -137,11 +148,18 @@ active effort overrides—not the highlighted preset or slider preview. Project 
 at minimum height they replace verbose navigation hints rather than adding rows.
 **P Settings** routes to preferences; **N New** and
 **C Edit** route to custom model-preset editing (C is unavailable on `off`).
-Click a slot's model text, or press **1 / 2 / 3** for light / standard / strong,
-to edit only that model. These routes close the picker before opening their
+Click a slot's model text, or press **1 / 2 / 3 / 4 / 5** for `d1`–`d5`,
+to edit only that model. Digits address slot IDs, not row positions: **1** still
+edits `d1` and **5** edits `d5`. These routes close the picker before opening their
 next dialog; permission prompts cancel an open model selection without applying.
 The picker returns a candidate name or management route. Effort changes use a
 synchronous callback; routing code owns validated audited publication.
+Short panels show a window of the five slots: `Tab` / `Shift+Tab` moves that
+window while `↑` / `↓` still navigates presets. Only painted model text is a
+mouse target; **1–5** remains the direct keyboard route to each slot. Compact
+rows retain mode/eagerness shortcuts when they fit. Below the minimum usable
+viewport, routing, editing, settings and saving do nothing; cancellation and
+return from the effort page still work.
 
 ### Effort editor
 
@@ -152,16 +170,18 @@ nothing. Confirming audits the selection and reopens its effort page. `off` has
 no effort editor. The editor always states **new Agents only; main unchanged**:
 accepted running, queued, idle and resumed Agents keep their original allocation.
 
-- `↑`/`↓` chooses light, standard, or strong; `←`/`→` changes the selected policy
+- `↑`/`↓` follows the displayed `d5`→`d1` order, starting at `d5`;
+  `←`/`→` changes the selected policy
   immediately after validation and synchronous audit. Pointer arrows behave the
-  same; scrolling and slot-label clicks only move the selection. Bounded arrows
+  same; scrolling, **1–5**, and slot-label clicks only move the selection. Short
+  panels scroll the slot window to keep the selected slot visible. Bounded arrows
   that cannot change the value do not audit.
 - **preset default** removes that slot's override. **inherit** explicitly follows
   parent thinking at creation, with a current resolved preview or advisory warning.
   Inheritance warnings (including unavailable models) never block saving; the
   actual check happens at spawn. Other values are fixed levels supported by
   that model in Pi's registry.
-- `R` / **Reset** immediately removes all three overrides, restoring preset
+- `R` / **Reset** immediately removes all five overrides, restoring preset
   defaults. It does not necessarily select `inherit`.
 - Every proposed change validates all effective **fixed** slots against fresh
   model metadata before audit/publication. An unavailable model or unsupported
@@ -232,7 +252,9 @@ supported; see [session replacement](#session-replacement-confirmation) and
 Use **N New** or `/harness-preset-edit` to create a user model preset; use **C
 Edit** on a highlighted preset or `/harness-preset-edit NAME` to edit it. The
 interactive editor reuses Pi's native `/model` selector, including fuzzy search
-and the active keybindings, separately for `light`, `standard`, and `strong`.
+and the active keybindings, separately for each slot in `d5`→`d1` order.
+This is editing order only: the reasoning score still increases from 1 (easiest)
+to 5 (hardest), with unchanged one-to-one routing.
 The title names the preset and slot; the current slot model is preselected when
 available. It uses the session's public `scopedModels` snapshot—the same current
 range `/model` uses, including `--models` and `enabledModels`. **Tab** switches
@@ -242,13 +264,16 @@ removed from both lists. Scope is read again for each slot, not copied from
 settings at startup. Choosing a model returns it to the preset draft: it does not change the main model or Pi's
 model defaults, and the native main-model default-save action is not connected.
 Escape cancels the draft. RPC clients retain the standard model-list dialog.
-Each slot still has its own catalogue effort default. After confirmation, it audits and selects the edited/created preset;
+Each slot stores its model and catalogue effort default in one `slots.dN`
+object. Inheritance maps unsupported enabled levels automatically; there is no
+compatibility-map editor or configuration. Session/scoped effort overrides remain separate from
+that definition. After confirmation, it audits and selects the edited/created preset;
 this changes only the user model catalogue: permission profiles `reader`,
 `editor`, and `researcher` remain fixed and are not editable. Changing a preset
 affects future Agent admissions; accepted Agents keep their allocated
-configuration, and the main model is unchanged. If a slot's model changes, its
-old thinking compatibility map is cleared because the map belongs to that
-model. Existing session effort overrides are retained and may mask newly edited
+configuration, and the main model is unchanged. The selected model's current
+SDK-supported levels determine inherited thinking at admission.
+Existing session effort overrides are retained and may mask newly edited
 catalogue defaults; use **E Edit effort** to change or reset session overrides.
 For a single-slot edit, selecting the model applies immediately to an active
 preset through the same validated audit. Editing an inactive preset asks before
@@ -259,7 +284,11 @@ In fullscreen the native selector uses a closable rounded popover near the
 clicked model (centered for keyboard entry), clamped to the terminal. Painted
 model items are clickable; search, IME focus and Tab remain native. Short screens
 reduce the list around its selected item; a too-small viewport cannot apply an
-unseen choice. Regular TUI stays docked. The worker panel is not auto-reopened.
+unseen choice. Enter and a model click recheck the current terminal size and
+the submitted model. A previous paint cannot authorize a choice that is no
+longer visible. An unseen keyboard choice shows a warning; an unverified model
+identity cancels that draft with a warning to reopen/refresh, rather than
+silently leaving a disposed native selector waiting. Regular TUI stays docked. The worker panel is not auto-reopened.
 Direct settings/editor commands and picker routes share one interaction latch;
 Agent detail and Delegation panels cannot open over that dialog sequence.
 Permission yield is rechecked before each model selector, including queued factories.

@@ -339,7 +339,7 @@ for (const closing of ["escape", "toggle", "approval"]) test(`immediate effort a
   const h = liveEffortPanels(t), before = h.router.current(), opening = h.panels.selectPreset("", h.ctx);
   h.component.handleInput("e"); h.component.handleInput("\u001b[C");
   assert.equal(h.audits.length, 1);
-  assert.deepEqual(h.router.current().effort_overrides, { light: "inherit" });
+  assert.deepEqual(h.router.current().effort_overrides, { d5: "inherit" });
   assert.deepEqual(before.effort_overrides, {}, "an already allocated snapshot is unchanged");
   assert(h.capabilities > 0);
   if (closing === "escape") { h.component.handleInput("\u001b"); h.component.handleInput("\u001b"); }
@@ -347,15 +347,15 @@ for (const closing of ["escape", "toggle", "approval"]) test(`immediate effort a
   else h.bus.emit("permissions:ui_prompt", { requestId: "effort-approval" });
   await opening;
   assert.equal(h.audits.length, 1);
-  assert.deepEqual(h.router.current().effort_overrides, { light: "inherit" });
+  assert.deepEqual(h.router.current().effort_overrides, { d5: "inherit" });
   assert.deepEqual(h.errors, []);
 });
 
 test("multiple live edits, reset, Enter/back and later preset selection use the latest own commit", async (t) => {
   const h = liveEffortPanels(t), opening = h.panels.selectPreset("", h.ctx);
   h.component.handleInput("e"); h.component.handleInput("\u001b[C");
-  h.component.handleInput("\u001b[B"); h.component.handleInput("\u001b[C");
-  assert.deepEqual(h.router.current().effort_overrides, { light: "inherit", standard: "inherit" });
+  h.component.handleInput("3"); h.component.handleInput("\u001b[C");
+  assert.deepEqual(h.router.current().effort_overrides, { d5: "inherit", d3: "inherit" });
   h.component.handleInput("r");
   assert.deepEqual(h.router.current().effort_overrides, {});
   assert.equal(h.audits.length, 3);
@@ -379,7 +379,7 @@ for (const failure of ["validation", "audit"]) test(`a live ${failure} failure p
   assert.deepEqual(h.audits, []);
   assert.equal(h.errors[0].code, failure === "validation" ? "THINKING_INCOMPATIBLE" : "PRESET_AUDIT_FAILED");
   assert.equal(h.latched.length, failure === "audit" ? 1 : 0);
-  assert.match(h.component.render(76).join("\n"), /light:default/);
+  assert.match(h.component.render(76).join("\n"), /›‹d5:default/);
   assert.match(h.component.render(76).join("\n"), /Change not applied/);
   h.component.handleInput("\u001bs"); await opening;
 });
@@ -395,7 +395,7 @@ for (const invalidation of ["external", "round-trip", "router", "retire", "dispo
     else if (invalidation === "dispose") h.panels.dispose();
     else h.component.handleInput("\u001b"); // settled, before the awaiting continuation runs
     const before = original.current();
-    assert.equal(setter("fixture-balanced", { light: "off" }), undefined);
+    assert.equal(setter("fixture-balanced", { d1: "off" }), undefined);
     assert.deepEqual(original.current(), before);
     assert.deepEqual(h.audits, []);
     if (h.component.isOpen()) h.component.handleInput("\u001bs");
@@ -423,9 +423,10 @@ for (const accepted of [false, true]) test(`inactive effort entry confirms after
   } else {
     assert.equal(h.components.length, 2, "confirmed selection reopens directly on its effort page");
     assert.match(h.component.render(76).join("\n"), /Effort · fixture-balanced/);
+    assert.match(h.component.render(76).join("\n"), /›‹d5:default/, "confirmed reopen starts hardest first");
     assert.equal(h.audits.length, 1, "enabling is explicitly audited once");
     h.component.handleInput("\u001b[C");
-    assert.deepEqual(h.router.current().effort_overrides, { light: "inherit" });
+    assert.deepEqual(h.router.current().effort_overrides, { d5: "inherit" });
     assert.equal(h.audits.length, 2);
     h.component.handleInput("\u001bs"); await opening;
   }
@@ -456,14 +457,17 @@ for (const invalidation of ["external", "round-trip", "router", "retire", "dispo
 
 test("live effort continuations do not reread changed or missing catalogue files", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "harness-live-effort-")); t.after(() => rm(root, { recursive: true, force: true }));
-  const path = join(root, "presets.json"), body = { version: "v1", models: { light: "fixture/old", standard: "fixture/old", strong: "fixture/old" } };
-  await writeFile(path, JSON.stringify({ version: 2, defaultPreset: "team", presets: { team: body, other: body } }));
+  const path = join(root, "presets.json"), body = { version: "v1", slots: {
+    d1: { model: "fixture/old" }, d2: { model: "fixture/old" }, d3: { model: "fixture/old" },
+    d4: { model: "fixture/old" }, d5: { model: "fixture/old" },
+  } };
+  await writeFile(path, JSON.stringify({ version: 3, defaultPreset: "team", presets: { team: body, other: body } }));
   const h = liveEffortPanels(t, { router: new PresetRouter(path) }), opening = h.panels.selectPreset("", h.ctx);
-  h.component.handleInput("e"); h.component.handleInput("\u001b[C");
+  h.component.handleInput("e"); h.component.handleInput("1"); h.component.handleInput("\u001b[C");
   await writeFile(path, "invalid JSON must not be reread");
-  h.component.handleInput("\u001b[B"); h.component.handleInput("\u001b[C");
-  assert.deepEqual(h.router.current().effort_overrides, { light: "inherit", standard: "inherit" });
-  assert.equal(h.router.current().models.light, "fixture/old");
+  h.component.handleInput("5"); h.component.handleInput("\u001b[C");
+  assert.deepEqual(h.router.current().effort_overrides, { d1: "inherit", d5: "inherit" });
+  assert.equal(h.router.current().models.d1, "fixture/old");
   await rm(path);
   h.component.handleInput("r"); h.component.handleInput("\r"); h.component.handleInput("\u001b[A"); h.component.handleInput("\r");
   await opening;
@@ -476,11 +480,11 @@ test("immediate efforts stage explicit persistent leaves without writing files o
   const store = new SettingsStore({ agentDir: join(root, "agent"), cwd: root, projectTrusted: true }); store.setScope("workspace");
   const h = liveEffortPanels(t, { store, afterCommit: () => { throw new Error("FOOTER_FAILED_AFTER_COMMIT"); } });
   const opening = h.panels.selectPreset("", h.ctx);
-  h.component.handleInput("e"); h.component.handleInput("\u001b[C");
-  assert.deepEqual(store.get("workspace").effort["fixture-balanced"], { light: "inherit" });
-  assert.match(h.component.render(76).join("\n"), /light:inherit/);
+  h.component.handleInput("e"); h.component.handleInput("1"); h.component.handleInput("\u001b[C");
+  assert.deepEqual(store.get("workspace").effort["fixture-balanced"], { d1: "inherit" });
+  assert.match(h.component.render(76).join("\n"), /d1:inherit/);
   h.component.handleInput("r");
-  assert.equal(store.get("workspace").effort["fixture-balanced"].light, null);
+  assert.equal(store.get("workspace").effort["fixture-balanced"].d1, null);
   h.component.handleInput("\u001bs"); await opening;
   assert.deepEqual(h.router.current().effort_overrides, {});
   assert.equal(h.audits.length, 2);
@@ -801,11 +805,11 @@ test("a host disposed while the dialog was awaited receives no further callbacks
 test("an edit-model route reaches the host callback after the picker settles with exact slot and position", async (t) => {
   const keyboard = await managementPanels(t);
   const opening = keyboard.panels.selectPreset("", keyboard.ctx);
-  assert.match(keyboard.component.render(76).join("\n"), /123/, "the callback's presence gates the picker's model routes");
-  keyboard.component.handleInput("2"); // keyboard: the standard slot, no position
+  assert.match(keyboard.component.render(76).join("\n"), /12345/, "the callback's presence gates the picker's model routes");
+  keyboard.component.handleInput("5"); // keyboard: the fifth slot, no position
   await opening;
   assert.deepEqual(keyboard.calls.map(([kind, name, slot, position]) => [kind, name, slot, position]),
-    [["editModel", "fixture-balanced", "standard", undefined]]);
+    [["editModel", "fixture-balanced", "d5", undefined]]);
   assert.equal(keyboard.calls[0][4], true, "the dialog runs only after ui.custom settled");
   assert.equal(keyboard.calls[0][5], 1, "no automatic reopen of the worker panel");
   assert.deepEqual(keyboard.published, [], "a model route never publishes a candidate");
@@ -816,13 +820,13 @@ test("an edit-model route reaches the host callback after the picker settles wit
   const clickOpening = clicked.panels.selectPreset("", clicked.ctx);
   assert.equal(clicked.panels.isFullscreen(), true, "the renderer projection reads the captured mode");
   const lines = clicked.component.render(76).map(stripTerminalSequences);
-  const y = lines.findIndex((line) => line.includes("fixture-light-model"));
+  const y = lines.findIndex((line) => line.includes("d1") && line.includes("fixture-light-model"));
   assert(y > 0, lines.join("\n"));
   clicked.component.handleMouse({ type: "click", button: "left",
     x: lines[y].indexOf("fixture-light-model"), y, screenX: 33, screenY: 9 });
   await clickOpening;
   assert.deepEqual(clicked.calls.map(([kind, name, slot, position]) => [kind, name, slot, position]),
-    [["editModel", "fixture-balanced", "light", { row: 9, col: 33 }]],
+    [["editModel", "fixture-balanced", "d1", { row: 9, col: 33 }]],
     "the click's absolute coordinates reach the callback verbatim");
   assert.deepEqual(clicked.published, []);
 });
@@ -854,7 +858,7 @@ test("model routes share the management latch, error reporting and stale-host gu
   const denied = await managementPanels(t, { editModel: null });
   const deniedOpening = denied.panels.selectPreset("", denied.ctx);
   const text = denied.component.render(76).join("\n");
-  assert.doesNotMatch(text, /123/, "no model hint without the host callback");
+  assert.doesNotMatch(text, /12345/, "no model hint without the host callback");
   denied.component.handleInput("1"); // gated off: the picker stays open
   denied.component.handleInput("\u001b");
   await deniedOpening;
@@ -930,7 +934,7 @@ test("a route finishing while a permission ask appears is dropped, and works aga
   h.component.handleInput("1");
   await next;
   assert.deepEqual(h.calls.map(([kind, name, slot]) => [kind, name, slot]),
-    [["editModel", "fixture-balanced", "light"]], "the route works once the ask has settled");
+    [["editModel", "fixture-balanced", "d1"]], "the route works once the ask has settled");
   assert.deepEqual(h.published, []);
 
   // The same pane gate drops a settings route finishing into a pending ask.

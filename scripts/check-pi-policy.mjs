@@ -203,7 +203,7 @@ try {
     assert.equal(resolver.checkPermission("skill", name).state, "allow");
   }
   for (const profile of ["editor", "reader", "researcher"]) {
-    assert.equal(resolver.checkPermission("agent_spawn", { agent: "orca", profile, difficulty: 3, prompt: "fixture" }).state, "allow");
+    assert.equal(resolver.checkPermission("agent_spawn", { agent: "orca", profile, reasoning_difficulty: 3, prompt: "fixture" }).state, "allow");
   }
   for (const tool of ["agent_run", "agent_send", "agent_answer", "agent_wait", "agent_read", "agent_interrupt", "agent_kill", "agent_list"]) {
     assert.equal(resolver.checkPermission(tool, {}).state, "allow", `Harness management: ${tool}`);

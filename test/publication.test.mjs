@@ -5,13 +5,15 @@ import test from "node:test";
 const json = (path) => JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
 
 test("published routing defaults are neutral and regression routes are explicitly synthetic", () => {
-  assert.deepEqual(json("resources/harness-presets.json"), { version: 2, defaultPreset: "off", presets: {} });
+  assert.deepEqual(json("resources/harness-presets.json"), { version: 3, defaultPreset: "off", presets: {} });
   const fixture = json("harness/test/support/presets.json");
   assert.match(fixture.defaultPreset, /^fixture-/);
   for (const [name, preset] of Object.entries(fixture.presets)) {
     assert.match(name, /^fixture-/);
     assert.match(preset.version, /^fixture-/);
-    for (const model of Object.values(preset.models)) assert.match(model, /^[^/]+\/fixture-/);
+    assert.deepEqual(Object.keys(preset.slots).sort(), ["d1", "d2", "d3", "d4", "d5"]);
+    assert.deepEqual(Object.keys(preset).sort(), ["slots", "version"]);
+    for (const slot of Object.values(preset.slots)) assert.match(slot.model, /^[^/]+\/fixture-/);
   }
 });
 

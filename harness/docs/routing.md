@@ -50,16 +50,19 @@ version; the picker, selection notices, and Agent detail retain it.
 Routing is deterministic, trusted configuration for **new** Agents. It is not
 model benchmarking, authentication, a provider fallback, or permission policy.
 The user selects the parent Pi model and thinking normally. The parent tool
-selects only a profile, required integer `difficulty` (1–5), and task. The fixed
-mapping is difficulty 1–2 → the preset's `light` slot, 3 → `standard`, and 4–5
-→ `strong`. Pi virtual selections (`api: "pi-virtual"`) are not supported in
+selects only a profile, required integer `reasoning_difficulty` (1–5, easiest
+to hardest), and task. The fixed
+mapping is one-to-one: difficulty 1 → `d1`, 2 → `d2`, 3 → `d3`,
+4 → `d4`, and 5 → `d5`. Pi virtual selections (`api: "pi-virtual"`) are not supported in
 worker slots: admission rejects them with `PRESET_MODEL_UNAVAILABLE` before
 child creation, rather than allowing a later per-request physical route change.
 Configure an exact physical model; the parent may still use Pi virtual routing.
 The harness resolves one exact worker model from that slot and its
-effort policy: a fixed level or `inherit` from parent thinking. Only inherited
-thinking may use the preset's explicit compatibility map. The fixed difficulty
-mapping, effort defaults, and session overrides participate in `selection_digest`.
+effort policy: a fixed level or `inherit` from parent thinking. Inherited
+thinking uses a deterministic automatic rule, not per-preset compatibility
+configuration. The fixed difficulty mapping, automatic-policy version
+(`ceiling-v1`), effort defaults, and session overrides participate in
+`selection_digest`.
 
 A resumed Agent keeps its admitted difficulty, preset/version/digest, internally
 resolved slot, exact provider/model, resolved thinking, profile digest, tools,
@@ -79,30 +82,33 @@ quality, independently of permission profile:
 
 Do not adjust difficulty for workload, importance, cost, or reassurance; cost
 belongs to the delegation decision, not the rating. These scoring
-anchors live in the model-visible `difficulty` parameter description. The fixed
+anchors live in the model-visible `reasoning_difficulty` parameter description. The fixed
 mapping above is operator documentation, not part of that scoring guidance; it
-is shared by all presets, with no per-preset thresholds. The existing
-`light`/`standard`/`strong` names remain internal routing slots, and slots may
-share a model.
+is shared by all presets, with no per-preset thresholds. The five slots are
+independently configurable and may share a model, with the same or different
+effort policies. Five slots do not require five distinct models.
 
 Difficulty is immutable Agent configuration. Resume does not accept or rescore
 it; creating a new Agent is required to allocate a different difficulty/route.
 A preset/model/thinking resolution failure is a configuration issue: report it
 and have the user adjust the worker preset, effort policy, or inherited parent
-thinking. Do not change difficulty to bypass the error or silently upgrade the route.
+thinking. Do not change `reasoning_difficulty` to bypass the error or silently upgrade the route.
 
 ## Effort
 
 Each slot has an optional `effort` policy: `inherit` or a Pi thinking level
 (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). Missing configuration
-means `inherit`, preserving older custom preset files.
+means `inherit`.
 
 - Fixed levels must be supported exactly by the registered model. They never
-  consult compatibility maps, clamp, or fall back. They do not need a parent
-  thinking level; a parent using `off` can explicitly allocate a `high` worker.
-- `inherit` captures parent thinking at the creation request. Exact model support
-  wins; otherwise only the selected slot's explicit `thinking` map may resolve
-  it. An inherited `off` cannot map to enabled thinking.
+  map, clamp, or fall back. They do not need a parent thinking level; a parent
+  using `off` can explicitly allocate a `high` worker.
+- `inherit` captures parent thinking at the creation request and uses the
+  [automatic rule](#automatic-inherited-thinking) below. Exact support wins.
+  Inheritance never crosses between `off` and enabled thinking. A non-reasoning
+  model that supports only `off` therefore fails an enabled parent on purpose;
+  set that slot's fixed `effort` to `off` if off is intended. Empty or
+  unknown-only capability metadata is not support for `off`.
 - The UI's **preset default** removes the session override; it is not a synonym
   for `inherit`. For example, a preset default can be fixed `high`.
 
@@ -134,23 +140,50 @@ See [the editor](interface.md#effort-editor) and
 
 ## Neutral catalogue and model resolution
 
-Explicit initialization creates the required version-2 routing file only when
+Explicit initialization creates the required version-3 routing file only when
 absent. The neutral generated catalogue is
-`{ "version": 2, "defaultPreset": "off", "presets": {} }`. This base
+`{ "version": 3, "defaultPreset": "off", "presets": {} }`. This base
 `harness-presets.json` is the read-only catalogue for the UI and is never
 rewritten by preferences or preset editing; users may edit it directly. No
 worker model or provider credentials are selected by the project; the user must
 configure exact host-registered models before enabling new Agents.
 There are no hidden model presets or fallback defaults in TypeScript.
 `off` is a special built-in selection (`off-v1`), not a model route or permission
-profile; it has no model slots or thinking maps.
+profile; it has no model slots.
 
-For `inherit`, exact SDK support wins even when a map also names that source
-level; a map is used only if identity is unsupported. Missing/unsupported maps
-fail with `THINKING_INCOMPATIBLE`; there is no clamp, alias, automatic route
-upgrade, inventory dump, or hidden fallback. `off` cannot map to enabled
-thinking. Model-facing settings contain only `profile` and `difficulty`.
-Resolution errors add a bounded reason, `error.difficulty` and, for inherited
+### Automatic inherited thinking
+
+No `thinking` map is configured. The SDK's supported thinking levels for the
+selected physical model determine the result at admission:
+
+1. Keep the parent's exact level if supported (`identity`).
+2. If an unsupported parent level is `off`, fail with `THINKING_INCOMPATIBLE`.
+   Never turn thinking on implicitly.
+3. For enabled thinking, use the ordered levels
+   `minimal < low < medium < high < xhigh < max`. Choose the nearest supported
+   higher level; if there is none, use the model's highest supported enabled
+   level (`automatic_mapping`). SDK list order, duplicates and unknown level
+   names do not change this order.
+4. If the model supports no enabled level, fail rather than silently disabling
+   thinking. A non-reasoning model whose only supported level is `off` therefore
+   rejects `inherit` of an enabled parent. Configure fixed `effort: "off"` on
+   that slot when off is intended. Empty or unknown-only capability metadata
+   does not count as support for `off` and does not turn enabled thinking off.
+   Missing or invalid parent thinking still fails separately.
+
+For a child supporting low/high/max, minimal→low, medium→high and xhigh→max.
+For one supporting low/medium/high/xhigh, max→xhigh. Supported levels never
+change. These are label-compatibility rules, **not** a guarantee of equal
+compute, quality, latency or cost across models. Rounding upward can cost more;
+choose a fixed supported `effort` when the inherited adjustment is unwanted.
+The rule never changes the physical model or task difficulty. Accepted Agents
+keep the resolved level and provenance even if SDK metadata changes later.
+
+Model-facing settings contain only `profile` and `reasoning_difficulty`.
+The former `difficulty` tool argument is rejected without an alias. Internal
+admitted settings and historical journals retain the field name `difficulty`;
+this model-facing rename does not change their format or the slot order.
+Resolution errors add a bounded reason, `error.reasoning_difficulty` and, for inherited
 thinking, `parent_thinking`; never the preset, slot, model or resolved effort.
 Direct callers may not pass `model`, `thinking`, or `effort`.
 
@@ -220,28 +253,21 @@ ${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/harness-presets.json
 The path defines no keys, credentials, or provider setup. It is a required
 regular file (or a trusted symlink to one) up to 256 KiB. Missing or
 invalid configuration blocks harness initialization; there is no code-level
-preset fallback. The root is closed and must be version 2:
+preset fallback. The root is closed and must be version 3:
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "defaultPreset": "my-team",
   "presets": {
     "my-team": {
       "version": "2026-10-01",
-      "models": {
-        "light": "registered-provider/exact-light-id",
-        "standard": "registered-provider/exact-standard-id",
-        "strong": "registered-provider/exact-strong-id"
-      },
-      "effort": {
-        "light": "high",
-        "standard": "inherit",
-        "strong": "high"
-      },
-      "thinking": {
-        "light": { "minimal": "medium", "low": "medium" },
-        "standard": { "xhigh": "max" }
+      "slots": {
+        "d1": { "model": "registered-provider/exact-small-id", "effort": "low" },
+        "d2": { "model": "registered-provider/exact-small-id", "effort": "medium" },
+        "d3": { "model": "registered-provider/exact-medium-id", "effort": "inherit" },
+        "d4": { "model": "registered-provider/exact-large-id", "effort": "high" },
+        "d5": { "model": "registered-provider/exact-large-id", "effort": "max" }
       }
     }
   }
@@ -251,24 +277,28 @@ preset fallback. The root is closed and must be version 2:
 Preset names are 1--64 characters of `[A-Za-z0-9._-]`, beginning alphanumeric;
 `reload` and `off` are reserved. All other valid names are user-configured presets: they may be changed,
 renamed, or removed. `defaultPreset` must name one of these presets or be `off`;
-`{ "version": 2, "defaultPreset": "off", "presets": {} }` is valid. The
+`{ "version": 3, "defaultPreset": "off", "presets": {} }` is valid. The
 catalogue default applies only when starting a session with no branch selection
 or scoped `preset` preference. Optional top-level `defaultMode` (`manual`,
 `co-worker`, `lead`, `supervisor`) and
 `defaultEagerness` (`reserved`, `balanced`, `eager`) set the fresh-session
 [delegation mode](#delegation-mode) the same way. A preset body
-has only `version`, `models`, optional `effort`, and optional `thinking`; model
-slots must contain all three routing slots and exact `provider/model` strings.
-Effort accepts a partial slot map; missing slots default to `inherit`. Thinking slots/source/
-target keys use Pi vocabulary `off`, `minimal`, `low`, `medium`, `high`,
-`xhigh`, `max`. `thinking` and individual maps are optional; inherited levels
-then require exact SDK support. `off` may map only to `off`. Fixed effort never
-uses these maps. Unknown keys, malformed files, unregistered exact IDs, and
-unavailable levels fail before child creation.
+has only `version` and `slots`. `slots` must contain all five routing slots
+(`d1`–`d5`), each an object with a required exact `provider/model` string in
+`model` and optional `effort`. Model and default effort stay together in that
+one slot. Missing `effort` defaults to `inherit`; it accepts a Pi thinking level
+or `inherit`. Any per-slot `thinking` field is rejected, including an empty
+`thinking: {}` produced by the intermediate unpublished editor, not only a
+hand-authored populated map. There is no compatibility read. Inherit uses the
+automatic rule above; fixed levels still require exact SDK support. Flat
+preset-level `models`, `effort` and `thinking` tables are rejected, even when
+they contain five-slot keys; there is no alternate input format.
+Unknown keys, malformed files, unregistered exact IDs, and unavailable levels
+fail before child creation.
 
 ### Scoped user preferences
 
-The required base catalogue above is separate from optional version-1 user
+The required base catalogue above is separate from optional version-2 user
 preferences. The preferences store reads these two locations:
 
 ```text
@@ -284,13 +314,15 @@ trust. A fresh session starts with save scope `session`; choosing global or
 workspace requires confirmation. Merely changing scope copies or writes
 nothing.
 
-The closed version-1 document has optional `preset`, partial `delegation`
+The closed version-2 document has optional `preset`, partial `delegation`
 (`mode`, `eagerness`), per-preset/per-slot `effort`, `approval`, and custom
 model `presets`. Delegation uses the modes and eagerness values above; effort
 uses `inherit` or a Pi thinking level. `approval` is one of `manual`, `judge`,
 `judge+sub`, or `yolo`. Each custom `presets` entry has the same body shape as a
-base preset: required `version` and three-slot `models`, with optional `effort`
-and `thinking`. Definitions add to the base catalogue and do not replace its
+base preset: required `version` and five-entry `slots`, with `model` and optional
+`effort` inside each slot. The document-level `effort`
+table remains separate: it holds per-preset session-start overrides, not slot
+definitions. Definitions add to the base catalogue and do not replace its
 file. In an effort preference, `null` means use that preset's catalogue default
 and masks a lower layer; an absent slot follows the lower layer. Workspace
 leaves override global leaves. Saved preset names resolve against the current
@@ -305,21 +337,21 @@ to route work:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "preset": "demo",
   "delegation": { "mode": "co-worker" },
-  "effort": { "demo": { "light": "high", "standard": null } },
+  "effort": { "demo": { "d1": "high", "d3": null } },
   "approval": "manual",
   "presets": {
     "demo": {
       "version": "example",
-      "models": {
-        "light": "synthetic-provider/example-light",
-        "standard": "synthetic-provider/example-standard",
-        "strong": "synthetic-provider/example-strong"
-      },
-      "effort": { "light": "inherit", "standard": "inherit", "strong": "inherit" },
-      "thinking": { "standard": { "low": "medium" } }
+      "slots": {
+        "d1": { "model": "synthetic-provider/example-small", "effort": "inherit" },
+        "d2": { "model": "synthetic-provider/example-small", "effort": "inherit" },
+        "d3": { "model": "synthetic-provider/example-medium", "effort": "inherit" },
+        "d4": { "model": "synthetic-provider/example-large", "effort": "inherit" },
+        "d5": { "model": "synthetic-provider/example-large", "effort": "inherit" }
+      }
     }
   }
 }
@@ -372,12 +404,32 @@ New Agents use the updated route; accepted Agents keep their admitted
 configuration. A new extension revision requires a fresh process, not
 `/reload` with an open Owner.
 
-Version 1 routing catalogues (formerly backed by hidden built-ins) are rejected
-rather than silently reinterpreted. Back up and explicitly convert them to a
-complete version-2 catalogue and `defaultPreset`; preserve any saved preset
-names needed for session restoration. Initialization must not overwrite the
-old file. Model preset labels include their configured version; no name has
-built-in privileges.
+This is a direct schema cutover: version-1/2 base catalogues, version-1 scoped
+preferences, and `light`/`standard`/`strong` configuration keys are rejected.
+Version checks also apply to empty Off catalogues and preference documents
+containing only approval, delegation or a preset name. Such documents still
+need the current version, but no model slots are required unless they actually
+contain preset definitions. There is no legacy parser, automatic slot expansion,
+fallback or file rewrite.
+Explicitly configure a version-3 base catalogue and, when used, version-2 scoped
+preferences with `d1`–`d5`. Preset definitions use nested `slots.dN` objects.
+Flat definition tables and any per-slot `thinking` field are not accepted or
+converted. That includes an empty `thinking: {}` written by the intermediate
+unpublished editor, not only a hand-authored populated map. Already-written
+catalogue and preference configuration files must be corrected explicitly. Amending or squashing this unpublished cutover does not repair
+those local files. Remove retired fields from configuration files only;
+neither initialization nor restoration edits them. Separate effort override
+tables still use `dN` keys directly. Initialization does not replace existing
+files or symlinks. Session records containing retired three-slot
+definitions/effort overrides, flat definitions, or nested definitions with any
+per-slot `thinking` field also fail restoration rather than silently changing
+their meaning. Start a fresh session, or fork from before the invalid
+selection record, after fixing configuration. Never rewrite historical journal
+records. Name-only
+branch selections still resolve against the current catalogue. Historical Run
+journals remain readable literally, including their old slot names and digests;
+they never restore live configuration. Model preset labels include their
+configured version; no name has built-in privileges.
 
 ## Selecting and persisting
 
@@ -415,27 +467,30 @@ from the active branch, not abandoned branches. Scoped preferences seed a fresh
 session only; they do not replace this branch-record precedence. User-defined
 session catalogue entries are carried additively as `custom_presets` in
 `harness:preset-selection:v1`; they do not rewrite the base file. Startup
-restores Off from the active branch before the first model request. Existing
-saved enabled selections remain compatible; a fresh session without a branch
+restores Off from the active branch before the first model request. Saved
+enabled selections must use valid five-slot definitions/overrides; a fresh session without a branch
 choice or scoped `preset` preference starts at the file's `defaultPreset`.
 Notices and the picker show every model preset's version (`<preset>@<version>`),
 so a reload visibly picks up an edited revision; the footer shows the preset
 name without it. The branch later restores the selected **name** and per-preset effort
 overrides, not historical model pins. On process start the name is resolved
 from the current configuration; a same-name preset
-may therefore have a new version/digest/slots/maps. A missing saved name is a
+may therefore have a new version/digest/slots. A missing saved name is a
 startup error, never a fallback. Selection records are historical evidence,
 not permanent catalogue pins. Each new child history boundary records difficulty
 alongside its immutable resolved route and effort provenance (`preset` or
-`user_override`, with `preset_fixed`, `identity`, or `preset_mapping` resolution).
-Older boundaries without difficulty or effort source remain readable; neither
-score nor source is inferred for them.
+`user_override`, with `preset_fixed`, `identity`, or `automatic_mapping`
+resolution). Older `preset_mapping` boundaries retain their recorded manual
+mapping provenance literally. Boundaries without difficulty or effort source
+remain readable; neither score nor source is inferred for them.
 
-The preset picker shows exact slot IDs and current effective thinking levels,
-not compatibility-map tables. The maps remain part of routing configuration
-and inherited resolution. Clicking a model (or **1 / 2 / 3**) edits that slot
+The preset picker and model/effort editors show slots in hardest-first order,
+`d5`→`d1`, with exact model IDs and current effective thinking levels. This is
+display/editing order only, not a reversal of the reasoning score or canonical
+difficulty-to-slot mapping. Clicking a model (or **1 / 2 / 3 / 4 / 5**, by slot
+ID rather than row position) edits that slot
 through the native model selector; other models and effort policies are kept.
 Internal UI and journal views retain preset, slot, model and effort details; model-facing
-parent-tool replies expose only `profile` and `difficulty`, so the caller rates
+parent-tool replies expose only `profile` and `reasoning_difficulty`, so the caller rates
 tasks without tuning scores against routing. See [interface](interface.md)
 for picker behavior and [tool contract](tool-contract.md) for the caller API.

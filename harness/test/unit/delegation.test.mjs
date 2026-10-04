@@ -8,7 +8,7 @@ import { defaultDelegation, delegationGuideline, delegationLabel, delegationMode
 import { PresetRouter } from "../../dist/routing.js";
 import { writePresetConfig } from "../support/preset-config.mjs";
 
-const preset = (name, effort_overrides = {}) => ({ name, version: "v1", digest: "0", models: {}, thinking: {},
+const preset = (name, effort_overrides = {}) => ({ name, version: "v1", digest: "0", models: {},
   effort: {}, effort_defaults: {}, effort_overrides });
 const off = { name: "off", version: "off-v1", digest: "f" };
 
@@ -32,7 +32,7 @@ test("status is versionless `mode/preset`, adds eagerness only off its default, 
   const selected = { ...preset("glm-mix"), version: "2026-10-v7" };
   assert.equal(delegationStatus(selected, { mode: "lead", eagerness: "balanced" }), "delegation: lead/glm-mix");
   assert.equal(selected.version, "2026-10-v7", "hiding a version must not mutate the selected preset");
-  assert.equal(delegationStatus(preset("gpt-medium", { light: "high" }), { mode: "lead", eagerness: "eager" }),
+  assert.equal(delegationStatus(preset("gpt-medium", { d1: "high" }), { mode: "lead", eagerness: "eager" }),
     "delegation: lead·eager/gpt-medium*");
   assert.equal(delegationStatus(off, { mode: "supervisor", eagerness: "eager" }), "delegation: off");
   assert.equal(delegationLabel({ mode: "manual", eagerness: "eager" }), "manual", "eagerness is meaningless in Manual");
@@ -60,7 +60,7 @@ test("the preset file may set the fresh-session default mode and eagerness; inva
   const root = await mkdtemp(join(tmpdir(), "harness-delegation-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const path = join(root, "harness-presets.json");
-  const base = { version: 2, defaultPreset: "off", presets: {} };
+  const base = { version: 3, defaultPreset: "off", presets: {} };
   await writePresetConfig(path, base);
   assert.deepEqual(new PresetRouter(path).defaultDelegation, defaultDelegation, "omitted fields keep the built-in default");
   await writePresetConfig(path, { ...base, defaultMode: "supervisor", defaultEagerness: "reserved" });

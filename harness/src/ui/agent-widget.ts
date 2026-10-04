@@ -14,6 +14,8 @@ export interface WidgetRun {
   name: string;
   profile: string;
   model: string;
+  /** Creation-time task assessment; distinct from the resolved model slot. */
+  difficulty: number;
   /** Effective creation-time effort/thinking level. */
   effort: string;
   description: string;
@@ -45,10 +47,12 @@ export interface WidgetOwner { blocked: boolean; error?: string; resident: numbe
 
 const active = (run: WidgetRun): boolean => !terminal(run.status);
 /** The Agent's nickname when the model gave one, else its profile — never both. */
-const label = (run: WidgetRun): { name: string; tag: string } => ({
-  name: run.name || run.profile,
-  tag: run.name ? run.profile : "",
-});
+const label = (run: WidgetRun): { name: string; tag: string } => {
+  const difficulty = Number.isInteger(run.difficulty) && run.difficulty >= 1 && run.difficulty <= 5 ?
+    `d${run.difficulty}` : "";
+  const tag = run.name ? (difficulty ? `${run.profile}/${difficulty}` : run.profile) : difficulty;
+  return { name: run.name || run.profile, tag };
+};
 const ROW_ELLIPSIS = "…";
 
 const stats = (run: WidgetRun, running: boolean): string[] => {
@@ -66,28 +70,54 @@ const stats = (run: WidgetRun, running: boolean): string[] => {
   return parts;
 };
 /** Highest-severity notes first, before ordinary metadata and statistics. */
-const notes = (run: WidgetRun, theme: Theme): string[] => {
+const notes = (run: WidgetRun, theme: Theme, compact: 0 | 1 | 2): string[] => {
   const out: string[] = [];
-  if (run.has_run_warnings) out.push(theme.fg("error", "run warning"));
-  if (run.pending_messages > 0) out.push(theme.fg("warning", `${run.pending_messages} pending`));
+  if (run.has_run_warnings) out.push(theme.fg("error", compact === 0 ? "run warning" : compact === 1 ? "warn" : "!"));
+  if (run.pending_messages > 0) out.push(theme.fg("warning", compact === 2 ? `${run.pending_messages}pend` : `${run.pending_messages} pending`));
   return out;
 };
+interface HeaderState { text: string; color: string; detail?: string; compact?: string }
 
-/** Keep attention signals ahead of optional text. Names yield to those signals;
- * the current task uses all room left after the compact statistics, rather than
- * an arbitrary short cap. The arrow separates stable identity from this Run's
- * work. The final row clip handles tiny terminals/diagnostics, never extra rows. */
-function renderHeader(run: WidgetRun, icon: string, state: string, running: boolean, theme: Theme, width: number): string {
+/** Identity and attention precede optional model/task/metrics. Compact warning
+ * labels and failed explanations before sacrificing a recognizable name or a
+ * complete profile/difficulty tag. At impossible widths keep a name prefix and
+ * severity/attention first, omit the whole tag, then let the final clip bound it. */
+function renderHeader(run: WidgetRun, icon: string, state: HeaderState | undefined, running: boolean, theme: Theme, width: number): string {
   const { name, tag } = label(run);
   const separator = theme.fg("dim", " · ");
-  const signals = [...notes(run, theme), state].filter(Boolean);
-  const attention = signals.length ? separator + signals.join(separator) : "";
-  // Reserve the final clip marker too: trailing metadata must not replace the
-  // last characters of an attention signal with an ellipsis.
-  const nameRoom = Math.max(8, Math.min(32, width - visibleWidth(withoutBreaks(attention)) - 2 - visibleWidth(ROW_ELLIPSIS)));
-  const shortName = truncateToWidth(withoutBreaks(name), nameRoom, "…");
+  const attentionText = (compact: 0 | 1 | 2, detailRoom = 60): string => {
+    const joiner = compact === 0 ? separator : theme.fg("dim", " ");
+    const detail = compact === 0 && state?.detail && detailRoom > 1 ?
+      `: ${truncateToWidth(withoutBreaks(state.detail), detailRoom, "…")}` : "";
+    const text = state ? (compact === 2 ? state.compact ?? state.text : state.text) + detail : "";
+    const signals = [...notes(run, theme, compact), ...(state ? [theme.fg(state.color, text)] : [])];
+    return signals.length ? joiner + signals.join(joiner) : "";
+  };
+  const nameText = withoutBreaks(name);
+  const wantedName = Math.min(8, visibleWidth(nameText));
+  const minimumName = Math.min(3, wantedName);
+  const iconRoom = visibleWidth(icon) + 1;
+  const clipRoom = visibleWidth(ROW_ELLIPSIS);
+  let tagText = tag ? ` ${theme.fg("dim", `(${withoutBreaks(tag)})`)}` : "";
+  const attentionRoom = width - iconRoom - visibleWidth(tagText) - wantedName - clipRoom;
+  let attention = attentionText(0);
+  if (visibleWidth(attention) > attentionRoom && state?.detail) {
+    // Strip/truncate only the explanation, never the failed state or earlier
+    // warning/pending facts. Full-width wording remains byte-for-byte unchanged.
+    const detailRoom = Math.floor(attentionRoom - visibleWidth(attentionText(0, 0)) - 2);
+    attention = attentionText(0, detailRoom);
+  }
+  if (visibleWidth(attention) > attentionRoom) attention = attentionText(1);
+  if (visibleWidth(attention) > attentionRoom) attention = attentionText(2);
+  let availableName = width - iconRoom - visibleWidth(attention + tagText) - clipRoom;
+  if (availableName < minimumName) {
+    tagText = ""; // Never retain a misleading clipped profile/difficulty tag.
+    availableName = width - iconRoom - visibleWidth(attention) - clipRoom;
+  }
+  const tinyPrefix = Math.min(minimumName, Math.max(1, width - iconRoom - clipRoom));
+  const nameRoom = Math.max(tinyPrefix, Math.min(32, availableName));
+  const shortName = truncateToWidth(nameText, nameRoom, "…");
   const identity = `${icon} ${running ? theme.bold(shortName) : theme.fg("dim", shortName)}${attention}`;
-  const tagText = tag ? ` ${theme.fg("dim", `(${withoutBreaks(tag)})`)}` : "";
   const allocation = [run.model, run.effort].filter(Boolean).map(withoutBreaks).join("/");
   const allocationText = allocation ? ` ${theme.fg("dim", `[${allocation}]`)}` : "";
   const metrics = separator + theme.fg("dim", stats(run, running).join(" · "));
@@ -100,20 +130,19 @@ function renderHeader(run: WidgetRun, icon: string, state: string, running: bool
 }
 
 export function renderFinishedLine(run: WidgetRun, theme: Theme, width = Infinity): string {
-  let icon: string, state: string;
+  let icon: string, state: HeaderState | undefined;
   if (run.status === "completed") {
     icon = theme.fg(run.limit_reached ? "warning" : "success", GLYPHS.success);
-    state = run.limit_reached ? theme.fg("warning", "(turn limit)") : "";
+    state = run.limit_reached ? { text: "(turn limit)", compact: "limit", color: "warning" } : undefined;
   } else if (run.status === "needs_input") {
     icon = theme.fg("warning", GLYPHS.question);
-    state = theme.fg("warning", run.question ? "needs answer" : "needs input");
+    state = { text: run.question ? "needs answer" : "needs input", compact: run.question ? "answer?" : "input?", color: "warning" };
   } else if (run.status === "cancelled") {
     icon = theme.fg("dim", GLYPHS.stopped);
-    state = theme.fg("dim", "cancelled");
+    state = { text: "cancelled", color: "dim" };
   } else {
     icon = theme.fg("error", GLYPHS.failure);
-    const detail = run.error ?? run.reason;
-    state = theme.fg("error", `failed${detail ? `: ${truncateToWidth(withoutBreaks(detail), 60, "…")}` : ""}`);
+    state = { text: "failed", detail: run.error ?? run.reason, color: "error" };
   }
   return renderHeader(run, icon, state, false, theme, width);
 }
@@ -122,8 +151,8 @@ export function renderRunningLines(run: WidgetRun, spinnerFrame: number, theme: 
   const frame = SPINNER[spinnerFrame % SPINNER.length]!;
   // "finishing" and "cancelling" are distinct facts: the first is our own
   // finalization, the second is a request whose exit is not yet observed.
-  const state = run.status === "cancelling" ? theme.fg("warning", "cancelling") :
-    run.finishing ? theme.fg("dim", "finishing") : "";
+  const state: HeaderState | undefined = run.status === "cancelling" ? { text: "cancelling", color: "warning" } :
+    run.finishing ? { text: "finishing", color: "dim" } : undefined;
   const header = renderHeader(run, theme.fg("accent", frame), state, true, theme, width);
   const activity = run.drain && !run.finishing ? formatDrain(run.drain) :
     run.runtime?.activity === "compacting" ? "compacting context…" :
@@ -365,7 +394,8 @@ export class HarnessWidget {
   private project(view: RunView): WidgetRun {
     const live = this.activities.get(view.agent_id)?.snapshot() ?? { active_tools: [], tool_uses: 0, preview: "" };
     return { agent_id: view.agent_id, run_id: view.run_id, name: view.name, profile: view.effective_settings.profile,
-      model: view.effective_settings.model, effort: view.effective_settings.thinking,
+      difficulty: view.effective_settings.difficulty, model: view.effective_settings.model,
+      effort: view.effective_settings.thinking,
       description: view.description, status: view.status, finishing: view.finalization_pending,
       turns: view.turns, max_turns: view.max_turns, elapsed_ms: view.elapsed_ms, turn_elapsed_ms: view.turn_elapsed_ms,
       cost: reported(view.usage, "cost"), cost_partial: view.usage?.partial.includes("cost"), runtime: view.runtime, drain: view.drain,

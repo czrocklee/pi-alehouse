@@ -94,7 +94,7 @@ async function fixture(t, respond, { window = 8192, retry = false, controllerOpt
   const task = (prompt = "Call blob, then finish.") => ({ prompt, description: "controlled long task", settings: {
     provider: "harness-long-run", model: "controlled", thinking: "off", parent_thinking: "off",
     thinking_resolution: "identity", profile: "reader",
-    difficulty: 3, strength: "standard", preset: "fixture", preset_version: "v1", selection_digest: "b".repeat(64), cwd: root,
+    difficulty: 3, strength: "d3", preset: "fixture", preset_version: "v1", selection_digest: "b".repeat(64), cwd: root,
     tools: ["blob"], definition_digest: "a".repeat(64) } });
   const submit = (request = task()) => controller.submit(randomUUID(), request);
   const end = async (run) => {
@@ -353,7 +353,7 @@ test("real SDK: compaction continues one Run, counts summary once, and resume pr
   assert.equal(recorded.output.text, "FINAL_2");
   assert.deepEqual(recorded.usage, a.usage);
   assert.deepEqual(recorded.routing, { preset: "fixture", preset_version: "v1", selection_digest: "b".repeat(64),
-    difficulty: 3, strength: "standard", thinking: "off", parent_thinking: "off", thinking_resolution: "identity",
+    difficulty: 3, strength: "d3", thinking: "off", parent_thinking: "off", thinking_resolution: "identity",
     provider: "harness-long-run", model: "controlled", profile: "reader" });
   assert.equal((await f.historical(second)).output.text, "FINAL_3");
   assert.equal(f.controller.drainUsage().total.cost, a.usage.total.cost + b.usage.total.cost);

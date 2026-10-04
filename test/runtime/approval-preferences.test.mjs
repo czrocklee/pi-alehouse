@@ -559,7 +559,7 @@ test("real shared store staging leaves config unchanged and creates no workspace
   mkdirSync(agentDir); mkdirSync(cwd);
   const globalPath = join(agentDir, "extensions/pi-alehouse/config.json");
   mkdirSync(dirname(globalPath), { recursive: true });
-  const original = '{"version":1,"approval":"judge"}\n';
+  const original = '{"version":2,"approval":"judge"}\n';
   writeFileSync(globalPath, original);
   const store = new SettingsStore({ agentDir, cwd, projectTrusted: true });
   store.setScope("global");
@@ -936,7 +936,7 @@ test("fullscreen global remembering writes only at simulated normal exit and yol
   // The harness, not approval-mode, owns the real seal/flush at normal exit.
   store.seal();
   assert.deepEqual(store.flush(), [{ scope: "global", path: store.paths.global }]);
-  assert.deepEqual(JSON.parse(readFileSync(store.paths.global, "utf8")), { version: 1, approval: "yolo" });
+  assert.deepEqual(JSON.parse(readFileSync(store.paths.global, "utf8")), { version: 2, approval: "yolo" });
   const nextStore = new SettingsStore({ agentDir, cwd, projectTrusted: true });
   const next = fixture(t, { store: nextStore, fullscreen: true, confirm: false });
   await next.start();

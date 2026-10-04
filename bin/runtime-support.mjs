@@ -126,7 +126,8 @@ export function verifyAgentResources(agentDir = agentDirectory(), root = package
   // Existing Nix/user policy and catalogues remain authoritative, not replaced
   // with seed defaults. Upstream and harness perform full semantic validation.
   const presets = JSON.parse(regular(join(agentDir, "harness-presets.json")));
-  assert(presets.version === 2 && typeof presets.defaultPreset === "string" && presets.presets && typeof presets.presets === "object" && !Array.isArray(presets.presets), "Invalid harness-presets.json");
+  assert(presets?.version === 3 && typeof presets.defaultPreset === "string" && presets.presets && typeof presets.presets === "object" && !Array.isArray(presets.presets),
+    "Invalid harness-presets.json: catalogue version 3 is required, including empty Off catalogues. Preserve your file and update it manually; any configured preset needs all five slots d1–d5. Older configurations are not converted, and init never replaces existing files.");
   const permissions = JSON.parse(regular(join(agentDir, "extensions/pi-permission-system/config.json")));
   assert(permissions && permissions.permission && typeof permissions.permission === "object" && !Array.isArray(permissions.permission), "Invalid permission config.json");
 }

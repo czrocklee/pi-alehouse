@@ -70,7 +70,21 @@ pi-alehouse init
 
 Initialization creates only absent resources: six worker definitions, a routing catalogue and a permission configuration. It preserves existing files and symlinks and does not modify settings or credentials. Conflicting or incompatible existing resources require your explicit attention; they are not silently replaced. An agent directory initialized before the `researcher` profile existed fails launch with `Missing managed profile`; run `pi-alehouse init` again to add only that definition.
 
-The routing catalogue is `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/harness-presets.json`. It starts with `off` and no model presets. Add your own registered provider/model IDs using the [routing configuration guide](routing.md#preset-configuration). The README's images show an existing personal setup, not built-in model recommendations.
+The routing catalogue is `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/harness-presets.json`. Its version-3 format uses five independent `slots.d1`–`slots.d5` objects, one per difficulty, each with `model` and optional `effort`. Inherited thinking resolves an unsupported enabled parent level automatically; no per-slot `thinking` field is accepted. It starts with `off` and no model presets. Add your own registered provider/model IDs using the [routing configuration guide](routing.md#preset-configuration). The README's images label historical personal captures and controlled UI examples separately; neither is a built-in model recommendation.
+
+A non-reasoning model that supports only `off` fails `inherit` of an enabled parent on purpose. Set that slot's fixed `effort` to `off` if that is what you want. Empty or unknown-only capability metadata is not support for `off` and does not turn enabled thinking off. See [automatic inherited thinking](routing.md#automatic-inherited-thinking).
+
+This is a direct cutover. Older three-slot configurations are not supported or automatically converted.
+Existing installations need an explicitly corrected version-3 routing catalogue
+and version-2 scoped preferences, when present. Any per-slot `thinking` field
+is rejected, including an empty `thinking: {}` written by the intermediate
+unpublished editor, not only a hand-authored populated map. Already-written
+catalogue and preference configuration files must be corrected explicitly. Amending or squashing the unpublished cutover does not repair
+those local files, and `init` will not overwrite them. If a previous session
+saved three-slot definitions or effort overrides, flat definitions, or any
+per-slot `thinking` field, start a fresh session or fork from before that
+invalid selection record. Never rewrite historical journals. Old Run records,
+including `preset_mapping` provenance, remain readable.
 
 Start a fresh process:
 

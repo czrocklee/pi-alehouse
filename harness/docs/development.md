@@ -50,7 +50,7 @@ all consumers must use that identity. Root dependencies include the parser
 runtime and pinned `pi-web-access` 0.35.0; do not resolve an ambient globally
 installed web extension. Generated resources and CLI must match the source
 revision. `pi-alehouse init` seeds only absent files into Pi's agent directory
-(six agent definitions, a version-2 Off routing catalogue and a permission
+(six agent definitions, a version-3 Off routing catalogue and a permission
 config), never changes settings/auth or replaces existing policies/catalogues. Old
 `harness:*` records, child tool/config names and `Symbol.for` keys remain
 compatibility protocol, not reasons to rename public schemas. Parent management

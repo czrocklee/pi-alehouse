@@ -135,7 +135,7 @@ test("cold history preserves current thinking provenance and still reads legacy 
   const identity = { owner_id: parent.getSessionId(), generation: randomUUID(), agent_id: randomUUID(), run_id: randomUUID() };
   const settings = { provider: "p", model: "m", thinking: "high", parent_thinking: "low",
     thinking_resolution: "preset_mapping", effort_source: "user_override", profile: "reader", difficulty: 3,
-    strength: "standard", preset: "team", preset_version: "v2", selection_digest: "a".repeat(64), cwd: root,
+    strength: "d3", preset: "team", preset_version: "v2", selection_digest: "a".repeat(64), cwd: root,
     tools: ["read"], definition_digest: "b".repeat(64) };
   assert.equal(validSettings(settings), true);
   const ref = history.begin(identity, settings); child.appendMessage(message); history.seal();
@@ -143,7 +143,7 @@ test("cold history preserves current thinking provenance and still reads legacy 
   const query = () => readSdkRun({ sessionManager: SessionManager, parentFile: parent.getSessionFile(),
     sessionDirectory: root, run_id: ref.run_id });
   const expected = { preset: "team", preset_version: "v2", selection_digest: "a".repeat(64),
-    difficulty: 3, strength: "standard", thinking: "high", parent_thinking: "low", thinking_resolution: "preset_mapping",
+    difficulty: 3, strength: "d3", thinking: "high", parent_thinking: "low", thinking_resolution: "preset_mapping",
     effort_source: "user_override", provider: "p", model: "m", profile: "reader" };
   assert.deepEqual((await query()).routing, expected);
   const recorded = await Promise.all([parent.getSessionFile(), child.getSessionFile()].map(async (file) =>
@@ -153,14 +153,18 @@ test("cold history preserves current thinking provenance and still reads legacy 
   const eraseRoutingFields = async (fields) => {
     for (const file of [parent.getSessionFile(), child.getSessionFile()]) {
       const lines = (await readFile(file, "utf8")).trimEnd().split("\n").map((line) => JSON.parse(line));
-      for (const entry of lines) if (entry.data?.routing)
+      for (const entry of lines) if (entry.data?.routing) {
+        entry.data.routing.strength = "standard";
         for (const field of fields) delete entry.data.routing[field];
+      }
       await writeFile(file, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
     }
   };
   await eraseRoutingFields(["difficulty", "effort_source"]);
   const priorRating = await query();
   assert.equal(priorRating.state, "recorded");
+  assert.equal(priorRating.routing.strength, "standard", "retired slots remain literal history, not configuration");
+  assert.equal(priorRating.routing.selection_digest, expected.selection_digest, "historical route digests are not rewritten");
   assert.equal(priorRating.routing.parent_thinking, "low");
   assert.equal(priorRating.routing.thinking_resolution, "preset_mapping");
   assert.equal(Object.hasOwn(priorRating.routing, "difficulty"), false, "old records must not invent a rating");
@@ -175,15 +179,71 @@ test("cold history preserves current thinking provenance and still reads legacy 
   assert.equal(Object.hasOwn(legacy.routing, "effort_source"), false, "old records must not invent a source");
 });
 
+test("automatic mapping provenance round-trips and does not rewrite a literal preset map", { timeout: 5000 }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "harness-history-auto-map-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const parent = SessionManager.create(root, root), child = SessionManager.create(root, root);
+  const message = { role: "assistant", api: "fixture", provider: "p", model: "m",
+    content: [{ type: "text", text: "answer" }], stopReason: "stop",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } }, timestamp: Date.now() };
+  parent.appendMessage(message);
+  const automatic = { provider: "p", model: "m", thinking: "high", parent_thinking: "low",
+    thinking_resolution: "automatic_mapping", effort_source: "preset", profile: "reader", difficulty: 3,
+    strength: "d3", preset: "team", preset_version: "v2", selection_digest: "a".repeat(64), cwd: root,
+    tools: ["read"], definition_digest: "b".repeat(64) };
+  assert.equal(validSettings(automatic), true);
+  const history = new SdkRunHistory({ parent, session: child });
+  const ref = history.begin({ owner_id: parent.getSessionId(), generation: randomUUID(), agent_id: randomUUID(), run_id: randomUUID() }, automatic);
+  child.appendMessage(message); history.seal();
+  history.finish(ref, { status: "completed", limit_reached: false }, { text: "answer", total_chars: 6, truncated: false });
+  const expected = { preset: "team", preset_version: "v2", selection_digest: "a".repeat(64),
+    difficulty: 3, strength: "d3", thinking: "high", parent_thinking: "low", thinking_resolution: "automatic_mapping",
+    effort_source: "preset", provider: "p", model: "m", profile: "reader" };
+  const query = () => readSdkRun({ sessionManager: SessionManager, parentFile: parent.getSessionFile(),
+    sessionDirectory: root, run_id: ref.run_id });
+  assert.deepEqual((await query()).routing, expected);
+  const files = [parent.getSessionFile(), child.getSessionFile()];
+  const before = await Promise.all(files.map((file) => readFile(file, "utf8")));
+  for (const file of files) {
+    const lines = (await readFile(file, "utf8")).trimEnd().split("\n").map((line) => JSON.parse(line));
+    for (const entry of lines) if (entry.data?.routing?.thinking_resolution === "automatic_mapping") {
+      entry.data.routing.thinking_resolution = "preset_mapping";
+      entry.data.routing.effort_source = "user_override";
+    }
+    await writeFile(file, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+  }
+  const historical = await query();
+  assert.equal(historical.state, "recorded");
+  assert.equal(historical.routing.thinking_resolution, "preset_mapping");
+  assert.equal(historical.routing.parent_thinking, "low");
+  assert.equal(historical.routing.effort_source, "user_override");
+  const literal = await Promise.all(files.map((file) => readFile(file, "utf8")));
+  const reread = await query();
+  assert.equal(reread.routing.thinking_resolution, "preset_mapping", "a later read does not migrate preset_mapping");
+  assert.deepEqual(await Promise.all(files.map((file) => readFile(file, "utf8"))), literal);
+  assert.notDeepEqual(literal, before);
+});
+
 test("admission and cold routing validate fixed and inherited effort without inferring provenance", () => {
   const settings = { provider: "p", model: "m", thinking: "high", thinking_resolution: "preset_fixed",
-    effort_source: "preset", profile: "reader", difficulty: 3, strength: "standard", preset: "team",
+    effort_source: "preset", profile: "reader", difficulty: 3, strength: "d3", preset: "team",
     preset_version: "v2", selection_digest: "a".repeat(64), cwd: "/tmp", tools: ["read"],
     definition_digest: "b".repeat(64) };
   const route = { preset: settings.preset, preset_version: settings.preset_version,
     selection_digest: settings.selection_digest, difficulty: settings.difficulty, strength: settings.strength,
     thinking: settings.thinking, thinking_resolution: settings.thinking_resolution,
     effort_source: settings.effort_source, provider: settings.provider, model: settings.model, profile: settings.profile };
+  for (const difficulty of [1, 2, 3, 4, 5]) {
+    const current = { difficulty, strength: `d${difficulty}` };
+    assert.equal(validSettings({ ...settings, ...current }), true);
+    assert.equal(validRouting({ ...route, ...current }), true);
+    const mismatch = { ...current, strength: `d${difficulty === 5 ? 1 : difficulty + 1}` };
+    assert.equal(validSettings({ ...settings, ...mismatch }), false);
+    assert.equal(validRouting({ ...route, ...mismatch }), false);
+    const old = { difficulty, strength: ["light", "light", "standard", "strong", "strong"][difficulty - 1] };
+    assert.equal(validSettings({ ...settings, ...old }), false, "old slots cannot admit live work");
+    assert.equal(validRouting({ ...route, ...old }), true, "old journals remain readable without route conversion");
+  }
   for (const parent of [undefined, "off"]) {
     const extra = parent === undefined ? {} : { parent_thinking: parent };
     assert.equal(validSettings({ ...settings, ...extra }), true);
@@ -192,7 +252,7 @@ test("admission and cold routing validate fixed and inherited effort without inf
   assert.equal(validSettings({ ...settings, effort_source: undefined }), false);
   assert.equal(validSettings({ ...settings, parent_thinking: "" }), false);
   assert.equal(validRouting({ ...route, parent_thinking: "" }), false);
-  for (const resolution of ["identity", "preset_mapping"]) {
+  for (const resolution of ["identity", "preset_mapping", "automatic_mapping"]) {
     assert.equal(validSettings({ ...settings, thinking_resolution: resolution }), false, "inheritance requires a parent");
     assert.equal(validRouting({ ...route, thinking_resolution: resolution }), false);
     assert.equal(validSettings({ ...settings, thinking_resolution: resolution, parent_thinking: "low",
@@ -224,7 +284,7 @@ test("admission and cold routing validate fixed and inherited effort without inf
   assert.equal(validRouting({ ...legacy, parent_thinking: "low" }), false, "half of a legacy pair is invalid");
 });
 
-test("fixed effort round-trips on both parent link and child start with no parent", async (t) => {
+for (const difficulty of [1, 2, 3, 4, 5]) test(`d${difficulty} fixed effort round-trips on both parent link and child start with no parent`, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "harness-history-fixed-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const parent = SessionManager.create(root, root), child = SessionManager.create(root, root);
@@ -233,7 +293,7 @@ test("fixed effort round-trips on both parent link and child start with no paren
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } }, timestamp: Date.now() };
   parent.appendMessage(message);
   const settings = { provider: "p", model: "m", thinking: "high", thinking_resolution: "preset_fixed",
-    effort_source: "preset", profile: "reader", difficulty: 3, strength: "standard", preset: "team",
+    effort_source: "preset", profile: "reader", difficulty, strength: `d${difficulty}`, preset: "team",
     preset_version: "v2", selection_digest: "a".repeat(64), cwd: root, tools: ["read"], definition_digest: "b".repeat(64) };
   const history = new SdkRunHistory({ parent, session: child });
   const ref = history.begin({ owner_id: parent.getSessionId(), generation: randomUUID(), agent_id: randomUUID(), run_id: randomUUID() }, settings);
@@ -260,7 +320,7 @@ test("unfinished history returns validated routing, but never invents it or acce
   parent.appendMessage(message);
   const identity = () => ({ owner_id: parent.getSessionId(), generation: randomUUID(), agent_id: randomUUID(), run_id: randomUUID() });
   const settings = { provider: "p", model: "m", thinking: "high", parent_thinking: "low",
-    thinking_resolution: "preset_mapping", profile: "reader", difficulty: 3, strength: "standard", preset: "team",
+    thinking_resolution: "preset_mapping", profile: "reader", difficulty: 3, strength: "d3", preset: "team",
     preset_version: "v2", selection_digest: "a".repeat(64), cwd: root, tools: ["read"], definition_digest: "b".repeat(64) };
   const child = SessionManager.create(root, root), current = new SdkRunHistory({ parent, session: child });
   const ref = current.begin(identity(), settings); child.appendMessage(message);
@@ -270,7 +330,7 @@ test("unfinished history returns validated routing, but never invents it or acce
   assert.equal(unfinished.state, "unknown", JSON.stringify(unfinished)); assert.equal(unfinished.resumable, false);
   assert.equal(unfinished.outcome, undefined); assert.equal(unfinished.output, undefined);
   assert.deepEqual(unfinished.routing, { preset: "team", preset_version: "v2", selection_digest: "a".repeat(64),
-    difficulty: 3, strength: "standard", thinking: "high", parent_thinking: "low", thinking_resolution: "preset_mapping",
+    difficulty: 3, strength: "d3", thinking: "high", parent_thinking: "low", thinking_resolution: "preset_mapping",
     provider: "p", model: "m", profile: "reader" });
 
   const legacyChild = SessionManager.create(root, root), legacyHistory = new SdkRunHistory({ parent, session: legacyChild });
@@ -304,6 +364,7 @@ test("unfinished history returns validated routing, but never invents it or acce
     { effort_source: "invented" }, { effort_source: null }, { parent_thinking: "" },
     { thinking: "" }, { thinking_resolution: "preset_fixed", parent_thinking: null },
     { thinking_resolution: "preset_mapping", parent_thinking: undefined },
+    { thinking_resolution: "automatic_mapping", parent_thinking: undefined },
     { thinking_resolution: undefined, effort_source: "preset" },
   ]) {
     const changed = { ...original, ...invalid };

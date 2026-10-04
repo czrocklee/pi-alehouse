@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { renderEffortIllustration } from "../harness/test/support/effort-illustration.mjs";
 
 // Synthetic privacy canaries are used only in temporary test files, never in
-// the README images. Published images come from manually reviewed real captures.
+// the README images. Images label their provenance: reviewed real captures
+// (including historical UI) or controlled UI renders with example models.
 function fixture(run) {
   const root = mkdtempSync(join(tmpdir(), "alehouse-panel-test-"));
   try {
@@ -35,6 +37,33 @@ function frame(lines, { prefix = "", width = 72 } = {}) {
       return `${prefix}│${line}${" ".repeat(width - plain.length)}│`;
     }), `${prefix}╰${"─".repeat(width)}╯`, "PRIVATE_BACKGROUND_AFTER"].join("\n");
 }
+
+test("effort illustration follows the current five-slot renderer and labels its controlled provenance", () => {
+  const svg = readFileSync(new URL("../harness/docs/assets/effort-panel.svg", import.meta.url), "utf8");
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const plain = [...svg.matchAll(/<text\b[^>]*>([\s\S]*?)<\/text>/g)].map((match) => match[1]
+    .replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&"))
+    .join("").replace(/\s+/g, " ");
+  const theme = { fg: (_color, text) => text, bg: (_color, text) => text, bold: (text) => text };
+  const lines = renderEffortIllustration(theme);
+  for (const line of lines.slice(1, -1)) {
+    if (line.startsWith("├")) continue;
+    const content = line.slice(1, -1).trim().replace(/\s+/g, " ");
+    assert(plain.includes(content), `SVG differs from the current renderer: ${content}`);
+  }
+  const order = [...plain.matchAll(/‹(d[1-5]):/g)].map((match) => match[1]);
+  assert.deepEqual(order, ["d5", "d4", "d3", "d2", "d1"]);
+  assert.match(svg, /aria-label="Five-slot effort editor.*controlled UI render/);
+  assert.match(plain, /Controlled UI render · example models/);
+  assert.doesNotMatch(plain, /light:|standard:|strong:|d1–2|d4–5|Apply|Real terminal capture/);
+  assert.match(readme, /Current UI renderer with example models, not a live-provider capture/);
+  const provenance = readFileSync(new URL("../harness/docs/assets/README.md", import.meta.url), "utf8");
+  assert.match(provenance, /effort-panel\.svg.*controlled UI render with example models/i);
+  assert.doesNotMatch(provenance, /These images come from a real working terminal session|They are not mockups or synthetic workloads/);
+  const historical = readFileSync(new URL("../harness/docs/assets/routing-panel.svg", import.meta.url), "utf8");
+  assert.match(historical, /aria-label="Historical three-slot/);
+  assert.match(historical, /Historical terminal capture/);
+});
 
 test("panel export excludes background and OSC payloads while retaining real text and colors", () => fixture((execute) => {
   const result = execute(frame(["\x1b[38:2::1:2:3mVisible <&>\x1b[0m",

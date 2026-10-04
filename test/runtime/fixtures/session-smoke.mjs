@@ -15,7 +15,7 @@ initialize({ agentDir });
 const invalidPreset = process.argv.includes("--invalid-preset");
 if (invalidPreset) {
   const path = join(agentDir, "harness-presets.json");
-  const preserved = JSON.stringify({ version: 2, defaultPreset: "missing", presets: {} });
+  const preserved = JSON.stringify({ version: 3, defaultPreset: "missing", presets: {} });
   writeFileSync(path, preserved);
   initialize({ agentDir });
   assert.equal(readFileSync(path, "utf8"), preserved, "init must preserve the user's invalid catalogue");

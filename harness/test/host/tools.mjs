@@ -51,9 +51,9 @@ runtime.registerProvider("harness-fixture", provider.config);
 const model = runtime.getModel("harness-fixture", "controlled"), reasoning = runtime.getModel("harness-fixture", "reasoning");
 assert(model && reasoning); assert(ai.getSupportedThinkingLevels(reasoning).includes("high"));
 const route = (name, id, version = "v1") => ({ name, version, digest: digest(`${name}:${version}:${id}`),
-  models: { light: id, standard: id, strong: id }, thinking: { light: {}, standard: {}, strong: {} },
-  effort: { light: "inherit", standard: "inherit", strong: "inherit" },
-  effort_defaults: { light: "inherit", standard: "inherit", strong: "inherit" }, effort_overrides: {} });
+  models: { d1: id, d2: id, d3: id, d4: id, d5: id },
+  effort: { d1: "inherit", d2: "inherit", d3: "inherit", d4: "inherit", d5: "inherit" },
+  effort_defaults: { d1: "inherit", d2: "inherit", d3: "inherit", d4: "inherit", d5: "inherit" }, effort_overrides: {} });
 let activePreset = route("controlled-team", "harness-fixture/controlled");
 const parentBus = sdk.createEventBus(), parentManager = sdk.SessionManager.create(cwd, sessionDirectory);
 const ownerOptions = { directory: join(outputRoot, "tools-owners"), owner_id: parentManager.getSessionId(), flock: process.env.P0_FLOCK };
@@ -96,7 +96,7 @@ provider.respond(async (call) => {
     if (call.signal.aborted) stop(); else call.signal.addEventListener("abort", stop, { once: true });
   });
   if (prompt?.includes("TRY_PARENT_CONTROL") && last?.role !== "toolResult") return {
-    tools: [{ type: "toolCall", id: "forbidden-management", name: "agent_spawn", arguments: { agent: "not-an-agent", prompt: "must not route", profile: "reader", difficulty: 1 } }],
+    tools: [{ type: "toolCall", id: "forbidden-management", name: "agent_spawn", arguments: { agent: "not-an-agent", prompt: "must not route", profile: "reader", reasoning_difficulty: 1 } }],
   };
   return { text: "SYNTHETIC_CHILD_DONE" };
 });
@@ -197,7 +197,7 @@ async function invoke(name, args, { id = `parent-call-${sequence++}`, error, pro
 // Agent names are the model-facing handle: a lowercase slug of the fixture prompt.
 const slug = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24).replace(/-+$/, "");
 const newTask = (prompt, profile = "reader", rest = {}) => ({ agent: slug(prompt), prompt, label: prompt, profile,
-  difficulty: 3, ...rest });
+  reasoning_difficulty: 3, ...rest });
 const runOf = (agent) => controller.findAgent(agent).run_id;
 const settled = (agent) => until(() => ["completed", "needs_input", "failed", "cancelled"].includes(controller.view(runOf(agent)).status));
 try {
@@ -210,10 +210,10 @@ try {
 
   await invoke("agent_spawn", { ...newTask("MUST_NOT_START"), agent_id: "wrong-branch" }, { error: "INVALID_PARAMETERS" });
   await invoke("agent_spawn", newTask("MUST_NOT_START", "unknown"), { error: "INVALID_PROFILE" });
-  for (const extra of [{ model: "controlled" }, { thinking: "max" }, { strength: "standard" }, { role: "reviewer" }, { agent: "Not A Name" }]) {
+  for (const extra of [{ model: "controlled" }, { thinking: "max" }, { strength: "d3" }, { role: "reviewer" }, { agent: "Not A Name" }]) {
     await invoke("agent_spawn", newTask("MUST_NOT_START", "editor", extra), { error: "INVALID_PARAMETERS" });
   }
-  await invoke("agent_spawn", newTask("MUST_NOT_START", "editor", { difficulty: 0 }), { error: "INVALID_DIFFICULTY" });
+  await invoke("agent_spawn", newTask("MUST_NOT_START", "editor", { reasoning_difficulty: 0 }), { error: "INVALID_DIFFICULTY" });
   await invoke("agent_send", { agent: "must-not-start", message: "MUST_NOT_START" }, { error: "AGENT_NOT_FOUND" });
   await invoke("agent_read", { agent: "must-not-start", limit: 10 }, { error: "INVALID_PARAMETERS" });
   mutateNext = true;
@@ -262,14 +262,14 @@ try {
   assert.equal(runOf("orca"), firstRun); assert.equal(children.length, 1);
   await invoke("agent_spawn", { ...firstArgs, prompt: "CONFLICT" }, { id: "stable-call", error: "REQUEST_CONFLICT" });
   await invoke("agent_send", { agent: "orca", message: "ANSWER_FACTOR", model: "other" }, { error: "INVALID_PARAMETERS" });
-  await invoke("agent_send", { agent: "orca", message: "ANSWER_FACTOR", difficulty: 4 }, { error: "INVALID_PARAMETERS" });
+  await invoke("agent_send", { agent: "orca", message: "ANSWER_FACTOR", reasoning_difficulty: 4 }, { error: "INVALID_PARAMETERS" });
   await invoke("agent_spawn", newTask("ANSWER_FACTOR", "editor", { agent: "orca" }), { error: "AGENT_EXISTS" });
   const beforeAnswer = provider.requests.length;
   await invoke("agent_run", { agent: "orca", prompt: "ANSWER_FACTOR 3" }, { error: "PENDING_QUESTION" });
   const notDelivered = await invoke("agent_send", { agent: "orca", message: "ANSWER_FACTOR 3" });
   assert.deepEqual(notDelivered.action, { type: "agent_send", agent: "orca", task: 1, delivery: "not_delivered" });
   assert.equal(runOf("orca"), firstRun, "send never starts a question continuation");
-  for (const extra of [{ difficulty: 4 }, { profile: "editor" }, { label: "replacement" }]) {
+  for (const extra of [{ reasoning_difficulty: 4 }, { difficulty: 4 }, { profile: "editor" }, { label: "replacement" }]) {
     await invoke("agent_answer", { agent: "orca", question_id: question.question_id, answer: "ANSWER_FACTOR 3", ...extra },
       { error: "INVALID_PARAMETERS" });
   }

@@ -69,6 +69,8 @@ export function applyAuditedPreset(input: {
   }
 }
 
+const savedPresetResolution = "The saved harness:preset-selection:v1 branch record failed worker configuration validation. Effort overrides require a named non-Off preset and valid policies; custom definitions require valid preset versions and all five nested slots d1, d2, d3, d4, d5 with model and optional effort under version-2 settings rules; any per-slot thinking field is unsupported, including editor-generated empty thinking: {}. Correct configuration files explicitly, then start a fresh session or fork from before the invalid harness:preset-selection:v1 record and restart Pi. Do not rewrite historical journal records.";
+
 /** Reconstruct only the active branch's per-preset overrides. Older selection
  * entries have no override field; they retain their original name-only meaning.
  * The caller must pass getBranch(), never the entire session tree. */
@@ -76,8 +78,8 @@ export function restorePresetDefinitions(selections: readonly unknown[]): Record
   let definitions: Record<string, PresetDefinition> = {};
   for (const entry of selections) {
     if (!entry || typeof entry !== "object" || !("custom_presets" in entry) || !Object.hasOwn(entry, "custom_presets")) continue;
-    try { definitions = validateSettings({ version: 1, presets: entry.custom_presets }).presets ?? {}; }
-    catch { throw new HarnessError("INVALID_SAVED_PRESETS"); }
+    try { definitions = validateSettings({ version: 2, presets: entry.custom_presets }).presets ?? {}; }
+    catch { throw new HarnessError("INVALID_SAVED_PRESETS", { record: "harness:preset-selection:v1", resolution: savedPresetResolution }); }
   }
   return definitions;
 }
@@ -100,7 +102,7 @@ export function restorePresetRouter(path: string, selections: readonly unknown[]
     }
     if (!Object.hasOwn(data, "effort_overrides")) continue;
     if (typeof data.name !== "string" || data.name === "off" || !validEffortOverrides(data.effort_overrides))
-      throw new HarnessError("INVALID_SAVED_EFFORT", { resolution: "Repair the saved worker effort selection before restoring this session." });
+      throw new HarnessError("INVALID_SAVED_EFFORT", { record: "harness:preset-selection:v1", resolution: savedPresetResolution });
     overrides.set(data.name, structuredClone(data.effort_overrides));
   }
   const router = new PresetRouter(path, overrides, { ...preferences?.presets, ...restorePresetDefinitions(selections) });
@@ -125,7 +127,7 @@ function effortIssue(error: unknown): string {
       : "Worker model is unavailable or ambiguous in Pi's registry.";
     if (error.code === "THINKING_INCOMPATIBLE") return error.details.reason === "fixed_effort_unsupported"
       ? "The worker model does not support this fixed effort."
-      : "Current parent thinking has no supported inherited level or compatibility mapping.";
+      : "Current parent thinking has no supported inherited level under the automatic rule.";
   }
   return "Worker effort could not be checked.";
 }
@@ -238,7 +240,7 @@ export default function harnessExtension(pi: ExtensionAPI) {
     const previous = router.current();
     const targetBefore = router.inspect(candidate).find((preset) => preset.name === name);
     const nextDefinitions = definition
-      ? validateSettings({ version: 1, presets: { ...sessionDefinitions, [name]: definition } }).presets ?? {}
+      ? validateSettings({ version: 2, presets: { ...sessionDefinitions, [name]: definition } }).presets ?? {}
       : sessionDefinitions;
     const snapshot = applyAuditedPreset({ controller, router, candidate, name, effort_overrides,
       ...(effort_overrides === undefined && !definition ? {} : { validate: (selected: PresetSelection) => {
@@ -500,10 +502,15 @@ export default function harnessExtension(pi: ExtensionAPI) {
       sessionDefinitions = restorePresetDefinitions(selections);
       router = restorePresetRouter(presetPath, selections, preferences);
     } catch (error) {
+      // A bad branch record is not a defect in the base catalogue. Attaching
+      // that file's path sends the operator to the wrong place to repair it.
+      const savedRecord = error instanceof HarnessError &&
+        (error.code === "INVALID_SAVED_PRESETS" || error.code === "INVALID_SAVED_EFFORT");
       showPresetError(new HarnessError(error instanceof HarnessError ? error.code : "PRESET_ERROR", {
         ...(error instanceof HarnessError ? error.details : { error: String(error).slice(0, 512) }),
-        config_path: presetPath,
-        resolution: "Fix the preset configuration or restore the saved preset, then restart Pi. The harness is not initialized.",
+        ...(savedRecord ? {} : { config_path: presetPath }),
+        resolution: error instanceof HarnessError && typeof error.details.resolution === "string" ? error.details.resolution
+          : "Fix the preset configuration or restore the saved preset, then restart Pi. The harness is not initialized.",
       }), ctx);
       return;
     }

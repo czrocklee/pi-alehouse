@@ -18,8 +18,8 @@ const network = [];
 globalThis.fetch = (url) => { network.push(String(url)); throw new Error("Unexpected network request in offline Agent fixture"); };
 initialize({ agentDir });
 const fixtureModel = "harness-fixture/controlled";
-writeFileSync(join(agentDir, "harness-presets.json"), JSON.stringify({ version: 2, defaultPreset: "fixture",
-  presets: { fixture: { version: "v1", models: { light: fixtureModel, standard: fixtureModel, strong: fixtureModel } } } }));
+writeFileSync(join(agentDir, "harness-presets.json"), JSON.stringify({ version: 3, defaultPreset: "fixture",
+  presets: { fixture: { version: "v1", slots: Object.fromEntries(["d1", "d2", "d3", "d4", "d5"].map((slot) => [slot, { model: fixtureModel }])) } } }));
 initTheme(undefined, false);
 const runtime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json"), allowModelNetwork: false });
 const provider = controlledProvider(ai);
@@ -108,7 +108,7 @@ const spawned = (message, agent, profile) => {
   assert.equal(reply.workers_disabled, undefined);
 };
 const spawn = (agent, profile, key) => call(`spawn-${agent}`, "agent_spawn",
-  { agent, prompt: `Do ${key} now.`, profile, difficulty: 1, wait_ms: 60000 });
+  { agent, prompt: `Do ${key} now.`, profile, reasoning_difficulty: 1, wait_ms: 60000 });
 try {
   await session.bindExtensions({ mode: "rpc", uiContext, onError: (error) => errors.push(error.error) });
   assert.deepEqual(errors, []);

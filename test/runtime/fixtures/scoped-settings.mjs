@@ -28,8 +28,8 @@ const fixtureModel = "harness-fixture/controlled";
 const presetsPath = join(agentDir, "harness-presets.json");
 const globalConfig = join(agentDir, "extensions/pi-alehouse/config.json");
 const workspaceConfig = join(home, "project/.pi/extensions/pi-alehouse/config.json");
-writeFileSync(presetsPath, JSON.stringify({ version: 2, defaultPreset: "fixture",
-  presets: { fixture: { version: "v1", models: { light: fixtureModel, standard: fixtureModel, strong: fixtureModel } } } }));
+writeFileSync(presetsPath, JSON.stringify({ version: 3, defaultPreset: "fixture",
+  presets: { fixture: { version: "v1", slots: Object.fromEntries(["d1", "d2", "d3", "d4", "d5"].map((slot) => [slot, { model: fixtureModel }])) } } }));
 const catalogueBytes = readFileSync(presetsPath);
 initTheme(undefined, false);
 const runtime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json"), allowModelNetwork: false });
@@ -106,7 +106,7 @@ async function parent(sessionManager, script = {}) {
 // 1. A fresh parent is Session-scoped and creates no configuration file.
 const first = await parent(SessionManager.create(cwd, sessions), {
   selects: ["Show paths and pending changes", "Change save scope", "global",
-    fixtureModel, "inherit", fixtureModel, "inherit", fixtureModel, "inherit"],
+    fixtureModel, "inherit", fixtureModel, "inherit", fixtureModel, "inherit", fixtureModel, "inherit", fixtureModel, "inherit"],
   inputs: ["custom"], confirms: [true, true, true],
 });
 const problems = [];
@@ -147,10 +147,10 @@ try {
   assert(pendingApproval.some((patch) => patch.path.join(".") === "approval" && patch.value === "manual"));
   assert(!existsSync(globalConfig), "the remembered preference is still only pending");
 
-  // 6. A scripted custom preset: three model and three effort selects, the
+  // 6. A scripted custom preset: five model and five effort selects, the
   //    physical fixture model only, and no harness-presets.json mutation.
   await first.session.prompt("/harness-preset-edit");
-  assert(first.ui.selects.some(({ prompt, options }) => prompt.startsWith("custom: light model") && options.includes(fixtureModel)),
+  assert(first.ui.selects.some(({ prompt, options }) => prompt.startsWith("custom: d1 model") && options.includes(fixtureModel)),
     JSON.stringify(first.ui.selects.map(({ prompt }) => prompt)));
   assert(first.ui.confirms.some(({ title }) => title === "Create and select custom?"), JSON.stringify(first.ui.confirms));
   assert(first.ui.notices.some(({ message }) => /^Model preset custom@user-\d+ selected; existing agents are unchanged\.$/.test(message)),
@@ -158,7 +158,7 @@ try {
   assert.equal(first.status("harness-preset"), "delegation: lead·eager/custom");
   assert.deepEqual(readFileSync(presetsPath), catalogueBytes, "the base preset catalogue keeps its exact bytes");
   const firstPending = first.store().pending();
-  assert(firstPending.some((patch) => patch.path.join(".") === "presets.custom" && patch.value.models.light === fixtureModel));
+  assert(firstPending.some((patch) => patch.path.join(".") === "presets.custom" && patch.value.slots.d1.model === fixtureModel));
   assert(firstPending.some((patch) => patch.path.join(".") === "preset" && patch.value === "custom"));
   assert(!existsSync(globalConfig), "the created definition waits for the quit flush too");
 
@@ -172,10 +172,10 @@ const flushed = JSON.parse(readFileSync(globalConfig, "utf8"));
 assert.match(readFileSync(globalConfig, "utf8"), /\n$/, "the flush writes one terminating newline");
 assert.match(flushed.presets.custom.version, /^user-\d+$/);
 assert.deepEqual({ ...flushed, presets: { custom: { ...flushed.presets.custom, version: "user" } } }, {
-  version: 1, preset: "custom", approval: "manual",
+  version: 2, preset: "custom", approval: "manual",
   delegation: { mode: "lead", eagerness: "eager" },
-  presets: { custom: { version: "user", models: { light: fixtureModel, standard: fixtureModel, strong: fixtureModel },
-    effort: { light: "inherit", standard: "inherit", strong: "inherit" } } },
+  presets: { custom: { version: "user", slots: Object.fromEntries(["d1", "d2", "d3", "d4", "d5"]
+    .map((slot) => [slot, { model: fixtureModel, effort: "inherit" }])) } },
 });
 assert(!existsSync(workspaceConfig), "nothing ever writes the workspace layer");
 const firstFlushBytes = readFileSync(globalConfig);
@@ -189,7 +189,7 @@ try {
   assert((await second.ask("HELLO"))[0].includes(leadEager), "the restored mode reaches the first request");
   assert.equal(second.store().scope, "session", "a fresh session starts Session-scoped again");
   assert.equal(second.store().effective().preset, "custom");
-  assert.equal(second.store().effective().presets.custom.models.strong, fixtureModel);
+  assert.equal(second.store().effective().presets.custom.slots.d5.model, fixtureModel);
   await second.session.prompt("/harness-settings");
   const shown = JSON.parse(second.ui.notices.findLast(({ message }) => message.startsWith("{") && message.includes('"scope"')).message);
   assert.equal(shown.scope, "session"); assert.deepEqual(shown.pending, []);
@@ -203,7 +203,7 @@ assert.deepEqual(readFileSync(globalConfig), firstFlushBytes, "a session-scoped 
 //    the scope switches to global (again without copying), Off and a custom
 //    re-selection stage BOTH the saved name and the session-born definition.
 const third = await parent(SessionManager.create(cwd, sessions), {
-  selects: [fixtureModel, "inherit", fixtureModel, "inherit", fixtureModel, "inherit",
+  selects: [fixtureModel, "inherit", fixtureModel, "inherit", fixtureModel, "inherit", fixtureModel, "inherit", fixtureModel, "inherit",
     "Show paths and pending changes", "Change save scope", "global"],
   inputs: ["scoped"], confirms: [true, true],
 });
@@ -228,7 +228,7 @@ try {
   const staged = third.store().pending();
   assert.equal(staged.length, 2, JSON.stringify(staged));
   assert.deepEqual(staged[0].path, ["presets", "scoped"]);
-  assert.equal(staged[0].value.models.light, fixtureModel);
+  assert.equal(staged[0].value.slots.d1.model, fixtureModel);
   assert.match(staged[0].value.version, /^user-\d+$/);
   assert.deepEqual(staged[1], { scope: "global", path: ["preset"], value: "scoped" });
   assert.equal(third.status("harness-preset"), "delegation: lead·eager/scoped");
@@ -238,7 +238,7 @@ assert.deepEqual(problems, [], "parent 3: session-scoped create, later global sc
 const regressed = JSON.parse(readFileSync(globalConfig, "utf8"));
 assert.equal(regressed.preset, "scoped");
 assert.match(regressed.presets.scoped.version, /^user-\d+$/);
-assert.equal(regressed.presets.custom.models.light, fixtureModel, "earlier saved definitions survive the merge");
+assert.equal(regressed.presets.custom.slots.d1.model, fixtureModel, "earlier saved definitions survive the merge");
 assert.equal(regressed.approval, "manual");
 
 // 9. The next fresh parent loads the session-born preset name and definition.
@@ -265,7 +265,7 @@ assert.deepEqual(readFileSync(globalConfig), savedConfigBytes, "a resume flushes
 
 // 11. A malformed saved preference fails the next startup closed, without
 //     touching the file or initializing any harness tool.
-writeFileSync(globalConfig, '{"version":1,"preset":"not a valid name"}\n');
+writeFileSync(globalConfig, '{"version":2,"preset":"not a valid name"}\n');
 const sixth = await parent(SessionManager.create(cwd, sessions));
 try {
   const failure = sixth.ui.notices.find(({ message }) => message.includes("SETTINGS_LOAD_FAILED"));
@@ -279,7 +279,7 @@ try {
     toolName: "read", input: { path: "fixture.txt" } });
   assert.equal(blocked.block, true);
   assert.match(blocked.reason, /Harness initialization did not complete/);
-  assert.equal(readFileSync(globalConfig, "utf8"), '{"version":1,"preset":"not a valid name"}\n', "startup repairs nothing");
+  assert.equal(readFileSync(globalConfig, "utf8"), '{"version":2,"preset":"not a valid name"}\n', "startup repairs nothing");
 } catch (error) { problems.push(error); }
 problems.push(...await sixth.close());
 assert.deepEqual(problems, [], "parent 6: malformed saved preference fails startup closed");

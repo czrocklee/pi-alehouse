@@ -98,7 +98,7 @@ for (const mode of ["cooperative", "abort-timeout", "shutdown-error"]) {
     const run = await controller.submit(mode, { prompt: "HARNESS_PROMPT_MUST_NOT_EXECUTE", description: mode,
       settings: { provider: model.provider, model: model.id, thinking: "off", parent_thinking: "off",
         thinking_resolution: "identity", profile: "reader",
-        difficulty: 3, strength: "standard", preset: "fixture", preset_version: "v1", selection_digest: "1".repeat(64),
+        difficulty: 3, strength: "d3", preset: "fixture", preset_version: "v1", selection_digest: "1".repeat(64),
         cwd, tools: [], definition_digest: definitionDigest } });
     assert.equal(await controller.waitForRuns([run.run_id], { mode: "all", timeout_ms: 10000 }), "ready");
     data.run = controller.view(run.run_id);

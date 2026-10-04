@@ -1,5 +1,5 @@
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { terminal, type RunView } from "../core/contracts.js";
+import { terminal, validDifficulty, type RunView } from "../core/contracts.js";
 import { reported, type UsageComponent } from "../core/usage-ledger.js";
 import { formatContextPercent, formatContextTokens, formatCost, formatDrain, formatMs, formatTokens, formatTurns,
   GLYPHS, SPINNER, withoutBreaks, type ActiveTool, type Theme, type TranscriptRows } from "./format.js";
@@ -137,10 +137,15 @@ export function renderDetailFields(input: DetailInput, theme: Theme, width: numb
     (view.history_ref ? ` · session ${shortId(view.history_ref.session_id)}` : ""));
   const s = view.effective_settings;
   const resolution = s.thinking_resolution === "preset_fixed" ? "preset fixed" :
+    s.thinking_resolution === "automatic_mapping" ? `${s.parent_thinking}→${s.thinking} (auto map)` :
     s.thinking_resolution === "preset_mapping" ? `${s.parent_thinking}→${s.thinking} (preset map)` : "parent identity";
   const source = s.effort_source === "user_override" ? "user override" :
     s.effort_source === "preset" ? "preset" : undefined;
-  field("routing", `${s.preset}@${s.preset_version} · d${s.difficulty}→${s.strength}`);
+  // New matching slots need no redundant dN→dN; historical routes stay literal.
+  // A missing/invalid historical rating cannot acquire an inferred difficulty.
+  const route = validDifficulty(s.difficulty) && s.strength !== `d${s.difficulty}`
+    ? `d${s.difficulty}→${s.strength}` : s.strength;
+  field("routing", `${s.preset}@${s.preset_version} · ${route}`);
   field("effort", `${s.thinking} · ${resolution}${source ? ` · source: ${source}` : ""} · fixed at creation`);
   field("model", s.model);
   field("cwd", s.cwd);

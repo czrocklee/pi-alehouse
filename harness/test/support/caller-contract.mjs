@@ -13,15 +13,19 @@ export function assertCallerTools(tools) {
     assert.doesNotMatch(serialized, /run_id|agent_id|\bRun\b|\bcancel/, `${tool.name} exposes no internal IDs or Run/cancel vocabulary`);
   }
   const spawn = byName.get("agent_spawn"), fields = spawn.parameters.properties;
-  assert.deepEqual(spawn.parameters.required.sort(), ["agent", "difficulty", "profile", "prompt"]);
+  assert.deepEqual(spawn.parameters.required.sort(), ["agent", "profile", "prompt", "reasoning_difficulty"]);
   assert.match(fields.agent.description, /short nickname, one theme per session.*not a task name. Never reused/);
   assert.match(fields.prompt.description, /Complete instructions/);
   assert.match(fields.label.description, /agent_list, not instructions. Default: the prompt's first line/);
   assert.deepEqual(fields.profile.enum, ["editor", "reader", "researcher"]);
   assert.match(fields.profile.description, /reader:.*cannot edit files; editor: may edit files; researcher: web search and fetch.*no Bash or edits.*untrusted. Git mutations stay with you/);
   assert.match(fields.profile.description, /permission-gated; no profile is an OS sandbox/);
-  const difficulty = fields.difficulty.description;
+  const difficulty = fields.reasoning_difficulty.description;
+  assert.equal(fields.reasoning_difficulty.type, "integer");
+  assert.equal(fields.reasoning_difficulty.minimum, 1); assert.equal(fields.reasoning_difficulty.maximum, 5);
+  assert.equal(Object.hasOwn(fields, "difficulty"), false, "the legacy score parameter is not a provider-visible alias");
   assert.match(difficulty, /Picks the Agent's model; fixed for its lifetime/);
+  assert.match(difficulty, /from easiest \(1\) to hardest \(5\)/);
   assert.match(difficulty, /1=clear method.*2=routine local analysis.*3=independent investigation.*4=competing hypotheses.*5=no established approach/);
   assert.match(difficulty, /Not workload, importance or cost/);
   assert.doesNotMatch(difficulty, /light|standard|strong|slot/i);
@@ -30,7 +34,7 @@ export function assertCallerTools(tools) {
   assert.match(fields.wait_ms.description, /accepted task.*question.*issue.*alerts.*Default 0.*snapshot.*never interrupts/);
   assert.match(fields.max_turns.description, /per task, default 256.*partial result/);
   assert.match(fields.max_duration_ms.description, /per task.*asked to stop/);
-  for (const key of ["model", "effort", "strength", "thinking", "name", "description", "message"]) assert.equal(key in fields, false, key);
+  for (const key of ["model", "effort", "strength", "thinking", "name", "description", "message", "difficulty"]) assert.equal(key in fields, false, key);
   assert.match(spawn.description, /share your checkout without isolation, and cannot delegate. Only researcher Agents can use the web/);
   assert.match(spawn.description, /settled needs_input.*question_id.*answer it with agent_answer, never agent_send/);
   assert.match(spawn.description, /Capacity is limited: kill idle Agents/);
@@ -39,7 +43,7 @@ export function assertCallerTools(tools) {
   const run = byName.get("agent_run"), runFields = run.parameters.properties;
   assert.deepEqual(run.parameters.required.sort(), ["agent", "prompt"]);
   assert.deepEqual(Object.keys(runFields).sort(), ["after", "agent", "dispatch", "label", "prompt", "wait_ms"],
-    "profile, difficulty, context and budgets belong to the Agent; dispatch belongs to each task");
+    "profile, reasoning_difficulty, context and budgets belong to the Agent; dispatch belongs to each task");
   for (const tool of [spawn, run]) {
     const dispatch = tool.parameters.properties.dispatch;
     assert.equal(dispatch.type, "object"); assert.equal(dispatch.additionalProperties, false);

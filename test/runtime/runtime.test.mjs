@@ -68,7 +68,7 @@ test("init creates only absent resources and seeds Off without model routes", (t
   assert.equal(config.permission.external_directory["*"], "ask");
   assert.equal(config.permission.external_directory_read, undefined);
   assert.deepEqual(config.piInfrastructureReadPaths, []);
-  assert.deepEqual(JSON.parse(readFileSync(join(agentDir, "harness-presets.json"))), { version: 2, defaultPreset: "off", presets: {} });
+  assert.deepEqual(JSON.parse(readFileSync(join(agentDir, "harness-presets.json"))), { version: 3, defaultPreset: "off", presets: {} });
   const second = initialize({ agentDir });
   assert.equal(second.created.length, 0);
   assert.equal(second.preserved.length, 8);
@@ -76,6 +76,24 @@ test("init creates only absent resources and seeds Off without model routes", (t
   assert(!existsSync(join(agentDir, "settings.json")));
   assert(!existsSync(join(agentDir, "auth.json")));
   preflight({ agentDir, env: { PATH: "" } });
+});
+
+test("init preserves legacy catalogues and launcher rejects them without conversion", (t) => {
+  const base = temporary(t), agentDir = join(base, "agent");
+  initialize({ agentDir });
+  const path = join(agentDir, "harness-presets.json");
+  for (const version of [1, 2]) {
+    const original = JSON.stringify({ version, defaultPreset: "off", presets: {} }) + "\n";
+    writeFileSync(path, original);
+    assert.throws(() => initialize({ agentDir }), /version 3.*including empty Off catalogues.*init never replaces existing files/);
+    assert.equal(readFileSync(path, "utf8"), original, "failed init must preserve the existing catalogue bytes");
+    assert.throws(() => preflight({ agentDir, env: {} }), /version 3.*update it manually.*not converted/);
+    const launched = spawnSync(process.execPath, [join(packageRoot, "bin/pi-alehouse.mjs"), "--offline"], {
+      env: { ...process.env, PI_CODING_AGENT_DIR: agentDir }, encoding: "utf8",
+    });
+    assert.notEqual(launched.status, 0); assert.match(launched.stderr, /version 3/);
+    assert.equal(readFileSync(path, "utf8"), original, "rejection must not rewrite the user's catalogue");
+  }
 });
 
 test("init preserves conflicting and dangling profile symlinks; never claims ready", (t) => {

@@ -320,7 +320,7 @@ child not in that registry is not covered and keeps asking.
 
 ## Scoped settings and trust
 
-Optional user preferences are read from `<agentDir>/extensions/pi-alehouse/config.json`
+Optional version-2 user preferences are read from `<agentDir>/extensions/pi-alehouse/config.json`
 and, only for a trusted project, `<current-cwd>/.pi/extensions/pi-alehouse/config.json`.
 The workspace lookup is the current working directory only, not a Git-root
 search. It contains user-selected routing, delegation, effort, approval, and
@@ -412,7 +412,8 @@ read-only display, never pending-state hydration. See
 
 The parent tool captures the real `ExtensionContext`; all relevant identity is
 rechecked after preparation/awaits and before publication commit, never by a
-success wrapper after consumption. A parent-tool caller may choose profile and difficulty,
+success wrapper after consumption. A parent-tool caller may choose `profile`
+and `reasoning_difficulty`,
 but cannot choose the concrete provider/model/thinking resolution, parent/child
 cwd, owner, generation, session ID, history path, or profile tool table.
 Optional inherited context is a bounded 64 KiB text snapshot with an aggregate

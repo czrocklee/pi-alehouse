@@ -1,19 +1,19 @@
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { HarnessError, workersDisabled } from "./core/ports.js";
-import { validDifficulty, type Difficulty } from "./core/contracts.js";
+import { difficultySlots, validDifficulty, type Difficulty, type WorkerSlot } from "./core/contracts.js";
 import { defaultDelegation, delegationModes, eagernessLevels, type DelegationSetting } from "./delegation.js";
 import { validateSettings, type PresetDefinition } from "../../lib/settings-store.mjs";
 
-export const strengths = ["light", "standard", "strong"] as const;
-export type Strength = (typeof strengths)[number];
-// Task ratings are the caller contract; preset slots remain an internal route.
-const difficultySlots = ["light", "light", "standard", "strong", "strong"] as const;
-export const invalidDifficultyResolution = "Use an integer from 1 to 5 to rate the task difficulty.";
+// Task ratings and configured slots have one fixed, one-to-one correspondence.
+export const strengths = difficultySlots;
+export type Strength = WorkerSlot;
+export const invalidDifficultyResolution = "Use an integer from 1 to 5 for reasoning_difficulty.";
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
-export type ThinkingMap = Partial<Record<ThinkingLevel, ThinkingLevel>>;
 export type Effort = ThinkingLevel | "inherit";
+/** Versioned deterministic policy, included in preset selection identity. */
+export const inheritedThinkingPolicy = "ceiling-v1";
 export type EffortOverrides = Partial<Record<Strength, Effort>>;
 /** Session overrides are a closed, plain record; explicit undefined is not an omission. */
 export function validEffortOverrides(value: unknown): value is EffortOverrides {
@@ -29,7 +29,7 @@ export function validEffortOverrides(value: unknown): value is EffortOverrides {
       (member.value === "inherit" || thinkingLevels.includes(member.value as ThinkingLevel));
   });
 }
-const CONFIG_VERSION = 2;
+const CONFIG_VERSION = 3;
 const MAX_CONFIG_BYTES = 256 * 1024;
 const RESERVED_NAMES = new Set(["off", "reload"]);
 
@@ -37,9 +37,6 @@ export interface PresetSnapshot {
   name: string;
   version: string;
   models: Record<Strength, string>;
-  /** Explicit compatibility policy, consulted only when exact inherited
-   * thinking is unsupported by the selected model. */
-  thinking: Record<Strength, ThinkingMap>;
   /** Effective per-slot effort, including session-specific overrides. */
   effort: Record<Strength, Effort>;
   effort_defaults: Record<Strength, Effort>;
@@ -77,8 +74,7 @@ export interface PresetPublication {
   candidate: PresetCandidate;
 }
 
-type PresetBody = { version: string; models: Record<Strength, string>; thinking?: Partial<Record<Strength, ThinkingMap>>;
-  effort?: EffortOverrides };
+type PresetBody = PresetDefinition;
 type PresetConfig = { defaultPreset: string; presets: Record<string, PresetBody>; delegation: DelegationSetting };
 type CandidateData = { owner: object; presets: Map<string, PresetSnapshot>; definitions: Record<string, PresetDefinition> };
 const candidateData = new WeakMap<PresetCandidate, CandidateData>();
@@ -106,13 +102,12 @@ const exactKeys = (value: Record<string, unknown>, allowed: readonly string[], a
   if (extra !== undefined) fail(`${at} has unsupported field: ${extra}`);
 };
 const canonical = (name: string, body: PresetBody): PresetSnapshot => {
-  const models = Object.fromEntries(strengths.map((strength) => [strength, body.models[strength]])) as Record<Strength, string>;
-  const thinking = Object.fromEntries(strengths.map((strength) => [strength,
-    Object.fromEntries(thinkingLevels.filter((level) => body.thinking?.[strength]?.[level] !== undefined)
-      .map((level) => [level, body.thinking![strength]![level]]))])) as Record<Strength, ThinkingMap>;
+  // Normalize slot definitions into the internal runtime projection. Only the
+  // nested `slots` shape is accepted on disk or in persisted definitions.
+  const models = Object.fromEntries(strengths.map((strength) => [strength, body.slots[strength].model])) as Record<Strength, string>;
   const effort_defaults = Object.fromEntries(strengths.map((strength) =>
-    [strength, body.effort?.[strength] ?? "inherit"])) as Record<Strength, Effort>;
-  return withOverrides({ name, version: body.version, models, thinking, effort_defaults }, {});
+    [strength, body.slots[strength].effort ?? "inherit"])) as Record<Strength, Effort>;
+  return withOverrides({ name, version: body.version, models, effort_defaults }, {});
 };
 const withOverrides = (base: Omit<PresetSnapshot, "effort" | "effort_overrides" | "digest">,
   overrides: EffortOverrides): PresetSnapshot => {
@@ -120,16 +115,14 @@ const withOverrides = (base: Omit<PresetSnapshot, "effort" | "effort_overrides" 
     .map((strength) => [strength, overrides[strength]])) as EffortOverrides;
   const effort = Object.fromEntries(strengths.map((strength) =>
     [strength, effort_overrides[strength] ?? base.effort_defaults[strength]])) as Record<Strength, Effort>;
-  const selection = { name: base.name, version: base.version, models: base.models, thinking: base.thinking,
+  const selection = { name: base.name, version: base.version, models: base.models,
     effort_defaults: base.effort_defaults, effort, effort_overrides };
-  return { ...selection, digest: createHash("sha256").update(JSON.stringify({ ...selection, difficultySlots })).digest("hex") };
+  return { ...selection, digest: createHash("sha256").update(JSON.stringify({ ...selection, difficultySlots, inheritedThinkingPolicy })).digest("hex") };
 };
 const snapshotFor = (base: PresetSnapshot, overrides: EffortOverrides = {}): PresetSnapshot =>
   withOverrides(base, overrides);
 const frozenSnapshot = (snapshot: PresetSnapshot): PresetSnapshot => {
   Object.freeze(snapshot.models);
-  for (const strength of strengths) Object.freeze(snapshot.thinking[strength]);
-  Object.freeze(snapshot.thinking);
   Object.freeze(snapshot.effort);
   Object.freeze(snapshot.effort_defaults);
   Object.freeze(snapshot.effort_overrides);
@@ -157,7 +150,7 @@ function parsePresetConfig(path: string): PresetConfig {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) fail("Top level must be an object");
   const root = raw as Record<string, unknown>;
   exactKeys(root, ["version", "defaultPreset", "presets", "defaultMode", "defaultEagerness"], "Top level");
-  if (root.version !== CONFIG_VERSION) fail(`version must be ${CONFIG_VERSION}; provide the full preset catalogue and defaultPreset (version 1 additive configs must be migrated)`);
+  if (root.version !== CONFIG_VERSION) fail(`version must be ${CONFIG_VERSION}; configure all five slots d1–d5 and defaultPreset. Older routing configurations are not supported or converted.`);
   if (!root.presets || typeof root.presets !== "object" || Array.isArray(root.presets)) fail("presets must be an object");
   const parsed: Record<string, PresetBody> = {};
   for (const [name, value] of Object.entries(root.presets as Record<string, unknown>)) {
@@ -165,42 +158,28 @@ function parsePresetConfig(path: string): PresetConfig {
     if (RESERVED_NAMES.has(name)) fail(`Preset name is reserved: ${name}`);
     if (!value || typeof value !== "object" || Array.isArray(value)) fail(`Preset ${name} must be an object`);
     const body = value as Record<string, unknown>;
-    exactKeys(body, ["version", "models", "thinking", "effort"], `Preset ${name}`);
+    exactKeys(body, ["version", "slots"], `Preset ${name}`);
     if (!validVersion(body.version)) fail(`Preset ${name}.version must be a non-empty string of at most 64 characters`);
-    if (!body.models || typeof body.models !== "object" || Array.isArray(body.models)) fail(`Preset ${name}.models must be an object`);
-    const models = body.models as Record<string, unknown>;
-    exactKeys(models, strengths, `Preset ${name}.models`);
-    for (const strength of strengths) if (!validModel(models[strength]))
-      fail(`Preset ${name}.models.${strength} must be an exact provider/model ID`);
-    let thinking: Partial<Record<Strength, ThinkingMap>> | undefined;
-    if (body.thinking !== undefined) {
-      if (!body.thinking || typeof body.thinking !== "object" || Array.isArray(body.thinking))
-        fail(`Preset ${name}.thinking must be an object`);
-      const slots = body.thinking as Record<string, unknown>;
-      exactKeys(slots, strengths, `Preset ${name}.thinking`);
-      thinking = {};
-      for (const [strength, value] of Object.entries(slots)) {
-        if (!value || typeof value !== "object" || Array.isArray(value))
-          fail(`Preset ${name}.thinking.${strength} must be an object`);
-        const mapping = value as Record<string, unknown>;
-        exactKeys(mapping, thinkingLevels, `Preset ${name}.thinking.${strength}`);
-        for (const [source, target] of Object.entries(mapping)) {
-          if (!thinkingLevels.includes(target as ThinkingLevel))
-            fail(`Preset ${name}.thinking.${strength}.${source} must be a Pi thinking level`);
-          if (source === "off" && target !== "off")
-            fail(`Preset ${name}.thinking.${strength}.off cannot enable thinking`);
-        }
-        thinking[strength as Strength] = { ...mapping };
+    if (!body.slots || typeof body.slots !== "object" || Array.isArray(body.slots)) fail(`Preset ${name}.slots must be an object`);
+    const slots = body.slots as Record<string, unknown>;
+    exactKeys(slots, strengths, `Preset ${name}.slots`);
+    const definitions = {} as PresetDefinition["slots"];
+    for (const strength of strengths) {
+      const value = slots[strength];
+      const at = `Preset ${name}.slots.${strength}`;
+      if (!value || typeof value !== "object" || Array.isArray(value)) fail(`${at} must be an object`);
+      const slot = value as Record<string, unknown>;
+      exactKeys(slot, ["model", "effort"], at);
+      if (!validModel(slot.model)) fail(`${at}.model must be an exact provider/model ID`);
+      let effort: Effort | undefined;
+      if (Object.hasOwn(slot, "effort")) {
+        if (slot.effort !== "inherit" && !thinkingLevels.includes(slot.effort as ThinkingLevel))
+          fail(`${at}.effort must be a Pi thinking level or inherit`);
+        effort = slot.effort as Effort;
       }
+      definitions[strength] = { model: slot.model as string, ...(effort === undefined ? {} : { effort }) };
     }
-    let effort: EffortOverrides | undefined;
-    if (body.effort !== undefined) {
-      if (!validEffortOverrides(body.effort)) fail(`Preset ${name}.effort must contain only routing slots with Pi thinking levels or inherit`);
-      effort = { ...body.effort };
-    }
-    parsed[name] = { version: body.version as string,
-      models: Object.fromEntries(strengths.map((strength) => [strength, models[strength]])) as Record<Strength, string>,
-      ...(thinking ? { thinking } : {}), ...(effort ? { effort } : {}) };
+    parsed[name] = { version: body.version as string, slots: definitions };
   }
   if (typeof root.defaultPreset !== "string" || !validName(root.defaultPreset) ||
     (root.defaultPreset !== "off" && !Object.hasOwn(parsed, root.defaultPreset)))
@@ -236,7 +215,7 @@ export class PresetRouter {
     const config = parsePresetConfig(configPath);
     // Two scoped preference layers plus explicit session-only definitions.
     // Stored files and session records keep their independent one-layer caps.
-    this.definitions = validateSettings({ version: 1, presets: definitions }, 3).presets ?? {};
+    this.definitions = validateSettings({ version: 2, presets: definitions }, 3).presets ?? {};
     this.defaultDelegation = Object.freeze(config.delegation);
     this.presets = catalogue({ ...config.presets, ...this.definitions });
     this.activeName = config.defaultPreset;
@@ -249,7 +228,7 @@ export class PresetRouter {
   }
 
   prepare(definitions: Readonly<Record<string, PresetDefinition>> = this.definitions): PresetCandidate {
-    const checked = validateSettings({ version: 1, presets: definitions }, 3).presets ?? {};
+    const checked = validateSettings({ version: 2, presets: definitions }, 3).presets ?? {};
     const presets = catalogue({ ...parsePresetConfig(this.configPath).presets, ...checked });
     const candidate: PresetCandidate = Object.freeze({ revision: this.revision, activeName: this.activeName,
       names: Object.freeze(orderedNames(presets)) });
@@ -263,8 +242,8 @@ export class PresetRouter {
   definition(name: string): PresetDefinition {
     const preset = this.presets.get(name);
     if (!preset) throw missing(name, this.names());
-    return structuredClone({ version: preset.version, models: preset.models,
-      effort: preset.effort_defaults, thinking: preset.thinking });
+    return structuredClone({ version: preset.version, slots: Object.fromEntries(strengths.map((slot) =>
+      [slot, { model: preset.models[slot], effort: preset.effort_defaults[slot] }])) as PresetDefinition["slots"] });
   }
 
   /** Read-only snapshots for a prepared catalogue. Inspecting never publishes
@@ -375,7 +354,7 @@ export interface ResolvedRoute {
   thinking: ThinkingLevel;
   /** Parent Pi thinking captured when this creation request was made. */
   parent_thinking?: ThinkingLevel;
-  thinking_resolution: "identity" | "preset_mapping" | "preset_fixed";
+  thinking_resolution: "identity" | "automatic_mapping" | "preset_fixed";
   effort_source?: "preset" | "user_override";
   preset: string;
   preset_version: string;
@@ -385,8 +364,8 @@ export interface ResolvedRoute {
 }
 
 const VIRTUAL_WORKER_API = "pi-virtual";
-const unavailableResolution = "Ask the user to check the worker preset and model configuration. Do not change difficulty to bypass configuration errors.";
-const virtualWorkerResolution = "Ask the user to configure a physical model for this worker preset slot. Virtual models route each request and cannot be pinned to an Agent. Do not change difficulty to bypass configuration errors.";
+const unavailableResolution = "Ask the user to check the worker preset and model configuration. Do not change reasoning_difficulty to bypass configuration errors.";
+const virtualWorkerResolution = "Ask the user to configure a physical model for this worker preset slot. Virtual models route each request and cannot be pinned to an Agent. Do not change reasoning_difficulty to bypass configuration errors.";
 
 /** Chat-catalogue identity only. Classifier and image catalogues are not workers. */
 export type WorkerModelRef = { provider: string; id: string; api?: string };
@@ -436,7 +415,7 @@ export function resolveRoute<M extends WorkerModelRef>(
 }
 
 /** Exact-ID lookup for a trusted preset slot, also used by operator previews.
- * No task score is invented. Inherit uses explicit compatibility maps only
+ * No task score is invented. Inherit uses the versioned automatic policy only
  * when identity is unsupported; fixed effort never maps or falls back. */
 export function resolveSlotRoute<M extends WorkerModelRef>(
   input: RouteInput<M> & { strength: Strength },
@@ -449,47 +428,51 @@ export function resolveSlotRoute<M extends WorkerModelRef>(
   if (effort === "inherit" && !parentValid)
     throw new HarnessError("PARENT_THINKING_UNAVAILABLE", {
       error: "Pi did not provide a valid parent thinking level.",
-      resolution: "Ask the user to check Pi's thinking setting or restart Pi. Do not change difficulty to bypass configuration errors.",
+      resolution: "Ask the user to check Pi's thinking setting or restart Pi. Do not change reasoning_difficulty to bypass configuration errors.",
     });
   const exact = input.preset.models[strength];
   // Physical check is shared with operator previews. Thinking support is not
   // consulted for a virtual slot, including one that advertises the level.
   const model = selectPhysicalWorkerModel(input.models, exact, input.preset);
-  const incompatible = (reason: string, thinking?: string): never => {
+  const supported = [...input.supportedThinking(model)];
+  const incompatible = (reason: string): never => {
+    const resolution = reason === "no_supported_thinking_level" && supported.includes("off")
+      ? "Ask the user to set this worker preset slot's fixed effort to \"off\", or change the parent Pi thinking level or worker preset."
+      : "Ask the user to change the parent Pi thinking level or worker preset.";
     throw new HarnessError("THINKING_INCOMPATIBLE", { key: "parent_thinking", reason,
       preset: input.preset.name, preset_version: input.preset.version,
-      parent_thinking: bounded(input.parentThinking), ...(thinking ? { thinking: bounded(thinking) } : {}),
-      resolution: "Ask the user to change the parent Pi thinking level or worker preset. Do not change difficulty to bypass configuration errors.",
+      parent_thinking: bounded(input.parentThinking),
+      resolution: `${resolution} Do not change reasoning_difficulty to bypass configuration errors.`,
     });
   };
   const parent = parentValid ? input.parentThinking as ThinkingLevel : undefined;
-  const supported = [...input.supportedThinking(model)];
   const effort_source = Object.hasOwn(input.preset.effort_overrides, strength) ? "user_override" : "preset";
   if (effort !== "inherit") {
     if (!supported.includes(effort)) throw new HarnessError("THINKING_INCOMPATIBLE", {
       reason: "fixed_effort_unsupported",
       preset: input.preset.name, preset_version: input.preset.version,
-      resolution: "Ask the user to change the worker preset effort configuration to a level supported by its model. Do not change difficulty to bypass configuration errors.",
+      resolution: "Ask the user to change the worker preset effort configuration to a level supported by its model. Do not change reasoning_difficulty to bypass configuration errors.",
     });
     return { provider: model.provider, model: model.id, thinking: effort,
       ...(parent === undefined ? {} : { parent_thinking: parent }), thinking_resolution: "preset_fixed", effort_source,
       preset: input.preset.name, preset_version: input.preset.version,
       selection_digest: input.preset.digest, strength };
   }
-  // Inherit keeps identity-first semantics and its explicit compatibility map.
+  // Preserve exact support first. Otherwise round enabled thinking upward,
+  // capped at the model's highest positive level. SDK order/duplicates/unknown
+  // names do not affect this canonical policy. Never cross the off boundary.
   const inherited = parent!;
   let thinking: ThinkingLevel, thinking_resolution: ResolvedRoute["thinking_resolution"];
   if (supported.includes(inherited)) {
     thinking = inherited;
     thinking_resolution = "identity";
   } else {
-    const mapped = input.preset.thinking?.[strength]?.[inherited];
-    if (mapped === undefined) return incompatible("identity_unsupported_no_mapping");
-    if (inherited === "off" && mapped !== "off") return incompatible("off_mapping_forbidden", mapped);
-    if (!thinkingLevels.includes(mapped) || !supported.includes(mapped))
-      return incompatible("mapped_target_unsupported", mapped);
-    thinking = mapped;
-    thinking_resolution = "preset_mapping";
+    if (inherited === "off") return incompatible("off_unsupported");
+    const enabled = thinkingLevels.filter((level) => level !== "off" && supported.includes(level));
+    const highest = enabled.at(-1);
+    if (highest === undefined) return incompatible("no_supported_thinking_level");
+    thinking = enabled.find((level) => thinkingLevels.indexOf(level) > thinkingLevels.indexOf(inherited)) ?? highest;
+    thinking_resolution = "automatic_mapping";
   }
   return { provider: model.provider, model: model.id, thinking, parent_thinking: inherited, thinking_resolution, effort_source,
     preset: input.preset.name, preset_version: input.preset.version,

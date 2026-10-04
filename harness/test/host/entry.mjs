@@ -222,9 +222,9 @@ const createRuntime = async ({ cwd, sessionManager, sessionStartEvent }) => {
 };
 const bind = (session) => session.bindExtensions({ mode: "tui", uiContext: ui, onError: (error) => errors.push(error.error) });
 const presetPath = join(agentDir, "harness-presets.json"), presetEntry = "harness:preset-selection:v1";
-const preset = (version) => ({ version, models: { light: "harness-fixture/controlled",
-  standard: "harness-fixture/controlled", strong: "harness-fixture/controlled" } });
-const writePresets = (presets) => writeFileSync(presetPath, JSON.stringify({ version: 2,
+const preset = (version) => ({ version, slots: Object.fromEntries(["d1", "d2", "d3", "d4", "d5"]
+  .map((slot) => [slot, { model: "harness-fixture/controlled" }])) });
+const writePresets = (presets) => writeFileSync(presetPath, JSON.stringify({ version: 3,
   defaultPreset: Object.keys(presets)[0] ?? "off", presets }), { mode: 0o600 });
 const selectedEntries = () => parent.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === presetEntry);
 const presetStatus = () => statuses.findLast((entry) => entry.key === "harness-preset")?.value;
@@ -396,7 +396,7 @@ try {
   // footer therefore reports a warning but cannot turn the selection into a
   // failure or roll it back; the first worker below proves the live v5 route.
   const unresolvedInheritance = preset("v5");
-  unresolvedInheritance.models.strong = "harness-fixture/missing-inherit-model";
+  unresolvedInheritance.slots.d5.model = "harness-fixture/missing-inherit-model";
   assert.equal(runtime.getModel("harness-fixture", "missing-inherit-model"), undefined);
   writePresets({ "entry-fixture": unresolvedInheritance, "entry-other": preset("v3") });
   const beforeFooterAudit = selectedEntries().length;
@@ -409,32 +409,32 @@ try {
   assert.match(notices.at(-1), /entry-fixture@v5 selected.*footer could not update.*ENTRY_FOOTER_PAINT_FAILURE/);
 
   // The nonreasoning model in the installed registry supports only "off".
-  // Strong deliberately has an unresolved inherited model: it must not block
+  // D5 deliberately has an unresolved inherited model: it must not block
   // saving another slot or warn on session restoration before any spawn.
   // Arrows audit immediately; Esc returns without undoing, and Alt+S closes.
   // Editor Enter only returns to the list. List Enter still selects a name
   // rather than manufacturing an override record.
   const beforeEdit = selectedEntries().length;
-  presetSelections.push({ target: "entry-fixture", steps: ["e", "down", "right", "right", "esc", "esc"],
-    expectPaint: { 0: "Effort · entry-fixture", 3: "standard:off", 4: "Delegation" }, expectResult: null });
+  presetSelections.push({ target: "entry-fixture", steps: ["e", "down", "down", "right", "right", "esc", "esc"],
+    expectPaint: { 0: "Effort · entry-fixture", 4: "d3:off", 5: "Delegation" }, expectResult: null });
   await parent.prompt("/harness-preset");
-  presetSelections.push({ target: "entry-fixture", steps: ["e", "down", "right", "right", "alt+s"],
-    expectPaint: { 3: "standard:off" }, expectResult: null });
+  presetSelections.push({ target: "entry-fixture", steps: ["e", "down", "down", "right", "right", "alt+s"],
+    expectPaint: { 4: "d3:off" }, expectResult: null });
   await parent.prompt("/harness-preset");
   assert.equal(selectedEntries().length, beforeEdit + 2, "arrows audit inherit/off; bounded arrows and closing do not");
   assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*", "live arrows repaint and closing retains them");
-  presetSelections.push({ target: "entry-fixture", steps: ["e", "down", "left", "right", "right", "enter", "esc"],
-    expectPaint: { 0: "Effort · entry-fixture", 2: "standard:inherit", 3: "standard:off", 4: "standard:off", 5: "Delegation" },
+  presetSelections.push({ target: "entry-fixture", steps: ["e", "down", "down", "left", "right", "right", "enter", "esc"],
+    expectPaint: { 0: "Effort · entry-fixture", 3: "d3:inherit", 4: "d3:off", 5: "d3:off", 6: "Delegation" },
     expectResult: null });
   await parent.prompt("/harness-preset");
   assert.equal(selectedEntries().length, beforeEdit + 4);
-  assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { standard: "off" });
+  assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { d3: "off" });
   assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
   await parent.prompt("/harness-preset entry-other");
   assert.equal(presetStatus(), "delegation: co-worker/entry-other");
   await parent.prompt("/harness-preset entry-fixture");
   assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*", "switch-away/back remembers this preset's effort");
-  assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { standard: "off" });
+  assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { d3: "off" });
 
   // A fresh unused Owner permits a real SDK InteractiveMode replacement. Fork
   // the persisted branch, not an in-memory copy or a synthetic session_start;
@@ -447,12 +447,12 @@ try {
   assert.equal(permission.getPermissionsService(beforeEffortReplacement.sessionId), undefined);
   assert.notEqual(permission.getPermissionsService(parent.sessionId), beforeEffortService);
   assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
-  assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { standard: "off" });
+  assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { d3: "off" });
   assert.equal(parent.model, model, "editing worker effort must not change the parent model");
   assert.equal(notices.slice(beforeEffortRestoreNotices).some((message) => message.includes("Saved worker effort needs attention")), false,
     "unresolved inherit is spawn-time validation, not a saved-policy warning");
-  // Restore the controlled strong model before later difficulty-5 work. This
-  // rereads metadata without changing the successfully saved standard override.
+  // Restore the controlled d5 model before later difficulty-5 work. This
+  // rereads metadata without changing the successfully saved d3 override.
   writePresets({ "entry-fixture": preset("v5"), "entry-other": preset("v3") });
   await parent.prompt("/harness-preset reload");
   assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
@@ -475,7 +475,7 @@ try {
   assert(!parent.getActiveToolNames().includes("agent_spawn"));
   const lastLink = () => parent.sessionManager.getBranch().findLast((entry) => entry.type === "custom" &&
     entry.customType === "harness:run-link:v1");
-  const first = await invoke("agent_spawn", { agent: "entry", profile: "reader", difficulty: 3,
+  const first = await invoke("agent_spawn", { agent: "entry", profile: "reader", reasoning_difficulty: 3,
     prompt: "Read source.txt", label: "Entry smoke", max_turns: 4, wait_ms: 60000 });
   assert.equal(first.reason, "done");
   assert.deepEqual(first.action, { type: "agent_spawn", agent: "entry", task: 1 });
@@ -518,7 +518,7 @@ try {
   assert.equal(selectedEntries().at(-1).data.name, "off");
   assert.equal("models" in selectedEntries().at(-1).data, false);
   for (const [name, args] of [
-    ["agent_spawn", { agent: "blocked", profile: "reader", difficulty: 3, prompt: "Must not start", label: "Blocked" }],
+    ["agent_spawn", { agent: "blocked", profile: "reader", reasoning_difficulty: 3, prompt: "Must not start", label: "Blocked" }],
     ["agent_run", { agent: "entry", prompt: "Must not start" }],
     ["agent_send", { agent: "entry", message: "Must not steer" }],
     ["agent_answer", { agent: "entry", question_id: `q_${"0".repeat(32)}`, answer: "Must not answer" }],
@@ -548,13 +548,13 @@ try {
   // An explicit inherit is distinct from the preset default in the audit, but
   // has identity resolution. Reset removes that override and clears the star.
   const inheritAudit = selectedEntries().length;
-  presetSelections.push({ target: "entry-fixture", steps: ["e", "down", "left", "enter", "esc"],
-    expectPaint: { 0: "Effort · entry-fixture", 2: "standard:inherit", 3: "Delegation" }, expectResult: null });
+  presetSelections.push({ target: "entry-fixture", steps: ["e", "down", "down", "left", "enter", "esc"],
+    expectPaint: { 0: "Effort · entry-fixture", 3: "d3:inherit", 4: "Delegation" }, expectResult: null });
   await parent.prompt("/harness-preset");
   assert.equal(selectedEntries().length, inheritAudit + 1);
-  assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { standard: "inherit" });
+  assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { d3: "inherit" });
   assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
-  const inherited = await invoke("agent_spawn", { agent: "inherit", profile: "reader", difficulty: 3,
+  const inherited = await invoke("agent_spawn", { agent: "inherit", profile: "reader", reasoning_difficulty: 3,
     prompt: "Read source.txt", label: "Explicit inherit control", max_turns: 4, wait_ms: 60000 });
   assert.equal(inherited.reason, "done");
   assert.deepEqual(inherited.action, { type: "agent_spawn", agent: "inherit", task: 1 });
@@ -566,7 +566,7 @@ try {
   assert.equal((await invoke("agent_kill", { agent: "inherit" })).status, "killed");
   const resetAudit = selectedEntries().length;
   presetSelections.push({ target: "entry-fixture", steps: ["e", "r", "enter", "esc"],
-    expectPaint: { 1: "standard:default", 2: "Delegation" }, expectResult: null });
+    expectPaint: { 1: "d3:default", 2: "Delegation" }, expectResult: null });
   await parent.prompt("/harness-preset");
   assert.equal(selectedEntries().length, resetAudit + 1);
   assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, {});
@@ -574,7 +574,7 @@ try {
   // Reset affects only future Agents, not the resident child whose Run was
   // fixed at admission. Read-only list projection must keep that old setting.
   const retained = await invoke("agent_list", {});
-  assert.deepEqual(retained.agents.map((row) => [row.agent, row.profile, row.difficulty]), [["entry", "reader", 3]]);
+  assert.deepEqual(retained.agents.map((row) => [row.agent, row.profile, row.reasoning_difficulty]), [["entry", "reader", 3]]);
   assert.deepEqual(uiEvidence.pickerModes, Array(9).fill("docked"),
     "all edited/cancelled choices used the installed component, not a fabricated UI return");
   const effortEditing = { fixed_routing: fixedLink.data.routing, inherited_routing: inheritedLink.data.routing,
@@ -623,7 +623,7 @@ try {
   assert.equal(parent, sameParent); assert.match(notices.at(-1), /Could not confirm harness Owner closure/);
   // Use the unmodified managed policy: write/edit and wait/resume must work
   // without a UI grant or fixture-only management-tool allow rules.
-  const idle = await invoke("agent_spawn", { agent: "writer", profile: "editor", difficulty: 5,
+  const idle = await invoke("agent_spawn", { agent: "writer", profile: "editor", reasoning_difficulty: 5,
     prompt: "ENTRY_WRITE: create edited.txt", label: "Writable entry smoke", max_turns: 4 });
   assert.equal((await finish(idle)).result, "ENTRY_WRITE_OK");
   assert.equal(readFileSync(join(cwd, "edited.txt"), "utf8"), "before\n");
@@ -693,7 +693,7 @@ try {
   const replacementList = await invoke("agent_list", {});
   assert.deepEqual(replacementList.agents, []);
   await parent.prompt("/harness-preset entry-other");
-  const replacementRun = await invoke("agent_spawn", { agent: "replacement", profile: "reader", difficulty: 1,
+  const replacementRun = await invoke("agent_spawn", { agent: "replacement", profile: "reader", reasoning_difficulty: 1,
     prompt: "Read source.txt", label: "Replacement entry smoke", max_turns: 4 });
   assert.equal((await finish(replacementRun)).result, "ENTRY_READ_OK");
   const replacement = { previous_session: original.sessionId, session: parent.sessionId, fresh, replacementList, run: replacementRun };
@@ -713,14 +713,14 @@ try {
   const restoreRoot = restoreManager.appendCustomEntry("fixture:branch-root", {});
   const restoreBranch = restoreManager.appendCustomEntry(presetEntry, { name: "entry-fixture", version: "historical-v0", digest: "0".repeat(64) });
   restoreManager.branch(restoreRoot);
-  restoreManager.appendCustomEntry(presetEntry, { name: "entry-other", effort_overrides: { strong: "off" } });
+  restoreManager.appendCustomEntry(presetEntry, { name: "entry-other", effort_overrides: { d5: "off" } });
   restoreManager.branch(restoreBranch);
-  restoreManager.appendCustomEntry(presetEntry, { name: "entry-fixture", effort_overrides: { standard: "off" } });
+  restoreManager.appendCustomEntry(presetEntry, { name: "entry-fixture", effort_overrides: { d3: "off" } });
   const restored = await createRuntime({ cwd, sessionManager: restoreManager, sessionStartEvent: { type: "session_start", reason: "startup" } });
   await bind(restored.session);
   assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
   for (const name of delegationTools) assert(restored.session.getActiveToolNames().includes(name));
-  assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { standard: "off" },
+  assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { d3: "off" },
     "active SDK branch must not replay the abandoned preset's effort");
   const restoredSelection = { status: presetStatus(), saved_version: "historical-v0", active_tools: restored.session.getActiveToolNames() };
   const restoredCleanup = await disposeChild(restored.session, parentBus);

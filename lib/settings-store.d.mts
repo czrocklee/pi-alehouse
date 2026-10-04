@@ -1,19 +1,24 @@
 export type SettingsScope = "session" | "global" | "workspace";
 export type PersistentScope = Exclude<SettingsScope, "session">;
 export type ApprovalPreference = "manual" | "judge" | "judge+sub" | "yolo";
-export type Slot = "light" | "standard" | "strong";
+export type Slot = "d1" | "d2" | "d3" | "d4" | "d5";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type Effort = ThinkingLevel | "inherit";
 /** null masks lower-layer overrides in favor of the preset's default. */
 export type EffortPolicy = Record<string, Partial<Record<Slot, Effort | null>>>;
+/** One closed routing slot. Omitted effort is not stored; consumers default it to inherit.
+ * Thinking is not configurable on a slot. */
+export type PresetSlotDefinition = {
+  model: string;
+  effort?: Effort;
+};
+/** External preference preset. Flat models/effort/thinking tables and per-slot thinking are not accepted. */
 export type PresetDefinition = {
   version: string;
-  models: Record<Slot, string>;
-  effort?: Partial<Record<Slot, Effort>>;
-  thinking?: Partial<Record<Slot, Partial<Record<ThinkingLevel, ThinkingLevel>>>>;
+  slots: Record<Slot, PresetSlotDefinition>;
 };
 export type SettingsDocument = {
-  version: 1;
+  version: 2;
   preset?: string;
   delegation?: {
     mode?: "manual" | "co-worker" | "lead" | "supervisor";
@@ -26,7 +31,9 @@ export type SettingsDocument = {
 export type SettingsPatch = { scope: PersistentScope; path: string[]; value: unknown };
 export type SettingsFlushResult = { scope: PersistentScope; path: string; error?: string };
 
-/** Closed schema, detached clone; 256 KiB per stored layer. Two/three layers
+/** Closed version-2 schema; rejects version 1, legacy slot keys, retired flat
+ * preset models/effort/thinking tables, and per-slot thinking without migration.
+ * Empty and slot-free documents remain valid. Detached clone; 256 KiB per stored layer. Two/three layers
  * are only for trusted in-memory preference/routing merges, never file writes. */
 export function validateSettings(value: unknown, layers?: 1 | 2 | 3): SettingsDocument;
 export class SettingsStore {
@@ -36,7 +43,7 @@ export class SettingsStore {
   get scope(): SettingsScope;
   setScope(scope: SettingsScope): void;
   canWriteWorkspace(): boolean;
-  /** Explicit path patch. undefined deletes the key; unchanged values are clean. */
+  /** Explicit path patch of 1 to 5 keys. undefined deletes the key; unchanged values are clean. */
   stage(scope: PersistentScope, path: readonly string[], value: unknown): void;
   get(scope: PersistentScope): SettingsDocument;
   /** Global then trusted workspace; preset bodies replace by name. */
