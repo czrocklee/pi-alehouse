@@ -142,7 +142,7 @@ do not keep an SDK execution environment alive.
 ## Task fields, not roles
 
 `agent_spawn` requires `agent`, `prompt`, `profile` and `reasoning_difficulty`; `agent_run`
-requires `agent` and `prompt`. Both take optional `label` and `dispatch`. `agent_send`
+requires `agent`, `builds_on` and `prompt`. Both take optional `label` and `dispatch`. `agent_send`
 joins/steers the task bound when called; it never starts a continuation.
 `agent_answer` takes `agent`, the exact pending `question_id`, and `answer`,
 with optional wait_ms. It preserves the asking task's label, dispatch and Agent settings;

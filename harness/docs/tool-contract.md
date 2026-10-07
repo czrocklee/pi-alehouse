@@ -23,7 +23,7 @@ Routing, models, Owner IDs, generation and SDK session IDs stay internal.
 | Tool | Intent |
 | --- | --- |
 | `agent_spawn` | Create a named Agent and give it its first task. |
-| `agent_run` | Give an idle Agent a new task; cannot bypass an unanswered question. |
+| `agent_run` | Give an idle Agent a follow-up task; cannot bypass an unanswered question. |
 | `agent_send` | Join/steer the task bound at the call; never create a continuation. |
 | `agent_answer` | Answer one explicit pending question and create a continuation Run. |
 | `agent_wait` | Wait for bound tasks, a question, a task issue or scoped alerts. |
@@ -57,12 +57,15 @@ and parameter descriptions, not another orchestration briefing.
 
 ## Agent names and spawn
 
-Names match `^[a-z][a-z0-9-]{0,23}$`: short task-independent nicknames, one theme
-per session (`orca`, `otter`), not task labels. A name stays taken after kill.
+Names match `^[a-z][a-z0-9-]{0,23}$`: short task-independent nicknames, not task
+labels, from one theme the model chooses per session. The description gives no
+example names: models copied them into every session instead of choosing. A name stays taken after kill.
 Addressing selects current task, else the still-pending question's task, else
 latest task; a read cursor instead pins its original result Run. Unknown names
 fail `AGENT_NOT_FOUND` with `parameter`, known names in `allowed`, and a pointer
-to spawn. Spawning a known name fails `AGENT_EXISTS` and points to run.
+to spawn. Spawning a known name fails `AGENT_EXISTS`: it first points to
+`agent_list`, since a repeated uncertain spawn is the common cause, then to a
+new name for a new Agent, never to run: the caller asked for a new Agent.
 
 Tool assembly explicitly binds this naming contract for the Owner's lifetime,
 including Off. It checks all retained Agents, including released history, before
@@ -114,10 +117,24 @@ permission grant. Oversize fails `CONTEXT_SNAPSHOT_TOO_LARGE` before creation.
 
 ## Run, send and explicit answer
 
-`agent_run({agent, prompt, label?, after?, wait_ms?, dispatch?})` admits a new task only
+`agent_run({agent, builds_on, prompt, label?, after?, wait_ms?, dispatch?})` admits a new task only
 when idle. Finishing/stopping is waited out for at most 30 s outside the submit
 queue. Running fails `AGENT_BUSY`; a pending question fails `PENDING_QUESTION`
 and points to explicit answer. Run never delivers into an existing task.
+
+Reuse is for follow-ups, not the default. Every turn of a reused Agent's task
+re-reads its whole conversation, so a long-lived Agent that drifts across
+unrelated work multiplies cost, and an idle Agent's provider prompt cache can
+expire. Spawn says to spawn for each new piece of work, including reviews and
+tasks needing another reasoning difficulty. Run requires `builds_on` (1--512
+nonblank UTF-16 units, declared before `prompt`): the specific earlier work the
+task continues, or spawn with `after` when that Agent's result alone suffices. It is a deliberate speed bump for the parent model, part
+of the request identity but never forwarded to the Agent or stored in
+`harness:*` records. An idle, reusable
+Agent's latest settled task row carries `context_tokens`, its last observed
+conversation size (see the envelope below); `AGENT_EXISTS` and `RESIDENT_LIMIT`
+lead back to spawning, not reuse. Capacity guidance names finished Agents, never
+"idle" ones, which would include an Agent with a pending question.
 
 `agent_send({agent, message, wait_ms?})` takes 1--16384 nonblank units and binds
 its target at the call, never redirecting to a task admitted later. Its action's
@@ -307,8 +324,12 @@ Each task row retains `{agent, task, status}` and applicable boolean
 `has_question`, `limit_reached`, `unavailable`; diagnostics use
 `unavailable_reason`, `error`, `owner_error`. Statuses include queued, running,
 finishing, needs_input, completed, failed, interrupting and interrupted.
-Question fields are `question_id`, `question`, `question_truncated`; historical
-text need not have a token. Results use `result`, `next_cursor`, `result_omitted`,
+Optional `context_tokens` (a nonnegative integer) appears only on the latest
+settled task of an idle, resident, reusable Agent with no pending question and a
+known size: what its next task re-reads. It is absent while compaction leaves
+the size unknown. It is absolute, not a share of the model window, and never a
+thin control or finished-row field. Question fields are `question_id`,
+`question`, `question_truncated`; historical text need not have a token. Results use `result`, `next_cursor`, `result_omitted`,
 `result_truncated` and `omitted_chars`. Truncation/omission control flags are
 never silently removed by compact fallback. Omitted_chars means text never
 retained, not packing loss. Live previews shortened by packing explicitly mark
@@ -365,8 +386,8 @@ Result text yields before its reserved cursor; wholly omitted pages keep their
 original offset, partial pages advance by shown units, and EOF needs no cursor.
 Packing retains thin controls and, for reason=alert, a complete first scoped
 FIFO alert. Then it adds questions (marked if truncated), further complete FIFO
-prefix alerts, optional time_wrapped attempts across tasks, result pages,
-bounded string diagnostics/notes and up to eight finished rows.
+prefix alerts, optional time_wrapped then context_tokens attempts across tasks,
+result pages, bounded string diagnostics/notes and up to eight finished rows.
 It stops at the first alert that cannot fit, never skips to a smaller later one.
 Unshown alerts remain pending; fat diagnostics/finished entries yield first.
 `dispatch_notes` (at most 2 × 120 units) and `time_wrapped` are optional task
@@ -442,7 +463,7 @@ List is a read-only roster with `profile`/`reasoning_difficulty`, label/task pro
 current pending-question identity via has_question, and elapsed_s when running.
 Unavailable is a boolean availability fact with unavailable_reason diagnostics.
 History observations include tasks count, four newest earlier_labels,
-context_pct, cumulative cost_usd/cost_partial, eight successful-edit/write
+context_tokens, cumulative cost_usd/cost_partial, eight successful-edit/write
 `touched` paths plus touched_omitted, and idle_s. Bash changes are not touched
 paths. Killed names include newest 32 plus killed_omitted. Questions are read
 through wait/read, answered only through answer; roster facts grant no admission.

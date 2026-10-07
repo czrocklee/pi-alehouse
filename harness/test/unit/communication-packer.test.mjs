@@ -679,6 +679,33 @@ test("optional notes/time warning yield entirely at exact byte saturation and al
   }
 });
 
+test("context_tokens is an optional settled-row hint: validated, shown before result bodies, yielded at byte saturation", () => {
+  const settled = (rest) => snapshot({ tasks: [task(row("otter", 1, "completed"), rest)] });
+  assert.equal(pack(settled({ context_tokens: 391_000 })).envelope.agents[0].context_tokens, 391_000);
+  assert.deepEqual(pack(settled({ context_tokens: undefined })), pack(settled({})), "absence adds no metadata");
+  for (const input of [settled({ context_tokens: -1 }), settled({ context_tokens: 1.5 }), settled({ context_tokens: "391000" }),
+    snapshot({ tasks: [task(row(), { context_tokens: 1 })] }),
+    snapshot({ finished: [{ row: row("otter", 1, "completed", { context_tokens: 1 }) }] })])
+    assert.throws(() => packCommunication(input), { code: "INVALID_COMMUNICATION_SNAPSHOT" });
+  const flooded = pack(settled({ context_tokens: 391_000, result: window("\0".repeat(16384), { cursor: cursorIdentity }) })).envelope;
+  assert.equal(flooded.agents[0].context_tokens, 391_000, "a byte-heavy result page yields before the small hint");
+  assert(flooded.agents[0].result.length < 16384); assert.equal(typeof flooded.agents[0].next_cursor, "string");
+  assert.equal(flooded.response_limit_reached, true);
+  const input = maximalSnapshot("\0".repeat(8192)); input.alerts = input.alerts.slice(0, 1);
+  for (const entry of input.tasks) { entry.row = { ...entry.row, status: "needs_input" }; entry.settled = true; }
+  input.tasks[0].question = "q";
+  const remaining = 65536 - bytes({ ...pack(input).envelope, response_limit_reached: true });
+  const full = structuredClone(input); full.tasks[0].question = "q".repeat(1 + remaining);
+  const complete = pack(full);
+  assert.equal(complete.envelope.response_limit_reached, undefined);
+  assert.equal(bytes({ ...complete.envelope, response_limit_reached: true }), 65536);
+  const pressured = structuredClone(full);
+  for (const entry of pressured.tasks) entry.context_tokens = 391_000;
+  const { envelope } = pack(pressured);
+  assert.equal(envelope.response_limit_reached, true); assert.deepEqual(envelope.agents, complete.envelope.agents,
+    "questions, controls and reserved tokens keep their bytes; only the hint yields");
+});
+
 test("dispatch notes are packed as a whole prefix, never clipped to fit or skipped for a shorter tail", () => {
   const { input, complete } = byteSaturatedSnapshot(), first = "first complete note", second = "\0".repeat(120);
   const withFirst = { ...complete.envelope, response_limit_reached: true,

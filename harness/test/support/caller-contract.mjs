@@ -14,7 +14,8 @@ export function assertCallerTools(tools) {
   }
   const spawn = byName.get("agent_spawn"), fields = spawn.parameters.properties;
   assert.deepEqual(spawn.parameters.required.sort(), ["agent", "profile", "prompt", "reasoning_difficulty"]);
-  assert.match(fields.agent.description, /short nickname, one theme per session.*not a task name. Never reused/);
+  assert.match(fields.agent.description, /short nickname from one theme you choose for this session, not a task name. Never reused/);
+  assert.doesNotMatch(fields.agent.description, /orca|otter/, "example names get copied into every session");
   assert.match(fields.prompt.description, /Complete instructions/);
   assert.match(fields.label.description, /agent_list, not instructions. Default: the prompt's first line/);
   assert.deepEqual(fields.profile.enum, ["editor", "reader", "researcher"]);
@@ -36,13 +37,15 @@ export function assertCallerTools(tools) {
   for (const key of ["model", "effort", "strength", "thinking", "name", "description", "message", "difficulty"]) assert.equal(key in fields, false, key);
   assert.match(spawn.description, /share your checkout without isolation, and cannot delegate. Only researcher Agents can use the web/);
   assert.match(spawn.description, /settled needs_input.*question_id.*answer it with agent_answer, never agent_send/);
-  assert.match(spawn.description, /Capacity is limited: kill idle Agents/);
+  assert.match(spawn.description, /Spawn a fresh Agent for each new piece of work, including reviews and tasks needing another reasoning_difficulty; use agent_run only for a follow-up that builds on an Agent's earlier work/);
+  assert.match(spawn.description, /Capacity is limited: kill finished Agents/);
   assert.match(spawn.description, /check agent_list before repeating it/);
   assert.match(spawn.description, /action, reason, agents and alerts/);
   const run = byName.get("agent_run"), runFields = run.parameters.properties;
-  assert.deepEqual(run.parameters.required.sort(), ["agent", "prompt"]);
-  assert.deepEqual(Object.keys(runFields).sort(), ["after", "agent", "dispatch", "label", "prompt", "wait_ms"],
+  assert.deepEqual(run.parameters.required.sort(), ["agent", "builds_on", "prompt"]);
+  assert.deepEqual(Object.keys(runFields).sort(), ["after", "agent", "builds_on", "dispatch", "label", "prompt", "wait_ms"],
     "profile, reasoning_difficulty, context and budgets belong to the Agent; dispatch belongs to each task");
+  assert.deepEqual(Object.keys(runFields).slice(0, 3), ["agent", "builds_on", "prompt"], "the reuse reason comes before the prompt it justifies");
   for (const tool of [spawn, run]) {
     const dispatch = tool.parameters.properties.dispatch;
     assert.equal(dispatch.type, "object"); assert.equal(dispatch.additionalProperties, false);
@@ -59,14 +62,18 @@ export function assertCallerTools(tools) {
     assert.equal(dispatch.properties.tree.maxLength, 512);
     assert.match(dispatch.properties.checks.items.description, /globs allowed.*not evidence.*skip gates/);
   }
-  assert.match(run.description, /existing, idle Agent its next task.*A running Agent is busy.*agent_send.*cannot bypass an unanswered question.*agent_answer/);
+  assert.match(run.description, /existing, idle Agent a follow-up task that builds on its earlier work.*A running Agent is busy.*agent_send.*cannot bypass an unanswered question.*agent_answer/);
+  assert.match(run.description, /re-reads that whole conversation \(context_tokens on its latest task\), while a fresh Agent starts from only your prompt, so for new or unrelated work spawn instead/);
+  assert.equal(runFields.builds_on.minLength, 1); assert.equal(runFields.builds_on.maxLength, 512);
+  assert.match(runFields.builds_on.description, /earlier work of this Agent that this task continues.*Not sent to the Agent. If nothing specific, or its result alone is enough \(spawn with after: \[agent\]\), use agent_spawn instead/);
   const send = byName.get("agent_send"), sendFields = send.parameters.properties;
   assert.deepEqual(send.parameters.required.sort(), ["agent", "message"]);
   assert.deepEqual(Object.keys(sendFields).sort(), ["agent", "message", "wait_ms"], "a message has no task fields");
   assert.equal(sendFields.message.maxLength, 16384);
-  assert.match(sendFields.message.description, /Never an answer or a new task.*agent_answer.*agent_run/);
+  assert.match(sendFields.message.description, /Never an answer \(use agent_answer\) or another task/);
+  assert.doesNotMatch(sendFields.message.description, /agent_run/, "another task is a spawn decision, not a run");
   assert.match(send.description, /target never drifts.*action.delivery is joined.*steered.*not_delivered/);
-  assert.match(send.description, /Never answers a question or creates a continuation.*agent_answer.*agent_run/);
+  assert.match(send.description, /Never answers a question or starts another task: use agent_answer for questions; agent_spawn for new work, agent_run for a follow-up/);
   assert.doesNotMatch(send.description, /delivery.*answered\b/);
   const answer = byName.get("agent_answer"), answerFields = answer.parameters.properties;
   assert.deepEqual(answer.parameters.required.sort(), ["agent", "answer", "question_id"]);

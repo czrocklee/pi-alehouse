@@ -102,7 +102,11 @@ const spawned = (message, agent, profile) => {
   const reply = JSON.parse(text(message));
   assert.equal(reply.reason, "done");
   assert.deepEqual(reply.action, { type: "agent_spawn", agent, task: 1 });
-  assert.deepEqual(reply.agents, [{ agent, task: 1, status: "completed", result: `${profile}_DONE` }]);
+  // The idle Agent's real SDK context size rides on its completed row as a reuse-cost hint.
+  const [{ context_tokens, ...row }] = reply.agents;
+  assert(Number.isSafeInteger(context_tokens) && context_tokens >= 0, text(message));
+  assert.equal(reply.agents.length, 1);
+  assert.deepEqual(row, { agent, task: 1, status: "completed", result: `${profile}_DONE` });
   assert.equal(reply.alerts_pending, 0);
   assert.equal(reply.alerts, undefined);
   assert.equal(reply.workers_disabled, undefined);

@@ -66,10 +66,10 @@ test("live runtime/drain facts stay out of model replies while roster retains co
   ports[0].callbacks.drain("sdk_idle"); mono = 5000;
   compact(await read(c, a)); compact(await wait(c, [a], { wait_ms: 0 }));
   const row = agentRow(c.view(a.run_id), c.agentSummary(a.agent_id), namesOf(c)); compact(row);
-  assert.equal(row.elapsed_s, 5); assert.equal(row.context_pct, 0);
+  assert.equal(row.elapsed_s, 5); assert.equal(row.context_tokens, 20);
   ports[0].finish("done"); await ended(c, a);
   const settled = agentRow(c.view(a.run_id), c.agentSummary(a.agent_id), namesOf(c));
-  assert.equal(settled.elapsed_s, undefined); assert.equal(settled.context_pct, 0);
+  assert.equal(settled.elapsed_s, undefined); assert.equal(settled.context_tokens, 20);
 });
 
 test("alerts live at envelope top level and can wake a still-running task before its later question", async (t) => {

@@ -20,6 +20,9 @@ const modelAgentName = new RegExp(MODEL_AGENT_NAME_PATTERN);
 /** Shared model projection/admission rule, not the generic core name contract. */
 export const isModelAgentName = (value: unknown): value is string => typeof value === "string" &&
   value.length <= COMMUNICATION_LIMITS.agent_name_units && modelAgentName.exec(value)?.[0] === value;
+/** A taken name is often the caller's own repeated spawn: check before spawning
+ * the same work twice. Otherwise it still wants a NEW Agent; never redirect it to reuse. */
+export const AGENT_EXISTS_RESOLUTION = "This name is taken; check agent_list, it may be your own earlier spawn of this task. Names are never reused, even after agent_kill: for a new Agent, choose another name.";
 
 export type TaskStatus = "queued" | "running" | "interrupting" | "finishing" |
   "completed" | "needs_input" | "failed" | "interrupted";
@@ -47,6 +50,8 @@ export interface TaskEntry extends ThinTaskEntry {
   readonly dispatch_notes?: readonly string[];
   /** Warning was attempted, not proof of delivery or a checkpoint. */
   readonly time_wrapped?: true;
+  /** Idle Agent's conversation size on its latest task: what its next task re-reads. */
+  readonly context_tokens?: number;
   readonly question_id?: QuestionId;
   readonly question?: string;
   readonly result?: string;

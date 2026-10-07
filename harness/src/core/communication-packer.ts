@@ -170,6 +170,7 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
         invalid("Invalid diagnostic text");
     }
     if (task.time_wrapped !== undefined && task.time_wrapped !== true) invalid("Invalid time_wrapped diagnostic flag");
+    if (task.context_tokens !== undefined && (!safeCount(task.context_tokens) || !task.settled)) invalid("Invalid context_tokens hint");
     if (task.dispatch_notes !== undefined && (!Array.isArray(task.dispatch_notes) || task.dispatch_notes.length > 2 ||
         Array.from(task.dispatch_notes).some((note: unknown) => typeof note !== "string" || !nonblank(note) || note.length > 120))) invalid("Invalid bounded dispatch notes");
     return row;
@@ -254,6 +255,14 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
   for (let index = 0; index < snapshot.tasks.length; index++) {
     if (snapshot.tasks[index]!.time_wrapped !== true) continue;
     const candidate = replaceRow(envelope, index, { ...envelope.agents[index]!, time_wrapped: true });
+    if (communicationBudget(candidate).fits) envelope = candidate;
+    else limited = true;
+  }
+  // Same tier: a small optional reuse-cost hint, shown before result pages.
+  for (let index = 0; index < snapshot.tasks.length; index++) {
+    const context_tokens = snapshot.tasks[index]!.context_tokens;
+    if (context_tokens === undefined) continue;
+    const candidate = replaceRow(envelope, index, { ...envelope.agents[index]!, context_tokens });
     if (communicationBudget(candidate).fits) envelope = candidate;
     else limited = true;
   }

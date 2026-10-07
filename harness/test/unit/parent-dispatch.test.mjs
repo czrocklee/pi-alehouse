@@ -50,7 +50,7 @@ function adapter({ notes = false, pressure = false } = {}) {
   });
   const tool = (name) => tools.find((value) => value.name === name);
   const args = (name, rest = {}) => name === "agent_spawn" ?
-    { agent: "otter", prompt: "task", profile: "reader", reasoning_difficulty: 3, ...rest } : { agent: "orca", prompt: "task", ...rest };
+    { agent: "otter", prompt: "task", profile: "reader", reasoning_difficulty: 3, ...rest } : { agent: "orca", prompt: "task", builds_on: "its earlier findings", ...rest };
   const execute = (name, raw, id = "dispatch") => tool(name).execute(id, raw, undefined, undefined, context);
   return { tool, args, execute, submissions, published, state };
 }

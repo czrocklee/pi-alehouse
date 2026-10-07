@@ -478,7 +478,7 @@ try {
       }
     }
     const ordinaryAnswer = ordinary.calls.findLast((call) => call.name === "agent_answer");
-    ordinaryAnswer.name = "agent_run"; ordinaryAnswer.args = { agent: "worker", prompt: "ANSWER_FACTOR 3", wait_ms: 60000 };
+    ordinaryAnswer.name = "agent_run"; ordinaryAnswer.args = { agent: "worker", prompt: "ANSWER_FACTOR 3", builds_on: "its pending question", wait_ms: 60000 };
     ordinaryAnswer.value.action.type = "agent_run";
     assert.deepEqual(dialogueFailures(ordinary, evidenceExpected), []);
     report.ordinary_followup_oracle = "accepted-without-claiming-ask_parent-coverage";

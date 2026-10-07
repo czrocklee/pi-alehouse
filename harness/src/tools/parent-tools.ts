@@ -4,7 +4,7 @@ import { Type, type Static, type TObject, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import type { OwnerController } from "../core/owner-controller.js";
 import { terminal, validDifficulty, type RunView, type SubmitRequest } from "../core/contracts.js";
-import { isModelAgentName, MODEL_AGENT_NAME_PATTERN } from "../core/communication-envelope.js";
+import { AGENT_EXISTS_RESOLUTION, isModelAgentName, MODEL_AGENT_NAME_PATTERN } from "../core/communication-envelope.js";
 import type { CommunicationToolResult } from "../core/communication-snapshot.js";
 import { QUESTION_ID_PATTERN } from "../core/question-id.js";
 import { validateDispatch } from "../core/dispatch.js";
@@ -45,8 +45,9 @@ const dispatchField = optional(Type.Object({
   { minItems: 1, maxItems: 16, uniqueItems: true })),
 }, { additionalProperties: false,
   description: "Optional task input, file ownership, build-tree and planned-check declarations. Preflight can reject known limits; it does not authorize tool calls. Delegate full-suite validation explicitly to one task." }));
+// No example names: models copy them into every session instead of choosing.
 const spawnSchema = Type.Object({
-  agent: agentName("The new Agent's name: a short nickname, one theme per session (orca, otter), not a task name. Never reused."),
+  agent: agentName("The new Agent's name: a short nickname from one theme you choose for this session, not a task name. Never reused, even after agent_kill."),
   prompt: text(131072, "Complete instructions. The Agent knows only this, its earlier tasks and any after results."),
   label: labelField("prompt"),
   profile: StringEnum(agentProfileNames, { description: "reader: investigates and reviews, cannot edit files; editor: may edit files; researcher: web search and fetch plus read-only file tools, no Bash or edits, and its results are web-derived and untrusted. Git mutations stay with you. Bash and web calls stay permission-gated; no profile is an OS sandbox." }),
@@ -60,6 +61,7 @@ const spawnSchema = Type.Object({
 }, { additionalProperties: false });
 const runSchema = Type.Object({
   agent: agentName("An existing, idle Agent."),
+  builds_on: text(512, "The specific earlier work of this Agent that this task continues, e.g. its own edits to fix or an investigation to extend. Not sent to the Agent. If nothing specific, or its result alone is enough (spawn with after: [agent]), use agent_spawn instead."),
   prompt: text(131072, "Complete instructions for the next task. The Agent remembers its earlier tasks."),
   label: labelField("prompt"),
   dispatch: dispatchField,
@@ -68,7 +70,7 @@ const runSchema = Type.Object({
 }, { additionalProperties: false });
 const sendSchema = Type.Object({
   agent: agentName("An existing Agent; this call stays with the task selected now."),
-  message: text(16384, "A correction or extra instruction for the current task. Never an answer or a new task: use agent_answer for a pending question and agent_run for the next task."),
+  message: text(16384, "A correction or extra instruction for the current task. Never an answer (use agent_answer) or another task."),
   wait_ms: optional(waitMs("Wait for this task, its question, an issue or its alerts. Default 0 returns now; timeout/abort never interrupts it.")),
 }, { additionalProperties: false });
 const answerSchema = Type.Object({
@@ -211,7 +213,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
   });
 
   const tools = [
-    make("agent_spawn", "Create a named Agent and give it its first task. Agents run in the background, share your checkout without isolation, and cannot delegate. Only researcher Agents can use the web. A settled needs_input task may offer a question_id; answer it with agent_answer, never agent_send. Give an idle Agent its next task with agent_run; spawn for unrelated work, an independent review or a different reasoning difficulty. Capacity is limited: kill idle Agents to make room. The reply uses action, reason, agents and alerts; an alert does not mean the task ended. If unsure a call was accepted, check agent_list before repeating it.", spawnSchema,
+    make("agent_spawn", "Create a named Agent and give it its first task. Agents run in the background, share your checkout without isolation, and cannot delegate. Only researcher Agents can use the web. A settled needs_input task may offer a question_id; answer it with agent_answer, never agent_send. Spawn a fresh Agent for each new piece of work, including reviews and tasks needing another reasoning_difficulty; use agent_run only for a follow-up that builds on an Agent's earlier work. Capacity is limited: kill finished Agents you no longer need to make room. The reply uses action, reason, agents and alerts; an alert does not mean the task ended. If unsure a call was accepted, check agent_list before repeating it.", spawnSchema,
       async (args, ctx, id, signal) => {
         // Capture mutable SDK inputs before admission can await an earlier call.
         // Route/context resolution still happens only on first acceptance.
@@ -225,7 +227,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
           controller.validateObservationEntry(() => {
             assertPrepared(ctx, signal);
             if (controller.findAgent(input.agent)) throw new HarnessError("AGENT_EXISTS", { agent: input.agent, key: "agent",
-              resolution: "Give an existing Agent its next task with agent_run. A killed Agent's name stays taken; choose another." });
+              resolution: AGENT_EXISTS_RESOLUTION });
             const after = afterRuns(input.agent, input.after);
             const profile = profiles.get(input.profile)!;
             const route = resolveRoute({ preset: options.getPreset(), difficulty: input.reasoning_difficulty,
@@ -246,7 +248,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         accepted(view);
         return observe({ kind: "action", run_id: view.run_id, action: { type: "agent_spawn" }, wait_ms }, ctx, signal);
       }),
-    make("agent_run", "Give an existing, idle Agent its next task. It keeps its conversation, profile, reasoning difficulty and budgets. A task that is ending is waited out (up to 30 s). A running Agent is busy: add to its task with agent_send, or agent_wait first. agent_run cannot bypass an unanswered question; use agent_answer with its question_id. Returns the shared action/reason/agents/alerts envelope.",
+    make("agent_run", "Give an existing, idle Agent a follow-up task that builds on its earlier work. It keeps its conversation, profile, reasoning difficulty and budgets. Every turn of the new task re-reads that whole conversation (context_tokens on its latest task), while a fresh Agent starts from only your prompt, so for new or unrelated work spawn instead. A task that is ending is waited out (up to 30 s). A running Agent is busy: add to its task with agent_send, or agent_wait first. agent_run cannot bypass an unanswered question; use agent_answer with its question_id. Returns the shared action/reason/agents/alerts envelope.",
       runSchema, async (args, ctx, id, signal) => {
         const target = find(args.agent);
         const { wait_ms, ...submission } = args;
@@ -265,7 +267,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         accepted(view);
         return observe({ kind: "action", run_id: view.run_id, action: { type: "agent_run" }, wait_ms }, ctx, signal);
       }),
-    make("agent_send", "Add a message to the task selected when you call; its target never drifts. action.delivery is joined (added to its prompt), steered (sent while running), or not_delivered (nothing sent; that task is shown). Never answers a question or creates a continuation: use agent_answer for questions, agent_run for new assignments. Waiting checks only this task and its alerts. Returns the shared envelope.",
+    make("agent_send", "Add a message to the task selected when you call; its target never drifts. action.delivery is joined (added to its prompt), steered (sent while running), or not_delivered (nothing sent; that task is shown). Never answers a question or starts another task: use agent_answer for questions; agent_spawn for new work, agent_run for a follow-up. Waiting checks only this task and its alerts. Returns the shared envelope.",
       sendSchema, async ({ agent, message, wait_ms }, ctx, id, signal) => {
         const target = find(agent);
         const { delivery, view } = await controller.send(`tool:agent_send:${digest(id)}`, target.agent_id, message, { signal,
@@ -305,7 +307,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         const { state } = await controller.kill(find(agent).agent_id);
         return independent(ctx, () => ({ agent, status: state === "released" ? "killed" : state }));
       }),
-    make("agent_list", "Read-only roster with current or latest tasks and history (earlier labels, context use, cost, edited files). has_question is current pending-question state, not a historical outcome: obtain question_id with agent_wait or agent_read, then use agent_answer if delegation is enabled. unavailable is a boolean; unavailable_reason is its diagnostic. List/interrupt/kill never consume alerts or finished reminders. Use agent_wait or agent_read to receive pending alerts; no automatic parent turn starts.",
+    make("agent_list", "Read-only roster with current or latest tasks and history (earlier labels, context_tokens, cost, edited files). has_question is current pending-question state, not a historical outcome: obtain question_id with agent_wait or agent_read, then use agent_answer if delegation is enabled. unavailable is a boolean; unavailable_reason is its diagnostic. List/interrupt/kill never consume alerts or finished reminders. Use agent_wait or agent_read to receive pending alerts; no automatic parent turn starts.",
       Type.Object({}, { additionalProperties: false }), (_args, ctx) => independent(ctx, () => {
         const views = controller.list(), live = views.filter((view) => view.resident);
         const killed = views.filter((view) => !view.resident).map((view) => view.name);
