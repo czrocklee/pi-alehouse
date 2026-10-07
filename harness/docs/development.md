@@ -8,7 +8,7 @@ SDK fork, or second permission authority. The root manifest sets
 installed as an extension by `pi install`. The CLI explicitly launches a host
 Pi process with `--no-extensions -e <absolute composition.ts>`, keeping its
 runtime and credentials host-provided. Development Pi/AI/TUI SDK packages are
-pinned to 1.0.0. There is no npm publication automation or
+pinned to 1.0.4. There is no npm publication automation or
 public release acceptance. See the [root README](../../README.md).
 
 ## Layout and responsibilities

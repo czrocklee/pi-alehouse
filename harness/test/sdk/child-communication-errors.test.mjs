@@ -30,7 +30,7 @@ const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 
 async function ownerFixture(t, concurrency) {
-  assert.equal(sdkVersion, "1.0.0"); assert.equal(coreVersion, "1.0.0");
+  assert.equal(sdkVersion, "1.0.4"); assert.equal(coreVersion, "1.0.4");
   assert.equal(ALERT_QUEUE_FULL_RESOLUTION, resolution, "shared core guidance must preserve the exact SDK text contract");
   t.mock.method(globalThis, "fetch", () => { assert.fail("child communication fixture attempted network IO"); });
   let held = true;
