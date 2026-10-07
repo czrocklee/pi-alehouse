@@ -6,9 +6,9 @@ without it, and nothing here is an npm build input.
 - `package.nix` builds the npm package from this repository with lifecycle
   scripts disabled and wraps the `pi-alehouse` launcher. `npmDepsHash` must be
   updated together with `package-lock.json`; `nix build .#pi-alehouse` reports
-  the expected value. Pi 1.0's shrinkwrap omits seven nested Pi-package
-  integrity fields; the root lockfile records their registry/tarball-verified
-  SHA-512 values so npm cache prefetching stays reproducible.
+  the expected value. Since Pi 1.0.1 the published package ships no
+  shrinkwrap, so every root lockfile entry carries its own registry integrity
+  and npm cache prefetching stays reproducible.
 - `hm-module.nix` is `homeManagerModules.default` (`programs.pi-alehouse`).
 - `permission-bootstrap/` holds the persistent bootstrap and settings
   migration used for ordinary Pi.

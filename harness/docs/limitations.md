@@ -113,7 +113,7 @@ tool execution, including parallel calls, which has not been verified.
 
 ## Host SDK and runtime scope
 
-Development API checks target Pi/AI/TUI 1.0.0 and TypeBox 1.3.27.  The launcher
+Development API checks target Pi/AI/TUI 1.0.4 and TypeBox 1.3.27.  The launcher
 uses the installed host SDK, not a bundled second SDK or a runtime version lock.
 There is no version allowlist, compatibility fallback, or historical support
 matrix.  Required APIs fail closed when absent/changed.  In particular, the

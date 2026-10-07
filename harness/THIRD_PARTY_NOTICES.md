@@ -2,8 +2,8 @@
 
 This is Pi Alehouse's internal opt-in local-worker harness, not a vendored/forked subagents backend. Dependencies retain their own licenses; the root lockfile pins development inputs, not the user's host runtime. See the root [third-party notices](../THIRD_PARTY_NOTICES.md) for pi-web-access.
 
-- **Pi**, `@earendil-works/pi-coding-agent` / SDK / TUI / AI **1.0.0**:
-  https://github.com/earendil-works/pi/tree/v1.0.0
+- **Pi**, `@earendil-works/pi-coding-agent` / SDK / TUI / AI **1.0.4**:
+  https://github.com/earendil-works/pi/tree/v1.0.4
   The controlled-provider fixture follows the stream pattern and message/event
   shapes in `docs/custom-provider.md`; session loading follows `docs/sdk.md` and
   `examples/sdk/06-extensions.ts`. The installed loader, SDK and UI are used
@@ -15,7 +15,7 @@ This is Pi Alehouse's internal opt-in local-worker harness, not a vendored/forke
   packages declare `"license": "MIT"` in `package.json` but ship no `LICENSE`
   file, so unlike the pi-packages entries below this text cannot be taken from
   the installed tree; it is reproduced and verified against the tagged
-  repository at `v1.0.0`.
+  repository at `v1.0.4`.
 - **pi-permission-system 32.0.3**:
   https://github.com/gotgenes/pi-packages/tree/pi-permission-system-v32.0.3/packages/pi-permission-system
   Consumed via its public `getPermissionsService(sessionId)` export and the
@@ -105,8 +105,8 @@ SOFTWARE.
 ## Pi MIT license
 
 Applies to the pinned `@earendil-works/pi-coding-agent` / SDK / TUI / AI /
-telemetry **1.0.0**. Those packages ship no `LICENSE` file, so the text below
-was verified against https://github.com/earendil-works/pi/blob/v1.0.0/LICENSE.
+telemetry **1.0.4**. Those packages ship no `LICENSE` file, so the text below
+was verified against https://github.com/earendil-works/pi/blob/v1.0.4/LICENSE.
 The holder, year and license text remain unchanged from the earlier notice.
 
 MIT License

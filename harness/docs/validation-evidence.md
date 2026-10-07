@@ -25,6 +25,19 @@ observations into public evidence.
 
 Keep fixtures offline and output outside the checkout; never make real-model calls or copy Pi auth/session data into public reports. A controlled provider reports synthetic behavior only. In particular, SDK post-guard queue/message acceptance and unsupported live-Owner `/reload` must be tested as limitations, not relabelled safe because a selected schedule produced no post-cancel provider call. Only an actual controlled run can record an outcome. Permission authority selection must use the **built matched patched runtime**; a mutable global install or missing fixture is not a pass. A test report should distinguish failures, skipped checks and suites that matched zero tests.
 
+## Pi 1.0.4 update
+
+With Node 24.20.0, development Pi/AI/TUI 1.0.4 and installed host Pi 1.0.4,
+`npm run build` and `HARNESS_FLOCK=/run/current-system/sw/bin/flock npm run check`
+passed locally: **2085 package tests passed, 7 skipped**, plus lint/types and the
+separate portable policy gates. The only adaptation was the SDK version pin in
+the child-communication fixture. Pi 1.0.1 stopped publishing a shrinkwrap, so
+the nested vulnerable `brace-expansion` 5.0.9 copy noted below is gone;
+`npm audit` still reports the high-severity `@modelcontextprotocol/sdk` 1.27.1
+advisory reached through pi-web-access 0.35.0, which this update does not change.
+The optional Nix package built with its refreshed npm cache hash. No built-tarball
+host RPC check, Home Manager activation or real-model run was performed.
+
 ## Pi 1.0 adaptation checks
 
 With Node 24.20.0, development Pi/AI/TUI 1.0.0 and installed host Pi 1.0.0,
