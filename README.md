@@ -28,7 +28,7 @@ The same panel sets how much your main agent hands off: **Manual**, **Co-worker*
 
 An agent isn't a disposable task. Within your session, it keeps its conversation between assignments.
 
-Send it a follow-up. Redirect work while it's running. Let it ask a question when something is unclear. Reuse the agent that already knows the problem instead of starting another one from scratch.
+Send it a follow-up. Redirect work while it's running. Let it ask a question when something is unclear. Give follow-ups to the agent that did the earlier work, and start a fresh one for new work: a reused agent re-reads its whole conversation on every turn.
 
 There is no mandatory research → plan → code → review ritual. Your main agent can work directly, delegate independent pieces, or return to an existing teammate. **Parallel when it helps. Continuity when it matters.**
 

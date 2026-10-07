@@ -133,6 +133,12 @@ let expectedWorkers = "off-empty", initialOffPrompt;
 const offRequests = [];
 const heldResponse = Promise.withResolvers();
 let heldResponseEntered = false;
+// An idle Agent's completed row carries its real SDK context size as a reuse-cost
+// hint; check it is a plain count, then compare the rest of the row exactly.
+const settledRows = (agents) => agents.map(({ context_tokens, ...row }) => {
+  assert(Number.isSafeInteger(context_tokens) && context_tokens >= 0, `context_tokens on ${row.agent}/${row.task}`);
+  return row;
+});
 const text = (message) => typeof message?.content === "string" ? message.content : (message?.content ?? []).filter((p) => p.type === "text").map((p) => p.text).join("");
 provider.respond(async ({ context, maxTokens }) => {
   if (maxTokens === 1) return { text: "SYNTHETIC_CACHE_WARM" };
@@ -479,7 +485,7 @@ try {
     prompt: "Read source.txt", label: "Entry smoke", max_turns: 4, wait_ms: 60000 });
   assert.equal(first.reason, "done");
   assert.deepEqual(first.action, { type: "agent_spawn", agent: "entry", task: 1 });
-  assert.deepEqual(first.agents, [{ agent: "entry", task: 1, status: "completed", result: "ENTRY_READ_OK" }],
+  assert.deepEqual(settledRows(first.agents), [{ agent: "entry", task: 1, status: "completed", result: "ENTRY_READ_OK" }],
     "unified replies name the Agent/task and carry no routing");
   const fixedLink = lastLink();
   assert(fixedLink, "the real SDK child must record a parent run link");
@@ -498,7 +504,7 @@ try {
   };
   // Hold a real SDK child in an accepting task, not a finished one whose message
   // would not be delivered. Reuse the same resident Agent.
-  const held = await invoke("agent_run", { agent: "entry", prompt: "ENTRY_HOLD", label: "Entry hold" });
+  const held = await invoke("agent_run", { agent: "entry", prompt: "ENTRY_HOLD", builds_on: "the entry task", label: "Entry hold" });
   await waitUntil(() => heldResponseEntered, "accepting child before Off");
   // Cached definitions bypass active-tool visibility, so these rejections prove
   // execution-side admission rather than merely an unavailable schema.
@@ -519,7 +525,7 @@ try {
   assert.equal("models" in selectedEntries().at(-1).data, false);
   for (const [name, args] of [
     ["agent_spawn", { agent: "blocked", profile: "reader", reasoning_difficulty: 3, prompt: "Must not start", label: "Blocked" }],
-    ["agent_run", { agent: "entry", prompt: "Must not start" }],
+    ["agent_run", { agent: "entry", prompt: "Must not start", builds_on: "the entry task" }],
     ["agent_send", { agent: "entry", message: "Must not steer" }],
     ["agent_answer", { agent: "entry", question_id: `q_${"0".repeat(32)}`, answer: "Must not answer" }],
   ]) {
@@ -538,10 +544,10 @@ try {
   assert.equal((await finish(held)).result, "ENTRY_HOLD_DONE", "accepted work must finish while Off");
   await parent.prompt("/harness-preset entry-other");
   expectedWorkers = "on";
-  const next = await invoke("agent_run", { agent: "entry", prompt: "Read source.txt again", label: "Entry again", wait_ms: 60000 });
+  const next = await invoke("agent_run", { agent: "entry", prompt: "Read source.txt again", builds_on: "its earlier read of source.txt", label: "Entry again", wait_ms: 60000 });
   assert.equal(next.reason, "done");
   assert.deepEqual(next.action, { type: "agent_run", agent: "entry", task: 3 });
-  assert.deepEqual(next.agents, [{ agent: "entry", task: 3, status: "completed", result: "ENTRY_READ_OK" }]);
+  assert.deepEqual(settledRows(next.agents), [{ agent: "entry", task: 3, status: "completed", result: "ENTRY_READ_OK" }]);
   assert.deepEqual(lastLink().data.routing, fixedLink.data.routing, "reenabling a different preset must not reconfigure a reused fixed-effort Agent");
   await parent.prompt("/harness-preset entry-fixture");
   assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
@@ -558,7 +564,7 @@ try {
     prompt: "Read source.txt", label: "Explicit inherit control", max_turns: 4, wait_ms: 60000 });
   assert.equal(inherited.reason, "done");
   assert.deepEqual(inherited.action, { type: "agent_spawn", agent: "inherit", task: 1 });
-  assert.deepEqual(inherited.agents, [{ agent: "inherit", task: 1, status: "completed", result: "ENTRY_READ_OK" }], "effort provenance never reaches the model");
+  assert.deepEqual(settledRows(inherited.agents), [{ agent: "inherit", task: 1, status: "completed", result: "ENTRY_READ_OK" }], "effort provenance never reaches the model");
   const inheritedLink = lastLink();
   assert.equal(inheritedLink?.data.routing.effort_source, "user_override");
   assert.equal(inheritedLink?.data.routing.thinking_resolution, "identity",
@@ -627,8 +633,8 @@ try {
     prompt: "ENTRY_WRITE: create edited.txt", label: "Writable entry smoke", max_turns: 4 });
   assert.equal((await finish(idle)).result, "ENTRY_WRITE_OK");
   assert.equal(readFileSync(join(cwd, "edited.txt"), "utf8"), "before\n");
-  const edited = await invoke("agent_run", { agent: "writer", prompt: "ENTRY_EDIT: change before to after in edited.txt", label: "Edit" });
-  assert.equal(edited.agent, "writer");
+  const edited = await invoke("agent_run", { agent: "writer", prompt: "ENTRY_EDIT: change before to after in edited.txt", builds_on: "the writer task", label: "Edit" });
+  assert.deepEqual(edited.action, { type: "agent_run", agent: "writer", task: 2 });
   assert.equal((await finish(edited)).result, "ENTRY_EDIT_OK");
   assert.equal(readFileSync(join(cwd, "edited.txt"), "utf8"), "after\n");
 

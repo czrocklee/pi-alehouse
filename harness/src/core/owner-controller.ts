@@ -12,7 +12,7 @@ import { actionableQuestionId, applyCommunicationCommit, canAnswerQuestion, comm
   enqueueAlert, finishedCandidates, isCommunicationSettled, recordFirstQuestion, scopedAlerts, taskOrdinal, validateCommunicationCommit,
   type AlertScope, type CommunicationCommitPlan, type CommunicationCommitSnapshot, type PendingAlert } from "./communication-state.js";
 import { packCommunication } from "./communication-packer.js";
-import { COMMUNICATION_LIMITS, isModelAgentName, type CommunicationAction, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.js";
+import { AGENT_EXISTS_RESOLUTION, COMMUNICATION_LIMITS, isModelAgentName, type CommunicationAction, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.js";
 import type { CommunicationSnapshot, CommunicationToolResult, ResultWindow, TaskSnapshot } from "./communication-snapshot.js";
 import { isQuestionId } from "./question-id.js";
 import { decodeResultCursor, invalidResultCursor, resultCursorKey, type ResultCursorIdentity } from "./result-cursor.js";
@@ -513,7 +513,7 @@ export class OwnerController {
         key: "name", resolution: "This Owner is bound to model tools. Use a unique lowercase ASCII nickname of 1–24 characters (letters, digits and hyphens, starting with a letter).",
       });
       if ([...this.agents.values()].some((agent) => agent.name === request.name)) throw new HarnessError("AGENT_EXISTS", {
-        agent: request.name, key: "agent", resolution: "Give an existing Agent its next task with agent_run. A killed Agent's name stays taken; choose another.",
+        agent: request.name, key: "agent", resolution: AGENT_EXISTS_RESOLUTION,
       });
     }
     if (this.runs.size >= this.limits.historyRuns ||
@@ -541,7 +541,7 @@ export class OwnerController {
     }
     if (!reuse && [...this.agents.values()].filter((a) => a.resident).length >= this.limits.resident) {
       throw new HarnessError("RESIDENT_LIMIT", { resident_limit: this.limits.resident,
-        resolution: "All Agent slots are in use. Kill an idle Agent with agent_kill to make room; its name stays taken." });
+        resolution: "All Agent slots are in use. Kill a finished Agent you no longer need (agent_kill), or agent_wait for one to finish, then retry this agent_spawn." });
     }
     if (agent.question) {
       if (!reuse || !request.answer_to_run_id) throw new HarnessError("PENDING_QUESTION", { run_id: agent.question.run_id });
@@ -1328,6 +1328,8 @@ export class OwnerController {
       ...(this.blockedBy(run).length ? { blocked_by: this.blockedBy(run) } : {}),
       ...(record.delivered_updates ? { delivered_updates: record.delivered_updates } : {}) });
   }
+  /** Last observed SDK context occupancy of one Agent's Runs, retained after settlement. */
+  private lastContext(runs: readonly ManagedRun[]) { return runs.findLast((run) => run.runtime?.context)?.runtime?.context; }
   /** On-demand Agent history for choosing between resume and a fresh Agent. */
   agentSummary(agent_id: string): AgentSummary {
     const agent = this.requireAgent(agent_id);
@@ -1339,7 +1341,7 @@ export class OwnerController {
       if (!usage) continue;
       cost += usage.total.cost; partial ||= usage.partial.includes("cost");
     }
-    const context = runs.findLast((run) => run.runtime?.context)?.runtime?.context;
+    const context = this.lastContext(runs);
     return structuredClone({ agent_id, runs: runs.length,
       earlier_descriptions: runs.slice(0, -1).reverse().map((run) => run.record.description),
       ...(context ? { context } : {}), observed_cost: cost, cost_partial: partial,
@@ -1566,12 +1568,19 @@ export class OwnerController {
   private communicationTask(run: ManagedRun, all: readonly ManagedRun[], healthy: boolean, limit: number, cursor: string | undefined, historical: boolean): TaskSnapshot {
     const agent = this.requireAgent(run.record.agent_id);
     const question_id = actionableQuestionId(agent, run, healthy);
+    // Reuse cost belongs where the parent decides on reuse: the latest task of
+    // an Agent that could take another one. Older or unavailable rows omit it.
+    const own = all.filter((candidate) => candidate.record.agent_id === agent.id);
+    const reusable = healthy && isCommunicationSettled(run) && own.at(-1) === run && !agent.current && !agent.question &&
+      agent.resident && !agent.unavailable && !agent.release && !agent.exiting && !run.quarantine;
+    const context_tokens = reusable ? this.lastContext(own)?.tokens ?? undefined : undefined;
     return { row: this.communicationRow(run, all, healthy), settled: isCommunicationSettled(run),
       ...(question_id ? { question_id } : {}),
       ...(run.question !== undefined && (historical || isCommunicationSettled(run)) ? { question: run.question } : {}),
       result: this.communicationWindow(run, limit, cursor),
       ...(run.record.dispatch_notes?.length ? { dispatch_notes: [...run.record.dispatch_notes] } : {}),
       ...(run.record.time_wrapped ? { time_wrapped: true as const } : {}),
+      ...(context_tokens === undefined ? {} : { context_tokens }),
       diagnostics: { error: run.record.outcome?.error, owner_error: this.parentError ?? this.internalError,
         unavailable_reason: !healthy ? "owner_unavailable" : agent.unavailable ?? (agent.exiting ? "exiting" : run.quarantine) } };
   }

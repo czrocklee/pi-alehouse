@@ -265,7 +265,7 @@ try {
   await invoke("agent_send", { agent: "orca", message: "ANSWER_FACTOR", reasoning_difficulty: 4 }, { error: "INVALID_PARAMETERS" });
   await invoke("agent_spawn", newTask("ANSWER_FACTOR", "editor", { agent: "orca" }), { error: "AGENT_EXISTS" });
   const beforeAnswer = provider.requests.length;
-  await invoke("agent_run", { agent: "orca", prompt: "ANSWER_FACTOR 3" }, { error: "PENDING_QUESTION" });
+  await invoke("agent_run", { agent: "orca", prompt: "ANSWER_FACTOR 3", builds_on: "its pending question" }, { error: "PENDING_QUESTION" });
   const notDelivered = await invoke("agent_send", { agent: "orca", message: "ANSWER_FACTOR 3" });
   assert.deepEqual(notDelivered.action, { type: "agent_send", agent: "orca", task: 1, delivery: "not_delivered" });
   assert.equal(runOf("orca"), firstRun, "send never starts a question continuation");

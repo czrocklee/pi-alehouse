@@ -27,6 +27,8 @@ export interface TaskSnapshot {
   /** Optional whole diagnostics, outside the required thin control row. */
   readonly dispatch_notes?: readonly string[];
   readonly time_wrapped?: true;
+  /** Only on an idle, reusable Agent's latest settled task with a known size. */
+  readonly context_tokens?: number;
 }
 export interface AlertSnapshot {
   readonly agent: string;

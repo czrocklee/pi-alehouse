@@ -51,7 +51,9 @@ export function agentRow(view: RunView, summary: AgentSummary, nameOf: NameOf) {
     ...(running && view.execution_elapsed_ms !== undefined ? { elapsed_s: Math.round(view.execution_elapsed_ms / 1000) } : {}),
     tasks: summary.runs,
     ...(earlier.length ? { earlier_labels: earlier } : {}),
-    ...(context && context.tokens !== null ? { context_pct: Math.round(context.tokens / context.context_window * 100) } : {}),
+    // Absolute size, not a share of the window: a large window makes a costly
+    // conversation look small, and every turn of the next task re-reads all of it.
+    ...(context && context.tokens !== null ? { context_tokens: context.tokens } : {}),
     cost_usd: Math.round(summary.observed_cost * 1000) / 1000,
     // Observed spend only: some responses reported no cost.
     ...(summary.cost_partial ? { cost_partial: true } : {}),

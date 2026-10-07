@@ -55,7 +55,7 @@ function toolsFor(f, hooks = {}) {
 }
 const create = (rest = {}) => ({ agent: "orca", prompt: "task", label: "task", profile: "reader", reasoning_difficulty: 3, ...rest });
 const send = (agent, rest = {}) => ({ agent, message: "task", ...rest });
-const run = (agent, rest = {}) => ({ agent, prompt: "task", label: "task", ...rest });
+const run = (agent, rest = {}) => ({ agent, prompt: "task", builds_on: "its earlier findings", label: "task", ...rest });
 
 test("serialized tool schemas explain task fields and independent capability/routing choices", async (t) => {
   const f = await fixture(t), { tools } = toolsFor(f);
@@ -228,7 +228,9 @@ test("spawn creates and send addresses: each rejects the other's names with a po
   await call("agent_spawn", create()); await until(() => f.ports[0]?.streaming); f.ports[0].finish(); await settle(f, "orca");
   await assert.rejects(call("agent_spawn", create({ profile: "editor" }), "again"), (error) => {
     const result = JSON.parse(error.message).error;
-    assert.equal(result.code, "AGENT_EXISTS"); assert.equal(result.agent, "orca"); assert.match(result.resolution, /agent_run/);
+    assert.equal(result.code, "AGENT_EXISTS"); assert.equal(result.agent, "orca");
+    assert.match(result.resolution, /check agent_list, it may be your own earlier spawn.*never reused.*for a new Agent, choose another name/);
+    assert.doesNotMatch(result.resolution, /agent_run/);
     return true;
   });
   await assert.rejects(call("agent_spawn", create({ agent: "otter", after: ["ghost"] }), "after-ghost"), (error) => {
@@ -456,6 +458,9 @@ test("preset/profile/context snapshots pin at admission; same ID keeps first acc
   assert.equal((await call("agent_read", { agent: "orca" })).agents[0].result, "second");
   assert.equal(f.controller.getResult(first).text, "first", "earlier results are retained");
   await assert.rejects(call("agent_run", run("orca", { prompt: "different" }), "reuse"), code("REQUEST_CONFLICT"));
+  await assert.rejects(call("agent_run", run("orca", { prompt: "follow-up", builds_on: "something else" }), "reuse"),
+    code("REQUEST_CONFLICT"), "builds_on is part of the request identity");
+  assert.equal((await call("agent_run", run("orca", { prompt: "follow-up" }), "reuse")).agents[0].task, 2, "an identical retry replays");
 });
 
 for (const compacted of [false, true]) test(`inherited SDK projection respects omission and replacement (compacted=${compacted})`, async (t) => {
@@ -546,7 +551,13 @@ for (const effect of ["cancel", "observe", "spawn"]) test(`guarded SDK context g
 test("an aborted wait is not an interrupt; kill ends a busy Agent and frees its capacity", async (t) => {
   const f = await fixture(t, { controller: { resident_limit: 1 } }), { call } = toolsFor(f);
   await call("agent_spawn", create({ agent: "one" }), "one"); await until(() => f.ports[0]?.streaming);
-  await assert.rejects(call("agent_spawn", create({ agent: "two" }), "full"), code("RESIDENT_LIMIT"));
+  await assert.rejects(call("agent_spawn", create({ agent: "two" }), "full"), (error) => {
+    const result = JSON.parse(error.message).error;
+    assert.equal(result.code, "RESIDENT_LIMIT");
+    assert.match(result.resolution, /Kill a finished Agent.*agent_wait for one to finish, then retry this agent_spawn/, "a full roster leads back to spawning, not reuse");
+    assert.doesNotMatch(result.resolution, /new name|idle/, "the rejected name was never taken; idle includes pending questions");
+    return true;
+  });
   const abort = new AbortController(); abort.abort();
   assert.equal((await call("agent_wait", { agents: ["one"] }, "wait", undefined, abort.signal)).reason, "aborted");
   assert.equal(f.ports[0].stopped, 0);
@@ -1139,8 +1150,54 @@ test("list_agents adds per-Agent history for choosing reuse versus a new Agent",
   await until(() => f.ports[0].calls.length === 2); f.ports[0].finish(); await settle(f, "orca");
   now += 7_000;
   assert.deepEqual((await call("agent_list", {})).agents, [{ agent: "orca", profile: "reader", reasoning_difficulty: 3,
-    label: "Fix flaky test", task: 2, status: "completed", tasks: 2, earlier_labels: ["Port tests"], context_pct: 25,
+    label: "Fix flaky test", task: 2, status: "completed", tasks: 2, earlier_labels: ["Port tests"], context_tokens: 50_000,
     cost_usd: 0, touched: ["src/a.ts"], idle_s: 7 }]);
+});
+
+test("only an idle Agent's latest task shows context_tokens, the size its next task re-reads", async (t) => {
+  const f = await fixture(t), { call } = toolsFor(f);
+  const row = (reply) => reply.agents.find((entry) => entry.agent === "orca");
+  await call("agent_spawn", create()); await until(() => f.ports[0]?.streaming);
+  f.ports[0].callbacks.runtime({ activity: "tool", context: { tokens: 50_000, context_window: 1_000_000 } });
+  assert.equal(row(await call("agent_read", { agent: "orca" })).context_tokens, undefined, "a running task is not a reuse decision yet");
+  f.ports[0].finish("first"); await settle(f, "orca");
+  const done = row(await call("agent_wait", { agents: ["orca"], wait_ms: 0 }));
+  assert.equal(done.status, "completed"); assert.equal(done.context_tokens, 50_000, "absolute tokens, not a share of a large window");
+  const { next_cursor: cursor } = row(await call("agent_read", { agent: "orca", max_chars: 2 }, "page"));
+  assert.equal(typeof cursor, "string");
+  const next = await call("agent_run", run("orca", { prompt: "follow-up" }), "follow-up");
+  assert.equal(row(next).status, "running"); assert.equal(row(next).context_tokens, undefined);
+  await until(() => f.ports[0].calls.length === 2);
+  f.ports[0].callbacks.runtime({ activity: "generating", context: { tokens: 80_000, context_window: 1_000_000 } });
+  f.ports[0].finish("second"); await settle(f, "orca");
+  assert.equal(row(await call("agent_read", { agent: "orca" })).context_tokens, 80_000);
+  const older = row(await call("agent_read", { agent: "orca", cursor }, "older"));
+  assert.equal(older.task, 1); assert.equal(older.context_tokens, undefined, "an older task's row does not describe the Agent's current size");
+  await call("agent_kill", { agent: "orca" });
+  assert.equal(row(await call("agent_read", { agent: "orca" }, "killed")).context_tokens, undefined, "a killed Agent cannot be reused");
+});
+
+test("an Agent with a pending question shows no context_tokens: only agent_answer can continue it", async (t) => {
+  const f = await fixture(t), { call } = toolsFor(f);
+  await call("agent_spawn", create()); await until(() => f.ports[0]?.streaming);
+  f.ports[0].callbacks.runtime({ activity: "tool", context: { tokens: 50_000, context_window: 1_000_000 } });
+  f.ports[0].callbacks.question("Choose a branch?"); f.ports[0].finish("decision needed"); await settle(f, "orca");
+  const asking = (await call("agent_read", { agent: "orca" })).agents[0];
+  assert.equal(asking.status, "needs_input"); assert.equal(typeof asking.question_id, "string");
+  assert.equal(asking.context_tokens, undefined);
+  await assert.rejects(call("agent_run", run("orca"), "blocked"), code("PENDING_QUESTION"));
+});
+
+test("agent_run requires builds_on and never forwards it to the Agent", async (t) => {
+  const f = await fixture(t), { call } = toolsFor(f);
+  await call("agent_spawn", create()); await until(() => f.ports[0]?.streaming); f.ports[0].finish(); await settle(f, "orca");
+  const { builds_on: _omitted, ...missing } = run("orca");
+  for (const args of [missing, run("orca", { builds_on: "" }), run("orca", { builds_on: " " }), run("orca", { builds_on: "x".repeat(513) })])
+    await assert.rejects(call("agent_run", args, "invalid"), code("INVALID_PARAMETERS"));
+  await call("agent_run", run("orca", { prompt: "Review the parser fix", builds_on: "UNIQUE_BUILDS_ON_MARKER" }), "valid");
+  await until(() => f.ports[0].calls.length === 2);
+  assert.match(JSON.stringify(f.ports[0].calls[1]), /Review the parser fix/, "the inspected call is the follow-up prompt");
+  assert.doesNotMatch(JSON.stringify(f.ports[0].calls), /UNIQUE_BUILDS_ON_MARKER/, "a reuse justification is for the parent, not the Agent's prompt");
 });
 
 test("only observation replies present finished tasks; roster, interrupt and kill leave reminders pending", async (t) => {
@@ -1175,7 +1232,7 @@ test("an omitted label is the first nonblank line of the instructions", async (t
   const { label: _label, ...args } = create({ prompt: "\n  Fix the parser  \nDetails follow." });
   await call("agent_spawn", args, "spawn");
   await until(() => f.ports[0]?.streaming); f.ports[0].finish(); await settle(f, "orca");
-  await call("agent_run", { agent: "orca", prompt: "Now update the docs.\nKeep it short." }, "run");
+  await call("agent_run", { agent: "orca", prompt: "Now update the docs.\nKeep it short.", builds_on: "the parser fix" }, "run");
   await until(() => f.ports[0].calls.length === 2); f.ports[0].finish(); await settle(f, "orca");
   const [row] = (await call("agent_list", {})).agents;
   assert.equal(row.label, "Now update the docs."); assert.deepEqual(row.earlier_labels, ["Fix the parser"]);
