@@ -12,7 +12,7 @@ import { actionableQuestionId, applyCommunicationCommit, canAnswerQuestion, comm
   enqueueAlert, finishedCandidates, isCommunicationSettled, recordFirstQuestion, scopedAlerts, taskOrdinal, validateCommunicationCommit,
   type AlertScope, type CommunicationCommitPlan, type CommunicationCommitSnapshot, type PendingAlert } from "./communication-state.js";
 import { packCommunication } from "./communication-packer.js";
-import { AGENT_EXISTS_RESOLUTION, COMMUNICATION_LIMITS, isModelAgentName, type CommunicationAction, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.js";
+import { AGENT_EXISTS_RESOLUTION, COMMUNICATION_LIMITS, isModelAgentName, modelTaskStatus, type CommunicationAction, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.js";
 import type { CommunicationSnapshot, CommunicationToolResult, ResultWindow, TaskSnapshot } from "./communication-snapshot.js";
 import { isQuestionId } from "./question-id.js";
 import { decodeResultCursor, invalidResultCursor, resultCursorKey, type ResultCursorIdentity } from "./result-cursor.js";
@@ -131,6 +131,9 @@ export interface OwnerControllerOptions {
   /** Retained/reserved RESULT text only, in UTF-16 code units; must fit output_chars.
    * Excludes prompts, settings/context snapshots, other metadata and SDK heap. */
   history_output_chars?: number;
+  /** Real-time bound, default 10 s, for a new admission blocked only by an
+   * Agent whose explicit kill/release is already under way. 0 disables it. */
+  release_wait_ms?: number;
   /** Timestamp/elapsed observation only. Deadlines and wait timeouts use real
    * event-loop timers; advancing an injected clock does not fire them. */
   clock?: { wall(): number; mono(): number };
@@ -257,10 +260,12 @@ export class OwnerController {
   private constructor(private readonly options: OwnerControllerOptions) {
     this.limits = { concurrency: options.concurrency ?? 4, resident: options.resident_limit ?? 8,
       queue: options.queue_limit ?? 16, grace: options.grace_turns ?? 5, output: options.output_chars ?? 1_048_576,
-      historyRuns: options.history_run_limit ?? 512, historyOutput: options.history_output_chars ?? 64 * 1024 * 1024 };
+      historyRuns: options.history_run_limit ?? 512, historyOutput: options.history_output_chars ?? 64 * 1024 * 1024,
+      releaseWait: options.release_wait_ms ?? 10_000 };
     if (![this.limits.concurrency, this.limits.resident, this.limits.queue, this.limits.output,
       this.limits.historyRuns, this.limits.historyOutput].every(positive) ||
         !Number.isSafeInteger(this.limits.grace) || this.limits.grace < 0 ||
+        !Number.isSafeInteger(this.limits.releaseWait) || this.limits.releaseWait < 0 || this.limits.releaseWait > 2147483647 ||
         this.limits.historyOutput < this.limits.output) throw new HarnessError("INVALID_LIMIT");
     this.clock = options.clock ?? { wall: Date.now, mono: () => performance.now() };
   }
@@ -440,9 +445,10 @@ export class OwnerController {
 
   /** Trusted synchronous preparation, not another queue or request cache.
    * Identity is the caller's explicit input; defaults must be captured by the
-   * host before this call. A retry never prepares again. No SDK types in core. */
+   * host before this call. Accepted replay never prepares again; a release-wait
+   * retry rechecks preparation and admission. No SDK types in core. */
   submitPrepared<T extends object>(request_id: string, input: T, prepare: (identity: T) => SubmitRequest,
-    options: { settle?: SettleOptions } = {}): Promise<RunView> {
+    options: { settle?: SettleOptions; signal?: AbortSignal } = {}): Promise<RunView> {
     this.assertEffectAllowed();
     if (typeof request_id !== "string" || !request_id || request_id.length > 256) return Promise.reject(new HarnessError("INVALID_REQUEST_ID"));
     // Capture before awaiting another admission; caller mutation cannot drift it.
@@ -462,30 +468,62 @@ export class OwnerController {
     // A new request for a busy Agent first waits out its ending task, outside
     // the submit tail so other admissions proceed. Identity replays skip it.
     const gate = this.requests.has(request_id) ? undefined : this.settleGate(options.settle, admission);
-    const enqueue = () => {
-    const submission = this.submitTail.then(async () => {
-      const old = this.requests.get(request_id);
-      if (old) {
-        if (this.requireRun(old).record.request_digest !== request_digest) throw new HarnessError("REQUEST_CONFLICT");
-        return this.view(old); // Owner-local idempotence precedes busy/capacity/error gates.
-      }
-      this.assertNewWorkAdmission(admission);
-      const prepared = prepare(structuredClone(captured.request));
-      if (prepared && (typeof prepared === "object" || typeof prepared === "function") && "then" in prepared) {
-        void Promise.resolve(prepared).catch(() => {});
-        throw new HarnessError("ASYNC_PREPARE");
-      }
-      if (!prepared || typeof prepared !== "object" || Array.isArray(prepared)) throw new HarnessError("INVALID_SUBMIT");
-      const request = structuredClone(prepared);
-      // A trusted preparer can synchronously reenter the host and change the
-      // selected preset. Do not allocate a Run after that transition.
-      this.assertNewWorkAdmission(admission);
-      return this.admit(request_id, request_digest, request);
-    });
-    this.submitTail = submission.catch(() => {});
-    return submission;
+    const releaseDeadline = performance.now() + this.limits.releaseWait;
+    const enqueue = (): Promise<RunView> => {
+      // Captured when admission rejects: a release may finish before the catch below runs.
+      let releasing: Agent[] = [];
+      const submission = this.submitTail.then(async () => {
+        const old = this.requests.get(request_id);
+        if (old) {
+          if (this.requireRun(old).record.request_digest !== request_digest) throw new HarnessError("REQUEST_CONFLICT");
+          return this.view(old); // Owner-local idempotence precedes busy/capacity/error gates.
+        }
+        this.assertNewWorkAdmission(admission);
+        const prepared = prepare(structuredClone(captured.request));
+        if (prepared && (typeof prepared === "object" || typeof prepared === "function") && "then" in prepared) {
+          void Promise.resolve(prepared).catch(() => {});
+          throw new HarnessError("ASYNC_PREPARE");
+        }
+        if (!prepared || typeof prepared !== "object" || Array.isArray(prepared)) throw new HarnessError("INVALID_SUBMIT");
+        const request = structuredClone(prepared);
+        // A trusted preparer can synchronously reenter the host and change the
+        // selected preset. Do not allocate a Run after that transition.
+        this.assertNewWorkAdmission(admission);
+        try { return this.admit(request_id, request_digest, request); }
+        catch (error) { releasing = this.releasingBlockers(error); throw error; }
+      });
+      this.submitTail = submission.catch(() => {});
+      // A blocker that an explicit kill/release is already freeing (often from an
+      // earlier call in the same parallel tool batch) is waited for, bounded and
+      // outside the submit tail, then the whole admission reruns. Any other
+      // blocker, uncertain cleanup or the deadline returns the latest rejection.
+      return submission.catch(async (error: unknown) => {
+        const remaining = releaseDeadline - performance.now();
+        if (!releasing.length || remaining <= 0) throw error;
+        const signal = options.signal ?? options.settle?.signal;
+        const outcome = await this.observations.observeLifecycle({ wait_ms: Math.ceil(remaining), signal,
+          ready: () => releasing.some((agent) => !this.releasing(agent)) });
+        if (outcome === "aborted") throw new HarnessError("TOOL_INTERRUPTED");
+        // Retry keeps replay precedence. New work rechecks admission above and
+        // effect/Owner availability in admit(), including closure during the wait.
+        return enqueue();
+      });
     };
     return gate ? gate.then(enqueue) : enqueue();
+  }
+  /** An explicit kill/release under way that may still free its reservation
+   * and claims. Uncertain cleanup keeps both, so it is never waited for. */
+  private releasing(agent: Agent): boolean {
+    return agent.resident && agent.unavailable !== "cleanup_uncertain" && !this.uncertainClaim(agent) &&
+      (!!agent.exiting || agent.unavailable === "explicitly_released");
+  }
+  /** Agents being released that hold what a rejected admission needed. */
+  private releasingBlockers(error: unknown): Agent[] {
+    if (!(error instanceof HarnessError)) return [];
+    if (error.code === "RESIDENT_LIMIT") return [...this.agents.values()].filter((agent) => this.releasing(agent));
+    if (error.code !== "RESOURCE_OWNED" && error.code !== "BUILD_TREE_BUSY") return [];
+    const blocker = typeof error.details.agent_id === "string" ? this.agents.get(error.details.agent_id) : undefined;
+    return blocker && this.releasing(blocker) ? [blocker] : [];
   }
 
   /** Wait (bounded) for an Agent's ending task to settle before a request
@@ -539,10 +577,6 @@ export class OwnerController {
     if (reuse && (agent.unavailable || agent.release || agent.exiting)) {
       throw new HarnessError("AGENT_UNAVAILABLE", { agent_id: agent.id, reason: agent.unavailable ?? (agent.exiting ? "exiting" : undefined) });
     }
-    if (!reuse && [...this.agents.values()].filter((a) => a.resident).length >= this.limits.resident) {
-      throw new HarnessError("RESIDENT_LIMIT", { resident_limit: this.limits.resident,
-        resolution: "All Agent slots are in use. Kill a finished Agent you no longer need (agent_kill), or agent_wait for one to finish, then retry this agent_spawn." });
-    }
     if (agent.question) {
       if (!reuse || !request.answer_to_run_id) throw new HarnessError("PENDING_QUESTION", { run_id: agent.question.run_id });
       if (request.answer_to_run_id !== agent.question.run_id ||
@@ -557,6 +591,12 @@ export class OwnerController {
     if (prepared) {
       if (inheritedClaim && !this.sameResources(prepared, inheritedClaim.prepared)) throw new HarnessError("DISPATCH_RESOURCE_CHANGED");
       this.checkClaims(prepared, inheritedClaim, this.predecessors(request.after ?? []));
+    }
+    // Capacity after request-specific conflicts: a release under way can free a
+    // slot, but waiting for one must not hide a conflict no release resolves.
+    if (!reuse && [...this.agents.values()].filter((a) => a.resident).length >= this.limits.resident) {
+      throw new HarnessError("RESIDENT_LIMIT", { resident_limit: this.limits.resident,
+        resolution: "All Agent slots are in use, including by Agents whose tasks are still queued. Kill a finished Agent you no longer need (agent_kill), or agent_wait for one to finish, then retry this agent_spawn. A kill already under way is waited for briefly; an Agent still stopping keeps its slot until agent_kill reports killed." });
     }
     const record: RunRecord = {
       owner_id: this.options.owner.owner_id, generation: this.options.owner.generation,
@@ -631,13 +671,15 @@ export class OwnerController {
       ...p.ownership.map((path, i) => ({ path, tree: false, requested: p.declaration.ownership?.[i] })),
       ...(p.tree ? [{ path: p.tree, tree: true, requested: p.declaration.tree }] : []),
     ];
-    for (const claim of this.claims) {
+    let conflict: { claim: ResourceClaim; other: ManagedRun; tree: boolean; key: "tree" | "ownership"; requested?: string; path: string } | undefined;
+    claims: for (const claim of this.claims) {
       if (claim === own || predecessors.has(claim.run_id)) continue;
       const other = this.requireRun(claim.run_id);
       const ancestors = this.predecessors(this.dependencies(other.record));
-      // A fixed failed/questioned ancestor cannot later become completed. A
-      // doomed queued successor may wait for a pump slot to settle, but cannot
-      // block an answer or new owner in the meantime. Never rebind its after.
+      // A fixed failed/questioned ancestor cannot later become completed. Pump
+      // fails such a doomed queued successor without a slot, but its claim stays
+      // installed until that settlement finishes; meanwhile it cannot block an
+      // answer or new owner. Never rebind its after.
       if (other.record.status === "queued" && [...ancestors].some(id => {
         const status = this.requireRun(id).record.status;
         return terminal(status) && status !== "completed";
@@ -645,14 +687,25 @@ export class OwnerController {
       // Accepted successors reserve their place, not a concurrent execution.
       if (futureOf && other.record.status === "queued" && ancestors.has(futureOf)) continue;
       for (const wanted of entries(prepared)) for (const held of entries(claim.prepared)) {
-        if (pathsOverlap(wanted.path, held.path)) throw new HarnessError(wanted.tree && held.tree ? "BUILD_TREE_BUSY" : "RESOURCE_OWNED", {
-          agent: other.record.name, key: wanted.tree ? "tree" : "ownership", requested: wanted.requested, path: wanted.path.path,
-          resolution: other.record.status === "needs_input" ?
-            "Read the pending question and use agent_answer; or explicitly abandon the task with agent_kill and wait for confirmed release. An after dependency on this question will fail." :
-            "Wait for this resource's owner, or declare an after dependency. Ownership declarations do not grant permissions.",
-        });
+        if (!pathsOverlap(wanted.path, held.path)) continue;
+        // Report a holder that is not being released over one that is: no
+        // release wait can resolve the admission while such a holder remains.
+        const agent = this.agents.get(claim.agent_id), notReleasing = !agent || !this.releasing(agent);
+        if (!conflict || notReleasing) conflict = { claim, other, tree: wanted.tree && held.tree,
+          key: wanted.tree ? "tree" : "ownership", requested: wanted.requested, path: wanted.path.path };
+        if (notReleasing) break claims;
+        continue claims;
       }
     }
+    if (!conflict) return;
+    const { claim, other, tree, key, requested, path } = conflict;
+    // agent_id stays internal: it lets admission wait out a release already under way.
+    throw new HarnessError(tree ? "BUILD_TREE_BUSY" : "RESOURCE_OWNED", {
+      agent: other.record.name, agent_id: claim.agent_id, key, requested, path,
+      resolution: other.record.status === "needs_input" ?
+        "Read the pending question and use agent_answer; or explicitly abandon the task with agent_kill and wait for confirmed release. Naming that question's task in after is rejected." :
+        "Wait for this resource's owner, or declare an after dependency. Ownership declarations do not grant permissions.",
+    });
   }
   private dispatchNote(run: ManagedRun, note: string): void {
     const notes = run.record.dispatch_notes ??= [];
@@ -717,8 +770,36 @@ export class OwnerController {
     const index = this.queue.indexOf(id);
     if (index >= 0) this.queue.splice(index, 1);
   }
+  /** A queued Run whose fixed dependency settled without completing can never
+   * start, so fail it now: neither its other dependencies nor a free execution
+   * slot can change that. Its own settlement pumps again, failing successors. */
+  private failDoomed(): void {
+    for (const id of [...this.queue]) {
+      const run = this.requireRun(id);
+      if (run.record.status !== "queued" || !this.queue.includes(id)) continue;
+      const unmet = this.dependencies(run.record).map((dep) => this.requireRun(dep).record)
+        .find((dep) => terminal(dep.status) && dep.status !== "completed");
+      if (!unmet) continue;
+      try { this.options.owner.assertHeld(); }
+      catch (error) { this.internalError = errorText(error); this.wake(); return; }
+      this.removeQueued(id);
+      this.failDependency(run, unmet);
+    }
+  }
+  private failDependency(run: ManagedRun, dependency: RunRecord): void {
+    // Model-visible through the task's error: name the Agent and its status in
+    // the parent's vocabulary, never a Run ID.
+    const status = modelTaskStatus(dependency.status);
+    run.prestartFailure = { reason: "dependency_not_completed",
+      error: `DEPENDENCY_NOT_COMPLETED: ${dependency.name || dependency.settings.profile} (${status})` };
+    this.track(this.finish(run, { kind: "error", error: run.prestartFailure.error, output: run.output }));
+  }
   private pump(): void {
     this.assertEffectAllowed();
+    // Closing cancels queued work through shutdown, not dependency failure.
+    // Owner faults likewise suspend ordinary scheduling, including failDoomed.
+    if (this.closing || this.closed || this.parentError || this.internalError || this.cleanupUncertain) return;
+    this.failDoomed();
     while (this.active < this.limits.concurrency && this.queue.length) {
       // Recheck every iteration: execute/begin may throw synchronously and
       // release its slot while this very pump still has queued work.
@@ -731,13 +812,9 @@ export class OwnerController {
       catch (error) { this.internalError = errorText(error); this.wake(); return; }
       const run = this.requireRun(this.queue.splice(index, 1)[0]!);
       if (run.record.status !== "queued") continue;
+      // Defensive: failDoomed already removed Runs with an unmet settled dependency.
       const unmet = this.dependencies(run.record).map((id) => this.requireRun(id).record).find((dep) => dep.status !== "completed");
-      if (unmet) {
-        // Model-visible through the task's error: name the Agent, never a Run ID.
-        run.prestartFailure = { reason: "dependency_not_completed", error: `DEPENDENCY_NOT_COMPLETED: ${unmet.name || unmet.settings.profile}` };
-        this.track(this.finish(run, { kind: "error", error: run.prestartFailure.error, output: run.output }));
-        continue;
-      }
+      if (unmet) { this.failDependency(run, unmet); continue; }
       if (run.record.dispatch) {
         try {
           const prepared = this.prepareDispatch(run.record.dispatch, run.record.settings, false);
@@ -1140,7 +1217,7 @@ export class OwnerController {
       this.assertOwnerAvailable(); // Preparation may cross another authority boundary.
       const original = pending();
       return { resume: agent_id, prompt: answer, description: original.record.description, answer_to_run_id: original.record.run_id };
-    });
+    }, { signal: options.signal });
   }
 
   private acceptsInput(run: ManagedRun): boolean {
@@ -1561,7 +1638,7 @@ export class OwnerController {
     const agent = this.requireAgent(run.record.agent_id), record = run.record;
     const unavailable = !healthy || !agent.resident || !!agent.unavailable || !!agent.exiting || !!run.quarantine;
     return { agent: record.name, task: taskOrdinal(run, all), status: record.execution_exited && !terminal(record.status) ? "finishing" :
-      record.status === "cancelled" ? "interrupted" : record.status === "cancelling" ? "interrupting" : record.status,
+      modelTaskStatus(record.status),
       ...(agent.question?.run_id === record.run_id ? { has_question: true } : {}),
       ...(record.limit_reached ? { limit_reached: true } : {}), ...(unavailable ? { unavailable: true } : {}) };
   }

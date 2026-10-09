@@ -91,14 +91,18 @@ acceptance. Only that predecessor lineage is exempt from admission conflicts:
 A → B → C may queue for the same resource; unordered B and C cannot both claim
 it merely because each follows A. The exemption permits queuing, not early
 execution or ignoring unfinished cleanup. Admission still checks known permission
-denials, but defers input existence for an after task. If a fixed ancestor is
-terminal but not completed, its doomed queued successor's reservation does not
-block answer or new admission while awaiting pump settlement. Its `after` stays
-bound to the original Run IDs.
+denials, but defers input existence for an after task. If a fixed dependency
+settles without completing, pump fails the queued successor at once, without an
+execution slot or waiting for its other dependencies, and that settlement fails
+its own successors in turn. Until the settlement finishes, the doomed
+successor's reservation does not block answer or new admission. Its `after`
+stays bound to the original Run IDs; the model adapter rejects naming a task
+that has already settled without completing instead of accepting it.
 
 Every dispatched Run is rechecked by pump before execution: permission/path
 interpretation, inputs and executable resources must still qualify. This occurs
 when pump can progress; no free slot means no guarantee of immediate diagnosis.
+Failing a doomed dependent is not such a recheck and needs no slot.
 Missing dependency-produced input settles as `dependency_input_missing`; other
 deferred preflight failures use `dispatch_preflight_failed`. These prestart
 failures create no child session, occupy no execution slot and leave the Agent
@@ -115,7 +119,10 @@ unaccepted rollback; replay still identifies it.
 Release requires final termination and confirmed execution exit/finalization
 and any necessary cleanup. Stop, kill, quarantine or Owner closure requests are
 not release evidence. Tree-lease close failure is sticky: resources remain held,
-and a later no-op close or successful SDK cleanup is not release evidence.
+and a later no-op close or successful SDK cleanup is not release evidence. A new
+admission blocked only by an explicit kill/release already under way waits for
+that confirmed release within a bound, then rechecks everything; see
+[acceptance](tool-contract.md#acceptance-selection-and-reasons).
 Optional observation failure must not poison the Owner. Claims are Owner-memory state,
 not persisted locks, grants or restart hydration.
 
@@ -259,7 +266,13 @@ L2 is outside this implementation.
 Only the **single explicitly delegated validation owner** runs the full gate
 after shared source is frozen. Other tasks stay within their assigned focused
 checks; approval of a tool is not authorization for a wider gate. `checks` and
-tree leases do not mechanically enforce this discipline. Deliver findings and
+tree leases do not mechanically enforce this discipline. A check that cannot run
+yet (no tree, a busy tree, shared source not yet ready for that check, or an
+instruction to wait) is reported as unrun with its command and reason, not asked
+about; missing inputs or a decision that changes what is implemented still need
+the parent. Workers do not announce a declared tree as released: its claim ends
+with the task, or after a question with its resolution. Omitting `tree` neither
+forbids building nor makes a shared tree safe. Deliver findings and
 changed behavior with exact evidence paths, actual commands/results and relevant
 platform/tool-version/configuration context. List unrun, blocked, interrupted
 and zero-match checks as such, never as success. Worker-body changes require

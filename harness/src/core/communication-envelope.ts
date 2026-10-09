@@ -1,3 +1,4 @@
+import type { RunStatus } from "./contracts.js";
 import type { QuestionId } from "./question-id.js";
 import { encodeResultCursor } from "./result-cursor.js";
 
@@ -26,6 +27,10 @@ export const AGENT_EXISTS_RESOLUTION = "This name is taken; check agent_list, it
 
 export type TaskStatus = "queued" | "running" | "interrupting" | "finishing" |
   "completed" | "needs_input" | "failed" | "interrupted";
+/** Parent vocabulary only; retained Run statuses stay unchanged. Finalizing
+ * projections add `finishing` separately, based on confirmed execution exit. */
+export const modelTaskStatus = (status: RunStatus): Exclude<TaskStatus, "finishing"> =>
+  status === "cancelled" ? "interrupted" : status === "cancelling" ? "interrupting" : status;
 export type CommunicationReason = "snapshot" | "aborted" | "owner_blocked" | "question" |
   "task_issue" | "done" | "alert" | "nothing_pending" | "timeout";
 

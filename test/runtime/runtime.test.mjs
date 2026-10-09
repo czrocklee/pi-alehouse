@@ -12,13 +12,14 @@ const temporary = (t) => { const path = mkdtempSync(join(tmpdir(), "alehouse-run
 
 test("portable generator matches dispatch-aware worker bytes and policy digests", () => {
   const { agents, metadata } = renderWorkers();
-  assert.equal(metadata.editor.digest, "b604be9000c802091effa8dcd7e8f0de59b6230ab32f4f00f92fb9de42e7c7cf");
-  assert.equal(metadata.reader.digest, "f4efe70421afa70db9e267366efb2a954fe211ba333a774c2d78b49f987ce1c5");
-  assert.equal(metadata.researcher.digest, "48b90c27e775cc029992a837380594775e7bbe83baa77f450086ac6da047bc28");
+  assert.equal(metadata.editor.digest, "984a82fd788466c25e2b030d1ae3d8261fdc4aaec46870daa6947ba7cbe680ab");
+  assert.equal(metadata.reader.digest, "f8bb8f389eecdb91707e1fa2a39739f85e73b9509eb037caf4ea82d5f45e07e8");
+  assert.equal(metadata.researcher.digest, "9dc17ce69786e7885ca3c173b70c4e4179e6d8a511f7d7077f7df724d4e92f62");
   for (const name of Object.keys(metadata)) {
     const worker = agents[name];
     assert.match(worker, /A denied operation stays denied; do not retry the same class of request/);
     assert.match(worker, /full validation gate/);
+    assert.match(worker, /A check you cannot run yet \(no build tree, a busy one, shared source not yet ready for it, or an instruction to wait\) needs no question: finish the rest of the work and report that check as unrun.*never report it released earlier/);
   }
   for (const [name, source] of Object.entries(agents)) assert.equal(readFileSync(join(packageRoot, "runtime/agents", `${name}.md`), "utf8"), source);
   assert.match(agents.reader, /  write: deny\n  edit: deny\n  path_write:\n    "\*": deny/);

@@ -595,7 +595,7 @@ test("fixed A→B→C after closure exempts predecessors and future reservations
   assert.equal(c.claims.size, 0);
 });
 
-test("doomed fixed-after reservations cannot block their predecessor's pending-question answer", serial, async t => {
+test("a questioned predecessor fails its fixed-after successors at once, freeing their reservations before the answer", serial, async t => {
   const dispatch = dispatchPort(), declaration = { ownership: ["x"] };
   const { controller: c, ports } = await memoryFixture(t, { controller: { dispatch } });
   const a = await c.submit("a", task("a", { name: "a", dispatch: declaration }));
@@ -606,23 +606,23 @@ test("doomed fixed-after reservations cannot block their predecessor's pending-q
   const originalClaim = claimFor(c, a);
   assert.equal(c.claims.size, 3);
   await ask(ports[0]); ports[0].finish("need a decision"); await ended(c, a);
-  await until(() => ports[1]?.streaming);
+  await ended(c, b); await ended(c, child);
   assert.equal(c.view(a.run_id).status, "needs_input");
-  assert.equal(c.stats().active, 1, "the earlier unclaimed peer occupies the only slot");
-  assert.equal(c.view(b.run_id).status, "queued"); assert.equal(c.view(child.run_id).status, "queued");
-  assert.equal(c.claims.size, 3, "doomed successors have not yet had a pump slot to settle");
+  assert.equal(c.view(peer.run_id).status, "running");
+  assert.equal(c.stats().active, 1, "the earlier unclaimed peer occupies the only slot; failing successors needs none");
+  assert.equal(c.view(b.run_id).outcome.error, "DEPENDENCY_NOT_COMPLETED: a (needs_input)");
+  assert.equal(c.view(child.run_id).outcome.error, "DEPENDENCY_NOT_COMPLETED: b (failed)", "the failure cascades without a slot");
+  assert.equal(c.claims.size, 1, "only the pending question keeps its claim");
+  assert.equal(claimFor(c, a), originalClaim);
   const answer = await c.answer("answer", a.agent_id, c.view(a.run_id).question_id, "continue safely");
-  assert.equal(answer.status, "queued", "both direct and transitive doomed claims must be ignored at admission");
+  assert.equal(answer.status, "queued");
   assert.equal(claimFor(c, answer), originalClaim); assert.equal(originalClaim.run_id, answer.run_id);
   assert.deepEqual(answer.dispatch, declaration);
-  assert.deepEqual(c.view(b.run_id).after, [a.run_id]); assert.deepEqual(c.view(child.run_id).after, [b.run_id]);
   ports[1].finish(); await ended(c, peer);
-  await until(() => ports[0].calls.length === 2); await ended(c, b);
-  assert.equal(c.view(b.run_id).outcome.reason, "dependency_not_completed");
+  await until(() => ports[0].calls.length === 2);
   assert.equal(c.view(answer.run_id).status, "running");
-  assert.equal(claimFor(c, answer), originalClaim, "answer pump also ignores the doomed transitive reservation");
   assert.equal(ports.length, 2, "neither failed successor starts a session");
-  ports[0].finish("answered"); await ended(c, answer); await ended(c, child);
+  ports[0].finish("answered"); await ended(c, answer);
   assert.equal(c.view(answer.run_id).status, "completed");
   for (const successor of [b, child]) {
     const view = c.view(successor.run_id);
@@ -723,7 +723,7 @@ test("pending question → queued answer cancel restores the same claim/lease �
     assert.match(error.details.resolution, /agent_answer/); assert.match(error.details.resolution, /agent_kill/);
     assert.match(error.details.resolution, /confirmed release/);
     assert.doesNotMatch(error.details.resolution, /declare an after dependency/i);
-    assert.match(error.details.resolution, /after dependency.*fail/i);
+    assert.match(error.details.resolution, /in after is rejected/i);
     return true;
   });
   const blocker = await c.submit("blocker", task("blocker")); await until(() => ports[1]?.streaming);
