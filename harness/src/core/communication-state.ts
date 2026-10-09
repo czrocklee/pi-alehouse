@@ -1,4 +1,4 @@
-import { COMMUNICATION_LIMITS, alertAdmissionBudget, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.js";
+import { COMMUNICATION_LIMITS, alertAdmissionBudget, modelTaskStatus, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.js";
 import type { CommunicationReferences, CommunicationSnapshot } from "./communication-snapshot.js";
 import { terminal, type Phase, type RunStatus } from "./contracts.js";
 import type { CoreObservationReason } from "./observation-scheduler.js";
@@ -186,7 +186,7 @@ const sameRow = (a: ThinTaskEntry, b: ThinTaskEntry): boolean =>
 const matchesRun = (run: CommunicationRun, row: ThinTaskEntry, runs: readonly CommunicationRun[]): boolean => {
   const record = run.record;
   const status = record.execution_exited && !terminal(record.status) ? "finishing" :
-    record.status === "cancelled" ? "interrupted" : record.status === "cancelling" ? "interrupting" : record.status;
+    modelTaskStatus(record.status);
   return record.name === row.agent && taskOrdinal(run, runs) === row.task && status === row.status;
 };
 

@@ -16,7 +16,7 @@ export function assertCallerTools(tools) {
   assert.deepEqual(spawn.parameters.required.sort(), ["agent", "profile", "prompt", "reasoning_difficulty"]);
   assert.match(fields.agent.description, /short nickname from one theme you choose for this session, not a task name. Never reused/);
   assert.doesNotMatch(fields.agent.description, /orca|otter/, "example names get copied into every session");
-  assert.match(fields.prompt.description, /Complete instructions/);
+  assert.match(fields.prompt.description, /Complete instructions in plain sentences, with the full path of every file or document you mention/);
   assert.match(fields.label.description, /agent_list, not instructions. Default: the prompt's first line/);
   assert.deepEqual(fields.profile.enum, ["editor", "reader", "researcher"]);
   assert.match(fields.profile.description, /reader:.*cannot edit files; editor: may edit files; researcher: web search and fetch.*no Bash or edits.*untrusted. Git mutations stay with you/);
@@ -31,6 +31,7 @@ export function assertCallerTools(tools) {
   assert.doesNotMatch(difficulty, /light|standard|strong|slot/i);
   assert.match(fields.inherit_context.description, /Default false.*text copy.*without tool calls or results.*64 KiB/);
   assert.match(fields.after.description, /must complete first.*reference, not instructions.*\(question, failure, interrupt\).*fails without starting/);
+  assert.match(fields.after.description, /current or latest task, fixed at this call.*naming one that already has is rejected.*name that Agent after agent_answer returns/);
   assert.match(fields.wait_ms.description, /accepted task.*question.*issue.*alerts.*Default 0.*snapshot.*never interrupts/);
   assert.match(fields.max_turns.description, /per task, default 256.*partial result/);
   assert.match(fields.max_duration_ms.description, /per task.*asked to stop/);
@@ -38,7 +39,7 @@ export function assertCallerTools(tools) {
   assert.match(spawn.description, /share your checkout without isolation, and cannot delegate. Only researcher Agents can use the web/);
   assert.match(spawn.description, /settled needs_input.*question_id.*answer it with agent_answer, never agent_send/);
   assert.match(spawn.description, /Spawn a fresh Agent for each new piece of work, including reviews and tasks needing another reasoning_difficulty; use agent_run only for a follow-up that builds on an Agent's earlier work/);
-  assert.match(spawn.description, /Capacity is limited: kill finished Agents/);
+  assert.match(spawn.description, /Capacity is limited, and queued tasks count: to make room, kill finished reviewers and Agents whose work you have accepted first; keep an editor whose changes are not yet built or tested/);
   assert.match(spawn.description, /check agent_list before repeating it/);
   assert.match(spawn.description, /action, reason, agents and alerts/);
   const run = byName.get("agent_run"), runFields = run.parameters.properties;
@@ -61,6 +62,9 @@ export function assertCallerTools(tools) {
     assert.equal(dispatch.properties.tree.type, "string"); assert.equal(dispatch.properties.tree.minLength, 1);
     assert.equal(dispatch.properties.tree.maxLength, 512);
     assert.match(dispatch.properties.checks.items.description, /globs allowed.*not evidence.*skip gates/);
+    assert.match(dispatch.properties.checks.items.description, /this task can complete on its own.*cannot wait idle for your later go-ahead.*follow-up agent_run/);
+    assert.match(dispatch.properties.tree.description, /Local build-tree.*this session are rejected; other sessions get only an advisory note.*not coordinate your own commands or other hosts.*neither forbids building nor makes a shared tree safe/);
+    assert.match(dispatch.properties.ownership.items.description, /several tasks must change.*to one task; the others report the entries they need/);
   }
   assert.match(run.description, /existing, idle Agent a follow-up task that builds on its earlier work.*A running Agent is busy.*agent_send.*cannot bypass an unanswered question.*agent_answer/);
   assert.match(run.description, /re-reads that whole conversation \(context_tokens on its latest task\), while a fresh Agent starts from only your prompt, so for new or unrelated work spawn instead/);

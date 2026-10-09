@@ -134,7 +134,9 @@ of the request identity but never forwarded to the Agent or stored in
 Agent's latest settled task row carries `context_tokens`, its last observed
 conversation size (see the envelope below); `AGENT_EXISTS` and `RESIDENT_LIMIT`
 lead back to spawning, not reuse. Capacity guidance names finished Agents, never
-"idle" ones, which would include an Agent with a pending question.
+"idle" ones, which would include an Agent with a pending question. It asks to
+kill finished reviewers and Agents whose work was accepted first, and to keep an
+editor whose changes are not yet built or tested for that follow-up.
 
 `agent_send({agent, message, wait_ms?})` takes 1--16384 nonblank units and binds
 its target at the call, never redirecting to a task admitted later. Its action's
@@ -203,11 +205,21 @@ early, even after reservation release.
 
 ## After and handoff
 
-`after` binds dependencies to other Agents' tasks at acceptance. Queued tasks
-hold no execution slot and their duration budget has not started; `waiting_for`
-names unsettled dependencies. They still count toward queue capacity. Any
-dependency not completing (including needs-input) fails the task with
-`dependency_not_completed` without creating a session; the Agent remains.
+`after` binds dependencies to other Agents' tasks at acceptance: the addressed
+current, pending-question or latest task. It never follows a later answer
+continuation; to wait for one, name the Agent after `agent_answer` returns, not
+in the same tool batch. Naming a task that has already settled without
+completing (needs-input, failed or interrupted) is rejected with
+`DEPENDENCY_NOT_COMPLETED`, carrying that Agent and its status as `reason`,
+before any Agent, name or task is allocated. Queued tasks hold no execution slot
+and their duration budget has not started; `waiting_for` names unsettled
+dependencies. They still count toward queue capacity, and their Agents toward
+resident capacity. Once any dependency settles without completing (including
+needs-input), pump fails the task with `dependency_not_completed` at once,
+without waiting for its other dependencies or a free slot and without creating
+a session. Its error names that Agent and status, e.g.
+`DEPENDENCY_NOT_COMPLETED: otter (needs_input)`; its own successors then fail in
+turn. The Agent remains.
 Dispatch predecessor conflict exemptions use the fixed Run-ID transitive closure
 at admission, not dynamic Agent names, and allow queuing rather than premature
 execution. Inputs for after tasks defer existence checks; all dispatched tasks
@@ -232,6 +244,16 @@ disable/re-enable boundary without allocating failed work or poisoning Owner
 health. Other errors include `QUEUE_FULL`, `RESIDENT_LIMIT`,
 `OWNER_HISTORY_LIMIT`, `AGENT_UNAVAILABLE`, `STALE_OWNER_CONTEXT` and
 `OWNER_CLEANUP_UNCERTAIN`.
+
+A new spawn/run/answer rejected with `RESIDENT_LIMIT`, `RESOURCE_OWNED` or
+`BUILD_TREE_BUSY` only by Agents whose explicit kill/release is already under
+way waits for such a release outside the submit queue, at most 10 s from the
+call (abortable), then repeats the whole admission. Resource conflicts are
+checked before capacity, and a conflicting holder that is not being released is
+reported at once. Timeout, uncertain cleanup or any other blocker returns the
+rejection unchanged. Only a release
+already under way when admission rejects is waited for: parallel tool-batch
+order is not a guarantee, and a later kill is not anticipated.
 
 Duration begins at slot assignment/initialization, not queue admission. The
 [wall-clock soft wrap](task-dispatch.md#wall-clock-soft-wrap) uses a bounded Δ
@@ -454,7 +476,8 @@ failed before session creation leaves an Agent whose next task can create it.
 Kill is permanent: idle releases immediately, busy interrupts then releases
 after settlement. A single 10 s deadline covers stopping/cleanup. Beyond it,
 status is exiting while tracked cleanup continues; cleanup_uncertain retains
-reservations, with no force-release/retry/eviction. Name/results remain retained;
+reservations, with no force-release/retry/eviction. Admissions blocked only by a
+release under way wait for it within their own bound (see acceptance above). Name/results remain retained;
 cleanup diagnostics do not rewrite historical outcomes. Lifecycle waits share
 the drain but have no model validator/publisher or presentation commit. Shutdown
 still waits for actual execution/cleanup promises, not an empty observer set.

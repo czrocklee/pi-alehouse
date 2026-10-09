@@ -347,7 +347,7 @@ test("shipped default limits are pinned, not just mechanism", async () => {
   try {
     assert.deepEqual(controller.stats().limits, {
       concurrency: 4, resident: 8, queue: 16, grace: 5, output: 1_048_576,
-      historyRuns: 512, historyOutput: 64 * 1024 * 1024,
+      historyRuns: 512, historyOutput: 64 * 1024 * 1024, releaseWait: 10_000,
     }, "the documented headline numbers must not drift silently");
   } finally {
     await controller.shutdown(1000);

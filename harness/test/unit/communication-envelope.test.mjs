@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   alertAdmissionBudget, COMMUNICATION_LIMITS, communicationBudget, communicationEnvelopeBytes,
-  communicationTextUnits, retainedEnvelopeFixture,
+  communicationTextUnits, modelTaskStatus, retainedEnvelopeFixture,
 } from "../../dist/core/communication-envelope.js";
 
 // Checked-in, independent transcription of the spec's conservative proof shape.
@@ -35,6 +35,13 @@ function independentBytes(value) {
   const serialized = JSON.stringify({ content: [{ type: "text", text: JSON.stringify(value) }] });
   return new TextEncoder().encode(serialized).byteLength;
 }
+
+test("model task status translates cancellation without changing retained vocabulary", () => {
+  for (const [internal, displayed] of [
+    ["queued", "queued"], ["running", "running"], ["cancelling", "interrupting"],
+    ["completed", "completed"], ["needs_input", "needs_input"], ["failed", "failed"], ["cancelled", "interrupted"],
+  ]) assert.equal(modelTaskStatus(internal), displayed);
+});
 
 test("model bounds are frozen separately from general-purpose core capacity", () => {
   assert.deepEqual(COMMUNICATION_LIMITS, {

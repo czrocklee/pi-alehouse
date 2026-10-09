@@ -299,7 +299,10 @@ identities are not automatically coordinated. Profile/external preflight is
 approximate: ask/unknown is not a grant; child gates may be stricter. Literal
 paths and lexical/canonical aliases do not provide hardlink tracking or atomic
 filesystem protection. Inputs must exist when checked, whereas ownership/tree
-may name new outputs. Pump rechecks can wait for a free slot.
+may name new outputs. Pump rechecks can wait for a free slot; failing a task
+whose dependency settled without completing does not. The admission wait for a
+release already under way is bounded (10 s) and does not make parallel
+tool-batch order a guarantee.
 
 Claims and existing tree leases span healthy pending questions and answer
 continuations; reopening a question before input entry restores its claim.

@@ -61,11 +61,16 @@ const harnessFailure = (error) => { assert(error instanceof HarnessError); retur
 for (const timeout_ms of [0.5, 300001, 2147483647])
   test(`public lifecycle wait accepts finite timeout ${timeout_ms} independently of the model wait cap`, async (t) => {
     const { c, ports } = await fixture(t), { run, port } = await start(c, ports, "lifecycle");
-    const watching = c.waitForRuns([run.run_id], { mode: "all", timeout_ms });
-    // Finish in this turn: no long real-time sleep or fractional-timer race.
-    port.finish("ready before the timer");
-    assert.equal(await watching, "ready");
-    assert.equal(c.stats().internal_error, undefined);
+    // This tests the public timeout domain, not whether async finalization can
+    // beat 0.5 ms under load. Settle first so readiness is deterministic.
+    port.finish("already ready"); await settle(c, run);
+    const recording = lifecycleCalls(t);
+    try {
+      assert.equal(await c.waitForRuns([run.run_id], { mode: "all", timeout_ms }), "ready");
+      assert.equal(recording.calls.length, 1);
+      assert.equal(recording.calls[0].wait_ms, timeout_ms, "forward the fractional/large timeout unchanged");
+      assert.equal(c.stats().internal_error, undefined);
+    } finally { recording.restore(); }
   });
 
 test("omitted lifecycle timeout reaches the shared scheduler as unbounded, not a five-minute default", async (t) => {

@@ -103,7 +103,8 @@ tree lease. Final termination and required confirmed cleanup permit release. A n
 claim conflict requires answer, or explicit abandonment/kill followed by
 confirmed release, not after/passive waiting on the original question Run.
 After exemptions bind predecessor Run IDs at admission, not dynamic names;
-pump still rechecks inputs/resources before execution.
+pump still rechecks inputs/resources before execution. A dependency that
+settles without completing fails its queued dependents at once, without a slot.
 
 Wall-clock **soft wrap** is a guarded warning attempt with a bounded Δ window,
 not receipt/checkpoint or turn limit_reached. Its soft-budget input invalidates

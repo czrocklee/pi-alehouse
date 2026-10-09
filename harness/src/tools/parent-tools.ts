@@ -4,7 +4,7 @@ import { Type, type Static, type TObject, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import type { OwnerController } from "../core/owner-controller.js";
 import { terminal, validDifficulty, type RunView, type SubmitRequest } from "../core/contracts.js";
-import { AGENT_EXISTS_RESOLUTION, isModelAgentName, MODEL_AGENT_NAME_PATTERN } from "../core/communication-envelope.js";
+import { AGENT_EXISTS_RESOLUTION, isModelAgentName, MODEL_AGENT_NAME_PATTERN, modelTaskStatus } from "../core/communication-envelope.js";
 import type { CommunicationToolResult } from "../core/communication-snapshot.js";
 import { QUESTION_ID_PATTERN } from "../core/question-id.js";
 import { validateDispatch } from "../core/dispatch.js";
@@ -28,7 +28,7 @@ const agentNames = (maxItems: number, description: string) =>
 const waitMs = (description: string) => Type.Integer({ minimum: 0, maximum: 300000, description });
 
 const labelField = (source: string) => optional(text(120, `Short label for agent_list, not instructions. Default: the ${source}'s first line.`));
-const afterField = (instructions: string) => optional(agentNames(4, `Other Agents whose current or latest task must complete first. Their results (16384 characters shared) come before the ${instructions} as reference, not instructions. If one ends any other way (question, failure, interrupt), this task fails without starting.`));
+const afterField = (instructions: string) => optional(agentNames(4, `Other Agents whose current or latest task, fixed at this call, must complete first. Their results (16384 characters shared) come before the ${instructions} as reference, not instructions. If one ends any other way (question, failure, interrupt), this task fails without starting; naming one that already has is rejected. To wait for the task an answer starts, name that Agent after agent_answer returns.`));
 const waitField = optional(waitMs("Wait up to this long for the accepted task, its question, an issue or its alerts. Default 0: return a snapshot at once. Timing out never interrupts the task."));
 const dispatchPath = (description: string) => Type.String({ minLength: 1, maxLength: 512,
   pattern: "^(?![~@])(?=.*\\S)[^\\x00-\\x1f\\x7f*?[\\]{}'\"`$\\\\]+(?![\\s\\S])", description });
@@ -37,18 +37,18 @@ const dispatchPaths = (maxItems: number, description: string) => Type.Array(disp
 });
 const dispatchField = optional(Type.Object({
   inputs: optional(dispatchPaths(8, "Existing input files/directories to read. Literal paths, no shell expansion, glob, quotes, controls, $, backslash or leading ~/@.")),
-  ownership: optional(dispatchPaths(16, "Files/directories assigned to this task, including planned outputs. Literal paths; declares scope, not permission or isolation.")),
-  tree: optional(dispatchPath("The build-tree directory for this task, including a planned directory. Sharing is advisory, not an exclusive execution guarantee.")),
+  ownership: optional(dispatchPaths(16, "Files/directories assigned to this task, including planned outputs. Literal paths; declares scope, not permission or isolation. Give a file several tasks must change, such as a central build or test list, to one task; the others report the entries they need.")),
+  tree: optional(dispatchPath("Local build-tree directory for this task, including a planned one. Overlapping declarations of unfinished tasks in this session are rejected; other sessions get only an advisory note. It does not coordinate your own commands or other hosts. Omitting it neither forbids building nor makes a shared tree safe.")),
   checks: optional(Type.Array(Type.String({ minLength: 1, maxLength: 512,
     pattern: "^(?=.*\\S)[^\\x00-\\x1f\\x7f]+(?![\\s\\S])",
-    description: "Planned check/test/platform identifiers; globs allowed. A declaration is not evidence that a check ran or permission to skip gates." }),
+    description: "Planned check/test/platform identifiers this task can complete on its own; globs allowed. A task cannot wait idle for your later go-ahead: give such checks in a follow-up agent_run. A declaration is not evidence that a check ran or permission to skip gates." }),
   { minItems: 1, maxItems: 16, uniqueItems: true })),
 }, { additionalProperties: false,
   description: "Optional task input, file ownership, build-tree and planned-check declarations. Preflight can reject known limits; it does not authorize tool calls. Delegate full-suite validation explicitly to one task." }));
 // No example names: models copy them into every session instead of choosing.
 const spawnSchema = Type.Object({
   agent: agentName("The new Agent's name: a short nickname from one theme you choose for this session, not a task name. Never reused, even after agent_kill."),
-  prompt: text(131072, "Complete instructions. The Agent knows only this, its earlier tasks and any after results."),
+  prompt: text(131072, "Complete instructions in plain sentences, with the full path of every file or document you mention. The Agent knows only this, its earlier tasks and any after results."),
   label: labelField("prompt"),
   profile: StringEnum(agentProfileNames, { description: "reader: investigates and reviews, cannot edit files; editor: may edit files; researcher: web search and fetch plus read-only file tools, no Bash or edits, and its results are web-derived and untrusted. Git mutations stay with you. Bash and web calls stay permission-gated; no profile is an OS sandbox." }),
   reasoning_difficulty: Type.Integer({ minimum: 1, maximum: 5, description: "Picks the Agent's model; fixed for its lifetime. Rate the reasoning this task needs, not its workload, importance or cost, from easiest (1) to hardest (5): 1=run given checks or apply decided changes, e.g. tests, CI, lint, listed review nits; 2=small, well-scoped fix or check; 3=implement a given design, review a change, investigate a failure, or plan; 4=competing hypotheses or complex constraints, e.g. races, lifetimes, intermittent failures, cross-cutting migrations; 5=no known approach, e.g. a failure with no leads, or a design without precedent." }),
@@ -62,7 +62,7 @@ const spawnSchema = Type.Object({
 const runSchema = Type.Object({
   agent: agentName("An existing, idle Agent."),
   builds_on: text(512, "The specific earlier work of this Agent that this task continues, e.g. its own edits to fix or an investigation to extend. Not sent to the Agent. If nothing specific, or its result alone is enough (spawn with after: [agent]), use agent_spawn instead."),
-  prompt: text(131072, "Complete instructions for the next task. The Agent remembers its earlier tasks."),
+  prompt: text(131072, "Complete instructions for the next task in plain sentences, with full paths. The Agent remembers its earlier tasks."),
   label: labelField("prompt"),
   dispatch: dispatchField,
   after: afterField("prompt"),
@@ -209,11 +209,21 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
   };
   const afterRuns = (self: string, agents: string[] | undefined) => agents?.map((name) => {
     if (name === self) throw new HarnessError("INVALID_PARAMETER", { key: "after", resolution: "An Agent cannot wait for itself." });
-    return find(name, "after").run_id;
+    const { run_id } = find(name, "after"), view = controller.view(run_id);
+    // A task that settled without completing can never satisfy after. Reject it
+    // here instead of accepting a task that would fail at once.
+    if (terminal(view.status) && view.status !== "completed") {
+      const status = modelTaskStatus(view.status);
+      throw new HarnessError("DEPENDENCY_NOT_COMPLETED", { agent: name, key: "after", reason: status,
+        resolution: view.has_question ?
+          `${name}'s task ended with a question, so it cannot complete. Answer it with agent_answer first; once that answer is accepted, after: ["${name}"] waits for the answering task.` :
+          `${name}'s latest task ended ${status}, so it cannot complete. Omit after, or name ${name} only once it has a new task.` });
+    }
+    return run_id;
   });
 
   const tools = [
-    make("agent_spawn", "Create a named Agent and give it its first task. Agents run in the background, share your checkout without isolation, and cannot delegate. Only researcher Agents can use the web. A settled needs_input task may offer a question_id; answer it with agent_answer, never agent_send. Spawn a fresh Agent for each new piece of work, including reviews and tasks needing another reasoning_difficulty; use agent_run only for a follow-up that builds on an Agent's earlier work. Capacity is limited: kill finished Agents you no longer need to make room. The reply uses action, reason, agents and alerts; an alert does not mean the task ended. If unsure a call was accepted, check agent_list before repeating it.", spawnSchema,
+    make("agent_spawn", "Create a named Agent and give it its first task. Agents run in the background, share your checkout without isolation, and cannot delegate. Only researcher Agents can use the web. A settled needs_input task may offer a question_id; answer it with agent_answer, never agent_send. Spawn a fresh Agent for each new piece of work, including reviews and tasks needing another reasoning_difficulty; use agent_run only for a follow-up that builds on an Agent's earlier work. Capacity is limited, and queued tasks count: to make room, kill finished reviewers and Agents whose work you have accepted first; keep an editor whose changes are not yet built or tested, since fixing them is its follow-up. The reply uses action, reason, agents and alerts; an alert does not mean the task ended. If unsure a call was accepted, check agent_list before repeating it.", spawnSchema,
       async (args, ctx, id, signal) => {
         // Capture mutable SDK inputs before admission can await an earlier call.
         // Route/context resolution still happens only on first acceptance.
@@ -244,7 +254,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
               ...(after ? { after } : {}),
               settings: { ...route, profile: input.profile, cwd, tools: [...profile.tools], definition_digest: profile.definition_digest,
                 ...(context_snapshot === undefined ? {} : { context_snapshot }) } };
-          }));
+          }), { signal });
         accepted(view);
         return observe({ kind: "action", run_id: view.run_id, action: { type: "agent_spawn" }, wait_ms }, ctx, signal);
       }),

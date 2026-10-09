@@ -31,9 +31,33 @@ test("a dependency that does not complete fails the waiting Run before it starts
   f.controller.cancel(author.run_id); f.ports[0].finish("partial", "aborted");
   const settled = (await ended(f.controller, reviewer)).snapshots[0];
   assert.equal(settled.status, "failed"); assert.equal(settled.outcome.reason, "dependency_not_completed");
-  assert.equal(settled.outcome.error, "DEPENDENCY_NOT_COMPLETED: otter", "the model-visible error names the Agent, not a Run ID");
+  assert.equal(settled.outcome.error, "DEPENDENCY_NOT_COMPLETED: otter (interrupted)",
+    "the model-visible error names the Agent and its status in the parent's vocabulary, not a Run ID");
   assert.equal(f.ports.length, 1, "no session is created for a Run that never starts");
   assert.equal(settled.resident, true, "the Agent stays until kill"); assert.equal(settled.resumable, true);
+});
+
+test("a dependency that settles without completing fails waiting Runs at once, without the others or a free slot", async (t) => {
+  const f = await fixture(t, { controller: { concurrency: 2 } });
+  const author = await f.controller.submit("a", task("write", { name: "otter" }));
+  const other = await f.controller.submit("b", task("other", { name: "seal" }));
+  await until(() => f.ports.length === 2 && f.ports.every((port) => port.streaming));
+  const first = await f.controller.submit("c", task("first in line", { name: "heron" }));
+  const second = await f.controller.submit("d", task("second in line", { name: "crane" }));
+  const reviewer = await f.controller.submit("e", task("review", { name: "owl", after: [author.run_id, other.run_id] }));
+  f.ports[0].finish("broken", "error", "boom"); await ended(f.controller, author);
+  const failed = (await ended(f.controller, reviewer)).snapshots[0];
+  assert.equal(failed.outcome.reason, "dependency_not_completed");
+  assert.equal(failed.outcome.error, "DEPENDENCY_NOT_COMPLETED: otter (failed)");
+  assert.equal(f.controller.view(other.run_id).status, "running", "the other dependency has not settled");
+  assert.equal(f.controller.view(second.run_id).status, "queued", "no execution slot was free");
+  assert.equal(f.controller.stats().active, 2);
+  assert.equal(failed.resident, true); assert.equal(failed.resumable, true);
+  await until(() => f.ports.length === 3 && f.ports[2].streaming);
+  assert.equal(f.ports[2].calls[0].prompt, "first in line", "only the earlier queued peer took the freed slot");
+  f.ports[1].finish(); f.ports[2].finish(); await ended(f.controller, other); await ended(f.controller, first);
+  await until(() => f.ports.length === 4 && f.ports[3].streaming);
+  f.ports[3].finish(); await ended(f.controller, second);
 });
 
 test("dependency references are bounded, unique and must name known Runs", async (t) => {

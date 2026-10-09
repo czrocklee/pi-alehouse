@@ -1252,6 +1252,171 @@ test("after queues a follow-up with the earlier result and reports what it waits
   f.ports[1].finish(); await settle(f, "reviewer");
 });
 
+test("after rejects a task that already ended without completing; an accepted answer's task can be awaited", async (t) => {
+  const f = await fixture(t, { controller: { concurrency: 2 } }), { call } = toolsFor(f);
+  await call("agent_spawn", create({ agent: "author", label: "write" }), "author");
+  await call("agent_spawn", create({ agent: "breaker" }), "breaker");
+  await until(() => f.ports.length === 2 && f.ports.every((port) => port.streaming));
+  f.ports[0].callbacks.question("Which API?"); f.ports[0].finish("need an API"); await settle(f, "author");
+  f.ports[1].finish("broken", "error", "boom"); await settle(f, "breaker");
+  for (const [dependency, reason, resolution] of [
+    ["author", "needs_input", /ended with a question.*agent_answer first; once that answer is accepted, after: \["author"\] waits for the answering task/],
+    ["breaker", "failed", /latest task ended failed, so it cannot complete. Omit after/]]) {
+    await assert.rejects(call("agent_spawn", create({ agent: "reviewer", after: [dependency] }), `reviewer-${dependency}`), (error) => {
+      const result = JSON.parse(error.message).error;
+      assert.equal(result.code, "DEPENDENCY_NOT_COMPLETED"); assert.equal(result.agent, dependency);
+      assert.equal(result.parameter, "after"); assert.equal(result.reason, reason); assert.match(result.resolution, resolution);
+      return true;
+    });
+  }
+  await assert.rejects(call("agent_run", run("breaker", { after: ["author"] }), "rerun"), code("DEPENDENCY_NOT_COMPLETED"));
+  assert.equal(f.controller.findAgent("reviewer"), undefined, "a rejected spawn takes no name");
+  assert.equal(f.controller.stats().runs, 2, "no task was allocated");
+  const question_id = (await call("agent_read", { agent: "author" })).agents[0].question_id;
+  await call("agent_answer", { agent: "author", question_id, answer: "Use v2." }, "answer");
+  const reviewer = await call("agent_spawn", create({ agent: "reviewer", prompt: "Review it.", after: ["author"] }), "reviewer");
+  assert.equal(reviewer.agents[0].status, "queued");
+  assert.deepEqual((await call("agent_list", {})).agents.find((row) => row.agent === "reviewer").waiting_for, ["author"]);
+  await until(() => f.ports[0].calls.length === 2); f.ports[0].finish("v2 patch"); await settle(f, "author");
+  await until(() => f.ports[2]?.streaming);
+  assert.match(f.ports[2].calls[0].prompt, /--- author: write \(completed\) ---\nv2 patch\n/, "after waits for the answering task");
+  f.ports[2].finish(); await settle(f, "reviewer");
+});
+
+const literalDispatch = { prepare(declaration, context) {
+  const path = (word) => ({ path: `${context.cwd}/${word}`, canonical: `${context.cwd}/${word}` });
+  return { declaration: structuredClone(declaration), inputs: (declaration.inputs ?? []).map(path),
+    ownership: (declaration.ownership ?? []).map(path), ...(declaration.tree === undefined ? {} : { tree: path(declaration.tree) }) };
+}, async start() { return {}; } };
+
+test("a kill earlier in the same parallel batch frees its slot for a later spawn", async (t) => {
+  const f = await fixture(t, { controller: { resident_limit: 2, concurrency: 2 } }), { call } = toolsFor(f);
+  await call("agent_spawn", create({ agent: "one" }), "one"); await call("agent_spawn", create({ agent: "two" }), "two");
+  await until(() => f.ports.length === 2 && f.ports.every((port) => port.streaming));
+  f.ports[0].finish(); f.ports[1].finish(); await settle(f, "one"); await settle(f, "two");
+  // Like Pi's parallel batch: both execute() calls start in order in one tick.
+  const [killed, spawned] = await Promise.all([call("agent_kill", { agent: "one" }, "kill"), call("agent_spawn", create({ agent: "three" }), "three")]);
+  assert.equal(killed.status, "killed");
+  assert.deepEqual(spawned.action, { type: "agent_spawn", agent: "three", task: 1 });
+  await until(() => f.ports[2]?.streaming); f.ports[2].finish(); await settle(f, "three");
+});
+
+test("a kill earlier in the same parallel batch frees a questioned Agent's claim for a later spawn", async (t) => {
+  const f = await fixture(t, { controller: { resident_limit: 4, concurrency: 2, dispatch: literalDispatch } }), { call } = toolsFor(f);
+  await call("agent_spawn", create({ agent: "asker", profile: "editor", dispatch: { ownership: ["out"] } }), "asker");
+  await until(() => f.ports[0]?.streaming);
+  f.ports[0].callbacks.question("Which layout?"); f.ports[0].finish("need a layout"); await settle(f, "asker");
+  const [killed, spawned] = await Promise.all([call("agent_kill", { agent: "asker" }, "kill"),
+    call("agent_spawn", create({ agent: "fixer", profile: "editor", dispatch: { ownership: ["out"] } }), "fixer")]);
+  assert.equal(killed.status, "killed");
+  assert.deepEqual(spawned.action, { type: "agent_spawn", agent: "fixer", task: 1 });
+  assert.deepEqual([...f.controller.claims].map((claim) => claim.agent_id), [f.controller.findAgent("fixer").agent_id]);
+  await until(() => f.ports[1]?.streaming); f.ports[1].finish(); await settle(f, "fixer");
+});
+
+test("a conflict no release resolves is reported at once, even beside a release under way", async (t) => {
+  const f = await fixture(t, { controller: { resident_limit: 2, concurrency: 2, dispatch: literalDispatch, release_wait_ms: 5000 } });
+  const { call } = toolsFor(f);
+  await call("agent_spawn", create({ agent: "alpha", profile: "editor", dispatch: { ownership: ["a"] } }), "alpha");
+  await call("agent_spawn", create({ agent: "bravo", profile: "editor", dispatch: { ownership: ["b"] } }), "bravo");
+  await until(() => f.ports.length === 2 && f.ports.every((port) => port.streaming));
+  f.ports[0].callbacks.question("Which format?"); f.ports[0].finish("need a format"); await settle(f, "alpha");
+  f.ports[1].callbacks.question("Which layout?"); f.ports[1].finish("need a layout"); await settle(f, "bravo");
+  assert.deepEqual([...f.controller.claims].map(claim => claim.agent_id),
+    [f.controller.findAgent("alpha").agent_id, f.controller.findAgent("bravo").agent_id],
+    "both pending questions retain their claims before kill");
+  const hold = deferred(); t.after(() => hold.resolve());
+  f.ports[0].dispose = async function () { await hold.promise; this.disposed++; return { shutdownExited: true, errors: [] }; };
+  const killing = call("agent_kill", { agent: "alpha" }, "kill");
+  // Both Agent slots are taken and "a" is held by alpha, which is being released;
+  // "b" is held by bravo's pending question, which no release frees.
+  const waits = t.mock.method(f.controller.observations, "observeLifecycle");
+  try {
+    await assert.rejects(call("agent_spawn", create({ agent: "charlie", profile: "editor", dispatch: { ownership: ["a", "b"] } }), "both"), (error) => {
+      const result = JSON.parse(error.message).error;
+      assert.equal(result.code, "RESOURCE_OWNED"); assert.equal(result.agent, "bravo"); assert.equal(result.path, "b");
+      return true;
+    });
+    assert.equal(waits.mock.callCount(), 0, "no lifecycle wait for a conflict that release cannot resolve");
+  } finally { hold.resolve(); }
+  assert.equal((await killing).status, "killed");
+});
+
+for (const held of ["ownership", "tree"]) for (const requested of ["ownership", "tree"])
+  test(`${requested} against ${held} reports the requested field without internal IDs`, async (t) => {
+    const f = await fixture(t, { controller: { dispatch: literalDispatch } }), { call } = toolsFor(f);
+    const declaration = (key) => key === "tree" ? { tree: "out" } : { ownership: ["out"] };
+    await call("agent_spawn", create({ agent: "holder", profile: "editor", dispatch: declaration(held) }), "holder");
+    await until(() => f.ports[0]?.streaming);
+    const holder = f.controller.findAgent("holder");
+    await assert.rejects(call("agent_spawn", create({ agent: "requester", profile: "editor", dispatch: declaration(requested) }), "requester"), (error) => {
+      const result = JSON.parse(error.message).error;
+      assert.deepEqual(result, {
+        code: held === "tree" && requested === "tree" ? "BUILD_TREE_BUSY" : "RESOURCE_OWNED",
+        agent: "holder", parameter: requested, path: "out", requested: "out",
+        resolution: "Wait for this resource's owner, or declare an after dependency. Ownership declarations do not grant permissions.",
+      });
+      for (const id of [holder.agent_id, holder.run_id, f.controller.identity.owner_id, f.controller.identity.generation])
+        assert(!error.message.includes(id), "model error text contains no internal identity");
+      return true;
+    });
+    assert.equal(f.controller.stats().runs, 1);
+    f.ports[0].finish(); await settle(f, "holder");
+  });
+
+for (const transition of ["off", "off-on", "shutdown"])
+  test(`release-wait retry rejects new work after ${transition}, but preserves accepted replay`, async (t) => {
+    const admission = { enabled: true, revision: 0 };
+    const f = await fixture(t, { controller: { resident_limit: 1, release_wait_ms: 5000, admission: () => ({ ...admission }) } });
+    const { call } = toolsFor(f), original = create({ agent: "one" });
+    const accepted = await call("agent_spawn", original, "one");
+    await until(() => f.ports[0]?.streaming); f.ports[0].finish(); await settle(f, "one");
+    const hold = deferred();
+    f.ports[0].dispose = async function () { await hold.promise; this.disposed++; return { shutdownExited: true, errors: [] }; };
+    const killing = call("agent_kill", { agent: "one" }, "kill");
+    const waits = t.mock.method(f.controller.observations, "observeLifecycle");
+    const rejected = assert.rejects(call("agent_spawn", create({ agent: "two" }), "two"),
+      code(transition === "shutdown" ? "OWNER_CLOSED" : "WORKERS_DISABLED"));
+    let closing;
+    try {
+      await until(() => waits.mock.callCount() === 1);
+      assert.equal(waits.mock.calls[0].arguments[0].wait_ms <= 5000, true);
+      if (transition === "shutdown") closing = f.controller.shutdown(3000);
+      else {
+        admission.enabled = false; admission.revision++;
+        if (transition === "off-on") { admission.enabled = true; admission.revision++; }
+      }
+    } finally { hold.resolve(); }
+    await rejected;
+    assert.equal((await killing).status, "killed");
+    if (closing) assert.equal((await closing).closed, true);
+    assert.equal(f.controller.stats().runs, 1);
+    assert.equal(f.controller.findAgent("two"), undefined);
+    assert.deepEqual((await call("agent_spawn", original, "one")).action, accepted.action,
+      "accepted replay still precedes new-work gates after the transition");
+  });
+
+test("admission waits for a release under way only within its bound, and an abort ends the wait", async (t) => {
+  const f = await fixture(t, { controller: { resident_limit: 1, release_wait_ms: 100 } }), { call } = toolsFor(f);
+  assert.equal(f.controller.stats().limits.releaseWait, 100);
+  await call("agent_spawn", create({ agent: "one" }), "one"); await until(() => f.ports[0]?.streaming);
+  f.ports[0].finish(); await settle(f, "one");
+  const hold = deferred(); t.after(() => hold.resolve());
+  f.ports[0].dispose = async function () { await hold.promise; this.disposed++; return { shutdownExited: true, errors: [] }; };
+  const killing = call("agent_kill", { agent: "one" }, "kill");
+  const started = performance.now();
+  await assert.rejects(call("agent_spawn", create({ agent: "two" }), "late"), code("RESIDENT_LIMIT"));
+  assert(performance.now() - started >= 90, "the release under way was waited for");
+  const abort = new AbortController();
+  const aborted = call("agent_spawn", create({ agent: "two" }), "aborted", undefined, abort.signal);
+  await tick(); abort.abort();
+  await assert.rejects(aborted, code("TOOL_INTERRUPTED"));
+  assert.equal(f.controller.stats().runs, 1, "neither rejected spawn allocated a task");
+  hold.resolve(); assert.equal((await killing).status, "killed");
+  assert.equal((await call("agent_spawn", create({ agent: "two" }), "now")).action.agent, "two");
+  await until(() => f.ports[1]?.streaming); f.ports[1].finish(); await settle(f, "two");
+});
+
 test("agent_run needs an idle Agent: busy points to send, asking points to answer", async (t) => {
   const f = await fixture(t), { call } = toolsFor(f);
   await call("agent_spawn", create(), "spawn"); await until(() => f.ports[0]?.streaming);

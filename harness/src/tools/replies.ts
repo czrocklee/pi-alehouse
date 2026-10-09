@@ -1,4 +1,5 @@
 import { terminal, validDifficulty, type AgentSummary, type RunView } from "../core/contracts.js";
+import { modelTaskStatus } from "../core/communication-envelope.js";
 
 // Model-facing projections. The model addresses Agents by name and calls each
 // assignment a task; Run and Agent IDs, routing and diagnostics stay host-only.
@@ -13,7 +14,7 @@ export type NameOf = (run_id: string) => string;
 
 // The parent's verb is interrupt, so its statuses say so.
 const statusOf = (view: RunView) => view.finalization_pending ? "finishing" :
-  view.status === "cancelled" ? "interrupted" : view.status === "cancelling" ? "interrupting" : view.status;
+  modelTaskStatus(view.status);
 
 /** Independent interrupt/roster projection. Communication observations are
  * projected and serialized in core before their presentation commit. */
