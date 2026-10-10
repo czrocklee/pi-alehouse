@@ -698,28 +698,38 @@ const indicatorValue = (key: string, text: string): string =>
   key === APPROVAL_INDICATOR ? text.replace(/^approval: /, "") :
     key === WORKER_PRESET_INDICATOR ? text.replace(/^(?:delegation|workers): /, "") : text;
 
-type FooterSegment = { text: string; key?: string; compact?: string };
+/** A usage figure or a status. Usage figures are told apart by their own
+ * `↑`/`↓`/`$`, so a space separates them; a dot separates everything else. */
+type FooterSegment = { text: string; key?: string; compact?: string; usage?: boolean };
 const FOOTER_SEPARATOR = " · ";
+const USAGE_SEPARATOR = " ";
+
+/** What precedes `segments[index]` on the row. */
+const joint = (segments: readonly FooterSegment[], index: number): string =>
+  index === 0 ? "" : segments[index - 1]!.usage && segments[index]!.usage ? USAGE_SEPARATOR : FOOTER_SEPARATOR;
+
+const footerWidth = (segments: readonly FooterSegment[]): number =>
+  segments.reduce((sum, segment, index) => sum + joint(segments, index).length + visibleWidth(segment.text), 0);
 
 /** Fit whole controls before deriving click geometry. Never clip the right edge
  * or a permission mode into a misleading fragment. Published values stay intact. */
-function fitFooterSegments(segments: FooterSegment[], width: number, caret: string): FooterSegment[] {
+function fitFooterSegments(segments: FooterSegment[], width: number): FooterSegment[] {
   if (width <= 0) return [];
   let selected = segments.map((segment) => ({ ...segment }));
-  const used = (): number => selected.reduce((sum, segment) => sum + visibleWidth(segment.text),
-    Math.max(0, selected.length - 1) * FOOTER_SEPARATOR.length);
+  const used = (): number => footerWidth(selected);
   if (used() <= width) return selected;
 
   // Shed the hit rate first, keeping honest, complete token/cost figures.
   for (const segment of selected) if (segment.key === undefined && segment.compact) segment.text = segment.compact;
   if (used() <= width) return selected;
   const worker = selected.find((segment) => segment.key === WORKER_PRESET_INDICATOR);
+  const full = worker?.text;
   const fitWorker = (): void => {
-    if (!worker?.compact) return;
-    // At least six value columns (including ellipsis) and the two-column caret.
-    // Refit from the full value after each omission so spare space restores it.
-    const columns = Math.max(8, width - used() + visibleWidth(worker.text));
-    worker.text = truncateToWidth(worker.compact, columns - visibleWidth(caret), "…") + caret;
+    if (!worker || full === undefined) return;
+    // At least six value columns, ellipsis included. Refit from the full
+    // value after each omission so spare space restores it.
+    const columns = Math.max(6, width - used() + visibleWidth(worker.text));
+    worker.text = truncateToWidth(full, columns, "…");
   };
   fitWorker();
   for (const segment of [...selected]) {
@@ -733,10 +743,8 @@ function fitFooterSegments(segments: FooterSegment[], width: number, caret: stri
 
   selected = selected.filter((segment) => segment.key !== WORKER_PRESET_INDICATOR);
   if (used() <= width) return selected;
-  // Extremely narrow: drop carets, then use the health glyph alone. Keep the
-  // complete approval mode whenever it fits; never shorten YOLO to e.g. YO….
-  for (const segment of selected) if (segment.compact) segment.text = segment.compact;
-  if (used() <= width) return selected;
+  // Extremely narrow: health keeps one cell (Stats publishes a single dot).
+  // Keep the complete approval mode whenever it fits; never shorten YOLO to e.g. YO….
   const health = selected.find((segment) => segment.key === HEALTH_INDICATOR);
   if (health) health.text = truncateToWidth(health.text, 1, "");
   if (used() > width) selected = selected.filter((segment) => segment.key !== APPROVAL_INDICATOR);
@@ -1023,24 +1031,21 @@ export default function (pi: ExtensionAPI) {
           const input = `${value(formatTokens(totalInput))} (${cacheHitDisplay})`;
 
           const modelDisplay = modelLabel(ctx, theme);
-          const caret = ` ${theme.fg("dim", "▴")}`;
           const statuses = [...footerData.getExtensionStatuses()]
             // Subagent status belongs in its own widget, not in this footer.
             .filter(([key]) => key !== "subagents")
             .map(([key, text]) => ({ key, text: indicatorValue(key, oneLine(text).replace(/ +/g, " ").trim()) }))
             .filter(({ text }) => text)
             // Fixed worker → approval → health order, not attention-based sorting.
-            .sort((a, b) => pinned(a.key) - pinned(b.key))
-            .map(({ key, text }) => ({ key, text: pinned(key) >= 0 ? text + caret : text,
-              ...(pinned(key) >= 0 ? { compact: text } : {}) }));
+            .sort((a, b) => pinned(a.key) - pinned(b.key));
           const segments = fitFooterSegments([
-            { text: `${theme.fg("accent", "↑")} ${input}`,
-              compact: `${theme.fg("accent", "↑")} ${value(formatTokens(totalInput))}` },
-            { text: `${theme.fg("accent", "↓")} ${value(formatTokens(totals.output))}` },
-            { text: cost },
+            { text: `${theme.fg("accent", "↑")}${input}`,
+              compact: `${theme.fg("accent", "↑")}${value(formatTokens(totalInput))}`, usage: true },
+            { text: `${theme.fg("accent", "↓")}${value(formatTokens(totals.output))}`, usage: true },
+            { text: cost, usage: true },
             ...statuses,
-          ], width, caret);
-          const right = segments.map((segment) => segment.text).join(FOOTER_SEPARATOR);
+          ], width);
+          const right = segments.map((segment, index) => joint(segments, index) + segment.text).join("");
 
           let quotaDisplay: string | undefined;
           const quotaIsCurrent =
@@ -1075,11 +1080,12 @@ export default function (pi: ExtensionAPI) {
           // worker values. Hidden controls and separators have no indicator hit.
           let x = rightStart(right, width);
           footerHits = [];
-          for (const segment of segments) {
+          segments.forEach((segment, index) => {
+            x += joint(segments, index).length;
             const span = visibleWidth(segment.text);
             if (span > 0) footerHits.push({ x, width: span, key: segment.key });
-            x += span + FOOTER_SEPARATOR.length;
-          }
+            x += span;
+          });
           return [`${alignFooter(left, right, width)}${marker}`];
         },
       };

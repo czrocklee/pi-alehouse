@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import type { EventBus, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { STATS_WORKER_ATTACH } from "../../../lib/stats-protocol.mjs";
 import type { WorkerStatsAttachment, WorkerStatsMessage, WorkerStatsSink } from "../../../lib/stats-protocol.mjs";
@@ -10,8 +11,13 @@ type UntrustedMessage = {
   model?: unknown;
   responseModel?: unknown;
   stopReason?: unknown;
+  errorMessage?: unknown;
   usage?: unknown;
 };
+
+/** The same text already reaches the parent as the failed Run's `error`.
+ * Matches the parent collector's MAX_ERROR_LENGTH, which bounds it again. */
+const MAX_ERROR_MESSAGE = 240;
 
 type UntrustedUsage = {
   output?: unknown;
@@ -30,6 +36,17 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+/** One line, no control characters, bounded before it crosses the bus. */
+function errorLine(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const clean = stripVTControlCharacters(value)
+    // eslint-disable-next-line no-control-regex -- control characters become word breaks, never bus payload
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!clean) return undefined;
+  const characters = Array.from(clean);
+  return characters.length <= MAX_ERROR_MESSAGE ? clean : `${characters.slice(0, MAX_ERROR_MESSAGE - 1).join("")}…`;
+}
+
 /** Construct a new metadata-only object; never give the parent an SDK message. */
 function assistantMetadata(message: unknown): WorkerStatsMessage | undefined {
   if (typeof message !== "object" || message === null) return undefined;
@@ -45,6 +62,9 @@ function assistantMetadata(message: unknown): WorkerStatsMessage | undefined {
   if (model !== undefined) result.model = model;
   if (responseModel !== undefined) result.responseModel = responseModel;
   if (stopReason !== undefined) result.stopReason = stopReason;
+  // Error text is metadata only on a failed response; any other message keeps none.
+  const errorMessage = stopReason === "error" ? errorLine(source.errorMessage) : undefined;
+  if (errorMessage !== undefined) result.errorMessage = errorMessage;
 
   const usageSource = source.usage;
   if (typeof usageSource !== "object" || usageSource === null) return result;

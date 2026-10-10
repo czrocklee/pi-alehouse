@@ -1,5 +1,5 @@
 /**
- * Approval indicator: `MODE ▴` in the footer's right corner, and the
+ * Approval indicator: `MODE` in the footer's right corner, and the
  * bottom-right popover that changes it.
  *
  * Modes are the loaded model judge's own (jev under pi-harness, Luna under

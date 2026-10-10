@@ -19,6 +19,8 @@ export interface WorkerStatsMessage {
   model?: string;
   responseModel?: string;
   stopReason?: string;
+  /** Failed responses only: the provider's error, one bounded line. */
+  errorMessage?: string;
   usage?: { output?: number; cost?: { total?: number } };
 }
 export interface WorkerStatsAttachment {

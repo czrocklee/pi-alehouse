@@ -25,12 +25,13 @@ function clock(initial = 0) {
 }
 
 function assistant({ provider = "p", model = "m", responseModel, output = 0,
-  cost = 0, stopReason = "stop", withUsage = true } = {}) {
+  cost = 0, stopReason = "stop", withUsage = true, errorMessage } = {}) {
   return {
     role: "assistant",
     provider,
     model,
     ...(responseModel ? { responseModel } : {}),
+    ...(errorMessage !== undefined ? { errorMessage } : {}),
     stopReason,
     ...(withUsage ? { usage: { output, cost: { total: cost } } } : {}),
   };
@@ -60,7 +61,7 @@ test("parallel worker busy durations are additive rather than a main-session uni
     observed: 2, resident: 2, running: 0,
     busyMs: 200, llmMs: 0, toolMs: 0,
     activeRequests: 0, activeTools: 0,
-    health: "idle", partial: false, models: [], tools: [],
+    health: "idle", partial: false, models: [], tools: [], recentErrors: [],
   });
 });
 
@@ -206,6 +207,46 @@ test("tool errors do not poison resident health or request token-by-token paints
   assert.equal(workers.snapshot().health, "idle");
   sink.dispose();
   assert.equal(workers.snapshot().tools[0].errors, 3, "retirement preserves tool errors");
+});
+
+test("worker failures name the worker; a retry, a successful Run or the parent's successful run clears them", () => {
+  const c = clock();
+  const workers = new WorkerStats(c.now);
+  const a = workers.attach("a7");
+  const b = workers.attach("b2");
+  a.beginRun(); a.startActivity(); a.requestStart("m", "p");
+  c.set(10); a.messageEnd(assistant({ stopReason: "error", responseModel: "actual", errorMessage: "429 rate\nlimited" }));
+  let snapshot = workers.snapshot();
+  assert.equal(snapshot.health, "error");
+  assert.deepEqual(snapshot.recentErrors, [{ ageMs: 0, workerId: "a7", provider: "p", model: "actual",
+    message: "429 rate limited", cleared: false }]);
+  a.requestStart("m", "p");
+  c.set(20); a.messageEnd(assistant());
+  assert.equal(workers.snapshot().health, "busy", "the child's SDK auto-retry recovered");
+  a.settleActivity(); a.endRun("success");
+
+  // A Run can fail with no provider error, and its worker may never be resumed.
+  b.beginRun();
+  c.set(30); b.endRun("error");
+  snapshot = workers.snapshot();
+  assert.equal(snapshot.health, "error");
+  assert.deepEqual(snapshot.recentErrors.map(({ workerId, message, cleared }) => [workerId, message, cleared]),
+    [["b2", "Run failed without a provider error", false], ["a7", "429 rate limited", true]]);
+
+  a.beginRun(); a.startActivity(); a.requestStart("m", "p");
+  c.set(40); a.messageEnd(assistant({ stopReason: "error" }));
+  workers.clearSettledFailures();
+  snapshot = workers.snapshot();
+  assert.equal(snapshot.health, "error", "a running worker's failure is not the parent's to clear");
+  assert.equal(snapshot.recentErrors.find(({ workerId }) => workerId === "b2").cleared, true,
+    "the idle worker that was never resumed no longer holds the indicator red");
+  a.settleActivity(); a.endRun("error");
+  assert.equal(workers.snapshot().recentErrors.filter(({ workerId, cleared }) => workerId === "a7" && !cleared).length, 1,
+    "a failed response and its failed Run are one failure");
+  a.dispose();
+  snapshot = workers.snapshot();
+  assert.equal(snapshot.health, "idle");
+  assert(snapshot.recentErrors.every(({ cleared }) => cleared), "retired failures remain as cleared history");
 });
 
 test("a rejected Run is deliberate failure evidence without invented model work", () => {

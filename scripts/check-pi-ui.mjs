@@ -480,7 +480,7 @@ for (const mode of ["regular", "fullscreen"]) test(`footer input parentheses sho
     ]) {
       entry.message.usage = reported;
       const line = mounted.line();
-      assert(line.includes(`↑ ${expected} · ↓ 20 · $0.250`), line);
+      assert(line.includes(`↑${expected} ↓20 $0.250`), line);
     }
   } finally { mounted.footer.dispose(); }
 });
@@ -616,8 +616,8 @@ test("native SDK UsageEntries, including unknown kinds, match session totals wit
     const line = mounted.line(), lines = mounted.overlayLines();
     // Cache reads and writes still count toward prompt totals and the hit-rate
     // denominator; only the hit rate is shown inside the footer parentheses.
-    assert(line.includes(`↑ ${prompt} (25.2%)`), line);
-    assert(line.includes(`↓ ${native.tokens.output}`), line);
+    assert(line.includes(`↑${prompt} (25.2%)`), line);
+    assert(line.includes(`↓${native.tokens.output}`), line);
     assert(line.includes(`$${native.cost.toFixed(3)}`), line);
     assert.deepEqual(spendKeys(lines), ["model", "shared-model", "tools", "main · compact/summaries", "shared-model", "warm-only", "total"]);
     const cells = (line) => line.replace(/^│\s*/, "").replace(/\s*│$/, "").split(/\s{2,}/);
@@ -1156,7 +1156,7 @@ test("the worker indicator sits in the corner and hands its clicks to the harnes
     for (const columns of [300, 120]) {
       mounted.tui.terminal.columns = columns;
       const line = mounted.line(columns);
-      assert(line.endsWith("lead/fixture-balanced ▴"), `pinned to the far right: ${line}`);
+      assert(line.endsWith("lead/fixture-balanced"), `pinned to the far right: ${line}`);
       assert(!line.includes("delegation:"), "the dock shows the mode and preset without its label");
       assert(line.indexOf("OTHER") < line.indexOf("fixture-balanced"), "after every other status");
       claimed.length = 0;
@@ -1179,11 +1179,11 @@ test("the worker indicator sits in the corner and hands its clicks to the harnes
     claim = false;
     mounted.clickFooter(mounted.line().length - 1);
     assert.equal(mounted.visible().length, 1, "with no harness to claim it, the corner still opens usage");
-    // Narrowing sheds usage before the worker control; its drawn caret still
-    // belongs to the indicator, rather than a clipped off-screen hit region.
+    // Narrowing shortens the worker control rather than clipping it; its last
+    // drawn cell still belongs to the indicator, not an off-screen hit region.
     const narrow = 40;
     const cut = stripVTControlCharacters(mounted.line(narrow));
-    assert(cut.endsWith(" ▴"), cut);
+    assert(/ · lead\/\S*…$/.test(cut), cut);
     claimed.length = 0;
     mounted.clickFooter(narrow - 1);
     assert.deepEqual(claimed, [WORKER_PRESET_INDICATOR]);
@@ -1819,7 +1819,7 @@ test("approval sits to the right of worker routing in the footer's corner", asyn
   const off = mounted.f.pi.events.on(FOOTER_INDICATOR_CLICK_EVENT, (click) => { claimed.push(click.key); click.handled = true; });
   try {
     const line = mounted.line();
-    assert(line.endsWith("OTHER · fixture-balanced ▴ · jev+sub ▴"), line);
+    assert(line.endsWith("OTHER · fixture-balanced · jev+sub"), line);
     mounted.clickFooter(line.indexOf("jev+sub"));
     assert.deepEqual(claimed, ["approval"]);
   } finally { off(); mounted.footer.dispose(); }
@@ -1841,13 +1841,13 @@ test("compact corner indicators preserve styled values and route clicks by their
       mounted.tui.terminal.columns = columns;
       const painted = mounted.line(columns);
       const line = stripVTControlCharacters(painted);
-      assert(line.endsWith("workers: unrelated · fixture-strong ▴ · YOLO ▴"), line);
+      assert(line.endsWith("workers: unrelated · fixture-strong · YOLO"), line);
       assert(painted.includes("\x1b[31m\x1b[1mYOLO\x1b[22m\x1b[39m"), "YOLO keeps its red/bold styling");
       claimed.length = 0;
       for (const label of ["YOLO", "fixture-strong"]) {
         const start = line.indexOf(label);
         mounted.clickFooter(start);
-        mounted.clickFooter(start + visibleWidth(label) + 1); // The caret is clickable too.
+        mounted.clickFooter(start + visibleWidth(label) - 1);
       }
       assert.deepEqual(claimed, ["approval", "approval", WORKER_PRESET_INDICATOR, WORKER_PRESET_INDICATOR]);
       assert.deepEqual(mounted.visible(), [], "claimed clicks never open the usage panel");
@@ -1855,13 +1855,13 @@ test("compact corner indicators preserve styled values and route clicks by their
     assert.equal(statuses.get("approval"), yolo, "only the footer presentation changed, not published statuses");
     statuses.set("approval", "manual");
     statuses.set(WORKER_PRESET_INDICATOR, "custom@v2");
-    assert(mounted.line().endsWith("custom@v2 ▴ · manual ▴"), "already compact values pass through unchanged");
+    assert(mounted.line().endsWith("custom@v2 · manual"), "already compact values pass through unchanged");
   } finally { off(); mounted.footer.dispose(); }
 });
 
 test("footer keeps worker/approval/health order and the health edge stable across status changes", async () => {
   const theme = { fg: (_color, text) => text };
-  const statuses = new Map([[HEALTH_INDICATOR, "○ idle"], ["approval", "approval: jev+sub"],
+  const statuses = new Map([[HEALTH_INDICATOR, "●"], ["approval", "approval: jev+sub"],
     [WORKER_PRESET_INDICATOR, "workers: off"]]);
   const mounted = await mountFooter({ mode: "fullscreen", statuses });
   try {
@@ -1871,7 +1871,7 @@ test("footer keeps worker/approval/health order and the health edge stable acros
         const health = healthStatus(theme, state);
         statuses.set(HEALTH_INDICATOR, health);
         const line = mounted.line(120);
-        assert(line.endsWith(`${preset} ▴ · jev+sub ▴ · ${health} ▴`), line);
+        assert(line.endsWith(`${preset} · jev+sub · ${health}`), line);
         assert.equal(visibleWidth(line), 120, "health remains flush right");
       }
     }
@@ -1880,20 +1880,20 @@ test("footer keeps worker/approval/health order and the health edge stable acros
 
 test("footer sheds cache detail before complete usage figures or corner controls", async () => {
   const statuses = new Map([[WORKER_PRESET_INDICATOR, "workers: fixture-balanced"],
-    ["approval", "approval: manual"], [HEALTH_INDICATOR, "○ idle"]]);
+    ["approval", "approval: manual"], [HEALTH_INDICATOR, "●"]]);
   const mounted = await mountFooter({ mode: "fullscreen", statuses, entries: spendEntries });
   try {
     const full = mounted.line(300);
     const right = full.slice(full.indexOf("↑"));
     const narrow = stripVTControlCharacters(mounted.line(visibleWidth(right) - 1));
-    assert(narrow.endsWith("↑ 6.2k · ↓ 788 · $0.780 · fixture-balanced ▴ · manual ▴ · ○ idle ▴"), narrow);
+    assert(narrow.endsWith("↑6.2k ↓788 $0.780 · fixture-balanced · manual · ●"), narrow);
     assert.equal(mounted.line(300), full, "resize restores full cache detail");
   } finally { mounted.footer.dispose(); }
 });
 
 test("footer fitting stays bounded with any subset of pinned extensions in either renderer", async () => {
   const pinned = [[WORKER_PRESET_INDICATOR, "workers: custom-long-preset@v2"],
-    ["approval", "approval: jev+sub"], [HEALTH_INDICATOR, "? wait"]];
+    ["approval", "approval: jev+sub"], [HEALTH_INDICATOR, "●"]];
   for (const mode of ["fullscreen", "regular"]) for (let mask = 0; mask < 8; mask++) {
     const statuses = new Map([["other", "EXTERNAL_STATUS ".repeat(10)],
       ...pinned.filter((_entry, index) => mask & (1 << index))]);
@@ -1902,7 +1902,7 @@ test("footer fitting stays bounded with any subset of pinned extensions in eithe
       for (let columns = 0; columns <= 120; columns++) {
         const line = stripVTControlCharacters(mounted.line(columns));
         assert(visibleWidth(line) <= columns, `${mode}/${mask}/${columns}: ${line}`);
-        if (mask & 4 && columns >= 8) assert(line.endsWith("? wait ▴") || line.endsWith("? wait") || line.endsWith("?"), line);
+        if (mask & 4 && columns >= 1) assert(line.endsWith("●"), line);
         if (mask & 2 && columns >= 22) assert(line.includes("jev+sub"), "ordinary Pi also retains approval");
       }
     } finally { mounted.footer.dispose(); }
@@ -1930,8 +1930,7 @@ test("narrow footer preserves styled approval and health, with exact ANSI/CJK cl
         assert.deepEqual(claimed, [], "no stale indicator hit after a zero-width paint");
         continue;
       }
-      if (columns >= 18) assert(line.endsWith("! error ▴"), `${columns}: ${line}`);
-      else assert(line.endsWith("!"), `${columns}: ${line}`);
+      assert(line.endsWith("●"), `${columns}: ${line}`);
       mounted.clickFooter(columns - 1);
       assert.deepEqual(claimed, [HEALTH_INDICATOR], "rightmost drawn cell always routes to health");
       if (columns >= 8) {
@@ -1944,11 +1943,11 @@ test("narrow footer preserves styled approval and health, with exact ANSI/CJK cl
       }
       if (line.includes("研究")) {
         const start = visibleWidth(line.slice(0, line.indexOf("研究")));
-        const end = visibleWidth(line.slice(0, line.indexOf(" ▴", line.indexOf("研究")))) + 2;
+        const end = visibleWidth(line.slice(0, line.indexOf(" · ", line.indexOf("研究"))));
         claimed.length = 0;
         for (let x = start; x < end; x++) mounted.clickFooter(x);
         assert(claimed.length > 0 && claimed.every((key) => key === WORKER_PRESET_INDICATOR),
-          "wide glyphs, a shortened label's ellipsis, and its caret all belong to the worker control");
+          "wide glyphs and a shortened label's ellipsis all belong to the worker control");
         if (columns < 500) assert(line.slice(0, line.indexOf("YOLO")).includes("…"), "long preset is visibly shortened");
       } else assert(!claimed.includes(WORKER_PRESET_INDICATOR), "hidden worker control has no phantom hit");
       if (columns === 500) assert(line.includes("研究团队".repeat(30) + "@v2"), "expansion restores the original label");
@@ -1956,6 +1955,10 @@ test("narrow footer preserves styled approval and health, with exact ANSI/CJK cl
     assert.deepEqual([...statuses], before, "fitting never mutates published status values");
   } finally { off(); mounted.footer.dispose(); }
 });
+
+/** Health is one dot whose color is the state; the Stats fixture's theme spells
+ * that color out so assertions can tell the states apart. */
+const DOT = Object.freeze({ busy: "●accent", waiting: "●warning", error: "●error", idle: "●dim" });
 
 async function mountStats(mode = "fullscreen", hasUI = true) {
   const f = fixture();
@@ -1965,7 +1968,7 @@ async function mountStats(mode = "fullscreen", hasUI = true) {
   const host = mode === "fullscreen" ? tui : { mode, terminal, render: () => [], requestRender() {} };
   const editor = { render: () => [], invalidate() {}, handleInput() {} };
   tui.setFocus(editor);
-  const theme = { fg: (_role, text) => text, bold: (text) => text, bg: (_role, text) => text };
+  const theme = { fg: (role, text) => text === "●" ? `●${role}` : text, bold: (text) => text, bg: (_role, text) => text };
   const statuses = new Map([["approval", "approval: manual"], [WORKER_PRESET_INDICATOR, "workers: fixture-strong"]]);
   const commands = new Map(), notices = [];
   f.pi.registerCommand = (name, command) => commands.set(name, command);
@@ -2001,19 +2004,16 @@ async function mountStats(mode = "fullscreen", hasUI = true) {
   };
 }
 
-test("health is a compact attention indicator, not a fabricated green performance score", () => {
+test("health is one dot whose color is the attention state, not a fabricated green score", () => {
   const theme = { fg: (role, text) => `${role}:${text}` };
-  assert.equal(healthStatus(theme, "unknown"), "dim:○ —");
-  assert.equal(healthStatus(theme, "idle"), "dim:○ idle");
-  assert.equal(healthStatus(theme, "busy"), "accent:● busy");
-  assert.equal(healthStatus(theme, "waiting"), "warning:? wait");
-  assert.equal(healthStatus(theme, "error"), "error:! error");
+  assert.deepEqual(["unknown", "idle", "busy", "waiting", "error"].map((health) => healthStatus(theme, health)),
+    ["dim:●", "dim:●", "accent:●", "warning:●", "error:●"]);
 });
 
 test("the health footer opens a separate Stats view and closes without popping another overlay", async () => {
   const m = await mountStats();
   try {
-    assert(m.line().endsWith("fixture-strong ▴ · manual ▴ · ○ — ▴"));
+    assert(m.line().endsWith(`fixture-strong · manual · ${DOT.idle}`));
     assert.equal(m.click().handled, true);
     m.paint();
     const pane = m.pane();
@@ -2041,7 +2041,7 @@ test("Stats yields to approvals and other dialogs, and never reopens from a stal
     m.click();
     m.f.pi.events.emit("permissions:ui_prompt", { requestId: "ask" });
     assert.equal(m.pane(), undefined);
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), "? wait");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.waiting);
     m.click();
     assert.equal(m.pane(), undefined, "cannot cover an active approval");
     m.f.pi.events.emit("permissions:decision", { requestId: "ask" });
@@ -2062,7 +2062,7 @@ test("Stats session replacement clears live observations and shutdown retires li
   const m = await mountStats();
   try {
     await m.f.emit("agent_start");
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), "● busy");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.busy);
     await m.f.emit("turn_start", { turnIndex: 0 });
     await m.f.emit("before_provider_request", { payload: {} });
     await m.f.emit("message_update", { message: { role: "assistant" }, assistantMessageEvent: { type: "text_delta", delta: "NOT_RETAINED" } });
@@ -2072,7 +2072,7 @@ test("Stats session replacement clears live observations and shutdown retires li
     m.click(); assert(m.pane());
     await m.f.emit("session_start");
     assert.equal(m.pane(), undefined);
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), "○ —");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.idle);
     assert.equal(m.f.listeners.get(FOOTER_INDICATOR_CLICK_EVENT).size, 1, "replacement never duplicates the toggle");
     m.click(); assert(m.pane());
     await m.f.emit("session_shutdown");
@@ -2095,7 +2095,7 @@ test("regular Stats uses a non-modal summary and no-UI sessions mount nothing", 
       await m.commands.get("stats").handler("", m.f.ctx);
       assert.equal(m.pane(), undefined);
       assert.equal(m.notices.length, hasUI ? 1 : 0);
-      if (hasUI) assert.match(m.notices[0].message, /main session and workers since opening/);
+      if (hasUI) assert.match(m.notices[0].message, /main session \+ managed workers, since opening\n\nTime +Main +Workers\nBusy /);
       else assert.equal(m.statuses.has(HEALTH_INDICATOR), false);
     } finally { await m.close(); }
   }
@@ -2114,7 +2114,7 @@ test("Stats includes owned workers, retains released metrics and rejects foreign
     assert(sink);
     assert.equal(attach("stats-root", "agent-a"), sink, "duplicate attachment does not reset or duplicate a collector");
     sink.beginRun();
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), "● busy", "a worker keeps health busy even while the parent is idle");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.busy, "a worker keeps health busy even while the parent is idle");
     sink.startActivity();
     sink.requestStart("requested", "fixture");
     sink.delta("thinking_delta");
@@ -2122,19 +2122,19 @@ test("Stats includes owned workers, retains released metrics and rejects foreign
       stopReason: "stop", usage: { output: 20, cost: { total: 0.03 } } });
     sink.toolStart("call-a", "read"); sink.toolEnd("call-a", false);
     sink.endRun("success");
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), "○ idle");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.idle);
     m.click(); m.pane().handleInput("2");
-    assert.match(m.pane().render(140).join("\n"), /\[worker\] fixture\/worker-actual.*1 req/);
+    assert.match(m.pane().render(140).join("\n"), /Workers[\s│]*fixture\/worker-actual +1 /);
     sink.dispose(); sink.dispose();
     const saved = m.pane().render(140).join("\n");
-    assert.match(saved, /\[worker\] fixture\/worker-actual.*1 req/, "release retains historical totals, not the SDK session");
+    assert.match(saved, /Workers[\s│]*fixture\/worker-actual +1 /, "release retains historical totals, not the SDK session");
     sink.beginRun(); sink.requestStart("STALE_MODEL", "fixture");
     sink.messageEnd({ role: "assistant", model: "STALE_MODEL", stopReason: "stop", usage: { output: 999 } });
     assert.doesNotMatch(m.pane().render(140).join("\n"), /STALE_MODEL/);
     const late = attach("stats-root", "agent-b"); late.beginRun();
     await m.f.emit("session_start");
     late.requestStart("OLD_WINDOW", "fixture"); late.endRun("error"); late.dispose();
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), "○ —", "callbacks from the old window cannot revive worker health");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.idle, "callbacks from the old window cannot revive worker health");
     m.click(); m.pane().handleInput("2");
     assert.doesNotMatch(m.pane().render(140).join("\n"), /worker-actual|OLD_WINDOW/);
   } finally { await m.close(); }
@@ -2160,27 +2160,88 @@ test("health transitions and streaming never build detail snapshots; tool errors
     await m.f.emit("tool_execution_start", { toolCallId: "check", toolName: "bash" });
     await m.f.emit("tool_execution_end", { toolCallId: "check", isError: true });
     sink.toolStart("worker-check", "bash"); sink.toolEnd("worker-check", true);
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), "● busy", "neither tool error is a fatal health signal");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.busy, "neither tool error is a fatal health signal");
     const failure = (model) => ({ role: "assistant", provider: "fixture", model, stopReason: "error" });
     await m.f.emit("message_end", { message: failure("requested") });
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), "! error");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.error);
     m.f.pi.events.emit("permissions:ui_prompt", { requestId: "permission" });
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), "? wait");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.waiting);
     m.f.pi.events.emit("permissions:decision", { requestId: "permission", decision: "deny" });
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), "! error");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.error);
     await m.f.emit("agent_settled"); await m.f.emit("agent_start"); await m.f.emit("agent_settled");
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), "● busy", "worker is still running after parent recovery");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.busy, "worker is still running after parent recovery");
     sink.messageEnd(failure("worker")); sink.endRun("error");
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), "! error", "actual worker failure is immediately visible");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.error, "actual worker failure is immediately visible");
     t.mock.timers.tick(3000);
-    sink.beginRun(); assert.equal(m.statuses.get(HEALTH_INDICATOR), "● busy");
-    sink.endRun("success"); assert.equal(m.statuses.get(HEALTH_INDICATOR), "○ idle");
+    sink.beginRun(); assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.busy);
+    sink.endRun("success"); assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.idle);
     assert.deepEqual([mainReads, workerReads], [0, 0], "streaming, transitions and refresh use only cheap health reads");
     m.click(); m.pane().handleInput("3");
     const details = m.pane().render(140).join("\n");
-    assert.match(details, /\[main\] bash/); assert.match(details, /\[worker\] bash/);
-    assert.equal((details.match(/1 errors/g) ?? []).length, 2, "both tool error counts remain visible");
+    assert.match(details, /Main[\s│]*bash +1 +1 /); assert.match(details, /Workers[\s│]*bash +1 +1 /,
+      "both tool error counts remain visible");
     assert(mainReads > 0 && workerReads > 0, "full snapshots are requested when the details view actually paints");
+  } finally { await m.close(); }
+});
+
+test("red health clears once something succeeds after it, and Stats says what failed", async () => {
+  const m = await mountStats();
+  try {
+    const request = { parentId: "stats-root", workerId: "a7" };
+    m.f.pi.events.emit(STATS_WORKER_ATTACH, request);
+    const sink = request.sink;
+    sink.beginRun(); sink.startActivity(); sink.requestStart("glm", "zai");
+    sink.messageEnd({ role: "assistant", provider: "zai", model: "glm", stopReason: "error", errorMessage: "429 rate limited" });
+    sink.settleActivity(); sink.endRun("error");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.error);
+
+    // The parent's next run retries a failed response and then succeeds.
+    const response = (stopReason, errorMessage) => ({ message: { role: "assistant", provider: "fixture", model: "requested",
+      stopReason, ...(errorMessage ? { errorMessage } : {}), usage: { output: 1, cost: { total: 0 } } } });
+    await m.f.emit("agent_start");
+    await m.f.emit("turn_start", { turnIndex: 0 }); await m.f.emit("message_end", response("error", "overloaded"));
+    await m.f.emit("turn_start", { turnIndex: 1 }); await m.f.emit("message_end", response("stop"));
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.error, "the idle worker's failure still stands mid-run");
+    m.click(); m.paint();
+    const details = m.pane().render(140).join("\n");
+    assert.match(details, /! a7 +\S.* +zai\/glm +429 rate limited/);
+    assert.match(details, /· main +\S.* +fixture\/requested +overloaded/, "the retried main failure is already cleared");
+    m.pane().handleInput("\u001b");
+    await m.f.emit("agent_settled");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.idle, "a successful parent run clears a worker that was never resumed");
+
+    // A run that ends failed stays red after it settles, until something succeeds.
+    await m.f.emit("agent_start");
+    await m.f.emit("turn_start", { turnIndex: 0 }); await m.f.emit("message_end", response("error"));
+    await m.f.emit("agent_settled");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.error);
+  } finally { await m.close(); }
+});
+
+test("an aborted parent run keeps a worker failure red, even after its successful toolUse response", async () => {
+  const m = await mountStats();
+  try {
+    const request = { parentId: "stats-root", workerId: "a7" };
+    m.f.pi.events.emit(STATS_WORKER_ATTACH, request);
+    const sink = request.sink;
+    const response = (stopReason) => ({ message: { role: "assistant", provider: "fixture", model: "requested",
+      stopReason, usage: { output: 1, cost: { total: 0 } } } });
+    await m.f.emit("agent_start");
+    await m.f.emit("turn_start", { turnIndex: 0 }); await m.f.emit("message_end", response("toolUse"));
+    await m.f.emit("tool_execution_start", { toolCallId: "wait", toolName: "agent_wait", args: {} });
+    sink.beginRun(); sink.startActivity(); sink.requestStart("glm", "zai");
+    sink.messageEnd({ role: "assistant", provider: "zai", model: "glm", stopReason: "error", errorMessage: "429 rate limited" });
+    sink.settleActivity(); sink.endRun("error");
+    // Esc: the wait ends aborted and the SDK reports the run outside any request.
+    await m.f.emit("tool_execution_end", { toolCallId: "wait", toolName: "agent_wait", result: {}, isError: true });
+    await m.f.emit("message_end", response("aborted"));
+    await m.f.emit("agent_settled");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.error, "nothing has seen the failure succeed or been answered");
+
+    await m.f.emit("agent_start");
+    await m.f.emit("turn_start", { turnIndex: 0 }); await m.f.emit("message_end", response("stop"));
+    await m.f.emit("agent_settled");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.idle, "the next run that answers clears it");
   } finally { await m.close(); }
 });
 

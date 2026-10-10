@@ -89,6 +89,21 @@ test("worker observer lazily attaches and forwards literal metadata only", () =>
   ]);
 });
 
+test("only a failed response forwards provider error text, as one bounded line", () => {
+  const { sink, calls } = recordingSink();
+  const { observer, emit } = boundObserver({ emit(_name, payload) { payload.sink = sink; } });
+  observer.beginRun();
+  const failed = (errorMessage) => ({ role: "assistant", provider: "p", model: "m", stopReason: "error", errorMessage });
+  emit("message_end", { message: failed(`429 rate\nlimited\x1b[31m ${"x".repeat(400)}`) });
+  emit("message_end", { message: failed({ toString() { throw new Error("not a string"); } }) });
+  emit("message_end", { message: failed(" \n\t ") });
+  const forwarded = calls.filter(([name]) => name === "messageEnd").map(([, message]) => message.errorMessage);
+  assert.equal(forwarded.length, 3);
+  assert.match(forwarded[0], /^429 rate limited x+…$/, "line breaks separate words; escape sequences do not cross");
+  assert.equal(Array.from(forwarded[0]).length, 240);
+  assert.deepEqual(forwarded.slice(1), [undefined, undefined], "non-text or blank errors carry nothing");
+});
+
 test("a worker observer is a no-op when the parent has no Stats listener", () => {
   const emitted = [];
   const { observer, emit } = boundObserver({ emit(name, payload) { emitted.push([name, payload]); }, on() {} });

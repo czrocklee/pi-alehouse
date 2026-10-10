@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export type SessionHealth = "unknown" | "idle" | "busy" | "waiting" | "error";
@@ -41,6 +42,19 @@ export interface SessionToolStats {
   partial: boolean;
 }
 
+/** One failed response, kept so the details view can say what the red indicator means. */
+export interface SessionErrorStats {
+  /** Age of the failure; the collector keeps no wall timestamps. */
+  ageMs: number;
+  provider?: string;
+  /** Model that answered, or that was requested; omitted for a Run-level failure. */
+  model?: string;
+  /** The provider's error text, one bounded line. Omitted when none was reported. */
+  message?: string;
+  /** No longer red: a later response succeeded, or a later run began. */
+  cleared: boolean;
+}
+
 export interface SessionStatsSnapshot {
   /** This collector never backfills history and covers one instrumented session. */
   scope: "foreground-observed";
@@ -74,6 +88,8 @@ export interface SessionStatsSnapshot {
   partial: boolean;
   models: SessionModelStats[];
   tools: SessionToolStats[];
+  /** Newest first, at most MAX_RECENT_ERRORS. Counters keep the full totals. */
+  recentErrors: SessionErrorStats[];
 }
 
 interface ActiveRequest {
@@ -121,6 +137,13 @@ const MAX_ID_LENGTH = 512;
 const MAX_NUMBER = Number.MAX_SAFE_INTEGER;
 const OVERFLOW = "(other)";
 const UNKNOWN = "(unknown)";
+export const MAX_RECENT_ERRORS = 5;
+/** Provider error text is longer than a name; the worker bridge uses the same bound. */
+export const MAX_ERROR_LENGTH = 240;
+/** A settled response. error/aborted are not, and neither is one that never ended. */
+const SUCCESSFUL_STOPS = new Set(["stop", "length", "toolUse"]);
+/** A run that ends well ends on an answer; after toolUse another turn was due. */
+const FINAL_STOPS = new Set(["stop", "length"]);
 
 const LIMITATIONS = Object.freeze([
   "Current observation window only; no historical backfill.",
@@ -140,21 +163,22 @@ function addBounded(left: number, right: number): number {
   return Math.min(MAX_NUMBER, left + right);
 }
 
-function label(value: unknown, fallback = UNKNOWN): string {
+/** One display line: escape sequences go, and a line break still separates words. */
+export function label(value: unknown, fallback = UNKNOWN, max = MAX_LABEL_LENGTH): string {
   if (typeof value !== "string") return fallback;
-  const clean = Array.from(value)
-    .filter((character) => {
+  const clean = Array.from(stripVTControlCharacters(value))
+    .map((character) => {
       const point = character.codePointAt(0) ?? 0;
-      return point >= 0x20 && point !== 0x7f;
+      return point < 0x20 || point === 0x7f ? " " : character;
     })
     .join("")
     .replace(/\s+/g, " ")
     .trim();
   if (!clean) return fallback;
   const characters = Array.from(clean);
-  return characters.length <= MAX_LABEL_LENGTH
+  return characters.length <= max
     ? clean
-    : `${characters.slice(0, MAX_LABEL_LENGTH - 1).join("")}…`;
+    : `${characters.slice(0, max - 1).join("")}…`;
 }
 
 function identifier(value: unknown): string | undefined {
@@ -185,9 +209,10 @@ function cloneTool(value: ToolAggregate): ToolAggregate {
  * produce negative durations. The default deliberately uses performance.now(),
  * never wall-clock time.
  *
- * Provider-error health is latched through the current foreground activity and recovers
- * deliberately at the next startActivity(). A pending approval has display
- * precedence because it is immediately actionable.
+ * Provider errors and runs that fail between turns latch red health until a
+ * later response succeeds, including an SDK auto-retry of the failed one, or
+ * the next startActivity(). A pending approval has display precedence because
+ * it is immediately actionable.
  */
 export class SessionStats {
   readonly #clock: () => number;
@@ -198,6 +223,12 @@ export class SessionStats {
   #busyMs = 0;
   #hasActivityEvidence = false;
   #errorLatched = false;
+  /** Whether the latest finished response succeeded; an unfinished one did not. */
+  #lastResponseSucceeded = false;
+  /** stopReason of the current run's latest assistant message, inside a request or not. */
+  #runStop: unknown;
+  #lastRunSucceeded = false;
+  readonly #recentErrors: { at: number; provider?: string; model: string; message?: string; cleared: boolean }[] = [];
   #request?: ActiveRequest;
   readonly #activeTools = new Map<string, ActiveTool>();
   readonly #pendingApprovals = new Set<string>();
@@ -248,15 +279,37 @@ export class SessionStats {
       this.#activityStartedAt !== undefined ? "busy" : this.#hasActivityEvidence ? "idle" : "unknown";
   }
 
+  /** Constant-time: whether the latest finished response succeeded. */
+  get lastResponseSucceeded(): boolean {
+    return this.#lastResponseSucceeded;
+  }
+
+  /**
+   * Constant-time: whether the latest settled run ended on a final answer.
+   * An aborted or failed run did not, and neither did one cut short after a
+   * successful toolUse response: its next turn never answered.
+   */
+  get lastRunSucceeded(): boolean {
+    return this.#lastRunSucceeded;
+  }
+
   startActivity(): void {
     const now = this.#now();
     this.#touch(now);
     if (this.#activityStartedAt !== undefined) return;
     this.#activityStartedAt = now;
     this.#hasActivityEvidence = true;
-    // A new foreground run is the deliberate recovery boundary. Errors remain
-    // visible after settlement and are not erased by unrelated successful tools.
+    this.#lastResponseSucceeded = false;
+    this.#runStop = undefined;
+    this.#lastRunSucceeded = false;
+    // A new foreground run is a recovery boundary. Errors remain visible after
+    // settlement and are not erased by unrelated successful tools.
+    this.#recover();
+  }
+
+  #recover(): void {
     this.#errorLatched = false;
+    for (const error of this.#recentErrors) error.cleared = true;
   }
 
   settleActivity(): void {
@@ -266,7 +319,9 @@ export class SessionStats {
     this.#busyMs = addBounded(this.#busyMs, this.#duration(this.#activityStartedAt, now));
     this.#activityStartedAt = undefined;
     if (this.#request) this.#finishRequest(undefined, now, true);
+    const cutShort = this.#activeTools.size > 0;
     for (const id of [...this.#activeTools.keys()]) this.#finishTool(id, false, now, true);
+    this.#lastRunSucceeded = !cutShort && typeof this.#runStop === "string" && FINAL_STOPS.has(this.#runStop);
     // Permission prompts belong to the parent UI, not the agent loop. A prompt
     // can outlive settlement (or originate while idle), so only its matching
     // decision or collector destruction may close it.
@@ -294,18 +349,51 @@ export class SessionStats {
   }
 
   messageEnd(message: unknown): void {
-    if (!this.#request) return;
+    if (!this.#request) {
+      // The SDK reports a run that threw as an aborted/error message outside
+      // any request; it still decides how the run ended.
+      if (this.#activityStartedAt !== undefined) this.#runFailure(message);
+      return;
+    }
     let role: unknown;
     try {
       role = record(message)?.role;
     } catch {
       this.#partial = true;
+      this.#runStop = undefined;
       return;
     }
     if (role !== "assistant") return;
     const now = this.#now();
     this.#touch(now);
     this.#finishRequest(message, now, false);
+  }
+
+  /**
+   * A throw between turns (finishTurn, compaction, the next turn's setup) is
+   * no request: no model counters, but an error is red and listed like one.
+   * An abort only ends the run.
+   */
+  #runFailure(message: unknown): void {
+    try {
+      const response = record(message);
+      if (response?.role !== "assistant") return;
+      this.#runStop = response.stopReason;
+      if (response.stopReason !== "error") return;
+      const now = this.#now();
+      this.#touch(now);
+      this.#lastResponseSucceeded = false;
+      this.#latch(now, label(response.provider, ""), label(response.responseModel ?? response.model),
+        label(response.errorMessage, "", MAX_ERROR_LENGTH));
+    } catch {
+      this.#runStop = undefined;
+    }
+  }
+
+  #latch(at: number, provider: string | undefined, model: string, message: string | undefined): void {
+    this.#errorLatched = true;
+    this.#recentErrors.unshift({ at, ...(provider ? { provider } : {}), model, ...(message ? { message } : {}), cleared: false });
+    this.#recentErrors.length = Math.min(this.#recentErrors.length, MAX_RECENT_ERRORS);
   }
 
   toolStart(id: string, name: string): void {
@@ -441,6 +529,7 @@ export class SessionStats {
     let provider = active.provider;
     let model = active.model;
     let stopReason: unknown;
+    let errorMessage: string | undefined;
     let outputTokens: number | undefined;
     let cost: number | undefined;
     let malformed = false;
@@ -453,6 +542,7 @@ export class SessionStats {
           provider = label(response.provider, provider ?? UNKNOWN);
           model = label(response.responseModel ?? response.model, model);
           stopReason = response.stopReason;
+          if (stopReason === "error") errorMessage = label(response.errorMessage, "", MAX_ERROR_LENGTH) || undefined;
           const usage = record(response.usage);
           outputTokens = finiteNonNegative(usage?.output);
           cost = finiteNonNegative(record(usage?.cost)?.total);
@@ -498,7 +588,11 @@ export class SessionStats {
       ? undefined
       : this.#duration(active.startedAt, active.firstTextAt);
 
-    if (isError) this.#errorLatched = true;
+    this.#runStop = stopReason;
+    this.#lastResponseSucceeded = typeof stopReason === "string" && SUCCESSFUL_STOPS.has(stopReason);
+    // A later success, e.g. the SDK's auto-retry of this very request, clears it.
+    if (this.#lastResponseSucceeded) this.#recover();
+    if (isError) this.#latch(now, provider, model, errorMessage);
     if (partial || aggregate.model === OVERFLOW) this.#partial = true;
   }
 
@@ -610,6 +704,7 @@ export class SessionStats {
       partial: this.#partial || Boolean(this.#request) || this.#activeTools.size > 0,
       models,
       tools,
+      recentErrors: this.#recentErrors.map(({ at, ...error }) => ({ ageMs: this.#duration(at, now), ...error })),
     };
   }
 }

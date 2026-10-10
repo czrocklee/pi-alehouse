@@ -102,7 +102,7 @@ omitted rather than painted unhittable.
 ## Delegation panel
 
 `Alt+S`, bare `/harness-preset`, or a click on the footer's delegation indicator
-(`co-worker/NAME ▴`, left of approval and health in the bottom-right group)
+(`co-worker/NAME`, left of approval and health in the bottom-right group)
 opens the Delegation panel; the same key or click closes it.
 
 Its top section is the [delegation mode](routing.md#delegation-mode): a slider
@@ -380,7 +380,9 @@ A click on a status segment is first offered to the extension that owns it over
 the harness claims its `harness-preset` indicator synchronously.  Unclaimed
 clicks, and clicks elsewhere on the row, toggle the usage breakdown.  The corner
 keeps a fixed left-to-right order: usage, delegation, approval, then health
-at the right edge (`co-worker/my-team ▴ · YOLO ▴ · ○ idle ▴`). Delegation and
+at the right edge (`↑1.2M (95.2%) ↓61k $4.810 · co-worker/my-team · YOLO · ●`).
+Usage figures are told apart by their own `↑` / `↓` / `$` and sit a space apart;
+`·` separates the controls, which carry no extra click marker. Delegation and
 approval show only their values, without the `delegation:` / `approval:` labels. The footer banner
 omits preset versions; the picker and Agent details retain their versions. Status keys and
 click routing stay unchanged; YOLO retains its red/bold warning styling.
@@ -388,9 +390,9 @@ click routing stay unchanged; YOLO retains its red/bold warning styling.
 Narrow rows first omit cache detail and shorten the delegation value with an
 ellipsis, then omit whole usage/other-status items and, if necessary, the
 delegation control.
-Approval and health have priority. At extreme widths their carets disappear,
-then health collapses to its existing glyph; if both still cannot fit, approval
-is omitted whole rather than displaying a misleading partial mode. Click spans
+Approval and health have priority. At extreme widths health keeps a single
+cell; if both still cannot fit, approval is omitted whole rather than displaying
+a misleading partial mode. Click spans
 follow exactly the fitted ANSI/CJK-aware layout on every paint and resize.
 Full values return when space permits. Popover opening order is independent of
 this fixed footer order.
@@ -410,25 +412,40 @@ do not authorize child web tools or change the permission boundary.
 ## Health and Stats
 
 The footer's health indicator stays at the far right, after routing and approval.
-It shows observed main/managed-worker activity and attention (`○ —` before
-observation, `○ idle`, `● busy`, `? wait`, `! error`), not a synthesized
+It is a single `●` whose color is the observed main/managed-worker activity and
+attention: dim when idle or before any activity, accent when busy, warning while
+an approval waits, error after a failure. It is not a synthesized
 performance grade. A worker can keep it busy while the parent is idle. Click it or use `/stats` to
-open a separate, centered view with Overview / Models / Tools tabs. Use
-`Tab` / `Shift+Tab` or `1` / `2` / `3` to switch views; arrows, paging and the
-wheel scroll; `Esc` or `×` closes. The small usage popover remains unchanged.
-Stats is not part of the bottom-right column and does not widen those popovers.
+open a separate, centered view with Overview / Models / Tools tabs. Each tab is
+a table: Overview sets Main beside Workers for time, current activity and the
+last main request, and Models and Tools give one aligned row per entry. The box
+is sized to its widest tab rather than a fixed share of the terminal, and its
+key hints sit in the bottom edge. Use `Tab` / `Shift+Tab` or `1` / `2` / `3` to
+switch views; arrows, paging and the wheel scroll; `Esc` or `×` closes. The
+small usage popover remains unchanged. Stats is not part of the bottom-right
+column and does not widen those popovers.
 
 Measurements cover the current parent observation window, including managed
 child LLMs and tools, but not historical sessions. Main wall/busy/idle time stays
-separate from summed worker busy durations. Models and Tools label `[main]` and
-`[worker]` separately; same-provider/model worker rows merge using TTFT sample
-counts and timed output/token totals, never averages of rates. Resume continues
+separate from summed worker busy durations. Models and Tools group rows under
+Main and Workers separately; same-provider/model worker rows merge using TTFT sample
+counts and timed output/token totals, never averages of rates. Model names carry
+their provider where there is room; when two rows in one group share a model ID,
+they always do, and optional columns give way first. Resume continues
 its worker's counters; release preserves bounded totals without retaining the
 child session. Release is permanent, so observed workers are Agent lifetimes,
-not Run counts. Red health is limited to provider failures or failed worker Runs
-(including port admission failure); tool errors remain counters only. Current
-worker failures clear on a new Run or retirement, while historical error counters
-remain visible. Models use the actual response model
+not Run counts. Red health is limited to provider failures, runs that fail between
+turns, or failed worker Runs (including port admission failure); aborts and tool
+errors remain counters only. Red clears when a later response succeeds (such as
+the SDK's auto-retry of the failed request), when the next main run or that
+worker's next Run starts, when a worker's Run succeeds, or on retirement. A parent
+run that ends on an answer also clears idle workers' failures, so a worker that
+is never resumed cannot hold the indicator red; an aborted parent run clears
+nothing, even after a successful tool-use response. Historical error counters
+remain visible, and Overview lists the five most recent failures with where
+(main or the worker's Agent ID), when, the model and the error text; `!` marks
+one still holding red, `·` one already cleared.
+Models use the actual response model
 when reported. TTFT is first nonempty effective output, which can be thinking or tool arguments;
 first-text time is separate. Latencies start at the foreground SDK `turn_start`
 and include preflight; they are not transport-only timings. Uncorrelated
@@ -441,7 +458,10 @@ Parent-side approval wait, including forwarded asks, is counted once. Worker
 usage forwarded in tool results is never re-counted as another model response.
 Compaction, cache warming and queue/initialization breakdowns remain outside
 this view. The optional worker hook sends metadata only, not prompts, deltas,
-arguments or tool output; teardown makes old sinks inert across parent windows.
+arguments or tool output. Its one piece of text is a failed response's provider
+error, the same text the failed Run already reports as `error`, cut to one line of
+at most 240 characters without control sequences. Teardown makes old sinks inert
+across parent windows.
 Health changes notify immediately using lightweight state reads. Streaming
 updates the collectors without rebuilding detail snapshots; table aggregation
 happens when the view paints, with a one-second numeric refresh.

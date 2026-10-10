@@ -42,12 +42,13 @@ function usage(output, cost = 0) {
 }
 
 function assistant({ provider = "provider", model = "requested", responseModel, output = 0,
-  cost = 0, stopReason = "stop", withUsage = true } = {}) {
+  cost = 0, stopReason = "stop", withUsage = true, errorMessage } = {}) {
   return {
     role: "assistant",
     provider,
     model,
     ...(responseModel ? { responseModel } : {}),
+    ...(errorMessage !== undefined ? { errorMessage } : {}),
     ...(withUsage ? { usage: usage(output, cost) } : {}),
     stopReason,
     // Content is deliberately ignored by the collector.
@@ -79,7 +80,7 @@ test("unknown health becomes busy then evidenced idle; busy is a foreground unio
     ],
     elapsedMs: 0, busyMs: 0, idleMs: 0, llmMs: 0, toolMs: 0, approvalMs: 0,
     activeRequests: 0, activeTools: 0, pendingApprovals: 0,
-    health: "unknown", observedActivity: false, partial: false, models: [], tools: [],
+    health: "unknown", observedActivity: false, partial: false, models: [], tools: [], recentErrors: [],
   });
   c.set(110); stats.startActivity();
   c.set(150); stats.startActivity(); // duplicate lifecycle notification does not double-count
@@ -257,23 +258,127 @@ test("TTFT means only observed samples, not zero-filled silent responses", () =>
   assert.equal(stats.snapshot().lastTtftMs, undefined);
 });
 
-test("failed retry attempts remain counted and partial; errors recover only next activity", () => {
+test("a failed attempt stays counted and partial; a later success clears its red health", () => {
   const { c, stats } = started();
   c.set(10); stats.requestStart("m", "p");
-  c.set(30); stats.messageEnd(assistant({ provider: "p", model: "m", output: 0, stopReason: "error" }));
+  c.set(30); stats.messageEnd(assistant({ provider: "p", model: "m", output: 0, stopReason: "error",
+    errorMessage: "529\n{\"type\":\"overloaded_error\"}\x1b[31m" }));
+  let snapshot = stats.snapshot();
+  assert.equal(snapshot.health, "error", "the failure is visible while the SDK backs off");
+  assert.equal(stats.lastResponseSucceeded, false);
+  assert.deepEqual(snapshot.recentErrors, [{ ageMs: 0, provider: "p", model: "m",
+    message: "529 {\"type\":\"overloaded_error\"}", cleared: false }], "one line, no control sequences");
+
   c.set(40); stats.requestStart("m", "p");
   c.set(70); stats.messageEnd(assistant({ provider: "p", model: "m", output: 3 }));
+  assert.equal(stats.health, "busy", "the SDK auto-retry succeeded, so nothing is still failing");
+  assert.equal(stats.lastResponseSucceeded, true);
   c.set(80); stats.settleActivity();
-  let snapshot = stats.snapshot();
-  assert.equal(snapshot.health, "error", "same-run success does not hide a failed attempt");
-  assert.equal(model(snapshot, "m").requests, 2);
-  assert.equal(model(snapshot, "m").errors, 1);
-  assert.equal(model(snapshot, "m").partial, true);
-  assert.match(snapshot.limitations.join(" "), /internal retries are not observable/i);
-
-  c.set(90); stats.startActivity();
   snapshot = stats.snapshot();
-  assert.equal(snapshot.health, "busy", "the next foreground activity is the recovery boundary");
+  assert.equal(snapshot.health, "idle");
+  assert.equal(model(snapshot, "m").requests, 2);
+  assert.equal(model(snapshot, "m").errors, 1, "the counter keeps the failed attempt");
+  assert.equal(model(snapshot, "m").partial, true);
+  assert.deepEqual(snapshot.recentErrors.map(({ ageMs, cleared }) => [ageMs, cleared]), [[50, true]],
+    "the history keeps it, cleared");
+  assert.match(snapshot.limitations.join(" "), /internal retries are not observable/i);
+});
+
+test("a run that ends failed stays red until the next run; aborts and tools neither clear nor latch", () => {
+  const { c, stats } = started();
+  c.set(10); stats.requestStart("m", "p");
+  c.set(20); stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "error" }));
+  stats.toolStart("t", "bash"); stats.toolEnd("t", false);
+  c.set(30); stats.requestStart("m", "p");
+  c.set(40); stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "aborted" }));
+  c.set(50); stats.settleActivity();
+  let snapshot = stats.snapshot();
+  assert.equal(snapshot.health, "error", "neither a successful tool nor an abort is a success after the failure");
+  assert.equal(stats.lastResponseSucceeded, false);
+  assert.equal(snapshot.recentErrors[0].message, undefined, "no reported text is not invented");
+
+  c.set(60); stats.startActivity();
+  snapshot = stats.snapshot();
+  assert.equal(snapshot.health, "busy", "the next foreground run starts from a clean slate");
+  assert.equal(snapshot.recentErrors[0].cleared, true);
+});
+
+test("a run succeeds only by ending on an answer, not on an earlier successful toolUse", () => {
+  const ended = (steps) => {
+    const { c, stats } = started();
+    c.set(10); stats.requestStart("m", "p");
+    c.set(20); stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "toolUse" }));
+    steps(stats, c);
+    c.set(90); stats.settleActivity();
+    return stats;
+  };
+  const answered = ended((stats, c) => {
+    c.set(30); stats.toolStart("t", "agent_wait"); stats.toolEnd("t", false);
+    c.set(40); stats.requestStart("m", "p");
+    c.set(50); stats.messageEnd(assistant({ provider: "p", model: "m" }));
+  });
+  assert.equal(answered.lastRunSucceeded, true);
+  for (const [why, steps] of [
+    ["aborted while a tool ran", (stats, c) => { c.set(30); stats.toolStart("t", "agent_wait"); }],
+    ["aborted between turns: the SDK reports it outside any request", (stats, c) => {
+      c.set(30); stats.toolStart("t", "agent_wait"); stats.toolEnd("t", true);
+      stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "aborted" }));
+    }],
+    ["aborted in the next request", (stats, c) => {
+      c.set(30); stats.toolStart("t", "agent_wait"); stats.toolEnd("t", true);
+      c.set(40); stats.requestStart("m", "p");
+      c.set(50); stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "aborted" }));
+    }],
+    ["ended without another turn", (stats, c) => { c.set(30); stats.toolStart("t", "agent_wait"); stats.toolEnd("t", false); }],
+    ["the next request never ended", (stats, c) => { c.set(40); stats.requestStart("m", "p"); }],
+  ]) {
+    assert.equal(ended(steps).lastRunSucceeded, false, why);
+  }
+  assert.equal(ended((stats, c) => { c.set(30); stats.toolStart("t", "agent_wait"); }).lastResponseSucceeded, true,
+    "the latest response did succeed, which is why it is no evidence for the run");
+  const { stats } = started();
+  assert.equal(stats.lastRunSucceeded, false, "a run that has not settled has not succeeded");
+});
+
+test("a run that throws between turns is red and listed; an abort there only ends the run", () => {
+  const { c, stats } = started();
+  c.set(10); stats.requestStart("m", "p");
+  c.set(20); stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "toolUse", output: 1 }));
+  c.set(30); stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "error",
+    errorMessage: "compaction failed:\n\x1b[31mcontext too large\x1b[0m" }));
+  assert.equal(stats.health, "error");
+  c.set(40); stats.settleActivity();
+  let snapshot = stats.snapshot();
+  assert.equal(snapshot.health, "error", "it stays red after the run settles");
+  assert.equal(stats.lastRunSucceeded, false);
+  assert.deepEqual(snapshot.recentErrors, [{ ageMs: 10, provider: "p", model: "m",
+    message: "compaction failed: context too large", cleared: false }]);
+  assert.equal(model(snapshot, "m").requests, 1, "no request was made, so no model counters");
+  assert.equal(model(snapshot, "m").errors, 0);
+
+  c.set(50); stats.startActivity();
+  c.set(60); stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "aborted", errorMessage: "aborted" }));
+  c.set(70); stats.settleActivity();
+  snapshot = stats.snapshot();
+  assert.equal(snapshot.health, "idle", "an abort is no failure");
+  assert.equal(snapshot.recentErrors.length, 1);
+  assert.equal(snapshot.recentErrors[0].cleared, true);
+
+  const idle = new SessionStats(clock(0).now);
+  idle.messageEnd(assistant({ stopReason: "error" }));
+  assert.equal(idle.health, "unknown", "outside a run nothing is observed");
+});
+
+test("recent errors are bounded, newest first, with long provider text cut to one bounded line", () => {
+  const { c, stats } = started();
+  for (let index = 0; index < 8; index++) {
+    c.set(index * 10); stats.requestStart(`m${index}`, "p");
+    stats.messageEnd(assistant({ provider: "p", model: `m${index}`, stopReason: "error", errorMessage: "x".repeat(1000) }));
+  }
+  const { recentErrors } = stats.snapshot();
+  assert.deepEqual(recentErrors.map(({ model }) => model), ["m7", "m6", "m5", "m4", "m3"]);
+  assert.equal(Array.from(recentErrors[0].message).length, 240);
+  assert(recentErrors[0].message.endsWith("…"));
 });
 
 test("aborted and superseded requests are retained as incomplete observations", () => {

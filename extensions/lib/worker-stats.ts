@@ -1,6 +1,10 @@
 import type { WorkerStatsMessage, WorkerStatsSink } from "../../lib/stats-protocol.mjs";
 import {
+  label,
+  MAX_ERROR_LENGTH,
+  MAX_RECENT_ERRORS,
   SessionStats,
+  type SessionErrorStats,
   type SessionHealth,
   type SessionModelStats,
   type SessionStatsSnapshot,
@@ -22,6 +26,12 @@ export interface WorkerStatsSnapshot {
   partial: boolean;
   models: SessionModelStats[];
   tools: SessionToolStats[];
+  /** Newest first across all workers, retired ones included. */
+  recentErrors: WorkerErrorStats[];
+}
+
+export interface WorkerErrorStats extends SessionErrorStats {
+  workerId: string;
 }
 
 interface ModelAggregate {
@@ -230,6 +240,9 @@ export class WorkerStats {
   #partial = false;
   #disposed = false;
   #notifiedHealth: SessionHealth = "unknown";
+  /** Failures outlive their worker's retirement here, but only as cleared history. */
+  readonly #recentErrors: { at: number; workerId: string; provider?: string; model?: string; message?: string;
+    cleared: boolean }[] = [];
 
   constructor(
     now: () => number = () => performance.now(),
@@ -317,8 +330,20 @@ export class WorkerStats {
         partial: true,
         models: publicModels(this.#models),
         tools: [...this.#tools.values()].map((value) => ({ ...value })),
+        recentErrors: this.#publicErrors(),
       };
     }
+  }
+
+  /**
+   * The parent's run settled successfully: it saw these failures and finished
+   * anyway. Clear idle workers' red health so a worker that is never resumed
+   * cannot hold the indicator red; a running worker is still deciding.
+   */
+  clearSettledFailures(): void {
+    if (this.#disposed) return;
+    for (const record of this.#workers.values()) if (!record.running) this.#clear(record);
+    this.#notify();
   }
 
   dispose(): void {
@@ -331,9 +356,33 @@ export class WorkerStats {
   #beginRun(record: WorkerRecord): void {
     if (this.#disposed || record.disposed || record.running) return;
     record.running = true;
-    // Failure is a latest-resident-run indicator; cumulative error counters stay.
-    record.failed = false;
+    // Failure is a latest-outcome indicator; cumulative error counters stay.
+    this.#clear(record);
     this.#notify();
+  }
+
+  #clear(record: WorkerRecord): void {
+    record.failed = false;
+    for (const error of this.#recentErrors) if (error.workerId === record.id) error.cleared = true;
+  }
+
+  #recordError(record: WorkerRecord, error: { provider?: string; model?: string; message?: string }): void {
+    record.failed = true;
+    this.#recentErrors.unshift({ at: this.#now(), workerId: record.id, ...error, cleared: false });
+    this.#recentErrors.length = Math.min(this.#recentErrors.length, MAX_RECENT_ERRORS);
+  }
+
+  #now(): number {
+    try {
+      return finiteNonNegative(this.#clock()) ?? 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  #publicErrors(): WorkerErrorStats[] {
+    const now = this.#now();
+    return this.#recentErrors.map(({ at, ...error }) => ({ ageMs: Math.max(0, now - at), ...error }));
   }
 
   #observe(record: WorkerRecord, operation: (stats: SessionStats) => void): void {
@@ -350,7 +399,16 @@ export class WorkerStats {
     if (this.#disposed || record.disposed || !record.running) return;
     try {
       record.stats.messageEnd(message);
-      if (message?.stopReason === "error") record.failed = true;
+      if (message?.stopReason === "error") {
+        const provider = label(message.provider, "");
+        const model = label(message.responseModel ?? message.model, "");
+        const text = label(message.errorMessage, "", MAX_ERROR_LENGTH);
+        this.#recordError(record, { ...(provider ? { provider } : {}), ...(model ? { model } : {}),
+          ...(text ? { message: text } : {}) });
+      } else if (record.stats.lastResponseSucceeded) {
+        // The child's SDK auto-retry recovered the failed request.
+        this.#clear(record);
+      }
     } catch {
       record.partial = true;
     }
@@ -372,7 +430,9 @@ export class WorkerStats {
     if (this.#disposed || record.disposed || !record.running) return;
     try {
       if (kind !== "success") record.partial = true;
-      if (kind === "error") record.failed = true;
+      // A Run can fail without any failed response, e.g. at admission.
+      if (kind === "error" && !record.failed) this.#recordError(record, { message: "Run failed without a provider error" });
+      if (kind === "success") this.#clear(record);
       if (kind !== "success" && kind !== "error" && kind !== "aborted") record.partial = true;
       // This is deliberately independent of a possibly missing SDK settlement.
       // SessionStats closes only spans that actually started and invents no usage.
@@ -397,6 +457,8 @@ export class WorkerStats {
       }
     }
     this.#workers.delete(record.id);
+    // Retired errors are counters and history, not sticky health.
+    this.#clear(record);
     try {
       this.#archive(record.stats.snapshot(), record.partial);
     } catch {
@@ -467,6 +529,7 @@ export class WorkerStats {
       partial,
       models: publicModels(models),
       tools: [...tools.values()].map((value) => ({ ...value })),
+      recentErrors: this.#publicErrors(),
     };
   }
 

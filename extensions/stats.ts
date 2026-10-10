@@ -7,18 +7,19 @@ import { FOOTER_INDICATOR_CLICK_EVENT, HEALTH_INDICATOR, HIDE_TRANSIENT_OVERLAYS
 import { bindStatsEvents, SessionStats, type SessionHealth } from "./lib/session-stats.ts";
 import { WorkerStats } from "./lib/worker-stats.ts";
 import { STATS_WORKER_ATTACH, type WorkerStatsAttachment } from "../lib/stats-protocol.mjs";
-import { StatsView, type StatsDashboardSnapshot } from "./lib/stats-view.ts";
+import { StatsView, statsSummary, type StatsDashboardSnapshot } from "./lib/stats-view.ts";
 
 const WIDGET_KEY = "stats-host";
 
-/** Activity/attention, not an invented green health score or latency threshold. */
+/** One dot whose color is the activity/attention state, not an invented green
+ * health score or latency threshold. The Stats view spells the state out. */
 export function healthStatus(theme: Pick<Theme, "fg">, health: SessionHealth): string {
   switch (health) {
-    case "busy": return theme.fg("accent", "● busy");
-    case "waiting": return theme.fg("warning", "? wait");
-    case "error": return theme.fg("error", "! error");
-    case "idle": return theme.fg("dim", "○ idle");
-    default: return theme.fg("dim", "○ —");
+    case "busy": return theme.fg("accent", "●");
+    case "waiting": return theme.fg("warning", "●");
+    case "error": return theme.fg("error", "●");
+    // Nothing running: idle, or nothing observed yet.
+    default: return theme.fg("dim", "●");
   }
 }
 
@@ -96,12 +97,9 @@ export default function statsExtension(pi: ExtensionAPI): void {
       // Regular-mode overlays get baked into terminal scrollback. A non-modal
       // summary is safer than occupying the shared approval prompt queue.
       const s = snapshot(stats, workers);
-      const seconds = (ms: number): string => `${(ms / 1000).toFixed(1)}s`;
-      ctx.ui.notify(`Stats · main session and workers since opening\n` +
-        `Open ${seconds(s.elapsedMs)} · active ${seconds(s.busyMs)} · idle ${seconds(s.idleMs)}\n` +
-        `LLM Σ ${seconds(s.llmMs)} · tools Σ ${seconds(s.toolMs)} (overlap) · approval ${seconds(s.approvalMs)}\n` +
-        `Workers: ${s.workers?.running ?? 0} running · LLM Σ ${seconds(s.workers?.llmMs ?? 0)} · tools Σ ${seconds(s.workers?.toolMs ?? 0)}\n` +
-        "The interactive Stats view needs fullscreen TUI. Compaction, cache warming and historical timing are not observed.", "info");
+      ctx.ui.notify(["Stats · main session + managed workers, since opening", "", ...statsSummary(s), "",
+        "LLM/tool sums overlap and are not wall time. Models and tools are in the fullscreen Stats view.",
+        "Compaction, cache warming and historical timing are not observed."].join("\n"), "info");
       return;
     }
     const context = ctx;
@@ -112,8 +110,10 @@ export default function statsExtension(pi: ExtensionAPI): void {
       snapshot: () => snapshot(observed, group), close });
     try {
       // A separate, readable details surface. It is deliberately NOT another
-      // member of the small bottom-right popover column.
-      const handle = host.showOverlay(view, { anchor: "center", width: "85%", maxHeight: "75%", minWidth: 40 });
+      // member of the small bottom-right popover column. Pi reads the width on
+      // every layout, so the box follows its tables and terminal resizes.
+      const handle = host.showOverlay(view, { anchor: "center", maxHeight: "75%", minWidth: 40,
+        get width() { return view.preferredWidth(Math.floor(host.terminal.columns * 0.85)); } });
       open = { view, handle };
       host.requestRender();
     } catch (error) { view.dispose(); throw error; }
@@ -162,6 +162,11 @@ export default function statsExtension(pi: ExtensionAPI): void {
       pi.events.on(HIDE_TRANSIENT_OVERLAYS_EVENT, closeCurrent),
       pi.events.on("permissions:ui_prompt", closeCurrent),
       pi.on("ui_prompt_start", () => { if (current()) { prompts++; close(); } }),
+      // Registered after bindStatsEvents, so the main collector has settled.
+      // A parent run that ends on an answer has seen its workers' failures; an
+      // idle worker that is never resumed must not hold the indicator red. An
+      // aborted run has seen nothing, even after a successful toolUse response.
+      pi.on("agent_settled", () => { if (current() && observed.lastRunSucceeded) group.clearSettledFailures(); }),
       pi.on("ui_prompt_end", () => { if (current()) prompts = Math.max(0, prompts - 1); }),
     ];
     if (context.mode === "tui" && context.hasUI) {
