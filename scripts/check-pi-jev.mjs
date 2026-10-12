@@ -920,7 +920,7 @@ for (const variant of ["intact", "prompt-at-limit", "prompt-over-limit", "wrong-
   h.setMode("enforce", false);
   check("a human No survives a round trip through manual", (await h.authorize(h.call("mode-denied-trip"))).kind, "deny");
   check("paused retries across mode changes never call the model", fetchCalls, 1);
-  check("mode changes are announced like Luna's", h.notices.at(-1)?.message,
+  check("mode changes are announced for the current session", h.notices.at(-1)?.message,
     "Jev approval: enforce root only (current session only)");
   h.live("Retry that exact inspection now.");
   check("only new direct input reopens it", await h.authorize(h.call("mode-denied-reopened")), { kind: "allow" });

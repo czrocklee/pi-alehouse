@@ -19,7 +19,7 @@ unset PI_AGENT_ROUTER_PARENT_SESSION_ID PI_SUBAGENT_PARENT_SESSION \
     OPENAI_API_KEY ANTHROPIC_API_KEY XAI_API_KEY GOOGLE_API_KEY
 export HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/home/.config" \
     PI_CODING_AGENT_DIR="$scratch/agent" PI_CODING_AGENT_SESSION_DIR="$scratch/sessions" \
-    PI_AUTO_APPROVAL_MODE=shadow PI_JEV_APPROVAL_MODE=shadow PI_OFFLINE=1 PI_TELEMETRY=0
+    PI_JEV_APPROVAL_MODE=shadow PI_OFFLINE=1 PI_TELEMETRY=0
 node "$ROOT_DIR/scripts/build.mjs"
 node "$ROOT_DIR/scripts/check-render-fixture.mjs" "$ROOT_DIR" "$scratch/agent" "$scratch/evidence" jev
 node "$ROOT_DIR/harness/test/support/managed-authority.mjs" "$ROOT_DIR" "$scratch/agent" "$scratch/evidence"

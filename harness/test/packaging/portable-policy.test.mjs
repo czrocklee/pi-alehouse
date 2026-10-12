@@ -13,7 +13,7 @@ test("full fixture alone receives exact synthetic executable allowances; readonl
   const scratch = mkdtempSync(join(tmpdir(), "alehouse-policy-lanes-"));
   t.after(() => rmSync(scratch, { recursive: true, force: true }));
   const original = json(join(repo, "test/policy/permissions.json"));
-  for (const lane of ["full", "readonly", "luna", "jev"]) {
+  for (const lane of ["full", "readonly", "jev"]) {
     const agent = join(scratch, lane), output = join(scratch, "evidence", lane);
     renderFixture(repo, agent, output, lane);
     const config = json(join(agent, "extensions/pi-permission-system/config.json"));

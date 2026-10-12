@@ -20,7 +20,6 @@ observations into public evidence.
 | Portable policy suite (separate from package tests) | Generated worker definitions, static guard, policy-aware grep and patched permission authority under synthetic controlled calls | OS sandboxing, arbitrary scripts/paths or live human authorization |
 | Controlled host integration suite (explicit invocation) | Built entrypoint, actual host SDK/loader, child tool allowlist, parent/researcher web isolation, footer/Stats/UI registration, lease and shutdown with synthetic provider/UI | Remote model use, safe reload, transactionally atomic cancellation or durable recovery |
 | Optional Jev controlled lane | Review provenance and forwarded asks with fabricated responses in isolated process; defer and no-key paths | Human authorization, calibrated judgments, permission grants for other contexts |
-| Optional Luna negative co-load lane | No unintended second authorizer in explicit harness process | Usable Luna automated review |
 | PTY/history probes | Selected terminal and journal behavior, negative reload/IO observations | Human-TUI acceptance, fsync/power-loss guarantees |
 
 Keep fixtures offline and output outside the checkout; never make real-model calls or copy Pi auth/session data into public reports. A controlled provider reports synthetic behavior only. In particular, SDK post-guard queue/message acceptance and unsupported live-Owner `/reload` must be tested as limitations, not relabelled safe because a selected schedule produced no post-cancel provider call. Only an actual controlled run can record an outcome. Permission authority selection must use the **built matched patched runtime**; a mutable global install or missing fixture is not a pass. A test report should distinguish failures, skipped checks and suites that matched zero tests.
@@ -156,7 +155,7 @@ excluded.
 - SDK/host: verified capabilities, controlled prompt/input races, natural-finish steer fallback, real SDK replacement confirmation, reader/editor web exclusion, researcher isolation and parent tool visibility.
 - Security: `reader` direct write ceiling, `editor` guarded writes, shell ask behavior, static guard and policy search, approval provenance/defer, and failure-closed readiness against the matched generated authority.
 - UI: permission dialog yield, widget/detail/picker/footer/Stats projection, overlay protocol, and non-atomic replacement warnings; scripted UI is not a person.
-- Negative/optional: unsafe-live-reload assertions and separately invoked Jev/Luna tests. A passed *negative* assertion documents an unsupported operation; it does not authorize that operation.
+- Negative/optional: unsafe-live-reload assertions and separately invoked Jev tests. A passed *negative* assertion documents an unsupported operation; it does not authorize that operation.
 
 ## Current evidence and gaps
 

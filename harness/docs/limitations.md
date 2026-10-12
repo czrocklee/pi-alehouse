@@ -23,7 +23,7 @@ public acceptance. Test reports must declare their own scope.
   target loading. Never `/reload` with an open Owner. Unconfirmed drain is not
   safe-exit evidence, and releasing all Agents is not Owner closure.
 - **Not implied:** npm publication, default `pi` delegation, a background
-  service, Luna authorization, remote model quality, real-provider trials,
+  service, remote model quality, real-provider trials,
   human UI acceptance, or deployment. Ordinary `pi` remains unchanged; the
   explicit launcher is not a hot-swappable backend for a running session.
 
@@ -284,10 +284,10 @@ this scope. No OS isolation or general inherited-environment guarantee follows.
 
 Automated review requires its external policy, key, complete current provenance,
 and supported context.  It can defer and leave a human ask; it is not calibrated
-model-quality evidence or a new grant authority.  Luna is not loaded by the
-normal launcher.  Context snapshots are bounded text, not history forks, and
-history/diagnostics may contain sensitive model content.  The harness does not
-copy credentials, although authorized real SDK use can refresh an auth file.
+model-quality evidence or a new grant authority.  Context snapshots are bounded
+text, not history forks, and history/diagnostics may contain sensitive model
+content.  The harness does not copy credentials, although authorized real SDK
+use can refresh an auth file.
 
 ## Task dispatch and validation scope
 

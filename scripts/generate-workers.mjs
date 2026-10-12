@@ -53,7 +53,7 @@ export function generateWorkers(output = join(packageRoot, "runtime"), root = pa
   cpSync(join(root, "extensions"), join(output, "policy"), { recursive: true });
   cpSync(join(root, "lib"), join(output, "lib"), { recursive: true });
   const marker = "/* @worker-policy@ */ {}";
-  for (const name of ["jev-auto-approval.ts", "luna-auto-approval.ts", "static-safety-guard.ts"]) {
+  for (const name of ["jev-auto-approval.ts", "static-safety-guard.ts"]) {
     const source = readFileSync(join(root, "extensions", name), "utf8");
     assert.equal(source.split(marker).length, 2, `Expected exactly one worker-policy marker: ${name}`);
     writeFileSync(join(output, "policy", name), source.replace(marker, JSON.stringify(rendered.metadata)));

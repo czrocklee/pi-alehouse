@@ -1311,7 +1311,6 @@ const yoloSet = () => globalThis[SESSION_YOLO_KEY] ?? new Set();
 test("approval choices follow the loaded judge, and yolo is always offered", () => {
   assert.deepEqual(approvalChoices(undefined).map((choice) => choice.id), ["manual", "yolo"]);
   assert.deepEqual(approvalChoices("jev").map((choice) => choice.label), ["manual", "jev", "jev + sub", "yolo"]);
-  assert.deepEqual(approvalChoices("luna").map((choice) => choice.label), ["manual", "luna", "luna + sub", "yolo"]);
   const jev = (mode, includeSubagents) => ({ judge: "jev", mode, includeSubagents, shown: true });
   assert.equal(currentChoice(undefined, false), "manual");
   assert.equal(currentChoice(jev("shadow", false), false), "manual");
@@ -1363,7 +1362,7 @@ async function mountApproval({ branch = [], mode = "fullscreen", judges = true, 
     sessionManager: { getSessionId: () => sessionId, getBranch: () => [...branch, ...entries] },
   });
   approvalExtension(f.pi);
-  // A stand-in judge that owns its mode, as jev and Luna do: each session
+  // A stand-in judge that owns its mode, as jev does: each session
   // starts from the launch mode, and every publish names its session.
   const judge = { judge: "jev", ...launch };
   const publish = () => f.pi.events.emit("approval:judge-state", { ...judge, sessionId, shown: false });
@@ -1532,7 +1531,7 @@ test("the approval indicator renders the judge's mode and claims it from the jud
   const m = await mountApproval();
   try {
     assert.equal(m.statuses.get("approval"), "approval: jev+sub");
-    const state = { judge: "luna", mode: "shadow", includeSubagents: false, sessionId: "approval-root", shown: false };
+    const state = { judge: "jev", mode: "shadow", includeSubagents: false, sessionId: "approval-root", shown: false };
     m.f.pi.events.emit("approval:judge-state", state);
     assert.equal(state.shown, true, "an indicator that renders the mode claims it, so the judge drops its own status");
     assert.equal(m.statuses.get("approval"), "approval: manual");

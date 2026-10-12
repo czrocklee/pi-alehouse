@@ -8,9 +8,7 @@ unset PI_AGENT_ROUTER_PARENT_SESSION_ID PI_SUBAGENT_PARENT_SESSION \
     PI_IS_SUBAGENT PI_SUBAGENT_SESSION_ID PI_AGENT_ROUTER_SUBAGENT \
     PI_SUBAGENT_CHILD PI_SUBAGENT_RUN_ID PI_SUBAGENT_CHILD_AGENT PI_SUBAGENT_DEPTH \
     PI_SUBAGENT_NAME PI_SUBAGENT_ID PI_SUBAGENT_SESSION PI_SUBAGENT_ACTIVITY_FILE
-# Defense in depth: only --luna-only opts its isolated negative probe into Luna.
-# Normal SDK/PTY/model trials still omit Luna and never enable enforcement.
-export PI_AUTO_APPROVAL_MODE=shadow
+# Defense in depth: only --jev-only enables Jev enforcement for its probe.
 export PI_JEV_APPROVAL_MODE=shadow
 unset PI_JEV_API_KEY_FILE PI_HARNESS_PERMISSION_ROOT PI_HARNESS_POLICY_ROOT AGENT_DASHBOARD_URL PI_ALEHOUSE_GROK_BILLING
 
@@ -31,7 +29,6 @@ fi
 INSTALLED_AGENT_DIR="/nonexistent/alehouse-offline-auth-forbidden"
 TOOLS_ONLY=false
 PERMISSIONS_ONLY=false
-LUNA_ONLY=false
 JEV_ONLY=false
 ALL=false
 if [[ "${1:-}" == --tools-only ]]; then
@@ -39,9 +36,6 @@ if [[ "${1:-}" == --tools-only ]]; then
     shift
 elif [[ "${1:-}" == --permissions-only ]]; then
     PERMISSIONS_ONLY=true
-    shift
-elif [[ "${1:-}" == --luna-only ]]; then
-    LUNA_ONLY=true
     shift
 elif [[ "${1:-}" == --jev-only ]]; then
     JEV_ONLY=true
@@ -52,7 +46,7 @@ elif [[ "${1:-}" == --all ]]; then
 fi
 if [[ $# -gt 0 ]]; then
     if [[ $# -ne 2 || "$1" != --output ]]; then
-        echo "Usage: $0 [--all | --tools-only | --permissions-only | --luna-only | --jev-only] [--output NEW_EVIDENCE_DIRECTORY]" >&2
+        echo "Usage: $0 [--all | --tools-only | --permissions-only | --jev-only] [--output NEW_EVIDENCE_DIRECTORY]" >&2
         exit 2
     fi
     # Refuse overwriting a previous report, symlinks, or unrelated directory.
@@ -95,11 +89,10 @@ npm run typecheck --prefix "$ROOT_DIR"
 node "$ROOT_DIR/scripts/check-pi-types.mjs" "$ROOT_DIR"
 npm test --prefix "$ROOT_DIR"
 render_resources() {
-    local target="$1" stage_output="$2" permissions_only="$3" luna_only="$4" jev_only="$5"
+    local target="$1" stage_output="$2" permissions_only="$3" jev_only="$4"
     mkdir -p "$target" "$stage_output"
     local lane=full
     if [[ "$permissions_only" == true ]]; then lane=readonly; fi
-    if [[ "$luna_only" == true ]]; then lane=luna; fi
     if [[ "$jev_only" == true ]]; then lane=jev; fi
     node "$ROOT_DIR/scripts/check-render-fixture.mjs" "$ROOT_DIR" "$target" "$stage_output" "$lane"
 }
@@ -109,14 +102,14 @@ if [[ "$ALL" == true ]]; then
     READONLY_RESOURCE_DIR="$scratch/agent-readonly"
     FULL_OUTPUT="$OUTPUT_ROOT/full"
     READONLY_OUTPUT="$OUTPUT_ROOT/readonly"
-    render_resources "$FULL_RESOURCE_DIR" "$FULL_OUTPUT" false false false
-    render_resources "$READONLY_RESOURCE_DIR" "$READONLY_OUTPUT" true false false
+    render_resources "$FULL_RESOURCE_DIR" "$FULL_OUTPUT" false false
+    render_resources "$READONLY_RESOURCE_DIR" "$READONLY_OUTPUT" true false
     node "$HARNESS/test/support/managed-authority.mjs" "$ROOT_DIR" "$FULL_RESOURCE_DIR" "$FULL_OUTPUT"
     node "$HARNESS/test/support/managed-authority.mjs" "$ROOT_DIR" "$READONLY_RESOURCE_DIR" "$READONLY_OUTPUT"
     RESOURCE_DIR="$FULL_RESOURCE_DIR"
     OUTPUT="$FULL_OUTPUT"
 else
-    render_resources "$RESOURCE_DIR" "$OUTPUT" "$PERMISSIONS_ONLY" "$LUNA_ONLY" "$JEV_ONLY"
+    render_resources "$RESOURCE_DIR" "$OUTPUT" "$PERMISSIONS_ONLY" "$JEV_ONLY"
     node "$HARNESS/test/support/managed-authority.mjs" "$ROOT_DIR" "$RESOURCE_DIR" "$OUTPUT"
 fi
 if [[ "$JEV_ONLY" == true ]]; then
@@ -135,24 +128,18 @@ if [[ "$JEV_ONLY" == true ]]; then
     exit 0
 fi
 run_permission_probe() {
-    local resource_dir="$1" stage_output="$2" luna="$3"
-    local probe_args=() sessions=readonly-sessions scope=core-and-readonly-permissions
-    if [[ "$luna" == true ]]; then
-        probe_args=(--luna)
-        sessions=luna-sessions
-        scope=core-and-luna-negative-permissions
-    fi
-    HOME="$scratch/home" PI_CODING_AGENT_DIR="$resource_dir" PI_CODING_AGENT_SESSION_DIR="$stage_output/$sessions" \
+    local resource_dir="$1" stage_output="$2" scope=core-and-readonly-permissions
+    HOME="$scratch/home" PI_CODING_AGENT_DIR="$resource_dir" PI_CODING_AGENT_SESSION_DIR="$stage_output/readonly-sessions" \
         PI_OFFLINE=1 PI_TELEMETRY=0 \
         timeout -k 5s 120s node "$HARNESS/test/host/readonly-permissions.mjs" \
         "$PI_EXECUTABLE" "$resource_dir" "$stage_output" \
-        "$ROOT_DIR/test/policy/permissions.json" "${probe_args[@]}"
+        "$ROOT_DIR/test/policy/permissions.json"
     write_validation_summary "$stage_output" "$scope"
     echo "Permission checks passed ($scope); evidence-only. Evidence: $stage_output"
     release_notice
 }
-if [[ "$PERMISSIONS_ONLY" == true || "$LUNA_ONLY" == true ]]; then
-    run_permission_probe "$RESOURCE_DIR" "$OUTPUT" "$LUNA_ONLY"
+if [[ "$PERMISSIONS_ONLY" == true ]]; then
+    run_permission_probe "$RESOURCE_DIR" "$OUTPUT"
     exit 0
 fi
 check_tool_layer() {
@@ -233,7 +220,7 @@ write_validation_summary "$OUTPUT" "core-and-full-suite"
 if [[ "$ALL" == true ]]; then
     # This uses the separately rendered strict config; full-suite allowances are
     # confined to agent-full and cannot satisfy the readonly permission probe.
-    run_permission_probe "$READONLY_RESOURCE_DIR" "$READONLY_OUTPUT" false
+    run_permission_probe "$READONLY_RESOURCE_DIR" "$READONLY_OUTPUT"
     write_validation_summary "$OUTPUT_ROOT" "core-full-suite-and-readonly-permissions"
     echo "Evidence: $OUTPUT_ROOT (full suite: $FULL_OUTPUT; readonly permissions: $READONLY_OUTPUT)"
     echo "CHECKS: core, full suite, and readonly permissions passed."

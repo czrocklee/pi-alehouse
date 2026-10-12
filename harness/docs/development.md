@@ -340,7 +340,7 @@ mandatory. A normal source `npm ci` intentionally includes SDK development pins.
 Neither install mode changes public release status from PENDING.
 
 Existing collector script names and P0/P1 identifiers are compatibility
-artifacts; do not transplant private evidence outputs. Optional Jev/Luna,
+artifacts; do not transplant private evidence outputs. Optional Jev,
 SDK-history and real-model lanes are never implicitly authorized by
 `npm run check`. Controlled host fixture passes cannot certify human
 interaction or live provider behavior. Do not

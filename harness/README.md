@@ -12,7 +12,7 @@ The harness is Pi Alehouse's internal, opt-in Owner-local worker backend, not an
 
 Off leaves accepted queued/running work and result/cleanup tools available. A fresh initially Off conversation has no harness tool schemas or orchestration reminder; turning Off later cannot remove historical model context. See [Off](docs/routing.md#off).
 
-The parent retains normal footer/title, approval queue, health/Stats, and pinned `pi-web-access` 0.35.0 tools. Child sessions have no nested delegation; only `researcher` children have web tools, from their own pi-web-access instance and without Bash. Luna is not loaded; its shared checkpoint helper is imported by Jev without registering a second authorizer. See [security](docs/security.md). Leaving this launcher and starting ordinary `pi` does not retroactively stop its children; close the Owner first.
+The parent retains normal footer/title, approval queue, health/Stats, and pinned `pi-web-access` 0.35.0 tools. Child sessions have no nested delegation; only `researcher` children have web tools, from their own pi-web-access instance and without Bash. Jev is the only model judge. See [security](docs/security.md). Leaving this launcher and starting ordinary `pi` does not retroactively stop its children; close the Owner first.
 
 ## Limits at a glance
 

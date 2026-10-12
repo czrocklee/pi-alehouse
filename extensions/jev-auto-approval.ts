@@ -1,12 +1,10 @@
 /**
  * jev (TypeSafe System One) permission reviewer for the pi-harness authorizer chain.
  *
- * Replaces Luna's one-shot LLM judge with a System One model: jev returns typed
- * answers with calibrated probabilities and no prose, so the verdict is composed
- * here, in code, from independent factual questions rather than delegated to a
- * model's free-text reasoning. That is the substantive difference from Luna and
- * the reason this file exists: the policy is reviewable TypeScript, and the
- * model only supplies evidence.
+ * jev returns typed answers with calibrated probabilities and no prose, so the
+ * verdict is composed here, in code, from independent factual questions rather
+ * than delegated to a model's free-text reasoning: the policy is reviewable
+ * TypeScript, and the model only supplies evidence.
  *
  * PI_JEV_APPROVAL_MODE sets each session's initial mode. This extension defaults
  * to shadow when the variable is absent. The pi-harness launcher explicitly
@@ -27,17 +25,10 @@
  * would not announce itself is a hazard this probe never exercised being read
  * systematically low on some class of action.
  *
- * Deliberately narrower than Luna where evidence is missing rather than wrong:
- * every question jev cannot be given complete, trustworthy input for resolves to
- * defer. jev never widens a surface family Luna excludes, and the static
- * checkpoints run before any model call, so an unparseable or high-impact action
- * costs nothing and stays human.
- *
- * Duplication note: the static checkpoint policy is imported from
- * luna-auto-approval.ts rather than re-spelled, so the two judges cannot drift
- * apart on what must always reach a human. Importing that module defines its
- * constants; it does not register Luna's authorizer, which only happens when Pi
- * loads it via an explicit -e entry. The harness launcher does not.
+ * Deliberately narrow where evidence is missing rather than wrong: every
+ * question jev cannot be given complete, trustworthy input for resolves to
+ * defer. The static checkpoints (lib/hard-checkpoint.ts) run before any model
+ * call, so an unparseable or high-impact action costs nothing and stays human.
  */
 
 import { createHash } from "node:crypto";
@@ -54,8 +45,8 @@ import type {
   PermissionsService,
   PromptPermissionDetails,
 } from "@gotgenes/pi-permission-system";
-import { hardCheckpointReason } from "./luna-auto-approval.ts";
 import { APPROVAL_SET_JUDGE_EVENT, publishJudgeState, readSetJudgeMode } from "./lib/approval-protocol.ts";
+import { hardCheckpointReason } from "./lib/hard-checkpoint.ts";
 import { JEV_MODEL_ID as MODEL_ID, reviewWithNativeJev } from "./lib/jev-classifier.ts";
 
 const AUTHORIZER_NAME = "jev-model-judge";
@@ -102,8 +93,8 @@ const API_KEY_FILE = captureApiKeyFile(
 
 // This budget detects a stalled review; it is not a promised response latency.
 const REVIEW_TIMEOUT_MS = 2_000;
-// Model ceiling is 64k per request and 32k for state; Luna's packet budget is
-// already well inside both and keeps the two judges comparable in shadow.
+// Model ceiling is 64k per request and 32k for state; this packet budget is
+// well inside both.
 const MAX_PACKET_TOKENS = 16_384;
 const MAX_ACTION_TOKENS = 1_200;
 const MAX_USER_CONTEXT_TOKENS = 8_192;
@@ -2043,8 +2034,8 @@ async function authorize(
  * ------------------------------------------------------------------ */
 
 function configuredMode(value: string | undefined): { mode: RolloutMode; includeSubagents: boolean } {
-  // Unlike Luna, an absent variable means shadow. Enforcement for this judge is
-  // opt-in until its calibration has been checked on real traffic.
+  // An absent variable means shadow. Enforcement for this judge is opt-in
+  // until its calibration has been checked on real traffic.
   if (value === "enforce-subagents") return { mode: "enforce", includeSubagents: true };
   if (value === "enforce") return { mode: "enforce", includeSubagents: false };
   return { mode: "shadow", includeSubagents: false };

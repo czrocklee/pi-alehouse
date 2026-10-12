@@ -75,7 +75,6 @@ in
         --set PI_HARNESS_POLICY_ROOT "$root/runtime/policy" \
         --set PI_HARNESS_FLOCK ${util-linux}/bin/flock \
         --set PI_HARNESS_GIT ${gitMinimal}/bin/git \
-        --set PI_AUTO_APPROVAL_MODE shadow \
         --set-default PI_JEV_APPROVAL_MODE enforce-subagents \
         ${lib.concatStringsSep " " (lib.mapAttrsToList (name: value: "--set-default ${lib.escapeShellArg name} ${lib.escapeShellArg value}") environment)} \
         ${

@@ -2,8 +2,8 @@
  * Approval indicator: `MODE` in the footer's right corner, and the
  * bottom-right popover that changes it.
  *
- * Modes are the loaded model judge's own (jev under pi-harness, Luna under
- * plain pi) plus yolo:
+ * Modes are the loaded model judge's own (jev, under pi-harness) plus yolo;
+ * plain pi loads no judge and offers only manual and yolo:
  *
  * - manual     the judge only observes; every ask reaches the human
  * - JUDGE      the judge decides the main session's asks
@@ -658,7 +658,7 @@ export default function approvalMode(pi: ExtensionAPI): void {
 
   pi.events.on(APPROVAL_JUDGE_STATE_EVENT, (data) => {
     const state = data as JudgeState | undefined;
-    if (!state || (state.judge !== "jev" && state.judge !== "luna") ||
+    if (!state || state.judge !== "jev" ||
         (state.mode !== "shadow" && state.mode !== "enforce")) return;
     state.shown = true;
     const previous = liveJudge(), previousName = boundJudgeName();

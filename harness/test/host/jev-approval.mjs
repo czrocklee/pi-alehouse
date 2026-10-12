@@ -36,11 +36,11 @@ assert.equal(process.env.PI_TELEMETRY, "0");
 assert.equal(process.env.PI_JEV_APPROVAL_MODE, "enforce-subagents");
 
 const jevPath = join(generatedRoot, "extensions/jev-auto-approval.ts");
-const lunaHelperPath = join(generatedRoot, "extensions/luna-auto-approval.ts");
+const checkpointPath = join(generatedRoot, "extensions/lib/hard-checkpoint.ts");
 const permissionPath = join(generatedRoot, "extensions/managed-permissions/index.ts");
 const staticGuardPath = join(generatedRoot, "extensions/static-safety-guard.ts");
 const policyGrepPath = join(generatedRoot, "extensions/policy-grep.ts");
-for (const path of [jevPath, lunaHelperPath, permissionPath, staticGuardPath, policyGrepPath]) {
+for (const path of [jevPath, checkpointPath, permissionPath, staticGuardPath, policyGrepPath]) {
   assert(existsSync(path), `Missing rendered fixture resource: ${path}`);
 }
 assert.doesNotMatch(readFileSync(jevPath, "utf8"), /\/\* @worker-policy@ \*\/ \{\}/,

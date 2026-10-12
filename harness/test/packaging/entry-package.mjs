@@ -17,7 +17,6 @@ console.log(JSON.stringify({ argv: process.argv.slice(2),
   permissionRoot: process.env.PI_HARNESS_PERMISSION_ROOT,
   policyRoot: process.env.PI_HARNESS_POLICY_ROOT,
   flock: process.env.PI_HARNESS_FLOCK,
-  autoApproval: process.env.PI_AUTO_APPROVAL_MODE,
   jevApproval: process.env.PI_JEV_APPROVAL_MODE }));
 `, { mode: 0o700 });
 const launcherEnv = { ...process.env, PI_ALEHOUSE_PI: fake };
@@ -33,7 +32,6 @@ const captured = command(["--thinking", "off"]);
 assert.deepEqual(captured.argv, ["--no-extensions", "-e", join(repo, "composition.ts"), "--thinking", "off"]);
 assert.equal(captured.permissionRoot, join(repo, "runtime/permission-system"));
 assert.equal(captured.policyRoot, join(repo, "runtime/policy"));
-assert.equal(captured.autoApproval, "shadow");
 assert.equal(captured.jevApproval, "enforce-subagents");
 assert.equal(command([], { ...launcherEnv, PI_JEV_APPROVAL_MODE: "shadow" }).jevApproval, "shadow");
 // Component-wiring smoke retains the historical harness-only baseline comparison.

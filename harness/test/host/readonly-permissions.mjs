@@ -3,86 +3,44 @@
 import assert from "node:assert/strict";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { syncBuiltinESMExports } from "node:module";
-import http from "node:http";
-import https from "node:https";
-import net from "node:net";
-import tls from "node:tls";
 import { digest } from "../../dist/runtime/context-snapshot.js";
 import { assembleChildSession as assembleChild, disposeChildSession as disposeChild } from "../../dist/runtime/child-session.js";
 import { managementToolNames as delegationTools } from "../../dist/tools/tool-names.js";
 import { abortAndWaitForIdle, controlledProvider, loadHost } from "../support/host.mjs";
 import { releaseDecision } from "../support/release-policy.mjs";
 
-const [piExecutable, agentDir, outputRoot, configSource, option] = process.argv.slice(2);
-assert(option === undefined || option === "--luna", "Unknown permission probe option");
-const luna = option === "--luna";
-assert(piExecutable && agentDir && outputRoot && configSource, "Use check-pi-harness.sh --permissions-only or --luna-only");
+const [piExecutable, agentDir, outputRoot, configSource, ...extra] = process.argv.slice(2);
+assert.deepEqual(extra, [], "Unknown permission probe option");
+assert(piExecutable && agentDir && outputRoot && configSource, "Use check-pi-harness.sh --permissions-only");
 assert.equal(process.env.HOME, join(dirname(agentDir), "home"));
 assert.equal(process.env.PI_CODING_AGENT_DIR, agentDir);
-assert.equal(process.env.PI_CODING_AGENT_SESSION_DIR, join(outputRoot, luna ? "luna-sessions" : "readonly-sessions"));
+assert.equal(process.env.PI_CODING_AGENT_SESSION_DIR, join(outputRoot, "readonly-sessions"));
 assert.equal(process.env.PI_OFFLINE, "1");
 assert.equal(process.env.PI_TELEMETRY, "0");
-assert.equal(process.env.PI_AUTO_APPROVAL_MODE, "shadow");
-const lunaPath = join(agentDir, "extensions/luna-auto-approval.ts");
-assert.equal(existsSync(lunaPath), luna);
-const networkAttempts = [];
-if (luna) {
-  // Only this isolated negative probe enables enforcement. The wrapper and all
-  // other SDK/model/PTY fixtures still start in shadow with Luna excluded.
-  process.env.PI_AUTO_APPROVAL_MODE = "enforce-subagents";
-  const block = (name) => () => { networkAttempts.push(name); throw new Error(`UNEXPECTED_NETWORK: ${name}`); };
-  globalThis.fetch = block("fetch");
-  for (const [name, module] of [["http", http], ["https", https]]) for (const key of ["request", "get"]) module[key] = block(`${name}.${key}`);
-  net.Socket.prototype.connect = block("socket.connect"); tls.connect = block("tls.connect");
-  syncBuiltinESMExports();
-}
 const configText = readFileSync(configSource, "utf8");
 assert.deepEqual(JSON.parse(readFileSync(join(agentDir, "extensions/pi-permission-system/config.json"), "utf8")), JSON.parse(configText), "No fixture permission allowances in this probe");
 const definition = readFileSync(join(agentDir, "agents/reader.md"), "utf8");
 const declaredTools = JSON.parse(/^tools: (.*)$/m.exec(definition)[1]);
-const cwd = join(outputRoot, luna ? "luna-project" : "readonly-project"), sessionDirectory = process.env.PI_CODING_AGENT_SESSION_DIR;
+const cwd = join(outputRoot, "readonly-project"), sessionDirectory = process.env.PI_CODING_AGENT_SESSION_DIR;
 for (const path of [cwd, sessionDirectory, join(cwd, "ask-zone"), join(cwd, "shared-zone"), join(cwd, ".git")]) mkdirSync(path, { recursive: true, mode: 0o700 });
 for (const [name, content] of Object.entries({ "source.txt": "PUBLIC_MARKER\n", ".env": "DENIED_MARKER\n",
   "ask-zone/a.pem": "CHILD_GRANT_MARKER\n", "shared-zone/a.key": "SHARED_GRANT_MARKER\n", "ask-zone/unserved.pem": "UNSERVED_MARKER\n" })) writeFileSync(join(cwd, name), content);
 symlinkSync(join(cwd, ".env"), join(cwd, "alias.txt"));
 const host = await loadHost(piExecutable), { sdk, ai, permission } = host;
-const report = { authority: host.authority, versions: host.versions, real_model: false, luna_loaded: luna, release: releaseDecision,
-  auto_approval_mode: process.env.PI_AUTO_APPROVAL_MODE, network_attempts: networkAttempts, luna_provider_calls: 0,
-  luna_digest: luna ? digest(readFileSync(lunaPath, "utf8")) : undefined,
+const report = { authority: host.authority, versions: host.versions, real_model: false, release: releaseDecision,
   config_digest: digest(configText), definition_digest: digest(definition), declared_tools: declaredTools,
   cases: [], events: [], dialogs: [], policy: [], cleanup: [], scratch_cleanup: [], extension_errors: [], limitations: [
     "Real file/Bash gates and policy-grep; web tools are not provisioned or exercised, not full profile acceptance",
-    "Controlled provider and scripted RPC-style human choices; not actual human/TUI or positive Luna authorization acceptance",
-    ...(luna ? ["Negative co-load/forwarding only: no complete Luna delegation provenance, no Owner/Run binding or production enforcement support"] : []),
+    "Controlled provider and scripted RPC-style human choices; not actual human/TUI acceptance",
     "One worker scratch mkdir/cp case; other cases use reader. No persisted scratch inheritance acceptance",
     "No Owner/Run lifecycle, reload, production entrypoint or permission policy changes",
   ] };
-const reportPath = join(outputRoot, luna ? "luna-permissions.json" : "readonly-permissions.json");
+const reportPath = join(outputRoot, "readonly-permissions.json");
 const save = () => writeFileSync(reportPath, JSON.stringify(report, null, 2), { mode: 0o600 });
 save();
 const runtime = await sdk.ModelRuntime.create({ credentials: new ai.InMemoryCredentialStore(), modelsPath: null,
   modelsStore: new ai.InMemoryModelsStore(), refreshOnCreate: false, allowModelNetwork: false });
 const provider = controlledProvider(ai); runtime.registerProvider("harness-fixture", provider.config);
-if (luna) runtime.registerProvider("openai-codex", {
-  ...provider.config, api: "luna-forbidden-fixture",
-  models: [{ ...provider.config.models[0], id: "gpt-5.6-luna", name: "Forbidden Luna fixture" }],
-  streamSimple: () => { report.luna_provider_calls++; throw new Error("UNEXPECTED_LUNA_MODEL_CALL"); },
-});
-const audit = () => {
-  const path = join(agentDir, "logs/luna-auto-approval.jsonl");
-  return existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
-};
-function deferredWithoutModel(start, reason) {
-  const decisions = audit().slice(start).filter((row) => row.event === "auto_model_judge.decision");
-  assert.equal(decisions.length, 1, JSON.stringify(decisions));
-  const row = decisions[0];
-  assert.equal(row.mode, "enforce"); assert.equal(row.requestScope, "subagent");
-  assert.equal(row.reasonCode, reason); assert.equal(row.failureCode, reason);
-  assert.equal(row.modelCalled, false); assert.equal(row.effectiveVerdict, "defer");
-  assert.equal(report.luna_provider_calls, 0); assert.deepEqual(networkAttempts, []);
-  report.cases.at(-1).luna = row;
-}
 const model = runtime.getModel("harness-fixture", "controlled");
 const settings = () => sdk.SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
 const parents = [], children = [], scratchRoots = [];
@@ -98,10 +56,7 @@ function busFor(label) {
 async function loader(bus, profile) {
   const result = new sdk.DefaultResourceLoader({ cwd, agentDir, settingsManager: settings(), eventBus: bus,
     noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true, noContextFiles: true,
-    // Preserve historical fixture ordering: Luna's session_start must run before the
-    // authority publishes permissions:ready. A loaded file alone is not proof
-    // of authorizer registration; the probe requires its actual decision audit.
-    additionalExtensionPaths: [...(luna ? [lunaPath] : []), host.permissionEntry, join(agentDir, "extensions/static-safety-guard.ts"), join(agentDir, "extensions/policy-grep.ts")],
+    additionalExtensionPaths: [host.permissionEntry, join(agentDir, "extensions/static-safety-guard.ts"), join(agentDir, "extensions/policy-grep.ts")],
     ...(profile ? { appendSystemPromptOverride: () => [profile.definition.split(/^---\s*$/m).slice(2).join("\n").trim(), `<active_agent name="${profile.name}"/>`] } : {}),
   });
   await result.reload(); assert.deepEqual(result.getExtensions().errors, []);
@@ -186,15 +141,6 @@ let primaryError;
 try {
   const p = await parent("parent"), a = await child(p, "child-a"), b = await child(p, "child-b");
   report.sessions = { parent: p.session.sessionId, a: a.session.sessionId, b: b.session.sessionId };
-  if (luna) for (const allowed of [true, false]) await check(`unbound child Bash ask defers to scripted human ${allowed ? "allow" : "deny"}`, async () => {
-    const start = report.events.length, auditStart = audit().length;
-    assert.equal(permission.getPermissionsService(a.session.sessionId).checkPermission("bash", "sleep 0", "reader").state, "ask");
-    const result = await call(a, "bash", { command: "sleep 0" }, [allowed ? /^Yes$/ : /^No$/]);
-    assert.equal(!!result.isError, !allowed);
-    const decision = forwardedSince(start, a, allowed ? "allow" : "deny");
-    assert.equal(decision.resolution, allowed ? "user_approved" : "user_denied");
-    deferredWithoutModel(auditStart, "delegation_unbound");
-  });
   await check("real read, tool visibility and profile denies", async () => {
     const result = await call(a, "read", { path: "source.txt" });
     assert(!result.isError); assert.equal(text(result), "PUBLIC_MARKER\n");
@@ -284,10 +230,9 @@ try {
     assert(!existsSync(join(cwd, "outside-copy.txt"))); assert.equal(effects().length, 1);
   });
   await check("forwarded child-only grant cannot authorize sibling or parent", async () => {
-    const start = report.events.length, auditStart = audit().length;
+    const start = report.events.length;
     const granted = await call(a, "read", { path: "ask-zone/a.pem" }, [/^Yes, allow reads to/, /^This subagent\b.*\bonly$/]);
     assert(!granted.isError); assert.equal(text(granted), "CHILD_GRANT_MARKER\n"); forwardedSince(start, a, "allow");
-    if (luna) deferredWithoutModel(auditStart, "bounded_path_family");
     const count = report.dialogs.length;
     assert.equal(permission.getPermissionsService(a.session.sessionId).checkPermission("path_write", join(cwd, "ask-zone/a.pem"), "reader").state, "deny", "read approval must not weaken the reader write ceiling");
     assert(!(await call(a, "read", { path: "ask-zone/a.pem" })).isError); assert.equal(report.dialogs.length, count);
@@ -354,9 +299,7 @@ finally {
     } catch (error) { report.scratch_cleanup.push({ path: root.path, removed: false, error: String(error) }); }
   }
   report.error = primaryError;
-  report.luna_audit = luna ? audit() : undefined;
-  report.status = !primaryError && networkAttempts.length === 0 && report.luna_provider_calls === 0 &&
-    !report.luna_audit?.some((row) => row.modelCalled === true || row.event === "auto_model_judge.registration_failed") && childrenClosed && report.extension_errors.length === 0 && report.cases.every((item) => item.status === "passed") &&
+  report.status = !primaryError && childrenClosed && report.extension_errors.length === 0 && report.cases.every((item) => item.status === "passed") &&
     report.cleanup.every((item) => item.shutdownExited && item.permission_removed && item.errors?.length === 0) &&
     report.scratch_cleanup.length === scratchRoots.length && report.scratch_cleanup.every((item) => item.removed) ? "passed" : "failed";
   save();

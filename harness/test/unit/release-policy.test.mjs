@@ -29,10 +29,10 @@ test("canonical release metadata retains the pending scope and rejected safety g
 });
 
 test("validation summaries preserve evidence scope and real-model status beside release metadata", () => {
-  const summary = validationSummary("core-and-luna-negative-permissions");
+  const summary = validationSummary("core-and-jev-permissions");
   assert.deepEqual(JSON.parse(JSON.stringify(summary)), {
     checks: "passed",
-    scope: "core-and-luna-negative-permissions",
+    scope: "core-and-jev-permissions",
     release: releaseDecision,
     real_model: false,
   });
@@ -75,11 +75,11 @@ test("a revoked policy changes release metadata without changing completed evide
     assert(notice.stdout.startsWith(`RELEASE: NO-GO (${revoked.contract};`), notice.stdout);
 
     const summary = spawnSync(process.execPath, [copiedHelper, "--write-validation-summary", "--checks-passed", output,
-      "core-and-luna-negative-permissions"], { encoding: "utf8" });
+      "core-and-jev-permissions"], { encoding: "utf8" });
     assert.ifError(summary.error); assert.equal(summary.status, 0, summary.stderr);
     assert.deepEqual(JSON.parse(readFileSync(join(output, "validation-summary.json"), "utf8")), {
       checks: "passed",
-      scope: "core-and-luna-negative-permissions",
+      scope: "core-and-jev-permissions",
       release: revoked,
       real_model: false,
     });

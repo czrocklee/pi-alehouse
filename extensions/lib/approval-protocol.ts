@@ -1,8 +1,8 @@
 /**
  * Approval-mode protocol between the footer's approval indicator
- * (approval-mode.ts) and the model judges (jev, Luna).
+ * (approval-mode.ts) and the model judge (jev).
  *
- * A shared helper, not an extension: the judges are deployed as loose files
+ * A shared helper, not an extension: the judge is deployed as a loose file
  * beside this one, and the indicator bundles it. Keep it free of SDK imports.
  *
  * The judges keep sole ownership of their mode. They publish every change on
@@ -24,7 +24,7 @@ export const APPROVAL_SET_JUDGE_EVENT = "approval:set-judge";
  */
 export const SESSION_YOLO_KEY = Symbol.for("@rocklee/managed-permissions:session-yolo");
 
-export type JudgeName = "jev" | "luna";
+export type JudgeName = "jev";
 
 export interface JudgeMode {
   mode: "shadow" | "enforce";

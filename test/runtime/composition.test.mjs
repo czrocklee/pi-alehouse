@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -54,7 +54,7 @@ async function blocked(extension) {
   return handlers[0]({ toolName: "bash", input: { command: "true" } });
 }
 
-test("single composition invokes ordered factories without invoking Luna", async (t) => {
+test("single composition invokes its ordered factories", async (t) => {
   const { extension, observations } = await fixture(t);
   assert.deepEqual(observations, fixtures.map(([name]) => name));
   assert.match((await blocked(extension)).reason, /not ready/);
@@ -183,6 +183,5 @@ test("real pinned package factories load as one host extension with web_enable",
   assert.equal((await blocked(extension)).reason, "Alehouse session is not ready", "no caught factory failure");
   assert(extension.tools.has("web_enable"), "pinned web lazy-loader must remain available");
   assert(extension.commands.has("harness-status"));
-  assert(!extension.commands.has("auto-approval"), "Luna factory must never be invoked");
-  assert(!readFileSync(join(packageRoot, "composition.ts"), "utf8").includes('"luna-auto-approval.ts"'));
+  assert(!extension.commands.has("auto-approval"), "the retired Luna judge's command must not return");
 });

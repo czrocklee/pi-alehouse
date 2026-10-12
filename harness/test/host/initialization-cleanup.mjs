@@ -16,7 +16,7 @@ const [piExecutable, generatedRoot, outputRoot] = process.argv.slice(2);
 assert(piExecutable && generatedRoot && outputRoot, "Use script/check-pi-harness.sh");
 const { sdk, ai, permission, permissionEntry, authority, versions } = await loadHost(piExecutable);
 const report = { authority, versions, release: releaseDecision, cases: [], limitations: [
-  "Real SDK/permission with synthetic provider; no real model, production consumer, Luna or backend switch",
+  "Real SDK/permission with synthetic provider; no real model, production consumer or backend switch",
   "Faulty session_start deliberately starts SDK work before bind fails; harness never returns a SessionPort",
   "Shutdown dispatch attempted is not proof that every handler ran or arbitrary extension work exited",
   "Uncertain owners keep their lock until this isolated process exits; no force-unlock or late close certificate",

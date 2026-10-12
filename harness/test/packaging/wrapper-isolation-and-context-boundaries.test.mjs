@@ -69,7 +69,6 @@ for (const script of liveTrialScripts) test(`${script} requires an explicit mode
 const collectorCases = [
   [["--tools-only"], ["packaging/entry-package.mjs", "host/entry.mjs", "host/tools.mjs", "host/model-trial.mjs --controlled", "host/model-trial-failures.mjs"]],
   [["--permissions-only"], ["host/readonly-permissions.mjs"]],
-  [["--luna-only"], ["host/readonly-permissions.mjs"]],
   [["--jev-only"], ["host/jev-approval.mjs"]],
   [["--all"], ["packaging/entry-package.mjs", "host/entry.mjs", "host/tools.mjs", "host/model-trial.mjs --controlled", "host/model-trial-failures.mjs", "tui/reload.mjs", "host/session-integration.mjs", "host/run-lifecycle.mjs", "host/readonly-permissions.mjs"]],
   [[], ["packaging/entry-package.mjs", "host/entry.mjs", "host/tools.mjs", "host/model-trial.mjs --controlled", "host/model-trial-failures.mjs", "tui/reload.mjs", "host/session-integration.mjs", "host/run-lifecycle.mjs"]],
@@ -92,11 +91,10 @@ if [[ "$1" == run && "$2" == lint ]]; then exit "\${HARNESS_TEST_LINT_EXIT:-0}";
 `, { mode: 0o700 });
   for (const name of ["node", "python3"]) writeFileSync(join(bin, name), `#!/usr/bin/env bash
 set -euo pipefail
-[[ "$PI_AUTO_APPROVAL_MODE" == shadow ]] || { printf '%s\\n' 'Missing shadow isolation' >&2; exit 74; }
-${collector ? `expected_jev=shadow
-[[ "$1" != */test/host/jev-approval.mjs ]] || expected_jev=enforce-subagents
-[[ "$PI_JEV_APPROVAL_MODE" == "$expected_jev" ]] || { echo 'Wrong Jev isolation mode' >&2; exit 75; }
-[[ ! -v PI_JEV_API_KEY_FILE ]] || { echo 'Inherited Jev credential path' >&2; exit 76; }
+expected_jev=shadow
+${collector ? `[[ "$1" != */test/host/jev-approval.mjs ]] || expected_jev=enforce-subagents
+` : ""}[[ "$PI_JEV_APPROVAL_MODE" == "$expected_jev" ]] || { echo 'Wrong Jev isolation mode' >&2; exit 75; }
+${collector ? `[[ ! -v PI_JEV_API_KEY_FILE ]] || { echo 'Inherited Jev credential path' >&2; exit 76; }
 if [[ "$1" == */test/packaging/entry-package.mjs ]]; then
   [[ "$PI_CODING_AGENT_DIR" == */${options.includes("--all") ? "agent-full" : "agent"} ]] || { echo 'Wrong packaging resource lane' >&2; exit 78; }
 fi
@@ -112,9 +110,8 @@ printf '%s\\n' "$*" >> "$HARNESS_ENV_PROBE_LOG"
     ...options, "--output", join(root, "output"), ...(liveTrialScripts.includes(script) ? ["--model", "fixture/controlled"] : [])], { encoding: "utf8", timeout: 10000,
     env: { ...process.env, ...Object.fromEntries(subagentEnvHintKeys.map((key) => [key, "synthetic-inherited-hint"])),
       PATH: `${bin}:${process.env.PATH}`, HOME: root, PI_CODING_AGENT_DIR: join(root, "missing-installed-agent"),
-      PI_AUTO_APPROVAL_MODE: "enforce-subagents",
-      ...(collector ? { PI_JEV_APPROVAL_MODE: "enforce-subagents",
-        PI_JEV_API_KEY_FILE: "/synthetic/do-not-read-real-key" } : {}),
+      PI_JEV_APPROVAL_MODE: "enforce-subagents",
+      ...(collector ? { PI_JEV_API_KEY_FILE: "/synthetic/do-not-read-real-key" } : {}),
       HARNESS_ENV_PROBE_LOG: log, HARNESS_TEST_LINT_EXIT: lintFails ? "73" : "0", P0_FLOCK: flock } });
   assert.equal(output.status, lintFails ? 73 : 0, `${output.error ?? ""}\n${output.stderr}`);
   const calls = readFileSync(log, "utf8").trimEnd().split("\n");
@@ -134,7 +131,7 @@ printf '%s\\n' "$*" >> "$HARNESS_ENV_PROBE_LOG"
     const reporting = calls.filter((call) => call.startsWith(`${policyHelper} `));
     const scope = ({
       "--tools-only": "core-and-tools-only", "--permissions-only": "core-and-readonly-permissions",
-      "--luna-only": "core-and-luna-negative-permissions", "--jev-only": "core-and-jev-permissions",
+      "--jev-only": "core-and-jev-permissions",
     })[options[0]] ?? "core-and-full-suite";
     const summary = (directory, lane) => `${policyHelper} --write-validation-summary --checks-passed ${join(root, "output", directory)} ${lane}`;
     const notice = `${policyHelper} --print-release-notice`;
@@ -165,10 +162,9 @@ printf '%s\\n' "$*" >> "$HARNESS_ENV_PROBE_LOG"
       assert(calls.some((call) => call.includes("/test/host/run-lifecycle.mjs ") && call.endsWith(` --post-guard-${kind}`)), `missing post-guard ${kind} probe`);
     }
   }
-  if (options.includes("--permissions-only") || options.includes("--luna-only")) {
+  if (options.includes("--permissions-only")) {
     const probes = calls.filter((call) => call.includes("/test/host/readonly-permissions.mjs "));
     assert.equal(probes.length, 1);
-    assert.equal(probes[0].endsWith(" --luna"), options.includes("--luna-only"));
     const fixtures = calls.filter(fixtureCall);
     assert.deepEqual(fixtures.map(fixtureName),
       ["managed-authority.mjs", "readonly-permissions.mjs", "release-policy.mjs", "release-policy.mjs"],
@@ -180,7 +176,7 @@ printf '%s\\n' "$*" >> "$HARNESS_ENV_PROBE_LOG"
     assert(authorities[0].includes("/agent-full ") && authorities[0].includes("/output/full"));
     assert(authorities[1].includes("/agent-readonly ") && authorities[1].includes("/output/readonly"));
     const probes = calls.filter((call) => call.includes("/test/host/readonly-permissions.mjs "));
-    assert.equal(probes.length, 1); assert(!probes[0].endsWith(" --luna"));
+    assert.equal(probes.length, 1);
     assert(probes[0].includes("/agent-readonly ") && probes[0].includes("/output/readonly"),
       "all mode permission probe must use its strict resource/output lane");
     for (const name of ["host/entry.mjs", "host/tools.mjs", "host/session-integration.mjs", "host/run-lifecycle.mjs"]) {

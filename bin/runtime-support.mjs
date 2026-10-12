@@ -196,7 +196,7 @@ export function protectionResources(paths = {}, env = process.env, root = packag
 export function runtimeEnvironment(paths, env = process.env) {
   const result = { ...env, PI_CODING_AGENT_DIR: paths.agentDir,
     PI_HARNESS_PERMISSION_ROOT: paths.permissionRoot, PI_HARNESS_POLICY_ROOT: paths.policyRoot,
-    PI_HARNESS_FLOCK: paths.flock, PI_HARNESS_GIT: paths.git, PI_HARNESS_WEB_ENTRY: paths.web, PI_AUTO_APPROVAL_MODE: "shadow",
+    PI_HARNESS_FLOCK: paths.flock, PI_HARNESS_GIT: paths.git, PI_HARNESS_WEB_ENTRY: paths.web,
     ...(env.PI_JEV_API_KEY_FILE ? { PI_JEV_API_KEY_FILE: absoluteUserPath(env.PI_JEV_API_KEY_FILE) } : {}),
     PI_JEV_APPROVAL_MODE: env.PI_JEV_APPROVAL_MODE || "enforce-subagents" };
   // Git is optional. execve rejects undefined values, and a stale inherited

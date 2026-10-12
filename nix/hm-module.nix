@@ -26,7 +26,6 @@
     "stats"
     "terminal-title-status"
     "ui-prompt-queue"
-    "luna-auto-approval"
     "static-safety-guard"
     "policy-grep"
   ];

@@ -21,7 +21,7 @@ const host = await loadHost(piExecutable), { sdk, ai, permission } = host;
 const report = { authority: host.authority, versions: host.versions, claims: [], parent_shutdowns: [], limitations: [
   "Actual SDK tool validation/readiness handshake with loaded permission/guard; independent gate enforcement is not established here",
   "Controlled provider IO, not a real model or remote schema acceptance",
-  "No production admission, Luna consumer, service registry, UI, migration, or backend installation",
+  "No production admission, service registry, UI, migration, or backend installation",
   "Reload here occurs only after explicit owner shutdown; stale handles are not a live-child reload veto",
   "Parent abort probe uses the public SDK API, not TUI Esc/signals or an uncooperative external process",
   "Registered catalogue lookup is not an auth/availability guarantee; no private auth/history is read",

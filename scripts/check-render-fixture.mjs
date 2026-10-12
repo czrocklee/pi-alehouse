@@ -1,17 +1,16 @@
 #!/usr/bin/env node
 // Test resources only. Never reads a user's agent directory or credentials.
 import assert from "node:assert/strict";
-import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export function renderFixture(repo, target, output, lane = "readonly") {
-  assert(["full", "readonly", "luna", "jev"].includes(lane), "INVALID_FIXTURE_LANE");
+  assert(["full", "readonly", "jev"].includes(lane), "INVALID_FIXTURE_LANE");
   mkdirSync(target, { recursive: true, mode: 0o700 });
   cpSync(join(repo, "runtime/agents"), join(target, "agents"), { recursive: true });
   cpSync(join(repo, "runtime/policy"), join(target, "extensions"), { recursive: true });
   cpSync(join(repo, "runtime/lib"), join(target, "lib"), { recursive: true });
-  if (lane !== "luna" && lane !== "jev") rmSync(join(target, "extensions/luna-auto-approval.ts"), { force: true });
   const config = JSON.parse(readFileSync(join(repo, "test/policy/permissions.json"), "utf8"));
   if (lane === "full") {
     // ONLY these synthetic executables: no wildcard/interpreter class allowance.

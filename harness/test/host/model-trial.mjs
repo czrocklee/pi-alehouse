@@ -34,7 +34,7 @@ const sessionDirectory = join(outputRoot, controlled ? "controlled-model-session
 assert.equal(process.env.HOME, isolatedHome, "Use the isolating shell wrapper");
 assert.equal(process.env.PI_CODING_AGENT_DIR, agentDir);
 assert.equal(process.env.PI_TELEMETRY, "0");
-assert.equal(process.env.PI_AUTO_APPROVAL_MODE, "shadow", "Trials must keep automatic approval in shadow mode");
+assert.equal(process.env.PI_JEV_APPROVAL_MODE, "shadow", "Trials must keep automatic approval in shadow mode");
 assert.equal(process.env.PI_CODING_AGENT_SESSION_DIR, sessionDirectory, "The shell wrapper must isolate the SDK session root");
 for (const directory of [agentDir, cwd, isolatedHome, sessionDirectory]) mkdirSync(directory, { recursive: true, mode: 0o700 });
 
@@ -48,7 +48,6 @@ if (!controlled) {
   for (const [directory, files] of Object.entries({ agents: resources.agents, extensions: resources.extensions })) {
     mkdirSync(join(agentDir, directory), { recursive: true });
     for (const [name, text] of Object.entries(files)) {
-      if (name === "luna-auto-approval.ts") continue;
       const path = join(agentDir, directory, directory === "agents" ? `${name}.md` : name);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, text);
@@ -60,7 +59,6 @@ if (!controlled) {
   mkdirSync(join(agentDir, "extensions/pi-permission-system"), { recursive: true });
   writeFileSync(join(agentDir, "extensions/pi-permission-system/config.json"), JSON.stringify(config));
 }
-assert.equal(existsSync(join(agentDir, "extensions/luna-auto-approval.ts")), false, "Luna must not load in a trial");
 
 const sourceText = "quantity=7\nunit=11\nfactor=unknown; ask your parent\n";
 const sourcePath = join(cwd, "source.txt");
@@ -122,7 +120,7 @@ let owner;
 
 const report = { authority, versions, runtime: { node: process.version, platform: process.platform, arch: process.arch },
   mode: controlled ? "controlled" : "real-model", real_model: !controlled, release: releaseDecision,
-  model: modelSpec, thinking: parentThinking, auto_approval_mode: process.env.PI_AUTO_APPROVAL_MODE, luna_loaded: false,
+  model: modelSpec, thinking: parentThinking, auto_approval_mode: process.env.PI_JEV_APPROVAL_MODE,
   output_limits: { parent_model_max_tokens: model.maxTokens, child_model_max_tokens: catalogModel.maxTokens,
     child_source: "catalogue", verified_hard_token_or_fee_cap: false },
   abort_errors: [], injected_fault: fault, factory_failures: [],
@@ -131,7 +129,7 @@ const report = { authority, versions, runtime: { node: process.version, platform
   limitations: [
     "Synthetic read-only project and an explicit two-profile trial subset, not full production-profile acceptance",
     controlled ? "Controlled provider IO; no private auth or remote model call" : "One explicitly selected real provider/model; not a statistical usability benchmark",
-    "No Bash, writes, Luna, reload, production admission, backend switch, private conversation, or deployment",
+    "No Bash, writes, reload, production admission, backend switch, private conversation, or deployment",
     "SDK catalogue membership is not authentication/availability proof",
     "Parent-only maxTokens metadata is not a verified provider cap; child metadata comes from the catalogue; wall time is not a token/fee limit",
     "Alerts are bounded Owner-local pending facts consumed only after complete local presentation; no SDK persistence/model receipt/ACK guarantee",

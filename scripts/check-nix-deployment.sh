@@ -43,11 +43,12 @@ verifyAgentResources(resources, root);
 for (const name of ["editor", "reader", "researcher", "Explore", "Plan", "general-purpose"]) {
   assert.equal(realpathSync(join(resources, "agents", `${name}.md`)), join(runtime, "agents", `${name}.md`));
 }
-const policyExtensions = ["status-footer", "approval-mode", "stats", "terminal-title-status", "ui-prompt-queue", "luna-auto-approval", "static-safety-guard", "policy-grep"];
+const policyExtensions = ["status-footer", "approval-mode", "stats", "terminal-title-status", "ui-prompt-queue", "static-safety-guard", "policy-grep"];
 for (const name of policyExtensions) {
   // Shims, not symlinks: Pi resolves an entry's relative imports from its ~/.pi path.
   assert.equal(readFileSync(join(resources, "extensions", `${name}.ts`), "utf8"), `export { default } from "${join(runtime, "policy", `${name}.ts`)}";\n`);
 }
+assert(!existsSync(join(resources, "extensions/luna-auto-approval.ts")), "The retired Luna judge must not be installed");
 // Use the product's parser, not a second schema implementation in Nix tests.
 let piRoot = dirname(realpathSync(piExecutable));
 while (!existsSync(join(piRoot, "package.json"))) {
@@ -87,14 +88,14 @@ try {
   for (const name of ["editor", "reader", "researcher", "Explore", "Plan", "general-purpose"]) copyFileSync(join(resources, "agents", `${name}.md`), join(agent, "agents", `${name}.md`));
   for (const name of ["harness-presets.json", "extensions/pi-permission-system/config.json"]) copyFileSync(join(resources, name), join(agent, name));
   const record = join(scratch, "launch.json"), host = join(scratch, "record-host.mjs");
-  writeFileSync(host, `#!${process.execPath}\nimport { writeFileSync } from "node:fs"; writeFileSync(process.env.RECORD, JSON.stringify({ argv: process.argv.slice(2), permission: process.env.PI_HARNESS_PERMISSION_ROOT, policy: process.env.PI_HARNESS_POLICY_ROOT, luna: process.env.PI_AUTO_APPROVAL_MODE, jev: process.env.PI_JEV_APPROVAL_MODE }));\n`, { mode: 0o700 });
+  writeFileSync(host, `#!${process.execPath}\nimport { writeFileSync } from "node:fs"; writeFileSync(process.env.RECORD, JSON.stringify({ argv: process.argv.slice(2), permission: process.env.PI_HARNESS_PERMISSION_ROOT, policy: process.env.PI_HARNESS_POLICY_ROOT, jev: process.env.PI_JEV_APPROVAL_MODE }));\n`, { mode: 0o700 });
   // Even a regressed override lookup must never find the real credentialed CLI.
   symlinkSync(host, join(scratch, "pi"));
   const probe = spawnSync(launcher, ["--mode", "rpc", "--no-session"], { encoding: "utf8", timeout: 30_000,
     env: { PATH: scratch, HOME: scratch, PI_CODING_AGENT_DIR: agent, PI_ALEHOUSE_PI: host, RECORD: record, PI_TELEMETRY: "0", AGENT_DASHBOARD_URL: "", PI_ALEHOUSE_GROK_BILLING: "0" } });
   assert.equal(probe.status, 0, probe.stderr || String(probe.error));
   const launch = JSON.parse(readFileSync(record));
-  assert.deepEqual(launch, { argv: ["--no-extensions", "-e", join(root, "composition.ts"), "--mode", "rpc", "--no-session"], permission: join(runtime, "permission-system"), policy: join(runtime, "policy"), luna: "shadow", jev: "enforce-subagents" });
+  assert.deepEqual(launch, { argv: ["--no-extensions", "-e", join(root, "composition.ts"), "--mode", "rpc", "--no-session"], permission: join(runtime, "permission-system"), policy: join(runtime, "policy"), jev: "enforce-subagents" });
   console.log("PASS: generation selector/bootstrap, exact runtime workers/UI, installed preset schema, host-only SDK, and store launcher composition (recording host; no models)");
 } finally { rmSync(scratch, { recursive: true, force: true }); }
 const check = spawnSync(process.execPath, [join(scripts, "check-pi-permission-bootstrap.mjs"), piExecutable, resources, bootstrap, join(root, "node_modules/@gotgenes/pi-permission-system")], { stdio: "inherit", timeout: 180_000 });

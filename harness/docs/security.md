@@ -252,9 +252,9 @@ verdict.  Missing/stale provenance, invalid tool observation, or a leftover
 witness disables automatic approval for that Run while preserving normal human
 forwarding through the existing authority.
 
-The explicit Pi Alehouse launcher does not load Luna. Jev imports only Luna's
-shared static checkpoint helper; this does not register Luna as an authorizer.
-The launch default for Jev is `enforce-subagents` (or explicit
+Jev is the only model judge. Its static checkpoints
+(`extensions/lib/hard-checkpoint.ts`) run before any model call. The launch
+default for Jev is `enforce-subagents` (or explicit
 `PI_JEV_APPROVAL_MODE=shadow`). This is not a claim that automated review is
 available, calibrated, or authorized for every request. Without a protected
 `PI_JEV_API_KEY_FILE` **path** (not a key in an environment variable), review

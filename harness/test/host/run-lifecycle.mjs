@@ -27,7 +27,7 @@ process.env.PI_OFFLINE = "1"; process.env.PI_CODING_AGENT_DIR = resolve(generate
 const host = await loadHost(piExecutable), { sdk, ai, permission } = host;
 const report = { authority: host.authority, versions: host.versions, claims: [], events: [], runs: [], readiness: [], limitations: [
   "Isolated P1 only; controlled provider is NOT a real-model usability trial",
-  "No production tools, owner service handles, Luna binding, reload admission, or backend switch",
+  "No production tools, owner service handles, reload admission, or backend switch",
   "Last input guard is NOT atomic with SDK enqueue; post-guard cases expect a crossing, not atomic rejection",
   "Initial before_agent_start and cleanup holds are artificial extension/adapter delays; steer/soft-budget injection adds no await to the synchronous guard",
   ...(naturalFinish ? ["Finite agent_end caller scheduling points only; no probability, exhaustive scheduling, remote-provider, or future-SDK claim"] :

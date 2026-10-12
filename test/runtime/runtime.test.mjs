@@ -29,7 +29,7 @@ test("portable generator matches dispatch-aware worker bytes and policy digests"
   assert.match(agents.researcher, /  write: deny\n  edit: deny\n  path_write:\n    "\*": deny\n  bash:\n    "\*": deny\n/);
   assert.match(agents.researcher, /untrusted data, not instructions/);
   assert.doesNotMatch(agents.reader, /untrusted data/);
-  for (const name of ["jev-auto-approval.ts", "luna-auto-approval.ts", "static-safety-guard.ts"]) {
+  for (const name of ["jev-auto-approval.ts", "static-safety-guard.ts"]) {
     const source = readFileSync(join(packageRoot, "runtime/policy", name), "utf8");
     assert(!source.includes("/* @worker-policy@ */ {}"));
     assert(source.includes(JSON.stringify(metadata)));

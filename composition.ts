@@ -76,7 +76,7 @@ export default async function alehouse(pi: ExtensionAPI) {
     const support = await import("./bin/runtime-support.mjs");
     const paths = support.preflight();
     const env = support.runtimeEnvironment(paths);
-    for (const key of ["PI_CODING_AGENT_DIR", "PI_HARNESS_PERMISSION_ROOT", "PI_HARNESS_POLICY_ROOT", "PI_HARNESS_FLOCK", "PI_HARNESS_WEB_ENTRY", "PI_AUTO_APPROVAL_MODE", "PI_JEV_APPROVAL_MODE"]) process.env[key] = env[key];
+    for (const key of ["PI_CODING_AGENT_DIR", "PI_HARNESS_PERMISSION_ROOT", "PI_HARNESS_POLICY_ROOT", "PI_HARNESS_FLOCK", "PI_HARNESS_WEB_ENTRY", "PI_JEV_APPROVAL_MODE"]) process.env[key] = env[key];
     if (env.PI_JEV_API_KEY_FILE) process.env.PI_JEV_API_KEY_FILE = env.PI_JEV_API_KEY_FILE;
     // Establish deny-only resource/credential floors before Jev captures and
     // removes its key-file environment variable. Importing is not invocation:
@@ -98,7 +98,6 @@ export default async function alehouse(pi: ExtensionAPI) {
       ["web-access", paths.web],
     ];
     for (const [name, path] of entries) {
-      // Luna is an internal Jev helper dependency, NEVER an invoked factory.
       const extension = await import(pathToFileURL(path).href);
       if (typeof extension.default !== "function") throw new Error(`Invalid factory: ${name}`);
       await extension.default(scoped(name));

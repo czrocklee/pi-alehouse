@@ -245,46 +245,8 @@ try {
       assert.equal(gate?.preCheck?.state, "ask", `No guard pipeline: ${agent}:${command}`);
     }
   }
-  // Test Luna against upstream payloads, not a guessed request.value shape.
-  const { default: lunaAutoApproval, hardCheckpointReason } = await jiti.import(join(resources, "extensions/luna-auto-approval.ts"));
-  {
-    // The approval indicator's protocol: Luna publishes every mode, keeps its
-    // own status only while nobody renders it, and applies a well-formed request
-    // through the same transition as /auto-approval.
-    const hooks = new Map(), listeners = new Map(), statuses = [], published = [];
-    const events = {
-      on: (name, fn) => { (listeners.get(name) ?? listeners.set(name, []).get(name)).push(fn); return () => {}; },
-      emit: (name, data) => { for (const fn of listeners.get(name) ?? []) fn(data); published.push({ name, data: { ...data } }); },
-    };
-    const previousMode = process.env.PI_AUTO_APPROVAL_MODE, previousHome = process.env.HOME;
-    process.env.PI_AUTO_APPROVAL_MODE = "enforce-subagents";
-    process.env.HOME = scratch; // Luna's audit log lands in the fixture, never the real home.
-    try {
-      lunaAutoApproval({ on: (name, fn) => hooks.set(name, fn), registerCommand() {}, registerTool() {}, events });
-      const ctx = { cwd: scratch, hasUI: true, mode: "tui", ui: { setStatus: (key, value) => statuses.push([key, value]), notify() {} },
-        sessionManager: { getSessionId: () => "luna-protocol", getHeader: () => ({}), getBranch: () => [], getSessionFile: () => undefined } };
-      await hooks.get("session_start")({}, ctx);
-      assert.deepEqual(published.at(-1), { name: "approval:judge-state",
-        data: { judge: "luna", mode: "enforce", includeSubagents: true, sessionId: "luna-protocol", shown: false } });
-      assert.deepEqual(statuses.at(-1), ["luna-auto-approval", "auto: ENFORCE+SUB"], "Unclaimed, Luna keeps its status");
-      events.on("approval:judge-state", (state) => { state.shown = true; });
-      const request = (mode, includeSubagents) => {
-        const data = { mode, includeSubagents, applied: false };
-        for (const fn of listeners.get("approval:set-judge") ?? []) fn(data);
-        return data.applied;
-      };
-      assert.equal(request("shadow", true), false, "Shadow cannot cover subagents");
-      assert.equal(request("yolo", false), false, "Yolo is not a judge mode");
-      assert.equal(request("shadow", false), true);
-      assert.deepEqual(published.at(-1).data, { judge: "luna", mode: "shadow", includeSubagents: false, sessionId: "luna-protocol", shown: true });
-      assert.deepEqual(statuses.at(-1), ["luna-auto-approval", undefined], "A rendering indicator replaces Luna's status");
-    } finally {
-      process.env.PI_AUTO_APPROVAL_MODE = previousMode;
-      process.env.HOME = previousHome;
-      await hooks.get("session_shutdown")?.({}, {});
-    }
-    console.log("PASS: Luna publishes its mode and applies approval-indicator requests");
-  }
+  // Test the hard checkpoints against upstream payloads, not a guessed request.value shape.
+  const { hardCheckpointReason } = await jiti.import(join(resources, "extensions/lib/hard-checkpoint.ts"));
   const { inspectGitCommands } = await jiti.import(join(resources, "extensions/static-safety-guard.ts"));
   const { SessionRules } = await load("session/session-rules");
   for (const command of [...uncheckedGit, "env git show HEAD", "env git show HEAD:.env"]) {
@@ -365,10 +327,10 @@ try {
     run: async (gate) => { if (gate) grantedGates.push(gate); return { action: "allow" }; },
   });
   assert(!grantedGates.some((gate) => gate.surface === "bash" && gate.preCheck?.state === "ask"), "Session grant skips the bash ask");
-  assert(hardCheckpointReason({ payload: { kind: "bash", request: { surface: "bash", toolName: "bash", value: leak, matchedPattern: "git -P *", commandContext: null, executedUnit: null }, evidence: [{ label: "full command", text: leak, detail: null }], annotations: [] } }), "Luna still checkpoints a session-granted git -P show");
+  assert(hardCheckpointReason({ payload: { kind: "bash", request: { surface: "bash", toolName: "bash", value: leak, matchedPattern: "git -P *", commandContext: null, executedUnit: null }, evidence: [{ label: "full command", text: leak, detail: null }], annotations: [] } }), "The hard checkpoint still catches a session-granted git -P show");
   // The static guard lets operand-taking wrappers through as the normal-review
   // route. That is only sound while upstream keys them by the wrapper name, so
-  // no `git ...` session grant covers them and Luna still sees a show.
+  // no `git ...` session grant covers them and the hard checkpoint still sees a show.
   const wideSession = new SessionRules();
   for (const pattern of ["git -P *", "git *"]) wideSession.approve("bash", pattern);
   const wideGranted = new PermissionResolver(manager, wideSession);
@@ -480,7 +442,7 @@ try {
         const directoryGate = (await gatesFor("grep", { path: "/var" })).find((gate) => gate.surface === "external_directory_read");
         assert(directoryGate, "External directory produces an ask gate");
         const result = await preflight({ ...directoryGate.promptDetails, payload: directoryGate.payload });
-        assert.equal(result.kind, "deny", "Useless one-time directory prompt is stopped before Luna/UI");
+        assert.equal(result.kind, "deny", "Useless one-time directory prompt is stopped before the judge/UI");
         const explicitGate = (await gatesFor("grep", { path: "/etc/hosts" })).find((gate) => gate.surface === "external_directory_read");
         assert.equal((await preflight({ ...explicitGate.promptDetails, payload: explicitGate.payload })).kind, "defer", "Explicit file search keeps normal approval");
       } finally { globalThis[serviceKey] = previous; }

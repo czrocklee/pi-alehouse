@@ -1,5 +1,6 @@
 /**
- * Argv-preserving Git invocation parse shared by the static guard and Luna.
+ * Argv-preserving Git invocation parse shared by the static guard and the
+ * hard checkpoints (hard-checkpoint.ts).
  * Unknown globals stay on the human path; do not join words and re-lex them.
  */
 import { basename } from "node:path";
@@ -390,7 +391,7 @@ function hasExtDiffOrOutput(args: readonly string[]): boolean {
   );
 }
 
-/** Luna hard-checkpoint: remaining show, config, destructive Git, unknown globals. */
+/** Hard checkpoint: remaining show, config, destructive Git, unknown globals. */
 export function gitInvocationNeedsHuman(invocation: GitInvocation): boolean {
   const subcommand = invocation.subcommand?.toLowerCase();
   if (invocation.configOverride) return true;
