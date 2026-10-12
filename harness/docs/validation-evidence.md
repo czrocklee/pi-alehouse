@@ -40,7 +40,8 @@ code borrows no `InteractiveMode` methods, its tool renderers leave the new
 `outputPad` to Pi (none use `renderShell: "self"`), and child tool lists stay
 plain names, so the new `+name`/`-name` modifiers do not apply. Two uses of new
 fields: Stats tool time is Pi's `tool_execution_end` `durationMs`, so the
-permission gate and its approval wait no longer count as tool time, and the
+permission gate and its approval wait no longer count as tool time (running
+calls are reported apart, by the oldest one's age), and the
 terminal title shows no completion marker after an `agent_settled` with
 `aborted`. The lockfile changed only the eight `@earendil-works` packages;
 `npm audit` still reports the same `@modelcontextprotocol/sdk` 1.27.1 advisory

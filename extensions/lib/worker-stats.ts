@@ -19,9 +19,12 @@ export interface WorkerStatsSnapshot {
   /** Sum of worker busy intervals. Parallel workers are deliberately additive. */
   busyMs: number;
   llmMs: number;
+  /** Completed calls' execution time; running calls are not included. */
   toolMs: number;
   activeRequests: number;
   activeTools: number;
+  /** Time since the longest-running worker call began, permission gate included. Absent when none runs. */
+  longestActiveToolMs?: number;
   health: SessionHealth;
   partial: boolean;
   models: SessionModelStats[];
@@ -488,6 +491,7 @@ export class WorkerStats {
     let toolMs = this.#toolMs;
     let activeRequests = 0;
     let activeTools = 0;
+    let longestActiveToolMs: number | undefined;
     let running = 0;
     let partial = this.#partial;
     const models = new Map(
@@ -504,6 +508,8 @@ export class WorkerStats {
       toolMs = addBounded(toolMs, amount(snapshot.toolMs));
       activeRequests = addBounded(activeRequests, amount(snapshot.activeRequests));
       activeTools = addBounded(activeTools, amount(snapshot.activeTools));
+      const longest = finiteNonNegative(snapshot.longestActiveToolMs);
+      if (longest !== undefined) longestActiveToolMs = Math.max(longestActiveToolMs ?? 0, longest);
       if (record.running) running++;
       partial ||= record.partial || snapshot.partial;
       for (const model of snapshot.models) {
@@ -525,6 +531,7 @@ export class WorkerStats {
       toolMs,
       activeRequests,
       activeTools,
+      ...(longestActiveToolMs === undefined ? {} : { longestActiveToolMs }),
       health: this.health,
       partial,
       models: publicModels(models),

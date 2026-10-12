@@ -281,10 +281,10 @@ test("same model ids from different providers keep their prefixes; optional colu
 });
 
 test("main and worker metrics stay separate even for identical model/tool names", () => {
-  const mounted = mount({ rows: 40, data: snapshot({ elapsedMs: 1000, busyMs: 500, idleMs: 500,
+  const mounted = mount({ rows: 40, data: snapshot({ elapsedMs: 1000, busyMs: 500, idleMs: 500, longestActiveToolMs: 65000,
     models: [model("same", { provider: "p", outputTokens: 10 })], tools: [tool("read")],
     workers: { observed: 3, resident: 2, running: 2, busyMs: 3000, llmMs: 2000, toolMs: 800,
-      activeRequests: 2, activeTools: 1, health: "busy", partial: false,
+      activeRequests: 2, activeTools: 1, longestActiveToolMs: 4000, health: "busy", partial: false,
       models: [model("same", { provider: "p", outputTokens: 90 })], tools: [tool("read", { calls: 9 })] },
   }) });
   let lines = paint(mounted, 140).map(plain);
@@ -292,6 +292,7 @@ test("main and worker metrics stay separate even for identical model/tool names"
   assert.match(text, /Busy +500ms +3\.0s/);
   assert.match(text, /Idle +500ms +[│ ]/, "worker busy is a sum, so it has no idle counterpart");
   assert.match(text, /Agents running +2 of 2/);
+  assert.match(text, /Oldest tool call +1m ago +4s ago/, "running calls' age is apart from Tools Σ");
   assert.match(text, /Worker figures add up 3 observed workers\./);
   assert.match(text, /Approval wait includes forwarded worker asks, counted once/);
   const order = (...patterns) => patterns.map((pattern) => lines.findIndex((line) => pattern.test(line)));

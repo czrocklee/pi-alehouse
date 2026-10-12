@@ -65,6 +65,34 @@ test("parallel worker busy durations are additive rather than a main-session uni
   });
 });
 
+test("worker tool totals are execution-only; the oldest running call's age is separate", () => {
+  const c = clock();
+  const workers = new WorkerStats(c.now);
+  const a = workers.attach("a");
+  const b = workers.attach("b");
+  assert(a && b);
+  a.beginRun(); b.beginRun();
+  a.startActivity(); b.startActivity();
+  a.toolStart("done", "bash");
+  c.set(30); a.toolEnd("done", false, 12);
+  a.toolStart("awaiting-approval", "bash");
+  c.set(40); b.toolStart("running", "read");
+  c.set(90);
+  let snapshot = workers.snapshot();
+  assert.equal(snapshot.toolMs, 12, "running calls, including one awaiting approval, add no tool time");
+  assert.equal(snapshot.activeTools, 2);
+  assert.equal(snapshot.longestActiveToolMs, 60, "the oldest call across workers");
+  assert.deepEqual(tool(snapshot, "bash"), { tool: "bash", calls: 1, errors: 0, totalMs: 12, maxMs: 12, partial: false });
+  assert.equal(tool(snapshot, "read"), undefined);
+  a.toolEnd("awaiting-approval", true, 0);
+  b.toolEnd("running", false, 5);
+  finishRun(a); finishRun(b);
+  snapshot = workers.snapshot();
+  assert.equal(snapshot.toolMs, 17);
+  assert.equal(snapshot.longestActiveToolMs, undefined);
+  assert.deepEqual(tool(snapshot, "bash"), { tool: "bash", calls: 2, errors: 1, totalMs: 12, maxMs: 12, partial: false });
+});
+
 test("same model merges by provider with sample-weighted TTFT and raw timed TPS", () => {
   const c = clock();
   const workers = new WorkerStats(c.now);

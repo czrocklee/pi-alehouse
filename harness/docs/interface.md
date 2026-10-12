@@ -456,7 +456,9 @@ or decoder speed. Cumulative LLM/tool time can overlap
 and is not an additive breakdown of session wall time. Tool time is the
 execution time Pi measures for each call, so it leaves out the permission gate
 and its approval wait; a call Pi never ran, such as a denied one, counts with no
-time, and a call still running shows its time so far. Missing and partial
+time. Running calls stay out of the totals: Now shows the oldest one's age,
+which includes the permission gate. A call cut short at settlement has no known
+execution time, so it counts with none and marks its row partial. Missing and partial
 measurements are labeled; no timing is invented from older transcripts.
 Parent-side approval wait, including forwarded asks, is counted once. Worker
 usage forwarded in tool results is never re-counted as another model response.

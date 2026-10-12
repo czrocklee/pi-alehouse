@@ -35,10 +35,10 @@ export interface SessionToolStats {
   tool: string;
   calls: number;
   errors: number;
-  /** Cumulative per-call time. Parallel calls are additive and may exceed wall time. */
+  /** Completed calls' execution time as Pi measured it. Parallel calls are additive and may exceed wall time. */
   totalMs: number;
   maxMs: number;
-  /** At least one call is still running or could not be paired. */
+  /** At least one completed call has no known execution time, or the row is the overflow bucket. */
   partial: boolean;
 }
 
@@ -66,12 +66,14 @@ export interface SessionStatsSnapshot {
   idleMs: number;
   /** Cumulative SDK-turn time from turn_start; includes preflight and is not transport-only. */
   llmMs: number;
-  /** Cumulative per-tool time; parallel tools are additive. */
+  /** Completed calls' execution time; parallel tools are additive. Running calls are not included. */
   toolMs: number;
   /** Union time across overlapping permission prompts. */
   approvalMs: number;
   activeRequests: number;
   activeTools: number;
+  /** Time since the longest-running call began, permission gate included. Absent when none runs. */
+  longestActiveToolMs?: number;
   pendingApprovals: number;
   health: SessionHealth;
   /** Whether an agent_start has established foreground lifecycle evidence. */
@@ -197,10 +199,6 @@ function cloneModel(value: ModelAggregate): ModelAggregate {
   return { ...value };
 }
 
-function cloneTool(value: ToolAggregate): ToolAggregate {
-  return { ...value };
-}
-
 /**
  * Timer-free, bounded, in-memory observations for one currently open Pi session.
  *
@@ -320,7 +318,7 @@ export class SessionStats {
     this.#activityStartedAt = undefined;
     if (this.#request) this.#finishRequest(undefined, now, true);
     const cutShort = this.#activeTools.size > 0;
-    for (const id of [...this.#activeTools.keys()]) this.#finishTool(id, false, now, true);
+    for (const id of [...this.#activeTools.keys()]) this.#finishTool(id, false, undefined);
     this.#lastRunSucceeded = !cutShort && typeof this.#runStop === "string" && FINAL_STOPS.has(this.#runStop);
     // Permission prompts belong to the parent UI, not the agent loop. A prompt
     // can outlive settlement (or originate while idle), so only its matching
@@ -414,14 +412,14 @@ export class SessionStats {
 
   /**
    * `durationMs` is the execution time Pi measured, which leaves out argument
-   * validation and the permission gate. Without it, the time since toolStart.
+   * validation and the permission gate. A call without one adds no time and
+   * marks its row partial.
    */
   toolEnd(id: string, isError: boolean, durationMs?: number): void {
     const safeId = identifier(id);
     if (!safeId || !this.#activeTools.has(safeId)) return;
-    const now = this.#now();
-    this.#touch(now);
-    this.#finishTool(safeId, isError === true, now, false, finiteNonNegative(durationMs));
+    this.#touch(this.#now());
+    this.#finishTool(safeId, isError === true, finiteNonNegative(durationMs));
   }
 
   approvalStart(id: string): void {
@@ -600,21 +598,24 @@ export class SessionStats {
     if (partial || aggregate.model === OVERFLOW) this.#partial = true;
   }
 
-  #finishTool(id: string, isError: boolean, now: number, forcedPartial: boolean, reportedMs?: number): void {
+  #finishTool(id: string, isError: boolean, executionMs: number | undefined): void {
     const active = this.#activeTools.get(id);
     if (!active) return;
     this.#activeTools.delete(id);
-    const duration = reportedMs ?? this.#duration(active.startedAt, now);
+    // Time since toolStart includes the permission gate, so it never stands
+    // in for an unknown execution time, such as a call cut short at settlement.
+    const unknown = executionMs === undefined;
+    const duration = executionMs ?? 0;
     this.#toolMs = addBounded(this.#toolMs, duration);
     const aggregate = this.#toolAggregate(this.#tools, active.tool);
     aggregate.calls = addBounded(aggregate.calls, 1);
     aggregate.errors = addBounded(aggregate.errors, isError ? 1 : 0);
     aggregate.totalMs = addBounded(aggregate.totalMs, duration);
     aggregate.maxMs = Math.max(aggregate.maxMs, duration);
-    aggregate.partial ||= forcedPartial || aggregate.tool === OVERFLOW;
+    aggregate.partial ||= unknown || aggregate.tool === OVERFLOW;
     // Nonzero shell exits, denied permissions and fixable builds are tool
     // outcomes, not provider/Run failures. Retain their counts without red health.
-    if (forcedPartial || aggregate.tool === OVERFLOW) this.#partial = true;
+    if (unknown || aggregate.tool === OVERFLOW) this.#partial = true;
   }
 
   #closeApprovalInterval(now: number): void {
@@ -636,9 +637,6 @@ export class SessionStats {
     const modelValues = new Map(
       [...this.#models].map(([key, value]) => [key, cloneModel(value)]),
     );
-    const toolValues = new Map(
-      [...this.#tools].map(([key, value]) => [key, cloneTool(value)]),
-    );
 
     let llmMs = this.#llmMs;
     if (this.#request) {
@@ -654,15 +652,11 @@ export class SessionStats {
       aggregate.partial = true;
     }
 
-    let toolMs = this.#toolMs;
+    // Running calls stay out of the execution totals: their time so far
+    // includes the permission gate. The longest one is reported on its own.
+    let longestActiveToolMs: number | undefined;
     for (const active of this.#activeTools.values()) {
-      const duration = this.#duration(active.startedAt, now);
-      toolMs = addBounded(toolMs, duration);
-      const aggregate = this.#toolAggregate(toolValues, active.tool);
-      aggregate.calls = addBounded(aggregate.calls, 1);
-      aggregate.totalMs = addBounded(aggregate.totalMs, duration);
-      aggregate.maxMs = Math.max(aggregate.maxMs, duration);
-      aggregate.partial = true;
+      longestActiveToolMs = Math.max(longestActiveToolMs ?? 0, this.#duration(active.startedAt, now));
     }
 
     const approvalMs = this.#approvalStartedAt === undefined
@@ -683,7 +677,7 @@ export class SessionStats {
       ...(value.tpsMs > 0 ? { tps: value.tpsTokens / (value.tpsMs / 1_000) } : {}),
       partial: value.partial,
     }));
-    const tools: SessionToolStats[] = [...toolValues.values()].map((value) => ({ ...value }));
+    const tools: SessionToolStats[] = [...this.#tools.values()].map((value) => ({ ...value }));
 
     return {
       scope: "foreground-observed",
@@ -692,10 +686,11 @@ export class SessionStats {
       busyMs,
       idleMs: Math.max(0, elapsedMs - busyMs),
       llmMs,
-      toolMs,
+      toolMs: this.#toolMs,
       approvalMs,
       activeRequests: this.#request ? 1 : 0,
       activeTools: this.#activeTools.size,
+      ...(longestActiveToolMs === undefined ? {} : { longestActiveToolMs }),
       pendingApprovals: this.#pendingApprovals.size,
       health: this.health,
       observedActivity: this.#hasActivityEvidence,

@@ -105,8 +105,8 @@ test("parallel tools are cumulative rather than a wall-time partition", () => {
   const { c, stats } = started();
   c.set(10); stats.toolStart("private-tool-id-a", "bash");
   c.set(20); stats.toolStart("private-tool-id-b", "read");
-  c.set(40); stats.toolEnd("private-tool-id-a", false);
-  c.set(60); stats.toolEnd("private-tool-id-b", true);
+  c.set(40); stats.toolEnd("private-tool-id-a", false, 30);
+  c.set(60); stats.toolEnd("private-tool-id-b", true, 40);
   c.set(70); stats.settleActivity();
   const snapshot = stats.snapshot();
   assert.equal(snapshot.elapsedMs, 70);
@@ -134,23 +134,32 @@ test("ordinary tool failures remain counters, not a fatal session health state",
   assert.equal(tool(stats.snapshot(), "read").errors, 1);
 });
 
-test("live parallel tools are included without mutating completed totals", () => {
+test("running tools stay out of execution totals; the oldest call's age is separate", () => {
   const { c, stats } = started();
+  c.set(5); stats.toolStart("done", "bash");
+  c.set(8); stats.toolEnd("done", false, 2);
   c.set(10); stats.toolStart("a", "bash");
   c.set(20); stats.toolStart("b", "bash");
   c.set(50);
   const one = stats.snapshot();
   assert.equal(one.activeTools, 2);
-  assert.equal(one.toolMs, 70);
+  assert.equal(one.longestActiveToolMs, 40, "age since the call began, permission gate included");
+  assert.equal(one.toolMs, 2, "a running call, perhaps awaiting approval, adds no tool time");
   assert.deepEqual(tool(one, "bash"), {
-    tool: "bash", calls: 2, errors: 0, totalMs: 70, maxMs: 40, partial: true,
+    tool: "bash", calls: 1, errors: 0, totalMs: 2, maxMs: 2, partial: false,
   });
+  assert.equal(one.partial, true);
   assert.deepEqual(stats.snapshot(), one, "snapshot is an idempotent read at a fixed clock");
-  c.set(60); stats.toolEnd("a", false); stats.toolEnd("b", false);
-  assert.equal(stats.snapshot().toolMs, 90);
+  c.set(60); stats.toolEnd("a", false, 30); stats.toolEnd("b", true, 0);
+  const two = stats.snapshot();
+  assert.equal(two.toolMs, 32);
+  assert.equal(two.longestActiveToolMs, undefined);
+  assert.deepEqual(tool(two, "bash"), {
+    tool: "bash", calls: 3, errors: 1, totalMs: 32, maxMs: 30, partial: false,
+  });
 });
 
-test("reported execution time replaces the observed interval; an invalid one does not", () => {
+test("reported execution time is the only tool time; a missing or invalid one adds none", () => {
   const { c, stats } = started();
   c.set(10); stats.toolStart("approved", "bash");
   c.set(40); stats.toolEnd("approved", false, 12);
@@ -162,13 +171,14 @@ test("reported execution time replaces the observed interval; an invalid one doe
   c.set(104); stats.toolEnd("invalid", false, -1);
   stats.settleActivity();
   const snapshot = stats.snapshot();
-  assert.equal(snapshot.toolMs, 21);
+  assert.equal(snapshot.toolMs, 12);
   assert.deepEqual(tool(snapshot, "bash"), {
     tool: "bash", calls: 2, errors: 1, totalMs: 12, maxMs: 12, partial: false,
   });
   assert.deepEqual(tool(snapshot, "read"), {
-    tool: "read", calls: 2, errors: 0, totalMs: 9, maxMs: 5, partial: false,
+    tool: "read", calls: 2, errors: 0, totalMs: 0, maxMs: 0, partial: true,
   });
+  assert.equal(snapshot.partial, true);
 });
 
 test("overlapping approvals accrue union time and waiting takes precedence over provider errors", () => {
@@ -425,7 +435,8 @@ test("unsettled work is live and settlement closes it conservatively", () => {
   assert.equal(snapshot.activeTools, 1);
   assert.equal(snapshot.pendingApprovals, 1);
   assert.equal(snapshot.llmMs, 40);
-  assert.equal(snapshot.toolMs, 30);
+  assert.equal(snapshot.toolMs, 0);
+  assert.equal(snapshot.longestActiveToolMs, 30);
   assert.equal(snapshot.approvalMs, 20);
   assert.equal(snapshot.partial, true);
 
@@ -436,7 +447,10 @@ test("unsettled work is live and settlement closes it conservatively", () => {
   assert.equal(snapshot.pendingApprovals, 1, "agent settlement does not settle a parent UI prompt");
   assert.equal(snapshot.health, "waiting");
   assert.equal(model(snapshot, "m").partial, true);
-  assert.equal(tool(snapshot, "bash").partial, true);
+  assert.deepEqual(tool(snapshot, "bash"), {
+    tool: "bash", calls: 1, errors: 0, totalMs: 0, maxMs: 0, partial: true,
+  }, "a call cut short has no known execution time");
+  assert.equal(snapshot.longestActiveToolMs, undefined);
   c.set(60); stats.approvalEnd("approval");
   assert.equal(stats.snapshot().approvalMs, 30);
 });
@@ -616,6 +630,9 @@ test("binding takes Pi's execution time, so a gated wait is approval time, not t
   f.emit("agent_start");
   c.set(10); f.emit("tool_execution_start", { toolCallId: "approved", toolName: "bash" });
   c.set(15); f.bus("permissions:ui_prompt", { requestId: "ask" });
+  c.set(40);
+  assert.equal(stats.snapshot().toolMs, 0, "awaiting approval is not tool time");
+  assert.equal(stats.snapshot().longestActiveToolMs, 30);
   c.set(45); f.bus("permissions:decision", { requestId: "ask", decision: "allow" });
   c.set(52); f.emit("tool_execution_end", { toolCallId: "approved", toolName: "bash", isError: false, durationMs: 7 });
   // Pi reports no duration for a call it never executed.

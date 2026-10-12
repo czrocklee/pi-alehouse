@@ -376,6 +376,9 @@ function overviewGrids(snapshot: StatsDashboardSnapshot): Grid<OverviewRow>[] {
       { label: "Agents running", main: "", workers: worker((w) => `${formatCount(w.running)} of ${formatCount(w.resident)}`) },
       { label: "Requests", main: formatCount(snapshot.activeRequests), workers: worker((w) => formatCount(w.activeRequests)) },
       { label: "Tool calls", main: formatCount(snapshot.activeTools), workers: worker((w) => formatCount(w.activeTools)) },
+      // Running calls are not in Tools Σ; their age includes the permission gate.
+      { label: "Oldest tool call", main: formatAge(snapshot.longestActiveToolMs),
+        workers: worker((w) => formatAge(w.longestActiveToolMs)) },
       { label: "Approvals pending", main: formatCount(snapshot.pendingApprovals) },
       { label: "Last event", main: formatAge(snapshot.lastActivityMs) },
     ]),

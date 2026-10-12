@@ -2180,7 +2180,7 @@ test("health transitions and streaming never build detail snapshots; tool errors
     }
     await m.f.emit("tool_execution_start", { toolCallId: "check", toolName: "bash" });
     await m.f.emit("tool_execution_end", { toolCallId: "check", isError: true });
-    sink.toolStart("worker-check", "bash"); sink.toolEnd("worker-check", true);
+    sink.toolStart("worker-check", "bash"); sink.toolEnd("worker-check", true, 0);
     assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.busy, "neither tool error is a fatal health signal");
     const failure = (model) => ({ role: "assistant", provider: "fixture", model, stopReason: "error" });
     await m.f.emit("message_end", { message: failure("requested") });
