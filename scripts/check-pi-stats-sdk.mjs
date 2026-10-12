@@ -87,7 +87,12 @@ for (const worker of [false, true]) for (const failedTool of [false, true]) test
     agentsFilesOverride: () => ({ agentsFiles: [] }), systemPromptOverride: () => "Synthetic stats fixture.", extensionFactories });
   const bindMain = (pi) => { unbind = bindStatsEvents(pi, () => stats, () => {}); };
   const settings = makeSettings();
-  const loader = makeLoader(settings, observer ? [observer.extension] : [bindMain]);
+  // Pi times execute() alone with performance.now. A slow permission gate
+  // before it is approval time, never tool time, although tool_execution_start
+  // precedes the gate.
+  t.mock.method(performance, "now", () => now);
+  const gate = (pi) => { pi.on("tool_call", () => { now += 25; }); };
+  const loader = makeLoader(settings, [gate, observer ? observer.extension : bindMain]);
   let session, parentSession;
   t.after(async () => {
     unbind?.();
@@ -130,7 +135,7 @@ for (const worker of [false, true]) for (const failedTool of [false, true]) test
   const view = worker ? workers.snapshot() : stats.snapshot();
   assert.equal(calls, 2);
   assert.equal(view.health, "idle");
-  assert.equal(view.busyMs, 870);
+  assert.equal(view.busyMs, 895);
   assert.equal(view.llmMs, 800);
   assert.equal(view.toolMs, 70);
   if (!worker) {

@@ -210,10 +210,11 @@ export default function (pi: ExtensionAPI) {
     syncTitle();
   });
 
-  pi.on("agent_settled", (_event, ctx) => {
+  pi.on("agent_settled", (event, ctx) => {
     context = ctx;
-    // Settlement means the run ended, not that the task succeeded.
-    settled ||= running;
+    // Settlement means the run ended, not that the task succeeded. An aborted
+    // run was stopped by someone already here, so it does not ask for a look.
+    settled = !event.aborted && (settled || running);
     running = false;
     syncTitle();
   });

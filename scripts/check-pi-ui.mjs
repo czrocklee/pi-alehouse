@@ -277,6 +277,27 @@ for (const sdkDispatch of [false, true]) {
     assert.equal(f.terminal.setTitle, f.originalSetTitle);
     assert.deepEqual(f.errors, []);
   });
+
+  test(`an aborted run settles to the plain title, not the completion marker (SDK dispatch: ${sdkDispatch})`, async (t) => {
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    const f = fixture("tui", sdkDispatch);
+    titleExtension(f.pi);
+    t.after(() => f.emit("session_shutdown"));
+    await f.emit("session_start");
+    await f.emit("agent_start");
+    await f.emit("agent_settled", { aborted: true });
+    assert.equal(f.titles.at(-1), "π - project", "an Escape needs no completion marker");
+    const writes = f.titles.length;
+    t.mock.timers.tick(330);
+    assert.equal(f.titles.length, writes, "an aborted run stops animation");
+    await f.emit("agent_start");
+    await f.emit("agent_settled", { aborted: false });
+    assert.equal(f.titles.at(-1), "✓ - project", "the next completed run still asks for a look");
+    await f.emit("agent_start");
+    await f.emit("agent_settled", { aborted: true });
+    assert.equal(f.titles.at(-1), "π - project", "a later abort replaces the earlier marker");
+    assert.deepEqual(f.errors, []);
+  });
 }
 
 for (const running of [false, true]) {

@@ -25,6 +25,29 @@ observations into public evidence.
 
 Keep fixtures offline and output outside the checkout; never make real-model calls or copy Pi auth/session data into public reports. A controlled provider reports synthetic behavior only. In particular, SDK post-guard queue/message acceptance and unsupported live-Owner `/reload` must be tested as limitations, not relabelled safe because a selected schedule produced no post-cancel provider call. Only an actual controlled run can record an outcome. Permission authority selection must use the **built matched patched runtime**; a mutable global install or missing fixture is not a pass. A test report should distinguish failures, skipped checks and suites that matched zero tests.
 
+## Pi 1.1.0 update
+
+With Node 24.20.0, development Pi/AI/TUI 1.1.0 and
+`PI_TEST_EXECUTABLE` set to the development 1.1.0 CLI, `npm run build` and
+`HARNESS_FLOCK=/run/current-system/sw/bin/flock npm run check` passed locally:
+**2101 package tests passed, 7 skipped**, plus lint/types and the separate
+portable policy gates. Installed host Pi was still 1.0.4; against it the
+stats SDK gate fails as expected, because 1.0.4 reports no tool execution time.
+Besides the child-communication fixture's SDK version pin, the preset-picker
+fixture that borrows `InteractiveMode` dialogs on a partial host now supplies
+`programStatus`: 1.1.0 dialogs report OSC 7501 `blocked` through it. Production
+code borrows no `InteractiveMode` methods, its tool renderers leave the new
+`outputPad` to Pi (none use `renderShell: "self"`), and child tool lists stay
+plain names, so the new `+name`/`-name` modifiers do not apply. Two uses of new
+fields: Stats tool time is Pi's `tool_execution_end` `durationMs`, so the
+permission gate and its approval wait no longer count as tool time, and the
+terminal title shows no completion marker after an `agent_settled` with
+`aborted`. The lockfile changed only the eight `@earendil-works` packages;
+`npm audit` still reports the same `@modelcontextprotocol/sdk` 1.27.1 advisory
+through pi-web-access 0.35.0. The optional Nix package built with its refreshed
+npm cache hash. No built-tarball host RPC check, Home Manager activation or
+real-model run was performed.
+
 ## Pi 1.0.4 update
 
 With Node 24.20.0, development Pi/AI/TUI 1.0.4 and installed host Pi 1.0.4,

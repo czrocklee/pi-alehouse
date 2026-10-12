@@ -9,7 +9,8 @@ export interface WorkerStatsSink {
   delta(kind: "text_delta" | "thinking_delta" | "toolcall_delta"): void;
   messageEnd(message: WorkerStatsMessage): void;
   toolStart(id: string, name: string): void;
-  toolEnd(id: string, isError: boolean): void;
+  /** `durationMs` is the execution time Pi reported; 0 for a call it never ran. */
+  toolEnd(id: string, isError: boolean, durationMs?: number): void;
   endRun(kind: "success" | "error" | "aborted"): void;
   dispose(): void;
 }

@@ -291,7 +291,7 @@ export class WorkerStats {
         delta: (kind) => this.#observe(record, (stats) => stats.delta(kind, "observed")),
         messageEnd: (message) => this.#messageEnd(record, message),
         toolStart: (id, name) => this.#observe(record, (stats) => stats.toolStart(id, name)),
-        toolEnd: (id, isError) => this.#toolEnd(record, id, isError),
+        toolEnd: (id, isError, durationMs) => this.#toolEnd(record, id, isError, durationMs),
         endRun: (kind) => this.#endRun(record, kind),
         dispose: () => this.#retire(record, true),
       };
@@ -415,11 +415,11 @@ export class WorkerStats {
     this.#notify();
   }
 
-  #toolEnd(record: WorkerRecord, id: string, isError: boolean): void {
+  #toolEnd(record: WorkerRecord, id: string, isError: boolean, durationMs?: number): void {
     if (this.#disposed || record.disposed || !record.running) return;
     try {
       // Recoverable tool errors belong in counters, not a sticky Run failure.
-      record.stats.toolEnd(id, isError);
+      record.stats.toolEnd(id, isError, durationMs);
     } catch {
       record.partial = true;
     }

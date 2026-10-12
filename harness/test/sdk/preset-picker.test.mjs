@@ -78,7 +78,8 @@ function emptyOwnerPanels(t, mode = "fullscreen", management, liveEffort = false
     renderWidgets: InteractiveMode.prototype.renderWidgets,
     renderWidgetContainer: InteractiveMode.prototype.renderWidgetContainer,
     showExtensionSelector: InteractiveMode.prototype.showExtensionSelector,
-    hideExtensionSelector: InteractiveMode.prototype.hideExtensionSelector, disposeActiveSelector() {} };
+    hideExtensionSelector: InteractiveMode.prototype.hideExtensionSelector, disposeActiveSelector() {},
+    programStatus: { setBlocked() {} } };
   host.editorContainer.addChild(editor);
   const bus = createEventBus(), shortcuts = new Map(), mounts = [], widgets = [], published = [];
   const router = new PresetRouter(starterPath);

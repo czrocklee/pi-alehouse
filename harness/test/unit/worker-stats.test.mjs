@@ -13,7 +13,7 @@ function recordingSink() {
     delta(kind) { calls.push(["delta", kind]); },
     messageEnd(message) { calls.push(["messageEnd", message]); },
     toolStart(id, name) { calls.push(["toolStart", id, name]); },
-    toolEnd(id, isError) { calls.push(["toolEnd", id, isError]); },
+    toolEnd(id, isError, durationMs) { calls.push(["toolEnd", id, isError, durationMs]); },
     endRun(kind) { calls.push(["endRun", kind]); },
     dispose() { calls.push(["dispose"]); },
   };
@@ -72,9 +72,12 @@ test("worker observer lazily attaches and forwards literal metadata only", () =>
   const toolStart = { toolCallId: "call-1", toolName: "bash" };
   Object.defineProperty(toolStart, "args", { get() { throw new Error("tool args must not be read"); } });
   emit("tool_execution_start", toolStart);
-  const toolEnd = { toolCallId: "call-1", isError: true };
+  const toolEnd = { toolCallId: "call-1", isError: true, durationMs: 42 };
   Object.defineProperty(toolEnd, "result", { get() { throw new Error("tool output must not be read"); } });
   emit("tool_execution_end", toolEnd);
+  // Pi reports no duration for a call it never ran, such as a denied one.
+  emit("tool_execution_start", { toolCallId: "call-2", toolName: "bash" });
+  emit("tool_execution_end", { toolCallId: "call-2", isError: true });
   emit("agent_settled");
   observer.endRun("success");
 
@@ -85,7 +88,8 @@ test("worker observer lazily attaches and forwards literal metadata only", () =>
       role: "assistant", provider: "provider", model: "requested", responseModel: "actual", stopReason: "stop",
       usage: { output: 7, cost: { total: 0.25 } },
     }],
-    ["toolStart", "call-1", "bash"], ["toolEnd", "call-1", true], ["settleActivity"], ["endRun", "success"],
+    ["toolStart", "call-1", "bash"], ["toolEnd", "call-1", true, 42],
+    ["toolStart", "call-2", "bash"], ["toolEnd", "call-2", true, 0], ["settleActivity"], ["endRun", "success"],
   ]);
 });
 

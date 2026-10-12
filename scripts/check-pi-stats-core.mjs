@@ -150,6 +150,27 @@ test("live parallel tools are included without mutating completed totals", () =>
   assert.equal(stats.snapshot().toolMs, 90);
 });
 
+test("reported execution time replaces the observed interval; an invalid one does not", () => {
+  const { c, stats } = started();
+  c.set(10); stats.toolStart("approved", "bash");
+  c.set(40); stats.toolEnd("approved", false, 12);
+  c.set(50); stats.toolStart("denied", "bash");
+  c.set(80); stats.toolEnd("denied", true, 0);
+  c.set(90); stats.toolStart("unreported", "read");
+  c.set(95); stats.toolEnd("unreported", false);
+  c.set(100); stats.toolStart("invalid", "read");
+  c.set(104); stats.toolEnd("invalid", false, -1);
+  stats.settleActivity();
+  const snapshot = stats.snapshot();
+  assert.equal(snapshot.toolMs, 21);
+  assert.deepEqual(tool(snapshot, "bash"), {
+    tool: "bash", calls: 2, errors: 1, totalMs: 12, maxMs: 12, partial: false,
+  });
+  assert.deepEqual(tool(snapshot, "read"), {
+    tool: "read", calls: 2, errors: 0, totalMs: 9, maxMs: 5, partial: false,
+  });
+});
+
 test("overlapping approvals accrue union time and waiting takes precedence over provider errors", () => {
   const { c, stats } = started();
   c.set(5); stats.requestStart("m", "p");
@@ -587,6 +608,25 @@ test("binding measures idle/overlapping permission asks without exposing IDs or 
     assert(!serialized.includes(secret), `snapshot retained ${secret}`);
   }
   assert.equal(stats.snapshot().approvalMs, 25);
+});
+
+test("binding takes Pi's execution time, so a gated wait is approval time, not tool time", () => {
+  const c = clock(), stats = new SessionStats(c.now), f = eventFixture();
+  bindStatsEvents(f.pi, () => stats, () => {});
+  f.emit("agent_start");
+  c.set(10); f.emit("tool_execution_start", { toolCallId: "approved", toolName: "bash" });
+  c.set(15); f.bus("permissions:ui_prompt", { requestId: "ask" });
+  c.set(45); f.bus("permissions:decision", { requestId: "ask", decision: "allow" });
+  c.set(52); f.emit("tool_execution_end", { toolCallId: "approved", toolName: "bash", isError: false, durationMs: 7 });
+  // Pi reports no duration for a call it never executed.
+  c.set(60); f.emit("tool_execution_start", { toolCallId: "denied", toolName: "bash" });
+  c.set(90); f.emit("tool_execution_end", { toolCallId: "denied", toolName: "bash", isError: true });
+  const snapshot = stats.snapshot();
+  assert.equal(snapshot.approvalMs, 30);
+  assert.equal(snapshot.toolMs, 7);
+  assert.deepEqual(tool(snapshot, "bash"), {
+    tool: "bash", calls: 2, errors: 1, totalMs: 7, maxMs: 7, partial: false,
+  });
 });
 
 test("prompt settlement ends only its own approval wait even without a matching decision", () => {

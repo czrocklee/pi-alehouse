@@ -142,9 +142,10 @@ export class WorkerStatsObserver {
       const name = stringValue(event.toolName);
       if (id !== undefined && name !== undefined) sink.toolStart(id, name);
     })));
+    // Pi reports no duration only for a call it never executed.
     this.register(() => pi.on("tool_execution_end", (event) => this.observe((sink) => {
       const id = stringValue(event.toolCallId);
-      if (id !== undefined && typeof event.isError === "boolean") sink.toolEnd(id, event.isError);
+      if (id !== undefined && typeof event.isError === "boolean") sink.toolEnd(id, event.isError, numberValue(event.durationMs) ?? 0);
     })));
     this.register(() => pi.on("session_shutdown", () => this.dispose()));
   };

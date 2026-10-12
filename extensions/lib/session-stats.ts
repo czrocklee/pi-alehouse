@@ -412,12 +412,16 @@ export class SessionStats {
     this.#activeTools.set(safeId, { startedAt: now, tool: label(name) });
   }
 
-  toolEnd(id: string, isError: boolean): void {
+  /**
+   * `durationMs` is the execution time Pi measured, which leaves out argument
+   * validation and the permission gate. Without it, the time since toolStart.
+   */
+  toolEnd(id: string, isError: boolean, durationMs?: number): void {
     const safeId = identifier(id);
     if (!safeId || !this.#activeTools.has(safeId)) return;
     const now = this.#now();
     this.#touch(now);
-    this.#finishTool(safeId, isError === true, now, false);
+    this.#finishTool(safeId, isError === true, now, false, finiteNonNegative(durationMs));
   }
 
   approvalStart(id: string): void {
@@ -596,11 +600,11 @@ export class SessionStats {
     if (partial || aggregate.model === OVERFLOW) this.#partial = true;
   }
 
-  #finishTool(id: string, isError: boolean, now: number, forcedPartial: boolean): void {
+  #finishTool(id: string, isError: boolean, now: number, forcedPartial: boolean, reportedMs?: number): void {
     const active = this.#activeTools.get(id);
     if (!active) return;
     this.#activeTools.delete(id);
-    const duration = this.#duration(active.startedAt, now);
+    const duration = reportedMs ?? this.#duration(active.startedAt, now);
     this.#toolMs = addBounded(this.#toolMs, duration);
     const aggregate = this.#toolAggregate(this.#tools, active.tool);
     aggregate.calls = addBounded(aggregate.calls, 1);
@@ -777,8 +781,10 @@ export function bindStatsEvents(
   register(() => pi.on("tool_execution_start", (event) => observe((stats) => {
     stats.toolStart(event.toolCallId, event.toolName);
   })));
+  // Pi reports no duration only for a call it never executed: unknown tool,
+  // invalid arguments, or blocked or aborted before execution.
   register(() => pi.on("tool_execution_end", (event) => observe((stats) => {
-    stats.toolEnd(event.toolCallId, event.isError);
+    stats.toolEnd(event.toolCallId, event.isError, event.durationMs ?? 0);
   })));
   register(() => pi.events.on("permissions:ui_prompt", (value) => {
     const requestId = requestIdFrom(value);

@@ -453,7 +453,10 @@ and include preflight; they are not transport-only timings. Uncorrelated
 provider hooks also fire during cache warming and are deliberately ignored.
 TPS uses reported output tokens over this SDK-turn time, not stream-chunk counts
 or decoder speed. Cumulative LLM/tool time can overlap
-and is not an additive breakdown of session wall time. Missing and partial
+and is not an additive breakdown of session wall time. Tool time is the
+execution time Pi measures for each call, so it leaves out the permission gate
+and its approval wait; a call Pi never ran, such as a denied one, counts with no
+time, and a call still running shows its time so far. Missing and partial
 measurements are labeled; no timing is invented from older transcripts.
 Parent-side approval wait, including forwarded asks, is counted once. Worker
 usage forwarded in tool results is never re-counted as another model response.
