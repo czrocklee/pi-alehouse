@@ -38,7 +38,7 @@ const dispatchPaths = (maxItems: number, description: string) => Type.Array(disp
 const dispatchField = optional(Type.Object({
   inputs: optional(dispatchPaths(8, "Existing input files/directories to read. Literal paths, no shell expansion, glob, quotes, controls, $, backslash or leading ~/@.")),
   ownership: optional(dispatchPaths(16, "Files/directories assigned to this task, including planned outputs. Literal paths; declares scope, not permission or isolation. Give a file several tasks must change, such as a central build or test list, to one task; the others report the entries they need.")),
-  tree: optional(dispatchPath("Local build-tree directory for this task, including a planned one. Overlapping declarations of unfinished tasks in this session are rejected; other sessions get only an advisory note. It does not coordinate your own commands or other hosts. Omitting it neither forbids building nor makes a shared tree safe.")),
+  tree: optional(dispatchPath("Local build-tree directory for this task, including a planned one. Overlapping declarations of unfinished tasks in this session are rejected; other sessions get only an advisory note: the task still starts, and dispatch_notes shows tree_shared when another session holds this tree. It does not coordinate your own commands or other hosts. Omitting it neither forbids building nor makes a shared tree safe, and a missing note does not prove the tree is free.")),
   checks: optional(Type.Array(Type.String({ minLength: 1, maxLength: 512,
     pattern: "^(?=.*\\S)[^\\x00-\\x1f\\x7f]+(?![\\s\\S])",
     description: "Planned check/test/platform identifiers this task can complete on its own; globs allowed. A task cannot wait idle for your later go-ahead: give such checks in a follow-up agent_run. A declaration is not evidence that a check ran or permission to skip gates." }),
@@ -303,21 +303,21 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
       }),
     make("agent_read", "Read a task's question/result page now; the full question takes priority over alerts. Alerts can be from any task of this Agent, even older ones, and are separate from result pages. Keep next_cursor for more of the original result after reuse. If workers_disabled, ask the user to enable delegation before answering with agent_answer.",
       Type.Object({ agent: agentName("Current task, else pending-question task, else latest. A cursor selects its original task; read can recover question_truncated text."),
-        cursor: optional(text(1024, "Copy next_cursor for this Agent to continue that result after reuse; an omitted page keeps its starting offset.")),
+        cursor: optional(text(1024, "Copy next_cursor exactly as a reply for this Agent gave it; it continues that task's result even after the Agent takes another task.")),
         max_chars: optional(Type.Integer({ minimum: 1, maximum: 16384, description: "Result page size in UTF-16 units, default/max 16384. Reply limits may set result_omitted/result_truncated; omitted_chars is text never retained." })) }, { additionalProperties: false }),
       ({ agent, cursor, max_chars = 16384 }, ctx, _id, signal) =>
         observe({ kind: "read", agent_id: find(agent).agent_id, cursor, max_chars }, ctx, signal)),
-    make("agent_interrupt", "Request that the current task stop; this is not exit evidence. The Agent keeps its conversation, so agent_run can redirect it after settlement. Returns an independent task projection; consumes no alerts or finished reminders.",
+    make("agent_interrupt", "Request that the current task stop. This only requests a stop, and the task can still end another way, such as completed, failed or needs_input. Use agent_wait or agent_read to confirm the task has ended. If it ended needs_input, answer with agent_answer; otherwise the Agent keeps its conversation, so agent_run can redirect it. Returns the task's status now. This call does not return pending alerts or completion notices; use agent_wait or agent_read.",
       agentOnly, ({ agent }, ctx) => {
         const snapshot = controller.cancel(find(agent).run_id).snapshot;
         return independent(ctx, () => taskReply(snapshot, nameOf));
       }),
-    make("agent_kill", "End an Agent permanently, interrupting any task. Its name is never reused; results stay readable and old alerts stay pending. status: killed; exiting (still stopping, cleanup continues); or cleanup_uncertain (could not be confirmed, no retry). Returns independently without consuming alerts or finished reminders.",
+    make("agent_kill", "End an Agent permanently, interrupting any task. Its name is never reused; results stay readable and old alerts stay pending. status: killed; exiting (still stopping, cleanup continues); or cleanup_uncertain (could not be confirmed, no retry). This call does not return pending alerts or completion notices; use agent_wait or agent_read.",
       agentOnly, async ({ agent }, ctx) => {
         const { state } = await controller.kill(find(agent).agent_id);
         return independent(ctx, () => ({ agent, status: state === "released" ? "killed" : state }));
       }),
-    make("agent_list", "Read-only roster with current or latest tasks and history (earlier labels, context_tokens, cost, edited files). has_question is current pending-question state, not a historical outcome: obtain question_id with agent_wait or agent_read, then use agent_answer if delegation is enabled. unavailable is a boolean; unavailable_reason is its diagnostic. List/interrupt/kill never consume alerts or finished reminders. Use agent_wait or agent_read to receive pending alerts; no automatic parent turn starts.",
+    make("agent_list", "Read-only roster with current or latest tasks and history (earlier labels, context_tokens, edited files). has_question is current pending-question state, not a historical outcome: obtain question_id with agent_wait or agent_read, then use agent_answer if delegation is enabled. unavailable is a boolean; unavailable_reason is its diagnostic. This call does not return pending alerts or completion notices; use agent_wait or agent_read. No automatic parent turn starts.",
       Type.Object({}, { additionalProperties: false }), (_args, ctx) => independent(ctx, () => {
         const views = controller.list(), live = views.filter((view) => view.resident);
         const killed = views.filter((view) => !view.resident).map((view) => view.name);

@@ -28,7 +28,7 @@ Routing, models, Owner IDs, generation and SDK session IDs stay internal.
 | `agent_answer` | Answer one explicit pending question and create a continuation Run. |
 | `agent_wait` | Wait for bound tasks, a question, a task issue or scoped alerts. |
 | `agent_read` | Snapshot a task page plus that Agent's cross-Run pending alerts. |
-| `agent_interrupt` | Request a stop; not execution-exit evidence. |
+| `agent_interrupt` | Request a stop; confirm settlement through wait or read. |
 | `agent_kill` | Permanently end an Agent. |
 | `agent_list` | Read the roster without consuming communication. |
 
@@ -413,8 +413,12 @@ result pages, bounded string diagnostics/notes and up to eight finished rows.
 It stops at the first alert that cannot fit, never skips to a smaller later one.
 Unshown alerts remain pending; fat diagnostics/finished entries yield first.
 `dispatch_notes` (at most 2 × 120 units) and `time_wrapped` are optional task
-diagnostics, not additions to the reserved thin controls. The time flag is
-attempted after questions/FIFO alerts but before results; notes stay lower
+diagnostics, not additions to the reserved thin controls. Model projections
+(this envelope and the independent list/interrupt rows) show only `tree_shared`,
+which the parent can act on; `tree_lock_unknown`, `source_state_unknown` and
+other notes stay on the Run and the Agent detail pane. The filter runs before
+packing, so a hidden note spends no bytes and never sets response_limit_reached.
+The time flag is attempted after questions/FIFO alerts but before results; notes stay lower
 priority. Saturated bytes can omit the flag, but a long ASCII result reaching
 the text cap does not inherently do so. They are constructed before publication
 commit. A later
@@ -470,6 +474,9 @@ consume neither alerts nor finished reminders.
 ## Interrupt, kill and list
 
 Interrupt requests stop; wait for settlement, not just an interrupting status.
+A task that already settled, already exited, or is already stopping for its
+deadline or turn limit keeps that outcome (completed, failed or needs_input);
+only a stop this call records settles interrupted.
 The Agent keeps its conversation for a later run. Even a first task stopped or
 failed before session creation leaves an Agent whose next task can create it.
 
@@ -485,11 +492,16 @@ still waits for actual execution/cleanup promises, not an empty observer set.
 List is a read-only roster with `profile`/`reasoning_difficulty`, label/task projection,
 current pending-question identity via has_question, and elapsed_s when running.
 Unavailable is a boolean availability fact with unavailable_reason diagnostics.
-History observations include tasks count, four newest earlier_labels,
-context_tokens, cumulative cost_usd/cost_partial, eight successful-edit/write
-`touched` paths plus touched_omitted, and idle_s. Bash changes are not touched
-paths. Killed names include newest 32 plus killed_omitted. Questions are read
-through wait/read, answered only through answer; roster facts grant no admission.
+History observations include four newest earlier_labels, context_tokens, and
+eight successful-edit/write `touched` paths plus touched_omitted. Bash changes
+are not touched paths. Spend and idle time stay host-side: cumulative cost is
+sunk, not what the next task costs, and per-Agent spend would reveal which
+difficulty slot is dearer; idle time cannot say whether a provider cache is
+still warm. There is no task count: it usually equals `task`, and where it does
+not (an answer that never started reopens its question task) the difference
+does not change the next decision. Killed names include
+newest 32 plus killed_omitted. Questions are read through wait/read, answered
+only through answer; roster facts grant no admission.
 
 ## Child tools
 

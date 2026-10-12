@@ -57,6 +57,12 @@ export interface DetailInput { view: RunView; live: DetailLive }
  * what lets the field rendering above stay a pure, directly testable function.
  */
 const shortId = (value: string): string => value.length <= 14 ? value : `${value.slice(0, 6)}…${value.slice(-4)}`;
+/** Every dispatch note, spelled out; the parent model is shown only tree_shared. */
+const DISPATCH_NOTES: ReadonlyMap<string, string> = new Map([
+  ["tree_shared", "another session holds this build tree"],
+  ["tree_lock_unknown", "build-tree lock could not be confirmed"],
+  ["source_state_unknown", "source state for the declared checks was not captured"],
+]);
 const statusWord = (view: RunView): RunView["status"] | "finishing" =>
   view.status === "running" && view.finalization_pending ? "finishing" : view.status;
 
@@ -196,6 +202,7 @@ export function renderDetailFields(input: DetailInput, theme: Theme, width: numb
   if (view.outcome?.error) notes.push(["error", "error", view.outcome.error]);
   else if (view.outcome?.reason) notes.push(["reason", "dim", view.outcome.reason]);
   if (view.outcome?.limit_reached) notes.push(["limit", "warning", "stopped at the turn limit"]);
+  for (const note of view.dispatch_notes ?? []) notes.push(["dispatch", "warning", DISPATCH_NOTES.get(note) ?? note]);
   if (view.unavailable_reason) notes.push(["session", "error", view.unavailable_reason]);
   if (view.owner_error) notes.push(["owner", "error", view.owner_error]);
   if (view.history_error) notes.push(["history", "warning", view.history_error]);

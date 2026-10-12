@@ -1,5 +1,5 @@
 import { terminal, validDifficulty, type AgentSummary, type RunView } from "../core/contracts.js";
-import { modelTaskStatus } from "../core/communication-envelope.js";
+import { modelDispatchNotes, modelTaskStatus } from "../core/communication-envelope.js";
 
 // Model-facing projections. The model addresses Agents by name and calls each
 // assignment a task; Run and Agent IDs, routing and diagnostics stay host-only.
@@ -21,13 +21,14 @@ const statusOf = (view: RunView) => view.finalization_pending ? "finishing" :
 export function taskReply(view: RunView, nameOf: NameOf) {
   const unavailable = view.owner_blocked || (terminal(view.status) && !view.resumable) ||
     !!(view.unavailable_reason && view.unavailable_reason !== "agent_busy");
+  const dispatch_notes = modelDispatchNotes(view.dispatch_notes);
   return { agent: view.name, task: view.task, status: statusOf(view),
     ...(view.has_question ? { has_question: true } : {}),
     ...(view.outcome?.reason ? { reason: view.outcome.reason } : {}),
     // Qualifies `status`: a turn-capped task still settles as "completed".
     ...(view.outcome?.limit_reached ? { limit_reached: true } : {}),
     ...(view.time_wrapped || view.outcome?.time_wrapped ? { time_wrapped: true } : {}),
-    ...(view.dispatch_notes?.length ? { dispatch_notes: [...view.dispatch_notes] } : {}),
+    ...(dispatch_notes ? { dispatch_notes } : {}),
     ...(view.outcome?.error ? { error: utf16Prefix(view.outcome.error, 512) } : {}),
     ...(view.owner_error ? { owner_error: utf16Prefix(view.owner_error, 512) } : {}),
     ...(view.blocked_by?.length ? { waiting_for: view.blocked_by.map(nameOf) } : {}),
@@ -39,7 +40,9 @@ const EARLIER_SHOWN = 4;
 const TOUCHED_SHOWN = 8;
 /** A roster row: what the parent needs to choose between reusing this Agent
  * and creating another. Model, preset and effort stay hidden: exposing them
- * invites tuning difficulty to pick a model. */
+ * invites tuning difficulty to pick a model. Spend and idle time stay hidden
+ * too: spend is sunk and reveals which difficulty is dearer, and idle time
+ * cannot tell the parent whether a provider cache is still warm. */
 export function agentRow(view: RunView, summary: AgentSummary, nameOf: NameOf) {
   const earlier = summary.earlier_descriptions.slice(0, EARLIER_SHOWN).map((text) => utf16Prefix(text, 120));
   const context = summary.context;
@@ -50,17 +53,12 @@ export function agentRow(view: RunView, summary: AgentSummary, nameOf: NameOf) {
   return { agent, profile: view.effective_settings.profile, reasoning_difficulty: view.effective_settings.difficulty,
     label: utf16Prefix(view.description, 120), ...task,
     ...(running && view.execution_elapsed_ms !== undefined ? { elapsed_s: Math.round(view.execution_elapsed_ms / 1000) } : {}),
-    tasks: summary.runs,
     ...(earlier.length ? { earlier_labels: earlier } : {}),
     // Absolute size, not a share of the window: a large window makes a costly
     // conversation look small, and every turn of the next task re-reads all of it.
     ...(context && context.tokens !== null ? { context_tokens: context.tokens } : {}),
-    cost_usd: Math.round(summary.observed_cost * 1000) / 1000,
-    // Observed spend only: some responses reported no cost.
-    ...(summary.cost_partial ? { cost_partial: true } : {}),
     ...(touched.length ? { touched } : {}),
-    ...(touchedOmitted ? { touched_omitted: touchedOmitted } : {}),
-    ...(summary.idle_ms === undefined ? {} : { idle_s: Math.round(summary.idle_ms / 1000) }) };
+    ...(touchedOmitted ? { touched_omitted: touchedOmitted } : {}) };
 }
 
 const ALLOWED_SHOWN = 32;

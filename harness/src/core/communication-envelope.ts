@@ -34,6 +34,16 @@ export const modelTaskStatus = (status: RunStatus): Exclude<TaskStatus, "finishi
 export type CommunicationReason = "snapshot" | "aborted" | "owner_blocked" | "question" |
   "task_issue" | "done" | "alert" | "nothing_pending" | "timeout";
 
+/** Dispatch notes the parent can act on: tree_shared means another session
+ * holds the declared build tree. Lock and source-capture uncertainty stay
+ * host diagnostics on the Run. Filtered before packing, so a hidden note
+ * never spends envelope bytes or sets response_limit_reached. */
+const MODEL_DISPATCH_NOTES: ReadonlySet<string> = new Set(["tree_shared"]);
+export const modelDispatchNotes = (notes: readonly string[] | undefined): string[] | undefined => {
+  const shown = notes?.filter((note) => MODEL_DISPATCH_NOTES.has(note));
+  return shown?.length ? shown : undefined;
+};
+
 /** Required retained facts. No diagnostics or arbitrary strings may be added here.
  * agent matches ^[a-z][a-z0-9-]{0,23}$; task is a positive safe integer. */
 export interface ThinTaskEntry {

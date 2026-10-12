@@ -12,7 +12,7 @@ import { actionableQuestionId, applyCommunicationCommit, canAnswerQuestion, comm
   enqueueAlert, finishedCandidates, isCommunicationSettled, recordFirstQuestion, scopedAlerts, taskOrdinal, validateCommunicationCommit,
   type AlertScope, type CommunicationCommitPlan, type CommunicationCommitSnapshot, type PendingAlert } from "./communication-state.js";
 import { packCommunication } from "./communication-packer.js";
-import { AGENT_EXISTS_RESOLUTION, COMMUNICATION_LIMITS, isModelAgentName, modelTaskStatus, type CommunicationAction, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.js";
+import { AGENT_EXISTS_RESOLUTION, COMMUNICATION_LIMITS, isModelAgentName, modelDispatchNotes, modelTaskStatus, type CommunicationAction, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.js";
 import type { CommunicationSnapshot, CommunicationToolResult, ResultWindow, TaskSnapshot } from "./communication-snapshot.js";
 import { isQuestionId } from "./question-id.js";
 import { decodeResultCursor, invalidResultCursor, resultCursorKey, type ResultCursorIdentity } from "./result-cursor.js";
@@ -734,8 +734,13 @@ export class OwnerController {
       if (Array.isArray(result?.notes)) for (const note of result.notes.slice(0, 2)) if (typeof note === "string") this.dispatchNote(run, note);
       if (prepared.tree && !claim?.lease && !run.record.dispatch_notes?.length) this.dispatchNote(run, "tree_lock_unknown");
     } catch {
-      if (capture) run.record.source_state = { state: "unknown", reason: "capture_failed" };
-      this.dispatchNote(run, prepared.tree ? "tree_lock_unknown" : "source_state_unknown");
+      // Note what the failed observation left unconfirmed, not a guess at why:
+      // a lease already held stays held, and undeclared checks capture nothing.
+      if (prepared.tree && !claim?.lease) this.dispatchNote(run, "tree_lock_unknown");
+      if (capture) {
+        run.record.source_state = { state: "unknown", reason: "capture_failed" };
+        this.dispatchNote(run, "source_state_unknown");
+      }
     }
   }
   private releaseClaimsIfIdle(agent: Agent): void {
@@ -1651,11 +1656,12 @@ export class OwnerController {
     const reusable = healthy && isCommunicationSettled(run) && own.at(-1) === run && !agent.current && !agent.question &&
       agent.resident && !agent.unavailable && !agent.release && !agent.exiting && !run.quarantine;
     const context_tokens = reusable ? this.lastContext(own)?.tokens ?? undefined : undefined;
+    const dispatch_notes = modelDispatchNotes(run.record.dispatch_notes);
     return { row: this.communicationRow(run, all, healthy), settled: isCommunicationSettled(run),
       ...(question_id ? { question_id } : {}),
       ...(run.question !== undefined && (historical || isCommunicationSettled(run)) ? { question: run.question } : {}),
       result: this.communicationWindow(run, limit, cursor),
-      ...(run.record.dispatch_notes?.length ? { dispatch_notes: [...run.record.dispatch_notes] } : {}),
+      ...(dispatch_notes ? { dispatch_notes } : {}),
       ...(run.record.time_wrapped ? { time_wrapped: true as const } : {}),
       ...(context_tokens === undefined ? {} : { context_tokens }),
       diagnostics: { error: run.record.outcome?.error, owner_error: this.parentError ?? this.internalError,

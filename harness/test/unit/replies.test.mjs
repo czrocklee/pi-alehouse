@@ -10,7 +10,7 @@ const observe = async (c, request, signal) => JSON.parse((await c.observe(reques
 const read = (c, run, rest = {}) => observe(c, { kind: "read", agent_id: run.agent_id, ...rest });
 const wait = (c, runs, rest = {}) => observe(c, { kind: "wait", agent_ids: runs.map((run) => run.agent_id), ...rest });
 const compact = (value) => {
-  const forbidden = /"(?:run_id|agent_id|owner_id|generation|phase|execution_exited|finalization_pending|history_ref|result_ref|cleanup_errors|effective_settings|outcome|snapshots|runtime|drain|resumable|model_stop_reason|max_duration_ms|settings|model|preset)"/;
+  const forbidden = /"(?:run_id|agent_id|owner_id|generation|phase|execution_exited|finalization_pending|history_ref|result_ref|cleanup_errors|effective_settings|outcome|snapshots|runtime|drain|resumable|model_stop_reason|max_duration_ms|settings|model|preset|tasks|cost_usd|cost_partial|idle_s)"/;
   assert(!forbidden.test(JSON.stringify(value)), JSON.stringify(value));
 };
 
@@ -167,25 +167,29 @@ test("bounded error choices retain remainder counts and hide concrete routing in
   for (const allowed of ["not an array", [], undefined]) assert.equal(errorReply({ code: "X", details: { allowed } }).error.allowed, undefined);
 });
 
-test("independent task/roster replies show optional whole dispatch notes and live or final time warning without a turn-limit flag", () => {
+test("independent task/roster replies show only tree_shared dispatch notes and live or final time warning without a turn-limit flag", () => {
   const base = { name: "otter", task: 1, status: "running", description: "task", resumable: true,
     owner_blocked: false, has_question: false, effective_settings: { profile: "reader", difficulty: 3 } };
-  const notes = Object.freeze(["tree_shared", "x".repeat(118) + "🚀"]);
+  const notes = Object.freeze(["tree_shared", "tree_lock_unknown"]);
   const live = { ...base, time_wrapped: true, dispatch_notes: notes }, reply = taskReply(live, () => "otter");
-  assert.deepEqual(reply, { agent: "otter", task: 1, status: "running", time_wrapped: true, dispatch_notes: notes });
+  assert.deepEqual(reply, { agent: "otter", task: 1, status: "running", time_wrapped: true, dispatch_notes: ["tree_shared"] });
   assert.notEqual(reply.dispatch_notes, notes, "independent projections cannot alias retained view arrays");
-  reply.dispatch_notes[0] = "changed output"; assert.equal(notes[0], "tree_shared");
+  reply.dispatch_notes[0] = "changed output"; assert.deepEqual(notes, ["tree_shared", "tree_lock_unknown"]);
   const terminalView = { ...base, status: "completed", dispatch_notes: notes,
     outcome: { status: "completed", limit_reached: false, time_wrapped: true } };
   const final = taskReply(terminalView, () => "otter");
   assert.equal(final.time_wrapped, true); assert.equal(final.limit_reached, undefined);
-  assert.equal(final.dispatch_notes[1].length, 120); assert.equal(final.next_cursor, undefined);
-  const summary = { runs: 1, earlier_descriptions: [], touched: [], touched_omitted: 0, observed_cost: 0, cost_partial: false };
+  assert.deepEqual(final.dispatch_notes, ["tree_shared"]); assert.equal(final.next_cursor, undefined);
+  // Spend, idle time and the run count stay host-side even when known.
+  const summary = { runs: 3, earlier_descriptions: [], touched: [], touched_omitted: 0, observed_cost: 1.5, cost_partial: true, idle_ms: 7_000 };
   const roster = agentRow(terminalView, summary, () => "otter");
-  assert.equal(roster.time_wrapped, true); assert.deepEqual(roster.dispatch_notes, notes); compact(roster);
+  assert.equal(roster.time_wrapped, true); assert.deepEqual(roster.dispatch_notes, ["tree_shared"]); compact(roster);
   assert.equal(roster.reasoning_difficulty, 3); assert.equal(Object.hasOwn(roster, "difficulty"), false);
   assert.equal(taskReply(base, () => "otter").dispatch_notes, undefined);
   assert.equal(taskReply({ ...base, dispatch_notes: [] }, () => "otter").dispatch_notes, undefined);
+  for (const hidden of [["tree_lock_unknown"], ["source_state_unknown"], ["tree_lock_unknown", "source_state_unknown"]]) {
+    assert.equal(Object.hasOwn(taskReply({ ...base, dispatch_notes: hidden }, () => "otter"), "dispatch_notes"), false, "hidden notes leave no empty field");
+  }
 });
 
 test("dispatch error replies name concrete raw or normalized paths with a bounded 512-unit whole-declaration projection", () => {

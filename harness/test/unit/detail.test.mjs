@@ -244,8 +244,12 @@ test("warnings the operator must not miss are all listed, never summarised away"
     outcome: { status: "needs_input", question: "用哪个分支？", limit_reached: true },
     unavailable_reason: "SESSION_UNAVAILABLE", owner_error: "flock lost", history_error: "disk full",
     pending_messages: 2, cleanup_errors: ["child did not exit"], discarded_inputs: ["stale steer"],
+    // The parent model sees only tree_shared; the operator sees every note.
+    dispatch_notes: ["tree_shared", "tree_lock_unknown", "source_state_unknown", "future_note"],
   });
   for (const expected of [/asked\s+用哪个分支？/, /limit\s+stopped at the turn limit/, /session\s+SESSION_UNAVAILABLE/,
+    /dispatch\s+another session holds this build tree/, /dispatch\s+build-tree lock could not be confirmed/,
+    /dispatch\s+source state for the declared checks was not captured/, /dispatch\s+future_note/,
     /owner\s+flock lost/, /history\s+disk full/, /pending\s+2 alert\(s\) from this Run awaiting local presentation/,
     /cleanup\s+child did not exit/, /discarded\s+stale steer/]) assert.match(text, expected);
   assert.doesNotMatch(text, /dropped|never reached/);

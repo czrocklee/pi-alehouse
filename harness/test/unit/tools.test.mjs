@@ -725,7 +725,7 @@ test("reuse keeps an Agent's name, settings and conversation while each task has
   assert.equal(f.ports.length, 2, "reuse runs in the same session");
   assert.deepEqual(routed(f, "orca"), settings);
   const [row] = (await call("agent_list", {})).agents;
-  assert.deepEqual([row.agent, row.label, row.tasks, row.earlier_labels], ["orca", "复核取消修复", 2, ["检查取消竞态"]]);
+  assert.deepEqual([row.agent, row.label, row.task, row.earlier_labels], ["orca", "复核取消修复", 2, ["检查取消竞态"]]);
   assert.equal(f.controller.view(first).description, "检查取消竞态", "reuse does not rewrite earlier task metadata");
   f.ports[0].finish("reviewed"); f.ports[1].finish("cost findings");
   await settle(f, "orca"); await settle(f, "otter");
@@ -1149,9 +1149,12 @@ test("list_agents adds per-Agent history for choosing reuse versus a new Agent",
   await call("agent_run", run("orca", { prompt: "more", label: "Fix flaky test" }), "second");
   await until(() => f.ports[0].calls.length === 2); f.ports[0].finish(); await settle(f, "orca");
   now += 7_000;
+  // Idle time, spend and the run count are known to the host but never listed.
   assert.deepEqual((await call("agent_list", {})).agents, [{ agent: "orca", profile: "reader", reasoning_difficulty: 3,
-    label: "Fix flaky test", task: 2, status: "completed", tasks: 2, earlier_labels: ["Port tests"], context_tokens: 50_000,
-    cost_usd: 0, touched: ["src/a.ts"], idle_s: 7 }]);
+    label: "Fix flaky test", task: 2, status: "completed", earlier_labels: ["Port tests"], context_tokens: 50_000,
+    touched: ["src/a.ts"] }]);
+  const summary = f.controller.agentSummary(f.controller.findAgent("orca").agent_id);
+  assert.deepEqual([summary.runs, summary.observed_cost, summary.idle_ms], [2, 0, 7_000]);
 });
 
 test("only an idle Agent's latest task shows context_tokens, the size its next task re-reads", async (t) => {

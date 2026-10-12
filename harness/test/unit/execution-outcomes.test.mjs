@@ -185,10 +185,11 @@ test("runtime snapshots are validated, projected live, and billed once at finish
   const usage = { byModel: { "p/m": { input: 2, output: 1, cache_read: 0, cache_write: 0, cost: 0.25 } }, partial: ["cost"] };
   ports[0].callbacks.runtime({ activity: "generating", context: { tokens: null, context_window: 128000 }, usage });
   usage.byModel["p/m"].cost = 7;
-  const live = c.view(run.run_id), projected = agentRow(live, c.agentSummary(run.agent_id), () => "");
+  const live = c.view(run.run_id), summary = c.agentSummary(run.agent_id), projected = agentRow(live, summary, () => "");
   assert.equal(live.usage.total.cost, 0.25); assert.equal("runtime" in taskReply(live, () => ""), false);
   assert.equal(projected.context_tokens, undefined, "unknown context occupancy is not reported as zero");
-  assert.equal(projected.cost_usd, 0.25); assert.equal(projected.cost_partial, true, "partial spend is not shown as complete");
+  assert.equal(summary.observed_cost, 0.25); assert.equal(summary.cost_partial, true, "partial spend is not recorded as complete");
+  assert.equal("cost_usd" in projected || "cost_partial" in projected, false, "spend stays host-side, out of the roster");
   // A structurally valid cumulative regression cannot erase already observed spend.
   ports[0].callbacks.runtime({ activity: "tool", usage: { byModel: { "p/m": { input: 1, output: 0, cache_read: 0, cache_write: 0, cost: 0 } }, partial: ["cost"] } });
   assert.equal(c.view(run.run_id).usage.total.cost, 0.25);

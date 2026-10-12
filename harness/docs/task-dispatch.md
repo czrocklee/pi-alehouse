@@ -198,14 +198,23 @@ host, same agentDir and same canonical tree identity, under private
 `<agentDir>/harness-trees/<sha256(canonical tree)>/`, not files in the user tree.
 Reuse the trusted flock/identity checks and retain lock files for inode identity.
 True contention yields `tree_shared`; handshake/identity uncertainty yields
-`tree_lock_unknown`. Both are advisory, not dispatch rejection or exclusivity
-proof. Nonblocking flock contention does not mean asynchronous IO: synchronous
-flock still blocks the Node event loop. Different agentDirs, hosts and distinct
+`tree_lock_unknown`. If the start observation itself fails, the Run notes what
+it left unconfirmed: `tree_lock_unknown` when no lease is held, and
+`source_state_unknown` (with source state `capture_failed`) when checks were
+declared. Notes are advisory, not dispatch rejection or exclusivity
+proof. Only `tree_shared` reaches the parent model; the absence of that note is
+not proof that a tree is free. Nonblocking flock contention does not mean
+asynchronous IO: synchronous flock still blocks the Node event loop. Different agentDirs, hosts and distinct
 nested roots are not automatically coordinated.
 
 ## Notes, receipts and coverage
 
 `dispatch_notes` is bounded to at most two notes of 120 UTF-16 units each.
+The Run keeps every note, and the Agent detail pane shows them all. Model
+projections filter them to `tree_shared` before packing; `tree_lock_unknown`
+and `source_state_unknown` give the parent nothing to act on, and receipts
+already stay out of its context. Notes are memory-only: the run-end journal
+append does not record them.
 Notes and `time_wrapped` are optional, yielding projections, not reserved thin
 controls. After questions and FIFO alerts, attempt `time_wrapped` independently
 for each task before results/string diagnostics. It can still yield when bytes

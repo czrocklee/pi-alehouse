@@ -64,6 +64,7 @@ export function assertCallerTools(tools) {
     assert.match(dispatch.properties.checks.items.description, /globs allowed.*not evidence.*skip gates/);
     assert.match(dispatch.properties.checks.items.description, /this task can complete on its own.*cannot wait idle for your later go-ahead.*follow-up agent_run/);
     assert.match(dispatch.properties.tree.description, /Local build-tree.*this session are rejected; other sessions get only an advisory note.*not coordinate your own commands or other hosts.*neither forbids building nor makes a shared tree safe/);
+    assert.match(dispatch.properties.tree.description, /task still starts, and dispatch_notes shows tree_shared when another session holds this tree.*a missing note does not prove the tree is free/);
     assert.match(dispatch.properties.ownership.items.description, /several tasks must change.*to one task; the others report the entries they need/);
   }
   assert.match(run.description, /existing, idle Agent a follow-up task that builds on its earlier work.*A running Agent is busy.*agent_send.*cannot bypass an unanswered question.*agent_answer/);
@@ -108,13 +109,19 @@ export function assertCallerTools(tools) {
   assert.match(read.description, /full question takes priority over alerts.*any task of this Agent.*separate from result pages.*Keep next_cursor.*original result after reuse/);
   assert.match(readFields.agent.description, /Current task, else pending-question task, else latest.*cursor selects its original task.*question_truncated/);
   assert.match(readFields.max_chars.description, /result_omitted\/result_truncated.*omitted_chars is text never retained/);
+  assert.match(readFields.cursor.description, /Copy next_cursor exactly.*continues that task's result even after the Agent takes another task/);
   assert.match(read.description, /workers_disabled.*enable delegation before answering with agent_answer/);
   for (const tool of [answer, wait, read]) assert.doesNotMatch(JSON.stringify(tool), /\bOwner\b|\bbound\b|\binbox\b/);
-  assert.match(byName.get("agent_interrupt").description, /not exit evidence.*keeps its conversation.*agent_run.*consumes no alerts or finished/);
+  const notice = "This call does not return pending alerts or completion notices; use agent_wait or agent_read.";
+  assert.match(byName.get("agent_interrupt").description, /only requests a stop.*can still end another way.*completed, failed or needs_input.*confirm the task has ended\. If it ended needs_input, answer with agent_answer; otherwise.*keeps its conversation, so agent_run can redirect it/);
+  for (const name of ["agent_interrupt", "agent_kill", "agent_list"]) assert(byName.get(name).description.includes(notice), name);
   assert.match(byName.get("agent_kill").description, /permanently, interrupting any task.*never reused.*alerts stay pending.*killed; exiting.*cleanup_uncertain/);
   assert.match(byName.get("agent_list").description, /Read-only roster.*has_question is current pending-question state, not a historical outcome.*question_id.*agent_answer/);
-  assert.match(byName.get("agent_list").description, /unavailable is a boolean.*unavailable_reason.*never consume alerts or finished/);
-  for (const tool of byName.values()) assert.doesNotMatch(tool.description, /prefer the default timeout|extra get\b|progress_omitted|finished_omitted/);
+  assert.match(byName.get("agent_list").description, /unavailable is a boolean.*unavailable_reason is its diagnostic/);
+  assert.match(byName.get("agent_list").description, /history \(earlier labels, context_tokens, edited files\)/);
+  assert.doesNotMatch(byName.get("agent_list").description, /\bcost\b|idle/, "the roster shows no spend or idle time");
+  // Host contract terms the model has no definition for.
+  for (const tool of byName.values()) assert.doesNotMatch(JSON.stringify(tool), /prefer the default timeout|extra get\b|progress_omitted|finished_omitted|finished reminders|exit evidence|projection|starting offset/);
 }
 
 export function assertNoOrchestrationPrompt(prompt) {

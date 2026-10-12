@@ -892,12 +892,51 @@ test("late observation after cancellation opens no session and closes the late t
 });
 
 test("optional start observation rejection records notes but does not poison Owner or strand claims", serial, async t => {
-  const dispatch = dispatchPort({ start: async () => { throw new Error("optional capture failed"); } });
-  const { controller: c, ports } = await memoryFixture(t, { controller: { dispatch } });
-  const run = await c.submit("optional", task("optional", { dispatch: { tree: "build", checks: ["unit"] } }));
-  await until(() => ports[0]?.streaming);
-  assert.deepEqual(c.view(run.run_id).dispatch_notes, ["tree_lock_unknown"]);
-  ports[0].finish(); await ended(c, run);
-  assert.equal(c.view(run.run_id).status, "completed"); assert.equal(c.claims.size, 0);
-  assert.equal(c.stats().cleanup_uncertain, false); assert.equal(c.stats().internal_error, undefined);
+  // Each note names what stayed unconfirmed, not the tree/no-tree guess at why.
+  for (const [declaration, expected] of [
+    [{ tree: "build", checks: ["unit"] }, ["tree_lock_unknown", "source_state_unknown"]],
+    [{ tree: "build" }, ["tree_lock_unknown"]],
+    [{ checks: ["unit"] }, ["source_state_unknown"]],
+  ]) {
+    const dispatch = dispatchPort({ start: async () => { throw new Error("optional capture failed"); } });
+    const { controller: c, ports } = await memoryFixture(t, { controller: { dispatch } });
+    const run = await c.submit("optional", task("optional", { dispatch: declaration }));
+    await until(() => ports[0]?.streaming);
+    assert.deepEqual(c.view(run.run_id).dispatch_notes, expected, JSON.stringify(declaration));
+    ports[0].finish(); await ended(c, run);
+    assert.equal(c.view(run.run_id).status, "completed"); assert.equal(c.claims.size, 0);
+    assert.equal(c.stats().cleanup_uncertain, false); assert.equal(c.stats().internal_error, undefined);
+  }
+});
+
+test("model observations show only tree_shared; hidden notes stay on the Run and never reach packing", serial, async t => {
+  // One settled Agent per Owner, so no other task's finished row shares the
+  // envelope. Each "\0" costs seven bytes there, so a page that exactly fills
+  // the byte cap leaves less room than any note would take.
+  const settledWith = async notes => {
+    const dispatch = dispatchPort({ start: async () => ({ notes }) });
+    const { controller: c, ports } = await memoryFixture(t, { controller: { dispatch } });
+    const run = await c.submit("noted", task("noted", { name: "otter", dispatch: { tree: "build" } }));
+    await until(() => ports[0]?.streaming);
+    ports[0].finish("\0".repeat(12_000)); await ended(c, run);
+    const read = async max_chars => envelope(await c.observe({ kind: "read", agent_id: run.agent_id, max_chars }, { validate() {} }));
+    return { c, run, read };
+  };
+  const hidden = await settledWith(["tree_lock_unknown", "source_state_unknown"]);
+  assert.deepEqual(hidden.c.view(hidden.run.run_id).dispatch_notes, ["tree_lock_unknown", "source_state_unknown"],
+    "the Run keeps every note for the host");
+  const saturated = await hidden.read(16_384);
+  assert.equal(saturated.response_limit_reached, true, "the full result cannot fit");
+  const fill = saturated.agents[0].result.length;
+  const exact = await hidden.read(fill);
+  assert.equal(exact.agents[0].result.length, fill);
+  assert.equal(exact.response_limit_reached, undefined, "hidden notes do not compete for the remaining bytes");
+  assert.equal(Object.hasOwn(exact.agents[0], "dispatch_notes"), false);
+
+  const shown = await settledWith(["tree_shared", "tree_lock_unknown"]);
+  assert.deepEqual((await shown.read(100)).agents[0].dispatch_notes, ["tree_shared"]);
+  const crowded = await shown.read(fill);
+  assert.equal(crowded.agents[0].result.length, fill);
+  assert.equal(crowded.response_limit_reached, true, "a note that reaches packing and cannot fit does set the flag");
+  assert.equal(Object.hasOwn(crowded.agents[0], "dispatch_notes"), false);
 });

@@ -23,7 +23,8 @@ function adapter({ notes = false, pressure = false } = {}) {
     ...(pressure ? { question_id: `q_${"a".repeat(32)}`, question: "\0".repeat(8192),
       result: { text: "retained", offset: 0, retained_chars: 16384, total_chars: 16384,
         cursor: { owner: "owner", generation: "generation", run: "prior", version: "v" } } } : {}),
-    ...(notes ? { time_wrapped: true, dispatch_notes: ["tree_shared", "tree_lock_unknown"] } : {}),
+    // The controller filters notes to what the model may see before packing.
+    ...(notes ? { time_wrapped: true, dispatch_notes: ["tree_shared"] } : {}),
   }], alerts: pressure ? [{ agent: "otter", task: 1, label: "\0".repeat(120), message: "\0".repeat(8192) }] : [], finished: [] }).result;
   Object.freeze(published.content[0]); Object.freeze(published.content); Object.freeze(published);
   const controller = {
@@ -128,7 +129,7 @@ for (const name of ["agent_spawn", "agent_run"]) {
     assert.notEqual(a.submissions[0].request.dispatch, declaration);
     const parsed = JSON.parse(result.content[0].text);
     assert.equal(parsed.agents[0].time_wrapped, true);
-    assert.deepEqual(parsed.agents[0].dispatch_notes, ["tree_shared", "tree_lock_unknown"]);
+    assert.deepEqual(parsed.agents[0].dispatch_notes, ["tree_shared"]);
     declaration.inputs.push("late-mutation"); assert.deepEqual(a.submissions[0].request.dispatch.inputs, ["ordinary.txt"]);
   });
 

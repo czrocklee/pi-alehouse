@@ -68,7 +68,8 @@ parent identity, or automatic mapping; user override when present). Historical
 manual maps retain the distinct `preset map` label. Effort is
 labelled fixed at creation, not editable on a resident Agent. The pane also shows
 tool facts, phase, full cumulative usage split, active-tool arguments, streaming
-draft, each stalling condition, and a child transcript.  Context occupancy is
+draft, each stalling condition, every dispatch note (the parent model sees only
+`tree_shared`), and a child transcript.  Context occupancy is
 separate from cumulative billed usage (`≈231k/272k tokens · 84.9%`); unknown
 occupancy remains unknown.  Formatting shares rounded-unit carry rules with the
 footer: compact counts use whole k above 10k, detailed billed usage retains

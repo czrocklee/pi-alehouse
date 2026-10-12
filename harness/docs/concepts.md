@@ -232,8 +232,8 @@ vacuous done. Timeout or abort ends observation, not worker execution. UI/list
 are count/read-only projections and never consume communication.
 
 The harness does not inject an Agent/Run roster after compaction. `agent_list`
-exposes Owner-local state, including killed names, labels, earlier tasks, context,
-cost and touched paths, not full assignments or admission authority. Finished
+exposes Owner-local state, including killed names, labels, earlier tasks, context
+and touched paths, not full assignments, spend or admission authority. Finished
 reminders use fixed finished_presented and settled_seq on each original Run;
 only explicitly showing that task's terminal row commits its bit. Running rows
 with the same Agent name, alerts/list/UI/count do not. Results stay rereadable
