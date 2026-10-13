@@ -711,8 +711,9 @@ class InputProvenance {
     }
   }
 
-  beforeStart(prompt: string): void {
-    this.expected = this.pending === prompt ? this.pending : undefined;
+  /** `undefined` is a run started by a custom message: it binds no input. */
+  beforeStart(prompt: string | undefined): void {
+    this.expected = prompt !== undefined && this.pending === prompt ? this.pending : undefined;
     this.pending = undefined;
   }
 
@@ -2166,10 +2167,14 @@ export default function jevAutoApproval(pi: ExtensionAPI): void {
     }
   });
   // The turn boundary: a new prompt re-opens the denial fuse and is what binds
-  // the pending live input to the message that carries it.
+  // the pending live input to the message that carries it. A run started by a
+  // custom message (sendMessage with triggerTurn) is neither: it keeps the fuse
+  // and discards any pending input. Pi before 1.2 sends no messageType, and
+  // fires this event only for prompts.
   pi.on("before_agent_start", (event) => {
-    state.provenance.beforeStart(event.prompt);
-    state.denialCount = 0;
+    const prompt = event.messageType === "custom" ? undefined : event.prompt;
+    state.provenance.beforeStart(prompt);
+    if (prompt !== undefined) state.denialCount = 0;
   });
 
   pi.events.on("pi-harness:approval:admitted", (event) => captureHarnessAdmission(state, event));

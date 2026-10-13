@@ -491,9 +491,10 @@ function registeredHarness({ withSignal = true, mode = "enforce", hasUI = true }
   bus.get("permissions:ready")({ sessionId });
   assert.equal(typeof authorizer, "function", "rendered extension registered a callable authorizer");
 
-  const live = (text) => {
+  // Pi before 1.2 sends no messageType on before_agent_start.
+  const live = (text, { legacy = false } = {}) => {
     hooks.get("input")({ source: "interactive", text });
-    hooks.get("before_agent_start")({ prompt: text });
+    hooks.get("before_agent_start")(legacy ? { prompt: text } : { messageType: "user", prompt: text });
     const message = { role: "user", content: [{ type: "text", text }] };
     hooks.get("message_start")({ message });
     branch.push({ type: "message", message });
@@ -1149,6 +1150,29 @@ Never push to main.</project_context>`, "context_incomplete"],
   check("new direct input clears the sticky refusal overflow fuse",
     await h.authorize(h.call("refused-new-epoch")), { kind: "defer" });
   check("cleared refusal fuse reaches reviewer again", fetchCalls, 258);
+}
+
+// Pi 1.2 also starts runs from custom messages (sendMessage with triggerTurn).
+// Such a run is not new direct input, so it cannot reopen the denial fuse. A
+// pre-1.2 start without messageType is a prompt and still reopens it.
+for (const legacy of [false, true]) {
+  const h = registeredHarness(), lane = legacy ? "pre-1.2 " : "";
+  h.live("Inspect three independent status targets.", { legacy });
+  let fetchCalls = 0;
+  globalThis.fetch = async () => { fetchCalls++; return mockResponse({ ...allowAnswers(), injection: { noul: 0.99 } }); };
+  for (let i = 0; i < 3; i++) {
+    check(`${lane}model denial ${i} counts toward the fuse`, (await h.authorize(h.call(`fused-${i}`, `git status -- fused-${i}`))).kind, "deny");
+  }
+  check(`${lane}denial fuse stops further reviews`, (await h.authorize(h.call("fused-open", "git status -- fused-open"))).kind, "deny");
+  if (!legacy) {
+    h.hooks.get("before_agent_start")({ messageType: "custom", message: { role: "custom", customType: "fixture-ready", content: "ready" } });
+    check("a custom-message run keeps the fuse",
+      (await h.authorize(h.call("fused-custom", "git status -- fused-custom"))).kind, "deny");
+  }
+  check(`${lane}no fused request called the model`, fetchCalls, 3);
+  globalThis.fetch = async () => { fetchCalls++; return mockResponse(allowAnswers()); };
+  h.live("Authorize a fresh inspection after the refusals.", { legacy });
+  check(`${lane}new direct input reopens the fuse`, await h.authorize(h.call("fused-reopened", "git status -- reopened")), { kind: "allow" });
 }
 
 // Unresolved request tracking is bounded without eviction. Unlike refusal-map

@@ -424,7 +424,7 @@ test("real SDK: pre-prompt compaction cancel quarantines escaped admission rathe
   const seed = await f.submit(f.task("seed context ".repeat(500))); await f.end(seed);
   const run = await f.submit({ resume: seed.agent_id, prompt: "trigger pre-prompt compaction" });
   const request = await entered.promise;
-  assert.equal(f.session.isStreaming, false);
+  assert.equal(f.session.isStreaming, true, "Pi 1.2 counts the run as started during pre-prompt compaction");
   f.controller.cancel(run.run_id); await new Promise((r) => setImmediate(r));
   assert.equal(request.signal.aborted, true);
   release.resolve(); const result = await f.end(run);

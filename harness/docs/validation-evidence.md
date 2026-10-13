@@ -24,6 +24,41 @@ observations into public evidence.
 
 Keep fixtures offline and output outside the checkout; never make real-model calls or copy Pi auth/session data into public reports. A controlled provider reports synthetic behavior only. In particular, SDK post-guard queue/message acceptance and unsupported live-Owner `/reload` must be tested as limitations, not relabelled safe because a selected schedule produced no post-cancel provider call. Only an actual controlled run can record an outcome. Permission authority selection must use the **built matched patched runtime**; a mutable global install or missing fixture is not a pass. A test report should distinguish failures, skipped checks and suites that matched zero tests.
 
+## Pi 1.2.0 update
+
+With Node 24.20.0, development Pi/AI/TUI 1.2.0 and `PI_TEST_EXECUTABLE` set to
+the development 1.2.0 CLI, `npm run build` and
+`HARNESS_FLOCK=/run/current-system/sw/bin/flock npm run check` passed locally:
+**2100 package tests passed, 7 skipped**, plus lint/types and the separate
+portable policy gates. The controlled host suite
+(`collect-pi-harness-evidence.sh --all`) also passed against that CLI.
+Installed host Pi was still 1.1.0. Against it, the controlled host suite stops
+at the run-lifecycle natural-finish lane, whose fixture now follows 1.2.0's
+`emitBeforeAgentStart` signature and run-start observations.
+
+`before_agent_start` now also fires for a run started by
+`pi.sendMessage(..., { triggerTurn: true })`, as a `messageType: "custom"`
+event without `prompt`. Jev no longer treats such a run as a turn boundary: it
+binds no live input and does not reopen the denial fuse, which only new direct
+input reopens. A start without `messageType` (Pi before 1.2, which fires the
+event only for prompts) is still a prompt, so Jev and the child witness still
+bind prompts on a 1.1.0 host. The child approval witness fails closed on a
+custom-message run, as it already did on any second run; children never
+start one (`triggerTurn` is forced off there). The routing reconciliation
+handler runs for both kinds. Pi 1.2 also counts the session as busy from run
+start, so `isStreaming` is already true during pre-prompt compaction and
+`before_agent_start`. The SDK and host fixtures that recorded the 1.1.0 value
+now record that; cancellation during pre-prompt compaction still ends the Run
+cancelled and unresumable with no post-cancel provider request. Steering is
+admitted in that window and queued into the starting run. Fixtures that call
+`emitBeforeAgentStart` directly use its new `(trigger, options)` signature.
+The lockfile changed only the seven `@earendil-works` packages and dropped
+`@earendil-works/chord` with its esbuild closure; `npm audit` still reports
+the same `@modelcontextprotocol/sdk` advisory through pi-web-access 0.35.0.
+Pi's LICENSE is byte-identical at `v1.1.0` and `v1.2.0`. The optional Nix
+package built with its refreshed npm cache hash. No built-tarball host RPC
+check, Home Manager activation or real-model run was performed.
+
 ## Pi 1.1.0 update
 
 With Node 24.20.0, development Pi/AI/TUI 1.1.0 and

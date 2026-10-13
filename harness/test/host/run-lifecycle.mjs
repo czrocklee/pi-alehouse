@@ -207,12 +207,12 @@ const controller = await Controller.open({ owner, concurrency: 1,
     Object.defineProperty(naturalCase, "session", { value: assembled.session });
     const runner = assembled.session.extensionRunner;
     const beforeAgentStart = runner.emitBeforeAgentStart.bind(runner);
-    runner.emitBeforeAgentStart = (text, ...args) => {
-      if (text === naturalCase.target) observeNatural(naturalCase, "target_before_agent_start", {
+    runner.emitBeforeAgentStart = (trigger, ...args) => {
+      if (trigger.messageType === "user" && trigger.prompt === naturalCase.target) observeNatural(naturalCase, "target_before_agent_start", {
         sdk_session_streaming: assembled.session.isStreaming,
         core_agent_streaming: assembled.session.agent.state.isStreaming,
         gate_accepting: gate.accepting, gate_stopped: gate.stopped });
-      return beforeAgentStart(text, ...args); // Return the original Promise; do not add an await.
+      return beforeAgentStart(trigger, ...args); // Return the original Promise; do not add an await.
     };
     const prompt = assembled.session.prompt.bind(assembled.session);
     assembled.session.prompt = (...args) => {
@@ -500,7 +500,8 @@ try {
         const user = item.trace.find((row) => row.event === "target_user_message_start");
         const settled = item.trace.find((row) => row.event === "sdk_agent_settled");
         assert(settled && before && user && guard.order < settled.order && settled.order < before.order && before.order < user.order);
-        assert.equal(before.sdk_session_streaming, false); assert.equal(before.core_agent_streaming, false);
+        // Pi 1.2 counts the session busy from run start; the agent loop has not started.
+        assert.equal(before.sdk_session_streaming, true); assert.equal(before.core_agent_streaming, false);
         assert.equal(user.gate_accepting, false); assert.equal(item.gate.uncertain, true);
         assert.equal(user.gate_stopped, false); assert.equal(targetProviderCalls.length, 0);
         assert(events.includes("target_user_message_end")); assert.equal(snapshot.resumable, false);

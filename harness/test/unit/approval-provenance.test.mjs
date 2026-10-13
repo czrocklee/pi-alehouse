@@ -13,7 +13,7 @@ function fixture() {
   binding.childExtension(input.sessionId)({ on: (name, fn) => hooks.set(name, fn) });
   const emit = (name, event) => hooks.get(name)?.(event);
   emit("session_start", {});
-  const start = () => emit("before_agent_start", { prompt: input.prompt, systemPrompt: "Loaded instruction snapshot" });
+  const start = () => emit("before_agent_start", { messageType: "user", prompt: input.prompt, systemPrompt: "Loaded instruction snapshot" });
   const message = (text = input.prompt) => emit("message_start", { message: { role: "user", content: [{ type: "text", text }] } });
   return { binding, events, emit, start, message, facts: () => globalThis[key].get(input.sessionId) };
 }
@@ -57,10 +57,19 @@ for (const kind of ["steer", "soft_budget", "cancel", "hard_budget"]) test(`${ki
   assert.equal(f.facts().contextChanged, true, "a later hook cannot revive authority");
 });
 
+test("a pre-1.2 host start without messageType binds as the harness prompt", () => {
+  const f = fixture(); f.binding.begin(run, input);
+  f.emit("before_agent_start", { prompt: input.prompt, systemPrompt: "Loaded instruction snapshot" }); f.message();
+  assert.equal(f.events.at(-1).name, "pi-harness:approval:started");
+  assert.equal(f.facts().contextChanged, false);
+});
+
 test("mismatched, repeated prompts and extra user messages fail closed", () => {
-  for (const extra of ["wrong-prompt", "second-start", "second-user", "wrong-user"]) {
+  for (const extra of ["wrong-prompt", "custom-start", "second-start", "second-user", "wrong-user"]) {
     const f = fixture(); f.binding.begin(run, input);
-    if (extra === "wrong-prompt") f.emit("before_agent_start", { prompt: "wrong", systemPrompt: "x" });
+    if (extra === "wrong-prompt") f.emit("before_agent_start", { messageType: "user", prompt: "wrong", systemPrompt: "x" });
+    // Pi 1.2 also starts runs from custom messages; none carries the harness prompt.
+    else if (extra === "custom-start") f.emit("before_agent_start", { messageType: "custom", message: { role: "custom", content: input.prompt }, systemPrompt: "x" });
     else {
       f.start();
       if (extra === "second-start") f.start();

@@ -109,7 +109,9 @@ export class ApprovalBindings {
       pi.on("before_agent_start", (event) => {
         const facts = this.facts(sessionId);
         if (!facts) return;
-        if (facts.contextChanged || facts.initialPromptDigest || event.prompt !== facts.harness.prompt) {
+        // A run started by a custom message is never the harness prompt. Pi
+        // before 1.2 sends no messageType; a missing prompt still fails closed.
+        if (event.messageType === "custom" || facts.contextChanged || facts.initialPromptDigest || event.prompt !== facts.harness.prompt) {
           this.invalidate(sessionId);
           return;
         }

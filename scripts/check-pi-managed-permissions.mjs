@@ -743,10 +743,10 @@ try {
     const service = getPermissionsService(id); assert(service, `Managed service: ${agent}; errors=${JSON.stringify(errors)}`);
     assert.equal(publicService.getPermissionsService(id), service, "Unpatched public service import reaches the managed authority through shared symbols");
     if (!parent) service.registerAuthorizer("auto-model-judge", async () => { modelCalls++; return { kind: "defer" }; });
-    // Pi 0.87.1 takes BuildSystemPromptOptions as the third argument; `cwd` is
+    // Pi 1.2 takes the starting trigger, then BuildSystemPromptOptions; `cwd` is
     // required and the active-agent tag must land inside the rendered prompt,
     // because the permission system reads it back out of that text.
-    await session.extensionRunner.emitBeforeAgentStart("Fixture inspection", undefined,
+    await session.extensionRunner.emitBeforeAgentStart({ messageType: "user", prompt: "Fixture inspection" },
       { cwd, ...(agent ? { appendSystemPrompt: `<active_agent name="${agent}"/>` } : {}) });
     const record = { session, id, eventBus, parent,
       call: (toolName, input) => session.extensionRunner.emitToolCall({ type: "tool_call", toolCallId: `actual-${Math.random()}`, toolName, input }),
