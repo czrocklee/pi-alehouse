@@ -363,7 +363,7 @@ function pinBlob(cwd: string, proof: GitProof): string | undefined {
 type ScopeProof = { ruleCandidates: BashPathRuleCandidate[]; externalAccesses: BashExternalPath[] };
 export function managedGitProof(source: string, normalizer: PathNormalizer, workdir?: string, reject?: (diagnostic: ManagedGitDiagnostic) => void): ScopeProof | undefined {
   const fail = (code: string, reason: string) => { reject?.({ code, reason }); return undefined; };
-  const proof = inspectGit(source, reject);
+  const proof = inspectGit(source, reject && (diagnostic => reject(declinedHardening(source) ?? diagnostic)));
   if (!proof) return;
   let cwd: string;
   try {
@@ -717,6 +717,26 @@ function hardenedUnit(words: string[], cwd?: string, sessionRoot?: string): stri
     return ["printenv", "--", ...words.slice(1)].join(" ");
   if (words.length > 2 && words[0] === "env" && words[1] === "printenv" && words.slice(2).every(word => exposedEnvironment.has(word)))
     return ["printenv", "--", ...words.slice(2)].join(" ");
+  const hardened = hardenedGit(words);
+  if (!hardened) return;
+  const { prefix, args, directory, proof } = hardened;
+  if (proof.kind !== "blob") return hardened.command;
+  if (!cwd || !sessionRoot) return;
+  try {
+    const base = canonicalGitDirectory(cwd, directory);
+    const offset = relative(sessionRoot, base);
+    if (offset === ".." || offset.startsWith(`..${sep}`) || isAbsolute(offset)) return;
+    if (!repositoryLayout(base) || hasGitConfig(base, "^(extensions\\.partialclone|remote\\..*\\.(promisor|partialclonefilter))$")) return;
+    const pinned = pinBlob(base, proof);
+    if (!pinned) return;
+    return [...prefix, ...args.map(arg => blobOperand(arg) ? pinned : arg)].map(shellWord).join(" ");
+  } catch { return; } // No rewrite or grant for an unpinned/invalid blob.
+}
+
+// The single hardened spelling of a literal Git unit, before blob pinning.
+// Execution rewrites to it; diagnostics use its rejection to explain a
+// declined rewrite. Neither use is an authorization.
+function hardenedGit(words: string[], reject?: (diagnostic: ManagedGitDiagnostic) => void) {
   const invocation = gitInvocation(words);
   if (!invocation?.sub) return;
   const { sub, args, directory, wrapped, globals } = invocation;
@@ -725,7 +745,11 @@ function hardenedUnit(words: string[], cwd?: string, sessionRoot?: string): stri
   const blob = sub === "show" && flags.some(arg => blobOperand(arg));
   // Disabling rename/copy detection changes filter selection, including A/D
   // and lowercase exclusions. Only do so when the user already requested it.
-  if (sub === "diff" && flags.some(flag => flag.startsWith("--diff-filter=")) && !flags.includes("--no-renames")) return;
+  const filter = sub === "diff" && !flags.includes("--no-renames") ? flags.find(flag => flag.startsWith("--diff-filter=")) : undefined;
+  if (filter !== undefined) {
+    reject?.({ code: "git-diff-scope", reason: "A diff filter needs explicit --no-renames; hardening does not change filter selection.", token: filter });
+    return;
+  }
   // Never erase a requested unsafe option to manufacture a proof. Short format
   // bounds submodule disclosure without hiding gitlink or dirty-state changes.
   // Do not override the user's explicit or configured submodule ignore policy.
@@ -736,22 +760,21 @@ function hardenedUnit(words: string[], cwd?: string, sessionRoot?: string): stri
   const endOfRevisions = sub === "log" && !args.includes("--") ? ["--"] : [];
   const prefix = [...(wrapped ? ["env"] : []), "git", "--no-lazy-fetch", "--no-optional-locks", "--no-pager",
     ...(blob || sub === "diff" || globals.includes("--no-replace-objects") ? ["--no-replace-objects"] : []), ...(directory ? ["-C", directory] : []), sub, ...extra];
-  let result = [...prefix, ...args, ...endOfRevisions].map(shellWord).join(" ");
-  const proof = inspectGit(result);
-  if (!proof) return;
-  if (proof.kind === "blob") {
-    if (!cwd || !sessionRoot) return;
-    try {
-      const base = canonicalGitDirectory(cwd, directory);
-      const offset = relative(sessionRoot, base);
-      if (offset === ".." || offset.startsWith(`..${sep}`) || isAbsolute(offset)) return;
-      if (!repositoryLayout(base) || hasGitConfig(base, "^(extensions\\.partialclone|remote\\..*\\.(promisor|partialclonefilter))$")) return;
-      const pinned = pinBlob(base, proof);
-      if (!pinned) return;
-      result = [...prefix, ...args.map(arg => blobOperand(arg) ? pinned : arg)].map(shellWord).join(" ");
-    } catch { return; } // No rewrite or grant for an unpinned/invalid blob.
-  }
-  return result;
+  const command = [...prefix, ...args, ...endOfRevisions].map(shellWord).join(" ");
+  const proof = inspectGit(command, reject);
+  return proof && { prefix, args, directory, command, proof };
+}
+
+// Hardening runs before gating, so an unhardened unit here was declined. Its
+// hardened spelling names the actual unsupported token; the missing injected
+// flags do not, and the model cannot repair the request by spelling them.
+function declinedHardening(source: string): ManagedGitDiagnostic | undefined {
+  const words = gitLiteralWords(source);
+  if (!words) return;
+  let cause: ManagedGitDiagnostic | undefined;
+  const hardened = hardenedGit(words, diagnostic => { cause = diagnostic; });
+  if (cause || hardened?.proof.kind !== "blob") return cause;
+  return { code: "git-blob-unpinned", reason: "Historical file could not be pinned to an immutable tree and a verified blob." };
 }
 
 // Called BEFORE the authority's gate handler. SDK guarantees that in-place input
@@ -821,8 +844,8 @@ export function managedProgramAnalysis(root: TSNode, normalizer: PathNormalizer,
   if (!units) return { diagnostics: [] };
   const diagnostics: (ManagedGitDiagnostic | undefined)[] = units.map(() => undefined);
   const isGit = (unit: LiteralUnit) => unit.words[0] === "git" || (unit.words[0] === "env" && unit.words.includes("git"));
-  const incomplete = (reason: string) => {
-    units.forEach((unit, index) => { if (isGit(unit) && !diagnostics[index]) diagnostics[index] = { code: "git-program-scope", reason }; });
+  const incomplete = (reason: string, token?: string) => {
+    units.forEach((unit, index) => { if (isGit(unit) && !diagnostics[index]) diagnostics[index] = { code: "git-program-scope", reason, ...(token === undefined ? {} : { token }) }; });
     return { diagnostics };
   };
   let cwd = normalizer.resolveBase(workdir ?? "");
@@ -852,7 +875,8 @@ export function managedProgramAnalysis(root: TSNode, normalizer: PathNormalizer,
   }
   const ruleCandidates: BashPathRuleCandidate[] = [], externalAccesses: BashExternalPath[] = [], marked: boolean[] = [];
   const gitWrappers: (string | undefined)[] = units.map(() => undefined);
-  let complete = true;
+  // The first unit without proof is named in its siblings' diagnostics.
+  let unproven: LiteralUnit | undefined;
   for (const [index, unit] of units.entries()) {
     if (unit === cd[0]) { marked.push(false); continue; }
     if (isGit(unit)) {
@@ -860,14 +884,14 @@ export function managedProgramAnalysis(root: TSNode, normalizer: PathNormalizer,
       if (git) {
         ruleCandidates.push(...git.ruleCandidates); externalAccesses.push(...git.externalAccesses); marked.push(true);
         gitWrappers[index] = managedGitInnerCommand(unit.text);
-      } else { complete = false; marked.push(false); }
+      } else { unproven ??= unit; marked.push(false); }
       continue;
     }
     const inspection = managedInspection(unit.words);
     if (inspection) {
       for (const token of inspection.files) {
         const path = normalizer.forPath(token, { resolveBase: cwd });
-        try { if (!lstatSync(path.boundaryValue()).isFile()) complete = false; } catch { /* A missing literal file cannot become a recursive scan. */ }
+        try { if (!lstatSync(path.boundaryValue()).isFile()) unproven ??= unit; } catch { /* A missing literal file cannot become a recursive scan. */ }
         const candidate = { token, path, effect: READ };
         ruleCandidates.push(candidate);
         if (normalizer.isBoundaryOutsideWorkingDirectory(path.boundaryValue())) externalAccesses.push({ path, effect: READ });
@@ -876,11 +900,11 @@ export function managedProgramAnalysis(root: TSNode, normalizer: PathNormalizer,
       continue;
     }
     const read = managedReaderEffect(unit.text) ?? proveCommandEffect(unit.words[0], unit.words.slice(1));
-    if (read.effect !== "read" && !["true", "false", "uname", "whoami", "id"].includes(unit.words[0])) complete = false;
+    if (read.effect !== "read" && !["true", "false", "uname", "whoami", "id"].includes(unit.words[0])) unproven ??= unit;
     // Effect attribution is not a tool allowance for recursive readers.
     marked.push(printingSed(unit.words) || resourceMetadata(unit.words));
   }
-  if (!complete) return incomplete("Another command in the shell program lacks a complete read-only proof.");
+  if (unproven) return incomplete("Another command in the shell program lacks a complete read-only proof.", unproven.text);
   return { proof: { ruleCandidates, externalAccesses, marked, gitWrappers }, diagnostics };
 }
 

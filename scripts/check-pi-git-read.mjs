@@ -397,6 +397,25 @@ try {
     try { assert.equal(managedProgramProof(tree.rootNode, normalizer), undefined); }
     finally { tree.delete(); }
   }
+  // Bare ancestry steps are Git's spelling of ^1/~1, the common parent idiom.
+  for (const command of ["git diff HEAD^ HEAD -- ordinary.txt", "env git diff --name-only HEAD~ HEAD -- ordinary.txt", "git diff --stat HEAD^ HEAD"]) {
+    const input = await equivalent(cwd, command);
+    for (const agent of [undefined, "editor", "reader"]) await assertAllowed(cwd, input, resolver, agent);
+  }
+  // A declined rewrite reports the hardened spelling's failure, not flags the
+  // authority injects itself; a sibling's program-scope note names that unit.
+  await checkProofDiagnostic(cwd, { command: "git diff --ext-diff HEAD^ HEAD -- ordinary.txt" }, resolver, "git-token");
+  {
+    const failed = "git diff --ext-diff HEAD^ HEAD -- ordinary.txt", input = { command: `git status --short && ${failed}` };
+    await hardenGitInput(input, cwd);
+    const program = await BashProgram.parse(input.command, normalizer, { originalCommands: originalGitCommands(input) });
+    assert.deepEqual(program.commands().map(unit => [unit.managedGitDiagnostic?.code, unit.managedGitDiagnostic?.token]),
+      [["git-program-scope", failed], ["git-token", "--ext-diff"]]);
+    const gate = describeBashPathGate({ toolCallId: "diagnostic-fixture", toolName: "bash", cwd, agentName: "reader" }, program, resolver, normalizer);
+    assert.equal(gate?.preCheck?.state, "deny");
+    assert.deepEqual(gate.payload.evidence.filter(entry => entry.label === "managed Git proof unavailable").map(entry => entry.detail),
+      ["--ext-diff"], "Path denial explains the failed unit, not its proven sibling");
+  }
   console.log("PASS: quoted Git argv/pretty/date/revision roundtrips, bare/env log READ scope and protected session floor, full env gates, original inner/outer rules and opt-out");
 
   // ls-tree's blob label is insufficient when replacement changes actual type.

@@ -28,7 +28,9 @@ and managed overlay share these primitives, not an identical acceptance policy.
   or another ignore mode.
 - Log supports ranges, multiple revision words, `^A` and `--not`; a revision
   word cannot start with an option. Diff uses stricter revision atoms and splits
-  supported ranges in its caller. Path words remain a restricted literal
+  supported ranges in its caller; an atom may end in ancestry steps, bare or
+  numbered (`HEAD^`, `HEAD~`, `main~2^`), but not peel, reflog or shorthand
+  suffixes (`^{}`, `@{}`, `^!`, `^@`, `^-`). Path words remain a restricted literal
   language, not arbitrary Git pathspec magic or a path permission.
 
 The managed overlay has a **Git-only** concatenation decoder. It accepts literal
@@ -163,7 +165,11 @@ or isolation guarantee for the whole repository.
 A static diagnostic names unsupported syntax and blocks at that independent
 floor. A managed diagnostic explains why a complete read proof is unavailable;
 it is **not** an allow/ask/deny verdict and does not change the deciding token,
-rule or approval scope. Probe failure, timeout, overflow, unsupported layout or
+rule or approval scope. A unit that reaches the gates unhardened had its rewrite
+declined, so its diagnostic reports the hardened spelling's failure (for example
+an unsupported token), never the flags hardening injects. Sibling units carry a
+`git-program-scope` note naming the first unproven unit, and a path denial
+prefers the failed unit's own diagnostic over that note. Probe failure, timeout, overflow, unsupported layout or
 helper configuration falls back to the ordinary gates. That fallback may deny
 under a reader capability ceiling; it does not promise an approval prompt.
 

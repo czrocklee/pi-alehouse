@@ -156,8 +156,10 @@ patch("src/handlers/gates/bash-path.ts", [
   ['import { buildPathAskPayload } from "#src/presentation/path-ask-payload";', 'import { buildPathAskPayload } from "#src/presentation/path-ask-payload";\nimport { managedGitDiagnosticEvidence } from "#src/presentation/agent-renderer";'],
   ['  const pattern = normalizer.approvalPatternFor(worstEntry.path);', `  // One failed unit withholds the complete program proof. This diagnostic
   // describes that loss, not the identity or authority of the deciding path.
-  const diagnostic = worstEntry.effect.effect === "unproven"
-    ? bashProgram.commands().find(cmd => cmd.managedGitDiagnostic)?.managedGitDiagnostic : undefined;
+  // Prefer the failed unit's own reason over its siblings' program-scope note.
+  const diagnostics = worstEntry.effect.effect === "unproven"
+    ? bashProgram.commands().flatMap(cmd => cmd.managedGitDiagnostic ? [cmd.managedGitDiagnostic] : []) : [];
+  const diagnostic = diagnostics.find(item => item.code !== "git-program-scope") ?? diagnostics[0];
   const pattern = normalizer.approvalPatternFor(worstEntry.path);`],
   ['    payload,\n    sessionApproval:', '    payload: { ...payload, evidence: [...payload.evidence, ...managedGitDiagnosticEvidence(diagnostic)] },\n    sessionApproval:'],
   ['      effectSource: worstEntry.effect.source,', '      effectSource: worstEntry.effect.source,\n      ...(diagnostic ? { managedGitDiagnostic: diagnostic } : {}),'],

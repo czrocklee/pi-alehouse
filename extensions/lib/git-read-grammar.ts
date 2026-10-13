@@ -126,9 +126,13 @@ export function gitLogRevision(word: string): boolean {
   return !controls.test(word) && /^\^?[A-Za-z0-9_@][A-Za-z0-9_./~^@{}+\-]*$/.test(word);
 }
 
-/** Existing strict diff revision atom; callers split ranges themselves. */
+/**
+ * Strict diff revision atom; callers split ranges themselves. A bare ancestry
+ * step (`X^`, `X~`, `X^^`) is Git's spelling of `X^1`/`X~1`; peel, reflog and
+ * shorthand suffixes (`^{}`, `@{}`, `^!`, `^@`, `^-`) remain unsupported.
+ */
 export function gitDiffRevision(word: string): boolean {
-  return !controls.test(word) && /^[A-Za-z0-9_][A-Za-z0-9_./-]*(?:[~^][0-9]+)*$/.test(word) && !word.includes("..");
+  return !controls.test(word) && /^[A-Za-z0-9_][A-Za-z0-9_./-]*(?:[~^][0-9]*)*$/.test(word) && !word.includes("..");
 }
 
 /** Existing literal path spelling; not a path permission or existence check. */

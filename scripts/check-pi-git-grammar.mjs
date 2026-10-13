@@ -47,8 +47,9 @@ values("gitLogRevision", [
   "HEAD", "HEAD~5..HEAD", "main...topic", "^main", "^HEAD~2", "@{u}", "HEAD^{commit}", "refs/heads/topic", "deadbeef",
 ], ["", "^", "^^main", "--all", "-main", "HEAD:file", ":0:file", "main topic", "$REF", "HEAD\n", "HEAD\0"]);
 values("gitDiffRevision", [
-  "HEAD", "HEAD~1", "main^0", "refs/heads/topic", "deadbeef",
-], ["^main", "main..topic", "main...topic", "HEAD^", "@{u}", "HEAD^{commit}", "HEAD:file", "--cached", "HEAD\n", "HEAD\0"]);
+  "HEAD", "HEAD~1", "main^0", "refs/heads/topic", "deadbeef", "HEAD^", "HEAD~", "HEAD^^", "deadbeef^", "main~2^",
+], ["^main", "main..topic", "main...topic", "@{u}", "HEAD^{commit}", "HEAD^{}", "HEAD^!", "HEAD^@", "HEAD^-", "HEAD^-1",
+  "HEAD:file", "--cached", "HEAD\n", "HEAD\0"]);
 values("gitPathWord", [
   ".", "./file.txt", "a path/file-name.txt", ".env", "./-file", "dir/file", "a...b",
 ], ["", "-file", "../file", "dir/../file", "/absolute", " file", "file ", ":(literal)file", "dir/*", "$PATH", "file\n", "file\0"]);
