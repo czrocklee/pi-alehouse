@@ -201,7 +201,7 @@ const newTask = (prompt, profile = "reader", rest = {}) => ({ agent: slug(prompt
 const runOf = (agent) => controller.findAgent(agent).run_id;
 const settled = (agent) => until(() => ["completed", "needs_input", "failed", "cancelled"].includes(controller.view(runOf(agent)).status));
 try {
-  const { getJsonSchemaToolParameters } = await import(pathToFileURL(join(host.root, "node_modules/@earendil-works/pi-ai/dist/api/constrained-sampling.js")));
+  const { getJsonSchemaToolParameters } = await import(pathToFileURL(join(host.aiRoot, "dist/api/constrained-sampling.js")));
   for (const tool of tools) assert.equal(getJsonSchemaToolParameters(tool, true).type, "object");
   assert.throws(() => getJsonSchemaToolParameters({ name: "union", parameters: Type.Union([
     Type.Object({ create: Type.String() }), Type.Object({ agent: Type.String() }),

@@ -70,7 +70,8 @@ export async function loadHost(piExecutable) {
   // pi-ai exports only the ESM "import" condition; require.resolve(packageName)
   // throws ERR_PACKAGE_PATH_NOT_EXPORTED. Stay within this selected host's
   // installed closure rather than falling back to development dependencies.
-  const aiEntry = join(dirname(findPackageJSON("@earendil-works/pi-ai", pathToFileURL(executable).href)), "dist/index.js");
+  const aiRoot = dirname(findPackageJSON("@earendil-works/pi-ai", pathToFileURL(executable).href));
+  const aiEntry = join(aiRoot, "dist/index.js");
   const ai = await import(pathToFileURL(aiEntry));
   const { createJiti } = require("jiti");
   // Public package export, not a private registry import. Pi's permission
@@ -92,7 +93,7 @@ export async function loadHost(piExecutable) {
   // movement or hint drift must fail visibly, never silently select a fallback.
   const { SUBAGENT_ENV_HINT_KEYS } = await jiti.import(join(permissionRoot, "src/authority/permission-forwarding.ts"));
   assertPermissionEnvHints(SUBAGENT_ENV_HINT_KEYS);
-  return { sdk, ai, tui, permission, permissionRoot, permissionEntry, authority, root, require, capabilities,
+  return { sdk, ai, aiRoot, tui, permission, permissionRoot, permissionEntry, authority, root, require, capabilities,
     versions: { pi: packageAt(root).version, tui: packageAt(tuiRoot).version, permission: packageAt(permissionRoot).version },
   };
 }

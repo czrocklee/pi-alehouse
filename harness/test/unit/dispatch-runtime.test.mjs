@@ -233,11 +233,12 @@ test("tree locking is only tree && acquireTree; unsafe roots/leaves are not repa
   assert.deepEqual(await runtime.start(runtime.prepare({ ownership: ["tree"] }, f.context), f.context), {});
   const root = join(f.agentDir, "harness-trees"), leaf = join(root, sha(join(f.cwd, "tree")));
   assert(!existsSync(root));
-  mkdirSync(root, { mode: 0o755 });
+  // chmod, not mkdir's mode: the evidence lane runs under umask 077.
+  mkdirSync(root); chmodSync(root, 0o755);
   assert.deepEqual((await runtime.start(prepared, f.context)).notes, ["tree_lock_unknown"]);
   assert.equal(lstatSync(root).mode & 0o7777, 0o755); assert(!existsSync(leaf));
   chmodSync(root, 0o700);
-  mkdirSync(leaf, { mode: 0o755 });
+  mkdirSync(leaf); chmodSync(leaf, 0o755);
   assert.deepEqual((await runtime.start(prepared, f.context)).notes, ["tree_lock_unknown"]);
   assert.equal(lstatSync(leaf).mode & 0o7777, 0o755); assert.deepEqual(readdirSync(leaf), []);
   rmSync(leaf, { recursive: true });
