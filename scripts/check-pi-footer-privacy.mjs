@@ -35,15 +35,19 @@ try {
   const { default: footer } = await createJiti(import.meta.url).import(join(resolve(import.meta.dirname, ".."), "extensions/status-footer.ts"));
   const handlers = new Map();
   footer({ on(event, handler) { handlers.set(event, [...(handlers.get(event) ?? []), handler]); } });
-  const emit = async (event, payload, provider) => {
-    for (const handler of handlers.get(event) ?? []) await handler(payload, { model: { provider } });
+  const emit = async (event, payload, provider, api) => {
+    for (const handler of handlers.get(event) ?? []) await handler(payload, { model: { provider, api } });
   };
+  const codexHeaders = { "x-codex-primary-used-percent": "10", "x-codex-primary-window-minutes": "300", "x-codex-primary-reset-at": "2000000000" };
   await emit("after_provider_response", {}, "xai");
   await emit("agent_settled", {}, "xai");
-  await emit("after_provider_response", { headers: { "x-codex-primary-used-percent": "10", "x-codex-primary-window-minutes": "300", "x-codex-primary-reset-at": "2000000000" } }, "openai-codex");
+  await emit("after_provider_response", { headers: codexHeaders }, "openai-codex", "openai-codex-responses");
+  // A second Codex account displays its quota but never publishes it: the
+  // dashboard payload names no account, so it would overwrite the first.
+  await emit("after_provider_response", { headers: { ...codexHeaders, "x-codex-primary-used-percent": "40" } }, "openai-codex-2", "openai-codex-responses");
   // OpenAI ChatGPT auth is not a Codex quota source. The same headers must not
   // publish, and must not read a credential, just because the provider is openai.
-  await emit("after_provider_response", { headers: { "x-codex-primary-used-percent": "10", "x-codex-primary-window-minutes": "300", "x-codex-primary-reset-at": "2000000000" } }, "openai");
+  await emit("after_provider_response", { headers: codexHeaders }, "openai", "openai-responses");
   await new Promise((done) => setTimeout(done, 10));
   if (mode === "default") { assert.deepEqual(authReads, []); assert.deepEqual(requests, []); }
   if (mode === "billing") {

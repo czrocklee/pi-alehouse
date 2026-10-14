@@ -255,7 +255,8 @@ try {
   assert.match(physical, /gpt-5\.6 \(high\)/);
   assert.doesNotMatch(physical, /→|different-physical-model/, "a physical selection does not borrow another call as its route");
 
-  useModel("openai-codex", "gpt-5.6-codex");
+  const codexApi = { api: "openai-codex-responses" };
+  useModel("openai-codex", "gpt-5.6-codex", codexApi);
   oauthProviders.add("openai-codex");
   const weeklyHeaders = {
     "x-codex-primary-used-percent": "10",
@@ -264,6 +265,14 @@ try {
   };
   await emit("after_provider_response", { headers: weeklyHeaders });
   assert.match(line(), /W 90%/, "openai-codex still displays its own weekly quota headers");
+  // A provider alias cloning openai-codex is another account on the same API.
+  useModel("openai-codex-2", "gpt-6.1-sol", codexApi);
+  oauthProviders.add("openai-codex-2");
+  assert.doesNotMatch(line(), /W \d+%/, "an account shows no quota before its own response");
+  await emit("after_provider_response", { headers: { ...weeklyHeaders, "x-codex-primary-used-percent": "40" } });
+  assert.match(line(), /W 60%/, "a Codex provider alias displays its own weekly quota");
+  useModel("openai-codex", "gpt-5.6-codex", codexApi);
+  assert.match(line(), /W 90%/, "switching back shows the first account's quota, not the alias's");
   useModel("openai", "gpt-5.6");
   oauthProviders.add("openai");
   providers.openai = providerAuth(true);

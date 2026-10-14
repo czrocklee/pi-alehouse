@@ -134,6 +134,13 @@ function weeklyQuota(snapshot: CodexQuotaSnapshot): CodexWeeklyQuota | undefined
   };
 }
 
+/** The Codex backend answers with `x-codex-*` quota headers. That includes a
+ * provider alias cloning openai-codex for another account; OpenAI ChatGPT auth
+ * uses another API and never does. */
+function isCodexQuotaSource(model: { api?: string } | undefined): boolean {
+  return model?.api === "openai-codex-responses";
+}
+
 function weeklyQuotasEqual(left: CodexWeeklyQuota | undefined, right: CodexWeeklyQuota | undefined): boolean {
   if (!left || !right) return left === right;
   return (
@@ -755,7 +762,8 @@ function fitFooterSegments(segments: FooterSegment[], width: number): FooterSegm
 type FooterHit = { x: number; width: number; key?: string };
 
 export default function (pi: ExtensionAPI) {
-  let codexWeeklyQuota: CodexWeeklyQuota | undefined;
+  /** Keyed by provider: each Codex provider is its own account. */
+  const codexWeeklyQuotas = new Map<string, CodexWeeklyQuota>();
   let grokWeeklyQuota: GrokWeeklyQuota | undefined;
   let lastPublishedQuota: CodexQuotaSnapshot | undefined;
   let requestFooterRender: (() => void) | undefined;
@@ -814,21 +822,25 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.on("after_provider_response", (event, ctx) => {
-    // Codex quota headers belong to openai-codex only. OpenAI ChatGPT
+    // Codex quota headers belong to the Codex backend only. OpenAI ChatGPT
     // subscription auth does not publish or display them.
-    if (ctx.model?.provider !== "openai-codex") return;
+    const provider = ctx.model?.provider;
+    if (!provider || !isCodexQuotaSource(ctx.model)) return;
 
     const headers = quotaHeaders(event.headers);
     const snapshot = quotaSnapshot(headers);
     if (!QUOTA_BUCKET_NAMES.some((bucket) => snapshot[bucket])) return;
 
     const nextWeeklyQuota = weeklyQuota(snapshot);
-    if (!weeklyQuotasEqual(codexWeeklyQuota, nextWeeklyQuota)) {
-      codexWeeklyQuota = nextWeeklyQuota;
+    if (!weeklyQuotasEqual(codexWeeklyQuotas.get(provider), nextWeeklyQuota)) {
+      if (nextWeeklyQuota) codexWeeklyQuotas.set(provider, nextWeeklyQuota);
+      else codexWeeklyQuotas.delete(provider);
       requestFooterRender?.();
     }
 
-    if (quotaSnapshotsEqual(lastPublishedQuota, snapshot)) return;
+    // The dashboard payload names no account. Publish only openai-codex, as
+    // before, so another account's quota never overwrites it.
+    if (provider !== "openai-codex" || quotaSnapshotsEqual(lastPublishedQuota, snapshot)) return;
 
     // Do not delay consumption of the model stream on a best-effort localhost update.
     void publishQuota(headers).then((published) => {
@@ -1048,8 +1060,9 @@ export default function (pi: ExtensionAPI) {
           const right = segments.map((segment, index) => joint(segments, index) + segment.text).join("");
 
           let quotaDisplay: string | undefined;
+          const codexWeeklyQuota =
+            provider && isCodexQuotaSource(ctx.model) ? codexWeeklyQuotas.get(provider) : undefined;
           const quotaIsCurrent =
-            provider === "openai-codex" &&
             codexWeeklyQuota &&
             (codexWeeklyQuota.resetsAt === 0 || codexWeeklyQuota.resetsAt > Date.now() / 1_000);
           if (quotaIsCurrent && codexWeeklyQuota) {
