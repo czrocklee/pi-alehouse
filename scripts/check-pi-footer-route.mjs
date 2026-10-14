@@ -273,6 +273,25 @@ try {
   assert.match(line(), /W 60%/, "a Codex provider alias displays its own weekly quota");
   useModel("openai-codex", "gpt-5.6-codex", codexApi);
   assert.match(line(), /W 90%/, "switching back shows the first account's quota, not the alias's");
+  // Only a plan that reports a shorter window shows it, before the weekly one.
+  const fiveHourHeaders = {
+    "x-codex-primary-used-percent": "30",
+    "x-codex-primary-window-minutes": "300",
+    "x-codex-primary-reset-at": "2000000000",
+    "x-codex-secondary-used-percent": "40",
+    "x-codex-secondary-window-minutes": "10080",
+    "x-codex-secondary-reset-at": "2000000000",
+  };
+  useModel("openai-codex-2", "gpt-6.1-sol", codexApi);
+  await emit("after_provider_response", { headers: fiveHourHeaders });
+  assert.match(line(), /5h 70% W 60%/, "an account reporting a 5h window shows it beside its weekly quota");
+  useModel("openai-codex", "gpt-5.6-codex", codexApi);
+  assert.doesNotMatch(line(), /5h/, "an account without a 5h window shows only its weekly quota");
+  useModel("openai-codex-2", "gpt-6.1-sol", codexApi);
+  await emit("after_provider_response", { headers: { ...fiveHourHeaders, "x-codex-primary-reset-at": "1000000000" } });
+  const lapsed = line();
+  assert.match(lapsed, /W 60%/);
+  assert.doesNotMatch(lapsed, /5h/, "a 5h window past its reset is not shown as current");
   useModel("openai", "gpt-5.6");
   oauthProviders.add("openai");
   providers.openai = providerAuth(true);

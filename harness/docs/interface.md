@@ -363,9 +363,10 @@ response on the active branch; before that it shows only the selection.
 Subscription marks use the provider's OAuth subscription metadata and actual
 OAuth state, plus the existing Kimi exception. Native OpenAI ChatGPT login does
 not imply Codex quota headers: `x-codex-*` handling remains limited to the Codex
-responses API. The weekly quota is kept per provider, so a provider alias for a
-second Codex account shows its own; the dashboard POST, which names no account,
-stays limited to `openai-codex`.
+responses API. Quota is kept per provider, so a provider alias for a second
+Codex account shows its own; a shorter window such as `5h` shows before `W` only
+when that account's headers report one. The dashboard POST, which names no
+account, stays limited to `openai-codex`.
 Harness-provided `usage.harnessModels` permits per-worker model rows; unattributed totals stay in
 the `tools` lump.  Main compaction/branch summary uses `main · compact/summaries`;
 model-attributed child compaction displays `worker compact · model`, avoiding

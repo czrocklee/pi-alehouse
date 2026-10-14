@@ -66,9 +66,17 @@ type CodexQuotaBucket = {
 
 type CodexQuotaSnapshot = Partial<Record<(typeof QUOTA_BUCKET_NAMES)[number], CodexQuotaBucket>>;
 
-type CodexWeeklyQuota = {
+type CodexWindowQuota = {
   remainingPercent: number;
   resetsAt: number;
+  windowMinutes: number;
+};
+
+/** One Codex account's footer quota: the weekly window, and a shorter one
+ * (a 5h limit) only when that account's plan reports it. */
+type CodexQuota = {
+  short?: CodexWindowQuota;
+  weekly?: CodexWindowQuota;
 };
 
 type GrokWeeklyQuota = {
@@ -123,15 +131,24 @@ function quotaSnapshotsEqual(left: CodexQuotaSnapshot | undefined, right: CodexQ
   });
 }
 
-function weeklyQuota(snapshot: CodexQuotaSnapshot): CodexWeeklyQuota | undefined {
-  const bucket = QUOTA_BUCKET_NAMES.map((name) => snapshot[name]).find(
-    (candidate) => candidate?.windowMinutes === WEEKLY_WINDOW_MINUTES,
-  );
-  if (!bucket) return undefined;
-  return {
+function codexQuota(snapshot: CodexQuotaSnapshot): CodexQuota | undefined {
+  const buckets = QUOTA_BUCKET_NAMES.flatMap((name) => snapshot[name] ?? []);
+  const weekly = buckets.find((bucket) => bucket.windowMinutes === WEEKLY_WINDOW_MINUTES);
+  const short = buckets
+    .filter((bucket) => bucket.windowMinutes < WEEKLY_WINDOW_MINUTES)
+    .sort((left, right) => left.windowMinutes - right.windowMinutes)[0];
+  if (!weekly && !short) return undefined;
+  const window = (bucket: CodexQuotaBucket): CodexWindowQuota => ({
     remainingPercent: 100 - bucket.usedPercent,
     resetsAt: bucket.resetsAt,
-  };
+    windowMinutes: bucket.windowMinutes,
+  });
+  return { ...(short ? { short: window(short) } : {}), ...(weekly ? { weekly: window(weekly) } : {}) };
+}
+
+/** `5h` for a 300-minute window; minutes when it is not whole hours. */
+function quotaWindowLabel(minutes: number): string {
+  return minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`;
 }
 
 /** The Codex backend answers with `x-codex-*` quota headers. That includes a
@@ -141,12 +158,18 @@ function isCodexQuotaSource(model: { api?: string } | undefined): boolean {
   return model?.api === "openai-codex-responses";
 }
 
-function weeklyQuotasEqual(left: CodexWeeklyQuota | undefined, right: CodexWeeklyQuota | undefined): boolean {
+function windowQuotasEqual(left: CodexWindowQuota | undefined, right: CodexWindowQuota | undefined): boolean {
   if (!left || !right) return left === right;
   return (
     left.remainingPercent === right.remainingPercent &&
+    left.windowMinutes === right.windowMinutes &&
     Math.abs(left.resetsAt - right.resetsAt) <= RESET_TIME_TOLERANCE_SECONDS
   );
+}
+
+function codexQuotasEqual(left: CodexQuota | undefined, right: CodexQuota | undefined): boolean {
+  if (!left || !right) return left === right;
+  return windowQuotasEqual(left.short, right.short) && windowQuotasEqual(left.weekly, right.weekly);
 }
 
 function quotaHeaders(headers: Record<string, string>): Record<string, string> {
@@ -763,7 +786,7 @@ type FooterHit = { x: number; width: number; key?: string };
 
 export default function (pi: ExtensionAPI) {
   /** Keyed by provider: each Codex provider is its own account. */
-  const codexWeeklyQuotas = new Map<string, CodexWeeklyQuota>();
+  const codexQuotas = new Map<string, CodexQuota>();
   let grokWeeklyQuota: GrokWeeklyQuota | undefined;
   let lastPublishedQuota: CodexQuotaSnapshot | undefined;
   let requestFooterRender: (() => void) | undefined;
@@ -831,10 +854,10 @@ export default function (pi: ExtensionAPI) {
     const snapshot = quotaSnapshot(headers);
     if (!QUOTA_BUCKET_NAMES.some((bucket) => snapshot[bucket])) return;
 
-    const nextWeeklyQuota = weeklyQuota(snapshot);
-    if (!weeklyQuotasEqual(codexWeeklyQuotas.get(provider), nextWeeklyQuota)) {
-      if (nextWeeklyQuota) codexWeeklyQuotas.set(provider, nextWeeklyQuota);
-      else codexWeeklyQuotas.delete(provider);
+    const nextQuota = codexQuota(snapshot);
+    if (!codexQuotasEqual(codexQuotas.get(provider), nextQuota)) {
+      if (nextQuota) codexQuotas.set(provider, nextQuota);
+      else codexQuotas.delete(provider);
       requestFooterRender?.();
     }
 
@@ -1059,25 +1082,25 @@ export default function (pi: ExtensionAPI) {
           ], width);
           const right = segments.map((segment, index) => joint(segments, index) + segment.text).join("");
 
-          let quotaDisplay: string | undefined;
-          const codexWeeklyQuota =
-            provider && isCodexQuotaSource(ctx.model) ? codexWeeklyQuotas.get(provider) : undefined;
-          const quotaIsCurrent =
-            codexWeeklyQuota &&
-            (codexWeeklyQuota.resetsAt === 0 || codexWeeklyQuota.resetsAt > Date.now() / 1_000);
-          if (quotaIsCurrent && codexWeeklyQuota) {
-            const remaining = Math.round(codexWeeklyQuota.remainingPercent);
-            const quotaColor = remaining <= 10 ? "error" : remaining <= 25 ? "warning" : "success";
-            quotaDisplay = `${label("W")} ${theme.fg(quotaColor, `${remaining}%`)}`;
-          } else if (
-            provider === "xai" &&
-            grokWeeklyQuota &&
-            (grokWeeklyQuota.resetsAt === 0 || grokWeeklyQuota.resetsAt > Date.now() / 1_000)
-          ) {
-            const remaining = Math.round(grokWeeklyQuota.remainingPercent);
-            const quotaColor = remaining <= 10 ? "error" : remaining <= 25 ? "warning" : "success";
-            quotaDisplay = `${label("W")} ${theme.fg(quotaColor, `${remaining}%`)}`;
-          }
+          // A window whose reset has passed shows nothing until the next response.
+          const current = <T extends { resetsAt: number }>(quota: T | undefined) =>
+            quota && (quota.resetsAt === 0 || quota.resetsAt > Date.now() / 1_000) ? quota : undefined;
+          const remaining = (window: string, remainingPercent: number) => {
+            const percent = Math.round(remainingPercent);
+            const quotaColor = percent <= 10 ? "error" : percent <= 25 ? "warning" : "success";
+            return `${label(window)} ${theme.fg(quotaColor, `${percent}%`)}`;
+          };
+          const codex =
+            provider && isCodexQuotaSource(ctx.model) ? codexQuotas.get(provider) : undefined;
+          const codexShort = current(codex?.short);
+          const codexWeekly = current(codex?.weekly);
+          const grokWeekly = provider === "xai" ? current(grokWeeklyQuota) : undefined;
+          const quotaDisplay = codexShort || codexWeekly
+            ? [
+                ...(codexShort ? [remaining(quotaWindowLabel(codexShort.windowMinutes), codexShort.remainingPercent)] : []),
+                ...(codexWeekly ? [remaining("W", codexWeekly.remainingPercent)] : []),
+              ].join(" ")
+            : grokWeekly ? remaining("W", grokWeekly.remainingPercent) : undefined;
 
           const left = [
             location,
