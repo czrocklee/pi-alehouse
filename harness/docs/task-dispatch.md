@@ -56,7 +56,13 @@ The synchronous read-only host preflight uses the target permission **profile**
   `external_directory_read` or `external_directory_write` surface.
 
 Known deny rejects admission (`PREFLIGHT_DENIED`) before additional input
-classification stat; permission lookup itself may canonicalize paths. Policy
+classification stat; permission lookup itself may canonicalize paths. The error
+reports the target `profile` and checked permission `surface`; it is not a
+missing-directory/type result. A reader's `write` is limited to its own
+[private scratch](reader-scratch.md); build/project writes need an editor, not
+just a `tree` declaration. Preflight is a generic profile query: it neither
+grants nor recognizes the reader's per-call scratch capability, a new spawn has no
+scratch at preflight, and claims cannot invent scratch permission. Policy
 ask/unknown does not trigger approval and may pass this approximate preflight.
 It is **not a grant**: child per-session rules and ordinary tool gates still
 apply. A missing/throwing/invalid port is an interface failure, not a policy

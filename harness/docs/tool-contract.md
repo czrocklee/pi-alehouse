@@ -88,12 +88,17 @@ supplied arrays are nonempty with unique entries, and each string is bounded
 to 512 UTF-16 units. Paths have no leading/trailing whitespace and are literal,
 not shell globs or expansions. See [task dispatch](task-dispatch.md) for exact path language,
 profile/external preflight, claims, after rechecks and validation observations.
-These declarations do not grant permissions or prove that checks ran.
+These declarations do not grant permissions or prove that checks ran. In
+particular, `tree` is checked as `path_write`; it cannot create an output-root
+exception. Preflight permission errors expose the target `profile` and checked
+`surface`, separately from missing-input and wrong-type filesystem errors.
 
 Profile, reasoning difficulty, context and budgets are fixed for the Agent at spawn;
 later tasks cannot silently change them. Prompt is the full task instruction;
 label defaults to its first nonblank line and is never forwarded as an
-instruction. Reader denies direct/detectable writes; editor edits within
+instruction. Reader reads the project and can use `write` only in its own
+[private scratch](reader-scratch.md); no edit or web. Its prompt names the scratch
+directory. Builds and project edits need an editor. Editor edits within
 parent-configured scope; researcher has read-only file tools and web, no Bash,
 and returns web-derived untrusted material. Git mutations stay with the parent.
 Bash/web remain permission-gated; no profile is an OS sandbox.

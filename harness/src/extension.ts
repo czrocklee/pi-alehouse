@@ -16,7 +16,7 @@ import { ApprovalBindings } from "./permissions/approval-provenance.js";
 import { isOffPreset, presetLabel, PresetRouter, resolveSlotRoute, selectPhysicalWorkerModel, strengths, thinkingLevels, validEffortOverrides,
   type EffortOverrides, type PresetCandidate, type PresetPublication, type PresetSelection, type PresetSnapshot, type Strength } from "./routing.js";
 import { ChildActivityRegistry } from "./runtime/activity-observer.js";
-import { createChildSessionFactory } from "./runtime/child-factory.js";
+import { createChildSessionFactory, type ReaderScratchFactory } from "./runtime/child-factory.js";
 import { ChildWebModules, nativeWebLoader } from "./runtime/child-web.js";
 import { configureChildRuntime } from "./runtime/execution-policy.js";
 import { createDispatchRuntime } from "./runtime/dispatch-runtime.js";
@@ -542,7 +542,9 @@ export default function harnessExtension(pi: ExtensionAPI) {
     } });
     const permission = await jiti.import<{
       getPermissionsService: (id: string) => unknown;
+      createReaderScratch: ReaderScratchFactory;
     }>(join(permissionRoot, "index.ts"));
+    assert(typeof permission.createReaderScratch === "function", "Reader scratch authority is unavailable; restart with a matched pi-alehouse runtime");
     // The launcher loads us first so shutdown drains children BEFORE tearing
     // down the parent authority. Permission session_start runs after ours;
     // tool admission and child creation check its readiness, not this hook.
@@ -582,7 +584,8 @@ export default function harnessExtension(pi: ExtensionAPI) {
     const approvalBindings = new ApprovalBindings(pi.events, owner);
     const createSession = createChildSessionFactory({ ctx, parentBus: pi.events, agentDir, permissionRoot, policyRoot,
       parentId, runtime, profiles, settings, parentHistory, approvalBindings, activities,
-      parentPermission, getPermissionsService: permission.getPermissionsService, web });
+      parentPermission, getPermissionsService: permission.getPermissionsService,
+      createReaderScratch: permission.createReaderScratch, web });
     try {
       controller = await OwnerController.open({ owner, concurrency: 4, resident_limit: residentLimit, grace_turns: 5,
         admission: () => router!.admissionState(),

@@ -28,7 +28,7 @@ test("generated managed definitions deny all current/retired parent tools and no
     const definition = rendered.agents[name];
     const tools = JSON.parse(/^tools: (.+)$/m.exec(definition)[1]);
     assert.deepEqual(tools, [...policy.readTools.filter((tool) => profile.bash !== false || tool !== "bash"),
-      ...(profile.edits ? ["edit", "write"] : [])]);
+      ...(profile.edits ? ["edit", "write"] : profile.scratchWrite ? ["write"] : [])]);
     for (const tool of policy.childToolDenies) {
       assert.match(definition, new RegExp(`^  ${tool}: deny$`, "m"), `${name}: ${tool}`);
       assert(!tools.includes(tool), `${name}: forbidden declared tool ${tool}`);
@@ -40,6 +40,16 @@ test("generated managed definitions deny all current/retired parent tools and no
       assert(rendered.metadata[name].bashDenies.includes(spelling), `${name}: retain Git boundary ${spelling}`);
     if (!profile.edits) assert.match(definition, / {2}path_write:\n {4}"\*": deny/);
     if (profile.bash === false) assert.match(definition, / {2}bash:\n {4}"\*": deny/);
+    if (profile.scratchWrite) {
+      // Reader-only scratch write: the built-in write tool exists without edit,
+      // and the profile adds no per-tool write rule, so ordinary global write
+      // rules decide the tool itself while the path_write floor above still
+      // denies every path outside the trusted bound scratch directory.
+      assert.equal(name, "reader", "scratchWrite is reader-only");
+      assert(!tools.includes("edit"), "reader scratch write grants no edit tool");
+      assert.match(definition, /^ {2}edit: deny$/m, "reader edit deny");
+      assert.doesNotMatch(definition, /^ {2}write: (deny|allow)$/m, "reader adds no per-tool write rule");
+    }
   }
   for (const name of policy.disabled) {
     assert.match(rendered.agents[name], /^enabled: false$/m);

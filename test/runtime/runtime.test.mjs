@@ -13,7 +13,7 @@ const temporary = (t) => { const path = mkdtempSync(join(tmpdir(), "alehouse-run
 test("portable generator matches dispatch-aware worker bytes and policy digests", () => {
   const { agents, metadata } = renderWorkers();
   assert.equal(metadata.editor.digest, "984a82fd788466c25e2b030d1ae3d8261fdc4aaec46870daa6947ba7cbe680ab");
-  assert.equal(metadata.reader.digest, "f8bb8f389eecdb91707e1fa2a39739f85e73b9509eb037caf4ea82d5f45e07e8");
+  assert.equal(metadata.reader.digest, "5c89c1546b32101278aca16b5176f6aa9b5045c63cba8927dd4c9e79c2dbd1de");
   assert.equal(metadata.researcher.digest, "9dc17ce69786e7885ca3c173b70c4e4179e6d8a511f7d7077f7df724d4e92f62");
   for (const name of Object.keys(metadata)) {
     const worker = agents[name];
@@ -22,8 +22,16 @@ test("portable generator matches dispatch-aware worker bytes and policy digests"
     assert.match(worker, /A check you cannot run yet \(no build tree, a busy one, shared source not yet ready for it, or an instruction to wait\) needs no question: finish the rest of the work and report that check as unrun.*never report it released earlier/);
   }
   for (const [name, source] of Object.entries(agents)) assert.equal(readFileSync(join(packageRoot, "runtime/agents", `${name}.md`), "utf8"), source);
-  assert.match(agents.reader, /  write: deny\n  edit: deny\n  path_write:\n    "\*": deny/);
+  // Reader: built-in write serves its private scratch directory only. No
+  // per-tool write deny, so ordinary global write rules still apply (never a
+  // write allow); edit and path_write stay denied outside the bound directory.
+  assert.match(agents.reader, /\ntools: \["read","bash","grep","find","ls","web_search","source_check","fetch_content","get_search_content","write"\]\n/);
+  assert.match(agents.reader, /  edit: deny\n  path_write:\n    "\*": deny\n  bash:\n    "\*": ask\n/);
+  assert.doesNotMatch(agents.reader, /^ {2}write: deny$/m);
+  assert.doesNotMatch(agents.reader, /write: allow/);
+  assert.match(agents.reader, /Read project files\. Use write only in your assigned scratch directory; do not edit project files\. Bash remains permission-gated\./);
   assert(metadata.editor.bashDenies.includes("git -C * commit *"));
+  assert(metadata.reader.bashDenies.includes("git -C * commit *"), "Git mutations stay with the parent for readers too");
   // The researcher: read-only local tools plus web, no Bash, every command denied.
   assert.match(agents.researcher, /\ntools: \["read","grep","find","ls","web_search","source_check","fetch_content","get_search_content"\]\n/);
   assert.match(agents.researcher, /  write: deny\n  edit: deny\n  path_write:\n    "\*": deny\n  bash:\n    "\*": deny\n/);
@@ -276,7 +284,7 @@ test("real composition runs researcher, reader and editor Agents with forwarded 
       PI_JEV_API_KEY_FILE: join(dir, "nonexistent-test-key"), PI_OFFLINE: "1", NO_COLOR: "1" },
     encoding: "utf8", timeout: 55000,
   });
-  assert.match(output, /real composition spawns researcher, reader and editor Agents; forwarded asks reach the parent UI; a mode switch reaches the next request; nothing leaves the process/);
+  assert.match(output, /real composition spawns researcher, reader and editor Agents; forwarded asks reach the parent UI; a reader scratch ask is approved and written; a sibling reader cannot touch another reader's scratch; a mode switch reaches the next request; nothing leaves the process/);
 });
 
 test("real composition restores, defaults and fails closed on the delegation mode across restarts, offline", { timeout: 60000 }, (t) => {

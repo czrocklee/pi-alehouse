@@ -97,6 +97,32 @@ test("all public profile/external checks precede every input/tree classification
   assert.equal(prepared.ownership[0].canonical, join(outside, "new/file"));
 });
 
+test("tree preflight deny reports target profile and surface without classification stat or allocation", t => {
+  const f = fixture(t);
+  f.service.checkPermission = (surface, _value, profile) => {
+    assert.equal(profile, "reader");
+    return { state: surface === "path_write" ? "deny" : "allow" };
+  };
+  withStat(() => { assert.fail("deny must precede classification stat"); }, () => {
+    assert.throws(() => f.runtime().prepare({ tree: "new-tree" }, { ...f.context, profile: "reader" }), failure => {
+      assert.equal(failure.code, "PREFLIGHT_DENIED");
+      // Profile is new; existing keys and sizing are unchanged, and no internal
+      // identity joins the details.
+      assert.deepEqual(Object.keys(failure.details).sort(), ["key", "path", "profile", "reason", "requested", "surface"]);
+      assert.equal(failure.details.key, "tree");
+      assert.equal(failure.details.requested, "new-tree");
+      assert.equal(failure.details.surface, "path_write");
+      assert.equal(failure.details.profile, "reader");
+      assert.equal(failure.details.path, join(f.cwd, "new-tree"));
+      assert.match(failure.details.reason, /Permission policy denied path_write for profile reader on this declared path/);
+      assert.match(failure.details.reason, /not a missing or wrong-type filesystem result/);
+      return true;
+    });
+  });
+  assert(!existsSync(join(f.cwd, "new-tree")), "a denied tree declaration creates nothing");
+  assert(!existsSync(join(f.agentDir, "harness-trees")), "known deny allocates no child tree lease");
+});
+
 test("deny beats missing input without any classification stat and reports the precise declaration", t => {
   const f = fixture(t);
   f.service.checkPermission = (surface, _path, profile) => {
@@ -139,6 +165,14 @@ test("policy unknown is allowed, but missing/broken/throwing/async public API is
   withStat(() => { assert.fail("invalid permission API must precede classification"); }, () => {
     for (const service of services) assert.throws(() => f.runtime({ getPermissionsService: () => service }).prepare({ inputs: ["missing"] }, f.context), error("DISPATCH_PREFLIGHT_UNAVAILABLE"));
     assert.throws(() => f.runtime({ getPermissionsService() { throw new Error("service failed"); } }).prepare({ ownership: ["new"] }, f.context), error("DISPATCH_PREFLIGHT_UNAVAILABLE"));
+    assert.throws(() => f.runtime({ getPermissionsService: () => ({ checkPermission() { throw new Error("API failed"); } }) })
+      .prepare({ ownership: ["new"] }, { ...f.context, profile: "reader" }), failure => {
+      assert.equal(failure.code, "DISPATCH_PREFLIGHT_UNAVAILABLE");
+      assert.equal(failure.details.key, "ownership");
+      assert.equal(failure.details.surface, "path_write");
+      assert.equal(failure.details.profile, "reader");
+      return true;
+    });
   });
 });
 

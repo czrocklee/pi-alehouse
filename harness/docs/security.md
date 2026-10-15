@@ -38,7 +38,7 @@ with the parent in all of them, since Agents share one checkout:
 
 | Profile | Direct edit/write | Ordinary Git mutation | Meaning |
 | --- | --- | --- | --- |
-| `reader` | denied; detectable Bash path writes denied | denied | no writes a judge or session yolo could approve; not an OS read-only sandbox |
+| `reader` | `write` only in its own private `/tmp` scratch; no `edit` | denied | reads the project; Bash keeps its detectable-write deny, real paths and normal approval |
 | `editor` | parent-configured workspace/scratch scope | denied | bounded writer capability, subject to existing guards |
 | `researcher` | denied; no Bash tool (its definition also turns Bash asks into denies) | denied | `read`/`grep`/`find`/`ls` plus the four web tools |
 
@@ -153,14 +153,23 @@ permission grants.  They share policy body; they do not pin a model, thinking,
 turn budget, or context inheritance.  Generated profile integrity and static
 Bash denies are checked by the external authority.  Existing sensitive paths,
 external writes, subprocess restrictions, Git configuration protections, and
-permission-search rules continue to apply.  A reader's `path_write` is a
-deny, not an ask, so neither Jev nor session yolo can turn a write it can be
-seen to make into an allow.  The managed authority applies that whole-surface
-profile ceiling after global/project rules, session grants and yolo; inherited
-certificate/key-file asks cannot override it.  It still retains inspected shell `ask` paths: an
-opaque program (a script that writes files itself) is an ordinary Bash ask,
-which a judge or yolo can approve, so `reader` must not be represented as a
-container/sandbox.
+permission-search rules continue to apply. A reader can use `write` only in its
+[assigned scratch directory](reader-scratch.md), bound to the real child SDK
+session. The exception is a short-lived process-local per-call capability,
+granted only at the real tool boundary of the trusted built-in `write` tool,
+checked against the same effective identity as the permission session,
+including its last-known name, before the vendor permission handler. Other reader
+directories and project writes are denied, including under session grants or
+yolo. Global/project rules, project-agent floors and immutable resource
+protection still apply independently of the reader's default write floor.
+Bindings are rechecked after awaited approvals before returning allow.
+Forwarded asks verify the requesting child's binding and direct-write capability, not the
+parent identity; missing, malformed or stale provenance gets no exception, and
+generic profile/service queries (including dispatch ownership/tree preflight)
+get none. Bash receives no scratch-write exception or write capability: it
+preserves real paths, including unproven effects, and detected writes keep the
+reader ceiling. Opaque Bash programs can perform internal IO
+that the classifier cannot see, so this is not an OS sandbox.
 
 ## Dispatch preflight and validation observations
 

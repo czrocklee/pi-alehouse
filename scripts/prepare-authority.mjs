@@ -32,6 +32,7 @@ import permissions from "./vendor/src/index.ts";
 import { guardSingleAuthority } from "./authority-guard.ts";
 import { installManagedScratch } from "./managed-scratch.ts";
 import { hardenGitInput, hardenStaticFileInput } from "./vendor/src/access-intent/bash/managed-read-policy.ts";
+export { createReaderScratch } from "./vendor/src/policy/managed-reader-scratch.ts";
 import { originalBashDeny } from "../policy/static-safety-guard.ts";
 export { getPermissionsService } from "./vendor/src/service.ts";
 export { initializeManagedResourceProtection, getManagedResourceProtection };

@@ -132,14 +132,20 @@ try {
   ]) assert.equal((await check(command)).bash.state, "allow", "Upstream assignment-stripping contract");
   assert.equal((await check("git push origin main", "reader")).bash.state, "deny");
   assert.equal((await check("git commit --amend", "editor")).bash.state, "deny");
+  assert.equal(resolver.checkPermission("write", {}).state, "allow", "Fixture global write baseline: the reader equality below must be meaningful");
   for (const agent of ["editor", "reader"]) {
     assert.deepEqual(manager.getConfigIssues(agent), [], `Worker policy must load: ${agent}`);
     for (const tool of ["alert_parent", "ask_parent"]) {
       assert.equal(resolver.checkPermission(tool, {}, agent).state, "allow", `Internal communication: ${agent}: ${tool}`);
     }
-    for (const tool of ["write", "edit"]) {
-      assert.equal(resolver.checkPermission(tool, {}, agent).state, agent === "editor" ? "allow" : "deny", `Direct editing boundary: ${agent}: ${tool}`);
-    }
+    // Direct editing boundary: the editor may edit and write. The reader's
+    // built-in write follows the ordinary global rule (its profile pins no
+    // per-tool write deny and never adds a forced allow); its edit stays
+    // denied by the profile.
+    assert.equal(resolver.checkPermission("edit", {}, agent).state, agent === "editor" ? "allow" : "deny", `Direct editing boundary: ${agent}: edit`);
+    assert.equal(resolver.checkPermission("write", {}, agent).state,
+      agent === "editor" ? "allow" : resolver.checkPermission("write", {}).state,
+      `Reader write follows the ordinary global rule, not a forced allow: ${agent}`);
     assert.equal((await check("printf '%s' fixture > ordinary.txt", agent)).path?.preCheck?.state, agent === "editor" ? undefined : "deny", `Worker path-write gate: ${agent}`);
     assert.equal((await check("printf '%s' fixture > ~/.pi/agent/settings.json", agent)).path?.preCheck?.state, "deny", `Worker self-write denial: ${agent}`);
 
@@ -266,6 +272,16 @@ try {
     for (const command of ["echo fixture > .git/HEAD", "echo fixture > .git/config"]) {
       assert.equal((await check(command, agent)).path?.preCheck?.state, "deny", `Git control redirection: ${agent}:${command}`);
     }
+  }
+  // Reader scratch boundary: no trusted authority has bound a scratch
+  // directory in this process, so the default path_write floor denies the
+  // write tool everywhere — project paths and arbitrary /tmp paths alike. The
+  // only possible exception is the exact per-child directory the trusted child
+  // factory creates and binds, which this fixture never provides.
+  for (const path of [join(scratch, "ordinary.txt"), "src/new-file.ts",
+    "/tmp/pi-alehouse-reader-unbound/report.md", "/tmp/unbound-notes.txt"]) {
+    assert((await gatesFor("write", { path, content: "fixture" }, "reader")).some((gate) => gate.preCheck?.state === "deny"),
+      `Reader write floor denies the unbound path: ${path}`);
   }
   const { resolveToCwd } = await import(join(piRoot, "dist/core/tools/path-utils.js"));
   assert.equal(resolveToCwd("file:///home/fixture/.ssh/id_fixture", scratch), "/home/fixture/.ssh/id_fixture");

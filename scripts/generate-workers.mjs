@@ -25,14 +25,23 @@ export function renderWorkers(root = packageRoot) {
     const bashDenies = [...git(policy.commonGitDenies), ...policy.gitSpellingDenies,
       ...git(policy.mutationGitDenies), ...profile.extraBashDenies];
     // Optional profile capabilities remain opt-in; communication changes must
-    // never widen Bash, editing, or web access.
+    // never widen Bash, editing, or web access. scratchWrite is reader-only:
+    // the built-in write tool serves the private scratch directory the
+    // trusted authority creates and binds per child. It drops only the per-tool
+    // write deny so ordinary global write rules still apply (never a write
+    // allow that could override an explicit user deny); edit stays denied and
+    // path_write stays denied everywhere outside the bound scratch directory.
     assert(profile.bash === undefined || profile.bash === false, `Invalid bash flag: ${name}`);
     assert(profile.prompt === undefined || (typeof profile.prompt === "string" && profile.prompt.trim()), `Invalid prompt: ${name}`);
-    const bash = profile.bash !== false;
-    const tools = [...policy.readTools.filter((tool) => bash || tool !== "bash"), ...(profile.edits ? ["edit", "write"] : [])];
+    assert(profile.scratchWrite === undefined || (profile.scratchWrite === true && name === "reader" && profile.edits !== true),
+      `Invalid scratchWrite flag: ${name}`);
+    const bash = profile.bash !== false, scratchWrite = profile.scratchWrite === true;
+    const tools = [...policy.readTools.filter((tool) => bash || tool !== "bash"),
+      ...(profile.edits ? ["edit", "write"] : scratchWrite ? ["write"] : [])];
     assert(tools.every((tool) => !policy.childToolDenies.includes(tool)), `Denied tool in profile: ${name}`);
     agents[name] = `---\ndisplay_name: Worker\ndescription: ${JSON.stringify(profile.description)}\ntools: ${JSON.stringify(tools)}\nprompt_mode: replace\ninherit_context: false\npermission:\n` +
-      toolDenies + (profile.edits ? "" : '  write: deny\n  edit: deny\n  path_write:\n    "*": deny\n') +
+      toolDenies + (profile.edits ? "" : scratchWrite ? '  edit: deny\n  path_write:\n    "*": deny\n'
+        : '  write: deny\n  edit: deny\n  path_write:\n    "*": deny\n') +
       `  bash:\n    "*": ${bash ? "ask" : "deny"}\n` + bashDenies.map((p) => `    ${JSON.stringify(p)}: deny`).join("\n") +
       `\n---\n${prompt}${profile.prompt ? `\n${profile.prompt}\n` : ""}\n`;
     // Nix's toJSON sorts attributes; retain that order for byte-for-byte output.

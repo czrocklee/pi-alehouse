@@ -22,9 +22,11 @@
       "extraBashDenies": []
     },
     "reader": {
-      "description": "Generic worker without edit/write tools or project writes; inspected Bash proofs still require normal permissions.",
+      "description": "Reads the project; built-in write only in its own private scratch directory; no edit tools or web.",
       "edits": false,
-      "extraBashDenies": ["rm *", "mv *"]
+      "scratchWrite": true,
+      "extraBashDenies": ["rm *", "mv *"],
+      "prompt": "Read project files. Use write only in your assigned scratch directory; do not edit project files. Bash remains permission-gated."
     },
     "researcher": {
       "description": "Web research worker: read-only local inspection plus web search and fetch; no Bash, edit/write tools or project writes.",

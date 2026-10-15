@@ -44,6 +44,7 @@ export function initialize({ agentDir = agentDirectory(), root = packageRoot } =
     policy.permission.path[path] = "deny";
     policy.permission.path_write[path] = "deny";
   }
+  for (const path of (protection.writeFiles ?? []).flatMap(aliases)) policy.permission.path_write[path] = "deny";
   for (const path of protection.writeRoots.flatMap(aliases)) {
     policy.permission.path_write[path] = "deny";
     policy.permission.path_write[join(path, "*")] = { action: "deny", reason: "Executable policy, dependencies and Pi configuration must be edited outside the agent." };

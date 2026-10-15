@@ -257,7 +257,9 @@ one migration unit:
   checks exact definition digests, including worker-body changes. Absent-only
   init never repairs existing mismatches or overwrites files/symlinks. Preserve
   user choices and credentials; never copy credentials or silently enable models.
-  Routing defaults to Off.
+  Routing defaults to Off. Readers receive a private `/tmp` scratch directory,
+  granted only as a per-call capability at the built-in `write` tool boundary,
+  not a configurable output allowlist; see [reader scratch](reader-scratch.md).
 - Keep all nine management tools and retired names denied/excluded in children;
   allow only the intended `alert_parent`/`ask_parent` communication tools and
   retire `notify_parent` to an explicit deny, without an alias. Preserve Git,

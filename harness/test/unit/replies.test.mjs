@@ -212,6 +212,25 @@ test("dispatch error replies name concrete raw or normalized paths with a bounde
   assert.equal(errorReply({ code: "INVALID_MODEL", details: { requested: raw } }).error.path, undefined, "routing choices do not become filesystem declarations");
 });
 
+test("preflight denials project the checked surface and target profile only for dispatch errors", () => {
+  const denial = errorReply({ code: "PREFLIGHT_DENIED", details: { key: "tree", requested: "build/tree", surface: "path_write", profile: "reader" } }).error;
+  assert.equal(denial.parameter, "tree");
+  assert.equal(denial.surface, "path_write");
+  assert.equal(denial.profile, "reader");
+  assert.equal(denial.path, "build/tree");
+  const bounded = errorReply({ code: "PREFLIGHT_DENIED", details: { key: "tree", surface: "s".repeat(64), profile: "p".repeat(64) } }).error;
+  assert.equal(bounded.surface, "s".repeat(32));
+  assert.equal(bounded.profile, "p".repeat(16));
+  const unavailable = errorReply({ code: "DISPATCH_PREFLIGHT_UNAVAILABLE", details: { key: "ownership", surface: "path_write", profile: "editor" } }).error;
+  assert.equal(unavailable.surface, "path_write");
+  assert.equal(unavailable.profile, "editor");
+  // Non-dispatch codes never surface these fields, and unknown detail keys stay
+  // redacted; filesystem type/missing errors gain no permission surface.
+  assert.deepEqual(errorReply({ code: "AGENT_BUSY", details: { surface: "path_write", profile: "reader", secret_fixture: "hidden" } }).error, { code: "AGENT_BUSY" });
+  const filesystem = errorReply({ code: "DISPATCH_TREE_TYPE", details: { key: "tree", requested: "file" } }).error;
+  assert.equal(filesystem.surface, undefined); assert.equal(filesystem.profile, undefined);
+});
+
 test("Esc abort is not task interruption, and neither consumes finished presentation", async (t) => {
   const { controller: c, ports } = await fixture(t);
   const run = await c.submit("a", named("orca")); await until(() => ports[0]?.streaming);

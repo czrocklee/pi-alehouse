@@ -91,6 +91,11 @@ export function errorReply(error: { code?: string; details?: Record<string, unkn
     ...(agent ? { agent: utf16Prefix(agent, 64) } : {}),
     ...(parameter === undefined ? {} : { parameter }),
     ...(path === undefined ? {} : { path: utf16Prefix(path, 512) }),
+    // Dispatch failures additionally show which permission surface was checked
+    // and for which target profile, bounded; filesystem missing/type errors
+    // carry no surface from the runtime and gain none here.
+    ...(dispatchError && typeof d.surface === "string" ? { surface: utf16Prefix(d.surface, 32) } : {}),
+    ...(dispatchError && typeof d.profile === "string" ? { profile: utf16Prefix(d.profile, 16) } : {}),
     ...(typeof d.reason === "string" ? { reason: utf16Prefix(d.reason, 512) } : {}),
     ...(typeof d.error === "string" ? { message: utf16Prefix(d.error, 512) } : {}),
     ...(typeof d.resolution === "string" ? { resolution: utf16Prefix(d.resolution, 512) } : {}),

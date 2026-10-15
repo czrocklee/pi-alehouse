@@ -79,7 +79,7 @@ function permissionState(service: PermissionQuery, surface: string, path: string
     const state: unknown = (result as { state?: unknown }).state;
     if (state !== "allow" && state !== "ask" && state !== "deny" && state !== "unknown") throw new Error("INVALID_QUERY_STATE");
     return state;
-  } catch { throw new HarnessError("DISPATCH_PREFLIGHT_UNAVAILABLE", { key: field, requested: item, surface, path }); }
+  } catch { throw new HarnessError("DISPATCH_PREFLIGHT_UNAVAILABLE", { key: field, requested: item, surface, path, profile }); }
 }
 function classify(path: DispatchPath, field: "inputs" | "tree", item: string): void {
   let entry: ReturnType<typeof statSync>;
@@ -214,8 +214,13 @@ export function createDispatchRuntime(options: { agentDir: string; flock: string
       const tree = declaration.tree ? target(declaration.tree, "tree") : undefined;
       const targets = [...inputs, ...ownership, ...(tree ? [tree] : [])];
       const denied = (entry: Target, surface: string, path: string): void => {
-        if (permissionState(service, surface, path, context.profile, entry.key, entry.requested) === "deny")
-          throw new HarnessError("PREFLIGHT_DENIED", { key: entry.key, requested: entry.requested, surface, path });
+        // A policy verdict for this declaration, not a filesystem classification
+        // or a suggestion to change the path, drop the tree or escalate.
+        if (permissionState(service, surface, path, context.profile, entry.key, entry.requested) === "deny") {
+          throw new HarnessError("PREFLIGHT_DENIED", { key: entry.key, requested: entry.requested, surface, path,
+            profile: context.profile,
+            reason: `Permission policy denied ${surface} for profile ${context.profile} on this declared path; this is a permission decision, not a missing or wrong-type filesystem result.` });
+        }
       };
       const external = (entry: Target): string => entry.key === "inputs" ? "external_directory_read" : "external_directory_write";
       // First query every lexical declaration before ANY ancestry inspection.

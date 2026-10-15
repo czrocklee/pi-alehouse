@@ -353,4 +353,162 @@ patch("src/index.ts", [
   ['import { PermissionManager } from "#src/policy/permission-manager";', 'import { PermissionManager } from "#src/policy/permission-manager";\nimport { requireManagedResourceProtection } from "#src/policy/managed-resource-protection";'],
   ['  const permissionManager = new PermissionManager({\n    agentDir,', '  const permissionManager = new PermissionManager({\n    resourceProtection: requireManagedResourceProtection(),\n    agentDir,'],
 ]);
-console.log("Applied managed permission/provenance/profile/yolo and immutable resource-floor patches to pi-permission-system 32.0.3");
+// A trusted child factory allocates each reader's scratch. No configuration or
+// model declaration can grant an arbitrary output directory.
+copyFileSync(join(dirname(fileURLToPath(import.meta.url)), "managed-reader-scratch.ts"), join(root, "src/policy/managed-reader-scratch.ts"));
+// Reuse exactly the original scope composition for both policy branches. Removing
+// a deny AFTER merging would lose a lower scope's shadowed rule with the same key.
+const manager = readFileSync(join(root, "src/policy/permission-manager.ts"), "utf8");
+const compositionStart = manager.indexOf("    // Merge permission objects across scopes");
+const compositionEnd = manager.indexOf("    const agentWriteFloor: Ruleset = [];", compositionStart);
+assert(compositionStart >= 0 && compositionEnd > compositionStart, "Reader-scratch composition patch drift");
+const composition = manager.slice(compositionStart, compositionEnd);
+assert.equal(composition.split('["agent", agentConfig]').length, 2);
+const composeForAgent = `    const composeForAgent = (agentScope: ScopeConfig): Ruleset => {\n` +
+  composition.replace('["agent", agentConfig]', '["agent", agentScope]').trimEnd().split("\n").map(line => "  " + line).join("\n") +
+  `\n      return composeRuleset(\n        synthesizeDefaults(universalFallback, universalFallbackOrigin),\n        synthesizeBaseline(configRules),\n        configRules,\n      );\n    };\n\n`;
+patch("src/policy/permission-manager.ts", [
+  ['import { join } from "node:path";', 'import { join } from "node:path";\nimport { readerScratchAgentScope, readerScratchDirectories, readerScratchWriteMatches, type ReaderScratchWriteContext } from "./managed-reader-scratch";\nimport type { ScopeConfig } from "#src/types";'],
+  ['  agentWriteFloor: Ruleset;', '  agentWriteFloor: Ruleset;\n  readerScratchRules?: Ruleset;'],
+  [composition, composeForAgent],
+  [`    const composedRules = composeRuleset(
+      synthesizeDefaults(universalFallback, universalFallbackOrigin),
+      synthesizeBaseline(configRules),
+      configRules,
+    );`, `    const composedRules = composeForAgent(agentConfig);
+    const scratchAgent = agentName === "reader" ? readerScratchAgentScope(agentConfig) : undefined;
+    const readerScratchRules = scratchAgent ? composeForAgent(scratchAgent) : undefined;`],
+  ['      composedRules: effectiveRules,', '      composedRules: effectiveRules,\n      readerScratchRules: readerScratchRules && (failClosedScopes.length ? floorAllowsToAsk(readerScratchRules) : readerScratchRules),'],
+  ['    if (toolName.trim() === "path_write" && this.resolvePermissions(agentName).agentWriteFloor.length) return true;', `    if (toolName.trim() === "path_write" && this.resolvePermissions(agentName).agentWriteFloor.length) {
+      // Availability is conservative; two sample paths cannot disprove a
+      // specific allowed descendant. Every invocation still checks its path.
+      return !this.resolvePermissions(agentName).readerScratchRules || readerScratchDirectories().length === 0;
+    }`],
+  ['    const { composedRules, agentWriteFloor } = this.resolvePermissions(intent.agentName);', '    const { composedRules, agentWriteFloor, readerScratchRules } = this.resolvePermissions(intent.agentName);'],
+  ['    const fullRules: Ruleset = this.isYoloEnabled()', '    const yolo = this.isYoloEnabled();\n    const scratchWithSession = readerScratchRules && (sessionRules?.length ? [...readerScratchRules, ...sessionRules] : readerScratchRules);\n    const scratchRules = scratchWithSession && (yolo ? rewriteAsksToYolo(scratchWithSession) : scratchWithSession);\n    const fullRules: Ruleset = yolo'],
+  ['        this.resourceProtection,\n      );', '        this.resourceProtection,\n        scratchRules,\n        intent.readerScratchWrite,\n      );'],
+  ['      this.resourceProtection,\n    );', '      this.resourceProtection,\n      scratchRules,\n      intent.readerScratchWrite,\n    );'],
+  ['  resourceProtection: ManagedResourceProtection | undefined,\n): PermissionCheckResult {', `  resourceProtection: ManagedResourceProtection | undefined,
+  scratchRules: Ruleset | undefined,
+  readerScratchWrite: ReaderScratchWriteContext | undefined,
+): PermissionCheckResult {
+  if (surface === "path_write" && scratchRules && readerScratchWriteMatches(readerScratchWrite, values)) {
+    fullRules = scratchRules;
+    agentWriteFloor = agentWriteFloor.filter(rule => rule.origin !== "agent");
+  }`],
+]);
+// The exception is request provenance, not a profile-wide path allowance.
+// Bash keeps its real path facts and receives no scratch capability at all.
+patch("src/access-intent/access-intent.ts", [
+  ['import type { AccessPath } from "./access-path";', `import type { AccessPath } from "./access-path";
+import type { ReaderScratchWriteContext } from "#src/policy/managed-reader-scratch";
+interface ReaderScratchIntent {
+  /** Private per-call capability from the actual SDK built-in write boundary. */
+  readerScratchWrite?: ReaderScratchWriteContext;
+}`],
+  ['export interface ToolAccessIntent {', 'export interface ToolAccessIntent extends ReaderScratchIntent {'],
+  ['export interface PathValuesAccessIntent {', 'export interface PathValuesAccessIntent extends ReaderScratchIntent {'],
+  ['export interface AccessPathAccessIntent {', 'export interface AccessPathAccessIntent extends ReaderScratchIntent {'],
+]);
+patch("src/policy/permission-resolver.ts", [
+  ['      agentName: intent.agentName,\n    };', '      agentName: intent.agentName,\n      readerScratchWrite: intent.readerScratchWrite,\n    };'],
+]);
+patch("src/handlers/gates/types.ts", [
+  ['/** Outcome of a single permission gate evaluation. */', 'import type { ReaderScratchWriteContext } from "#src/policy/managed-reader-scratch";\n\n/** Outcome of a single permission gate evaluation. */'],
+  ['  cwd: string;', '  cwd: string;\n  readerScratchWrite?: ReaderScratchWriteContext;'],
+]);
+patch("src/handlers/permission-gate-handler.ts", [
+  ['import { toRecord } from "#src/value-guards";', 'import { toRecord } from "#src/value-guards";\nimport { beginReaderScratchWrite, readerScratchWriteMatches } from "#src/policy/managed-reader-scratch";'],
+  ['    const validation = validateRequestedTool(event, this.toolRegistry.getAll());', '    const registeredTools = this.toolRegistry.getAll();\n    const validation = validateRequestedTool(event, registeredTools);'],
+  ['    const tcc: ToolCallContext = {', `    const scratchWrite = beginReaderScratchWrite(ctx, toolName, agentName, input, registeredTools);
+    if (toolName === "write" && agentName === "reader" && !scratchWrite) {
+      return { action: "block", reason: "Reader can use write only in its own scratch directory with the built-in write tool." };
+    }
+    const tcc: ToolCallContext = {
+      readerScratchWrite: scratchWrite?.context,`],
+  ['    return await this.pipeline.evaluate(tcc, this.runner);', `    try {
+      const outcome = await this.pipeline.evaluate(tcc, this.runner);
+      // A gate may have waited for approval after computing its preCheck.
+      // Revoked/replaced leases, changed identities or rewritten raw inputs
+      // cannot reuse that earlier capability when permission evaluation ends.
+      if (outcome.action === "allow" && scratchWrite) {
+        const path = toRecord(getEventInput(event)).path;
+        if (ctx.sessionManager.getSessionId() !== scratchWrite.context.sessionId ||
+            this.session.resolveAgentName(ctx) !== "reader" || typeof path !== "string" ||
+            !readerScratchWriteMatches(scratchWrite.context, [path])) {
+          return { action: "block", reason: "Reader scratch write binding changed during permission evaluation." };
+        }
+      }
+      return outcome;
+    } finally { scratchWrite?.release(); }`],
+]);
+patch("src/handlers/gates/tool-call-gate-pipeline.ts", [
+  ['          surface: tcc.toolName,\n          path: accessPath,', '          surface: tcc.toolName,\n          path: accessPath,\n          readerScratchWrite: tcc.readerScratchWrite,'],
+]);
+patch("src/handlers/gates/path.ts", [
+  ['    path: accessPath,\n    agentName:', '    path: accessPath,\n    readerScratchWrite: tcc.readerScratchWrite,\n    agentName:'],
+]);
+// Every ask for this direct write retains the same effective identity. Only
+// the path_write surface may consume its capability as a floor exception.
+patch("src/handlers/gates/helpers.ts", [
+  ['  "toolCallId" | "toolName" | "agentName"', '  "toolCallId" | "toolName" | "agentName" | "readerScratchWrite"'],
+  ['    path,\n    accessIntent,', `    path,
+    accessIntent: { ...accessIntent,
+      ...(tcc.readerScratchWrite ? { readerScratchWrite: tcc.readerScratchWrite.token } : {}) },`],
+]);
+patch("src/handlers/gates/tool.ts", [
+  ['      accessIntent,\n      ...permissionLogContext,', `      accessIntent: { ...accessIntent,
+        ...(tcc.readerScratchWrite ? { readerScratchWrite: tcc.readerScratchWrite.token } : {}) },
+      ...permissionLogContext,`],
+]);
+patch("src/authority/permission-forwarding.ts", [
+  ['export interface ForwardedAccessFacts {', `export interface ForwardedAccessFacts {
+  /** Live process-local built-in write capability; not a model-selected flag. */
+  readerScratchWrite?: string;`],
+]);
+patch("src/authority/forwarding-io.ts", [
+  ['    requesterCwd?: unknown;\n    principal?: unknown;', '    requesterCwd?: unknown;\n    principal?: unknown;\n    readerScratchWrite?: unknown;'],
+  ['    surface: candidate.surface,\n    matchValues:', `    // Malformed capability data loses only eligibility, not the path intent:
+    // dropping the whole intent would incorrectly floor this request to ask.
+    ...(typeof candidate.readerScratchWrite === "string" && candidate.readerScratchWrite.length <= 64
+      ? { readerScratchWrite: candidate.readerScratchWrite } : {}),
+    surface: candidate.surface,
+    matchValues:`],
+]);
+patch("src/authority/approval-escalator.ts", [
+  ['import { toRecord } from "#src/value-guards";', 'import { toRecord } from "#src/value-guards";\nimport { readerScratchWriteAgent } from "#src/policy/managed-reader-scratch";'],
+  ['    const requesterAgentName =\n      getActiveAgentName(ctx) ??', `    const requesterAgentName =
+      (facts.accessIntent?.readerScratchWrite
+        ? readerScratchWriteAgent(facts.accessIntent.readerScratchWrite, requesterSessionId) : undefined) ??
+      getActiveAgentName(ctx) ??`],
+]);
+patch("src/authority/forwarded-request-server.ts", [
+  ['    const check = request.accessIntent', `    // The edge-stamped principal must agree with its forwarding envelope.
+    // Never borrow a different child's session to recover a scratch exception.
+    if (request.accessIntent &&
+        (request.accessIntent.principal.sessionId !== request.requesterSessionId ||
+         request.accessIntent.principal.agentName !== request.requesterAgentName)) {
+      const reason = "Forwarded permission principal does not match its requester.";
+      return { ...createDeniedPermissionDecision(reason), decidedBy: { kind: "gate_error", reason } };
+    }
+    const check = request.accessIntent`],
+]);
+patch("src/index.ts", [
+  ['import { requireManagedResourceProtection } from "#src/policy/managed-resource-protection";', 'import { requireManagedResourceProtection } from "#src/policy/managed-resource-protection";\nimport { installReaderScratchGuard, readerScratchForwardedWrite } from "#src/policy/managed-reader-scratch";'],
+  [`    resolve: (intent) =>
+      resolver.resolve(
+        buildResolvedIntentFromMatchValues(
+          intent.surface,
+          intent.matchValues,
+          intent.principal.agentName,
+        ),
+      ),`, `    resolve: (intent) => resolver.resolve({
+      ...buildResolvedIntentFromMatchValues(intent.surface, intent.matchValues, intent.principal.agentName),
+      readerScratchWrite: readerScratchForwardedWrite(intent, serviceLifecycle.currentSessionId(), subagentRegistry),
+    }),`],
+  ['  const agentDir = getAgentDir();', `  // Same authority-owned effective identity, including remembered-agent state.
+  // Register first; an unavailable identity resolver also fails closed here.
+  installReaderScratchGuard(pi, ctx => session.resolveAgentName(ctx));
+  const agentDir = getAgentDir();`],
+]);
+console.log("Applied managed permission/provenance/profile/yolo, session-bound reader scratch and immutable resource-floor patches to pi-permission-system 32.0.3");

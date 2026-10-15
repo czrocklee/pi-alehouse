@@ -251,9 +251,13 @@ footer or audit entry.
 
 The harness depends on, but does not own, generated worker policy, permission
 authority, static guards, search policy, and Jev review policy.  Profiles are
-not an OS sandbox; `reader` has no direct edit tools and denies detectable
-path writes, but an opaque program remains an inspected shell ask, while OS permissions and global policy still
-matter.  Nested delegation is excluded for every child.  Child web is limited
+not an OS sandbox; `reader` has no edit tool and can use `write` only in its
+[private scratch](reader-scratch.md), via a per-call capability checked at the
+real built-in `write` tool boundary — generic profile/service queries and Bash
+receive no such exception. Bash keeps its detectable-write ceiling and preserves
+real paths, but opaque programs can still perform internal IO outside the
+classifier's view. OS permissions and global policy still matter. Nested delegation is
+excluded for every child. Child web is limited
 to `researcher`, which has no Bash; `reader`/`editor` web stays excluded by the
 harness allowlist even though their declared definitions include it.  Researcher
 file reads and web calls together can move project content to the network; its

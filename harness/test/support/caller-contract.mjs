@@ -19,7 +19,9 @@ export function assertCallerTools(tools) {
   assert.match(fields.prompt.description, /Complete instructions in plain sentences, with the full path of every file or document you mention/);
   assert.match(fields.label.description, /agent_list, not instructions. Default: the prompt's first line/);
   assert.deepEqual(fields.profile.enum, ["editor", "reader", "researcher"]);
-  assert.match(fields.profile.description, /reader:.*cannot edit files; editor: may edit files; researcher: web search and fetch.*no Bash or edits.*untrusted. Git mutations stay with you/);
+  assert.match(fields.profile.description, /reader: reads the project and writes only in its own assigned scratch directory \(temp reports, helper files\); no edit or web, so builds or project edits need the editor profile/);
+  assert.doesNotMatch(fields.profile.description, /output root/i, "the generic trusted output-roots mechanism is retired");
+  assert.match(fields.profile.description, /editor: may edit and write files; researcher: web search and fetch.*no Bash or edits.*untrusted. Git mutations stay with you/);
   assert.match(fields.profile.description, /permission-gated; no profile is an OS sandbox/);
   const difficulty = fields.reasoning_difficulty.description;
   assert.equal(fields.reasoning_difficulty.type, "integer");

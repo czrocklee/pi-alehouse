@@ -41,7 +41,8 @@ for (const fault of ["widget", "panel", "all"]) test(`quit drains before later S
   await writeFile(join(permissionRoot, "package.json"), "{}");
   await writeFile(join(authority, "package.json"), JSON.stringify({ type: "module", exports: "./index.js" }));
   await writeFile(join(authority, "index.js"), "export const getPermissionsService = () => ({});\n");
-  await writeFile(join(permissionRoot, "index.ts"), 'export { getPermissionsService } from "./node_modules/@gotgenes/pi-permission-system/index.js";\n');
+  await writeFile(join(permissionRoot, "index.ts"), 'export { getPermissionsService } from "./node_modules/@gotgenes/pi-permission-system/index.js";\n' +
+    'export const createReaderScratch = () => { throw new Error("FakePort shutdown fixture must not create an SDK child"); };\n');
   t.mock.method(globalThis, "fetch", () => { assert.fail("shutdown fixture attempted network IO"); });
   t.mock.method(OwnerController, "open", async () => h.controller);
   t.mock.method(FileOwnerLease, "open", async () => h.owner);

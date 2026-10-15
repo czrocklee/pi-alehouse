@@ -189,9 +189,15 @@ export function protectionResources(paths = {}, env = process.env, root = packag
     join(homedir(), ".pi/agent/auth.json"), join(homedir(), ".pi/agent/web-search.json"), join(homedir(), ".pi/web-search.json")];
   if (env.XDG_CONFIG_HOME) readFiles.push(join(absoluteUserPath(env.XDG_CONFIG_HOME), "pi/web-search.json"));
   if (keyFile) readFiles.push(absoluteUserPath(keyFile));
+  // Pin individual trust-input aliases as well as their directory. A nested
+  // config/profile symlink can target an otherwise writable output directory.
+  const writeFiles = ["extensions/pi-permission-system/config.json", "extensions/pi-alehouse/config.json",
+    "harness-presets.json", "managed-permissions.json", "settings.json", "models.json", "trust.json",
+    ...managedAgentNames.map(name => `agents/${name}.md`)].map(path => join(agentDir, path));
   return { writeRoots: [...new Set([resolve(root), agentDir,
     paths.permissionRoot ?? join(root, "runtime/permission-system"), paths.policyRoot ?? join(root, "runtime/policy"),
-    ...dependencyCodeRoots(root), ...(hostRoot ? [hostRoot, ...dependencyCodeRoots(hostRoot)] : [])])], readFiles: [...new Set(readFiles)] };
+    ...dependencyCodeRoots(root), ...(hostRoot ? [hostRoot, ...dependencyCodeRoots(hostRoot)] : [])])],
+    readFiles: [...new Set(readFiles)], writeFiles };
 }
 export function runtimeEnvironment(paths, env = process.env) {
   const result = { ...env, PI_CODING_AGENT_DIR: paths.agentDir,

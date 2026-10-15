@@ -152,6 +152,7 @@ async function checkOriginalDenyFloor(cwd, executionCommand) {
     "@earendil-works/pi-coding-agent", "../../bin/runtime-support.mjs",
     "./vendor/src/policy/managed-resource-protection.ts", "./vendor/src/index.ts", "./authority-guard.ts",
     "./managed-scratch.ts", "./vendor/src/access-intent/bash/managed-read-policy.ts",
+    "./vendor/src/policy/managed-reader-scratch.ts",
     "../policy/static-safety-guard.ts", "./vendor/src/service.ts",
   ]);
   const seenSpecs = new Set();
@@ -172,6 +173,7 @@ export const getPackageDir = () => "/fixture-host", packageRoot = "/fixture-pack
 export const protectionResources = () => ({}), initializeManagedResourceProtection = () => {};
 export const getManagedResourceProtection = () => ({}), getPermissionsService = () => undefined;
 export const guardSingleAuthority = () => {};
+export const createReaderScratch = () => { throw new Error("Order fixture allocates no children"); };
 export function originalBashDeny(command, ctx) { state.trace.push("original-deny"); return state.deny(command, ctx); }
 export async function hardenGitInput(input) { state.trace.push("hardener/probes"); state.hardenCalls++; input.command = state.executionCommand; return { version: 1, originalDigest: "fixture", executionDigest: "fixture" }; }
 export const hardenStaticFileInput = () => undefined;
@@ -184,6 +186,8 @@ export default function permissions(pi) { pi.on("tool_call", () => { state.trace
     authority({ on: (name, handler) => { if (name === "tool_call") hooks.push(handler); },
       appendEntry: (name) => { assert.equal(name, "managed-git-read"); state.trace.push("audit"); } });
     assert.equal(hooks.length, 3, "Generated pre-hardener registers ahead of mocked scratch and permission handlers");
+    // The real vendor installs its reader guard using PermissionSession; this
+    // dependency-mocked wrapper fixture checks only original Bash deny order.
     const dispatch = async input => {
       for (const hook of hooks) {
         const result = await hook({ toolName: "bash", input }, ctx);
