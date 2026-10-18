@@ -172,7 +172,8 @@ provider.respond(async ({ context, maxTokens }) => {
   assert(["editor", "reader"].includes(profile));
   const names = context.tools.map((tool) => tool.name).sort();
   childToolsByProfile[profile] = names;
-  for (const name of ["edit", "write"]) assert.equal(names.includes(name), profile === "editor");
+  assert.equal(names.includes("edit"), profile === "editor");
+  assert(names.includes("write"), "reader keeps the guarded built-in scratch writer");
   assert(names.includes("read") && names.includes("bash"));
   const operation = text(context.messages.findLast((message) => message.role === "user"));
   if (operation.includes("ENTRY_HOLD")) {
@@ -193,7 +194,8 @@ provider.respond(async ({ context, maxTokens }) => {
       ? { path: "edited.txt", oldText: "before", newText: "after" }
       : { path: "edited.txt", content: "before\n" } }] };
   }
-  assert(!context.tools.some((tool) => ["edit", "write"].includes(tool.name)), "write tools exposed to readonly worker");
+  assert.equal(profile, "reader");
+  assert(!context.tools.some((tool) => tool.name === "edit"), "edit exposed to reader");
   if (context.messages.at(-1)?.role === "toolResult") {
     assert.equal(text(context.messages.at(-1)).trim(), "ENTRY_READ_OK");
     return { text: "ENTRY_READ_OK" };

@@ -24,6 +24,43 @@ observations into public evidence.
 
 Keep fixtures offline and output outside the checkout; never make real-model calls or copy Pi auth/session data into public reports. A controlled provider reports synthetic behavior only. In particular, SDK post-guard queue/message acceptance and unsupported live-Owner `/reload` must be tested as limitations, not relabelled safe because a selected schedule produced no post-cancel provider call. Only an actual controlled run can record an outcome. Permission authority selection must use the **built matched patched runtime**; a mutable global install or missing fixture is not a pass. A test report should distinguish failures, skipped checks and suites that matched zero tests.
 
+## Pi 1.3.0 update
+
+With Node 24.20.0, development Pi/AI/TUI 1.3.0 and `PI_TEST_EXECUTABLE` set to
+the development 1.3.0 CLI, `npm ci --ignore-scripts`, `npm run build` and
+`HARNESS_FLOCK=/run/current-system/sw/bin/flock npm run check` passed locally:
+**2137 package tests passed, 7 skipped**, plus lint/types and the separate
+portable policy gates. The controlled host collector (`--all`) also passed
+its full and readonly lanes against that CLI. Fixtures used isolated
+HOME/agent/session directories, `PI_OFFLINE=1`, synthetic providers and no
+real credentials. Their private `/tmp` directories must remain on the same
+filesystem as reader scratch for the hardlink probes.
+
+Pi 1.3 closes a custom overlay through its own handle rather than popping the
+topmost overlay. The pane fixture now implements that handle and independently
+counts handle/global closes, including late-callback idempotence. The host
+fixtures also caught up with the existing reader scratch contract: `write` is
+visible, `edit` and management tools are not, and project writes remain denied.
+The readonly lane exercises actual built-in writes before and during parent
+yolo, checking unchanged canaries and no approval prompt. These are fixture
+corrections, not new write permissions or production runtime shims.
+
+The lockfile changes only the seven `@earendil-works` packages; their internal
+Pi dependency edges are now exact versions. TypeBox, Web and the patched
+permission authority are unchanged. Pi's MIT notice is unchanged at `v1.3.0`.
+The optional Nix package built with its refreshed npm cache hash.
+
+A built tarball retained all 231 matched runtime files and the upstream
+permission LICENSE. A production install with
+`--omit=dev --legacy-peer-deps --ignore-scripts` contained no Pi packages or
+TypeBox. That install fetched public npm dependencies; empty-cache offline
+attempts failed with `ENOTCACHED` and are not recorded as successful offline
+installs. An installed-tarball RPC smoke with fake model configuration and
+network-deny canaries opened, statused and closed an Owner without any model
+turn or network attempt. No global host replacement, Home Manager activation,
+real-model run or human-TUI acceptance was performed. Public acceptance remains
+PENDING.
+
 ## Pi 1.2.0 update
 
 With Node 24.20.0, development Pi/AI/TUI 1.2.0 and `PI_TEST_EXECUTABLE` set to

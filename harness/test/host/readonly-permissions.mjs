@@ -144,11 +144,14 @@ try {
   await check("real read, tool visibility and profile denies", async () => {
     const result = await call(a, "read", { path: "source.txt" });
     assert(!result.isError); assert.equal(text(result), "PUBLIC_MARKER\n");
-    assert.deepEqual([...a.activeTools].sort(), ["bash", "find", "grep", "ls", "read"]);
-    assert(!a.activeTools.some((name) => ["write", "edit", ...delegationTools].includes(name)));
+    assert.deepEqual([...a.activeTools].sort(), ["bash", "find", "grep", "ls", "read", "write"]);
+    assert(!a.activeTools.some((name) => ["edit", ...delegationTools].includes(name)));
     report.active_tools = a.activeTools;
     const service = permission.getPermissionsService(a.session.sessionId);
-    for (const name of ["write", "edit"]) assert.equal(service.checkPermission(name, undefined, "reader").state, "deny");
+    assert.equal(service.checkPermission("edit", undefined, "reader").state, "deny");
+    assert.equal(service.checkPermission("write", undefined, "reader").state,
+      service.checkPermission("write", undefined).state, "write follows the ordinary global rule, not a forced allow");
+    assert.equal(service.checkPermission("path_write", join(cwd, "source.txt"), "reader").state, "deny");
   });
   await check("sensitive reads and symlink alias denied without a prompt", async () => {
     const before = report.dialogs.length;
@@ -188,6 +191,11 @@ try {
           assert.match(text(result), /Denied by policy.*path_write/);
           assert.equal(readFileSync(path, "utf8"), "SYNTHETIC_WRITE_CEILING_FIXTURE\n");
           assert.equal(report.dialogs.length, before, "A profile denial never reaches human approval");
+          const direct = await call(a, "write", { path, content: "READER_DIRECT_WRITE_CANARY" });
+          assert(direct.isError, `reader's built-in write escaped its scratch boundary: ${name}, yolo=${yolo}`);
+          assert.match(text(direct), /own scratch directory/);
+          assert.equal(readFileSync(path, "utf8"), "SYNTHETIC_WRITE_CEILING_FIXTURE\n");
+          assert.equal(report.dialogs.length, before, "An out-of-scratch write never reaches human approval");
         }
       }
     } finally {

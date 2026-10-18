@@ -256,7 +256,13 @@ export default function () { globalThis[Symbol.for(${JSON.stringify(probeKey)})]
         assert.match(context.systemPrompt, /<active_agent name="reader"\/>/);
         assert.match(context.systemPrompt, /CHILD_SKILL_CATALOG_MARKER/);
         assert.equal(context.systemPrompt.split("OPERATOR_CONTEXT_MARKER").length - 1, 1);
-        assert(!context.tools.some((t) => ["edit", "write", ...delegationTools].includes(t.name)));
+        // Reader exposes the guarded built-in scratch writer, not edit or
+        // delegation. This low-level fixture binds no scratch capability.
+        assert.deepEqual(context.tools.map((tool) => tool.name).sort(), ["bash", "find", "grep", "ls", "read", "write"]);
+        assert(!context.tools.some((t) => ["edit", ...delegationTools].includes(t.name)));
+        const service = permission.getPermissionsService(item.session.sessionId);
+        assert.equal(service.checkPermission("edit", undefined, "reader").state, "deny");
+        assert.equal(service.checkPermission("path_write", join(cwd, "source.txt"), "reader").state, "deny");
         assert.equal(JSON.stringify(context.messages).includes("PARENT_TEXT_SNAPSHOT_MARKER"), inherit);
         const file = `prompt-${cwd === parentCwd ? "same" : "different"}-${inherit}-${round}.json`;
         writeFileSync(join(outputRoot, file), JSON.stringify({ systemPrompt: context.systemPrompt,

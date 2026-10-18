@@ -28,6 +28,7 @@ function fixture(t) {
   t.after(() => { delete globalThis[queueKey]; });
   const log = [];
   let current, overlay, request, lastRequest, pane, lateDone, answer, renders = 0, rawDoneCalls = 0, failMount = false;
+  let overlayHideCalls = 0, globalOverlayHideCalls = 0;
   const editor = { getText: () => "draft", setText: (text) => assert.equal(text, "draft") };
   const dialog = { render: () => ["approval"], invalidate() {} };
   current = editor;
@@ -36,8 +37,14 @@ function fixture(t) {
     terminal: { columns: 80, rows: 24 },
     requestRender: () => { renders++; },
     setFocus() {},
-    showOverlay(component) { overlay = component; log.push("overlay"); return { setHidden() {} }; },
-    hideOverlay() { overlay = undefined; log.push("hide-overlay"); },
+    showOverlay(component) {
+      overlay = component; log.push("overlay");
+      return { hide() {
+        overlayHideCalls++;
+        if (overlay === component) { overlay = undefined; log.push("hide-overlay"); }
+      }, setHidden() {} };
+    },
+    hideOverlay() { globalOverlayHideCalls++; overlay = undefined; log.push("hide-overlay"); },
   };
   const host = {
     editor, ui: tui, keybindings: {}, disposeActiveSelector() {},
@@ -84,6 +91,7 @@ function fixture(t) {
   return { ui, open, log, editor, dialog, intervals, pane: () => pane,
     current: () => current, overlay: () => overlay, hasOwner: () => !!request,
     renders: () => renders, rawDoneCalls: () => rawDoneCalls,
+    overlayHideCalls: () => overlayHideCalls, globalOverlayHideCalls: () => globalOverlayHideCalls,
     close: () => lastRequest?.close(), lateDone: () => lateDone?.("late"),
     answer: () => answer(), failMount: () => { failMount = true; } };
 }
@@ -317,5 +325,11 @@ test("a floating pane is not subject to the inline queue's stall bound", async (
   assert.equal(h.intervals.size, 1);
   h.close();
   await opening;
+  assert.equal(h.overlay(), undefined, "Pi closes the pane through its own overlay handle");
+  assert.equal(h.overlayHideCalls(), 1);
+  assert.equal(h.globalOverlayHideCalls(), 0, "Pi must not pop the topmost overlay");
+  h.close(); h.lateDone();
+  assert.equal(h.overlayHideCalls(), 1, "late closure does not call the handle again");
+  assert.equal(h.globalOverlayHideCalls(), 0);
   assert.equal(h.intervals.size, 0);
 });
