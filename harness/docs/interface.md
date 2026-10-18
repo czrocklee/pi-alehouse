@@ -365,8 +365,21 @@ OAuth state, plus the existing Kimi exception. Native OpenAI ChatGPT login does
 not imply Codex quota headers: `x-codex-*` handling remains limited to the Codex
 responses API. Quota is kept per provider, so a provider alias for a second
 Codex account shows its own; a shorter window such as `5h` shows before `W` only
-when that account's headers report one. The dashboard POST, which names no
-account, stays limited to `openai-codex`.
+when that account reports one. Purchased balances appear as `Cr 123.45` (or
+`Cr ∞` for unlimited credits) only when at least one non-expired reported `5h`
+or `W` quota is truly exhausted (`used_percent >= 100`, before display rounding).
+Positive or unknown quota does not trigger `Cr`; it hides again after reset or
+quota recovery. A valid balance or unlimited-credit report is still required.
+This is the account's last reported credit balance, not dollars or an estimate
+from session spend. Balances remain cached while hidden and can appear when a
+later current window reports exhaustion. Both HTTP headers and raw
+`codex.rate_limits` stream events (including WebSocket primary/secondary windows)
+can update local quota and credits. Stream updates use the event's outer
+provider/API identity; missing or invalid values are not invented as zero, and
+stream updates never publish
+to the dashboard. Credit snapshots stay local and require no billing request or
+credential reads. The quota-only dashboard POST,
+which names no account, stays limited to `openai-codex` and excludes credits.
 Harness-provided `usage.harnessModels` permits per-worker model rows; unattributed totals stay in
 the `tools` lump.  Main compaction/branch summary uses `main · compact/summaries`;
 model-attributed child compaction displays `worker compact · model`, avoiding

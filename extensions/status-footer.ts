@@ -60,6 +60,7 @@ const WORKER_COMPACTION_PREFIX = "compaction/";
 
 type CodexQuotaBucket = {
   usedPercent: number;
+  exhausted: boolean;
   resetsAt: number;
   windowMinutes: number;
 };
@@ -68,6 +69,7 @@ type CodexQuotaSnapshot = Partial<Record<(typeof QUOTA_BUCKET_NAMES)[number], Co
 
 type CodexWindowQuota = {
   remainingPercent: number;
+  exhausted: boolean;
   resetsAt: number;
   windowMinutes: number;
 };
@@ -77,6 +79,14 @@ type CodexWindowQuota = {
 type CodexQuota = {
   short?: CodexWindowQuota;
   weekly?: CodexWindowQuota;
+};
+
+/** Purchased credits are separate from subscription windows and have no reset.
+ * Keep the reported decimal text: these are credits, not a dollar amount. */
+type CodexCredits = {
+  hasCredits: boolean;
+  unlimited: boolean;
+  balance?: string;
 };
 
 type GrokWeeklyQuota = {
@@ -110,9 +120,42 @@ function quotaSnapshot(headers: Record<string, string>): CodexQuotaSnapshot {
           : 0;
     snapshot[bucket] = {
       usedPercent: Math.max(0, Math.min(100, Math.round(usedPercent))),
+      // Rounding the displayed percentage to zero is not actual exhaustion.
+      exhausted: usedPercent >= 100,
       resetsAt,
       windowMinutes: Math.floor(windowMinutes),
     };
+  }
+  return snapshot;
+}
+
+function quotaSnapshotFromStream(value: unknown, previous: CodexQuotaSnapshot | undefined): CodexQuotaSnapshot | undefined {
+  const limits = asRecord(value);
+  if (!limits) return undefined;
+  const snapshot = { ...previous };
+  for (const bucket of QUOTA_BUCKET_NAMES) {
+    if (!Object.hasOwn(limits, bucket)) continue;
+    const data = asRecord(limits[bucket]);
+    const prior = previous?.[bucket];
+    const resetAt = data?.reset_at;
+    if (resetAt != null && (typeof resetAt !== "number" || !Number.isInteger(resetAt) || resetAt < 0)) {
+      // Bad supplied metadata must not turn an expired window into reset=0.
+      delete snapshot[bucket];
+      continue;
+    }
+    const headers: Record<string, string> = {};
+    // Optional metadata can be omitted on recovery updates. Retain its known
+    // reset rather than making an old exhausted window current indefinitely.
+    for (const [number, suffix] of [
+      [data?.used_percent, "used-percent"],
+      [data?.window_minutes ?? prior?.windowMinutes, "window-minutes"],
+      [data?.reset_at ?? prior?.resetsAt, "reset-at"],
+    ] as const) {
+      if (typeof number === "number" && Number.isFinite(number)) headers[`x-codex-${bucket}-${suffix}`] = String(number);
+    }
+    const next = quotaSnapshot(headers)[bucket];
+    if (next) snapshot[bucket] = next;
+    else delete snapshot[bucket];
   }
   return snapshot;
 }
@@ -125,6 +168,7 @@ function quotaSnapshotsEqual(left: CodexQuotaSnapshot | undefined, right: CodexQ
     if (!leftBucket || !rightBucket) return leftBucket === rightBucket;
     return (
       leftBucket.usedPercent === rightBucket.usedPercent &&
+      leftBucket.exhausted === rightBucket.exhausted &&
       leftBucket.windowMinutes === rightBucket.windowMinutes &&
       Math.abs(leftBucket.resetsAt - rightBucket.resetsAt) <= RESET_TIME_TOLERANCE_SECONDS
     );
@@ -140,6 +184,7 @@ function codexQuota(snapshot: CodexQuotaSnapshot): CodexQuota | undefined {
   if (!weekly && !short) return undefined;
   const window = (bucket: CodexQuotaBucket): CodexWindowQuota => ({
     remainingPercent: 100 - bucket.usedPercent,
+    exhausted: bucket.exhausted,
     resetsAt: bucket.resetsAt,
     windowMinutes: bucket.windowMinutes,
   });
@@ -162,6 +207,7 @@ function windowQuotasEqual(left: CodexWindowQuota | undefined, right: CodexWindo
   if (!left || !right) return left === right;
   return (
     left.remainingPercent === right.remainingPercent &&
+    left.exhausted === right.exhausted &&
     left.windowMinutes === right.windowMinutes &&
     Math.abs(left.resetsAt - right.resetsAt) <= RESET_TIME_TOLERANCE_SECONDS
   );
@@ -178,6 +224,34 @@ function quotaHeaders(headers: Record<string, string>): Record<string, string> {
       .map(([name, value]) => [name.toLowerCase(), value] as const)
       .filter(([name]) => QUOTA_HEADER_NAMES.has(name)),
   );
+}
+
+function codexCredits(value: unknown): CodexCredits | undefined {
+  const data = asRecord(value);
+  if (typeof data?.has_credits !== "boolean" || typeof data.unlimited !== "boolean") return undefined;
+  const raw = typeof data.balance === "string" ? data.balance.trim() : "";
+  // Validate before putting untrusted provider text on the terminal. Preserve
+  // decimals (including tiny balances) without Number's rounding/precision loss.
+  const balance = /^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(raw) && Number.isFinite(Number(raw))
+    ? raw : undefined;
+  return { hasCredits: data.has_credits, unlimited: data.unlimited, ...(balance !== undefined ? { balance } : {}) };
+}
+
+function codexCreditsFromHeaders(headers: Record<string, string>): CodexCredits | undefined {
+  const normalized = Object.fromEntries(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]));
+  const boolean = (name: string): boolean | undefined => {
+    const value = normalized[name]?.trim().toLowerCase();
+    return value === "true" || value === "1" ? true : value === "false" || value === "0" ? false : undefined;
+  };
+  return codexCredits({
+    has_credits: boolean("x-codex-credits-has-credits"),
+    unlimited: boolean("x-codex-credits-unlimited"),
+    balance: normalized["x-codex-credits-balance"],
+  });
+}
+
+function codexCreditsEqual(left: CodexCredits | undefined, right: CodexCredits): boolean {
+  return left?.hasCredits === right.hasCredits && left.unlimited === right.unlimited && left.balance === right.balance;
 }
 
 async function publishQuota(headers: Record<string, string>): Promise<boolean> {
@@ -787,6 +861,8 @@ type FooterHit = { x: number; width: number; key?: string };
 export default function (pi: ExtensionAPI) {
   /** Keyed by provider: each Codex provider is its own account. */
   const codexQuotas = new Map<string, CodexQuota>();
+  const codexQuotaSnapshots = new Map<string, CodexQuotaSnapshot>();
+  const codexCreditsByProvider = new Map<string, CodexCredits>();
   let grokWeeklyQuota: GrokWeeklyQuota | undefined;
   let lastPublishedQuota: CodexQuotaSnapshot | undefined;
   let requestFooterRender: (() => void) | undefined;
@@ -844,22 +920,35 @@ export default function (pi: ExtensionAPI) {
     })();
   };
 
+  const rememberCodexQuota = (provider: string, snapshot: CodexQuotaSnapshot) => {
+    codexQuotaSnapshots.set(provider, snapshot);
+    const nextQuota = codexQuota(snapshot);
+    if (codexQuotasEqual(codexQuotas.get(provider), nextQuota)) return;
+    if (nextQuota) codexQuotas.set(provider, nextQuota);
+    else codexQuotas.delete(provider);
+    requestFooterRender?.();
+  };
+
+  const rememberCodexCredits = (provider: string, credits: CodexCredits | undefined) => {
+    if (!credits || codexCreditsEqual(codexCreditsByProvider.get(provider), credits)) return;
+    codexCreditsByProvider.set(provider, credits);
+    requestFooterRender?.();
+  };
+
   pi.on("after_provider_response", (event, ctx) => {
     // Codex quota headers belong to the Codex backend only. OpenAI ChatGPT
     // subscription auth does not publish or display them.
     const provider = ctx.model?.provider;
     if (!provider || !isCodexQuotaSource(ctx.model)) return;
 
+    // Credit-only updates are useful even when subscription windows are absent.
+    // Keep paid balances out of the existing quota-only dashboard payload.
+    rememberCodexCredits(provider, codexCreditsFromHeaders(event.headers));
     const headers = quotaHeaders(event.headers);
     const snapshot = quotaSnapshot(headers);
     if (!QUOTA_BUCKET_NAMES.some((bucket) => snapshot[bucket])) return;
 
-    const nextQuota = codexQuota(snapshot);
-    if (!codexQuotasEqual(codexQuotas.get(provider), nextQuota)) {
-      if (nextQuota) codexQuotas.set(provider, nextQuota);
-      else codexQuotas.delete(provider);
-      requestFooterRender?.();
-    }
+    rememberCodexQuota(provider, snapshot);
 
     // The dashboard payload names no account. Publish only openai-codex, as
     // before, so another account's quota never overwrites it.
@@ -869,6 +958,20 @@ export default function (pi: ExtensionAPI) {
     void publishQuota(headers).then((published) => {
       if (published) lastPublishedQuota = snapshot;
     });
+  });
+
+  pi.on("provider_stream_event", (event) => {
+    if (!isCodexQuotaSource(event)) return;
+    const data = asRecord(event.data);
+    if (data?.type !== "codex.rate_limits") return;
+    const limit = data.metered_limit_name ?? data.limit_name ?? "codex";
+    if (typeof limit !== "string" || limit.trim().toLowerCase().replace(/-/g, "_") !== "codex") return;
+    // Successful Codex WebSocket calls have no HTTP response hook. These raw
+    // events carry windows, top-level credits and the physical request identity.
+    // Keep stream updates local, like credits; they never publish to a dashboard.
+    const snapshot = quotaSnapshotFromStream(data.rate_limits, codexQuotaSnapshots.get(event.provider));
+    if (snapshot) rememberCodexQuota(event.provider, snapshot);
+    rememberCodexCredits(event.provider, codexCredits(data.credits));
   });
 
   pi.on("after_provider_response", (_event, ctx) => {
@@ -1094,13 +1197,23 @@ export default function (pi: ExtensionAPI) {
             provider && isCodexQuotaSource(ctx.model) ? codexQuotas.get(provider) : undefined;
           const codexShort = current(codex?.short);
           const codexWeekly = current(codex?.weekly);
+          const credits = provider && isCodexQuotaSource(ctx.model) ? codexCreditsByProvider.get(provider) : undefined;
+          const creditBalance = credits?.unlimited ? "∞" : credits?.balance;
+          const subscriptionExhausted = codexShort?.exhausted === true || codexWeekly?.exhausted === true;
+          const creditDisplay = !subscriptionExhausted || creditBalance === undefined ? undefined
+            : `${label("Cr")} ${theme.fg(Number(creditBalance) === 0 ? "error" : "text", creditBalance)}`;
           const grokWeekly = provider === "xai" ? current(grokWeeklyQuota) : undefined;
-          const quotaDisplay = codexShort || codexWeekly
-            ? [
-                ...(codexShort ? [remaining(quotaWindowLabel(codexShort.windowMinutes), codexShort.remainingPercent)] : []),
-                ...(codexWeekly ? [remaining("W", codexWeekly.remainingPercent)] : []),
-              ].join(" ")
-            : grokWeekly ? remaining("W", grokWeekly.remainingPercent) : undefined;
+          const codexParts = [
+            ...(codexShort ? [remaining(quotaWindowLabel(codexShort.windowMinutes), codexShort.remainingPercent)] : []),
+            ...(codexWeekly ? [remaining("W", codexWeekly.remainingPercent)] : []),
+          ];
+          if (creditDisplay) {
+            const throughCredits = [location, modelDisplay, [...codexParts, creditDisplay].join(" ")].join(" · ");
+            // Never clip `Cr 123.45` into a different balance such as 123.
+            if (visibleWidth(oneLine(throughCredits)) <= Math.max(0, rightStart(right, width) - 1)) codexParts.push(creditDisplay);
+          }
+          const codexDisplay = codexParts.join(" ");
+          const quotaDisplay = codexDisplay || (grokWeekly ? remaining("W", grokWeekly.remainingPercent) : undefined);
 
           const left = [
             location,
