@@ -82,7 +82,8 @@ type CodexQuota = {
 };
 
 /** Purchased credits are separate from subscription windows and have no reset.
- * Keep the reported decimal text: these are credits, not a dollar amount. */
+ * The cache keeps the reported decimal text: these are credits, not a dollar
+ * amount; the footer renders whole credits. */
 type CodexCredits = {
   hasCredits: boolean;
   unlimited: boolean;
@@ -252,6 +253,17 @@ function codexCreditsFromHeaders(headers: Record<string, string>): CodexCredits 
 
 function codexCreditsEqual(left: CodexCredits | undefined, right: CodexCredits): boolean {
   return left?.hasCredits === right.hasCredits && left.unlimited === right.unlimited && left.balance === right.balance;
+}
+
+/** Render whole credits for the footer; the exact reported balance stays cached.
+ * BigInt string rounding keeps huge balances exact (Number would lose
+ * precision); exotic exponent text displays verbatim. */
+function wholeCreditBalance(balance: string): string {
+  if (/e/i.test(balance)) return balance;
+  const match = /^(\d*)(?:\.(\d*))?$/.exec(balance);
+  if (!match) return balance;
+  const whole = match[1] || "0";
+  return match[2] && Number(match[2][0]) >= 5 ? (BigInt(whole) + 1n).toString() : whole;
 }
 
 async function publishQuota(headers: Record<string, string>): Promise<boolean> {
@@ -1199,9 +1211,10 @@ export default function (pi: ExtensionAPI) {
           const codexWeekly = current(codex?.weekly);
           const credits = provider && isCodexQuotaSource(ctx.model) ? codexCreditsByProvider.get(provider) : undefined;
           const creditBalance = credits?.unlimited ? "∞" : credits?.balance;
+          const wholeBalance = creditBalance === undefined ? undefined : wholeCreditBalance(creditBalance);
           const subscriptionExhausted = codexShort?.exhausted === true || codexWeekly?.exhausted === true;
-          const creditDisplay = !subscriptionExhausted || creditBalance === undefined ? undefined
-            : `${label("Cr")} ${theme.fg(Number(creditBalance) === 0 ? "error" : "text", creditBalance)}`;
+          const creditDisplay = !subscriptionExhausted || wholeBalance === undefined ? undefined
+            : `${label("Cr")} ${theme.fg(wholeBalance === "0" ? "error" : "text", wholeBalance)}`;
           const grokWeekly = provider === "xai" ? current(grokWeeklyQuota) : undefined;
           const codexParts = [
             ...(codexShort ? [remaining(quotaWindowLabel(codexShort.windowMinutes), codexShort.remainingPercent)] : []),
@@ -1209,7 +1222,7 @@ export default function (pi: ExtensionAPI) {
           ];
           if (creditDisplay) {
             const throughCredits = [location, modelDisplay, [...codexParts, creditDisplay].join(" ")].join(" · ");
-            // Never clip `Cr 123.45` into a different balance such as 123.
+            // Never clip a credit balance into a different whole-credit value.
             if (visibleWidth(oneLine(throughCredits)) <= Math.max(0, rightStart(right, width) - 1)) codexParts.push(creditDisplay);
           }
           const codexDisplay = codexParts.join(" ");
