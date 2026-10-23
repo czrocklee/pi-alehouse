@@ -113,7 +113,7 @@ tool execution, including parallel calls, which has not been verified.
 
 ## Host SDK and runtime scope
 
-Development API checks target Pi/AI/TUI 1.3.0 and TypeBox 1.3.27.  The launcher
+Development API checks target Pi/AI/TUI 1.4.0 and TypeBox 1.3.27.  The launcher
 uses the installed host SDK, not a bundled second SDK or a runtime version lock.
 There is no version allowlist, compatibility fallback, or historical support
 matrix.  Required APIs fail closed when absent/changed.  In particular, the
@@ -374,8 +374,12 @@ viewports refuse unseen selections. Controlled selector tests use synthetic
 runtimes, not live providers.
 
 The prompt queue yield protects permission dialogs only within the known process
-queue protocol.  It is not an atomic global UI transaction and `/reload` does
-not replace its existing wrapper.
+queue protocol. Queue-owned AbortSignals retire stalled native select/confirm/input
+dialogs before advancing the FIFO, while preserving caller cancellation. Pi 1.4's
+`editor()` exposes no signal/dismiss API: a stalled editor can remain until the
+user closes it. Shortcut-created UI contexts can also bypass the queue. This is
+not an atomic global UI transaction and `/reload` does not replace its existing
+wrapper.
 
 ## Matched migration scope
 

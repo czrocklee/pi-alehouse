@@ -1,12 +1,12 @@
-import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionUIContext, ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
 
 /**
  * Serialize extension-owned inline prompts.
  *
- * Pi currently lets a second inline UI call replace the first component
- * without settling its promise (earendil-works/pi#7007). Permission prompts
- * can arrive concurrently from the main agent and forwarded subagents, so an
- * orphaned prompt otherwise blocks the forwarding inbox indefinitely.
+ * Older Pi versions let a second inline UI call orphan the first promise
+ * (earendil-works/pi#7007). Pi 1.4 stacks native dialogs, but that does not
+ * replace this process-wide FIFO across main/forwarded contexts, its bounded
+ * failure handling, or the permission-yield protocol used by worker panels.
  *
  * Overlays bypass the queue because Pi supports stacking them and persistent
  * overlays must not block ordinary dialogs. Bypassing is safe for the invariant
@@ -16,18 +16,21 @@ import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding
  * inline prompt shown underneath an open overlay still steals focus, and
  * closing one hands focus back to the editor — which an extension cannot reach.
  *
- * Known gaps, all bounded by STALL_TIMEOUT_MS:
+ * Known gaps (the stall bound limits each active queue slot):
  * - Pi builds a separate, unwrapped UI context for extension *shortcut*
  *   handlers, so a shortcut-triggered prompt still bypasses this queue.
- * - Pi tracks nested prompt lifetimes for ui_prompt events, but its TUI does
- *   not stack and restore inline components. A prompt opened from inside a live
- *   prompt's callback therefore waits behind it until the stall bound rather
- *   than bypassing the queue and orphaning the outer prompt.
+ * - A queued inline prompt opened from inside a live queued prompt's callback
+ *   still waits behind it until the stall bound. Native dialog stacking does
+ *   not make this FIFO reentrant or let the nested call bypass its owner.
  * - ExtensionUIDialogOptions.timeout counts down from display, which is now
- *   dequeue time rather than call time. Queued asks cannot be withdrawn once
- *   their requester gives up. Active inline custom UIs are closed before a
- *   stalled/failed slot is handed on; their creators still own component resources
- *   until Pi has received the factory's result (including late async results).
+ *   dequeue time rather than call time. Caller aborts are honored at dequeue
+ *   and while displayed; giving up without a signal cannot withdraw an ask.
+ * - Pi's editor() has no signal/dismiss API. Its queue wait is bounded, but a
+ *   stalled editor can remain on Pi's dialog stack until the user closes it.
+ *
+ * Active select/confirm/input dialogs and inline custom UIs are closed before
+ * a stalled/failed slot is handed on. Custom creators still own component resources
+ * until Pi has received the factory's result (including late async results).
  */
 
 /**
@@ -159,13 +162,46 @@ function queued<A extends unknown[], R>(
   return markWrapped((...args: A) => queue.enqueue(() => call(...args)));
 }
 
+function queuedDialog<A extends [string, (string | string[])?, ExtensionUIDialogOptions?], R>(
+  call: (...args: A) => Promise<R>,
+  queue: PromptSerializer,
+): (...args: A) => Promise<R> {
+  return markWrapped((...args: A) => {
+    const controller = new AbortController();
+    let detach = (): void => {};
+    return queue.enqueue(() => {
+      const options = args[2];
+      const signal = options?.signal;
+      const onAbort = (): void => controller.abort(signal?.reason);
+      // Subscribe only when this slot starts. An abort while queued is latched
+      // by the caller's signal, so Pi receives an already-aborted signal and
+      // never displays that dialog. Preserve Pi's undefined/false cancellation.
+      if (signal?.aborted) onAbort();
+      else if (signal) {
+        signal.addEventListener("abort", onAbort, { once: true });
+        detach = () => signal.removeEventListener("abort", onAbort);
+      }
+      // Keep the caller's timeout/countdown and options object intact. The
+      // queue owns dismissal too: Pi 1.4 would otherwise restore a stalled
+      // native dialog when a later stacked dialog closes.
+      args[2] = { ...options, signal: controller.signal };
+      return call(...args).finally(() => detach());
+    }, () => {
+      detach();
+      // PromptQueue has claimed rejection; abort synchronously retires Pi's
+      // exact dialog BEFORE releasing the slot, without aborting the caller.
+      controller.abort();
+    });
+  });
+}
+
 function installPromptQueue(ui: ExtensionUIContext): void {
   const queue = sharedQueue();
 
   // Bound in case Pi ever moves these off object literals onto a prototype.
-  if (!isWrapped(ui.select)) ui.select = queued(ui.select.bind(ui), queue);
-  if (!isWrapped(ui.confirm)) ui.confirm = queued(ui.confirm.bind(ui), queue);
-  if (!isWrapped(ui.input)) ui.input = queued(ui.input.bind(ui), queue);
+  if (!isWrapped(ui.select)) ui.select = queuedDialog(ui.select.bind(ui), queue);
+  if (!isWrapped(ui.confirm)) ui.confirm = queuedDialog(ui.confirm.bind(ui), queue);
+  if (!isWrapped(ui.input)) ui.input = queuedDialog(ui.input.bind(ui), queue);
   if (!isWrapped(ui.editor)) ui.editor = queued(ui.editor.bind(ui), queue);
 
   if (!isWrapped(ui.custom)) {

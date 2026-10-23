@@ -14,8 +14,8 @@ import { joinPopoverStack, stackedOverlayOptions } from "../../../lib/popover-st
 import { FOOTER_INDICATOR_CLICK_EVENT, WORKER_PRESET_INDICATOR, HIDE_TRANSIENT_OVERLAYS_EVENT }
   from "../../../lib/overlay-protocol.mjs";
 
-// Exercise Pi's real ui.custom completion, whose overlay branch closes by
-// popping the top of the global stack rather than the component's own handle.
+// Exercise Pi's real ui.custom completion: overlays close their own handle,
+// while inline dialogs use the SDK's editor-slot stack.
 const { InteractiveMode } = await import(new URL("modes/interactive/interactive-mode.js",
   import.meta.resolve("@earendil-works/pi-coding-agent")));
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -78,7 +78,10 @@ function emptyOwnerPanels(t, mode = "fullscreen", management, liveEffort = false
     renderWidgets: InteractiveMode.prototype.renderWidgets,
     renderWidgetContainer: InteractiveMode.prototype.renderWidgetContainer,
     showExtensionSelector: InteractiveMode.prototype.showExtensionSelector,
-    hideExtensionSelector: InteractiveMode.prototype.hideExtensionSelector, disposeActiveSelector() {},
+    extensionDialogs: [], disposeActiveSelector() {},
+    pushExtensionDialog: InteractiveMode.prototype.pushExtensionDialog,
+    removeExtensionDialog: InteractiveMode.prototype.removeExtensionDialog,
+    showTopExtensionDialog: InteractiveMode.prototype.showTopExtensionDialog,
     programStatus: { setBlocked() {} } };
   host.editorContainer.addChild(editor);
   const bus = createEventBus(), shortcuts = new Map(), mounts = [], widgets = [], published = [];
@@ -1341,8 +1344,9 @@ for (const mode of ["fullscreen", "regular"]) for (const accepted of [false, tru
     h.panels.attachHost(h.ctx, h.bus);
     const opening = h.shortcuts.get("alt+s").handler(); await tick(); h.paint();
     h.tui.getFocusedComponent().handleInput("\u001b[B"); h.tui.getFocusedComponent().handleInput("e"); await tick();
-    assert(h.host.extensionSelector, "the real native confirmation owns focus");
-    assert.equal(h.tui.getFocusedComponent(), h.host.extensionSelector);
+    assert.equal(h.host.extensionDialogs.length, 1, "the real native confirmation is the only inline dialog");
+    assert.equal(h.tui.getFocusedComponent(), h.host.extensionDialogs[0].component,
+      "the real native confirmation owns focus");
     assert.equal(h.router.current().name, "off");
     h.tui.getFocusedComponent().handleInput(accepted ? "\r" : "\u001b"); await tick();
     if (!accepted) {
@@ -1350,7 +1354,8 @@ for (const mode of ["fullscreen", "regular"]) for (const accepted of [false, tru
       assert.deepEqual(h.published, []); assert.equal(h.mounts.length, 1);
     } else {
       assert.equal(h.mounts.length, 2);
-      assert.equal(h.host.extensionSelector, undefined);
+      assert.equal(h.host.extensionDialogs.length, mode === "regular" ? 1 : 0,
+        "the confirmation is gone; only a reopened docked picker can remain");
       assert.equal(h.tui.getFocusedComponent(), h.mounts[1].component);
       assert.match(h.mounts[1].component.render(76).map(stripTerminalSequences).join("\n"), /Effort · fixture-balanced/);
       h.tui.getFocusedComponent().handleInput("\u001b[C");
