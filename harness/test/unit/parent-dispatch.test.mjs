@@ -81,8 +81,6 @@ for (const name of ["agent_spawn", "agent_run"]) {
       assert.deepEqual(prepared, raw); assert.notEqual(prepared, raw); assert.notEqual(prepared.dispatch, declaration);
       if (declaration.inputs) assert.notEqual(prepared.dispatch.inputs, declaration.inputs);
     }
-    assert.match(dispatch.description, /not authorize tool calls.*full-suite validation explicitly to one task/);
-    assert.match(dispatch.properties.checks.items.description, /globs allowed.*not evidence.*skip gates/);
   });
 
   test(`${name} rejects malformed dispatch in BOTH preparation and direct execution before core admission`, async () => {

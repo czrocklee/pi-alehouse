@@ -34,7 +34,7 @@ test("generated managed definitions deny all current/retired parent tools and no
       assert(!tools.includes(tool), `${name}: forbidden declared tool ${tool}`);
     }
     assert.equal(rendered.metadata[name].digest, createHash("sha256").update(definition).digest("hex"));
-    assert.match(definition, /Use `alert_parent` only for important facts/);
+    assert.match(definition, /Use alert_parent for decision-relevant facts/);
     assert.doesNotMatch(definition.split("---\n").at(-1), /notify_parent/);
     for (const spelling of ["git commit *", "git -C * push *", "git config *"])
       assert(rendered.metadata[name].bashDenies.includes(spelling), `${name}: retain Git boundary ${spelling}`);

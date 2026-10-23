@@ -252,7 +252,7 @@ export default function () { globalThis[Symbol.for(${JSON.stringify(probeKey)})]
         assert.match(context.systemPrompt, /OPERATOR_CONTEXT_MARKER/);
         assert.match(context.systemPrompt, cwd === parentCwd ? /PARENT_CWD_CONTEXT_MARKER/ : /CHILD_CWD_CONTEXT_MARKER/);
         assert.doesNotMatch(context.systemPrompt, cwd === parentCwd ? /CHILD_CWD_CONTEXT_MARKER/ : /PARENT_CWD_CONTEXT_MARKER/);
-        assert.match(context.systemPrompt, /Execute the current assignment/);
+        assert.match(context.systemPrompt, /Complete the assignment and required checks/);
         assert.match(context.systemPrompt, /<active_agent name="reader"\/>/);
         assert.match(context.systemPrompt, /CHILD_SKILL_CATALOG_MARKER/);
         assert.equal(context.systemPrompt.split("OPERATOR_CONTEXT_MARKER").length - 1, 1);

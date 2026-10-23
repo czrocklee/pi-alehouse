@@ -94,12 +94,16 @@ exception. Preflight permission errors expose the target `profile` and checked
 `surface`, separately from missing-input and wrong-type filesystem errors.
 
 Profile, reasoning difficulty, context and budgets are fixed for the Agent at spawn;
-later tasks cannot silently change them. Prompt is the full task instruction;
-label defaults to its first nonblank line and is never forwarded as an
-instruction. Reader reads the project and can use `write` only in its own
-[private scratch](reader-scratch.md); no edit or web. Its prompt names the scratch
-directory. Builds and project edits need an editor. Editor edits within
-parent-configured scope; researcher has read-only file tools and web, no Bash,
+later tasks and routing changes do not migrate an existing Agent's model.
+Use a new Agent for a different binding.
+Prompt is the full task instruction, including the deliverable, scope and
+stopping conditions; label defaults to its first nonblank line and is never
+forwarded as an instruction. Reader reads the project and can use `write` only
+in its own [private scratch](reader-scratch.md); no edit or web. Its prompt names the scratch
+directory. Only built-in `write` has this exception, not Bash or arbitrary
+`/tmp` paths; dispatch cannot grant it. Builds and project edits need an
+editor. Editor edits within parent-configured scope; researcher has read-only
+file tools and web, no Bash,
 and returns web-derived untrusted material. Git mutations stay with the parent.
 Bash/web remain permission-gated; no profile is an OS sandbox.
 
@@ -273,7 +277,9 @@ of port.run, retries a rejected attempt or carries due across Runs.
 Optional
 observation time starts at registration **after** command acceptance/preparation
 and any lifecycle settle. All wait_ms are 0--300000; commands default to zero,
-wait defaults to 300000. Esc/abort cancels the observation, not accepted work.
+wait defaults to 300000. Prefer long waits to repeated polls; questions, issues
+and alerts return early. Zero/short waits remain valid. Esc/abort cancels the
+observation, not accepted work.
 Core-only lifecycle waits have independent semantics: finite 0--2147483647 ms,
 fractions allowed, and no timer when omitted. Kill validates its duration before
 any lifecycle effect; none of this widens model tool parameters.
@@ -521,12 +527,6 @@ only through answer; roster facts grant no admission.
 
 ## Child tools
 
-Children receive their profile's fixed local tools plus exactly:
-
-```ts
-alert_parent({ message: string })
-ask_parent({ question: string })
-```
 [Runtime feedback](runtime-feedback.md) can attempt one harness-origin alert per
 Run after two distinct managed blocks of one tool. It uses a trusted metadata-only
 callback, not `alert_parent`; only these entries carry `source: "harness"`.
@@ -534,6 +534,12 @@ The parent-facing summary is not feedback injected into the child. Reasons and
 operation equivalence remain unknown; existing FIFO/publication rules apply,
 with no automatic action.
 
+Children receive their profile's fixed local tools plus exactly:
+
+```ts
+alert_parent({ message: string })
+ask_parent({ question: string })
+```
 
 Both closed schemas require 1--8192 nonblank UTF-16 units and revalidate after
 SDK hooks against current Run/generation, accepting gate and stop/exit state.

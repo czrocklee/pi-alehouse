@@ -950,7 +950,7 @@ test("Off keeps pending question identity inspectable but hides and rejects new 
     assert.equal(observed.workers_disabled, true); assert.equal(observed.agents[0].question_id, question_id);
     assert.equal(observed.agents[0].has_question, true);
   }
-  assert.match(tool("agent_answer").description, /enable delegation first, not retry this hidden tool/);
+  assert.match(tool("agent_answer").description, /workers_disabled.*ask the user to enable delegation first/);
   const args = { agent: "orca", question_id, answer: "main" };
   await assert.rejects(call("agent_answer", args, "off-answer"), (error) => {
     assert(code("WORKERS_DISABLED")(error));

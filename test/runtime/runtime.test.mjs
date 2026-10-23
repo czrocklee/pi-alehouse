@@ -12,14 +12,18 @@ const temporary = (t) => { const path = mkdtempSync(join(tmpdir(), "alehouse-run
 
 test("portable generator matches dispatch-aware worker bytes and policy digests", () => {
   const { agents, metadata } = renderWorkers();
-  assert.equal(metadata.editor.digest, "984a82fd788466c25e2b030d1ae3d8261fdc4aaec46870daa6947ba7cbe680ab");
-  assert.equal(metadata.reader.digest, "5c89c1546b32101278aca16b5176f6aa9b5045c63cba8927dd4c9e79c2dbd1de");
-  assert.equal(metadata.researcher.digest, "9dc17ce69786e7885ca3c173b70c4e4179e6d8a511f7d7077f7df724d4e92f62");
+  assert.equal(metadata.editor.digest, "13aad89aed7222f0f2a36555e0784ba393035022f9e915ae94423b8c0aa3dda5");
+  assert.equal(metadata.reader.digest, "8151a36f1e3a5c74107105d3fde4c29cec0fb6e7aed2c89afea8b9c30f451554");
+  assert.equal(metadata.researcher.digest, "e9928f909be58a364fe1cf465b41d9742666ad002c36d42593a99922c194eaef");
   for (const name of Object.keys(metadata)) {
     const worker = agents[name];
-    assert.match(worker, /A denied operation stays denied; do not retry the same class of request/);
-    assert.match(worker, /full validation gate/);
-    assert.match(worker, /A check you cannot run yet \(no build tree, a busy one, shared source not yet ready for it, or an instruction to wait\) needs no question: finish the rest of the work and report that check as unrun.*never report it released earlier/);
+    assert.match(worker, /minimal reviewable result; explore only concrete unresolved questions/);
+    assert.match(worker, /temporary evidence paths at invocation, not in reusable source/);
+    assert.match(worker, /Separate observation from inference; name the comparison performed.*manual inspection is not a byte-identity check/);
+    assert.match(worker, /After denial, report the limit; do not retry the same operation class/);
+    assert.match(worker, /full gate only as its single explicitly delegated validation owner/);
+    assert.match(worker, /check must wait for a missing\/busy tree, unfinished source or later go-ahead.*exact command and reason as unrun; no question is needed/);
+    assert.match(worker, /tree held until task end, or through a pending question until resolution; never report earlier release/);
   }
   for (const [name, source] of Object.entries(agents)) assert.equal(readFileSync(join(packageRoot, "runtime/agents", `${name}.md`), "utf8"), source);
   // Reader: built-in write serves its private scratch directory only. No
