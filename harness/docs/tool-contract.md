@@ -331,7 +331,7 @@ Spawn/run/send/answer/wait/read share one projection/publication path:
   reason,
   workers_disabled?: true,
   agents: TaskEntry[],
-  alerts?: { agent, task, label, message }[],
+  alerts?: { agent, task, label, message, source?: "harness" }[],
   alerts_pending: number,
   pending?: string[],
   finished?: FinishedEntry[],
@@ -355,7 +355,14 @@ Optional `context_tokens` (a nonnegative integer) appears only on the latest
 settled task of an idle, resident, reusable Agent with no pending question and a
 known size: what its next task re-reads. It is absent while compaction leaves
 the size unknown. It is absolute, not a share of the model window, and never a
-thin control or finished-row field. Question fields are `question_id`,
+thin control or finished-row field. Optional whole `recovery_hint` (≤384 units)
+is conditional fixed-model guidance only for a retained failed execution with
+model stop reason `error`, not a claim that a model is unavailable. It is absent
+from thin controls and finished rows; list/interrupt use the same shared
+settlement predicate and outcome projection. Identical guidance appears only
+once per response/roster, on the first qualifying task; deduplication is not
+packing loss or persistent presentation state.
+See [runtime feedback](runtime-feedback.md). Question fields are `question_id`,
 `question`, `question_truncated`; historical text need not have a token. Results use `result`, `next_cursor`, `result_omitted`,
 `result_truncated` and `omitted_chars`. Truncation/omission control flags are
 never silently removed by compact fallback. Omitted_chars means text never
@@ -406,7 +413,8 @@ double-JSON UTF-8 content envelope. Max_chars does not override this byte cap.
 The conservative reservation proof includes 16 maximal task rows/pending names,
 maximum safe-integer ordinals/counts, action/disabled/response-limit fields,
 all six task flags, 16 recovery cursors, 16 question IDs, 16 empty question fields, a 120-NUL label
-and a full 8192-NUL or lone-surrogate alert: **65045 bytes**, leaving **491 bytes**.
+and a full 8192-NUL or lone-surrogate alert with its conservative harness-source
+tag: **65068 bytes**, leaving **468 bytes**.
 Metadata does not spend the 16384-unit body budget. This bound depends on the
 exact fields, string/numeric bounds and array limits, not arbitrary JSON shapes.
 Result text yields before its reserved cursor; wholly omitted pages keep their
@@ -414,7 +422,10 @@ original offset, partial pages advance by shown units, and EOF needs no cursor.
 Packing retains thin controls and, for reason=alert, a complete first scoped
 FIFO alert. Then it adds questions (marked if truncated), further complete FIFO
 prefix alerts, optional time_wrapped then context_tokens attempts across tasks,
-result pages, bounded string diagnostics/notes and up to eight finished rows.
+deduplicated whole recovery_hint attempts, result pages, bounded string diagnostics/notes and
+up to eight finished rows. Recovery hints spend only envelope bytes; failure to
+fit omits the whole hint and sets response_limit_reached without weakening
+required control/token/cursor retention.
 It stops at the first alert that cannot fit, never skips to a smaller later one.
 Unshown alerts remain pending; fat diagnostics/finished entries yield first.
 `dispatch_notes` (at most 2 × 120 units) and `time_wrapped` are optional task
@@ -516,6 +527,13 @@ Children receive their profile's fixed local tools plus exactly:
 alert_parent({ message: string })
 ask_parent({ question: string })
 ```
+[Runtime feedback](runtime-feedback.md) can attempt one harness-origin alert per
+Run after two distinct managed blocks of one tool. It uses a trusted metadata-only
+callback, not `alert_parent`; only these entries carry `source: "harness"`.
+The parent-facing summary is not feedback injected into the child. Reasons and
+operation equivalence remain unknown; existing FIFO/publication rules apply,
+with no automatic action.
+
 
 Both closed schemas require 1--8192 nonblank UTF-16 units and revalidate after
 SDK hooks against current Run/generation, accepting gate and stop/exit state.
@@ -530,10 +548,15 @@ says it was queued and the child may continue, not that the parent read it. It
 wakes matching observations without starting a parent model turn. Duplicate
 valid calls may create distinct events; no call-ID alert deduplication cache.
 
-One Owner FIFO holds at most 64 pending alerts and at most 16 per source Agent,
-across all its Runs. Capacity is derived from that FIFO; old/killed sources still
-occupy quota, and run/answer/reuse/kill do not release it. Only publication does.
-Owner quota is checked first, then Agent; ALERT_QUEUE_FULL specifies scope/limit,
+One Owner FIFO preserves order across both sources. Child-origin pending alerts
+retain limits of 64 per Owner and 16 per Agent across its Runs. Harness-origin
+feedback has independent limits of 16 per Owner and one pending per Agent, for
+at most 80 physical entries. Neither lane consumes the other's admission quota
+or evicts accepted messages; separate allowance is not delivery priority. Child
+text cannot set the structural source tag; publication commit validates it
+against the original queued entry. Old/killed sources still occupy their lane's
+quota, and run/answer/reuse/kill do not release it. Only publication does.
+Within each lane Owner quota is checked first, then Agent; ALERT_QUEUE_FULL specifies scope/limit,
 rejects without shifting old messages and says: do not loop-retry; retain the
 information in the final result and continue possible work; if a parent decision
 is essential, ask_parent and end. The child SDK-visible error text includes the code, scope, limit and this

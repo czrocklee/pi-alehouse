@@ -322,7 +322,8 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         const views = controller.list(), live = views.filter((view) => view.resident);
         const killed = views.filter((view) => !view.resident).map((view) => view.name);
         const addressed = (view: RunView) => controller.view(controller.findAgent(view.name)?.run_id ?? view.run_id);
-        return { agents: live.map((view) => agentRow(addressed(view), controller.agentSummary(view.agent_id), nameOf)),
+        const recoveryHints = new Set<string>();
+        return { agents: live.map((view) => agentRow(addressed(view), controller.agentSummary(view.agent_id), nameOf, recoveryHints)),
           ...(killed.length ? { killed: killed.slice(-KILLED_SHOWN) } : {}),
           ...(killed.length > KILLED_SHOWN ? { killed_omitted: killed.length - KILLED_SHOWN } : {}) };
       })),

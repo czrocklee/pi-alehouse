@@ -16,7 +16,7 @@ function expectedRetainedShape(message) {
       has_question: true, limit_reached: true, unavailable: true,
       question_truncated: true, result_omitted: true, result_truncated: true,
     })),
-    alerts: [{ agent: "a".repeat(24), task: Number.MAX_SAFE_INTEGER, label: "\u0000".repeat(120), message }],
+    alerts: [{ agent: "a".repeat(24), task: Number.MAX_SAFE_INTEGER, label: "\u0000".repeat(120), message, source: "harness" }],
     pending: Array.from({ length: 16 }, () => "a".repeat(24)),
     workers_disabled: true,
     alerts_pending: Number.MAX_SAFE_INTEGER,
@@ -47,6 +47,7 @@ test("model bounds are frozen separately from general-purpose core capacity", ()
   assert.deepEqual(COMMUNICATION_LIMITS, {
     agents: 16, pending: 16, finished: 8, text_units: 16384, envelope_bytes: 65536,
     agent_name_units: 24, label_units: 120, child_text_units: 8192, agent_alerts: 16, owner_alerts: 64,
+    harness_owner_alerts: 16, harness_agent_alerts: 1, pending_alerts: 80,
   });
   assert(Object.isFrozen(COMMUNICATION_LIMITS));
   assert.throws(() => { COMMUNICATION_LIMITS.agents = 17; }, TypeError);
@@ -55,9 +56,9 @@ test("model bounds are frozen separately from general-purpose core capacity", ()
 test("retained proof fixes every control key, 16 complete rows, and 16 pending names", () => {
   const value = retainedEnvelopeFixture("");
   assert.deepEqual(value, expectedRetainedShape(""));
-  assert.equal(communicationEnvelopeBytes(value), 5605);
-  assert.equal(independentBytes(value), 5605);
-  assert(5605 <= 65536 - 8192 * 7);
+  assert.equal(communicationEnvelopeBytes(value), 5628);
+  assert.equal(independentBytes(value), 5628);
+  assert(5628 <= 65536 - 8192 * 7);
   for (const row of value.agents) {
     assert.equal(row.agent.length, 24);
     assert.equal(row.task, Number.MAX_SAFE_INTEGER);
@@ -72,14 +73,14 @@ test("retained proof fixes every control key, 16 complete rows, and 16 pending n
 });
 
 for (const [name, message, bytes] of [
-  ["NUL", "\u0000".repeat(8192), 62949],
-  ["lone high surrogate", "\ud800".repeat(8192), 62949],
-  ["lone low surrogate", "\udfff".repeat(8192), 62949],
-  ["quote", "\"".repeat(8192), 38373],
-  ["backslash", "\\".repeat(8192), 38373],
-  ["ASCII", "a".repeat(8192), 13797],
-  ["CJK", "字".repeat(8192), 30181],
-  ["surrogate pairs", "😀".repeat(4096), 21989],
+  ["NUL", "\u0000".repeat(8192), 62972],
+  ["lone high surrogate", "\ud800".repeat(8192), 62972],
+  ["lone low surrogate", "\udfff".repeat(8192), 62972],
+  ["quote", "\"".repeat(8192), 38396],
+  ["backslash", "\\".repeat(8192), 38396],
+  ["ASCII", "a".repeat(8192), 13820],
+  ["CJK", "字".repeat(8192), 30204],
+  ["surrogate pairs", "😀".repeat(4096), 22012],
 ]) {
   test(`maximal retained controls deliver one complete 8192-unit ${name} alert`, () => {
     const value = retainedEnvelopeFixture(message);
@@ -88,7 +89,7 @@ for (const [name, message, bytes] of [
     assert.equal(communicationEnvelopeBytes(value), bytes);
     assert.equal(independentBytes(value), bytes);
     assert(bytes <= 65536);
-    assert(bytes - 5605 <= 8192 * 7);
+    assert(bytes - 5628 <= 8192 * 7);
     const parsed = JSON.parse(JSON.parse(JSON.stringify({ content: [{ type: "text", text: JSON.stringify(value) }] })).content[0].text);
     assert.equal(parsed.alerts[0].message, message, "no replacement, truncation, or omitted alert");
     assert.equal(parsed.agents.length, 16);
@@ -101,9 +102,9 @@ for (const [name, message, bytes] of [
 test("all 16 question IDs still fit alongside worst-case controls and the whole alert", () => {
   const value = retainedEnvelopeFixture("\u0000".repeat(8192), true);
   for (const row of value.agents) assert.equal(row.question_id, "q_" + "f".repeat(32));
-  assert.equal(communicationEnvelopeBytes(value), 63829);
-  assert.equal(independentBytes(value), 63829);
-  assert.equal(65536 - communicationEnvelopeBytes(value), 1707);
+  assert.equal(communicationEnvelopeBytes(value), 63852);
+  assert.equal(independentBytes(value), 63852);
+  assert.equal(65536 - communicationEnvelopeBytes(value), 1684);
   assert.equal(communicationTextUnits(value), 8192, "labels and question IDs are not body text");
 });
 
@@ -114,21 +115,24 @@ for (const message of ["\0".repeat(8192), "\ud800".repeat(8192), "\udfff".repeat
       assert.match(row.next_cursor, /^r1_[A-Za-z0-9_-]{22}\.2gosa7pa2gv$/);
       assert.equal(row.next_cursor.length, 37); assert.equal(row.question, "");
     }
-    assert.equal(communicationEnvelopeBytes(value), 65045);
-    assert.equal(independentBytes(value), 65045); assert.equal(65536 - independentBytes(value), 491);
-    assert.deepEqual(alertAdmissionBudget(message), { text_units: 8192, envelope_bytes: 65045, fits: true });
+    assert.equal(value.alerts[0].source, "harness");
+    assert.equal(communicationEnvelopeBytes(value), 65068);
+    assert.equal(independentBytes(value), 65068); assert.equal(65536 - independentBytes(value), 468);
+    const untagged = structuredClone(value); delete untagged.alerts[0].source;
+    assert.equal(independentBytes(untagged), 65045, "the source tag costs exactly 23 double-JSON bytes");
+    assert.deepEqual(alertAdmissionBudget(message), { text_units: 8192, envelope_bytes: 65068, fits: true });
     assert.equal(communicationTextUnits(value), 8192, "cursor recovery metadata never spends body units");
   });
 
-test("optional warning bytes do not alter the 65045-byte mandatory fixture or turn it into a seven-flag reservation", () => {
+test("optional warning bytes do not alter the 65068-byte tagged mandatory fixture or turn it into a seven-flag reservation", () => {
   const retained = retainedEnvelopeFixture("\0".repeat(8192), true, true), before = structuredClone(retained);
   const optional = { ...retained, agents: retained.agents.map((row) => ({ ...row, time_wrapped: true })) };
-  assert.equal(communicationEnvelopeBytes(retained), 65045);
-  assert.equal(communicationEnvelopeBytes(optional), 65045 + 16 * 22, "an optional flag only spends double-JSON bytes");
+  assert.equal(communicationEnvelopeBytes(retained), 65068);
+  assert.equal(communicationEnvelopeBytes(optional), 65068 + 16 * 22, "an optional flag only spends double-JSON bytes");
   assert(communicationBudget(optional).fits); assert.equal(communicationTextUnits(optional), 8192);
   assert.deepEqual(retained, before);
   assert(retained.agents.every((row) => !Object.hasOwn(row, "time_wrapped")));
-  assert.equal(communicationEnvelopeBytes(retainedEnvelopeFixture("\0".repeat(8192), true, true)), 65045);
+  assert.equal(communicationEnvelopeBytes(retainedEnvelopeFixture("\0".repeat(8192), true, true)), 65068);
 });
 
 test("admission measures a complete retained envelope, not message-only JSON", () => {
@@ -136,7 +140,7 @@ test("admission measures a complete retained envelope, not message-only JSON", (
   const admitted = alertAdmissionBudget(message);
   assert.equal(admitted.envelope_bytes, communicationEnvelopeBytes(retainedEnvelopeFixture(message, true, true)));
   assert(admitted.envelope_bytes > communicationEnvelopeBytes({ message }));
-  assert.deepEqual(alertAdmissionBudget("x"), { text_units: 1, envelope_bytes: 7702, fits: true });
+  assert.deepEqual(alertAdmissionBudget("x"), { text_units: 1, envelope_bytes: 7725, fits: true });
   assert.equal(alertAdmissionBudget("").fits, false);
   assert.equal(alertAdmissionBudget("a".repeat(8193)).fits, false, "text cap applies even when bytes fit");
   assert.equal(alertAdmissionBudget("\u0000".repeat(16384)).fits, false);
@@ -207,7 +211,7 @@ test("envelope byte ceiling is inclusive and actually measures both JSON layers"
   assert(communicationEnvelopeBytes(escaped) > Buffer.byteLength(JSON.stringify(escaped), "utf8"));
 });
 
-for (const [field, limit] of [["agents", 16], ["pending", 16], ["finished", 8], ["alerts", 64]]) {
+for (const [field, limit] of [["agents", 16], ["pending", 16], ["finished", 8], ["alerts", 80]]) {
   test(`${field} cap rejects overflow without silently trimming projection rows`, () => {
     const value = { reason: "snapshot", agents: [], alerts_pending: 0 };
     const item = field === "pending" ? "otter" : field === "alerts" ?

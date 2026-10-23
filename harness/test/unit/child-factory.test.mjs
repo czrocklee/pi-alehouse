@@ -21,7 +21,16 @@ export const createChildTools = () => [];
 export const webProfileNames = ["researcher"];
 export const childWebExtension = (factory) => factory;
 export const orderFreeToolSchemaExtension = () => {};
-export class ChildRunGate { extension = () => {}; }
+export class ChildRunGate { extension = () => {}; accepting = false; stopped = false; }
+export class ManagedBlockObserver {
+  constructor(subscribe) { state.blockSubscribe = subscribe; }
+  begin(id, callbacks, accepting) { state.blockRuns.push({ id, callbacks, accepting }); }
+  flush() {
+    state.blockFlushes++;
+    state.blockRuns.at(-1).callbacks.managedBlock?.({ toolName: "write" });
+  }
+  end() { state.blockEnds++; }
+}
 export class PiRunJournal {}
 export class WorkerStatsObserver {
   extension = () => {};
@@ -39,6 +48,7 @@ export const assembleChildSession = async (input) => {
   if (state.assemblyError) throw state.assemblyError;
   return { session: { sessionId: state.sessionIdOverride ?? input.options.sessionManager.getSessionId(),
     thinkingLevel: state.badThinking ? "high" : "off",
+    subscribe: (listener) => { state.blockListener = listener; return () => { state.blockUnsubscribes++; }; },
     getActiveToolNames: () => [...input.options.tools] } };
 };
 export const disposeChildSession = async () => {
@@ -48,10 +58,14 @@ export const disposeChildSession = async () => {
 };
 export class PiAgentSessionAdapter {
   constructor(options) { this.session_id = options.session.sessionId; this.history = options.history; }
-  async run(prompt) { state.runs.push(prompt); return { kind: "success" }; }
+  async run(prompt) {
+    state.runs.push(prompt);
+    if (state.onRun) await state.onRun();
+    return { kind: "success" };
+  }
   canInput() { return false; }
   async steer() { return false; }
-  async stop() {}
+  async stop() { state.blockEndsAtStop = state.blockEnds; }
   clearInputs() { return []; }
   async dispose() {
     if (state.disposal) return await state.disposal;
@@ -80,6 +94,7 @@ function fixture(t, profile = "reader") {
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   for (const key of Object.keys(seam.state)) delete seam.state[key];
   Object.assign(seam.state, { loaders: [], prompts: [], assemblies: [], runs: [], cleanups: 0,
+    blockRuns: [], blockEnds: 0, blockFlushes: 0, blockUnsubscribes: 0,
     cleanupReport: { shutdownExited: true, errors: [] } });
   const scratchCalls = [], releases = [], webReleases = [], approvals = [];
   const definition = `${profile} synthetic definition`, tools = ["read", "alert_parent", "ask_parent"];
@@ -96,6 +111,7 @@ function fixture(t, profile = "reader") {
     runtime: { getModel: () => model, getPhysicalModel: () => model },
     profiles: { [profile]: { definition, body: "Shared worker body.", tools } }, settings: () => ({}),
     parentHistory: {}, parentPermission: () => ({}), getPermissionsService: () => undefined,
+    subscribeManagedBlocks: () => () => {},
     approvalBindings: { childExtension: (id) => { approvals.push(id); return () => {}; }, begin() {}, end() {} },
     activities: { track: () => ({ extension() {}, begin() {} }) },
     createReaderScratch: (id) => {
@@ -189,6 +205,35 @@ for (const uncertain of [false, true]) test(`post-assembly validation failure ${
   await assert.rejects(f.create(), uncertain ? seam.SessionInitializationError : /strictly equal/);
   assert.equal(seam.state.cleanups, 1);
   assert.equal(f.releases.length, uncertain ? 0 : 1);
+});
+
+test("managed-block subscription follows actual SDK identity and seals on every Run exit and stop", async (t) => {
+  const f = fixture(t), port = await f.create();
+  assert.equal(seam.state.blockSubscribe, f.options.subscribeManagedBlocks);
+  const deferred = Promise.withResolvers();
+  seam.state.onRun = () => deferred.promise;
+  const feedback = [], callbacks = { managedBlock: (fact) => feedback.push(fact),
+    alert: () => assert.fail("managed feedback must not call the child alert sink") };
+  const pending = port.run("initial", callbacks, { run_id: "first" });
+  assert.equal(seam.state.blockRuns[0].id, port.session_id);
+  assert.equal(seam.state.blockRuns[0].callbacks, callbacks);
+  seam.state.blockListener({ type: "tool_execution_start", isError: true });
+  assert.equal(seam.state.blockFlushes, 0);
+  seam.state.blockListener({ type: "tool_execution_end", isError: false });
+  assert.equal(seam.state.blockFlushes, 1, "SDK safe point does not classify isError");
+  assert.deepEqual(feedback, [{ toolName: "write" }], "factory wires the typed trusted callback, not arbitrary alert text");
+  await port.stop();
+  assert.equal(seam.state.blockEndsAtStop, 1, "seals before SDK stop can reenter");
+  deferred.resolve(); await pending;
+  assert.equal(seam.state.blockEnds, 2);
+  assert.equal(seam.state.blockUnsubscribes, 1);
+  seam.state.onRun = () => { throw new Error("synthetic Run failure"); };
+  await assert.rejects(port.run("follow-up", {}, { run_id: "second" }), /synthetic Run failure/);
+  assert.equal(seam.state.blockRuns[1].id, port.session_id);
+  assert.equal(seam.state.blockEnds, 3);
+  assert.equal(seam.state.blockUnsubscribes, 2);
+  await port.dispose();
+  assert.equal(seam.state.blockEnds, 4);
 });
 
 test("mismatched SDK execution ID fails assembly and cleans before revocation", async (t) => {

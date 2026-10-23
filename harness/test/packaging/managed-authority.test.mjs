@@ -19,6 +19,8 @@ for (const fault of [undefined, "bootstrap", "package-name"]) test(`managed clos
     [join(permissionRoot, "package.json"), JSON.stringify({ name: fault === "package-name" ? "wrong-package" : "@gotgenes/pi-permission-system", version: "32.0.3" })],
     [selection.entryPoint, "managed factory"], [join(closure, "authority-guard.ts"), "guard"],
     [join(closure, "managed-scratch.ts"), "scratch"],
+    [join(closure, "managed-block-observer.ts"), "managed block observer"],
+    [join(closure, "../lib/managed-block-tools.mjs"), "managed block vocabulary"],
     [join(permissionRoot, "src/access-intent/bash/managed-read-policy.ts"), "managed read proof"],
   ]);
   const original = fs.readFileSync;
@@ -33,7 +35,9 @@ for (const fault of [undefined, "bootstrap", "package-name"]) test(`managed clos
     else {
       const resolved = resolveManagedAuthority(agentDir);
       assert.equal(resolved.permissionRoot, permissionRoot); assert.equal(resolved.permissionEntry, permissionEntry);
-      assert.equal(resolved.authority.sources.length, 6);
+      assert.equal(resolved.authority.sources.length, 8);
+      assert(resolved.authority.sources.some(({ path }) => path === join(closure, "managed-block-observer.ts")));
+      assert(resolved.authority.sources.some(({ path }) => path === join(closure, "../lib/managed-block-tools.mjs")));
       assert(resolved.authority.sources.every((source) => /^[0-9a-f]{64}$/.test(source.sha256)));
     }
   } finally {

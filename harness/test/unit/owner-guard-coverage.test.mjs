@@ -117,6 +117,7 @@ const callbackCases = {
   turnEnd: { kind: "effect", args: () => [true] },
   question: { kind: "effect", args: () => ["forbidden?"] },
   alert: { kind: "effect", args: () => ["forbidden"] },
+  managedBlock: { kind: "effect", args: () => [{ toolName: "bash" }] },
   touched: { kind: "effect", args: () => ["forbidden.txt"] },
 };
 const surfaces = [

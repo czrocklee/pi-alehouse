@@ -161,8 +161,11 @@ memory are outside result accounting. There is no automatic eviction; hitting
 the limit requires closing the Owner for new admissions.
 
 The [tool contract](tool-contract.md) defines communication and retention.
-One FIFO bounds accepted pending alerts at 64 per Owner / 16 per source Agent
-across Runs; no per-Run queue, coalescing, eviction or rejected-call drop counter.
+One FIFO preserves accepted alert order across Runs. Child-origin limits remain
+64 per Owner / 16 per Agent; optional harness feedback has separate limits of
+16 per Owner / one pending per Agent, for at most 80 entries total. Reserved
+admission quota is not delivery priority. There is no per-Run queue, coalescing,
+eviction or rejected-call drop counter.
 Old/killed sources still occupy quota. Multiple Agents/history can fill the
 Owner; the per-Agent cap does not promise every Agent reserved space. Full queues
 reject new alerts and advise retaining information in the final result rather
@@ -199,7 +202,7 @@ binding preserves pending alerts but does not make their bodies model-readable;
 silently filtered or renamed. Increasing adapter bounds needs a new packing
 proof, not silent truncation. Fixed-width recovery cursors are reserved for bound terminal
 windows with remaining text, including wholly omitted pages after Agent reuse;
-the conservative reservation bound is 65045 bytes. Keep returned cursors: task
+the conservative tagged-alert reservation bound is 65068 bytes. Keep returned cursors: task
 ordinals are not historical-read parameters, and a convenience-only finished row
 or wholly shown/empty result does not newly acquire an all-history selector.
 Cursors are stateless 128-bit Owner/generation/Run/version locators with accepted
@@ -248,6 +251,12 @@ not zero price; unreported residue is a separate gap.  Neither is repaired by a
 footer or audit entry.
 
 ## Permission and isolation scope
+
+[Runtime feedback](runtime-feedback.md) observes only the managed authority's
+own returned blocks. Its bounded exact-tool counter is partial, not semantic
+retry detection or reason classification; silence is unknown. Recovery hints
+neither diagnose model availability/ability nor migrate Agents. The linked
+contract lists unobserved paths and publication limits.
 
 The harness depends on, but does not own, generated worker policy, permission
 authority, static guards, search policy, and Jev review policy.  Profiles are
@@ -350,7 +359,8 @@ salvage mode, and failure does not mean zero usage. A needs-input resource
 conflict needs answer or explicit abandonment/kill with confirmed release,
 not passive waiting/after on the original question Run.
 Worker L1 guidance says report a denied-operation limit without retrying the
-same class; runtime L2 counting is not implemented in this scope.
+same class. Partial exact-tool managed-block observations are not semantic L2
+retry classification and do not establish the operation or deny reason.
 
 ## UI scope
 

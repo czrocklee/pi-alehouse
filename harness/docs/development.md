@@ -116,12 +116,14 @@ stay strict without retry. Derive time_wrapped_attempts from recorded attempts,
 not delivery. Source status fixes --untracked-files=normal; global LFS helpers
 and configured fsmonitor=false still conservatively withhold known state.
 
-Worker L1 guidance forbids same-class retries after denial; L2 counters are not
-implemented by this package. Delivery reports name platform, tool versions,
-key configuration, exact evidence and unrun/blocked/interrupted/zero-match
-checks. A worker-body edit changes generated definition digests: coordinate
-matched resources and a fresh process separately; never replace user files
-or treat a documentation change as validation/deployment acceptance.
+Workers should produce minimal reviewable results, explore only unresolved
+questions and never retry the same denied operation class. [Runtime feedback](runtime-feedback.md)
+adds partial exact-tool block summaries and conditional fixed-model guidance,
+not a semantic denial counter or availability diagnosis. Keep temporary evidence
+paths out of source; report actual comparisons, platform/configuration, commands
+and unrun/blocked/interrupted/zero-match checks. Worker-body edits change generated
+digests: use matched resources and a fresh process, never replace user files or
+claim documentation changes as validation/deployment acceptance.
 
 ## Tool metadata and Off
 
@@ -194,8 +196,10 @@ incompatible Owner appear supported. Read prioritizes whole questions and pins c
 inline observations see only their accepted/bound Run. Do not use legacy progress
 claims or name-based finished consumption.
 
-One Owner pending FIFO derives 64/16 quotas; closed/full callbacks fail before
-acceptance. Questions are first-write-wins on Run; explicit answer uses the same
+One Owner pending FIFO derives independent child (64 Owner / 16 Agent) and
+harness-feedback (16 Owner / one pending per Agent) quotas, at most 80 entries;
+closed/full callbacks fail before acceptance. Harness source is structural,
+not child-controlled text. Questions are first-write-wins on Run; explicit answer uses the same
 128-bit Owner/generation/Run token function for projection and validation, atomic
 reservation/replay and real inputEntered cancellation boundaries. Per-Run
 finished_presented/settled_seq are the sole finished-presentation state.
@@ -221,7 +225,7 @@ omits next_cursor. Promise/thenable observation ports are interface errors, not
 awaitable work. A fixed-width
 37-character stateless cursor is reserved for every bound terminal window with
 unshown retained text, even if the whole page is displaced after Agent reuse.
-The conservative alert/control/token/cursor reservation bound is 65045 bytes;
+The conservative tagged-alert/control/token/cursor reservation bound is 65068 bytes;
 see [packing budgets](tool-contract.md#budget-and-local-publication).
 Tool success only passes that result through, without later
 assertCurrent/serialization/withChanges/UI. onRunAccepted UI wake stays separate

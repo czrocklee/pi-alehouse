@@ -6,6 +6,7 @@ import {
 import type {
   CommunicationSnapshot, PackedCommunication, ResultWindow,
 } from "./communication-snapshot.js";
+import { MODEL_RECOVERY_HINT_MAX_UNITS } from "./model-recovery.js";
 import { isQuestionId } from "./question-id.js";
 import { encodeResultCursor } from "./result-cursor.js";
 import { HarnessError } from "./ports.js";
@@ -128,7 +129,7 @@ function cursorAt(window: ResultWindow, offset: number): string | undefined {
 export function packCommunication(snapshot: CommunicationSnapshot): PackedCommunication {
   if (!snapshot || typeof snapshot !== "object" || !Object.hasOwn(reasons, snapshot.reason) ||
       !Array.isArray(snapshot.tasks) || snapshot.tasks.length > COMMUNICATION_LIMITS.agents ||
-      !Array.isArray(snapshot.alerts) || snapshot.alerts.length > COMMUNICATION_LIMITS.owner_alerts ||
+      !Array.isArray(snapshot.alerts) || snapshot.alerts.length > COMMUNICATION_LIMITS.pending_alerts ||
       !Array.isArray(snapshot.finished)) invalid("Invalid communication snapshot shape or model capacity");
   if (snapshot.workers_disabled !== undefined && snapshot.workers_disabled !== true) invalid("Invalid workers_disabled flag");
   if (snapshot.reason === "alert" && snapshot.alerts.length === 0) invalid("Alert reason requires a complete pending alert");
@@ -171,6 +172,9 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     }
     if (task.time_wrapped !== undefined && task.time_wrapped !== true) invalid("Invalid time_wrapped diagnostic flag");
     if (task.context_tokens !== undefined && (!safeCount(task.context_tokens) || !task.settled)) invalid("Invalid context_tokens hint");
+    if (task.recovery_hint !== undefined && (!task.settled || row.status !== "failed" ||
+        !nonblank(task.recovery_hint) || task.recovery_hint.length > MODEL_RECOVERY_HINT_MAX_UNITS))
+      invalid("Invalid bounded recovery_hint");
     if (task.dispatch_notes !== undefined && (!Array.isArray(task.dispatch_notes) || task.dispatch_notes.length > 2 ||
         Array.from(task.dispatch_notes).some((note: unknown) => typeof note !== "string" || !nonblank(note) || note.length > 120))) invalid("Invalid bounded dispatch notes");
     return row;
@@ -178,8 +182,11 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
   const alerts = snapshot.alerts.map((alert) => {
     if (!alert || typeof alert !== "object" || !validName(alert.agent) || !safeCount(alert.task) || alert.task === 0 ||
         typeof alert.label !== "string" || alert.label.length > COMMUNICATION_LIMITS.label_units ||
-        !nonblank(alert.message) || alert.message.length > COMMUNICATION_LIMITS.child_text_units) invalid("Invalid complete alert bounds");
-    return { agent: alert.agent, task: alert.task, label: alert.label, message: alert.message };
+        !nonblank(alert.message) || alert.message.length > COMMUNICATION_LIMITS.child_text_units ||
+        (alert.source !== undefined && alert.source !== "harness") ||
+        Object.keys(alert).some((key) => !["agent", "task", "label", "message", "source"].includes(key))) invalid("Invalid complete alert bounds");
+    return { agent: alert.agent, task: alert.task, label: alert.label, message: alert.message,
+      ...(alert.source === undefined ? {} : { source: alert.source }) };
   });
   const suppressPresentation = snapshot.reason === "aborted" || snapshot.reason === "timeout";
   const finishedKeys = new Set<string>();
@@ -249,22 +256,24 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     }
   }
 
-  // Warning attempts are optional metadata, NOT reserved thin controls. Try
-  // every task now, after questions/FIFO alerts but before any result or string
-  // diagnostic can saturate bytes. Previously fitted bodies/cursors never yield.
-  for (let index = 0; index < snapshot.tasks.length; index++) {
-    if (snapshot.tasks[index]!.time_wrapped !== true) continue;
-    const candidate = replaceRow(envelope, index, { ...envelope.agents[index]!, time_wrapped: true });
-    if (communicationBudget(candidate).fits) envelope = candidate;
-    else limited = true;
-  }
-  // Same tier: a small optional reuse-cost hint, shown before result pages.
-  for (let index = 0; index < snapshot.tasks.length; index++) {
-    const context_tokens = snapshot.tasks[index]!.context_tokens;
-    if (context_tokens === undefined) continue;
-    const candidate = replaceRow(envelope, index, { ...envelope.agents[index]!, context_tokens });
-    if (communicationBudget(candidate).fits) envelope = candidate;
-    else limited = true;
+  // Optional metadata, NOT reserved thin controls: all warning attempts, then
+  // all reuse-cost hints, then all whole recovery hints, before any result or
+  // string diagnostic. Never clip hints or spend the body-text budget;
+  // previously fitted bodies/cursors never yield. Identical recovery prose is
+  // intentionally shown only on its first qualified row, not a packing loss.
+  const recoveryHints = new Set<string>();
+  for (const field of ["time_wrapped", "context_tokens", "recovery_hint"] as const) {
+    for (let index = 0; index < snapshot.tasks.length; index++) {
+      const value = snapshot.tasks[index]![field];
+      if (value === undefined) continue;
+      if (field === "recovery_hint" && typeof value === "string") {
+        if (recoveryHints.has(value)) continue;
+        recoveryHints.add(value);
+      }
+      const candidate = replaceRow(envelope, index, { ...envelope.agents[index]!, [field]: value });
+      if (communicationBudget(candidate).fits) envelope = candidate;
+      else limited = true;
+    }
   }
 
   // A stable cursor describes the actual shown endpoint, not the captured

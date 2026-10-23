@@ -9,11 +9,12 @@ import { boundedOutput, describeResult, sha256, validOutput } from "./result-tex
 import { emptyLedger, mergeLedgers, totalOf, USAGE_COMPONENTS, type UsageLedger } from "./usage-ledger.js";
 import { ObservationScheduler, synchronousObservationPort, validateLifecycleWait, type LifecycleObservationResult } from "./observation-scheduler.js";
 import { actionableQuestionId, applyCommunicationCommit, canAnswerQuestion, communicationReadiness, defaultObservationTargets,
-  enqueueAlert, finishedCandidates, isCommunicationSettled, recordFirstQuestion, scopedAlerts, taskOrdinal, validateCommunicationCommit,
+  enqueueAlert, enqueueManagedBlock, finishedCandidates, isCommunicationSettled, recordFirstQuestion, scopedAlerts, snapshotManagedBlockTools, taskOrdinal, validateCommunicationCommit,
   type AlertScope, type CommunicationCommitPlan, type CommunicationCommitSnapshot, type PendingAlert } from "./communication-state.js";
 import { packCommunication } from "./communication-packer.js";
 import { AGENT_EXISTS_RESOLUTION, COMMUNICATION_LIMITS, isModelAgentName, modelDispatchNotes, modelTaskStatus, type CommunicationAction, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.js";
 import type { CommunicationSnapshot, CommunicationToolResult, ResultWindow, TaskSnapshot } from "./communication-snapshot.js";
+import { modelRecoveryHint } from "./model-recovery.js";
 import { isQuestionId } from "./question-id.js";
 import { decodeResultCursor, invalidResultCursor, resultCursorKey, type ResultCursorIdentity } from "./result-cursor.js";
 import { dispatchText, pathsOverlap, validateDispatch, validSourceState, type Dispatch, type DispatchLease,
@@ -118,6 +119,10 @@ export interface OwnerControllerOptions {
   createSession: (agent: { agent_id: string; name: string; settings: AdmittedAgentConfig }) => Promise<AgentSessionPort>;
   /** Optional host filesystem/permission/observation adapter. No SDK IO in core. */
   dispatch?: DispatchPort;
+  /** Optional exact telemetry vocabulary, copied at open: at most 32 unique
+   * lowercase ASCII identifiers of 1..64 units. Missing/empty disables managed
+   * feedback only; child-authored alert behavior is unchanged. */
+  managedBlockTools?: readonly string[];
   /** Synchronous post-accept/pre-dispatch effect, not an admission transaction.
    * Must return undefined; failure prevents dispatch, never rolls back a Run ID. */
   onContextChange?: (event: ContextChange) => undefined;
@@ -256,8 +261,13 @@ export class OwnerController {
   private internalError?: string;
   private readonly limits;
   private readonly clock;
+  private readonly options: Omit<OwnerControllerOptions, "managedBlockTools">;
+  private readonly managedBlockTools: ReadonlySet<string>;
 
-  private constructor(private readonly options: OwnerControllerOptions) {
+  private constructor(options: OwnerControllerOptions) {
+    const { managedBlockTools, ...ownerOptions } = options;
+    this.options = ownerOptions; // Do not retain the caller's vocabulary array.
+    this.managedBlockTools = snapshotManagedBlockTools(managedBlockTools);
     this.limits = { concurrency: options.concurrency ?? 4, resident: options.resident_limit ?? 8,
       queue: options.queue_limit ?? 16, grace: options.grace_turns ?? 5, output: options.output_chars ?? 1_048_576,
       historyRuns: options.history_run_limit ?? 512, historyOutput: options.history_output_chars ?? 64 * 1024 * 1024,
@@ -976,6 +986,10 @@ export class OwnerController {
             enqueueAlert(this.alerts, run, text);
             this.wake(); // Observer errors cannot undo an accepted child alert.
           },
+          managedBlock: (fact) => {
+            this.assertCommunicationOpen(run); // Guard before any metadata inspection.
+            if (enqueueManagedBlock(this.alerts, run, fact, this.managedBlockTools)) this.wake();
+          },
           touched: (path) => {
             this.assertEffectAllowed();
             if (!this.current(run) || run.record.execution_exited || typeof path !== "string" || !path) return;
@@ -1611,8 +1625,8 @@ export class OwnerController {
         const healthy = this.communicationHealthy() && leaseHeld;
         const data: CommunicationSnapshot = { reason, ...(action ? { action } : {}), ...(!enabled ? { workers_disabled: true } : {}),
           tasks: targets.map((run) => this.communicationTask(run, all, healthy, limit, cursor, request.kind === "read")),
-          alerts: alerts.map(({ run, message }) => ({ agent: run.record.name, task: taskOrdinal(run, all),
-            label: boundedOutput(run.record.description, 120).text, message })),
+          alerts: alerts.map(({ run, message, source }) => ({ agent: run.record.name, task: taskOrdinal(run, all),
+            label: boundedOutput(run.record.description, 120).text, message, ...(source === undefined ? {} : { source }) })),
           finished: finished.map((run) => ({ row: this.communicationRow(run, all, healthy),
             ...(targets.includes(run) ? { task_index: targets.indexOf(run) } : {}) })), blocked: this.communicationBlock() };
         snapshot = { data, targets, alerts, finished, reportedBlockAtStart };
@@ -1657,6 +1671,7 @@ export class OwnerController {
       agent.resident && !agent.unavailable && !agent.release && !agent.exiting && !run.quarantine;
     const context_tokens = reusable ? this.lastContext(own)?.tokens ?? undefined : undefined;
     const dispatch_notes = modelDispatchNotes(run.record.dispatch_notes);
+    const recovery_hint = isCommunicationSettled(run) ? modelRecoveryHint(run.record.outcome) : undefined;
     return { row: this.communicationRow(run, all, healthy), settled: isCommunicationSettled(run),
       ...(question_id ? { question_id } : {}),
       ...(run.question !== undefined && (historical || isCommunicationSettled(run)) ? { question: run.question } : {}),
@@ -1664,6 +1679,7 @@ export class OwnerController {
       ...(dispatch_notes ? { dispatch_notes } : {}),
       ...(run.record.time_wrapped ? { time_wrapped: true as const } : {}),
       ...(context_tokens === undefined ? {} : { context_tokens }),
+      ...(recovery_hint === undefined ? {} : { recovery_hint }),
       diagnostics: { error: run.record.outcome?.error, owner_error: this.parentError ?? this.internalError,
         unavailable_reason: !healthy ? "owner_unavailable" : agent.unavailable ?? (agent.exiting ? "exiting" : run.quarantine) } };
   }

@@ -29,7 +29,8 @@ export function resolveManagedAuthority(agentDir) {
   assert.equal(pkg.name, "@gotgenes/pi-permission-system");
   assert.equal(pkg.version, "32.0.3", "MANAGED_VENDOR_VERSION_CHANGED");
   const sources = [selector, permissionEntry, selection.entryPoint,
-    join(closure, "authority-guard.ts"), join(closure, "managed-scratch.ts"),
+    join(closure, "authority-guard.ts"), join(closure, "managed-scratch.ts"), join(closure, "managed-block-observer.ts"),
+    join(closure, "../lib/managed-block-tools.mjs"),
     join(permissionRoot, "src/access-intent/bash/managed-read-policy.ts")].map((path) => ({ path,
     sha256: createHash("sha256").update(readFileSync(path)).digest("hex") }));
   return { permissionRoot, permissionEntry, authority: { kind: "portable-managed", selector: selection, permissionRoot, sources } };

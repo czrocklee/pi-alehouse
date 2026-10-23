@@ -1,5 +1,7 @@
 import { terminal, validDifficulty, type AgentSummary, type RunView } from "../core/contracts.js";
 import { modelDispatchNotes, modelTaskStatus } from "../core/communication-envelope.js";
+import { modelRecoveryHint } from "../core/model-recovery.js";
+import { isSettledRecord } from "../core/communication-state.js";
 
 // Model-facing projections. The model addresses Agents by name and calls each
 // assignment a task; Run and Agent IDs, routing and diagnostics stay host-only.
@@ -22,6 +24,7 @@ export function taskReply(view: RunView, nameOf: NameOf) {
   const unavailable = view.owner_blocked || (terminal(view.status) && !view.resumable) ||
     !!(view.unavailable_reason && view.unavailable_reason !== "agent_busy");
   const dispatch_notes = modelDispatchNotes(view.dispatch_notes);
+  const recovery_hint = isSettledRecord(view) ? modelRecoveryHint(view.outcome) : undefined;
   return { agent: view.name, task: view.task, status: statusOf(view),
     ...(view.has_question ? { has_question: true } : {}),
     ...(view.outcome?.reason ? { reason: view.outcome.reason } : {}),
@@ -29,6 +32,7 @@ export function taskReply(view: RunView, nameOf: NameOf) {
     ...(view.outcome?.limit_reached ? { limit_reached: true } : {}),
     ...(view.time_wrapped || view.outcome?.time_wrapped ? { time_wrapped: true } : {}),
     ...(dispatch_notes ? { dispatch_notes } : {}),
+    ...(recovery_hint === undefined ? {} : { recovery_hint }),
     ...(view.outcome?.error ? { error: utf16Prefix(view.outcome.error, 512) } : {}),
     ...(view.owner_error ? { owner_error: utf16Prefix(view.owner_error, 512) } : {}),
     ...(view.blocked_by?.length ? { waiting_for: view.blocked_by.map(nameOf) } : {}),
@@ -43,15 +47,19 @@ const TOUCHED_SHOWN = 8;
  * invites tuning difficulty to pick a model. Spend and idle time stay hidden
  * too: spend is sunk and reveals which difficulty is dearer, and idle time
  * cannot tell the parent whether a provider cache is still warm. */
-export function agentRow(view: RunView, summary: AgentSummary, nameOf: NameOf) {
+export function agentRow(view: RunView, summary: AgentSummary, nameOf: NameOf, recoveryHints = new Set<string>()) {
   const earlier = summary.earlier_descriptions.slice(0, EARLIER_SHOWN).map((text) => utf16Prefix(text, 120));
   const context = summary.context;
   const touched = summary.touched.slice(0, TOUCHED_SHOWN).map((path) => utf16Prefix(path, 160));
   const touchedOmitted = summary.touched.length - touched.length + summary.touched_omitted;
   const running = view.status === "running" && !view.execution_exited;
-  const { agent, ...task } = taskReply(view, nameOf);
+  const { agent, recovery_hint: hint, ...task } = taskReply(view, nameOf);
+  // This set belongs to one roster construction only, never retained state.
+  const recovery_hint = hint !== undefined && !recoveryHints.has(hint) ? hint : undefined;
+  if (recovery_hint !== undefined) recoveryHints.add(recovery_hint);
   return { agent, profile: view.effective_settings.profile, reasoning_difficulty: view.effective_settings.difficulty,
     label: utf16Prefix(view.description, 120), ...task,
+    ...(recovery_hint === undefined ? {} : { recovery_hint }),
     ...(running && view.execution_elapsed_ms !== undefined ? { elapsed_s: Math.round(view.execution_elapsed_ms / 1000) } : {}),
     ...(earlier.length ? { earlier_labels: earlier } : {}),
     // Absolute size, not a share of the window: a large window makes a costly

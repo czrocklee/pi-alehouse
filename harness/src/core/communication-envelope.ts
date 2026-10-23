@@ -13,7 +13,10 @@ export const COMMUNICATION_LIMITS = Object.freeze({
   label_units: 120,
   child_text_units: 8192,
   agent_alerts: 16, // Across all of an Agent's Runs in the same Owner FIFO.
-  owner_alerts: 64,
+  owner_alerts: 64, // Child-origin allowance only.
+  harness_owner_alerts: 16,
+  harness_agent_alerts: 1,
+  pending_alerts: 80, // One physical FIFO: 64 child + 16 harness.
 });
 
 export const MODEL_AGENT_NAME_PATTERN = "^[a-z][a-z0-9-]{0,23}$";
@@ -67,6 +70,9 @@ export interface TaskEntry extends ThinTaskEntry {
   readonly time_wrapped?: true;
   /** Idle Agent's conversation size on its latest task: what its next task re-reads. */
   readonly context_tokens?: number;
+  /** Whole conditional pinned-model guidance on a settled failed task, at most 384 UTF-16 units.
+   * Optional envelope metadata, not an availability fact or body-budget text. */
+  readonly recovery_hint?: string;
   readonly question_id?: QuestionId;
   readonly question?: string;
   readonly result?: string;
@@ -93,6 +99,8 @@ export interface AlertEntry {
   readonly task: number;
   readonly label: string; // At most 120 UTF-16 units, outside the text budget.
   readonly message: string; // 1..8192 non-whitespace UTF-16 units, always shown whole.
+  /** Absent on child-authored text, even if it imitates a harness message. */
+  readonly source?: "harness";
 }
 export type FinishedEntry = ThinTaskEntry;
 
@@ -146,7 +154,7 @@ export function communicationBudget(value: CommunicationEnvelope): Communication
     fits: text_units <= COMMUNICATION_LIMITS.text_units && envelope_bytes <= COMMUNICATION_LIMITS.envelope_bytes &&
       value.agents.length <= COMMUNICATION_LIMITS.agents && (value.pending?.length ?? 0) <= COMMUNICATION_LIMITS.pending &&
       (value.finished?.length ?? 0) <= COMMUNICATION_LIMITS.finished &&
-      (value.alerts?.length ?? 0) <= COMMUNICATION_LIMITS.owner_alerts };
+      (value.alerts?.length ?? 0) <= COMMUNICATION_LIMITS.pending_alerts };
 }
 
 /** Intentionally impossible action combines the longest verb with delivery.
@@ -163,7 +171,9 @@ export interface RetainedEnvelopeBound extends Omit<RetainedEnvelope, "action" |
 }
 
 /** Fresh pure proof data, with one complete alert and every bounded control
- * at its maximum. Six flags coexist conservatively; no stored Owner/Run state.
+ * at its maximum, including the harness source tag even for a worst-escaped
+ * child-sized body. Six flags coexist conservatively; no stored Owner/Run state.
+ * The 65068-byte bound adds 23 double-JSON bytes to the old 65045-byte shape.
  * The proof depends on these exact keys and bounds, not arbitrary JSON data. */
 export function retainedEnvelopeFixture(message: string, withQuestionIds = false, withResultCursors = false): RetainedEnvelopeBound {
   const name = "a".repeat(COMMUNICATION_LIMITS.agent_name_units);
@@ -179,7 +189,7 @@ export function retainedEnvelopeFixture(message: string, withQuestionIds = false
       ...(withResultCursors ? { next_cursor: encodeResultCursor({ owner: "owner", generation: "generation", run: "run", version: "version" }, max),
         ...(withQuestionIds ? { question: "" } : {}) } : {}),
     })),
-    alerts: [{ agent: name, task: max, label: "\u0000".repeat(COMMUNICATION_LIMITS.label_units), message }],
+    alerts: [{ agent: name, task: max, label: "\u0000".repeat(COMMUNICATION_LIMITS.label_units), message, source: "harness" }],
     pending: Array.from({ length: COMMUNICATION_LIMITS.pending }, () => name),
     workers_disabled: true,
     alerts_pending: max,

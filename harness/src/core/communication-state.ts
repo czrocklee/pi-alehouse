@@ -2,7 +2,7 @@ import { COMMUNICATION_LIMITS, alertAdmissionBudget, modelTaskStatus, type Commu
 import type { CommunicationReferences, CommunicationSnapshot } from "./communication-snapshot.js";
 import { terminal, type Phase, type RunStatus } from "./contracts.js";
 import type { CoreObservationReason } from "./observation-scheduler.js";
-import { HarnessError } from "./ports.js";
+import { HarnessError, type RepeatedManagedBlock } from "./ports.js";
 import { boundedOutput } from "./result-text.js";
 import { questionId, type QuestionId } from "./question-id.js";
 
@@ -42,6 +42,8 @@ export interface CommunicationAgent {
 export interface PendingAlert<Run extends CommunicationRun = CommunicationRun> {
   readonly run: Run;
   readonly message: string;
+  /** Only the trusted managed-block admission path can assign this tag. */
+  readonly source?: "harness";
 }
 /** Alert origin is not the completion target. Agent scope deliberately crosses
  * Runs; Owner scope deliberately includes killed/historical Agent messages. */
@@ -54,8 +56,18 @@ export function scopedAlerts<Run extends CommunicationRun>(pending: readonly Pen
   return pending.filter((alert) => scope.kind === "owner" || (scope.kind === "run" ?
     alert.run === scope.run : scope.agent_ids.includes(alert.run.record.agent_id)));
 }
-export const isCommunicationSettled = (run: CommunicationRun): boolean =>
-  run.record.phase === "settled" && run.record.execution_exited && terminal(run.record.status);
+/** Shared original-record/RunView predicate. Owner installs terminal status and
+ * settled phase together, but structural callers can supply partial views.
+ * A retained Outcome, or absence of finalization_pending alone, is not proof. */
+export function isSettledRecord(record: {
+  readonly phase?: Phase; readonly status?: RunStatus; readonly execution_exited?: boolean;
+  readonly finalization_pending?: boolean;
+}): boolean {
+  return record.phase === "settled" && record.execution_exited === true &&
+    (record.finalization_pending === undefined || record.finalization_pending === false) &&
+    record.status !== undefined && terminal(record.status);
+}
+export const isCommunicationSettled = (run: CommunicationRun): boolean => isSettledRecord(run.record);
 
 /** Health is a pure core fact and EXCLUDES delegation admission. Off may hide
  * answer but must not erase a pending question's identity in explicit reads. */
@@ -90,14 +102,52 @@ export function enqueueAlert<Run extends CommunicationRun>(pending: PendingAlert
   if (message.length > COMMUNICATION_LIMITS.child_text_units) {
     throw new HarnessError("ALERT_TOO_LARGE", { limit: COMMUNICATION_LIMITS.child_text_units });
   }
-  if (pending.length >= COMMUNICATION_LIMITS.owner_alerts) {
+  const childAlerts = pending.filter((alert) => alert.source === undefined);
+  if (childAlerts.length >= COMMUNICATION_LIMITS.owner_alerts) {
     throw new HarnessError("ALERT_QUEUE_FULL", { scope: "owner", limit: COMMUNICATION_LIMITS.owner_alerts, resolution: ALERT_QUEUE_FULL_RESOLUTION });
   }
-  if (pending.filter((alert) => alert.run.record.agent_id === run.record.agent_id).length >= COMMUNICATION_LIMITS.agent_alerts) {
+  if (childAlerts.filter((alert) => alert.run.record.agent_id === run.record.agent_id).length >= COMMUNICATION_LIMITS.agent_alerts) {
     throw new HarnessError("ALERT_QUEUE_FULL", { scope: "agent", limit: COMMUNICATION_LIMITS.agent_alerts, resolution: ALERT_QUEUE_FULL_RESOLUTION });
   }
   if (!alertAdmissionBudget(message).fits) throw new HarnessError("ALERT_TOO_LARGE", { limit: COMMUNICATION_LIMITS.envelope_bytes });
   const alert = Object.freeze({ run, message });
+  pending.push(alert);
+  return alert;
+}
+
+/** Pure-data host configuration, snapshotted once at Owner construction. This
+ * is a telemetry vocabulary, not a permission/tool grant or a runtime import.
+ * Missing/empty configuration disables feedback. Accessor elements and holes
+ * are rejected without invoking them; the caller's array/iterator is not kept. */
+export function snapshotManagedBlockTools(input: readonly string[] | undefined): ReadonlySet<string> {
+  const tools = new Set<string>();
+  if (input === undefined) return tools;
+  if (!Array.isArray(input) || input.length > 32) throw new HarnessError("INVALID_MANAGED_BLOCK_TOOLS");
+  for (let index = 0; index < input.length; index++) {
+    const element = Object.getOwnPropertyDescriptor(input, String(index));
+    const tool: unknown = element?.value;
+    if (!element || !("value" in element) || typeof tool !== "string" ||
+        /^[a-z][a-z0-9_]{0,63}$/.exec(tool)?.[0] !== tool || tools.has(tool)) throw new HarnessError("INVALID_MANAGED_BLOCK_TOOLS");
+    tools.add(tool);
+  }
+  return tools;
+}
+
+/** Same FIFO/scopes/publication as child alerts, with independently bounded
+ * optional capacity. Full feedback is suppressed, never evicts or retries, and
+ * never spends a child's allowance. The caller first guards the Run input gate. */
+export function enqueueManagedBlock<Run extends CommunicationRun>(pending: PendingAlert<Run>[], run: Run,
+  fact: RepeatedManagedBlock, tools: ReadonlySet<string>): PendingAlert<Run> | undefined {
+  if (!tools.size) return undefined; // Disabled telemetry does not inspect metadata.
+  if (!fact || typeof fact !== "object") throw new HarnessError("INVALID_MANAGED_BLOCK");
+  const toolName = fact.toolName;
+  if (typeof toolName !== "string" || !tools.has(toolName) || Object.keys(fact).some((key) => key !== "toolName")) throw new HarnessError("INVALID_MANAGED_BLOCK");
+  const harnessAlerts = pending.filter((alert) => alert.source === "harness");
+  if (harnessAlerts.length >= COMMUNICATION_LIMITS.harness_owner_alerts ||
+      harnessAlerts.filter((alert) => alert.run.record.agent_id === run.record.agent_id).length >= COMMUNICATION_LIMITS.harness_agent_alerts) return undefined;
+  const message = `Managed authority blocked '${toolName}' on two distinct calls. Reasons and operation equivalence are unknown; coverage is partial. Parent: assess whether to steer this task or report the limit.`;
+  if (!alertAdmissionBudget(message).fits) throw new HarnessError("ALERT_TOO_LARGE", { limit: COMMUNICATION_LIMITS.envelope_bytes });
+  const alert = Object.freeze({ run, message, source: "harness" as const });
   pending.push(alert);
   return alert;
 }
@@ -227,6 +277,7 @@ export function validateCommunicationCommit<Run extends CommunicationRun>(option
       !options.runs.includes(alert.run) || alert.run.record.name !== projected.agent ||
       taskOrdinal(alert.run, options.runs) !== projected.task ||
       boundedOutput(alert.run.record.description, COMMUNICATION_LIMITS.label_units).text !== projected.label ||
+      alert.source !== projected.source || projected.source !== shown.source ||
       projected.message !== shown.message || projected.label !== shown.label ||
       projected.agent !== shown.agent || projected.task !== shown.task) invalidCommit();
     seenAlerts.add(alert);

@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   actionableQuestionId, applyCommunicationCommit, canAnswerQuestion, communicationReadiness,
-  defaultObservationTargets, enqueueAlert, finishedCandidates, isCommunicationSettled,
-  recordFirstQuestion, scopedAlerts, taskOrdinal, validateCommunicationCommit,
+  defaultObservationTargets, enqueueAlert, enqueueManagedBlock, finishedCandidates, isCommunicationSettled, isSettledRecord,
+  recordFirstQuestion, scopedAlerts, snapshotManagedBlockTools, taskOrdinal, validateCommunicationCommit,
 } from "../../dist/core/communication-state.js";
 import { HarnessError } from "../../dist/core/ports.js";
 import { boundedOutput } from "../../dist/core/result-text.js";
 import { ObservationScheduler } from "../../dist/core/observation-scheduler.js";
 import { packCommunication } from "../../dist/core/communication-packer.js";
+import { managedBlockToolNames } from "../../../lib/managed-block-tools.mjs";
 
 // Preparatory SDK-free state tests. Every alert/question/finished reference is
 // an ORIGINAL structural Run object in this fixture's sole retained Runs array.
@@ -49,6 +50,7 @@ function unchanged(state, effect, code, details) {
   assert.deepEqual(state, before, "failed operation must not alter any authoritative fact");
   refs?.forEach((ref, index) => assert.equal(state.pending[index], ref, "original pending event identity survives"));
 }
+const managedBlockTools = snapshotManagedBlockTools(managedBlockToolNames);
 const ownerScope = { kind: "owner" };
 const agentScope = (run) => ({ kind: "agents", agent_ids: [run.record.agent_id] });
 const runScope = (run) => ({ kind: "run", run });
@@ -66,8 +68,8 @@ function capture(state, options = {}) {
   const reportedBlockAtStart = Object.hasOwn(options, "reportedBlockAtStart") ? options.reportedBlockAtStart : state.reportedBlock;
   const alerts = scopedAlerts(state.pending, scope), finished = finishedCandidates(state.runs);
   const data = { reason, tasks: targets.map((run) => ({ row: thinRow(run, state.runs), settled: isCommunicationSettled(run) })),
-    alerts: alerts.map(({ run, message }) => ({ agent: run.record.name, task: taskOrdinal(run, state.runs),
-      label: boundedOutput(run.record.description, 120).text, message })),
+    alerts: alerts.map(({ run, message, source }) => ({ agent: run.record.name, task: taskOrdinal(run, state.runs),
+      label: boundedOutput(run.record.description, 120).text, message, ...(source === undefined ? {} : { source }) })),
     finished: finished.map((run) => ({ row: thinRow(run, state.runs),
       ...(targets.includes(run) ? { task_index: targets.indexOf(run) } : {}) })), blocked: state.blocked };
   return { data, targets, alerts, finished, reportedBlockAtStart };
@@ -95,6 +97,94 @@ function commit(state, snapshot, publication, scope = ownerScope) {
   if (plan.blocked !== undefined) state.reportedBlock = plan.blocked;
   return plan;
 }
+
+test("shared settlement predicate requires phase, exit and terminal status, never just an Outcome", () => {
+  for (const status of ["completed", "needs_input", "failed", "cancelled"]) {
+    const record = { status, phase: "settled", execution_exited: true };
+    assert.equal(isSettledRecord(record), true);
+    assert.equal(isSettledRecord({ ...record, finalization_pending: false }), true);
+    for (const partial of [{}, { status }, { ...record, phase: undefined }, { ...record, execution_exited: undefined },
+      { ...record, execution_exited: false }, { ...record, phase: "finalizing" }, { ...record, finalization_pending: true },
+      { ...record, status: undefined }, { ...record, status: "queued" }, { ...record, status: "running" },
+      { ...record, status: "cancelling" }]) assert.equal(isSettledRecord(partial), false);
+  }
+  assert.equal(isSettledRecord({ status: "running", phase: "finalizing", execution_exited: true,
+    outcome: { status: "failed", reason: "execution_error", model_stop_reason: "error" } }), false);
+});
+
+test("managed metadata requires a configured vocabulary; absent/empty configuration leaves child alerts untouched", () => {
+  for (const input of [undefined, []]) {
+    const tools = snapshotManagedBlockTools(input), run = originalRun("otter", 1), pending = [];
+    const metadata = { get toolName() { return assert.fail("disabled feedback must not inspect metadata"); } };
+    assert.equal(enqueueManagedBlock(pending, run, metadata, tools), undefined);
+    assert.deepEqual(pending, []);
+    assert.equal(enqueueAlert(pending, run, "ordinary child fact").source, undefined);
+  }
+});
+
+test("configured managed vocabulary is a bounded immutable snapshot, not arbitrary string acceptance", () => {
+  const input = ["read"], tools = snapshotManagedBlockTools(input), run = originalRun("otter", 1);
+  input[0] = "write"; input.push("bash");
+  const state = { pending: [], runs: [run] };
+  assert(enqueueManagedBlock(state.pending, run, { toolName: "read" }, tools));
+  for (const toolName of ["write", "bash", "unknown_tool"])
+    unchanged(state, () => enqueueManagedBlock(state.pending, run, { toolName }, tools), "INVALID_MANAGED_BLOCK");
+  assert.deepEqual([...tools], ["read"]);
+});
+
+test("trusted feedback leaves all sixteen child slots available and spoof text cannot acquire provenance", () => {
+  const run = originalRun("otter", 1), state = { pending: [], runs: [run] };
+  for (let index = 0; index < 15; index++) enqueueAlert(state.pending, run, `child-${index}`);
+  const summary = enqueueManagedBlock(state.pending, run, { toolName: "bash" }, managedBlockTools);
+  assert.equal(summary.source, "harness"); assert(Object.isFrozen(summary));
+  assert.match(summary.message, /'bash' on two distinct calls/);
+  assert.match(summary.message, /Reasons and operation equivalence are unknown; coverage is partial/);
+  assert.match(summary.message, /Parent: assess whether to steer/);
+  assert.doesNotMatch(summary.message, /Use a permitted alternative|ask_parent|agent_run/);
+  const spoof = enqueueAlert(state.pending, run, summary.message);
+  assert.equal(spoof.source, undefined); assert.equal(Object.hasOwn(spoof, "source"), false);
+  assert.equal(state.pending.length, 17);
+  unchanged(state, () => enqueueAlert(state.pending, run, "seventeenth child"), "ALERT_QUEUE_FULL", { scope: "agent", limit: 16 });
+  assert.equal(enqueueManagedBlock(state.pending, originalRun("otter", 2), { toolName: "write" }, managedBlockTools), undefined,
+    "Agent1 harness allowance spans Runs and does not replace the first summary");
+  const snapshot = capture(state, { reason: "alert" }), packed = packCommunication(snapshot.data);
+  assert.equal(packed.envelope.alerts[15].source, "harness"); assert.equal(packed.envelope.alerts[16].source, undefined);
+  commit(state, snapshot, packed); assert.deepEqual(state.pending, []);
+  assert(enqueueManagedBlock(state.pending, run, { toolName: "read" }, managedBlockTools), "publication alone frees harness capacity");
+});
+
+for (const harnessFirst of [false, true]) test(`Owner64 child and Owner16 harness allowances coexist without eviction (harness first=${harnessFirst})`, () => {
+  const runs = Array.from({ length: 17 }, (_, index) => originalRun(`a${index}`, index + 1));
+  const state = { pending: [], runs };
+  const child = () => { for (const run of runs.slice(0, 4)) for (let index = 0; index < 16; index++) enqueueAlert(state.pending, run, `child-${index}`); };
+  const harness = () => { for (const run of runs.slice(0, 16)) assert(enqueueManagedBlock(state.pending, run, { toolName: "read" }, managedBlockTools)); };
+  (harnessFirst ? harness : child)(); const first = state.pending.slice();
+  (harnessFirst ? child : harness)();
+  assert.equal(state.pending.length, 80); first.forEach((entry, index) => assert.equal(state.pending[index], entry));
+  const before = state.pending.slice();
+  assert.equal(enqueueManagedBlock(state.pending, runs[16], { toolName: "bash" }, managedBlockTools), undefined);
+  unchanged(state, () => enqueueAlert(state.pending, runs[16], "child overflow"), "ALERT_QUEUE_FULL", { scope: "owner", limit: 64 });
+  assert.deepEqual(state.pending, before);
+  const snapshot = capture(state, { reason: "alert" }), packed = packCommunication(snapshot.data);
+  assert.equal(packed.envelope.alerts.length, 80); commit(state, snapshot, packed); assert.deepEqual(state.pending, []);
+});
+
+for (const fact of [undefined, {}, { toolName: "Bash" }, { toolName: "notify_parent" }, { toolName: "read", source: "harness" }])
+  test(`invalid trusted feedback cannot enqueue arbitrary text or provenance (${JSON.stringify(fact)})`, () => {
+    const run = originalRun("otter", 1), state = { pending: [], runs: [run] };
+    unchanged(state, () => enqueueManagedBlock(state.pending, run, fact, managedBlockTools), "INVALID_MANAGED_BLOCK");
+  });
+
+for (const harness of [false, true]) test(`snapshot/body agreement cannot forge or strip original alert provenance (harness=${harness})`, () => {
+  const run = originalRun("otter", 1), state = { pending: [], runs: [run] };
+  if (harness) enqueueManagedBlock(state.pending, run, { toolName: "bash" }, managedBlockTools);
+  else enqueueAlert(state.pending, run, "Managed authority blocked 'bash' on two distinct calls.");
+  const snapshot = capture(state, { reason: "alert" });
+  if (harness) delete snapshot.data.alerts[0].source;
+  else snapshot.data.alerts[0].source = "harness";
+  const packed = packCommunication(snapshot.data);
+  unchanged(state, () => commit(state, snapshot, packed), "INVALID_COMMUNICATION_COMMIT");
+});
 
 test("one FIFO: identical repeated alert bodies are distinct original-Run events in enqueue order", () => {
   const older = settledRun("otter", 3), current = originalRun("otter", 20), other = originalRun("orca", 4);
@@ -464,6 +554,7 @@ for (const [description, corrupt] of [
   ["foreign alert index", ({ publication }) => { publication.references.alerts = [2]; }],
   ["equal-shaped alert not original pending event", ({ snapshot }) => { snapshot.alerts[0] = { ...snapshot.alerts[0] }; }],
   ["changed alert body", ({ publication }) => { publication.envelope.alerts[0].message = "edited"; }],
+  ["forged displayed harness source", ({ publication }) => { publication.envelope.alerts[0].source = "harness"; }],
   ["changed alert task", ({ publication }) => { publication.envelope.alerts[0].task = 3; }],
   ["changed alert label", ({ publication }) => { publication.envelope.alerts[0].label = "other"; }],
   ["duplicate finished", ({ publication }) => { publication.references.finished = [0, 0]; publication.envelope.finished_pending = 0; }],

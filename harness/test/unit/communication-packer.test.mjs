@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { packCommunication } from "../../dist/core/communication-packer.js";
+import { modelRecoveryHint } from "../../dist/core/model-recovery.js";
 import { decodeResultCursor, resultCursorKey } from "../../dist/core/result-cursor.js";
 
 // Pure packing of captured ordinary data. These are not live Owner/FIFO,
@@ -76,7 +77,7 @@ function maximalSnapshot(message) {
     { question_id: questionId(index + 1) }));
   return snapshot({ reason: "alert", workers_disabled: true, tasks,
     action: { type: "agent_send", agent: tasks[0].row.agent, task: Number.MAX_SAFE_INTEGER, delivery: "not_delivered" },
-    alerts: [alert(message, Number.MAX_SAFE_INTEGER, tasks[0].row.agent, "\u0000".repeat(120)),
+    alerts: [{ ...alert(message, Number.MAX_SAFE_INTEGER, tasks[0].row.agent, "\u0000".repeat(120)), source: "harness" },
       alert("\u0000".repeat(8192), Number.MAX_SAFE_INTEGER, tasks[1].row.agent)] });
 }
 
@@ -740,6 +741,220 @@ test("optional dispatch diagnostics never displace sixteen reserved stable curso
   }
   assert(envelope.agents.some((entry) => entry.dispatch_notes === undefined));
   assert.equal(envelope.response_limit_reached, true);
+});
+
+test("identical recovery hints appear once on the first qualifying task without reporting intentional dedup as loss", () => {
+  const hint = modelRecoveryHint({ status: "failed", reason: "execution_error", model_stop_reason: "error" });
+  const input = snapshot({ tasks: [task(row("healthy", 1, "completed")), ...Array.from({ length: 15 }, (_, index) =>
+    task(row(`a${index}`, index + 1, "failed"), { recovery_hint: hint }))] });
+  const packed = pack(input), again = pack(input);
+  assert.equal(packed.envelope.agents[0].recovery_hint, undefined);
+  assert.equal(packed.envelope.agents[1].recovery_hint, hint);
+  assert(packed.envelope.agents.slice(2).every((entry) => entry.recovery_hint === undefined));
+  assert.equal(packed.envelope.response_limit_reached, undefined);
+  assert.deepEqual(packed, again, "dedup is per publication, never presentation state");
+  assert.deepEqual(packed.references, { alerts: [], finished: [] });
+  const distinct = snapshot({ tasks: [task(row("otter", 1, "failed"), { recovery_hint: "first bounded hint" }),
+    task(row("orca", 1, "failed"), { recovery_hint: "another bounded hint" })] });
+  assert.deepEqual(pack(distinct).envelope.agents.map((entry) => entry.recovery_hint), ["first bounded hint", "another bounded hint"],
+    "defensive generic packing deduplicates identical strings, not unrelated guidance");
+});
+
+test("all eighty mixed-source alerts pack in FIFO order and malformed provenance cannot be copied or silently discarded", () => {
+  const alerts = Array.from({ length: 80 }, (_, index) => ({ ...alert(`message-${index}`, index + 1),
+    ...(index < 16 ? { source: "harness" } : {}) }));
+  const input = snapshot({ reason: "alert", alerts }), packed = pack(input);
+  assert.deepEqual(packed.envelope.alerts, alerts); assert.equal(packed.envelope.alerts_pending, 0);
+  for (const source of ["child", "system", false, null, 1]) {
+    const invalid = snapshot({ alerts: [{ ...alert("retained"), source }] });
+    assert.throws(() => packCommunication(invalid), { code: "INVALID_COMMUNICATION_SNAPSHOT" });
+  }
+  for (const invalid of [snapshot({ alerts: [...alerts, alert("eighty-first")] }),
+    snapshot({ alerts: [{ ...alert("retained"), kind: "managed_block" }] })])
+    assert.throws(() => packCommunication(invalid), { code: "INVALID_COMMUNICATION_SNAPSHOT" });
+});
+
+test("a whole 384-unit recovery_hint is task metadata, not body text, thin control or finished data", () => {
+  const recovery_hint = "x".repeat(382) + "🚀", original = row("otter", 1, "failed", { has_question: true });
+  const input = snapshot({ tasks: [task(original, { question_id: questionId(), question: "q".repeat(8192), recovery_hint })],
+    alerts: [alert("a".repeat(8192))], finished: [{ row: { ...original }, task_index: 0 }, { row: row("orca", 1, "failed") }] });
+  const { envelope, result } = pack(input), entry = envelope.agents[0];
+  assert.equal(recovery_hint.length, 384); assert.equal(entry.recovery_hint, recovery_hint);
+  assert.equal(JSON.parse(result.content[0].text).agents[0].recovery_hint, recovery_hint);
+  assert.equal(entry.question, input.tasks[0].question); assert.deepEqual(envelope.alerts, input.alerts);
+  assert.equal(bodyUnits(envelope), 16384, "recovery guidance spends envelope bytes only");
+  assert.equal(envelope.response_limit_reached, undefined);
+  assert.deepEqual(envelope.finished, [input.finished[1].row]);
+  assert.equal(envelope.finished[0].recovery_hint, undefined);
+  assert.equal(entry.next_cursor, undefined, "guidance introduces no recovery locator");
+  const absent = snapshot({ tasks: [task(row("otter", 1, "failed"))] });
+  const explicitUndefined = structuredClone(absent); explicitUndefined.tasks[0].recovery_hint = undefined;
+  assert.deepEqual(pack(explicitUndefined), pack(absent), "absence preserves existing packed bytes");
+});
+
+test("malformed recovery_hint fields reject before returning any publication references", () => {
+  for (const recovery_hint of [null, false, true, 42, {}, [], "", " ", "\t\n", "x".repeat(385), "x".repeat(383) + "🚀"]) {
+    const input = snapshot({ tasks: [task(row("otter", 1, "failed"), { recovery_hint })],
+      alerts: [alert("preserved")], finished: [{ row: row("otter", 1, "failed"), task_index: 0 }] });
+    const before = structuredClone(input); deepFreeze(input);
+    assert.throws(() => packCommunication(input), { code: "INVALID_COMMUNICATION_SNAPSHOT" });
+    assert.deepEqual(input, before);
+  }
+  for (const input of [
+    snapshot({ tasks: [task(row("otter", 1, "failed", { recovery_hint: "never thin" }))] }),
+    snapshot({ finished: [{ row: row("otter", 1, "failed", { recovery_hint: "never finished" }) }] }),
+    snapshot({ tasks: [task(row("otter", 1, "failed"), { diagnostics: { recovery_hint: "not a clipped diagnostic" } })] }),
+  ]) assert.throws(() => packCommunication(input), { code: "INVALID_COMMUNICATION_SNAPSHOT" });
+});
+
+test("recovery_hint is rejected unless its task is truly settled with failed status", () => {
+  for (const status of ["queued", "running", "interrupting", "finishing", "completed", "needs_input", "interrupted"]) {
+    const input = snapshot({ tasks: [task(row("otter", 1, status), { recovery_hint: "valid bounded guidance" })],
+      alerts: [alert("preserved")] });
+    const before = structuredClone(input); deepFreeze(input);
+    assert.throws(() => packCommunication(input), { code: "INVALID_COMMUNICATION_SNAPSHOT" }, status);
+    assert.deepEqual(input, before);
+  }
+  const unsettled = snapshot({ tasks: [task(row("otter", 1, "failed"), { settled: false, recovery_hint: "valid bounded guidance" })] });
+  assert.throws(() => packCommunication(unsettled), { code: "INVALID_COMMUNICATION_SNAPSHOT" });
+});
+
+test("all recovery hints follow time/context metadata but precede every result page and clipped diagnostic", () => {
+  const recovery_hint = modelRecoveryHint({ status: "failed", reason: "execution_error", model_stop_reason: "error", limit_reached: false });
+  assert.equal(typeof recovery_hint, "string");
+  const input = snapshot({ tasks: [task(row("otter", 1, "completed"), {
+    result: window("\0".repeat(20000), { cursor: cursorIdentity }), diagnostics: { error: "\0".repeat(512) },
+  }), task(row("orca", 1, "failed"), { recovery_hint, time_wrapped: true, context_tokens: 391_000 })] });
+  const { envelope } = pack(input);
+  assert.equal(envelope.agents[1].time_wrapped, true); assert.equal(envelope.agents[1].context_tokens, 391_000);
+  assert.equal(envelope.agents[1].recovery_hint, recovery_hint, "a later task's hint must not wait behind the first result");
+  assert(envelope.agents[0].result.length < 16384);
+  assert((envelope.agents[0].error?.length ?? 0) < 512);
+  assert.equal(envelope.response_limit_reached, true);
+  assert.equal(decodeCursor(envelope.agents[0].next_cursor).offset, envelope.agents[0].result.length);
+  assert.equal(bodyUnits(envelope), envelope.agents[0].result.length);
+});
+
+function recoverySaturatedSnapshot(message = "\0".repeat(8192)) {
+  const tasks = Array.from({ length: 16 }, (_, index) => task(
+    row(`a${String(index).padStart(2, "0")}${"x".repeat(21)}`, Number.MAX_SAFE_INTEGER, index === 15 ? "running" : "failed", controls), {
+      question_id: questionId(index + 1), ...(index === 15 ? {} : {
+        result: window("", { offset: Number.MAX_SAFE_INTEGER - 1000, retained_chars: Number.MAX_SAFE_INTEGER,
+          total_chars: Number.MAX_SAFE_INTEGER, cursor: { ...cursorIdentity, run: `recovery-${index}` } }),
+      }),
+    }));
+  tasks[0].question = "q"; tasks[0].time_wrapped = true; tasks[0].context_tokens = 391_000;
+  const input = snapshot({ reason: "alert", tasks, workers_disabled: true,
+    action: { type: "agent_send", agent: tasks[0].row.agent, task: Number.MAX_SAFE_INTEGER, delivery: "not_delivered" },
+    alerts: [alert(message, Number.MAX_SAFE_INTEGER, tasks[0].row.agent, "\0".repeat(120))],
+    finished: [{ row: { ...tasks[0].row }, task_index: 0 }] });
+  const seed = pack(input), remaining = 65536 - bytes({ ...seed.envelope, response_limit_reached: true });
+  assert(remaining > 0);
+  const full = structuredClone(input); full.tasks[0].question = "q".repeat(1 + remaining);
+  const complete = pack(full);
+  assert.equal(complete.envelope.agents[0].question, full.tasks[0].question);
+  assert.equal(complete.envelope.response_limit_reached, undefined);
+  assert.equal(bytes({ ...complete.envelope, response_limit_reached: true }), 65536);
+  return { input: full, complete };
+}
+
+test("a duplicate recovery hint costs no bytes or response-limit flag even when only the first copy fits", () => {
+  const { input, complete } = recoverySaturatedSnapshot();
+  const recovery_hint = modelRecoveryHint({ status: "failed", reason: "execution_error", model_stop_reason: "error" });
+  const withHint = { ...complete.envelope, response_limit_reached: true,
+    agents: complete.envelope.agents.map((entry, index) => index === 0 ? { ...entry, recovery_hint } : entry) };
+  const cost = bytes(withHint) - 65536, fitting = structuredClone(input);
+  assert(cost > 0 && fitting.tasks[0].question.length > cost);
+  fitting.tasks[0].question = fitting.tasks[0].question.slice(0, -cost);
+  fitting.tasks[0].recovery_hint = recovery_hint; fitting.tasks[1].recovery_hint = recovery_hint;
+  const { envelope } = pack(fitting);
+  assert.equal(envelope.agents[0].recovery_hint, recovery_hint); assert.equal(envelope.agents[1].recovery_hint, undefined);
+  assert.equal(envelope.response_limit_reached, undefined, "intentional duplicate suppression is not packing pressure");
+  assert.equal(bytes({ ...envelope, response_limit_reached: true }), 65536);
+  const duplicated = { ...envelope, response_limit_reached: true,
+    agents: envelope.agents.map((entry, index) => index === 1 ? { ...entry, recovery_hint } : entry) };
+  assert(bytes(duplicated) > 65536);
+});
+
+test("near-cap competition keeps time_wrapped and context_tokens before a whole recovery_hint", () => {
+  const { input, complete } = recoverySaturatedSnapshot(), recovery_hint = "x".repeat(384);
+  const withHint = { ...complete.envelope, response_limit_reached: true,
+    agents: complete.envelope.agents.map((entry, index) => index === 0 ? { ...entry, recovery_hint } : entry) };
+  const hintBytes = bytes(withHint) - 65536, competing = structuredClone(input);
+  assert(competing.tasks[0].question.length > hintBytes);
+  competing.tasks[0].question = competing.tasks[0].question.slice(0, -(hintBytes - 1));
+  const baseline = pack(structuredClone(competing)); competing.tasks[0].recovery_hint = recovery_hint;
+  const packed = pack(competing), { envelope } = packed;
+  assert.equal(envelope.agents[0].time_wrapped, true); assert.equal(envelope.agents[0].context_tokens, 391_000);
+  assert.equal(envelope.agents[0].recovery_hint, undefined); assert.equal(envelope.response_limit_reached, true);
+  assert.deepEqual(envelope.agents, baseline.envelope.agents); assert.deepEqual(packed.references, baseline.references);
+  const hintFirst = { ...envelope, agents: envelope.agents.map((entry, index) => index === 0 ? { ...entry, recovery_hint } : entry) };
+  assert.equal(bytes(hintFirst), 65537, "all three metadata fields compete for one byte beyond the cap");
+  for (const field of ["time_wrapped", "context_tokens"]) {
+    const wrongPriority = structuredClone(hintFirst); delete wrongPriority.agents[0][field];
+    assert(bytes(wrongPriority) <= 65536, `the hint could fit by displacing ${field}, but must not`);
+  }
+});
+
+for (const [name, glyph] of [["NUL", "\0"], ["lone high surrogate", "\ud800"], ["lone low surrogate", "\udfff"]])
+  test(`exactly 384 ${name} recovery_hint units fit whole or yield whole at the double-JSON byte boundary`, () => {
+    const recovery_hint = glyph.repeat(384), { input, complete } = recoverySaturatedSnapshot("\0".repeat(7600));
+    const withHint = { ...complete.envelope, response_limit_reached: true,
+      agents: complete.envelope.agents.map((entry, index) => index === 0 ? { ...entry, recovery_hint } : entry) };
+    const hintBytes = bytes(withHint) - 65536, fitting = structuredClone(input);
+    assert.equal(recovery_hint.length, 384); assert(hintBytes > recovery_hint.length, "both JSON escaping layers spend bytes");
+    assert(fitting.tasks[0].question.length > hintBytes);
+    fitting.tasks[0].question = fitting.tasks[0].question.slice(0, -hintBytes); fitting.tasks[0].recovery_hint = recovery_hint;
+    const fitted = pack(fitting);
+    assert.equal(fitted.envelope.agents[0].recovery_hint, recovery_hint);
+    assert.equal(JSON.parse(fitted.result.content[0].text).agents[0].recovery_hint, recovery_hint);
+    assert.equal(fitted.envelope.response_limit_reached, undefined);
+    assert.equal(bytes({ ...fitted.envelope, response_limit_reached: true }), 65536);
+
+    const pressured = structuredClone(fitting); pressured.tasks[0].question += "q";
+    const required = structuredClone(pressured); delete required.tasks[0].recovery_hint;
+    const baseline = pack(required), omitted = pack(pressured), { envelope } = omitted;
+    assert.equal(envelope.agents[0].recovery_hint, undefined, "one byte less room omits the whole valid hint, never a prefix");
+    assert.equal(envelope.response_limit_reached, true);
+    assert.deepEqual(envelope.agents, baseline.envelope.agents, "all controls, questions, tokens and reserved cursors stay intact");
+    assert.deepEqual(envelope.alerts, baseline.envelope.alerts); assert.deepEqual(envelope.pending, baseline.envelope.pending);
+    assert.deepEqual(envelope.action, baseline.envelope.action); assert.equal(envelope.workers_disabled, true);
+    assert.deepEqual(omitted.references, baseline.references);
+    const unfitWhole = { ...envelope,
+      agents: envelope.agents.map((entry, index) => index === 0 ? { ...entry, recovery_hint } : entry) };
+    assert.equal(bytes(unfitWhole), 65537, "whole omission is caused by double-JSON byte pressure, not the UTF-16 cap");
+  });
+
+test("recovery_hint yields whole at byte saturation without changing controls, tokens, cursors or publication references", () => {
+  const { input, complete } = recoverySaturatedSnapshot(), pressured = structuredClone(input);
+  for (const entry of pressured.tasks.slice(0, 15)) entry.recovery_hint = "x".repeat(384);
+  const packed = pack(pressured), { envelope } = packed;
+  assert.equal(envelope.response_limit_reached, true, "omitted recovery guidance alone marks envelope pressure");
+  assert.equal(bytes(envelope), 65536);
+  assert.deepEqual(envelope.agents, complete.envelope.agents);
+  assert.deepEqual(envelope.pending, [input.tasks[15].row.agent]);
+  assert.deepEqual(envelope.action, complete.envelope.action); assert.equal(envelope.workers_disabled, true);
+  assert.deepEqual(envelope.alerts, input.alerts); assert.equal(envelope.alerts_pending, 0);
+  assert.deepEqual(packed.references, complete.references, "hint packing adds no presentation-state effects");
+  assert.deepEqual(packed.references, { alerts: [0], finished: [0] });
+  assert.equal(envelope.agents[0].time_wrapped, true); assert.equal(envelope.agents[0].context_tokens, 391_000);
+  for (const [index, entry] of envelope.agents.entries()) {
+    assert.equal(entry.recovery_hint, undefined); assert.equal(entry.question_id, input.tasks[index].question_id);
+    for (const [flag, value] of Object.entries(controls)) assert.equal(entry[flag], value);
+    if (index < 15) {
+      assert.equal(entry.next_cursor.length, 37);
+      assert.equal(decodeResultCursor(entry.next_cursor).key, resultCursorKey(input.tasks[index].result.cursor));
+      assert.equal(decodeResultCursor(entry.next_cursor).offset, input.tasks[index].result.offset);
+    }
+  }
+  assert.deepEqual(pack(pressured), packed, "omission mutates neither captured data nor future publication attempts");
+
+  const partialSpace = structuredClone(input); partialSpace.tasks[0].question = partialSpace.tasks[0].question.slice(0, -64);
+  partialSpace.tasks[0].recovery_hint = "x".repeat(384);
+  const partial = pack(partialSpace).envelope;
+  assert.equal(partial.agents[0].recovery_hint, undefined); assert.equal(partial.response_limit_reached, true);
+  const illegalPrefix = { ...partial, agents: partial.agents.map((entry, index) => index === 0 ? { ...entry, recovery_hint: "x" } : entry) };
+  assert(bytes(illegalPrefix) < 65536, "a prefix could fit, but whole guidance must be omitted rather than clipped");
 });
 
 test("packing is deterministic and independent across invocations, with no mutation through output arrays", () => {

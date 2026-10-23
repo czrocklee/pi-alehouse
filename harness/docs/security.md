@@ -203,8 +203,11 @@ append failures remain strict, with no retry.
 Wall-clock `soft_budget` warning attempts invalidate the automatic-approval
 witness and emit `pi-harness:approval:invalidated`, like turn wrap. This is not
 just a harmless reminder or a guarantee that a model received it. Worker
-same-class denied-operation escalation is L1 guidance only; no L2 deny counter
-or new authority channel is introduced.
+same-class denied-operation escalation remains guidance. [Runtime feedback](runtime-feedback.md)
+observes actual managed blocks through session/service-bound leases, not UI
+decisions or inferred reasons. It attempts one structurally tagged harness alert
+per Run with independent bounded quota, not a child-authored alert. It grants no
+permission, automatic action or delivery guarantee.
 
 ## Immutable resource floor in writable installations
 
@@ -377,10 +380,13 @@ an admission gate. Send never creates an answer continuation; run cannot bypass
 a pending question. Child messages are data, not permission grants.
 
 Alerts are accepted only at an open Run/generation gate, after parameter, quota
-and SDK-free retained-envelope byte checks. A single FIFO bounds pending memory
-at Owner 64 / Agent 16, including historical/killed sources. Full queues reject
-new messages without evicting accepted ones; only successful scoped publication
-releases quota. No deny, Git/path/web boundary, immutable resource floor or lease
+and SDK-free retained-envelope byte checks. A single FIFO preserves order across
+child and harness sources, including historical/killed sources. Child allowances
+remain Owner 64 / Agent 16; harness feedback has separate Owner 16 / Agent one
+pending allowances, for at most 80 entries total. Child tools cannot supply the
+structural harness-source tag, which commit validates against the original queued
+entry. Full allowances reject new messages without evicting accepted ones; only
+successful scoped publication releases quota. No deny, Git/path/web boundary, immutable resource floor or lease
 rule is relaxed. Task-condition targets bind once; alert scopes are separately
 typed Owner/Agents/Run. Read spans one Agent's pending alerts independently of
 its page cursor; inline command observations see only their bound Run.

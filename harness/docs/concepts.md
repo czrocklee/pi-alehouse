@@ -199,8 +199,12 @@ selectors. See [result cursor identity](tool-contract.md#result-cursors).
 
 `alert_parent` records decision-relevant facts and wakes matching observations
 while the child continues, without starting a parent turn or interrupting parent
-Bash. One FIFO bounds accepted pending alerts at Owner 64 / Agent 16 across all
-Runs, including old/killed sources. Full/closed gates reject new calls, never
+Bash. One FIFO retains child-origin alerts with Owner 64 / Agent 16 allowances
+across all Runs, including old/killed sources. Optional managed-block feedback
+shares that FIFO but carries a structural harness-source tag and independent
+Owner 16 / Agent one pending allowances (at most 80 entries total), never taking
+a child's slot. Separate admission quota does not prioritize delivery.
+Full/closed gates reject new calls, never
 evict accepted messages or count rejection as delivery loss. Only complete
 scoped FIFO-prefix messages successfully published in local final content leave
 the queue. This is not SDK persistence, model receipt, a durable outbox or ACK.

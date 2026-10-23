@@ -19,6 +19,7 @@ export function prepareAuthority(output = join(packageRoot, "runtime/permission-
     filter: (path) => !path.slice(upstream.length).split(/[\\/]/).includes("node_modules") });
   execFileSync(process.execPath, [join(root, "permission-system/apply-patch.mjs"), vendor], { stdio: "inherit" });
   cpSync(join(root, "permission-system/authority-guard.ts"), join(output, "authority-guard.ts"));
+  cpSync(join(root, "permission-system/managed-block-observer.ts"), join(output, "managed-block-observer.ts"));
   const scratch = readFileSync(join(root, "permission-system/managed-scratch.ts"), "utf8");
   const oldRoot = '"./node_modules/@gotgenes/pi-permission-system/';
   assert.equal(scratch.split(oldRoot).length, 3, "Managed scratch import-layout drift");
@@ -30,28 +31,33 @@ import { packageRoot, protectionResources } from "../../bin/runtime-support.mjs"
 import { initializeManagedResourceProtection, getManagedResourceProtection } from "./vendor/src/policy/managed-resource-protection.ts";
 import permissions from "./vendor/src/index.ts";
 import { guardSingleAuthority } from "./authority-guard.ts";
+import { createManagedBlockObserver } from "./managed-block-observer.ts";
 import { installManagedScratch } from "./managed-scratch.ts";
 import { hardenGitInput, hardenStaticFileInput } from "./vendor/src/access-intent/bash/managed-read-policy.ts";
 export { createReaderScratch } from "./vendor/src/policy/managed-reader-scratch.ts";
 import { originalBashDeny } from "../policy/static-safety-guard.ts";
-export { getPermissionsService } from "./vendor/src/service.ts";
+import { getPermissionsService } from "./vendor/src/service.ts";
+export { getPermissionsService };
+const { subscribeManagedBlocks, wrapManagedBlocks } = createManagedBlockObserver(getPermissionsService);
+export { subscribeManagedBlocks };
 export { initializeManagedResourceProtection, getManagedResourceProtection };
 export default function (pi: ExtensionAPI) {
   // Standalone authority loads (including normal Pi) get the same immutable
   // floor. Internal children may request only an already-covered subset.
   initializeManagedResourceProtection(protectionResources({}, process.env, packageRoot, getPackageDir()));
-  guardSingleAuthority(pi);
-  pi.on("tool_call", async (event, ctx) => {
+  const managedPi = wrapManagedBlocks(pi);
+  guardSingleAuthority(managedPi);
+  managedPi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "bash") return;
     if (typeof event.input.command === "string") {
       const reason = originalBashDeny(event.input.command, ctx);
       if (reason) return { block: true, reason };
     }
     const audit = await hardenGitInput(event.input, ctx.cwd);
-    if (audit) pi.appendEntry("managed-git-read", audit);
+    if (audit) managedPi.appendEntry("managed-git-read", audit);
   });
-  installManagedScratch(pi, hardenStaticFileInput);
-  permissions(pi);
+  installManagedScratch(managedPi, hardenStaticFileInput);
+  permissions(managedPi);
 }
 `);
 }

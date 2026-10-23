@@ -8,6 +8,7 @@ import { FileOwnerLease } from "../../dist/runtime/owner-lease.js";
 import { boundedOutput } from "../../dist/core/result-text.js";
 import { assertOwnerInvariants } from "./owner-invariants.mjs";
 import { flock } from "./flock.mjs";
+import { managedBlockToolNames } from "../../../lib/managed-block-tools.mjs";
 
 export const deferred = () => Promise.withResolvers();
 export const settings = { provider: "fixture", model: "controlled", thinking: "off", parent_thinking: "off",
@@ -51,6 +52,7 @@ export async function fixture(t, options = {}) {
   const events = [];
   const owner = await FileOwnerLease.open({ directory, owner_id, flock });
   const controller = await OwnerController.open({ owner, concurrency: 1, resident_limit: 8, queue_limit: 16,
+    managedBlockTools: managedBlockToolNames,
     createSession: async () => {
       const port = new FakePort(); ports.push(port);
       if (options.history) port.history = {

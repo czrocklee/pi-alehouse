@@ -19,6 +19,7 @@ import { ChildActivityRegistry } from "./runtime/activity-observer.js";
 import { createChildSessionFactory, type ReaderScratchFactory } from "./runtime/child-factory.js";
 import { ChildWebModules, nativeWebLoader } from "./runtime/child-web.js";
 import { configureChildRuntime } from "./runtime/execution-policy.js";
+import type { ManagedBlockSubscription } from "./runtime/permission-blocks.js";
 import { createDispatchRuntime } from "./runtime/dispatch-runtime.js";
 import { researcherHostModules } from "./runtime/host-modules.js";
 import { FileOwnerLease } from "./runtime/owner-lease.js";
@@ -35,6 +36,7 @@ import { HIDE_TRANSIENT_OVERLAYS_EVENT } from "./ui/overlay-request.js";
 import type { EffortCapabilities } from "./ui/preset-picker.js";
 import { PreferencesControls, stageWorkerSelection } from "./ui/preferences-controls.js";
 import { SettingsStore, registerSettingsStore, validateSettings, type PresetDefinition, type SettingsDocument } from "../../lib/settings-store.mjs";
+import { managedBlockToolNames } from "../../lib/managed-block-tools.mjs";
 const localTools = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
 
 export function applyAuditedPreset(input: {
@@ -543,8 +545,10 @@ export default function harnessExtension(pi: ExtensionAPI) {
     const permission = await jiti.import<{
       getPermissionsService: (id: string) => unknown;
       createReaderScratch: ReaderScratchFactory;
+      subscribeManagedBlocks: ManagedBlockSubscription;
     }>(join(permissionRoot, "index.ts"));
     assert(typeof permission.createReaderScratch === "function", "Reader scratch authority is unavailable; restart with a matched pi-alehouse runtime");
+    assert(typeof permission.subscribeManagedBlocks === "function", "Managed block observations are unavailable; restart with a matched pi-alehouse runtime");
     // The launcher loads us first so shutdown drains children BEFORE tearing
     // down the parent authority. Permission session_start runs after ours;
     // tool admission and child creation check its readiness, not this hook.
@@ -585,9 +589,10 @@ export default function harnessExtension(pi: ExtensionAPI) {
     const createSession = createChildSessionFactory({ ctx, parentBus: pi.events, agentDir, permissionRoot, policyRoot,
       parentId, runtime, profiles, settings, parentHistory, approvalBindings, activities,
       parentPermission, getPermissionsService: permission.getPermissionsService,
-      createReaderScratch: permission.createReaderScratch, web });
+      createReaderScratch: permission.createReaderScratch, subscribeManagedBlocks: permission.subscribeManagedBlocks, web });
     try {
       controller = await OwnerController.open({ owner, concurrency: 4, resident_limit: residentLimit, grace_turns: 5,
+        managedBlockTools: managedBlockToolNames,
         admission: () => router!.admissionState(),
         onContextChange: approvalBindings.contextChanged,
         dispatch: createDispatchRuntime({ agentDir, flock, git: process.env.PI_HARNESS_GIT, getPermissionsService: parentPermission }),

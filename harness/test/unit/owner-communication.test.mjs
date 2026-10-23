@@ -13,6 +13,7 @@ import { emptyLedger } from "../../dist/core/usage-ledger.js";
 import { FileOwnerLease } from "../../dist/runtime/owner-lease.js";
 import { FakePort, deferred, task, tick, until } from "../support/controller-fixture.mjs";
 import { flock } from "../support/flock.mjs";
+import { managedBlockToolNames } from "../../../lib/managed-block-tools.mjs";
 
 // Real OwnerController lifecycle, admission, one FIFO, snapshot, packer and
 // commit; only SessionPort/history IO are controlled mocks. No shadow inbox,
@@ -22,6 +23,7 @@ async function ownerFixture(t, { controller = {}, history, createPort = () => ne
   const directory = await mkdtemp(join(tmpdir(), "pi-owner-communication-")), ports = [], events = [], holds = [];
   const owner = await FileOwnerLease.open({ directory, owner_id, flock });
   const c = await OwnerController.open({ owner, concurrency: 1, resident_limit: 16,
+    managedBlockTools: managedBlockToolNames,
     createSession: async (agent) => {
       const port = createPort(agent); ports.push(port);
       if (history) port.history = {
@@ -289,6 +291,85 @@ test("same-alert A/B contention consumes once while B stays registered; abort ne
   port.callbacks.alert("after detached B");
   assert.equal(c.view(run.run_id).pending_messages, 1); assert.equal(port.stopped, 0);
   assert.equal((await read(c, run)).alerts[0].message, "after detached B");
+});
+
+for (const managedBlockTools of [undefined, []]) test(`unconfigured managed feedback is disabled without changing child alerts (${JSON.stringify(managedBlockTools)})`, async (t) => {
+  const { c, ports } = await ownerFixture(t, { controller: { managedBlockTools } });
+  const { run, port } = await started(c, ports, "disabled-feedback", "otter");
+  const metadata = { get toolName() { return assert.fail("disabled feedback must not inspect metadata"); } };
+  assert.doesNotThrow(() => port.callbacks.managedBlock(metadata));
+  assert.equal(c.view(run.run_id).pending_messages, 0);
+  for (let index = 0; index < 16; index++) port.callbacks.alert(`child-${index}`);
+  assert.throws(() => port.callbacks.alert("seventeenth child"), hasCode("ALERT_QUEUE_FULL", { scope: "agent", limit: 16 }));
+  const published = await read(c, run);
+  assert.equal(published.alerts.length, 16); assert(published.alerts.every((entry) => entry.source === undefined));
+  c.cancel(run.run_id);
+  assert.throws(() => port.callbacks.managedBlock(metadata), hasCode("RUN_INPUT_CLOSED"), "disabled metadata still respects the input gate");
+});
+
+test("Owner snapshots caller vocabulary before later array mutations or replacement", async (t) => {
+  const input = ["read"], controller = { managedBlockTools: input };
+  const { c, ports } = await ownerFixture(t, { controller });
+  input[0] = "write"; input.push("bash"); controller.managedBlockTools = ["ls"];
+  assert.equal(Object.hasOwn(c.options, "managedBlockTools"), false, "Owner must not retain the caller's collection in options");
+  const { run, port } = await started(c, ports, "snapshot-feedback", "otter");
+  port.callbacks.managedBlock({ toolName: "read" });
+  for (const toolName of ["write", "bash", "ls", "unknown_tool"])
+    assert.throws(() => port.callbacks.managedBlock({ toolName }), hasCode("INVALID_MANAGED_BLOCK"));
+  assert.equal(c.view(run.run_id).pending_messages, 1);
+  const published = await read(c, run);
+  assert.equal(published.alerts[0].source, "harness"); assert.match(published.alerts[0].message, /'read'/);
+});
+
+test("invalid managed vocabulary rejects open and closes the construction lease without invoking data accessors", async () => {
+  let elementReads = 0;
+  const accessor = [];
+  Object.defineProperty(accessor, "0", { get() { elementReads++; throw new Error("CONFIG_ACCESSOR_EXECUTED"); } });
+  for (const managedBlockTools of [null, {}, new Set(["read"]), [""], ["read", "read"], ["read\n"],
+    ["a".repeat(65)], Array.from({ length: 33 }, (_, index) => `tool_${index}`), Array(1), [42], accessor]) {
+    let closed = 0, created = 0;
+    const owner = { owner_id: "config-owner", generation: "config-generation", assertHeld() {}, close() { closed++; } };
+    await assert.rejects(OwnerController.open({ owner, managedBlockTools,
+      createSession: async () => { created++; throw new Error("must not create a session"); } }), hasCode("INVALID_MANAGED_BLOCK_TOOLS"));
+    assert.equal(closed, 1); assert.equal(created, 0);
+  }
+  assert.equal(elementReads, 0);
+});
+
+test("trusted managed feedback wakes scoped observations through Off without spending child capacity or following Agent reuse", async (t) => {
+  let enabled = true;
+  const { c, ports } = await ownerFixture(t, { controller: { concurrency: 2, admission: () => ({ enabled, revision: 0 }) } });
+  const a = await started(c, ports, "managed", "otter"), b = await started(c, ports, "peer", "orca");
+  enabled = false;
+  const watching = wait(c, [a.run.agent_id], 3000);
+  a.port.callbacks.managedBlock({ toolName: "bash" });
+  const wake = await watching;
+  assert.equal(wake.reason, "alert"); assert.equal(wake.workers_disabled, true);
+  assert.equal(wake.alerts[0].source, "harness"); assert.equal(wake.alerts[0].task, 1);
+  assert.match(wake.alerts[0].message, /Parent: assess whether to steer/);
+  assert.equal((await wait(c, [b.run.agent_id])).reason, "timeout", "other Agent scope cannot receive this alert");
+  for (let index = 0; index < 15; index++) a.port.callbacks.alert(`child-${index}`);
+  a.port.callbacks.managedBlock({ toolName: "write" });
+  a.port.callbacks.alert(wake.alerts[0].message);
+  assert.equal(c.view(a.run.run_id).pending_messages, 17);
+  assert.throws(() => a.port.callbacks.alert("seventeenth child"), hasCode("ALERT_QUEUE_FULL", { scope: "agent", limit: 16 }));
+  const old = a.port.callbacks;
+  a.port.finish("old result"); await settled(c, a.run);
+  assert.throws(() => old.managedBlock({ toolName: "read" }), hasCode("RUN_INPUT_CLOSED"));
+  enabled = true;
+  const next = await c.submit("managed-reuse", { resume: a.run.agent_id, prompt: "next" });
+  await until(() => a.port.calls.length === 2 && a.port.streaming);
+  a.port.callbacks.managedBlock({ toolName: "read" });
+  assert.equal(c.view(next.run_id).pending_messages, 0, "the old Agent1 harness summary remains, with no replacement or retry");
+  const action = await inline(c, next);
+  assert.equal(action.alerts, undefined); assert.equal(action.alerts_pending, 0, "inline scope cannot drain old task alerts");
+  const all = await read(c, next);
+  assert.equal(all.alerts.length, 17); assert.equal(all.alerts[15].source, "harness");
+  assert.equal(all.alerts[16].message, wake.alerts[0].message); assert.equal(all.alerts[16].source, undefined);
+  assert(all.alerts.every((entry) => entry.task === 1)); assert.equal(all.alerts_pending, 0);
+  c.cancel(next.run_id);
+  assert.throws(() => a.port.callbacks.managedBlock({ toolName: "read" }), hasCode("RUN_INPUT_CLOSED"));
+  assert.equal(a.port.calls.length, 2, "feedback never admits another child input or task");
 });
 
 test("real FIFO enforces Agent 16 across reused Runs, no eviction, and lifecycle kill consumes nothing", async (t) => {

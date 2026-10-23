@@ -54,7 +54,13 @@ test("generated authority is private, pinned, patched and package-complete", () 
   const patched = readFileSync(join(vendor, "src/policy/permission-manager.ts"), "utf8");
   assert.match(patched, /agentWriteFloor/);
   assert.doesNotMatch(readFileSync(join(original, "src/policy/permission-manager.ts"), "utf8"), /agentWriteFloor/);
-  assert.match(readFileSync(join(packageRoot, "runtime/permission-system/index.ts"), "utf8"), /export \{ getPermissionsService \} from "\.\/vendor\/src\/service.ts"/);
+  const entry = readFileSync(join(packageRoot, "runtime/permission-system/index.ts"), "utf8");
+  assert.match(entry, /import \{ getPermissionsService \} from "\.\/vendor\/src\/service.ts"/);
+  assert.match(entry, /export \{ getPermissionsService \};/);
+  assert.match(entry, /createManagedBlockObserver\(getPermissionsService\)/);
+  assert.match(entry, /export \{ subscribeManagedBlocks \};/);
+  assert.equal(readFileSync(join(packageRoot, "runtime/permission-system/managed-block-observer.ts"), "utf8"),
+    readFileSync(join(packageRoot, "permission-system/managed-block-observer.ts"), "utf8"));
   assert(existsSync(join(packageRoot, "node_modules/tree-sitter-bash/tree-sitter-bash.wasm")));
   assert(existsSync(join(packageRoot, "node_modules/web-tree-sitter/web-tree-sitter.wasm")));
   verifyRuntime();

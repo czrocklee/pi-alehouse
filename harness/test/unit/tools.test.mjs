@@ -9,6 +9,8 @@ import { blockedDelegationToolNames as blockedDelegationTools, cleanupToolNames,
   workerToolSelection } from "../../dist/tools/tool-names.js";
 import { digest } from "../../dist/runtime/context-snapshot.js";
 import { ParentHistoryError } from "../../dist/core/ports.js";
+import { modelRecoveryHint } from "../../dist/core/model-recovery.js";
+import { taskReply } from "../../dist/tools/replies.js";
 import { deferred, ended, fixture, task, tick, until } from "../support/controller-fixture.mjs";
 
 const model = { provider: "fixture", id: "controlled", levels: ["off", "high"] };
@@ -1465,6 +1467,186 @@ for (const name of ["agent_run", "agent_send"]) test(`a context replaced while $
   assert.equal(await running, "STALE_OWNER_CONTEXT");
   await settle(f, "orca");
   assert.equal(f.ports[0].calls.length, 1, "no task was started by the stale call");
+});
+
+test("a retained failed model outcome has no recovery_hint until async finalization truly settles", async (t) => {
+  const finishGate = deferred(); let finalizationBlocked = false;
+  t.after(() => finishGate.resolve());
+  const f = await fixture(t, { history: async (point) => {
+    if (point === "finish") { finalizationBlocked = true; await finishGate.promise; }
+  } });
+  const { call } = toolsFor(f);
+  await call("agent_spawn", create(), "finishing-error"); await until(() => f.ports[0]?.streaming);
+  f.ports[0].finish("retained artifacts", "error", "synthetic provider failure", "error");
+  await until(() => finalizationBlocked);
+  const finishing = viewOf(f, "orca"), hint = modelRecoveryHint(finishing.outcome);
+  assert.equal(finishing.execution_exited, true); assert.equal(finishing.finalization_pending, true);
+  assert.equal(finishing.outcome.status, "failed"); assert.equal(typeof hint, "string");
+  for (const name of ["agent_read", "agent_list", "agent_interrupt"]) {
+    const reply = await call(name, name === "agent_list" ? {} : { agent: "orca" });
+    const projected = name === "agent_interrupt" ? reply : reply.agents[0];
+    assert.equal(projected.status, "finishing"); assert.equal(projected.recovery_hint, undefined, name);
+  }
+  assert.equal(taskReply({ ...finishing, status: "failed" }, () => "orca").recovery_hint, undefined,
+    "even a terminal-looking view must not bypass finalization_pending");
+  assert.equal(taskReply({ ...finishing, finalization_pending: false }, () => "orca").recovery_hint, undefined,
+    "a retained failed Outcome alone cannot turn a nonterminal view into settled work");
+  assert.equal(f.controller.runs.get(runOf(f, "orca")).finished_presented, false);
+  assert.equal(f.ports[0].stopped, 0, "interrupting an already-exited task must not rewrite its outcome");
+  finishGate.resolve(); await settle(f, "orca");
+  for (const name of ["agent_read", "agent_list", "agent_interrupt"]) {
+    const reply = await call(name, name === "agent_list" ? {} : { agent: "orca" });
+    const projected = name === "agent_interrupt" ? reply : reply.agents[0];
+    assert.equal(projected.status, "failed"); assert.equal(projected.recovery_hint, hint, name);
+  }
+});
+
+test("failed model errors project the same conditional hint in wait/read/list/interrupt without extra publication state", async (t) => {
+  const f = await fixture(t), { call } = toolsFor(f);
+  const started = await call("agent_spawn", create(), "recoverable-error");
+  assert.equal(started.agents[0].recovery_hint, undefined);
+  await until(() => f.ports[0]?.streaming);
+  f.ports[0].callbacks.alert("retain this artifact pointer");
+  const raw = "fixture/controlled RAW_PROVIDER_DETAIL quota disabled";
+  f.ports[0].finish("artifact path and handoff", "error", raw, "error"); await settle(f, "orca");
+  const original = f.controller.runs.get(runOf(f, "orca")), before = structuredClone(original.record);
+  const events = structuredClone(f.events), hint = modelRecoveryHint(original.record.outcome);
+  assert.equal(typeof hint, "string"); assert.doesNotMatch(hint, /fixture|controlled|RAW_PROVIDER_DETAIL|quota|disabled/);
+  assert.equal(original.finished_presented, false); assert.equal(viewOf(f, "orca").pending_messages, 1);
+  for (const projected of [(await call("agent_list", {})).agents[0], await call("agent_interrupt", { agent: "orca" })]) {
+    assert.equal(projected.status, "failed"); assert.equal(projected.reason, "execution_error");
+    assert.equal(projected.recovery_hint, hint); assert.equal(projected.error, raw, "raw error remains a separate untrusted diagnostic");
+    assert.equal(projected.unavailable, undefined, "a model error is not an Agent availability verdict");
+  }
+  assert.deepEqual(original.record, before); assert.deepEqual(f.events, events);
+  assert.equal(Object.hasOwn(original.record, "recovery_hint"), false, "the hint is derived, never Run state");
+  assert.equal(original.finished_presented, false); assert.equal(viewOf(f, "orca").pending_messages, 1,
+    "independent projections consume neither alerts nor finished reminders");
+  const waiting = await call("agent_wait", { agents: ["orca"], wait_ms: 0 });
+  assert.equal(waiting.reason, "task_issue"); assert.equal(waiting.agents[0].recovery_hint, hint);
+  assert.equal(waiting.alerts[0].message, "retain this artifact pointer");
+  assert.equal(original.finished_presented, true); assert.equal(viewOf(f, "orca").pending_messages, 0);
+  const reading = await call("agent_read", { agent: "orca" });
+  assert.equal(reading.agents[0].recovery_hint, hint); assert.equal(reading.alerts, undefined);
+  assert.deepEqual(original.record, before, "publication changes presentation bits, not retained outcome or model state");
+  assert.equal(f.ports[0].calls.length, 1); assert.equal(f.ports[0].stopped, 0);
+});
+
+test("roster and communication deduplicate shared recovery only on the first qualifying task, afresh for every response", async (t) => {
+  const f = await fixture(t), { call } = toolsFor(f);
+  for (const [index, agent] of ["plain", "first", "second"].entries()) {
+    await call("agent_spawn", create({ agent }), `dedup-${agent}`);
+    await until(() => f.ports[index]?.streaming);
+    f.ports[index].finish("artifacts", index === 0 ? "success" : "error", index === 0 ? undefined : "controlled failure", index === 0 ? "stop" : "error");
+    await settle(f, agent);
+  }
+  const hint = modelRecoveryHint(viewOf(f, "first").outcome);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const roster = await call("agent_list", {});
+    assert.deepEqual(roster.agents.map((entry) => entry.recovery_hint), [undefined, hint, undefined]);
+    assert.equal(roster.response_limit_reached, undefined);
+    const waiting = await call("agent_wait", { agents: ["plain", "second", "first"], wait_ms: 0 });
+    assert.deepEqual(waiting.agents.map((entry) => entry.recovery_hint), [undefined, hint, undefined]);
+    assert.equal(waiting.agents[1].agent, "second", "first qualifying bound task, not a name/status guess");
+    assert.equal(waiting.response_limit_reached, undefined, "intentional dedup is not packing pressure");
+  }
+  assert.equal((await call("agent_read", { agent: "first" })).agents[0].recovery_hint, hint,
+    "an independently read task remains qualified despite earlier roster dedup");
+});
+
+for (const quarantine of [false, true]) test(`fixed-model guidance remains conditional on unavailable retained history (quarantine=${quarantine})`, async (t) => {
+  const f = await fixture(t), { call } = toolsFor(f);
+  await call("agent_spawn", create(), "unavailable-hint"); await until(() => f.ports[0]?.streaming);
+  if (quarantine) f.ports[0].clearInputs = () => { throw new Error("controlled input cleanup failure"); };
+  f.ports[0].finish("retained artifacts", "error", "controlled failure", "error"); await settle(f, "orca");
+  if (!quarantine) await call("agent_kill", { agent: "orca" });
+  const view = viewOf(f, "orca"), hint = modelRecoveryHint(view.outcome);
+  assert.equal(view.status, "failed"); assert.equal(view.phase, "settled"); assert.equal(view.execution_exited, true);
+  assert.equal(view.finalization_pending, false); assert.equal(view.resumable, false);
+  const read = await call("agent_read", { agent: "orca" });
+  assert.equal(read.agents[0].unavailable, true); assert.equal(read.agents[0].recovery_hint, hint);
+  assert.doesNotMatch(hint, /agent_run|agent_answer/); assert.match(hint, /explicitly spawning a fresh Agent/);
+  await assert.rejects(call("agent_run", run("orca"), "cannot-reuse"), code("AGENT_UNAVAILABLE"));
+  for (const partial of [{ phase: undefined }, { phase: "finalizing" }, { execution_exited: undefined },
+    { execution_exited: false }, { finalization_pending: true }])
+    assert.equal(taskReply({ ...view, ...partial }, () => "orca").recovery_hint, undefined,
+      "malformed partial views cannot establish true settlement");
+});
+
+test("routing changes before resume, replay and answer never re-resolve or migrate the bound model; Off replay stays observational", async (t) => {
+  const admission = { enabled: true, revision: 0 }, f = await fixture(t, { controller: { admission: () => ({ ...admission }) } });
+  let presetReads = 0;
+  const { state, call } = toolsFor(f, { getPreset() {
+    presetReads++;
+    assert.equal(presetReads, 1, "resolveRoute must never run again for this accepted Agent or its replays");
+    return preset();
+  } });
+  const spawnArgs = create({ reasoning_difficulty: 3 });
+  await call("agent_spawn", spawnArgs, "pinned-spawn"); await until(() => f.ports[0]?.streaming);
+  const bound = structuredClone(routed(f, "orca")), session = f.ports[0].session_id;
+  f.ports[0].finish("first artifacts", "error", "synthetic provider error", "error"); await settle(f, "orca");
+  const hint = modelRecoveryHint(viewOf(f, "orca").outcome);
+  state.preset = preset("changed", "missing/replacement", "v2"); state.catalog = []; state.thinking = "high";
+  admission.enabled = false; admission.revision++;
+  const replay = await call("agent_spawn", spawnArgs, "pinned-spawn");
+  assert.equal(replay.workers_disabled, true); assert.equal(replay.agents[0].task, 1); assert.equal(replay.agents[0].recovery_hint, hint);
+  assert.deepEqual(routed(f, "orca"), bound); assert.equal(f.ports[0].calls.length, 1);
+  await assert.rejects(call("agent_run", run("orca"), "off-new-run"), code("WORKERS_DISABLED"));
+  admission.enabled = true; admission.revision++;
+  const runArgs = run("orca", { prompt: "Continue from the existing artifact" });
+  const resumed = await call("agent_run", runArgs, "pinned-run");
+  assert.equal(resumed.agents[0].recovery_hint, undefined, "an earlier failure does not stick to a new Run");
+  assert.deepEqual(routed(f, "orca"), bound); await until(() => f.ports[0].calls.length === 2);
+  f.ports[0].callbacks.question("Which artifact should be used?"); f.ports[0].finish("decision needed"); await settle(f, "orca");
+  const asking = (await call("agent_read", { agent: "orca" })).agents[0];
+  assert.equal(asking.status, "needs_input"); assert.equal(asking.recovery_hint, undefined);
+  const answerArgs = { agent: "orca", question_id: asking.question_id, answer: "Use the retained artifact." };
+  state.preset = preset("changed-again", "missing/another", "v3");
+  admission.enabled = false; admission.revision++;
+  await assert.rejects(call("agent_answer", answerArgs, "off-answer"), code("WORKERS_DISABLED"));
+  assert.equal((await call("agent_read", { agent: "orca" })).agents[0].question_id, asking.question_id);
+  admission.enabled = true; admission.revision++;
+  const answered = await call("agent_answer", answerArgs, "pinned-answer");
+  assert.deepEqual(answered.action, { type: "agent_answer", agent: "orca", task: 3 });
+  assert.deepEqual(routed(f, "orca"), bound); await until(() => f.ports[0].calls.length === 3);
+  assert.equal(f.ports[0].calls[2].prompt, answerArgs.answer);
+  f.ports[0].finish("answer artifacts", "error", "another synthetic error", "error"); await settle(f, "orca");
+  admission.enabled = false; admission.revision++;
+  const answerReplay = await call("agent_answer", answerArgs, "pinned-answer");
+  assert.equal(answerReplay.workers_disabled, true); assert.deepEqual(answerReplay.action, answered.action);
+  assert.equal(answerReplay.agents[0].recovery_hint, hint);
+  const runReplay = await call("agent_run", runArgs, "pinned-run");
+  assert.equal(runReplay.agents[0].task, 2); assert.equal(runReplay.agents[0].status, "needs_input");
+  assert.equal(runReplay.agents[0].recovery_hint, undefined, "replay projects its original outcome, not the latest task's failure");
+  assert.equal(presetReads, 1, "the resolveRoute preset dependency was read only at initial spawn");
+  assert.deepEqual(routed(f, "orca"), bound); assert.equal(bound.difficulty, 3);
+  assert.equal(f.ports.length, 1); assert.equal(f.ports[0].session_id, session); assert.equal(f.ports[0].calls.length, 3);
+  assert.equal(f.controller.stats().runs, 3);
+});
+
+test("raw quota/availability words and non-error terminal facts do not add recovery hints to tool projections", async (t) => {
+  const f = await fixture(t), { call } = toolsFor(f);
+  const raw = "quota and usage limit; fixture/controlled unavailable";
+  const cases = [
+    ["keyword-only", "error", undefined, "failed", "execution_error"],
+    ["output-limit", "success", "length", "failed", "output_limit"],
+    ["unexpected-abort", "aborted", "aborted", "failed", "unexpected_abort"],
+    ["completed", "success", "stop", "completed", undefined],
+    ["user-cancel", "error", "error", "cancelled", undefined],
+    ["needs-input", "success", "stop", "needs_input", undefined],
+  ];
+  for (const [index, [name, kind, modelStop, status, reason]] of cases.entries()) {
+    if (index === 0) await call("agent_spawn", create(), "negative-spawn");
+    else await call("agent_run", run("orca"), name);
+    await until(() => f.ports[0]?.calls.length === index + 1 && f.ports[0].streaming);
+    if (name === "user-cancel") await call("agent_interrupt", { agent: "orca" });
+    if (name === "needs-input") f.ports[0].callbacks.question("Choose an artifact?");
+    f.ports[0].finish("retained output", kind, raw, modelStop); await settle(f, "orca");
+    const view = viewOf(f, "orca"); assert.equal(view.status, status); assert.equal(view.outcome.reason, reason);
+    for (const projected of [(await call("agent_list", {})).agents[0], await call("agent_interrupt", { agent: "orca" }),
+      (await call("agent_read", { agent: "orca" })).agents[0]])
+      assert.equal(projected.recovery_hint, undefined, name);
+  }
 });
 
 test("an interrupted answer that never started leaves the question answerable through the parent tools", async (t) => {

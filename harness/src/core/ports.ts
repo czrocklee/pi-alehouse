@@ -11,6 +11,9 @@ export interface HistoryPort {
   finish(ref: HistoryRef, outcome: Outcome, output: Output, usage?: UsageLedger, receipt?: ValidationReceipt,
     onReceiptRejected?: () => void): HistoryRef | Promise<HistoryRef>;
 }
+/** Trusted adapter telemetry only. Core validates its configured exact-tool vocabulary;
+ * no tool input, denial reason, arbitrary message or caller-selected origin. */
+export interface RepeatedManagedBlock { readonly toolName: string }
 export interface RunCallbacks {
   inputEntered(): void;
   output(output: Output): void;
@@ -21,6 +24,8 @@ export interface RunCallbacks {
   turnEnd(continuing?: boolean): void;
   question(text: string): "recorded" | "already_recorded";
   alert(text: string): void;
+  /** Harness-only feedback; never registered as a child tool. */
+  managedBlock?(fact: RepeatedManagedBlock): void;
   /** Observation only: a successful edit/write tool call's path argument. */
   touched?(path: string): void;
 }

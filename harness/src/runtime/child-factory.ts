@@ -16,6 +16,7 @@ import { assembleChildSession, disposeChildSession } from "./child-session.js";
 import { childWebExtension, type ChildWebModules, type WebLease } from "./child-web.js";
 import { digest } from "./context-snapshot.js";
 import { orderFreeToolSchemaExtension } from "./provider-schema.js";
+import { ManagedBlockObserver, type ManagedBlockSubscription } from "./permission-blocks.js";
 import { WorkerStatsObserver } from "./worker-stats.js";
 
 export interface ChildProfile {
@@ -49,6 +50,8 @@ export function createChildSessionFactory(options: {
   getPermissionsService: (id: string) => unknown;
   /** Trusted permission authority capability; required only by reader sessions. */
   createReaderScratch?: ReaderScratchFactory;
+  /** Trusted, metadata-only managed authority observations; never approval. */
+  subscribeManagedBlocks?: ManagedBlockSubscription;
   /** Isolated pi-web-access instances; required only by web profiles. */
   web?: ChildWebModules;
 }): (agent: { agent_id: string; name: string; settings: AdmittedAgentConfig }) => Promise<AgentSessionPort> {
@@ -93,6 +96,7 @@ export function createChildSessionFactory(options: {
     // Attachment is lazy at first Run: failed assembly creates no parent-side
     // telemetry registration, even if loading failed before SDK shutdown bound.
     const stats = new WorkerStatsObserver(options.parentBus, options.parentId, agent.agent_id);
+    const blocks = new ManagedBlockObserver(options.subscribeManagedBlocks);
     let callbacks: RunCallbacks | undefined;
     const customTools = createChildTools(() => callbacks, gate);
     // Pi reserves an ID/path here but does not create the journal until its
@@ -160,19 +164,32 @@ export function createChildSessionFactory(options: {
           // not a fabricated model/tool request or execution-start claim.
           let kind: "success" | "error" | "aborted" = "error";
           stats.beginRun();
+          blocks.begin(port.session_id, cb, () => gate.accepting && !gate.stopped);
+          let unsubscribeBlocks: (() => void) | undefined;
           try {
+            // A block fact only latches counters in the permission stack. This
+            // SDK observation flushes after the real tool boundary returned.
+            try { unsubscribeBlocks = child.session.subscribe((event) => {
+              if (event.type === "tool_execution_end") blocks.flush();
+            }); } catch { blocks.end(); /* Optional feedback may be unavailable. */ }
             const facts = await port.run(prompt, cb);
             kind = facts.kind;
             return facts;
           } finally {
+            blocks.end();
+            try { unsubscribeBlocks?.(); } catch { /* Optional telemetry is sealed. */ }
             stats.endRun(kind);
             callbacks = undefined;
             options.approvalBindings.end(port.session_id, identity);
             approvalRun = undefined;
           }
         },
-        canInput: () => port.canInput(), steer: (text, valid) => port.steer(text, valid), stop: () => port.stop(),
+        canInput: () => port.canInput(), steer: (text, valid) => port.steer(text, valid), stop: () => {
+          blocks.end();
+          return port.stop();
+        },
         clearInputs: () => port.clearInputs(), dispose: async () => {
+          blocks.end();
           const report = await port.dispose();
           stats.dispose();
           if (report.shutdownExited) {

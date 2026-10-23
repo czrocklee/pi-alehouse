@@ -29,12 +29,16 @@ export interface TaskSnapshot {
   readonly time_wrapped?: true;
   /** Only on an idle, reusable Agent's latest settled task with a known size. */
   readonly context_tokens?: number;
+  /** Derived from the retained Outcome only after confirmed failed settlement;
+   * whole optional envelope metadata. */
+  readonly recovery_hint?: string;
 }
 export interface AlertSnapshot {
   readonly agent: string;
   readonly task: number;
   readonly label: string;
   readonly message: string;
+  readonly source?: "harness";
 }
 export interface FinishedSnapshot {
   readonly row: ThinTaskEntry;
