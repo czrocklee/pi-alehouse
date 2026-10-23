@@ -333,7 +333,7 @@ paths. Node 22.19+ (or 24+) is needed by ESLint 10.
 | Controlled host collector | `npm run test:integration` | Separately authorized controlled full/readonly suite; not a release gate. |
 | Focused host fixtures | `harness/test/host/session-integration.mjs`, `run-lifecycle.mjs` | Invoke through the isolated collector with required host/fixture paths; never run bare npm scripts as proof. |
 | Init absent resources | `node bin/pi-alehouse.mjs init` | Explicit eight-file seed, no overwrite; inspect conflicts. |
-| Orchestration metrics | `node scripts/analyze-pi-session.mjs [--json] SESSION.jsonl` | Offline aggregates from one local parent transcript: cache hit rate, turns, steer/wait/list usage. Prints no transcript text; transcripts and reports are not source. |
+| Orchestration metrics | `node scripts/analyze-pi-session.mjs [--json] [--since ISO] [--until ISO] JOURNAL.jsonl ...` | [Offline session analysis](session-analysis.md): explicit journals, inclusive entry-time window, deduplicated counts and observed usage; no transcript text. |
 
 After building/checking, `npm pack` produces a tarball with the generated
 private authority, source composition and runtime assets; verify its contents,

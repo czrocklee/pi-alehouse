@@ -24,6 +24,43 @@ observations into public evidence.
 
 Keep fixtures offline and output outside the checkout; never make real-model calls or copy Pi auth/session data into public reports. A controlled provider reports synthetic behavior only. In particular, SDK post-guard queue/message acceptance and unsupported live-Owner `/reload` must be tested as limitations, not relabelled safe because a selected schedule produced no post-cancel provider call. Only an actual controlled run can record an outcome. Permission authority selection must use the **built matched patched runtime**; a mutable global install or missing fixture is not a pass. A test report should distinguish failures, skipped checks and suites that matched zero tests.
 
+## Pi 1.4.0 initial update
+
+With Node 24.20.0 and development Pi/AI/TUI 1.4.0,
+`npm ci --ignore-scripts`, `npm run build` and the complete `npm run check`
+passed locally: **2217 package tests passed, none skipped**, plus lint/types
+and the separate portable policy gates. The same working tree passed 2217
+package tests and policy under 1.3.0 before the dependency change; this is not
+an assertion that the upgrade added those tests. Four focused UI/communication/
+recovery files passed 114 tests. The separately invoked controlled host
+collector (`--all`) passed its core, full and readonly lanes against the
+1.4.0 development CLI, with isolated HOME/agent/session directories,
+synthetic provider IO and no real credentials.
+
+The lockfile updates seven internal Pi packages to matched 1.4.0 versions and
+adds TUI's required `marked-cjk-friendly` 0.1.2 dependency; other locked packages
+are unchanged. Pi's MIT LICENSE is byte-identical at `v1.3.0` and `v1.4.0`.
+The optional Nix package built with its refreshed npm cache hash.
+
+Pi 1.4 stacks native inline dialogs. The UI fixtures now borrow the real SDK
+stack methods and check the live confirmation/reopened picker, rather than the
+removed single-selector field. Dedicated overlay-handle close counters remain
+independent of the global hide method. That initial adaptation added no
+production UI workaround; the process-wide prompt FIFO and permission-yield
+protocol were retained because native stacking does not replace them.
+Subsequent source review added queue-owned cancellation for native
+select/confirm/input and corrected runtime feedback provenance/quota, source
+evidence and symlinked analysis. The initial counts above do not validate those
+later fixes; each rerun must identify its own frozen source and evidence.
+
+Compaction summaries now use the model's output limit, reduced to fit the
+context, instead of the former fixed summary caps. `reserveTokens` still
+controls when compaction starts; it is not a summary-output budget in 1.4.
+This can increase summary output, latency and observed cost. Existing incomplete
+summary/retry accounting and cooperative cancellation limitations still apply.
+No global host replacement, activation, real-model quality run or human-TUI
+acceptance was performed. Public acceptance remains PENDING.
+
 ## Pi 1.3.0 update
 
 With Node 24.20.0, development Pi/AI/TUI 1.3.0 and `PI_TEST_EXECUTABLE` set to
