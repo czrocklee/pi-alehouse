@@ -5,8 +5,8 @@ Pi Alehouse's harness uses four identities.  They are deliberately not interchan
 ## Owner
 
 An **Owner** is one harness controller bound to one live parent Pi session and
-one owner generation.  It owns the FIFO scheduler, resident-Agent limit,
-request-id idempotence, result memory, parent accounting handoff, and the local
+one owner generation.  It owns the FIFO scheduler, a per-provider execution cap and the resident-Agent
+limit, request-id idempotence, result memory, parent accounting handoff, and the local
 owner lease.  Parent tools capture this Owner and the actual parent extension
 context; there is no global registry, public service, or cross-owner lookup.
 
@@ -82,9 +82,11 @@ until true settlement. A terminal outcome is not necessarily a complete answer:
 - unknown, `pending`, and `deferred` SDK stop reasons fail closed.
 
 An `agent_send` `steered` report is only admission to the child-input path, not delivery.
-A cancellation request is only a request.  The execution slot is freed only
+A cancellation request is only a request.  That provider's execution slot is freed only
 after actual execution exit; the Agent reservation and Owner lease remain until
-finalization and required cleanup are confirmed.
+finalization and required cleanup are confirmed.  Models of one admitted provider
+share its cap, and a saturated provider does not block another.  See
+[architecture](architecture.md#ownership-and-lifecycle).
 
 ## Dispatch, claims and validation observations
 

@@ -1,5 +1,6 @@
 import {
   COMMUNICATION_LIMITS, communicationBudget, communicationTextUnits, isModelAgentName as validName,
+  isQueueWait,
   type CommunicationAction, type CommunicationEnvelope, type CommunicationReason,
   type FinishedEntry, type TaskEntry, type TaskStatus, type ThinTaskEntry,
 } from "./communication-envelope.js";
@@ -44,13 +45,20 @@ const safeCount = (value: number): boolean => Number.isSafeInteger(value) && val
 const nonblank = (value: string): boolean => typeof value === "string" && value.trim().length > 0;
 
 /** Reject extra required-layer keys rather than accidentally copying arbitrary
- * strings into the fixed shape whose byte bound was proved. */
+ * strings into the fixed shape whose byte bound was proved. wait, when present,
+ * is part of that shape: queued status only, and only dependencies or capacity. */
 function copyRow(row: ThinTaskEntry): MutableRow {
   if (!row || typeof row !== "object" || !validName(row.agent) || !safeCount(row.task) || row.task === 0 ||
       !Object.hasOwn(statuses, row.status)) invalid("Invalid thin task identity or status");
-  const allowed: readonly string[] = ["agent", "task", "status", ...flags];
+  const allowed: readonly string[] = ["agent", "task", "status", "wait", ...flags];
   if (Object.keys(row).some((key) => !allowed.includes(key))) invalid("Unexpected thin task field");
   const result: MutableRow = { agent: row.agent, task: row.task, status: row.status };
+  // Mandatory thin control, not optional metadata: a present reason is reserved
+  // before any body or diagnostic can yield. Provider ids and counts are not keys.
+  if (row.wait !== undefined) {
+    if (row.status !== "queued" || !isQueueWait(row.wait)) invalid("Invalid queued wait reason");
+    result.wait = row.wait;
+  }
   for (const key of flags) {
     if (row[key] !== undefined && row[key] !== true) invalid(`Invalid ${key} control flag`);
     if (row[key] === true) result[key] = true;
@@ -125,7 +133,8 @@ function cursorAt(window: ResultWindow, offset: number): string | undefined {
 /** Pure bounded projection from an ordinary immutable-by-contract snapshot.
  * No ports, callbacks from the caller, live Run references, queues, or commits.
  * Every trial reserves response_limit_reached and all potential thin flags so
- * later omissions cannot push previously accepted mandatory facts over budget. */
+ * later omissions cannot push previously accepted mandatory facts over budget.
+ * A queued wait reason is copied with that thin row, never as optional metadata. */
 export function packCommunication(snapshot: CommunicationSnapshot): PackedCommunication {
   if (!snapshot || typeof snapshot !== "object" || !Object.hasOwn(reasons, snapshot.reason) ||
       !Array.isArray(snapshot.tasks) || snapshot.tasks.length > COMMUNICATION_LIMITS.agents ||

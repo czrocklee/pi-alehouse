@@ -13,6 +13,7 @@ function expectedRetainedShape(message) {
     action: { type: "agent_answer", agent: "a".repeat(24), task: Number.MAX_SAFE_INTEGER, delivery: "not_delivered" },
     agents: Array.from({ length: 16 }, () => ({
       agent: "a".repeat(24), task: Number.MAX_SAFE_INTEGER, status: "interrupting",
+      wait: "dependencies",
       has_question: true, limit_reached: true, unavailable: true,
       question_truncated: true, result_omitted: true, result_truncated: true,
     })),
@@ -56,12 +57,13 @@ test("model bounds are frozen separately from general-purpose core capacity", ()
 test("retained proof fixes every control key, 16 complete rows, and 16 pending names", () => {
   const value = retainedEnvelopeFixture("");
   assert.deepEqual(value, expectedRetainedShape(""));
-  assert.equal(communicationEnvelopeBytes(value), 5628);
-  assert.equal(independentBytes(value), 5628);
-  assert(5628 <= 65536 - 8192 * 7);
+  assert.equal(communicationEnvelopeBytes(value), 6044);
+  assert.equal(independentBytes(value), 6044);
+  assert(6044 <= 65536 - 8192 * 7);
   for (const row of value.agents) {
     assert.equal(row.agent.length, 24);
     assert.equal(row.task, Number.MAX_SAFE_INTEGER);
+    assert.equal(row.wait, "dependencies");
     for (const flag of ["has_question", "limit_reached", "unavailable", "question_truncated", "result_omitted", "result_truncated"])
       assert.equal(row[flag], true);
   }
@@ -73,14 +75,14 @@ test("retained proof fixes every control key, 16 complete rows, and 16 pending n
 });
 
 for (const [name, message, bytes] of [
-  ["NUL", "\u0000".repeat(8192), 62972],
-  ["lone high surrogate", "\ud800".repeat(8192), 62972],
-  ["lone low surrogate", "\udfff".repeat(8192), 62972],
-  ["quote", "\"".repeat(8192), 38396],
-  ["backslash", "\\".repeat(8192), 38396],
-  ["ASCII", "a".repeat(8192), 13820],
-  ["CJK", "字".repeat(8192), 30204],
-  ["surrogate pairs", "😀".repeat(4096), 22012],
+  ["NUL", "\u0000".repeat(8192), 63388],
+  ["lone high surrogate", "\ud800".repeat(8192), 63388],
+  ["lone low surrogate", "\udfff".repeat(8192), 63388],
+  ["quote", "\"".repeat(8192), 38812],
+  ["backslash", "\\".repeat(8192), 38812],
+  ["ASCII", "a".repeat(8192), 14236],
+  ["CJK", "字".repeat(8192), 30620],
+  ["surrogate pairs", "😀".repeat(4096), 22428],
 ]) {
   test(`maximal retained controls deliver one complete 8192-unit ${name} alert`, () => {
     const value = retainedEnvelopeFixture(message);
@@ -89,7 +91,7 @@ for (const [name, message, bytes] of [
     assert.equal(communicationEnvelopeBytes(value), bytes);
     assert.equal(independentBytes(value), bytes);
     assert(bytes <= 65536);
-    assert(bytes - 5628 <= 8192 * 7);
+    assert(bytes - 6044 <= 8192 * 7);
     const parsed = JSON.parse(JSON.parse(JSON.stringify({ content: [{ type: "text", text: JSON.stringify(value) }] })).content[0].text);
     assert.equal(parsed.alerts[0].message, message, "no replacement, truncation, or omitted alert");
     assert.equal(parsed.agents.length, 16);
@@ -102,9 +104,9 @@ for (const [name, message, bytes] of [
 test("all 16 question IDs still fit alongside worst-case controls and the whole alert", () => {
   const value = retainedEnvelopeFixture("\u0000".repeat(8192), true);
   for (const row of value.agents) assert.equal(row.question_id, "q_" + "f".repeat(32));
-  assert.equal(communicationEnvelopeBytes(value), 63852);
-  assert.equal(independentBytes(value), 63852);
-  assert.equal(65536 - communicationEnvelopeBytes(value), 1684);
+  assert.equal(communicationEnvelopeBytes(value), 64268);
+  assert.equal(independentBytes(value), 64268);
+  assert.equal(65536 - communicationEnvelopeBytes(value), 1268);
   assert.equal(communicationTextUnits(value), 8192, "labels and question IDs are not body text");
 });
 
@@ -116,23 +118,30 @@ for (const message of ["\0".repeat(8192), "\ud800".repeat(8192), "\udfff".repeat
       assert.equal(row.next_cursor.length, 37); assert.equal(row.question, "");
     }
     assert.equal(value.alerts[0].source, "harness");
-    assert.equal(communicationEnvelopeBytes(value), 65068);
-    assert.equal(independentBytes(value), 65068); assert.equal(65536 - independentBytes(value), 468);
+    assert.equal(communicationEnvelopeBytes(value), 65484);
+    assert.equal(independentBytes(value), 65484); assert.equal(65536 - independentBytes(value), 52);
     const untagged = structuredClone(value); delete untagged.alerts[0].source;
-    assert.equal(independentBytes(untagged), 65045, "the source tag costs exactly 23 double-JSON bytes");
-    assert.deepEqual(alertAdmissionBudget(message), { text_units: 8192, envelope_bytes: 65068, fits: true });
+    assert.equal(independentBytes(untagged), 65461, "the source tag costs exactly 23 double-JSON bytes");
+    const withoutWait = structuredClone(value);
+    for (const row of withoutWait.agents) delete row.wait;
+    assert.equal(independentBytes(value) - independentBytes(withoutWait), 16 * 26, "wait:dependencies costs 26 double-JSON bytes on every row");
+    assert.deepEqual(alertAdmissionBudget(message), { text_units: 8192, envelope_bytes: 65484, fits: true });
     assert.equal(communicationTextUnits(value), 8192, "cursor recovery metadata never spends body units");
   });
 
-test("optional warning bytes do not alter the 65068-byte tagged mandatory fixture or turn it into a seven-flag reservation", () => {
+test("optional warning bytes do not alter the 65484-byte tagged mandatory fixture or move wait into optional metadata", () => {
   const retained = retainedEnvelopeFixture("\0".repeat(8192), true, true), before = structuredClone(retained);
   const optional = { ...retained, agents: retained.agents.map((row) => ({ ...row, time_wrapped: true })) };
-  assert.equal(communicationEnvelopeBytes(retained), 65068);
-  assert.equal(communicationEnvelopeBytes(optional), 65068 + 16 * 22, "an optional flag only spends double-JSON bytes");
-  assert(communicationBudget(optional).fits); assert.equal(communicationTextUnits(optional), 8192);
+  assert.equal(communicationEnvelopeBytes(retained), 65484);
+  assert.equal(communicationEnvelopeBytes(optional), 65484 + 16 * 22, "an optional flag only spends double-JSON bytes");
+  assert.equal(communicationBudget(optional).fits, false, "sixteen optional flags are outside the reservation and exceed the 52-byte headroom");
+  assert.equal(communicationTextUnits(optional), 8192);
+  const one = { ...retained, agents: retained.agents.map((row, index) => index === 0 ? { ...row, time_wrapped: true } : row) };
+  assert.equal(communicationEnvelopeBytes(one), 65484 + 22);
+  assert(communicationBudget(one).fits, "one optional flag still fits in the remaining 52 bytes");
   assert.deepEqual(retained, before);
-  assert(retained.agents.every((row) => !Object.hasOwn(row, "time_wrapped")));
-  assert.equal(communicationEnvelopeBytes(retainedEnvelopeFixture("\0".repeat(8192), true, true)), 65068);
+  assert(retained.agents.every((row) => row.wait === "dependencies" && !Object.hasOwn(row, "time_wrapped")));
+  assert.equal(communicationEnvelopeBytes(retainedEnvelopeFixture("\0".repeat(8192), true, true)), 65484);
 });
 
 test("admission measures a complete retained envelope, not message-only JSON", () => {
@@ -140,7 +149,7 @@ test("admission measures a complete retained envelope, not message-only JSON", (
   const admitted = alertAdmissionBudget(message);
   assert.equal(admitted.envelope_bytes, communicationEnvelopeBytes(retainedEnvelopeFixture(message, true, true)));
   assert(admitted.envelope_bytes > communicationEnvelopeBytes({ message }));
-  assert.deepEqual(alertAdmissionBudget("x"), { text_units: 1, envelope_bytes: 7725, fits: true });
+  assert.deepEqual(alertAdmissionBudget("x"), { text_units: 1, envelope_bytes: 8141, fits: true });
   assert.equal(alertAdmissionBudget("").fits, false);
   assert.equal(alertAdmissionBudget("a".repeat(8193)).fits, false, "text cap applies even when bytes fit");
   assert.equal(alertAdmissionBudget("\u0000".repeat(16384)).fits, false);

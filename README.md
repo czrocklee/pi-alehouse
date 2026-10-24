@@ -32,6 +32,8 @@ Send it a follow-up. Redirect work while it's running. Let it ask a question whe
 
 There is no mandatory research → plan → code → review ritual. Your main agent can work directly, delegate independent pieces, or return to an existing teammate. **Parallel when it helps. Continuity when it matters.**
 
+In one session, each admitted provider runs at most four workers at once. Models of that provider share the cap; twelve workers can stay resident.
+
 ## See the work—not just the final summary
 
 Parallel work shouldn't disappear behind a spinner.

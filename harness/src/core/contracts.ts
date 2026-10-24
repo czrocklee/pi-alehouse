@@ -166,6 +166,8 @@ export interface RunView {
   after?: string[];
   /** Queued only: dependencies that have not settled yet. */
   blocked_by?: string[];
+  /** Scheduling wait, without exposing routing to the parent model. */
+  queued_for?: "dependencies" | "capacity";
   /** Parent updates queued while idle and delivered with this Run's prompt. */
   delivered_updates?: number;
 }

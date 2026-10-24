@@ -278,7 +278,12 @@ potentially sensitive instructions/prompt material) to
 a private TypeSafe provider from the host Pi 1.0 classifier API, not the shared
 model/auth registry. The protected key-file is read lazily; environment keys
 and provider fallbacks are not used. Requests retain a two-second cancellation
-budget, no retries and exact-endpoint/no-redirect checks. Native boolean answers
+budget, no retries and exact-endpoint/no-redirect checks. Independent judge
+backpressure allows four root and eight distinct subagent reviews in flight;
+excess requests defer as `review_overloaded` to normal human handling, while
+identical in-flight packets coalesce. This is not tied to resident worker count:
+a worker may issue parallel tool calls. Raising worker capacity does not widen
+this automated-review budget. Native boolean answers
 are validated and converted to the existing policy verdict inputs; native
 transport does not confer approval authority.
 Opt in only after evaluating that data handling.  Never reinterpret the harness profile or

@@ -51,7 +51,7 @@ whether tracked inputs/abort or SDK idle is still awaited. The detail pane and
 `/harness-status` expose the same wait and elapsed time; this is an observation,
 not a new lifecycle phase or permission to release ownership.
 `?` marks a child waiting for an answer.  The heading says, for example,
-`3 resident` or `8 resident (full)` rather than implying all slots exist.
+`3 resident` or `12 resident (full)` rather than implying all slots exist.
 
 ## Agent detail and transcript
 

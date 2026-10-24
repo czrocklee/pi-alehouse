@@ -30,6 +30,10 @@ export const AGENT_EXISTS_RESOLUTION = "This name is taken; check agent_list, it
 
 export type TaskStatus = "queued" | "running" | "interrupting" | "finishing" |
   "completed" | "needs_input" | "failed" | "interrupted";
+/** Why a queued task has not started. Not a provider id, model, or queue depth. */
+export type QueueWait = "dependencies" | "capacity";
+export const isQueueWait = (value: unknown): value is QueueWait =>
+  value === "dependencies" || value === "capacity";
 /** Parent vocabulary only; retained Run statuses stay unchanged. Finalizing
  * projections add `finishing` separately, based on confirmed execution exit. */
 export const modelTaskStatus = (status: RunStatus): Exclude<TaskStatus, "finishing"> =>
@@ -53,6 +57,8 @@ export interface ThinTaskEntry {
   readonly agent: string;
   readonly task: number;
   readonly status: TaskStatus;
+  /** Queued rows only. Mandatory when set: packing must not yield it. */
+  readonly wait?: QueueWait;
   readonly has_question?: true;
   readonly limit_reached?: true;
   readonly unavailable?: true;
@@ -172,8 +178,12 @@ export interface RetainedEnvelopeBound extends Omit<RetainedEnvelope, "action" |
 
 /** Fresh pure proof data, with one complete alert and every bounded control
  * at its maximum, including the harness source tag even for a worst-escaped
- * child-sized body. Six flags coexist conservatively; no stored Owner/Run state.
- * The 65068-byte bound adds 23 double-JSON bytes to the old 65045-byte shape.
+ * child-sized body. Six flags coexist conservatively with wait:"dependencies"
+ * on the longest non-queued status; that pairing is a byte ceiling, not a
+ * legal packed row. No stored Owner/Run state.
+ * The 65484-byte bound adds 26 double-JSON bytes per row (416 across 16) for
+ * that conservative wait to the prior 65068-byte tagged shape. The 65068-byte
+ * shape adds 23 double-JSON bytes to the old 65045-byte shape.
  * The proof depends on these exact keys and bounds, not arbitrary JSON data. */
 export function retainedEnvelopeFixture(message: string, withQuestionIds = false, withResultCursors = false): RetainedEnvelopeBound {
   const name = "a".repeat(COMMUNICATION_LIMITS.agent_name_units);
@@ -183,6 +193,7 @@ export function retainedEnvelopeFixture(message: string, withQuestionIds = false
     action: { type: "agent_answer", agent: name, task: max, delivery: "not_delivered" },
     agents: Array.from({ length: COMMUNICATION_LIMITS.agents }, () => ({
       agent: name, task: max, status: "interrupting",
+      wait: "dependencies",
       has_question: true, limit_reached: true, unavailable: true,
       question_truncated: true, result_omitted: true, result_truncated: true,
       ...(withQuestionIds ? { question_id: `q_${"f".repeat(32)}` } : {}),

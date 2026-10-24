@@ -183,7 +183,7 @@ before arming any timer.
 Spawn/run/send/answer/wait/read produce the same envelope, including derived
 task sequence and action facts. Task binding is separate from typed alert scope.
 All bound rows/pending names remain complete; createOwnerTools must reject
-resident >16 (extension fixes eight), leaving core capacity configurable. As the
+resident >16 (extension fixes twelve), leaving core capacity configurable. As the
 last assembly step, it explicitly binds the Owner to model-compatible names:
 all retained Agents, including released history, must have unique valid model
 names. Failed binding has no effects; successful binding lasts for that Owner,
@@ -225,7 +225,7 @@ omits next_cursor. Promise/thenable observation ports are interface errors, not
 awaitable work. A fixed-width
 37-character stateless cursor is reserved for every bound terminal window with
 unshown retained text, even if the whole page is displaced after Agent reuse.
-The conservative tagged-alert/control/token/cursor reservation bound is 65068 bytes;
+The conservative tagged-alert/control/token/cursor/queue-wait reservation bound is 65484 bytes;
 see [packing budgets](tool-contract.md#budget-and-local-publication).
 Tool success only passes that result through, without later
 assertCurrent/serialization/withChanges/UI. onRunAccepted UI wake stays separate

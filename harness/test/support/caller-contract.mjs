@@ -35,10 +35,12 @@ export function assertCallerTools(tools) {
   assert.match(difficulty, /Rate task reasoning, not workload, importance or cost/);
   assert.match(difficulty, /1=execute given checks or decided changes.*2=small, scoped fix\/check.*3=implement a given design, review, investigate or plan.*4=resolve competing hypotheses or complex constraints.*5=find an approach where none is known/);
   assert.doesNotMatch(difficulty, /light|standard|strong|slot/i);
+  assert.match(difficulty, /Do not re-score to bypass capacity waits/);
   assert.match(fields.inherit_context.description, /Default false.*text copy.*without tool calls or results.*64 KiB/);
   assert.match(fields.after.description, /All must complete.*question, failure or interrupt fails this task before starting.*admission rejects/);
   assert.match(fields.after.description, /current or latest tasks now.*16384 characters.*reference only.*name its Agent after agent_answer returns/);
   assert.match(fields.wait_ms.description, /accepted task, question, issue or alerts.*Default 0.*snapshot.*Timeout never stops/);
+  assert.match(fields.wait_ms.description, /Queued wait: dependencies or capacity.*do not respawn queued work/);
   assert.match(fields.max_turns.description, /per task, default 256.*partial result/);
   assert.match(fields.max_duration_ms.description, /per task.*asked to stop/);
   for (const key of ["model", "effort", "strength", "thinking", "name", "description", "message", "difficulty"]) assert.equal(key in fields, false, key);

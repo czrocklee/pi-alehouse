@@ -225,7 +225,7 @@ for (const problem of ["context", "missing profile", "empty definition", "delega
     assert.equal(c.view(generic.run.run_id).name, ""); assert.equal(c.getResult(generic.run.run_id).text, "generic completion");
   });
 
-for (const resident_limit of [8, 16, 17])
+for (const resident_limit of [8, 12, 16, 17])
   test(`binding preserves the model resident capacity boundary at ${resident_limit} without constraining generic Owners`, async (t) => {
     const f = await fixture(t, { controller: { resident_limit } }), c = f.controller;
     if (resident_limit > 16) {

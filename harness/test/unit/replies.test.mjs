@@ -255,3 +255,44 @@ test("historical stopped questions remain readable without actionable token; sen
   const question = (await read(c, b)).agents[0]; assert.equal(question.has_question, true); assert(question.question_id);
   const next = await c.answer("answer", b.agent_id, question.question_id, "because"); assert.equal(next.task, 2);
 });
+
+test("task replies copy queued_for to wait and keep dependency names without provider or count fields", () => {
+  const base = { name: "otter", task: 2, status: "queued", description: "task", resumable: true,
+    owner_blocked: false, has_question: false, effective_settings: { profile: "reader", difficulty: 3 },
+    blocked_by: ["run-author", "run-editor"] };
+  const names = (id) => id === "run-author" ? "author" : id === "run-editor" ? "editor" : "other";
+  assert.deepEqual(taskReply({ ...base, queued_for: "dependencies" }, names), {
+    agent: "otter", task: 2, status: "queued", wait: "dependencies", waiting_for: ["author", "editor"],
+  });
+  const capacity = taskReply({ ...base, queued_for: "capacity" }, names);
+  assert.equal(capacity.wait, "capacity");
+  assert.deepEqual(capacity.waiting_for, ["author", "editor"], "capacity does not drop unmet dependency names");
+  assert.equal(Object.hasOwn(capacity, "queued_for"), false);
+  assert.equal(Object.hasOwn(capacity, "provider"), false);
+  assert.equal(Object.hasOwn(capacity, "concurrency"), false);
+  const plain = taskReply(base, names);
+  assert.equal(Object.hasOwn(plain, "wait"), false);
+  assert.deepEqual(plain.waiting_for, ["author", "editor"]);
+  const noNames = taskReply({ ...base, blocked_by: [], queued_for: "capacity" }, names);
+  assert.deepEqual(noNames, { agent: "otter", task: 2, status: "queued", wait: "capacity" });
+  for (const status of ["running", "completed", "failed", "needs_input", "interrupting"]) {
+    const reply = taskReply({ ...base, status, queued_for: "dependencies" }, names);
+    assert.equal(Object.hasOwn(reply, "wait"), false, status);
+    assert.deepEqual(reply.waiting_for, ["author", "editor"]);
+  }
+  assert.equal(Object.hasOwn(taskReply({ ...base, finalization_pending: true, queued_for: "capacity" }, names), "wait"), false);
+  for (const queued_for of ["openai", "provider/model", 4, "4", "", null, false, "Dependencies"]) {
+    const reply = taskReply({ ...base, queued_for }, names);
+    assert.equal(Object.hasOwn(reply, "wait"), false);
+    assert.equal(JSON.stringify(reply).includes("openai"), false);
+    assert.equal(JSON.stringify(reply).includes("provider"), false);
+    assert.equal(JSON.stringify(reply).includes("concurrency"), false);
+  }
+  const summary = { runs: 1, earlier_descriptions: [], touched: [], touched_omitted: 0, observed_cost: 9, cost_partial: true };
+  const roster = agentRow({ ...base, queued_for: "dependencies" }, summary, names);
+  assert.equal(roster.wait, "dependencies");
+  assert.deepEqual(roster.waiting_for, ["author", "editor"]);
+  assert.equal(Object.hasOwn(roster, "queued_for"), false);
+  assert.equal(Object.hasOwn(roster, "provider"), false);
+  compact(roster);
+});

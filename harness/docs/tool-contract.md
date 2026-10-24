@@ -223,9 +223,15 @@ completing (needs-input, failed or interrupted) is rejected with
 before any Agent, name or task is allocated. Queued tasks hold no execution slot
 and their duration budget has not started; `waiting_for` names unsettled
 dependencies. They still count toward queue capacity, and their Agents toward
-resident capacity. Once any dependency settles without completing (including
+resident capacity. Active work is capped at four Runs per admitted provider
+(models share it); waiting on that provider does not block another. Queued rows
+explain the wait without exposing model/provider routing: `wait: "dependencies"`
+or `wait: "capacity"`. Capacity waits are normal scheduling, not a failed task;
+wait for the accepted work rather than respawning it or changing difficulty
+to bypass the queue. See
+[architecture](architecture.md#ownership-and-lifecycle). Once any dependency settles without completing (including
 needs-input), pump fails the task with `dependency_not_completed` at once,
-without waiting for its other dependencies or a free slot and without creating
+without waiting for its other dependencies or that provider's free slot and without creating
 a session. Its error names that Agent and status, e.g.
 `DEPENDENCY_NOT_COMPLETED: otter (needs_input)`; its own successors then fail in
 turn. The Agent remains.
@@ -357,6 +363,11 @@ Each task row retains `{agent, task, status}` and applicable boolean
 `has_question`, `limit_reached`, `unavailable`; diagnostics use
 `unavailable_reason`, `error`, `owner_error`. Statuses include queued, running,
 finishing, needs_input, completed, failed, interrupting and interrupted.
+Queued rows retain `wait: "dependencies" | "capacity"` when that scheduling
+condition applies; it is a mandatory bounded control, including in list/interrupt
+projections, not optional diagnostic text. Dependency names remain in the roster's
+`waiting_for`. Owner faults remain separately reported; an unavailable Owner is
+not diagnosed as provider saturation. Routing identities remain host-only.
 Optional `context_tokens` (a nonnegative integer) appears only on the latest
 settled task of an idle, resident, reusable Agent with no pending question and a
 known size: what its next task re-reads. It is absent while compaction leaves
@@ -387,7 +398,7 @@ that full question needs space. A task-3 read may present a task-2 alert of the
 same Agent, but inline action.task=3 never receives task-2 alerts.
 
 The model adapter requires effective resident capacity ≤16 at tool assembly
-(`UNSUPPORTED_MODEL_RESIDENT_LIMIT` otherwise). Production uses eight. Core
+(`UNSUPPORTED_MODEL_RESIDENT_LIMIT` otherwise). Production uses twelve. Core
 can still support larger configurations. All bound control rows/pending names
 are shown; there are no agents_omitted or pending_omitted fields.
 
@@ -418,9 +429,11 @@ and diagnostics are outside that text budget but inside the final **65536-byte**
 double-JSON UTF-8 content envelope. Max_chars does not override this byte cap.
 The conservative reservation proof includes 16 maximal task rows/pending names,
 maximum safe-integer ordinals/counts, action/disabled/response-limit fields,
-all six task flags, 16 recovery cursors, 16 question IDs, 16 empty question fields, a 120-NUL label
-and a full 8192-NUL or lone-surrogate alert with its conservative harness-source
-tag: **65068 bytes**, leaving **468 bytes**.
+all six task flags, 16 maximum-length queue-wait reasons, 16 recovery cursors,
+16 question IDs, 16 empty question fields, a 120-NUL label and a full 8192-NUL or
+lone-surrogate alert with its conservative harness-source tag:
+**65484 bytes**, leaving **52 bytes**. This deliberately combines mutually
+exclusive statuses/controls for a conservative bound.
 Metadata does not spend the 16384-unit body budget. This bound depends on the
 exact fields, string/numeric bounds and array limits, not arbitrary JSON shapes.
 Result text yields before its reserved cursor; wholly omitted pages keep their

@@ -45,13 +45,62 @@ export class FakePort {
   clearInputs() { return this.inputs.splice(0); }
   async dispose() { this.disposed++; return { shutdownExited: true, errors: [] }; }
 }
+function cleanupFailure(errors) {
+  if (errors.length === 1) return errors[0];
+  if (errors.length > 1) return new AggregateError(errors, errors.map((error) => error instanceof Error ? error.message : String(error)).join("; "));
+  return undefined;
+}
+// One teardown: node:test after hooks are FIFO, so a gate release registered
+// after fixture() runs too late and an init/history failure is reported as a
+// retained owner. beforeShutdown runs first, then the live invariant, and
+// shutdown still drains if either throws. Do not unlock a truly uncertain owner.
+async function releaseFixture({ controller, owner, directory, ports, beforeShutdown, cleanupUncertainExpected }) {
+  const errors = [];
+  const capture = (error) => { errors.push(error); };
+  try {
+    try { await beforeShutdown?.(); }
+    catch (error) { capture(error); }
+    try { assertOwnerInvariants(controller, "pre-shutdown"); }
+    catch (error) { capture(error); }
+  } finally {
+    try {
+      for (const port of ports) { port.deliveryGate?.resolve(); if (port.streaming) port.finish("test cleanup", "aborted"); }
+    } catch (error) { capture(error); }
+    let report;
+    try { report = await controller.shutdown(1000); }
+    catch (error) { capture(error); }
+    try { assertOwnerInvariants(controller); }
+    catch (error) { capture(error); }
+    let released = report?.closed === true;
+    try {
+      if (report && !report.closed) {
+        if (!cleanupUncertainExpected || !report.cleanup_uncertain || report.active || report.finalizing || report.cleaning || ports.some((port) => port.streaming)) {
+          capture(new Error(`fixture retained owner: ${JSON.stringify(report)}`));
+        } else {
+          // Test-only cleanup of a simulated uncertain report, with no live child.
+          // The controller is required to REFUSE unlocking in the assertions.
+          owner.close();
+          released = true;
+        }
+      }
+    } catch (error) { capture(error); }
+    // Preserve lock inode identity if a real execution/cleanup remains owned.
+    if (released) {
+      try { await rm(directory, { recursive: true, force: true }); }
+      catch (error) { capture(error); }
+    }
+  }
+  const error = cleanupFailure(errors);
+  if (error) throw error;
+}
 export async function fixture(t, options = {}) {
   const directory = await mkdtemp(join(tmpdir(), "pi-p1-core-"));
   const owner_id = options.owner_id ?? randomUUID();
   const ports = [];
   const events = [];
   const owner = await FileOwnerLease.open({ directory, owner_id, flock });
-  const controller = await OwnerController.open({ owner, concurrency: 1, resident_limit: 8, queue_limit: 16,
+  const pinned = options.omitLimits ? {} : { concurrency: 1, resident_limit: 8, queue_limit: 16 };
+  const controller = await OwnerController.open({ owner, ...pinned,
     managedBlockTools: managedBlockToolNames,
     createSession: async () => {
       const port = new FakePort(); ports.push(port);
@@ -62,23 +111,7 @@ export async function fixture(t, options = {}) {
       return port;
     },
     onContextChange: (event) => { events.push(event); }, ...options.controller });
-  t.after(async () => {
-    for (const port of ports) { port.deliveryGate?.resolve(); if (port.streaming) port.finish("test cleanup", "aborted"); }
-    const report = await controller.shutdown(1000);
-    // Every test doubles as an invariant fuzzer: the post-shutdown graph must
-    // satisfy every cross-structure invariant, latched fail-closed owners
-    // included (quarantine is legal state).
-    assertOwnerInvariants(controller);
-    if (!report.closed) {
-      if (!options.cleanupUncertainExpected || !report.cleanup_uncertain || report.active || report.finalizing || report.cleaning || ports.some((p) => p.streaming)) {
-        throw new Error(`fixture retained owner: ${JSON.stringify(report)}`);
-      }
-      // Test-only cleanup of a simulated uncertain report, with no live child.
-      // The controller is required to REFUSE unlocking in the assertions.
-      owner.close();
-    }
-    await rm(directory, { recursive: true, force: true });
-  });
+  t.after(() => releaseFixture({ controller, owner, directory, ports, beforeShutdown: options.beforeShutdown, cleanupUncertainExpected: options.cleanupUncertainExpected }));
   return { controller, owner, directory, owner_id, ports, events };
 }
 export async function tick() { await new Promise((resolve) => setImmediate(resolve)); }

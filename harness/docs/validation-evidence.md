@@ -260,7 +260,7 @@ excluded.
 
 ## Existing contract regressions to preserve
 
-- Core: Owner FIFO/idempotence, four executing/eight resident reservations, result budgets and paging, Off with retained work, cleanup quarantine, non-regressing usage floor and unreported residue.
+- Core: Owner FIFO/idempotence, four executing per admitted provider/twelve Owner-wide resident reservations, result budgets and paging, Off with retained work, cleanup quarantine, non-regressing usage floor and unreported residue. These are the current regression targets; the historical evidence above exercised the former four-global/eight-resident configuration.
 - SDK/host: verified capabilities, controlled prompt/input races, natural-finish steer fallback, real SDK replacement confirmation, reader/editor web exclusion, researcher isolation and parent tool visibility.
 - Security: `reader` direct write ceiling, `editor` guarded writes, shell ask behavior, static guard and policy search, approval provenance/defer, and failure-closed readiness against the matched generated authority.
 - UI: permission dialog yield, widget/detail/picker/footer/Stats projection, overlay protocol, and non-atomic replacement warnings; scripted UI is not a person.

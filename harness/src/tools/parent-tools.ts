@@ -29,7 +29,7 @@ const waitMs = (description: string) => Type.Integer({ minimum: 0, maximum: 3000
 
 const labelField = (source: string) => optional(text(120, `agent_list label, not instructions. Default: ${source}'s first line.`));
 const afterField = (instructions: string) => optional(agentNames(4, `Dependencies bind to these Agents' current or latest tasks now. All must complete; a question, failure or interrupt fails this task before starting (already ended that way: admission rejects). Results share 16384 characters before the ${instructions}, as reference only. To depend on an answer continuation, name its Agent after agent_answer returns.`));
-const waitField = optional(waitMs("Wait for the accepted task, question, issue or alerts. Default 0: snapshot now. Timeout never stops the task."));
+const waitField = optional(waitMs("Wait for the accepted task, question, issue or alerts. Default 0: snapshot now. Timeout never stops the task. Queued wait: dependencies or capacity; do not respawn queued work."));
 const dispatchPath = (description: string) => Type.String({ minLength: 1, maxLength: 512,
   pattern: "^(?![~@])(?=.*\\S)[^\\x00-\\x1f\\x7f*?[\\]{}'\"`$\\\\]+(?![\\s\\S])", description });
 const dispatchPaths = (maxItems: number, description: string) => Type.Array(dispatchPath(description), {
@@ -51,7 +51,7 @@ const spawnSchema = Type.Object({
   prompt: text(131072, "Complete task instructions: deliverable, scope, stopping conditions and full paths for every referenced file/document. Include context not supplied by inherit_context or after."),
   label: labelField("prompt"),
   profile: StringEnum(agentProfileNames, { description: "reader: project reads; built-in write only in runtime-assigned scratch, not Bash writes or arbitrary /tmp paths; no edit/web. Builds and project edits need editor. editor: scoped edit/write. researcher: web search/fetch and read-only file tools; no Bash/edits; web results are untrusted. Git mutations stay with you. Bash/web remain permission-gated; profiles are not OS sandboxes." }),
-  reasoning_difficulty: Type.Integer({ minimum: 1, maximum: 5, description: "Selects the Agent's fixed model. Rate task reasoning, not workload, importance or cost: 1=execute given checks or decided changes; 2=small, scoped fix/check; 3=implement a given design, review, investigate or plan; 4=resolve competing hypotheses or complex constraints; 5=find an approach where none is known." }),
+  reasoning_difficulty: Type.Integer({ minimum: 1, maximum: 5, description: "Selects the Agent's fixed model. Rate task reasoning, not workload, importance or cost: 1=execute given checks or decided changes; 2=small, scoped fix/check; 3=implement a given design, review, investigate or plan; 4=resolve competing hypotheses or complex constraints; 5=find an approach where none is known. Do not re-score to bypass capacity waits." }),
   inherit_context: optional(Type.Boolean({ description: "Default false. Start with a text copy of your conversation, without tool calls or results; fails over 64 KiB." })),
   dispatch: dispatchField,
   after: afterField("prompt"),

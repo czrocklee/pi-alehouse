@@ -58,12 +58,25 @@ or replacement construction: this is not an atomic close-and-replace transaction
 Wait for each replacement operation to finish before starting another. `/tree`
 changes the current session in place without a fresh Owner, so it always
 keeps the explicit `/harness-close` gate and never auto-closes. One Owner has one
-FIFO admission queue, four execution slots, eight resident reservations, and
-memory-only request idempotence. Every unsettled task pins its Agent's
-reservation, so the queue can never hold more than the resident cap; under the
-default limits `QUEUE_FULL` is unreachable and the resident cap bounds admission
-first — the queue limit only bites when it is configured below the resident
-limit.
+FIFO admission queue, per-provider execution slots, twelve resident reservations, and
+memory-only request idempotence. Retained `concurrency` (default 4) is the
+maximum active Runs per immutable admitted `settings.provider`: the exact
+registered provider ID, shared by that provider's models, not by API, base URL
+or credentials. Two provider IDs pointing to the same account/backend still
+have separate slots: this is an Owner-local scheduler, not an account or
+cross-process rate limiter. The
+earliest dependency-ready queued Run with remaining provider capacity starts;
+a saturated provider or unmet dependency does not head-of-line block another
+provider. Initialization and cancellation/drain hold the slot until actual
+execution exit; finalization does not. Resident 12 (including queued and
+completed-unreleased) and queue 16 stay Owner-wide. `/harness-status`
+`stats.active` is the summed total; `concurrency_scope: "provider"` and
+`providers: [{provider, active, queued, limit}]` show the per-provider breakdown.
+`limits.concurrency` is the per-provider cap. The extension uses core's shared
+`DEFAULT_OWNER_LIMITS` rather than overriding these defaults. Every unsettled task pins its Agent's reservation, so the queue can never hold
+more than the resident cap; under the default limits `QUEUE_FULL` is
+unreachable and the resident cap bounds admission first — the queue limit only
+bites when it is configured below the resident limit.
 
 Admission reserves a configured worst-case output budget for each unsettled Run.
 A same tool-call ID with identical task fields returns its accepted Run; a
@@ -75,7 +88,7 @@ host's post-guard input boundary is not atomic; see
 
 A Run goes through initialization, prompt/input dispatch, adapter drain,
 history finalization, and child cleanup.  Its execution deadline starts only
-when an execution slot is assigned and initialization begins.  `stop`,
+when that provider's execution slot is assigned and initialization begins.  `stop`,
 cancellation, or deadline only requests the existing stop path.  On actual
 execution exit, the Controller frees that **execution slot** and can schedule a
 queued peer before history finalization completes.  The Run's **Agent

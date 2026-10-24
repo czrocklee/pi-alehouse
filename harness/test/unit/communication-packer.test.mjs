@@ -477,6 +477,92 @@ test("malformed retained controls fail instead of trimming/normalizing bad snaps
   }
 });
 
+test("valid queued wait is retained and invalid or terminal wait is rejected with no publication", () => {
+  for (const wait of ["dependencies", "capacity"]) {
+    const input = snapshot({ tasks: [task(row("otter", 1, "queued", { wait }))], alerts: [alert("kept")] });
+    const packed = pack(input), entry = packed.envelope.agents[0];
+    assert.equal(entry.wait, wait); assert.equal(entry.status, "queued");
+    assert.equal(Object.hasOwn(entry, "provider"), false);
+    assert.equal(Object.hasOwn(entry, "queued_for"), false);
+    assert.deepEqual(packed.references, { alerts: [0], finished: [] });
+  }
+  const absent = pack(snapshot({ tasks: [task(row("otter", 1, "queued"))] }));
+  assert.equal(Object.hasOwn(absent.envelope.agents[0], "wait"), false);
+  const illegal = [];
+  for (const status of ["running", "interrupting", "finishing", "completed", "needs_input", "failed", "interrupted"])
+    illegal.push(snapshot({ tasks: [task(row("otter", 1, status, { wait: "dependencies" }))], alerts: [alert("preserved")] }));
+  for (const status of ["completed", "needs_input", "failed", "interrupted"])
+    illegal.push(snapshot({ finished: [{ row: row("otter", 1, status, { wait: "capacity" }) }], alerts: [alert("preserved")] }));
+  illegal.push(snapshot({ finished: [{ row: row("otter", 1, "queued", { wait: "dependencies" }) }], alerts: [alert("preserved")] }));
+  for (const wait of ["provider", "openai/gpt-4", "concurrency", "4", 4, 0, "", " ", "Dependencies", "dependency", null, false, true, ["dependencies"]])
+    illegal.push(snapshot({ tasks: [task(row("otter", 1, "queued", { wait }))], alerts: [alert("preserved")],
+      finished: [{ row: row("otter", 1, "completed") }] }));
+  illegal.push(snapshot({ tasks: [task(row("otter", 1, "queued", { wait: "capacity", provider: "openai", active: 4 }))] }));
+  for (const input of illegal) {
+    const before = structuredClone(input); deepFreeze(input);
+    let published;
+    assert.throws(() => { published = packCommunication(input); }, (error) => {
+      assert.equal(error.code, "INVALID_COMMUNICATION_SNAPSHOT");
+      assert.equal(error.envelope, undefined);
+      assert.equal(error.references, undefined);
+      assert.equal(error.result, undefined);
+      assert.equal(error.content, undefined);
+      return true;
+    });
+    assert.equal(published, undefined, "invalid wait returns no envelope, references, or tool result");
+    assert.deepEqual(input, before, "rejection publishes nothing and does not mutate the snapshot");
+    assert.throws(() => packCommunication(input), { code: "INVALID_COMMUNICATION_SNAPSHOT" }, "a repeated invalid snapshot still publishes nothing");
+  }
+});
+
+test("queued wait survives byte saturation instead of yielding like optional metadata", () => {
+  const tasks = Array.from({ length: 16 }, (_, index) => task(
+    row(`a${String(index).padStart(2, "0")}${"x".repeat(21)}`, Number.MAX_SAFE_INTEGER, "queued",
+      { ...controls, wait: "dependencies" }),
+    { question_id: questionId(index + 1) }));
+  const input = snapshot({ reason: "alert", workers_disabled: true, tasks,
+    action: { type: "agent_send", agent: tasks[0].row.agent, task: Number.MAX_SAFE_INTEGER, delivery: "not_delivered" },
+    alerts: [{ ...alert("\0".repeat(8192), Number.MAX_SAFE_INTEGER, tasks[0].row.agent, "\0".repeat(120)), source: "harness" }] });
+  input.tasks[0].question = "q";
+  const seed = pack(input);
+  assert.equal(seed.envelope.response_limit_reached, undefined);
+  assert(seed.envelope.agents.every((entry) => entry.wait === "dependencies"));
+  const remaining = 65536 - bytes({ ...seed.envelope, response_limit_reached: true });
+  assert(remaining > 0, "reserved controls including the whole wait token must themselves fit");
+  const full = structuredClone(input);
+  if (remaining <= 8191) full.tasks[0].question = "q".repeat(1 + remaining);
+  else for (const entry of full.tasks) entry.result = window("\0".repeat(8192));
+  const complete = pack(full);
+  if (remaining <= 8191) {
+    assert.equal(complete.envelope.agents[0].question, full.tasks[0].question);
+    assert.equal(complete.envelope.response_limit_reached, undefined);
+    assert.equal(bytes({ ...complete.envelope, response_limit_reached: true }), 65536);
+  }
+  assert(complete.envelope.agents.every((entry) => entry.wait === "dependencies" && entry.status === "queued"));
+  const pressured = structuredClone(full);
+  for (const entry of pressured.tasks) {
+    entry.time_wrapped = true;
+    entry.dispatch_notes = ["tree_shared"];
+    entry.diagnostics = { error: "\0".repeat(512) };
+  }
+  const packed = pack(pressured);
+  assert.equal(packed.envelope.response_limit_reached, true);
+  if (remaining <= 8191) {
+    assert.equal(bytes(packed.envelope), 65536);
+    assert.deepEqual(packed.envelope.agents, complete.envelope.agents, "optional diagnostics yield; queued wait stays in the thin row");
+    assert.deepEqual(packed.references, complete.references, "yielding optional metadata does not change publication references");
+  }
+  assert.equal(packed.envelope.alerts[0].message, input.alerts[0].message);
+  const published = JSON.parse(packed.result.content[0].text);
+  for (const [index, entry] of packed.envelope.agents.entries()) {
+    assert.equal(entry.wait, "dependencies");
+    assert.equal(entry.wait.length, "dependencies".length, "the whole wait token is retained, never clipped to fit");
+    assert.equal(published.agents[index].wait, "dependencies");
+    assert.equal(entry.status, "queued");
+    for (const [flag, value] of Object.entries(controls)) assert.equal(entry[flag], value);
+  }
+});
+
 test("inconsistent windows, oversize alerts, and wrong finished links fail without any returned reference candidate", () => {
   const terminal = row("otter", 2, "completed");
   const invalid = [

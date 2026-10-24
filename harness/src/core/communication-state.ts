@@ -231,7 +231,7 @@ export interface CommunicationCommitPlan<Run extends CommunicationRun> {
 }
 function invalidCommit(): never { throw new HarnessError("INVALID_COMMUNICATION_COMMIT"); }
 const sameRow = (a: ThinTaskEntry, b: ThinTaskEntry): boolean =>
-  a.agent === b.agent && a.task === b.task && a.status === b.status;
+  a.agent === b.agent && a.task === b.task && a.status === b.status && a.wait === b.wait;
 /** Compare a projection with a KNOWN original, never discover identity from it. */
 const matchesRun = (run: CommunicationRun, row: ThinTaskEntry, runs: readonly CommunicationRun[]): boolean => {
   const record = run.record;

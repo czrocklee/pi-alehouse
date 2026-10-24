@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { getAgentDir, getPackageDir, parseFrontmatter, SettingsManager,
   type ExtensionAPI, type ExtensionContext, type ModelRuntime, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { OwnerController } from "./core/owner-controller.js";
+import { DEFAULT_OWNER_LIMITS, OwnerController } from "./core/owner-controller.js";
 import { defaultDelegation, delegationGuideline, delegationLabel, delegationStatus, isDelegationSetting, parseDelegation,
   restoreDelegation, type DelegationSetting } from "./delegation.js";
 import { HarnessError } from "./core/ports.js";
@@ -195,7 +195,7 @@ export default function harnessExtension(pi: ExtensionAPI) {
       supportedThinking: getSupportedThinkingLevels };
   };
   let parentPermission: () => unknown = () => undefined;
-  const residentLimit = 8;
+  const residentLimit = DEFAULT_OWNER_LIMITS.resident;
   registerOrderFreeToolSchemas(pi);
   historicalRunsCommand(pi);
   const presetEntry = "harness:preset-selection:v1";
@@ -591,7 +591,7 @@ export default function harnessExtension(pi: ExtensionAPI) {
       parentPermission, getPermissionsService: permission.getPermissionsService,
       createReaderScratch: permission.createReaderScratch, subscribeManagedBlocks: permission.subscribeManagedBlocks, web });
     try {
-      controller = await OwnerController.open({ owner, concurrency: 4, resident_limit: residentLimit, grace_turns: 5,
+      controller = await OwnerController.open({ owner,
         managedBlockTools: managedBlockToolNames,
         admission: () => router!.admissionState(),
         onContextChange: approvalBindings.contextChanged,

@@ -16,7 +16,7 @@ The parent retains normal footer/title, approval queue, health/Stats, and pinned
 
 ## Limits at a glance
 
-- Four execution slots; eight resident Agent reservations, including queued/busy/uncertain-cleanup reservations. `agent_kill` is permanent.
+- Four execution slots per admitted provider (models share that provider's cap); twelve resident Agent reservations, including queued/busy/uncertain-cleanup reservations. `agent_kill` is permanent.
 - Default Run execution deadline 30 minutes (1 ms–24 h configurable), excluding queue time. Expiry/cancellation requests a stop; it is not forced exit, rollback, or guaranteed zero later provider activity.
 - `wait_ms` on `agent_spawn`/`agent_run`/`agent_send`/`agent_wait` bounds only the parent's wait (five minutes max); Esc interrupts waiting, not worker work.
 - Owner-local result retention is bounded to 512 cumulative Runs and 64 Mi UTF-16 result units (including reservations for unsettled Runs); this is not a total heap/RSS cap or a durable store.

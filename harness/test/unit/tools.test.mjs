@@ -1248,7 +1248,7 @@ test("after queues a follow-up with the earlier result and reports what it waits
   await call("agent_spawn", create({ agent: "author", label: "write" }), "author");
   const reviewer = await call("agent_spawn", create({ agent: "reviewer", prompt: "Review it.", after: ["author"] }), "reviewer");
   assert.deepEqual(reviewer, { action: { type: "agent_spawn", agent: "reviewer", task: 1 }, reason: "snapshot",
-    agents: [{ agent: "reviewer", task: 1, status: "queued", result: "" }], pending: ["reviewer"], alerts_pending: 0, finished_pending: 0 });
+    agents: [{ agent: "reviewer", task: 1, status: "queued", wait: "dependencies", result: "" }], pending: ["reviewer"], alerts_pending: 0, finished_pending: 0 });
   assert.deepEqual((await call("agent_list", {})).agents.find((row) => row.agent === "reviewer").waiting_for, ["author"]);
   await until(() => f.ports[0]?.streaming); f.ports[0].finish("diff summary"); await settle(f, "author");
   await until(() => f.ports[1]?.streaming);

@@ -107,7 +107,7 @@ that has already settled without completing instead of accepting it.
 
 Every dispatched Run is rechecked by pump before execution: permission/path
 interpretation, inputs and executable resources must still qualify. This occurs
-when pump can progress; no free slot means no guarantee of immediate diagnosis.
+when pump can progress; no free slot on that Run's own provider means no guarantee of immediate diagnosis.
 Failing a doomed dependent is not such a recheck and needs no slot.
 Missing dependency-produced input settles as `dependency_input_missing`; other
 deferred preflight failures use `dispatch_preflight_failed`. These prestart

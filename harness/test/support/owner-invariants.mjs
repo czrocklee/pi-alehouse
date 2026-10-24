@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { terminal } from "../../dist/core/contracts.js";
 import { DELIVERY_LOG_LIMIT, INBOX_CHARS, INBOX_LIMIT } from "../../dist/core/owner-controller.js";
 
-// Test-only invariant pass over the OwnerController's private graph, run from
-// the fixture teardown after shutdown so every unit test doubles as an
-// invariant fuzzer. TS `private` is compile-time only; the runtime fields are
-// read directly and NOTHING here may require a production hook.
-// Quiescent-state formulations only (see the audit report, item 3): a latched
-// fail-closed owner is legal state, and `reserved_by` is checked in its weak
-// form because the answer-reservation window legitimately outlives statuses.
+// Test-only invariant pass over the OwnerController's private graph. The
+// shared fixture runs it on the live schedulable graph and again after
+// shutdown. TS `private` is compile-time only; the runtime fields are read
+// directly and NOTHING here may require a production hook or stats() oracle.
+// Quiescent-state formulations only: a latched fail-closed owner is legal
+// state, and `reserved_by` is checked in its weak form because the
+// answer-reservation window legitimately outlives statuses.
 
 export function assertOwnerInvariants(controller, where = "teardown") {
   const violations = [];
@@ -61,20 +61,33 @@ export function assertOwnerInvariants(controller, where = "teardown") {
   }
   if (controller.retainedOutputChars !== retainedSum) bad(`retained ${controller.retainedOutputChars} != ${retainedSum}`);
 
-  // I6: active counter and its flag pairing.
+  // I6: active counter pairs with flags. Legal scheduled occupancy is an
+  // active running or cancelling Run, including initializing and unconfirmed
+  // cancellation. Fold run.active here. Do not read stats().providers or any
+  // production occupancy helper; concurrency tests check that projection.
   let activeCount = 0;
+  const activeByProvider = new Map();
   for (const run of runs.values()) {
     if (run.active) {
       activeCount++;
-      if (run.record.execution_exited || run.record.status !== "running") bad(`active ${run.record.run_id}`);
+      if (run.record.execution_exited || !["running", "cancelling"].includes(run.record.status)) bad(`active ${run.record.run_id}`);
+      const provider = run.record.settings.provider;
+      activeByProvider.set(provider, (activeByProvider.get(provider) ?? 0) + 1);
     }
-    if (run.record.status === "running" && !run.active && !run.record.execution_exited) bad(`running ${run.record.run_id}`);
+    if (["running", "cancelling"].includes(run.record.status) && !run.active && !run.record.execution_exited) {
+      bad(`unslotted ${run.record.status} ${run.record.run_id}`);
+    }
   }
   if (controller.active !== activeCount) bad(`active ${controller.active} != ${activeCount}`);
+  for (const [provider, count] of activeByProvider) {
+    if (count > limits.concurrency) bad(`provider ${provider} active ${count} > ${limits.concurrency}`);
+  }
 
   // I7: queue membership iff queued and not yet exited; no duplicates.
+  // Queue length is an Owner total, not per provider.
   const inQueue = new Set(queue);
   if (inQueue.size !== queue.length) bad("queue duplicates");
+  if (queue.length > limits.queue) bad(`queue ${queue.length} > ${limits.queue}`);
   for (const id of queue) {
     const run = runs.get(id);
     if (!run || run.record.status !== "queued" || run.record.execution_exited) bad(`queue entry ${id}`);
@@ -82,6 +95,20 @@ export function assertOwnerInvariants(controller, where = "teardown") {
   for (const run of runs.values()) {
     if (run.record.status === "queued" && !run.record.execution_exited && !inQueue.has(run.record.run_id)) {
       bad(`queued not in queue ${run.record.run_id}`);
+    }
+  }
+  // A schedulable Owner must not leave a dependency-ready Run queued while its
+  // admitted provider still has capacity. Active cancelling holds that slot
+  // (I6). Only the fault flags that actually suspend pump skip this check;
+  // closing is one of them, so it is observed before shutdown, not weakened.
+  if (!controller.closing && !controller.closed && !controller.parentError && !controller.internalError && !controller.cleanupUncertain) {
+    for (const id of queue) {
+      const run = runs.get(id);
+      if (!run) continue;
+      const blocked = (run.record.after ?? []).some((dep) => !terminal(runs.get(dep)?.record.status));
+      if (blocked) continue;
+      const provider = run.record.settings.provider;
+      if ((activeByProvider.get(provider) ?? 0) < limits.concurrency) bad(`ready ${id} queued under ${provider} with capacity`);
     }
   }
 

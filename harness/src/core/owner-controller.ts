@@ -63,6 +63,7 @@ interface RunRecord {
   source_state?: SourceState;
   time_wrapped?: true;
 }
+type ProviderActivity = ReadonlyMap<string, { readonly active: number }>;
 interface ResourceClaim {
   run_id: string;
   agent_id: string;
@@ -126,6 +127,9 @@ export interface OwnerControllerOptions {
   /** Synchronous post-accept/pre-dispatch effect, not an admission transaction.
    * Must return undefined; failure prevents dispatch, never rolls back a Run ID. */
   onContextChange?: (event: ContextChange) => undefined;
+  /** Maximum executing Runs per admitted provider, including initialization and
+   * stop/drain until actual execution exit. Default 4; Owner-local, not a rate
+   * limiter. Resident and queue limits remain Owner-wide. */
   concurrency?: number;
   resident_limit?: number;
   queue_limit?: number;
@@ -182,6 +186,9 @@ const errorText = (error: unknown): string => {
 };
 const emptyOutput = (): Output => ({ text: "", total_chars: 0, truncated: false });
 const positive = (value: number): boolean => Number.isSafeInteger(value) && value > 0;
+/** Single source for shipped capacity and retention defaults, also used by UI assembly. */
+export const DEFAULT_OWNER_LIMITS = Object.freeze({ concurrency: 4, resident: 12, queue: 16, grace: 5,
+  output: 1_048_576, historyRuns: 512, historyOutput: 64 * 1024 * 1024, releaseWait: 10_000 });
 const cumulativeUsage = (previous: UsageLedger | undefined, next: UsageLedger): UsageLedger => {
   if (!previous) return next;
   // Cumulative observations are not deltas. Keep every observed floor, even
@@ -248,6 +255,9 @@ export class OwnerController {
   private modelCommunication = false;
   private submitTail: Promise<unknown> = Promise.resolve();
   private active = 0;
+  /** Transient occupancy for one non-reentrant pump, never retained authority.
+   * Active transitions update it even when execution exits synchronously. */
+  private pumping?: Map<string, number>;
   /** Settled child spend the host has not taken yet. See `drainUsage`. */
   private unreported: UsageLedger | undefined;
   private sequence = 0;
@@ -268,10 +278,10 @@ export class OwnerController {
     const { managedBlockTools, ...ownerOptions } = options;
     this.options = ownerOptions; // Do not retain the caller's vocabulary array.
     this.managedBlockTools = snapshotManagedBlockTools(managedBlockTools);
-    this.limits = { concurrency: options.concurrency ?? 4, resident: options.resident_limit ?? 8,
-      queue: options.queue_limit ?? 16, grace: options.grace_turns ?? 5, output: options.output_chars ?? 1_048_576,
-      historyRuns: options.history_run_limit ?? 512, historyOutput: options.history_output_chars ?? 64 * 1024 * 1024,
-      releaseWait: options.release_wait_ms ?? 10_000 };
+    this.limits = { concurrency: options.concurrency ?? DEFAULT_OWNER_LIMITS.concurrency, resident: options.resident_limit ?? DEFAULT_OWNER_LIMITS.resident,
+      queue: options.queue_limit ?? DEFAULT_OWNER_LIMITS.queue, grace: options.grace_turns ?? DEFAULT_OWNER_LIMITS.grace, output: options.output_chars ?? DEFAULT_OWNER_LIMITS.output,
+      historyRuns: options.history_run_limit ?? DEFAULT_OWNER_LIMITS.historyRuns, historyOutput: options.history_output_chars ?? DEFAULT_OWNER_LIMITS.historyOutput,
+      releaseWait: options.release_wait_ms ?? DEFAULT_OWNER_LIMITS.releaseWait };
     if (![this.limits.concurrency, this.limits.resident, this.limits.queue, this.limits.output,
       this.limits.historyRuns, this.limits.historyOutput].every(positive) ||
         !Number.isSafeInteger(this.limits.grace) || this.limits.grace < 0 ||
@@ -809,19 +819,54 @@ export class OwnerController {
       error: `DEPENDENCY_NOT_COMPLETED: ${dependency.name || dependency.settings.profile} (${status})` };
     this.track(this.finish(run, { kind: "error", error: run.prestartFailure.error, output: run.output }));
   }
+  /** Shared production projection; tests independently fold active Run flags. */
+  private providerActivity() {
+    const providers = new Map<string, { provider: string; active: number; queued: number; limit: number }>();
+    const rowFor = (run: ManagedRun) => {
+      const provider = run.record.settings.provider;
+      let row = providers.get(provider);
+      if (!row) { row = { provider, active: 0, queued: 0, limit: this.limits.concurrency }; providers.set(provider, row); }
+      return row;
+    };
+    for (const run of this.runs.values()) if (run.active) rowFor(run).active++;
+    // A prestart failure may still be finalizing with status queued after it
+    // left the scheduling queue; count membership, not that transient status.
+    for (const id of this.queue) rowFor(this.requireRun(id)).queued++;
+    return providers;
+  }
+  /** Per-projection snapshot, only needed when a row could have a queue wait. */
+  private projectionActivity(runs: Iterable<ManagedRun>): ProviderActivity {
+    for (const run of runs) if (run.record.status === "queued" && !run.record.execution_exited) return this.providerActivity();
+    return new Map();
+  }
+  private queuedFor(run: ManagedRun, healthy: boolean, providers: ProviderActivity): RunView["queued_for"] {
+    if (!healthy || run.record.status !== "queued" || run.record.execution_exited) return undefined;
+    const dependencies = this.dependencies(run.record).map((id) => this.requireRun(id).record);
+    // A doomed Run needs neither its other dependencies nor a provider slot.
+    if (dependencies.some((dep) => terminal(dep.status) && dep.status !== "completed")) return undefined;
+    if (dependencies.some((dep) => !terminal(dep.status))) return "dependencies";
+    return (providers.get(run.record.settings.provider)?.active ?? 0) >= this.limits.concurrency ? "capacity" : undefined;
+  }
   private pump(): void {
     this.assertEffectAllowed();
     // Closing cancels queued work through shutdown, not dependency failure.
     // Owner faults likewise suspend ordinary scheduling, including failDoomed.
-    if (this.closing || this.closed || this.parentError || this.internalError || this.cleanupUncertain) return;
+    if (this.pumping || !this.queue.length || this.closing || this.closed || this.parentError || this.internalError || this.cleanupUncertain) return;
+    // Scan retained Runs once, not once per queue slot. Synchronous exits update
+    // this transient map and recursive pump calls leave scheduling to this pass.
+    const activeByProvider = new Map([...this.providerActivity()].map(([provider, row]) => [provider, row.active]));
+    this.pumping = activeByProvider;
+    try {
     this.failDoomed();
-    while (this.active < this.limits.concurrency && this.queue.length) {
-      // Recheck every iteration: execute/begin may throw synchronously and
-      // release its slot while this very pump still has queued work.
+    while (this.queue.length) {
       if (this.closing || this.closed || this.parentError || this.internalError || this.cleanupUncertain) return;
-      // FIFO among Runs whose dependencies have settled. A waiting Run keeps
-      // its queue place without holding an execution slot or its deadline.
-      const index = this.queue.findIndex((id) => !this.blockedBy(this.requireRun(id)).length);
+      // FIFO among dependency-ready Runs with room in their admitted provider.
+      // A saturated provider must not block another provider's ready work.
+      // Skipped Runs keep their queue place and have not started their deadline.
+      const index = this.queue.findIndex((id) => {
+        const run = this.requireRun(id);
+        return (activeByProvider.get(run.record.settings.provider) ?? 0) < this.limits.concurrency && !this.blockedBy(run).length;
+      });
       if (index < 0) return;
       try { this.options.owner.assertHeld(); }
       catch (error) { this.internalError = errorText(error); this.wake(); return; }
@@ -846,6 +891,8 @@ export class OwnerController {
         }
       }
       run.active = true; this.active++;
+      const provider = run.record.settings.provider;
+      activeByProvider.set(provider, (activeByProvider.get(provider) ?? 0) + 1);
       run.executionStartedMono = this.clock.mono();
       run.budgetStartedMono = performance.now();
       run.record.status = "running"; run.record.phase = "initializing"; run.record.started_at = this.clock.wall();
@@ -860,6 +907,7 @@ export class OwnerController {
       }
       this.track(this.execute(run));
     }
+    } finally { this.pumping = undefined; }
   }
   private output(run: ManagedRun, value: Output): boolean {
     this.assertEffectAllowed();
@@ -1043,7 +1091,11 @@ export class OwnerController {
     run.record.exited_at = this.clock.wall(); run.record.phase = "finalizing"; run.turnStarted = undefined;
     run.record.execution_elapsed_ms = run.executionStartedMono === undefined ? undefined :
       Math.max(0, this.clock.mono() - run.executionStartedMono);
-    if (run.active) { run.active = false; this.active--; }
+    if (run.active) {
+      run.active = false; this.active--;
+      const provider = run.record.settings.provider;
+      if (this.pumping) this.pumping.set(provider, (this.pumping.get(provider) ?? 0) - 1);
+    }
     let agent: Agent;
     const stopped = run.record.stop_reason;
     let accrued = false;
@@ -1393,10 +1445,11 @@ export class OwnerController {
 
   view(run_id: string): RunView {
     const run = this.requireRun(run_id);
-    return this.projectRun(run, this.observationLeaseHeld(), taskOrdinal(run, [...this.runs.values()]));
+    return this.projectRun(run, this.observationLeaseHeld(), taskOrdinal(run, [...this.runs.values()]), this.projectionActivity([run]));
   }
-  private projectRun(run: ManagedRun, leaseHeld: boolean, task: number): RunView {
+  private projectRun(run: ManagedRun, leaseHeld: boolean, task: number, providers: ProviderActivity): RunView {
     const record = run.record, run_id = record.run_id, agent = this.requireAgent(record.agent_id);
+    const queued_for = this.queuedFor(run, this.communicationHealthy() && leaseHeld, providers);
     const unavailable = this.closed || this.closing ? "owner_closed" : this.cleanupUncertain ? "owner_cleanup_uncertain" : this.internalError ? "owner_internal_error" : this.parentError ? "owner_parent_unavailable" :
       !leaseHeld ? "owner_lease_lost" : agent.unavailable ?? (agent.exiting ? "exiting" : agent.current ? "agent_busy" : undefined);
     return structuredClone({ owner_id: record.owner_id, generation: record.generation, run_id, agent_id: record.agent_id,
@@ -1422,6 +1475,7 @@ export class OwnerController {
       pending_messages: this.alerts.filter((alert) => alert.run === run).length,
       ...(record.after ? { after: record.after } : {}),
       ...(this.blockedBy(run).length ? { blocked_by: this.blockedBy(run) } : {}),
+      ...(queued_for ? { queued_for } : {}),
       ...(record.delivered_updates ? { delivered_updates: record.delivered_updates } : {}) });
   }
   /** Last observed SDK context occupancy of one Agent's Runs, retained after settlement. */
@@ -1497,8 +1551,11 @@ export class OwnerController {
       latest.set(id, run);
     }
     if (!latest.size) return [];
-    const leaseHeld = this.observationLeaseHeld();
-    return [...latest.values()].map((run) => this.projectRun(run, leaseHeld, ordinals.get(run.record.agent_id)!));
+    // Occupancy belongs to this projection only, just like lease health and
+    // ordinals. Do not rescan retained Runs for each queued row or cache it
+    // across independent views/commands.
+    const leaseHeld = this.observationLeaseHeld(), providers = this.projectionActivity(latest.values());
+    return [...latest.values()].map((run) => this.projectRun(run, leaseHeld, ordinals.get(run.record.agent_id)!, providers));
   }
   stats() {
     const draining = [...this.runs.values()].flatMap((run) => {
@@ -1521,13 +1578,15 @@ export class OwnerController {
       settled_reasons[key] = (settled_reasons[key] ?? 0) + 1;
       if (run.record.outcome?.time_wrapped) time_wrapped_attempts++;
     }
-    return { active: this.active, queued: this.queue.length, time_wrapped_attempts, ...(draining.length ? { draining } : {}),
+    return { active: this.active, queued: this.queue.length, concurrency_scope: "provider" as const,
+    providers: [...this.providerActivity().values()], time_wrapped_attempts, ...(draining.length ? { draining } : {}),
     ...(Object.keys(settled_reasons).length ? { settled_reasons } : {}),
     ...(finalizingWaits.length ? { finalizing_waits: finalizingWaits } : {}),
     ...(stopping.length ? { stopping } : {}),
     resident: [...this.agents.values()].filter((a) => a.resident).length,
     agents: this.agents.size, runs: this.runs.size, requests: this.requests.size,
-    /** Effective limits, so operators can see the real caps, not just defaults. */
+    /** Effective limits: concurrency is per provider; active above is summed
+     * across providers. Resident and queue capacities remain Owner-wide. */
     limits: { ...this.limits },
     retained_output_chars: this.retainedOutputChars, reserved_output_chars: this.reservedOutputChars,
     unreported_usage: this.unreported ? structuredClone(this.unreported) : undefined,
@@ -1622,12 +1681,12 @@ export class OwnerController {
       },
       snapshot: (reason, enabled) => {
         const all = [...this.runs.values()], alerts = scopedAlerts(this.alerts, scope), finished = finishedCandidates(all);
-        const healthy = this.communicationHealthy() && leaseHeld;
+        const healthy = this.communicationHealthy() && leaseHeld, providers = this.projectionActivity(targets);
         const data: CommunicationSnapshot = { reason, ...(action ? { action } : {}), ...(!enabled ? { workers_disabled: true } : {}),
-          tasks: targets.map((run) => this.communicationTask(run, all, healthy, limit, cursor, request.kind === "read")),
+          tasks: targets.map((run) => this.communicationTask(run, all, healthy, providers, limit, cursor, request.kind === "read")),
           alerts: alerts.map(({ run, message, source }) => ({ agent: run.record.name, task: taskOrdinal(run, all),
             label: boundedOutput(run.record.description, 120).text, message, ...(source === undefined ? {} : { source }) })),
-          finished: finished.map((run) => ({ row: this.communicationRow(run, all, healthy),
+          finished: finished.map((run) => ({ row: this.communicationRow(run, all, healthy, providers),
             ...(targets.includes(run) ? { task_index: targets.indexOf(run) } : {}) })), blocked: this.communicationBlock() };
         snapshot = { data, targets, alerts, finished, reportedBlockAtStart };
         return data;
@@ -1653,15 +1712,17 @@ export class OwnerController {
   private observationLeaseHeld(): boolean {
     try { this.options.owner.assertHeld(); return true; } catch { return false; }
   }
-  private communicationRow(run: ManagedRun, all: readonly ManagedRun[], healthy: boolean): ThinTaskEntry {
+  private communicationRow(run: ManagedRun, all: readonly ManagedRun[], healthy: boolean, providers: ProviderActivity): ThinTaskEntry {
     const agent = this.requireAgent(run.record.agent_id), record = run.record;
     const unavailable = !healthy || !agent.resident || !!agent.unavailable || !!agent.exiting || !!run.quarantine;
-    return { agent: record.name, task: taskOrdinal(run, all), status: record.execution_exited && !terminal(record.status) ? "finishing" :
+    const wait = this.queuedFor(run, healthy, providers);
+    return { agent: record.name, task: taskOrdinal(run, all), ...(wait ? { wait } : {}), status: record.execution_exited && !terminal(record.status) ? "finishing" :
       modelTaskStatus(record.status),
       ...(agent.question?.run_id === record.run_id ? { has_question: true } : {}),
       ...(record.limit_reached ? { limit_reached: true } : {}), ...(unavailable ? { unavailable: true } : {}) };
   }
-  private communicationTask(run: ManagedRun, all: readonly ManagedRun[], healthy: boolean, limit: number, cursor: string | undefined, historical: boolean): TaskSnapshot {
+  private communicationTask(run: ManagedRun, all: readonly ManagedRun[], healthy: boolean, providers: ProviderActivity,
+    limit: number, cursor: string | undefined, historical: boolean): TaskSnapshot {
     const agent = this.requireAgent(run.record.agent_id);
     const question_id = actionableQuestionId(agent, run, healthy);
     // Reuse cost belongs where the parent decides on reuse: the latest task of
@@ -1672,7 +1733,7 @@ export class OwnerController {
     const context_tokens = reusable ? this.lastContext(own)?.tokens ?? undefined : undefined;
     const dispatch_notes = modelDispatchNotes(run.record.dispatch_notes);
     const recovery_hint = isCommunicationSettled(run) ? modelRecoveryHint(run.record.outcome) : undefined;
-    return { row: this.communicationRow(run, all, healthy), settled: isCommunicationSettled(run),
+    return { row: this.communicationRow(run, all, healthy, providers), settled: isCommunicationSettled(run),
       ...(question_id ? { question_id } : {}),
       ...(run.question !== undefined && (historical || isCommunicationSettled(run)) ? { question: run.question } : {}),
       result: this.communicationWindow(run, limit, cursor),

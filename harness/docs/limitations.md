@@ -36,7 +36,10 @@ expiry, and explicit close use best-effort stop paths and quarantine uncertain s
 they do not roll back filesystem/provider effects, prove zero further provider
 activity, prove child exit, or restore an old input safely.  An execution slot
 is freed only after actual execution exit; it can then run a queued peer before
-history finalization completes.  The Agent reservation and Owner lease remain
+history finalization completes.  That slot is per admitted provider
+(`concurrency`, default 4; models share it), Owner-local and not a
+cross-process or account rate limiter: separate provider IDs sharing an account
+still receive separate slots. Resident capacity is 12 Owner-wide.  The Agent reservation and Owner lease remain
 until finalization and cleanup confirm release.  A deadline is not a hard
 monetary or provider-output cap.  Observed cost is telemetry, not a budget.
 
@@ -191,7 +194,7 @@ the byte limit, even when outside the text budget. A complete first alert is
 reserved for reason=alert; full worst-case question and alert cannot always fit
 together. Read prioritizes the complete recorded question; unshown alerts stay
 pending. Mandatory control rows, pending names and truncation flags stay intact;
-the model tool adapter requires resident ≤16 (production eight), while core can
+the model tool adapter requires resident ≤16 (production twelve), while core can
 support more. Model tool assembly also explicitly binds lifetime-valid unique
 model names, rejecting incompatible existing generic history before exposing
 tools; final admission prevents later incompatible work. Generic core names
@@ -202,7 +205,7 @@ binding preserves pending alerts but does not make their bodies model-readable;
 silently filtered or renamed. Increasing adapter bounds needs a new packing
 proof, not silent truncation. Fixed-width recovery cursors are reserved for bound terminal
 windows with remaining text, including wholly omitted pages after Agent reuse;
-the conservative tagged-alert reservation bound is 65068 bytes. Keep returned cursors: task
+the conservative tagged-alert/queue-wait reservation bound is 65484 bytes. Keep returned cursors: task
 ordinals are not historical-read parameters, and a convenience-only finished row
 or wholly shown/empty result does not newly acquire an all-history selector.
 Cursors are stateless 128-bit Owner/generation/Run/version locators with accepted
@@ -295,6 +298,12 @@ which may deny instead of asking. Unsupported env-wrapped configuration spelling
 gain no managed proof, but the existing static deny-parity gap is not fixed by
 this scope. No OS isolation or general inherited-environment guarantee follows.
 
+Jev review concurrency is independent of worker capacity: up to four root and
+eight distinct subagent reviews can be in flight. Extra reviews defer with
+`review_overloaded` to ordinary human handling; duplicate in-flight packets
+coalesce. Parallel tool calls can exceed this even with fewer workers, so twelve
+resident Agents do not promise twelve simultaneous automatic approvals.
+
 Automated review requires its external policy, key, complete current provenance,
 and supported context.  It can defer and leave a human ask; it is not calibrated
 model-quality evidence or a new grant authority.  Context snapshots are bounded
@@ -312,7 +321,7 @@ identities are not automatically coordinated. Profile/external preflight is
 approximate: ask/unknown is not a grant; child gates may be stricter. Literal
 paths and lexical/canonical aliases do not provide hardlink tracking or atomic
 filesystem protection. Inputs must exist when checked, whereas ownership/tree
-may name new outputs. Pump rechecks can wait for a free slot; failing a task
+may name new outputs. Pump rechecks can wait for a free slot on that Run's own provider; failing a task
 whose dependency settled without completing does not. The admission wait for a
 release already under way is bounded (10 s) and does not make parallel
 tool-batch order a guarantee.

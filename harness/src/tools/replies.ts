@@ -1,5 +1,5 @@
 import { terminal, validDifficulty, type AgentSummary, type RunView } from "../core/contracts.js";
-import { modelDispatchNotes, modelTaskStatus } from "../core/communication-envelope.js";
+import { isQueueWait, modelDispatchNotes, modelTaskStatus, type QueueWait } from "../core/communication-envelope.js";
 import { modelRecoveryHint } from "../core/model-recovery.js";
 import { isSettledRecord } from "../core/communication-state.js";
 
@@ -17,6 +17,12 @@ export type NameOf = (run_id: string) => string;
 // The parent's verb is interrupt, so its statuses say so.
 const statusOf = (view: RunView) => view.finalization_pending ? "finishing" :
   modelTaskStatus(view.status);
+/** Host RunView.queued_for, renamed. Only a queued projection may carry it, and
+ * only the two enum values: a provider id or count is omitted, never copied. */
+const queueWait = (view: RunView): QueueWait | undefined => {
+  if (statusOf(view) !== "queued") return undefined;
+  return isQueueWait(view.queued_for) ? view.queued_for : undefined;
+};
 
 /** Independent interrupt/roster projection. Communication observations are
  * projected and serialized in core before their presentation commit. */
@@ -25,7 +31,9 @@ export function taskReply(view: RunView, nameOf: NameOf) {
     !!(view.unavailable_reason && view.unavailable_reason !== "agent_busy");
   const dispatch_notes = modelDispatchNotes(view.dispatch_notes);
   const recovery_hint = isSettledRecord(view) ? modelRecoveryHint(view.outcome) : undefined;
+  const wait = queueWait(view);
   return { agent: view.name, task: view.task, status: statusOf(view),
+    ...(wait === undefined ? {} : { wait }),
     ...(view.has_question ? { has_question: true } : {}),
     ...(view.outcome?.reason ? { reason: view.outcome.reason } : {}),
     // Qualifies `status`: a turn-capped task still settles as "completed".
@@ -35,6 +43,7 @@ export function taskReply(view: RunView, nameOf: NameOf) {
     ...(recovery_hint === undefined ? {} : { recovery_hint }),
     ...(view.outcome?.error ? { error: utf16Prefix(view.outcome.error, 512) } : {}),
     ...(view.owner_error ? { owner_error: utf16Prefix(view.owner_error, 512) } : {}),
+    // Dependency names stay; wait is only the queued reason, not a replacement.
     ...(view.blocked_by?.length ? { waiting_for: view.blocked_by.map(nameOf) } : {}),
     ...(unavailable ? { unavailable: true } : {}),
     ...(unavailable && view.unavailable_reason ? { unavailable_reason: utf16Prefix(view.unavailable_reason, 512) } : {}) };
@@ -44,7 +53,8 @@ const EARLIER_SHOWN = 4;
 const TOUCHED_SHOWN = 8;
 /** A roster row: what the parent needs to choose between reusing this Agent
  * and creating another. Model, preset and effort stay hidden: exposing them
- * invites tuning difficulty to pick a model. Spend and idle time stay hidden
+ * invites tuning difficulty to pick a model. Provider identity and queue counts
+ * stay hidden; a queued task exposes only wait. Spend and idle time stay hidden
  * too: spend is sunk and reveals which difficulty is dearer, and idle time
  * cannot tell the parent whether a provider cache is still warm. */
 export function agentRow(view: RunView, summary: AgentSummary, nameOf: NameOf, recoveryHints = new Set<string>()) {
