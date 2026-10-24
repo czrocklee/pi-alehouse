@@ -327,6 +327,7 @@ export class HarnessWidget {
   /** Per-line Agent ids from the last paint; a click at row N reads this. */
   private hits: (string | undefined)[] = [];
   private open?: (agent_id: string) => void;
+  private rosterUpdate?: (inspectableCount: number) => void;
   /** Latest Run's linger per Agent. Expired ages remain as small tombstones so
    * reading a retained released result cannot start its linger over again. */
   private readonly age = new Map<string, { run_id: string; turns: number }>();
@@ -346,6 +347,8 @@ export class HarnessWidget {
   }
   /** What a click on an Agent row does. Unset until the host can mount a pane. */
   onOpen(handler: ((agent_id: string) => void) | undefined): void { this.open = handler; }
+  /** Update projections notify pane coordination, never paint/inspection reads. */
+  onRosterUpdate(handler: ((inspectableCount: number) => void) | undefined): void { this.rosterUpdate = handler; }
   /**
    * The renderer this session is running, captured from the widget's own paint.
    * The detail pane needs it BEFORE it mounts -- only the alternate screen can
@@ -434,6 +437,9 @@ export class HarnessWidget {
     let snapshot: { runs: WidgetRun[]; owner: WidgetOwner };
     // A closed or failing owner must not take the parent UI down with it.
     try { snapshot = this.rows(); } catch { this.clear(); return; }
+    // Best-effort UI coordination uses this projection, including hidden idle
+    // residents and lingering released failures, before any show/clear decision.
+    try { this.rosterUpdate?.(snapshot.runs.length); } catch { /* Optional subscriber cannot break widget updates. */ }
     const { runs, owner } = snapshot;
     const running = runs.filter((run) => !terminal(run.status) && run.status !== "queued").length;
     const queued = runs.filter((run) => run.status === "queued").length;
@@ -527,6 +533,7 @@ export class HarnessWidget {
     finally {
       this.ui = undefined;
       this.open = undefined;
+      this.rosterUpdate = undefined;
       this.lastMode = undefined;
       this.age.clear();
     }

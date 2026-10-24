@@ -157,8 +157,8 @@ export default function statsExtension(pi: ExtensionAPI): void {
         click.handled = true;
         toggleSafely();
       }),
-      // Raw overlays can remove their exact handle. Step off before a harness
-      // ui.custom completion pops the global top; never strand another panel.
+      // Cooperatively close Stats during harness settlement for presentation
+      // coordination; current Pi's ui.custom completion removes its own entry.
       pi.events.on(HIDE_TRANSIENT_OVERLAYS_EVENT, closeCurrent),
       pi.events.on("permissions:ui_prompt", closeCurrent),
       pi.on("ui_prompt_start", () => { if (current()) { prompts++; close(); } }),

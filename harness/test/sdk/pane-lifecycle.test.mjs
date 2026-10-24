@@ -652,6 +652,51 @@ test("native permission stall retires before the next ask and pane restoration n
   assert.equal(h.timeouts.size, 0);
 });
 
+test("real SDK custom completion removes only its own overlay beneath an unrelated overlay", async () => {
+  const layers = [];
+  let finish, handleCloses = 0, globalCloses = 0, disposals = 0;
+  const a = { render: () => ["A"], invalidate() {}, dispose() { disposals++; } };
+  const b = { render: () => ["B"], invalidate() {} };
+  const tui = {
+    requestRender() {},
+    showOverlay(component, options = {}) {
+      const layer = { component, options };
+      layers.push(layer);
+      return { hide() {
+        handleCloses++;
+        const index = layers.indexOf(layer);
+        if (index >= 0) layers.splice(index, 1);
+      }, setHidden() {} };
+    },
+    hideOverlay() { globalCloses++; layers.pop(); },
+  };
+  const host = { editor: { getText: () => "draft" }, ui: tui, keybindings: {} };
+  const opening = InteractiveMode.prototype.showExtensionCustom.call(host, (_tui, _theme, _keys, done) => {
+    finish = done;
+    return a;
+  }, { overlay: true });
+  await tick();
+  assert.deepEqual(layers.map(({ component }) => component), [a]);
+  // B is unrelated and does not subscribe to the cooperative coordination event.
+  const bHandle = tui.showOverlay(b, { nonCapturing: true });
+  assert.deepEqual(layers.map(({ component }) => component), [a, b]);
+  assert.equal(layers[1].options.nonCapturing, true);
+  finish("complete");
+  assert.equal(await opening, "complete");
+  assert.deepEqual(layers.map(({ component }) => component), [b], "A is removed while B survives");
+  assert.equal(handleCloses, 1);
+  assert.equal(globalCloses, 0);
+  assert.equal(disposals, 1);
+
+  finish("late"); finish("later");
+  await tick();
+  assert.deepEqual(layers.map(({ component }) => component), [b], "late completion cannot remove B");
+  assert.equal(handleCloses, 1, "late completion does not hide the handle again");
+  assert.equal(globalCloses, 0);
+  assert.equal(disposals, 1);
+  bHandle.hide();
+});
+
 test("a floating pane is not subject to the inline queue's stall bound", async (t) => {
   const h = fixture(t), opening = h.open({ overlay: true });
   await tick();

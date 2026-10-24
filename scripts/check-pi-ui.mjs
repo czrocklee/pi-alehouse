@@ -1041,7 +1041,7 @@ test("the pinned panel steps aside while a harness panel closes, then returns to
     mounted.paintOverlay();
     const place = mounted.bounds();
     mounted.f.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {});
-    assert.deepEqual(mounted.visible(), [], "off the overlay stack before the harness pops its own");
+    assert.deepEqual(mounted.visible(), [], "cooperatively steps aside during harness settlement");
     // The column keeps its place meanwhile: a harness popover above it cannot drop into the gap.
     const above = joinPopoverStack(mounted.tui);
     assert.equal(above.bottom, FOOTER_HEIGHT + place.height);
@@ -2073,7 +2073,7 @@ test("Stats yields to approvals and other dialogs, and never reopens from a stal
     await m.f.emit("ui_prompt_end", { kind: "confirm", reason: "ui_prompt" });
     m.click(); assert(m.pane());
     m.f.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {});
-    assert.equal(m.pane(), undefined, "gets out of the way before ui.custom pops the global top");
+    assert.equal(m.pane(), undefined, "cooperatively closes during harness settlement");
   } finally { await m.close(); }
 });
 

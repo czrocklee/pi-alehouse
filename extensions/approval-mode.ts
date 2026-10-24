@@ -696,8 +696,8 @@ export default function approvalMode(pi: ExtensionAPI): void {
   // A permission dialog must not open under a popover that holds the keyboard.
   pi.events.on(PERMISSION_UI_PROMPT, () => close());
 
-  // A harness panel closing through ui.custom pops the TOP overlay, which may
-  // be this one. Step off the overlay stack, keep the column place, come back.
+  // Cooperatively step aside during harness settlement, keep the column place,
+  // then return. Current Pi's ui.custom completion removes its own overlay entry.
   pi.events.on(HIDE_TRANSIENT_OVERLAYS_EVENT, () => {
     if (!open?.handle) return;
     open.handle.hide();

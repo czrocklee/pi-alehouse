@@ -1096,10 +1096,9 @@ export default function (pi: ExtensionAPI) {
         member = joinPopoverStack(tui);
         mountBreakdown(member);
       };
-      // Pi's ui.custom overlay close pops the top of a global stack rather than
-      // its own handle. Step aside before a harness panel closes so that the
-      // SDK cannot pop this newer overlay and strand the older one, then come
-      // back in the same place once that close has run.
+      // Cooperatively step aside during harness panel settlement, then return
+      // to the same place. This is presentation coordination, not a workaround
+      // for current Pi: ui.custom completion removes its own overlay entry.
       const stepAside = () => {
         if (!overlay) return;
         overlay.hide();

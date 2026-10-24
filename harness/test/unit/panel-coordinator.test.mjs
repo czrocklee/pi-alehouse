@@ -245,6 +245,164 @@ test("an open queued pane follows late child history and streaming without remou
   await reopening;
 });
 
+function detailRosterPanels(t, { mode = "regular", ids = ["a"], closeFailure, notificationFailure } = {}) {
+  const views = ids.map((id) => ({ agent_id: id, run_id: `run-${id}`, name: `agent-${id}`,
+    description: "roster fixture", status: "completed", phase: "settled", execution_exited: true,
+    finalization_pending: false, resident: true, resumable: true, owner_blocked: false,
+    pending_messages: 0, isolation: "shared", elapsed_ms: 1, turns: 1, max_turns: 8,
+    cleanup_errors: [], discarded_inputs: [], effective_settings: settings }));
+  const widget = new HarnessWidget({ list: () => views,
+    stats: () => ({ resident: views.filter((view) => view.resident).length, cleanup_uncertain: false }) }, 8);
+  widget.tuiMode = () => mode;
+  widget.setUi({}); // Projection updates work without mounting or painting a widget.
+  const shortcuts = new Map(), bus = createEventBus(), settlements = [], hidden = [], mounts = [], notices = [];
+  let pane, closes = 0;
+  const off = bus.on("pi-harness:hide-transient-overlays", () => settlements.push("hide-transient"));
+  const panels = new PanelCoordinator({
+    pi: { events: bus, registerShortcut: (name, spec) => shortcuts.set(name, spec) }, widget,
+    ready: () => true, router() { throw new Error("unused"); }, publish() {}, showError() {},
+  });
+  panels.attachHost({ mode: "tui", ui: {
+    notify(message) { notices.push(message); if (notificationFailure) throw notificationFailure; },
+    custom(factory, options) {
+      mounts.push(options);
+      return new Promise((resolve) => {
+        pane = factory({ terminal: { columns: 120, rows: 100 }, requestRender() {} }, theme, {}, () => {
+          closes++; settlements.push("done"); resolve();
+          if (closeFailure) throw closeFailure;
+        });
+        if (options.overlay) options.onHandle?.({ setHidden: (value) => hidden.push(value) });
+      });
+    },
+  } }, bus);
+  t.after(() => {
+    panels.dispose(); widget.dispose(); off();
+    if (!closeFailure && !notificationFailure) assert.deepEqual(notices, [], "no unexpected UI failures");
+  });
+  return { panels, widget, views, bus, settlements, hidden, mounts, notices,
+    open: () => shortcuts.get("alt+a").handler(), refresh: () => widget.wake(),
+    render: (width = 120) => pane.render(width).join("\n"),
+    get closes() { return closes; } };
+}
+
+for (const mode of ["regular", "fullscreen"]) for (const width of [undefined, 8, 120]) {
+  test(`an open ${mode} detail pane closes on roster refresh without painting (width=${width ?? "unpainted"})`, async (t) => {
+    const h = detailRosterPanels(t, { mode }), opening = h.open();
+    assert.equal(h.mounts[0].overlay, mode === "fullscreen");
+    h.refresh();
+    if (width !== undefined) h.render(width);
+    h.views[0].resident = false;
+    assert.equal(h.widget.agents().length, 0);
+    if (width !== undefined) { h.render(width); h.render(width); }
+    assert.equal(h.closes, 0, "projection reads and paints cannot settle ui.custom");
+    assert.deepEqual(h.settlements, []);
+    h.refresh(); // Tool-result wake, not a terminal paint or an animation timer.
+    assert.equal(h.closes, 1);
+    assert.deepEqual(h.settlements, ["hide-transient", "done"], "auto-close uses the existing coordinated close path");
+    h.refresh();
+    await opening; await tick();
+    assert.equal(h.closes, 1);
+    assert.equal(h.mounts.length, 1, "empty-roster close must not reopen the pane");
+  });
+}
+
+test("empty-roster auto-close contains a throwing close callback and a throwing error notifier", async (t) => {
+  const h = detailRosterPanels(t, { closeFailure: new Error("AUTO_CLOSE_FAILED"),
+    notificationFailure: new Error("NOTIFY_FAILED") }), opening = h.open();
+  h.views[0].resident = false;
+  assert.doesNotThrow(() => h.refresh());
+  assert.equal(h.closes, 1);
+  assert.deepEqual(h.settlements, ["hide-transient", "done"]);
+  assert.equal(h.notices.length, 1);
+  assert.match(h.notices[0], /AUTO_CLOSE_FAILED/);
+  await opening;
+});
+
+test("a transient empty projection cannot close a pane whose next roster refresh has an Agent", async (t) => {
+  const h = detailRosterPanels(t), opening = h.open();
+  h.views[0].resident = false;
+  h.render();
+  h.views[0].resident = true;
+  h.refresh();
+  await tick();
+  assert.equal(h.closes, 0);
+  assert.deepEqual(h.settlements, []);
+  assert.match(h.render(), /agent-a/);
+  h.views[0].resident = false;
+  h.refresh();
+  assert.equal(h.closes, 1);
+  await opening;
+});
+
+test("disposing the coordinator detaches empty-roster refreshes", async (t) => {
+  const h = detailRosterPanels(t, { mode: "fullscreen" }), opening = h.open();
+  h.panels.dispose();
+  assert.equal(h.closes, 1, "disposal itself closes the mounted pane");
+  const settled = [...h.settlements];
+  h.views[0].resident = false;
+  h.refresh();
+  await tick(); await opening;
+  assert.equal(h.closes, 1, "later roster refreshes cannot close again after disposal");
+  assert.deepEqual(h.settlements, settled, "no late overlay coordination through the retired host");
+  assert.equal(h.mounts.length, 1);
+});
+
+test("losing the selected resident keeps the pane open until the last inspectable failure expires", async (t) => {
+  const h = detailRosterPanels(t, { ids: ["a", "b"] }), opening = h.open();
+  h.views[1].resident = false; h.views[1].status = "failed";
+  assert.match(h.render(), /agent-a/);
+  h.views[0].resident = false;
+  h.refresh();
+  assert.deepEqual(h.widget.agents().map((agent) => agent.agent_id), ["b"]);
+  assert.match(h.render(), /agent-b/, "selection falls back to the remaining inspectable Agent");
+  assert.equal(h.closes, 0, "zero residents is not the same as an empty inspectable roster");
+  assert.deepEqual(h.settlements, []);
+  for (let turn = 0; turn < 3; turn++) h.widget.onTurnStart();
+  assert.equal(h.closes, 1, "failure-linger expiration closes without another paint");
+  await opening;
+});
+
+test("an inspectable Agent without any transcript does not auto-close its detail pane", async (t) => {
+  const h = detailRosterPanels(t, { mode: "fullscreen" }), opening = h.open();
+  assert.equal(h.widget.agents()[0].entries(), undefined, "the child has no bound history");
+  h.refresh();
+  assert.match(h.render(), /agent-a/);
+  h.refresh();
+  assert.equal(h.closes, 0);
+  assert.deepEqual(h.settlements, []);
+  h.panels.dispose(); await opening;
+});
+
+test("a floating empty pane waits for the permission decision, then closes without painting", async (t) => {
+  const h = detailRosterPanels(t, { mode: "fullscreen" }), opening = h.open();
+  h.bus.emit("permissions:ui_prompt", { requestId: "empty-roster-ask" });
+  assert.deepEqual(h.hidden, [true], "the permission yield hides, rather than closes, the floating pane");
+  h.views[0].resident = false;
+  h.refresh();
+  assert.equal(h.closes, 0, "the pending ask wins over the roster close");
+  assert.deepEqual(h.settlements, []);
+  h.bus.emit("permissions:decision", { requestId: "empty-roster-ask" });
+  assert.deepEqual(h.hidden, [true, false]);
+  assert.equal(h.closes, 1, "the still-empty pane closes as permission UI settles");
+  await opening;
+});
+
+test("a docked permission yield silently abandons reopening when the last Agent was released", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const h = detailRosterPanels(t), opening = h.open();
+  h.bus.emit("permissions:ui_prompt", { requestId: "docked-empty-roster" });
+  assert.equal(h.closes, 1);
+  await opening;
+  h.views[0].resident = false;
+  h.refresh();
+  h.bus.emit("permissions:decision", { requestId: "docked-empty-roster" });
+  t.mock.timers.tick(1);
+  await tick();
+  assert.equal(h.mounts.length, 1, "automatic restoration never queues a new empty pane");
+  assert.deepEqual(h.notices, [], "an automatic restore is not an explicit inspect request");
+  assert.equal(h.closes, 1);
+});
+
 test("the footer's worker indicator toggles a picker stacked in the bottom-right column", async (t) => {
   const { PresetRouter } = await import("../../dist/routing.js");
   const { FOOTER_INDICATOR_CLICK_EVENT, WORKER_PRESET_INDICATOR } = await import("../../../lib/overlay-protocol.mjs");

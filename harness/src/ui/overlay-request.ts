@@ -1,10 +1,9 @@
 /**
- * Pi's `ui.custom` completion pops the TOP of the global overlay stack rather
- * than the handle it was handed. A newer non-capturing overlay -- the status
- * footer's spend panel, say -- would therefore be popped in place of the panel
- * that actually finished, stranding the disposed one on screen. Every harness
- * panel announces this channel before it settles so cooperating extensions can
- * step aside first.
+ * Every harness panel announces this channel before it settles so cooperating
+ * extensions can close or temporarily step aside for presentation coordination.
+ * This originated as a workaround for older Pi global-stack completion; current
+ * Pi completes `ui.custom` through its own overlay handle, so unrelated overlays
+ * do not need to step aside for the SDK to remove the correct entry.
  *
  * The protocol is shared as a neutral constant and independently bundled into
  * both consumers. The UI regression lane still tests their actual interaction.
@@ -22,7 +21,7 @@ export { HIDE_TRANSIENT_OVERLAYS_EVENT } from "../../../lib/overlay-protocol.mjs
  * because another transient overlay may open in the gap between the two.
  *
  * Both harness panels share this so their settlement seams cannot drift apart:
- * the overlay-stack coordination is only correct while they behave identically.
+ * the cooperative settlement coordination stays consistent between them.
  */
 export class OverlayRequest<T> {
   private cancelled = false;

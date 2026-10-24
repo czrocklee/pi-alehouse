@@ -81,7 +81,12 @@ export class PanelCoordinator {
       overlay: () => this.paneOverlay,
       close: () => this.closePane,
       pending: () => this.approvals.pending,
-      reopen: () => { this.mount(this.paneAgent).catch((error: unknown) => this.observeDetailError(error)); },
+      reopen: () => {
+        // A permission yield is not a new user request. If the last Agent left
+        // while the dialog was open, there is no pane to restore or announce.
+        if (this.options.widget.agents().length)
+          this.mount(this.paneAgent).catch((error: unknown) => this.observeDetailError(error));
+      },
       // One pending pane-reopen intent, not a general deferred-task queue.
       // Repeated idle notifications coalesce; disposal cancels the last intent.
       defer: (task) => {
@@ -102,7 +107,10 @@ export class PanelCoordinator {
         this.closePreset?.();
         this.yieldHandlers.onPrompt(pending);
       },
-      onIdle: () => this.yieldHandlers.onIdle(),
+      onIdle: () => {
+        this.yieldHandlers.onIdle();
+        this.closeEmptyDetail();
+      },
     });
     options.pi.registerShortcut("alt+a", {
       description: "Open the harness agent detail pane",
@@ -134,6 +142,7 @@ export class PanelCoordinator {
     this.options.widget.onOpen((agent_id) => {
       this.activateFromWidget(agent_id).catch((error: unknown) => this.observeDetailError(error));
     });
+    this.options.widget.onRosterUpdate?.((count) => { if (!count) this.closeEmptyDetail(); });
     // The footer paints our status; a click on it is ours to answer, and
     // claiming it synchronously keeps the footer from opening its own panel.
     this.unwatchIndicator = bus.on(FOOTER_INDICATOR_CLICK_EVENT, (data) => {
@@ -177,7 +186,7 @@ export class PanelCoordinator {
   dispose(): void {
     const ctx = this.host;
     const cleanups = [this.unwatchIndicator, this.unwatchApprovals, this.closePreset, this.closePane,
-      () => this.options.widget.onOpen(undefined), this.clearHostWidget];
+      () => this.options.widget.onOpen(undefined), () => this.options.widget.onRosterUpdate?.(undefined), this.clearHostWidget];
     // Detach first: failed host cleanup and already-queued callbacks cannot
     // reopen a panel or keep the old UI binding alive through this coordinator.
     this.host = undefined;
@@ -363,6 +372,15 @@ export class PanelCoordinator {
       this.yielding.unmounted();
       if (this.host && this.options.ready() && !this.approvals.pending) this.yieldHandlers.onIdle();
     }
+  }
+
+  /** Widget refreshes run outside painting, including after release while the
+   * terminal is too narrow to render the pane. Permission UI retains priority;
+   * its idle notification retries an empty pane that was hidden in place. */
+  private closeEmptyDetail(): void {
+    if (!this.host || !this.paneOpen || this.approvals.pending) return;
+    try { if (!this.options.widget.agents().length) this.closePane?.(); }
+    catch (error) { this.observeDetailError(error); }
   }
 
   private mount(agent_id?: string): Promise<void> {

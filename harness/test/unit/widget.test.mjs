@@ -572,6 +572,108 @@ const mounted = (initial = []) => {
     showing: () => !!content, lines: (width = 120) => content ? content.render(width) : [] };
 };
 
+for (const hidden of [false, true]) test(`wake notifies release to empty without a paint (hidden=${hidden})`, (t) => {
+  const view = viewOf("a", "completed");
+  const h = mounted([view]);
+  t.after(() => h.widget.dispose());
+  const counts = [], showingAtEmpty = [];
+  h.widget.onRosterUpdate((count) => {
+    counts.push(count);
+    if (count === 0) showingAtEmpty.push(h.showing());
+  });
+  h.widget.wake();
+  if (hidden) h.widget.onTurnStart();
+  assert.equal(h.showing(), !hidden, "idle residents can outlive their painted rows");
+  h.set([{ ...view, resident: false }]);
+  h.widget.wake();
+  assert.deepEqual(counts, hidden ? [1, 1, 0] : [1, 0]);
+  assert.deepEqual(showingAtEmpty, [!hidden], "notification precedes widget removal");
+  assert.equal(h.showing(), false);
+  assert.equal(h.renders(), 0, "no render request or component render drives notification");
+});
+
+test("roster notifications count released failure linger and expire it on turn start", (t) => {
+  const h = mounted([viewOf("idle", "completed"), { ...viewOf("failed", "failed"), resident: false },
+    { ...viewOf("released", "completed"), resident: false }]);
+  t.after(() => h.widget.dispose());
+  const counts = [];
+  h.widget.onRosterUpdate((count) => { counts.push(count); });
+  h.widget.wake();
+  for (let turn = 0; turn < 3; turn++) h.widget.onTurnStart();
+  assert.deepEqual(counts, [2, 2, 2, 1], "inspectable includes diagnostics, not just residents or painted rows");
+  assert.equal(h.showing(), false, "only the hidden idle resident remains inspectable");
+});
+
+test("every explicit empty update notifies even when the count is unchanged", (t) => {
+  const h = mounted();
+  t.after(() => h.widget.dispose());
+  const counts = [];
+  h.widget.onRosterUpdate((count) => { counts.push(count); });
+  h.widget.update(); h.widget.wake(); h.widget.update(true);
+  assert.deepEqual(counts, [0, 0, 0], "a pane may have opened since the previous empty update");
+});
+
+test("roster notifications use one successful update projection, never render or inspection reads", (t) => {
+  let reads = 0, fail = false, component;
+  const counts = [], setterCounts = [];
+  const widget = new HarnessWidget({ list: () => {
+    reads++;
+    if (fail) throw new Error("PROJECTION_FAILED");
+    return [viewOf("a", "completed")];
+  }, stats: () => ({ resident: 1, cleanup_uncertain: false }) }, 8);
+  t.after(() => widget.dispose());
+  widget.onRosterUpdate((count) => { counts.push(count); });
+  widget.update();
+  assert.equal(reads, 0, "an update before UI binding remains a no-op");
+  widget.setUi({ setWidget: (_key, factory) => {
+    setterCounts.push([...counts]);
+    component = factory?.({ terminal: { columns: 120 }, requestRender() {} }, theme);
+  } });
+  widget.agents();
+  assert.deepEqual(counts, []);
+  widget.wake();
+  assert.equal(reads, 2, "the update scans the controller only once");
+  assert.deepEqual(setterCounts, [[1]], "notification precedes widget registration");
+  component.render(120); component.render(120);
+  widget.agents(); widget.tuiMode();
+  assert.deepEqual(counts, [1], "projection reads do not notify");
+  fail = true;
+  widget.wake();
+  assert.deepEqual(counts, [1], "failed projection does not notify an invented empty roster");
+  assert.equal(component, undefined);
+});
+
+test("roster subscriber failures cannot block showing or clearing and can be detached", (t) => {
+  const h = mounted([viewOf("a", "completed")]);
+  t.after(() => h.widget.dispose());
+  let calls = 0;
+  h.widget.onRosterUpdate(() => { calls++; throw new Error("SUBSCRIBER_FAILED"); });
+  assert.doesNotThrow(() => h.widget.wake());
+  assert.equal(h.showing(), true);
+  h.set([]);
+  assert.doesNotThrow(() => h.widget.wake());
+  assert.equal(h.showing(), false);
+  assert.equal(calls, 2);
+  h.widget.onRosterUpdate(undefined);
+  h.widget.update();
+  assert.equal(calls, 2);
+});
+
+for (const clearThrows of [false, true]) test(`dispose detaches the roster subscriber (clearThrows=${clearThrows})`, (t) => {
+  const h = refreshFixture(t, "completed");
+  const counts = [];
+  h.widget.onRosterUpdate((count) => { counts.push(count); });
+  h.widget.wake();
+  if (clearThrows) {
+    h.failRemoval();
+    assert.throws(() => h.widget.dispose(), /WIDGET_CLEAR_FAILED/);
+  } else h.widget.dispose();
+  // Rebinding ensures this proves subscriber detachment, not just the no-UI guard.
+  h.widget.setUi({});
+  h.widget.wake();
+  assert.deepEqual(counts, [1]);
+});
+
 test("the paint loop starts when a Run is there, not when delegation is only about to happen", (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const h = mounted();
