@@ -20,17 +20,19 @@ const base = { turns: 3, max_turns: 256, elapsed_ms: 12400, tool_uses: 2, active
   effort: "high", description: "Task" };
 const run = (id, overrides) => ({ ...base, agent_id: id, run_id: `${id}-run`, ...overrides });
 const render = (runs, options = {}) => renderWidgetLines({ runs, owner, spinnerFrame: 0, width: 120, theme,
-  shouldShowFinished: () => true, ...options });
+  maxLines: 12, shouldShowFinished: () => true, ...options });
 
 test("an empty, unblocked owner renders nothing at all", () => {
-  assert.deepEqual(render([]), []);
-  assert.deepEqual(render([run("a", { status: "completed" })], { shouldShowFinished: () => false }), []);
+  const empty = { ...owner, resident: 0 };
+  assert.deepEqual(render([], { owner: empty }), []);
+  assert.deepEqual(render([run("a", { status: "completed" })],
+    { owner: empty, shouldShowFinished: () => false }), []);
 });
 
 test("the body is ordered finished, running, queued and the tree closes exactly once", () => {
   const lines = render([run("q", { status: "queued" }), run("r", { status: "running", turn_elapsed_ms: 900 }),
     run("f", { status: "completed", name: "done" })]);
-  assert.match(lines[0], /^● Agents 2 resident$/);
+  assert.match(lines[0], /^● Agents 2 resident ▸$/);
   assert.match(lines[1], /^├─ ✓ done/);
   assert.match(lines[2], /^├─ ⠋ editor/);
   assert.match(lines[3], /^│ {4}⎿ {2}thinking…$/);
@@ -68,6 +70,8 @@ for (const [waiting_for, label] of [["sdk_idle", "SDK idle"], ["deliveries", "tr
     const live = { active_tools: [], tool_uses: 0, preview: "" };
     assert(renderDetailFields({ view, live }, theme, 120).join("\n").includes(`draining 5.0s · awaiting ${label}`));
     view.drain.elapsed_ms = 8000;
+    assert(h.lines().join("\n").includes(`draining 5.0s · awaiting ${label}`), "render uses the detached tick snapshot");
+    h.widget.wake();
     assert(h.lines().join("\n").includes(`draining 8.0s · awaiting ${label}`));
     for (const width of [20, 40, 80]) assert(h.lines(width).every((line) => visibleWidth(line) <= width));
     view.execution_exited = true;
@@ -75,15 +79,15 @@ for (const [waiting_for, label] of [["sdk_idle", "SDK idle"], ["deliveries", "tr
   });
 }
 
-test("owner trouble is always the last line and survives an overflowing body", () => {
+test("owner trouble is directly after the heading and survives an overflowing body", () => {
   const many = Array.from({ length: 9 }, (_, index) => run(`r${index}`, { status: "running" }));
-  const lines = renderWidgetLines({ runs: many, spinnerFrame: 0, width: 120, theme, shouldShowFinished: () => true,
+  const lines = renderWidgetLines({ runs: many, spinnerFrame: 0, width: 120, maxLines: 12, theme, shouldShowFinished: () => true,
     owner: { blocked: true, error: "PARENT_HISTORY_UNAVAILABLE", resident: 8, resident_limit: 8 } });
   // A running Agent costs two rows, so the last row can stay unused rather than half-drawn.
   assert(lines.length <= 12, String(lines.length));
-  assert.match(lines[0], /^✗ Agents 8 resident \(full\)$/);
-  assert.match(lines.at(-2), /^├─ \+5 more \(5 running\)$/);
-  assert.match(lines.at(-1), /^└─ ✗ owner blocked: PARENT_HISTORY_UNAVAILABLE$/);
+  assert.match(lines[0], /^✗ Agents 8 resident \(full\) ▸$/);
+  assert.match(lines[1], /^├─ ✗ owner blocked: PARENT_HISTORY_UNAVAILABLE$/);
+  assert.match(lines.at(-1), /^└─ \+5 more \(5 running\)$/);
 });
 
 test("overflow keeps running work and reports what it hid", () => {
@@ -93,6 +97,91 @@ test("overflow keeps running work and reports what it hid", () => {
   assert.equal(lines.length, 12);
   assert.equal(lines.filter((line) => line.includes("⠋")).length, 5);
   assert.match(lines.at(-1), /^└─ \+6 more \(1 running, 1 queued, 4 finished\)$/);
+});
+
+test("a single available row prioritizes the Owner warning over body or disclosure", () => {
+  const frame = renderWidget({ runs: [run("a", { status: "running" })],
+    owner: { ...owner, blocked: true, error: "BROKEN" }, maxLines: 1, expanded: true,
+    width: 80, theme, spinnerFrame: 0, shouldShowFinished: () => true });
+  assert.deepEqual(frame.lines, ["owner blocked: BROKEN"]);
+  assert.deepEqual(frame.hits, [undefined]);
+  assert.equal(frame.headingWidth, 0);
+  assert.equal(frame.pagination, undefined);
+});
+
+test("resident headings remain discoverable without visible idle rows, even below capacity", () => {
+  for (const resident of [1, 2, 7]) {
+    const options = { owner: { ...owner, resident }, shouldShowFinished: () => false };
+    assert.deepEqual(render([run("idle", { status: "completed" })], options),
+      [`○ Agents ${resident} resident ▸`]);
+    assert.deepEqual(render([], options), [`○ Agents ${resident} resident`], "no projected runs means no disclosure");
+  }
+  for (const expanded of [false, true]) {
+    assert.deepEqual(render([], { owner: { ...owner, resident: 0, blocked: true, error: "BROKEN" }, expanded }),
+      ["✗ Agents 0 resident", "└─ ✗ owner blocked: BROKEN"], "blocked empty headings have no disclosure");
+  }
+});
+
+test("expanded rendering pages every projected Agent within the bounded budget", () => {
+  const finished = Array.from({ length: 12 }, (_, i) => run(`idle-${i}`, { status: "completed", name: `idle${i}` }));
+  const runs = [...finished, run("busy", { status: "running", name: "busy" })];
+  const params = { runs, owner: { ...owner, resident: 13, resident_limit: 16 }, spinnerFrame: 0,
+    width: 120, maxLines: 12, theme, shouldShowFinished: () => false };
+  const compact = renderWidget(params);
+  assert.deepEqual(compact, renderWidget({ ...params, expanded: false }));
+  assert.equal(compact.lines.length, 3, "ordinary rendering still filters aged-out results");
+  assert.deepEqual(compact.hits, [undefined, "busy", "busy"]);
+  assert.match(compact.lines[0], / ▸$/);
+  const seen = new Set();
+  for (let page = 0, pages = 1; page < pages; page++) {
+    const frame = renderWidget({ ...params, expanded: true, page });
+    pages = frame.pagination.pages;
+    assert.equal(frame.pagination.page, page);
+    assert(frame.lines.length <= 12);
+    assert.match(frame.lines[0], / ▾$/);
+    for (const id of frame.hits.filter(Boolean)) seen.add(id);
+    assert.doesNotMatch(frame.lines.join("\n"), /\+\d+ more/);
+    assert(frame.lines.every((line) => visibleWidth(line) <= 120));
+  }
+  assert.deepEqual([...seen], runs.map((row) => row.agent_id));
+});
+
+test("expanded queued Agents each have their own clickable identity instead of an aggregate", () => {
+  const queued = Array.from({ length: 13 }, (_, i) => run(`queue-id-${i}`, { status: "queued", name: `queue${i}` }));
+  const params = { runs: queued, owner, spinnerFrame: 0, width: 120, theme, shouldShowFinished: () => false };
+  const compact = renderWidget(params);
+  assert.deepEqual(compact.hits, [undefined, undefined]);
+  assert.match(compact.lines[1], /^└─ ◦ 13 queued$/);
+  const seen = [];
+  for (let page = 0, pages = 1; page < pages; page++) {
+    const frame = renderWidget({ ...params, expanded: true, page });
+    pages = frame.pagination.pages;
+    assert(frame.lines.length <= 6, "legacy/default rendering has a safe six-line budget");
+    for (const [y, id] of frame.hits.entries()) if (id) {
+      const row = queued.find((run) => run.agent_id === id);
+      assert.match(frame.lines[y], /^[├└]─ ◦ /);
+      assert(frame.lines[y].includes(`${row.name} `));
+      seen.push(id);
+    }
+    assert.doesNotMatch(frame.lines.join("\n"), /13 queued|\+\d+ more/);
+  }
+  assert.deepEqual(seen, queued.map((row) => row.agent_id));
+});
+
+test("every expanded page protects owner trouble above the bounded body", () => {
+  const runs = Array.from({ length: 8 }, (_, i) => run(`r${i}`, { status: "running" }));
+  const seen = new Set();
+  for (let page = 0, pages = 1; page < pages; page++) {
+    const frame = renderWidget({ runs, expanded: true, page, owner: { ...owner, blocked: true, error: "BROKEN" },
+      spinnerFrame: 0, width: 80, theme, shouldShowFinished: () => false });
+    pages = frame.pagination.pages;
+    assert(frame.lines.length <= 6);
+    assert.match(frame.lines[1], /^├─ ✗ owner blocked: BROKEN$/);
+    assert(frame.lines.some((line) => /⎿ {2}thinking…/.test(line)), "activity survives when a pair fits");
+    for (const id of frame.hits.filter(Boolean)) seen.add(id);
+    assert(frame.lines.every((line) => visibleWidth(line) <= 80));
+  }
+  assert.deepEqual([...seen], runs.map((row) => row.agent_id));
 });
 
 test("every line fits the terminal, counting CJK by the columns it occupies", () => {
@@ -560,17 +649,428 @@ const viewOf = (agent_id, status, run_id = `${agent_id}-1`) => ({
     tools: [], definition_digest: "0".repeat(64), context_mode: "none" },
 });
 /** A widget wired to a host that mounts its component, as the TUI does. */
-const mounted = (initial = []) => {
-  let views = initial, renders = 0, content;
-  const tui = { terminal: { columns: 120 }, mode: "regular", requestRender: () => { renders++; } };
+const mounted = (initial = [], residentLimit = 8) => {
+  let views = initial, renders = 0, reads = 0, statsReads = 0, content;
+  const tui = { terminal: { columns: 120, rows: 36 }, mode: "fullscreen", requestRender: () => { renders++; } };
   const activities = new ChildActivityRegistry();
-  const widget = new HarnessWidget({ list: (options) => views.filter((view) => options.include_released !== false || view.resident),
-    stats: () => ({ resident: views.filter((view) => view.resident).length, cleanup_uncertain: false }) }, 8,
+  const widget = new HarnessWidget({ list: (options) => {
+    reads++;
+    return views.filter((view) => options.include_released !== false || view.resident);
+  }, stats: () => {
+    statsReads++;
+    return { resident: views.filter((view) => view.resident).length, cleanup_uncertain: false };
+  } }, residentLimit,
     activities.observations, (ids) => activities.retain(ids));
-  widget.setUi({ setWidget: (_key, factory) => { content = factory ? factory(tui, theme) : undefined; } });
-  return { widget, activities, set: (next) => { views = next; }, renders: () => renders,
+  const ui = { setWidget: (_key, factory) => { content = factory ? factory(tui, theme) : undefined; } };
+  widget.setUi(ui);
+  return { widget, activities, ui, tui, component: () => content, set: (next) => { views = next; },
+    renders: () => renders, reads: () => reads, statsReads: () => statsReads,
     showing: () => !!content, lines: (width = 120) => content ? content.render(width) : [] };
 };
+
+const headingClick = { type: "click", button: "left", x: 0, y: 0 };
+const pageClick = (h, direction = "Next") => {
+  const lines = h.lines(), y = lines.findIndex((line) => line.includes("[Next]"));
+  assert(y >= 0, "page controls must be painted");
+  return h.component().handleMouse({ ...headingClick, y, x: lines[y].indexOf(`[${direction}]`) });
+};
+
+test("idle editor renders reuse detached projections without Owner reads or observer pruning", (t) => {
+  const view = { ...viewOf("idle", "completed"), name: "before", pending_messages: 2 };
+  const h = mounted([view]), counts = [];
+  t.after(() => h.widget.dispose());
+  const retain = t.mock.method(h.activities, "retain");
+  h.widget.onRosterUpdate((count) => { counts.push(count); });
+  h.widget.wake();
+  const initial = h.lines();
+  const held = { list: h.reads(), stats: h.statsReads(), retain: retain.mock.callCount() };
+  view.name = "after"; view.pending_messages = 9;
+  for (let i = 0; i < 100; i++) assert.deepEqual(h.lines(), initial);
+  assert.deepEqual({ list: h.reads(), stats: h.statsReads(), retain: retain.mock.callCount() }, held);
+  assert.deepEqual(counts, [1]);
+  assert.deepEqual(h.component().handleMouse(headingClick), { handled: true, render: true });
+  assert.equal(h.reads(), held.list + 1);
+  assert.equal(h.statsReads(), held.stats + 1);
+  assert.match(h.lines()[1], /after · 9 pending/);
+  assert.deepEqual(counts, [1], "inspection cannot publish roster updates or model-facing acknowledgements");
+  h.set([{ ...viewOf("new", "completed"), name: "new-resident" }]);
+  assert.equal(h.widget.agents()[0].agent_id, "new", "operations still read current Owner state");
+  assert.match(h.lines()[1], /after/, "an operation's fresh projection does not silently replace the UI cache");
+  h.widget.wake();
+  assert.match(h.lines()[1], /new-resident/);
+});
+
+test("explicit expansion sees newly admitted idle residents without a lifecycle wake", (t) => {
+  const h = mounted([viewOf("old", "completed")]);
+  t.after(() => h.widget.dispose());
+  h.widget.wake(); h.widget.onTurnStart(); h.lines();
+  h.set([viewOf("old", "completed"), { ...viewOf("new", "completed"), name: "new-resident" }]);
+  const held = { list: h.reads(), stats: h.statsReads() };
+  assert.deepEqual(h.lines(), ["○ Agents 1 resident ▸"]);
+  assert.deepEqual({ list: h.reads(), stats: h.statsReads() }, held);
+  h.component().handleMouse(headingClick);
+  assert.match(h.lines()[0], /2 resident ▾$/);
+  assert.match(h.lines()[2], /new-resident/);
+});
+
+test("active timer ticks refresh cached activity and stop once idle", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const view = { ...viewOf("busy", "running"), name: "busy" }, h = mounted([view]);
+  t.after(() => h.widget.dispose());
+  h.widget.wake();
+  const before = h.lines(), held = { list: h.reads(), stats: h.statsReads() };
+  view.turns = 6;
+  for (let i = 0; i < 20; i++) assert.deepEqual(h.lines(), before);
+  assert.deepEqual({ list: h.reads(), stats: h.statsReads() }, held);
+  t.mock.timers.tick(80);
+  assert.equal(h.reads(), held.list + 1); assert.equal(h.statsReads(), held.stats + 1);
+  assert.match(h.lines()[1], /↻6≤8/);
+  h.set([viewOf("busy", "completed")]); t.mock.timers.tick(80);
+  const idle = { list: h.reads(), stats: h.statsReads(), renders: h.renders() };
+  t.mock.timers.tick(10000); h.lines();
+  assert.deepEqual({ list: h.reads(), stats: h.statsReads(), renders: h.renders() }, idle);
+});
+
+for (const mode of ["regular", undefined]) test(`nonfullscreen widgets advertise no disclosure and reject mouse input (mode=${mode})`, (t) => {
+  const h = mounted([viewOf("idle", "completed")]), opened = [];
+  t.after(() => h.widget.dispose());
+  h.tui.mode = mode; h.widget.onOpen((id) => { opened.push(id); });
+  h.widget.wake();
+  assert.doesNotMatch(h.lines().join("\n"), /[▸▾]/);
+  const held = { list: h.reads(), stats: h.statsReads(), renders: h.renders() };
+  assert.equal(h.component().handleMouse(headingClick), undefined);
+  assert.equal(h.component().handleMouse({ ...headingClick, y: 1 }), undefined);
+  assert.deepEqual({ list: h.reads(), stats: h.statsReads(), renders: h.renders() }, held);
+  assert.deepEqual(opened, []);
+  h.widget.onTurnStart();
+  assert.deepEqual(h.lines(), [], "ordinary idle headings have no purpose without mouse inspection");
+  const idleReads = { list: h.reads(), stats: h.statsReads() };
+  for (let i = 0; i < 20; i++) assert.deepEqual(h.lines(), []);
+  assert.deepEqual({ list: h.reads(), stats: h.statsReads() }, idleReads, "hidden cached paints stay read-only");
+  assert.equal(h.widget.agents()[0].agent_id, "idle", "Alt+A's inspection projection remains available");
+});
+
+for (const mode of ["regular", undefined]) test(`nonfullscreen idle still reports full capacity (mode=${mode})`, (t) => {
+  const h = mounted([viewOf("idle", "completed")], 1);
+  t.after(() => h.widget.dispose());
+  h.tui.mode = mode;
+  h.widget.wake(); h.widget.onTurnStart();
+  assert.deepEqual(h.lines(), ["○ Agents 1 resident (full)"], "full is a capacity fact, not a mouse-only entry");
+  assert.equal(h.component().handleMouse(headingClick), undefined);
+  assert.equal(h.widget.agents()[0].agent_id, "idle");
+});
+
+test("suppressing mouse-only idle headings preserves attention facts", () => {
+  const options = { disclosure: false, shouldShowFinished: () => false };
+  assert.deepEqual(render([run("idle", { status: "completed" })], options), []);
+  assert.deepEqual(render([run("idle", { status: "completed" })], {
+    ...options, owner: { ...owner, blocked: true, error: "BROKEN" },
+  }), ["✗ Agents 2 resident", "└─ ✗ owner blocked: BROKEN"]);
+  assert.match(render([run("busy", { status: "running" })], options)[1], /⠋/);
+  assert.match(render([run("asked", { status: "needs_input" })], {
+    ...options, shouldShowFinished: (_id, status) => status === "needs_input",
+  })[1], /needs input/);
+});
+
+for (const blocked of [false, true]) test(`tiny readable pages reach every resident and released diagnostic (blocked=${blocked})`, () => {
+  const runs = [...Array.from({ length: 12 }, (_, i) => run(`id-${i}`, { status: i % 2 ? "queued" : "running", name: `复核${i}` })),
+    run("linger", { status: "failed", name: "故障", error: "SDK broke" })];
+  const seen = new Set(), maxLines = blocked ? 4 : 3;
+  for (let page = 0, pages = 1; page < pages; page++) {
+    const frame = renderWidget({ runs, owner: { ...owner, resident: 12, resident_limit: 12, blocked, error: "BROKEN" },
+      spinnerFrame: 0, width: 20, theme, maxLines, page, expanded: true, shouldShowFinished: () => false });
+    pages = frame.pagination.pages;
+    assert.equal(pages, 13, "one readable Agent per tiny page, never a hidden remainder");
+    assert(frame.headingWidth > 0, "the shortened heading retains a visible disclosure");
+    assert.equal(frame.lines.length, maxLines);
+    assert(frame.lines.every((line) => visibleWidth(line) <= 20));
+    if (blocked) assert.match(frame.lines[1], /owner blocked/);
+    assert.equal(frame.pagination.prev === undefined, page === 0);
+    assert.equal(frame.pagination.next === undefined, page === pages - 1);
+    for (const id of frame.hits.filter(Boolean)) seen.add(id);
+  }
+  assert.deepEqual([...seen].sort(), runs.map((run) => run.agent_id).sort());
+});
+
+test("unreadable tiny controls refuse unseen actions, and extreme line budgets stay bounded", (t) => {
+  const h = mounted(Array.from({ length: 12 }, (_, i) => viewOf(`id-${i}`, "completed")), 12);
+  t.after(() => h.widget.dispose());
+  // spacer 1 + editor 3 + footer 2 + status 1 + one queued prompt 3 + transcript 2.
+  const budget = (rows) => Math.max(0, Math.min(12, Math.floor(rows / 3), rows - 12));
+  h.tui.terminal.rows = 9;
+  h.widget.wake(); h.widget.onTurnStart();
+  assert.deepEqual(h.lines(), [], "rows 9 reserves input chrome and does not advertise nav");
+  assert.equal(h.widget.agents().length, 12, "Alt+A inspection remains available without a painted control");
+  const held = { list: h.reads(), stats: h.statsReads() };
+  assert.equal(h.component().handleMouse(headingClick), undefined);
+  assert.deepEqual({ list: h.reads(), stats: h.statsReads() }, held);
+  h.tui.terminal.rows = 13;
+  assert.match(h.lines()[0], /Alt\+A/);
+  assert.doesNotMatch(h.lines()[0], /[▸▾]/);
+  assert.equal(h.component().handleMouse(headingClick), undefined, "a one-line budget must not expand into clipped nav");
+  for (const rows of [0, 1, 3, 6, 9, 12]) {
+    h.tui.terminal.rows = rows;
+    assert.deepEqual(h.lines(), [], `rows ${rows} stay inside the reserved chrome`);
+  }
+  for (const rows of [13, 15, 16, 18, 36, 300]) {
+    h.tui.terminal.rows = rows;
+    assert(h.lines().length <= budget(rows), `rows ${rows}`);
+    assert(h.lines().length <= Math.min(12, Math.floor(rows / 3)));
+  }
+  h.tui.terminal.rows = 18; h.tui.terminal.columns = 12;
+  assert(h.lines(12).every((line) => visibleWidth(line) <= 12), "narrow headings stay clipped to the viewport");
+  assert.doesNotMatch(h.lines(12)[0], /[▸▾]/);
+  assert.equal(h.component().handleMouse(headingClick), undefined);
+  delete h.tui.terminal.rows;
+  assert(h.lines(120).length <= 6, "legacy hosts without rows remain bounded");
+  for (const rows of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    h.tui.terminal.rows = rows;
+    assert(h.lines(120).length <= 6, "non-finite height keeps the legacy six-line budget");
+  }
+});
+
+test("page geometry is paint-local across resizing, page changes and roster shrink", (t) => {
+  const idle = Array.from({ length: 12 }, (_, i) => ({ ...viewOf(`id-${i}`, "completed"), name: `idle${i}` }));
+  const h = mounted(idle, 12), opened = [];
+  t.after(() => h.widget.dispose());
+  h.tui.terminal.rows = 18;
+  h.widget.onOpen((id) => { opened.push(id); }); h.widget.wake(); h.widget.onTurnStart(); h.lines();
+  h.component().handleMouse(headingClick);
+  const first = h.lines(), y = first.length - 1, x = first[y].indexOf("[Next]");
+  assert.equal(first.length, 6);
+  h.tui.terminal.rows = 9;
+  assert.equal(h.component().handleMouse({ ...headingClick, y, x }), undefined, "resize before repaint retires old controls");
+  assert.equal(h.component().handleMouse({ ...headingClick, y: 1 }), undefined);
+  assert.deepEqual(h.lines(), [], "rows 9 does not keep a nav the dock would clip");
+  assert.equal(h.component().handleMouse(headingClick), undefined);
+  h.tui.terminal.rows = 15;
+  assert.equal(h.lines().length, 3, "unblocked pages start once the reserve leaves three widget rows");
+  pageClick(h);
+  assert.equal(h.component().handleMouse({ ...headingClick, y: 1 }), undefined, "old page hits are gone before repaint");
+  assert.match(h.lines()[1], /idle1 /);
+  h.tui.terminal.columns = 80;
+  assert.equal(h.component().handleMouse({ ...headingClick, y: 1 }), undefined, "column-only resizes are guarded too");
+  assert.equal(h.lines(80).length, 3);
+  h.set(idle.slice(0, 1)); h.widget.wake();
+  assert.equal(h.component().handleMouse({ ...headingClick, y: 1 }), undefined, "updates retire stale Agent targets");
+  assert.equal(h.lines().length, 2);
+  h.component().handleMouse({ ...headingClick, y: 1 });
+  assert.deepEqual(opened, ["id-0"], "the clamped replacement page opens the painted immutable Agent ID");
+});
+
+test("twelve idle residents have a compact heading and a bounded complete static roster", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const interval = t.mock.method(globalThis, "setInterval"), timeout = t.mock.method(globalThis, "setTimeout");
+  const idle = Array.from({ length: 12 }, (_, i) => ({ ...viewOf(`id-${i}`, "completed"), name: `idle${i}` }));
+  const h = mounted(idle, 12);
+  t.after(() => h.widget.dispose());
+  h.widget.wake();
+  for (let turn = 0; turn < 5; turn++) h.widget.onTurnStart();
+  assert.deepEqual(h.lines(), ["○ Agents 12 resident (full) ▸"]);
+  assert.deepEqual(h.component().handleMouse(headingClick), { handled: true, render: true });
+  assert.equal(h.lines().length, 12);
+  assert.match(h.lines()[0], / ▾$/);
+  assert.match(h.lines().at(-1), /1\/2 \[Next\]$/);
+  assert.deepEqual(pageClick(h), { handled: true, render: true });
+  assert.match(h.lines()[1], /✓ idle10 /);
+  assert.match(h.lines()[2], /✓ idle11 /);
+  assert.match(h.lines().at(-1), /2\/2 \[Next\]$/);
+  assert.equal(pageClick(h), undefined, "Next on the last page is inert");
+  assert.deepEqual(pageClick(h, "Prev"), { handled: true, render: true });
+  h.lines();
+  const held = { renders: h.renders(), reads: h.reads() };
+  t.mock.timers.tick(10000);
+  assert.deepEqual({ renders: h.renders(), reads: h.reads() }, held, "expanded idle rows never start a paint loop");
+  assert.equal(interval.mock.callCount(), 0);
+  assert.equal(timeout.mock.callCount(), 0, "a disclosure click schedules no idle work");
+  assert.deepEqual(h.component().handleMouse(headingClick), { handled: true, render: true });
+  assert.deepEqual(h.lines(), ["○ Agents 12 resident (full) ▸"]);
+});
+
+test("nonfull idle rosters expand and every painted Agent row opens its immutable id", (t) => {
+  const idle = Array.from({ length: 7 }, (_, i) => ({ ...viewOf(`id-${i}`, "completed"), name: `idle${i}` }));
+  const h = mounted(idle, 12), opened = [];
+  t.after(() => h.widget.dispose());
+  h.widget.onOpen((id) => { opened.push(id); });
+  h.widget.wake(); h.widget.onTurnStart();
+  assert.deepEqual(h.lines(), ["○ Agents 7 resident ▸"]);
+  assert.deepEqual(h.component().handleMouse(headingClick), { handled: true, render: true });
+  assert.equal(h.lines().length, 8);
+  for (let y = 1; y <= idle.length; y++) {
+    assert.deepEqual(h.component().handleMouse({ ...headingClick, y }), { handled: true });
+  }
+  assert.deepEqual(opened, idle.map((view) => view.agent_id));
+});
+
+test("expanded queued rows open each Agent and toggles invalidate old row targets until repaint", (t) => {
+  const queued = Array.from({ length: 13 }, (_, i) => ({ ...viewOf(`queued-id-${i}`, "queued"), name: "same-label" }));
+  const h = mounted(queued, 16), opened = [];
+  t.after(() => h.widget.dispose());
+  h.widget.onOpen((id) => { opened.push(id); });
+  h.widget.wake();
+  assert.match(h.lines()[1], /13 queued$/);
+  assert.equal(h.component().handleMouse({ ...headingClick, y: 1 }), undefined, "an aggregate is not an Agent");
+  h.component().handleMouse(headingClick);
+  assert.equal(h.component().handleMouse({ ...headingClick, y: 1 }), undefined, "the old compact hits are discarded");
+  assert.equal(h.lines().length, 12);
+  for (let y = 1; y <= 10; y++) h.component().handleMouse({ ...headingClick, y });
+  assert.deepEqual(pageClick(h), { handled: true, render: true });
+  assert.equal(h.component().handleMouse({ ...headingClick, y: 1 }), undefined, "page changes retire old row hits before repaint");
+  assert.equal(h.lines().length, 5);
+  for (let y = 1; y <= 3; y++) h.component().handleMouse({ ...headingClick, y });
+  assert.deepEqual(opened, queued.map((view) => view.agent_id), "neither duplicate labels nor the line budget lose identity");
+  h.component().handleMouse(headingClick);
+  assert.equal(h.component().handleMouse({ ...headingClick, y: 13 }), undefined,
+    "a formerly expanded Agent row is not live before the compact repaint");
+  assert.match(h.lines()[1], /13 queued$/);
+  assert.equal(h.component().handleMouse({ ...headingClick, y: 1 }), undefined);
+});
+
+test("a blocked but empty painted heading cannot toggle", (t) => {
+  let component, renders = 0;
+  const widget = new HarnessWidget({ list: () => [],
+    stats: () => ({ resident: 0, parent_error: "BROKEN", cleanup_uncertain: false }) }, 12);
+  t.after(() => widget.dispose());
+  widget.setUi({ setWidget: (_key, factory) => {
+    component = factory?.({ terminal: { columns: 120 }, requestRender: () => { renders++; } }, theme);
+  } });
+  widget.wake();
+  assert.deepEqual(component.render(120), ["✗ Agents 0 resident", "└─ ✗ owner blocked: BROKEN"]);
+  assert.equal(component.handleMouse(headingClick), undefined);
+  assert.equal(component.handleMouse({ ...headingClick, y: 1 }), undefined);
+  assert.equal(renders, 0);
+});
+
+test("heading inspection refreshes explicitly; unseen controls and other events never project or notify", (t) => {
+  const view = { ...viewOf("immutable-id", "completed"), name: "otter", pending_messages: 2 };
+  const before = structuredClone(view), h = mounted([view]), counts = [], opened = [];
+  t.after(() => h.widget.dispose());
+  h.widget.onRosterUpdate((count) => { counts.push(count); });
+  h.widget.onOpen((id) => { opened.push(id); });
+  h.widget.wake();
+  const component = h.component(), unpainted = { reads: h.reads(), renders: h.renders() };
+  assert.equal(component.handleMouse(headingClick), undefined, "registration is not a paint");
+  assert.equal(component.handleMouse({ ...headingClick, y: 1 }), undefined);
+  assert.deepEqual({ reads: h.reads(), renders: h.renders() }, unpainted);
+  const heading = h.lines()[0], width = visibleWidth(heading);
+  const held = { reads: h.reads(), renders: h.renders(), counts: [...counts] };
+  for (const event of [
+    { x: -1 }, { x: width }, { x: 119 }, { x: NaN }, { x: Infinity }, { y: -1 }, { y: 99 },
+    { button: "right" }, { button: "middle" }, { type: "release" }, { type: "move" }, { type: "scroll" },
+  ]) assert.equal(component.handleMouse({ ...headingClick, ...event }), undefined);
+  assert.deepEqual({ reads: h.reads(), renders: h.renders(), counts }, held);
+  assert.deepEqual(component.handleMouse({ ...headingClick, x: width - 1 }), { handled: true, render: true });
+  assert.equal(h.renders(), held.renders + 1, "the toggle requests one immediate render");
+  assert.equal(h.reads(), held.reads + 1, "explicit inspection refreshes the projection once");
+  assert.deepEqual(counts, held.counts, "a local disclosure is not a roster update");
+  assert.deepEqual(opened, [], "the heading is never an Agent hit");
+  assert.deepEqual(view, before, "pending model-facing facts remain untouched");
+  assert.match(h.lines()[0], / ▾$/);
+  assert.deepEqual(component.handleMouse({ ...headingClick, y: 1 }), { handled: true });
+  assert.deepEqual(opened, ["immutable-id"]);
+
+  const narrow = h.lines(10)[0], narrowRenders = h.renders();
+  assert.equal(component.handleMouse({ ...headingClick, x: visibleWidth(narrow) }), undefined,
+    "resizing replaces the old heading's wider hit box");
+  assert.equal(h.renders(), narrowRenders);
+  assert.equal(component.handleMouse({ ...headingClick, x: visibleWidth(narrow) - 1 }), undefined,
+    "a clipped disclosure is not an unseen action; Alt+A remains the inspection fallback");
+  assert.match(h.lines()[0], / ▾$/);
+});
+
+test("collapse restores automatic lingering and attention rows instead of hiding active work", (t) => {
+  const h = mounted([viewOf("idle", "completed"), viewOf("busy", "running"),
+    viewOf("question", "needs_input"), viewOf("queue", "queued")]);
+  t.after(() => h.widget.dispose());
+  h.widget.wake(); h.widget.onTurnStart();
+  const compact = h.lines();
+  assert.doesNotMatch(compact.join("\n"), /✓ editor/);
+  assert.match(compact.join("\n"), /needs input/);
+  assert.match(compact.at(-1), /1 queued$/);
+  h.component().handleMouse(headingClick);
+  assert(h.lines().some((line) => line.includes("✓ editor")));
+  h.widget.onTurnStart(); h.widget.wake();
+  assert.match(h.lines()[0], / ▾$/, "turn starts and activity wakes preserve expansion");
+  h.component().handleMouse(headingClick);
+  const collapsed = h.lines();
+  assert.match(collapsed[0], / ▸$/);
+  assert.doesNotMatch(collapsed.join("\n"), /✓ editor/);
+  assert.match(collapsed.join("\n"), /needs input/);
+  assert.match(collapsed.join("\n"), /thinking…/);
+  assert.match(collapsed.at(-1), /1 queued$/);
+  // A new result still gets the normal linger after collapsing.
+  h.set([viewOf("fresh", "completed")]); h.widget.wake();
+  assert.match(h.lines()[1], /✓ editor/);
+  h.widget.onTurnStart();
+  assert.deepEqual(h.lines(), ["○ Agents 1 resident ▸"]);
+});
+
+test("multiple host instances from one factory never share hit or heading authority", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const timeout = t.mock.method(globalThis, "setTimeout");
+  let factory, renders = 0;
+  const opened = [], widget = new HarnessWidget({ list: () => [viewOf("id", "completed")],
+    stats: () => ({ resident: 1, cleanup_uncertain: false }) }, 12);
+  t.after(() => widget.dispose());
+  widget.onOpen((id) => { opened.push(id); });
+  widget.setUi({ setWidget: (_key, content) => { factory = content; } }); widget.wake();
+  const tui = { terminal: { columns: 120, rows: 18 }, mode: "fullscreen", requestRender() { renders++; } };
+  const old = factory(tui, theme); old.render(120);
+  const current = factory(tui, theme); current.render(120);
+  assert.equal(old.handleMouse(headingClick), undefined);
+  assert.equal(old.handleMouse({ ...headingClick, y: 1 }), undefined);
+  old.invalidate();
+  assert.equal(timeout.mock.callCount(), 0, "an already retired sibling cannot schedule a replacement");
+  assert.deepEqual(old.render(120), []);
+  assert.equal(renders, 0); assert.deepEqual(opened, []);
+  assert.deepEqual(current.handleMouse(headingClick), { handled: true, render: true });
+  assert.match(current.render(120)[0], / ▾$/);
+});
+
+test("expansion is binding-local and stale components cannot toggle or open after a rebind", (t) => {
+  const h = mounted([viewOf("a", "completed")]);
+  t.after(() => h.widget.dispose());
+  const opened = [];
+  h.widget.onOpen((id) => { opened.push(id); });
+  h.widget.wake(); h.lines();
+  const old = h.component(); old.handleMouse(headingClick);
+  assert.match(h.lines()[0], / ▾$/);
+  h.widget.setUi(h.ui); h.widget.wake();
+  assert.match(h.lines()[0], / ▾$/, "the identical binding is not a reset");
+  h.widget.setUi({ ...h.ui }); h.widget.wake();
+  const current = h.component();
+  assert.notEqual(current, old);
+  assert.equal(current.handleMouse(headingClick), undefined, "a new binding must paint its own heading");
+  assert.match(h.lines()[0], / ▸$/);
+  const held = h.renders();
+  assert.equal(old.handleMouse(headingClick), undefined);
+  assert.equal(old.handleMouse({ ...headingClick, y: 1 }), undefined);
+  assert.equal(h.renders(), held);
+  assert.deepEqual(opened, []);
+  assert.match(h.lines()[0], / ▸$/);
+});
+
+for (const reset of ["empty", "dispose"]) test(`a ${reset} reset drops disclosure state and stale hit targets`, (t) => {
+  const h = mounted([viewOf("a", "completed")]), opened = [];
+  t.after(() => h.widget.dispose());
+  h.widget.onOpen((id) => { opened.push(id); });
+  h.widget.wake(); h.lines();
+  const old = h.component(); old.handleMouse(headingClick); h.lines();
+  if (reset === "empty") { h.set([]); h.widget.wake(); }
+  else h.widget.dispose();
+  assert.equal(h.showing(), false);
+  const held = h.renders();
+  assert.equal(old.handleMouse(headingClick), undefined);
+  assert.equal(old.handleMouse({ ...headingClick, y: 1 }), undefined);
+  assert.equal(h.renders(), held);
+  if (reset === "dispose") h.widget.setUi({ ...h.ui });
+  h.set([viewOf("b", "completed")]); h.widget.wake();
+  assert.equal(h.component().handleMouse(headingClick), undefined);
+  assert.match(h.lines()[0], / ▸$/);
+  assert.equal(old.handleMouse(headingClick), undefined, "even a newly painted replacement cannot revive the old component");
+  assert.equal(old.handleMouse({ ...headingClick, y: 1 }), undefined);
+  assert.deepEqual(opened, []);
+});
 
 for (const hidden of [false, true]) test(`wake notifies release to empty without a paint (hidden=${hidden})`, (t) => {
   const view = viewOf("a", "completed");
@@ -583,13 +1083,13 @@ for (const hidden of [false, true]) test(`wake notifies release to empty without
   });
   h.widget.wake();
   if (hidden) h.widget.onTurnStart();
-  assert.equal(h.showing(), !hidden, "idle residents can outlive their painted rows");
+  assert.equal(h.showing(), true, "idle residents retain their heading after their rows age out");
   h.set([{ ...view, resident: false }]);
   h.widget.wake();
   assert.deepEqual(counts, hidden ? [1, 1, 0] : [1, 0]);
-  assert.deepEqual(showingAtEmpty, [!hidden], "notification precedes widget removal");
+  assert.deepEqual(showingAtEmpty, [true], "notification precedes widget removal");
   assert.equal(h.showing(), false);
-  assert.equal(h.renders(), 0, "no render request or component render drives notification");
+  assert.equal(h.renders(), hidden ? 1 : 0, "only the retained heading's turn update requests a render");
 });
 
 test("roster notifications count released failure linger and expire it on turn start", (t) => {
@@ -601,7 +1101,8 @@ test("roster notifications count released failure linger and expire it on turn s
   h.widget.wake();
   for (let turn = 0; turn < 3; turn++) h.widget.onTurnStart();
   assert.deepEqual(counts, [2, 2, 2, 1], "inspectable includes diagnostics, not just residents or painted rows");
-  assert.equal(h.showing(), false, "only the hidden idle resident remains inspectable");
+  assert.equal(h.showing(), true, "the idle resident keeps the heading mounted");
+  assert.deepEqual(h.lines(), ["○ Agents 1 resident ▸"]);
 });
 
 test("every explicit empty update notifies even when the count is unchanged", (t) => {
@@ -705,7 +1206,7 @@ test("a reused Agent lingers again for every Run, not only its first", (t) => {
   h.widget.update();
   assert.match(h.lines()[1], /✓ editor/);
   h.widget.onTurnStart();
-  assert.equal(h.showing(), false, "one turn is the whole normal linger");
+  assert.deepEqual(h.lines(), ["○ Agents 1 resident ▸"], "one turn is the whole normal row linger");
   // delegate to an existing Agent: a new Run on the Agent that already spent a linger.
   h.set([viewOf("a", "running", "a-2")]);
   h.widget.update();
@@ -719,10 +1220,10 @@ test("a Run that starts and finishes between paints gets its own linger", (t) =>
   t.after(() => h.widget.dispose());
   h.widget.wake();
   for (let i = 0; i < 3; i++) h.widget.onTurnStart();
-  assert.equal(h.showing(), false);
+  assert.deepEqual(h.lines(), ["○ Agents 1 resident ▸"]);
   h.set([viewOf("a", "failed", "a-2")]);
   h.widget.wake();
-  assert.equal(h.showing(), true);
+  assert.match(h.lines()[1], /✗ editor/, "the second failure gets a new row linger, not just a retained heading");
 });
 
 test("released failures expire in both UI entry points without resurrecting", (t) => {
@@ -745,6 +1246,50 @@ test("released failures expire in both UI entry points without resurrecting", (t
     assert.deepEqual(h.widget.agents(), []);
     assert.equal(h.showing(), false);
   }
+});
+
+test("expansion does not resurrect released successes or extend released failure linger", (t) => {
+  const idle = viewOf("idle", "completed"), failed = { ...viewOf("failed", "failed"), resident: false,
+    outcome: { status: "failed", error: "expired diagnostic" } };
+  const h = mounted([idle, failed, { ...viewOf("success", "completed"), resident: false }]);
+  t.after(() => h.widget.dispose());
+  h.widget.wake(); h.lines(); h.component().handleMouse(headingClick);
+  assert.match(h.lines().join("\n"), /expired diagnostic/);
+  assert.deepEqual(h.widget.agents().map((agent) => agent.agent_id), ["idle", "failed"]);
+  for (let turn = 0; turn < 3; turn++) h.widget.onTurnStart();
+  assert.match(h.lines()[0], / ▾$/);
+  assert.equal(h.lines().length, 2, "the idle resident remains expanded but the released diagnostic expires");
+  assert.doesNotMatch(h.lines().join("\n"), /expired diagnostic/);
+  for (let cycle = 0; cycle < 3; cycle++) {
+    h.component().handleMouse(headingClick);
+    assert.deepEqual(h.lines(), ["○ Agents 1 resident ▸"], "ages continued advancing while expanded");
+    h.widget.wake(); h.widget.onTurnStart();
+    assert.deepEqual(h.lines(), ["○ Agents 1 resident ▸"], "explicit updates require freshly painted heading geometry");
+    h.component().handleMouse(headingClick);
+    assert.equal(h.lines().length, 2);
+    assert.deepEqual(h.widget.agents().map((agent) => agent.agent_id), ["idle"]);
+  }
+  h.set([failed, { ...viewOf("success", "completed"), resident: false }]); h.widget.wake();
+  assert.equal(h.showing(), false, "expired released history alone cannot retain a heading");
+  assert.deepEqual(h.widget.agents(), []);
+});
+
+test("a released failure expiring on a later page retires its old hit without extending linger", (t) => {
+  const idle = Array.from({ length: 12 }, (_, i) => ({ ...viewOf(`id-${i}`, "completed"), name: `idle${i}` }));
+  const h = mounted([...idle, { ...viewOf("failed", "failed"), resident: false,
+    outcome: { status: "failed", error: "expired diagnostic" } }], 12), opened = [];
+  t.after(() => h.widget.dispose());
+  h.widget.onOpen((id) => { opened.push(id); });
+  h.widget.wake(); h.lines(); h.component().handleMouse(headingClick);
+  pageClick(h);
+  assert.match(h.lines()[3], /expired diagnostic/);
+  for (let turn = 0; turn < 3; turn++) h.widget.onTurnStart();
+  assert.equal(h.component().handleMouse({ ...headingClick, y: 3, x: 7 }), undefined);
+  assert.doesNotMatch(h.lines().join("\n"), /expired diagnostic/);
+  assert.equal(h.lines().length, 4, "later pages shrink but the idle roster remains expanded");
+  assert.equal(h.component().handleMouse({ ...headingClick, y: 3, x: 7 }), undefined, "the old failure row is now inert page-chrome whitespace");
+  assert.deepEqual(opened, []);
+  assert.deepEqual(h.widget.agents().map((agent) => agent.agent_id), idle.map((view) => view.agent_id));
 });
 
 test("a real Controller's automatic release frees capacity but retains clickable failure diagnostics", async (t) => {
@@ -809,7 +1354,7 @@ test("runtime retains idle resident observations but prunes released successes",
   const child = h.activities.track("a", "/w");
   h.widget.wake();
   for (let i = 0; i < 4; i++) h.widget.onTurnStart();
-  assert.equal(h.showing(), false);
+  assert.deepEqual(h.lines(), ["○ Agents 1 resident ▸"]);
   assert.equal(h.activities.observations.get("a"), child, "a hidden idle Agent can still resume with its observer");
   h.set([{ ...viewOf("a", "completed"), resident: false }]);
   h.widget.wake();
@@ -899,11 +1444,11 @@ test("an Agent waiting on an answer never ages out, however long the parent take
   for (let turn = 0; turn < 12; turn++) h.widget.onTurnStart();
   assert.equal(h.showing(), true, "the blocked Agent is still on screen");
   assert.match(h.lines()[1] ?? "", /editor/, h.lines().join("\n"));
-  // A finished one still goes, so this is not simply "nothing ever leaves".
+  // A finished row still goes; its resident heading remains available to expand.
   h.set([viewOf("b", "completed")]);
   h.widget.onTurnStart();
   h.widget.onTurnStart();
-  assert.equal(h.showing(), false);
+  assert.deepEqual(h.lines(), ["○ Agents 1 resident ▸"]);
 });
 
 /**
@@ -918,10 +1463,10 @@ test("a saturated roster stays on screen even when every Agent is idle", (t) => 
   for (let turn = 0; turn < 5; turn++) h.widget.onTurnStart();
   assert.equal(h.showing(), true, "capacity is still reported after the rows aged out");
   assert.match(h.lines()[0], /8 resident \(full\)/);
-  // One slot free and all idle: nothing to say, so nothing on screen.
+  // A nonfull idle roster remains discoverable too, without claiming saturation.
   h.set(idle.slice(0, 7));
   h.widget.onTurnStart();
-  assert.equal(h.showing(), false);
+  assert.deepEqual(h.lines(), ["○ Agents 7 resident ▸"]);
 });
 
 test("nothing that reaches a row can end it early", () => {
@@ -937,11 +1482,11 @@ test("nothing that reaches a row can end it early", () => {
   }
   assert.equal(frame.lines.length, frame.hits.length, "one hit per painted row");
   // Folded to spaces, not dropped: the text is still readable and still attributed.
-  assert.match(frame.lines[1], /rev bot/);
-  assert.match(frame.lines[1], /Review the code and tests/);
-  assert.match(frame.lines[2], /running make test/);
-  assert.match(frame.lines[3], /owner blocked: boom +at foo\(\) +at bar\(\)/);
-  assert.equal(frame.hits[1], "a");
+  assert.match(frame.lines[1], /owner blocked: boom +at foo\(\) +at bar\(\)/);
+  assert.match(frame.lines[2], /rev bot/);
+  assert.match(frame.lines[2], /Review the code and tests/);
+  assert.match(frame.lines[3], /running make test/);
+  assert.equal(frame.hits[2], "a");
 });
 
 test("a detail title stays one row however it is labelled", () => {
@@ -961,9 +1506,13 @@ test("a detail title stays one row however it is labelled", () => {
 
 function refreshFixture(t, status = "running") {
   t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
-  let views = [viewOf("a", status)], component, failure, removalFails = false;
+  let views = [viewOf("a", status)], component, failure, removalFails = false, projectionFails = false;
   let mounts = 0, removals = 0, renders = 0, reads = 0, opens = 0;
-  const widget = new HarnessWidget({ list: () => { reads++; return views; },
+  const widget = new HarnessWidget({ list: () => {
+    reads++;
+    if (projectionFails) throw new Error("PROJECTION_FAILED");
+    return views;
+  },
     stats: () => ({ resident: views.length, cleanup_uncertain: false }) }, 8);
   const tui = { terminal: { columns: 120 }, mode: "fullscreen", requestRender() { renders++; } };
   widget.onOpen(() => { opens++; });
@@ -987,9 +1536,88 @@ function refreshFixture(t, status = "running") {
   } });
   t.after(() => { removalFails = false; widget.dispose(); });
   return { widget, component: () => component, fail: (phase) => { failure = phase; },
+    failProjection: (fail) => { projectionFails = fail; },
     failRemoval: () => { removalFails = true; }, set: (next) => { views = next; },
     counts: () => ({ mounts, removals, renders, reads, opens }) };
 }
+
+test("expanded idle state survives resizing and a successful theme replacement without reviving stale hits", (t) => {
+  const h = refreshFixture(t, "completed");
+  h.widget.wake(); const old = h.component(); old.render(120); old.handleMouse(headingClick);
+  h.widget.onTurnStart();
+  assert.match(old.render(40)[0], / ▾$/);
+  assert.equal(old.render(40).length, 2, "expanded idle rows ignore normal linger expiry");
+  old.invalidate();
+  const invalidated = h.counts();
+  assert.equal(old.handleMouse(headingClick), undefined);
+  assert.equal(old.handleMouse({ ...headingClick, y: 1 }), undefined);
+  assert.deepEqual(h.counts(), invalidated, "invalidation immediately drops heading and Agent targets");
+  t.mock.timers.tick(1);
+  const current = h.component();
+  assert.notEqual(current, old);
+  assert.equal(current.handleMouse(headingClick), undefined, "replacement has no heading bounds before paint");
+  assert.match(current.render(120)[0], / ▾$/);
+  const held = h.counts();
+  assert.equal(old.handleMouse(headingClick), undefined);
+  assert.equal(old.handleMouse({ ...headingClick, y: 1 }), undefined);
+  assert.deepEqual(h.counts(), held);
+  t.mock.timers.tick(1000);
+  assert.deepEqual(h.counts(), held, "a completed roster does not start animating after refresh");
+  current.handleMouse(headingClick);
+  assert.deepEqual(current.render(120), ["○ Agents 1 resident ▸"]);
+});
+
+test("theme replacement retires page controls immediately and preserves roster expansion", (t) => {
+  const h = refreshFixture(t, "completed");
+  h.set(Array.from({ length: 12 }, (_, i) => ({ ...viewOf(`id-${i}`, "completed"), name: `idle${i}` })));
+  h.widget.wake(); const old = h.component(); old.render(120); old.handleMouse(headingClick);
+  const lines = old.render(120), y = lines.length - 1, x = lines[y].indexOf("[Next]");
+  assert.deepEqual(old.handleMouse({ ...headingClick, y, x }), { handled: true, render: true });
+  assert.match(old.render(120)[1], /idle4 /);
+  old.invalidate();
+  assert.equal(old.handleMouse({ ...headingClick, y, x }), undefined);
+  t.mock.timers.tick(1);
+  const current = h.component();
+  assert.equal(current.handleMouse({ ...headingClick, y, x }), undefined, "new geometry requires a paint");
+  assert.match(current.render(120)[0], / ▾$/);
+  assert.equal(old.handleMouse(headingClick), undefined, "retired page callbacks cannot collapse the replacement");
+  assert.equal(old.handleMouse({ ...headingClick, y, x }), undefined);
+  assert.match(current.render(120)[1], /idle0 /);
+});
+
+for (const phase of ["retained", "removed", "installed"]) {
+  test(`failed refresh disables heading clicks but preserves expansion for recovery (host=${phase})`, (t) => {
+    const h = refreshFixture(t, "completed");
+    h.widget.wake(); const old = h.component(); old.render(120); old.handleMouse(headingClick); old.render(120);
+    h.widget.onTurnStart();
+    h.fail(phase); old.invalidate(); t.mock.timers.tick(1);
+    const failed = h.counts();
+    assert.equal(old.handleMouse(headingClick), undefined);
+    assert.equal(h.component()?.handleMouse(headingClick), undefined);
+    assert.deepEqual(h.counts(), failed, "failed registration cannot accept a stale heading click");
+    h.widget.wake();
+    const current = h.component();
+    assert.equal(current.handleMouse(headingClick), undefined);
+    assert.match(current.render(120)[0], / ▾$/);
+    assert.equal(current.render(120).length, 2);
+    current.handleMouse(headingClick);
+    assert.deepEqual(current.render(120), ["○ Agents 1 resident ▸"]);
+  });
+}
+
+test("failed Owner projection clears heading targets and resets expansion", (t) => {
+  const h = refreshFixture(t, "completed");
+  h.widget.wake(); const old = h.component(); old.render(120); old.handleMouse(headingClick); old.render(120);
+  h.failProjection(true); h.widget.wake();
+  assert.equal(h.component(), undefined);
+  const failed = h.counts();
+  assert.equal(old.handleMouse(headingClick), undefined);
+  assert.equal(old.handleMouse({ ...headingClick, y: 1 }), undefined);
+  assert.deepEqual(h.counts(), failed);
+  h.failProjection(false); h.widget.wake();
+  assert.equal(h.component().handleMouse(headingClick), undefined);
+  assert.match(h.component().render(120)[0], / ▸$/);
+});
 
 for (const status of ["running", "completed"]) for (const phase of ["retained", "removed", "installed"]) {
   test(`failed theme refresh recovers on a later wake (status=${status}, host=${phase})`, (t) => {
@@ -1126,4 +1754,146 @@ for (const invalidated of [false, true]) test(`throwing widget removal still rel
   widget.dispose(); t.mock.timers.tick(1000);
   assert.equal(removals, 1); assert.equal(timers.size, 0);
   assert.equal(paints, painted); assert.equal(opens, 0, "a host retaining its broken component cannot call the detached panel");
+});
+
+function reentryHost(t, views) {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  let component, mounts = 0, removals = 0, renders = 0, opens = 0, mode = "apply";
+  const widget = new HarnessWidget({ list: () => views,
+    stats: () => ({ resident: views.length, cleanup_uncertain: false }) }, 8);
+  const tui = { terminal: { columns: 120, rows: 36 }, mode: "fullscreen", requestRender() { renders++; } };
+  widget.onOpen(() => { opens++; });
+  widget.setUi({ setWidget(_key, factory) {
+    if (!factory) { removals++; component = undefined; return; }
+    mounts++;
+    if (mode === "before") widget.wake();
+    if (mode === "refresh") widget.update(true);
+    const installed = factory(tui, theme);
+    if (mode === "after") widget.wake();
+    component = installed;
+  } });
+  t.after(() => widget.dispose());
+  return { widget, tui, component: () => component, setMode: (next) => { mode = next; },
+    counts: () => ({ mounts, removals, renders, opens }) };
+}
+
+test("a wake before setWidget applies its factory does not install a competing one", (t) => {
+  const views = [viewOf("a", "completed")];
+  const h = reentryHost(t, views);
+  h.setMode("before");
+  h.widget.wake();
+  assert.equal(h.counts().mounts, 1, "the nested wake stays on the outer registration");
+  const installed = h.component();
+  assert.match(installed.render(120).join("\n"), /Agents/, "the outer factory remains current, not a blank epoch mismatch");
+  assert.deepEqual(installed.handleMouse(headingClick), { handled: true, render: true });
+  const paints = h.counts().renders;
+  h.widget.wake();
+  assert.equal(h.counts().mounts, 1, "successful outer registration is reused");
+  assert.ok(h.counts().renders > paints, "a later wake only requests paint");
+  h.setMode("refresh");
+  h.widget.update(true);
+  assert.equal(h.counts().mounts, 2, "a later forced refresh still replaces the factory");
+  assert.equal(installed.handleMouse(headingClick), undefined, "the retired factory cannot act");
+});
+
+test("a pending wake refreshes the detached cache after the outer factory is installed", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const views = [{ ...viewOf("a", "completed"), name: "before" }];
+  let component, mounts = 0, reads = 0, renders = 0;
+  const widget = new HarnessWidget({ list: () => { reads++; return views; },
+    stats: () => ({ resident: 1, cleanup_uncertain: false }) }, 8);
+  const tui = { terminal: { columns: 120, rows: 36 }, mode: "fullscreen", requestRender() { renders++; } };
+  t.after(() => widget.dispose());
+  widget.setUi({ setWidget(_key, factory) {
+    if (!factory) { component = undefined; return; }
+    mounts++;
+    views[0] = { ...views[0], name: "during", description: "fresh task" };
+    widget.wake(); widget.update(true);
+    component = factory(tui, theme);
+  } });
+  widget.wake();
+  assert.equal(mounts, 1, "nested ordinary and forced wakes coalesce into the current factory");
+  assert.equal(reads, 2, "one post-install projection observes changes made by the setter");
+  const painted = component.render(120);
+  assert.match(painted[1], /during .*fresh task/);
+  for (let i = 0; i < 10; i++) assert.deepEqual(component.render(120), painted);
+  const held = { mounts, reads, renders };
+  t.mock.timers.tick(1000);
+  assert.deepEqual({ mounts, reads, renders }, held, "idle registration leaves no autonomous retry or animation");
+});
+
+test("a wake after the factory is created still leaves one current component", (t) => {
+  const h = reentryHost(t, [viewOf("a", "completed")]);
+  h.setMode("after"); h.widget.wake();
+  assert.equal(h.counts().mounts, 1);
+  assert.match(h.component().render(120).join("\n"), /Agents/);
+  h.widget.wake();
+  assert.equal(h.counts().mounts, 1);
+});
+
+test("a failed reentrant setter drops pending retries and recovers on an external wake", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  let component, fail = true, mounts = 0;
+  const widget = new HarnessWidget({ list: () => [viewOf("a", "completed")],
+    stats: () => ({ resident: 1, cleanup_uncertain: false }) }, 8);
+  const tui = { terminal: { columns: 120, rows: 36 }, mode: "fullscreen", requestRender() {} };
+  t.after(() => widget.dispose());
+  widget.setUi({ setWidget(_key, factory) {
+    if (!factory) { component = undefined; return; }
+    mounts++; widget.wake(); component = factory(tui, theme);
+    if (fail) throw new Error("REENTRANT_SETTER_FAILED");
+  } });
+  assert.throws(() => widget.wake(), /REENTRANT_SETTER_FAILED/);
+  component.render(120);
+  assert.equal(component.handleMouse(headingClick), undefined);
+  t.mock.timers.tick(1000);
+  assert.equal(mounts, 1, "failure does not retry itself");
+  fail = false; widget.wake();
+  assert.equal(mounts, 2);
+  assert.match(component.render(120).join("\n"), /Agents/);
+  assert.deepEqual(component.handleMouse(headingClick), { handled: true, render: true });
+});
+
+for (const stage of ["before", "after"]) test(`a setter can dispose during factory application (${stage})`, (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  let component, mounts = 0;
+  const widget = new HarnessWidget({ list: () => [viewOf("a", "completed")],
+    stats: () => ({ resident: 1, cleanup_uncertain: false }) }, 8);
+  const tui = { terminal: { columns: 120, rows: 36 }, mode: "fullscreen", requestRender() {} };
+  t.after(() => widget.dispose());
+  widget.setUi({ setWidget(_key, factory) {
+    if (!factory) { component = undefined; return; }
+    mounts++; widget.wake();
+    if (stage === "before") widget.dispose();
+    const installed = factory(tui, theme);
+    if (stage === "after") widget.dispose();
+    component = installed; // A partially applying host may retain a retired component.
+  } });
+  assert.doesNotThrow(() => widget.wake());
+  assert.deepEqual(component.render(120), []);
+  assert.equal(component.handleMouse?.(headingClick), undefined);
+  component.invalidate(); widget.wake(); t.mock.timers.tick(1000);
+  assert.equal(mounts, 1, "retirement cannot trigger another registration");
+});
+
+test("an old setter cannot clear a replacement UI's registration state", (t) => {
+  let oldComponent, current, mounts = 0;
+  const widget = new HarnessWidget({ list: () => [viewOf("a", "completed")],
+    stats: () => ({ resident: 1, cleanup_uncertain: false }) }, 8);
+  const tui = { terminal: { columns: 120, rows: 36 }, mode: "fullscreen", requestRender() {} };
+  t.after(() => widget.dispose());
+  const replacement = { setWidget(_key, factory) {
+    if (!factory) { current = undefined; return; }
+    mounts++; widget.wake(); current = factory(tui, theme);
+  } };
+  widget.setUi({ setWidget(_key, factory) {
+    if (!factory) return;
+    widget.setUi(replacement); widget.wake(); oldComponent = factory(tui, theme);
+  } });
+  assert.doesNotThrow(() => widget.wake());
+  assert.equal(mounts, 1);
+  assert.deepEqual(oldComponent.render(120), []);
+  assert.match(current.render(120).join("\n"), /Agents/);
+  widget.wake();
+  assert.equal(mounts, 1, "the replacement's installed component is still current");
 });

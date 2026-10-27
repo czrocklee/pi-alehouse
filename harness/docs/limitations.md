@@ -31,8 +31,16 @@ See [validation scope](validation-evidence.md) for portable tests and gaps.
 
 ## Lifecycle and cancellation
 
-Esc interrupts the parent's wait, not child work.  Cancellation, deadline
-expiry, and explicit close use best-effort stop paths and quarantine uncertain sessions;
+Esc interrupts the parent's wait, not child work. In Agent details it only
+closes the pane, or goes back from Stop confirmation. **S** / **[S Stop]** opens a
+confirmation bound to the displayed task; **Ctrl+S** / **[Confirm stop]** then
+requests cooperative cancellation through the Owner. Stop is offered only when
+the full confirmation identity/task and hint fit the pane's width and height
+budget. Ordinary typing and plain Enter never execute Stop; hidden controls
+cannot be activated. Human-origin
+metadata and a non-triggering parent message distinguish a new human stop from
+model interruption, but optional metadata may yield under packing pressure and
+message queuing is not model acknowledgement. Cancellation, deadline expiry, and explicit close use best-effort stop paths and quarantine uncertain sessions;
 they do not roll back filesystem/provider effects, prove zero further provider
 activity, prove child exit, or restore an old input safely.  An execution slot
 is freed only after actual execution exit; it can then run a queued peer before
@@ -379,7 +387,16 @@ scrollback contamination; its footer retains totals but does not open the usage
 popover.  Multiplexers can further limit mouse motion.  Pi's unexported native
 tool renderers mean child transcripts fall back to plain tool argument/output
 blocks for built-in tools.  PTY/UI fixtures and scripted permission RPC are not
-human-TUI acceptance.
+human-TUI acceptance. Expanded Agent inspection is paginated within a widget
+budget (at most twelve lines and one third of terminal height, with a further
+reserve for normal SDK input chrome and transcript space), not an unbounded
+roster in the input dock. Tall editors, additional queued prompts, other extensions
+and tiny viewports can still constrain available space; expansion is suppressed
+when its known budget cannot show controls, and `Alt+A` remains the
+inspection fallback. Ordinary nonfull idle headings are hidden in regular/unknown
+modes; full capacity and attention facts remain visible. Idle widget repaints
+reuse detached presentation snapshots, not fresh command-admission evidence;
+out-of-band idle changes appear only on the next explicit refresh.
 
 Interactive preset editing reuses the host's native `/model` selector with a
 physical-model-only view; RPC uses a standard list instead. The native selector

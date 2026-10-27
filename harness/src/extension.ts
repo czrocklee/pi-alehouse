@@ -22,6 +22,7 @@ import { configureChildRuntime } from "./runtime/execution-policy.js";
 import type { ManagedBlockSubscription } from "./runtime/permission-blocks.js";
 import { createDispatchRuntime } from "./runtime/dispatch-runtime.js";
 import { researcherHostModules } from "./runtime/host-modules.js";
+import { requestHumanStop } from "./runtime/human-stop.js";
 import { FileOwnerLease } from "./runtime/owner-lease.js";
 import { ownerSessionReplacementGuard } from "./runtime/owner-lifecycle.js";
 import { registerOrderFreeToolSchemas } from "./runtime/provider-schema.js";
@@ -351,6 +352,10 @@ export default function harnessExtension(pi: ExtensionAPI) {
     activities.observations, (ids) => activities.retain(ids));
   const panels = new PanelCoordinator({ pi, widget, ready: () => ready, router: requireRouter,
     publish: publishPreset, showError: showPresetError,
+    stopRun: (run_id) => {
+      if (!ready || !controller) throw new HarnessError("HARNESS_NOT_READY");
+      return requestHumanStop(controller, pi, run_id);
+    },
     delegation: { current: () => ({ ...delegation }), set: publishDelegation, guideline: delegationGuideline },
     management: { summary: () => settingsUi?.summary() ?? "Save: session",
       settings: async () => { await settingsUi?.open(); },

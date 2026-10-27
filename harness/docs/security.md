@@ -474,6 +474,14 @@ Owner for its parent session.  It is not an OS sandbox, distributed lock, or
 proof that child/provider activity stopped.  Lock files are intentionally kept
 for inode identity; manual removal while a process may hold one is unsafe.
 
+Rendering is read-only with respect to Owner lifecycle. Explicit human input may
+submit a confirmed intent bound to the originally displayed Run; the host invokes
+the same core cancel path, including approval-witness invalidation. This narrowing
+action remains available while delegation is Off; it grants no tool/path authority.
+A retired host/pane or a target that changed while confirmation was visible cannot
+redirect the intent. First-accepted human provenance is an observation, not an
+approval credential or a durable notification guarantee.
+
 Cancellation, deadline expiry, and explicit shutdown seal the harness gate and
 request the existing SDK stop path.  They do not roll back file or provider
 effects. Switch/fork guards require confirmed closure: an unused Owner starts

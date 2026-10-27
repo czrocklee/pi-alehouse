@@ -1,4 +1,4 @@
-import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { terminal, validDifficulty, type RunView } from "../core/contracts.js";
 import { reported, type UsageComponent } from "../core/usage-ledger.js";
 import { formatContextPercent, formatContextTokens, formatCost, formatDrain, formatMs, formatTokens, formatTurns,
@@ -7,6 +7,17 @@ import { POPOVER, isPopoverCloseClick, popoverInlay, popoverInlayWidth, popoverS
 
 /** Label column, so every field's value starts at the same place. */
 const LABEL = 10;
+const STOP_LABEL = "[S Stop]";
+const CONFIRM_LABEL = "[Confirm stop]";
+const CONFIRM_HINT = `${CONFIRM_LABEL} · Ctrl+S · Esc back`;
+type StopTarget = Pick<RunView, "owner_id" | "generation" | "agent_id" | "run_id" | "name" | "description">;
+/** Actionable identity must be plain text: strip terminal protocols, then make
+ * remaining C0/DEL/C1 controls visible rather than letting them move/hide text. */
+const confirmationText = (text: string): string => stripTerminalSequences(text)
+  .replace(/\p{Cc}/gu, (char) => `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`);
+/** Stop requests only apply to live execution, never settled or draining work. */
+const stoppable = (view: RunView): boolean =>
+  (view.status === "queued" || view.status === "running") && !view.execution_exited && !view.stop_reason;
 /** A label as wide as its own column would run into the value, so clamp it here
  * rather than trusting every call site to stay short. */
 const key = (label: string): string => label.length >= LABEL ? `${label.slice(0, LABEL - 1)} ` : label.padEnd(LABEL);
@@ -34,6 +45,9 @@ export function wrapText(text: string, columns: number): string[] {
         else { out.push(line); line = ""; }
         used = visibleWidth(line);
         breakAt = -1;
+        // A combining-only prefix before a space can free just one column.
+        // Recheck the remainder before appending a two-column character.
+        if (used + w > columns && line) { out.push(line); line = ""; used = 0; }
       }
       if (char === " ") breakAt = line.length;
       line += char;
@@ -234,6 +248,29 @@ const CHROME_LINES = 2;
 const MIN_VIEWPORT = 3;
 const VIEWPORT_HEIGHT_PCT = 70;
 
+/**
+ * Exact sanitized confirmation rows, or undefined when the full hint or the
+ * unsliced body cannot fit. Shared by the initial Stop affordance and the
+ * confirmation paint so neither can offer a control the other cannot show.
+ * Pure: no Owner snapshot and no shortening of identity or task.
+ */
+const confirmationLayout = (target: StopTarget, inner: number, chrome: number, rows: number): string[] | undefined => {
+  // NaN comparisons are false, and Infinity would clear the height cap. Reject
+  // both before measuring so a malformed host cannot advertise Stop.
+  if (!Number.isFinite(inner) || !Number.isFinite(chrome) || !Number.isFinite(rows) || inner < 1 || chrome < 1 || rows < 1)
+    return undefined;
+  if (visibleWidth(CONFIRM_HINT) > chrome) return undefined;
+  const body = ["Stop this task? Cancellation is best-effort.",
+    `Agent: ${confirmationText(target.name || target.agent_id)} (${confirmationText(target.agent_id)})`,
+    `Run: ${confirmationText(target.run_id)}`, `Task: ${confirmationText(target.description)}`]
+    .flatMap((line) => wrapText(line, inner));
+  // Never infer full visibility from the row count alone: an oversized row
+  // would be clipped by a framed host or rejected by the regular renderer.
+  if (body.length === 0 || body.some((line) => visibleWidth(line) > inner) ||
+      body.length + CHROME_LINES > Math.floor(rows * VIEWPORT_HEIGHT_PCT / 100)) return undefined;
+  return body;
+};
+
 /** Pads a styled row to `columns` display columns; ANSI has no width of its own. */
 const padTo = (line: string, columns: number): string =>
   line + " ".repeat(Math.max(0, columns - visibleWidth(line)));
@@ -263,6 +300,9 @@ export interface DetailPaneOptions {
   /** The Agent on screen changed. Lets a caller that reopens the pane -- after
    * yielding to a permission dialog -- come back to what was being watched. */
   onSelect?: (agent_id: string) => void;
+  /** Request cancellation through the host's Owner. Bound to the painted Run,
+   * not whichever task this Agent might be running when a later callback fires. */
+  onStop?: (run_id: string) => void;
   /**
    * Draw a border. Set when the pane floats as a centred overlay, where nothing
    * brackets it; docked it sits between the agents widget and Pi's footer, which
@@ -289,6 +329,12 @@ export class DetailPane {
   private painted = 0;
   /** Width of the last framed paint; the close control's hit area follows it. */
   private paintedWidth = 0;
+  private paintedHeight = 0;
+  private stopTarget: StopTarget | undefined;
+  private stopColumns: { from: number; to: number } | undefined;
+  private confirmation: StopTarget | undefined;
+  private confirmPainted = false;
+  private stopPaintDimensions: { columns: number; rows: number } | undefined;
   private frame = 0;
   private readonly timer: ReturnType<typeof setInterval>;
 
@@ -319,6 +365,7 @@ export class DetailPane {
     this.scrollOffset = 0;
     this.followTail = true;
     this.painted = 0;
+    this.resetStopInteraction();
     this.options.onSelect?.(agent_id);
   }
   private select(entries: { agent_id: string }[], index: number): void {
@@ -333,6 +380,7 @@ export class DetailPane {
     if (this.closed) return;
     if (agent_id === this.selected) {
       this.closed = true;
+      this.resetStopInteraction();
       this.options.done();
       return;
     }
@@ -341,11 +389,81 @@ export class DetailPane {
     this.options.tui.requestRender();
   }
 
+  isOpen(): boolean { return !this.closed; }
+
+  /** Hiding/yielding must discard intent as well as stale hit geometry. */
+  resetStopInteraction(): void {
+    this.stopTarget = undefined;
+    this.stopColumns = undefined;
+    this.confirmation = undefined;
+    this.confirmPainted = false;
+    this.stopPaintDimensions = undefined;
+  }
+
+  /** The pane knows its last paint and terminal dimensions, not whether an
+   * arbitrary host has clipped/occluded it. Never reuse that paint after resize. */
+  private retireResizedStopPaint(): void {
+    const painted = this.stopPaintDimensions;
+    const terminal = this.options.tui.terminal;
+    if (painted && (painted.columns !== terminal.columns || painted.rows !== terminal.rows))
+      this.resetStopInteraction();
+  }
+
+  /** Action-time validation, independent of the render-time affordance. Never
+   * fall back to another Agent or a replacement task. */
+  private validStop(target: StopTarget): boolean {
+    const entry = this.options.snapshot().find((entry) => entry.agent_id === target.agent_id);
+    const view = entry?.input.view;
+    return this.selected === target.agent_id && !!view && view.agent_id === target.agent_id &&
+      view.owner_id === target.owner_id && view.generation === target.generation &&
+      view.run_id === target.run_id && stoppable(view);
+  }
+
+  private requestStop(): void {
+    const target = this.stopTarget;
+    if (!target || !this.stopColumns || !this.options.onStop || !this.validStop(target)) {
+      this.resetStopInteraction();
+      return;
+    }
+    const dimensions = this.stopPaintDimensions;
+    this.resetStopInteraction();
+    this.confirmation = target;
+    this.stopPaintDimensions = dimensions;
+    this.options.tui.requestRender();
+  }
+
+  private confirmStop(): void {
+    const target = this.confirmation;
+    if (!target || !this.confirmPainted || !this.options.onStop) return;
+    const valid = this.validStop(target);
+    // Consume intent before invoking a host callback, including a throwing one.
+    this.resetStopInteraction();
+    if (valid) this.options.onStop(target.run_id);
+    this.options.tui.requestRender();
+  }
+
   handleInput(data: string): void {
+    if (this.closed) return;
+    if (matchesKey(data, "ctrl+s")) {
+      this.retireResizedStopPaint();
+      this.confirmStop();
+      return;
+    }
+    if (matchesKey(data, "s") || matchesKey(data, "shift+s")) {
+      this.retireResizedStopPaint();
+      if (!this.confirmation) this.requestStop();
+      return;
+    }
     // Pi's focused-input dispatcher requests an immediate render on return.
     // The 120 ms timer animates live activity; it does not gate keyboard paints.
     if (matchesKey(data, "escape")) {
+      if (this.confirmation) {
+        this.resetStopInteraction();
+        this.options.tui.requestRender();
+        return;
+      }
       this.closed = true;
+      this.resetStopInteraction();
       this.options.done();
       return;
     }
@@ -377,9 +495,18 @@ export class DetailPane {
    * own step -- Alt multiplies it by five upstream -- so it is used as given.
    */
   handleMouse(event: PaneMouseEvent): { handled: boolean } | undefined {
+    if (this.closed) return undefined;
+    this.retireResizedStopPaint();
+    if (event.type === "click" && event.button === "left" && event.y === this.paintedHeight - 1 &&
+        event.x !== undefined && this.stopColumns && event.x >= this.stopColumns.from && event.x < this.stopColumns.to) {
+      if (this.confirmation) this.confirmStop();
+      else this.requestStop();
+      return { handled: true };
+    }
     if (this.options.frame && !this.closed && event.x !== undefined && event.y !== undefined &&
         isPopoverCloseClick({ type: event.type, button: event.button, x: event.x, y: event.y }, this.paintedWidth)) {
       this.closed = true;
+      this.resetStopInteraction();
       this.options.done();
       return { handled: true };
     }
@@ -393,24 +520,52 @@ export class DetailPane {
   }
 
   render(width: number): string[] {
-    if (width < 12) return [];
+    this.retireResizedStopPaint();
+    this.stopTarget = undefined;
+    this.stopColumns = undefined;
+    this.confirmPainted = false;
+    this.paintedHeight = 0;
+    if (this.closed || width < 12) { this.resetStopInteraction(); return []; }
     // Floating, the two side columns come out of the body's width.
     const inner = this.options.frame ? width - 2 : width;
-    if (inner < 10) return [];
+    if (inner < 10) { this.resetStopInteraction(); return []; }
     // Framed, the title and footer are inlaid between the corners, so they get
     // two columns less than the body they sit above and below.
     const chrome = this.options.frame ? inner - 4 : inner;
-    if (chrome < 8) return [];
+    if (chrome < 8) { this.resetStopInteraction(); return []; }
     // Framed, the title shares the top edge with the close control.
     const titleWidth = this.options.frame ? popoverInlayWidth(width, "top", true) : chrome;
     this.paintedWidth = this.options.frame ? width : 0;
     const { entries, index } = this.current();
     const entry = entries[index];
     if (!entry) {
+      this.resetStopInteraction();
       this.painted = 0; // No visible body for keys/wheel to scroll against.
       return this.dress(this.options.theme.fg("dim", "harness"),
         [truncateToWidth(this.options.theme.fg("dim", "No agents are available to inspect."), inner)],
         this.footer(chrome, 0, 0, 0, 0), width, inner);
+    }
+    if (this.confirmation) {
+      const target = this.confirmation;
+      // Same pure layout as the initial affordance. validStop remains the
+      // action/render identity recheck and is the only extra snapshot here.
+      const body = confirmationLayout(target, inner, chrome, this.options.tui.terminal.rows);
+      if (body && this.validStop(target)) {
+        this.painted = 0;
+        this.confirmPainted = true;
+        const from = this.options.frame ? 3 : 0;
+        this.stopColumns = { from, to: from + visibleWidth(CONFIRM_LABEL) };
+        return this.dress(truncateToWidth(this.options.theme.fg("warning", "Confirm stop"), titleWidth), body,
+          this.options.theme.fg("warning", CONFIRM_HINT), width, inner);
+      }
+      this.resetStopInteraction();
+    }
+    if (this.options.onStop && stoppable(entry.input.view)) {
+      const { owner_id, generation, agent_id, run_id, name, description } = entry.input.view;
+      const target = { owner_id, generation, agent_id, run_id, name, description };
+      // Offer the label only when this exact body and hint fit. Do not re-read
+      // the Owner here; request/confirm still validate through validStop.
+      if (confirmationLayout(target, inner, chrome, this.options.tui.terminal.rows)) this.stopTarget = target;
     }
     // Fields first, then a rule, then the transcript Pi's own components render.
     const fields = renderDetailFields(entry.input, this.options.theme, inner);
@@ -432,9 +587,10 @@ export class DetailPane {
       this.footer(chrome, index + 1, entries.length, start + viewportHeight, total, entry.input.view), width, inner);
   }
 
-  invalidate(): void {}
+  invalidate(): void { this.resetStopInteraction(); }
   dispose(): void {
     this.closed = true;
+    this.resetStopInteraction();
     clearInterval(this.timer);
   }
 
@@ -470,6 +626,13 @@ export class DetailPane {
    * would show that much less transcript.
    */
   private dress(title: string, body: string[], footer: string, width: number, inner: number): string[] {
+    this.paintedHeight = body.length + CHROME_LINES;
+    if (this.paintedHeight > Math.floor(this.options.tui.terminal.rows * VIEWPORT_HEIGHT_PCT / 100))
+      this.resetStopInteraction();
+    if (this.stopColumns && (this.stopTarget || this.confirmPainted)) {
+      const { columns, rows } = this.options.tui.terminal;
+      this.stopPaintDimensions = { columns, rows };
+    }
     if (!this.options.frame) return [truncateToWidth(title, width), ...body, footer];
     const th = this.options.theme;
     const side = popoverSide(th);
@@ -490,10 +653,17 @@ export class DetailPane {
     const th = this.options.theme;
     const counts = th.fg("dim", count ? `${position}/${count} agents · ${Math.min(shown, total)}/${total} lines` : "no agents");
     const status = view ? renderDetailStatus(view, this.frame, th, width) : undefined;
-    const left = status === undefined ? counts : visibleWidth(status) + 3 + visibleWidth(counts) > width ? status :
+    // Counters yield only after the confirmation layout has already accepted Stop.
+    const reserved = this.stopTarget ? visibleWidth(STOP_LABEL) + 1 : 0;
+    const left = status === undefined ? counts : visibleWidth(status) + 3 + visibleWidth(counts) + reserved > width ? status :
       `${status}${th.fg("dim", " · ")}${counts}`;
-    const hints = ["←→ agent · ↑↓ scroll · Esc close", "←→ · ↑↓ · Esc", "Esc", ""]
-      .find((text) => visibleWidth(left) + 1 + visibleWidth(text) <= width) ?? "";
+    const navigation = ["←→ agent · ↑↓ scroll · Esc close", "←→ · ↑↓ · Esc", "Esc"];
+    const choices = this.stopTarget ? [...navigation.map((text) => `${STOP_LABEL} · ${text}`), STOP_LABEL, "Esc", ""] : [...navigation, ""];
+    const hints = choices.find((text) => visibleWidth(left) + 1 + visibleWidth(text) <= width) ?? "";
+    if (hints.startsWith(STOP_LABEL)) {
+      const from = (this.options.frame ? 3 : 0) + width - visibleWidth(hints);
+      this.stopColumns = { from, to: from + visibleWidth(STOP_LABEL) };
+    } else this.stopTarget = undefined;
     return spanRow(left, th.fg("dim", hints), width, th, !!this.options.frame);
   }
 }

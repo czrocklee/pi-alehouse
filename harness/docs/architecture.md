@@ -27,8 +27,15 @@ the public contract.
 execution port; `PiAgentSessionAdapter` adapts the actual child SDK session.
 `FileOwnerLease` owns the process-held local lock.  `AdmittedAgentConfig` is the
 immutable accepted configuration and `RunTelemetry` is a non-authoritative
-runtime snapshot.  UI reads controller views; **UI never owns SDK sessions** or
-becomes another source of lifecycle truth.
+runtime snapshot. UI reads controller views; **UI never owns SDK sessions** or
+becomes another source of lifecycle truth. "UI as projections" forbids commands
+from rendering and a UI-owned lifecycle state machine, not explicit human input:
+a confirmed, Run-bound Stop intent is routed through the host to `Owner.cancel`.
+The core owns acceptance, stop provenance, approval invalidation and actual drain.
+The runtime adapter separately attempts a non-triggering parent-model notice;
+message or display failures cannot undo an accepted cancellation. Cached widget
+projections are presentation-only; independent inspection and command validation
+still read fresh Owner state.
 
 Shared pure presentation/accounting helpers live at the sibling
 repository-root `lib/` boundary:
@@ -167,13 +174,17 @@ durable custom record names are compatibility surface:
 
 - `harness:preset-selection:v1` in the parent branch;
 - `harness:run-link:v1`, `harness:run-start:v1`, and `harness:run-end:v1`;
-- `harness:unreported-usage:v1` audit checkpoints.
+- `harness:unreported-usage:v1` audit checkpoints;
+- `harness:human-cancellation:v1` parent custom messages for accepted human stops
+  (model-visible, non-triggering; distinct from non-context custom entries).
 
 Record names and versions remain unchanged. New `harness:run-start:v1` entries
 carry the Agent's difficulty alongside the existing internally resolved route
 (slot, model, and thinking). Older entries without difficulty remain readable;
 the reader leaves that value unknown rather than inferring or fabricating a
 score. None of this routing detail reaches model-facing parent-tool replies.
+New run-end outcomes may carry `cancellation_source: "human"`; older records
+without it remain unattributed, never inferred or rewritten.
 
 `/harness-history` reads links from the current parent and an optional Run in
 pages no larger than 16384 UTF-16 output units.  Default per-file cap is 8 MiB;

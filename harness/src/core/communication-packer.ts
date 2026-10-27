@@ -179,6 +179,7 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
       for (const key of diagnostics) if (task.diagnostics[key] !== undefined && typeof task.diagnostics[key] !== "string")
         invalid("Invalid diagnostic text");
     }
+    if (task.cancellation_source !== undefined && task.cancellation_source !== "human") invalid("Invalid cancellation_source metadata");
     if (task.time_wrapped !== undefined && task.time_wrapped !== true) invalid("Invalid time_wrapped diagnostic flag");
     if (task.context_tokens !== undefined && (!safeCount(task.context_tokens) || !task.settled)) invalid("Invalid context_tokens hint");
     if (task.recovery_hint !== undefined && (!task.settled || row.status !== "failed" ||
@@ -204,6 +205,7 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     if (!candidate || typeof candidate !== "object") invalid("Invalid finished candidate");
     const row = copyRow(candidate.row);
     if (!terminalStatus(row.status)) invalid("Finished candidate requires a terminal status");
+    if (candidate.cancellation_source !== undefined && candidate.cancellation_source !== "human") invalid("Invalid finished cancellation_source metadata");
     const key = `${row.agent}:${row.task}`;
     if (finishedKeys.has(key)) invalid("Duplicate finished candidate");
     finishedKeys.add(key);
@@ -265,13 +267,13 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     }
   }
 
-  // Optional metadata, NOT reserved thin controls: all warning attempts, then
-  // all reuse-cost hints, then all whole recovery hints, before any result or
+  // Optional metadata, NOT reserved thin controls: human Stop attribution, all
+  // warning attempts, then reuse-cost and whole recovery hints, before result or
   // string diagnostic. Never clip hints or spend the body-text budget;
   // previously fitted bodies/cursors never yield. Identical recovery prose is
   // intentionally shown only on its first qualified row, not a packing loss.
   const recoveryHints = new Set<string>();
-  for (const field of ["time_wrapped", "context_tokens", "recovery_hint"] as const) {
+  for (const field of ["cancellation_source", "time_wrapped", "context_tokens", "recovery_hint"] as const) {
     for (let index = 0; index < snapshot.tasks.length; index++) {
       const value = snapshot.tasks[index]![field];
       if (value === undefined) continue;
@@ -353,9 +355,19 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
       if (listed.length === COMMUNICATION_LIMITS.finished) { limited = true; break; }
       const candidate = { ...envelope, finished: [...listed, finished[index]!], finished_pending: finished.length - presented.size - 1 };
       if (!communicationBudget(candidate).fits) { limited = true; break; }
-      listed.push(finished[index]!);
-      presented.add(index);
+      // Attribute only after the thin row fits. If metadata cannot fit, still
+      // present/commit that original Run; no second reminder/ACK is invented.
+      let row: FinishedEntry = finished[index]!;
+      const source = snapshot.finished[index]!.cancellation_source;
       envelope = candidate;
+      if (source !== undefined) {
+        const attributed = { ...row, cancellation_source: source };
+        const withSource = { ...envelope, finished: [...listed, attributed] };
+        if (communicationBudget(withSource).fits) { envelope = withSource; row = attributed; }
+        else limited = true;
+      }
+      listed.push(row);
+      presented.add(index);
     }
   }
 

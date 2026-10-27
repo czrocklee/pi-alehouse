@@ -73,7 +73,9 @@ const ownerCases = {
     questionId(f.c.identity.owner_id, f.c.identity.generation, f.run.run_id), "forbidden", { prepare: f.prepareVoid }] },
   steer: { kind: "effect", args: (f) => [f.run.run_id, "forbidden"] },
   send: { kind: "effect", args: (f) => ["forbidden-send", f.run.agent_id, "forbidden", { prepare: f.prepareVoid }] },
-  cancel: { kind: "effect", args: (f) => [f.run.run_id] },
+  // Host-origin options are inspected only after the effect guard, including
+  // reflection/proxy traps; the default model path uses the same entry.
+  cancel: { kind: "effect", args: (f) => [f.run.run_id, { source: "human" }] },
   drainUsage: { kind: "effect", args: () => [] },
   returnUsage: { kind: "effect", args: () => [ledger()] },
   waitForRuns: { kind: "effect", args: (f) => [[f.run.run_id], { mode: "all", timeout_ms: 1 }] },
@@ -154,7 +156,7 @@ function stableState(f) {
   // mutate private Runs. Include facts projections intentionally do not expose.
   return {
     stats: pick(f.c.stats(), "active queued resident agents runs requests retained_output_chars reserved_output_chars unreported_usage finalizing parent_error internal_error cleanup_uncertain cleaning closed"),
-    run: pick(view, "status phase execution_exited finalization_pending resident unavailable_reason owner_error owner_blocked turns stop_reason outcome usage runtime cleanup_errors discarded_inputs has_question question_id pending_messages delivered_updates"),
+    run: pick(view, "status phase execution_exited finalization_pending resident unavailable_reason owner_error owner_blocked turns stop_reason cancellation_source outcome usage runtime cleanup_errors discarded_inputs has_question question_id pending_messages delivered_updates"),
     drain: view.drain?.waiting_for,
     result: pick(f.c.getResult(f.run.run_id), "text truncated retained_chars total_chars"),
     agent: pick(f.c.agentSummary(f.run.agent_id), "runs touched touched_omitted pending_updates observed_cost cost_partial"),

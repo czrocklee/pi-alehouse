@@ -5,6 +5,8 @@ import type { Dispatch } from "./dispatch.js";
 
 export type RunStatus = "queued" | "running" | "cancelling" | "completed" | "needs_input" | "failed" | "cancelled";
 export type StopReason = "user_cancel" | "hard_budget" | "deadline";
+/** Explicit trusted-host human Stop only; absence makes no claim about origin. */
+export type CancellationSource = "human";
 /** Final provider/SDK assistant stop reason. */
 export type ModelStopReason = "stop" | "length" | "toolUse" | "error" | "aborted" | "pending" | "deferred" | (string & {});
 export type Phase = "queued" | "initializing" | "executing" | "finalizing" | "settled";
@@ -88,6 +90,8 @@ export interface Outcome {
   status: "completed" | "needs_input" | "failed" | "cancelled";
   model_stop_reason?: ModelStopReason;
   reason?: string;
+  /** First accepted cancellation, independent of finalization diagnostics. */
+  cancellation_source?: CancellationSource;
   error?: string;
   question?: string;
   limit_reached: boolean;
@@ -155,6 +159,7 @@ export interface RunView {
   max_duration_ms: number;
   runtime?: RunTelemetry;
   stop_reason?: StopReason;
+  cancellation_source?: CancellationSource;
   model_stop_reason?: ModelStopReason;
   outcome?: Outcome;
   usage?: UsageLedger;

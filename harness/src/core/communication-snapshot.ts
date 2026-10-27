@@ -1,4 +1,5 @@
 import type { CommunicationAction, CommunicationEnvelope, CommunicationReason, TaskEntry, ThinTaskEntry } from "./communication-envelope.js";
+import type { CancellationSource } from "./contracts.js";
 import type { QuestionId } from "./question-id.js";
 import type { ResultCursorIdentity } from "./result-cursor.js";
 
@@ -24,6 +25,8 @@ export interface TaskSnapshot {
   readonly question?: string;
   readonly result?: ResultWindow;
   readonly diagnostics?: Pick<TaskEntry, "error" | "owner_error" | "unavailable_reason">;
+  /** Optional bounded attribution, outside the required thin control row. */
+  readonly cancellation_source?: CancellationSource;
   /** Optional whole diagnostics, outside the required thin control row. */
   readonly dispatch_notes?: readonly string[];
   readonly time_wrapped?: true;
@@ -42,6 +45,7 @@ export interface AlertSnapshot {
 }
 export interface FinishedSnapshot {
   readonly row: ThinTaskEntry;
+  readonly cancellation_source?: CancellationSource;
   /** Explicit original-Run association with a bound tasks row. Absence means
    * this candidate needs its own finished row; never infer identity from names,
    * task ordinals or statuses. The Owner validates the original references. */

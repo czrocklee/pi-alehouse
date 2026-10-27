@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isAbsolute, relative, resolve } from "node:path";
 import { normalizeFacts, normalizeRuntime, terminal, validSettings, type AdmittedAgentConfig, type AgentSummary, type ExecutionFacts,
-  type HistoryRef, type ModelStopReason, type Outcome, type Output, type Phase, type ResultPage, type ResultRef,
+  type CancellationSource, type HistoryRef, type ModelStopReason, type Outcome, type Output, type Phase, type ResultPage, type ResultRef,
   type RunStatus, type RunTelemetry, type RunView, type StopReason, type SubmitRequest } from "./contracts.js";
 import { HarnessError, ParentHistoryError, SessionInitializationError, SessionUnavailableError, workersDisabled,
   type AgentSessionPort, type OwnerLease, type RunCallbacks } from "./ports.js";
@@ -50,6 +50,7 @@ interface RunRecord {
   turns: number;
   limit_reached: boolean;
   stop_reason?: StopReason;
+  cancellation_source?: CancellationSource;
   model_stop_reason?: ModelStopReason;
   outcome?: Outcome;
   result?: ResultRef;
@@ -186,6 +187,16 @@ const errorText = (error: unknown): string => {
 };
 const emptyOutput = (): Output => ({ text: "", total_chars: 0, truncated: false });
 const positive = (value: number): boolean => Number.isSafeInteger(value) && value > 0;
+/** Host-only plain data, never model tool arguments. Inspect descriptors rather
+ * than invoking accessors; the caller runs reflection under the read-only gate. */
+const cancellationSource = (options: unknown): CancellationSource => {
+  if (!options || typeof options !== "object" || Array.isArray(options)) throw new HarnessError("INVALID_CANCEL_OPTIONS");
+  const proto: unknown = Object.getPrototypeOf(options);
+  const keys = Reflect.ownKeys(options), source = Object.getOwnPropertyDescriptor(options, "source");
+  if ((proto !== Object.prototype && proto !== null) || keys.length !== 1 || keys[0] !== "source" ||
+      !source || !Object.hasOwn(source, "value") || source.value !== "human") throw new HarnessError("INVALID_CANCEL_OPTIONS");
+  return "human";
+};
 /** Single source for shipped capacity and retention defaults, also used by UI assembly. */
 export const DEFAULT_OWNER_LIMITS = Object.freeze({ concurrency: 4, resident: 12, queue: 16, grace: 5,
   output: 1_048_576, historyRuns: 512, historyOutput: 64 * 1024 * 1024, releaseWait: 10_000 });
@@ -1139,6 +1150,7 @@ export class OwnerController {
           facts.kind === "aborted" ? "unexpected_abort" :
           facts.kind === "error" ? "execution_error" : undefined,
       error: facts.error?.slice(0, 2048), question: run.question, limit_reached: run.record.limit_reached,
+      ...(run.record.cancellation_source ? { cancellation_source: run.record.cancellation_source } : {}),
       ...(run.record.time_wrapped ? { time_wrapped: true } : {}),
     };
     } catch (error) {
@@ -1162,6 +1174,7 @@ export class OwnerController {
         model_stop_reason: run.record.model_stop_reason, reason: "finalization_failed",
         error: `FINALIZATION_FAILED: ${errorText(error)}`.slice(0, 2048),
         question: run.question, limit_reached: run.record.limit_reached,
+        ...(run.record.cancellation_source ? { cancellation_source: run.record.cancellation_source } : {}),
         ...(run.record.time_wrapped ? { time_wrapped: true } : {}) };
     }
     // A freed execution slot belongs to healthy peers, even while this Run's
@@ -1404,11 +1417,13 @@ export class OwnerController {
     void delivery.then(() => run.inputs.delete(delivery), () => run.inputs.delete(delivery));
     return { accepted: true, event_id };
   }
-  private stop(run: ManagedRun, reason: StopReason): void {
+  private stop(run: ManagedRun, reason: StopReason, source?: CancellationSource): void {
     this.assertEffectAllowed();
     if (run.record.execution_exited || terminal(run.record.status) || run.record.stop_reason) return;
-    // Freeze before calling a consumer, which may throw or reenter cancel().
-    run.record.stop_reason = reason; run.inputOpen = false; run.stopRequestedMono = this.clock.mono();
+    // Freeze reason AND attribution before a consumer can throw/reenter cancel().
+    run.record.stop_reason = reason;
+    if (source !== undefined) run.record.cancellation_source = source;
+    run.inputOpen = false; run.stopRequestedMono = this.clock.mono();
     try { this.changed(reason === "user_cancel" ? "cancel" : reason, run); }
     catch (error) { run.quarantine = "context_change_failed"; run.record.cleanup_errors.push(errorText(error)); }
     const queued = run.record.status === "queued";
@@ -1427,12 +1442,16 @@ export class OwnerController {
     }
     this.wake();
   }
-  cancel(run_id: string) {
+  /** Only explicit human Stop passes source; model interrupt/kill and shutdown
+   * omit it. Neither repeated stops nor late inspection can add attribution. */
+  cancel(run_id: string, options?: { source: "human" }) {
     this.assertEffectAllowed();
+    const source = options === undefined ? undefined : this.validateObservationEntry(() => cancellationSource(options));
     const run = this.requireRun(run_id);
-    const result = terminal(run.record.status) ? "already_terminal" : run.record.execution_exited ? "already_exited" : "cancel_requested";
+    const result: "already_terminal" | "already_exited" | "cancel_requested" =
+      terminal(run.record.status) ? "already_terminal" : run.record.execution_exited ? "already_exited" : "cancel_requested";
     const already_stopping = !!run.record.stop_reason;
-    if (result === "cancel_requested") this.stop(run, "user_cancel");
+    if (result === "cancel_requested") this.stop(run, "user_cancel", source);
     const snapshot = this.view(run_id);
     return { result, already_stopping, execution_exited: snapshot.execution_exited,
       finalization_pending: snapshot.finalization_pending, stop_reason: snapshot.stop_reason, snapshot };
@@ -1465,6 +1484,7 @@ export class OwnerController {
       execution_elapsed_ms: record.execution_elapsed_ms ?? (run.executionStartedMono === undefined ? undefined :
         Math.max(0, this.clock.mono() - run.executionStartedMono)), runtime: run.runtime,
       stop_reason: record.stop_reason, model_stop_reason: record.model_stop_reason, outcome: record.outcome,
+      ...(record.cancellation_source ? { cancellation_source: record.cancellation_source } : {}),
       usage: record.usage ?? run.runtime?.usage, result_ref: record.result,
       cleanup_errors: record.cleanup_errors, discarded_inputs: record.discarded_inputs,
       ...(record.dispatch === undefined ? {} : { dispatch: record.dispatch }),
@@ -1687,6 +1707,7 @@ export class OwnerController {
           alerts: alerts.map(({ run, message, source }) => ({ agent: run.record.name, task: taskOrdinal(run, all),
             label: boundedOutput(run.record.description, 120).text, message, ...(source === undefined ? {} : { source }) })),
           finished: finished.map((run) => ({ row: this.communicationRow(run, all, healthy, providers),
+            ...(run.record.cancellation_source ? { cancellation_source: run.record.cancellation_source } : {}),
             ...(targets.includes(run) ? { task_index: targets.indexOf(run) } : {}) })), blocked: this.communicationBlock() };
         snapshot = { data, targets, alerts, finished, reportedBlockAtStart };
         return data;
@@ -1738,6 +1759,7 @@ export class OwnerController {
       ...(run.question !== undefined && (historical || isCommunicationSettled(run)) ? { question: run.question } : {}),
       result: this.communicationWindow(run, limit, cursor),
       ...(dispatch_notes ? { dispatch_notes } : {}),
+      ...(run.record.cancellation_source ? { cancellation_source: run.record.cancellation_source } : {}),
       ...(run.record.time_wrapped ? { time_wrapped: true as const } : {}),
       ...(context_tokens === undefined ? {} : { context_tokens }),
       ...(recovery_hint === undefined ? {} : { recovery_hint }),

@@ -1,4 +1,4 @@
-import type { RunStatus } from "./contracts.js";
+import type { CancellationSource, RunStatus } from "./contracts.js";
 import type { QuestionId } from "./question-id.js";
 import { encodeResultCursor } from "./result-cursor.js";
 
@@ -69,6 +69,8 @@ export interface ThinTaskEntry {
 
 /** Optional text/metadata can yield to the retained control layer when packing. */
 export interface TaskEntry extends ThinTaskEntry {
+  /** Explicit human Stop provenance; optional metadata may yield at saturation. */
+  readonly cancellation_source?: CancellationSource;
   /** Whole bounded notes (at most two, each 1..120 nonblank UTF-16 units).
    * Optional diagnostics yield to retained controls/body; no recovery promise. */
   readonly dispatch_notes?: readonly string[];
@@ -108,7 +110,10 @@ export interface AlertEntry {
   /** Absent on child-authored text, even if it imitates a harness message. */
   readonly source?: "harness";
 }
-export type FinishedEntry = ThinTaskEntry;
+export interface FinishedEntry extends ThinTaskEntry {
+  /** May yield independently of the finished row and its presentation commit. */
+  readonly cancellation_source?: CancellationSource;
+}
 
 /** Projection only; these arrays must never become another persistent registry.
  * Counts are nonnegative safe integers. Arrays are bounded by COMMUNICATION_LIMITS. */

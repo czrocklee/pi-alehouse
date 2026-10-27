@@ -299,7 +299,8 @@ test("an overflowing widget still answers correctly for the rows it did paint", 
     spinnerFrame: 0, width: 120, theme, shouldShowFinished: () => true });
   assert.equal(lines.length, hits.length);
   assert.equal(hits.at(-1), undefined, "the +N more row is a count, not an Agent");
-  assert.match(lines.at(-1), /\+3 more \(3 running\)/);
+  assert(lines.length <= 6, "unknown-height callers use the safe six-line widget budget");
+  assert.match(lines.at(-1), /\+6 more \(6 running\)/);
   // Pairs stay paired: a header and its activity line never disagree.
   for (let i = 1; i + 1 < hits.length; i += 2) assert.equal(hits[i], hits[i + 1]);
 });

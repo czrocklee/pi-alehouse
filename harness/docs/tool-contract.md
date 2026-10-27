@@ -363,6 +363,14 @@ Each task row retains `{agent, task, status}` and applicable boolean
 `has_question`, `limit_reached`, `unavailable`; diagnostics use
 `unavailable_reason`, `error`, `owner_error`. Statuses include queued, running,
 finishing, needs_input, completed, failed, interrupting and interrupted.
+Optional `cancellation_source: "human"` on task/finished rows and list/interrupt
+projections identifies the first accepted explicit human Stop. It is bounded
+metadata, not a thin control, and may yield under envelope pressure. Default
+model interruption, shutdown, and budget stops do not fabricate human origin;
+a repeated Stop does not relabel an earlier request. The same source is retained
+in new run-end outcomes for cold inspection. A separate best-effort
+`harness:human-cancellation:v1` parent custom message requests no automatic retry
+and does not trigger a model turn; publication is not model acknowledgement.
 Queued rows retain `wait: "dependencies" | "capacity"` when that scheduling
 condition applies; it is a mandatory bounded control, including in list/interrupt
 projections, not optional diagnostic text. Dependency names remain in the roster's

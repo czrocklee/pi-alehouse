@@ -1,16 +1,39 @@
 # Interface
 
-The interface is a projection of Owner state.  It never owns child sessions,
-creates a second result store, or treats a paint/notification as lifecycle
-confirmation.  Panels coordinate through one request/overlay protocol so that a
-closing `ui.custom` cannot pop a newer overlay.
+The interface is a projection of Owner state. Rendering never issues lifecycle
+commands, owns child sessions, creates a second result store, or treats a
+paint/notification as lifecycle confirmation. Explicit human input may submit a
+Run-bound intent to the host, which invokes the existing Owner command; only the
+core changes lifecycle state. Panels coordinate through one request/overlay
+protocol so that a closing `ui.custom` cannot pop a newer overlay.
 
 ## Agent widget
 
-The widget normally appears while child work is active and lingers briefly
-after settlement.  An idle resident Agent alone does not necessarily keep it
-visible; full capacity, an unanswered question, or retained diagnostics can
-also keep it present.  Failed Runs remain inspectable for three parent turns
+The widget shows child work while active and lingers briefly after settlement.
+In fullscreen mode, idle residents keep a compact heading even after their
+outcome rows age out. Click the heading (`▸`/`▾`) to expand the whole inspectable
+roster or return to the automatic compact view. Expansion pages through all idle
+residents and individually listed queued Agents using **[Prev]** / **[Next]**;
+Agent rows still open their details. The widget uses at most twelve lines and at
+most one third of the terminal height (six lines if host height is unknown),
+and additionally reserves normal SDK input chrome and transcript space rather
+than growing the input dock without limit. Owner-blocked diagnostics sit above
+the paginated body, or take the sole widget line at minimum height. Very small
+viewports suppress the widget or expansion controls; use `Alt+A` for inspection
+instead. Compact view retains
+its activity/attention priority within the same height budget.
+In regular/unknown renderer modes there is no mouse-only disclosure arrow, and
+ordinary idle headings disappear once outcome rows age out. Full capacity,
+owner-blocked diagnostics and attention rows remain visible within the budget;
+`Alt+A` remains the inspection entry. Expansion is presentation-only and does
+not restart work or reset retention.
+
+Detached display snapshots refresh on wake/turn/active ticks and explicit heading
+inspection, not unrelated editor repaints. There is no idle animation interval;
+out-of-band state changes while idle appear at the next explicit refresh, not
+through a background monitor. Fresh detail reads and command-time target checks
+do not use this display cache.
+Failed Runs remain inspectable for three parent turns
 after their Agent is released; this diagnostic retention neither holds a
 resident slot nor restores reusability.  Once it expires, released failures
 leave the widget/detail roster and their child render state is dropped.
@@ -58,7 +81,30 @@ not a new lifecycle phase or permission to release ownership.
 `Alt+A` opens the Agent detail pane.  A row click opens it, selects a different
 Agent, or closes it when clicking the selected Agent.  `←`/`→` choose an Agent,
 `↑`/`↓` scroll, and **only** `Esc` closes it, restoring typed editor text.  The
-pane keeps focus: printable input is for the editor, not an accidental dismiss.
+pane keeps focus: unbound printable input does not dismiss it.
+**S** or a click on the visible **[S Stop]** opens a confirmation identifying the
+original Agent, Run and task. Only **Ctrl+S** or **[Confirm stop]** then requests
+cooperative cancellation; **Esc** dismisses confirmation without closing details.
+Ordinary typing and plain `Enter` never execute Stop. Both steps require their
+controls to be painted. Stop itself is offered only when its complete sanitized
+Agent/Run/task confirmation and hint fit the pane's width and height budget;
+there is no visible but unusable Stop button or hidden keyboard action.
+Navigation, replacement work, permission hiding and closing retire the confirmation.
+The host rechecks the original target before invoking the Owner: a stale control
+never stops another Agent or a replacement task. This is not steering, Agent kill,
+or Owner shutdown, and it also works for queued tasks and while delegation is Off.
+Once stopping starts or execution exits the control disappears. Status and drain
+diagnostics, not the command's acceptance notice, confirm progress toward exit.
+A display-refresh failure is reported separately from an accepted stop request.
+Outside confirmation, `Esc` and `×` only close the pane.
+
+The first accepted explicit human stop carries `cancellation_source: "human"` in
+live state and the recorded outcome. Parent tool projections attempt this bounded
+optional metadata; byte pressure may omit it. The host also attempts a visible
+`harness:human-cancellation:v1` parent message without triggering a new model turn,
+asking the model not to repeat the task automatically. Neither queuing a message
+nor displaying a notice proves model receipt. An earlier model/budget stop or an
+already-exited task is not relabelled as a new human cancellation.
 The title carries identity/task; live status and its spinner or outcome glyph
 sit at the lower left, before the Agent/line counts, in both docked and floating layouts.
 

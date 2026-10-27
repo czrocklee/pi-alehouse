@@ -100,6 +100,7 @@ export async function readSdkRun(input: {
         !data.outcome || !["completed", "needs_input", "failed", "cancelled"].includes(data.outcome.status) ||
         typeof data.outcome.limit_reached !== "boolean" || !validModelStopReason(data.outcome.model_stop_reason) ||
         (data.outcome.time_wrapped !== undefined && data.outcome.time_wrapped !== true) ||
+        (data.outcome.cancellation_source !== undefined && data.outcome.cancellation_source !== "human") ||
         ![data.outcome.reason, data.outcome.error, data.outcome.question].every((v) => v === undefined || typeof v === "string")) invalidHistory();
     if (data.through === ends[0]!.id) invalidHistory();
     const final = finalMessage(session, ref.start_entry_id, data.through, ends[0]!.id), result = data.result;

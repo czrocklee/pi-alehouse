@@ -36,6 +36,7 @@ export function taskReply(view: RunView, nameOf: NameOf) {
     ...(wait === undefined ? {} : { wait }),
     ...(view.has_question ? { has_question: true } : {}),
     ...(view.outcome?.reason ? { reason: view.outcome.reason } : {}),
+    ...(view.cancellation_source === "human" || view.outcome?.cancellation_source === "human" ? { cancellation_source: "human" as const } : {}),
     // Qualifies `status`: a turn-capped task still settles as "completed".
     ...(view.outcome?.limit_reached ? { limit_reached: true } : {}),
     ...(view.time_wrapped || view.outcome?.time_wrapped ? { time_wrapped: true } : {}),

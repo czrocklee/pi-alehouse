@@ -16,6 +16,12 @@ import { PRESET_PICKER_MIN_ROWS, PresetPicker, PresetPickerRequest,
   type EffortCapabilities, type ModelPickerPosition, type PresetChoice } from "./preset-picker.js";
 import { TranscriptContent } from "./transcript.js";
 
+export interface HumanStopResult {
+  result: "cancel_requested" | "already_terminal" | "already_exited";
+  already_stopping: boolean;
+  warnings?: readonly string[];
+}
+
 export interface PanelCoordinatorOptions {
   pi: ExtensionAPI;
   widget: HarnessWidget;
@@ -23,6 +29,8 @@ export interface PanelCoordinatorOptions {
   router(): PresetRouter;
   publish(candidate: PresetCandidate, name: string, ctx: Pick<ExtensionContext, "ui">, overrides?: EffortOverrides): PresetPublication;
   showError(error: unknown, ctx: Pick<ExtensionContext, "ui">): void;
+  /** Host core command only. Display refresh is a separate best-effort effect. */
+  stopRun?: (run_id: string) => HumanStopResult;
   efforts?: (preset: PresetSnapshot, slot: Strength) => EffortCapabilities;
   /** Delegation mode: read live, and applied at once by the panel's slider. */
   delegation?: {
@@ -99,6 +107,7 @@ export class PanelCoordinator {
     });
     this.approvals = new ApprovalWatch({
       onPrompt: (pending) => {
+        this.detailPane?.resetStopInteraction();
         // An ask for permission must reach the human: cancel any open model
         // selection first, but never let that best-effort cleanup block the
         // ordinary close/yield or the ask's own registration.
@@ -205,7 +214,9 @@ export class PanelCoordinator {
     this.yielding.end();
     if (this.yieldTimer) { clearTimeout(this.yieldTimer); this.yieldTimer = undefined; }
     for (const cleanup of cleanups) {
-      try { cleanup?.(); } catch (error) { this.observeDetailError(error, ctx); }
+      // This synchronous teardown owns the captured host, even after detaching
+      // callbacks. Report its cleanup failure without reviving retired input.
+      try { cleanup?.(); } catch (error) { this.reportDetailError(error, ctx); }
     }
   }
 
@@ -351,6 +362,37 @@ export class PanelCoordinator {
             return content;
           },
           onSelect: (id) => { this.paneAgent = id; },
+          ...(this.options.stopRun ? { onStop: (run_id: string) => {
+            // Retired callbacks are inert, including their notifications. A
+            // current but blocked action instead explains why it did nothing.
+            if (this.host !== ctx || this.closePane !== request.close || this.detailPane !== pane || !pane.isOpen()) return;
+            try {
+              if (!this.options.ready()) {
+                this.detailNotice("Cancellation unavailable: harness is not ready.", "warning", ctx);
+                return;
+              }
+              if (!mountable(this.yielding, this.approvals.pending)) {
+                this.detailNotice("Cancellation unavailable while a permission dialog is active.", "warning", ctx);
+                return;
+              }
+              let result: HumanStopResult;
+              try { result = this.options.stopRun!(run_id); }
+              catch (error) {
+                this.detailNotice(`Cancellation request failed: ${String(error)}`, "error", ctx);
+                return;
+              }
+              // Acceptance cannot be undone or retried by a display failure.
+              if (this.host !== ctx || this.closePane !== request.close) return;
+              let refreshFailed = false;
+              try { this.options.widget.wake(); } catch { refreshFailed = true; }
+              const message = result.result === "already_terminal" ? "Task already finished; no cancellation needed" :
+                result.result === "already_exited" ? "Task execution already exited; no cancellation needed" :
+                result.already_stopping ? "Cancellation already requested; still stopping" : "Cancellation requested";
+              const warnings = result.warnings?.length ? `; ${result.warnings.join("; ")}` : "";
+              this.detailNotice(`${message}${refreshFailed ? "; display refresh failed" : ""}${warnings}`,
+                refreshFailed || result.warnings?.length ? "warning" : "info", ctx);
+            } catch (error) { this.observeDetailError(error, ctx); }
+          } } : {}),
           frame: floating,
         });
         this.detailPane = pane;
@@ -392,7 +434,18 @@ export class PanelCoordinator {
 
   /** Last observer at mouse/timer boundaries, which have no Promise consumer.
    * Formatting and notification are both fallible; nothing may escape here. */
+  private detailNotice(message: string, kind: "info" | "warning" | "error", ctx = this.host): void {
+    if (ctx !== this.host) return;
+    try { ctx?.ui.notify(message, kind); }
+    catch { /* notification failure cannot change command acceptance */ }
+  }
+
   private observeDetailError(error: unknown, ctx = this.host): void {
+    if (ctx !== this.host) return;
+    this.reportDetailError(error, ctx);
+  }
+
+  private reportDetailError(error: unknown, ctx = this.host): void {
     try { ctx?.ui.notify(`Harness panel UI failed: ${String(error)}`, "error"); }
     catch { /* even error reporting is best-effort at a void host boundary */ }
   }
