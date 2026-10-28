@@ -1897,3 +1897,88 @@ test("an old setter cannot clear a replacement UI's registration state", (t) => 
   widget.wake();
   assert.equal(mounts, 1, "the replacement's installed component is still current");
 });
+
+test("a failed mount retains removal ownership but cannot revive its factory or instance", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  let factory, component, fail = true, mounts = 0, removals = 0;
+  const widget = new HarnessWidget({ list: () => [viewOf("a", "completed")],
+    stats: () => ({ resident: 1, cleanup_uncertain: false }) }, 8);
+  const tui = { terminal: { columns: 120, rows: 36 }, mode: "fullscreen", requestRender() {} };
+  t.after(() => widget.dispose());
+  widget.setUi({ setWidget(_key, content) {
+    if (!content) { removals++; return; }
+    mounts++; factory = content; component = content(tui, theme);
+    if (fail) throw new Error("PARTIAL_MOUNT_FAILED");
+  } });
+  assert.throws(() => widget.wake(), /PARTIAL_MOUNT_FAILED/);
+  const oldFactory = factory, old = component;
+  assert.deepEqual(old.render(120), [], "a partially applied component is retired on failure");
+  const late = oldFactory({ ...tui, mode: "regular" }, theme);
+  assert.deepEqual(late.render(120), [], "the failed factory cannot reacquire an instance");
+  old.invalidate(); late.invalidate();
+  t.mock.timers.tick(1000);
+  assert.equal(mounts, 1, "failure cannot schedule its own retry");
+  assert.equal(widget.tuiMode(), "fullscreen", "stale factory calls cannot change the last known renderer");
+  fail = false; widget.wake();
+  assert.equal(mounts, 2);
+  assert.match(component.render(120)[0], /Agents/);
+  assert.equal(old.handleMouse(headingClick), undefined);
+  assert.deepEqual(oldFactory(tui, theme).render(120), []);
+  widget.dispose(); widget.dispose();
+  assert.equal(removals, 1, "all failed/ready attempts share the one host slot");
+});
+
+for (const timer of [false, true]) test(`a failed render request retires only its mount (timer=${timer})`, (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  let component, fail = false, mounts = 0, reads = 0, renders = 0;
+  const widget = new HarnessWidget({ list: () => { reads++; return [viewOf("a", "running")]; },
+    stats: () => ({ resident: 1, cleanup_uncertain: false }) }, 8);
+  const tui = { terminal: { columns: 120, rows: 36 }, mode: "fullscreen", requestRender() {
+    renders++;
+    if (fail) throw new Error("RENDER_REQUEST_FAILED");
+  } };
+  t.after(() => widget.dispose());
+  widget.setUi({ setWidget(_key, factory) {
+    if (!factory) return;
+    mounts++; component = factory(tui, theme);
+  } });
+  widget.wake(); const old = component; old.render(120);
+  fail = true;
+  if (timer) assert.doesNotThrow(() => t.mock.timers.tick(80));
+  else assert.throws(() => widget.wake(), /RENDER_REQUEST_FAILED/);
+  assert.deepEqual(old.render(120), []);
+  assert.equal(old.handleMouse(headingClick), undefined);
+  const held = { mounts, reads, renders };
+  old.invalidate(); t.mock.timers.tick(1000);
+  assert.deepEqual({ mounts, reads, renders }, held, "the failed request leaves no live animation/repaint");
+  assert.equal(widget.tuiMode(), "fullscreen");
+  fail = false; widget.wake();
+  assert.equal(mounts, 2);
+  assert.match(component.render(120)[0], /Agents/);
+  assert.equal(old.handleMouse(headingClick), undefined);
+});
+
+test("an older setter failure cannot retire a synchronously rebound ready mount", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  let component, mounts = 0, renders = 0;
+  const widget = new HarnessWidget({ list: () => [viewOf("a", "running")],
+    stats: () => ({ resident: 1, cleanup_uncertain: false }) }, 8);
+  const tui = { terminal: { columns: 120, rows: 36 }, mode: "fullscreen", requestRender() { renders++; } };
+  t.after(() => widget.dispose());
+  const replacement = { setWidget(_key, factory) {
+    if (!factory) return;
+    mounts++; component = factory(tui, theme);
+  } };
+  widget.setUi({ setWidget(_key, factory) {
+    if (!factory) return;
+    widget.setUi(replacement); widget.wake();
+    throw new Error("RETIRED_SETTER_FAILED");
+  } });
+  assert.throws(() => widget.wake(), /RETIRED_SETTER_FAILED/);
+  assert.match(component.render(120)[0], /Agents/);
+  const before = renders;
+  t.mock.timers.tick(160);
+  assert.equal(renders - before, 2, "the older exception cannot stop the new lifetime's timer");
+  widget.wake();
+  assert.equal(mounts, 1, "the new ready mount does not need repair");
+});

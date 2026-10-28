@@ -379,6 +379,20 @@ interface WidgetController {
   list(options: { include_released?: boolean }): RunView[];
   stats(): { resident: number; parent_error?: string; internal_error?: string; cleanup_uncertain: boolean };
 }
+/** Each setter attempt is an identity token and possible host ownership, even
+ * after a partial failure. Absence means there is no widget left to remove. */
+interface WidgetMount {
+  phase: "installing" | "ready" | "retry";
+  pendingWake: boolean;
+  instance?: WidgetInstance;
+}
+/** A factory may be invoked more than once. Only its current instance owns the
+ * renderer and hit geometry; replacing either identity retires old callbacks. */
+interface WidgetInstance {
+  tui: WidgetTui;
+  page: number;
+  paint?: { frame: WidgetFrame; columns: number; rows?: number };
+}
 /**
  * The main-screen display: a tree above the editor, and nothing in the footer
  * (see WidgetUi). Detached UI snapshots refresh on explicit ticks/inspection,
@@ -386,33 +400,12 @@ interface WidgetController {
  */
 export class HarnessWidget {
   private ui?: WidgetUi;
-  private tui?: WidgetTui;
   private lastMode?: string;
-  /** The host may own a component even if its last replacement threw. */
-  private registered = false;
-  private needsRefresh = false;
-  /**
-   * Set only while the outer setWidget call is on the stack. A synchronous
-   * wake before that setter applies its factory must not install another one:
-   * the nested call would publish epoch N+1 and the outer factory N would
-   * overwrite it, leaving registered, needsRefresh false, and a blank widget.
-   * Latch one pending wake instead so the outer factory stays current; after
-   * a successful install, refresh the detached projection and request paint.
-   * No second factory and no recursive registration. Failure and clear release
-   * the latch; recovery is a later external wake, not an autonomous retry.
-   * Nested forced refresh is the factory already being installed. Deferred
-   * invalidation stays a separate macrotask and is not coalesced here.
-   */
-  private registration?: { pendingWake: boolean };
-  /** Retired host components must not read or act on a replacement's hits. */
-  private componentEpoch = 0;
+  private mount?: WidgetMount;
   private frame = 0;
   private timer?: ReturnType<typeof setInterval>;
   private repaint?: ReturnType<typeof setTimeout>;
   private snapshot?: { runs: WidgetRun[]; owner: WidgetOwner };
-  /** Retire component-local geometry before updates and failed replacements. */
-  private retire?: () => void;
-  private forgetPaint?: () => void;
   private expanded = false;
   private open?: (agent_id: string) => void;
   private rosterUpdate?: (inspectableCount: number) => void;
@@ -428,16 +421,8 @@ export class HarnessWidget {
   /** Bound at session_start; a different context means the old widget is gone. */
   setUi(ui: WidgetUi): void {
     if (ui === this.ui) return;
-    this.retire?.(); this.retire = undefined;
-    this.forgetPaint = undefined;
-    this.stopTimer();
-    if (this.repaint) { clearTimeout(this.repaint); this.repaint = undefined; }
+    this.detachMount();
     this.ui = ui;
-    this.registration = undefined;
-    this.componentEpoch++;
-    this.registered = false;
-    this.needsRefresh = false;
-    this.tui = undefined;
     this.snapshot = undefined;
     this.lastMode = undefined;
     this.expanded = false;
@@ -456,7 +441,7 @@ export class HarnessWidget {
   /** The renderer last painted into. Falls back to the last one seen: going
    * idle or invalidating drops the component, not the renderer, and a mode read
    * as unknown would dock a pane the alternate screen should float. */
-  tuiMode(): string | undefined { return this.tui?.mode ?? this.lastMode; }
+  tuiMode(): string | undefined { return this.mount?.instance?.tui.mode ?? this.lastMode; }
   /** Resident Agents plus released failures still in their diagnostic linger. */
   agents(): AgentDetail[] {
     return this.views().map((view) => {
@@ -531,16 +516,17 @@ export class HarnessWidget {
 
   update(refresh = false): void {
     if (!this.ui) return;
-    if (this.registration) {
-      // Coalesce into the in-flight outer factory; do not publish epoch N+1.
-      this.registration.pendingWake = true;
+    if (this.mount?.phase === "installing") {
+      // Synchronous wakes share the outer setter. A competing nested factory
+      // could otherwise be overwritten by the older one when that setter returns.
+      this.mount.pendingWake = true;
       return;
     }
     let snapshot: { runs: WidgetRun[]; owner: WidgetOwner };
     // A closed or failing owner must not take the parent UI down with it.
     try { snapshot = structuredClone(this.rows()); } catch { this.clear(); return; }
     this.snapshot = snapshot;
-    this.forgetPaint?.();
+    if (this.mount?.instance) this.mount.instance.paint = undefined;
     // Best-effort UI coordination uses this projection, including hidden idle
     // residents and lingering released failures, before any show/clear decision.
     try { this.rosterUpdate?.(snapshot.runs.length); } catch { /* Optional subscriber cannot break widget updates. */ }
@@ -553,139 +539,132 @@ export class HarnessWidget {
     const showing = running + queued > 0 || owner.blocked || owner.resident > 0 ||
       runs.some((run) => terminal(run.status) && this.lingering(run.agent_id, run.status));
     if (!showing) { this.clear(); return; }
-    // Only the spinner animates. Lingering rows and the blocked line are static,
-    // so the loop stops as soon as nothing is running or queued -- and starts
-    // whenever work is there, whichever paint noticed it first.
+    // Only active work animates; a static idle or lingering roster has no loop.
     if (running || queued) this.timer ??= setInterval(() => this.updateFromTimer(), 80);
     else this.stopTimer();
 
     this.frame++;
-    // A non-interactive host (RPC/print) may carry no widget surface. There is
-    // no agent-capacity footer fallback by design, so such a host simply shows
-    // no widget and reads capacity from /harness-status instead of throwing.
+    // RPC/print hosts can omit the widget and inspect /harness-status instead.
     const ui = this.ui;
     if (typeof ui.setWidget !== "function") return;
-    if (this.registered && !refresh && !this.needsRefresh) { this.tui?.requestRender(); return; }
-    // Track possible host ownership before calling a partially applying setter.
-    // Only a successful return certifies that ordinary paints can reuse it.
-    this.registered = true;
-    this.needsRefresh = true;
-    const epoch = ++this.componentEpoch;
-    this.retire?.();
-    const registration = { pendingWake: false };
-    this.registration = registration;
-    const factory = (tui: WidgetTui, theme: Theme): WidgetComponent => {
-      if (!this.ui || epoch !== this.componentEpoch) return { render: () => [], invalidate() {} };
-      this.tui = tui; this.lastMode = tui.mode;
-      this.retire?.();
-      let painted: WidgetFrame | undefined, page = 0, paintedColumns = 0, paintedRows: number | undefined;
-      let retired = false;
-      const clearGeometry = () => { painted = undefined; };
-      this.forgetPaint = clearGeometry;
-      this.retire = () => { retired = true; clearGeometry(); };
-      return {
-        render: (width: number) => {
-          if (!this.ui || retired || epoch !== this.componentEpoch || !this.snapshot) return [];
-          painted = renderWidget({ ...this.snapshot, spinnerFrame: this.frame, expanded: this.expanded && tui.mode === "fullscreen",
-            maxLines: lineBudget(tui.terminal.rows), page, disclosure: tui.mode === "fullscreen",
-            width: width || tui.terminal.columns, theme, shouldShowFinished: (id, status) => this.lingering(id, status) });
-          page = painted.pagination?.page ?? 0;
-          paintedColumns = tui.terminal.columns; paintedRows = tui.terminal.rows;
-          return painted.lines;
-        },
-        // Pi normalizes the row to this component, so `y` indexes the last paint
-        // directly. Only reachable on the alternate screen: the regular-mode
-        // renderer never enables mouse reporting, where the shortcut is the way in.
-        handleMouse: (event) => {
-          if (event.type !== "click" || event.button !== "left" || tui.mode !== "fullscreen" || !this.ui || retired ||
-            !this.registered || this.needsRefresh || epoch !== this.componentEpoch || !painted ||
-            paintedColumns !== tui.terminal.columns || paintedRows !== tui.terminal.rows ||
-            !Number.isInteger(event.y) || !Number.isFinite(event.x) || event.x < 0) return undefined;
-          if (event.y === 0 && event.x < (painted.headingWidth ?? 0)) {
-            // Explicit inspection can sample newer facts, but never publishes a
-            // roster notification, consumes alerts or starts an idle timer.
-            try { this.snapshot = structuredClone(this.rows()); } catch { this.clear(); return undefined; }
-            if (!this.snapshot.runs.length && !this.snapshot.owner.blocked && !this.snapshot.owner.resident) {
-              this.clear(); return undefined;
-            }
-            this.expanded = !this.expanded;
-            page = 0; clearGeometry(); tui.requestRender();
-            return { handled: true, render: true };
-          }
-          const nav = painted.pagination;
-          if (nav && event.y === nav.row) {
-            const inside = (range?: [number, number]) => range && event.x >= range[0] && event.x < range[1];
-            if (inside(nav.prev)) page--;
-            else if (inside(nav.next)) page++;
-            else return undefined;
-            clearGeometry(); tui.requestRender();
-            return { handled: true, render: true };
-          }
-          const agent = painted.hits[event.y];
-          if (!agent || !this.open || event.x >= visibleWidth(painted.lines[event.y]!)) return undefined;
-          this.open(agent);
-          return { handled: true };
-        },
-        // A theme change invalidates the captured theme, so re-register instead.
-        // Only `update()` re-registers, and the loop that would call it stops as
-        // soon as nothing is running -- so schedule one, or a lingering finished
-        // row keeps painting through the dead component with the old theme. A
-        // macrotask: this runs inside pi-tui's own invalidation walk.
-        invalidate: () => {
-          if (!this.ui || retired || epoch !== this.componentEpoch) return;
-          retired = true; clearGeometry();
-          this.tui = undefined;
-          if (this.repaint) clearTimeout(this.repaint);
-          this.repaint = setTimeout(() => { this.repaint = undefined; if (this.ui) this.updateFromTimer(true); }, 0);
-        },
-      };
-    };
-    let pendingWake = false;
-    try {
-      ui.setWidget("harness-agents", factory, { placement: "aboveEditor" });
-      if (this.ui === ui && epoch === this.componentEpoch && this.registration === registration) {
-        this.needsRefresh = false;
-        pendingWake = registration.pendingWake;
-      }
-    } finally {
-      // A setter can retire/rebind this widget; never touch a newer lifetime's
-      // latch or read through shared state that teardown may have cleared.
-      if (this.registration === registration) this.registration = undefined;
+    const mount = this.mount;
+    if (mount?.phase === "ready" && !refresh) {
+      try { mount.instance?.tui.requestRender(); }
+      catch (error) { this.retryMount(mount); throw error; }
+      return;
     }
-    if (pendingWake && this.ui === ui && epoch === this.componentEpoch) this.update();
+    this.install(ui);
+  }
+
+  private install(ui: WidgetUi): void {
+    // Publish possible host ownership before a partially applying setter. The
+    // token stays on failure for one eventual removal, but old callbacks die.
+    const mount: WidgetMount = { phase: "installing", pendingWake: false };
+    this.mount = mount;
+    try {
+      ui.setWidget!("harness-agents", (tui, theme) => this.createComponent(mount, tui, theme), { placement: "aboveEditor" });
+      if (this.mount !== mount) return; // A setter may dispose/rebind synchronously.
+      const pendingWake = mount.pendingWake;
+      mount.phase = "ready";
+      mount.pendingWake = false;
+      if (pendingWake) this.update(); // One ordinary projection, never a second factory.
+    } catch (error) { this.retryMount(mount); throw error; }
+  }
+
+  private createComponent(mount: WidgetMount, tui: WidgetTui, theme: Theme): WidgetComponent {
+    if (this.mount !== mount || mount.phase === "retry") return { render: () => [], invalidate() {} };
+    const instance: WidgetInstance = { tui, page: 0 };
+    mount.instance = instance;
+    this.lastMode = tui.mode;
+    const current = () => this.mount === mount && mount.instance === instance;
+    return {
+      render: (width: number) => {
+        if (!current() || !this.snapshot) return [];
+        const frame = renderWidget({ ...this.snapshot, spinnerFrame: this.frame, expanded: this.expanded && tui.mode === "fullscreen",
+          maxLines: lineBudget(tui.terminal.rows), page: instance.page, disclosure: tui.mode === "fullscreen",
+          width: width || tui.terminal.columns, theme, shouldShowFinished: (id, status) => this.lingering(id, status) });
+        instance.page = frame.pagination?.page ?? 0;
+        instance.paint = { frame, columns: tui.terminal.columns, rows: tui.terminal.rows };
+        return frame.lines;
+      },
+      // Pi normalizes `y` to this component. Regular mode leaves the mouse to
+      // the terminal; its keyboard inspection entry is Alt+A.
+      handleMouse: (event) => {
+        const paint = instance.paint;
+        if (!current() || mount.phase !== "ready" || !paint || tui.mode !== "fullscreen" ||
+          event.type !== "click" || event.button !== "left" || paint.columns !== tui.terminal.columns || paint.rows !== tui.terminal.rows ||
+          !Number.isInteger(event.y) || !Number.isFinite(event.x) || event.x < 0) return undefined;
+        const { frame } = paint;
+        if (event.y === 0 && event.x < (frame.headingWidth ?? 0)) {
+          // Explicit inspection refreshes presentation, never model-facing ACKs.
+          try { this.snapshot = structuredClone(this.rows()); } catch { this.clear(); return undefined; }
+          if (!this.snapshot.runs.length && !this.snapshot.owner.blocked && !this.snapshot.owner.resident) {
+            this.clear(); return undefined;
+          }
+          this.expanded = !this.expanded;
+          instance.page = 0; instance.paint = undefined; tui.requestRender();
+          return { handled: true, render: true };
+        }
+        const nav = frame.pagination;
+        if (nav && event.y === nav.row) {
+          const inside = (range?: [number, number]) => range && event.x >= range[0] && event.x < range[1];
+          if (inside(nav.prev)) instance.page--;
+          else if (inside(nav.next)) instance.page++;
+          else return undefined;
+          instance.paint = undefined; tui.requestRender();
+          return { handled: true, render: true };
+        }
+        const agent = frame.hits[event.y];
+        if (!agent || !this.open || event.x >= visibleWidth(frame.lines[event.y]!)) return undefined;
+        this.open(agent);
+        return { handled: true };
+      },
+      invalidate: () => {
+        if (!current()) return;
+        mount.instance = undefined;
+        // Theme replacement must leave pi-tui's invalidation walk first. Idle
+        // widgets have no animation tick to perform this refresh for them.
+        if (this.repaint) clearTimeout(this.repaint);
+        this.repaint = setTimeout(() => {
+          this.repaint = undefined;
+          if (this.mount === mount) this.updateFromTimer(true);
+        }, 0);
+      },
+    };
+  }
+
+  /** Failure retains removal ownership and cached content, but no live instance
+   * or autonomous retry. A later external wake installs a new identity. */
+  private retryMount(mount: WidgetMount): void {
+    if (this.mount !== mount) return;
+    mount.phase = "retry";
+    mount.pendingWake = false;
+    mount.instance = undefined;
+    this.pausePainting();
   }
 
   private updateFromTimer(refresh = false): void {
     try { this.update(refresh); }
-    catch {
-      // Optional presentation must not throw out of a timer or spin on a broken
-      // host. Keep possible host ownership for clear/dispose; a later external
-      // wake can retry registration without trusting the failed replacement.
-      this.needsRefresh = true;
-      this.tui = undefined;
-      this.componentEpoch++;
-      this.retire?.(); this.retire = undefined;
-      this.forgetPaint = undefined;
-      this.stopTimer();
-      if (this.repaint) { clearTimeout(this.repaint); this.repaint = undefined; }
-    }
+    catch { /* The failing setter/render request retired its own mount before throwing. */ }
   }
 
-  /** Empty or unavailable: drop the widget and timer, but keep the binding. */
-  private clear(): void {
-    if (this.registration) this.registration.pendingWake = false;
-    const registered = this.registered;
-    this.componentEpoch++;
-    this.registered = false;
-    this.needsRefresh = false;
-    this.tui = undefined;
-    this.retire?.(); this.retire = undefined;
-    this.forgetPaint = undefined;
-    this.snapshot = undefined;
-    this.expanded = false;
+  /** Retire before host removal/rebinding, including when that host throws. */
+  private detachMount(): WidgetMount | undefined {
+    const mount = this.mount;
+    this.mount = undefined;
+    this.pausePainting();
+    return mount;
+  }
+  private pausePainting(): void {
     this.stopTimer();
     if (this.repaint) { clearTimeout(this.repaint); this.repaint = undefined; }
-    if (registered) this.ui?.setWidget?.("harness-agents", undefined);
+  }
+  /** Empty or unavailable: drop the widget and timer, but keep the binding. */
+  private clear(): void {
+    const mount = this.detachMount();
+    this.snapshot = undefined;
+    this.expanded = false;
+    if (mount) this.ui?.setWidget?.("harness-agents", undefined);
   }
   private stopTimer(): void {
     if (this.timer) { clearInterval(this.timer); this.timer = undefined; }
