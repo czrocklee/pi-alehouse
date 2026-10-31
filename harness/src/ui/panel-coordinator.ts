@@ -2,7 +2,8 @@ import type { PersistentScope } from "../../../lib/settings-store.mjs";
 import { buildContextEntries, sessionEntryToContextMessages, getMarkdownTheme, type EventBus, type ExtensionAPI, type ExtensionContext,
   type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
-import { FOOTER_INDICATOR_CLICK_EVENT, WORKER_PRESET_INDICATOR, type FooterIndicatorClick }
+import { FOOTER_INDICATOR_CLICK_EVENT, PINNED_POPOVER_YIELD_EVENT, WORKER_PRESET_INDICATOR, type FooterIndicatorClick,
+  type PinnedPopoverYield }
   from "../../../lib/overlay-protocol.mjs";
 import { focusOrigin, focusRevealed, joinPopoverStack, stackedOverlayOptions, type StackMember } from "../../../lib/popover-stack.mjs";
 import type { DelegationSetting } from "../delegation.js";
@@ -494,12 +495,23 @@ export class PanelCoordinator {
     let place: StackMember | undefined;
     let handle: OverlayHandle | undefined;
     let reveal: (() => void) | undefined;
+    let releasePinned: (() => void) | undefined;
     try {
       const floating = this.floating();
       return await this.host.ui.custom<PresetChoice | null>((tui, theme, keybindings, done) => {
         if (!request.mount(done, this.host !== host || this.options.router() !== live || !live.isCurrent(state.candidate) ||
             this.paneOpen || !this.options.ready() || !mountable(this.yielding, this.approvals.pending)))
           return { render: () => [], invalidate() {} };
+        if (floating) {
+          const token = {};
+          // Own the release before publishing: even a partially delivered,
+          // throwing start must be paired. This is presentation, not authority.
+          releasePinned = () => {
+            releasePinned = undefined;
+            this.options.pi.events.emit(PINNED_POPOVER_YIELD_EVENT, { token, active: false } satisfies PinnedPopoverYield);
+          };
+          this.options.pi.events.emit(PINNED_POPOVER_YIELD_EVENT, { token, active: true } satisfies PinnedPopoverYield);
+        }
         const stacked = floating ? (place = joinPopoverStack(tui)) : undefined;
         // Opened behind taller popovers, it waits off screen; when room
         // appears it takes the keyboard it would have had, unless a dialog
@@ -545,7 +557,14 @@ export class PanelCoordinator {
         : { overlay: false });
     } finally {
       try { request.dispose(); }
-      finally { reveal = undefined; place?.leave(); this.closePreset = undefined; this.pickerOpen = false; }
+      finally {
+        reveal = undefined;
+        try { place?.leave(); }
+        finally {
+          try { releasePinned?.(); }
+          finally { this.closePreset = undefined; this.pickerOpen = false; }
+        }
+      }
     }
   }
 }

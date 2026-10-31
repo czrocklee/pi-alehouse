@@ -1,18 +1,22 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { getAgentDir, type ExtensionAPI, type ExtensionContext, type SessionEntry, type Theme } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ContextUsage, type ExtensionAPI, type ExtensionContext, type SessionEntry, type Theme } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import type { OverlayHandle, TuiMouseEvent } from "@earendil-works/pi-tui";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { isKeyRelease, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatTokenCount } from "../lib/token-format.mjs";
+import { collectContextSnapshot, type ContextModelIdentity, type ContextSnapshot } from "./lib/context-stats.ts";
+import { ContextView } from "./lib/context-view.ts";
+import { CompactionProgress } from "./lib/compaction-progress.ts";
 import { APPROVAL_INDICATOR, FOOTER_INDICATOR_CLICK_EVENT, HEALTH_INDICATOR, HIDE_TRANSIENT_OVERLAYS_EVENT, PINNED_INDICATORS,
+  PINNED_POPOVER_YIELD_EVENT,
   WORKER_PRESET_INDICATOR, type FooterIndicatorClick } from "../lib/overlay-protocol.mjs";
 import { POPOVER as BOX, POPOVER_CLOSE_COLUMNS, isPopoverCloseClick, popoverCloseHit, popoverCloseTail,
   popoverRule, popoverSide } from "../lib/popover-frame.mjs";
 // render() returns one clipped line, never a wrapping component: exactly the
 // POPOVER_DOCK_ROWS the bottom-right popover column rests on.
-import { POPOVER_DOCK_ROWS, joinPopoverStack, stackedOverlayOptions, type StackMember } from "../lib/popover-stack.mjs";
+import { POPOVER_DOCK_ROWS, focusOrigin, focusRevealed, joinPopoverStack, stackedOverlayOptions, type StackMember } from "../lib/popover-stack.mjs";
 import { SPEND_FIELDS, usageTotals, readUsageAttribution as attribution,
   type UsageTotals, type HostModelSpend as SpendAttribution } from "../lib/usage-attribution.mjs";
 
@@ -868,7 +872,39 @@ function fitFooterSegments(segments: FooterSegment[], width: number): FooterSegm
 }
 
 /** A clickable span of the footer row: the usage figures, or one status. */
-type FooterHit = { x: number; width: number; key?: string };
+type FooterHit = { x: number; width: number; key?: string; context?: boolean };
+
+/** Read once per paint; the context panel receives this same SDK total. */
+function contextUsage(ctx: ExtensionContext): ContextUsage {
+  try {
+    const usage = ctx.getContextUsage();
+    if (usage) return { ...usage };
+  } catch { /* A presentation failure must not affect the session. */ }
+  return { tokens: null, contextWindow: 0, percent: null };
+}
+
+function contextSummary(snapshot: ContextSnapshot, reason: string): string {
+  return ["Context · main session", `${formatTokens(snapshot.usage.tokens)}/${formatTokens(snapshot.usage.contextWindow || null)}`,
+    ...snapshot.categories.filter((row) => row.rawTokens > 0 || row.count > 0)
+      .map((row) => `${row.label}: ≈${formatTokens(row.tokens)}`), snapshot.note, reason].join("\n");
+}
+
+function contextControl(usage: ContextUsage, theme: Theme, width: number, progress?: string): string {
+  const fraction = `${formatTokens(usage.tokens)}/${formatTokens(usage.contextWindow > 0 ? usage.contextWindow : null)}`;
+  const percent = usage.percent == null ? "?" : `${usage.percent.toFixed(1)}%`;
+  const bar = formatContextBar(usage.percent);
+  const tone = usage.percent == null ? "dim" : usage.percent > 90 ? "error" : usage.percent > 70 ? "warning" : "success";
+  const candidates = progress ? [
+    `${theme.fg("muted", `${fraction} ${bar}`)} ${theme.fg("accent", progress)}`,
+    `${theme.fg("muted", fraction)} ${theme.fg("accent", progress)}`,
+    theme.fg("accent", progress),
+  ] : [
+    theme.fg(tone, `${fraction} ${bar} ${percent}`),
+    theme.fg(tone, `${fraction} ${percent}`),
+    theme.fg(tone, fraction),
+  ];
+  return candidates.find((text) => visibleWidth(text) <= width) ?? "";
+}
 
 export default function (pi: ExtensionAPI) {
   /** Keyed by provider: each Codex provider is its own account. */
@@ -882,6 +918,119 @@ export default function (pi: ExtensionAPI) {
   let grokPublishQueued = false;
   let grokPublishForceQueued = false;
   let lastGrokFetchAt = 0;
+  const compaction = new CompactionProgress();
+  let compactionTimer: ReturnType<typeof setInterval> | undefined;
+  let compactionUsage: ContextUsage | undefined;
+  let frozenContext: ContextSnapshot | undefined;
+  let effectivePrompt: string | undefined;
+  // Foreground assistant events observe a dispatch; they never predict a route.
+  let observedReplayModel: ContextModelIdentity | undefined;
+  let replaySource: "active-request" | "last-observed-request" = "last-observed-request";
+  let cachedContext: ContextSnapshot | undefined;
+  let cachedContextKey: string | undefined;
+  let contextRevision = 0;
+  let inspectContext: ((focus: boolean) => void) | undefined;
+  let retireContextUI: (() => void) | undefined;
+  const clearContext = () => {
+    contextRevision++;
+    cachedContext = undefined;
+    cachedContextKey = undefined;
+  };
+  const stopCompactionTimer = () => {
+    if (compactionTimer) clearInterval(compactionTimer);
+    compactionTimer = undefined;
+  };
+  const resetContext = () => {
+    stopCompactionTimer();
+    compaction.reset();
+    compactionUsage = undefined;
+    frozenContext = undefined;
+    effectivePrompt = undefined;
+    observedReplayModel = undefined;
+    clearContext();
+    retireContextUI?.();
+    retireContextUI = undefined;
+    inspectContext = undefined;
+  };
+  const rememberPrompt = (ctx: ExtensionContext) => {
+    try { effectivePrompt = ctx.getSystemPrompt(); } catch { /* A failed new-run capture remains unknown. */ }
+    clearContext();
+  };
+  const contextSnapshot = (ctx: ExtensionContext, usage = compactionUsage ?? contextUsage(ctx)): ContextSnapshot => {
+    if (compactionUsage && frozenContext) return frozenContext;
+    let leaf: string | null | undefined;
+    try { leaf = ctx.sessionManager.getLeafId?.(); } catch { /* Lifecycle invalidation remains available. */ }
+    const key = JSON.stringify([contextRevision, leaf, ctx.model?.provider, ctx.model?.id,
+      observedReplayModel, replaySource, usage.tokens, usage.contextWindow, usage.percent]);
+    if (!cachedContext || key !== cachedContextKey) {
+      cachedContext = collectContextSnapshot(ctx, { usage, effectiveSystemPrompt: effectivePrompt,
+        replayModel: observedReplayModel ?? (ctx.model?.api === VIRTUAL_MODEL_API ? null : undefined), replaySource });
+      cachedContextKey = key;
+    }
+    return cachedContext;
+  };
+  const invalidateContext = () => { clearContext(); requestFooterRender?.(); };
+  const observeReplay = (value: unknown, completed: boolean) => {
+    const message = asRecord(value);
+    if (message?.role !== "assistant") return;
+    observedReplayModel = typeof message.provider === "string" && typeof message.api === "string"
+      && typeof message.model === "string" && message.api !== VIRTUAL_MODEL_API
+      && (!completed || SETTLED_ROUTE_STOPS.has(String(message.stopReason)))
+      ? { provider: message.provider, api: message.api, id: message.model } : undefined;
+    replaySource = completed ? "last-observed-request" : "active-request";
+  };
+  pi.on("before_agent_start", (_event, ctx) => {
+    effectivePrompt = undefined; observedReplayModel = undefined; rememberPrompt(ctx);
+  });
+  pi.on("turn_start", () => { observedReplayModel = undefined; invalidateContext(); });
+  pi.on("context_with_system", (_event, ctx) => { rememberPrompt(ctx); });
+  pi.on("message_start", (event) => { observeReplay(event.message, false); invalidateContext(); });
+  pi.on("message_end", (event) => { observeReplay(event.message, true); invalidateContext(); });
+  pi.on("tool_execution_end", invalidateContext);
+  pi.on("agent_settled", () => {
+    if (replaySource === "active-request") observedReplayModel = undefined;
+    invalidateContext();
+  });
+  const resetContextSource = () => { effectivePrompt = undefined; observedReplayModel = undefined; invalidateContext(); };
+  pi.on("session_tree", resetContextSource);
+  pi.on("model_select", resetContextSource);
+  pi.on("session_before_compact", (event, ctx) => {
+    compactionUsage = contextUsage(ctx);
+    frozenContext = undefined;
+    clearContext();
+    // Capture the complete pre-compaction composition now, not on a later paint.
+    frozenContext = contextSnapshot(ctx, compactionUsage);
+    compaction.start({
+      modelKey: ctx.model && ctx.model.api !== VIRTUAL_MODEL_API ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
+      tokensBefore: event.preparation.tokensBefore,
+    });
+    stopCompactionTimer();
+    if (ctx.mode === "tui" && requestFooterRender) {
+      compactionTimer = setInterval(() => requestFooterRender?.(), 100);
+      compactionTimer.unref?.();
+    }
+    requestFooterRender?.();
+  });
+  const finishCompaction = (success: boolean) => {
+    compaction.finish(success);
+    stopCompactionTimer();
+    compactionUsage = undefined;
+    frozenContext = undefined;
+    observedReplayModel = undefined;
+    clearContext();
+    requestFooterRender?.();
+  };
+  pi.on("session_compact", (event) => finishCompaction(!event.fromExtension));
+  pi.on("session_compact_failed", () => finishCompaction(false));
+  pi.on("session_shutdown", resetContext);
+  pi.registerCommand?.("context", {
+    description: "Inspect current context composition (estimated); fullscreen panels can stay pinned",
+    handler: async (_args, ctx) => {
+      if (ctx.mode === "tui" && inspectContext) { inspectContext(true); return; }
+      if (!ctx.hasUI) return;
+      ctx.ui.notify(contextSummary(contextSnapshot(ctx), "The pinned context panel requires fullscreen Pi."), "info");
+    },
+  });
   // The stack asks every member for its preferred width during each overlay
   // layout. Keep the session walk local to this footer, but let lifecycle
   // boundaries clear it before a width getter can be the first reader.
@@ -997,6 +1146,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", (_event, ctx) => {
+    resetContext();
     ctx.ui.setFooter((tui, theme, footerData) => {
       // Pi's component tree is top-aligned and has no flex spacer before the
       // footer. Add one at the render boundary so the footer stays on the
@@ -1038,14 +1188,28 @@ export default function (pi: ExtensionAPI) {
       let member: StackMember | undefined;
       let overlay: OverlayHandle | undefined;
       let cachedSpend: ModelSpend[] | undefined;
-      const resetSpend = () => { cachedSpend = undefined; };
-      // `getEntries()` returns a new array, so identity cannot identify a
-      // stable snapshot. One native footer render or explicit invalidation
-      // starts the next snapshot; every width getter and overlay paint in that
-      // frame shares its already grouped rows.
-      const spend = () => cachedSpend ??= collectSpend(ctx);
+      let cachedSpendStamp: string | undefined;
+      const resetSpend = () => { cachedSpend = undefined; cachedSpendStamp = undefined; };
+      const spendStamp = (): string | undefined => {
+        try {
+          const leaf = ctx.sessionManager.getLeafId?.();
+          return leaf === null || typeof leaf === "string" ? JSON.stringify(leaf) : undefined;
+        } catch { return undefined; }
+      };
+      // SDK appends, including independent usage records, advance the leaf.
+      // Animation/focus paints reuse data; lifecycle invalidation covers tree
+      // changes. Older hosts without a leaf getter keep the per-frame fallback.
+      const spend = () => {
+        const stamp = spendStamp();
+        if (stamp !== undefined && stamp !== cachedSpendStamp) cachedSpend = undefined;
+        cachedSpendStamp = stamp;
+        return cachedSpend ??= collectSpend(ctx);
+      };
       invalidateSpend = resetSpend;
       let restoreTimer: ReturnType<typeof setTimeout> | undefined;
+      let promptDepth = 0;
+      const pinnedHolds = new Set<object>();
+      const panelsHeld = () => promptDepth > 0 || pinnedHolds.size > 0;
       /** Close-control geometry follows the latest paint, not event bounds. */
       let paintedWidth = 0;
       /** Clickable spans of the footer row as last painted. */
@@ -1065,10 +1229,8 @@ export default function (pi: ExtensionAPI) {
       };
       const breakdown = {
         invalidate: resetSpend,
-        // The footer begins each native frame with a fresh snapshot. This
-        // shares it with every stacked width getter even when focus changes
-        // their layout order, while lifecycle invalidation covers a width read
-        // that happens before the footer paints.
+        // Share the leaf/revision-keyed data with every stacked width getter;
+        // layout and focus changes do not invalidate historical accounting.
         render: (width: number): string[] => {
           const lines = breakdownFrame(breakdownTable(spend(), maxBreakdownRows()), theme, width);
           paintedWidth = width;
@@ -1083,6 +1245,7 @@ export default function (pi: ExtensionAPI) {
         },
       };
       const mountBreakdown = (place: StackMember) => {
+        if (panelsHeld() || requestFooterRender !== renderFooter) return;
         overlay = tui.showOverlay(breakdown, stackedOverlayOptions(place, {
           // Grows with new usage and follows resizes without remounting.
           width: () => breakdownWidth(breakdownTable(spend(), maxBreakdownRows())),
@@ -1099,23 +1262,172 @@ export default function (pi: ExtensionAPI) {
       // Cooperatively step aside during harness panel settlement, then return
       // to the same place. This is presentation coordination, not a workaround
       // for current Pi: ui.custom completion removes its own overlay entry.
+      const pauseBreakdown = () => {
+        if (restoreTimer) clearTimeout(restoreTimer);
+        restoreTimer = undefined;
+        overlay?.hide();
+        overlay = undefined;
+        paintedWidth = 0;
+        member?.measure(0);
+      };
       const stepAside = () => {
         if (!overlay) return;
-        overlay.hide();
-        overlay = undefined;
-        if (restoreTimer) clearTimeout(restoreTimer);
-        restoreTimer = setTimeout(() => {
+        pauseBreakdown();
+        if (!panelsHeld()) restoreTimer = setTimeout(() => {
           restoreTimer = undefined;
           if (member && !overlay && tui.mode === "fullscreen") mountBreakdown(member);
         }, 0);
       };
-      const unsubscribeTransientOverlayHide = pi.events.on(HIDE_TRANSIENT_OVERLAYS_EVENT, stepAside);
+      let paintedContextUsage: ContextUsage | undefined;
+      let contextPanel: { member: StackMember; view: ContextView; handle?: OverlayHandle } | undefined;
+      let contextRestore: ReturnType<typeof setTimeout> | undefined;
+      let pendingContextFocus: { view: ContextView; origin: unknown[] | undefined } | undefined;
+      let unsubscribeContextInput: (() => void) | undefined;
+      const cancelPendingContextFocus = () => {
+        pendingContextFocus = undefined;
+        unsubscribeContextInput?.();
+        unsubscribeContextInput = undefined;
+      };
+      const currentFooter = () => requestFooterRender === renderFooter;
+      const revealContext = () => {
+        const pending = pendingContextFocus, panel = contextPanel;
+        if (!pending || !panel?.handle || pending.view !== panel.view || !currentFooter() || panelsHeld()) return;
+        if (panel.member.available() < 6) return;
+        focusRevealed(tui, panel.handle, pending.origin);
+        // A different focus owner wins permanently, not merely until resize.
+        cancelPendingContextFocus();
+      };
+      const hideContext = () => {
+        cancelPendingContextFocus();
+        if (contextRestore) clearTimeout(contextRestore);
+        contextRestore = undefined;
+        const previous = contextPanel;
+        contextPanel = undefined;
+        if (!previous) return;
+        try { previous.handle?.hide(); } finally {
+          try { previous.view.dispose(); } finally { previous.member.leave(); }
+        }
+        tui.requestRender();
+      };
+      const mountContext = () => {
+        if (!currentFooter() || !contextPanel || contextPanel.handle || panelsHeld() || tui.mode !== "fullscreen") return;
+        const panel = contextPanel;
+        panel.handle = tui.showOverlay(panel.view, stackedOverlayOptions(panel.member, {
+          width: () => panel.view.preferredWidth(Math.max(1, tui.terminal.columns - 4)),
+          minRows: 6,
+          nonCapturing: true,
+          onReveal: () => { if (contextPanel === panel) revealContext(); },
+        }));
+        tui.requestRender();
+      };
+      const showContext = (focus: boolean) => {
+        if (!currentFooter() || tui.mode !== "fullscreen") return;
+        if (panelsHeld()) {
+          if (focus && ctx.hasUI) ctx.ui.notify(contextSummary(contextSnapshot(ctx),
+            "Context is unavailable while another dialog owns the UI; retry /context after it closes."), "info");
+          return;
+        }
+        if (!contextPanel) {
+          const place = joinPopoverStack(tui);
+          const view = new ContextView({
+            theme,
+            snapshot: () => contextSnapshot(ctx, compactionUsage ?? paintedContextUsage ?? contextUsage(ctx)),
+            availableRows: () => place.available(),
+            requestRender: () => { if (currentFooter()) tui.requestRender(); },
+            close: hideContext,
+            isFocused: () => contextPanel?.handle?.isFocused() === true,
+            onRender: (height) => place.measure(height),
+            compaction: () => compaction.snapshot()?.text,
+          });
+          contextPanel = { member: place, view };
+        }
+        if (focus) {
+          cancelPendingContextFocus();
+          pendingContextFocus = { view: contextPanel.view, origin: focusOrigin(tui) };
+        }
+        mountContext();
+        if (focus) {
+          contextPanel.handle?.focus();
+          if (contextPanel.handle?.isFocused()) cancelPendingContextFocus();
+          else {
+            // Observe input only while an explicit off-screen request is pending;
+            // passive pins never install a standing keyboard listener.
+            unsubscribeContextInput = ctx.ui.onTerminalInput?.((data) => {
+              if (data && !isKeyRelease(data)) cancelPendingContextFocus();
+              return undefined;
+            });
+            if (!unsubscribeContextInput) cancelPendingContextFocus();
+            if (ctx.hasUI) ctx.ui.notify(contextSummary(contextSnapshot(ctx),
+              "Context is pinned but needs at least 6 free rows. Close another popover or enlarge the terminal; later input cancels delayed keyboard focus."), "info");
+          }
+        }
+      };
+      const inspect = (focus: boolean) => {
+        if (tui.mode === "fullscreen") showContext(focus);
+        else if (ctx.hasUI) {
+          ctx.ui.notify(contextSummary(contextSnapshot(ctx), "The pinned context panel requires fullscreen Pi."), "info");
+        }
+      };
+      inspectContext = inspect;
+      retireContextUI = hideContext;
+      const pauseContext = () => {
+        cancelPendingContextFocus();
+        if (contextRestore) clearTimeout(contextRestore);
+        contextRestore = undefined;
+        if (!contextPanel) return;
+        contextPanel.handle?.hide();
+        contextPanel.handle = undefined;
+        contextPanel.member.measure(0);
+        contextPanel.view.invalidate();
+      };
+      const stepContextAside = () => {
+        if (!contextPanel?.handle) return;
+        pauseContext();
+        if (!panelsHeld()) contextRestore = setTimeout(() => { contextRestore = undefined; mountContext(); }, 0);
+      };
+      const resumePinned = () => {
+        if (!currentFooter() || panelsHeld()) return;
+        if (member && !overlay && tui.mode === "fullscreen") mountBreakdown(member);
+        mountContext(); // Always passive; old keyboard intent was retired on yield.
+      };
+      const unsubscribePinnedYield = pi.events.on(PINNED_POPOVER_YIELD_EVENT, (value) => {
+        if (!currentFooter()) return;
+        const data = asRecord(value), token = data?.token;
+        if (!token || typeof token !== "object" || typeof data?.active !== "boolean") return;
+        if (data.active) {
+          if (pinnedHolds.has(token)) return;
+          pinnedHolds.add(token);
+          pauseBreakdown(); pauseContext();
+        } else if (pinnedHolds.delete(token)) resumePinned();
+      });
+      const unsubscribePromptStart = pi.on("ui_prompt_start", () => {
+        if (!currentFooter()) return;
+        promptDepth++;
+        pauseBreakdown(); pauseContext();
+      });
+      const unsubscribePromptEnd = pi.on("ui_prompt_end", () => {
+        if (!currentFooter()) return;
+        promptDepth = Math.max(0, promptDepth - 1);
+        resumePinned();
+      });
+      const unsubscribeTransientOverlayHide = pi.events.on(HIDE_TRANSIENT_OVERLAYS_EVENT, () => {
+        stepAside();
+        stepContextAside();
+      });
       // Click-to-pin: pointer motion, typing and pasting leave the panel alone.
       // Only its close control, another click on the usage figures or host
       // teardown closes it.
 
       return {
         dispose() {
+          hideContext();
+          unsubscribePromptStart?.();
+          unsubscribePromptEnd?.();
+          unsubscribePinnedYield();
+          pinnedHolds.clear();
+          if (inspectContext === inspect) inspectContext = undefined;
+          if (retireContextUI === hideContext) retireContextUI = undefined;
+          if (requestFooterRender === renderFooter) stopCompactionTimer();
           hideBreakdown();
           unsubscribeTransientOverlayHide();
           unsubscribeBranch();
@@ -1128,8 +1440,13 @@ export default function (pi: ExtensionAPI) {
         invalidate: resetSpend,
 
         handleMouse(event: TuiMouseEvent) {
-          if (event.type !== "click" || event.button !== "left") return undefined;
+          if (event.type !== "click" || event.button !== "left" || event.y !== 0) return undefined;
           const hit = footerHits.find((span) => event.x >= span.x && event.x < span.x + span.width);
+          if (hit?.context) {
+            if (contextPanel) hideContext();
+            else showContext(false);
+            return { handled: true };
+          }
           if (hit?.key !== undefined) {
             // A status belongs to its extension; offer it the click first.
             const click: FooterIndicatorClick = { key: hit.key, handled: false };
@@ -1142,25 +1459,14 @@ export default function (pi: ExtensionAPI) {
         },
 
         render(width: number): string[] {
-          // The root footer paints once before Pi composites overlays. Reset at
-          // that render boundary rather than in the shared stack, whose width
-          // getter is intentionally evaluated for every open popover.
-          resetSpend();
+          // Width queries and animation reuse grouped spend until the SDK leaf
+          // or a lifecycle signal changes. No-leaf hosts retain the old fallback.
+          if (spendStamp() === undefined) resetSpend();
           const totals = sumSpend(spend());
-          const context = ctx.getContextUsage();
-          const contextPercent = context?.percent ?? null;
-          const contextText = `${formatTokens(context?.tokens)}/${formatTokens(
-            context?.contextWindow,
-          )} ${formatContextBar(contextPercent)} ${
-            contextPercent == null ? "?" : `${contextPercent.toFixed(1)}%`
-          }`;
-
-          const contextDisplay =
-            contextPercent != null && contextPercent > 90
-              ? theme.fg("error", contextText)
-              : contextPercent != null && contextPercent > 70
-                ? theme.fg("warning", contextText)
-                : theme.fg("success", contextText);
+          const context = compactionUsage ?? contextUsage(ctx);
+          paintedContextUsage = context;
+          // A context panel paint shares this frame's SDK total with the footer.
+          if (contextPanel) contextSnapshot(ctx, context);
 
           const branch = footerData.getGitBranch();
           const location = `${theme.fg("accent", formatCwd(ctx.cwd))}${
@@ -1195,6 +1501,10 @@ export default function (pi: ExtensionAPI) {
             ...statuses,
           ], width);
           const right = segments.map((segment, index) => joint(segments, index) + segment.text).join("");
+          const leftRoom = Math.max(0, rightStart(right, width) - 1);
+          const contextDisplay = contextControl(context, theme, leftRoom, compaction.snapshot()?.text);
+          const prefixRoom = Math.max(0, leftRoom - visibleWidth(contextDisplay) -
+            (contextDisplay ? FOOTER_SEPARATOR.length : 0));
 
           // A window whose reset has passed shows nothing until the next response.
           const current = <T extends { resetsAt: number }>(quota: T | undefined) =>
@@ -1222,17 +1532,24 @@ export default function (pi: ExtensionAPI) {
           if (creditDisplay) {
             const throughCredits = [location, modelDisplay, [...codexParts, creditDisplay].join(" ")].join(" · ");
             // Never clip a credit balance into a different whole-credit value.
-            if (visibleWidth(oneLine(throughCredits)) <= Math.max(0, rightStart(right, width) - 1)) codexParts.push(creditDisplay);
+            if (visibleWidth(oneLine(throughCredits)) <= prefixRoom) codexParts.push(creditDisplay);
           }
           const codexDisplay = codexParts.join(" ");
           const quotaDisplay = codexDisplay || (grokWeekly ? remaining("W", grokWeekly.remainingPercent) : undefined);
 
-          const left = [
-            location,
-            modelDisplay,
-            ...(quotaDisplay ? [quotaDisplay] : []),
-            contextDisplay,
-          ].join(" · ");
+          // Quota values are atomic: never turn W 12% into W 1…. Path/model
+          // chrome gives way first; right-hand approval/health stay unchanged.
+          const quotaParts = codexDisplay ? codexParts : quotaDisplay ? [quotaDisplay] : [];
+          const fittedQuota: string[] = [];
+          for (const part of quotaParts) {
+            if (visibleWidth([...fittedQuota, part].join(" ")) <= prefixRoom) fittedQuota.push(part);
+          }
+          const quotaText = fittedQuota.join(" ");
+          const chrome = truncateToWidth(oneLine([location, modelDisplay].join(FOOTER_SEPARATOR)),
+            Math.max(0, prefixRoom - visibleWidth(quotaText) - (quotaText ? FOOTER_SEPARATOR.length : 0)), "…");
+          const prefix = chrome && quotaText ? `${chrome}${FOOTER_SEPARATOR}${quotaText}` : chrome || quotaText;
+          const contextX = prefix && contextDisplay ? visibleWidth(prefix) + FOOTER_SEPARATOR.length : 0;
+          const left = prefix && contextDisplay ? `${prefix}${FOOTER_SEPARATOR}${contextDisplay}` : prefix || contextDisplay;
           // The shim that reads this marker wraps the regular renderer's own
           // render(); the alternate screen lays the dock out from its layout
           // root instead, never calls it, and would print the marker verbatim.
@@ -1240,7 +1557,7 @@ export default function (pi: ExtensionAPI) {
           // Geometry comes only from this fitted paint, including shortened
           // worker values. Hidden controls and separators have no indicator hit.
           let x = rightStart(right, width);
-          footerHits = [];
+          footerHits = contextDisplay ? [{ x: contextX, width: visibleWidth(contextDisplay), context: true }] : [];
           segments.forEach((segment, index) => {
             x += joint(segments, index).length;
             const span = visibleWidth(segment.text);

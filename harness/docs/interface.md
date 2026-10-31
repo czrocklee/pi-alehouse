@@ -436,10 +436,12 @@ partial observed-cost floor.  Pi's footer/native totals ignore completeness
 metadata and show reported amounts; they must not be read as a completeness
 claim or as free usage.
 
-In fullscreen, clicking the bottom status row toggles a pinned per-model usage
-breakdown.  Hover does nothing; typing, pasting, and table clicks do not dismiss
-it.  Click the footer again or its `×` to close it.  The footer's reserved row
-is separate from popover chrome.
+In fullscreen, clicking the usage figures or an otherwise unclaimed part of
+the bottom status row toggles a pinned per-model usage breakdown. Clicking the
+context control instead toggles the separate Context popover below. Hover does
+nothing; typing, pasting, and table clicks do not dismiss the usage panel. Click
+its footer entry again or its `×` to close it. The footer's reserved row is
+separate from popover chrome.
 
 A click on a status segment is first offered to the extension that owns it over
 `pi-footer:indicator-click` (`{ key, handled }`, shared in `lib/overlay-protocol`);
@@ -456,12 +458,98 @@ click routing stay unchanged; YOLO retains its red/bold warning styling.
 Narrow rows first omit cache detail and shorten the delegation value with an
 ellipsis, then omit whole usage/other-status items and, if necessary, the
 delegation control.
-Approval and health have priority. At extreme widths health keeps a single
-cell; if both still cannot fit, approval is omitted whole rather than displaying
-a misleading partial mode. Click spans
+Quota windows also retain atomic label/value boundaries: a complete `W 12%`
+or `5h 80%` is displayed, or that whole window is omitted, never `W 1…`.
+Path/model chrome yields before a fitted quota value. Approval and health have
+priority. At extreme widths health keeps a single cell; if both still cannot
+fit, approval is omitted whole rather than displaying a misleading partial mode. Click spans
 follow exactly the fitted ANSI/CJK-aware layout on every paint and resize.
 Full values return when space permits. Popover opening order is independent of
 this fixed footer order.
+
+## Context popover
+
+Click the footer's context token/bar region to pin Context in the existing
+bottom-right column. `/context` opens the same panel for keyboard inspection;
+it does not create a second copy. Pointer opening leaves the editor focused,
+and only a keyboard-focused panel advertises navigation, Enter or Esc. A
+space-constrained `/context` request shows a summary/notice; its one-shot reveal
+focus is cancelled by later key presses/repeats or paste, another focus owner,
+yield, close or teardown. Kitty key-release events alone do not cancel it.
+The close control or another click on the context control closes it; typing,
+pasting and outside clicks do not. Context and usage can stay pinned together.
+Regular mode offers a non-modal summary through `/context` instead of drawing
+floating chrome into scrollback.
+
+The panel is wide and short: category tabs share the top edge, totals and a
+width-fitted context bar share one row, and source rows page inside a bounded
+body. Clicking Context returns to the overview. Nonzero categories appear in
+fixed System, Summary, Messages, Tools order; System is first when present.
+Other/unattributed rows remain in the overview rather than becoming a permanent
+tab. Tabs support clicks, and keyboard inspection supports navigation, paging
+and same-height source details. Closing or resizing clears obsolete hit targets.
+The shared stack determines the actual width; long paths do not widen the column
+without bound. Context and usage yield during blocking prompts and for the full
+mounted lifetime of a floating Delegation picker. Their hidden members measure
+zero rows but retain order, width preference and view state. Overlapping holds
+must all end before passive restoration; settlement timers cannot resurrect a
+held panel. Queue cancellation/construction failure releases only its own hold.
+Restoration never takes the keyboard back.
+
+The long bar uses one theme hue with category-specific simulated alpha: System
+is strongest, followed by Summary, Messages and Tools. A selected category is
+emphasized without changing segment positions or the full-window denominator.
+Used cells remain visibly distinct from the neutral `░` free-space cells. The
+footer itself keeps the short occupancy overview, with context prioritized over
+path/model chrome when the left side is narrow; approval/health priorities on
+the right are unchanged.
+
+Footer and panel totals use the same per-paint SDK context observation. Detail
+weights use Pi's native token estimator, the observed effective run prompt, and
+the compaction/context-edit-aware main-session projection. Assistant prose and
+tool calls are split; tool declarations are counted once; summaries keep their
+origin even though providers may render them as user messages. Applicable signed
+reasoning may use reported output reasoning as a heuristic weight rather than
+counting encrypted bytes. Physical selection and observed foreground dispatch
+identity are separate: virtual requests use the same turn's assistant metadata,
+not historical last-message guesses, `responseModel`, uncorrelated provider hooks
+or a second routing call. This observes a request, never predicts the next route.
+Without a replay identity, reasoning remains explicitly unknown; after a new
+turn, selection/tree change, failure or compaction, stale route facts are not
+reused. Sources are safe labels and identifying metadata, not
+message bodies, full shell commands, arbitrary arguments, or provider secrets.
+No child journals, credentials, tokenizers or extra provider calls are used.
+
+Normal detail token values are approximate proportional allocations: integer
+rounding keeps item and category sums equal to that snapshot's SDK total. This
+is not a provider-measured content breakdown. Raw estimates remain available to
+explain adjustments. Calibration and incomplete attribution are separate visible
+states, including in narrow layouts; the full estimate note is inspectable in
+the same bounded body. Missing SDK totals use raw-only wording and remain unknown,
+not zero. If reasoning replay identity is unknown, known source weights are not
+silently inflated: the known SDK total stays explicitly unattributed in the
+overview and source allocations remain unknown. This does not hide available
+raw estimates: non-proportional tables use an explicit `≈raw` column, with a
+separate SDK-allocation column when applicable, never `%used` for raw weights.
+Successful raw estimates (including heuristic zero), unknown estimates, and
+non-applicable raw values are distinct per source; an unknown reasoning or a
+failed estimate is not displayed as raw zero. Other has no source raw estimate
+and retains the SDK total only in its SDK column. Narrow layouts may omit that
+column, never move its number under `≈raw`. Details keep the same distinction;
+non-proportional raw/SDK comparisons are explicitly unscaled available subtotals,
+not a completed normalization. There is no permanent Other tab.
+No post-compaction count is invented before the SDK has one. Footer and panel
+share the same compact number format and `?` unknown marker.
+
+During native manual/automatic compaction, the context control uses a braille
+spinner and elapsed time, without a `compact` label. The panel and footer share
+the pre-compaction snapshot until a terminal event. A percentage is an estimate
+only: at least three comparable successful observations for the same requested
+model are needed, and missing/variable history, virtual routing or an overrun
+falls back to spinner plus elapsed time. Failures/cancellations do not train the
+estimate. Samples are bounded and memory-only; session teardown retires timers,
+snapshots and panels. These UI observations never alter compaction or request a
+model call.
 
 ## Optional footer network integrations
 
@@ -546,7 +634,7 @@ See [limitations](limitations.md#ui-scope) for UI/Stats scope limitations.
 
 ## Bottom-right popover column
 
-The usage breakdown, approval selector and floating routing picker share one
+The usage breakdown, Context inspector, approval selector and floating routing picker share one
 bottom-right column above the footer, through `lib/popover-stack`.  The first
 opened rests on the footer and later ones stack directly on top; closing one
 drops everything above it into its place.  Every open popover uses the widest
@@ -560,18 +648,23 @@ yolo warning for the approval popover), so controls and the bottom edge are
 never clipped.  Pi focuses a capturing overlay only when it is shown on screen,
 so a picker or approval popover that appears later takes the keyboard itself --
 unless focus has moved since it opened, in which case that dialog keeps it.  The footer and harness are separate bundles, so the column lives in a
-process-wide registry keyed by the TUI both draw into.  When a harness panel
-closes, the usage breakdown steps off the overlay stack (Pi's `ui.custom` close
-pops the top overlay, not its own) and returns on the next tick, keeping its
-place in the column meanwhile.  In regular TUI mode the
+process-wide registry keyed by the TUI both draw into.  During a mounted floating Delegation picker, the UI-only
+`pi-harness:pinned-popover-yield` token holds pinned footer panels aside until
+that request releases it; it grants no permission or Owner authority. At other
+custom-panel settlement boundaries, footer panels briefly step off the overlay
+stack and return on the next tick while retaining their members. This is
+presentation coordination, not a claim that current Pi closes the wrong overlay.  In regular TUI mode the
 footer totals remain but the popover does not open; multiplexers commonly require
 click rather than hover motion.
 
-The footer, usage width preference and usage panel paint share one grouped spend
-snapshot per native frame. Repeated width queries from other popovers do not
-walk the transcript again. A new footer render or lifecycle/UI invalidation
-refreshes the snapshot; viewport-dependent table layout still recalculates for
-resize and changing stack budgets.
+The footer, usage width preference and usage panel share grouped spend until
+session leaf or lifecycle/UI invalidation changes it. Independent SDK usage
+appends advance that leaf too. Animation and repeated width queries do not walk
+the transcript again; hosts without a leaf getter keep the per-frame fallback.
+Context caches stable snapshot/category layout metrics and formats visible rows
+only; resize, source changes and navigation still update the viewport. Same-frame
+navigation can accumulate, but Enter and row-click activation wait for a matching
+paint; wheel events over the pending panel do not scroll the transcript below.
 
 ## Approval-dialog yield
 

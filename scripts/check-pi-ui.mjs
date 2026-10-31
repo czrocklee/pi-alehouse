@@ -1042,14 +1042,18 @@ test("the pinned panel steps aside while a harness panel closes, then returns to
     const place = mounted.bounds();
     mounted.f.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {});
     assert.deepEqual(mounted.visible(), [], "cooperatively steps aside during harness settlement");
-    // The column keeps its place meanwhile: a harness popover above it cannot drop into the gap.
+    // Keep the member's ordinal/width, not a ghost reservation of hidden rows.
     const above = joinPopoverStack(mounted.tui);
-    assert.equal(above.bottom, FOOTER_HEIGHT + place.height);
-    above.leave();
-    await nextTick();
-    assert.equal(mounted.visible().length, 1, "back once the harness close has run");
-    mounted.paintOverlay();
-    assert.deepEqual(mounted.bounds(), place);
+    try {
+      assert.equal(above.bottom, FOOTER_HEIGHT, "hidden pinned content releases measured height");
+      above.measure(2);
+      await nextTick();
+      assert.equal(mounted.visible().length, 1, "back once the harness close has run");
+      mounted.paintOverlay();
+      assert.deepEqual(mounted.bounds(), place);
+      assert.equal(above.bottom, FOOTER_HEIGHT + place.height,
+        "the restored pinned member is still below the member that joined during yield");
+    } finally { above.leave(); }
     mounted.clickFooter();
     assert.deepEqual(mounted.visible(), [], "a returned panel still toggles closed");
 
