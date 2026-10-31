@@ -24,9 +24,9 @@ const provider = controlledProvider(ai); modelRuntime.registerProvider("harness-
 const model = modelRuntime.getModel("harness-fixture", "controlled"); assert(model);
 const settings = () => sdk.SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
 const permissionPath = permissionEntry, guardPath = join(generatedRoot, "extensions/static-safety-guard.ts");
-const definition = readFileSync(join(generatedRoot, "agents/reader.md"), "utf8"), definitionDigest = digest(definition);
+const definition = readFileSync(join(generatedRoot, "agents/editor.md"), "utf8"), definitionDigest = digest(definition);
 const effective = { provider: model.provider, model: model.id, thinking: "off", parent_thinking: "off",
-  thinking_resolution: "identity", profile: "reader",
+  thinking_resolution: "identity", profile: "editor",
   difficulty: 3, strength: "d3", preset: "fixture", preset_version: "v1", selection_digest: "1".repeat(64), cwd: root,
   tools: ["alert_parent"], definition_digest: definitionDigest };
 const childInit = Promise.withResolvers(), initEntered = Promise.withResolvers(), childHold = Promise.withResolvers();

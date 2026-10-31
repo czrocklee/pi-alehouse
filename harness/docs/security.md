@@ -27,20 +27,17 @@ Children receive only their profile's local `read`/Bash/search/edit tools as
 filtered by the harness, plus fixed `alert_parent`/`ask_parent`. `notify_parent`
 is retired and explicitly denied, not a runtime alias. They receive
 no parent management tools, no nested delegation and no arbitrary extensions.
-`reader` and `editor` receive no web tool table.  This intentionally differs
-from their **declared** generated definitions, which list web capability under
-the broader shared worker policy while the effective harness child allowlist
-excludes it.  Tool availability is never network authorization.  Plain `pi`
-has no delegation tools at all.
+Worker (stable internal `editor`) receives no web tool table. This differs
+from its declared generated definition, whose web tools the harness excludes.
+Tool availability is not network authorization. Plain `pi` has no delegation.
 
-Supported profiles are `reader`, `editor` and `researcher`; Git mutations stay
-with the parent in all of them, since Agents share one checkout:
-
-| Profile | Direct edit/write | Ordinary Git mutation | Meaning |
-| --- | --- | --- | --- |
-| `reader` | `write` only in its own private `/tmp` scratch; no `edit` | denied | reads the project; Bash keeps its detectable-write deny, real paths and normal approval |
-| `editor` | parent-configured workspace/scratch scope | denied | bounded writer capability, subject to existing guards |
-| `researcher` | denied; no Bash tool (its definition also turns Bash asks into denies) | denied | `read`/`grep`/`find`/`ls` plus the four web tools |
+New model requests select `worker` or `researcher` only. Worker has local
+read/edit/write/Bash/build tools under normal permissions, no web; review-only
+work is an instruction, not an enforced readonly mode. Researcher has read-only
+file tools and web, no Bash/edit/write. Git mutations stay with the parent
+because all Agents share one checkout. Existing user `reader.md` files are
+not deleted or replaced and historical profile IDs stay literal display data;
+no retired profile alias or scratch capability is supported.
 
 ### Managed Git read proof
 
@@ -51,7 +48,7 @@ every path word checked against the restricted shared grammar. Path/external
 rules still decide the outcome. The static query floor remains status/log/show,
 with commit-only patch-free show; diff is not part of that query check. A Bash session grant skips
 only its own gate, not path/external gates. Ordinary session rules can override
-ordinary configuration denies; immutable-resource and reader write floors are
+ordinary configuration denies; immutable-resource and researcher write floors are
 separate. Unsupported forms and probe failures receive no proof and may be denied
 without an ask. Env does not override denies or guarantee approval.
 
@@ -153,23 +150,9 @@ permission grants.  They share policy body; they do not pin a model, thinking,
 turn budget, or context inheritance.  Generated profile integrity and static
 Bash denies are checked by the external authority.  Existing sensitive paths,
 external writes, subprocess restrictions, Git configuration protections, and
-permission-search rules continue to apply. A reader can use `write` only in its
-[assigned scratch directory](reader-scratch.md), bound to the real child SDK
-session. The exception is a short-lived process-local per-call capability,
-granted only at the real tool boundary of the trusted built-in `write` tool,
-checked against the same effective identity as the permission session,
-including its last-known name, before the vendor permission handler. Other reader
-directories and project writes are denied, including under session grants or
-yolo. Global/project rules, project-agent floors and immutable resource
-protection still apply independently of the reader's default write floor.
-Bindings are rechecked after awaited approvals before returning allow.
-Forwarded asks verify the requesting child's binding and direct-write capability, not the
-parent identity; missing, malformed or stale provenance gets no exception, and
-generic profile/service queries (including dispatch ownership/tree preflight)
-get none. Bash receives no scratch-write exception or write capability: it
-preserves real paths, including unproven effects, and detected writes keep the
-reader ceiling. Opaque Bash programs can perform internal IO
-that the classifier cannot see, so this is not an OS sandbox.
+permission-search rules continue to apply. Opaque Bash programs can perform
+internal IO outside the classifier's view, so this is not an OS sandbox.
+Forwarded asks must retain the requesting child's edge-stamped principal.
 
 ## Dispatch preflight and validation observations
 

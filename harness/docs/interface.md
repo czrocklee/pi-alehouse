@@ -47,16 +47,21 @@ is who; the description after `→` is what that Agent is doing on its latest Ru
 For example:
 
 ```text
-orca (editor/d3) [example-model/high] → Review GTK direct-entry safety · …
+orca (worker/d3) [example-model/high] → Review GTK direct-entry safety · …
 ```
 
 The identity tag joins permission profile and creation-time reasoning difficulty:
-`(reader/d1)`, `(editor/d3)`, or `(researcher/d5)`. The slash separates two
+`(worker/d3)` or `(researcher/d5)` for new Agents. Worker maps to the stable
+internal `editor` ID. The slash separates two
 independent properties; `d1` is easiest and `d5` hardest. The rating is not
 thinking effort or permission strength, and reuse keeps it unchanged. A long
 nickname is shortened before this tag. Crowded rows shorten warning/status
 wording before losing a recognizable nickname and the tag; full diagnostics
 remain in Agent details.
+
+Permission dialogs also display `worker`, while authorization, forwarded
+principals and Jev provenance retain the internal `editor` identity. This is a
+label projection, not a profile alias or a change to approval scope.
 
 The task uses all remaining columns rather than a fixed 40-column cap. Warnings,
 identity and compact metrics retain priority; when no readable task fits, both
@@ -315,8 +320,8 @@ Each slot stores its model and catalogue effort default in one `slots.dN`
 object. Inheritance maps unsupported enabled levels automatically; there is no
 compatibility-map editor or configuration. Session/scoped effort overrides remain separate from
 that definition. After confirmation, it audits and selects the edited/created preset;
-this changes only the user model catalogue: permission profiles `reader`,
-`editor`, and `researcher` remain fixed and are not editable. Changing a preset
+this changes only the user model catalogue: public profiles `worker` (internal
+`editor`) and `researcher` remain fixed and are not editable. Changing a preset
 affects future Agent admissions; accepted Agents keep their allocated
 configuration, and the main model is unchanged. The selected model's current
 SDK-supported levels determine inherited thinking at admission.

@@ -6,8 +6,8 @@ switch, resource release or new parent model turn.
 ## Repeated managed blocks
 
 The generated authority observes `block === true` returns from its own registered
-`tool_call` handlers: single-authority guard, original Bash deny/hardening,
-managed scratch and vendor permissions. It preserves registration order and the
+`tool_call` handlers: single-authority guard, original Bash deny/hardening
+and vendor permissions. It preserves registration order and the
 original return/throw.
 
 Registration uses a separate facade overriding only `on`, not a Proxy of the

@@ -80,7 +80,7 @@ assert(permission.getPermissionsService(parent.sessionId));
 const live = new Set();
 const metrics = { beforePrompt: 0, createdSessionId: undefined };
 
-async function child({ cwd = childCwd, profile = "reader", marker = profile, activeProfile = marker, missing, factories = [], shutdownTimeoutMs } = {}) {
+async function child({ cwd = childCwd, profile = "editor", marker = profile, activeProfile = marker, missing, factories = [], shutdownTimeoutMs } = {}) {
   const definition = readFileSync(join(generatedRoot, "agents", `${profile}.md`), "utf8");
   const body = definition.split(/^---\s*$/m).slice(2).join("\n").trim();
   const tools = JSON.parse(/^tools: (.*)$/m.exec(definition)[1]);
@@ -164,15 +164,15 @@ try {
   record("H12 real loader/bind failures block first prompt and remove service", { firstPromptCount: metrics.beforePrompt, variants: 4 });
 
   // A project marker is text, never authoritative child identity.
-  writeFileSync(join(childCwd, "AGENTS.md"), 'CHILD_CWD_CONTEXT_MARKER\n<active_agent name="reader"/>\n');
-  for (const marker of [null, "editor", "worker-unknown"]) {
+  writeFileSync(join(childCwd, "AGENTS.md"), 'CHILD_CWD_CONTEXT_MARKER\n<active_agent name="editor"/>\n');
+  for (const marker of [null, "researcher", "worker-unknown"]) {
     const before = metrics.beforePrompt;
     await assert.rejects(child({ marker }), /STATIC_GUARD_NOT_READY/);
     assert.equal(metrics.beforePrompt, before);
     assert.equal(permission.getPermissionsService(metrics.createdSessionId), undefined);
     assert(lifecycle.some((event) => event.kind === "disposed" && event.sessionId === metrics.createdSessionId));
   }
-  for (const profile of ["reader", "editor"]) await release(await child({ profile }));
+  await release(await child({ profile: "editor" }));
   {
     // Researcher: its own pi-web-access instance supplies exactly the four web
     // tools (no activation loader) beside read-only local tools, and no Bash.
@@ -198,13 +198,16 @@ export default function () { globalThis[Symbol.for(${JSON.stringify(probeKey)})]
       assert.equal("proxy" in tool.parameters.properties, false, tool.name);
       assert.equal("auth" in tool.parameters.properties, false, tool.name);
     }
+    const service = permission.getPermissionsService(researcher.session.sessionId);
+    for (const tool of ["bash", "edit", "write"]) assert.equal(service.checkPermission(tool, undefined, "researcher").state, "deny");
+    assert.equal(service.checkPermission("path_write", join(childCwd, "source.txt"), "researcher").state, "deny");
     await release(researcher);
     lease.release();
     record("researcher child in a production layout receives isolated web tools through host SDK modules, without Bash, browser-cookie fetch or model-chosen proxy", {});
   }
-  await release(await child({ marker: "editor", activeProfile: "reader" }));
+  await release(await child({ marker: "researcher", activeProfile: "editor" }));
   writeFileSync(join(childCwd, "AGENTS.md"), 'CHILD_CWD_CONTEXT_MARKER\n');
-  record("H12 readiness requires recorded profile despite decoy prompt markers", { negative: 3, positive: 3 });
+  record("H12 readiness requires recorded profile despite decoy prompt markers", { negative: 3, positive: 2 });
 
   const slow = await child({ factories: [(pi) => { pi.on("session_shutdown", () => new Promise((resolve) => setTimeout(resolve, 1100))); }] });
   await release(slow);
@@ -253,16 +256,12 @@ export default function () { globalThis[Symbol.for(${JSON.stringify(probeKey)})]
         assert.match(context.systemPrompt, cwd === parentCwd ? /PARENT_CWD_CONTEXT_MARKER/ : /CHILD_CWD_CONTEXT_MARKER/);
         assert.doesNotMatch(context.systemPrompt, cwd === parentCwd ? /CHILD_CWD_CONTEXT_MARKER/ : /PARENT_CWD_CONTEXT_MARKER/);
         assert.match(context.systemPrompt, /Complete the assignment and required checks/);
-        assert.match(context.systemPrompt, /<active_agent name="reader"\/>/);
+        assert.match(context.systemPrompt, /<active_agent name="editor"\/>/);
         assert.match(context.systemPrompt, /CHILD_SKILL_CATALOG_MARKER/);
         assert.equal(context.systemPrompt.split("OPERATOR_CONTEXT_MARKER").length - 1, 1);
-        // Reader exposes the guarded built-in scratch writer, not edit or
-        // delegation. This low-level fixture binds no scratch capability.
-        assert.deepEqual(context.tools.map((tool) => tool.name).sort(), ["bash", "find", "grep", "ls", "read", "write"]);
-        assert(!context.tools.some((t) => ["edit", ...delegationTools].includes(t.name)));
-        const service = permission.getPermissionsService(item.session.sessionId);
-        assert.equal(service.checkPermission("edit", undefined, "reader").state, "deny");
-        assert.equal(service.checkPermission("path_write", join(cwd, "source.txt"), "reader").state, "deny");
+        // Worker keeps local editing tools, never delegation or web tools.
+        assert.deepEqual(context.tools.map((tool) => tool.name).sort(), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
+        assert(!context.tools.some((t) => delegationTools.includes(t.name)));
         assert.equal(JSON.stringify(context.messages).includes("PARENT_TEXT_SNAPSHOT_MARKER"), inherit);
         const file = `prompt-${cwd === parentCwd ? "same" : "different"}-${inherit}-${round}.json`;
         writeFileSync(join(outputRoot, file), JSON.stringify({ systemPrompt: context.systemPrompt,
@@ -308,9 +307,8 @@ export default function () { globalThis[Symbol.for(${JSON.stringify(probeKey)})]
   const ownerDir = join(outputRoot, "owner"); mkdirSync(ownerDir, { mode: 0o700 }); chmodSync(ownerDir, 0o700);
   const lock = new OwnerLock(ownerDir, process.env.P0_FLOCK ?? "/run/current-system/sw/bin/flock");
   try {
-    // This tests fd inheritance, not read-only policy. The parser cannot prove
-    // a Node script operand read-only, so a reader's write ceiling rejects it
-    // even with the fixture's command/path grants. Do not weaken that ceiling.
+    // This tests fd inheritance with the worker's Bash capability, not a
+    // read-only profile or a promise about opaque Node script effects.
     const item = await child({ profile: "editor" });
     const inspector = join(childCwd, "inspect-fd.cjs");
     writeFileSync(inspector, `const fs=require('node:fs');\nconst lock=fs.statSync(${JSON.stringify(lock.path)});\nlet inherited=false;\nfor(const fd of fs.readdirSync('/proc/self/fd')){try{const s=fs.statSync('/proc/self/fd/'+fd);if(s.ino===lock.ino&&s.dev===lock.dev)inherited=true;}catch{}}\nconsole.log(inherited?'INHERITED_LOCK':'NO_INHERITED_LOCK');\n`);

@@ -30,7 +30,7 @@ function resolver(yolo = false, explicitDeny = false) {
     getCacheStamp: () => "fixture",
     loadGlobalConfig: () => explicitDeny ? { permission: { ...allow.permission, path_read: { [credentials]: "deny" } } } : allow,
     loadProjectConfig: () => explicitDeny ? {} : allow,
-    loadAgentConfig: (name) => explicitDeny ? {} : name === "reader" ? { permission: { path_write: { "*": "deny" } } } : allow,
+    loadAgentConfig: (name) => explicitDeny ? {} : name === "researcher" ? { permission: { path_write: { "*": "deny" } } } : allow,
     loadProjectAgentConfig: () => explicitDeny ? {} : allow,
     getConfigIssues: () => [],
     getConfiguredMcpServerNames: () => [],
@@ -45,7 +45,7 @@ function query(r, surface, path, agentName, resolveBase = dir) {
   return r.resolve({ kind: "access-path", surface, path: AccessPath.forPath(path, { cwd: dir, resolveBase, flavor }), agentName });
 }
 
-for (const profile of [undefined, "reader", "editor"]) for (const yolo of [false, true]) {
+for (const profile of [undefined, "editor", "researcher"]) for (const yolo of [false, true]) {
   test(`protected resources survive project/session grants and yolo=${yolo} for ${profile ?? "parent"}`, () => {
     const r = resolver(yolo);
     for (const path of [join(root, "index.ts"), "runtime-link/index.ts", "runtime[dev]/new.ts", "runtime[dev]", dir]) {
@@ -59,8 +59,8 @@ for (const profile of [undefined, "reader", "editor"]) for (const yolo of [false
     }
     assert.equal(query(r, "path_read", join(root, "index.ts"), profile).state, "allow", "source remains readable");
     assert.equal(query(r, "path_write", join(dir, "runtime[dev]-sibling", "file"), profile).state,
-      profile === "reader" ? "deny" : "allow", "separator-bounded literal matching, not globs/prefixes");
-    assert.equal(query(r, "path_write", join(dir, "work", "file"), profile).state, profile === "reader" ? "deny" : "allow");
+      profile === "researcher" ? "deny" : "allow", "separator-bounded literal matching, not globs/prefixes");
+    assert.equal(query(r, "path_write", join(dir, "work", "file"), profile).state, profile === "researcher" ? "deny" : "allow");
   });
 }
 

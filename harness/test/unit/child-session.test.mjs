@@ -19,7 +19,7 @@ function setup() {
   };
   const input = { createSession: async () => ({ session, extensionsResult: { errors: [] } }), options: {},
     parentBus: { emit: (name, data) => { reports.push({ name, data }); } }, childBus: {}, parentSessionId: "synthetic-parent",
-    profile: "reader", definitionDigest: "1".repeat(64), getPermissionsService() {}, shutdownTimeoutMs: 1000 };
+    profile: "editor", definitionDigest: "1".repeat(64), getPermissionsService() {}, shutdownTimeoutMs: 1000 };
   return { session, input, calls, reports, listeners };
 }
 

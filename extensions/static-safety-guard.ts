@@ -638,6 +638,9 @@ function safetySelfTest(root: string): void {
       getSystemPrompt: () => agent ? `<active_agent name="${agent}">` : "",
       sessionManager: { getEntries: () => [], getSessionId: () => "static-selftest" },
     });
+    // Invoke the registered guard hook directly, below harness tool exposure.
+    // Researcher Bash cases test guard depth, not an executable child route;
+    // identity, redirect and Git cases retain their separate guard obligations.
     const call = (toolName: string, input: Record<string, unknown>, agent?: string) =>
       handlers.get("tool_call")!({ toolName, input }, context(agent));
     // The grep override exercises descendant permissions in check-pi-policy.mjs.
@@ -648,9 +651,9 @@ function safetySelfTest(root: string): void {
         "git --git-dir=.git show -s deadbeef", "GIT_CONFIG_PARAMETERS=\"'core.pager=cat'\" git log -1 --oneline",
       ].map((command) => [undefined, command]),
       ["unlisted-worker", "git status --short"],
-      ["reader", "echo fixture > new-output"],
+      ["researcher", "echo fixture > new-output"],
       ["editor", "pwd >> new-output"],
-      ["reader", "cd linked-directory && echo fixture > normal.txt"],
+      ["researcher", "cd linked-directory && echo fixture > normal.txt"],
       ...["nl *.txt", "nl $INPUT", "sha256sum *.txt", "sha256sum $INPUT", "sha256sum < $INPUT",
         "sha256sum -c sums", "sha256sum --check sums", "sha256sum --ch sums", "sha256sum --check=sums",
         "sha256sum -bc sums", "sha256sum --ignore-missing sums", "sha256sum -- sums*",
@@ -712,8 +715,8 @@ function safetySelfTest(root: string): void {
       [undefined, 'if true; then "sudo" true; fi'],
       [undefined, '>/tmp/out "sudo" true'], [undefined, '2>&1 "sudo" true'],
       [undefined, 'while false; do "sudo" true; done'], [undefined, "true && /run/wrappers/bin/sudo true | cat"],
-      ["reader", "git --no-pager push"], ["reader", "git -C '/tmp/a b' --no-pager push origin main"],
-      ["reader", "'/usr/bin/git' --paginate commit -m fixture"],
+      ["researcher", "git --no-pager push"], ["researcher", "git -C '/tmp/a b' --no-pager push origin main"],
+      ["researcher", "'/usr/bin/git' --paginate commit -m fixture"],
       ["editor", "git --no-pager commit --amend"],
       ["editor", "git -P commit --amend"], ["editor", "git -P push --force"],
       ["editor", "git -p commit --amend"], ["editor", "git -C /tmp -P push --force"],
@@ -777,7 +780,7 @@ function safetySelfTest(root: string): void {
       'cat <<-"EOF"\n\tsudo true\n\tEOF\nprintf done',
       "cat <<'first end' <<SECOND\nsudo true\nfirst end\nsudo true\nSECOND\nprintf done",
     ]) {
-      if (call("bash", { command }, "reader")) throw new Error(`Safe literal blocked: ${command}`);
+      if (call("bash", { command }, "editor")) throw new Error(`Safe literal blocked: ${command}`);
     }
     for (const agent of Object.keys(WORKER_POLICY)) {
       if (call("bash", { command: "git status --short" }, agent)) throw new Error(`Managed worker cannot inspect status: ${agent}`);
@@ -787,21 +790,21 @@ function safetySelfTest(root: string): void {
     for (const agent of Object.keys(WORKER_POLICY)) {
       if (!call("bash", { command: "git --no-pager commit -m fixture" }, agent)?.block) throw new Error(`Worker committed: ${agent}`);
     }
-    // Identity decides the deny set: a reader may not rm, an editor may.
+    // Identity decides the deny set: a researcher may not rm, an editor may.
     const remove = { toolName: "bash", input: { command: "rm normal.txt" } };
-    for (const [parent, child] of [["editor", "reader"], ["reader", "editor"]]) {
+    for (const [parent, child] of [["editor", "researcher"], ["researcher", "editor"]]) {
       const ctx = { ...context(), getSystemPrompt: () => `<active_agent name="${parent}"/>\n<active_agent name="${child}"/>` };
       if (!handlers.get("tool_call")!(remove, ctx)?.block) throw new Error("Ambiguous legacy identity was accepted");
     }
     const repeated = { ...context(), getSystemPrompt: () => '<active_agent name="editor"/>\n<ACTIVE_AGENT name="editor"/>' };
     if (handlers.get("tool_call")!(remove, repeated)) throw new Error("Identical legacy markers blocked");
-    for (const agent of ["reader", "editor"]) {
-      const trusted = { ...context(), getSystemPrompt: () => '<active_agent name="editor"/>\n<active_agent name="reader"/>',
+    for (const agent of ["researcher", "editor"]) {
+      const trusted = { ...context(), getSystemPrompt: () => '<active_agent name="editor"/>\n<active_agent name="researcher"/>',
         sessionManager: { getEntries: () => [{ type: "custom", customType: "active_agent", data: { name: agent } }] } };
-      if (!!handlers.get("tool_call")!(remove, trusted)?.block !== (agent === "reader")) throw new Error("Prompt markers overrode trusted child entry");
+      if (!!handlers.get("tool_call")!(remove, trusted)?.block !== (agent === "researcher")) throw new Error("Prompt markers overrode trusted child entry");
     }
     if (call("bash", { command: "git status --short" })) throw new Error("Marker-free parent blocked");
-    for (const agent of [undefined, "editor", "reader"]) {
+    for (const agent of [undefined, "editor"]) {
       for (const command of ["git log -5 --oneline", "git log --oneline -n 20 HEAD", "git status --short -- normal.txt", "git status --short --ignored", "git show -s --format=%ci HEAD^0", "mktemp -d"]) {
         if (call("bash", { command }, agent)) throw new Error(`Read-only query blocked: ${agent}: ${command}`);
       }

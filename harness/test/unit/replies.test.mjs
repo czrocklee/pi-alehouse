@@ -169,7 +169,7 @@ test("bounded error choices retain remainder counts and hide concrete routing in
 
 test("independent task/roster replies show only tree_shared dispatch notes and live or final time warning without a turn-limit flag", () => {
   const base = { name: "otter", task: 1, status: "running", description: "task", resumable: true,
-    owner_blocked: false, has_question: false, effective_settings: { profile: "reader", difficulty: 3 } };
+    owner_blocked: false, has_question: false, effective_settings: { profile: "editor", difficulty: 3 } };
   const notes = Object.freeze(["tree_shared", "tree_lock_unknown"]);
   const live = { ...base, time_wrapped: true, dispatch_notes: notes }, reply = taskReply(live, () => "otter");
   assert.deepEqual(reply, { agent: "otter", task: 1, status: "running", time_wrapped: true, dispatch_notes: ["tree_shared"] });
@@ -213,20 +213,20 @@ test("dispatch error replies name concrete raw or normalized paths with a bounde
 });
 
 test("preflight denials project the checked surface and target profile only for dispatch errors", () => {
-  const denial = errorReply({ code: "PREFLIGHT_DENIED", details: { key: "tree", requested: "build/tree", surface: "path_write", profile: "reader" } }).error;
+  const denial = errorReply({ code: "PREFLIGHT_DENIED", details: { key: "tree", requested: "build/tree", surface: "path_write", profile: "researcher" } }).error;
   assert.equal(denial.parameter, "tree");
   assert.equal(denial.surface, "path_write");
-  assert.equal(denial.profile, "reader");
+  assert.equal(denial.profile, "researcher");
   assert.equal(denial.path, "build/tree");
   const bounded = errorReply({ code: "PREFLIGHT_DENIED", details: { key: "tree", surface: "s".repeat(64), profile: "p".repeat(64) } }).error;
   assert.equal(bounded.surface, "s".repeat(32));
   assert.equal(bounded.profile, "p".repeat(16));
   const unavailable = errorReply({ code: "DISPATCH_PREFLIGHT_UNAVAILABLE", details: { key: "ownership", surface: "path_write", profile: "editor" } }).error;
   assert.equal(unavailable.surface, "path_write");
-  assert.equal(unavailable.profile, "editor");
+  assert.equal(unavailable.profile, "worker");
   // Non-dispatch codes never surface these fields, and unknown detail keys stay
   // redacted; filesystem type/missing errors gain no permission surface.
-  assert.deepEqual(errorReply({ code: "AGENT_BUSY", details: { surface: "path_write", profile: "reader", secret_fixture: "hidden" } }).error, { code: "AGENT_BUSY" });
+  assert.deepEqual(errorReply({ code: "AGENT_BUSY", details: { surface: "path_write", profile: "researcher", secret_fixture: "hidden" } }).error, { code: "AGENT_BUSY" });
   const filesystem = errorReply({ code: "DISPATCH_TREE_TYPE", details: { key: "tree", requested: "file" } }).error;
   assert.equal(filesystem.surface, undefined); assert.equal(filesystem.profile, undefined);
 });
@@ -258,7 +258,7 @@ test("historical stopped questions remain readable without actionable token; sen
 
 test("task replies copy queued_for to wait and keep dependency names without provider or count fields", () => {
   const base = { name: "otter", task: 2, status: "queued", description: "task", resumable: true,
-    owner_blocked: false, has_question: false, effective_settings: { profile: "reader", difficulty: 3 },
+    owner_blocked: false, has_question: false, effective_settings: { profile: "editor", difficulty: 3 },
     blocked_by: ["run-author", "run-editor"] };
   const names = (id) => id === "run-author" ? "author" : id === "run-editor" ? "editor" : "other";
   assert.deepEqual(taskReply({ ...base, queued_for: "dependencies" }, names), {

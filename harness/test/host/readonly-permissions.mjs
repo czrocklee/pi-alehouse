@@ -19,7 +19,7 @@ assert.equal(process.env.PI_OFFLINE, "1");
 assert.equal(process.env.PI_TELEMETRY, "0");
 const configText = readFileSync(configSource, "utf8");
 assert.deepEqual(JSON.parse(readFileSync(join(agentDir, "extensions/pi-permission-system/config.json"), "utf8")), JSON.parse(configText), "No fixture permission allowances in this probe");
-const definition = readFileSync(join(agentDir, "agents/reader.md"), "utf8");
+const definition = readFileSync(join(agentDir, "agents/researcher.md"), "utf8");
 const declaredTools = JSON.parse(/^tools: (.*)$/m.exec(definition)[1]);
 const cwd = join(outputRoot, "readonly-project"), sessionDirectory = process.env.PI_CODING_AGENT_SESSION_DIR;
 for (const path of [cwd, sessionDirectory, join(cwd, "ask-zone"), join(cwd, "shared-zone"), join(cwd, ".git")]) mkdirSync(path, { recursive: true, mode: 0o700 });
@@ -32,7 +32,7 @@ const report = { authority: host.authority, versions: host.versions, real_model:
   cases: [], events: [], dialogs: [], policy: [], cleanup: [], scratch_cleanup: [], extension_errors: [], limitations: [
     "Real file/Bash gates and policy-grep; web tools are not provisioned or exercised, not full profile acceptance",
     "Controlled provider and scripted RPC-style human choices; not actual human/TUI acceptance",
-    "One worker scratch mkdir/cp case; other cases use reader. No persisted scratch inheritance acceptance",
+    "Researcher local read tools and write-floor queries; worker Bash and managed scratch mkdir/cp. No persisted scratch inheritance acceptance",
     "No Owner/Run lifecycle, reload, production entrypoint or permission policy changes",
   ] };
 const reportPath = join(outputRoot, "readonly-permissions.json");
@@ -84,9 +84,11 @@ async function parent(label, serving = true) {
   assert(permission.getPermissionsService(session.sessionId));
   return item;
 }
-async function child(parent, label, name = "reader") {
+async function child(parent, label, name = "researcher") {
   const profile = { name, definition: readFileSync(join(agentDir, "agents", `${name}.md`), "utf8") };
-  const tools = JSON.parse(/^tools: (.*)$/m.exec(profile.definition)[1]);
+  // This local policy probe deliberately provisions no web extension.
+  const tools = JSON.parse(/^tools: (.*)$/m.exec(profile.definition)[1])
+    .filter((tool) => ["read", "bash", "grep", "find", "ls", "edit", "write"].includes(tool));
   const bus = busFor(label), manager = sdk.SessionManager.inMemory(cwd);
   const parentSession = parent.session.sessionManager.getSessionFile();
   manager.newSession({ parentSession });
@@ -144,14 +146,12 @@ try {
   await check("real read, tool visibility and profile denies", async () => {
     const result = await call(a, "read", { path: "source.txt" });
     assert(!result.isError); assert.equal(text(result), "PUBLIC_MARKER\n");
-    assert.deepEqual([...a.activeTools].sort(), ["bash", "find", "grep", "ls", "read", "write"]);
-    assert(!a.activeTools.some((name) => ["edit", ...delegationTools].includes(name)));
+    assert.deepEqual([...a.activeTools].sort(), ["find", "grep", "ls", "read"]);
+    assert(!a.activeTools.some((name) => ["bash", "edit", "write", ...delegationTools].includes(name)));
     report.active_tools = a.activeTools;
     const service = permission.getPermissionsService(a.session.sessionId);
-    assert.equal(service.checkPermission("edit", undefined, "reader").state, "deny");
-    assert.equal(service.checkPermission("write", undefined, "reader").state,
-      service.checkPermission("write", undefined).state, "write follows the ordinary global rule, not a forced allow");
-    assert.equal(service.checkPermission("path_write", join(cwd, "source.txt"), "reader").state, "deny");
+    for (const tool of ["bash", "edit", "write"]) assert.equal(service.checkPermission(tool, undefined, "researcher").state, "deny");
+    assert.equal(service.checkPermission("path_write", join(cwd, "source.txt"), "researcher").state, "deny");
   });
   await check("sensitive reads and symlink alias denied without a prompt", async () => {
     const before = report.dialogs.length;
@@ -166,17 +166,18 @@ try {
     assert(!result.isError); assert.match(text(result), /PUBLIC_MARKER/);
     assert.doesNotMatch(text(result), /DENIED_MARKER|CHILD_GRANT_MARKER|SHARED_GRANT_MARKER|UNSERVED_MARKER/);
   });
-  await check("Bash safe read works; profile rm deny preserves file", async () => {
-    const safe = await call(a, "bash", { command: "cat source.txt" }); assert(!safe.isError); assert.match(text(safe), /PUBLIC_MARKER/);
+  await check("worker Bash safe read and managed proof work; researcher Bash stays denied", async () => {
+    const w = await child(p, "bash-worker", "editor");
+    const safe = await call(w, "bash", { command: "cat source.txt" }); assert(!safe.isError); assert.match(text(safe), /PUBLIC_MARKER/);
     // A managed-only proof, not merely an unchanged upstream literal allowance.
     const command = "sed -n '1,1p' source.txt", before = report.dialogs.length;
-    assert.equal(permission.getPermissionsService(a.session.sessionId).checkPermission("bash", command, "reader").state, "ask");
-    const managed = await call(a, "bash", { command });
+    assert.equal(permission.getPermissionsService(w.session.sessionId).checkPermission("bash", command, "editor").state, "ask");
+    const managed = await call(w, "bash", { command });
     assert(!managed.isError); assert.match(text(managed), /PUBLIC_MARKER/); assert.equal(report.dialogs.length, before);
-    const denied = await call(a, "bash", { command: "rm source.txt" }); assert(denied.isError);
+    assert.equal(permission.getPermissionsService(a.session.sessionId).checkPermission("bash", "rm source.txt", "researcher").state, "deny");
     assert.equal(readFileSync(join(cwd, "source.txt"), "utf8"), "PUBLIC_MARKER\n");
   });
-  await check("reader visible writes are hard-denied before and during parent yolo", async () => {
+  await check("researcher whole-surface write floor stays denied before and during parent yolo", async () => {
     const key = Symbol.for("@rocklee/managed-permissions:session-yolo"), previous = globalThis[key];
     const grants = new Set(previous ?? []);
     globalThis[key] = grants;
@@ -184,18 +185,14 @@ try {
       for (const yolo of [false, true]) {
         if (yolo) grants.add(p.session.sessionId); else grants.delete(p.session.sessionId);
         for (const suffix of ["txt", "pem", "key", "p12", "pfx"]) {
-          const name = `reader-write.${suffix}`, path = join(cwd, name), before = report.dialogs.length;
+          const name = `researcher-write.${suffix}`, path = join(cwd, name), before = report.dialogs.length;
           writeFileSync(path, "SYNTHETIC_WRITE_CEILING_FIXTURE\n");
-          const result = await call(a, "bash", { command: `printf '%s' READER_WRITE_CANARY > ./${name}` });
-          assert(result.isError, `reader wrote ${name}, yolo=${yolo}`);
-          assert.match(text(result), /Denied by policy.*path_write/);
+          const service = permission.getPermissionsService(a.session.sessionId);
+          assert.equal(service.checkPermission("path_write", path, "researcher").state, "deny", `whole-surface floor, yolo=${yolo}`);
+          for (const tool of ["bash", "edit", "write"]) assert.equal(service.checkPermission(tool, undefined, "researcher").state, "deny");
+          assert(!a.activeTools.some((tool) => ["bash", "edit", "write"].includes(tool)));
           assert.equal(readFileSync(path, "utf8"), "SYNTHETIC_WRITE_CEILING_FIXTURE\n");
-          assert.equal(report.dialogs.length, before, "A profile denial never reaches human approval");
-          const direct = await call(a, "write", { path, content: "READER_DIRECT_WRITE_CANARY" });
-          assert(direct.isError, `reader's built-in write escaped its scratch boundary: ${name}, yolo=${yolo}`);
-          assert.match(text(direct), /own scratch directory/);
-          assert.equal(readFileSync(path, "utf8"), "SYNTHETIC_WRITE_CEILING_FIXTURE\n");
-          assert.equal(report.dialogs.length, before, "An out-of-scratch write never reaches human approval");
+          assert.equal(report.dialogs.length, before, "Policy queries never reach human approval");
         }
       }
     } finally {
@@ -203,8 +200,8 @@ try {
     }
   });
   await check("worker scratch mkdir/cp uses managed proof; non-scratch copy still asks", async () => {
-    // reader deliberately retains a path_write deny ceiling. Use the editing
-    // profile here; do not relax any policy to manufacture a prompt-free copy.
+    // Researcher has no Bash and retains a path_write deny ceiling. Use the
+    // worker; do not relax any policy to manufacture a prompt-free copy.
     const w = await child(p, "scratch-worker", "editor");
     report.cases.at(-1).profile = { name: w.profile, definition_digest: w.definitionDigest };
     const manager = w.session.sessionManager, start = manager.getEntries().length, before = report.dialogs.length;
@@ -242,7 +239,7 @@ try {
     const granted = await call(a, "read", { path: "ask-zone/a.pem" }, [/^Yes, allow reads to/, /^This subagent\b.*\bonly$/]);
     assert(!granted.isError); assert.equal(text(granted), "CHILD_GRANT_MARKER\n"); forwardedSince(start, a, "allow");
     const count = report.dialogs.length;
-    assert.equal(permission.getPermissionsService(a.session.sessionId).checkPermission("path_write", join(cwd, "ask-zone/a.pem"), "reader").state, "deny", "read approval must not weaken the reader write ceiling");
+    assert.equal(permission.getPermissionsService(a.session.sessionId).checkPermission("path_write", join(cwd, "ask-zone/a.pem"), "researcher").state, "deny", "read approval must not weaken the researcher write ceiling");
     assert(!(await call(a, "read", { path: "ask-zone/a.pem" })).isError); assert.equal(report.dialogs.length, count);
     assert((await call(b, "read", { path: "ask-zone/a.pem" }, [/^No$/])).isError);
     assert((await call(p, "read", { path: "ask-zone/a.pem" }, [/^No$/])).isError);
@@ -255,8 +252,8 @@ try {
     for (const item of [b, p]) assert(!(await call(item, "read", { path: "shared-zone/a.key" })).isError);
     assert.equal(report.dialogs.length, count);
     for (const item of [p, a, b]) assert.equal(permission.getPermissionsService(item.session.sessionId)
-      .checkPermission("path_write", join(cwd, "shared-zone/a.key"), item === p ? undefined : "reader").state,
-      item === p ? "ask" : "deny", "whole-session read grant must not authorize writes or weaken the reader ceiling");
+      .checkPermission("path_write", join(cwd, "shared-zone/a.key"), item === p ? undefined : "researcher").state,
+      item === p ? "ask" : "deny", "whole-session read grant must not authorize writes or weaken the researcher ceiling");
   });
   await check("headless unserved parent fails closed", async () => {
     const unserved = await parent("unserved-parent", false), c = await child(unserved, "unserved-child");
@@ -265,16 +262,17 @@ try {
     assert(report.events.slice(start).some((event) => event.node === c.label && event.resolution === "confirmation_unavailable" && event.result === "deny"));
   });
   await check("protected write paths retain global hard denies in worker policy", async () => {
-    const service = permission.getPermissionsService(a.session.sessionId);
+    const w = await child(p, "protected-worker", "editor");
+    const service = permission.getPermissionsService(w.session.sessionId);
     const paths = [join(cwd, ".git/config"), join(process.env.HOME, ".gitconfig"), join(process.env.HOME, ".pi/agent/fixture.json")];
     for (const path of paths) report.policy.push({ path,
-      global: service.checkPermission("path_write", path), worker: service.checkPermission("path_write", path, "reader") });
+      global: service.checkPermission("path_write", path), worker: service.checkPermission("path_write", path, "editor") });
     // Control files are query-only. The real Bash gate is exercised against a
     // synthetic non-control canary inside this fixture's otherwise empty .git.
     assert(report.policy.every((row) => row.global.state === "deny" && row.worker.state === "deny" &&
       row.global.origin === "global" && row.worker.origin === "global" && row.global.matchedPattern === row.worker.matchedPattern), JSON.stringify(report.policy));
     const before = report.dialogs.length;
-    const result = await call(a, "bash", { command: "printf '%s' blocked > ./.git/fixture-canary.txt" });
+    const result = await call(w, "bash", { command: "printf '%s' blocked > ./.git/fixture-canary.txt" });
     assert(result.isError); assert.match(text(result), /Denied by policy.*path_write/);
     assert(!existsSync(join(cwd, ".git/fixture-canary.txt")));
     assert.equal(report.dialogs.length, before);

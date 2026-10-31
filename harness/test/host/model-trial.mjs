@@ -81,7 +81,7 @@ export default function (pi) {
   });
 }
 `);
-const profileNames = ["editor", "reader", "researcher"];
+const profileNames = ["editor", "researcher"];
 const profiles = Object.fromEntries(profileNames.map((name) => {
   const definition = readFileSync(join(agentDir, "agents", `${name}.md`), "utf8");
   // Identical explicit trial subset; this is not the complete production profile.
@@ -385,7 +385,7 @@ try {
       }
 
       const result = (id) => resultById(messages, id);
-      if (!callById(messages, "create-a")) return action("create-a", "agent_spawn", { agent: "worker", prompt: "ASK_FACTOR", label: "calculate the source product", profile: "reader", reasoning_difficulty: 3, wait_ms: 60000 });
+      if (!callById(messages, "create-a")) return action("create-a", "agent_spawn", { agent: "worker", prompt: "ASK_FACTOR", label: "calculate the source product", profile: "worker", reasoning_difficulty: 3, wait_ms: 60000 });
       const publications = messages.filter((message) => message.role === "toolResult")
         .map((message) => parseJson(messageText(message)));
       const question = publications.flatMap((value) => value?.agents ?? [])

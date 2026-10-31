@@ -230,14 +230,14 @@ assert(permission.getPermissionsService(parent.sessionId));
 // This must be a real live provenance path. An extension-source injection would
 // make Jev correctly fail context construction and invalidate the whole probe.
 provider.respond(async () => ({ text: "Parent accepted the delegated inspection task." }));
-await parent.prompt("Inspect the public fixture with reader; read-only shell inspection is authorized.", {
+await parent.prompt("Inspect the public fixture with worker; read-only shell inspection is authorized.", {
   source: "rpc",
   expandPromptTemplates: false,
 });
 await parent.waitForIdle();
 assert.equal(dialogCount, 0);
 
-const definitionPath = join(generatedRoot, "agents/reader.md");
+const definitionPath = join(generatedRoot, "agents/editor.md");
 const definition = readFileSync(definitionPath, "utf8");
 const definitionDigest = digest(definition);
 const tools = JSON.parse(/^tools: (.*)$/m.exec(definition)[1]);
@@ -248,7 +248,7 @@ const effective = {
   thinking: "off",
   parent_thinking: "off",
   thinking_resolution: "identity",
-  profile: "reader",
+  profile: "editor",
   difficulty: 3, strength: "d3",
   preset: "fixture",
   preset_version: "v1",
@@ -299,7 +299,7 @@ const controller = await Controller.open({
       additionalExtensionPaths: [permissionPath, staticGuardPath, policyGrepPath],
       appendSystemPromptOverride: () => [
         definition.split(/^---\s*$/m).slice(2).join("\n").trim(),
-        '<active_agent name="reader"/>',
+        '<active_agent name="editor"/>',
       ],
       extensionFactories: [approvals.childExtension(sessionId), gate.extension],
     });

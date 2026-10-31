@@ -98,7 +98,7 @@ test("a frozen host API registers managed blocks without mutation or Proxy invar
 test("telemetry vocabulary matches generated supported-profile tools plus fixed child communication", () => {
   const declared = new Set(["alert_parent", "ask_parent"]);
   const { agents } = renderWorkers();
-  for (const name of ["editor", "reader", "researcher"]) {
+  for (const name of ["editor", "researcher"]) {
     const tools = JSON.parse(/^tools: (.+)$/m.exec(agents[name])[1]);
     for (const tool of tools) declared.add(tool);
   }
@@ -426,7 +426,6 @@ test("generator copies helper, binds actual getter, exports subscription and wra
     assert.doesNotMatch(helper, new RegExp(`export (?:interface|type) ${name}\\b`));
   }
   assert.match(generator, /export \{ getPermissionsService \}/);
-  assert.match(generator, /export \{ createReaderScratch \} from "\.\/vendor\/src\/policy\/managed-reader-scratch\.ts"/);
   assert.match(generator, /export \{ initializeManagedResourceProtection, getManagedResourceProtection \}/);
   const ordered = ["const managedPi = wrapManagedBlocks(pi)", "guardSingleAuthority(managedPi)",
     'managedPi.on("tool_call"', "originalBashDeny(event.input.command, ctx)", "await hardenGitInput(event.input, ctx.cwd)",

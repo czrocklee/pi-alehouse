@@ -60,7 +60,7 @@ await parent.bindExtensions({}); assert(permission.getPermissionsService(parent.
 // A real controlled SDK assistant, not a forged log entry or force-flush API.
 if (!initializationFailure) { await parent.prompt("Initialize synthetic parent history", { source: "extension" }); await parent.waitForIdle(); }
 // Lifecycle probes execute a controlled Node script. Its operand has unknown
-// file effects, so it needs editor rather than overriding a reader write deny.
+// file effects, so it uses editor rather than overriding a read-only profile floor.
 const definitionPath = join(generatedRoot, "agents/editor.md");
 const definition = readFileSync(definitionPath, "utf8"), definitionDigest = digest(definition);
 const tools = JSON.parse(/^tools: (.*)$/m.exec(definition)[1]);

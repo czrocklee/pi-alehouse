@@ -31,7 +31,8 @@ wrong owner.
 An **Agent** is a resident reusable worker reservation with one immutable
 admitted configuration:
 
-- permission profile and rendered-definition digest;
+- permission profile and rendered-definition digest (public `worker` maps to
+  stable internal `editor`; the other public choice is `researcher`);
 - preset/version/digest, immutable difficulty (1–5), its internally resolved
   preset slot, exact provider/model, resolved thinking and recorded effort source;
 - parent cwd and optional text-only inherited context snapshot;
@@ -144,7 +145,7 @@ do not keep an SDK execution environment alive.
 
 ## Task fields, not roles
 
-`agent_spawn` requires `agent`, `prompt`, `profile` and `reasoning_difficulty`; `agent_run`
+`agent_spawn` requires `agent`, `prompt`, `profile` (`worker` or `researcher`) and `reasoning_difficulty`; `agent_run`
 requires `agent`, `builds_on` and `prompt`. Both take optional `label` and `dispatch`. `agent_send`
 joins/steers the task bound when called; it never starts a continuation.
 `agent_answer` takes `agent`, the exact pending `question_id`, and `answer`,

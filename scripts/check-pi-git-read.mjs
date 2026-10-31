@@ -152,7 +152,6 @@ async function checkOriginalDenyFloor(cwd, executionCommand) {
     "@earendil-works/pi-coding-agent", "../../bin/runtime-support.mjs",
     "./vendor/src/policy/managed-resource-protection.ts", "./vendor/src/index.ts", "./authority-guard.ts",
     "./managed-block-observer.ts", "./managed-scratch.ts", "./vendor/src/access-intent/bash/managed-read-policy.ts",
-    "./vendor/src/policy/managed-reader-scratch.ts",
     "../policy/static-safety-guard.ts", "./vendor/src/service.ts",
   ]);
   const seenSpecs = new Set();
@@ -180,7 +179,6 @@ export function createManagedBlockObserver(getService) {
   return { wrapManagedBlocks(pi) { state.observerWraps++; return pi; },
     subscribeManagedBlocks() { throw new Error("Order fixture subscribes no children"); } };
 }
-export const createReaderScratch = () => { throw new Error("Order fixture allocates no children"); };
 export function originalBashDeny(command, ctx) { state.trace.push("original-deny"); return state.deny(command, ctx); }
 export async function hardenGitInput(input) { state.trace.push("hardener/probes"); state.hardenCalls++; input.command = state.executionCommand; return { version: 1, originalDigest: "fixture", executionDigest: "fixture" }; }
 export const hardenStaticFileInput = () => undefined;
@@ -194,8 +192,7 @@ export default function permissions(pi) { pi.on("tool_call", () => { state.trace
       appendEntry: (name) => { assert.equal(name, "managed-git-read"); state.trace.push("audit"); } });
     assert.equal(state.observerWraps, 1, "Generated entry wraps its managed registrations once");
     assert.equal(hooks.length, 3, "Generated pre-hardener registers ahead of mocked scratch and permission handlers");
-    // The real vendor installs its reader guard using PermissionSession; this
-    // dependency-mocked wrapper fixture checks only original Bash deny order.
+    // This dependency-mocked wrapper fixture checks only original Bash deny order.
     const dispatch = async input => {
       for (const hook of hooks) {
         const result = await hook({ toolName: "bash", input }, ctx);
@@ -235,10 +232,12 @@ async function checkProofDiagnostic(cwd, input, resolver, expectedCode) {
   // path facts. The same deciding token/surface/state must remain unchanged.
   const diagnosticless = { commandText: () => program.commandText(), pathRuleCandidates: () => program.pathRuleCandidates(),
     commands: () => program.commands().map(({ managedGitDiagnostic: _diagnostic, ...command }) => command) };
-  const context = { toolCallId: "diagnostic-fixture", toolName: "bash", cwd, agentName: "reader" };
+  // Component seam only: compare path-gate diagnostics directly, not an
+  // executable researcher Bash route (the harness exposes no Bash to it).
+  const context = { toolCallId: "diagnostic-fixture", toolName: "bash", cwd, agentName: "researcher" };
   const before = describeBashPathGate(context, diagnosticless, resolver, normalizer);
   const after = describeBashPathGate(context, program, resolver, normalizer);
-  assert(before?.preCheck && after?.preCheck, "A reader's unproven explicit file operand produces the real path-family denial");
+  assert(before?.preCheck && after?.preCheck, "A researcher's unproven explicit file operand produces the real path-family denial");
   const decision = gate => ({ token: gate.input.path, surface: gate.surface, state: gate.preCheck.state, value: gate.decision.value });
   assert.deepEqual(decision(after), decision(before), "Diagnostics cannot change path authority or blame");
   assert.equal(after.input.path, "ordinary.txt"); assert.equal(after.surface, "path"); assert.equal(after.preCheck.state, "deny");
@@ -266,7 +265,7 @@ try {
     "git log --graph --topo-order --date-order --decorate=full --oneline", "git log --reverse --oneline",
   ]) {
     const input = await equivalent(cwd, command);
-    for (const agent of [undefined, "editor", "reader"]) await assertAllowed(cwd, input, resolver, agent);
+    for (const agent of [undefined, "editor"]) await assertAllowed(cwd, input, resolver, agent);
   }
   for (const globals of ["--no-lazy-fetch", "--no-lazy-fetch --no-pager", "--no-lazy-fetch --no-optional-locks", "--no-optional-locks --no-pager"]) {
     const command = `git ${globals} log --no-show-signature --oneline --`;
@@ -337,8 +336,8 @@ try {
     assert.equal(managedGitProof(command, normalizer), undefined, "Raw log lacks required execution hardening");
     assert(!program.commands().some(unit => unit.managedReadOnly));
     assert.equal(guard(cwd, input)?.block, undefined, "Static metadata log allowance does not claim a managed proof");
-    assert.equal(resolveBashCommandCheck(command, program.commands(), "reader", resolver).state, "ask", "No-proof bare log keeps ordinary Bash review");
-    const gates = await gatesFor(cwd, input, resolver, "reader");
+    assert.equal(resolveBashCommandCheck(command, program.commands(), "editor", resolver).state, "ask", "No-proof bare log keeps ordinary Bash review");
+    const gates = await gatesFor(cwd, input, resolver, "editor");
     assert.equal(gates.find(gate => gate.surface === "bash")?.preCheck.state, "ask");
     if (command.endsWith(".env")) assert(gates.some(gate => gate.surface.startsWith("path") && gate.preCheck?.state === "deny"), "Protected no-proof fallback retains independent path denial");
   }
@@ -347,7 +346,7 @@ try {
   for (const command of ["git log --oneline -- .env", "env git log --oneline -- .env", "env git show HEAD:.env"]) {
     const input = await harden(cwd, command);
     assert(managedGitProof(input.command, normalizer), "Syntax/content proof is not a policy grant");
-    for (const agent of [undefined, "editor", "reader"]) for (const local of [resolver, sessionResolver]) {
+    for (const agent of [undefined, "editor"]) for (const local of [resolver, sessionResolver]) {
       const denied = (await gatesFor(cwd, input, local, agent)).find(gate => gate.preCheck?.state === "deny" && gate.surface === "path_read");
       assert(denied, "Real protected READ gate wins env proof");
       assert(!denied.payload.evidence.some(entry => entry.label === "managed Git proof unavailable"), "A successful protected READ proof is not mislabeled as missing proof");
@@ -394,7 +393,7 @@ try {
     assert.equal(await hardenGitInput(input, cwd), undefined);
     const program = await BashProgram.parse(input.command, normalizer);
     assert(!program.commands().some(command => command.managedReadOnly));
-    for (const agent of ["editor", "reader"]) assert.equal(guard(cwd, input, agent)?.block, true, `Worker mutation floor: ${input.command}`);
+    for (const agent of ["editor", "researcher"]) assert.equal(guard(cwd, input, agent)?.block, true, `Worker mutation floor: ${input.command}`);
   }
   for (const command of ["git diff --ext-diff", "git diff --textconv", "git diff --output=ordinary.txt", "env git -c core.pager=cat log --oneline", "env git --git-dir=.git log --oneline", "env git --work-tree=. log --oneline"]) {
     const input = { command }; assert.equal(await hardenGitInput(input, cwd), undefined);
@@ -412,7 +411,7 @@ try {
   // Bare ancestry steps are Git's spelling of ^1/~1, the common parent idiom.
   for (const command of ["git diff HEAD^ HEAD -- ordinary.txt", "env git diff --name-only HEAD~ HEAD -- ordinary.txt", "git diff --stat HEAD^ HEAD"]) {
     const input = await equivalent(cwd, command);
-    for (const agent of [undefined, "editor", "reader"]) await assertAllowed(cwd, input, resolver, agent);
+    for (const agent of [undefined, "editor"]) await assertAllowed(cwd, input, resolver, agent);
   }
   // A declined rewrite reports the hardened spelling's failure, not flags the
   // authority injects itself; a sibling's program-scope note names that unit.
@@ -423,7 +422,7 @@ try {
     const program = await BashProgram.parse(input.command, normalizer, { originalCommands: originalGitCommands(input) });
     assert.deepEqual(program.commands().map(unit => [unit.managedGitDiagnostic?.code, unit.managedGitDiagnostic?.token]),
       [["git-program-scope", failed], ["git-token", "--ext-diff"]]);
-    const gate = describeBashPathGate({ toolCallId: "diagnostic-fixture", toolName: "bash", cwd, agentName: "reader" }, program, resolver, normalizer);
+    const gate = describeBashPathGate({ toolCallId: "diagnostic-fixture", toolName: "bash", cwd, agentName: "researcher" }, program, resolver, normalizer);
     assert.equal(gate?.preCheck?.state, "deny");
     assert.deepEqual(gate.payload.evidence.filter(entry => entry.label === "managed Git proof unavailable").map(entry => entry.detail),
       ["--ext-diff"], "Path denial explains the failed unit, not its proven sibling");
@@ -439,7 +438,7 @@ try {
   const replacedInput = await harden(cwd, "env git show HEAD:ordinary.txt");
   assert.equal(execute(cwd, replacedInput.command), "ordinary after\n", "Execution and proof share replacement-disabled blob semantics");
   assert(!execute(cwd, replacedInput.command).includes("PROTECTED_SYNTHETIC_MARKER"));
-  await assertAllowed(cwd, replacedInput, resolver, "reader");
+  await assertAllowed(cwd, replacedInput, resolver, "editor");
   git(cwd, "replace", "-d", blob);
   // A blob-to-blob replacement preserves the type check but changes patch
   // contents. Also cover GIT_REPLACE_REF_BASE, not only default loose refs.
@@ -499,10 +498,10 @@ try {
   const linkedInput = await equivalent(linked, "git diff -- ordinary.txt"), linkedProof = managedGitProof(linkedInput.command, normalizerFor(linked));
   assert(linkedProof.ruleCandidates.some(candidate => candidate.path.boundaryValue() === cwd && candidate.effect.effect === "read"), "Standard linked worktree includes main root READ candidate");
   assert(!linkedProof.ruleCandidates.some(candidate => candidate.path.boundaryValue().includes("/.git")), "Git administration directories are not user path candidates");
-  await assertAllowed(linked, linkedInput, resolver, "reader");
+  await assertAllowed(linked, linkedInput, resolver, "editor");
   const externalMain = resolverFor({ ...config, permission: { ...config.permission,
     external_directory: { "*": "ask" }, external_directory_read: { "*": "ask" } } });
-  assert((await gatesFor(linked, linkedInput, externalMain, "reader")).some(gate => gate.surface === "external_directory_read" && gate.preCheck?.state === "ask"), "Out-of-scope main root remains an independent ask");
+  assert((await gatesFor(linked, linkedInput, externalMain, "editor")).some(gate => gate.surface === "external_directory_read" && gate.preCheck?.state === "ask"), "Out-of-scope main root remains an independent ask");
   const separatedLinked = join(scratch, "separated-linked"); git(separated, "worktree", "add", "-q", "--detach", separatedLinked, "HEAD");
   const unknownLayout = await harden(separatedLinked, "git diff");
   assert.equal(managedGitProof(unknownLayout.command, normalizerFor(separatedLinked)), undefined, "Linked worktree with separated common gitdir cannot invent a main root");
@@ -514,7 +513,7 @@ try {
     assert(execute(cwd, input.command).includes("CASE_SYNTHETIC_CHANGED"), "Case-insensitive fixture selects the actual protected content");
     const proof = managedGitProof(input.command, normalizer);
     assert(proof?.ruleCandidates.some(candidate => candidate.token === "Vault/.env"), "Retain Git's actual changed path rather than a JS case-sensitive refilter");
-    assert((await gatesFor(cwd, input, resolver, "reader")).some(gate => gate.surface === "path_read" && gate.preCheck?.state === "deny"));
+    assert((await gatesFor(cwd, input, resolver, "editor")).some(gate => gate.surface === "path_read" && gate.preCheck?.state === "deny"));
   } finally { delete process.env.GIT_ICASE_PATHSPECS; }
   for (const key of ["remote.fixture.promisor", "remote.fixture.partialclonefilter", "extensions.partialclone"]) {
     git(cwd, "config", key, key.endsWith("promisor") ? "true" : "fixture");

@@ -1,6 +1,7 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { terminal, type RunView } from "../core/contracts.js";
 import { reported } from "../core/usage-ledger.js";
+import { profileLabel } from "../tools/tool-names.js";
 import type { ActivityObservationSource } from "../runtime/activity-observer.js";
 import { describeActivity, formatContextPercent, formatCost, formatDrain, formatMs, formatTurns, GLYPHS, SPINNER,
   withoutBreaks, type ActiveTool, type Theme } from "./format.js";
@@ -50,8 +51,9 @@ const active = (run: WidgetRun): boolean => !terminal(run.status);
 const label = (run: WidgetRun): { name: string; tag: string } => {
   const difficulty = Number.isInteger(run.difficulty) && run.difficulty >= 1 && run.difficulty <= 5 ?
     `d${run.difficulty}` : "";
-  const tag = run.name ? (difficulty ? `${run.profile}/${difficulty}` : run.profile) : difficulty;
-  return { name: run.name || run.profile, tag };
+  const profile = profileLabel(run.profile);
+  const tag = run.name ? (difficulty ? `${profile}/${difficulty}` : profile) : difficulty;
+  return { name: run.name || profile, tag };
 };
 const ROW_ELLIPSIS = "…";
 

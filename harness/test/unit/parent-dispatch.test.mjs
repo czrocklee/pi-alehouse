@@ -46,12 +46,12 @@ function adapter({ notes = false, pressure = false } = {}) {
     effort_defaults: { d1: "inherit", d2: "inherit", d3: "inherit", d4: "inherit", d5: "inherit" }, effort_overrides: {},
   };
   const tools = createOwnerTools({ controller, context,
-    profiles: Object.fromEntries(["reader", "editor", "researcher"].map((name) => [name, { definition: `${name} definition`, tools: ["read"] }])),
+    profiles: Object.fromEntries(["editor", "researcher"].map((name) => [name, { definition: `${name} definition`, tools: ["read"] }])),
     getPreset: () => preset, getSupportedThinkingLevels: (model) => model.levels,
   });
   const tool = (name) => tools.find((value) => value.name === name);
   const args = (name, rest = {}) => name === "agent_spawn" ?
-    { agent: "otter", prompt: "task", profile: "reader", reasoning_difficulty: 3, ...rest } : { agent: "orca", prompt: "task", builds_on: "its earlier findings", ...rest };
+    { agent: "otter", prompt: "task", profile: "worker", reasoning_difficulty: 3, ...rest } : { agent: "orca", prompt: "task", builds_on: "its earlier findings", ...rest };
   const execute = (name, raw, id = "dispatch") => tool(name).execute(id, raw, undefined, undefined, context);
   return { tool, args, execute, submissions, published, state };
 }

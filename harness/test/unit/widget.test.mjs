@@ -34,7 +34,7 @@ test("the body is ordered finished, running, queued and the tree closes exactly 
     run("f", { status: "completed", name: "done" })]);
   assert.match(lines[0], /^● Agents 2 resident ▸$/);
   assert.match(lines[1], /^├─ ✓ done/);
-  assert.match(lines[2], /^├─ ⠋ editor/);
+  assert.match(lines[2], /^├─ ⠋ worker/);
   assert.match(lines[3], /^│ {4}⎿ {2}thinking…$/);
   assert.match(lines[4], /^└─ ◦ 1 queued$/);
   assert.equal(lines.filter((line) => line.startsWith("└─")).length, 1);
@@ -42,7 +42,7 @@ test("the body is ordered finished, running, queued and the tree closes exactly 
 
 test("a trailing activity line hands its corner to the header above it", () => {
   const lines = render([run("r", { status: "running", name: "solo" })]);
-  assert.deepEqual(lines.slice(1), ["└─ ⠋ solo (editor/d3) [m/high] → Task · ↻3≤256 · ▸2 · 12.4s",
+  assert.deepEqual(lines.slice(1), ["└─ ⠋ solo (worker/d3) [m/high] → Task · ↻3≤256 · ▸2 · 12.4s",
     "   " + "  ⎿  thinking…"]);
   assert.equal(lines.filter((line) => line.includes("│")).length, 0);
 });
@@ -315,18 +315,23 @@ test("a recorded Run issue does not claim that resources are still unclosed", (t
 });
 
 test("an Agent without a nickname is named by its profile, never labelled twice", () => {
-  assert.match(render([run("a", { status: "completed" })])[1], /^└─ ✓ editor \(d3\) \[m\/high\] → Task/);
+  assert.match(render([run("a", { status: "completed" })])[1], /^└─ ✓ worker \(d3\) \[m\/high\] → Task/);
   assert.match(render([run("a", { status: "completed", name: "scout" })])[1],
-    /^└─ ✓ scout \(editor\/d3\) \[m\/high\] → Task/);
+    /^└─ ✓ scout \(worker\/d3\) \[m\/high\] → Task/);
+  assert.match(render([run("a", { status: "completed", name: "editor" })])[1],
+    /^└─ ✓ editor \(worker\/d3\)/, "a nickname is never relabelled as a profile");
 });
 
 test("the widget shows every profile's admitted difficulty beside its nickname in every Run state", () => {
-  const profiles = ["reader", "editor", "researcher"];
+  const profiles = ["editor", "researcher"];
   const statuses = ["running", "completed", "failed"];
   for (const profile of profiles) for (const difficulty of [1, 2, 3, 4, 5]) for (const status of statuses) {
-    const line = render([run("a", { name: "orca", profile, difficulty, status })])[1];
-    const identity = `orca${status === "failed" ? " · failed" : ""} (${profile}/d${difficulty})`;
+    const row = run("a", { name: "orca", profile, difficulty, status }), before = structuredClone(row);
+    const line = render([row])[1];
+    const displayed = profile === "editor" ? "worker" : profile;
+    const identity = `orca${status === "failed" ? " · failed" : ""} (${displayed}/d${difficulty})`;
     assert.ok(line.includes(identity), `${status} ${profile}/d${difficulty}: ${line}`);
+    assert.deepEqual(row, before, "display labels never rename the admitted or historical profile");
   }
 
   const styled = { fg: (_color, text) => `\x1b[33m${text}\x1b[0m`, bold: text => `\x1b[1m${text}\x1b[0m` };
@@ -354,7 +359,7 @@ test("the main widget projects difficulty from effective settings without changi
 
 test("a long nickname yields before the difficulty tag", () => {
   const line = render([run("a", { name: "n".repeat(32), status: "completed", description: "" })], { width: 40 })[1];
-  assert.match(line, /\(editor\/d3\)/, line);
+  assert.match(line, /\(worker\/d3\)/, line);
   assert.ok(visibleWidth(line) <= 40, line);
   assert.doesNotMatch(line, /n{32}/);
 });
@@ -364,13 +369,13 @@ test("crowded 40/56-column warning rows keep a name prefix, complete tag and cou
     bold: (text) => `\x1b[1m${text}\x1b[0m` };
   for (const width of [40, 56]) for (const name of ["otter", "复核者", "复核审查者".repeat(8)]) {
     for (const status of ["completed", "failed"]) for (const th of [theme, styled]) {
-      const row = run("immutable-id", { name, profile: "reader", difficulty: 3, status,
+      const row = run("immutable-id", { name, profile: "editor", difficulty: 3, status,
         has_run_warnings: true, pending_messages: 1, error: "SDK broke: 失败说明".repeat(20) });
       const before = structuredClone(row);
       const frame = renderWidget({ runs: [row], width, theme: th, owner, spinnerFrame: 0, shouldShowFinished: () => true });
       const text = stripTerminalSequences(frame.lines[1]);
       assert(text.includes(name === "otter" ? "ott" : "复"), text);
-      assert(text.includes("(reader/d3)"), text);
+      assert(text.includes("(worker/d3)"), text);
       const warning = text.match(/run warning|warn|!/)?.index;
       const pending = text.match(/1 pending|1pend/)?.index;
       assert.notEqual(warning, undefined, text);
@@ -403,12 +408,12 @@ test("crowded attention retains questions, cancellation, finishing and turn limi
     ["completed", { limit_reached: true }, /turn limit|limit/],
     ["cancelled", {}, /cancelled/],
   ]) {
-    const frame = renderWidget({ runs: [run("identity", { name: "otter", profile: "reader", difficulty: 3,
+    const frame = renderWidget({ runs: [run("identity", { name: "otter", profile: "editor", difficulty: 3,
       status, ...extra, has_run_warnings: true, pending_messages: 1 })], width, theme, owner,
     spinnerFrame: 0, shouldShowFinished: () => true });
     const text = stripTerminalSequences(frame.lines[1]);
     assert.match(text, /ot(?:t|…)/);
-    assert.match(text, /\(reader\/d3\)/);
+    assert.match(text, /\(worker\/d3\)/);
     assert.match(text, /run warning|warn|!/);
     assert.match(text, /1 pending|1pend/);
     assert.match(text, state);
@@ -420,9 +425,9 @@ test("crowded attention retains questions, cancellation, finishing and turn limi
 
 test("wide attention wording and failed explanation stay unchanged", () => {
   for (const [status, state] of [["completed", ""], ["failed", " · failed: SDK broke"]]) {
-    const line = render([run("a", { name: "otter", profile: "reader", difficulty: 3, status,
+    const line = render([run("a", { name: "otter", profile: "editor", difficulty: 3, status,
       has_run_warnings: true, pending_messages: 1, error: "SDK broke" })], { width: 180 })[1];
-    assert.equal(line, `└─ ${status === "failed" ? "✗" : "✓"} otter · run warning · 1 pending${state} (reader/d3) [m/high] → Task · ↻3≤256 · ▸2 · 12.4s`);
+    assert.equal(line, `└─ ${status === "failed" ? "✗" : "✓"} otter · run warning · 1 pending${state} (worker/d3) [m/high] → Task · ↻3≤256 · ▸2 · 12.4s`);
   }
 });
 
@@ -441,7 +446,7 @@ test("a fixed nickname points to the current task, which can use more than forty
   for (const status of ["running", "completed"]) {
     const frame = renderWidget({ runs: [run("orca-id", { name: "orca", status, description })],
       owner, spinnerFrame: 0, width: 180, theme, shouldShowFinished: () => true });
-    assert(frame.lines[1].includes(`orca (editor/d3) [m/high] → ${description} · ↻`), frame.lines[1]);
+    assert(frame.lines[1].includes(`orca (worker/d3) [m/high] → ${description} · ↻`), frame.lines[1]);
     assert.match(frame.lines[1], /▸2 · 12\.4s$/);
     assert.equal(frame.hits[1], "orca-id", "labels and their new separator never become click identities");
     assert(frame.lines.every((line) => visibleWidth(line) <= 180));
@@ -984,23 +989,23 @@ test("collapse restores automatic lingering and attention rows instead of hiding
   t.after(() => h.widget.dispose());
   h.widget.wake(); h.widget.onTurnStart();
   const compact = h.lines();
-  assert.doesNotMatch(compact.join("\n"), /✓ editor/);
+  assert.doesNotMatch(compact.join("\n"), /✓ worker/);
   assert.match(compact.join("\n"), /needs input/);
   assert.match(compact.at(-1), /1 queued$/);
   h.component().handleMouse(headingClick);
-  assert(h.lines().some((line) => line.includes("✓ editor")));
+  assert(h.lines().some((line) => line.includes("✓ worker")));
   h.widget.onTurnStart(); h.widget.wake();
   assert.match(h.lines()[0], / ▾$/, "turn starts and activity wakes preserve expansion");
   h.component().handleMouse(headingClick);
   const collapsed = h.lines();
   assert.match(collapsed[0], / ▸$/);
-  assert.doesNotMatch(collapsed.join("\n"), /✓ editor/);
+  assert.doesNotMatch(collapsed.join("\n"), /✓ worker/);
   assert.match(collapsed.join("\n"), /needs input/);
   assert.match(collapsed.join("\n"), /thinking…/);
   assert.match(collapsed.at(-1), /1 queued$/);
   // A new result still gets the normal linger after collapsing.
   h.set([viewOf("fresh", "completed")]); h.widget.wake();
-  assert.match(h.lines()[1], /✓ editor/);
+  assert.match(h.lines()[1], /✓ worker/);
   h.widget.onTurnStart();
   assert.deepEqual(h.lines(), ["○ Agents 1 resident ▸"]);
 });
@@ -1189,7 +1194,7 @@ test("the paint loop starts when a Run is there, not when delegation is only abo
   // tool, must not be what decides whether a running worker is visible.
   h.set([viewOf("a", "running")]);
   h.widget.wake();
-  assert.match(h.lines()[1], /^└─ \S editor \(d3\) \[m\/off\] → Task/, "the Run is on screen as soon as it exists");
+  assert.match(h.lines()[1], /^└─ \S worker \(d3\) \[m\/off\] → Task/, "the Run is on screen as soon as it exists");
   t.mock.timers.tick(240);
   assert.ok(h.renders() >= 3, `the spinner keeps animating (${h.renders()} frames)`);
   h.set([viewOf("a", "completed")]);
@@ -1197,14 +1202,14 @@ test("the paint loop starts when a Run is there, not when delegation is only abo
   const settled = h.renders();
   t.mock.timers.tick(800);
   assert.equal(h.renders(), settled, "a finished Run animates nothing");
-  assert.match(h.lines()[1], /✓ editor/, "but its result stays on screen for its linger");
+  assert.match(h.lines()[1], /✓ worker/, "but its result stays on screen for its linger");
 });
 
 test("a reused Agent lingers again for every Run, not only its first", (t) => {
   const h = mounted([viewOf("a", "completed", "a-1")]);
   t.after(() => h.widget.dispose());
   h.widget.update();
-  assert.match(h.lines()[1], /✓ editor/);
+  assert.match(h.lines()[1], /✓ worker/);
   h.widget.onTurnStart();
   assert.deepEqual(h.lines(), ["○ Agents 1 resident ▸"], "one turn is the whole normal row linger");
   // delegate to an existing Agent: a new Run on the Agent that already spent a linger.
@@ -1212,7 +1217,7 @@ test("a reused Agent lingers again for every Run, not only its first", (t) => {
   h.widget.update();
   h.set([viewOf("a", "completed", "a-2")]);
   h.widget.update();
-  assert.match(h.lines()[1] ?? "", /✓ editor/, "the second result gets its own linger");
+  assert.match(h.lines()[1] ?? "", /✓ worker/, "the second result gets its own linger");
 });
 
 test("a Run that starts and finishes between paints gets its own linger", (t) => {
@@ -1223,7 +1228,7 @@ test("a Run that starts and finishes between paints gets its own linger", (t) =>
   assert.deepEqual(h.lines(), ["○ Agents 1 resident ▸"]);
   h.set([viewOf("a", "failed", "a-2")]);
   h.widget.wake();
-  assert.match(h.lines()[1], /✗ editor/, "the second failure gets a new row linger, not just a retained heading");
+  assert.match(h.lines()[1], /✗ worker/, "the second failure gets a new row linger, not just a retained heading");
 });
 
 test("released failures expire in both UI entry points without resurrecting", (t) => {
@@ -1443,7 +1448,7 @@ test("an Agent waiting on an answer never ages out, however long the parent take
   h.widget.wake();
   for (let turn = 0; turn < 12; turn++) h.widget.onTurnStart();
   assert.equal(h.showing(), true, "the blocked Agent is still on screen");
-  assert.match(h.lines()[1] ?? "", /editor/, h.lines().join("\n"));
+  assert.match(h.lines()[1] ?? "", /worker/, h.lines().join("\n"));
   // A finished row still goes; its resident heading remains available to expand.
   h.set([viewOf("b", "completed")]);
   h.widget.onTurnStart();
@@ -1635,7 +1640,7 @@ for (const status of ["running", "completed"]) for (const phase of ["retained", 
     assert.doesNotThrow(() => h.widget.wake());
     assert.equal(h.counts().mounts, 3, "a normal wake retries registration, not an absent TUI render");
     assert.notEqual(h.component(), old);
-    assert.match(h.component().render(120).join("\n"), /editor/);
+    assert.match(h.component().render(120).join("\n"), /worker/);
     h.component().handleMouse({ type: "click", button: "left", x: 0, y: 1 });
     assert.equal(h.counts().opens, 1, "the recovered component is interactive");
     h.widget.wake(); assert.equal(h.counts().mounts, 3, "successful registration clears the refresh intent");

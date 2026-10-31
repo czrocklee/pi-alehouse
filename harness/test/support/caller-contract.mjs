@@ -22,11 +22,10 @@ export function assertCallerTools(tools) {
   assert.match(fields.prompt.description, /deliverable, scope, stopping conditions and full paths.*referenced file\/document/);
   assert.match(fields.prompt.description, /context not supplied by inherit_context or after/);
   assert.match(fields.label.description, /agent_list label, not instructions.*prompt's first line/);
-  assert.deepEqual(fields.profile.enum, ["editor", "reader", "researcher"]);
-  assert.match(fields.profile.description, /reader: project reads; built-in write only in runtime-assigned scratch, not Bash writes or arbitrary \/tmp paths; no edit\/web.*Builds and project edits need editor/);
-  assert.doesNotMatch(fields.profile.description, /output root/i, "the generic trusted output-roots mechanism is retired");
-  assert.match(fields.profile.description, /editor: scoped edit\/write.*researcher: web search\/fetch and read-only file tools; no Bash\/edits.*untrusted.*Git mutations stay with you/);
-  assert.match(fields.profile.description, /permission-gated; profiles are not OS sandboxes/);
+  assert.deepEqual(fields.profile.enum, ["worker", "researcher"]);
+  assert.match(fields.profile.description, /worker: local reading, editing, Bash and builds under normal permissions; no web/);
+  assert.match(fields.profile.description, /researcher: web search\/fetch and read-only file tools; no Bash\/edits.*untrusted/);
+  assert.match(fields.profile.description, /instruction, not a readonly sandbox.*Git mutations stay with you.*User denies and normal approvals still apply/);
   const difficulty = fields.reasoning_difficulty.description;
   assert.equal(fields.reasoning_difficulty.type, "integer");
   assert.equal(fields.reasoning_difficulty.minimum, 1); assert.equal(fields.reasoning_difficulty.maximum, 5);
@@ -47,7 +46,7 @@ export function assertCallerTools(tools) {
   assert.match(spawn.description, /Shared checkout, no isolation or delegation/);
   assert.match(spawn.description, /Spawn for new work\/reviews or different settings; agent_run is for that Agent's follow-ups/);
   assert.match(spawn.description, /Model, profile, reasoning difficulty, context and per-task budgets are fixed/);
-  assert.match(spawn.description, /Queued work counts toward capacity.*kill finished reviewers\/accepted work first.*keep editors awaiting build\/test fixes/);
+  assert.match(spawn.description, /Queued work counts toward capacity.*kill finished reviewers\/accepted work first.*keep workers awaiting build\/test fixes/);
   assert.match(spawn.description, /check agent_list before repeating/);
   assert.match(spawn.description, /action, reason, agents, alerts; alerts do not mean completion/);
   const run = byName.get("agent_run"), runFields = run.parameters.properties;
@@ -76,7 +75,6 @@ export function assertCallerTools(tools) {
     assert.match(dispatch.properties.tree.description, /Other sessions only produce a tree_shared note; execution still starts/);
     assert.match(dispatch.properties.tree.description, /commands, other hosts and agent directories are not coordinated.*Omission neither forbids builds nor makes sharing safe.*no note does not prove a free tree/);
     assert.match(dispatch.properties.ownership.items.description, /Assign each shared file to one task; others report needed changes/);
-    assert.match(dispatch.properties.ownership.items.description, /Reader scratch is runtime-assigned, not granted here/);
   }
   assert.match(run.description, /idle Agent a follow-up to its own work.*running Agent is busy.*agent_send or agent_wait.*Pending questions require agent_answer/);
   assert.match(run.description, /Each turn re-reads its conversation \(context_tokens\).*agent_spawn for new\/unrelated work or different settings/);

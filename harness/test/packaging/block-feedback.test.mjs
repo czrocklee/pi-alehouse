@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { packageRoot } from "../../../bin/runtime-support.mjs";
 
-test("real composition reports managed reader blocks once per task, offline", { timeout: 60000 }, (t) => {
+test("real composition reports configured managed worker blocks once per task, offline", { timeout: 60000 }, (t) => {
   const home = mkdtempSync(join(tmpdir(), "alehouse-block-feedback-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const output = execFileSync(process.execPath, [join(packageRoot, "test/runtime/fixtures/block-feedback.mjs")], {
@@ -17,5 +17,5 @@ test("real composition reports managed reader blocks once per task, offline", { 
       PI_JEV_API_KEY_FILE: join(home, "nonexistent-test-key"), PI_OFFLINE: "1", NO_COLOR: "1" },
     encoding: "utf8", timeout: 55000, stdio: ["ignore", "pipe", "pipe"],
   });
-  assert.match(output, /PASS: real composition managed blocks produce exactly one harness-sourced alert per reader task; no writes, extra parent turns or network; child shutdown confirmed/);
+  assert.match(output, /PASS: real composition managed blocks produce exactly one harness-sourced alert per worker task; no writes, extra parent turns or network; child shutdown confirmed/);
 });

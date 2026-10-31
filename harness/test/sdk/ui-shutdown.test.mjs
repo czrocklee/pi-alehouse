@@ -31,7 +31,7 @@ for (const fault of ["widget", "panel", "all"]) test(`quit drains before later S
   process.env.PI_HARNESS_FLOCK = "/unused-fixture-flock"; // The already-held real fixture lease is injected below.
   await mkdir(join(agentDir, "agents"), { recursive: true });
   await writePresetConfig(join(agentDir, "harness-presets.json"));
-  for (const name of ["editor", "reader"]) {
+  for (const name of ["editor"]) {
     await writeFile(join(agentDir, "agents", `${name}.md`), "---\ntools: [read]\n---\nFixture only.\n");
   }
   await writeFile(join(agentDir, "agents", "researcher.md"),
@@ -42,7 +42,6 @@ for (const fault of ["widget", "panel", "all"]) test(`quit drains before later S
   await writeFile(join(authority, "package.json"), JSON.stringify({ type: "module", exports: "./index.js" }));
   await writeFile(join(authority, "index.js"), "export const getPermissionsService = () => ({});\n");
   await writeFile(join(permissionRoot, "index.ts"), 'export { getPermissionsService } from "./node_modules/@gotgenes/pi-permission-system/index.js";\n' +
-    'export const createReaderScratch = () => { throw new Error("FakePort shutdown fixture must not create an SDK child"); };\n' +
     'export const subscribeManagedBlocks = () => { throw new Error("FakePort shutdown fixture must not observe an SDK child"); };\n');
   t.mock.method(globalThis, "fetch", () => { assert.fail("shutdown fixture attempted network IO"); });
   t.mock.method(OwnerController, "open", async () => h.controller);

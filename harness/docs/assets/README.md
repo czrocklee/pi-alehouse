@@ -4,6 +4,7 @@ Each image labels its provenance; none is a model recommendation or comparative 
 
 - `routing-panel.svg` is a **historical real terminal capture** of the author's three-slot setup, before five-slot routing and delegation controls. Its original panel contents are retained, not presented as the current UI.
 - `effort-panel.svg` is a **controlled UI render with example models**, using the current five-slot `PresetPicker` and `harness/test/support/effort-illustration.mjs`. It is not a live-provider capture, real workload, or host-validation evidence.
+- `agent-panel.svg` is a **historical real working-session capture** from before reader retirement. Its `(reader)` label is retained as observed history, not current profile support; do not edit it into a purported new capture.
 - The remaining panels are reviewed real working-session captures, using the author's actual settings and observed activity; they illustrate that personal setup, not built-in defaults.
 
 Only the framed panels were exported. The Agent image removes the values of `run` and `cwd` before SVG serialization and labels those omissions. No background conversation, terminal footer, raw capture, credential file or full personal configuration is included.

@@ -31,7 +31,7 @@ const validId = (value: unknown): value is string => typeof value === "string" &
 
 function subscriptions(): Map<string, Subscription> {
   // Separate jiti loads share only live leases, never a block history. The
-  // envelope is private/versioned/non-replaceable, like managed reader scratch.
+  // envelope is private/versioned/non-replaceable; it carries no permission.
   if (globals[key] === undefined) Object.defineProperty(globals, key, {
     value: Object.freeze({ version: 1, entries: new Map<string, Subscription>() }),
     configurable: false, writable: false, enumerable: false,

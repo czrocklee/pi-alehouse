@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { validateDispatch, type Dispatch, type DispatchContext, type DispatchObservation, type DispatchPath, type DispatchPort, type PreparedDispatch, type SourceState } from "../core/dispatch.js";
 import { HarnessError } from "../core/ports.js";
+import { profileLabel } from "../tools/tool-names.js";
 import { FileLeaseLock } from "./owner-lease.js";
 
 const PROBE_MS = 2_000;
@@ -219,7 +220,7 @@ export function createDispatchRuntime(options: { agentDir: string; flock: string
         if (permissionState(service, surface, path, context.profile, entry.key, entry.requested) === "deny") {
           throw new HarnessError("PREFLIGHT_DENIED", { key: entry.key, requested: entry.requested, surface, path,
             profile: context.profile,
-            reason: `Permission policy denied ${surface} for profile ${context.profile} on this declared path; this is a permission decision, not a missing or wrong-type filesystem result.` });
+            reason: `Permission policy denied ${surface} for profile ${profileLabel(context.profile)} on this declared path; this is a permission decision, not a missing or wrong-type filesystem result.` });
         }
       };
       const external = (entry: Target): string => entry.key === "inputs" ? "external_directory_read" : "external_directory_write";

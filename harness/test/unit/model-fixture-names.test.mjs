@@ -39,7 +39,7 @@ function submitFactory(source) {
   return factory.arguments[2].text;
 }
 const recordingSubmit = (theme) => {
-  const requests = [], settings = { profile: "reader", definition_digest: "synthetic" };
+  const requests = [], settings = { profile: "editor", definition_digest: "synthetic" };
   const controller = { submit: (id, request) => { requests.push({ id, request }); return request; } };
   return { submit: createModelFixtureSubmit(controller, settings, theme), requests, settings };
 };

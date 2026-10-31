@@ -36,7 +36,7 @@ and managed overlay share these primitives, not an identical acceptance policy.
 The managed overlay has a **Git-only** concatenation decoder. It accepts literal
 quoted fragments such as `--format='%H %P %s'` and `--date=format:'%Y %m'`, then
 re-encodes words for execution. It rejects expansions and unsupported shell
-syntax. The non-Git `literalWords` decoder and its reader/scratch consumers are
+syntax. The non-Git `literalWords` decoder and its file-reader/scratch consumers are
 unchanged. Quoting does not widen the path grammar; apostrophe-containing
 pathspecs are not supported.
 
@@ -73,7 +73,7 @@ IDs cannot hide an exact original deny behind a Bash session grant.
 A Bash-surface session grant skips only its own gate, not path or
 external-directory gates. Static checking is independent. Ordinary session
 rules may override ordinary configuration denies through normal permission
-composition; the immutable-resource floor and reader write ceiling are separate
+composition; the immutable-resource floor and researcher write ceiling are separate
 and are not widened by session grants or yolo.
 
 The pre-existing mismatch between bare and env-wrapped Git configuration-spelling
@@ -171,7 +171,7 @@ an unsupported token), never the flags hardening injects. Sibling units carry a
 `git-program-scope` note naming the first unproven unit, and a path denial
 prefers the failed unit's own diagnostic over that note. Probe failure, timeout, overflow, unsupported layout or
 helper configuration falls back to the ordinary gates. That fallback may deny
-under a reader capability ceiling; it does not promise an approval prompt.
+under a researcher capability ceiling; it does not promise an approval prompt.
 
 ## Source and generated copies
 

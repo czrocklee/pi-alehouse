@@ -80,19 +80,19 @@ try {
     assert(await hardenGitInput(input, scratch), `Metadata fixture must exercise complete hardening: ${command}`);
     return input.command;
   }));
-  for (const agent of [undefined, "editor", "reader"]) {
+  for (const agent of [undefined, "editor"]) {
     for (const command of metadataQueries) assert.equal((await check(command, agent)).bash.state, "allow", `Proven metadata query: ${agent}: ${command}`);
   }
   for (const command of ["git status --short -- ordinary.txt", "git status --short --ignored"]) {
     const input = { command };
     assert(await hardenGitInput(input, scratch), `Status fixture must exercise hardening: ${command}`);
-    for (const agent of [undefined, "editor", "reader"]) {
+    for (const agent of [undefined, "editor"]) {
       assert.equal((await check(input.command, agent)).bash.state, "ask", `Failed status repository probe gives no proof: ${agent}: ${command}`);
     }
   }
   const secretLog = { command: "git log -- .env" };
   assert(await hardenGitInput(secretLog, scratch), "Bare literal log pathspec must harden");
-  for (const agent of [undefined, "editor", "reader"]) {
+  for (const agent of [undefined, "editor"]) {
     const result = await check(secretLog.command, agent);
     assert.equal(result.bash.state, "allow", `Literal log pathspec metadata proof: ${agent}`);
     assert.equal(result.path?.preCheck?.state, "deny", `Literal log pathspec retains secret path denial: ${agent}`);
@@ -130,23 +130,18 @@ try {
     "PATH=./fixture-bin git status --short",
     "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=./fixture-hook git status --short",
   ]) assert.equal((await check(command)).bash.state, "allow", "Upstream assignment-stripping contract");
-  assert.equal((await check("git push origin main", "reader")).bash.state, "deny");
+  assert.equal((await check("git push origin main", "editor")).bash.state, "deny");
   assert.equal((await check("git commit --amend", "editor")).bash.state, "deny");
-  assert.equal(resolver.checkPermission("write", {}).state, "allow", "Fixture global write baseline: the reader equality below must be meaningful");
-  for (const agent of ["editor", "reader"]) {
+  assert.equal(resolver.checkPermission("write", {}).state, "allow", "Fixture global write baseline");
+  {
+    const agent = "editor";
     assert.deepEqual(manager.getConfigIssues(agent), [], `Worker policy must load: ${agent}`);
     for (const tool of ["alert_parent", "ask_parent"]) {
       assert.equal(resolver.checkPermission(tool, {}, agent).state, "allow", `Internal communication: ${agent}: ${tool}`);
     }
-    // Direct editing boundary: the editor may edit and write. The reader's
-    // built-in write follows the ordinary global rule (its profile pins no
-    // per-tool write deny and never adds a forced allow); its edit stays
-    // denied by the profile.
-    assert.equal(resolver.checkPermission("edit", {}, agent).state, agent === "editor" ? "allow" : "deny", `Direct editing boundary: ${agent}: edit`);
-    assert.equal(resolver.checkPermission("write", {}, agent).state,
-      agent === "editor" ? "allow" : resolver.checkPermission("write", {}).state,
-      `Reader write follows the ordinary global rule, not a forced allow: ${agent}`);
-    assert.equal((await check("printf '%s' fixture > ordinary.txt", agent)).path?.preCheck?.state, agent === "editor" ? undefined : "deny", `Worker path-write gate: ${agent}`);
+    // Editor retains ordinary edit/write policy.
+    for (const tool of ["edit", "write"]) assert.equal(resolver.checkPermission(tool, {}, agent).state, "allow", `Direct editing boundary: ${agent}: ${tool}`);
+    assert.equal((await check("printf '%s' fixture > ordinary.txt", agent)).path?.preCheck?.state, undefined, `Worker path-write gate: ${agent}`);
     assert.equal((await check("printf '%s' fixture > ~/.pi/agent/settings.json", agent)).path?.preCheck?.state, "deny", `Worker self-write denial: ${agent}`);
 
     for (const command of [...fixedCommands, ...readerCommands, "cd ."]) {
@@ -176,7 +171,7 @@ try {
     assert.equal((await check(command, "researcher")).bash.state, "deny", `Researcher Bash denial: ${command}`);
   }
   for (const command of [...fixedCommands, "ls -la .", "cat ordinary.txt"]) {
-    assert.equal((await check(command, "researcher")).bash.state, (await check(command, "reader")).bash.state, `Researcher global allowance: ${command}`);
+    assert.equal((await check(command, "researcher")).bash.state, (await check(command)).bash.state, `Researcher global allowance: ${command}`);
   }
   assert.equal((await check("printf '%s' fixture > ordinary.txt", "researcher")).path?.preCheck?.state, "deny", "Researcher path-write gate");
 
@@ -208,7 +203,7 @@ try {
   for (const name of ["fixture-skill", "unlisted/vendor-skill"]) {
     assert.equal(resolver.checkPermission("skill", name).state, "allow");
   }
-  for (const profile of ["editor", "reader", "researcher"]) {
+  for (const profile of ["worker", "researcher"]) {
     assert.equal(resolver.checkPermission("agent_spawn", { agent: "orca", profile, reasoning_difficulty: 3, prompt: "fixture" }).state, "allow");
   }
   for (const tool of ["agent_run", "agent_send", "agent_answer", "agent_wait", "agent_read", "agent_interrupt", "agent_kill", "agent_list"]) {
@@ -216,7 +211,7 @@ try {
   }
   assert.equal(config.permission.notify_parent, "deny", "Retired child communication is explicitly denied in every seed");
   const childDenies = JSON.parse(readFileSync(join(root, "resources/worker-policy.json"), "utf8")).childToolDenies;
-  for (const agent of ["editor", "reader", "researcher"]) {
+  for (const agent of ["editor", "researcher"]) {
     for (const tool of childDenies) assert.equal(resolver.checkPermission(tool, {}, agent).state, "deny", `Child exclusion: ${agent}: ${tool}`);
   }
   assert.equal(resolver.checkPermission("notify_parent", {}).state, "deny", "No root retired alias allowance");
@@ -244,7 +239,7 @@ try {
   // Evaluate with no guard at all. Neither content output nor executable diff
   // may inherit an allow from a broad metadata pattern if an extension fails.
   const uncheckedGit = ["git show HEAD", "git show HEAD:.env", "git show -s", "git show -s HEAD", "git show deadbeef", "git log -p -1 --ext-diff", "GIT_EXTERNAL_DIFF=./x.sh git log -p -1 --ext-diff"];
-  for (const agent of [undefined, "editor", "reader"]) {
+  for (const agent of [undefined, "editor"]) {
     for (const command of uncheckedGit) {
       assert.equal((await check(command, agent)).bash.state, "ask", `No guard parser: ${agent}:${command}`);
       const gate = (await gatesFor("bash", { command }, agent)).find((gate) => gate.surface === "bash");
@@ -260,7 +255,7 @@ try {
     assert(gate, `Git query requires review: ${command}`);
     assert(hardCheckpointReason({ ...gate.promptDetails, payload: gate.payload }), `Git content cannot reach automatic approval: ${command}`);
   }
-  for (const agent of [undefined, "editor", "reader"]) {
+  for (const agent of [undefined, "editor", "researcher"]) {
     for (const toolName of ["read", "write", "edit", "ls", "find", "grep"]) {
       for (const path of ["file:///home/fixture/.ssh/id_fixture", "@file:///home/fixture/.ssh/id_fixture", "file:///home/fixture/.ssh/id_fixture.env.example", "file:///home/fixture/.ssh/id_fixture.key"]) {
         assert((await gatesFor(toolName, { path }, agent)).some((gate) => gate.preCheck?.state === "deny"), `URL denied without static guard: ${agent}:${toolName}:${path}`);
@@ -273,15 +268,12 @@ try {
       assert.equal((await check(command, agent)).path?.preCheck?.state, "deny", `Git control redirection: ${agent}:${command}`);
     }
   }
-  // Reader scratch boundary: no trusted authority has bound a scratch
-  // directory in this process, so the default path_write floor denies the
-  // write tool everywhere — project paths and arbitrary /tmp paths alike. The
-  // only possible exception is the exact per-child directory the trusted child
-  // factory creates and binds, which this fixture never provides.
-  for (const path of [join(scratch, "ordinary.txt"), "src/new-file.ts",
-    "/tmp/pi-alehouse-reader-unbound/report.md", "/tmp/unbound-notes.txt"]) {
-    assert((await gatesFor("write", { path, content: "fixture" }, "reader")).some((gate) => gate.preCheck?.state === "deny"),
-      `Reader write floor denies the unbound path: ${path}`);
+  // Researcher's write floor applies to project and arbitrary /tmp paths.
+  for (const path of [join(scratch, "ordinary.txt"), "src/new-file.ts", "/tmp/unbound-notes.txt"]) {
+    const pathGate = (await gatesFor("write", { path, content: "fixture" }, "researcher"))
+      .find((gate) => gate.surface === "path_write");
+    assert.equal(pathGate?.preCheck?.state, "deny", `Researcher path-write floor denies the path: ${path}`);
+    assert.equal(pathGate.preCheck.origin, "agent", "Ordinary paths are denied by the profile ceiling, not the write-tool gate");
   }
   const { resolveToCwd } = await import(join(piRoot, "dist/core/tools/path-utils.js"));
   assert.equal(resolveToCwd("file:///home/fixture/.ssh/id_fixture", scratch), "/home/fixture/.ssh/id_fixture");
@@ -499,7 +491,7 @@ try {
       getEntries: () => agent ? [{ type: "custom", customType: "active_agent", data: { name: agent } }] : [],
     } });
     const search = (params, agent, signal) => grep.execute("fixture", { pattern: "needle", ...params }, signal, undefined, ctx(agent));
-    for (const agent of [undefined, "editor", "reader"]) {
+    for (const agent of [undefined, "editor"]) {
       const result = await search({}, agent);
       const text = result.content[0].text;
       assert(text.includes("needle visible") && text.includes("needle public template"), `Recursive ordinary/allowed template search: ${agent}`);

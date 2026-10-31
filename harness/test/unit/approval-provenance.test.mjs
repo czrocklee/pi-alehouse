@@ -5,7 +5,7 @@ import { ApprovalBindings } from "../../dist/permissions/approval-provenance.js"
 const key = Symbol.for("@rocklee/jev-auto-approval:child-runtime-facts");
 const owner = { owner_id: "approval-owner", generation: "owner-generation" };
 const run = { ...owner, agent_id: "agent", run_id: "run-1", task_prompt: "Inspect the public fixture." };
-const input = { sessionId: "approval-child", cwd: "/fixture", profile: "reader", definitionDigest: "definition", prompt: `Inherited notes\n\n${run.task_prompt}` };
+const input = { sessionId: "approval-child", cwd: "/fixture", profile: "editor", definitionDigest: "definition", prompt: `Inherited notes\n\n${run.task_prompt}` };
 function fixture() {
   globalThis[key] = new Map();
   const events = [], hooks = new Map();

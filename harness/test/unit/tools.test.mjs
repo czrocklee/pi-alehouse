@@ -6,7 +6,7 @@ import { defaultDelegation, delegationGuideline, delegationModes, eagernessLevel
 import { Check } from "typebox/value";
 import { assertCallerTools } from "../support/caller-contract.mjs";
 import { blockedDelegationToolNames as blockedDelegationTools, cleanupToolNames, managementToolNames as delegationTools,
-  workerToolSelection } from "../../dist/tools/tool-names.js";
+  agentProfileNames, modelProfileNames, workerToolSelection } from "../../dist/tools/tool-names.js";
 import { digest } from "../../dist/runtime/context-snapshot.js";
 import { ParentHistoryError } from "../../dist/core/ports.js";
 import { modelRecoveryHint } from "../../dist/core/model-recovery.js";
@@ -20,7 +20,7 @@ const preset = (name = "fixture", modelId = "fixture/controlled", version = "v1"
   effort: { d1: "inherit", d2: "inherit", d3: "inherit", d4: "inherit", d5: "inherit" },
   effort_defaults: { d1: "inherit", d2: "inherit", d3: "inherit", d4: "inherit", d5: "inherit" }, effort_overrides: {},
 });
-const profiles = () => Object.fromEntries(["editor", "reader", "researcher"].map((name) => [name, { definition: `${name} definition`, tools: ["read"] }]));
+const profiles = () => Object.fromEntries(["editor", "researcher"].map((name) => [name, { definition: `${name} definition`, tools: ["read"] }]));
 const code = (value) => (error) => JSON.parse(error.message).error.code === value;
 // Replies name Agents only; tests reach the host-side view through the controller.
 const runOf = (f, agent) => f.controller.findAgent(agent).run_id;
@@ -55,9 +55,24 @@ function toolsFor(f, hooks = {}) {
   };
   return { state, ctx, source, options, tools, tool, call };
 }
-const create = (rest = {}) => ({ agent: "orca", prompt: "task", label: "task", profile: "reader", reasoning_difficulty: 3, ...rest });
+const create = (rest = {}) => ({ agent: "orca", prompt: "task", label: "task", profile: "worker", reasoning_difficulty: 3, ...rest });
 const send = (agent, rest = {}) => ({ agent, message: "task", ...rest });
 const run = (agent, rest = {}) => ({ agent, prompt: "task", builds_on: "its earlier findings", label: "task", ...rest });
+
+test("worker maps to stable editor identity and retired model profile names are rejected", async (t) => {
+  assert.deepEqual(agentProfileNames, ["editor", "researcher"]);
+  assert.deepEqual(modelProfileNames, ["worker", "researcher"]);
+  const f = await fixture(t), { tool, call } = toolsFor(f);
+  for (const profile of ["reader", "editor"]) {
+    assert.throws(() => tool("agent_spawn").prepareArguments(create({ profile })), code("INVALID_PROFILE"));
+    await assert.rejects(call("agent_spawn", create({ profile }), `retired-${profile}`), code("INVALID_PROFILE"));
+  }
+  await call("agent_spawn", create());
+  await until(() => f.ports[0]?.streaming);
+  assert.equal(routed(f, "orca").profile, "editor");
+  assert.equal((await call("agent_list", {})).agents[0].profile, "worker");
+  f.ports[0].finish(); await settle(f, "orca");
+});
 
 test("serialized tool schemas explain task fields and independent capability/routing choices", async (t) => {
   const f = await fixture(t), { tools } = toolsFor(f);
@@ -228,7 +243,7 @@ test("spawn creates and send addresses: each rejects the other's names with a po
     return true;
   });
   await call("agent_spawn", create()); await until(() => f.ports[0]?.streaming); f.ports[0].finish(); await settle(f, "orca");
-  await assert.rejects(call("agent_spawn", create({ profile: "editor" }), "again"), (error) => {
+  await assert.rejects(call("agent_spawn", create({ profile: "researcher" }), "again"), (error) => {
     const result = JSON.parse(error.message).error;
     assert.equal(result.code, "AGENT_EXISTS"); assert.equal(result.agent, "orca");
     assert.match(result.resolution, /check agent_list, it may be your own earlier spawn.*never reused.*for a new Agent, choose another name/);
@@ -286,7 +301,7 @@ test("resolver exposes bounded abstract choices and incompatibility without mode
   }
   await assert.rejects(call("agent_spawn", create({ profile: "unknown" })), (error) => {
     const result = JSON.parse(error.message).error; assert.equal(result.code, "INVALID_PROFILE");
-    assert.deepEqual(result.allowed, ["editor", "reader", "researcher"]);
+    assert.deepEqual(result.allowed, ["worker", "researcher"]);
     assert.equal(JSON.stringify(result).includes("fixture/controlled"), false); return true;
   });
   state.model = { ...model, levels: ["off"] }; state.catalog = [state.model]; state.thinking = "low";
@@ -418,7 +433,7 @@ test("preset/profile/context snapshots pin at admission; same ID keeps first acc
   const starting = call("agent_spawn", args, "snapshot");
   args.prompt = "mutated caller";
   state.entries[0].message.content = "LATE_CONTEXT";
-  source["reader"].definition = "mutated profile"; source["reader"].tools.push("write");
+  source["editor"].definition = "mutated profile"; source["editor"].tools.push("write");
   const reply = await starting;
   // Main-session settings are unrelated to worker routing. A later preset/config
   // change also cannot reinterpret this accepted tool-call ID.
@@ -433,7 +448,7 @@ test("preset/profile/context snapshots pin at admission; same ID keeps first acc
   assert.equal(view.effective_settings.thinking_resolution, "identity");
   assert.equal(view.effective_settings.preset, "fixture"); assert.equal(view.effective_settings.difficulty, 3);
   assert.equal(view.effective_settings.strength, "d3", "internal route retains its slot");
-  assert.equal(view.effective_settings.definition_digest, digest("reader definition"));
+  assert.equal(view.effective_settings.definition_digest, digest("editor definition"));
   assert.deepEqual(view.effective_settings.tools, ["read"]);
   assert.equal(view.effective_settings.context_digest, digest("[user]\nUSER_CONTEXT\n\n[assistant]\nASSISTANT_CONTEXT"));
   assert(!JSON.stringify(reply).includes("USER_CONTEXT"));
@@ -668,7 +683,7 @@ test("ambiguous preset model keys fail without inventory; long tool-call IDs rem
     assert.equal(result.code, "PRESET_MODEL_UNAVAILABLE"); assert.equal("preset" in result, false);
     assert.equal(JSON.stringify(result).includes("fixture/controlled"), false); return true;
   });
-  source["reader"].tools.push("delegate");
+  source["editor"].tools.push("delegate");
   assert.throws(() => createOwnerTools(options), { code: "INVALID_PROFILE_DEFINITION" });
   state.catalog = [model];
   const id = "sdk-call-".repeat(1000);
@@ -1152,7 +1167,7 @@ test("list_agents adds per-Agent history for choosing reuse versus a new Agent",
   await until(() => f.ports[0].calls.length === 2); f.ports[0].finish(); await settle(f, "orca");
   now += 7_000;
   // Idle time, spend and the run count are known to the host but never listed.
-  assert.deepEqual((await call("agent_list", {})).agents, [{ agent: "orca", profile: "reader", reasoning_difficulty: 3,
+  assert.deepEqual((await call("agent_list", {})).agents, [{ agent: "orca", profile: "worker", reasoning_difficulty: 3,
     label: "Fix flaky test", task: 2, status: "completed", earlier_labels: ["Port tests"], context_tokens: 50_000,
     touched: ["src/a.ts"] }]);
   const summary = f.controller.agentSummary(f.controller.findAgent("orca").agent_id);
@@ -1308,11 +1323,11 @@ test("a kill earlier in the same parallel batch frees its slot for a later spawn
 
 test("a kill earlier in the same parallel batch frees a questioned Agent's claim for a later spawn", async (t) => {
   const f = await fixture(t, { controller: { resident_limit: 4, concurrency: 2, dispatch: literalDispatch } }), { call } = toolsFor(f);
-  await call("agent_spawn", create({ agent: "asker", profile: "editor", dispatch: { ownership: ["out"] } }), "asker");
+  await call("agent_spawn", create({ agent: "asker", profile: "worker", dispatch: { ownership: ["out"] } }), "asker");
   await until(() => f.ports[0]?.streaming);
   f.ports[0].callbacks.question("Which layout?"); f.ports[0].finish("need a layout"); await settle(f, "asker");
   const [killed, spawned] = await Promise.all([call("agent_kill", { agent: "asker" }, "kill"),
-    call("agent_spawn", create({ agent: "fixer", profile: "editor", dispatch: { ownership: ["out"] } }), "fixer")]);
+    call("agent_spawn", create({ agent: "fixer", profile: "worker", dispatch: { ownership: ["out"] } }), "fixer")]);
   assert.equal(killed.status, "killed");
   assert.deepEqual(spawned.action, { type: "agent_spawn", agent: "fixer", task: 1 });
   assert.deepEqual([...f.controller.claims].map((claim) => claim.agent_id), [f.controller.findAgent("fixer").agent_id]);
@@ -1322,8 +1337,8 @@ test("a kill earlier in the same parallel batch frees a questioned Agent's claim
 test("a conflict no release resolves is reported at once, even beside a release under way", async (t) => {
   const f = await fixture(t, { controller: { resident_limit: 2, concurrency: 2, dispatch: literalDispatch, release_wait_ms: 5000 } });
   const { call } = toolsFor(f);
-  await call("agent_spawn", create({ agent: "alpha", profile: "editor", dispatch: { ownership: ["a"] } }), "alpha");
-  await call("agent_spawn", create({ agent: "bravo", profile: "editor", dispatch: { ownership: ["b"] } }), "bravo");
+  await call("agent_spawn", create({ agent: "alpha", profile: "worker", dispatch: { ownership: ["a"] } }), "alpha");
+  await call("agent_spawn", create({ agent: "bravo", profile: "worker", dispatch: { ownership: ["b"] } }), "bravo");
   await until(() => f.ports.length === 2 && f.ports.every((port) => port.streaming));
   f.ports[0].callbacks.question("Which format?"); f.ports[0].finish("need a format"); await settle(f, "alpha");
   f.ports[1].callbacks.question("Which layout?"); f.ports[1].finish("need a layout"); await settle(f, "bravo");
@@ -1337,7 +1352,7 @@ test("a conflict no release resolves is reported at once, even beside a release 
   // "b" is held by bravo's pending question, which no release frees.
   const waits = t.mock.method(f.controller.observations, "observeLifecycle");
   try {
-    await assert.rejects(call("agent_spawn", create({ agent: "charlie", profile: "editor", dispatch: { ownership: ["a", "b"] } }), "both"), (error) => {
+    await assert.rejects(call("agent_spawn", create({ agent: "charlie", profile: "worker", dispatch: { ownership: ["a", "b"] } }), "both"), (error) => {
       const result = JSON.parse(error.message).error;
       assert.equal(result.code, "RESOURCE_OWNED"); assert.equal(result.agent, "bravo"); assert.equal(result.path, "b");
       return true;
@@ -1351,10 +1366,10 @@ for (const held of ["ownership", "tree"]) for (const requested of ["ownership", 
   test(`${requested} against ${held} reports the requested field without internal IDs`, async (t) => {
     const f = await fixture(t, { controller: { dispatch: literalDispatch } }), { call } = toolsFor(f);
     const declaration = (key) => key === "tree" ? { tree: "out" } : { ownership: ["out"] };
-    await call("agent_spawn", create({ agent: "holder", profile: "editor", dispatch: declaration(held) }), "holder");
+    await call("agent_spawn", create({ agent: "holder", profile: "worker", dispatch: declaration(held) }), "holder");
     await until(() => f.ports[0]?.streaming);
     const holder = f.controller.findAgent("holder");
-    await assert.rejects(call("agent_spawn", create({ agent: "requester", profile: "editor", dispatch: declaration(requested) }), "requester"), (error) => {
+    await assert.rejects(call("agent_spawn", create({ agent: "requester", profile: "worker", dispatch: declaration(requested) }), "requester"), (error) => {
       const result = JSON.parse(error.message).error;
       assert.deepEqual(result, {
         code: held === "tree" && requested === "tree" ? "BUILD_TREE_BUSY" : "RESOURCE_OWNED",

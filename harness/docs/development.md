@@ -41,7 +41,7 @@ not a developer's personal model inventory. Shared independent helpers in
 root `lib/` are bundled for both harness and footer; never make the footer
 import harness runtime. Permission/policy code lives outside `harness/`.
 
-The build generates `runtime/agents/{editor,reader,researcher,Explore,Plan,general-purpose}.md`,
+The build generates `runtime/agents/{editor,researcher,Explore,Plan,general-purpose}.md`,
 `runtime/worker-policy.json`, `runtime/policy/`, `runtime/lib/`, and a **private
 patched** `runtime/permission-system/vendor/` copy of pinned 32.0.3. Retain
 upstream LICENSE, package imports and WASM assets in that copy. The
@@ -50,10 +50,13 @@ all consumers must use that identity. Root dependencies include the parser
 runtime and pinned `pi-web-access` 0.35.0; do not resolve an ambient globally
 installed web extension. Generated resources and CLI must match the source
 revision. `pi-alehouse init` seeds only absent files into Pi's agent directory
-(six agent definitions, a version-3 Off routing catalogue and a permission
-config), never changes settings/auth or replaces existing policies/catalogues. Old
+(five agent definitions, a version-3 Off routing catalogue and a permission
+config: seven files total), never changes settings/auth or replaces existing policies/catalogues. Old
 `harness:*` records, child tool/config names and `Symbol.for` keys remain
-compatibility protocol, not reasons to rename public schemas. Parent management
+compatibility protocol, not reasons to rename public schemas. The explicit
+reader retirement removes its runtime support and private scratch/stderr
+capability keys, not literal historical records or existing user files. Remaining
+profile IDs and supported protocol keys retain their compatibility contract. Parent management
 tools are a model-facing API without caller compatibility; retired names stay
 only in deny/exclusion lists.
 
@@ -261,13 +264,12 @@ one migration unit:
   checks exact definition digests, including worker-body changes. Absent-only
   init never repairs existing mismatches or overwrites files/symlinks. Preserve
   user choices and credentials; never copy credentials or silently enable models.
-  Routing defaults to Off. Readers receive a private `/tmp` scratch directory,
-  granted only as a per-call capability at the built-in `write` tool boundary,
-  not a configurable output allowlist; see [reader scratch](reader-scratch.md).
+  Routing defaults to Off. Existing user `reader.md` files are not automatically
+  deleted or replaced; they provide no supported runtime profile or capability.
 - Keep all nine management tools and retired names denied/excluded in children;
   allow only the intended `alert_parent`/`ask_parent` communication tools and
   retire `notify_parent` to an explicit deny, without an alias. Preserve Git,
-  path, web, immutable-resource and lease boundaries. Keep profile/config IDs,
+  path, web, immutable-resource and lease boundaries. Keep supported profile/config IDs,
   `harness:*` records, lifecycle events and `Symbol.for` keys compatible.
 - For declarative packaging, coordinate the package pin, module wiring,
   generated definitions and permission sources together. Reconcile their source,
@@ -332,7 +334,7 @@ paths. Node 22.19+ (or 24+) is needed by ESLint 10.
 | Portable policy separately | `npm run test:policy` | Synthetic policy/authority checks. |
 | Controlled host collector | `npm run test:integration` | Separately authorized controlled full/readonly suite; not a release gate. |
 | Focused host fixtures | `harness/test/host/session-integration.mjs`, `run-lifecycle.mjs` | Invoke through the isolated collector with required host/fixture paths; never run bare npm scripts as proof. |
-| Init absent resources | `node bin/pi-alehouse.mjs init` | Explicit eight-file seed, no overwrite; inspect conflicts. |
+| Init absent resources | `node bin/pi-alehouse.mjs init` | Explicit seven-file seed, no overwrite; inspect conflicts. |
 | Orchestration metrics | `node scripts/analyze-pi-session.mjs [--json] [--since ISO] [--until ISO] JOURNAL.jsonl ...` | [Offline session analysis](session-analysis.md): explicit journals, inclusive entry-time window, deduplicated counts and observed usage; no transcript text. |
 
 After building/checking, `npm pack` produces a tarball with the generated
@@ -356,7 +358,7 @@ claim a command passed if it was not run, was interrupted, or matched zero tests
 
 - Assert required host Pi capabilities and exercise host integration; never
   treat a private SDK field or local patch as a supported upstream contract.
-- Preserve profile/config IDs, `harness:*` records, permission events and
+- Preserve supported profile/config IDs, `harness:*` records, permission events and
   cross-extension symbols. Changes to child communication must keep code,
   policy and definitions matched, without retired aliases or historical-state
   hydration.

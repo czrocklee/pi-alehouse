@@ -11,7 +11,7 @@ export const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), ".."
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 // Generated worker profiles installed into the agent directory, plus disabled
 // built-ins. Keep in step with nix/hm-module.nix and the harness profile names.
-export const managedAgentNames = Object.freeze(["editor", "reader", "researcher", "Explore", "Plan", "general-purpose"]);
+export const managedAgentNames = Object.freeze(["editor", "researcher", "Explore", "Plan", "general-purpose"]);
 export function agentDirectory(env = process.env) {
   const path = env.PI_CODING_AGENT_DIR;
   return resolve(path ? path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path : join(homedir(), ".pi/agent"));
@@ -106,8 +106,8 @@ export function verifyRuntime(root = packageRoot) {
     assert.equal(digest(regular(target)), expected, `Runtime resource mismatch: ${path}; rebuild Alehouse`);
   }
   for (const required of ["worker-policy.json", "permission-system/index.ts", "permission-system/vendor/package.json",
-    "policy/jev-auto-approval.ts", "policy/static-safety-guard.ts", "policy/policy-grep.ts", "agents/editor.md", "agents/reader.md",
-    "agents/researcher.md"]) {
+    "policy/jev-auto-approval.ts", "policy/static-safety-guard.ts", "policy/policy-grep.ts",
+    ...managedAgentNames.map(name => `agents/${name}.md`)]) {
     assert(Object.hasOwn(manifest.files, required), `Incomplete runtime manifest: ${required}`);
   }
   return runtime;

@@ -270,20 +270,17 @@ neither diagnose model availability/ability nor migrate Agents. The linked
 contract lists unobserved paths and publication limits.
 
 The harness depends on, but does not own, generated worker policy, permission
-authority, static guards, search policy, and Jev review policy.  Profiles are
-not an OS sandbox; `reader` has no edit tool and can use `write` only in its
-[private scratch](reader-scratch.md), via a per-call capability checked at the
-real built-in `write` tool boundary — generic profile/service queries and Bash
-receive no such exception. Bash keeps its detectable-write ceiling and preserves
-real paths, but opaque programs can still perform internal IO outside the
-classifier's view. OS permissions and global policy still matter. Nested delegation is
-excluded for every child. Child web is limited
-to `researcher`, which has no Bash; `reader`/`editor` web stays excluded by the
-harness allowlist even though their declared definitions include it.  Researcher
-file reads and web calls together can move project content to the network; its
-prompt forbids that but cannot enforce it (see
-[researcher web access](security.md#researcher-web-access)).  Tool availability
-is not authorization.
+authority, static guards, search policy, and Jev review policy. Public profiles
+are worker (stable internal editor) and researcher. Worker has local
+read/edit/write/Bash/build tools under normal permissions and no web; reviews
+are instructions, not an enforced readonly ceiling. Researcher has read-only
+file tools and web, no Bash/edit/write. Git mutations stay with the parent.
+No legacy profile aliases or scratch capabilities remain. Existing user files
+and literal historical records are not rewritten. No profile is an OS sandbox.
+Opaque programs can perform internal IO outside the classifier's view.
+Researcher reads and web calls can move project content to the network; prompt
+guidance cannot enforce secrecy. Tool availability is not authorization; see
+[researcher web access](security.md#researcher-web-access).
 
 [Managed Git read proof](git-read-proof.md) covers a restricted literal language,
 not arbitrary Git syntax or unsafe configuration equivalence. Content proof

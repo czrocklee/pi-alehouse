@@ -2,6 +2,7 @@ import { terminal, validDifficulty, type AgentSummary, type RunView } from "../c
 import { isQueueWait, modelDispatchNotes, modelTaskStatus, type QueueWait } from "../core/communication-envelope.js";
 import { modelRecoveryHint } from "../core/model-recovery.js";
 import { isSettledRecord } from "../core/communication-state.js";
+import { profileLabel } from "./tool-names.js";
 
 // Model-facing projections. The model addresses Agents by name and calls each
 // assignment a task; Run and Agent IDs, routing and diagnostics stay host-only.
@@ -68,7 +69,7 @@ export function agentRow(view: RunView, summary: AgentSummary, nameOf: NameOf, r
   // This set belongs to one roster construction only, never retained state.
   const recovery_hint = hint !== undefined && !recoveryHints.has(hint) ? hint : undefined;
   if (recovery_hint !== undefined) recoveryHints.add(recovery_hint);
-  return { agent, profile: view.effective_settings.profile, reasoning_difficulty: view.effective_settings.difficulty,
+  return { agent, profile: profileLabel(view.effective_settings.profile), reasoning_difficulty: view.effective_settings.difficulty,
     label: utf16Prefix(view.description, 120), ...task,
     ...(recovery_hint === undefined ? {} : { recovery_hint }),
     ...(running && view.execution_elapsed_ms !== undefined ? { elapsed_s: Math.round(view.execution_elapsed_ms / 1000) } : {}),
@@ -114,7 +115,7 @@ export function errorReply(error: { code?: string; details?: Record<string, unkn
     // and for which target profile, bounded; filesystem missing/type errors
     // carry no surface from the runtime and gain none here.
     ...(dispatchError && typeof d.surface === "string" ? { surface: utf16Prefix(d.surface, 32) } : {}),
-    ...(dispatchError && typeof d.profile === "string" ? { profile: utf16Prefix(d.profile, 16) } : {}),
+    ...(dispatchError && typeof d.profile === "string" ? { profile: utf16Prefix(profileLabel(d.profile), 16) } : {}),
     ...(typeof d.reason === "string" ? { reason: utf16Prefix(d.reason, 512) } : {}),
     ...(typeof d.error === "string" ? { message: utf16Prefix(d.error, 512) } : {}),
     ...(typeof d.resolution === "string" ? { resolution: utf16Prefix(d.resolution, 512) } : {}),

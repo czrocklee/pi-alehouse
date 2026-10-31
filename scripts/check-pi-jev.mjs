@@ -64,7 +64,7 @@ for (const path of [repo, piExecutable, generatedRoot]) assert(existsSync(path),
 // boundedProfileIsValid fail merely because its managed definitions are absent.
 // Copy only the rendered public profiles, never settings/auth or real logs.
 mkdirSync(join(offlineAgentDir, "agents"), { recursive: true });
-for (const profile of ["editor", "reader", "researcher"]) {
+for (const profile of ["editor", "researcher"]) {
   writeFileSync(join(offlineAgentDir, "agents", `${profile}.md`),
     readFileSync(join(generatedRoot, "agents", `${profile}.md`)));
 }
@@ -560,8 +560,8 @@ function registeredHarness({ withSignal = true, mode = "enforce", hasUI = true }
 for (const variant of ["intact", "prompt-at-limit", "prompt-over-limit", "wrong-cwd", "changed-profile", "missing-profile",
   "other-tool-start", "other-tool-end", "legacy-disposed", "current-tool-changed", "current-tool-ended", "current-ask-rebound", "current-run-changed"]) {
   const h = registeredHarness({ mode: "enforce-subagents" });
-  h.live("Inspect repository status with the read-only worker.");
-  const profile = "reader", profilePath = join(offlineAgentDir, "agents", `${profile}.md`);
+  h.live("Inspect repository status with the worker.");
+  const profile = "editor", profilePath = join(offlineAgentDir, "agents", `${profile}.md`);
   const originalProfile = readFileSync(profilePath);
   const definitionDigest = createHash("sha256").update(originalProfile).digest("hex");
   const sessionId = `${h.ctx.sessionManager.getSessionId()}-child`;
@@ -1213,10 +1213,10 @@ for (const legacy of [false, true]) {
 // by raising MAX_CONCURRENT_REVIEWS.
 {
   const h = registeredHarness({ mode: "enforce-subagents" });
-  h.live("Inspect repository status with the read-only worker.");
+  h.live("Inspect repository status with the worker.");
   const factsKey = Symbol.for("@rocklee/jev-auto-approval:child-runtime-facts");
   const previousFacts = globalThis[factsKey];
-  const profile = "reader";
+  const profile = "editor";
   const definitionDigest = createHash("sha256").update(readFileSync(join(offlineAgentDir, "agents", `${profile}.md`))).digest("hex");
   const childSessionId = `${h.ctx.sessionManager.getSessionId()}-capacity`;
   const taskPrompt = "Inspect repository status.";

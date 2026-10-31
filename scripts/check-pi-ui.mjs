@@ -1589,7 +1589,7 @@ test("yolo needs a second choice, reaches the authority's set, and is recorded i
     m.clickRow("yolo");
     assert.equal(m.popover().isArmed(), true, "the first choice only arms");
     assert.equal(yoloSet().has("approval-root"), false);
-    for (const warning of ["reader/subagent Bash asks", "fail-closed floor and static guard", "Opaque code can write files"]) {
+    for (const warning of ["subagent Bash asks", "fail-closed floor and static guard", "Opaque code can write files"]) {
       assert(m.lines().some((line) => line.includes(warning)), m.lines().join("\n"));
     }
     assert(m.lines().at(-1).startsWith("╰"), "the warning fits above the bottom edge");

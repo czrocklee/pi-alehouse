@@ -1,10 +1,11 @@
 // Offline end-to-end Agents through the real composition: parent tools, child
-// factory, researcher web instances, reader scratch writes and permission
+// factory, researcher web instances, cooperative worker edits and permission
 // forwarding to the parent UI. A scripted provider stands in for every model
-// and the global fetch throws, so nothing leaves the process. No web tool is
+// and the global fetch
+// throws, so nothing leaves the process. No web tool is
 // ever approved or executed.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as ai from "@earendil-works/pi-ai";
 import { createAgentSession, DefaultResourceLoader, initTheme, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -21,14 +22,6 @@ initialize({ agentDir });
 const fixtureModel = "harness-fixture/controlled";
 writeFileSync(join(agentDir, "harness-presets.json"), JSON.stringify({ version: 3, defaultPreset: "fixture",
   presets: { fixture: { version: "v1", slots: Object.fromEntries(["d1", "d2", "d3", "d4", "d5"].map((slot) => [slot, { model: fixtureModel }])) } } }));
-// The fixture's own synthetic seed config — never the packaged or installed
-// resources: add one genuine path_write ask for reader approved reports while
-// retaining every existing rule, so a real scratch ask is forwarded to the
-// parent UI and no exception auto-allows it.
-const syntheticPermissions = join(agentDir, "extensions/pi-permission-system/config.json");
-const seeded = JSON.parse(readFileSync(syntheticPermissions, "utf8"));
-seeded.permission.path_write["/tmp/pi-alehouse-reader-*/approved-report.md"] = "ask";
-writeFileSync(syntheticPermissions, JSON.stringify(seeded, null, 2) + "\n");
 initTheme(undefined, false);
 const runtime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json"), allowModelNetwork: false });
 const provider = controlledProvider(ai);
@@ -39,6 +32,20 @@ assert(model);
 const cwd = join(home, "project"), sessions = join(home, "sessions"), outside = join(home, "outside", "fixture.pem");
 mkdirSync(cwd, { recursive: true }); mkdirSync(sessions, { recursive: true }); mkdirSync(join(home, "outside"));
 writeFileSync(outside, "OUTSIDE_NOTE_CONTENT (not a key)\n");
+const workerReport = join(cwd, "worker-report.md"), approvedReport = join(cwd, "worker-approved-report.md");
+const siblingReport = join(cwd, "sibling-approved-report.md"), deniedReport = join(cwd, "fixture-protected-report.md");
+const secret = join(cwd, "fixture.env"), denyReason = "SYNTHETIC_WORKER_PATH_DENY";
+writeFileSync(deniedReport, "PROTECTED_FIXTURE_REPORT\n");
+writeFileSync(secret, "SYNTHETIC_SECRET_MUST_NOT_BE_READ\n");
+// Only this disposable fixture's synthetic config gains path asks/deny. Keep
+// every shipped rule, including the secret-path deny; ordinary worker writes
+// remain usable while explicit user-style policy is enforced for both workers.
+const syntheticPermissions = join(agentDir, "extensions/pi-permission-system/config.json");
+const seeded = JSON.parse(readFileSync(syntheticPermissions, "utf8"));
+assert.equal(seeded.permission.path["*.env"], "deny");
+for (const path of [approvedReport, siblingReport]) seeded.permission.path_write[path] = "ask";
+seeded.permission.path_write[deniedReport] = { action: "deny", reason: denyReason };
+writeFileSync(syntheticPermissions, JSON.stringify(seeded, null, 2) + "\n");
 const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false }, cacheWarming: "off" });
 const lifecycle = [];
 const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager,
@@ -57,7 +64,6 @@ const text = (message) => typeof message?.content === "string" ? message.content
 const profileOf = (request) => /<active_agent name="(\w+)"\/>/.exec(request.context.systemPrompt ?? "")?.[1];
 const results = (request) => request.context.messages.filter((message) => message.role === "toolResult");
 const parentSteps = [], parentPrompts = [], childTools = {}, childResults = {};
-let readerScratch, siblingScratch;
 const call = (id, name, args) => ({ tools: [{ type: "toolCall", id, name, arguments: args }] });
 // A failed step only ends the provider response; keep it for the real report.
 let scriptFailure;
@@ -74,23 +80,21 @@ function respond(request) {
   const key = /\b([A-Z]+_TASK)\b/.exec(task)?.[1];
   assert(key, `unscripted ${profile} task`);
   childTools[key] ??= request.context.tools.map((tool) => tool.name);
-  if (key === "READER_TASK" && request.context.messages.at(-1)?.role !== "toolResult") {
-    readerScratch = /^Scratch directory: (\/tmp\/pi-alehouse-reader-[A-Za-z0-9]+)$/m.exec(request.context.systemPrompt ?? "")?.[1];
-    assert(readerScratch, "the real reader prompt names its authority-created scratch");
-    return { tools: [
-      { type: "toolCall", id: "scratch-report", name: "write", arguments: { path: join(readerScratch, "report.md"), content: "SCRATCH_REPORT\n" } },
-      { type: "toolCall", id: "approved-report", name: "write", arguments: { path: join(readerScratch, "approved-report.md"), content: "APPROVED_READER_REPORT\n" } },
-      { type: "toolCall", id: "project-write", name: "write", arguments: { path: join(cwd, "reader-must-not-write.txt"), content: "FORBIDDEN\n" } },
-    ] };
-  }
-  if (key === "SIBLING_TASK" && request.context.messages.at(-1)?.role !== "toolResult") {
-    siblingScratch = /^Scratch directory: (\/tmp\/pi-alehouse-reader-[A-Za-z0-9]+)$/m.exec(request.context.systemPrompt ?? "")?.[1];
-    assert(siblingScratch && readerScratch && siblingScratch !== readerScratch, "a second live reader gets its own scratch");
-    return { tools: [
-      { type: "toolCall", id: "sibling-snoop", name: "write", arguments: { path: join(readerScratch, "approved-report.md"), content: "SIBLING_SNOOP\n" } },
-      { type: "toolCall", id: "sibling-approved", name: "write", arguments: { path: join(siblingScratch, "approved-report.md"), content: "SIBLING_APPROVED_REPORT\n" } },
-    ] };
-  }
+  assert.equal(profile, ["RESEARCH_TASK", "SECOND_TASK"].includes(key) ? "researcher" : "editor",
+    "public worker retains the internal editor profile");
+  if (key === "WORKER_TASK" && request.context.messages.at(-1)?.role !== "toolResult") return { tools: [
+    { type: "toolCall", id: "worker-report", name: "write", arguments: { path: workerReport, content: "WORKER_REPORT\n" } },
+    { type: "toolCall", id: "approved-report", name: "write", arguments: { path: approvedReport, content: "APPROVED_WORKER_REPORT\n" } },
+    { type: "toolCall", id: "protected-write", name: "write", arguments: { path: deniedReport, content: "FORBIDDEN\n" } },
+    { type: "toolCall", id: "secret-read", name: "read", arguments: { path: secret } },
+  ] };
+  if (key === "WORKER_TASK" && !results(request).some((result) => result.toolCallId === "worker-edit")) return { tools: [
+    { type: "toolCall", id: "worker-edit", name: "edit", arguments: { path: workerReport, oldText: "WORKER_REPORT", newText: "EDITED_WORKER_REPORT" } },
+  ] };
+  if (key === "SIBLING_TASK" && request.context.messages.at(-1)?.role !== "toolResult") return { tools: [
+    { type: "toolCall", id: "sibling-protected", name: "write", arguments: { path: deniedReport, content: "SIBLING_FORBIDDEN\n" } },
+    { type: "toolCall", id: "sibling-approved", name: "write", arguments: { path: siblingReport, content: "SIBLING_APPROVED_REPORT\n" } },
+  ] };
   if (key === "RESEARCH_TASK" && request.context.messages.at(-1)?.role !== "toolResult") return { tools: [
     { type: "toolCall", id: "search", name: "web_search", arguments: { query: "alehouse fixture" } },
     { type: "toolCall", id: "local-video", name: "fetch_content", arguments: { url: "file:///etc/passwd" } },
@@ -103,8 +107,8 @@ function respond(request) {
 
 // The parent UI answers forwarded permission requests: web_search is denied,
 // the local read of a *.pem path (an ask rule) is approved, and so is each
-// fixture reader's own approved-report scratch write (the synthetic
-// path_write ask). A sibling snooping another reader's scratch never asks.
+// fixture worker's approved report write (the synthetic path_write asks).
+// Explicit configured denies and secret-path blocks never ask.
 const dialogs = [], statuses = [];
 const noop = () => {};
 const uiContext = {
@@ -113,8 +117,8 @@ const uiContext = {
     assert.equal(options[0], "Yes");
     assert(options.includes("No"));
     if (/tool\s*:\s*read\b/.test(title)) return "Yes";
-    if (/subagent\s*:\s*reader\b/.test(title) && [readerScratch, siblingScratch]
-      .some((scratch) => scratch && title.includes(join(scratch, "approved-report.md")))) return "Yes";
+    if (/subagent\s*:\s*worker\b/.test(title) && [approvedReport, siblingReport]
+      .some((path) => title.includes(path))) return "Yes";
     return "No";
   },
   confirm: async () => false, input: async () => undefined, editor: async () => undefined, custom: async () => undefined,
@@ -153,10 +157,9 @@ try {
     () => spawn("otter", "researcher", "RESEARCH_TASK"),
     (last) => { spawned(last, "otter", "RESEARCH_TASK"); return call("kill-otter", "agent_kill", { agent: "otter" }); },
     (last) => { assert.equal(last.isError, false, text(last)); return spawn("heron", "researcher", "SECOND_TASK"); },
-    (last) => { spawned(last, "heron", "SECOND_TASK"); return spawn("pike", "reader", "READER_TASK"); },
-    (last) => { spawned(last, "pike", "READER_TASK"); return spawn("perch", "reader", "SIBLING_TASK"); },
-    (last) => { spawned(last, "perch", "SIBLING_TASK"); return spawn("carp", "editor", "EDITOR_TASK"); },
-    (last) => { spawned(last, "carp", "EDITOR_TASK"); return { text: "PARENT_DONE" }; },
+    (last) => { spawned(last, "heron", "SECOND_TASK"); return spawn("pike", "worker", "WORKER_TASK"); },
+    (last) => { spawned(last, "pike", "WORKER_TASK"); return spawn("perch", "worker", "SIBLING_TASK"); },
+    (last) => { spawned(last, "perch", "SIBLING_TASK"); return { text: "PARENT_DONE" }; },
   );
   await session.prompt("START", { expandPromptTemplates: false });
   if (scriptFailure) throw scriptFailure;
@@ -166,33 +169,30 @@ try {
   const researcherTools = ["read", "grep", "find", "ls", ...web, "alert_parent", "ask_parent"];
   assert.deepEqual(childTools.RESEARCH_TASK, researcherTools);
   assert.deepEqual(childTools.SECOND_TASK, researcherTools, "a reused web instance serves the next researcher");
-  for (const key of ["READER_TASK", "SIBLING_TASK", "EDITOR_TASK"]) {
+  for (const key of ["WORKER_TASK", "SIBLING_TASK"]) {
     assert(!childTools[key].some((tool) => web.includes(tool)), `${key} has no web tools`);
-    assert(childTools[key].includes("bash") && childTools[key].includes("alert_parent"), key);
+    for (const tool of ["bash", "read", "edit", "write", "alert_parent"]) assert(childTools[key].includes(tool), `${key}: ${tool}`);
   }
+  for (const tool of ["bash", "edit", "write"]) assert(!childTools.RESEARCH_TASK.includes(tool), `researcher has no ${tool}`);
   for (const tools of Object.values(childTools)) {
     assert(tools.includes("ask_parent"));
     assert(!tools.includes("notify_parent"), "no retired runtime communication alias");
     assert(!tools.some((tool) => management.includes(tool)), "children cannot answer or delegate");
   }
-  assert(childTools.EDITOR_TASK.includes("edit") && !childTools.READER_TASK.includes("edit"));
-  assert(childTools.READER_TASK.includes("write"), "reader has the built-in scratch writer");
-  const reader = Object.fromEntries(childResults.READER_TASK.map(result => [result.id, result]));
-  assert.equal(reader["scratch-report"].error, false, reader["scratch-report"].text);
-  assert.equal(readFileSync(join(readerScratch, "report.md"), "utf8"), "SCRATCH_REPORT\n");
-  assert.equal(reader["approved-report"].error, false, reader["approved-report"].text);
-  assert.equal(readFileSync(join(readerScratch, "approved-report.md"), "utf8"), "APPROVED_READER_REPORT\n",
-    "the parent-approved scratch write reached the actual file");
-  assert.equal(reader["project-write"].error, true);
-  assert.match(reader["project-write"].text, /own scratch directory/);
-  assert(!existsSync(join(cwd, "reader-must-not-write.txt")), "reader cannot write project files");
+  const worker = Object.fromEntries(childResults.WORKER_TASK.map(result => [result.id, result]));
+  for (const id of ["worker-report", "worker-edit", "approved-report"]) assert.equal(worker[id].error, false, worker[id].text);
+  assert.equal(readFileSync(workerReport, "utf8"), "EDITED_WORKER_REPORT\n", "ordinary worker write and edit reached the file");
+  assert.equal(readFileSync(approvedReport, "utf8"), "APPROVED_WORKER_REPORT\n", "the approved path ask reached the file");
+  assert.equal(worker["protected-write"].error, true);
+  assert(worker["protected-write"].text.includes(denyReason), "the worker cannot bypass an explicit path-write deny");
+  assert.equal(worker["secret-read"].error, true);
+  assert.doesNotMatch(worker["secret-read"].text, /SYNTHETIC_SECRET_MUST_NOT_BE_READ/);
   const sibling = Object.fromEntries(childResults.SIBLING_TASK.map((result) => [result.id, result]));
-  assert.equal(sibling["sibling-snoop"].error, true);
-  assert.match(sibling["sibling-snoop"].text, /own scratch directory/);
+  assert.equal(sibling["sibling-protected"].error, true);
+  assert(sibling["sibling-protected"].text.includes(denyReason), "the configured deny also covers a sibling worker");
   assert.equal(sibling["sibling-approved"].error, false, sibling["sibling-approved"].text);
-  assert.equal(readFileSync(join(siblingScratch, "approved-report.md"), "utf8"), "SIBLING_APPROVED_REPORT\n");
-  assert.equal(readFileSync(join(readerScratch, "approved-report.md"), "utf8"), "APPROVED_READER_REPORT\n",
-    "the denied sibling write left the first reader's report unmodified");
+  assert.equal(readFileSync(siblingReport, "utf8"), "SIBLING_APPROVED_REPORT\n");
+  assert.equal(readFileSync(deniedReport, "utf8"), "PROTECTED_FIXTURE_REPORT\n", "neither worker changed the denied target");
 
   const research = Object.fromEntries(childResults.RESEARCH_TASK.map((result) => [result.id, result]));
   assert.equal(research.search.error, true);
@@ -201,22 +201,23 @@ try {
   assert.match(research.proxy.text, /Validation failed for tool "fetch_content"[\s\S]*proxy/);
   assert.equal(research.outside.error, false, research.outside.text);
   assert.match(research.outside.text, /OUTSIDE_NOTE_CONTENT/);
-  // Exactly four forwarded prompts: invalid calls and the blocked sibling
-  // snoop never reach permission.
+  // Exactly four forwarded prompts: invalid calls and configured/secret denies
+  // never reach the parent approval UI.
   assert.equal(dialogs.length, 4, dialogs.join("\n---\n"));
   for (const [tool, dialog] of [["web_search", dialogs.find((title) => /tool\s*:\s*web_search/.test(title))],
     ["read", dialogs.find((title) => /tool\s*:\s*read\b/.test(title))]]) {
     assert.match(dialog ?? "", /Permission Required \(Subagent\)[\s\S]*subagent\s*:\s*researcher/, tool);
   }
   assert.match(dialogs.find((title) => /web_search/.test(title)), /alehouse fixture/, "the parent sees the query it approves");
-  for (const scratch of [readerScratch, siblingScratch]) {
-    const ask = dialogs.find((title) => title.includes(join(scratch, "approved-report.md")));
-    assert(ask, `the reader's forwarded ask names the actual ${scratch} artifact`);
-    assert.match(ask, /Permission Required \(Subagent\)[\s\S]*subagent\s*:\s*reader/, "the forwarded write ask names the reader");
+  for (const path of [approvedReport, siblingReport]) {
+    const ask = dialogs.find((title) => title.includes(path));
+    assert(ask, `the worker's forwarded ask names the actual ${path} artifact`);
+    assert.match(ask, /Permission Required \(Subagent\)[\s\S]*subagent\s*:\s*worker\b/, "forwarded ask titles show the public worker label");
+    assert.doesNotMatch(ask, /subagent\s*:\s*editor\b/, "internal profile IDs are not shown as requester labels");
     assert.match(ask, /tool\s*:\s*write\b/, "the forwarded write ask names the write tool");
   }
   assert.equal(dialogs.filter((title) => /tool\s*:\s*write\b/.test(title)).length, 2,
-    "only the two approved fixture reader writes ask");
+    "only the two approved fixture worker writes ask");
   assert.equal(lifecycle.filter((event) => event.kind === "disposed").length, 1, "only the killed researcher is disposed so far");
 
   // Delegation mode: the default guideline, then a command switch that takes
@@ -244,14 +245,11 @@ try {
 }
 const created = lifecycle.filter((event) => event.kind === "session-created").map((event) => event.sessionId);
 const disposed = lifecycle.filter((event) => event.kind === "disposed").map((event) => event.sessionId);
-assert.equal(created.length, 5);
+assert.equal(created.length, 4);
 assert.deepEqual([...disposed].sort(), [...created].sort(), "parent shutdown disposes every Agent session");
-assert.equal(readFileSync(join(readerScratch, "report.md"), "utf8"), "SCRATCH_REPORT\n", "shutdown preserves reader reports");
-assert.equal(readFileSync(join(readerScratch, "approved-report.md"), "utf8"), "APPROVED_READER_REPORT\n",
-  "shutdown preserves the parent-approved report");
-assert.equal(readFileSync(join(siblingScratch, "approved-report.md"), "utf8"), "SIBLING_APPROVED_REPORT\n",
-  "shutdown preserves the sibling's approved report");
-rmSync(readerScratch, { recursive: true, force: true }); // Test-owned output, not runtime cleanup.
-rmSync(siblingScratch, { recursive: true, force: true });
+assert.equal(readFileSync(workerReport, "utf8"), "EDITED_WORKER_REPORT\n", "shutdown preserves ordinary worker output");
+assert.equal(readFileSync(approvedReport, "utf8"), "APPROVED_WORKER_REPORT\n", "shutdown preserves the approved report");
+assert.equal(readFileSync(siblingReport, "utf8"), "SIBLING_APPROVED_REPORT\n", "shutdown preserves the sibling's approved report");
+assert.equal(readFileSync(deniedReport, "utf8"), "PROTECTED_FIXTURE_REPORT\n", "shutdown does not alter the denied target");
 assert.deepEqual(network, []);
-console.log("PASS: real composition spawns researcher, reader and editor Agents; forwarded asks reach the parent UI; a reader scratch ask is approved and written; a sibling reader cannot touch another reader's scratch; a mode switch reaches the next request; nothing leaves the process");
+console.log("PASS: real composition spawns researcher and worker Agents; forwarded asks reach the parent UI; worker writes and edits stay permission-checked; explicit path-write and secret denies hold; a mode switch reaches the next request; nothing leaves the process");

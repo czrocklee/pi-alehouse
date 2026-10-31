@@ -77,7 +77,7 @@ export const CONFIRM_ROWS = 3;
 export function confirmationFor(id: ChoiceId, judge: JudgeName | undefined, current: ChoiceId): string[] | undefined {
   if (CHOICE_RANK[id] <= CHOICE_RANK[current]) return undefined;
   if (id === "yolo") {
-    return [" yolo also auto-allows reader/subagent Bash asks.",
+    return [" yolo also auto-allows worker/subagent Bash asks.",
       " Denies, fail-closed floor and static guard hold.",
       " Opaque code can write files. Choose yolo again."];
   }
@@ -311,7 +311,7 @@ export function narrowerJudge(a: JudgeMode, b: JudgeMode): JudgeMode {
 }
 
 const YOLO_WARNING = "Approval: YOLO. Eligible permission asks in this session and its in-process subagents are allowed " +
-  "without review, a reader's Bash commands included; explicit denies (including detected reader path writes), the " +
+  "without review, worker Bash commands included; explicit denies, the " +
   "fail-closed floor and the static safety guard still apply. Opaque programs can still write files internally. " +
   "Subagents outside this process keep asking.";
 

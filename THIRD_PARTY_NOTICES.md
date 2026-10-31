@@ -4,7 +4,7 @@ Pi Alehouse is © 2026 Yang Li and MIT licensed; see [LICENSE](LICENSE). Depende
 
 ## pi-web-access 0.35.0
 
-Parent and isolated researcher integration use pinned `pi-web-access` 0.35.0 (https://github.com/nicobailon/pi-web-access). Its installed `package.json` declares MIT; the text below is from its installed `LICENSE`. Reader/editor workers do not receive web tools.
+Parent and isolated researcher integration use pinned `pi-web-access` 0.35.0 (https://github.com/nicobailon/pi-web-access). Its installed `package.json` declares MIT; the text below is from its installed `LICENSE`. Local workers (public `worker`, internal `editor`) do not receive web tools.
 
 MIT License
 

@@ -324,7 +324,7 @@ try {
   const management = ["agent_spawn", "agent_run", "agent_send", "agent_answer", "agent_wait", "agent_read", "agent_interrupt", "agent_kill", "agent_list"];
   const childDenies = JSON.parse(readFileSync(join(repo, "resources/worker-policy.json"), "utf8")).childToolDenies;
   assert.equal(config.permission.notify_parent, "deny", "Retired communication name must be explicitly denied");
-  for (const agent of ["editor", "reader", "researcher"]) {
+  for (const agent of ["editor", "researcher"]) {
     for (const tool of childDenies) assert.equal(resolver.checkPermission(tool, {}, agent).state, "deny", `${agent}: ${tool}`);
     for (const tool of ["alert_parent", "ask_parent"]) assert.equal(resolver.checkPermission(tool, {}, agent).state, "allow", `${agent}: ${tool}`);
   }
@@ -340,47 +340,47 @@ try {
   writeFileSync(ceilingProject, JSON.stringify({ permission: { path_write: { "*.future": "allow" } } }));
   const ceilingProjectAgents = join(scratch, "ceiling-project-agents");
   mkdirSync(ceilingProjectAgents);
-  writeFileSync(join(ceilingProjectAgents, "reader.md"), '---\npermission:\n  path_write:\n    "*": allow\n---\n');
+  writeFileSync(join(ceilingProjectAgents, "researcher.md"), '---\npermission:\n  path_write:\n    "*": allow\n---\n');
   writeFileSync(join(ceilingProjectAgents, "partial.md"), '---\npermission:\n  path_write:\n    "*": deny\n    "*.pem": ask\n---\n');
-  writeFileSync(join(ceilingProjectAgents, "local-reader.md"), '---\npermission:\n  path_write: deny\n---\n');
+  writeFileSync(join(ceilingProjectAgents, "local-path-ceiling.md"), '---\npermission:\n  path_write: deny\n---\n');
   for (const yolo of [false, true]) {
     const ceilingManager = new PermissionManager({ globalConfigPath: configPath, agentsDir: join(agentDir, "agents"),
       projectGlobalConfigPath: ceilingProject, projectAgentsDir: ceilingProjectAgents, mcpServerNames: [], isYoloEnabled: () => yolo });
-    assert.equal(ceilingManager.getToolPermission("path_write", "reader"), "deny");
-    assert.equal(ceilingManager.isToolFullyDenied("path_write", "reader"), true);
+    assert.equal(ceilingManager.getToolPermission("path_write", "researcher"), "deny");
+    assert.equal(ceilingManager.isToolFullyDenied("path_write", "researcher"), true);
     const certificateIntent = { kind: "path-values", surface: "path_write", values: [join(cwd, "ordinary.pem")] };
     assert.equal(ceilingManager.check({ ...certificateIntent, agentName: "partial" }).state, yolo ? "allow" : "ask",
       "Partial profile rules keep their own exceptions; a catch-all alone is not enough");
     assert.equal(ceilingManager.isToolFullyDenied("path_write", "partial"), false);
-    const localCeiling = ceilingManager.check({ ...certificateIntent, agentName: "local-reader" });
+    const localCeiling = ceilingManager.check({ ...certificateIntent, agentName: "local-path-ceiling" });
     assert.equal(localCeiling.state, "deny", "A project-agent's scalar full-surface denial is also a ceiling");
     assert.equal(localCeiling.origin, "project-agent");
     for (const grants of [[], [{ surface: "path_write", pattern: "*", action: "allow", layer: "session", origin: "session" }]]) {
       const ceilingResolver = new PermissionResolver(ceilingManager, { getRuleset: () => grants });
-      assert.equal(ceilingResolver.resolve({ ...certificateIntent, agentName: "local-reader" }).state, "deny",
+      assert.equal(ceilingResolver.resolve({ ...certificateIntent, agentName: "local-path-ceiling" }).state, "deny",
         "A path-only profile ceiling holds without relying on a direct write-tool deny");
-      assert.equal(ceilingManager.check({ kind: "tool", surface: "path_write", input: join(cwd, "ordinary.pem"), agentName: "local-reader" }, grants).state, "deny",
+      assert.equal(ceilingManager.check({ kind: "tool", surface: "path_write", input: join(cwd, "ordinary.pem"), agentName: "local-path-ceiling" }, grants).state, "deny",
         "The raw tool-intent path is clamped as well as path-values");
       for (const name of ["ordinary.txt", "ordinary.pem", "ordinary.key", "ordinary.p12", "ordinary.pfx", "ordinary.future", ".env.example"]) {
         const command = `printf '%s' fixture > ./${name}`;
         const program = await BashProgram.parse(command, normalizer);
-        const path = describeBashPathGate({ toolCallId: "ceiling", toolName: "bash", cwd, agentName: "reader" }, program, ceilingResolver, normalizer);
-        assert.equal(path?.preCheck.state, "deny", `reader ceiling: ${name}, yolo=${yolo}, sessionGrant=${grants.length}`);
+        const path = describeBashPathGate({ toolCallId: "ceiling", toolName: "bash", cwd, agentName: "researcher" }, program, ceilingResolver, normalizer);
+        assert.equal(path?.preCheck.state, "deny", `researcher ceiling: ${name}, yolo=${yolo}, sessionGrant=${grants.length}`);
         assert.equal(path.preCheck.origin, "agent", "Inherited exceptions cannot replace the profile ceiling");
       }
-      assert.equal(ceilingResolver.resolve({ kind: "path-values", surface: "path_read", values: [join(cwd, "ordinary.txt")], agentName: "reader" }).state, "allow");
+      assert.equal(ceilingResolver.resolve({ kind: "path-values", surface: "path_read", values: [join(cwd, "ordinary.txt")], agentName: "researcher" }).state, "allow");
       for (const agentName of [undefined, "editor"]) {
         assert.equal(ceilingResolver.resolve({ kind: "path-values", surface: "path_write", values: [join(cwd, "ordinary.future")], agentName }).state, "allow");
         assert.equal(ceilingResolver.resolve({ kind: "path-values", surface: "path_write", values: [join(cwd, "ordinary.pem")], agentName }).state,
           yolo || grants.length ? "allow" : "ask", "No new write ceiling on root/editor");
       }
-      const protectedWrite = ceilingResolver.resolve({ kind: "path-values", surface: "path_write", values: [join(cwd, ".git/config")], agentName: "reader" });
+      const protectedWrite = ceilingResolver.resolve({ kind: "path-values", surface: "path_write", values: [join(cwd, ".git/config")], agentName: "researcher" });
       assert.equal(protectedWrite.state, "deny");
       assert.equal(protectedWrite.origin, grants.length ? "agent" : "global",
         "Keep an existing specific denial; otherwise clamp the session grant to the profile ceiling");
     }
   }
-  console.log("PASS: reader write ceiling survives inherited/project exceptions, project-agent widening, session grants and yolo");
+  console.log("PASS: researcher write ceiling survives inherited/project exceptions, project-agent widening, session grants and yolo");
   const { hardenGitInput, originalGitCommands } = await load("access-intent/bash/managed-read-policy");
   const fixedRequested = [
     "command -v pi", "command -v alejandra", "command -v mypy", "bash -n syntax.sh",
@@ -412,7 +412,7 @@ try {
     "printenv", "printenv HOME", "printenv PI_OTHER", "printenv PI_MODEL HOME", "env", "env printenv HOME", "env FOO=bar printenv PI_MODEL",
     "ruff check syntax.sh", "ruff check --fix syntax.sh", "ruff check --output-file out syntax.sh", "ruff format --check syntax.sh",
     "git log -5 --oneline", "git diff --no-ext-diff --no-textconv --ignore-submodules=all", "git diff", "git diff --stat", "git diff --check", `${diff} --output=ordinary.txt`, `${diff} --out=ordinary.txt`, `${diff} --o ordinary.txt`, `${diff} --ext-diff`, `${diff} --textconv`, `${diff} HEAD~1`, `${diff} --no-renames -- ../repo/ordinary.txt`, `${diff} --no-renames -- ':(top)*'`, `${diff} --no-renames -- "$INPUT"`, `${diff} > ordinary.txt`, `${diff} && touch ordinary.txt`, `env FOO=1 ${diff}`, `env -i ${diff}`, `timeout 5 ${diff}`, "git -c core.pager=cat status --short", "git -C . status --short", "git --no-pager log -5 --oneline", "git show HEAD:.env", "git show HEAD", "git blame ordinary.txt", "git log -p -1", "git ls-files --with-tree=HEAD", "git ls-files --recurse-submodules"];
-  for (const agent of [undefined, "editor", "reader"]) {
+  for (const agent of [undefined, "editor"]) {
     for (const command of positive) {
       const result = await check(command, agent);
       assert.equal(result.bash.state, "allow", `${agent}: Bash: ${command}`);
@@ -424,8 +424,7 @@ try {
       assert.notEqual(result.bash.state, "allow", `${agent}: unsupported command: ${command}`);
       assert(!result.program.commands().some(command => command.floorExemption), `New proof reached wrapper core: ${command}`);
     }
-    if (agent && agent !== "editor") assert.equal((await check("echo fixture > ordinary.txt", agent)).path.preCheck.state, "deny", "A reader cannot write, even with approval");
-    else assert.equal((await check("echo fixture > ordinary.txt", agent)).path, null);
+    assert.equal((await check("echo fixture > ordinary.txt", agent)).path, null);
     assert.equal((await check("echo fixture > ~/.pi/agent/settings.json", agent)).path.preCheck.state, "deny");
     assert.equal((await check("cut -f 1 /var/lib/pi-fixture/external.txt", agent)).external.preCheck.state, "ask");
   }
@@ -443,7 +442,7 @@ try {
   }
   // A missing ordinary tracked file still has a narrow, policy-checked scope.
   rmSync(join(cwd, "ordinary.txt"));
-  for (const agent of [undefined, "editor", "reader"]) {
+  for (const agent of [undefined, "editor"]) {
     const deleted = await check(`${diff} --no-renames -- ordinary.txt`, agent);
     assert.equal(deleted.bash.state, "allow"); assert.equal(deleted.path, null);
   }
@@ -477,7 +476,7 @@ try {
   }
   writeFileSync(join(cwd, ".env"), "FAKE_SECRET_FIXTURE=not-real\n");
   git("rm", "-q", ".env", "src/.env");
-  for (const agent of [undefined, "editor", "reader"]) {
+  for (const agent of [undefined, "editor"]) {
     assert.equal((await check(`${diff} --cached`, agent)).path.preCheck.state, "deny", "Deleted HEAD secret is checked");
     assert.equal((await check(`${diff} --no-renames -- ordinary.txt`, agent)).path, null, "Explicit file proof does not read unrelated historical blobs");
     for (const path of ["src", "src//", "./src/./", "."])
@@ -553,7 +552,7 @@ try {
     mcpServerNames: [], isYoloEnabled: () => true }), { getRuleset: () => [] });
   assert.equal(resolveBashCommandCheck(plainAsk.commandText(), plainAsk.commands(), undefined, yoloValid).state, "allow",
     "with a valid config, yolo still allows an ordinary ask");
-  console.log(`PASS: patched 32.0.3 real parser/gates, ${positive.length} positive/${negative.length} negative forms x root + 3 workers; historical secrets, external scope, writes, wrappers, config drift`);
+  console.log(`PASS: patched 32.0.3 real parser/gates, ${positive.length} positive/${negative.length} negative forms x root/editor; historical secrets, external scope, writes, wrappers, config drift`);
 
   // Drop the fake secret from HEAD as well, so the full positive matrix (not
   // only narrow diffs) reaches the actual SDK gates below. Untracked .env stays
@@ -686,7 +685,7 @@ try {
     const b = spawnSync("bash", ["-c", short.command], { cwd, encoding: "utf8" });
     assert.equal(a.status, 0); assert.equal(a.status, b.status); assert.equal(a.stdout, b.stdout);
   }
-  for (const agent of [undefined, "editor", "reader"]) {
+  for (const agent of [undefined, "editor"]) {
     for (const path of [".env", "alias.txt"])
       assert.equal((await check(`sed -n '1p;2,4p' ${path}`, agent)).path.preCheck.state, "deny");
     assert.equal((await check("sed -n '1p;2,4p' /var/lib/pi-fixture/external.txt", agent)).external.preCheck.state, "ask");
@@ -779,7 +778,7 @@ try {
     "echo 'fixture' && git diff --check", "git status --short && cat ordinary.txt",
     "git diff --stat; git status --short; cat ordinary.txt",
   ];
-  for (const agent of [undefined, "editor", "reader"]) {
+  for (const agent of [undefined, "editor"]) {
     const node = agent ? await make(agent, root) : root;
     for (const tool of ["alert_parent", "ask_parent"]) {
       const decision = await node.call(tool, tool === "alert_parent" ? { message: "synthetic" } : { question: "synthetic" });
@@ -861,6 +860,8 @@ try {
   assert.equal(uiCalls, 0); assert.equal(modelCalls, 0);
   console.log("PASS: real agent-core dispatch executes only SDK-preflighted hardened fixed queries and exact proc reads; no model API");
 
+  // Keep a second editor child for sibling forwarding coverage.
+  await make("editor", root);
   // Start with a child's ask, approve explicitly for the whole task tree, then
   // siblings and a steering event reuse the upstream grant without new prompts.
   grantWhole = true;
@@ -879,19 +880,19 @@ try {
     assert.equal((await root.call("bash", { command }))?.block, true, `Deferred query remains review: ${command}`);
     assert.equal(uiCalls, before + 1, `Deferred query is an ask, not a new deny: ${command}`);
   }
-  assert.equal((await sessions[2].call("bash", { command: "ruff check --fix syntax.sh" }))?.block, true, "reader cannot gain Ruff write capability");
+  assert.equal((await first.call("bash", { command: "ruff check --fix syntax.sh" }))?.block, true, "Unapproved Ruff writes still require review");
   for (const path of ["/proc/1/environ", "/proc/self/environ", "/proc/self/fd", `/proc/${process.pid}/mountinfo`])
     assert.equal((await root.call("read", { path }))?.block, true, `Actual SDK retains review for ${path}`);
   for (const command of ["cat .env", "echo fixture > ~/.pi/agent/settings.json", "git diff --stat --output=ordinary.txt", "git -c core.pager=cat status --short", "PATH=./fixture-bin git status --short", "readlink $INPUT", "git show HEAD:.env", "git status --short && touch ordinary.txt", "git remote -v", "git diff -- 'ordinary.txt '", "git diff HEAD...main", "sed -n '1p; e touch ordinary.txt' ordinary.txt", "sed -i 's/a/b/' ordinary.txt", "cd missing || git diff", "cd missing; git diff", "cd . | git diff", "cd - && git status --short", "cd -- && git status --short", "df --sync .", "free --unknown"]) {
     assert.equal((await root.call("bash", { command }))?.block, true, `Actual gate blocks/asks ${command}`);
   }
   for (const node of sessions.slice(1)) {
-    assert.equal((await node.call("bash", { command: "echo fixture > ordinary.txt" }))?.block, node === sessions[1] ? undefined : true, "Editing profile inherits path scope; read-only workers still ask");
-    if (node === sessions[1]) assert.equal((await node.call("write", { path: "/var/lib/pi-fixture/external.txt", content: "fixture" }))?.block, true, "Editing capability cannot authorize external writes");
+    assert.equal((await node.call("bash", { command: "echo fixture > ordinary.txt" }))?.block, undefined, "Editing children inherit ordinary path scope");
+    assert.equal((await node.call("write", { path: "/var/lib/pi-fixture/external.txt", content: "fixture" }))?.block, true, "Editing capability cannot authorize external writes");
     assert.equal((await node.call("read", { path: "/var/lib/pi-fixture/external.txt" }))?.block, true, "Actual external scope still requires approval");
   }
   assert.deepEqual(errors, [], "Actual SDK lifecycle has no extension errors");
-  console.log("PASS: actual portable wrapper + SDK root/3 child gates; zero UI/model entries for proven reads; upstream explicit whole-session grant survives siblings and steer");
+  console.log("PASS: actual portable wrapper + SDK root/editor child gates; zero UI/model entries for proven reads; upstream explicit whole-session grant survives siblings and steer");
 
   const observeMktemp = async (node, label) => {
     const input = { command: "mktemp -d" };
@@ -948,12 +949,6 @@ try {
   const secretCopy = { command: `cp .env ${liveRoot}/secret-copy` };
   assert.equal((await root.callAs("file-effects-secret", "bash", secretCopy))?.block, true, "Sensitive source still reaches READ deny");
   assert.match(secretCopy.command, /^cp --no-dereference --no-target-directory -- /, "Sensitive source was analyzed, not skipped");
-
-  const readOnly = sessions[2];
-  const readOnlyRoot = await observeMktemp(readOnly, "readonly");
-  const readOnlyInput = { command: `mkdir -p ${readOnlyRoot}/blocked` };
-  assert.equal((await readOnly.callAs("file-effects-readonly", "bash", readOnlyInput))?.block, true, "Readonly worker path_write ask remains in force");
-  assert.notEqual(readOnlyInput.command, `mkdir -p ${readOnlyRoot}/blocked`, "Readonly denial happens after exact effect proof");
 
   symlinkSync("copy-a.txt", join(cwd, "copy-link.txt"));
   writeFileSync(join(cwd, "hard-a.txt"), "hard\n");
@@ -1171,18 +1166,22 @@ try {
   const yoloChild = sessions.find(node => node.parent === root);
   assert(yoloChild, "a child of the root session exists");
   const otherRoot = await make();
-  const yoloReader = await make("reader", root);
-  const readerWriteNames = ["ordinary.txt", "ordinary.pem", "ordinary.key", "ordinary.p12", "ordinary.pfx"];
-  for (const name of readerWriteNames.slice(1)) writeFileSync(join(cwd, name), "SYNTHETIC_WRITE_CEILING_FIXTURE\n");
+  // Direct emitToolCall dispatch intentionally bypasses harness tool exposure:
+  // researcher has no Bash tool there. The fixture's global `printf *` allow
+  // lets the path_write ceiling decide redirects; `printenv HOME` instead
+  // exercises the explicit Bash deny. Neither command is executed here.
+  const yoloResearcher = await make("researcher", root);
+  const researcherWriteNames = ["ordinary.txt", "ordinary.pem", "ordinary.key", "ordinary.p12", "ordinary.pfx"];
+  for (const name of researcherWriteNames.slice(1)) writeFileSync(join(cwd, name), "SYNTHETIC_WRITE_CEILING_FIXTURE\n");
   const asked = async (node, command) => {
     const before = { ui: uiCalls, model: modelCalls };
     const blocked = (await node.call("bash", { command }))?.block === true;
     return { blocked, reachedReview: uiCalls !== before.ui || modelCalls !== before.model };
   };
   assert.deepEqual(await asked(root, "printenv HOME"), { blocked: true, reachedReview: true }, "An ordinary ask before yolo");
-  for (const name of readerWriteNames) {
-    assert.deepEqual(await asked(yoloReader, `printf '%s' fixture > ./${name}`), { blocked: true, reachedReview: false },
-      `A reader's visible write never reaches a human or judge: ${name}`);
+  for (const name of researcherWriteNames) {
+    assert.deepEqual(await asked(yoloResearcher, `printf '%s' fixture > ./${name}`), { blocked: true, reachedReview: false },
+      `A researcher's visible write never reaches a human or judge: ${name}`);
   }
   globalThis[yoloKey] = new Set([root.id]);
   try {
@@ -1194,13 +1193,13 @@ try {
       assert.equal((await node.call("read", { path: ".env" }))?.block, true, "yolo keeps secret path denies");
     }
     assert.deepEqual(await asked(otherRoot, "printenv HOME"), { blocked: true, reachedReview: true }, "Another root session keeps asking");
-    // A reader's Bash asks are allowed too, but its file writes are a deny.
-    assert.deepEqual(await asked(yoloReader, "printenv HOME"), { blocked: false, reachedReview: false }, "yolo reaches a reader child");
-    for (const name of readerWriteNames) {
-      assert.deepEqual(await asked(yoloReader, `printf '%s' fixture > ./${name}`), { blocked: true, reachedReview: false },
-        `yolo cannot make a reader write, including inherited path asks: ${name}`);
+    // Researcher's explicit Bash and file-write denies survive yolo.
+    assert.deepEqual(await asked(yoloResearcher, "printenv HOME"), { blocked: true, reachedReview: false }, "researcher retains its Bash denial");
+    for (const name of researcherWriteNames) {
+      assert.deepEqual(await asked(yoloResearcher, `printf '%s' fixture > ./${name}`), { blocked: true, reachedReview: false },
+        `yolo cannot make a researcher write, including inherited path asks: ${name}`);
       assert.deepEqual(await asked(root, `printf '%s' fixture > ./${name}`), { blocked: false, reachedReview: false },
-        `The reader ceiling does not change the parent's scope: ${name}`);
+        `The researcher ceiling does not change the parent's scope: ${name}`);
     }
   } finally { globalThis[yoloKey].clear(); }
   assert.deepEqual(await asked(root, "printenv HOME"), { blocked: true, reachedReview: true }, "Clearing yolo restores the ask at once");

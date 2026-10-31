@@ -1,8 +1,8 @@
 // Offline, real composition/child factory/managed authority regression. The
-// only provider is scripted; the reader deliberately violates its scratch
-// ceiling to exercise actual managed block===true returns, not error inference.
+// only provider is scripted; the worker deliberately hits an explicit fixture
+// path-write deny to exercise actual managed block===true returns, not error inference.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as ai from "@earendil-works/pi-ai";
 import { createAgentSession, DefaultResourceLoader, initTheme, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -29,6 +29,13 @@ const model = runtime.getModel("harness-fixture", "controlled");
 assert(model);
 const cwd = join(home, "project"), sessions = join(home, "sessions");
 mkdirSync(cwd); mkdirSync(sessions);
+// Add a deny only to this disposable fixture's synthetic config. The worker
+// otherwise keeps ordinary write access; no shipped or live user rule changes.
+const denyReason = "SYNTHETIC_BLOCK_FEEDBACK_PATH_DENY";
+const syntheticPermissions = join(agentDir, "extensions/pi-permission-system/config.json");
+const seeded = JSON.parse(readFileSync(syntheticPermissions, "utf8"));
+seeded.permission.path_write[join(cwd, "private-project-target-*.txt")] = { action: "deny", reason: denyReason };
+writeFileSync(syntheticPermissions, JSON.stringify(seeded, null, 2) + "\n");
 const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false }, cacheWarming: "off" });
 const lifecycle = [], permissionPrompts = [];
 const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager,
@@ -55,7 +62,7 @@ const tasks = [1, 2].map((task) => ({ task, key: `BLOCK_TASK_${task}`, step: 0, 
     content: `PRIVATE_WRITE_PAYLOAD_${task}_${index + 1}\n`,
   })) }));
 const allAttempts = tasks.flatMap((task) => task.attempts);
-const childResults = new Map(), modelCalls = [], commands = [], observations = [], scratchDirectories = new Set();
+const childResults = new Map(), modelCalls = [], commands = [], observations = [];
 let expectedCommand, parentPhase = "start", currentTask = 1, oldCursor, scriptFailure;
 const emit = (name, args) => {
   assert(management.includes(name));
@@ -95,7 +102,7 @@ function observe(last, task, historical = false) {
     assert.equal(alert.message, summary);
     assert.match(alert.message, /Reasons and operation equivalence are unknown; coverage is partial/);
     for (const secret of [cwd, agentDir, ...allAttempts.flatMap(({ id, path, content }) => [id, path, content.trim()]),
-      "own scratch directory", "toolCallId", "path_write"]) assert(!alert.message.includes(secret), secret);
+      denyReason, "own scratch directory", "toolCallId", "path_write"]) assert(!alert.message.includes(secret), secret);
     tasks[task - 1].alerts.push(alert);
   }
   assert.equal(reply.alerts_pending, 0, "the accepted summary is consumed by ordinary publication");
@@ -108,7 +115,7 @@ function parentResponse(request) {
     assert.equal(last?.role, "user");
     assert.equal(text(last), "START_BLOCK_FEEDBACK");
     parentPhase = "settle";
-    return emit("agent_spawn", { agent, profile: "reader", reasoning_difficulty: 1,
+    return emit("agent_spawn", { agent, profile: "worker", reasoning_difficulty: 1,
       label: tasks[0].key, prompt: `Execute ${tasks[0].key} scripted denied-write probes.`, wait_ms: 60000 });
   }
   assert.notEqual(parentPhase, "done", "no extra parent provider call after scripted management flow");
@@ -130,7 +137,7 @@ function parentResponse(request) {
       assert.equal(typeof oldCursor, "string", JSON.stringify(reply));
       currentTask = 2;
       parentPhase = "settle";
-      return emit("agent_run", { agent, builds_on: "Continue the same reader's first denied-write boundary check with fresh calls.",
+      return emit("agent_run", { agent, builds_on: "Continue the same worker's first configured denied-write boundary check with fresh calls.",
         label: tasks[1].key, prompt: `Execute ${tasks[1].key} scripted denied-write probes.`, wait_ms: 60000 });
     }
     assert.equal(row.result, "BLOCK_TASK_2_DONE");
@@ -139,29 +146,27 @@ function parentResponse(request) {
   }
   assert.equal(parentPhase, "old-read");
   assert.equal(row.result, "LOCK_TASK_1_DONE");
-  assert.equal(observations.at(-1).reply.alerts, undefined, "old task stays drained after reader reuse");
+  assert.equal(observations.at(-1).reply.alerts, undefined, "old task stays drained after worker reuse");
   parentPhase = "done";
   return { text: "PARENT_BLOCK_FEEDBACK_DONE" };
 }
 function childResponse(request) {
-  assert.match(request.context.systemPrompt, /<active_agent name="reader"\/>/);
+  assert.match(request.context.systemPrompt, /<active_agent name="editor"\/>/, "worker keeps its internal profile identity");
   const user = request.context.messages.findLast((message) => message.role === "user" && /BLOCK_TASK_[12]/.test(text(message)));
   const key = /BLOCK_TASK_[12]/.exec(text(user))?.[0];
   const task = tasks.find((item) => item.key === key);
   assert(task, "unscripted child task");
-  const scratch = /^Scratch directory: (\/tmp\/pi-alehouse-reader-[A-Za-z0-9]+)$/m.exec(request.context.systemPrompt)?.[1];
-  assert(scratch, "real authority-created reader scratch appears in the child prompt");
-  scratchDirectories.add(scratch);
+  assert.doesNotMatch(request.context.systemPrompt, /^Scratch directory:/m, "worker has no scratch-directory capability");
   assert(request.context.tools.some((tool) => tool.name === "write"));
   assert(!request.context.tools.some((tool) => management.includes(tool.name)));
-  assert(task.attempts.every(({ path }) => !path.startsWith(scratch + "/")));
   if (task.step++ === 0) return writeCalls(task.attempts.slice(0, 2));
   const results = request.context.messages.filter((message) => message.role === "toolResult" && task.attempts.some(({ id }) => id === message.toolCallId));
   assert.equal(results.length, task.step === 2 ? 2 : 3);
   for (const result of results) {
     assert.equal(result.toolName, "write");
     assert.equal(result.isError, true, text(result));
-    assert.match(text(result), /own scratch directory/, "actual managed scratch handler, not validation or another guard");
+    assert.match(text(result), /Denied by policy/, "actual configured policy block, not validation or another guard");
+    assert(text(result).includes(denyReason), "the block names this fixture's explicit path-write deny");
     childResults.set(result.toolCallId, text(result));
   }
   if (task.task === 1 && task.step === 2) return writeCalls(task.attempts.slice(2));
@@ -188,14 +193,13 @@ try {
   assert.equal(parentPhase, "done");
   assert.equal(expectedCommand, undefined);
   assert.equal(childResults.size, 5, "all five distinct built-in write calls were blocked");
-  assert.equal(scratchDirectories.size, 1, "follow-up task reuses the SAME reader SDK session and scratch");
   assert.deepEqual(tasks.map(({ alerts }) => alerts.length), [1, 1]);
   assert.deepEqual(tasks.map(({ step }) => step), [3, 2]);
   assert.equal(modelCalls.filter(({ profile }) => profile === "parent").length, commands.length + 1,
     "only scripted management replies cause parent calls; alerts do not start a model turn");
-  assert.equal(modelCalls.filter(({ profile }) => profile === "reader").length, 5);
+  assert.equal(modelCalls.filter(({ profile }) => profile === "editor").length, 5);
   assert.equal(provider.requests.length, modelCalls.length, "every model call was recorded and checked");
-  assert.deepEqual(permissionPrompts, [], "scratch-floor blocks never ask a human or a reviewer");
+  assert.deepEqual(permissionPrompts, [], "explicit configured denies never ask a human or a reviewer");
   assert.deepEqual(errors, []);
   const links = session.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "harness:run-link:v1");
   assert.equal(links.length, 2);
@@ -208,7 +212,7 @@ try {
   }
   assert.equal(lifecycle.filter(({ kind }) => kind === "session-created").length, 1);
   assert.equal(lifecycle.filter(({ kind }) => kind === "bound").length, 1);
-  assert.equal(lifecycle.filter(({ kind }) => kind === "disposed").length, 0, "reader stays resident until shutdown");
+  assert.equal(lifecycle.filter(({ kind }) => kind === "disposed").length, 0, "worker stays resident until shutdown");
 } finally {
   await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
   session.dispose();
@@ -219,9 +223,6 @@ assert.equal(disposed.length, 1);
 assert.equal(disposed[0].sessionId, created[0].sessionId);
 assert.deepEqual(disposed[0].cleanup, { shutdownExited: true, disposed: true, resumable: false, errors: [] },
   "real SDK shutdown/idle/cleanup, not merely a cancellation request");
-// Runtime revokes authority but intentionally preserves artifacts. Only after
-// confirmed closure, remove this fixture's observed, authority-created scratch.
-for (const scratch of scratchDirectories) rmSync(scratch, { recursive: true, force: true });
 for (const { path } of allAttempts) assert(!existsSync(path), "blocked writes cannot reach project files");
 assert.deepEqual(network, []);
-console.log("PASS: real composition managed blocks produce exactly one harness-sourced alert per reader task; no writes, extra parent turns or network; child shutdown confirmed");
+console.log("PASS: real composition managed blocks produce exactly one harness-sourced alert per worker task; no writes, extra parent turns or network; child shutdown confirmed");

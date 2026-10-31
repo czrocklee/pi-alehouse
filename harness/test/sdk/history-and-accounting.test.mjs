@@ -134,7 +134,7 @@ test("cold history preserves current thinking provenance and still reads legacy 
   const history = new SdkRunHistory({ parent, session: child });
   const identity = { owner_id: parent.getSessionId(), generation: randomUUID(), agent_id: randomUUID(), run_id: randomUUID() };
   const settings = { provider: "p", model: "m", thinking: "high", parent_thinking: "low",
-    thinking_resolution: "preset_mapping", effort_source: "user_override", profile: "reader", difficulty: 3,
+    thinking_resolution: "preset_mapping", effort_source: "user_override", profile: "editor", difficulty: 3,
     strength: "d3", preset: "team", preset_version: "v2", selection_digest: "a".repeat(64), cwd: root,
     tools: ["read"], definition_digest: "b".repeat(64) };
   assert.equal(validSettings(settings), true);
@@ -144,7 +144,7 @@ test("cold history preserves current thinking provenance and still reads legacy 
     sessionDirectory: root, run_id: ref.run_id });
   const expected = { preset: "team", preset_version: "v2", selection_digest: "a".repeat(64),
     difficulty: 3, strength: "d3", thinking: "high", parent_thinking: "low", thinking_resolution: "preset_mapping",
-    effort_source: "user_override", provider: "p", model: "m", profile: "reader" };
+    effort_source: "user_override", provider: "p", model: "m", profile: "editor" };
   assert.deepEqual((await query()).routing, expected);
   const recorded = await Promise.all([parent.getSessionFile(), child.getSessionFile()].map(async (file) =>
     (await readFile(file, "utf8")).trimEnd().split("\n").map((line) => JSON.parse(line))
@@ -155,6 +155,7 @@ test("cold history preserves current thinking provenance and still reads legacy 
       const lines = (await readFile(file, "utf8")).trimEnd().split("\n").map((line) => JSON.parse(line));
       for (const entry of lines) if (entry.data?.routing) {
         entry.data.routing.strength = "standard";
+        entry.data.routing.profile = "reader"; // Synthetic historical record only; never admitted.
         for (const field of fields) delete entry.data.routing[field];
       }
       await writeFile(file, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
@@ -173,6 +174,12 @@ test("cold history preserves current thinking provenance and still reads legacy 
   const legacy = await query();
   assert.equal(legacy.state, "recorded");
   assert.equal(legacy.routing.thinking, "high");
+  assert.equal(legacy.routing.profile, "reader", "retired IDs remain literal display-only history");
+  const files = [parent.getSessionFile(), child.getSessionFile()];
+  const beforeRead = await Promise.all(files.map((file) => readFile(file)));
+  await query();
+  assert.deepEqual(await Promise.all(files.map((file) => readFile(file))), beforeRead,
+    "cold reads leave the synthetic historical journals byte-identical");
   assert.equal(Object.hasOwn(legacy.routing, "parent_thinking"), false);
   assert.equal(Object.hasOwn(legacy.routing, "thinking_resolution"), false);
   assert.equal(Object.hasOwn(legacy.routing, "difficulty"), false, "old records must not invent a rating");
@@ -188,7 +195,7 @@ test("automatic mapping provenance round-trips and does not rewrite a literal pr
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } }, timestamp: Date.now() };
   parent.appendMessage(message);
   const automatic = { provider: "p", model: "m", thinking: "high", parent_thinking: "low",
-    thinking_resolution: "automatic_mapping", effort_source: "preset", profile: "reader", difficulty: 3,
+    thinking_resolution: "automatic_mapping", effort_source: "preset", profile: "editor", difficulty: 3,
     strength: "d3", preset: "team", preset_version: "v2", selection_digest: "a".repeat(64), cwd: root,
     tools: ["read"], definition_digest: "b".repeat(64) };
   assert.equal(validSettings(automatic), true);
@@ -198,7 +205,7 @@ test("automatic mapping provenance round-trips and does not rewrite a literal pr
   history.finish(ref, { status: "completed", limit_reached: false }, { text: "answer", total_chars: 6, truncated: false });
   const expected = { preset: "team", preset_version: "v2", selection_digest: "a".repeat(64),
     difficulty: 3, strength: "d3", thinking: "high", parent_thinking: "low", thinking_resolution: "automatic_mapping",
-    effort_source: "preset", provider: "p", model: "m", profile: "reader" };
+    effort_source: "preset", provider: "p", model: "m", profile: "editor" };
   const query = () => readSdkRun({ sessionManager: SessionManager, parentFile: parent.getSessionFile(),
     sessionDirectory: root, run_id: ref.run_id });
   assert.deepEqual((await query()).routing, expected);
@@ -226,7 +233,7 @@ test("automatic mapping provenance round-trips and does not rewrite a literal pr
 
 test("admission and cold routing validate fixed and inherited effort without inferring provenance", () => {
   const settings = { provider: "p", model: "m", thinking: "high", thinking_resolution: "preset_fixed",
-    effort_source: "preset", profile: "reader", difficulty: 3, strength: "d3", preset: "team",
+    effort_source: "preset", profile: "editor", difficulty: 3, strength: "d3", preset: "team",
     preset_version: "v2", selection_digest: "a".repeat(64), cwd: "/tmp", tools: ["read"],
     definition_digest: "b".repeat(64) };
   const route = { preset: settings.preset, preset_version: settings.preset_version,
@@ -293,7 +300,7 @@ for (const difficulty of [1, 2, 3, 4, 5]) test(`d${difficulty} fixed effort roun
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } }, timestamp: Date.now() };
   parent.appendMessage(message);
   const settings = { provider: "p", model: "m", thinking: "high", thinking_resolution: "preset_fixed",
-    effort_source: "preset", profile: "reader", difficulty, strength: `d${difficulty}`, preset: "team",
+    effort_source: "preset", profile: "editor", difficulty, strength: `d${difficulty}`, preset: "team",
     preset_version: "v2", selection_digest: "a".repeat(64), cwd: root, tools: ["read"], definition_digest: "b".repeat(64) };
   const history = new SdkRunHistory({ parent, session: child });
   const ref = history.begin({ owner_id: parent.getSessionId(), generation: randomUUID(), agent_id: randomUUID(), run_id: randomUUID() }, settings);
@@ -320,7 +327,7 @@ test("unfinished history returns validated routing, but never invents it or acce
   parent.appendMessage(message);
   const identity = () => ({ owner_id: parent.getSessionId(), generation: randomUUID(), agent_id: randomUUID(), run_id: randomUUID() });
   const settings = { provider: "p", model: "m", thinking: "high", parent_thinking: "low",
-    thinking_resolution: "preset_mapping", profile: "reader", difficulty: 3, strength: "d3", preset: "team",
+    thinking_resolution: "preset_mapping", profile: "editor", difficulty: 3, strength: "d3", preset: "team",
     preset_version: "v2", selection_digest: "a".repeat(64), cwd: root, tools: ["read"], definition_digest: "b".repeat(64) };
   const child = SessionManager.create(root, root), current = new SdkRunHistory({ parent, session: child });
   const ref = current.begin(identity(), settings); child.appendMessage(message);
@@ -331,7 +338,7 @@ test("unfinished history returns validated routing, but never invents it or acce
   assert.equal(unfinished.outcome, undefined); assert.equal(unfinished.output, undefined);
   assert.deepEqual(unfinished.routing, { preset: "team", preset_version: "v2", selection_digest: "a".repeat(64),
     difficulty: 3, strength: "d3", thinking: "high", parent_thinking: "low", thinking_resolution: "preset_mapping",
-    provider: "p", model: "m", profile: "reader" });
+    provider: "p", model: "m", profile: "editor" });
 
   const legacyChild = SessionManager.create(root, root), legacyHistory = new SdkRunHistory({ parent, session: legacyChild });
   const legacyRef = legacyHistory.begin(identity()); legacyChild.appendMessage(message);

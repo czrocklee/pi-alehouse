@@ -25,13 +25,6 @@ export interface ChildProfile {
   tools: string[];
 }
 
-/** Authority-owned permission lease; release revokes access, never deletes artifacts. */
-export interface ReaderScratchLease {
-  directory: string;
-  release(): void;
-}
-export type ReaderScratchFactory = (sessionId: string) => ReaderScratchLease;
-
 /** Builds the controller's session port without moving adapter execution state. */
 export function createChildSessionFactory(options: {
   ctx: ExtensionContext;
@@ -48,8 +41,6 @@ export function createChildSessionFactory(options: {
   activities: ChildActivityRegistry;
   parentPermission(): unknown;
   getPermissionsService: (id: string) => unknown;
-  /** Trusted permission authority capability; required only by reader sessions. */
-  createReaderScratch?: ReaderScratchFactory;
   /** Trusted, metadata-only managed authority observations; never approval. */
   subscribeManagedBlocks?: ManagedBlockSubscription;
   /** Isolated pi-web-access instances; required only by web profiles. */
@@ -66,30 +57,25 @@ export function createChildSessionFactory(options: {
     // physical model; do not construct a child on a per-request router.
     const model = options.runtime.getPhysicalModel(agent.settings.provider, agent.settings.model);
     assert(model, "Agent model is no longer physical");
-    if (agent.settings.profile === "reader") {
-      assert(typeof options.createReaderScratch === "function", "Reader scratch access is unavailable; start through the pi-alehouse launcher");
-    }
-    const leases: { web?: WebLease; scratch?: ReaderScratchLease } = {};
+    let web: WebLease | undefined;
     if (webProfileNames.includes(agent.settings.profile as AgentProfileName)) {
       assert(options.web, "Researcher web access is unavailable; start through the pi-alehouse launcher");
-      leases.web = await options.web.acquire();
+      web = await options.web.acquire();
     }
     try {
-      return await assemble(agent, profile, model, leases);
+      return await assemble(agent, profile, model, web);
     } catch (error) {
       // No execution was created, or assembly confirmed cleanup. Uncertain
-      // shutdown retains both private permission and isolated web authority.
+      // shutdown retains isolated web authority.
       if (!(error instanceof SessionInitializationError)) {
-        leases.scratch?.release();
-        leases.web?.release();
+        web?.release();
       }
       throw error;
     }
   };
   async function assemble(agent: { agent_id: string; name: string; settings: AdmittedAgentConfig }, profile: ChildProfile,
     model: NonNullable<ReturnType<ModelRuntime["getModel"]>>,
-    leases: { web?: WebLease; scratch?: ReaderScratchLease }): Promise<AgentSessionPort> {
-    const { web } = leases;
+    web: WebLease | undefined): Promise<AgentSessionPort> {
     const bus = createEventBus(), gate = new ChildRunGate(), childSettings = options.settings();
     // Held, not re-fetched: this is the observer instance bound to the child.
     const activity = options.activities.track(agent.agent_id, agent.settings.cwd);
@@ -104,16 +90,12 @@ export function createChildSessionFactory(options: {
     const manager = SessionManager.create(options.ctx.cwd, options.ctx.sessionManager.getSessionDir(), {
       parentSession: options.ctx.sessionManager.getSessionFile(),
     });
-    // Bind only the SDK-reserved session identity, never an Agent/tool argument.
-    const scratch = agent.settings.profile === "reader"
-      ? leases.scratch = options.createReaderScratch!(manager.getSessionId()) : undefined;
     const loader = new DefaultResourceLoader({ cwd: options.ctx.cwd, agentDir: options.agentDir,
       settingsManager: childSettings, eventBus: bus,
       noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true,
       additionalExtensionPaths: [join(options.permissionRoot, "index.ts"),
         join(options.policyRoot, "static-safety-guard.ts"), join(options.policyRoot, "policy-grep.ts")],
-      appendSystemPromptOverride: () => [profile.body, `<active_agent name="${agent.settings.profile}"/>`,
-        ...(scratch ? [`Scratch directory: ${scratch.directory}`] : [])],
+      appendSystemPromptOverride: () => [profile.body, `<active_agent name="${agent.settings.profile}"/>`],
       // The gate must stay LAST. Inline factories load after every path above,
       // and cache_warming_decision is last-writer-wins in the runner, so only
       // the final handler's stop is authoritative. The activity observer has no
@@ -193,7 +175,6 @@ export function createChildSessionFactory(options: {
           const report = await port.dispose();
           stats.dispose();
           if (report.shutdownExited) {
-            scratch?.release();
             web?.release();
           }
           return report;

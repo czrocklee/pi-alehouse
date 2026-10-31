@@ -16,7 +16,7 @@ import { ApprovalBindings } from "./permissions/approval-provenance.js";
 import { isOffPreset, presetLabel, PresetRouter, resolveSlotRoute, selectPhysicalWorkerModel, strengths, thinkingLevels, validEffortOverrides,
   type EffortOverrides, type PresetCandidate, type PresetPublication, type PresetSelection, type PresetSnapshot, type Strength } from "./routing.js";
 import { ChildActivityRegistry } from "./runtime/activity-observer.js";
-import { createChildSessionFactory, type ReaderScratchFactory } from "./runtime/child-factory.js";
+import { createChildSessionFactory } from "./runtime/child-factory.js";
 import { ChildWebModules, nativeWebLoader } from "./runtime/child-web.js";
 import { configureChildRuntime } from "./runtime/execution-policy.js";
 import type { ManagedBlockSubscription } from "./runtime/permission-blocks.js";
@@ -549,10 +549,8 @@ export default function harnessExtension(pi: ExtensionAPI) {
     } });
     const permission = await jiti.import<{
       getPermissionsService: (id: string) => unknown;
-      createReaderScratch: ReaderScratchFactory;
       subscribeManagedBlocks: ManagedBlockSubscription;
     }>(join(permissionRoot, "index.ts"));
-    assert(typeof permission.createReaderScratch === "function", "Reader scratch authority is unavailable; restart with a matched pi-alehouse runtime");
     assert(typeof permission.subscribeManagedBlocks === "function", "Managed block observations are unavailable; restart with a matched pi-alehouse runtime");
     // The launcher loads us first so shutdown drains children BEFORE tearing
     // down the parent authority. Permission session_start runs after ours;
@@ -594,7 +592,7 @@ export default function harnessExtension(pi: ExtensionAPI) {
     const createSession = createChildSessionFactory({ ctx, parentBus: pi.events, agentDir, permissionRoot, policyRoot,
       parentId, runtime, profiles, settings, parentHistory, approvalBindings, activities,
       parentPermission, getPermissionsService: permission.getPermissionsService,
-      createReaderScratch: permission.createReaderScratch, subscribeManagedBlocks: permission.subscribeManagedBlocks, web });
+      subscribeManagedBlocks: permission.subscribeManagedBlocks, web });
     try {
       controller = await OwnerController.open({ owner,
         managedBlockTools: managedBlockToolNames,

@@ -1,6 +1,7 @@
 import { matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { terminal, validDifficulty, type RunView } from "../core/contracts.js";
 import { reported, type UsageComponent } from "../core/usage-ledger.js";
+import { profileLabel } from "../tools/tool-names.js";
 import { formatContextPercent, formatContextTokens, formatCost, formatDrain, formatMs, formatTokens, formatTurns,
   GLYPHS, SPINNER, withoutBreaks, type ActiveTool, type Theme, type TranscriptRows } from "./format.js";
 import { POPOVER, isPopoverCloseClick, popoverInlay, popoverInlayWidth, popoverSide } from "./popover.js";
@@ -117,15 +118,16 @@ export function renderDetailTitle(input: DetailInput, _spinnerFrame: number, the
   const { view } = input;
   // The title is one row -- inlaid into the top border when the pane floats, so
   // a line break in it would break the frame, not just the line.
-  const name = withoutBreaks(view.name || view.effective_settings.profile);
+  const profile = profileLabel(view.effective_settings.profile);
+  const name = withoutBreaks(view.name || profile);
   // Without a nickname the profile is already the title; repeating it as a tag
   // would label one fact twice, the same way the widget row avoids it.
-  const tags = [view.name ? view.effective_settings.profile : ""].filter(Boolean).map(withoutBreaks);
+  const tags = [view.name ? profile : ""].filter(Boolean).map(withoutBreaks);
   const identity = tags.length ? `${theme.bold(name)} ${theme.fg("dim", `(${tags.join(" · ")})`)}` : theme.bold(name);
   // The task follows the identity and tags in the title. The widget adds
   // model/signals too; this is not a copy of its whole row. The chrome never
   // scrolls: the `task` field can be scrolled out of the body, and
-  // a profile like `reader` names a capability, never the work. It
+  // a profile like `researcher` names a capability, never the work. It
   // takes only the room the identity leaves; below that it is dropped rather
   // than shown as an ellipsis. Live status belongs to the lower-left footer.
   const room = width - visibleWidth(identity) - 6;

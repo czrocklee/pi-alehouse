@@ -1112,12 +1112,12 @@ test("virtual selected presets are rejected before thinking; physical chat model
 });
 
 test("child construction rejects a runtime model that is no longer physical", async () => {
-  const definition = "reader definition";
-  const settings = { profile: "reader", definition_digest: digest(definition), tools: ["read"],
+  const definition = "editor definition";
+  const settings = { profile: "editor", definition_digest: digest(definition), tools: ["read"],
     provider: "fixture", model: "controlled" };
   const options = {
     ctx: {}, parentBus: {}, agentDir: "/tmp", permissionRoot: "tmp", policyRoot: "/tmp", parentId: "parent",
-    profiles: { reader: { definition, body: "", tools: ["read"] } },
+    profiles: { editor: { definition, body: "", tools: ["read"] } },
     settings() { throw new Error("settings unused"); }, parentHistory: {}, approvalBindings: {}, activities: {},
     parentPermission: () => ({}), getPermissionsService() { throw new Error("unused"); },
   };

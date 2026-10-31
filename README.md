@@ -34,15 +34,17 @@ There is no mandatory research → plan → code → review ritual. Your main ag
 
 In one session, each admitted provider runs at most four workers at once. Models of that provider share the cap; twelve workers can stay resident.
 
+Choose a **worker** for local reading, editing, Bash and builds, or a **researcher** for read-only file tools and web research. Worker maps to the stable internal `editor` profile. Reviews are task instructions, not a strict readonly worker mode. Git mutations stay with the parent. Normal permissions and configured denies still apply.
+
 ## See the work—not just the final summary
 
 Parallel work shouldn't disappear behind a spinner.
 
 The agent panel puts names, current tasks, live tool activity, context usage and reported cost together. Open an agent to follow its actual conversation: thinking, tool calls, output and streaming replies. Read back without losing the live tail, then return to the main conversation without losing what you were typing.
 
-![A real agent reviewing this README](harness/docs/assets/agent-panel.svg)
+![Historical agent panel capture reviewing this README](harness/docs/assets/agent-panel.svg)
 
-*An actual agent reviewing this README. Only its identifiers and private path are hidden.*
+*Historical capture, not the current profile contract. Only its identifiers and private path are hidden.*
 
 The rest of the interface follows the same idea:
 

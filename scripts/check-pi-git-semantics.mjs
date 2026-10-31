@@ -81,7 +81,7 @@ try {
       assert.equal(managedGitProof(command, normalizer), undefined, `Status execution must not acquire automatic proof: ${state}`);
       const program = await BashProgram.parse(command, normalizer);
       assert(!program.commands().some(unit => unit.managedReadOnly), "Status fallback cannot be relabeled as a managed read");
-      assert.equal(resolveBashCommandCheck(command, program.commands(), "reader", resolver).state, "ask", "No-proof status keeps the ordinary Bash review floor");
+      assert.equal(resolveBashCommandCheck(command, program.commands(), "editor", resolver).state, "ask", "No-proof status keeps the ordinary Bash review floor");
     }
     input = { command: "git diff" }; await hardenGitInput(input, cwd);
     for (const setting of ["submodule.dependency.ignore", "diff.ignoreSubmodules"]) {
@@ -182,13 +182,13 @@ try {
     const command = `git diff --cached --diff-filter=${filter} --name-status`;
     await equivalent(renamed, command, false);
     const program = await BashProgram.parse(command, renameNormalizer);
-    for (const agent of [undefined, "editor", "reader"]) assert.equal(resolveBashCommandCheck(command, program.commands(), agent, resolver).state, "ask", `Unchanged filter keeps normal review: ${filter}/${agent}`);
+    for (const agent of [undefined, "editor"]) assert.equal(resolveBashCommandCheck(command, program.commands(), agent, resolver).state, "ask", `Unchanged filter keeps normal review: ${filter}/${agent}`);
     await equivalent(renamed, `git diff --no-renames --cached --diff-filter=${filter} --name-status`);
   }
   input = { command: "git status --short && git diff --cached --diff-filter=R --name-status" }; await hardenGitInput(input, renamed);
   assert(input.command.endsWith("&& git diff --cached --diff-filter=R --name-status"), "Another hardenable unit cannot rewrite the rejected filter");
   const mixed = await BashProgram.parse(input.command, renameNormalizer);
-  for (const agent of [undefined, "editor", "reader"]) assert.equal(resolveBashCommandCheck(input.command, mixed.commands(), agent, resolver).state, "ask", "Mixed program cannot indirectly gain static proof");
+  for (const agent of [undefined, "editor"]) assert.equal(resolveBashCommandCheck(input.command, mixed.commands(), agent, resolver).state, "ask", "Mixed program cannot indirectly gain static proof");
 
   const protectedDir = init("protected-link"), protectedNormalizer = new PathNormalizer(posixPathFlavor, protectedDir);
   git(protectedDir, "update-index", "--add", "--cacheinfo", `160000,${"1".repeat(40)},.env`); git(protectedDir, "commit", "-qm", "protected link");
@@ -197,7 +197,7 @@ try {
     if (deleted) git(protectedDir, "update-index", "--force-remove", ".env");
     input = { command: "git diff --cached" }; await hardenGitInput(input, protectedDir);
     const program = await BashProgram.parse(input.command, protectedNormalizer);
-    for (const agentName of [undefined, "editor", "reader"]) {
+    for (const agentName of [undefined, "editor"]) {
       const gate = describeBashPathGate({ toolCallId: "gitlink", toolName: "bash", cwd: protectedDir, agentName }, program, resolver, protectedNormalizer);
       assert.equal(gate.preCheck.state, "deny", "Changed/deleted gitlinks retain protected-path gates");
     }

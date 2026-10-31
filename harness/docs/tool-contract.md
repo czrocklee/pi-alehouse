@@ -37,9 +37,10 @@ Retired management names (`delegate`, `wait_agents`, `read_result`,
 `resume_agent`, `read_run`, `wait_runs`, `steer_run`, `post_update`, `cancel_run`)
 stay denied/excluded, without aliases. `notify_parent` is also retired and
 explicitly denied, not registered as an alias of `alert_parent`. Historical
-journals may still display it. Profile IDs, `harness:*` records, config paths,
+journals may still display it. Supported profile IDs, `harness:*` records, config paths,
 lifecycle events and `Symbol.for` keys remain compatibility surface, including
-internal `cancelling`/`cancelled` statuses.
+internal `cancelling`/`cancelled` statuses. Reader retirement removes only its
+runtime support and private capability keys; existing records remain literal.
 
 `agent_spawn` carries the one policy no schema expresses: the user's
 [delegation mode](routing.md#delegation-mode), as a Pi `promptGuidelines` bullet.
@@ -76,7 +77,7 @@ while accepted-request replay remains intact. This is an adapter opt-in, not a
 restriction on optional/repeated display names in an unbound generic core Owner.
 
 Spawn requires `agent`, `prompt` (1--131072 UTF-16 units), `profile`
-(`reader`, `editor`, `researcher`) and integer `reasoning_difficulty` (1--5,
+(`worker` or `researcher`; worker maps to stable internal `editor`) and integer `reasoning_difficulty` (1--5,
 from easiest to hardest). Optional
 fields are `label` (1--120), `inherit_context`, `after` (1--4 other names),
 `wait_ms` (0--300000), `max_turns` (1--10000, default 256) and
@@ -98,13 +99,11 @@ later tasks and routing changes do not migrate an existing Agent's model.
 Use a new Agent for a different binding.
 Prompt is the full task instruction, including the deliverable, scope and
 stopping conditions; label defaults to its first nonblank line and is never
-forwarded as an instruction. Reader reads the project and can use `write` only
-in its own [private scratch](reader-scratch.md); no edit or web. Its prompt names the scratch
-directory. Only built-in `write` has this exception, not Bash or arbitrary
-`/tmp` paths; dispatch cannot grant it. Builds and project edits need an
-editor. Editor edits within parent-configured scope; researcher has read-only
-file tools and web, no Bash,
-and returns web-derived untrusted material. Git mutations stay with the parent.
+forwarded as an instruction. Worker has local read/edit/write/Bash/build tools
+under normal permissions, no web. Review-only work is an instruction, not an
+enforced readonly ceiling. Researcher has read-only file tools and web, no
+Bash/edit/write, and returns web-derived untrusted material. Git mutations stay
+with the parent. No legacy profile aliases or scratch capabilities remain.
 Bash/web remain permission-gated; no profile is an OS sandbox.
 
 Difficulty describes reasoning and quality, not permissions: 1--5 resolve
@@ -144,8 +143,8 @@ Agent's latest settled task row carries `context_tokens`, its last observed
 conversation size (see the envelope below); `AGENT_EXISTS` and `RESIDENT_LIMIT`
 lead back to spawning, not reuse. Capacity guidance names finished Agents, never
 "idle" ones, which would include an Agent with a pending question. It asks to
-kill finished reviewers and Agents whose work was accepted first, and to keep an
-editor whose changes are not yet built or tested for that follow-up.
+kill finished reviewers and Agents whose work was accepted first, and to keep a
+worker whose changes are not yet built or tested for that follow-up.
 
 `agent_send({agent, message, wait_ms?})` takes 1--16384 nonblank units and binds
 its target at the call, never redirecting to a task admitted later. Its action's
@@ -566,7 +565,7 @@ Both closed schemas require 1--8192 nonblank UTF-16 units and revalidate after
 SDK hooks against current Run/generation, accepting gate and stop/exit state.
 Closed callbacks fail explicitly (`RUN_INPUT_CLOSED`), never report acceptance.
 All nine management tools and retired names are excluded/denied in children.
-Only researcher receives web tools, with its own instance; declared reader/editor
+Only researcher receives web tools, with its own instance; declared editor
 web capability is excluded by the effective harness allowlist. See
 [security](security.md).
 

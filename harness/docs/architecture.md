@@ -124,6 +124,15 @@ processes exited, a distributed lock, or recovery from abrupt process loss.
 Lock files/directories persist to preserve inode identity and have no automatic
 pruning.  Do not remove them while a Pi process could hold a lease.
 
+## Profiles
+
+New model requests offer `worker` and `researcher` only. Worker maps to stable
+internal `editor`, with local read/edit/write/Bash/build tools under normal
+permissions and no web. Reviews are task instructions, not an enforced readonly
+mode. Researcher has read-only file tools and web, no Bash/edit/write. Git
+mutations stay with the parent; all Agents share the checkout. Existing user
+`reader.md` files and historical records are never rewritten.
+
 ## Task dispatch boundary
 
 [Task dispatch](task-dispatch.md) adds optional inputs/ownership/tree/checks

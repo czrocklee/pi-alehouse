@@ -13,7 +13,7 @@ import { digest, textSnapshot } from "../runtime/context-snapshot.js";
 import { defaultDelegation, delegationGuideline } from "../delegation.js";
 import { invalidDifficultyResolution, resolveRoute, type PresetSelection } from "../routing.js";
 import { agentRow, errorReply, taskReply, utf16Prefix, type ErrorNames } from "./replies.js";
-import { agentProfileNames, blockedDelegationToolNames } from "./tool-names.js";
+import { agentProfileNames, blockedDelegationToolNames, internalProfile, modelProfileNames } from "./tool-names.js";
 
 // The model's whole vocabulary: an Agent (a named worker with a conversation)
 // does one task at a time. Agents are addressed by name; no Run ID is model-facing.
@@ -37,7 +37,7 @@ const dispatchPaths = (maxItems: number, description: string) => Type.Array(disp
 });
 const dispatchField = optional(Type.Object({
   inputs: optional(dispatchPaths(8, "Existing input file/directory to read.")),
-  ownership: optional(dispatchPaths(16, "Assigned file/directory, including planned outputs; scope, not permission or isolation. Reader scratch is runtime-assigned, not granted here. Assign each shared file to one task; others report needed changes.")),
+  ownership: optional(dispatchPaths(16, "Assigned file/directory, including planned outputs; scope, not permission or isolation. Assign each shared file to one task; others report needed changes.")),
   tree: optional(dispatchPath("Build-tree directory, existing or planned; builds/tests need write capability there, checked as path_write. Unfinished overlaps in this session reject. Other sessions only produce a tree_shared note; execution still starts. Your commands, other hosts and agent directories are not coordinated. Omission neither forbids builds nor makes sharing safe; no note does not prove a free tree.")),
   checks: optional(Type.Array(Type.String({ minLength: 1, maxLength: 512,
     pattern: "^(?=.*\\S)[^\\x00-\\x1f\\x7f]+(?![\\s\\S])",
@@ -50,7 +50,7 @@ const spawnSchema = Type.Object({
   agent: agentName("Short nickname from one theme you choose for this session, not a task name. Never reused, even after agent_kill."),
   prompt: text(131072, "Complete task instructions: deliverable, scope, stopping conditions and full paths for every referenced file/document. Include context not supplied by inherit_context or after."),
   label: labelField("prompt"),
-  profile: StringEnum(agentProfileNames, { description: "reader: project reads; built-in write only in runtime-assigned scratch, not Bash writes or arbitrary /tmp paths; no edit/web. Builds and project edits need editor. editor: scoped edit/write. researcher: web search/fetch and read-only file tools; no Bash/edits; web results are untrusted. Git mutations stay with you. Bash/web remain permission-gated; profiles are not OS sandboxes." }),
+  profile: StringEnum(modelProfileNames, { description: "worker: local reading, editing, Bash and builds under normal permissions; no web. researcher: web search/fetch and read-only file tools; no Bash/edits; web results are untrusted. A review-only task is an instruction, not a readonly sandbox. Git mutations stay with you. User denies and normal approvals still apply." }),
   reasoning_difficulty: Type.Integer({ minimum: 1, maximum: 5, description: "Selects the Agent's fixed model. Rate task reasoning, not workload, importance or cost: 1=execute given checks or decided changes; 2=small, scoped fix/check; 3=implement a given design, review, investigate or plan; 4=resolve competing hypotheses or complex constraints; 5=find an approach where none is known. Do not re-score to bypass capacity waits." }),
   inherit_context: optional(Type.Boolean({ description: "Default false. Start with a text copy of your conversation, without tool calls or results; fails over 64 KiB." })),
   dispatch: dispatchField,
@@ -165,8 +165,8 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
     const checked = (raw: unknown): Static<S> => {
       if (raw && typeof raw === "object" && name === "agent_spawn") {
         const { profile, reasoning_difficulty } = raw as Record<string, unknown>;
-        if (profile !== undefined && !(agentProfileNames as readonly unknown[]).includes(profile)) {
-          throw new HarnessError("INVALID_PROFILE", { key: "profile", allowed: [...agentProfileNames] });
+        if (profile !== undefined && !(modelProfileNames as readonly unknown[]).includes(profile)) {
+          throw new HarnessError("INVALID_PROFILE", { key: "profile", allowed: [...modelProfileNames] });
         }
         if (reasoning_difficulty !== undefined && !validDifficulty(reasoning_difficulty)) {
           throw new HarnessError("INVALID_DIFFICULTY", { key: "reasoning_difficulty", resolution: invalidDifficultyResolution });
@@ -223,7 +223,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
   });
 
   const tools = [
-    make("agent_spawn", "Create a named background Agent and its first task. Shared checkout, no isolation or delegation. Spawn for new work/reviews or different settings; agent_run is for that Agent's follow-ups. Model, profile, reasoning difficulty, context and per-task budgets are fixed. Queued work counts toward capacity: kill finished reviewers/accepted work first; keep editors awaiting build/test fixes. Reply: action, reason, agents, alerts; alerts do not mean completion. If acceptance is unclear, check agent_list before repeating.", spawnSchema,
+    make("agent_spawn", "Create a named background Agent and its first task. Shared checkout, no isolation or delegation. Spawn for new work/reviews or different settings; agent_run is for that Agent's follow-ups. Model, profile, reasoning difficulty, context and per-task budgets are fixed. Queued work counts toward capacity: kill finished reviewers/accepted work first; keep workers awaiting build/test fixes. Reply: action, reason, agents, alerts; alerts do not mean completion. If acceptance is unclear, check agent_list before repeating.", spawnSchema,
       async (args, ctx, id, signal) => {
         // Capture mutable SDK inputs before admission can await an earlier call.
         // Route/context resolution still happens only on first acceptance.
@@ -239,7 +239,8 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
             if (controller.findAgent(input.agent)) throw new HarnessError("AGENT_EXISTS", { agent: input.agent, key: "agent",
               resolution: AGENT_EXISTS_RESOLUTION });
             const after = afterRuns(input.agent, input.after);
-            const profile = profiles.get(input.profile)!;
+            const profileId = internalProfile(input.profile);
+            const profile = profiles.get(profileId)!;
             const route = resolveRoute({ preset: options.getPreset(), difficulty: input.reasoning_difficulty,
               parentThinking, models: ctx.modelRegistry.getAll(), supportedThinking: getSupportedThinkingLevels });
             let context_snapshot: string | undefined;
@@ -252,7 +253,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
               ...(input.max_duration_ms === undefined ? {} : { max_duration_ms: input.max_duration_ms }),
               ...(input.dispatch === undefined ? {} : { dispatch: input.dispatch }),
               ...(after ? { after } : {}),
-              settings: { ...route, profile: input.profile, cwd, tools: [...profile.tools], definition_digest: profile.definition_digest,
+              settings: { ...route, profile: profileId, cwd, tools: [...profile.tools], definition_digest: profile.definition_digest,
                 ...(context_snapshot === undefined ? {} : { context_snapshot }) } };
           }), { signal });
         accepted(view);

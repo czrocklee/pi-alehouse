@@ -9,6 +9,7 @@ import { isAbsolute, join } from "node:path";
 import test from "node:test";
 import { createDispatchRuntime } from "../../dist/runtime/dispatch-runtime.js";
 import { FileLeaseLock } from "../../dist/runtime/owner-lease.js";
+import { errorReply } from "../../dist/tools/replies.js";
 import { resolveGit } from "../../../bin/runtime-support.mjs";
 import { flock } from "../support/flock.mjs";
 
@@ -100,11 +101,11 @@ test("all public profile/external checks precede every input/tree classification
 test("tree preflight deny reports target profile and surface without classification stat or allocation", t => {
   const f = fixture(t);
   f.service.checkPermission = (surface, _value, profile) => {
-    assert.equal(profile, "reader");
+    assert.equal(profile, "researcher");
     return { state: surface === "path_write" ? "deny" : "allow" };
   };
   withStat(() => { assert.fail("deny must precede classification stat"); }, () => {
-    assert.throws(() => f.runtime().prepare({ tree: "new-tree" }, { ...f.context, profile: "reader" }), failure => {
+    assert.throws(() => f.runtime().prepare({ tree: "new-tree" }, { ...f.context, profile: "researcher" }), failure => {
       assert.equal(failure.code, "PREFLIGHT_DENIED");
       // Profile is new; existing keys and sizing are unchanged, and no internal
       // identity joins the details.
@@ -112,9 +113,9 @@ test("tree preflight deny reports target profile and surface without classificat
       assert.equal(failure.details.key, "tree");
       assert.equal(failure.details.requested, "new-tree");
       assert.equal(failure.details.surface, "path_write");
-      assert.equal(failure.details.profile, "reader");
+      assert.equal(failure.details.profile, "researcher");
       assert.equal(failure.details.path, join(f.cwd, "new-tree"));
-      assert.match(failure.details.reason, /Permission policy denied path_write for profile reader on this declared path/);
+      assert.match(failure.details.reason, /Permission policy denied path_write for profile researcher on this declared path/);
       assert.match(failure.details.reason, /not a missing or wrong-type filesystem result/);
       return true;
     });
@@ -123,13 +124,45 @@ test("tree preflight deny reports target profile and surface without classificat
   assert(!existsSync(join(f.agentDir, "harness-trees")), "known deny allocates no child tree lease");
 });
 
+for (const [profile, publicProfile] of [["editor", "worker"], ["researcher", "researcher"]]) {
+  test(`real preflight denial projects ${profile} as ${publicProfile} in model JSON without effects`, t => {
+    const f = fixture(t), context = { ...f.context, profile };
+    f.service.checkPermission = (surface, value, queriedProfile) => {
+      f.calls.push({ surface, value, profile: queriedProfile });
+      return { state: surface === "path_write" ? "deny" : "allow" };
+    };
+    withStat(() => { assert.fail("deny must precede missing-input/tree classification stat"); }, () => {
+      assert.throws(() => f.runtime().prepare({ inputs: ["missing-input"], tree: "new-tree" }, context), failure => {
+        assert.equal(failure.code, "PREFLIGHT_DENIED");
+        assert.equal(failure.details.profile, profile, "internal error identity stays canonical");
+        const modelJSON = JSON.stringify(errorReply(failure));
+        const projected = JSON.parse(modelJSON).error;
+        assert.equal(projected.code, "PREFLIGHT_DENIED");
+        assert.equal(projected.profile, publicProfile);
+        assert.equal(projected.reason, `Permission policy denied path_write for profile ${publicProfile} on this declared path; this is a permission decision, not a missing or wrong-type filesystem result.`);
+        assert.equal(projected.parameter, "tree");
+        assert.equal(projected.requested, "new-tree");
+        assert.doesNotMatch(modelJSON, /editor/);
+        return true;
+      });
+    });
+    assert.deepEqual(f.calls, [
+      { surface: "path_read", value: join(f.cwd, "missing-input"), profile },
+      { surface: "path_write", value: join(f.cwd, "new-tree"), profile },
+    ], "permission queries retain the internal profile");
+    assert.equal(context.profile, profile);
+    assert.deepEqual(readdirSync(f.cwd), [], "no declared paths allocated");
+    assert.deepEqual(readdirSync(f.agentDir), [], "no tree lease or other agent resources allocated");
+  });
+}
+
 test("deny beats missing input without any classification stat and reports the precise declaration", t => {
   const f = fixture(t);
   f.service.checkPermission = (surface, _path, profile) => {
-    assert.equal(profile, "reader"); return { state: surface === "path_write" ? "deny" : "allow" };
+    assert.equal(profile, "researcher"); return { state: surface === "path_write" ? "deny" : "allow" };
   };
   withStat(() => { assert.fail("deny must precede classification stat"); }, () => {
-    assert.throws(() => f.runtime().prepare({ inputs: ["secret-missing"], ownership: ["output"] }, { ...f.context, profile: "reader" }),
+    assert.throws(() => f.runtime().prepare({ inputs: ["secret-missing"], ownership: ["output"] }, { ...f.context, profile: "researcher" }),
       error("PREFLIGHT_DENIED", "ownership", "output"));
   });
 });
@@ -166,11 +199,11 @@ test("policy unknown is allowed, but missing/broken/throwing/async public API is
     for (const service of services) assert.throws(() => f.runtime({ getPermissionsService: () => service }).prepare({ inputs: ["missing"] }, f.context), error("DISPATCH_PREFLIGHT_UNAVAILABLE"));
     assert.throws(() => f.runtime({ getPermissionsService() { throw new Error("service failed"); } }).prepare({ ownership: ["new"] }, f.context), error("DISPATCH_PREFLIGHT_UNAVAILABLE"));
     assert.throws(() => f.runtime({ getPermissionsService: () => ({ checkPermission() { throw new Error("API failed"); } }) })
-      .prepare({ ownership: ["new"] }, { ...f.context, profile: "reader" }), failure => {
+      .prepare({ ownership: ["new"] }, { ...f.context, profile: "researcher" }), failure => {
       assert.equal(failure.code, "DISPATCH_PREFLIGHT_UNAVAILABLE");
       assert.equal(failure.details.key, "ownership");
       assert.equal(failure.details.surface, "path_write");
-      assert.equal(failure.details.profile, "reader");
+      assert.equal(failure.details.profile, "researcher");
       return true;
     });
   });

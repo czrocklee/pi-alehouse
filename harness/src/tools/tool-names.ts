@@ -29,8 +29,14 @@ export const blockedDelegationToolNames: readonly string[] = Object.freeze([
   "notify_parent",
 ]);
 
-export const agentProfileNames = ["editor", "reader", "researcher"] as const;
+export const agentProfileNames = ["editor", "researcher"] as const;
 export type AgentProfileName = typeof agentProfileNames[number];
+
+/** Public choices are separate from stable on-disk/history profile IDs. */
+export const modelProfileNames = ["worker", "researcher"] as const;
+export type ModelProfileName = typeof modelProfileNames[number];
+export const internalProfile = (name: ModelProfileName): AgentProfileName => name === "worker" ? "editor" : name;
+export const profileLabel = (name: string): string => name === "editor" ? "worker" : name;
 
 /** The only child tools besides local ones and alert_parent/ask_parent. Only the
  * researcher receives them, from its own pi-web-access instance; its

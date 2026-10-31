@@ -28,7 +28,7 @@ const provider = controlledProvider(ai); runtime.registerProvider("harness-fixtu
 const model = runtime.getModel("harness-fixture", "controlled"); assert(model);
 const settings = () => sdk.SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
 const permissionPath = permissionEntry, guardPath = join(generatedRoot, "extensions/static-safety-guard.ts");
-const definitionDigest = digest(readFileSync(join(generatedRoot, "agents/reader.md"), "utf8"));
+const definitionDigest = digest(readFileSync(join(generatedRoot, "agents/editor.md"), "utf8"));
 
 for (const mode of ["cooperative", "abort-timeout", "shutdown-error"]) {
   const cwd = join(outputRoot, `initialization-${mode}`); mkdirSync(cwd, { mode: 0o700 });
@@ -81,7 +81,7 @@ for (const mode of ["cooperative", "abort-timeout", "shutdown-error"]) {
         if (mode === "shutdown-error") throw new Error("SYNTHETIC_SHUTDOWN_HANDLER_ERROR");
       });
     }] });
-    const manager = sdk.SessionManager.inMemory(cwd); manager.appendCustomEntry("active_agent", { name: "reader" });
+    const manager = sdk.SessionManager.inMemory(cwd); manager.appendCustomEntry("active_agent", { name: "editor" });
     await assembleChild({ createSession: async (options) => {
       const result = await sdk.createAgentSession(options); child = result.session;
       const abort = child.abort.bind(child), dispose = child.dispose.bind(child);
@@ -90,14 +90,14 @@ for (const mode of ["cooperative", "abort-timeout", "shutdown-error"]) {
       return result;
     }, options: { cwd, agentDir: generatedRoot, resourceLoader: loader, settingsManager: settings(), sessionManager: manager,
       modelRuntime: runtime, model, tools: [] }, parentBus, childBus: bus, parentSessionId: parent.sessionId,
-    profile: "reader", definitionDigest, getPermissionsService: permission.getPermissionsService,
+    profile: "editor", definitionDigest, getPermissionsService: permission.getPermissionsService,
     shutdownTimeoutMs: mode === "abort-timeout" ? 40 : 1000 });
     assert.fail("failed assembly returned a port");
   } });
   try {
     const run = await controller.submit(mode, { prompt: "HARNESS_PROMPT_MUST_NOT_EXECUTE", description: mode,
       settings: { provider: model.provider, model: model.id, thinking: "off", parent_thinking: "off",
-        thinking_resolution: "identity", profile: "reader",
+        thinking_resolution: "identity", profile: "editor",
         difficulty: 3, strength: "d3", preset: "fixture", preset_version: "v1", selection_digest: "1".repeat(64),
         cwd, tools: [], definition_digest: definitionDigest } });
     assert.equal(await controller.waitForRuns([run.run_id], { mode: "all", timeout_ms: 10000 }), "ready");

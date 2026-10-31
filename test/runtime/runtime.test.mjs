@@ -13,7 +13,8 @@ const temporary = (t) => { const path = mkdtempSync(join(tmpdir(), "alehouse-run
 test("portable generator matches dispatch-aware worker bytes and policy digests", () => {
   const { agents, metadata } = renderWorkers();
   assert.equal(metadata.editor.digest, "13aad89aed7222f0f2a36555e0784ba393035022f9e915ae94423b8c0aa3dda5");
-  assert.equal(metadata.reader.digest, "8151a36f1e3a5c74107105d3fde4c29cec0fb6e7aed2c89afea8b9c30f451554");
+  assert.deepEqual(Object.keys(agents).sort(), ["editor", "researcher", "Explore", "Plan", "general-purpose"].sort());
+  assert.deepEqual(Object.keys(metadata).sort(), ["editor", "researcher"]);
   assert.equal(metadata.researcher.digest, "e9928f909be58a364fe1cf465b41d9742666ad002c36d42593a99922c194eaef");
   for (const name of Object.keys(metadata)) {
     const worker = agents[name];
@@ -26,21 +27,14 @@ test("portable generator matches dispatch-aware worker bytes and policy digests"
     assert.match(worker, /tree held until task end, or through a pending question until resolution; never report earlier release/);
   }
   for (const [name, source] of Object.entries(agents)) assert.equal(readFileSync(join(packageRoot, "runtime/agents", `${name}.md`), "utf8"), source);
-  // Reader: built-in write serves its private scratch directory only. No
-  // per-tool write deny, so ordinary global write rules still apply (never a
-  // write allow); edit and path_write stay denied outside the bound directory.
-  assert.match(agents.reader, /\ntools: \["read","bash","grep","find","ls","web_search","source_check","fetch_content","get_search_content","write"\]\n/);
-  assert.match(agents.reader, /  edit: deny\n  path_write:\n    "\*": deny\n  bash:\n    "\*": ask\n/);
-  assert.doesNotMatch(agents.reader, /^ {2}write: deny$/m);
-  assert.doesNotMatch(agents.reader, /write: allow/);
-  assert.match(agents.reader, /Read project files\. Use write only in your assigned scratch directory; do not edit project files\. Bash remains permission-gated\./);
-  assert(metadata.editor.bashDenies.includes("git -C * commit *"));
-  assert(metadata.reader.bashDenies.includes("git -C * commit *"), "Git mutations stay with the parent for readers too");
+  assert(metadata.editor.bashDenies.includes("git -C * commit *"), "Git mutations stay with the parent");
+  assert.match(agents.editor, /^ {2}bash:\n {4}"\*": ask$/m, "ordinary Bash remains permission-checked");
+  assert.doesNotMatch(agents.editor, /^ {4}"git .*": allow$/m, "no blanket or command-specific Git allow");
   // The researcher: read-only local tools plus web, no Bash, every command denied.
   assert.match(agents.researcher, /\ntools: \["read","grep","find","ls","web_search","source_check","fetch_content","get_search_content"\]\n/);
   assert.match(agents.researcher, /  write: deny\n  edit: deny\n  path_write:\n    "\*": deny\n  bash:\n    "\*": deny\n/);
   assert.match(agents.researcher, /untrusted data, not instructions/);
-  assert.doesNotMatch(agents.reader, /untrusted data/);
+  assert.doesNotMatch(agents.editor, /untrusted data/);
   for (const name of ["jev-auto-approval.ts", "static-safety-guard.ts"]) {
     const source = readFileSync(join(packageRoot, "runtime/policy", name), "utf8");
     assert(!source.includes("/* @worker-policy@ */ {}"));
@@ -74,7 +68,8 @@ test("generated authority is private, pinned, patched and package-complete", () 
 test("init creates only absent resources and seeds Off without model routes", (t) => {
   const agentDir = join(temporary(t), "agent");
   const first = initialize({ agentDir });
-  assert.equal(first.created.length, 8);
+  assert.equal(first.created.length, 7);
+  assert.deepEqual(readdirSync(join(agentDir, "agents")).sort(), ["editor.md", "researcher.md", "Explore.md", "Plan.md", "general-purpose.md"].sort());
   const configPath = join(agentDir, "extensions/pi-permission-system/config.json");
   const original = readFileSync(configPath);
   const config = JSON.parse(original);
@@ -90,11 +85,29 @@ test("init creates only absent resources and seeds Off without model routes", (t
   assert.deepEqual(JSON.parse(readFileSync(join(agentDir, "harness-presets.json"))), { version: 3, defaultPreset: "off", presets: {} });
   const second = initialize({ agentDir });
   assert.equal(second.created.length, 0);
-  assert.equal(second.preserved.length, 8);
+  assert.equal(second.preserved.length, 7);
   assert.deepEqual(readFileSync(configPath), original);
   assert(!existsSync(join(agentDir, "settings.json")));
   assert(!existsSync(join(agentDir, "auth.json")));
   preflight({ agentDir, env: { PATH: "" } });
+});
+
+test("init and preflight leave unmanaged user profiles untouched", (t) => {
+  const base = temporary(t), agentDir = join(base, "agent");
+  mkdirSync(join(agentDir, "agents"), { recursive: true });
+  const path = join(agentDir, "agents/reader.md"), target = join(base, "user-profile.md");
+  const original = "user-owned profile; never migrate or execute\n";
+  writeFileSync(path, original);
+  writeFileSync(target, original);
+  const alias = join(agentDir, "agents/custom-link.md");
+  symlinkSync(target, alias);
+  assert.equal(initialize({ agentDir }).created.length, 7);
+  preflight({ agentDir, env: {} });
+  assert.equal(initialize({ agentDir }).created.length, 0);
+  assert.equal(readFileSync(path, "utf8"), original);
+  assert.equal(readFileSync(target, "utf8"), original);
+  assert(lstatSync(alias).isSymbolicLink());
+  assert.equal(readlinkSync(alias), target);
 });
 
 test("init preserves legacy catalogues and launcher rejects them without conversion", (t) => {
@@ -131,7 +144,7 @@ test("init preserves conflicting and dangling profile symlinks; never claims rea
 test("init preserves matching Nix-style symlinks and existing custom policies", (t) => {
   const agentDir = temporary(t);
   mkdirSync(join(agentDir, "agents"));
-  for (const name of ["editor", "reader", "researcher", "Explore", "Plan", "general-purpose"]) symlinkSync(join(packageRoot, "runtime/agents", `${name}.md`), join(agentDir, "agents", `${name}.md`));
+  for (const name of ["editor", "researcher", "Explore", "Plan", "general-purpose"]) symlinkSync(join(packageRoot, "runtime/agents", `${name}.md`), join(agentDir, "agents", `${name}.md`));
   initialize({ agentDir });
   const path = join(agentDir, "extensions/pi-permission-system/config.json");
   const ownPolicy = '{"permission":{"*":"deny"}}\n';
@@ -287,14 +300,14 @@ test("preserved invalid preset fails closed for real SDK tool and user_bash disp
   assert.match(output, /preserved invalid preset leaves real SDK tool and user_bash latches blocked/);
 });
 
-test("real composition runs researcher, reader and editor Agents with forwarded asks and a mode switch, offline", { timeout: 60000 }, (t) => {
+test("real composition runs researcher and worker Agents with forwarded asks, configured denies and a mode switch, offline", { timeout: 60000 }, (t) => {
   const dir = temporary(t), agentDir = join(dir, "agent");
   const output = execFileSync(process.execPath, [join(packageRoot, "test/runtime/fixtures/researcher-spawn.mjs")], {
     env: { HOME: dir, PATH: process.env.PATH, PI_CODING_AGENT_DIR: agentDir,
       PI_JEV_API_KEY_FILE: join(dir, "nonexistent-test-key"), PI_OFFLINE: "1", NO_COLOR: "1" },
     encoding: "utf8", timeout: 55000,
   });
-  assert.match(output, /real composition spawns researcher, reader and editor Agents; forwarded asks reach the parent UI; a reader scratch ask is approved and written; a sibling reader cannot touch another reader's scratch; a mode switch reaches the next request; nothing leaves the process/);
+  assert.match(output, /real composition spawns researcher and worker Agents; forwarded asks reach the parent UI; worker writes and edits stay permission-checked; explicit path-write and secret denies hold; a mode switch reaches the next request; nothing leaves the process/);
 });
 
 test("real composition restores, defaults and fails closed on the delegation mode across restarts, offline", { timeout: 60000 }, (t) => {

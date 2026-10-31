@@ -169,11 +169,10 @@ provider.respond(async ({ context, maxTokens }) => {
   assert(!context.tools.some((tool) => delegationTools.includes(tool.name)), "nested delegation exposed");
   assert(!context.tools.some((tool) => webTools.includes(tool.name)), "parent web tools exposed to child");
   const profile = /<active_agent name="([^"]+)"\/>/.exec(context.systemPrompt)?.[1];
-  assert(["editor", "reader"].includes(profile));
+  assert.equal(profile, "editor", "public worker retains the internal editor identity");
   const names = context.tools.map((tool) => tool.name).sort();
   childToolsByProfile[profile] = names;
-  assert.equal(names.includes("edit"), profile === "editor");
-  assert(names.includes("write"), "reader keeps the guarded built-in scratch writer");
+  assert(names.includes("edit") && names.includes("write"), "worker keeps project editing tools");
   assert(names.includes("read") && names.includes("bash"));
   const operation = text(context.messages.findLast((message) => message.role === "user"));
   if (operation.includes("ENTRY_HOLD")) {
@@ -194,8 +193,7 @@ provider.respond(async ({ context, maxTokens }) => {
       ? { path: "edited.txt", oldText: "before", newText: "after" }
       : { path: "edited.txt", content: "before\n" } }] };
   }
-  assert.equal(profile, "reader");
-  assert(!context.tools.some((tool) => tool.name === "edit"), "edit exposed to reader");
+  assert.equal(profile, "editor", "a read task does not change the worker's capability profile");
   if (context.messages.at(-1)?.role === "toolResult") {
     assert.equal(text(context.messages.at(-1)).trim(), "ENTRY_READ_OK");
     return { text: "ENTRY_READ_OK" };
@@ -483,7 +481,7 @@ try {
   assert(!parent.getActiveToolNames().includes("agent_spawn"));
   const lastLink = () => parent.sessionManager.getBranch().findLast((entry) => entry.type === "custom" &&
     entry.customType === "harness:run-link:v1");
-  const first = await invoke("agent_spawn", { agent: "entry", profile: "reader", reasoning_difficulty: 3,
+  const first = await invoke("agent_spawn", { agent: "entry", profile: "worker", reasoning_difficulty: 3,
     prompt: "Read source.txt", label: "Entry smoke", max_turns: 4, wait_ms: 60000 });
   assert.equal(first.reason, "done");
   assert.deepEqual(first.action, { type: "agent_spawn", agent: "entry", task: 1 });
@@ -526,7 +524,7 @@ try {
   assert.equal(selectedEntries().at(-1).data.name, "off");
   assert.equal("models" in selectedEntries().at(-1).data, false);
   for (const [name, args] of [
-    ["agent_spawn", { agent: "blocked", profile: "reader", reasoning_difficulty: 3, prompt: "Must not start", label: "Blocked" }],
+    ["agent_spawn", { agent: "blocked", profile: "worker", reasoning_difficulty: 3, prompt: "Must not start", label: "Blocked" }],
     ["agent_run", { agent: "entry", prompt: "Must not start", builds_on: "the entry task" }],
     ["agent_send", { agent: "entry", message: "Must not steer" }],
     ["agent_answer", { agent: "entry", question_id: `q_${"0".repeat(32)}`, answer: "Must not answer" }],
@@ -562,7 +560,7 @@ try {
   assert.equal(selectedEntries().length, inheritAudit + 1);
   assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { d3: "inherit" });
   assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
-  const inherited = await invoke("agent_spawn", { agent: "inherit", profile: "reader", reasoning_difficulty: 3,
+  const inherited = await invoke("agent_spawn", { agent: "inherit", profile: "worker", reasoning_difficulty: 3,
     prompt: "Read source.txt", label: "Explicit inherit control", max_turns: 4, wait_ms: 60000 });
   assert.equal(inherited.reason, "done");
   assert.deepEqual(inherited.action, { type: "agent_spawn", agent: "inherit", task: 1 });
@@ -582,7 +580,7 @@ try {
   // Reset affects only future Agents, not the resident child whose Run was
   // fixed at admission. Read-only list projection must keep that old setting.
   const retained = await invoke("agent_list", {});
-  assert.deepEqual(retained.agents.map((row) => [row.agent, row.profile, row.reasoning_difficulty]), [["entry", "reader", 3]]);
+  assert.deepEqual(retained.agents.map((row) => [row.agent, row.profile, row.reasoning_difficulty]), [["entry", "worker", 3]]);
   assert.deepEqual(uiEvidence.pickerModes, Array(9).fill("docked"),
     "all edited/cancelled choices used the installed component, not a fabricated UI return");
   const effortEditing = { fixed_routing: fixedLink.data.routing, inherited_routing: inheritedLink.data.routing,
@@ -631,7 +629,7 @@ try {
   assert.equal(parent, sameParent); assert.match(notices.at(-1), /Could not confirm harness Owner closure/);
   // Use the unmodified managed policy: write/edit and wait/resume must work
   // without a UI grant or fixture-only management-tool allow rules.
-  const idle = await invoke("agent_spawn", { agent: "writer", profile: "editor", reasoning_difficulty: 5,
+  const idle = await invoke("agent_spawn", { agent: "writer", profile: "worker", reasoning_difficulty: 5,
     prompt: "ENTRY_WRITE: create edited.txt", label: "Writable entry smoke", max_turns: 4 });
   assert.equal((await finish(idle)).result, "ENTRY_WRITE_OK");
   assert.equal(readFileSync(join(cwd, "edited.txt"), "utf8"), "before\n");
@@ -701,7 +699,7 @@ try {
   const replacementList = await invoke("agent_list", {});
   assert.deepEqual(replacementList.agents, []);
   await parent.prompt("/harness-preset entry-other");
-  const replacementRun = await invoke("agent_spawn", { agent: "replacement", profile: "reader", reasoning_difficulty: 1,
+  const replacementRun = await invoke("agent_spawn", { agent: "replacement", profile: "worker", reasoning_difficulty: 1,
     prompt: "Read source.txt", label: "Replacement entry smoke", max_turns: 4 });
   assert.equal((await finish(replacementRun)).result, "ENTRY_READ_OK");
   const replacement = { previous_session: original.sessionId, session: parent.sessionId, fresh, replacementList, run: replacementRun };
@@ -786,7 +784,7 @@ try {
   const startupFailure = { error: faultErrors[0], approval_listeners: approvalListeners.size,
     owner_reacquired: true, preset_command_blocked: true, footer_clear_attempts: faultClearAttempts, cleanup: faultCleanup };
   assert.deepEqual(networkAttempts, []);
-  assert.deepEqual(Object.keys(childToolsByProfile).sort(), ["editor", "reader"]);
+  assert.deepEqual(Object.keys(childToolsByProfile).sort(), ["editor"]);
   const caller = provider.requests.find((call) => isParentCall(call) && !isWarm(call) &&
     call.context.tools.some((tool) => tool.name === "agent_spawn")).context;
   writeFileSync(join(outputRoot, "caller-interface.json"), JSON.stringify({ real_model: false, model_decisions: "scripted",
@@ -795,7 +793,7 @@ try {
     childToolsByProfile, emptyOwner, initialOff: { requests: offRequests, directRead: text(directRead), child_sessions: 0 },
     offRetainedResult: offResult }, null, 2));
   writeFileSync(join(outputRoot, "entry-smoke.json"), JSON.stringify({ checks: "passed", versions, entry, real_model: false,
-    cases: ["portable launcher and historical component wiring (composition separately tested)", "actual SDK InteractiveMode handleResumeSession and showSessionSelector replace fresh unused Owners with fresh authority", "active-branch Off restores before the first real SDK request with zero harness prompt/schema content", "preset reconciliation restores a separately deactivated harness tool on the same request", "Off blocks cached new/reused delegation and messages per Agent while inspection stays available", "tool-visibility failure cannot roll back Off or bypass admission; next-request reconciliation repairs exposure", "reenabling another preset preserves resident Agent settings", "enabled active-branch selection restores current disk content rather than historical slots", "atomic preset typo/cancel/reload/removal/switch-away", "synchronous preset audit precedes live publication; ambiguous append latches owner", "successful selection survives footer paint failure with warning", "Alt+S packaged picker selection leaves parent model unchanged", "packaged effort editor audits live changes, retains them on close, restores across SDK branch replacement, remembers per-preset settings, explicitly inherits and resets defaults without changing resident Agent policy", "parent UI/web restored; child web excluded", "synthetic parent warming succeeds; child warming vetoed despite global idle mode", "readonly create/wait/read/result", "same-Agent reuse/wait", "worker write and resumed edit", "wait/reuse use managed allow rules without UI grants", "used Owner with a missing confirm UI remains closed to replacement", "release and normal shutdown before parent authority", "harness-close then actual SDK newSession with fresh authority/owner and successful delegation"],
+    cases: ["portable launcher and historical component wiring (composition separately tested)", "actual SDK InteractiveMode handleResumeSession and showSessionSelector replace fresh unused Owners with fresh authority", "active-branch Off restores before the first real SDK request with zero harness prompt/schema content", "preset reconciliation restores a separately deactivated harness tool on the same request", "Off blocks cached new/reused delegation and messages per Agent while inspection stays available", "tool-visibility failure cannot roll back Off or bypass admission; next-request reconciliation repairs exposure", "reenabling another preset preserves resident Agent settings", "enabled active-branch selection restores current disk content rather than historical slots", "atomic preset typo/cancel/reload/removal/switch-away", "synchronous preset audit precedes live publication; ambiguous append latches owner", "successful selection survives footer paint failure with warning", "Alt+S packaged picker selection leaves parent model unchanged", "packaged effort editor audits live changes, retains them on close, restores across SDK branch replacement, remembers per-preset settings, explicitly inherits and resets defaults without changing resident Agent policy", "parent UI/web restored; child web excluded", "synthetic parent warming succeeds; child warming vetoed despite global idle mode", "worker create/wait/read/result", "same-Agent reuse/wait", "worker write and resumed edit", "wait/reuse use managed allow rules without UI grants", "used Owner with a missing confirm UI remains closed to replacement", "release and normal shutdown before parent authority", "harness-close then actual SDK newSession with fresh authority/owner and successful delegation"],
     presetStatus: statuses.filter((entry) => entry.key === "harness-preset"), uiEvidence, cacheWarming, readyParents, startupFailure,
     restoredSelection, restoredCleanup, baselineCleanup, effortEditing,
     webTools, networkAttempts, human_ui: false, first, next, inherited, idle, edited, replacement, cleanup, parentPresentOnDisposal }, null, 2));

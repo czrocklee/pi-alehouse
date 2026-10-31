@@ -34,7 +34,7 @@ const until = async (condition, message = "fixture condition timed out") => {
 };
 const cwd = join(outputRoot, "tools-project"), sessionDirectory = join(outputRoot, "tools-sessions");
 for (const path of [cwd, sessionDirectory]) mkdirSync(path, { recursive: true, mode: 0o700 });
-const profiles = Object.fromEntries(["editor", "reader", "researcher"].map((name) => {
+const profiles = Object.fromEntries(["editor", "researcher"].map((name) => {
   const definition = readFileSync(join(generatedRoot, "agents", `${name}.md`), "utf8");
   const declared = JSON.parse(/^tools: (.*)$/m.exec(definition)[1]);
   // A fixture-selected subset of available built-ins, not a new agent parser or
@@ -96,7 +96,7 @@ provider.respond(async (call) => {
     if (call.signal.aborted) stop(); else call.signal.addEventListener("abort", stop, { once: true });
   });
   if (prompt?.includes("TRY_PARENT_CONTROL") && last?.role !== "toolResult") return {
-    tools: [{ type: "toolCall", id: "forbidden-management", name: "agent_spawn", arguments: { agent: "not-an-agent", prompt: "must not route", profile: "reader", reasoning_difficulty: 1 } }],
+    tools: [{ type: "toolCall", id: "forbidden-management", name: "agent_spawn", arguments: { agent: "not-an-agent", prompt: "must not route", profile: "worker", reasoning_difficulty: 1 } }],
   };
   return { text: "SYNTHETIC_CHILD_DONE" };
 });
@@ -196,7 +196,7 @@ async function invoke(name, args, { id = `parent-call-${sequence++}`, error, pro
 }
 // Agent names are the model-facing handle: a lowercase slug of the fixture prompt.
 const slug = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24).replace(/-+$/, "");
-const newTask = (prompt, profile = "reader", rest = {}) => ({ agent: slug(prompt), prompt, label: prompt, profile,
+const newTask = (prompt, profile = "worker", rest = {}) => ({ agent: slug(prompt), prompt, label: prompt, profile,
   reasoning_difficulty: 3, ...rest });
 const runOf = (agent) => controller.findAgent(agent).run_id;
 const settled = (agent) => until(() => ["completed", "needs_input", "failed", "cancelled"].includes(controller.view(runOf(agent)).status));
@@ -211,9 +211,9 @@ try {
   await invoke("agent_spawn", { ...newTask("MUST_NOT_START"), agent_id: "wrong-branch" }, { error: "INVALID_PARAMETERS" });
   await invoke("agent_spawn", newTask("MUST_NOT_START", "unknown"), { error: "INVALID_PROFILE" });
   for (const extra of [{ model: "controlled" }, { thinking: "max" }, { strength: "d3" }, { role: "reviewer" }, { agent: "Not A Name" }]) {
-    await invoke("agent_spawn", newTask("MUST_NOT_START", "editor", extra), { error: "INVALID_PARAMETERS" });
+    await invoke("agent_spawn", newTask("MUST_NOT_START", "worker", extra), { error: "INVALID_PARAMETERS" });
   }
-  await invoke("agent_spawn", newTask("MUST_NOT_START", "editor", { reasoning_difficulty: 0 }), { error: "INVALID_DIFFICULTY" });
+  await invoke("agent_spawn", newTask("MUST_NOT_START", "worker", { reasoning_difficulty: 0 }), { error: "INVALID_DIFFICULTY" });
   await invoke("agent_send", { agent: "must-not-start", message: "MUST_NOT_START" }, { error: "AGENT_NOT_FOUND" });
   await invoke("agent_read", { agent: "must-not-start", limit: 10 }, { error: "INVALID_PARAMETERS" });
   mutateNext = true;
@@ -222,7 +222,7 @@ try {
   assert(provider.requests.every(isParent));
   claim("actual SDK prepare/execute rejection, including mutation after schema validation: zero child factory/IO");
 
-  const firstArgs = newTask("ASK_FACTOR", "reader", { agent: "orca", inherit_context: true, label: "Find the missing factor 🚀" });
+  const firstArgs = newTask("ASK_FACTOR", "worker", { agent: "orca", inherit_context: true, label: "Find the missing factor 🚀" });
   const first = await invoke("agent_spawn", firstArgs, { id: "stable-call", prompt: inheritedMarker }); await settled("orca");
   const firstRun = runOf("orca");
   assert.equal(first.reason, "snapshot");
@@ -263,7 +263,7 @@ try {
   await invoke("agent_spawn", { ...firstArgs, prompt: "CONFLICT" }, { id: "stable-call", error: "REQUEST_CONFLICT" });
   await invoke("agent_send", { agent: "orca", message: "ANSWER_FACTOR", model: "other" }, { error: "INVALID_PARAMETERS" });
   await invoke("agent_send", { agent: "orca", message: "ANSWER_FACTOR", reasoning_difficulty: 4 }, { error: "INVALID_PARAMETERS" });
-  await invoke("agent_spawn", newTask("ANSWER_FACTOR", "editor", { agent: "orca" }), { error: "AGENT_EXISTS" });
+  await invoke("agent_spawn", newTask("ANSWER_FACTOR", "worker", { agent: "orca" }), { error: "AGENT_EXISTS" });
   const beforeAnswer = provider.requests.length;
   await invoke("agent_run", { agent: "orca", prompt: "ANSWER_FACTOR 3", builds_on: "its pending question" }, { error: "PENDING_QUESTION" });
   const notDelivered = await invoke("agent_send", { agent: "orca", message: "ANSWER_FACTOR 3" });
@@ -297,7 +297,7 @@ try {
 
   await invoke("agent_spawn", newTask("MUST_NOT_START_AFTER_PARENT_THINKING_CHANGE"), { error: "THINKING_INCOMPATIBLE" });
   activePreset = route("reasoning-team", "harness-fixture/reasoning", "v2");
-  const blocking = await invoke("agent_spawn", newTask("BLOCK_FOR_CANCEL", "editor"));
+  const blocking = await invoke("agent_spawn", newTask("BLOCK_FOR_CANCEL", "worker"));
   await until(() => children.length === 2 && children[1].session.isStreaming);
   assert.equal(blocking.reason, "snapshot");
   assert.deepEqual(blocking.action, { type: "agent_spawn", agent: "block-for-cancel", task: 1 });
@@ -306,13 +306,13 @@ try {
   assert.equal(blockingRoute.preset, "reasoning-team"); assert.equal(blockingRoute.parent_thinking, "high");
   assert.equal(blockingRoute.thinking, "high"); assert.equal(blockingRoute.thinking_resolution, "identity");
   assert.equal((await invoke("agent_send", { agent: "block-for-cancel", message: "SYNTHETIC_STEERING" })).action.delivery, "steered");
-  await invoke("agent_spawn", newTask("TRY_PARENT_CONTROL", "reader"), { error: "RESIDENT_LIMIT" });
+  await invoke("agent_spawn", newTask("TRY_PARENT_CONTROL", "worker"), { error: "RESIDENT_LIMIT" });
   assert.equal((await invoke("agent_kill", { agent: "orca" })).status, "killed");
   const orcaId = controller.findAgent("orca").agent_id;
   const releasedRuns = [...controller.runs.values()].filter((run) => run.record.agent_id === orcaId);
   assert.equal(releasedRuns.length, 2);
   assert(releasedRuns.every((run) => run.session === undefined), "historical Runs do not retain the real SDK port wrapper");
-  await invoke("agent_spawn", newTask("TRY_PARENT_CONTROL", "reader")); await settled("try-parent-control");
+  await invoke("agent_spawn", newTask("TRY_PARENT_CONTROL", "worker")); await settled("try-parent-control");
   assert.equal(leakedParentCalls, 0);
   assert(children[2].session.messages.some((m) => m.role === "toolResult" && m.toolName === "agent_spawn" && m.isError));
   await invoke("agent_interrupt", { agent: "block-for-cancel" }); await settled("block-for-cancel");
@@ -326,7 +326,7 @@ try {
   assert(batch.agents.reduce((count, entry) => count + (entry.result?.length ?? 0) + (entry.question?.length ?? 0), 0) <= 16384);
   assert.deepEqual(batch.agents.map((entry) => entry.status), ["completed", "interrupted", "completed"]);
   claim("actual SDK waits return results by Agent name within the shared text budget");
-  claim("new Agent takes the active preset while the parent model stays independent; kill frees hard capacity; messages and interrupts are Agent-scoped; both managed profiles have real readiness", {
+  claim("new Agent takes the active preset while the parent model stays independent; kill frees hard capacity; messages and interrupts are Agent-scoped; the cooperative worker profile has real readiness", {
     profiles: children.map((c) => c.agent.settings.profile), parent_control_calls_from_child: leakedParentCalls,
     released_run_port_refs: releasedRuns.filter((run) => run.session !== undefined).length,
   });
@@ -341,7 +341,7 @@ try {
   await invoke("agent_kill", { agent: "block-for-cancel" });
   await invoke("agent_kill", { agent: "try-parent-control" });
   request = { name: "agent_spawn", id: "parent-abort-wait", sent: false,
-    args: newTask("HOLD_AFTER_PARENT_ABORT", "reader", { agent: "shutdown-probe", wait_ms: 300000 }) };
+    args: newTask("HOLD_AFTER_PARENT_ABORT", "worker", { agent: "shutdown-probe", wait_ms: 300000 }) };
   let waitPromptError;
   const waitPrompt = parent.prompt("WAIT_FOR_HELD_CHILD", { source: "extension", expandPromptTemplates: false })
     .catch((error) => { waitPromptError = error; });

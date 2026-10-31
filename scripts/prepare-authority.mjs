@@ -34,7 +34,6 @@ import { guardSingleAuthority } from "./authority-guard.ts";
 import { createManagedBlockObserver } from "./managed-block-observer.ts";
 import { installManagedScratch } from "./managed-scratch.ts";
 import { hardenGitInput, hardenStaticFileInput } from "./vendor/src/access-intent/bash/managed-read-policy.ts";
-export { createReaderScratch } from "./vendor/src/policy/managed-reader-scratch.ts";
 import { originalBashDeny } from "../policy/static-safety-guard.ts";
 import { getPermissionsService } from "./vendor/src/service.ts";
 export { getPermissionsService };

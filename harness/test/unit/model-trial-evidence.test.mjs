@@ -12,7 +12,7 @@ const otherQuestionId = `q_${"2".repeat(32)}`;
 const envelope = (row, extra = {}) => ({ reason: "snapshot", agents: [row], alerts_pending: 0, ...extra });
 function evidence() {
   const settings = { provider: "fixture", model: "calculator", thinking: "off", parent_thinking: "off",
-    thinking_resolution: "identity", profile: "reader", difficulty: 3, definition_digest: "fixture" };
+    thinking_resolution: "identity", profile: "editor", difficulty: 3, definition_digest: "fixture" };
   const question = { run_id: "question", agent_id: "worker-id", name: "worker", task: 1, status: "needs_input", execution_exited: true,
     question_id: questionId, effective_settings: settings, outcome: { question: "factor?" } };
   const answer = { ...question, run_id: "answer", task: 2, question_id: undefined, status: "completed", outcome: { status: "completed" } };
@@ -58,7 +58,7 @@ test("full question/reference is separate from assistant-output preview complete
 });
 test("a spawn observation may supply the complete question without a read", () => {
   const copy = evidence().first;
-  copy.calls = [{ name: "agent_spawn", is_error: false, args: { agent: "worker", profile: "reader", reasoning_difficulty: 3, wait_ms: 60000 },
+  copy.calls = [{ name: "agent_spawn", is_error: false, args: { agent: "worker", profile: "worker", reasoning_difficulty: 3, wait_ms: 60000 },
     value: envelope({ agent: "worker", task: 1, status: "needs_input", question_id: questionId, question: "factor?", result: "please answer" },
       { reason: "question", action: { type: "agent_spawn", agent: "worker", task: 1 } }) }];
   assert.deepEqual(questionFailures(copy), []);
@@ -75,7 +75,7 @@ for (const name of ["agent_read", "agent_wait", "agent_spawn"]) {
     const copy = evidence().first, call = copy.calls[0], question = call.value.agents[0];
     if (name !== "agent_read") {
       call.name = name;
-      call.args = name === "agent_wait" ? { agents: ["worker"] } : { agent: "worker", profile: "reader", reasoning_difficulty: 3, wait_ms: 60000 };
+      call.args = name === "agent_wait" ? { agents: ["worker"] } : { agent: "worker", profile: "worker", reasoning_difficulty: 3, wait_ms: 60000 };
       call.value.reason = "question";
     }
     assert.deepEqual(questionFailures(copy), []);

@@ -16,7 +16,7 @@ const view = (overrides = {}) => ({
   owner_id: "o", generation: "g", agent_id: "a-19b7", run_id: "r-8f3a", name: "reviewer",
   description: "审查 controller.ts 的生命周期合同",
   effective_settings: { provider: "anthropic", model: "claude-opus-5", thinking: "medium", parent_thinking: "medium",
-    thinking_resolution: "identity", profile: "reader",
+    thinking_resolution: "identity", profile: "researcher",
     difficulty: 5, strength: "d5", preset: "team", preset_version: "v2", selection_digest: "1".repeat(64),
     cwd, tools: ["read", "grep", "find", "ls"], definition_digest: "0".repeat(64), context_mode: "none" },
   status: "running", phase: "executing", execution_exited: false, finalization_pending: false, resumable: true,
@@ -46,7 +46,7 @@ test("wrapText breaks latin at spaces and keeps every explicit newline", () => {
 
 test("the title keeps identity/task while leaving live status to the footer", () => {
   const title = renderDetailTitle({ view: view(), live: live() }, 0, theme, 60);
-  assert.match(title, /^reviewer \(reader\)/);
+  assert.match(title, /^reviewer \(researcher\)/);
   assert.match(title, /审查/);
   assert.equal(visibleWidth(title) <= 60, true);
   assert.match(renderDetailTitle({ view: view(), live: live() }, 0, theme, 100), /\) {2}审查 controller\.ts/);
@@ -55,14 +55,26 @@ test("the title keeps identity/task while leaving live status to the footer", ()
     assert.doesNotMatch(header, /running|completed|finishing|⠋|✓/);
   }
   const unnamed = renderDetailTitle({ view: view({ name: "" }), live: live() }, 0, theme, 60);
-  assert.match(unnamed, /^reader {2}审查/, "an unnamed Agent shows its profile only once");
+  assert.match(unnamed, /^researcher {2}审查/, "an unnamed Agent shows its profile only once");
   assert.doesNotMatch(unnamed, /\(/);
   for (const width of [60, 44, 30]) {
     const long = view({ name: "", description: "审查".repeat(60) });
     const tight = renderDetailTitle({ view: long, live: live() }, 0, theme, width);
     assert.equal(visibleWidth(tight), width, JSON.stringify(tight));
-    assert.match(tight, /^reader {2}审查/);
+    assert.match(tight, /^researcher {2}审查/);
     assert.doesNotMatch(tight, /⠋ running/);
+  }
+});
+
+test("detail profile labels say worker without renaming nicknames or historical settings", () => {
+  for (const [profile, displayed] of [["editor", "worker"], ["reader", "reader"], ["researcher", "researcher"]]) {
+    for (const name of ["", "editor"]) {
+      const v = view({ name, effective_settings: { ...view().effective_settings, profile } });
+      const before = structuredClone(v);
+      const title = renderDetailTitle({ view: v, live: live() }, 0, theme, 100);
+      assert.ok(title.startsWith(name ? `${name} (${displayed})` : `${displayed}  `), title);
+      assert.deepEqual(v, before, "profile labels are a display projection, not a settings migration");
+    }
   }
 });
 
@@ -632,7 +644,7 @@ test("the floating pane draws a frame that costs columns but never rows", (t) =>
   assert.match(b[0], /^.*\u256d/, "top border");
   assert.match(b.at(-1), /\u256f.*$/, "bottom border");
   // The title and the footer ride on the border rows rather than above and below it.
-  assert.match(b[0], /reviewer \(reader\)/);
+  assert.match(b[0], /reviewer \(researcher\)/);
   assert.match(b.at(-1), /agents/);
   // Riding on the border does not open it: what the inlay does not use is rule.
   assert.doesNotMatch(b[0], / {3}/, `top border left open: ${JSON.stringify(b[0])}`);

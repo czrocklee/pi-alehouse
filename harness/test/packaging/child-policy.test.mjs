@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renderWorkers } from "../../../scripts/generate-workers.mjs";
-import { blockedDelegationToolNames, managementToolNames } from "../../dist/tools/tool-names.js";
+import { agentProfileNames, blockedDelegationToolNames, managementToolNames } from "../../dist/tools/tool-names.js";
 
 const json = (relative) => JSON.parse(readFileSync(new URL(relative, import.meta.url), "utf8"));
 
@@ -23,12 +23,15 @@ test("production and portable seeds allow the two current child tools and answer
 
 test("generated managed definitions deny all current/retired parent tools and notify without changing local capability tables", () => {
   const policy = json("../../../resources/worker-policy.json"), rendered = renderWorkers();
+  assert.deepEqual(Object.keys(policy.profiles).sort(), ["editor", "researcher"]);
+  assert.deepEqual(agentProfileNames, ["editor", "researcher"]);
+  assert.equal(Object.hasOwn(rendered.agents, "reader"), false, "no active retired definition");
   assert.deepEqual(policy.childToolDenies, [...blockedDelegationToolNames], "source policy and assembly exclusion must be a matched API boundary");
   for (const [name, profile] of Object.entries(policy.profiles)) {
     const definition = rendered.agents[name];
     const tools = JSON.parse(/^tools: (.+)$/m.exec(definition)[1]);
     assert.deepEqual(tools, [...policy.readTools.filter((tool) => profile.bash !== false || tool !== "bash"),
-      ...(profile.edits ? ["edit", "write"] : profile.scratchWrite ? ["write"] : [])]);
+      ...(profile.edits ? ["edit", "write"] : [])]);
     for (const tool of policy.childToolDenies) {
       assert.match(definition, new RegExp(`^  ${tool}: deny$`, "m"), `${name}: ${tool}`);
       assert(!tools.includes(tool), `${name}: forbidden declared tool ${tool}`);
@@ -40,16 +43,6 @@ test("generated managed definitions deny all current/retired parent tools and no
       assert(rendered.metadata[name].bashDenies.includes(spelling), `${name}: retain Git boundary ${spelling}`);
     if (!profile.edits) assert.match(definition, / {2}path_write:\n {4}"\*": deny/);
     if (profile.bash === false) assert.match(definition, / {2}bash:\n {4}"\*": deny/);
-    if (profile.scratchWrite) {
-      // Reader-only scratch write: the built-in write tool exists without edit,
-      // and the profile adds no per-tool write rule, so ordinary global write
-      // rules decide the tool itself while the path_write floor above still
-      // denies every path outside the trusted bound scratch directory.
-      assert.equal(name, "reader", "scratchWrite is reader-only");
-      assert(!tools.includes("edit"), "reader scratch write grants no edit tool");
-      assert.match(definition, /^ {2}edit: deny$/m, "reader edit deny");
-      assert.doesNotMatch(definition, /^ {2}write: (deny|allow)$/m, "reader adds no per-tool write rule");
-    }
   }
   for (const name of policy.disabled) {
     assert.match(rendered.agents[name], /^enabled: false$/m);

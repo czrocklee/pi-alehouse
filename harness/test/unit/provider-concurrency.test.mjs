@@ -87,11 +87,11 @@ test("default concurrency of four is per provider and resident twelve is the own
 
 test("one provider shares its cap across model, profile and difficulty; FIFO skips a saturated head", async (t) => {
   const { controller: c, ports } = await fixture(t, { controller: { concurrency: 2, resident_limit: 8, queue_limit: 8 } });
-  const first = await c.submit("first", work("first", "alpha", { name: "first", model: "model-a", profile: "reader", difficulty: 1 }));
+  const first = await c.submit("first", work("first", "alpha", { name: "first", model: "model-a", profile: "editor", difficulty: 1 }));
   const second = await c.submit("second", work("second", "alpha", { name: "second", model: "model-b", profile: "editor", difficulty: 5 }));
   const third = await c.submit("third", work("third", "alpha", { name: "third", model: "model-c", profile: "researcher", difficulty: 3 }));
-  const later = await c.submit("later", work("later", "alpha", { name: "later", model: "model-d", profile: "reader", difficulty: 4 }));
-  const other = await c.submit("other", work("other", "beta", { name: "other", model: "model-a", profile: "reader", difficulty: 1 }));
+  const later = await c.submit("later", work("later", "alpha", { name: "later", model: "model-d", profile: "editor", difficulty: 4 }));
+  const other = await c.submit("other", work("other", "beta", { name: "other", model: "model-a", profile: "editor", difficulty: 1 }));
   await until(() => ports.filter((port) => port.streaming).length === 3);
   assert.equal(c.view(first.run_id).status, "running");
   assert.equal(c.view(second.run_id).status, "running");

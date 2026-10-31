@@ -15,7 +15,7 @@ const hasCode = (code, details = {}) => (error) => {
 };
 const finishedBit = (c, run) => c.runs.get(run.run_id).finished_presented; // Inspect original presentation evidence only.
 const invalidNames = [undefined, "月兔", "a".repeat(25), "otter\n"];
-const profiles = () => Object.fromEntries(["reader", "editor", "researcher"].map((name) =>
+const profiles = () => Object.fromEntries(["editor", "researcher"].map((name) =>
   [name, { definition: `${name} fixture definition`, tools: ["read"] }]));
 
 function toolOptions(f) {
