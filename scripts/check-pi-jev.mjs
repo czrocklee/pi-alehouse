@@ -554,6 +554,50 @@ function registeredHarness({ withSignal = true, mode = "enforce", hasUI = true }
   };
 }
 
+// Eligible root asks through the actual registered Jev authorizer. Dangerous
+// prefixes are normally stopped by the earlier static guard; deliberately
+// injecting them here tests the checkpoint independently, not a full pipeline.
+// The approve-only transport is synthetic, including its reversible-write
+// answers. A checkpoint means DEFER to normal authority, not a yolo/ALLOW ban.
+for (const command of [
+  "PATH=./fixture-bin git status", "LD_PRELOAD=./fixture.so git status",
+  "GIT_EXTERNAL_DIFF=./fixture git diff", "/usr/bin/env GIT_EDITOR=./fixture /usr/bin/git status",
+  "LC_ALL=C git status", "FOO=1 git status", "env LC_ALL=C git status",
+  "env -- FOO=1 git status", "LC_ALL=$(pwd) git status",
+  "git checkout -- .", "git restore .", "git branch -df main",
+  "git stash clear", "git update-ref -d refs/heads/main", "git filter-branch --all",
+  "git checkout -f main", "git checkout -B main", "git branch -fd main", "git branch -d main",
+  "git stash drop", "git reset --hard", "git clean -fd", "git push --force",
+  "git reflog expire --all", "git branch -D main", "git tag -d v1",
+  "git -c core.pager=./fixture status", "GIT_CONFIG_PARAMETERS=x git status",
+  "git diff --ext-diff", "git log --textconv", "git diff --output=fixture.txt",
+  "git --unknown status",
+]) {
+  const h = registeredHarness();
+  h.live("Perform the requested synthetic local Git action.");
+  let fetchCalls = 0;
+  globalThis.fetch = async () => { fetchCalls++; return mockResponse({ ...allowAnswers(), read_only: { noul: 0.01 } }); };
+  check(`Git checkpoint defers: ${command}`, await h.authorize(h.call("git-checkpoint", command)), { kind: "defer" });
+  check(`Git checkpoint skips approve-only reviewer: ${command}`, fetchCalls, 0);
+  const audit = h.reviews.at(-1);
+  check(`Git checkpoint audit: ${command}`, [audit.failureCode, audit.checkpointReason, audit.modelCalled],
+    ["hard_checkpoint", "high_impact_command", false]);
+}
+for (const command of [
+  "git status", "git add ordinary.txt", "git commit -m fixture", "env git status",
+  "git checkout topic", "git checkout -b topic", "git checkout -bfixture", "git checkout -qbfeature",
+  "git branch --list", "git branch main-data",
+  "git branch -- -df", "git branch --list -- -d", "git branch --format -d",
+  "git branch --sort -d", "git tag -- -d", "git stash list",
+]) {
+  const h = registeredHarness();
+  h.live("Perform the requested synthetic local Git action.");
+  let fetchCalls = 0;
+  globalThis.fetch = async () => { fetchCalls++; return mockResponse({ ...allowAnswers(), read_only: { noul: 0.01 } }); };
+  check(`ordinary Git ask reaches reviewer: ${command}`, await h.authorize(h.call("git-ordinary", command)), { kind: "allow" });
+  check(`ordinary Git ask uses approve-only reviewer once: ${command}`, fetchCalls, 1);
+}
+
 // Exercise the real profile lookup through the registered authorizer, not a
 // stubbed boundedProfileIsValid. A copied, intact rendered profile must allow a
 // well-bound child; missing/changed profiles and product limits must defer.

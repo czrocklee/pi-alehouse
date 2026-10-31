@@ -4,14 +4,13 @@
  * denies; it is not a sandbox for interpreters, scripts, or dynamic shell code.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PermissionsService } from "@gotgenes/pi-permission-system";
-import { isGitQuery, parseGitInvocation, unknownGlobalsMayHideQuery, type GitInvocation } from "./lib/git-invocation.ts";
-import { gitHistoryOptionLength, gitHistoryOptionProblem, gitLogRevision, gitPathWord, gitStatusFlags } from "./lib/git-read-grammar.ts";
+import { hasDangerousGitEnvironmentPrefix, parseGitInvocation, type GitInvocation } from "./lib/git-invocation.ts";
 
 // Populated from the same Nix declaration as worker definitions and approval hashes.
 const WORKER_POLICY: Record<string, { digest: string; bashDenies: string[] }> = /* @worker-policy@ */ {};
@@ -281,14 +280,15 @@ function loadDenies(root: string): Denies {
 
 function bashDenied(command: string, agent: string | undefined, denies: Denies): boolean {
   if (agent && !denies.agents.has(agent)) return true;
+  // Only declared denies apply. Worker identity is not a Git mutation ban;
+  // ordinary editor Git writes still need the normal Bash/path gates.
   const patterns = [...denies.global, ...(agent ? denies.agents.get(agent)! : [])];
   return canonicalCommands(command).some((value) => patterns.some((pattern) => matchesDeny(value, pattern)));
 }
 
-// The authority calls this before normalizing execution. In particular, a
-// pinned blob query or injected flags must not hide an exact declarative deny
-// on the original spelling behind a Bash-surface session grant. This reuses the
-// deny-only floor; it is not a permission decision or a factory registration.
+// Check the actual requested source before permission inspection or unrelated
+// non-Git hardening. A session grant must never hide an original declared deny.
+// This deny-only floor does not grant query permission.
 export function originalBashDeny(command: string, ctx: ExtensionContext,
   root = resolve(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi/agent"))): string | undefined {
   try {
@@ -304,9 +304,12 @@ function inlineEnvironmentOverridesWhitelist(command: string, denies: Denies): b
     const words = [...original];
     while (["if", "then", "else", "elif", "while", "until", "do", "!", "{"].includes(words[0])) words.shift();
     if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")) return false;
-    // Upstream strips these assignments before matching command patterns. PATH,
-    // loader options and Git configuration can turn an exact read-only spelling
-    // into code execution; unknown variables are not evidence of safety either.
+    // Git keeps ordinary approval for benign assignments, with a hard human
+    // checkpoint on eligible asks. Selected dangerous prefixes are refused
+    // separately, including env wrappers, regardless of any permission grant.
+    if (parseGitInvocation(original)) return false;
+    // Upstream strips these assignments before matching non-Git static allows.
+    // Unknown variables are not evidence that an exact allowance stays safe.
     // Work on decoded words, without reparsing quoted interpreter source.
     return canonicalWords(words).some((value) =>
       /^git (?:status|diff|log|show|ls-files)(?: |$)/.test(value) ||
@@ -425,67 +428,6 @@ function unsafeRipgrep(command: string): boolean {
   return blocked;
 }
 
-// Independent tool-entry metadata floor, including after a Bash-surface session
-// grant. Such a grant does not skip the remaining path gates or explicit denies.
-// Only status/log/show are checked here; diff keeps its existing gate route.
-// Wrapped queries keep the normal managed/approval route, not an approval grant.
-// This grammar cannot verify object types or authorize paths: show remains
-// commit-constrained and patch-free, and literal log pathspecs still need path gates.
-export function staticGitQueryProblem(source: string): string | undefined {
-  let problem: string | undefined;
-  literalCommands(source, undefined, undefined, (original, expansions) => {
-    if (problem !== undefined) return;
-    const git = parseGitInvocation(original, expansions);
-    if (!git || git.wrapped) return;
-    if (!isGitQuery(git)) {
-      if (unknownGlobalsMayHideQuery(git)) problem = "unrecognized Git global option; query position is not proven";
-      return;
-    }
-    const kind = git.subcommand!.toLowerCase();
-    if (git.unknownGlobals) { problem = "unrecognized Git global option; query position is not proven"; return; }
-    if (git.configOverride) { problem = "Git configuration override (-c/--config-env or GIT_CONFIG_* assignment)"; return; }
-    if (git.expansions) {
-      problem = `nonliteral shell expansion in Git argument ${JSON.stringify(original.find((_, index) => expansions[index]))}`;
-      return;
-    }
-    const args = git.args;
-    let showCommit = false;
-    for (let i = 0; i < args.length; i += 1) {
-      const arg = args[i];
-      if (arg === "--") {
-        if (kind === "status") return;
-        if (kind === "log") {
-          const badPath = args.slice(i + 1).find(path => !gitPathWord(path));
-          if (badPath !== undefined) problem = `unsupported log pathspec ${JSON.stringify(badPath)}; only restricted literal paths are accepted`;
-          return;
-        }
-        problem = "show option terminator -- is outside the static commit-only metadata grammar";
-        return;
-      }
-      if (kind === "status") {
-        if (gitStatusFlags.has(arg)) continue;
-        problem = `unsupported status argument ${JSON.stringify(arg)}`;
-        return;
-      }
-      const optionLength = gitHistoryOptionLength(args, i);
-      if (optionLength) { i += optionLength - 1; continue; }
-      if (arg.startsWith("-")) { problem = gitHistoryOptionProblem(args, i); return; }
-      // `git show -s <blob>` still prints its contents. Only commit-constrained
-      // show revisions are metadata queries; log itself traverses commits only.
-      if (kind === "show" && gitLogRevision(arg) && (/^HEAD(?:[~^][0-9]*)+$/.test(arg) || /^[A-Za-z0-9_@][A-Za-z0-9_./~^@{}+-]*\^\{commit\}$/.test(arg))) { showCommit = true; continue; }
-      if (kind === "log" && gitLogRevision(arg)) continue;
-      problem = kind === "show" ? `show argument ${JSON.stringify(arg)} is not an explicit commit-constrained revision (for example HEAD^0)` :
-        `unsupported log revision ${JSON.stringify(arg)}`;
-      return;
-    }
-    if (kind === "show" && !showCommit) problem = "show requires an explicit commit-constrained revision such as HEAD^0";
-    else if (kind === "show" && !args.some((arg) => arg === "-s" || arg === "--no-patch")) {
-      problem = "show requires -s/--no-patch; default output may include file contents";
-    }
-  });
-  return problem;
-}
-
 // Upstream misses a new bare output filename when classifying worker writes.
 // Keep the action on the normal path gate by requiring its explicit ./ spelling.
 function missedWorkerRedirect(command: string, ctx: ExtensionContext): boolean {
@@ -594,10 +536,6 @@ function registerGuard(pi: ExtensionAPI, root = resolve(process.env.PI_CODING_AG
       if (unsafeOutputUtility(event.input.command)) {
         return { block: true, reason: "Static printf requires a literal text/%s/%% format; sha256sum requires direct input and supported output flags. Use an env wrapper for normal approval of other forms." };
       }
-      const gitProblem = staticGitQueryProblem(event.input.command);
-      if (gitProblem !== undefined) {
-        return { block: true, reason: `Static Git metadata grammar: ${gitProblem}. Use env git ... for the normal managed/approval route; env does not override denies or guarantee approval.` };
-      }
       if (unsafeRipgrep(event.input.command)) {
         return { block: true, reason: "Static rg requires --no-config, safe flags, -d 0, then -- and a pattern plus literal paths (or stdin - without -d 0); --files lists only the current directory. Use an env wrapper for normal approval of other forms." };
       }
@@ -606,6 +544,9 @@ function registerGuard(pi: ExtensionAPI, root = resolve(process.env.PI_CODING_AG
       }
       if (expandingHeredocFeedsWhitelist(event.input.command, denies)) {
         return { block: true, reason: "Command substitutions in an expanding heredoc are outside the static whitelist; use an explicit env wrapper for normal approval." };
+      }
+      if ((literalCommands(event.input.command) ?? []).some(hasDangerousGitEnvironmentPrefix)) {
+        return { block: true, reason: "Requested PATH, loader, or helper-execution environment overrides on recognized Git invocations are statically denied; session approvals cannot override this guard." };
       }
       if (inlineEnvironmentOverridesWhitelist(event.input.command, denies)) {
         return { block: true, reason: "Inline environment overrides are outside the static whitelist; use an explicit env wrapper for normal approval." };
@@ -632,6 +573,7 @@ function safetySelfTest(root: string): void {
   try {
     writeFileSync(join(scratch, ".env"), "FAKE_SECURITY_FIXTURE=not-a-secret\n");
     writeFileSync(join(scratch, "normal.txt"), "safe fixture\n");
+    mkdirSync(join(scratch, "docs"));
     symlinkSync(scratch, join(scratch, "linked-directory"));
     const context = (agent?: string) => ({
       cwd: scratch,
@@ -643,17 +585,31 @@ function safetySelfTest(root: string): void {
     // identity, redirect and Git cases retain their separate guard obligations.
     const call = (toolName: string, input: Record<string, unknown>, agent?: string) =>
       handlers.get("tool_call")!({ toolName, input }, context(agent));
+    // Data-only guard checks: an absent static refusal is NOT a permission
+    // allow. The authority still checks paths, helpers and ordinary approval.
+    const gitApprovalRoute = [
+      "git show -s", "git show -s HEAD", "git show HEAD", "git show -s deadbeef", "git show -s refs/tags/blob", "git show -s HEAD:.env", "git show -s --output=ordinary.txt HEAD", "git log -5 --oneline --ext-diff", "git log --textconv", "git log --format=raw --patch", "git status --short -- $INPUT", "git log -5 --oneline $REF", "command git show HEAD", "if true; then git log --textconv; fi",
+      "git -P show -s deadbeef", "git -p show -s deadbeef", "git --bare show -s HEAD", "git --namespace=foo show -s HEAD",
+      "git -C . show -s deadbeef", "git -C . -P show -s deadbeef", "git -P -C . show -s deadbeef", "command git -P show -s deadbeef",
+      "git --git-dir=.git show -s deadbeef", "GIT_CONFIG_PARAMETERS=\"'core.pager=cat'\" git log -1 --oneline",
+      'GIT_CONFIG_VALUE_0="`pwd`/fixture" git status --short',
+      "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=./fixture-hook git status --short",
+      "LC_ALL=C git diff --stat", "FOO='a b' git status --short && git diff --check",
+      "git diff --check; FOO=bar git status --short", "FOO=bar command git status --short",
+    ];
+    for (const command of gitApprovalRoute) {
+      if (call("bash", { command })?.block) throw new Error(`Git approval route statically refused: ${command}`);
+    }
     // The grep override exercises descendant permissions in check-pi-policy.mjs.
     const denied = [
-      ...["git show -s", "git show -s HEAD", "git show HEAD", "git show -s deadbeef", "git show -s refs/tags/blob", "git show -s HEAD:.env", "git show -s --output=ordinary.txt HEAD", "git log -5 --oneline --ext-diff", "git log --textconv", "git log --format=raw --patch", "git status --short -- $INPUT", "git log -5 --oneline $REF", "command git show HEAD", "if true; then git log --textconv; fi",
-        "git -P show -s deadbeef", "git -p show -s deadbeef", "git --bare show -s HEAD", "git --namespace=foo show -s HEAD",
-        "git -C . show -s deadbeef", "git -C . -P show -s deadbeef", "git -P -C . show -s deadbeef", "command git -P show -s deadbeef",
-        "git --git-dir=.git show -s deadbeef", "GIT_CONFIG_PARAMETERS=\"'core.pager=cat'\" git log -1 --oneline",
-      ].map((command) => [undefined, command]),
       ["unlisted-worker", "git status --short"],
-      ["researcher", "echo fixture > new-output"],
       ["editor", "pwd >> new-output"],
-      ["researcher", "cd linked-directory && echo fixture > normal.txt"],
+      ["editor", "cd docs && echo ok >normal.txt"],
+      ...["PATH=./fixture-bin git status --short", 'PATH="`pwd`" git status --short',
+        "PATH=$(pwd) git status --short", 'PATH="$(pwd)" git status --short', "PATH=`pwd` git status --short",
+        "LD_PRELOAD=./fixture.so git status", "GIT_EXTERNAL_DIFF=./fixture git diff",
+        "env PATH=./fixture-bin git status --short", "/usr/bin/env GIT_EDITOR=./fixture /usr/bin/git status",
+      ].map((command) => [undefined, command]),
       ...["nl *.txt", "nl $INPUT", "sha256sum *.txt", "sha256sum $INPUT", "sha256sum < $INPUT",
         "sha256sum -c sums", "sha256sum --check sums", "sha256sum --ch sums", "sha256sum --check=sums",
         "sha256sum -bc sums", "sha256sum --ignore-missing sums", "sha256sum -- sums*",
@@ -693,19 +649,8 @@ function safetySelfTest(root: string): void {
       [undefined, "wc --files0-from=-"], [undefined, "PATH=/fixture head ordinary.txt"],
       [undefined, "wc -l <<EOF\n$(PATH=/fixture git status --short)\nEOF"],
       [undefined, "wc -l <<-EOF\n\t`PATH=/fixture git status --short`\n\tEOF"],
-      [undefined, "PATH=./fixture-bin git status --short"],
-      [undefined, 'PATH="`pwd`" git status --short'],
-      [undefined, "PATH=$(pwd) git status --short"],
-      [undefined, 'PATH="$(pwd)" git status --short'],
-      [undefined, "PATH=`pwd` git status --short"],
-      [undefined, 'GIT_CONFIG_VALUE_0="`pwd`/fixture" git status --short'],
       [undefined, "PATH=./fixture-bin node --version"],
       [undefined, "LD_PRELOAD=./fixture.so python3 --version"],
-      [undefined, "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=./fixture-hook git status --short"],
-      [undefined, "LC_ALL=C git diff --stat"],
-      [undefined, "FOO='a b' git status --short && git diff --check"],
-      [undefined, "git diff --check; FOO=bar git status --short"],
-      [undefined, "FOO=bar command git status --short"],
       [undefined, "sudo true"], [undefined, "/run/wrappers/bin/sudo true"],
       [undefined, "sudo\ttrue"], [undefined, '\"sudo\" true'], [undefined, '\"sudo\"'],
       [undefined, 's"u"do true'], [undefined, '"sudo" "$USER"'],
@@ -717,11 +662,6 @@ function safetySelfTest(root: string): void {
       [undefined, 'while false; do "sudo" true; done'], [undefined, "true && /run/wrappers/bin/sudo true | cat"],
       ["researcher", "git --no-pager push"], ["researcher", "git -C '/tmp/a b' --no-pager push origin main"],
       ["researcher", "'/usr/bin/git' --paginate commit -m fixture"],
-      ["editor", "git --no-pager commit --amend"],
-      ["editor", "git -P commit --amend"], ["editor", "git -P push --force"],
-      ["editor", "git -p commit --amend"], ["editor", "git -C /tmp -P push --force"],
-      ["editor", "git -C /tmp --no-pager push origin main --force-with-lease"],
-      ["editor", "git --git-dir=/tmp/foo status"], ["editor", "git --no-pager -c core.pager=cat status"],
       [undefined, 'cat <<\'EOF\'\nsudo true\nEOF\n"sudo" true'],
       [undefined, 'cat <<-"EOF"\n\tsudo true\n\tEOF\n"sudo" true'],
       [undefined, 'cat <<A <<\'B\'\nsudo true\nA\nsudo true\nB\n"sudo" true'],
@@ -767,7 +707,7 @@ function safetySelfTest(root: string): void {
       "env rg --pre cat fixture .",
       "head -45 normal.txt", "wc -l -c normal.txt", "head -n 10 < normal.txt",
       "env wc --files0-from=names", "env head *.txt",
-      "env PATH=./fixture-bin git status --short",
+      "echo ok >normal.txt",
       // Wrapped Git keeps the normal managed/approval route, not a permission grant.
       "env git show HEAD", "env git -P show -s deadbeef", "timeout 5 git -P show -s deadbeef",
       "FOO=bar python3 -c 'print(1); print(2)'",
@@ -786,22 +726,24 @@ function safetySelfTest(root: string): void {
       if (call("bash", { command: "git status --short" }, agent)) throw new Error(`Managed worker cannot inspect status: ${agent}`);
       if (!call("bash", { command: "sudo true" }, agent)?.block) throw new Error(`Worker escaped global deny: ${agent}`);
     }
-    // Git mutations are the parent's in every profile.
-    for (const agent of Object.keys(WORKER_POLICY)) {
-      if (!call("bash", { command: "git --no-pager commit -m fixture" }, agent)?.block) throw new Error(`Worker committed: ${agent}`);
+    // No special mutation refusal: only the generated profile's literal denies
+    // apply here. Absence of a guard refusal is NOT a Bash approval.
+    for (const command of ["git add normal.txt", "git commit -m fixture", "git branch topic", "git tag v1"]) {
+      if (call("bash", { command }, "editor")?.block) throw new Error(`Editor Git ordinary approval route refused: ${command}`);
     }
-    // Identity decides the deny set: a researcher may not rm, an editor may.
-    const remove = { toolName: "bash", input: { command: "rm normal.txt" } };
+    if (!call("bash", { command: "git --no-pager commit -m fixture" }, "researcher")?.block) throw new Error("Researcher lost its declared deny");
+    // Trusted identity selects the declared deny set, never prompt prose.
+    const commit = { toolName: "bash", input: { command: "git commit -m fixture" } };
     for (const [parent, child] of [["editor", "researcher"], ["researcher", "editor"]]) {
       const ctx = { ...context(), getSystemPrompt: () => `<active_agent name="${parent}"/>\n<active_agent name="${child}"/>` };
-      if (!handlers.get("tool_call")!(remove, ctx)?.block) throw new Error("Ambiguous legacy identity was accepted");
+      if (!handlers.get("tool_call")!(commit, ctx)?.block) throw new Error("Ambiguous prompt identity was accepted");
     }
     const repeated = { ...context(), getSystemPrompt: () => '<active_agent name="editor"/>\n<ACTIVE_AGENT name="editor"/>' };
-    if (handlers.get("tool_call")!(remove, repeated)) throw new Error("Identical legacy markers blocked");
+    if (handlers.get("tool_call")!(commit, repeated)) throw new Error("Identical prompt markers blocked");
     for (const agent of ["researcher", "editor"]) {
       const trusted = { ...context(), getSystemPrompt: () => '<active_agent name="editor"/>\n<active_agent name="researcher"/>',
         sessionManager: { getEntries: () => [{ type: "custom", customType: "active_agent", data: { name: agent } }] } };
-      if (!!handlers.get("tool_call")!(remove, trusted)?.block !== (agent === "researcher")) throw new Error("Prompt markers overrode trusted child entry");
+      if (!!handlers.get("tool_call")!(commit, trusted)?.block !== (agent === "researcher")) throw new Error("Prompt markers overrode trusted child entry");
     }
     if (call("bash", { command: "git status --short" })) throw new Error("Marker-free parent blocked");
     for (const agent of [undefined, "editor"]) {

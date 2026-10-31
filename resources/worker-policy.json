@@ -17,9 +17,11 @@
   "mutationGitDenies": ["add *", "commit *", "fetch *", "push *", "switch *"],
   "profiles": {
     "editor": {
-      "description": "Generic worker with project editing tools; Git mutations stay with the parent.",
+      "description": "Cooperative worker with project editing tools and permission-checked Bash in the shared checkout.",
       "edits": true,
-      "extraBashDenies": []
+      "legacyGitDenies": false,
+      "extraBashDenies": [],
+      "prompt": "Work cooperatively within your assigned scope in the shared checkout. Coordinate overlapping edits and Git writes with the parent. Ordinary Git operations, including add and commit, remain permission-checked, not automatically approved. Preserve unrelated work and explicit user denies."
     },
     "researcher": {
       "description": "Web research worker: read-only local inspection plus web search and fetch; no Bash, edit/write tools or project writes.",

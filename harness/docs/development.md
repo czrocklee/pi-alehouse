@@ -71,31 +71,51 @@ build and installed runtime separate; a changed protected generation requires a
 fresh Pi process. This is a permission floor, not an OS sandbox or protection
 against opaque programs; see [security](security.md#immutable-resource-floor-in-writable-installations).
 
-## Git read-proof integration
+## Cooperative Git
 
-The [Git read-proof contract](git-read-proof.md) separates shared literal grammar,
-Git-only decoding, execution hardening, repository probes and final permission
-verdicts. `extensions/lib/git-read-grammar.ts` must remain import-free; the build
-checks both generated policy/vendor copies against its source digest. Keep the
-non-Git decoder unchanged, preserve original-request WeakMap provenance, and
-validate complete program and gate behavior rather than only grammar acceptance.
-Keep the exact `env git` lane for historical-file show; bare log pathspecs after
-`--` are allowed only by checking every word with `gitPathWord`, not by treating
-the terminator as unconditional acceptance. Status accepts only exact
-`--ignore-submodules=all` among submodule-ignore forms. Every proved diff and
-its probes, including summary-only paths, must disable replacements. Status/diff
-must withhold proof for checked-out indexed submodules without that explicit
-ignore-all option; do not inject it or treat short output as helper isolation.
-Check the effective cwd boundary before probes, including hardening-time probes;
-only linked-worktree `mainRoot` layout verification may query outside it. Keep
-that primary root as a path/external candidate. Synchronous probes block the
-event loop; per-invocation timeout/output caps are not aggregate deadlines or
-prompt cancellation guarantees.
+The [Git contract](git-read-proof.md) keeps the original command, environment,
+executable selection and leading `cd` unchanged. Existing non-Git hardeners
+remain separate; a mixed program must not rewrite a shared `cd` when Git is
+present. `extensions/lib/git-read-grammar.ts` remains import-free and the build
+digest-checks its generated copies, not the query module.
+`permission-system/managed-git-query.ts` supplies a bounded literal inventory;
+`native-git-patch.mjs` integrates it and `native-git-restrictions-patch.mjs`
+retains raw-scope restrictions. `managed-read-policy.ts` hardens only non-Git
+fixed queries and static files. Preserve private original-request provenance
+for those non-Git rewrites.
+
+Repository queries and mutations use ordinary Bash permission. Only bounded
+literal Git version queries can qualify for fixed-query automatic allowance.
+Worker has no extra child-only blanket Git mutation deny and no blanket Git
+allow. Do not add a second per-operation Git authorization matrix. Raw configured
+denies/specific asks, explicit literal file/output facts, actual redirects,
+external-directory checks and credential/resource/high-risk protection remain.
+A selected deny survives session grants/yolo; normal yolo applies to ordinary
+asks, not invalid-config fail-closed asks.
+
+There are no Git subprocess provenance probes, history/object walks or
+unattributed-sentinel workflow in this command classifier. Literal historical
+paths can add restrictions through safely observed conventional repository-root
+aliases; unknown roots stay unknown. No complete historical-content separation
+is claimed. `redirect-argv-patch.mjs` copies `managed-redirect-argv.ts` into the
+vendor tree: consume only the actual redirect destination, keep later argv in
+order and preserve option/data roles. Completed spellings can add restrictions,
+never ALLOW or a truncated-command shortcut. Redirects, outputs and sibling
+commands retain independent effects. The speculative HOME-stability fold is
+retired; dynamic `cd` retains ordinary unknown-base behavior.
+
+Agents share the checkout and Git index; coordinate overlapping edits and Git
+writes. Native Git can refresh index caches and take locks: no zero-write,
+automatic retry or safe lock-removal guarantee. An operator may explicitly launch
+`GIT_OPTIONAL_LOCKS=0 pi-alehouse`; it is not injected and does not disable
+required writer locks or all IO. Shared execution is not OS isolation.
 
 Generated copies are not source; use the matched migration and single validation
-owner described below. `node scripts/check-pi-git-grammar.mjs` is a source-only
-grammar/tokenizer check; it does not exercise repository probes or complete
-permission gates.
+owner below. `node scripts/check-pi-git-grammar.mjs` checks source grammar/tokenizer
+behavior, not full permission gates or execution. Changed contracts require a
+fresh build, focused runtime regressions, package gate and portable policy tests
+under that owner's coordination. Earlier counts are not acceptance of later
+source or public release evidence.
 
 ## Task floor and validation ownership
 

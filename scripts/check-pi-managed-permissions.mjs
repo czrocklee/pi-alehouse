@@ -310,7 +310,7 @@ const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdi
 const sessions = [];
 const externalScratch = [];
 try {
-  git("init", "-q");
+  git("init", "-q", "-b", "main");
   writeFileSync(join(cwd, "ordinary.txt"), "before\n");
   mkdirSync(join(cwd, "src")); writeFileSync(join(cwd, "src/code.ts"), "export const n = 1;\n");
   writeFileSync(join(cwd, "syntax.sh"), "printf source-ran > \"$BASH_SOURCE_CANARY\"\n");
@@ -398,12 +398,26 @@ try {
     assert.deepEqual(originalGitCommands(input), [command]);
     fixedPositive.push(input.command);
   }
-  const diff = "git --no-lazy-fetch --no-optional-locks --no-pager --no-replace-objects diff --no-ext-diff --no-textconv --ignore-submodules=all";
-  const positive = await Promise.all([...fixedPositive, "git status --short", "git status --short -- ordinary.txt", "git status --short --ignored", "git log -5 --oneline", "git log --oneline -n 20 HEAD", "git show -s --format=%ci HEAD~1", "git ls-files", "git ls-files -- src", `env ${diff}`, ...["", " --stat", " --check", " --name-only", " --name-status", " --cached --stat", " --cached --check", " --unified=0", " --unified=9999", " --unified=3 --stat", " --no-renames -- ordinary.txt"].map(suffix => diff + suffix), "cut -d : -f 1 ordinary.txt", "nl -ba ordinary.txt", "readlink ordinary.txt", "sha256sum ordinary.txt", "cat ordinary.txt", "head -n 1 ordinary.txt", "sed -n '1p;2,4p' ordinary.txt", "sed -n '1,2p;2,$p' ordinary.txt", `sed -n '${Array(32).fill("1p").join(";")}' ordinary.txt`].map(async command => {
+  const diff = "git diff";
+  const gitRequested = ["git status --short", "git status --porcelain=v1 -z", "git status --short -- ordinary.txt", "git status --short --ignored", "git log -5 --oneline", "git log --oneline -n 20 HEAD", "git show HEAD:ordinary.txt", "env git show HEAD:ordinary.txt", "git ls-files", "git ls-files -- src", "git -C . status --short", "git --no-pager log -5 --oneline", `env ${diff}`, ...["", " --stat", " --check", " --name-only", " --name-status", " --cached --stat", " --cached --check", " --unified=0", " --unified=9999", " --unified=3 --stat", " --no-renames -- ordinary.txt"].map(suffix => diff + suffix)];
+  for (const command of gitRequested) {
     const input = { command };
-    await hardenGitInput(input, cwd);
-    return input.command;
-  }));
+    assert.equal(await hardenGitInput(input, cwd), undefined, `Git input is not rewritten: ${command}`);
+    assert.equal(input.command, command);
+    assert.deepEqual(Object.keys(input), ["command"]);
+  }
+  // Repository Git is deliberately not part of the automatic positive matrix.
+  // The fixture's exact status allow is USER policy; all other forms ask.
+  for (const agent of [undefined, "editor"]) for (const command of gitRequested) {
+    const result = await check(command, agent);
+    assert.equal(result.bash.state, command === "git status --short" ? "allow" : "ask", `${agent}: ordinary Git policy: ${command}`);
+    assert.equal(result.program.commands().some(unit => unit.managedReadOnly), false);
+  }
+  for (const command of ["git add ordinary.txt", "git commit -m fixture", "git branch topic", "git tag v1"]) {
+    assert.equal((await check(command, "editor")).bash.state, "ask", "editor writes use ordinary permission, never managed_static_read");
+    assert.equal((await check(command, "editor")).program.commands().some(unit => unit.managedReadOnly), false);
+  }
+  const positive = [...fixedPositive, "cut -d : -f 1 ordinary.txt", "nl -ba ordinary.txt", "readlink ordinary.txt", "sha256sum ordinary.txt", "cat ordinary.txt", "head -n 1 ordinary.txt", "sed -n '1p;2,4p' ordinary.txt", "sed -n '1,2p;2,$p' ordinary.txt", `sed -n '${Array(32).fill("1p").join(";")}' ordinary.txt`];
   const negative = [
     ...["--unified", "--unified=", "--unified=-1", "--unified=10000", "--unified=3x", "--unif=3", "--unified 3", "-U", "-U-1", "-U10000", "-U3x", "-U 3"].map(flag => `${diff} --stat ${flag}`),
     ...["1p;", ";1p", "1p;;2p", "0,2p;3p", "1p;2q", "1p;2e", "1p;w output.txt", "1p;r .env", "1p;s/a/b/e", "1p;#comment", "1p\\n2p", Array(33).fill("1p").join(";")].map(program => `sed -n '${program}' ordinary.txt`),
@@ -411,7 +425,7 @@ try {
     "command -v", "command -v git", "command -v ../pi", "command -v -- pi", "command pi", "bash -n", "bash -n syntax.sh extra", "bash -c syntax.sh", "bash -n .", "bash -n $FILE",
     "printenv", "printenv HOME", "printenv PI_OTHER", "printenv PI_MODEL HOME", "env", "env printenv HOME", "env FOO=bar printenv PI_MODEL",
     "ruff check syntax.sh", "ruff check --fix syntax.sh", "ruff check --output-file out syntax.sh", "ruff format --check syntax.sh",
-    "git log -5 --oneline", "git diff --no-ext-diff --no-textconv --ignore-submodules=all", "git diff", "git diff --stat", "git diff --check", `${diff} --output=ordinary.txt`, `${diff} --out=ordinary.txt`, `${diff} --o ordinary.txt`, `${diff} --ext-diff`, `${diff} --textconv`, `${diff} HEAD~1`, `${diff} --no-renames -- ../repo/ordinary.txt`, `${diff} --no-renames -- ':(top)*'`, `${diff} --no-renames -- "$INPUT"`, `${diff} > ordinary.txt`, `${diff} && touch ordinary.txt`, `env FOO=1 ${diff}`, `env -i ${diff}`, `timeout 5 ${diff}`, "git -c core.pager=cat status --short", "git -C . status --short", "git --no-pager log -5 --oneline", "git show HEAD:.env", "git show HEAD", "git blame ordinary.txt", "git log -p -1", "git ls-files --with-tree=HEAD", "git ls-files --recurse-submodules"];
+    "git diff --not-a-real-option", `${diff} --output=ordinary.txt`, `${diff} --out=ordinary.txt`, `${diff} --o ordinary.txt`, `${diff} --ext-diff`, `${diff} --textconv`, `${diff} --no-renames -- ../repo/ordinary.txt`, `${diff} --no-renames -- ':(top)*'`, `${diff} --no-renames -- "$INPUT"`, `${diff} && touch ordinary.txt`, `env FOO=1 ${diff}`, `env -i ${diff}`, `timeout 5 ${diff}`, "git -c core.pager=cat status --short", "git blame ordinary.txt", "git log -p -1", "git ls-files --with-tree=HEAD", "git ls-files --recurse-submodules"];
   for (const agent of [undefined, "editor"]) {
     for (const command of positive) {
       const result = await check(command, agent);
@@ -423,6 +437,31 @@ try {
       const result = await check(command, agent);
       assert.notEqual(result.bash.state, "allow", `${agent}: unsupported command: ${command}`);
       assert(!result.program.commands().some(command => command.floorExemption), `New proof reached wrapper core: ${command}`);
+      if (command === `${diff} && touch ordinary.txt`) {
+        assert.equal(result.bash.state, "ask", "the mutating sibling still needs its own ordinary approval");
+        assert.notEqual(result.program.commands().find(unit => unit.text === diff)?.managedReadOnly, true);
+        assert.notEqual(result.program.commands().find(unit => unit.text.startsWith("touch "))?.managedReadOnly, true,
+          "a sibling cannot inherit Git's read classification");
+      }
+    }
+    // Git-body eligibility is per COMMAND, not an allow for shell file effects.
+    // Gate-only fixtures: never execute either redirect, even for an editor.
+    for (const target of ["ordinary.txt", ".git/config"]) {
+      const command = `${diff} > ${target}`, input = { command };
+      assert.equal(await hardenGitInput(input, cwd), undefined);
+      assert.equal(input.command, command);
+      const result = await check(input.command, agent);
+      assert.equal(result.program.commandText(), command);
+      assert.equal(result.bash.state, "ask", `${agent}: repository Git uses normal Bash permission`);
+      assert.notEqual(result.program.commands().find(unit => unit.text === diff)?.managedReadOnly, true);
+      assert(result.program.pathRuleCandidates().some(candidate => candidate.token === target &&
+        candidate.effect.effect === "write" && candidate.effect.source === "syntax"),
+      `actual shell redirect remains a syntax WRITE: ${command}`);
+      if (target === ".git/config") {
+        assert.equal(result.path?.preCheck?.state, "deny", `${agent}: independent write/protected-target floor: ${command}`);
+      } else {
+        assert.equal(result.path, null, `${agent}: existing ordinary workspace-write permission is unchanged`);
+      }
     }
     assert.equal((await check("echo fixture > ordinary.txt", agent)).path, null);
     assert.equal((await check("echo fixture > ~/.pi/agent/settings.json", agent)).path.preCheck.state, "deny");
@@ -444,18 +483,18 @@ try {
   rmSync(join(cwd, "ordinary.txt"));
   for (const agent of [undefined, "editor"]) {
     const deleted = await check(`${diff} --no-renames -- ordinary.txt`, agent);
-    assert.equal(deleted.bash.state, "allow"); assert.equal(deleted.path, null);
+    assert.equal(deleted.bash.state, "ask"); assert.equal(deleted.path, null);
   }
   writeFileSync(join(cwd, "ordinary.txt"), "after\n");
-  // Whole-repo diff includes protected descendants even though none is named
-  // in the command, including deleted index entries still present in HEAD.
+  // Implicit whole-repository/history effects are no longer enumerated.
+  // Literal paths and ordinary Bash review remain, not content provenance.
   writeFileSync(join(cwd, ".env"), "FAKE_SECRET_FIXTURE=not-real\n");
   writeFileSync(join(cwd, "src/.env"), "FAKE_NESTED_FIXTURE=not-real\n"); git("add", ".env", "src/.env");
   git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fake sensitive fixture");
   const scopedCheck = { command: "git diff --check" }; await hardenGitInput(scopedCheck);
   assert.equal((await check(scopedCheck.command)).path, null, "Unchanged protected files cannot disable ordinary diff/check");
   writeFileSync(join(cwd, ".env"), "FAKE_SECRET_FIXTURE=changed-private-marker\n");
-  assert.equal((await check(scopedCheck.command)).path.preCheck.state, "deny", "Changed protected content still denies");
+  assert.equal((await check(scopedCheck.command)).path, null, "No implicit working-tree/history enumeration: repository diff remains normal review");
   for (const [requested, expected, gate] of [
     ["bash -n .env", "deny", "path"],
     ["bash -n /var/lib/pi-fixture/external.sh", "ask", "external"],
@@ -466,32 +505,36 @@ try {
   }
   for (const suffix of ["--stat -p", "--stat --patch", "--stat --check", "--stat --binary", "--stat -U0", "--stat --unified=0", "--unified=3 --stat", "--name-only --unified=1"]) {
     const mixed = { command: `git diff ${suffix}` }; await hardenGitInput(mixed);
-    assert.equal((await check(mixed.command)).path.preCheck.state, "deny", "Summary cannot hide a content-bearing option");
+    assert.equal((await check(mixed.command)).path, null, "Implicit file content is not attributed; ordinary Bash review remains");
+    assert.equal((await check(mixed.command)).bash.state, "ask");
   }
   for (const format of ["--stat", "--numstat", "--shortstat", "--summary", "--name-only", "--name-status"]) {
     const metadata = { command: `git diff ${format}` }; await hardenGitInput(metadata);
-    assert.equal((await check(metadata.command)).path, null, "Summary-only metadata does not expose file contents");
-    const output = spawnSync("bash", ["-c", metadata.command], { cwd, encoding: "utf8" });
-    assert.equal(output.status, 0); assert(!output.stdout.includes("changed-private-marker"));
+    assert.equal((await check(metadata.command)).path, null,
+      "No changed-file/history probe: unmentioned names are not a literal restriction");
+    assert.equal((await check(metadata.command)).bash.state, "ask");
+    assert.equal(metadata.command, `git diff ${format}`, "summary formatting is not rewritten to weaken a path restriction");
   }
   writeFileSync(join(cwd, ".env"), "FAKE_SECRET_FIXTURE=not-real\n");
   git("rm", "-q", ".env", "src/.env");
   for (const agent of [undefined, "editor"]) {
-    assert.equal((await check(`${diff} --cached`, agent)).path.preCheck.state, "deny", "Deleted HEAD secret is checked");
+    assert.equal((await check(`${diff} --cached`, agent)).path, null, "Historical-only names are not enumerated");
+    assert.equal((await check(`${diff} --cached`, agent)).bash.state, "ask");
     assert.equal((await check(`${diff} --no-renames -- ordinary.txt`, agent)).path, null, "Explicit file proof does not read unrelated historical blobs");
     for (const path of ["src", "src//", "./src/./", "."])
-      assert.equal((await check(`${diff} --cached --no-renames -- ${path}`, agent)).path.preCheck.state, "deny", "Directory spellings cannot omit protected descendants");
+      assert.equal((await check(`${diff} --cached --no-renames -- ${path}`, agent)).bash.state, "ask", "Directory content remains normal review, not a recursive read proof");
   }
   writeFileSync(join(cwd, ".env"), "FAKE_UNTRACKED_FIXTURE\n");
   symlinkSync(".env", join(cwd, "alias.txt"));
   assert.equal((await check("cat alias.txt", "editor")).path.preCheck.state, "deny");
   assert.equal((await check(`${diff} --no-renames -- alias.txt`)).path.preCheck.state, "deny", "Git proof retains canonical symlink policy");
+  assert.equal((await check("git show HEAD:.env")).path?.preCheck.state, "deny", "Named historical secret stays a path deny");
   // An explicit deny/ask and an invalid scope may never be replaced by proof.
   for (const action of ["ask", "deny"]) {
     const file = join(scratch, `policy-${action}.json`);
-    writeFileSync(file, JSON.stringify({ ...config, permission: { ...config.permission, bash: { ...config.permission.bash, "git --no-lazy-fetch --no-optional-locks --no-pager log *": action } } }));
+    writeFileSync(file, JSON.stringify({ ...config, permission: { ...config.permission, bash: { ...config.permission.bash, "git log -5 --oneline": action } } }));
     const local = new PermissionResolver(new PermissionManager({ globalConfigPath: file, agentsDir: join(agentDir, "agents"), mcpServerNames: [] }), { getRuleset: () => [] });
-    const p = await BashProgram.parse("git --no-lazy-fetch --no-optional-locks --no-pager log --no-show-signature -5 --oneline --", normalizer);
+    const p = await BashProgram.parse("git log -5 --oneline", normalizer);
     assert.equal(resolveBashCommandCheck(p.commandText(), p.commands(), undefined, local).state, action);
   }
   for (const [index, requested] of ["bash -n syntax.sh", "env printenv PI_MODEL PI_MODEL_ID PI_PROVIDER", ...weeklyRequested.filter(command => !command.includes("|"))].entries()) {
@@ -529,7 +572,7 @@ try {
   const brokenManager = new PermissionManager({ globalConfigPath: configPath, projectGlobalConfigPath: brokenConfig, agentsDir: brokenAgents, mcpServerNames: [] });
   assert(brokenManager.getConfigIssues("broken").length > 0);
   const brokenResolver = new PermissionResolver(brokenManager, { getRuleset: () => [] });
-  const p = await BashProgram.parse("git --no-lazy-fetch --no-optional-locks --no-pager log --no-show-signature -5 --oneline --", normalizer);
+  const p = await BashProgram.parse("git log -5 --oneline", normalizer);
   assert.notEqual(resolveBashCommandCheck(p.commandText(), p.commands(), "broken", brokenResolver).state, "allow");
   const brokenFixed = { command: "bash -n syntax.sh" }; await hardenGitInput(brokenFixed);
   const brokenFixedProgram = await BashProgram.parse(brokenFixed.command, normalizer, { originalCommands: originalGitCommands(brokenFixed) });
@@ -537,7 +580,7 @@ try {
   // Yolo turns asks into allows, never the floor's clamped allows.
   const yoloBroken = new PermissionResolver(new PermissionManager({ globalConfigPath: configPath, projectGlobalConfigPath: brokenConfig,
     agentsDir: brokenAgents, mcpServerNames: [], isYoloEnabled: () => true }), { getRuleset: () => [] });
-  // `cat *` is a fixture-only reader allowance; invalid project scope clamps it to ask.
+  // `cat *` is a fixture-only read-command allowance; invalid project scope clamps it to ask.
   const clamped = await BashProgram.parse("cat ordinary.txt", normalizer);
   assert.equal(resolveBashCommandCheck(clamped.commandText(), clamped.commands(), "broken", brokenResolver).origin, "fail-closed",
     "the fixture really is a floored allow");
@@ -552,77 +595,50 @@ try {
     mcpServerNames: [], isYoloEnabled: () => true }), { getRuleset: () => [] });
   assert.equal(resolveBashCommandCheck(plainAsk.commandText(), plainAsk.commands(), undefined, yoloValid).state, "allow",
     "with a valid config, yolo still allows an ordinary ask");
-  console.log(`PASS: patched 32.0.3 real parser/gates, ${positive.length} positive/${negative.length} negative forms x root/editor; historical secrets, external scope, writes, wrappers, config drift`);
+  console.log(`PASS: patched 32.0.3 real parser/gates, ${positive.length} non-Git positive/${negative.length} negative forms; ordinary Git review, literal secrets, external scope, writes, wrappers, config drift`);
 
   // Drop the fake secret from HEAD as well, so the full positive matrix (not
   // only narrow diffs) reaches the actual SDK gates below. Untracked .env stays
   // for the secret-read negatives.
   git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "remove fake secret");
-  assert.equal((await check(`${diff} HEAD~1 HEAD`)).path.preCheck.state, "deny", "Historical-only secret still contributes scope");
+  assert.equal((await check(`${diff} HEAD~1 HEAD`)).path, null, "No historical file enumeration");
+  assert.equal((await check(`${diff} HEAD~1 HEAD`)).bash.state, "ask");
   assert.equal((await check(`${diff} HEAD~1 HEAD --no-renames -- src/code.ts`)).path, null);
   for (const flags of ["--unified=0", "--stat --unified=1"]) {
     const historical = { command: `git diff ${flags} HEAD~1 HEAD` };
-    assert(await hardenGitInput(historical));
-    assert.equal((await check(historical.command)).path.preCheck.state, "deny", "Long context options cannot omit historical-only protected content");
+    assert.equal(await hardenGitInput(historical, cwd), undefined);
+    assert.equal(historical.command, `git diff ${flags} HEAD~1 HEAD`);
+    assert.equal((await check(historical.command)).path, null, "Implicit historical content is ordinary review, not an attributed read scope");
+    assert.equal((await check(historical.command)).bash.state, "ask");
   }
   symlinkSync("ordinary.txt", join(cwd, "doc-link")); git("add", "doc-link");
   assert.equal((await check(diff)).path, null, "Tracked documentation symlinks do not disable the entire proof");
 
-  // A real promisor repository with missing objects. Its remote helper is a
-  // local canary that cannot contact a network. First prove the fixture would
-  // fetch without the flag, then exercise both execution and pre-gate probes.
-  const partial = join(scratch, "partial"); mkdirSync(partial);
-  const helperDir = join(scratch, "helpers"); mkdirSync(helperDir);
-  const canary = join(scratch, "lazy-fetch-invoked");
-  writeFileSync(join(helperDir, "git-remote-picanary"), '#!/bin/sh\nprintf invoked > "$PI_GIT_FETCH_CANARY"\nexit 1\n', { mode: 0o755 });
-  const previousPath = process.env.PATH;
-  process.env.PATH = `${helperDir}:${previousPath}`;
-  process.env.PI_GIT_FETCH_CANARY = canary;
-  const pg = (...args) => execFileSync("git", args, { cwd: partial, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 5000 });
-  pg("init", "-q"); writeFileSync(join(partial, "ordinary.txt"), "old\n");
-  pg("add", "."); pg("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "promisor fixture");
-  const missingBlob = pg("rev-parse", "HEAD:ordinary.txt").trim();
-  const missingTree = pg("rev-parse", "HEAD^{tree}").trim();
-  pg("config", "remote.fixture.url", "picanary::fixture");
-  pg("config", "remote.fixture.promisor", "true");
-  pg("config", "remote.fixture.partialclonefilter", "blob:none");
-  writeFileSync(join(partial, "ordinary.txt"), "changed\n");
-  rmSync(join(partial, ".git/objects", missingBlob.slice(0, 2), missingBlob.slice(2)));
-  const diffArgs = ["diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all"];
-  const unsafeFetch = spawnSync("git", diffArgs, { cwd: partial, timeout: 5000, encoding: "utf8" });
-  assert.notEqual(unsafeFetch.status, 0);
-  assert(existsSync(canary), "Fixture must demonstrate Git's implicit remote-helper invocation");
-  rmSync(canary);
-  const partialNormalizer = new PathNormalizer(posixPathFlavor, partial);
-  assert(!(await BashProgram.parse(diff, partialNormalizer)).commands().some(command => command.managedReadOnly), "Partial-clone content proof declines even when name probes could avoid missing blobs");
-  assert(!existsSync(canary), "Rejected partial-clone proof must not invoke its remote helper");
-  const hardened = { command: "git diff" };
-  assert(await hardenGitInput(hardened));
-  assert.deepEqual(originalGitCommands(hardened), ["git diff"]);
-  assert.equal(await hardenGitInput(hardened), undefined, "Hardening is idempotent");
-  const noFetch = spawnSync("bash", ["-c", hardened.command], { cwd: partial, timeout: 5000, encoding: "utf8" });
-  assert.notEqual(noFetch.status, 0, "Missing object fails locally, not by fetching it");
-  assert(!existsSync(canary), "Proven command must not invoke a remote helper");
-  rmSync(join(partial, ".git/objects", missingTree.slice(0, 2), missingTree.slice(2)));
-  assert(!(await BashProgram.parse(diff, partialNormalizer)).commands().some(command => command.managedReadOnly));
-  assert(!existsSync(canary), "Pre-gate filename probes must never lazy-fetch missing trees");
-  process.env.PATH = previousPath;
-  delete process.env.PI_GIT_FETCH_CANARY;
-  console.log("PASS: real partial-clone content proof rejected; missing blob/tree probes and hardened execution never lazy-fetch");
+  // No promisor/helper trial: the literal classifier never starts Git at all.
+  // Partial clones, helpers and configured content sources are normal review,
+  // not a repository proof or an isolation promise for approved execution.
+  const querySource = readFileSync(join(repo, "permission-system/managed-git-query.ts"), "utf8");
+  assert.doesNotMatch(querySource, /node:child_process|execFileSync|spawnSync|managed-git-unattributed|find-object=/);
+  assert.equal((await check(diff)).bash.state, "ask");
+  console.log("PASS: Git classifier has no subprocess/history-attribution implementation; repository commands use ordinary review");
   const localCd = join(cwd, "nested"), cdBase = join(scratch, "cdpath"), outsideCd = join(cdBase, "nested");
   mkdirSync(localCd); mkdirSync(outsideCd, { recursive: true });
   for (const path of [localCd, outsideCd]) execFileSync("git", ["init", "-q"], { cwd: path });
   const cdInput = { command: "cd nested && git rev-parse --show-toplevel" };
-  const rawCd = spawnSync("bash", ["-c", cdInput.command], { cwd, encoding: "utf8", env: { ...process.env, CDPATH: cdBase } });
-  assert(rawCd.stdout.trim().endsWith(outsideCd), "Fixture must demonstrate CDPATH relocation");
-  assert(await hardenGitInput(cdInput));
-  assert(cdInput.command.startsWith("cd ./nested && "));
-  const safeCd = spawnSync("bash", ["-c", cdInput.command], { cwd, encoding: "utf8", env: { ...process.env, CDPATH: cdBase } });
-  assert.equal(safeCd.status, 0); assert.equal(safeCd.stdout.trim(), localCd);
+  assert.equal(await hardenGitInput(cdInput), undefined);
+  assert.equal(cdInput.command, "cd nested && git rev-parse --show-toplevel", "Leading cd in a Git program is not rewritten");
+  process.env.CDPATH = cdBase;
+  try {
+    const cdProgram = await BashProgram.parse(cdInput.command, normalizer);
+    assert.equal(cdProgram.commands().some(unit => unit.managedReadOnly), false, "CDPATH leading cd is not an automatic Git read");
+  } finally { delete process.env.CDPATH; }
   const implicitPath = { command: "git log --oneline src/code.ts" };
-  assert(await hardenGitInput(implicitPath)); assert(implicitPath.command.endsWith(" --"));
-  assert.notEqual(spawnSync("bash", ["-c", implicitPath.command], { cwd, encoding: "utf8" }).status, 0, "Log cannot reinterpret a revision operand as an implicit file path");
-  console.log("PASS: real CDPATH canary and forced Git revision interpretation");
+  assert.equal(await hardenGitInput(implicitPath), undefined);
+  assert.equal(implicitPath.command, "git log --oneline src/code.ts", "No injected pathspec terminator");
+  assert.equal((await BashProgram.parse(implicitPath.command, normalizer)).commands().some(unit => unit.managedReadOnly), false, "An unresolved log word is not an automatic read");
+  console.log("PASS: CDPATH Git cd stays original and is not an automatic read; implicit log path is not rewritten");
+  // No raw Git execution: CDPATH is deliberately unresolved for permission,
+  // not rewritten or verified by running the requested shell program.
 
   const fixedBin = join(scratch, "fixed-bin"); mkdirSync(fixedBin);
   const targetCanary = join(scratch, "command-target-ran");
@@ -679,18 +695,18 @@ try {
   for (const count of [0, 3, 80]) {
     const long = { command: `git diff --unified=${count} -- ordinary.txt` };
     const short = { command: `git diff -U${count} -- ordinary.txt` };
-    assert(await hardenGitInput(long)); assert(await hardenGitInput(short));
-    assert(long.command.includes(`--unified=${count}`), "Keep the user's long spelling");
-    const a = spawnSync("bash", ["-c", long.command], { cwd, encoding: "utf8" });
-    const b = spawnSync("bash", ["-c", short.command], { cwd, encoding: "utf8" });
-    assert.equal(a.status, 0); assert.equal(a.status, b.status); assert.equal(a.stdout, b.stdout);
+    assert.equal(await hardenGitInput(long, cwd), undefined);
+    assert.equal(await hardenGitInput(short, cwd), undefined);
+    assert.equal(long.command, `git diff --unified=${count} -- ordinary.txt`);
+    assert.equal(short.command, `git diff -U${count} -- ordinary.txt`);
   }
+  console.log("UNRUN: unified long/short native output comparison; parent has not assigned execution");
   for (const agent of [undefined, "editor"]) {
     for (const path of [".env", "alias.txt"])
       assert.equal((await check(`sed -n '1p;2,4p' ${path}`, agent)).path.preCheck.state, "deny");
     assert.equal((await check("sed -n '1p;2,4p' /var/lib/pi-fixture/external.txt", agent)).external.preCheck.state, "ask");
   }
-  console.log("PASS: long Git context flags retain content scope; multi-range sed preserves actual output and path gates");
+  console.log("PASS: Git context flags stay original and review-only; multi-range sed preserves actual output and path gates");
 
   // Actual generated portable wrapper + root/child permissions service and
   // normal forwarding. The named model-authorizer spy counts entry to the
@@ -770,9 +786,9 @@ try {
     "git status --short && git diff --stat && git log -5 --oneline",
     "git --no-pager diff -- ordinary.txt | head -20", "git -C . diff --check",
     "cd . && git diff --stat | tail -5", "git diff -- ordinary.txt | sed -n '1,20p'",
-    "git log --oneline HEAD~5..HEAD", "nl -ba ordinary.txt | sed -n '1,20p'",
+    "git log --oneline HEAD~1..HEAD", "nl -ba ordinary.txt | sed -n '1,20p'",
     "env git log --format='%H %P %s' HEAD~1..HEAD", "env git log --oneline -- ordinary.txt", "env git show HEAD:ordinary.txt",
-    "git diff HEAD~1 HEAD -- ordinary.txt", "git rev-parse --verify main", "git branch -vv && git remote",
+    "git diff HEAD~1 HEAD -- ordinary.txt", "git diff HEAD...main", "git rev-parse --verify main", "git branch -vv && git remote",
     "git diff --no-renames --name-only --diff-filter=U",
     "git diff --no-renames --cached --diff-filter=R --name-status",
     "echo 'fixture' && git diff --check", "git status --short && cat ordinary.txt",
@@ -788,7 +804,9 @@ try {
     for (const tool of agent ? childDenies : management) {
       assert.equal((await node.call(tool, {}))?.block, agent ? true : undefined, `Actual management exclusion: ${agent}: ${tool}`);
     }
-    for (const command of [...positive, ...fixedRequested, ...weeklyRequested, ...nativeReads]) {
+    // Non-Git static positives retain zero-review assertions. Git forms are
+    // checked separately below through the real SDK's ordinary ask/yolo lane.
+    for (const command of [...positive, ...fixedRequested, ...weeklyRequested, ...nativeReads].filter(command => !command.includes("git "))) {
       assert.equal((await node.call("bash", { command }))?.block, undefined, `Actual gate allows ${agent}: ${command}`);
     }
     assert.equal((await node.call("read", { path: "ordinary.txt" }))?.block, undefined);
@@ -801,15 +819,14 @@ try {
       assert.equal((await node.call("bash", { command: `cat ${path}` }))?.block, true, `SOPS Bash: ${agent} ${path}`);
     }
     for (const tool of ["edit", "write"]) {
-      if (!agent || agent === "editor") assert.equal((await node.call(tool, { path: "src/new-file.ts", content: "fixture", edits: [] }))?.block, undefined, "Editing profile inherits project path scope");
-      else assert.equal((await node.call(tool, { path: "src/new-file.ts", content: "fixture", edits: [] }))?.block, true, "Read-only profiles cannot edit");
+      assert.equal((await node.call(tool, { path: "src/new-file.ts", content: "fixture", edits: [] }))?.block, undefined, "Editing profile inherits project path scope");
       assert.equal((await node.call(tool, { path: join(scratch, "unregistered-tmp.txt"), content: "fixture", edits: [] }))?.block,
-        !agent || agent === "editor" ? undefined : true, "Direct editing inherits existing /tmp scope without scratch-creation proof");
+        undefined, "Direct editing inherits existing /tmp scope");
       for (const path of [".env", ".git/config", "~/.pi/agent/settings.json", "alias.txt"])
         assert.equal((await node.call(tool, { path, content: "fixture", edits: [] }))?.block, true, `Protected write: ${agent} ${path}`);
     }
     assert.equal((await node.call("read", { path: ".env" }))?.block, true, "Actual secret read denial");
-    assert.equal((await node.call("bash", { command: "cut -f 1 .env" }))?.block, true, "Actual reader secret denial");
+    assert.equal((await node.call("bash", { command: "cut -f 1 .env" }))?.block, true, "Actual Bash secret denial");
     assert.equal((await node.call("bash", { command: "sudo true" }))?.block, true, "Actual privilege denial");
     assert.equal(uiCalls, 0, "Static normal operations never prompt UI");
     assert.equal(modelCalls, 0, "Static normal operations never enter a model authorizer");
@@ -823,8 +840,8 @@ try {
   const bashTool = root.session.agent.state.tools.find(tool => tool.name === "bash");
   const readTool = root.session.agent.state.tools.find(tool => tool.name === "read");
   const assistant = { role: "assistant", content: [
-    { type: "toolCall", id: "native-read", name: "bash", arguments: { command: "git diff --stat" } },
-    ...[...fixedRequested, ...weeklyRequested].map((command, index) => ({ type: "toolCall", id: `fixed-${index}`, name: "bash", arguments: { command } })),
+    { type: "toolCall", id: "native-read", name: "bash", arguments: { command: "git status --short" } },
+    ...[...fixedRequested, ...weeklyRequested.filter(command => !command.startsWith("git "))].map((command, index) => ({ type: "toolCall", id: `fixed-${index}`, name: "bash", arguments: { command } })),
     { type: "toolCall", id: "secret-read", name: "bash", arguments: { command: "cat .env" } },
     { type: "toolCall", id: "proc-meminfo", name: "read", arguments: { path: "/proc/meminfo" } },
     { type: "toolCall", id: "proc-mountinfo", name: "read", arguments: { path: "/proc/self/mountinfo" } },
@@ -843,24 +860,23 @@ try {
     return { async *[Symbol.asyncIterator]() { yield { type: "done" }; }, result: async () => assistant };
   });
   assert.equal(providerCalls, 1); assert.equal(finishedTurns, 1);
-  assert.equal(executed.length, 1 + fixedRequested.length + weeklyRequested.length + 2, "Denied Bash/read calls never reach execute");
+  assert.equal(executed.length, 1 + fixedRequested.length + weeklyRequested.filter(command => !command.startsWith("git ")).length + 2, "Denied Bash/read calls never reach execute");
   const executedBash = executed.filter(item => item.tool === "bash").map(item => item.input.command);
   const executedRead = executed.filter(item => item.tool === "read").map(item => item.input.path).sort();
   const gitExecution = executedBash.find(command => command.startsWith("git "));
-  assert.match(gitExecution, /^git --no-lazy-fetch --no-optional-locks --no-pager --no-replace-objects diff /);
-  assert(gitExecution.includes("--no-ext-diff --no-textconv --submodule=short"));
-  assert(!gitExecution.includes("--ignore-submodules="), "No automatic suppression of gitlink or dirty-state changes");
+  assert.equal(gitExecution, "git status --short", "An explicit configured Git allowance executes the original argv, not a managed grant");
+  assert.equal(executedBash.some(command => command.startsWith("git diff")), false, "Diff is no longer an automatic-read dispatch fixture");
+  assert.equal(executedBash.some(command => command.includes("--no-lazy-fetch") || command.includes("--no-replace-objects")), false);
   assert(executedBash.includes("type -P -- pi"));
   assert(executedBash.includes("bash --noprofile --norc -p -n -- syntax.sh"));
   assert(executedBash.includes("printenv -- PI_MODEL PI_MODEL_ID PI_PROVIDER"));
   assert(executedBash.includes("printenv -- BUILD_DIR AOBUS_BUILD_ROOT"));
-  assert(executedBash.some(command => command.includes("--unified=80 -- ordinary.txt") && command.startsWith("git --no-lazy-fetch ")));
   assert(executedBash.includes("sed -n '1p;2,4p' ordinary.txt"), "Sed executes unchanged");
   assert.deepEqual(executedRead, ["/proc/meminfo", "/proc/self/mountinfo"]);
   assert.equal(uiCalls, 0); assert.equal(modelCalls, 0);
   console.log("PASS: real agent-core dispatch executes only SDK-preflighted hardened fixed queries and exact proc reads; no model API");
 
-  // Keep a second editor child for sibling forwarding coverage.
+  // Keep a second cooperative child to exercise sibling forwarding explicitly.
   await make("editor", root);
   // Start with a child's ask, approve explicitly for the whole task tree, then
   // siblings and a steering event reuse the upstream grant without new prompts.
@@ -883,7 +899,7 @@ try {
   assert.equal((await first.call("bash", { command: "ruff check --fix syntax.sh" }))?.block, true, "Unapproved Ruff writes still require review");
   for (const path of ["/proc/1/environ", "/proc/self/environ", "/proc/self/fd", `/proc/${process.pid}/mountinfo`])
     assert.equal((await root.call("read", { path }))?.block, true, `Actual SDK retains review for ${path}`);
-  for (const command of ["cat .env", "echo fixture > ~/.pi/agent/settings.json", "git diff --stat --output=ordinary.txt", "git -c core.pager=cat status --short", "PATH=./fixture-bin git status --short", "readlink $INPUT", "git show HEAD:.env", "git status --short && touch ordinary.txt", "git remote -v", "git diff -- 'ordinary.txt '", "git diff HEAD...main", "sed -n '1p; e touch ordinary.txt' ordinary.txt", "sed -i 's/a/b/' ordinary.txt", "cd missing || git diff", "cd missing; git diff", "cd . | git diff", "cd - && git status --short", "cd -- && git status --short", "df --sync .", "free --unknown"]) {
+  for (const command of ["cat .env", "echo fixture > ~/.pi/agent/settings.json", "git diff --stat --output=ordinary.txt", "git -c core.pager=cat status --short", "PATH=./fixture-bin git status --short", "readlink $INPUT", "git show HEAD:.env", "git status --short && touch ordinary.txt", "git remote -v", "git diff -- 'ordinary.txt '", "sed -n '1p; e touch ordinary.txt' ordinary.txt", "sed -i 's/a/b/' ordinary.txt", "cd missing || git diff", "cd missing; git diff", "cd . | git diff", "cd - && git status --short", "cd -- && git status --short", "df --sync .", "free --unknown"]) {
     assert.equal((await root.call("bash", { command }))?.block, true, `Actual gate blocks/asks ${command}`);
   }
   for (const node of sessions.slice(1)) {
@@ -893,6 +909,20 @@ try {
   }
   assert.deepEqual(errors, [], "Actual SDK lifecycle has no extension errors");
   console.log("PASS: actual portable wrapper + SDK root/editor child gates; zero UI/model entries for proven reads; upstream explicit whole-session grant survives siblings and steer");
+
+  // The remaining read-only profile has no Bash/edit/write capability. Verify
+  // its actual service without feeding it the editor's Bash-positive matrix.
+  const researcher = await make("researcher", root);
+  for (const tool of childDenies) assert.equal((await researcher.call(tool, {}))?.block, true, `Researcher child exclusion: ${tool}`);
+  for (const tool of ["alert_parent", "ask_parent"]) {
+    assert.equal((await researcher.call(tool, tool === "alert_parent" ? { message: "synthetic" } : { question: "synthetic" }))?.block, undefined);
+  }
+  assert.equal((await researcher.call("read", { path: "ordinary.txt" }))?.block, undefined);
+  assert.equal((await researcher.call("read", { path: ".env" }))?.block, true);
+  for (const tool of ["edit", "write"]) {
+    assert.equal((await researcher.call(tool, { path: "src/new-file.ts", content: "fixture", edits: [] }))?.block, true, `Researcher editing denial: ${tool}`);
+  }
+  assert.equal((await researcher.call("bash", { command: "git status --short" }))?.block, true, "Researcher raw Bash deny survives the fixture's exact Git allow");
 
   const observeMktemp = async (node, label) => {
     const input = { command: "mktemp -d" };
@@ -1088,7 +1118,7 @@ try {
       const disabled = await make();
       assert.equal((await disabled.call("bash", { command: "git diff --stat" }))?.block, true, "Dedicated opt-in can disable deterministic read grants");
       const before = uiCalls;
-      assert.equal((await disabled.call("bash", { command: "git status --short && cat ordinary.txt" }))?.block, undefined, "Fixture-only reader allowances survive with new static grants disabled");
+      assert.equal((await disabled.call("bash", { command: "git status --short && cat ordinary.txt" }))?.block, undefined, "Fixture-only read-command allowances survive with new static grants disabled");
       assert.equal(uiCalls, before);
     }
     {
@@ -1171,17 +1201,17 @@ try {
   // lets the path_write ceiling decide redirects; `printenv HOME` instead
   // exercises the explicit Bash deny. Neither command is executed here.
   const yoloResearcher = await make("researcher", root);
-  const researcherWriteNames = ["ordinary.txt", "ordinary.pem", "ordinary.key", "ordinary.p12", "ordinary.pfx"];
-  for (const name of researcherWriteNames.slice(1)) writeFileSync(join(cwd, name), "SYNTHETIC_WRITE_CEILING_FIXTURE\n");
+  const writeNames = ["ordinary.txt", "ordinary.pem", "ordinary.key", "ordinary.p12", "ordinary.pfx"];
+  for (const name of writeNames.slice(1)) writeFileSync(join(cwd, name), "SYNTHETIC_WRITE_POLICY_FIXTURE\n");
   const asked = async (node, command) => {
     const before = { ui: uiCalls, model: modelCalls };
     const blocked = (await node.call("bash", { command }))?.block === true;
     return { blocked, reachedReview: uiCalls !== before.ui || modelCalls !== before.model };
   };
   assert.deepEqual(await asked(root, "printenv HOME"), { blocked: true, reachedReview: true }, "An ordinary ask before yolo");
-  for (const name of researcherWriteNames) {
+  for (const name of writeNames) {
     assert.deepEqual(await asked(yoloResearcher, `printf '%s' fixture > ./${name}`), { blocked: true, reachedReview: false },
-      `A researcher's visible write never reaches a human or judge: ${name}`);
+      `Researcher path-write ceiling blocks without review: ${name}`);
   }
   globalThis[yoloKey] = new Set([root.id]);
   try {
@@ -1193,17 +1223,30 @@ try {
       assert.equal((await node.call("read", { path: ".env" }))?.block, true, "yolo keeps secret path denies");
     }
     assert.deepEqual(await asked(otherRoot, "printenv HOME"), { blocked: true, reachedReview: true }, "Another root session keeps asking");
-    // Researcher's explicit Bash and file-write denies survive yolo.
-    assert.deepEqual(await asked(yoloResearcher, "printenv HOME"), { blocked: true, reachedReview: false }, "researcher retains its Bash denial");
-    for (const name of researcherWriteNames) {
+    assert.deepEqual(await asked(yoloResearcher, "printenv HOME"), { blocked: true, reachedReview: false }, "Researcher Bash denial survives yolo");
+    for (const name of writeNames) {
       assert.deepEqual(await asked(yoloResearcher, `printf '%s' fixture > ./${name}`), { blocked: true, reachedReview: false },
-        `yolo cannot make a researcher write, including inherited path asks: ${name}`);
+        `Researcher path-write ceiling survives yolo: ${name}`);
       assert.deepEqual(await asked(root, `printf '%s' fixture > ./${name}`), { blocked: false, reachedReview: false },
-        `The researcher ceiling does not change the parent's scope: ${name}`);
+        `Normal yolo approves the parent's ordinary path writes: ${name}`);
     }
   } finally { globalThis[yoloKey].clear(); }
   assert.deepEqual(await asked(root, "printenv HOME"), { blocked: true, reachedReview: true }, "Clearing yolo restores the ask at once");
-  console.log("PASS: session yolo allows asks for the session and its in-process children only; explicit denies hold");
+  // The retired Git proof matrix now explicitly exercises normal SDK review.
+  // These are gate observations only: no requested Git command is executed.
+  for (const command of [...new Set([...gitRequested, ...nativeReads, ...weeklyRequested.filter(command => command.startsWith("git "))])]) {
+    const expected = (await check(command)).bash.state;
+    const result = await asked(root, command);
+    assert.equal(result.blocked, expected !== "allow", `ordinary SDK Git permission: ${command}`);
+    if (expected === "ask") assert.equal(result.reachedReview, true, command);
+  }
+  for (const command of ["git add ordinary.txt", "git commit -m fixture", "git branch topic", "git tag v1"]) {
+    assert.deepEqual(await asked(yoloChild, command), { blocked: true, reachedReview: true }, "editor mutation needs normal approval");
+    globalThis[yoloKey].add(root.id);
+    try { assert.deepEqual(await asked(yoloChild, command), { blocked: false, reachedReview: false }, "normal yolo can approve editor Git writes"); }
+    finally { globalThis[yoloKey].clear(); }
+  }
+  console.log("PASS: ordinary Git SDK review and editor writes/yolo; session yolo retains explicit denies");
 
   // The Nix Home Manager migration's backup/rewrite assertions stay in the
   // original deployment suite. Portable init instead MUST NOT migrate settings.

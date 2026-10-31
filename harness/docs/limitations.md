@@ -28,6 +28,9 @@ public acceptance. Test reports must declare their own scope.
   explicit launcher is not a hot-swappable backend for a running session.
 
 See [validation scope](validation-evidence.md) for portable tests and gaps.
+The [Git migration notice](git-permission-migration.md) covers seed queries
+changing to ask, broad user allows retaining their full scope, and yolo
+allowing ordinary worker Git mutations without Jev/checkpoint review.
 
 ## Lifecycle and cancellation
 
@@ -274,7 +277,9 @@ authority, static guards, search policy, and Jev review policy. Public profiles
 are worker (stable internal editor) and researcher. Worker has local
 read/edit/write/Bash/build tools under normal permissions and no web; reviews
 are instructions, not an enforced readonly ceiling. Researcher has read-only
-file tools and web, no Bash/edit/write. Git mutations stay with the parent.
+file tools and web, no Bash/edit/write. Agents share one checkout and Git index;
+coordinate overlapping edits and Git writes. Worker has no extra child-only
+blanket Git mutation deny and no blanket Git allow.
 No legacy profile aliases or scratch capabilities remain. Existing user files
 and literal historical records are not rewritten. No profile is an OS sandbox.
 Opaque programs can perform internal IO outside the classifier's view.
@@ -282,26 +287,33 @@ Researcher reads and web calls can move project content to the network; prompt
 guidance cannot enforce secrecy. Tool availability is not authorization; see
 [researcher web access](security.md#researcher-web-access).
 
-[Managed Git read proof](git-read-proof.md) covers a restricted literal language,
-not arbitrary Git syntax or unsafe configuration equivalence. Content proof
-declines bare/separate-git-dir layouts, subdirectory execution and partial/promisor
-configuration; configured index helpers can also withhold proof. Historical-file
-show retains the exact `env git` lane, disables replacements and pins its tree at
-hardening time. Bare log pathspecs after `--` are supported only when every word
-passes the restricted literal grammar and normal path/external rules. Default
-history formatting is explicitly medium. All proved diff execution and its
-probes disable replacements, including summary-only diff; replacement-dependent
-output equivalence is not promised. Status/diff with checked-out indexed
-submodules receive no proof without explicit exact `--ignore-submodules=all`;
-short submodule output is not protection from nested helpers. Probes do not run
-from an effective cwd outside the session working-directory boundary, except
-linked-worktree `mainRoot` layout verification. That exception grants no path
-permission or other external probes. Each synchronous Git probe blocks the Node
-event loop and can delay cancellation/timers; its five-second timeout and 4 MiB
-output cap do not bound the whole multi-probe call. Probe failure returns to normal gates,
-which may deny instead of asking. Unsupported env-wrapped configuration spellings
-gain no managed proof, but the existing static deny-parity gap is not fixed by
-this scope. No OS isolation or general inherited-environment guarantee follows.
+[Git literal restrictions](git-read-proof.md) inventory identifiable literal
+file operands, historical path spellings, explicit outputs and redirects, not
+arbitrary historical content. Repository queries and mutations use ordinary
+Bash permission; only bounded literal Git version queries can qualify for
+fixed-query automatic allowance. There is no second per-operation effect
+authorization matrix. Commands, environment, executable selection and leading
+`cd` stay unchanged. Raw configured denies/specific asks and independent
+path/output/redirect facts remain. A selected deny survives grants/yolo; normal
+yolo can satisfy ordinary asks, not invalid-config fail-closed asks.
+
+There are no command-classification Git subprocess provenance probes,
+history/object walks or unattributed-sentinel workflow. Literal historical
+paths can use safely observed conventional repository-root aliases; unknown
+roots remain unknown. Bare objects, patch output, batch stdin and arbitrary
+history do not have complete file-by-file protection. Ordinary Git access
+exposes repository history; do not delegate repositories needing that content
+separation. Path rules do not intercept every internal Git syscall or helper.
+Native Git may refresh index caches and take locks, including `index.lock`.
+No zero-write, automatic retry, safe lock deletion or atomic repository snapshot
+is promised. An operator may explicitly launch with `GIT_OPTIONAL_LOCKS=0`;
+the product does not inject it, and it disables neither required writer locks
+nor all IO. Portable path tests are not native Windows/MSYS Git validation.
+
+Redirect-buried argv belongs only to the last command of a redirected body;
+completed spellings add restrictions, never ALLOW. Dynamic `cd` targets keep
+an unknown, yolo-satisfiable base; the speculative HOME-stability fold is
+retired. See [redirect-buried argv](security.md#redirect-buried-argv-and-home-cd).
 
 Jev review concurrency is independent of worker capacity: up to four root and
 eight distinct subagent reviews can be in flight. Extra reviews defer with

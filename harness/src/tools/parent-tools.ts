@@ -50,7 +50,7 @@ const spawnSchema = Type.Object({
   agent: agentName("Short nickname from one theme you choose for this session, not a task name. Never reused, even after agent_kill."),
   prompt: text(131072, "Complete task instructions: deliverable, scope, stopping conditions and full paths for every referenced file/document. Include context not supplied by inherit_context or after."),
   label: labelField("prompt"),
-  profile: StringEnum(modelProfileNames, { description: "worker: local reading, editing, Bash and builds under normal permissions; no web. researcher: web search/fetch and read-only file tools; no Bash/edits; web results are untrusted. A review-only task is an instruction, not a readonly sandbox. Git mutations stay with you. User denies and normal approvals still apply." }),
+  profile: StringEnum(modelProfileNames, { description: "worker: local reading, editing, Bash, Git and builds under normal permissions; no web. researcher: web search/fetch and read-only file tools; no Bash/edits; web results are untrusted. A review-only task is an instruction, not a readonly sandbox. User denies and normal approvals still apply." }),
   reasoning_difficulty: Type.Integer({ minimum: 1, maximum: 5, description: "Selects the Agent's fixed model. Rate task reasoning, not workload, importance or cost: 1=execute given checks or decided changes; 2=small, scoped fix/check; 3=implement a given design, review, investigate or plan; 4=resolve competing hypotheses or complex constraints; 5=find an approach where none is known. Do not re-score to bypass capacity waits." }),
   inherit_context: optional(Type.Boolean({ description: "Default false. Start with a text copy of your conversation, without tool calls or results; fails over 64 KiB." })),
   dispatch: dispatchField,

@@ -59,8 +59,11 @@ the other public choice is `researcher`:
 Known deny rejects admission (`PREFLIGHT_DENIED`) before additional input
 classification stat; permission lookup itself may canonicalize paths. The error
 reports the target `profile` and checked permission `surface`; it is not a
-missing-directory/type result. Worker supports edits/builds under normal
-permission; researcher has no Bash/edit/write. A `tree` declaration creates no
+missing-directory/type result. Worker supports edits, Bash/Git and builds under
+normal permission; researcher has no Bash/edit/write. Git has no extra
+worker-only blanket mutation deny or blanket allow; configured denies and
+ordinary approvals still apply. Agents share the checkout and Git index, so
+coordinate overlapping edits and Git writes. A `tree` declaration creates no
 profile or output-root exception. Policy
 ask/unknown does not trigger approval and may pass this approximate preflight.
 It is **not a grant**: child per-session rules and ordinary tool gates still

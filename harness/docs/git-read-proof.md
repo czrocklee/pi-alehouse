@@ -1,191 +1,89 @@
-# Managed Git read proof
+# Git commands in cooperative workers
 
-Git read proof is a narrow extension of the managed permission pipeline, not an
-independent authorizer or an OS sandbox. It classifies literal execution and
-supplies read-path candidates; the normal Bash, path and external-directory
-rules decide the outcome. Worker Git mutations remain denied and belong to the
-parent. See [security](security.md) and [limitations](limitations.md).
+Workers are cooperative local developers, not a readonly execution sandbox.
+`worker` is the model-facing name of the stable internal `editor` profile. See [security](security.md).
 
-## Grammar and literal spelling
+See the [migration notice](git-permission-migration.md) for query auto-to-ask,
+broad user allows, worker mutations and yolo/checkpoint behavior changes.
 
-[`extensions/lib/git-read-grammar.ts`](../../extensions/lib/git-read-grammar.ts)
-is the import-free source of shared status flags, history option lengths,
-pretty/date validation, revision atoms and literal path words. The static guard
-and managed overlay share these primitives, not an identical acceptance policy.
+## Original command and normal permission
 
-- History values must be attached: `--format=...`, `--pretty=...`, `--date=...`.
-  Counts retain their supported attached and separate-operand forms.
-- Pretty values accept exact safe builtins (`medium`, `short`, `full`, `fuller`,
-  `raw`, `oneline`, `reference`), explicit `format:`/`tformat:` templates, or
-  implicit templates containing `%`. Templates are scanned by token: `%G`
-  signature-verification placeholders, byte escapes, color, widths and trailers
-  are rejected; `%%G?` is literal text. Unknown named pretty aliases are not
-  proved, even if their configured expansion looks harmless.
-- Dates use enumerated modes or a bounded `format:`/`format-local:` template
-  with a fixed strftime directive and literal alphabet. Literal control
-  characters, NUL and line breaks are rejected.
-- Status accepts exact `--ignore-submodules=all`, not a bare option, abbreviation
-  or another ignore mode.
-- Log supports ranges, multiple revision words, `^A` and `--not`; a revision
-  word cannot start with an option. Diff uses stricter revision atoms and splits
-  supported ranges in its caller; an atom may end in ancestry steps, bare or
-  numbered (`HEAD^`, `HEAD~`, `main~2^`), but not peel, reflog or shorthand
-  suffixes (`^{}`, `@{}`, `^!`, `^@`, `^-`). Path words remain a restricted literal
-  language, not arbitrary Git pathspec magic or a path permission.
+The model's Git command, environment, executable selection and leading `cd`
+remain unchanged on allow, ask and deny. No injected flags, pinned objects,
+forced format, hidden environment override or execution-rewrite audit. Existing
+non-Git hardeners remain separate; a mixed program must not rewrite a shared
+leading `cd` when Git is present.
 
-The managed overlay has a **Git-only** concatenation decoder. It accepts literal
-quoted fragments such as `--format='%H %P %s'` and `--date=format:'%Y %m'`, then
-re-encodes words for execution. It rejects expansions and unsupported shell
-syntax. The non-Git `literalWords` decoder and its file-reader/scratch consumers are
-unchanged. Quoting does not widen the path grammar; apostrophe-containing
-pathspecs are not supported.
+There is no blanket Git allow, and no worker-specific blanket Git mutation
+ban. Ordinary repository queries and mutations use normal Bash permission.
+Only the bounded literal Git version form can qualify for automatic fixed-query
+allowance. Git add/commit and other writes never gain a readonly shortcut.
+Explicit configured command denies/specific asks, path checks, external-directory
+checks, basic dangerous-operation guards and immutable resource protection
+remain. Researcher has no Bash/edit/write tools. No live user definition or
+policy is overwritten by building this package.
 
-## Static floor and managed env route
+Dangerous model-requested PATH/loader/helper environment prefixes remain a
+deny-only guard concern. Other assignment-bearing Git asks and selected
+high-impact Git asks defer to human approval instead of model-only Jev review.
+These checkpoints apply to asks, not existing allows or yolo; they are not a
+second Git authorization matrix.
 
-The independent static query check remains exactly `status`, `log`, `show`.
-It permits supported metadata spelling, but bare `show` must have
-`-s`/`--no-patch` and an explicit commit-constrained revision such as `HEAD^0`.
-Bare historical-file show remains statically blocked. Bare `git log -- path...`
-is accepted only when **every** following word passes the restricted
-`gitPathWord` grammar; `--` does not unconditionally admit arbitrary pathspecs.
-Those paths still need normal path/external authorization. **Diff never enters
-this static query check**; its other denies and gates still apply.
-Wrapped queries retain their existing static skip behavior.
+Raw global/project/agent/project-agent Bash restrictions are checked before
+session composition. A selected explicit deny is not erased by a recorded
+Bash grant or yolo. Ordinary asks retain the configured approval behavior,
+including yolo; invalid-config fail-closed asks remain distinct.
 
-The managed wrapper lane admits only exact bare `env git ...`: no env flags,
-assignments, quoted wrapper spelling or other wrappers. For example,
-`env git show HEAD:docs/file.md` and `env git log -- docs/file.md` can reach the
-repository-aware proof, but are not permission grants. `env -i git ...`,
-`env FOO=1 git ...` and unsupported Git configuration/global options receive no
-managed proof. Unsupported wrappers keep their ordinary behavior.
+## Limited literal inventory, not historical provenance
 
-Admission requires a complete read proof for the shell program and a narrowly
-marked env Git unit. The wrapper-floor exception also requires the managed read
-opt-in and valid policy scope; it is not a general wrapper exemption. Both inner
-Git and outer env requests are resolved in their original and hardened spellings,
-including command-specific asks/denies. Originals come from a private WeakMap
-bound to the actual input object and unchanged hardened command, not model
-fields. The decision and session-grant surface remain the outer request.
-The authority also checks the original spelling against the independent static
-Bash deny floor **before** hardening or probes. Injected flags and pinned object
-IDs cannot hide an exact original deny behind a Bash session grant.
+`permission-system/managed-git-query.ts` keeps a bounded literal inventory of
+identifiable file operands, historical `rev:path` spellings and explicit output
+files. It does **not** execute Git subprocesses to discover historical file
+ownership, replay commit selection, list trees, resolve blob provenance or
+classify helpers/configuration. There is no complete file-by-file protection
+claim for arbitrary Git history, bare object IDs, patch output or batch stdin.
+Allowing ordinary Git access exposes repository history under this cooperative
+contract; do not delegate repositories that require such content separation.
 
-A Bash-surface session grant skips only its own gate, not path or
-external-directory gates. Static checking is independent. Ordinary session
-rules may override ordinary configuration denies through normal permission
-composition; the immutable-resource floor and researcher write ceiling are separate
-and are not widened by session grants or yolo.
+Actual redirects, output writes and sibling commands retain their independent
+facts. The general redirect-buried-argv recovery remains: consume only the
+actual redirect destination, keep later argv in order and with operand roles.
+Completed spellings can add asks/denies, never ALLOW or a truncated-command
+shortcut. Literal historical paths can use safely observed conventional
+filesystem repository-root aliases; unknown roots remain unknown, not guessed.
+Recognized query argv effects do not grant permission or globally relabel
+unknown commands as reads.
 
-The pre-existing mismatch between bare and env-wrapped Git configuration-spelling
-denies is **not fixed by this scope**. Such unsupported forms gain no managed
-proof; this is not a claim of universal static deny parity. Env does not override
-denies or guarantee approval.
+The former history/object attribution probes and
+`<managed-git-unattributed>` workflow are retired. They are not replaced by a
+new model judge, a mandatory human review of every unknown form, or another
+per-Git-subcommand authorization matrix. Existing journals remain literal
+historical evidence, not current authorization.
 
-## Repository-aware content proof
+The speculative HOME-stability fold is also retired. Dynamic `cd` targets keep
+the ordinary unknown-base behavior rather than fabricating a certain cwd.
 
-The managed historical-file show route is exact `env git`, not bare static show.
-Literal log pathspecs can use bare `git` or that exact env lane. The
-authority calls `hardenGitInput(input, ctx.cwd)` before gating. Eligible requests are pinned
-from the requested revision to immutable `TREEOID:path`, with execution and
-object probes both disabling replacements. Exact-path `ls-tree` mode/type checks
-are combined with `cat-file` verification of the actual object type. Only blob
-modes `100644`, `100755`, `120000` qualify; trees, gitlinks and commit objects do
-not. A symlink blob exposes its stored link text, not target contents. The
-original request remains subject to its rules after pinning, and the requested
-path remains a read candidate.
+## Index locks and limits
 
-Log pathspecs produce read candidates for their literal paths without traversing
-historical name sets. All proved diff execution, including summary-only forms,
-and every diff-related repository/configuration/index/tree/name probe disable
-replacement objects with `--no-replace-objects`. Content diff uses bounded
-index/tree and changed-name probes. Names returned by Git are retained: no second JavaScript prefix filter
-may discard an actual changed path, including under `GIT_ICASE_PATHSPECS`.
-Requested pathspecs remain candidates as well.
+Agents share the parent's checkout and Git index; coordinate overlapping Git
+writes with the parent. Shared execution is not OS isolation or a secrecy
+boundary.
 
-Content proof supports repository-root execution in conventional non-bare
-repositories and linked worktrees. Native Git top-level/gitdir/common-dir
-resolution must agree with the conventional `.git` administration layout and,
-for linked worktrees, a verified primary-worktree relationship. The primary root
-is an additional read candidate; Git administration directories are not added as
-user-file candidates. A primary root outside allowed scope can require a
-separate external/path decision. Bare repositories, separate-git-dir layouts,
-subdirectory execution and unknown relationships decline content proof rather
-than guessing the object-store scope.
+Native Git can update index caches and use locks. No physical zero-write,
+automatic retry or safe lock deletion claim is made. An operator may explicitly
+choose `GIT_OPTIONAL_LOCKS=0` when launching; the product does not inject it into
+worker commands. That setting affects the whole process, not required writer
+locks or every helper's IO.
 
-The effective Git cwd (including leading `cd` and Git `-C`) must stay within the
-session working-directory boundary before any Git probe runs; an external cwd
-receives no probes and falls back to normal gates. Leading `cd` operands with a
-`..` segment, or with a `..` segment in inherited `PWD`, are not proved: Bash
-may retain a logical symlink `PWD` different from the physical base. Git `-C` retains physical chdir semantics, including
-symlink/`..` resolution. The narrow exception is the
-linked-worktree primary-root layout query needed to verify `mainRoot`: it may
-run outside that boundary, but does not authorize other probes there. The
-verified primary root still receives its own path/external decision.
+## Source and validation
 
-Presence of partial/promisor configuration declines content proof. Index-reading
-commands (`status`, `ls-files`, `diff`) also decline proof when `core.fsmonitor`
-or `filter.*.clean`/`filter.*.process` configuration is present, before index/name
-probes. Status and all diff forms also decline proof when a submodule found in
-the index (or, for diff, the inspected historical trees) is checked out unless
-the request explicitly includes exact
-`--ignore-submodules=all`. `--submodule=short` only bounds output; it does not
-prevent Git from running nested status/index helpers. Configured ignore settings
-are not a substitute for that explicit option, and hardening does not silently
-add it. Gitlink enumeration uses non-recursive stage/tree records, not nested
-status commands. Unknown entries/layouts or an inspection root outside the
-session boundary decline proof. These are conservative helper checks, not blanket protection from all
-Git configuration, inherited environment or external programs.
+Shared literal grammar remains in `extensions/lib/git-read-grammar.ts`.
+`native-git-patch.mjs` integrates the inventory; `native-git-restrictions-patch.mjs`
+retains raw-scope restrictions. The compatibility `hardenGitInput` API does not
+rewrite Git. Generated copies are not source.
 
-Each synchronous probe invocation has a five-second timeout and a 4 MiB output
-limit. These probes block the Node event loop while running: cancellation,
-timers and other tool handling can be delayed until a probe returns. A tool
-call may run several probes; these are not aggregate call limits or an
-asynchronous cancellation guarantee.
-Proved execution and probes disable lazy fetch, optional locks and paging.
-There is
-no persisted repository-proof cache; provenance and proof belong to an invocation.
-
-## Intentional hardening and fallback
-
-Supported history log/show execution receives `--no-show-signature`. Metadata
-history without explicit pretty/format/oneline receives `--format=medium`, so
-`format.pretty` cannot supply an unvalidated default. Historical-file show also
-receives `--no-replace-objects`, `--no-ext-diff`, `--no-textconv`; every diff
-receives `--no-replace-objects` as well as its required external-conversion,
-submodule-output and rename controls. Unsafe
-explicit options are not silently removed to manufacture a proof.
-
-These changes are intentional: historical-file and diff replacement semantics
-are disabled, the historical-file revision is fixed at hardening time, configured default pretty
-output is ignored, and signatures, conversions or rename behavior can differ
-where suppressed. Do not promise output equivalence under unsafe configuration
-or replacement-dependent behavior. Pinning a historical tree is not a snapshot
-or isolation guarantee for the whole repository.
-
-A static diagnostic names unsupported syntax and blocks at that independent
-floor. A managed diagnostic explains why a complete read proof is unavailable;
-it is **not** an allow/ask/deny verdict and does not change the deciding token,
-rule or approval scope. A unit that reaches the gates unhardened had its rewrite
-declined, so its diagnostic reports the hardened spelling's failure (for example
-an unsupported token), never the flags hardening injects. Sibling units carry a
-`git-program-scope` note naming the first unproven unit, and a path denial
-prefers the failed unit's own diagnostic over that note. Probe failure, timeout, overflow, unsupported layout or
-helper configuration falls back to the ordinary gates. That fallback may deny
-under a researcher capability ceiling; it does not promise an approval prompt.
-
-## Source and generated copies
-
-The build copies the zero-import grammar unchanged to
-`runtime/policy/lib/git-read-grammar.ts` and
-`runtime/permission-system/vendor/src/access-intent/bash/git-read-grammar.ts`.
-[`scripts/build.mjs`](../../scripts/build.mjs) checks **each copy against the
-source digest**, not just against the other copy, before publishing the matched
-runtime and its integrity manifest. Never edit generated copies directly.
-
-Changes must preserve Git-only decoding, original-request provenance, the static
-query set and the narrow complete-proof wrapper exception. Validation must cover
-raw spelling → decoding → hardening → complete program admission → Bash/path/
-external gates → static guard, including explicit asks/denies and failed probes;
-a grammar boolean or isolated positive proof does not establish that contract.
-See [development](development.md#matched-resource-migration) for matched builds
-and validation ownership.
+Tests distinguish the new cooperative contract from retired historical-provenance
+expectations. A permission allowance is not requested-command execution.
+Run a matched fresh build, focused runtime regressions, the package gate and
+portable policy tests. Local evidence is not public release or deployment
+acceptance. Installation requires separate authorization and fresh processes.

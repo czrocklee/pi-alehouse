@@ -34,33 +34,56 @@ Tool availability is not network authorization. Plain `pi` has no delegation.
 New model requests select `worker` or `researcher` only. Worker has local
 read/edit/write/Bash/build tools under normal permissions, no web; review-only
 work is an instruction, not an enforced readonly mode. Researcher has read-only
-file tools and web, no Bash/edit/write. Git mutations stay with the parent
-because all Agents share one checkout. Existing user `reader.md` files are
-not deleted or replaced and historical profile IDs stay literal display data;
-no retired profile alias or scratch capability is supported.
+file tools and web, no Bash/edit/write. Agents share one checkout and Git index;
+coordinate overlapping edits and Git writes with the parent. Worker has no extra
+child-only blanket Git mutation ban and no automatic Git allow. User-configured
+command/path denies and base credential/resource/high-risk protections remain;
+generated policy never overwrites live user configuration. Existing user
+`reader.md` files are not deleted or replaced and historical profile IDs stay
+literal display data; no retired profile alias or scratch capability is supported.
 
-### Managed Git read proof
+### Cooperative Git commands
 
-The [Git read-proof contract](git-read-proof.md) supplies bounded read scopes,
-not permission grants. Historical-file show uses the exact bare `env git`
-managed route; literal log pathspecs may also use bare `git log -- path...`, with
-every path word checked against the restricted shared grammar. Path/external
-rules still decide the outcome. The static query floor remains status/log/show,
-with commit-only patch-free show; diff is not part of that query check. A Bash session grant skips
-only its own gate, not path/external gates. Ordinary session rules can override
-ordinary configuration denies; immutable-resource and researcher write floors are
-separate. Unsupported forms and probe failures receive no proof and may be denied
-without an ask. Env does not override denies or guarantee approval.
+The [migration notice](git-permission-migration.md) lists concrete changes to
+seed queries, broad user allows and yolo. Selected PATH/loader/helper prefixes
+requested by the model retain a deny-only guard. Other assignment-bearing Git
+asks and selected destructive Git asks have Jev hard checkpoints, not an
+additional per-operation permission system. Checkpoints defer eligible asks to
+ordinary human approval; they do not run for an existing allow or under yolo.
 
-All proved diff execution and diff-related probes disable replacement objects,
-including summary-only diff. Status/diff with a checked-out indexed submodule
-receive no proof without explicit exact `--ignore-submodules=all`; short
-submodule output alone cannot prevent nested helpers. No Git probes run from an
-effective cwd outside the session working-directory boundary, except the narrow
-linked-worktree `mainRoot` layout verification query. That exception still
-leaves the primary root subject to its path/external rules. Probes are
-synchronous and block the event loop; the per-probe five-second/4 MiB limits do
-not provide an aggregate deadline or immediate cancellation.
+The current contract is [literal Git restrictions](git-read-proof.md): repository
+queries and writes use ordinary Bash permission, with no Git subprocess probing
+or historical file-provenance claim. Only bounded literal version queries can
+qualify for the automatic fixed-query lane. Raw configured Bash denies/specific
+asks, explicit path/output facts and actual redirects remain independent.
+Worker Git mutations do not receive a readonly shortcut.
+
+There is no complete historical-content separation promise for a worker with
+ordinary Git access. Literal path denies remain useful protection, not a data
+taint tracker for repository objects. A selected configured deny survives session
+grants/yolo; ordinary asks keep ordinary approval, and invalid configuration
+still fails closed. Researcher has no Bash tool and keeps its profile ceiling.
+
+Git commands are never silently rewritten: command bytes, environment, executable
+selection and leading `cd` stay unchanged. Native index cache writes and locks
+remain possible. No zero-write, automatic retry, safe lock removal or
+freedom-from-conflicts claim is made. Ordinary Git is not reauthorized through a
+second per-operation effect matrix.
+
+### Redirect-buried argv and home `cd`
+
+The pinned parser buries words after a redirect destination (`cmd 2>/dev/null
+a b`, `cmd <<EOF a`) in the redirect node, while Bash passes them to the
+command. They take the owning command's token roles and effect over its
+completed argv; the real destination keeps its redirect effect. The completed
+spelling is classified afresh and can add a command-rule ask or deny, never an
+allow or floor exemption, so a truncated exact allow cannot approve hidden
+argv. Only the last command of the redirected body owns a tail; a tail after a
+compound command keeps the destination effect. Literal Git argv roles do not
+grant permission or globally relabel unknown commands as reads. The speculative
+login-home `cd ~` stability inference is retired. Dynamic `cd` targets leave
+relative paths at an unknown base: an ordinary external ask,
+which yolo can satisfy. This is deliberately not an arbitrary-shell guarantee.
 
 ### Researcher web access
 

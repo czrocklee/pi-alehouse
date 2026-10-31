@@ -99,12 +99,22 @@ later tasks and routing changes do not migrate an existing Agent's model.
 Use a new Agent for a different binding.
 Prompt is the full task instruction, including the deliverable, scope and
 stopping conditions; label defaults to its first nonblank line and is never
-forwarded as an instruction. Worker has local read/edit/write/Bash/build tools
-under normal permissions, no web. Review-only work is an instruction, not an
-enforced readonly ceiling. Researcher has read-only file tools and web, no
-Bash/edit/write, and returns web-derived untrusted material. Git mutations stay
-with the parent. No legacy profile aliases or scratch capabilities remain.
-Bash/web remain permission-gated; no profile is an OS sandbox.
+forwarded as an instruction. Worker has local read/edit/write/Bash/Git/build
+tools under normal permissions, no web. Review-only work is an instruction, not
+an enforced readonly ceiling. It has no extra child-only blanket Git mutation
+deny and no blanket Git allow. Repository queries and mutations use ordinary
+Bash permission; only bounded literal Git version queries can qualify for
+fixed-query automatic allowance. Raw configured denies/specific asks, explicit
+literal paths/outputs, redirects and credential/resource/high-risk protection
+remain. Normal yolo applies to ordinary asks, not denies or invalid-config
+fail-closed asks. There are no historical-provenance probes or second
+Git-operation authorization matrix. See [Git restrictions](git-read-proof.md).
+
+Researcher has read-only file tools and web, no Bash/edit/write, and returns
+web-derived untrusted material. No legacy profile aliases or scratch
+capabilities remain. Bash/web remain permission-gated; no profile is an OS
+sandbox. All Agents share the checkout and Git index; coordinate overlapping
+edits and Git writes with the parent.
 
 Difficulty describes reasoning and quality, not permissions: 1--5 resolve
 one-to-one to `d1`--`d5`. Model-facing descriptions give the

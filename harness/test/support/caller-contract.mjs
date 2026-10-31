@@ -23,9 +23,9 @@ export function assertCallerTools(tools) {
   assert.match(fields.prompt.description, /context not supplied by inherit_context or after/);
   assert.match(fields.label.description, /agent_list label, not instructions.*prompt's first line/);
   assert.deepEqual(fields.profile.enum, ["worker", "researcher"]);
-  assert.match(fields.profile.description, /worker: local reading, editing, Bash and builds under normal permissions; no web/);
+  assert.match(fields.profile.description, /worker: local reading, editing, Bash, Git and builds under normal permissions; no web/);
   assert.match(fields.profile.description, /researcher: web search\/fetch and read-only file tools; no Bash\/edits.*untrusted/);
-  assert.match(fields.profile.description, /instruction, not a readonly sandbox.*Git mutations stay with you.*User denies and normal approvals still apply/);
+  assert.match(fields.profile.description, /instruction, not a readonly sandbox.*User denies and normal approvals still apply/);
   const difficulty = fields.reasoning_difficulty.description;
   assert.equal(fields.reasoning_difficulty.type, "integer");
   assert.equal(fields.reasoning_difficulty.minimum, 1); assert.equal(fields.reasoning_difficulty.maximum, 5);

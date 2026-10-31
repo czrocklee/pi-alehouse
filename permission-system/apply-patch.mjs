@@ -4,6 +4,8 @@ import { readFileSync, writeFileSync, copyFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyProfileDisplayPatch } from "./profile-display-patch.mjs";
+import { applyNativeGitPatch } from "./native-git-patch.mjs";
+import { applyRedirectArgvPatch } from "./redirect-argv-patch.mjs";
 const root = process.argv[2];
 assert(root, "Usage: node apply-patch.mjs PACKAGE_ROOT");
 assert.equal(JSON.parse(readFileSync(join(root, "package.json"))).version, "32.0.3");
@@ -21,12 +23,12 @@ patch("src/access-intent/effect.ts", [
   ['export type EffectSource = "syntax" | "core" | "retracted" | "unproven";', 'export type EffectSource = "syntax" | "core" | "retracted" | "unproven" | "managed-literal";'],
 ]);
 patch("src/access-intent/bash/token-collection.ts", [
-  ['import { proveCommandEffect } from "./command-effects";', 'import { proveCommandEffect } from "./command-effects";\nimport { managedReaderEffect } from "./managed-read-policy";'],
-  ['const effect = proveCommandEffect(', 'const effect = managedReaderEffect(node.text) ?? proveCommandEffect('],
+  ['import { proveCommandEffect } from "./command-effects";', 'import { proveCommandEffect } from "./command-effects";\nimport { managedInspectionEffect } from "./managed-read-policy";'],
+  ['const effect = proveCommandEffect(', 'const effect = managedInspectionEffect(node.text) ?? proveCommandEffect('],
 ]);
 patch("src/access-intent/bash/command-enumeration.ts", [
   ['import type { BashCommandContext, FloorExemption } from "#src/types";', 'import type { BashCommandContext, FloorExemption } from "#src/types";\nimport type { ManagedGitDiagnostic } from "./managed-read-policy";'],
-  ['export interface BashCommand {', 'export interface BashCommand {\n  /** Private managed normalization provenance; original policy still applies. */\n  readonly managedOriginal?: string;\n  /** Local proof after complete static scope inspection. */\n  readonly managedReadOnly?: true;\n  /** Hardened inner spelling for this exact, completely proven env Git unit. */\n  readonly managedGitInner?: string;\n  /** Raw original inner spelling; never reconstructed from decoded words. */\n  readonly managedGitOriginalInner?: string;\n  /** Proof failure is presentation only, not a permission decision. */\n  readonly managedGitDiagnostic?: ManagedGitDiagnostic;\n  /** Exact mkdir/cp effects came from private mutable-input provenance. */\n  readonly managedStaticFileEffects?: true;'],
+  ['export interface BashCommand {', 'export interface BashCommand {\n  /** Private original-source binding; original policy still applies. */\n  readonly managedOriginal?: string;\n  /** Eligible managed inspection/query scope, not physical zero-IO. */\n  readonly managedReadOnly?: true;\n  /** Literal inner spelling; restrictive checks also apply when auto scope is unavailable. */\n  readonly managedGitInner?: string;\n  /** Raw original inner spelling; never reconstructed from decoded words. */\n  readonly managedGitOriginalInner?: string;\n  /** Proof failure is presentation only, not a permission decision. */\n  readonly managedGitDiagnostic?: ManagedGitDiagnostic;\n  /** Exact mkdir/cp effects came from private mutable-input provenance. */\n  readonly managedStaticFileEffects?: true;'],
 ]);
 patch("src/access-intent/bash/program.ts", [
   ['import { getParser } from "./parser";', 'import { getParser } from "./parser";\nimport { managedGitInnerCommand, managedGitSyntaxDiagnostic, managedProgramAnalysis, managedStaticFileProof, type ManagedStaticFileScope } from "./managed-read-policy";'],
@@ -364,5 +366,10 @@ patch("src/authority/forwarded-request-server.ts", [
     }
     const check = request.accessIntent`],
 ]);
+applyNativeGitPatch(root, patch);
+applyRedirectArgvPatch(root, patch);
 applyProfileDisplayPatch(root, patch);
-console.log("Applied managed permission/provenance/profile/yolo and immutable resource-floor patches to pi-permission-system 32.0.3");
+// Dynamic cd targets (including ~) retain upstream's unknown-base handling.
+// Do not infer HOME stability from an AST: arbitrary earlier programs can
+// change the environment or the directory named by a later shell expansion.
+console.log("Applied managed permission/provenance/profile/yolo, original-command Git scope, redirect-buried argv and immutable resource-floor patches to pi-permission-system 32.0.3");

@@ -12,7 +12,7 @@ const temporary = (t) => { const path = mkdtempSync(join(tmpdir(), "alehouse-run
 
 test("portable generator matches dispatch-aware worker bytes and policy digests", () => {
   const { agents, metadata } = renderWorkers();
-  assert.equal(metadata.editor.digest, "13aad89aed7222f0f2a36555e0784ba393035022f9e915ae94423b8c0aa3dda5");
+  assert.equal(metadata.editor.digest, "3f0ecf089c947e25b75f439b9a0c41c62fa14b6d8a476dd1b7bd4baa9fffc68e");
   assert.deepEqual(Object.keys(agents).sort(), ["editor", "researcher", "Explore", "Plan", "general-purpose"].sort());
   assert.deepEqual(Object.keys(metadata).sort(), ["editor", "researcher"]);
   assert.equal(metadata.researcher.digest, "e9928f909be58a364fe1cf465b41d9742666ad002c36d42593a99922c194eaef");
@@ -27,7 +27,7 @@ test("portable generator matches dispatch-aware worker bytes and policy digests"
     assert.match(worker, /tree held until task end, or through a pending question until resolution; never report earlier release/);
   }
   for (const [name, source] of Object.entries(agents)) assert.equal(readFileSync(join(packageRoot, "runtime/agents", `${name}.md`), "utf8"), source);
-  assert(metadata.editor.bashDenies.includes("git -C * commit *"), "Git mutations stay with the parent");
+  assert.deepEqual(metadata.editor.bashDenies, [], "no shipped worker-only Git mutation deny");
   assert.match(agents.editor, /^ {2}bash:\n {4}"\*": ask$/m, "ordinary Bash remains permission-checked");
   assert.doesNotMatch(agents.editor, /^ {4}"git .*": allow$/m, "no blanket or command-specific Git allow");
   // The researcher: read-only local tools plus web, no Bash, every command denied.

@@ -12,11 +12,15 @@ const jiti = createJiti(import.meta.url, { alias: {
   "@earendil-works/pi-tui": require.resolve("@earendil-works/pi-tui"),
   "#src": join(packageRoot, "runtime/permission-system/vendor/src"),
 } });
-const [{ buildForwardedScopeLabels }, { renderPromptDialog, completeViewBudget }, { SessionApproval }, { publicProfileLabel }] = await Promise.all([
+const [{ buildForwardedScopeLabels }, { renderPromptDialog, completeViewBudget }, { SessionApproval }, { publicProfileLabel },
+  { renderPolicyDenial, renderRefusal, renderUnavailableDenial },
+  { SkillInputGatePipeline, formatSkillDenyNotice }] = await Promise.all([
   jiti.import("#src/presentation/pattern-suggest"),
   jiti.import("#src/presentation/dialog-renderer"),
   jiti.import("#src/session/session-approval"),
   jiti.import("#src/presentation/managed-profile-label"),
+  jiti.import("#src/presentation/agent-renderer"),
+  jiti.import("#src/handlers/gates/skill-input-gate-pipeline"),
 ]);
 
 function freeze(value) {
@@ -82,6 +86,72 @@ test("permission display: actual local and forwarded dialogs label worker but re
     assert.deepEqual(input, before, "rendering does not mutate the request or user content");
     assert.equal(input.request.requester.agentName, "editor", "permission identity stays internal");
   }
+});
+
+test("permission display: denial and refusal renders label the requester while every other fact stays literal", () => {
+  // The same payload the real gate pipeline emits, run through the actual
+  // built render entrypoints: policy deny, human refusal and no-authority
+  // denial. Only the requester label is remapped; the invoked-tool name,
+  // matched rule and evidence text keep the internal spelling.
+  for (const forwarded of [false, true]) {
+    for (const [name, shown] of [["editor", "worker"], ["researcher", "researcher"], ["unknown-profile", "unknown-profile"]]) {
+      const input = payload(name, forwarded), before = structuredClone(input);
+      const renders = {
+        policy: renderPolicyDenial(input, null),
+        user: renderRefusal(input, { kind: "user", via: "dialog" }, null),
+        unavailable: renderUnavailableDenial(input, null),
+      };
+      const identity = `(invoked as 'editor') for agent '${shown}' (rule 'editor *')`;
+      const core = `'bash' call ${identity}`;
+      assert.equal(renders.policy, `[pi-permission-system] Denied by policy: 'bash' ${identity}.`);
+      assert.equal(renders.user, `[pi-permission-system] The user denied this ${core}.`);
+      assert.equal(renders.unavailable, `[pi-permission-system] This ${core} requires approval, but no interactive UI is available.`);
+      if (name === "editor") {
+        for (const text of Object.values(renders)) assert.doesNotMatch(text, /for agent 'editor'/);
+      }
+      for (const text of Object.values(renders)) {
+        assert.match(text, /\(invoked as 'editor'\)/, "only the requester label is remapped");
+        assert.match(text, /rule 'editor \*'/, "the matched rule stays literal");
+        assert.doesNotMatch(text, /worker \*/, "no generic label replacement beyond the agent clause");
+      }
+      assert.deepEqual(input, before, "rendering does not mutate the request or evidence");
+      assert.equal(input.request.requester.agentName, name, "permission identity stays internal");
+    }
+  }
+});
+
+test("permission display: skill input deny notice labels the requester through the actual gate pipeline", async () => {
+  // A denied skill resolution (frozen check result), run through the real
+  // SkillInputGatePipeline: the underlying check still receives the internal
+  // agentName and the runner sees the same identity; only the human-facing
+  // notice text carries the public label.
+  const checks = [], runs = [], notices = [];
+  const pipeline = new SkillInputGatePipeline({
+    checkPermission: (surface, input, agentName) => {
+      checks.push({ surface, input, agentName });
+      return freeze({ toolName: "skill", state: "deny", reason: "off",
+        matchedPattern: "editor skill", source: "skill", origin: "config" });
+    },
+  });
+  for (const [name, shown] of [["editor", "worker"], ["researcher", "researcher"], ["unknown-profile", "unknown-profile"]]) {
+    checks.length = runs.length = notices.length = 0;
+    const outcome = await pipeline.evaluate("deploy-notes", name, { warn: (m) => notices.push(m) },
+      { run: async (gate, agentName) => { runs.push({ gate, agentName }); return freeze({ action: "block", reason: "deny" }); } });
+    assert.deepEqual(outcome, { action: "block", reason: "deny" });
+    assert.deepEqual(checks, [{ surface: "skill", input: { name: "deploy-notes" }, agentName: name }],
+      "the permission check keeps the internal requester identity");
+    assert.deepEqual(notices, [`Skill 'deploy-notes' is not permitted for agent '${shown}'.`],
+      "only the notice label is remapped");
+    if (name === "editor") assert.doesNotMatch(notices[0], /for agent 'editor'/);
+    assert.match(notices[0], /Skill 'deploy-notes' is not permitted for agent/);
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0].agentName, name, "the gate still evaluates as the internal requester");
+    assert.equal(runs[0].gate.surface, "skill");
+    assert.deepEqual(runs[0].gate.input, { name: "deploy-notes" });
+    assert.equal(runs[0].gate.payload.request.requester.agentName, name, "payload identity stays internal");
+  }
+  assert.equal(formatSkillDenyNotice("deploy-notes", null),
+    "Skill 'deploy-notes' is not permitted by the current skill policy.");
 });
 
 test("permission display: researcher, unknown profiles and unnamed requesters keep upstream identity", () => {

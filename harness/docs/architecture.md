@@ -129,9 +129,19 @@ pruning.  Do not remove them while a Pi process could hold a lease.
 New model requests offer `worker` and `researcher` only. Worker maps to stable
 internal `editor`, with local read/edit/write/Bash/build tools under normal
 permissions and no web. Reviews are task instructions, not an enforced readonly
-mode. Researcher has read-only file tools and web, no Bash/edit/write. Git
-mutations stay with the parent; all Agents share the checkout. Existing user
-`reader.md` files and historical records are never rewritten.
+mode. Researcher has read-only file tools and web, no Bash/edit/write. All
+Agents share the checkout and Git index; coordinate overlapping edits and Git
+writes. Existing user `reader.md` files and historical records are never rewritten.
+
+Worker has no extra child-only blanket Git mutation deny and no blanket Git
+allow. Ordinary repository Git queries/mutations use ordinary Bash permission,
+not a second per-operation effect matrix. Only bounded literal Git version
+queries can qualify for fixed-query automatic allowance. Raw configured
+denies/specific asks, literal path/output/redirect facts and
+credential/resource/high-risk protection remain. The
+[Git classifier](git-read-proof.md) does no subprocess provenance probes or
+history/object walks; commands, environment, executable selection and leading
+`cd` remain unchanged.
 
 ## Task dispatch boundary
 

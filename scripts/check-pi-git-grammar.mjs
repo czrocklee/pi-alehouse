@@ -9,12 +9,13 @@ import { createJiti } from "jiti";
 const grammarPath = fileURLToPath(new URL("../extensions/lib/git-read-grammar.ts", import.meta.url));
 const jiti = createJiti(import.meta.url, { fsCache: false });
 const grammar = await jiti.import(grammarPath);
-const { inspectGitCommands, staticGitQueryProblem } = await jiti.import(
+const { inspectGitCommands } = await jiti.import(
   fileURLToPath(new URL("../extensions/static-safety-guard.ts", import.meta.url)),
 );
 assert(!/^\s*import\b/m.test(readFileSync(grammarPath, "utf8")), "Shared grammar must stay import-free");
 assert.deepEqual([...grammar.gitStatusFlags], [
-  "-s", "-b", "--short", "--branch", "--porcelain", "--porcelain=v1", "--porcelain=v2",
+  "-s", "-b", "-sb", "-bs", "-z", "-uno", "-unormal", "-uall", "--short", "--branch",
+  "--porcelain", "--porcelain=v1", "--porcelain=v2",
   "--untracked-files=no", "--untracked-files=normal", "--untracked-files=all",
   "--ignored", "--ignored=matching", "--ignored=traditional", "--ignore-submodules=all",
 ]);
@@ -25,13 +26,14 @@ function values(name, accepted, rejected) {
 }
 values("gitPrettyValue", [
   "medium", "short", "full", "fuller", "raw", "oneline", "reference",
-  "%H %h %T %t %P %p %an %ae %ad %aD %ar %at %ai %aI %cn %ce %cd %cr %ct %ci %cI %s %f %b %N %D %n %%",
+  "%H %h %T %t %P %p %an %ae %ad %aD %ar %at %ai %aI %cn %ce %cd %cr %ct %ci %cI %s %f %b %B %N %D %n %%",
+  "format:%H%x09%s",
   "%gD %gd %gn %ge %gs", "%%G?", "format:literal", "tformat:literal", "format:", "tformat:",
   "format:%H %P %s", "tformat:%h %ad %s", "owner's %s", "%%x00 %%C(red) %%<(20) %%(trailers)",
 ], [
   "review", "default", "ful", "Fuller", "", "%G?", "%GG", "%GS", "%GK", "%GF", "%GP", "%GT",
-  "format:%G?", "tformat:%G?", "%x00", "%C(red)", "%Cred", "%<(20)", "%>(20)", "%|(20)",
-  "%(trailers)", "%g?", "%gN", "%gE", "%B", "%Q", "%", "%%%G?", "%+s", "%-s", "% s",
+  "format:%G?", "tformat:%G?", "%x00", "%x1b", "%C(red)", "%Cred", "%<(20)", "%>(20)", "%|(20)",
+  "%(trailers)", "%g?", "%gN", "%gE", "%Q", "%", "%%%G?", "%+s", "%-s", "% s",
   "%s\n", "%s\r", "%s\t", "%s\0", "%s\x1b", "%s\x7f", "%s\x85", "%s\u2028", "%s\u2029",
 ]);
 values("gitDateValue", [
@@ -51,7 +53,7 @@ values("gitDiffRevision", [
 ], ["^main", "main..topic", "main...topic", "@{u}", "HEAD^{commit}", "HEAD^{}", "HEAD^!", "HEAD^@", "HEAD^-", "HEAD^-1",
   "HEAD:file", "--cached", "HEAD\n", "HEAD\0"]);
 values("gitPathWord", [
-  ".", "./file.txt", "a path/file-name.txt", ".env", "./-file", "dir/file", "a...b",
+  ".", "./file.txt", "a path/file-name.txt", ".env", "./-file", "dir/file", "a...b", "docs/\u6ce8.txt",
 ], ["", "-file", "../file", "dir/../file", "/absolute", " file", "file ", ":(literal)file", "dir/*", "$PATH", "file\n", "file\0"]);
 
 const optionCases = [
@@ -77,6 +79,16 @@ assert.match(grammar.gitPrettyProblem("%G?"), /%G\?.*signature/);
 assert.match(grammar.gitPrettyProblem("review"), /named.*review/);
 assert.match(grammar.gitPrettyProblem("%x00"), /byte escape/);
 assert.match(grammar.gitDateProblem("format:%n"), /%n/);
+// The strict legacy pretty whitelist and signature inventory are syntax only.
+// Neither grants repository Git permission; all such commands use normal review.
+for (const value of ["%x00%C(red)%<(20)%Q", "format:arbitrary output", "%%G?", "%x25G?"]) {
+  assert.equal(grammar.gitPrettySignatureRequested(value), false, value);
+  grammarCases++;
+}
+for (const value of ["%G?", "format:%GG", "tformat:%+GS", "%-GK", "% G?"]) {
+  assert.equal(grammar.gitPrettySignatureRequested(value), true, value);
+  grammarCases++;
+}
 
 let tokenizerCases = 0;
 for (const [source, expected] of [
@@ -99,45 +111,48 @@ for (const source of ['git log --format="$FORMAT"', 'git log --format="$(echo %s
   tokenizerCases++;
 }
 
-let staticCases = 0;
-for (const source of [
-  "git status --short", "git status --short --ignored -- literal.txt", "git status --short --ignore-submodules=all",
-  "git log -- path", "git log HEAD -- docs/file.md './-file' 'docs/a b.txt' .env", "git log -- ./file dir/file",
-  "git log -5 --oneline", "git log --format=fuller",
-  "git log --format='%H %P %s' main..topic", "git log --pretty='%h %ad %s' --date=iso-local -6", "git log --format='%%G?'",
-  "git log --date=format:'%Y %m'", "git log '--format=%H %P %s' --pretty=raw --date=iso", "git log ^main --not topic --",
-  "git log --graph --topo-order --date-order --reverse --decorate=full main...topic", "git log HEAD '@{u}' ^main",
-  "git log --no-show-signature --no-ext-diff --no-textconv", "git show -s HEAD^0", "git show --no-patch main^{commit}",
-  "git show -s --format='%h %s' --date=iso-local HEAD^{commit}",
-  "env git show HEAD:file", "timeout 5 git show HEAD:file", "env git log -- path", "env git log --format=review",
-  "git diff --output=fixture -- path", "git ls-files --unknown", "git -P diff --textconv", "git config fixture value",
+// Required DATA may look like another option; roles do not confer query
+// eligibility. Optional pretty/color arguments must not swallow real outputs.
+for (const [sub, option, role] of [
+  ["log", "--grep", "data"], ["show", "--author", "data"],
+  ["branch", "--format", "data"], ["tag", "--sort", "data"],
+  ["log", "--output", "output"], ["diff", "--output", "output"],
+  ["archive", "--output", "output"], ["archive", "--prefix", "data"],
+  ["log", "--pretty", undefined], ["log", "--format", undefined], ["branch", "--color", undefined],
 ]) {
-  assert.equal(staticGitQueryProblem(source), undefined, source);
-  staticCases++;
+  assert.equal(grammar.gitRequiredOperandRole(sub, option), role, `${sub}/${option}`);
+  grammarCases++;
 }
-for (const [source, diagnostic] of [
-  ["git log --format=review", /named.*review/], ["git log --pretty=review", /named.*review/],
-  ["git log --format='%G?'", /%G\?.*signature/], ["git log --pretty='%x00'", /byte escape/],
-  ["git log --format='%C(red)'", /color/], ["git log --format='%<(20)'", /width/], ["git log --format='%(trailers)'", /trailers/],
-  ["git log --format='%g?'", /%g\?/], ["git log --format='%s\n'", /control|line break/],
-  ["git log --date=format:%n", /%n/], ["git log --date=review", /date mode.*review/], ["git log --format", /literal value/],
-  ["git log --max-count 1000", /1\.\.999/], ["git log --ext-diff", /--ext-diff/], ["git log --textconv", /--textconv/],
-  ["git log --patch", /--patch/], ["git log --output=fixture", /--output=fixture/],
-  ...["../file", "dir/../file", "/absolute", "-file", ":(literal)file", "dir/*", "$PATH", "file ", "file\n", "owner's file"].map(path =>
-    [`git log -- valid.txt ${JSON.stringify(path)}`, /pathspec|shell expansion/]),
-  ["git log -- valid.txt ''", /pathspec/], ["git show -s HEAD:file", /HEAD:file.*commit-constrained/],
-  ["git show -s HEAD", /HEAD.*commit-constrained/], ["git show -s deadbeef", /deadbeef.*commit-constrained/],
-  ["git show -s", /requires.*commit-constrained/], ["git show HEAD^0", /requires -s/], ["git show -s HEAD^0 --", /terminator/],
-  ["git show -s --pretty raw HEAD^0", /--pretty.*attached/], ["git show -s --format raw HEAD^0", /--format.*attached/],
-  ["git show -s --date iso HEAD^0", /--date.*attached/],
-  ["git status --unknown", /status argument.*--unknown/],
-  ...["--ignore-submodules", "--ignore-submodules=none", "--ignore-submodules=dirty", "--ignore-submodules=untracked", "--ignore-submodules=al"].map(flag =>
-    [`git status ${flag}`, /status argument/]),
-  ["git -c log.showSignature=true log", /configuration override/],
-  ["git --unknown log", /global option/], ['git log "$REF"', /shell expansion/],
-  ["git status --short; git log --format='%G?'", /signature/],
+
+let mutationCases = 0;
+for (const [sub, args, pattern] of [
+  ["branch", ["topic"], /creation/], ["tag", ["v1"], /creation/],
+  ["branch", ["-m", "old", "new"], /mutation/], ["branch", ["-D", "-f", "old"], /mutation/],
+  ["tag", ["-d", "v1"], /mutation/], ["tag", ["-a", "v1", "-m", "fixture"], /mutation/],
+  ["commit", ["-a", "-m", "fixture"], /mutation|configuration/], ["checkout", ["-b", "topic"], /mutation|configuration/],
+  ["commit", ["--amend"], /mutation|configuration/],
+  ["branch", ["--del", "topic"], /mutation/], ["tag", ["--del", "v1"], /mutation/],
+  ["branch", ["-vD", "topic"], /mutation/], ["tag", ["-ld", "v1"], /mutation/],
+  ["tag", ["-vd", "v1"], /mutation/], ["branch", ["-v", "new"], /creation/],
+  ["branch", ["--format", "--list", "topic"], /creation/],
+  ["tag", ["--sort", "--list", "v1"], /creation/],
+  ["symbolic-ref", ["--del", "HEAD"], /modification/], ["replace", ["--del", "HEAD"], /modification/],
 ]) {
-  assert.match(staticGitQueryProblem(source) ?? "", diagnostic, source);
-  staticCases++;
+  assert.match(grammar.gitMutationProblem(sub, args) ?? "", pattern, `${sub} ${args.join(" ")}`);
+  mutationCases++;
 }
-console.log(`PASS: ${grammarCases} grammar, ${tokenizerCases} static-tokenizer, ${staticCases} static-query cases (source-only; no complete gate proof)`);
+for (const [sub, args] of [
+  ["branch", ["--list"]], ["branch", ["-v"]], ["tag", ["--list"]], ["status", ["--short", "-z"]],
+  ["branch", ["--format", "%(refname:short)"]], ["tag", ["--sort", "refname"]],
+  ["branch", ["--format", "-D"]], ["tag", ["--sort", "--delete"]],
+  // Verification can invoke GPG: undefined here means ordinary analysis, NOT
+  // automatic permission. Never execute a verifier in this pure grammar lane.
+  ["tag", ["-v", "v1"]], ["tag", ["--verify", "v1"]],
+  ["log", ["--not-a-real-option"]], ["diff", ["--output=fixture"]],
+]) {
+  assert.equal(grammar.gitMutationProblem(sub, args), undefined, `Not a mutation deny: ${sub} ${args.join(" ")}`);
+  mutationCases++;
+}
+const guardSource = readFileSync(fileURLToPath(new URL("../extensions/static-safety-guard.ts", import.meta.url)), "utf8");
+assert.doesNotMatch(guardSource, /gitMutationProblem/, "effect inventory must not become a child-only static Git refusal");
+console.log(`PASS: ${grammarCases} grammar, ${tokenizerCases} static-tokenizer, ${mutationCases} mutation-inventory cases (source-only; inventory is not an approval or child refusal)`);

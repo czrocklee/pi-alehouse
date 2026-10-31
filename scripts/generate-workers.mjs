@@ -22,8 +22,14 @@ export function renderWorkers(root = packageRoot) {
   const agents = {}, metadata = {};
   for (const [name, profile] of Object.entries(policy.profiles)) {
     assert.match(name, /^[a-z]+$/);
-    const bashDenies = [...git(policy.commonGitDenies), ...policy.gitSpellingDenies,
-      ...git(policy.mutationGitDenies), ...profile.extraBashDenies];
+    // Only the cooperative editor opts out of the shipped child-only Git
+    // floor. Researcher keeps its exact denies; no Git allow is added,
+    // and user rules plus the independent safety/resource guards still apply.
+    assert(profile.legacyGitDenies === undefined || (profile.legacyGitDenies === false && name === "editor" && profile.edits === true),
+      `Invalid legacyGitDenies flag: ${name}`);
+    const bashDenies = [...(profile.legacyGitDenies === false ? [] : [
+      ...git(policy.commonGitDenies), ...policy.gitSpellingDenies, ...git(policy.mutationGitDenies),
+    ]), ...profile.extraBashDenies];
     // Optional profile capabilities remain opt-in; communication changes must
     // never widen Bash, editing, or web access.
     assert(profile.bash === undefined || profile.bash === false, `Invalid bash flag: ${name}`);

@@ -59,8 +59,9 @@ const HIGH_IMPACT_COMMAND_PATTERNS: readonly RegExp[] = [
     `${COMMAND_NAME_POSITION}git\\b${GIT_GLOBAL_OPTIONS}\\s+(?:-c(?:\\s+|[^\\s])|--config-env(?:=|\\s+))`,
   ),
   new RegExp(`${COMMAND_NAME_POSITION}git\\b${GIT_GLOBAL_OPTIONS}\\s+config\\b`, "i"),
-  // Only exact commit-metadata forms bypass review in the static policy. Any
-  // remaining show request needs a human: objects can contain denied file data.
+  // Repository queries have no fixed-query automatic allowance (only bounded
+  // literal Git version queries do). A show ask needs a human: object output
+  // can contain denied file data; this checkpoint is not a permission deny.
   new RegExp(`${COMMAND_NAME_POSITION}git\\b${GIT_GLOBAL_OPTIONS}\\s+show\\b`, "i"),
   /\bgit\b[^\n;]*\b(?:diff|log|show)\b[^\n;]*\s--(?:output(?:=|\s)|ext-diff\b|textconv\b)/i,
   // Git global options may sit between `git` and a destructive subcommand.

@@ -1589,7 +1589,12 @@ test("yolo needs a second choice, reaches the authority's set, and is recorded i
     m.clickRow("yolo");
     assert.equal(m.popover().isArmed(), true, "the first choice only arms");
     assert.equal(yoloSet().has("approval-root"), false);
-    for (const warning of ["subagent Bash asks", "fail-closed floor and static guard", "Opaque code can write files"]) {
+    // Every semantics of the popover warning, per line, at the same strength
+    // as before: Bash/Git scope with destructive writes, the Jev/checkpoint
+    // bypass, and the still-holding denies/floor/static guard plus re-choice.
+    // The dialog's full warning keeps the opaque-program fact.
+    for (const warning of ["Bash/Git asks, destructive writes", "bypasses Jev and hard checkpoints", "denies, the floor",
+      "static guard stay. Choose yolo again"]) {
       assert(m.lines().some((line) => line.includes(warning)), m.lines().join("\n"));
     }
     assert(m.lines().at(-1).startsWith("╰"), "the warning fits above the bottom edge");

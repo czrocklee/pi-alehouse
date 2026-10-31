@@ -1,7 +1,9 @@
 /**
  * Argv-preserving Git invocation parse shared by the static guard and the
  * hard checkpoints (hard-checkpoint.ts).
- * Unknown globals stay on the human path; do not join words and re-lex them.
+ * Preserve requested prefix facts for deny-only guards and eligible-ask
+ * checkpoints. This parser neither grants permission nor rewrites commands;
+ * unknown globals remain conservative. Do not join words and re-lex them.
  */
 import { basename } from "node:path";
 
@@ -11,9 +13,13 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 // selectors inject configuration exactly like -c/--config-env.
 const GIT_CONFIG_ASSIGNMENT = /^GIT_CONFIG(?:_[A-Za-z0-9_]*)?=/;
 const SIMPLE_WRAPPERS = new Set(["command", "builtin", "nohup"]);
-// Proven direct diff bypasses the ask chain in the managed upstream pipeline.
-// A diff/blame that still asks has no complete static read-scope proof.
-const CHECKPOINT_SUBCOMMANDS = new Set(["diff", "blame", "show", "config", "push", "reset", "clean", "reflog", "branch", "tag"]);
+// A bounded risk-word inventory for unknown Git global option positions.
+// It only helps select eligible-ask checkpoints, never authorizes an operation.
+const CHECKPOINT_SUBCOMMANDS = new Set(["diff", "blame", "show", "config", "push", "reset", "clean", "reflog", "branch", "tag", "checkout", "restore", "stash", "update-ref", "filter-branch"]);
+// Selected executable/loader/helper overrides, not an exhaustive environment
+// taxonomy. Only model-requested command prefixes are inspected, never the
+// operator's inherited process environment. Git config keeps its human checkpoint.
+const DANGEROUS_ENVIRONMENT_ASSIGNMENT = /^(?:PATH|LD_[A-Za-z0-9_]*|DYLD_[A-Za-z0-9_]*|GIT_EXTERNAL_DIFF|GIT_SSH|GIT_SSH_COMMAND|GIT_ASKPASS|SSH_ASKPASS|GIT_PAGER|PAGER|GIT_EXEC_PATH|GIT_EDITOR|GIT_SEQUENCE_EDITOR)=/;
 const QUERY_SUBCOMMANDS = new Set(["status", "log", "show"]);
 
 const GIT_GLOBALS_NONE = new Set([
@@ -51,6 +57,8 @@ export type GitInvocation = {
   args: string[];
   unknownGlobals: boolean;
   configOverride: boolean;
+  hasEnvironmentAssignments: boolean;
+  /** Includes expansions in assignments and wrapper operands stripped below. */
   expansions: boolean;
   /** An operand-taking wrapper (env, timeout, nice, ...) precedes git. */
   wrapped: boolean;
@@ -75,14 +83,21 @@ function take(words: string[], expansions: boolean[]): void {
 export function skipCommandPrefix(
   original: string[],
   originalExpansions?: boolean[],
-): { words: string[]; expansions: boolean[]; wrapped: boolean; gitConfigEnvironment: boolean } | undefined {
+  observeAssignment?: (word: string) => void,
+): { words: string[]; expansions: boolean[]; wrapped: boolean; gitConfigEnvironment: boolean; hasEnvironmentAssignments: boolean } | undefined {
   const words = [...original];
   const expansions = flagsFor(original, originalExpansions);
   let wrapped = false;
   let gitConfigEnvironment = false;
+  let hasEnvironmentAssignments = false;
+  const assignment = (word: string) => {
+    hasEnvironmentAssignments = true;
+    if (GIT_CONFIG_ASSIGNMENT.test(word)) gitConfigEnvironment = true;
+    observeAssignment?.(word);
+  };
   while (KEYWORDS.has(words[0] ?? "")) take(words, expansions);
   while (words.length && ASSIGNMENT.test(words[0] ?? "")) {
-    if (GIT_CONFIG_ASSIGNMENT.test(words[0])) gitConfigEnvironment = true;
+    assignment(words[0]);
     take(words, expansions);
   }
 
@@ -90,6 +105,7 @@ export function skipCommandPrefix(
     const name = basename(words[0] ?? "");
     if (SIMPLE_WRAPPERS.has(name)) {
       take(words, expansions);
+      if (name === "command" && words[0] === "-p") take(words, expansions);
       if (words[0] === "--") take(words, expansions);
       if (words[0]?.startsWith("-")) return undefined;
       continue;
@@ -127,11 +143,16 @@ export function skipCommandPrefix(
           take(words, expansions);
           break;
         }
+        if (word === "-S" || word === "--split-string" || word.startsWith("--split-string=") || /^-S./.test(word)) {
+          // A split-string payload is not literal executable argv. Do not
+          // claim that an unsupported prefix resolves to Git.
+          return undefined;
+        }
         if (["-i", "--ignore-environment", "-0", "--null"].includes(word)) {
           take(words, expansions);
           continue;
         }
-        if (["-u", "--unset", "-C", "--chdir", "-S", "--split-string"].includes(word)) {
+        if (["-u", "--unset", "-C", "--chdir"].includes(word)) {
           take(words, expansions);
           if (!words.length) return undefined;
           take(words, expansions);
@@ -141,19 +162,22 @@ export function skipCommandPrefix(
           (word.startsWith("-u") && word.length > 2) ||
           word.startsWith("--unset=") ||
           word.startsWith("--chdir=") ||
-          word.startsWith("--split-string=") ||
           (word.startsWith("-C") && word.length > 2)
         ) {
           take(words, expansions);
           continue;
         }
         if (ASSIGNMENT.test(word)) {
-          if (GIT_CONFIG_ASSIGNMENT.test(word)) gitConfigEnvironment = true;
+          assignment(word);
           take(words, expansions);
           continue;
         }
         if (word.startsWith("-")) return undefined;
         break;
+      }
+      while (ASSIGNMENT.test(words[0] ?? "")) {
+        assignment(words[0]);
+        take(words, expansions);
       }
       continue;
     }
@@ -295,7 +319,16 @@ export function skipCommandPrefix(
     }
     break;
   }
-  return { words, expansions, wrapped, gitConfigEnvironment };
+  return { words, expansions, wrapped, gitConfigEnvironment, hasEnvironmentAssignments };
+}
+
+/** Selected requested prefixes only for a bounded, recognized Git invocation. */
+export function hasDangerousGitEnvironmentPrefix(words: string[]): boolean {
+  let dangerous = false;
+  const skipped = skipCommandPrefix(words, undefined, (word) => {
+    if (DANGEROUS_ENVIRONMENT_ASSIGNMENT.test(word)) dangerous = true;
+  });
+  return dangerous && skipped !== undefined && basename(skipped.words[0] ?? "") === "git";
 }
 
 function consumeGitGlobal(word: string, next: string | undefined): { tokens: number; config: boolean } | "unknown" {
@@ -318,7 +351,7 @@ function consumeGitGlobal(word: string, next: string | undefined): { tokens: num
 export function parseGitInvocation(original: string[], originalExpansions?: boolean[]): GitInvocation | undefined {
   const skipped = skipCommandPrefix(original, originalExpansions);
   if (!skipped || basename(skipped.words[0] ?? "") !== "git") return undefined;
-  const { words, expansions } = skipped;
+  const { words } = skipped;
   let index = 1;
   let unknownGlobals = false;
   let configOverride = skipped.gitConfigEnvironment;
@@ -358,7 +391,8 @@ export function parseGitInvocation(original: string[], originalExpansions?: bool
     args,
     unknownGlobals,
     configOverride,
-    expansions: expansions.some(Boolean),
+    hasEnvironmentAssignments: skipped.hasEnvironmentAssignments,
+    expansions: flagsFor(original, originalExpansions).some(Boolean),
     wrapped: skipped.wrapped,
   };
 }
@@ -367,14 +401,18 @@ function mentionsSubcommand(invocation: GitInvocation, names: ReadonlySet<string
   return [invocation.subcommand, ...invocation.args].some((token) => token !== undefined && names.has(token.toLowerCase()));
 }
 
-/** status, log or show, whose output the static guard must prove metadata-only. */
-export function isGitQuery(invocation: GitInvocation): boolean {
-  return QUERY_SUBCOMMANDS.has(invocation.subcommand?.toLowerCase() ?? "");
-}
-
-/** An unknown global makes the subcommand position unreliable; any query word counts. */
-export function unknownGlobalsMayHideQuery(invocation: GitInvocation): boolean {
-  return invocation.unknownGlobals && mentionsSubcommand(invocation, QUERY_SUBCOMMANDS);
+// Git accepts options after operands, but never after --. Skip the bounded
+// required-value flags used below so option DATA (e.g. branch --format -d)
+// cannot be mistaken for a destructive short-option group.
+function optionsBeforeTerminator(args: readonly string[], valueFlags: readonly string[] = []): string[] {
+  const options: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--") break;
+    if (valueFlags.includes(arg)) { index += 1; continue; }
+    if (arg.startsWith("-")) options.push(arg);
+  }
+  return options;
 }
 
 function hasForceFlag(args: readonly string[]): boolean {
@@ -391,16 +429,35 @@ function hasExtDiffOrOutput(args: readonly string[]): boolean {
   );
 }
 
-/** Hard checkpoint: remaining show, config, destructive Git, unknown globals. */
+/** Eligible-ask checkpoint only: not a deny or a second Git authorization matrix. */
 export function gitInvocationNeedsHuman(invocation: GitInvocation): boolean {
   const subcommand = invocation.subcommand?.toLowerCase();
-  if (invocation.configOverride) return true;
+  if (invocation.hasEnvironmentAssignments || invocation.configOverride) return true;
   if (subcommand === "show" || subcommand === "config" || subcommand === "push") return true;
   if (subcommand === "reset" && invocation.args.includes("--hard")) return true;
   if (subcommand === "clean" && hasForceFlag(invocation.args)) return true;
   if (subcommand === "reflog" && ["delete", "expire"].includes((invocation.args[0] ?? "").toLowerCase())) return true;
-  if (subcommand === "branch" && invocation.args.some((arg) => arg === "-D" || arg === "--delete")) return true;
-  if (subcommand === "tag" && invocation.args.some((arg) => arg === "-d" || arg === "--delete")) return true;
+  if (subcommand === "checkout") {
+    const options = optionsBeforeTerminator(invocation.args, ["-b", "--conflict", "--pathspec-from-file"]);
+    const separator = invocation.args.indexOf("--");
+    if ((separator >= 0 && separator + 1 < invocation.args.length) || options.some((arg) => {
+      if (arg === "--force") return true;
+      if (!/^-[^-]/.test(arg)) return false;
+      for (const flag of arg.slice(1)) {
+        if (flag === "f" || flag === "B") return true;
+        if (flag === "b") break; // The rest is a new branch NAME, not flags.
+      }
+      return false;
+    })) return true;
+  }
+  if (subcommand === "restore" || subcommand === "update-ref" || subcommand === "filter-branch") return true;
+  if (subcommand === "stash" && ["clear", "drop"].includes((invocation.args[0] ?? "").toLowerCase())) return true;
+  if (subcommand === "branch" && optionsBeforeTerminator(invocation.args, ["--format", "--sort"]).some(
+    (arg) => arg === "--delete" || /^-[A-Za-z]*[dD][A-Za-z]*$/.test(arg),
+  )) return true;
+  if (subcommand === "tag" && optionsBeforeTerminator(invocation.args, ["--format", "--sort"]).some(
+    (arg) => arg === "--delete" || /^-[A-Za-z]*d[A-Za-z]*$/.test(arg),
+  )) return true;
   if ((subcommand === "diff" || subcommand === "log" || subcommand === "show") && hasExtDiffOrOutput(invocation.args)) {
     return true;
   }

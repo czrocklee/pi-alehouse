@@ -77,13 +77,13 @@ export const CONFIRM_ROWS = 3;
 export function confirmationFor(id: ChoiceId, judge: JudgeName | undefined, current: ChoiceId): string[] | undefined {
   if (CHOICE_RANK[id] <= CHOICE_RANK[current]) return undefined;
   if (id === "yolo") {
-    return [" yolo also auto-allows worker/subagent Bash asks.",
-      " Denies, fail-closed floor and static guard hold.",
-      " Opaque code can write files. Choose yolo again."];
+    return [" Yolo auto-allows Bash/Git asks, destructive writes too.",
+      " It bypasses Jev and hard checkpoints; denies, the floor",
+      " and static guard stay. Choose yolo again to turn it on."];
   }
   const name = judge ?? "the judge";
   return [id === "judge+sub" ? ` ${name} may decide asks here and from subagents.` : ` ${name} may approve or deny this session's asks.`,
-    " Static denies and hard checkpoints stay manual.",
+    " Denies hold; checkpoints keep eligible asks human.",
     ` Choose ${id === "judge+sub" ? `${name} + sub` : name} again to turn it on.`];
 }
 
@@ -311,9 +311,11 @@ export function narrowerJudge(a: JudgeMode, b: JudgeMode): JudgeMode {
 }
 
 const YOLO_WARNING = "Approval: YOLO. Eligible permission asks in this session and its in-process subagents are allowed " +
-  "without review, worker Bash commands included; explicit denies, the " +
-  "fail-closed floor and the static safety guard still apply. Opaque programs can still write files internally. " +
-  "Subagents outside this process keep asking.";
+  "without review, worker Bash commands included. Normal Git mutations are auto-allowed the same way: a subagent may " +
+  "commit, push (force included) or reset --hard, and a yolo allow is not re-reviewed by Jev or held at a hard " +
+  "checkpoint. Existing configured allows also bypass those checkpoints; explicit denies, the fail-closed " +
+  "floor and the static safety guard still apply. Opaque programs can " +
+  "still write files internally. Subagents outside this process keep asking.";
 
 /** The confirmation Pi's dialog shows before a widening change. */
 function confirmDialog(id: ChoiceId, judge: JudgeName | undefined): { title: string; text: string } {
@@ -322,10 +324,14 @@ function confirmDialog(id: ChoiceId, judge: JudgeName | undefined): { title: str
   return id === "judge+sub"
     ? { title: `Let ${name} approve asks here and from subagents?`,
       text: `${name} may allow or deny eligible permission asks from this session and its registered in-process ` +
-        "subagents without asking you. Static denies and hard checkpoints stay manual. This lasts for the current session." }
+        "subagents without asking you. Explicit denies hold, and checkpoints keep eligible asks human (an allow your " +
+        "config already grants, or yolo, never asks, so no checkpoint sees it). " +
+        "This lasts for the current session." }
     : { title: `Let ${name} approve this session's asks?`,
       text: `${name} may allow or deny eligible permission asks from this session without asking you; subagent asks ` +
-        "stay manual. Static denies and hard checkpoints stay manual. This lasts for the current session." };
+        `are not decided by ${name}. Explicit denies hold, and checkpoints keep eligible asks human (an allow your ` +
+        "config already grants, or yolo, never asks, so no checkpoint sees it). " +
+        "This lasts for the current session." };
 }
 
 export default function approvalMode(pi: ExtensionAPI): void {

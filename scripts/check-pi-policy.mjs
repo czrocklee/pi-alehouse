@@ -1,5 +1,7 @@
 // Exercise the installed permission system's real parser and gate policy.
-// Commands are parsed as data; none are executed and fixtures contain no secrets.
+// Gate commands are parsed as data, never executed after allow. Explicitly
+// authored offline Git argv below build/observe synthetic fixtures only; helper
+// canaries are NON-execution checks. Fixtures contain no real secrets.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -40,8 +42,8 @@ const [
 const configPath = join(resources, "extensions/pi-permission-system/config.json");
 const config = JSON.parse(readFileSync(configPath, "utf8"));
 // These explicit test-only Bash allowances exercise fixed-command matching,
-// while reader wildcards must still pass independent path/external gates.
-// Other read-only Git forms below rely on managed proof, not blanket patterns.
+// while read-command wildcards must still pass independent path/external gates.
+// Other Git forms below use normal Bash approval, not managed read grants.
 const fixedCommands = ["git status --short", "mktemp -d", "pwd"];
 assert.deepEqual(config.piInfrastructureReadPaths, [], "No deployment-specific infrastructure scope in the fixture");
 assert.deepEqual(Object.keys(config.permission.external_directory_read).sort(),
@@ -52,6 +54,13 @@ const allowedPatterns = Object.entries(config.permission.bash)
 assert.deepEqual(allowedPatterns, [...fixedCommands, "nl *", "sha256sum *", "echo *", "printf *", "ls *", "stat *", "rg --no-config *", "cd *", "head *", "wc *", "cat *", "tail *", "cut *", "tr *", "basename *", "dirname *", "readlink *", "realpath *", "uname *"].sort(), "Exact whitelist membership");
 
 const scratch = mkdtempSync(join(tmpdir(), "pi-policy-test-"));
+const savedEnv = { ...process.env };
+for (const key of Object.keys(process.env)) if (key.startsWith("GIT_")) delete process.env[key];
+mkdirSync(join(scratch, "home"));
+mkdirSync(join(scratch, "config"));
+Object.assign(process.env, { HOME: join(scratch, "home"), XDG_CONFIG_HOME: join(scratch, "config"),
+  GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_COUNT: "0",
+  GIT_TERMINAL_PROMPT: "0" });
 try {
   writeFileSync(join(scratch, ".env"), "FAKE_FIXTURE=not-a-real-secret\n");
   writeFileSync(join(scratch, "ordinary.txt"), "ordinary fixture\n");
@@ -61,41 +70,60 @@ try {
   const resolver = new PermissionResolver(manager, { getRuleset: () => [] });
   const normalizer = new PathNormalizer(posixPathFlavor, scratch);
   assert.deepEqual(manager.getConfigIssues(), [], "Policy must load without fail-closed fallback");
-  const check = async (command, agentName) => {
-    const program = await BashProgram.parse(command, normalizer);
-    const context = { toolCallId: "fixture", toolName: "bash", cwd: scratch, agentName };
+  const check = async (command, agentName, cwd = scratch) => {
+    const scopedNormalizer = cwd === scratch ? normalizer : new PathNormalizer(posixPathFlavor, cwd);
+    const program = await BashProgram.parse(command, scopedNormalizer);
+    const context = { toolCallId: "fixture", toolName: "bash", cwd, agentName };
     return {
+      program,
       bash: resolveBashCommandCheck(command, program.commands(), agentName, resolver),
-      path: describeBashPathGate(context, program, resolver, normalizer),
-      external: describeBashExternalDirectoryGate(context, program, resolver, normalizer),
+      path: describeBashPathGate(context, program, resolver, scopedNormalizer),
+      external: describeBashExternalDirectoryGate(context, program, resolver, scopedNormalizer),
     };
   };
-  const { hardenGitInput } = await load("access-intent/bash/managed-read-policy");
-  // This scratch directory is not a repository. Status can avoid submodule
-  // inspection only with the exact explicit ignore-all option; unqualified
-  // hardened status below must fall back when its repository probe fails.
-  const metadataQueries = await Promise.all(["git log -5 --oneline", "git log --oneline -n 20 HEAD", "git log -- ordinary.txt",
-    "git status --short --ignore-submodules=all -- ordinary.txt", "git status --short --ignored --ignore-submodules=all"].map(async command => {
+  const { hardenGitInput, managedGitProof } = await load("access-intent/bash/managed-read-policy");
+  const { nativeGitScope } = await load("access-intent/bash/managed-git-query");
+  const unchangedGit = async (command, cwd = scratch) => {
     const input = { command };
-    assert(await hardenGitInput(input, scratch), `Metadata fixture must exercise complete hardening: ${command}`);
-    return input.command;
-  }));
+    assert.equal(await hardenGitInput(input, cwd), undefined, `Git is not execution hardening: ${command}`);
+    assert.equal(input.command, command);
+    assert.deepEqual(Object.keys(input), ["command"]);
+    return input;
+  };
+  // This scratch directory is deliberately NOT a repository. Even explicit
+  // ignore-all cannot manufacture native scope when the repo probe fails.
+  const metadataQueries = ["git log -5 --oneline", "git log --oneline -n 20 HEAD", "git log -- ordinary.txt",
+    "git status --short --ignore-submodules=all -- ordinary.txt", "git status --short --ignored --ignore-submodules=all"];
+  for (const command of metadataQueries) await unchangedGit(command);
   for (const agent of [undefined, "editor"]) {
-    for (const command of metadataQueries) assert.equal((await check(command, agent)).bash.state, "allow", `Proven metadata query: ${agent}: ${command}`);
+    for (const command of metadataQueries) {
+      const result = await check(command, agent);
+      assert.equal(result.bash.state, "ask", `No-repository query remains ordinary review: ${agent}: ${command}`);
+      assert.equal(result.program.commands().some(unit => unit.managedReadOnly), false);
+    }
   }
   for (const command of ["git status --short -- ordinary.txt", "git status --short --ignored"]) {
-    const input = { command };
-    assert(await hardenGitInput(input, scratch), `Status fixture must exercise hardening: ${command}`);
+    const input = await unchangedGit(command);
     for (const agent of [undefined, "editor"]) {
       assert.equal((await check(input.command, agent)).bash.state, "ask", `Failed status repository probe gives no proof: ${agent}: ${command}`);
     }
   }
-  const secretLog = { command: "git log -- .env" };
-  assert(await hardenGitInput(secretLog, scratch), "Bare literal log pathspec must harden");
+  const secretLog = await unchangedGit("git log -- .env");
   for (const agent of [undefined, "editor"]) {
     const result = await check(secretLog.command, agent);
-    assert.equal(result.bash.state, "allow", `Literal log pathspec metadata proof: ${agent}`);
+    assert.equal(result.bash.state, "ask", `No-repository log retains ordinary review: ${agent}`);
     assert.equal(result.path?.preCheck?.state, "deny", `Literal log pathspec retains secret path denial: ${agent}`);
+  }
+  for (const [command, boundary] of [
+    ["git log --not-a-real-option -- .env", "path"],
+    ["git diff --not-a-real-option --output=.git/config", "path"],
+    ["git log -- /var/lib/pi-policy-fixture/input.txt", "external"],
+  ]) {
+    await unchangedGit(command);
+    const result = await check(command);
+    assert.equal(result.bash.state, "ask", `Unsupported query remains ordinary approval: ${command}`);
+    assert.equal(result[boundary]?.preCheck?.state, boundary === "path" ? "deny" : "ask",
+      `Declined query retains its independent ${boundary} boundary: ${command}`);
   }
   const readerCommands = ["nl -ba ordinary.txt", "sha256sum ordinary.txt", "sha256sum --tag ordinary.txt", "sha256sum - < ordinary.txt", "echo ok", "printf 'exit=%s\\n' \"$?\"", "head -45 ordinary.txt", "head ordinary.txt", "wc ordinary.txt", "wc -l -c ordinary.txt", "head -n 10 < ordinary.txt", "cat -n ordinary.txt", "tail -n 20 ordinary.txt", "cut -d : -f 1 ordinary.txt", "tr a-z A-Z < ordinary.txt", "tr '[:upper:]' '[:lower:]' < ordinary.txt", "basename ordinary.txt", "dirname ordinary.txt", "readlink ordinary.txt", "realpath ordinary.txt", "uname -m", "ls -la .", "stat ordinary.txt", "rg --no-config -n -d 0 -- fixture ordinary.txt", "rg --no-config -F -d 0 -- fixture ordinary.txt", "rg --no-config -n -d 0 -- '[ab]*$|x(y)' ordinary.txt", "rg --no-config -d 0 -- 'fixture with spaces' ordinary.txt", "rg --no-config --files --hidden -g '*.txt' -- .", "rg --no-config -- fixture - < ordinary.txt"];
   for (const command of [...fixedCommands, ...readerCommands, "cd .", `cd '${scratch}'`]) {
@@ -121,17 +149,28 @@ try {
   ]) assert.equal((await check(command)).bash.state, "ask", `Non-whitelisted command must ask: ${command}`);
   assert.equal((await check("git status --short && git diff --check")).bash.state, "ask");
   assert.equal((await check("git status --short && sudo true")).bash.state, "deny");
-  // The upstream Bash matcher strips inline assignments. The independent
-  // static-safety-guard tool-entry regressions must block these exact cases;
-  // an explicit `env` wrapper above provides the normal ask path instead.
+  // The non-Git wc allowance is unchanged. Its nested Git assignment now
+  // retains its own raw approval surface rather than inheriting stripped
+  // `git status --short`; the independent expansion guard remains separate.
   for (const command of [
     'wc -l <<< "$(PATH=/fixture git status --short)"',
     "wc -l <<EOF\n$(PATH=/fixture git status --short)\nEOF",
-    "PATH=./fixture-bin git status --short",
-    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=./fixture-hook git status --short",
-  ]) assert.equal((await check(command)).bash.state, "allow", "Upstream assignment-stripping contract");
-  assert.equal((await check("git push origin main", "editor")).bash.state, "deny");
-  assert.equal((await check("git commit --amend", "editor")).bash.state, "deny");
+  ]) {
+    const result = await check(command);
+    const outer = result.program.commands().find(unit => unit.text.startsWith("wc "));
+    assert.ok(outer);
+    assert.equal(resolver.resolve({ kind: "tool", surface: "bash", input: { command: outer.text } }).state, "allow",
+      "the non-Git outer command keeps its existing ordinary allowance");
+    assert.equal(result.bash.state, "ask", "nested Git assignment cannot inherit the stripped status allow");
+  }
+  for (const command of ["PATH=./fixture-bin git status --short",
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=./fixture-hook git status --short"]) {
+    await unchangedGit(command);
+    const result = await check(command);
+    assert.equal(result.bash.state, "ask", "Full raw Git assignment cannot inherit the stripped exact status allow");
+    assert.equal(result.program.commands().some(unit => unit.managedReadOnly), false);
+  }
+  assert.equal((await check("git commit --amend", "editor")).bash.state, "ask", "editor Git writes use normal Bash approval");
   assert.equal(resolver.checkPermission("write", {}).state, "allow", "Fixture global write baseline");
   {
     const agent = "editor";
@@ -139,7 +178,7 @@ try {
     for (const tool of ["alert_parent", "ask_parent"]) {
       assert.equal(resolver.checkPermission(tool, {}, agent).state, "allow", `Internal communication: ${agent}: ${tool}`);
     }
-    // Editor retains ordinary edit/write policy.
+    // The cooperative editor may edit and write under ordinary path policy.
     for (const tool of ["edit", "write"]) assert.equal(resolver.checkPermission(tool, {}, agent).state, "allow", `Direct editing boundary: ${agent}: ${tool}`);
     assert.equal((await check("printf '%s' fixture > ordinary.txt", agent)).path?.preCheck?.state, undefined, `Worker path-write gate: ${agent}`);
     assert.equal((await check("printf '%s' fixture > ~/.pi/agent/settings.json", agent)).path?.preCheck?.state, "deny", `Worker self-write denial: ${agent}`);
@@ -151,15 +190,16 @@ try {
       assert.equal((await check(command, agent)).bash.state, "ask", `Worker non-whitelist: ${agent}: ${command}`);
     }
     for (const command of ["git commit -m fixture", "git push origin main"]) {
-      assert.equal((await check(command, agent)).bash.state, "deny", `Git mutations stay with the parent: ${agent}: ${command}`);
+      assert.equal((await check(command, agent)).bash.state, "ask", `Editor normal approval: ${agent}: ${command}`);
     }
     assert.equal((await check("sudo true", agent)).bash.state, "deny", `Worker privilege denial: ${agent}`);
     assert.equal((await check("rg --no-config -d 0 -- fixture .env", agent)).path?.preCheck?.state, "deny", `Worker rg secret path: ${agent}`);
     assert.equal((await check("cat /var/lib/pi-policy-fixture/input.txt", agent)).external?.preCheck?.state, "ask", `Worker external reader: ${agent}`);
   }
-  // The researcher has no Bash tool at all (the harness child table). As depth,
-  // its definition turns every Bash ask into a deny; explicit global read-only
-  // allowances stay as they are for other workers. Web tools keep global rules.
+  // The researcher has no Bash tool at all (the harness child table). Its raw
+  // agent Bash deny also constrains native Git requests before scope merging,
+  // so a global status allow cannot erase it. Ordinary non-Git global allowance
+  // inheritance and the global web rules remain unchanged.
   assert.deepEqual(manager.getConfigIssues("researcher"), [], "Worker policy must load: researcher");
   for (const tool of ["write", "edit"]) assert.equal(resolver.checkPermission(tool, {}, "researcher").state, "deny", `Direct editing boundary: researcher: ${tool}`);
   for (const tool of ["alert_parent", "ask_parent", "get_search_content"]) assert.equal(resolver.checkPermission(tool, {}, "researcher").state, "allow", `Researcher: ${tool}`);
@@ -171,7 +211,12 @@ try {
     assert.equal((await check(command, "researcher")).bash.state, "deny", `Researcher Bash denial: ${command}`);
   }
   for (const command of [...fixedCommands, "ls -la .", "cat ordinary.txt"]) {
-    assert.equal((await check(command, "researcher")).bash.state, (await check(command)).bash.state, `Researcher global allowance: ${command}`);
+    const researcher = await check(command, "researcher");
+    if (command.startsWith("git ")) {
+      assert.equal(researcher.bash.state, "deny", `Native Git preserves the researcher's raw agent deny: ${command}`);
+    } else {
+      assert.equal(researcher.bash.state, (await check(command)).bash.state, `Researcher ordinary non-Git global allowance: ${command}`);
+    }
   }
   assert.equal((await check("printf '%s' fixture > ordinary.txt", "researcher")).path?.preCheck?.state, "deny", "Researcher path-write gate");
 
@@ -203,7 +248,7 @@ try {
   for (const name of ["fixture-skill", "unlisted/vendor-skill"]) {
     assert.equal(resolver.checkPermission("skill", name).state, "allow");
   }
-  for (const profile of ["worker", "researcher"]) {
+  for (const profile of ["editor", "researcher"]) {
     assert.equal(resolver.checkPermission("agent_spawn", { agent: "orca", profile, reasoning_difficulty: 3, prompt: "fixture" }).state, "allow");
   }
   for (const tool of ["agent_run", "agent_send", "agent_answer", "agent_wait", "agent_read", "agent_interrupt", "agent_kill", "agent_list"]) {
@@ -224,14 +269,15 @@ try {
 
   // Real upstream gate production, including URL normalization and write policy.
   const { ToolCallGatePipeline } = await load("handlers/gates/tool-call-gate-pipeline");
-  const pipeline = new ToolCallGatePipeline(resolver, {
-    getActiveSkillEntries: () => [], getInfrastructureReadDirs: () => [],
-    getToolPreviewLimits: () => ({}), getPathNormalizer: () => normalizer,
-    getShellToolAliases: () => undefined,
-  });
-  const gatesFor = async (toolName, input, agentName) => {
+  const gatesFor = async (toolName, input, agentName, cwd = scratch) => {
+    const scopedNormalizer = cwd === scratch ? normalizer : new PathNormalizer(posixPathFlavor, cwd);
+    const pipeline = new ToolCallGatePipeline(resolver, {
+      getActiveSkillEntries: () => [], getInfrastructureReadDirs: () => [],
+      getToolPreviewLimits: () => ({}), getPathNormalizer: () => scopedNormalizer,
+      getShellToolAliases: () => undefined,
+    });
     const gates = [];
-    await pipeline.evaluate({ toolCallId: "real-fixture", toolName, input, cwd: scratch, agentName }, {
+    await pipeline.evaluate({ toolCallId: "real-fixture", toolName, input, cwd, agentName }, {
       run: async (gate) => { if (gate) gates.push(gate); return { action: "allow" }; },
     });
     return gates;
@@ -255,7 +301,7 @@ try {
     assert(gate, `Git query requires review: ${command}`);
     assert(hardCheckpointReason({ ...gate.promptDetails, payload: gate.payload }), `Git content cannot reach automatic approval: ${command}`);
   }
-  for (const agent of [undefined, "editor", "researcher"]) {
+  for (const agent of [undefined, "editor"]) {
     for (const toolName of ["read", "write", "edit", "ls", "find", "grep"]) {
       for (const path of ["file:///home/fixture/.ssh/id_fixture", "@file:///home/fixture/.ssh/id_fixture", "file:///home/fixture/.ssh/id_fixture.env.example", "file:///home/fixture/.ssh/id_fixture.key"]) {
         assert((await gatesFor(toolName, { path }, agent)).some((gate) => gate.preCheck?.state === "deny"), `URL denied without static guard: ${agent}:${toolName}:${path}`);
@@ -268,7 +314,7 @@ try {
       assert.equal((await check(command, agent)).path?.preCheck?.state, "deny", `Git control redirection: ${agent}:${command}`);
     }
   }
-  // Researcher's write floor applies to project and arbitrary /tmp paths.
+  // Isolate the path-write ceiling from the researcher's direct tool denial.
   for (const path of [join(scratch, "ordinary.txt"), "src/new-file.ts", "/tmp/unbound-notes.txt"]) {
     const pathGate = (await gatesFor("write", { path, content: "fixture" }, "researcher"))
       .find((gate) => gate.surface === "path_write");
@@ -289,32 +335,54 @@ try {
   const gitEnv = { ...process.env, HOME: scratch, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "0" };
   const gitDir = join(scratch, "git-fixture"); mkdirSync(gitDir);
   const git = (...args) => spawnSync("git", ["-C", gitDir, ...args], { env: gitEnv, encoding: "utf8", timeout: 5000 });
-  assert.equal(git("init", "-q").status, 0);
+  const template = join(scratch, "git-template"); mkdirSync(template);
+  assert.equal(git("init", "-q", "-b", "main", `--template=${template}`).status, 0);
   writeFileSync(join(gitDir, "fixture.txt"), "BLOB_FIXTURE_CONTENT\n");
   const blob = git("hash-object", "-w", "fixture.txt").stdout.trim();
   writeFileSync(join(gitDir, ".git/HEAD"), `${blob}\n`);
-  assert.match(git("show", "-s").stdout, /BLOB_FIXTURE_CONTENT/);
-  assert.match(git("show", "-s", "HEAD").stdout, /BLOB_FIXTURE_CONTENT/);
-  for (const revision of ["HEAD^0", "HEAD~0", "HEAD^{commit}"]) {
-    const result = git("show", "-s", revision);
-    assert.notEqual(result.status, 0); assert(!result.stdout.includes("BLOB_FIXTURE_CONTENT"));
-  }
+  // No raw show/content control: object provenance/commit-peeling proof is
+  // retired. The authored object id is only permission-parser fixture data.
   writeFileSync(join(gitDir, ".git/HEAD"), "ref: refs/heads/main\n");
+  writeFileSync(join(gitDir, "ordinary.txt"), "ordinary authored Git fixture\n");
+  writeFileSync(join(gitDir, ".env"), "SYNTHETIC_HISTORICAL_SECRET\n");
+  assert.equal(git("add", "fixture.txt", "ordinary.txt", ".env").status, 0);
+  assert.equal(git("-c", "core.hooksPath=/dev/null", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+    "commit", "-q", "--no-gpg-sign", "-m", "synthetic policy fixture").status, 0);
+  const gitNormalizer = new PathNormalizer(posixPathFlavor, gitDir);
+  for (const command of metadataQueries) {
+    const input = await unchangedGit(command, gitDir);
+    assert.equal(nativeGitScope(command, gitNormalizer)?.auto, false, command);
+    for (const agent of [undefined, "editor"]) {
+      assert.equal((await check(input.command, agent, gitDir)).bash.state, "ask", `Repository Git remains ordinary approval: ${agent}/${command}`);
+      assert.equal((await check(input.command, agent, gitDir)).program.commands().some(unit => unit.managedReadOnly), false);
+    }
+  }
+  for (const command of ["git log -- .env", "git show HEAD:.env"]) {
+    const input = await unchangedGit(command, gitDir);
+    assert.equal((await check(command, undefined, gitDir)).path?.preCheck?.state, "deny", command);
+    assert.ok((await gatesFor("bash", input, "editor", gitDir)).some(gate => gate.preCheck?.state === "deny" && String(gate.surface).includes("path")));
+  }
   const marker = join(gitDir, "fsmonitor-ran");
   const hook = join(gitDir, "fixture-monitor.sh");
   writeFileSync(hook, `#!/bin/sh\nprintf executed > '${marker}'\n`, { mode: 0o700 });
   assert.equal(git("config", "core.fsmonitor", hook).status, 0);
-  git("status", "--short");
-  assert(existsSync(marker), "Git status can execute configured fsmonitor; it is not inherently side-effect-free");
-  assert.match(git("-P", "show", "-s", blob).stdout, /BLOB_FIXTURE_CONTENT/);
+  const helperInput = await unchangedGit("git status --short", gitDir);
+  assert.notEqual(nativeGitScope(helperInput.command, gitNormalizer)?.auto, true);
+  assert.equal(managedGitProof(helperInput.command, gitNormalizer), undefined);
+  assert.equal((await check(helperInput.command, undefined, gitDir)).program.commands().some(unit => unit.managedReadOnly), false);
+  assert.equal(existsSync(marker), false, "classification must NEVER execute the authored fsmonitor helper");
+  console.log("PASS: repository Git has no managed read grant; analysis never executes the authored helper (no helper-isolation claim for approved execution)");
   const prefixedShows = [
     `git -P show -s ${blob}`, `git -p show -s ${blob}`, `git -C . show -s ${blob}`,
     `git --no-pager show -s ${blob}`, `git --bare show -s ${blob}`,
     `git -C . -P show -s ${blob}`, `git -P -C . show -s ${blob}`, `command git -P show -s ${blob}`,
   ];
   for (const command of prefixedShows) {
-    assert.equal((await check(command)).bash.state, "ask", `Prefixed show asks: ${command}`);
-    const gate = (await gatesFor("bash", { command })).find((item) => item.surface === "bash");
+    await unchangedGit(command, gitDir);
+    const result = await check(command, undefined, gitDir);
+    assert.equal(result.bash.state, "ask", `Unattributed blob show keeps ordinary approval: ${command}`);
+    assert.equal(result.program.commands().some(unit => unit.managedReadOnly), false);
+    const gate = (await gatesFor("bash", { command }, undefined, gitDir)).find((item) => item.surface === "bash");
     assert(gate, `Prefixed show produces a bash gate: ${command}`);
     assert(hardCheckpointReason({ ...gate.promptDetails, payload: gate.payload }), `Prefixed show cannot auto-approve: ${command}`);
     assert.equal(inspectGitCommands(command)[0]?.subcommand, "show", `Shared parser finds show: ${command}`);
@@ -324,14 +392,14 @@ try {
   const granted = new PermissionResolver(manager, session);
   const grantedPipeline = new ToolCallGatePipeline(granted, {
     getActiveSkillEntries: () => [], getInfrastructureReadDirs: () => [],
-    getToolPreviewLimits: () => ({}), getPathNormalizer: () => normalizer,
+    getToolPreviewLimits: () => ({}), getPathNormalizer: () => gitNormalizer,
     getShellToolAliases: () => undefined,
   });
   const leak = `git -P show -s ${blob}`;
-  const grantedProgram = await BashProgram.parse(leak, normalizer);
+  const grantedProgram = await BashProgram.parse(leak, gitNormalizer);
   assert.equal(resolveBashCommandCheck(leak, grantedProgram.commands(), undefined, granted).state, "allow", "Session grant git -P * covers blob show");
   const grantedGates = [];
-  await grantedPipeline.evaluate({ toolCallId: "session-grant-fixture", toolName: "bash", input: { command: leak }, cwd: scratch }, {
+  await grantedPipeline.evaluate({ toolCallId: "session-grant-fixture", toolName: "bash", input: { command: leak }, cwd: gitDir }, {
     run: async (gate) => { if (gate) grantedGates.push(gate); return { action: "allow" }; },
   });
   assert(!grantedGates.some((gate) => gate.surface === "bash" && gate.preCheck?.state === "ask"), "Session grant skips the bash ask");
@@ -344,22 +412,24 @@ try {
   const wideGranted = new PermissionResolver(manager, wideSession);
   const widePipeline = new ToolCallGatePipeline(wideGranted, {
     getActiveSkillEntries: () => [], getInfrastructureReadDirs: () => [],
-    getToolPreviewLimits: () => ({}), getPathNormalizer: () => normalizer,
+    getToolPreviewLimits: () => ({}), getPathNormalizer: () => gitNormalizer,
     getShellToolAliases: () => undefined,
   });
   for (const prefix of ["env", "env FOO=1", "timeout 5", "timeout -s9 5", "nice -n 5", "nice -n5", "stdbuf -o0", "ionice -c3", "ionice -c 3", "time", "time -fx"]) {
     const command = `${prefix} git -P show -s ${blob}`;
     assert.equal(inspectGitCommands(command)[0]?.wrapped, true, `Shared parser marks wrapper: ${command}`);
-    const program = await BashProgram.parse(command, normalizer);
+    const program = await BashProgram.parse(command, gitNormalizer);
     assert.notEqual(resolveBashCommandCheck(command, program.commands(), undefined, wideGranted).state, "allow", `Git session grant does not cover wrapper: ${command}`);
     const gates = [];
-    await widePipeline.evaluate({ toolCallId: "wrapped-grant-fixture", toolName: "bash", input: { command }, cwd: scratch }, {
+    await widePipeline.evaluate({ toolCallId: "wrapped-grant-fixture", toolName: "bash", input: { command }, cwd: gitDir }, {
       run: async (gate) => { if (gate) gates.push(gate); return { action: "allow" }; },
     });
     const gate = gates.find((item) => item.surface === "bash" && item.preCheck?.state === "ask");
     assert(gate, `Wrapped Git show still asks under a Git session grant: ${command}`);
     assert(hardCheckpointReason({ ...gate.promptDetails, payload: gate.payload }), `Wrapped Git show cannot auto-approve: ${command}`);
   }
+
+  assert.equal(existsSync(marker), false, "all blob/wrapper permission analysis keeps the helper canary absent");
 
   // No SDK runtime export may be necessary to load the Bash/path guard.
   // Exercise both missing export and throwing grep factory against its real hook.
@@ -399,7 +469,9 @@ try {
         assert((await call("grep", { pattern: "fixture" }))?.block, `No readiness before session_start: ${scenario}`);
         await session.bindExtensions({ onError: (error) => errors.push(error) });
         assert((await call("bash", { command: "sudo true" }))?.block, `Actual SDK dispatch reaches Bash guard: ${scenario}`);
-        assert((await call("bash", { command: "git -P show -s deadbeef" }))?.block, `Actual SDK dispatch blocks prefixed Git show: ${scenario}`);
+        const gitInput = { command: "git -P show -s deadbeef" };
+        assert.equal((await call("bash", gitInput))?.block, undefined, `Static query refusal is retired; independent permission gates own review: ${scenario}`);
+        assert.equal(gitInput.command, "git -P show -s deadbeef");
         assert((await call("read", { path: "FILE:///home/fixture/.ssh/id_fixture" }))?.block, `Actual SDK dispatch reaches URL guard: ${scenario}`);
         const selected = session.getAllTools().find((tool) => tool.name === "grep");
         if (scenario === "earlier-extension" || scenario === "sdk-override") assert.equal(selected.description, canary.description, `SDK selects conflicting definition: ${scenario}`);
@@ -425,15 +497,33 @@ try {
         const { default: searchExtension } = await isolatedJiti.import(join(resources, "extensions/policy-grep.ts"));
         searchExtension(api);
       }, stub.includes("function") ? /fixture unavailable/ : /createGrepToolDefinition/);
-      for (const command of ["sudo true", "GIT_EXTERNAL_DIFF=./x.sh git log -p -1 --ext-diff", "git show -s", "git show -s HEAD", "git -P show -s deadbeef", "git --bare show -s HEAD", "command git -P show -s deadbeef",
+      assert(guardHandlers.get("tool_call")({ toolName: "bash", input: { command: "sudo true" } }, guardCtx)?.block, "Independent privilege guard still loaded");
+      for (const command of ["PATH=./fixture-bin git status", "LD_PRELOAD=./x.so git status",
+        "GIT_EXTERNAL_DIFF=./x.sh git log -p -1 --ext-diff"]) {
+        const input = { command };
+        assert.equal(guardHandlers.get("tool_call")({ toolName: "bash", input }, guardCtx)?.block, true,
+          `Executable Git environment overrides remain a static refusal: ${command}`);
+        assert.equal(input.command, command);
+      }
+      for (const command of ["git show -s", "git show -s HEAD", "git -P show -s deadbeef", "git --bare show -s HEAD", "command git -P show -s deadbeef",
         "git log -- ordinary.txt ../private.txt", "git log -- ordinary.txt ':(literal)file'", "git log -- ordinary.txt 'dir/*'",
         "git status --ignore-submodules=dirty", "git status --ignore-submodules=al"]) {
-        assert(guardHandlers.get("tool_call")({ toolName: "bash", input: { command } }, guardCtx)?.block, `Independent guard still loaded: ${command}`);
+        const input = { command };
+        assert.equal(guardHandlers.get("tool_call")({ toolName: "bash", input }, guardCtx)?.block, undefined,
+          `Unsupported query uses normal permission review, not a static query deny: ${command}`);
+        assert.equal(input.command, command);
       }
       for (const command of ["git log -- ordinary.txt", "git log HEAD -- ordinary.txt .env", "git log -- 'docs/a b.txt' ./-file",
         "git status --short --ignore-submodules=all"]) {
         assert.equal(guardHandlers.get("tool_call")({ toolName: "bash", input: { command } }, guardCtx), undefined,
           `Independent guard accepts restricted literal spelling, not a permission grant: ${command}`);
+      }
+      const childCtx = { ...guardCtx, sessionManager: { ...guardCtx.sessionManager,
+        getEntries: () => [{ type: "custom", customType: "active_agent", data: { name: "editor" } }],
+      } };
+      for (const command of ["git branch topic", "git tag v1", "git commit -m fixture", "git symbolic-ref --del HEAD", "git replace --del HEAD"]) {
+        assert.equal(guardHandlers.get("tool_call")({ toolName: "bash", input: { command } }, childCtx)?.block, undefined,
+          `Editor has no child-only mutation refusal; ordinary permission still applies: ${command}`);
       }
       assert(guardHandlers.get("tool_call")({ toolName: "grep", input: { pattern: "fixture" } }, guardCtx)?.block, "Unchecked grep fallback must fail closed");
       for (const toolName of ["read", "write", "edit", "ls", "find", "grep"]) {
@@ -491,7 +581,7 @@ try {
       getEntries: () => agent ? [{ type: "custom", customType: "active_agent", data: { name: agent } }] : [],
     } });
     const search = (params, agent, signal) => grep.execute("fixture", { pattern: "needle", ...params }, signal, undefined, ctx(agent));
-    for (const agent of [undefined, "editor"]) {
+    for (const agent of [undefined, "editor", "researcher"]) {
       const result = await search({}, agent);
       const text = result.content[0].text;
       assert(text.includes("needle visible") && text.includes("needle public template"), `Recursive ordinary/allowed template search: ${agent}`);
@@ -606,5 +696,7 @@ try {
   } finally { globalThis[servicesKey] = previousServices; }
   console.log(`PASS: upstream ${upstreamVersion} parser/gates, ${allowedPatterns.length} static patterns, negative commands, skills/subagents, path/external boundaries`);
 } finally {
+  for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
+  Object.assign(process.env, savedEnv);
   rmSync(scratch, { recursive: true, force: true });
 }

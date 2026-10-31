@@ -184,6 +184,17 @@ all accepted settings and does not accept or re-score difficulty.
 Callers may choose only profile/reasoning_difficulty, never a concrete worker model or
 thinking level, cwd, owner, generation, session path, or history path.
 
+Worker is a cooperative developer with read/edit/write/Bash/Git/build tools
+under normal permissions, no web or enforced readonly review ceiling.
+Researcher retains read-only file tools and web, without Bash/edit/write.
+Repository Git queries/mutations use ordinary Bash permission; only bounded
+literal version queries can qualify for automatic fixed-query allowance.
+There is no extra worker-only blanket Git mutation deny or blanket Git allow.
+Configured denies/specific asks and basic credential/resource/high-risk
+protection remain. No historical-provenance probes or second per-operation Git
+authorization matrix is involved; see [Git restrictions](git-read-proof.md).
+No legacy profile aliases or capabilities are supported.
+
 `inherit_context: true` copies a bounded (64 KiB) **text** snapshot only.  It is
 not an SDK history fork and carries neither tools nor routing settings.  It is
 prefixed only on the Agent's first Run; reuse retains the original child

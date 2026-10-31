@@ -34,7 +34,7 @@ There is no mandatory research → plan → code → review ritual. Your main ag
 
 In one session, each admitted provider runs at most four workers at once. Models of that provider share the cap; twelve workers can stay resident.
 
-Choose a **worker** for local reading, editing, Bash and builds, or a **researcher** for read-only file tools and web research. Worker maps to the stable internal `editor` profile. Reviews are task instructions, not a strict readonly worker mode. Git mutations stay with the parent. Normal permissions and configured denies still apply.
+Choose a **worker** for local code, Bash/Git and builds, or a **researcher** for read-only file tools and web research. Worker is the public name of the stable internal `editor` profile. Reviews are task instructions, not a strict readonly worker mode. Normal permissions, configured denies and credential/resource protections still apply; there is no blanket Git allow.
 
 ## See the work—not just the final summary
 
