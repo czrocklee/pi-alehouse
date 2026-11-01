@@ -494,6 +494,26 @@ retry classification and do not establish the operation or deny reason.
 
 ## UI scope
 
+Worker thinking previews contain only provider-visible thinking text or reasoning
+summaries; hidden or encrypted reasoning is not decoded. Summaries can arrive
+late or never arrive. The `thinking…` placeholder does not prove public thinking
+is being streamed. Current-message thinking and prose keep bounded, left-anchored
+logical-line prefixes: an overlong line is ellipsized on the right and may stop
+visibly growing until a new line begins. This favors readability over a scrolling
+last-token ticker. Compact previews are not a full or token-by-token transcript;
+Agent details retain Pi's native transcript separately. Each active-tool summary
+and supplemental detail preview is one row. Commands are bounded identifying
+argument previews, not a shell parser or content redactor: a command may contain
+an embedded heredoc/body snippet even though it cannot grow the compact fields
+into multiline content. Full command text remains in the native transcript.
+Leading Markdown cleanup is deliberately heuristic: unfinished `**` is removed
+only before a Unicode letter/number, preserving leading `**/*.ts` globs but still
+treating literal `**kwargs` as markup. Leading list/bold-looking code can resemble
+markup, whereas inline code/globs stay unchanged. Complete and unfinished multiline terminal string-protocol payloads
+are omitted from previews rather than displayed as false last lines. Real tools
+stay visible while cooperative cancellation/drain is pending; this observation
+is not proof of execution exit, and detailed drain diagnostics remain separate.
+
 Fullscreen alternate-screen rendering is required for floating worker panels and
 click input.  Regular mode deliberately docks the detail/picker to avoid
 scrollback contamination; its footer retains totals but does not open the usage

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { HarnessWidget, renderWidget, renderWidgetLines } from "../../dist/ui/agent-widget.js";
-import { describeActivity, describeToolArgs, formatContextTokens, formatMs, formatTurns, shortPath, SPINNER }
+import { renderActivity, describeToolArgs, formatContextTokens, formatMs, formatTurns, shortPath, SPINNER }
   from "../../dist/ui/format.js";
 import { ChildActivity, ChildActivityRegistry } from "../../dist/runtime/activity-observer.js";
 import { DetailPane, renderDetailFields, renderDetailTitle } from "../../dist/ui/agent-detail.js";
@@ -387,48 +387,46 @@ test("durations stay short below a minute and readable above it", () => {
 
 const tool = (name, detail) => ({ name, detail });
 
-test("activity prefers live tools, then streamed prose, then thinking", () => {
-  assert.equal(describeActivity([tool("read", "src/core/controller.ts")], "ignored"), "reading src/core/controller.ts");
-  assert.equal(describeActivity([tool("read")], ""), "reading…");
-  assert.equal(describeActivity([tool("bash", "npm test")], ""), "running npm test");
-  assert.equal(describeActivity([tool("ask_parent", "which factor?")], ""), "asking you: which factor?");
-  assert.equal(describeActivity([tool("alert_parent", "interface changed")], ""), "alerting you: interface changed");
-  assert.equal(describeActivity([tool("notify_parent", "old progress")], ""), "notifying you: old progress");
-  assert.equal(describeActivity([tool("read", "a.ts"), tool("edit", "b.ts")], ""), "reading a.ts, editing b.ts");
-  assert.equal(describeActivity([tool("grep", '"x"'), tool("grep", '"y"'), tool("read", "a")], ""),
+test("production activity rendering prefers live tools, then the explicit output channel", () => {
+  assert.equal(renderActivity([tool("read", "src/core/controller.ts")], { preview: "ignored", channel: "text" }, theme, 72), "reading src/core/controller.ts");
+  assert.equal(renderActivity([tool("read")], { preview: "" }, theme, 72), "reading…");
+  assert.equal(renderActivity([tool("bash", "npm test")], { preview: "" }, theme, 72), "running npm test");
+  assert.equal(renderActivity([tool("ask_parent", "which factor?")], { preview: "" }, theme, 72), "asking you: which factor?");
+  assert.equal(renderActivity([tool("alert_parent", "interface changed")], { preview: "" }, theme, 72), "alerting you: interface changed");
+  assert.equal(renderActivity([tool("notify_parent", "old progress")], { preview: "" }, theme, 72), "notifying you: old progress");
+  assert.equal(renderActivity([tool("read", "a.ts"), tool("edit", "b.ts")], { preview: "" }, theme, 72), "reading a.ts, editing b.ts");
+  assert.equal(renderActivity([tool("grep", '"x"'), tool("grep", '"y"'), tool("read", "a")], { preview: "" }, theme, 72),
     "searching 2 patterns, reading…");
-  assert.equal(describeActivity([tool("read", "a"), tool("read", "b"), tool("bash", "ls")], ""),
+  assert.equal(renderActivity([tool("read", "a"), tool("read", "b"), tool("bash", "ls")], { preview: "" }, theme, 72),
     "reading 2 files, running…");
-  // The line being written now, not the one scrolling out of the window above it.
-  assert.equal(describeActivity([], "\n\n  first real line \nlast real line \n  "), "last real line");
-  assert.equal(visibleWidth(describeActivity([], "x".repeat(200))), 72);
-  assert.equal(describeActivity([], "   \n "), "thinking…");
+  assert.equal(renderActivity([], { preview: "\n\n  first real line \nlast real line \n  ", channel: "text" }, theme, 72), "replying: last real line");
+  assert.equal(visibleWidth(renderActivity([], { preview: "x".repeat(200), channel: "text" }, theme, 72)), 72);
+  assert.equal(renderActivity([], { preview: "   \n " }, theme, 72), "thinking…");
 });
 
-/**
- * `ChildActivity` keeps the LAST 256 characters of the stream, so the first
- * non-empty line in that window is a fragment of a line already leaving it: it
- * loses a character on every delta and the text slides left each frame.
- */
+/** The latest logical line stays left-anchored rather than sliding on each delta. */
 test("the streamed preview holds still at its left edge as tokens arrive", () => {
   const child = new ChildActivity("/w");
   const handlers = new Map();
   child.extension({ on: (event, handler) => handlers.set(event, handler) });
-  handlers.get("message_start")({ message: { role: "assistant" } });
-  const stream = (delta) => handlers.get("message_update")({
-    message: { role: "assistant" }, assistantMessageEvent: { type: "text_delta", delta } });
+  const message = { role: "assistant", content: [{ type: "text", text: "" }] };
+  handlers.get("message_start")({ message });
+  const stream = (delta) => {
+    message.content[0].text += delta;
+    handlers.get("message_update")({ message, assistantMessageEvent: { type: "text_delta", contentIndex: 0, partial: message, delta } });
+  };
   stream("A line long enough to fill the preview window on its own.\n".repeat(6));
   const shown = [];
   for (const word of ["Now", " writing", " the", " newest", " line"]) {
     stream(word);
-    shown.push(describeActivity([], child.snapshot().preview));
+    shown.push(renderActivity([], child.snapshot(), theme, 72));
   }
   // Every frame starts the same way and only grows: nothing slid left.
   for (const [i, line] of shown.entries()) {
-    assert.ok(line.startsWith("Now"), `frame ${i} lost its left edge: ${JSON.stringify(line)}`);
+    assert.ok(line.startsWith("replying: Now"), `frame ${i} lost its left edge: ${JSON.stringify(line)}`);
     if (i > 0) assert.ok(line.length >= shown[i - 1].length, `frame ${i} shrank: ${JSON.stringify(line)}`);
   }
-  assert.equal(shown.at(-1), "Now writing the newest line");
+  assert.equal(shown.at(-1), "replying: Now writing the newest line");
 });
 
 test("each tool contributes the argument that identifies its work, and nothing else", () => {
@@ -447,7 +445,7 @@ test("each tool contributes the argument that identifies its work, and nothing e
   // Absent, malformed and unknown inputs degrade to the bare verb, never to a crash.
   for (const args of [undefined, null, "string", 7, {}, { path: 3 }]) assert.equal(at("read", args), undefined);
   assert.equal(at("mystery", { path: "a" }), undefined);
-  assert.equal(describeActivity([{ name: "mystery" }], ""), "mystery…");
+  assert.equal(renderActivity([{ name: "mystery" }], { preview: "" }, theme, 72), "mystery…");
 });
 
 test("a path that cannot fit keeps its tail, because the file name is the information", () => {
@@ -1489,6 +1487,13 @@ test("a real Controller's automatic release frees capacity but retains clickable
   const entries = [{ type: "custom", customType: "test-transcript" }], handlers = new Map();
   child.extension({ on: (event, handler) => handlers.set(event, handler) });
   handlers.get("session_start")({}, { sessionManager: { getEntries: () => entries } });
+  const dispose = ports[0].dispose.bind(ports[0]);
+  let shutdowns = 0;
+  t.mock.method(ports[0], "dispose", async () => {
+    shutdowns++;
+    handlers.get("session_shutdown")({ reason: "quit" });
+    return dispose();
+  });
   widget.wake();
   const pane = new DetailPane({
     tui: { terminal: { columns: 120, rows: 60 }, requestRender() {} }, theme,
@@ -1504,6 +1509,7 @@ test("a real Controller's automatic release frees capacity but retains clickable
   await ended(controller, run);
   widget.update();
   assert.equal(ports[0].disposed, 1);
+  assert.equal(shutdowns, 1, "release exercises the observer's actual session_shutdown boundary");
   assert.equal(controller.stats().resident, 0);
   assert.deepEqual(controller.list({ include_released: false }), []);
   assert.equal(controller.stats().parent_error, undefined);
@@ -1522,7 +1528,12 @@ test("a real Controller's automatic release frees capacity but retains clickable
   assert.match(failedPane.at(-1), /failed/, "the already-open pane retains the retired agent in its lower-left status");
   assert.doesNotMatch(failedPane[0], /failed/);
   assert.match(pane.render(120).join("\n"), /SDK broke/);
-  for (let i = 0; i < 3; i++) widget.onTurnStart();
+  for (let turn = 1; turn < 3; turn++) {
+    widget.onTurnStart();
+    assert.deepEqual(widget.agents()[0].entries(), entries, `failed transcript survives parent turn ${turn}`);
+    assert.match(pane.render(120).join("\n"), /SDK broke/);
+  }
+  widget.onTurnStart();
   assert.deepEqual(widget.agents(), []);
   assert.equal(content, undefined);
   assert.match(pane.render(120).join("\n"), /No agents are available to inspect/);

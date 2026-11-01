@@ -212,7 +212,7 @@ test("an open queued pane follows late child history and streaming without remou
   handlers.get("session_start")({}, { sessionManager });
   view.phase = "streaming";
   const draft = { role: "assistant", content: [{ type: "text", text: "LATE_CHILD_STREAM" }], stopReason: "pending" };
-  handlers.get("message_update")({ message: draft, assistantMessageEvent: { type: "text_delta", delta: "LATE_CHILD_STREAM" } });
+  handlers.get("message_update")({ message: draft, assistantMessageEvent: { type: "text_delta", contentIndex: 0, partial: draft, delta: "LATE_CHILD_STREAM" } });
   assert.deepEqual(retained.entries(), sessionManager.getEntries());
   assert.equal(retained.inFlight(), draft);
   // Match the transcript, not the independently refreshed activity preview.

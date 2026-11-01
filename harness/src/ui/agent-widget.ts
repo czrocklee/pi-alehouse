@@ -3,15 +3,16 @@ import { terminal, type RunView } from "../core/contracts.js";
 import { reported } from "../core/usage-ledger.js";
 import { profileLabel } from "../tools/tool-names.js";
 import type { ActivityObservationSource } from "../runtime/activity-observer.js";
-import { describeActivity, formatContextPercent, formatCost, formatDrain, formatMs, formatTurns, GLYPHS,
-  withoutBreaks, type ActiveTool, type Theme } from "./format.js";
-import { singleLineText } from "./text.js";
-import { runPresentation } from "./run-presentation.js";
+import type { ActiveTool, GenerationPreview } from "../runtime/activity-types.js";
+import { renderActivity, formatContextPercent, formatCost, formatMs, formatTurns, GLYPHS,
+  withoutBreaks, type Theme } from "./format.js";
+import { clipPlainText, singleLineText } from "./text.js";
+import { activityPresentation, runPresentation } from "./run-presentation.js";
 
 const BRANCH = "├─", LAST = "└─", TRUNK = "│  ";
 
 /** One rendered Agent row: the Agent's latest Run plus its ephemeral activity. */
-export interface WidgetRun {
+export interface WidgetRun extends GenerationPreview {
   agent_id: string;
   run_id: string;
   resident: boolean;
@@ -26,6 +27,7 @@ export interface WidgetRun {
   status: RunView["status"];
   /** Execution exited but the Run has not settled: shown as "finishing". */
   finishing: boolean;
+  execution_exited?: boolean;
   turns: number;
   max_turns: number;
   elapsed_ms: number;
@@ -37,7 +39,6 @@ export interface WidgetRun {
   drain?: RunView["drain"];
   tool_uses: number;
   active_tools: readonly ActiveTool[];
-  preview: string;
   question: boolean;
   limit_reached: boolean;
   error?: string;
@@ -158,10 +159,12 @@ export function renderRunningLines(run: WidgetRun, spinnerFrame: number, theme: 
   const state: HeaderState | undefined = run.status === "cancelling" ? { text: "cancelling", color: "warning" } :
     run.finishing ? { text: "finishing", color: "dim" } : undefined;
   const header = renderHeader(run, theme.fg(presentation.color, presentation.glyph), state, true, theme, width);
-  const activity = run.drain && !run.finishing ? formatDrain(run.drain) :
-    run.runtime?.activity === "compacting" ? "compacting context…" :
-    run.runtime?.activity === "retrying" ? "retrying provider request…" : describeActivity(run.active_tools, run.preview);
-  return [header, theme.fg("dim", `  ${GLYPHS.subLine}  ${singleLineText(activity)}`)];
+  const { system, showGeneration } = activityPresentation(run);
+  const prefix = `  ${GLYPHS.subLine}  `;
+  const columns = Math.max(0, width - visibleWidth(prefix));
+  const activity = run.active_tools.length || showGeneration ? renderActivity(run.active_tools, run, theme, columns) :
+    theme.fg("dim", clipPlainText(singleLineText(system ?? "thinking…"), columns));
+  return [header, theme.fg("dim", prefix) + activity];
 }
 
 // Heading + the default twelve-Agent roster, without a pagination row.
@@ -188,7 +191,7 @@ function renderQueuedLine(run: WidgetRun, theme: Theme, width: number): string {
 /** One rendered row plus the Agent it belongs to; `agent` is what turns a click
  * at row N into "open that Agent". Chrome carries none: the heading has its own
  * expansion action, while aggregate queued/overflow/owner rows are inert. */
-interface Row { line: string; agent?: string }
+interface Row { line: string; agent?: string; kind?: "branch" | "activity" }
 /** Geometry belongs to one paint, not the Owner or the shared widget binding. */
 export interface WidgetFrame {
   lines: string[];
@@ -275,19 +278,19 @@ export function renderWidget(params: {
 
   const rowWidth = Math.max(0, width - visibleWidth(BRANCH) - 1);
   const finishedRows: Row[] = finished.map((run) =>
-    ({ line: clip(`${theme.fg("dim", BRANCH)} ${renderFinishedLine(run, theme, rowWidth)}`), agent: run.agent_id }));
+    ({ line: clip(`${theme.fg("dim", BRANCH)} ${renderFinishedLine(run, theme, rowWidth)}`), agent: run.agent_id, kind: "branch" }));
   const runningRows: [Row, Row][] = running.map((run) => {
     const [header, activity] = renderRunningLines(run, spinnerFrame, theme, rowWidth);
     // The activity line answers for the same Agent as its header, so clicking
     // "⎿ reading src/core/controller.ts" opens the Agent doing the reading.
-    return [{ line: clip(`${theme.fg("dim", BRANCH)} ${header}`), agent: run.agent_id },
-      { line: clip(theme.fg("dim", TRUNK) + activity), agent: run.agent_id }];
+    return [{ line: clip(`${theme.fg("dim", BRANCH)} ${header}`), agent: run.agent_id, kind: "branch" },
+      { line: clip(theme.fg("dim", TRUNK) + activity), agent: run.agent_id, kind: "activity" }];
   });
   const queuedPresentation = runPresentation("queued", spinnerFrame);
   const queuedRow: Row | undefined = queued.length ? { line: clip(`${theme.fg("dim", BRANCH)} ${theme.fg(queuedPresentation.color, queuedPresentation.glyph)} ` +
-    `${theme.fg("dim", `${queued.length} queued`)}`) } : undefined;
+    `${theme.fg("dim", `${queued.length} queued`)}`), kind: "branch" } : undefined;
   const rows: Row[] = [{ line: heading }];
-  if (owner.blocked && maxLines > 1) rows.push({ line: clip(`${theme.fg("dim", BRANCH)} ${theme.fg("error", GLYPHS.failure)} ${warning}`) });
+  if (owner.blocked && maxLines > 1) rows.push({ line: clip(`${theme.fg("dim", BRANCH)} ${theme.fg("error", GLYPHS.failure)} ${warning}`), kind: "branch" });
   let pagination: WidgetFrame["pagination"];
   if (expanded && inspectable) {
     const budget = bodyBudget - (needsPages ? 1 : 0);
@@ -295,7 +298,7 @@ export function renderWidget(params: {
     // Keep the activity subline whenever the viewport can afford a pair.
     const groups: Row[][] = [...finishedRows.map((row) => [row]),
       ...runningRows.map((pair) => budget >= 2 ? pair : [pair[0]]),
-      ...queued.map((run) => [{ line: clip(`${theme.fg("dim", BRANCH)} ${renderQueuedLine(run, theme, rowWidth)}`), agent: run.agent_id }])];
+      ...queued.map((run): Row[] => [{ line: clip(`${theme.fg("dim", BRANCH)} ${renderQueuedLine(run, theme, rowWidth)}`), agent: run.agent_id, kind: "branch" }])];
     const pages: Row[][] = [[]];
     for (const group of groups) {
       if (pages[pages.length - 1]!.length + group.length > budget) pages.push([]);
@@ -343,7 +346,7 @@ function overflow(running: [Row, Row][], queued: [row: Row | undefined, count: n
   const hidden = [hiddenRunning ? `${hiddenRunning} running` : "", hiddenQueued ? `${hiddenQueued} queued` : "",
     hiddenFinished ? `${hiddenFinished} finished` : ""].filter(Boolean);
   const total = hiddenRunning + hiddenQueued + hiddenFinished;
-  rows.push({ line: clip(`${theme.fg("dim", BRANCH)} ${theme.fg("dim", `+${total} more (${hidden.join(", ")})`)}`) });
+  rows.push({ line: clip(`${theme.fg("dim", BRANCH)} ${theme.fg("dim", `+${total} more (${hidden.join(", ")})`)}`), kind: "branch" });
   return rows;
 }
 /**
@@ -356,14 +359,13 @@ function overflow(running: [Row, Row][], queued: [row: Row | undefined, count: n
  * closed the wrong row -- that is, closed nothing, and left ├─ dangling.
  */
 function closeLast(rows: Row[]): Row[] {
-  let last = rows.length - 1;
-  while (last > 0 && !rows[last]!.line.includes(BRANCH) && !rows[last]!.line.includes(TRUNK)) last--;
+  const last = rows.findLastIndex((row) => row.kind !== undefined);
   if (last < 1) return rows;
-  const trailing = rows[last]!.line;
-  if (last >= 2 && trailing.includes(TRUNK) && !trailing.includes(BRANCH)) {
+  const trailing = rows[last]!;
+  if (trailing.kind === "activity" && rows[last - 1]?.kind === "branch") {
     rows[last - 1]!.line = rows[last - 1]!.line.replace(BRANCH, LAST);
-    rows[last]!.line = trailing.replace(TRUNK, "   ");
-  } else rows[last]!.line = trailing.replace(BRANCH, LAST);
+    trailing.line = trailing.line.replace(TRUNK, "   ");
+  } else trailing.line = trailing.line.replace(BRANCH, LAST);
   return rows;
 }
 
@@ -397,7 +399,7 @@ export interface WidgetUi {
 export interface AgentDetail {
   agent_id: string;
   view: RunView;
-  live: { active_tools: ActiveTool[]; tool_uses: number; preview: string };
+  live: GenerationPreview & { active_tools: ActiveTool[]; tool_uses: number };
   cwd: string;
   entries(): unknown[] | undefined;
   inFlight(): unknown;
@@ -508,7 +510,7 @@ export class HarnessWidget {
     return { agent_id: view.agent_id, run_id: view.run_id, resident: view.resident, name: view.name, profile: view.effective_settings.profile,
       difficulty: view.effective_settings.difficulty, model: view.effective_settings.model,
       effort: view.effective_settings.thinking,
-      description: view.description, status: view.status, finishing: view.finalization_pending,
+      description: view.description, status: view.status, finishing: view.finalization_pending, execution_exited: view.execution_exited,
       turns: view.turns, max_turns: view.max_turns, elapsed_ms: view.elapsed_ms, turn_elapsed_ms: view.turn_elapsed_ms,
       cost: reported(view.usage, "cost"), cost_partial: view.usage?.partial.includes("cost"), runtime: view.runtime, drain: view.drain,
       question: !!view.outcome?.question, limit_reached: !!view.outcome?.limit_reached,

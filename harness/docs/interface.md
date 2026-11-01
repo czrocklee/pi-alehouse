@@ -38,7 +38,9 @@ do not use this display cache.
 Failed Runs remain inspectable for three parent turns
 after their Agent is released; this diagnostic retention neither holds a
 resident slot nor restores reusability.  Once it expires, released failures
-leave the widget/detail roster and their child render state is dropped.
+leave the widget/detail roster and their child render state is dropped. Child
+session shutdown clears live activity but does not sever the retained transcript
+reference during this diagnostic window; the observation registry retires it.
 
 A row prioritizes warning/drops/pending/exceptional state, then identity and
 statistics: latest Run state, original model ID without provider and its
@@ -72,13 +74,50 @@ nickname or task text. `run warning` means recorded `cleanup_errors` (including 
 issues), not proof that resources remain held; exact diagnostics stay in the
 detail pane.  Owner-level cleanup uncertainty has its own blocking state.
 
-The activity line (`⎿`) exposes only the identifying argument of current work:
-a path, command, or pattern such as `reading src/core/owner-controller.ts` or
-`searching "createOwnerTools" in src`.  It never includes file contents, edit
-text, or other payload.  Three or more concurrent calls collapse to counts.
-During exit confirmation the activity line instead shows `draining Ns` and
-whether tracked inputs/abort or SDK idle is still awaited. The detail pane and
-`/harness-status` expose the same wait and elapsed time; this is an observation,
+The activity line (`⎿`) distinguishes tools, public thinking, and ordinary
+assistant prose without adding rows or bracket tags. Tools keep their action
+words (`running`, `reading`, `editing`, `searching`): the action is dim and its
+argument muted, with no fixed-width padding. These are semantic theme roles, not
+a promise of fixed contrast in every terminal theme. Tool previews select only
+identifying argument fields such as a path, command, or pattern; they do not
+separately project read/write file bodies, edit payloads or tool output. A shell
+command can itself embed file content (for example a heredoc); this is a clipped
+command preview, not a shell-body redactor. Two concurrent calls share the line, donating unused short-call
+width to the longer call; three or more collapse to counts. Identifying arguments
+have a separate bounded storage limit, not a fixed 72-column capture limit;
+actual width fitting happens at paint time, with consistently styled `…`.
+Actual tool observations take priority over generated prose, including while
+cancelling, draining or finishing. Streamed tool arguments instead display
+`preparing write…` (or `preparing tool…` before its name is known), never execution
+or thinking. Neither that label nor a paint proves tool admission.
+
+Public generation previews use `thinking: …` and `replying: …`, with the same
+dim-prefix/muted-content treatment. They show the last nonempty logical line,
+including an unfinished line, anchored at the left and ellipsized on the right
+to the available terminal width. Only leading Markdown headings/list markers
+(with one-to-three-digit list numbers) and leading bold markers immediately
+followed by a Unicode letter or number are simplified. This includes unfinished
+leading `**` so heading closure does not shift the left edge. Leading globs such
+as `**/*.ts` and `**/foo/**`, inline globs, arithmetic and code are left literal; this compact heuristic is
+not a Markdown parser and does not rewrite the native transcript. Tool arguments
+never undergo this simplification. Each channel retains a bounded line prefix,
+not a scrolling suffix. The active output channel is named `channel`, independent
+of Owner generation identity. Empty text uses `replying…`; otherwise an empty
+preview retains the quiet `thinking…` placeholder. This is not proof
+that the provider has exposed thinking text. Providers may return a delayed
+reasoning summary or no visible thinking at all, not their full internal reasoning.
+These ephemeral UI observations never enter parent model results, Stats, or an
+additional journal. New messages/turns, message completion, retries, compaction,
+settlement and Run reuse retire previews so old text cannot reappear after tools.
+Retry/compaction, cancellation and finishing suppress generated previews using
+one shared presentation rule; with no actual tools they show plain status wording,
+not an additional `[state]` label. A retry's assistant response start restores
+live generation previews rather than waiting for that response to finish.
+
+During exit confirmation, when no tool is still observed, the activity line shows
+`draining Ns` and whether tracked inputs/abort or SDK idle is still awaited.
+The detail pane and `/harness-status` always expose that wait and elapsed time,
+including while the compact line retains a real tool. This is an observation,
 not a new lifecycle phase or permission to release ownership.
 `?` marks a child waiting for an answer. The heading gives the resident count
 and a compact resident-only status summary, for example
@@ -153,8 +192,15 @@ resolved difficulty slot `d1`–`d5`, model, actual effort and its recorded sour
 parent identity, or automatic mapping; user override when present). Historical
 manual maps retain the distinct `preset map` label. Effort is
 labelled fixed at creation, not editable on a resident Agent. The pane also shows
-tool facts, phase, full cumulative usage split, active-tool arguments, streaming
-draft, each stalling condition, every dispatch note (the parent model sees only
+tool facts, phase, full cumulative usage split, one-row active-tool argument
+summaries (one per tool, with paths shortened to retain their filename), separate
+`thinking` and ordinary-prose `draft` previews for the current assistant message,
+and a separate `preparing` tool field. Commands and all these previews are clipped
+to the actual remaining width before styling and never wrap into extra rows;
+full streamed content remains in the native transcript. When the reader has
+scrolled into the transcript, fields appearing/disappearing preserve that
+transcript row within the same Run and width. Agent/Owner/Run changes and resizes
+do not reuse the old anchor. The pane also shows each stalling condition and every dispatch note (the parent model sees only
 `tree_shared`), and a child transcript.  Context occupancy is
 separate from cumulative billed usage (`≈231k/272k tokens · 84.9%`); unknown
 occupancy remains unknown.  Formatting shares rounded-unit carry rules with the
@@ -173,7 +219,8 @@ supply them, so native `read`, `bash`, and `edit` use a plain arguments/output
 fallback.  This is an upstream SDK/UI limitation, not a custom imitation.
 Transcript rows strip OSC 133 markers because repeated viewport emission must
 not manufacture terminal prompt boundaries.  Full tool output remains visible
-in the detail transcript; only the compact widget activity line is redacted.
+in the detail transcript; tool arguments in the compact widget remain restricted
+to identifying fields. Preview simplification does not rewrite the native transcript.
 
 On Pi's alternate/fullscreen renderer the pane floats as a centered overlay; on
 the regular renderer it docks where the editor is.  This is a safety choice, not

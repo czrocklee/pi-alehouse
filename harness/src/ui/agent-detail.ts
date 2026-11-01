@@ -2,11 +2,12 @@ import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tu
 import { validDifficulty, type RunView } from "../core/contracts.js";
 import { reported, type UsageComponent } from "../core/usage-ledger.js";
 import { profileLabel } from "../tools/tool-names.js";
-import { formatContextPercent, formatContextTokens, formatCost, formatDrain, formatMs, formatTokens, formatTurns,
-  type ActiveTool, type Theme, type TranscriptRows } from "./format.js";
+import type { ActiveTool, GenerationPreview } from "../runtime/activity-types.js";
+import { formatContextPercent, formatContextTokens, formatCost, formatDrain, formatMs, formatTokens, formatTurns, generationLine, shortPath,
+  type Theme, type TranscriptRows } from "./format.js";
 import { POPOVER, isPopoverCloseClick, popoverInlay, popoverInlayWidth, popoverSide } from "./popover.js";
-import { singleLineText, wrapPlainText as wrapText } from "./text.js";
-import { runPresentation } from "./run-presentation.js";
+import { clipPlainText, singleLineText, wrapPlainText as wrapText } from "./text.js";
+import { activityPresentation, runPresentation } from "./run-presentation.js";
 export { wrapText };
 
 /** Label column, so every field's value starts at the same place. */
@@ -22,6 +23,7 @@ interface StopAction { kind: "stop" | "confirm"; from: number; to: number }
 interface StopPaint { target: StopTarget; action: StopAction; dimensions: PaintDimensions }
 interface StopConfirmation { target: StopTarget; expiresAt: number; dimensions: PaintDimensions }
 interface FooterFrame { text: string; action?: StopAction }
+interface TranscriptAnchor { target: StopTarget; width: number; start: number }
 const sameStop = (target: StopTarget, view: RunView | undefined, selected: string): boolean =>
   selected === target.agent_id && !!view && view.agent_id === target.agent_id &&
   view.owner_id === target.owner_id && view.generation === target.generation &&
@@ -37,10 +39,9 @@ const key = (label: string): string => label.length >= LABEL ? `${label.slice(0,
  * Asian Width cannot detect that. So every severity here is a word, not a symbol. */
 
 /** Live child state the pane shows beside the Run projection. */
-export interface DetailLive {
+export interface DetailLive extends GenerationPreview {
   active_tools: readonly ActiveTool[];
   tool_uses: number;
-  preview: string;
 }
 export interface DetailInput { view: RunView; live: DetailLive }
 /**
@@ -117,6 +118,11 @@ export function renderDetailFields(input: DetailInput, theme: Theme, width: numb
       out.push(truncateToWidth(`  ${theme.fg("dim", i === 0 ? key(label) : " ".repeat(LABEL))}` +
         (color === "text" ? line : theme.fg(color, line)), width));
     }
+  };
+  const lineRoom = Math.max(0, width - LABEL - 2);
+  const oneLineField = (label: string, value: string, color = "muted"): void => {
+    out.push(theme.fg("dim", clipPlainText(`  ${key(label)}`, Math.max(0, width))) +
+      theme.fg(color, clipPlainText(singleLineText(value), lineRoom)));
   };
   const blank = (): void => { if (out.length && out[out.length - 1] !== "") out.push(""); };
 
@@ -201,10 +207,22 @@ export function renderDetailFields(input: DetailInput, theme: Theme, width: numb
   if (live.active_tools.length) {
     blank();
     for (const [i, tool] of live.active_tools.entries()) {
-      field(i === 0 ? "active" : "", `${tool.name} ${tool.detail ?? "…"}`, "accent");
+      const name = singleLineText(tool.name);
+      let detail = singleLineText(tool.detail ?? "…");
+      if (["read", "edit", "write", "ls"].includes(name)) {
+        detail = shortPath(detail, view.workspace?.cwd ?? s.cwd, Math.max(0, lineRoom - visibleWidth(`${name} `)));
+      }
+      oneLineField(i === 0 ? "active" : "", `${name} ${detail}`, "accent");
     }
   }
-  if (live.preview.trim()) { blank(); field("draft", live.preview.trim(), "muted"); }
+  if (activityPresentation({ ...view, finishing: view.finalization_pending }).showGeneration) {
+    // The native transcript already holds the full streaming message. Keep each
+    // supplemental preview to one row, clipping plain text before theme styling.
+    const thinking = generationLine(live.thinking ?? ""), draft = generationLine(live.preview);
+    if (thinking) { blank(); oneLineField("thinking", thinking); }
+    if (draft) { blank(); oneLineField("draft", draft); }
+    if (live.preparing_tool !== undefined) { blank(); oneLineField("preparing", singleLineText(live.preparing_tool) || "tool"); }
+  }
 
   // Label, colour, text. Ordered by what stops progress soonest.
   const notes: [string, string, string][] = [];
@@ -305,6 +323,8 @@ export class DetailPane {
   /** Width of the last framed paint; the close control's hit area follows it. */
   private paintedWidth = 0;
   private paintedHeight = 0;
+  /** Previous field/transcript boundary, scoped to one Run and wrapping width. */
+  private transcriptAnchor: TranscriptAnchor | undefined;
   private stopPaint: StopPaint | undefined;
   private confirmation: StopConfirmation | undefined;
   private frame = 0;
@@ -337,6 +357,7 @@ export class DetailPane {
     this.scrollOffset = 0;
     this.followTail = true;
     this.painted = 0;
+    this.transcriptAnchor = undefined;
     this.resetStopInteraction();
     this.options.onSelect?.(agent_id);
   }
@@ -501,14 +522,17 @@ export class DetailPane {
     this.retireStopPaint(width);
     this.stopPaint = undefined;
     this.paintedHeight = 0;
-    if (this.closed || !Number.isFinite(width) || width < 12) { this.resetStopInteraction(); return []; }
+    if (this.closed || !Number.isFinite(width) || width < 12) {
+      this.transcriptAnchor = undefined;
+      this.resetStopInteraction(); return [];
+    }
     // Floating, the two side columns come out of the body's width.
     const inner = this.options.frame ? width - 2 : width;
-    if (inner < 10) { this.resetStopInteraction(); return []; }
+    if (inner < 10) { this.transcriptAnchor = undefined; this.resetStopInteraction(); return []; }
     // Framed, the title and footer are inlaid between the corners, so they get
     // two columns less than the body they sit above and below.
     const chrome = this.options.frame ? inner - 4 : inner;
-    if (chrome < 8) { this.resetStopInteraction(); return []; }
+    if (chrome < 8) { this.transcriptAnchor = undefined; this.resetStopInteraction(); return []; }
     // Framed, the title shares the top edge with the close control.
     const titleWidth = this.options.frame ? popoverInlayWidth(width, "top", true) : chrome;
     this.paintedWidth = this.options.frame ? width : 0;
@@ -517,6 +541,7 @@ export class DetailPane {
     if (!entry) {
       this.resetStopInteraction();
       this.painted = 0; // No visible body for keys/wheel to scroll against.
+      this.transcriptAnchor = undefined;
       this.paintedHeight = CHROME_LINES + 1;
       return this.dress(this.options.theme.fg("dim", "harness"),
         [truncateToWidth(this.options.theme.fg("dim", "No agents are available to inspect."), inner)],
@@ -532,7 +557,17 @@ export class DetailPane {
     const fields = renderDetailFields(entry.input, this.options.theme, inner);
     const rows = this.options.transcript(entry.agent_id);
     const transcript = rows?.lineCount(inner) ?? 0;
-    const total = fields.length + 1 + transcript;
+    const transcriptStart = fields.length + 1;
+    const previous = this.transcriptAnchor;
+    if (!this.followTail && previous?.width === inner && this.scrollOffset >= previous.start &&
+        previous.target.owner_id === owner_id && previous.target.generation === generation &&
+        previous.target.agent_id === agent_id && previous.target.run_id === run_id) {
+      // Fields can appear/disappear between messages. A reader already in the
+      // transcript should keep seeing the same transcript row, not those fields.
+      this.scrollOffset += transcriptStart - previous.start;
+    }
+    this.transcriptAnchor = { target: { owner_id, generation, agent_id, run_id }, width: inner, start: transcriptStart };
+    const total = transcriptStart + transcript;
     this.painted = total;
     const { viewportHeight, maxScroll, fits } = this.bounds(total);
     // A live transcript grows under the reader; only follow when they are at the end.

@@ -275,6 +275,11 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
       if (event.type === "turn_start") control(() => callbacks.turnStart());
       if (event.type === "turn_end") control(() => callbacks.turnEnd(event.message.role === "assistant" && event.message.stopReason === "toolUse"));
       if (event.type === "message_start" && event.message.role === "assistant") {
+        // auto_retry_end is not a backoff boundary: a recovered response emits
+        // it at message_end. Its assistant response starts generating earlier;
+        // publish before output callbacks or previews observe stale retry state.
+        retrying = false;
+        publish();
         // A new attempt/turn replaces the previous candidate, including failed
         // drafts and tool-use commentary. The result is not a transcript.
         output = { text: "", total_chars: 0, truncated: false, revision: ++revision };

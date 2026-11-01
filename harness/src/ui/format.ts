@@ -1,7 +1,8 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { RunView } from "../core/contracts.js";
 import { formatTokenCount } from "../../../lib/token-format.mjs";
-import { plainText, singleLineText } from "./text.js";
+import type { ActiveTool, GenerationPreview } from "../runtime/activity-types.js";
+import { clipPlainText, previewText, singleLineText } from "./text.js";
 
 export const GLYPHS = {
   turns: "↻", success: "✓", failure: "✗", stopped: "■", question: "?",
@@ -9,7 +10,6 @@ export const GLYPHS = {
 } as const;
 export const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 export type Theme = { fg(color: string, text: string): string; bold(text: string): string };
-export interface ActiveTool { name: string; detail?: string }
 
 const TOOL_ACTION: Record<string, { verb: string; noun?: string; joiner?: string }> = {
   read: { verb: "reading", noun: "files" }, bash: { verb: "running", noun: "commands" },
@@ -27,7 +27,7 @@ export function shortPath(value: string, cwd: string, columns: number): string {
   const parts = relative.split("/");
   let tail = parts.pop() ?? relative;
   while (parts.length && visibleWidth(`…/${parts[parts.length - 1]}/${tail}`) <= columns) tail = `${parts.pop()}/${tail}`;
-  return truncateToWidth(parts.length ? `…/${tail}` : tail, columns);
+  return clipPlainText(parts.length ? `…/${tail}` : tail, columns);
 }
 
 export function describeToolArgs(name: string, args: unknown, cwd: string, columns: number): string | undefined {
@@ -38,7 +38,7 @@ export function describeToolArgs(name: string, args: unknown, cwd: string, colum
     const value = str(key);
     return value ? shortPath(value, cwd, columns) : undefined;
   };
-  const bounded = (text: string): string => truncateToWidth(singleLineText(text), columns);
+  const bounded = (text: string): string => clipPlainText(singleLineText(text), columns);
   switch (singleLineText(name)) {
     case "read": case "edit": case "write": return path("path");
     case "ls": return path("path") ?? ".";
@@ -54,12 +54,77 @@ export function describeToolArgs(name: string, args: unknown, cwd: string, colum
     default: return undefined;
   }
 }
-const phrase = (tool: ActiveTool, columns: number): string => {
-  const name = singleLineText(tool.name), detail = tool.detail ? singleLineText(tool.detail) : "";
-  const action = TOOL_ACTION[name];
-  const verb = action?.verb ?? name;
-  return detail ? truncateToWidth(`${verb}${action?.joiner ?? " "}${detail}`, columns) : `${verb}…`;
-};
+interface ActivityPart { action: string; detail?: string; path?: boolean }
+
+/** Compact prose only. Simplify leading Markdown, never inline code, globs or
+ * arithmetic. Removing an unfinished leading ** also keeps its left edge steady
+ * when the matching closing marker arrives. */
+export function generationLine(text: string): string {
+  const line = previewText(text).split("\n").findLast((part) => part.trim())?.trim() ?? "";
+  return line.replace(/^(?:#{1,6}\s+|[-+*]\s+|\d{1,3}[.)]\s+)/, "")
+    .replace(/^\*\*((?=[\p{L}\p{N}])\S(?:[^*]*\S)?)\*\*/u, "$1")
+    .replace(/^\*\*(?=[\p{L}\p{N}])/u, "");
+}
+
+function activityParts(tools: readonly ActiveTool[], live: GenerationPreview): ActivityPart[] {
+  if (tools.length <= 2 && tools.length > 0) return tools.map((tool) => {
+    const name = singleLineText(tool.name), detail = tool.detail ? singleLineText(tool.detail) : "";
+    const action = TOOL_ACTION[name];
+    return { action: `${action?.verb ?? name}${detail ? action?.joiner ?? " " : "…"}`, detail,
+      path: ["read", "edit", "write", "ls"].includes(name) };
+  });
+  if (tools.length > 2) {
+    const groups = new Map<string, number>();
+    for (const tool of tools) {
+      const name = singleLineText(tool.name);
+      groups.set(name, (groups.get(name) ?? 0) + 1);
+    }
+    const parts = [...groups].map(([name, count]): ActivityPart => {
+      const action = TOOL_ACTION[name];
+      return { action: action?.verb ?? name, detail: count > 1 && action?.noun ? ` ${count} ${action.noun}` : "" };
+    });
+    parts[parts.length - 1]!.detail += "…";
+    return parts;
+  }
+  if (live.preparing_tool !== undefined) return [{ action: "preparing ", detail: `${singleLineText(live.preparing_tool) || "tool"}…` }];
+  if (!live.channel) return [{ action: "thinking…" }];
+  const thinking = live.channel === "thinking";
+  const line = generationLine(thinking ? live.thinking ?? "" : live.preview);
+  return line ? [{ action: thinking ? "thinking: " : "replying: ", detail: line }] :
+    [{ action: thinking ? "thinking…" : "replying…" }];
+}
+
+/** Small calls get their natural width; the remaining columns go to long calls
+ * rather than reserving an unused half-row for e.g. `reading a.ts`. */
+function activityWidths(parts: readonly ActivityPart[], columns: number): number[] {
+  const available = Math.max(0, columns - (parts.length - 1) * 2);
+  const widths = parts.map((part) => visibleWidth(part.action + (part.detail ?? "")));
+  if (widths.reduce((sum, width) => sum + width, 0) <= available) return widths;
+  const result = new Array<number>(parts.length).fill(0);
+  let remaining = available, count = parts.length;
+  for (const index of widths.map((_, index) => index).sort((a, b) => widths[a]! - widths[b]!)) {
+    const room = Math.min(widths[index]!, Math.floor(remaining / count));
+    result[index] = room;
+    remaining -= room;
+    count--;
+  }
+  return result;
+}
+
+function activityText(parts: readonly ActivityPart[], columns: number, theme: Theme): string {
+  if (columns < (parts.length - 1) * 2) return theme.fg("dim", clipPlainText(
+    parts.map((part) => part.action + (part.detail ?? "")).join(", "), columns));
+  const widths = activityWidths(parts, columns);
+  return parts.map((part, index) => {
+    const room = widths[index]!;
+    const detailRoom = Math.max(0, room - visibleWidth(part.action));
+    const detail = part.path && part.detail ? shortPath(part.detail, "", detailRoom) : part.detail ?? "";
+    const clipped = clipPlainText(part.action + detail, room);
+    const action = clipped.startsWith(part.action) ? part.action : clipped;
+    // Clip plain strings first, then color every visible cell, including ….
+    return theme.fg("dim", action) + (clipped.length > action.length ? theme.fg("muted", clipped.slice(action.length)) : "");
+  }).join(theme.fg("dim", ", "));
+}
 
 export const formatTokens = (count: number, unit = " token"): string =>
   formatTokenCount(count, { precision: "detailed" }) + unit;
@@ -80,22 +145,11 @@ export const formatDrain = (drain: NonNullable<RunView["drain"]>): string =>
 export const formatCost = (cost: number): string => `$${cost.toFixed(3)}`;
 export const formatTurns = (turns: number, max: number): string => `${GLYPHS.turns}${turns}≤${max}`;
 
-export function describeActivity(tools: readonly ActiveTool[], preview: string): string {
-  if (tools.length === 1) return phrase(tools[0]!, 72);
-  if (tools.length === 2) return tools.map((tool) => phrase(tool, 34)).join(", ");
-  if (tools.length > 2) {
-    const groups = new Map<string, number>();
-    for (const tool of tools) {
-      const name = singleLineText(tool.name);
-      groups.set(name, (groups.get(name) ?? 0) + 1);
-    }
-    return [...groups].map(([name, count]) => {
-      const action = TOOL_ACTION[name];
-      return count > 1 && action?.noun ? `${action.verb} ${count} ${action.noun}` : action?.verb ?? name;
-    }).join(", ") + "…";
-  }
-  const line = plainText(preview).split("\n").findLast((text) => text.trim())?.trim() ?? "";
-  return line ? truncateToWidth(line, 72) : "thinking…";
+/** The sole activity rendering path, shared by production and regression tests.
+ * Snapshots contain plain observations; styling and width decisions happen here. */
+export function renderActivity(tools: readonly ActiveTool[], live: GenerationPreview, theme: Theme, columns: number): string {
+  const width = columns === Infinity ? Infinity : Number.isFinite(columns) ? Math.max(0, Math.floor(columns)) : 0;
+  return activityText(activityParts(tools, live), width, theme);
 }
 
 /** Fold row breaks without removing already-applied theme styling. This is

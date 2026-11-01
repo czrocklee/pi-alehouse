@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { plainText, singleLineText, wrapPlainText } from "../../dist/ui/text.js";
-import { describeActivity, describeToolArgs, paneRow, shortPath, SPINNER, withoutBreaks }
+import { renderActivity, describeToolArgs, paneRow, shortPath, SPINNER, withoutBreaks }
   from "../../dist/ui/format.js";
 import { runPresentation } from "../../dist/ui/run-presentation.js";
 
@@ -104,16 +104,19 @@ test("tool arguments and paths are normalized before width and path decisions", 
   assert.equal(shortPath("/w/a\u202eb.ts", "/w", 72), "a\\u202eb.ts");
 });
 
-test("activity normalizes raw tool names/details and whole previews before clipping", () => {
-  for (const [, input, expected] of protocols) {
-    assert.equal(describeActivity([], input), expected);
-    assert.equal(describeActivity([{ name: "bash", detail: input }], ""), `running ${expected}`);
-    assert.equal(describeActivity([{ name: input }], ""), `${expected}…`);
-    assert.equal(describeActivity([{ name: input }, { name: input }, { name: input }], ""), `${expected}…`);
+test("production activity rendering sanitizes raw tools and suppresses complete or unfinished preview protocols", () => {
+  const theme = { fg: (_color, text) => text };
+  for (const [kind, input, expected] of protocols) {
+    const preview = ["incomplete OSC", "APC marker"].includes(kind) ? "" : ["DCS", "C1 OSC/ST"].includes(kind) ? "X" :
+      kind === "C0/DEL/C1" ? "\\x00\\x08\\x7f\\x80" : expected;
+    assert.equal(renderActivity([], { preview: input, channel: "text" }, theme, 200), preview ? `replying: ${preview}` : "replying…");
+    assert.equal(renderActivity([{ name: "bash", detail: input }], { preview: "" }, theme, 200), `running ${expected}`);
+    assert.equal(renderActivity([{ name: input }], { preview: "" }, theme, 200), `${expected}…`);
+    assert.equal(renderActivity([{ name: input }, { name: input }, { name: input }], { preview: "" }, theme, 200), `${expected}…`);
   }
-  assert.equal(describeActivity([], "old\r\nnew\tline\n  "), "new line");
-  assert.equal(describeActivity([], "\x1b]0;hidden\nprotocol\x07visible"), "visible");
-  assert.equal(describeActivity([], "abc\u202etxt\u202c"), "abc\\u202etxt\\u202c");
+  assert.equal(renderActivity([], { preview: "old\r\nnew\tline\n  ", channel: "text" }, theme, 200), "replying: new line");
+  assert.equal(renderActivity([], { preview: "\x1b]0;hidden\nprotocol\x07visible", channel: "text" }, theme, 200), "replying: visible");
+  assert.equal(renderActivity([], { preview: "abc\u202etxt\u202c", channel: "text" }, theme, 200), "replying: abc\\u202etxt\\u202c");
 });
 
 test("raw-field sanitizing does not strip subsequently applied theme/SDK styling", () => {
@@ -121,9 +124,10 @@ test("raw-field sanitizing does not strip subsequently applied theme/SDK styling
   const theme = { fg: (_color, text) => `\x1b[33m${text}\x1b[0m` };
   const raw = `${payload}${"long ".repeat(30)}`;
   const argument = describeToolArgs("bash", { command: raw }, "/w", 12);
-  assert(argument.includes("\x1b[0m"), "SDK clipping may issue trusted resets");
+  assert(!argument.includes("\x1b"), "plain clipping removes even SDK-issued resets before styling");
+  assert(argument.endsWith("…"));
   assert(!argument.includes("]52;"));
-  const styled = theme.fg("accent", describeActivity([{ name: "bash", detail: argument }], ""));
+  const styled = renderActivity([{ name: "bash", detail: argument }], { preview: "" }, theme, 72);
   assert(styled.startsWith("\x1b[33m"));
   assert(styled.endsWith("\x1b[0m"));
   assert(!styled.includes("]52;"));

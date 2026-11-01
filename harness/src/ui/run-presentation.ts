@@ -1,5 +1,23 @@
 import type { RunView } from "../core/contracts.js";
-import { GLYPHS, SPINNER } from "./format.js";
+import { formatDrain, GLYPHS, SPINNER } from "./format.js";
+
+export interface ActivityState {
+  status: RunView["status"];
+  finishing: boolean;
+  execution_exited?: boolean;
+  drain?: RunView["drain"];
+  runtime?: RunView["runtime"];
+}
+
+/** Shared by widget and details: lifecycle/maintenance hides only generated
+ * previews. Actual active tools remain observable, including during Stop/drain. */
+export function activityPresentation(state: ActivityState): { showGeneration: boolean; system?: string } {
+  const system = state.finishing ? "finishing…" : state.drain ? formatDrain(state.drain) :
+    state.status === "cancelling" ? "cancelling…" :
+    state.runtime?.activity === "compacting" ? "compacting context…" :
+    state.runtime?.activity === "retrying" ? "retrying provider request…" : undefined;
+  return { showGeneration: state.status === "running" && !state.execution_exited && system === undefined, system };
+}
 
 interface RunPresentation { glyph: string; color: string; label: string; compact: string }
 type State = RunView["status"] | "finishing";
