@@ -55,31 +55,16 @@ observed. UI `permissions:decision`, error text and `tool_execution_end.isError`
 are not denial evidence. A captured block may itself be validation/fail-closed,
 not policy denial. Silence proves neither no blocks nor no prohibited retries.
 
-## Fixed-model guidance
+## Failures and fixed settings
 
-Only settled `failed` / `execution_error` / `model_stop_reason=error` outcomes get
-an optional `recovery_hint`; pending finalization is not settlement. The pure
-projection reads no routing/catalogue and adds no lifecycle state. Error text,
-quota, authentication, timeouts and environment failures do not establish model
-unavailability or ability.
+Task replies show concrete errors and availability facts, not a generic
+`recovery_hint` lecture. A failed task does not establish model unavailability
+or ability. An Agent's model stays fixed across routing changes, `agent_run`
+and `agent_answer`; different settings require a fresh Agent.
 
-An Agent keeps its original model across routing changes, `agent_run` and
-`agent_answer`. If that model is unavailable, ask the user to check worker
-configuration, then explicitly spawn a fresh Agent with artifacts and a handoff.
-Keep reasoning difficulty task-based. Failed tasks are not valid `after` inputs;
-Off, questions, claims and confirmed-cleanup rules still apply.
-
-The whole hint is at most 384 UTF-16 units and does not suggest continuing an
-unavailable Agent. Both core and independent replies use the same conservative
-record-settlement predicate; a failed Outcome alone is insufficient.
-Packing tries guidance after questions, FIFO alerts and time/context hints,
-before results. Identical guidance appears only once per response, including
-rosters, on its first qualifying task; deduplication is not packing loss and
-creates no persistent presentation state. It spends envelope bytes, not body-text
-units. If it cannot fit, omit it whole and set `response_limit_reached`; required
-controls, question IDs and cursors remain. List/interrupt use the same projection;
-finished rows carry no hint. Neither publication nor the hint proves availability,
-recovery or quality acceptance.
+Usage, context size and warning attempts remain host/UI/history observations,
+not routine parent-model fields. Permission, question, claim and cleanup gates
+remain unchanged; no failure message authorizes automatic retry or release.
 
 Use [matched resources and a fresh process](development.md#matched-resource-migration),
 not an open-Owner reload or user-file replacement. See [tool contract](tool-contract.md),

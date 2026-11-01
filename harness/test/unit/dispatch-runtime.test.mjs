@@ -156,6 +156,28 @@ for (const [profile, publicProfile] of [["editor", "worker"], ["researcher", "re
   });
 }
 
+for (const requested of ["build", "../outside-build"]) {
+  test(`provisional deny projection identifies source-candidate preflight, not a bound worktree path: ${requested}`, t => {
+    const f = fixture(t);
+    f.service.checkPermission = surface => ({ state: surface === "path_write" ? "deny" : "allow" });
+    withStat(() => { assert.fail("provisional deny must not classify source inputs or trees"); }, () => {
+      assert.throws(() => f.runtime().prepare({ tree: requested }, {
+        ...f.context, source_cwd: f.cwd, unbound_worktree: "trusted-agent",
+      }), failure => {
+        const projected = errorReply(failure).error;
+        assert.equal(projected.code, "PREFLIGHT_DENIED"); assert.equal(projected.parameter, "tree");
+        assert.equal(projected.path, requested); assert.equal(projected.requested, requested);
+        assert.equal(projected.surface, "path_write"); assert.equal(projected.profile, "worker");
+        assert.match(projected.reason, /Provisional preflight.*source-path candidate/);
+        assert.match(projected.reason, /not bound yet/); assert.match(projected.reason, /not an actual worktree path/);
+        assert.equal(Object.hasOwn(projected, "stage"), false, "no new required model field");
+        return true;
+      });
+    });
+    assert.deepEqual(readdirSync(f.cwd), []); assert.deepEqual(readdirSync(f.agentDir), []);
+  });
+}
+
 test("deny beats missing input without any classification stat and reports the precise declaration", t => {
   const f = fixture(t);
   f.service.checkPermission = (surface, _path, profile) => {

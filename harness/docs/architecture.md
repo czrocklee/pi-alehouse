@@ -153,10 +153,13 @@ Runtime binds source project instructions/settings/config/trust to the child
 without letting checked-out `.pi` content replace source policy. Tools resolve
 at actual workspace cwd. Trusted whole checkout/source repository roots mirror
 literal restrictions as deny/ask aliases only, never ALLOW or boundary exemptions.
-Other checkouts retain ordinary external policy. Relative dispatch keeps source
-cwd semantics; worktree output claims use actual absolute paths once known.
-Uninitialized worktrees cannot declare a tree; initial checks without one remain
-valid and observe actual child cwd. List/detail project uninitialized mode or
+Other checkouts retain ordinary external policy. Relative dispatch uses the
+Agent's actual execution cwd. First-task worktree paths, including tree and `..`,
+remain provisional until binding; source candidates get deny-only preflight,
+not existence checks. Before input, runtime checks actual paths, authority and
+boundaries, and core refines/rechecks claims once. Later ownership/tree checks
+stay strict; inputs are revalidated, not locked. Healthy sessions survive binding
+preflight failure idle/reusable. See [workspace binding](workspaces.md#dispatch-paths-and-binding). List/detail project uninitialized mode or
 actual cwd, source cwd and baseline after creation; UI owns neither allocation
 nor cleanup. Without confirmed metadata, worktree rows say `uninitialized`
 (including after failed setup), not that creation will eventually succeed.
@@ -197,8 +200,9 @@ A failed optional observation is unknown/advisory, not an Owner fault. Wall-cloc
 soft-budget input invalidates approval; Run-local due waits for the real
 original inputEntered/canInput or post-budget turnStart boundary, not pre-run
 injection. time_wrapped is an attempted warning fact, never delivery.
-Notes/time_wrapped use the existing pre-commit projection/packer path,
-not reserved thin rows or post-publication mutation.
+Actionable notes use the pre-commit projection/packer path, not reserved thin
+rows or post-publication mutation. Warning-attempt telemetry stays host-side
+and in recorded outcomes, not in routine parent-model replies.
 
 Receipts extend the sole valid run-end append only when its history boundary
 exists and append succeeds. Invalid optional receipts alone are soft-dropped

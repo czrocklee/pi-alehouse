@@ -6,9 +6,9 @@ import { isAbsolute, join } from "node:path";
 import { test } from "node:test";
 import { packageRoot, resolveGit } from "../../bin/runtime-support.mjs";
 
-const pass = "PASS: real composition worker worktree uses committed baseline and SDK cwd, inherits source deny not checked-out config, reuses child and retains dirty output after kill and confirmed shutdown; source files and index unchanged; offline";
+const pass = "PASS: real composition worktrees inherit source policy and SDK cwd, reject shared canonical tree conflict before child input/history, retain a healthy reusable session and dirty output through confirmed shutdown; source files and index unchanged; offline";
 
-test("real composition worker uses a retained worktree with source policy and SDK cwd, offline", { timeout: 90000 }, (t) => {
+test("real composition worktrees bind source policy, reject canonical conflicts before input/history and reuse healthy sessions, offline", { timeout: 90000 }, (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "alehouse-worktree-composition-")));
   const agentDir = join(dir, "agent"), temporaryRoot = join(dir, "tmp"), closed = join(dir, "confirmed-closed");
   mkdirSync(temporaryRoot, { mode: 0o700 });

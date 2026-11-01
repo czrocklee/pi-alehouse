@@ -33,24 +33,27 @@ Path fields are literal relative/absolute filesystem paths, not shell words or
 shell globs. No expansion is performed. Reject leading/trailing whitespace,
 glob syntax, control characters,
 shell quoting, `$`, backslash and leading `~` or `@`; do not wrap a path in shell
-quotes to express spaces. Resolve against the immutable admitted **source cwd**,
-including when the Agent selects worktree mode, then use lexical absolute and
-canonical aliases derived through the nearest existing ancestor
-for permission, external scope, conflicts and tree identity. This also handles
-not-yet-created outputs and symlink aliases. Prefix overlap uses directory
-separator boundaries, not arbitrary string prefixes. It is not hardlink/inode
-tracking, a TOCTOU barrier or a filesystem snapshot.
+quotes to express spaces. Relative paths resolve against the Agent's
+**execution cwd** in both shared and worktree mode; absolute paths keep their
+meaning. Source cwd remains immutable for policy/settings inheritance. Bound
+paths use lexical absolute and nearest-existing-ancestor canonical aliases for
+permission, external scope, conflicts and tree identity, including new outputs
+and symlink aliases. Prefix overlap uses directory separator boundaries, not
+arbitrary string prefixes. It is not hardlink/inode tracking, a TOCTOU barrier
+or a filesystem snapshot.
 
-[Workspace selection](workspaces.md) does not rebase relative dispatch paths.
-Use actual absolute paths for worktree output ownership/build trees once known;
-relative paths continue to name source-checkout resources. An uninitialized
-worktree Agent cannot declare `dispatch.tree`: start without it, inspect
-`agent_list` after initialization, then declare the actual tree on a follow-up.
-First-task checks without a tree remain valid. Rejection occurs before dispatch
-preparation, claims, queueing or workspace creation. Queued worktrees have no
-invented cwd: `agent_list`/detail expose uninitialized mode (also used after
-failed setup), then actual cwd, source cwd and baseline after initialization. Dispatch remains a declaration, not a grant,
-file copy, patch transfer or integration step.
+An uninitialized worktree can declare relative inputs/ownership/tree on its
+first task. All relative paths, including `../foo`, remain provisional until
+actual session/workspace binding. Source candidates receive deny-only preflight,
+not source existence checks or imported ALLOW. Different Agents' provisional
+resources have no known overlap, not guaranteed disjointness. Explicit absolute
+paths receive ordinary checks immediately. Before child input, actual canonical
+paths, external boundaries, permissions, input existence, tree type and active
+claims are checked. See [workspace binding](workspaces.md#dispatch-paths-and-binding).
+Dispatch remains a declaration, not a grant, file copy, patch transfer or
+integration step. Only wait/read/list expose confirmed Run-local workspace
+locations; no provisional cwd is invented. Whole optional observed paths may
+yield under the reply cap; see [workspace metadata](workspaces.md#workspace-and-recovery-metadata).
 
 Only `inputs` must already exist as ordinary files/directories. `ownership` and
 `tree` may name new outputs; an existing `tree` must be a directory. Missing
@@ -93,12 +96,13 @@ cross-session external policy are described in [workspaces](workspaces.md).
 
 Same-Owner overlapping ownership declarations reject with `RESOURCE_OWNED`;
 a conflicting build tree rejects with `BUILD_TREE_BUSY`. Lexical and canonical
-aliases participate. Declared ownership is not inferred from `touched`, which
-only records successful direct edits/writes, and does not detect every opaque
-Bash effect. Undeclared work is not automatically serialized.
+aliases participate. Declared ownership is not inferred from observed edits
+and does not detect every opaque Bash effect. Undeclared work is not automatically serialized.
 
 Dispatch facts enter both the actual child task and the parent-authored
-instructions bound by the approval witness. An ownership declaration is visible
+instructions bound by the approval witness. The child-visible preface names
+execution cwd as the relative-path base and source cwd as the policy/settings
+inheritance base. An ownership declaration is visible
 to that review, but cannot widen authority. Delivery/validation discipline
 belongs in the worker guidance, not a second permission mechanism.
 
@@ -112,8 +116,10 @@ abandon the work, kill the Agent and wait for confirmed release. Passive waiting
 or `after` on the original needs-input Run does not release its claim; interrupt
 or a returned kill request is not release confirmation.
 
-`after` binds fixed predecessor Run IDs and their transitive closure at
-acceptance. Only that predecessor lineage is exempt from admission conflicts:
+`after` names each Agent's current or latest task and binds fixed predecessor
+Run IDs and their transitive closure at acceptance. It does not follow future
+tasks or answers: wait until `agent_answer` returns before naming that Agent in
+`after`, never rely on ordering in one parallel batch. Only that predecessor lineage is exempt from admission conflicts:
 A → B → C may queue for the same resource; unordered B and C cannot both claim
 it merely because each follows A. The exemption permits queuing, not early
 execution or ignoring unfinished cleanup. Admission still checks known permission
@@ -126,13 +132,26 @@ stays bound to the original Run IDs; the model adapter rejects naming a task
 that has already settled without completing instead of accepting it.
 
 Every dispatched Run is rechecked by pump before execution: permission/path
-interpretation, inputs and executable resources must still qualify. This occurs
-when pump can progress; no free slot on that Run's own provider means no guarantee of immediate diagnosis.
-Failing a doomed dependent is not such a recheck and needs no slot.
-Missing dependency-produced input settles as `dependency_input_missing`; other
-deferred preflight failures use `dispatch_preflight_failed`. These prestart
-failures create no child session, occupy no execution slot and leave the Agent
-reusable. Ordinary predecessor failure remains `dependency_not_completed`.
+interpretation, inputs and claimed resources must still qualify. This occurs
+when pump can progress; no free slot on that Run's own provider means no guarantee
+of immediate diagnosis. Uninitialized worktrees keep relative declarations
+provisional here; actual checks wait for session/workspace binding before
+history begin or child input. Failing a doomed dependent needs no slot/session.
+Missing deferred input settles as `dependency_input_missing`; other deferred
+preflight failures use `dispatch_preflight_failed`. Pump failures allocate no
+session/slot. A binding-time failure after healthy session creation fails only
+the task and leaves that Agent idle/reusable; it has already used initialization
+capacity. Ordinary predecessor failure remains `dependency_not_completed`.
+
+The first provisional-to-bound claim transition is a one-time refinement, not
+an exception allowing later resource drift. Already-bound ownership/tree must
+stay equal during that transition; later pump/answer rechecks strictly compare
+all ownership/tree resources. Inputs are not held resource locks and are
+revalidated for real path, permission and existence each time (a predecessor
+may produce an input symlink). Every prepared field must correspond to its
+literal declaration. Runtime uses the live authority-owned binding seam for
+source restriction aliases, not model-supplied roots or a second permission
+matrix.
 
 Explicit `agent_answer` inherits dispatch and reuses the same claim lineage in
 the answer-admission transaction. If a pre-`inputEntered` continuation is
@@ -149,8 +168,12 @@ and a later no-op close or successful SDK cleanup is not release evidence. A new
 admission blocked only by an explicit kill/release already under way waits for
 that confirmed release within a bound, then rechecks everything; see
 [acceptance](tool-contract.md#acceptance-selection-and-reasons).
-Optional observation failure must not poison the Owner. Claims are Owner-memory state,
-not persisted locks, grants or restart hydration.
+The execution slot is separate: it is freed after actual execution exit, even
+while history finalization continues. Resident reservations, claims and leases
+retain their respective finalization/confirmed-cleanup boundaries; do not hold
+the provider slot merely because cleanup is uncertain, or infer resource release
+from a free slot. Optional observation failure must not poison the Owner. Claims
+are Owner-memory state, not persisted locks, grants or restart hydration.
 
 Dispatch claim release and session-authority revocation do not delete worktrees
 or accept edits. Worktrees and private recovery manifests remain after
@@ -179,9 +202,9 @@ asynchronous failures. Stop prevents further attempts; execution exit clears
 due/timer. Neither carries to another Run or continuation. Wall-clock does not set turn `limit_reached`; turn wrap
 can still follow a wall-clock attempt.
 
-`time_wrapped` means **a warning was attempted after passing the guard**, not
-that the SDK/model received it or produced a checkpoint. It is an optional
-outcome/task diagnostic, not a thin control-row flag. Long tools, turn-boundary
+Internal `time_wrapped` means **a warning was attempted after passing the guard**,
+not that the SDK/model received it or produced a checkpoint. This remains an
+outcome/core/UI/history fact as applicable, not parent-model telemetry. Long tools, turn-boundary
 input delivery and event-loop blocking can prevent any checkpoint before the
 unchanged hard stop. This is not forced termination or a hard monetary cap.
 
@@ -244,20 +267,17 @@ nested roots are not automatically coordinated.
 
 `dispatch_notes` is bounded to at most two notes of 120 UTF-16 units each.
 The Run keeps every note, and the Agent detail pane shows them all. Model
-projections filter them to `tree_shared` before packing; `tree_lock_unknown`
+serializers filter them to `tree_shared` before budget fitting; `tree_lock_unknown`
 and `source_state_unknown` give the parent nothing to act on, and receipts
 already stay out of its context. Notes are memory-only: the run-end journal
 append does not record them.
-Notes and `time_wrapped` are optional, yielding projections, not reserved thin
-controls. After questions and FIFO alerts, attempt `time_wrapped` independently
-for each task before results/string diagnostics. It can still yield when bytes
-are saturated; reaching the text cap with a long ASCII result does not itself
-force omission. Notes retain lower priority. Construct them through the unified
-snapshot/packer/final ToolResult path before publication commit; never append
-after `observe` returns. Retained
-Run data is memory-only. Later observations of a still-locatable task can try to
-show omitted diagnostics again, but there is no complete-recovery guarantee,
-notes cursor or new arbitrary historical task selector.
+Public notes are optional, yielding projections, not reserved thin controls.
+Construct them through the unified snapshot/packer/final ToolResult path before
+publication commit; never append after `observe` returns. `time_wrapped` stays
+host-side rather than entering parent-model replies. Retained Run notes are
+memory-only. The read-only task ordinal selector locates retained Runs after
+reuse but does not guarantee complete diagnostic recovery. There is no notes
+cursor, metadata-only view or persistence.
 
 A checks Run may attach a validation receipt to its **single existing run-end
 append**, only with a successfully established valid history boundary and a
@@ -314,9 +334,11 @@ instruction to wait) is reported as unrun with its command and reason, not asked
 about; missing inputs or a decision that changes what is implemented still need
 the parent. Workers do not announce a declared tree as released: its claim ends
 with the task, or after a question with its resolution. Omitting `tree` neither
-forbids building nor makes a shared tree safe. Deliver findings and
-changed behavior with exact evidence paths, actual commands/results and relevant
-platform/tool-version/configuration context. List unrun, blocked, interrupted
-and zero-match checks as such, never as success. Worker-body changes require
+forbids building nor makes a shared tree safe. Helpers return concise findings,
+changes, actual check commands/results and unfinished or blocked work. The
+explicit validation owner additionally reports evidence paths and relevant
+platform/tool-version/configuration context, including zero-match checks; these
+are not a universal checklist in every worker's standing prompt. Unrun, blocked
+or interrupted checks are never success. Worker-body changes require
 matched generated definition digests and separately coordinated migration, not
 silent replacement of existing user resources or live-Owner deployment.

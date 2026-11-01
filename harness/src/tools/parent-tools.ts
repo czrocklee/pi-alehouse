@@ -2,9 +2,11 @@ import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static, type TObject, type TSchema } from "typebox";
 import { Check } from "typebox/value";
-import { WORKTREE_TREE_RESOLUTION, type OwnerController } from "../core/owner-controller.js";
+import type { OwnerController } from "../core/owner-controller.js";
 import { terminal, validDifficulty, type RunView, type SubmitRequest } from "../core/contracts.js";
-import { AGENT_EXISTS_RESOLUTION, isModelAgentName, MODEL_AGENT_NAME_PATTERN, modelTaskStatus } from "../core/communication-envelope.js";
+import { AGENT_EXISTS_RESOLUTION, COMMUNICATION_LIMITS, isModelAgentName, MODEL_AGENT_NAME_PATTERN, modelTaskStatus } from "../core/communication-envelope.js";
+import { taskMetadata } from "../core/task-metadata.js";
+import { packIndependentCommunication } from "../core/communication-packer.js";
 import type { CommunicationToolResult } from "../core/communication-snapshot.js";
 import { QUESTION_ID_PATTERN } from "../core/question-id.js";
 import { validateDispatch } from "../core/dispatch.js";
@@ -21,70 +23,71 @@ import { agentProfileNames, blockedDelegationToolNames, internalProfile, modelPr
 const text = (maxLength: number, description?: string) => Type.String({ minLength: 1, maxLength, pattern: "\\S",
   ...(description ? { description } : {}) });
 const optional = Type.Optional;
+const offGuidance = "workers_disabled: ask the user to enable delegation for new work, steering or answers; accepted work and inspection continue.";
+const workspaceFacts = "workspace_pending means binding is unconfirmed, not eventual creation. retained_paths lists observed failure locations, not a usable session; optional paths may be omitted.";
 export const AGENT_NAME_PATTERN = MODEL_AGENT_NAME_PATTERN;
 const agentName = (description?: string) => Type.String({ pattern: AGENT_NAME_PATTERN, ...(description ? { description } : {}) });
 const agentNames = (maxItems: number, description: string) =>
   Type.Array(agentName(), { minItems: 1, maxItems, description });
 const waitMs = (description: string) => Type.Integer({ minimum: 0, maximum: 300000, description });
 
-const labelField = (source: string) => optional(text(120, `agent_list label, not instructions. Default: ${source}'s first line.`));
-const afterField = (instructions: string) => optional(agentNames(4, `Dependencies bind to these Agents' current or latest tasks now. All must complete; a question, failure or interrupt fails this task before starting (already ended that way: admission rejects). Results share 16384 characters before the ${instructions}, as reference only. To depend on an answer continuation, name its Agent after agent_answer returns.`));
-const waitField = optional(waitMs("Wait for the accepted task, question, issue or alerts. Default 0: snapshot now. Timeout never stops the task. Queued wait: dependencies or capacity; do not respawn queued work."));
+const labelField = optional(text(COMMUNICATION_LIMITS.label_units, "Summary label, not instructions; defaults to prompt's first nonblank line."));
+const afterField = optional(agentNames(4, "Wait for each named Agent's current or latest task, fixed when this call is accepted, to reach completed; any other settled status fails the dependency. Results become reference context. Does not follow later tasks or answers: wait until agent_answer returns before naming its Agent here."));
+const waitField = optional(waitMs("Wait for task/events; default 0 returns now. Timeout/abort never stops work."));
 const dispatchPath = (description: string) => Type.String({ minLength: 1, maxLength: 512,
   pattern: "^(?![~@])(?=.*\\S)[^\\x00-\\x1f\\x7f*?[\\]{}'\"`$\\\\]+(?![\\s\\S])", description });
 const dispatchPaths = (maxItems: number, description: string) => Type.Array(dispatchPath(description), {
   minItems: 1, maxItems, uniqueItems: true,
 });
 const dispatchField = optional(Type.Object({
-  inputs: optional(dispatchPaths(8, "Existing input file/directory to read.")),
-  ownership: optional(dispatchPaths(16, "Assigned file/directory, including planned outputs; scope, not permission or isolation. Assign each shared file to one task; others report needed changes.")),
-  tree: optional(dispatchPath("Build-tree directory, existing or planned; builds/tests need write capability there, checked as path_write. Unfinished overlaps in this session reject. Other sessions only produce a tree_shared note; execution still starts. Your commands, other hosts and agent directories are not coordinated. Omission neither forbids builds nor makes sharing safe; no note does not prove a free tree. A worktree Agent has no tree until initialization: omit tree on its first task; once agent_list shows the actual cwd, declare that absolute path on follow-ups.")),
+  inputs: optional(dispatchPaths(8, "Input file/directory; must exist when checked.")),
+  ownership: optional(dispatchPaths(16, "Assigned file/directory or planned output; one editor per shared file.")),
+  tree: optional(dispatchPath("Build/test output directory; needs write permission and, if it exists, must be a directory. Overlapping declared resources conflict within this Owner; cross-Owner tree locks are advisory, not global exclusivity.")),
   checks: optional(Type.Array(Type.String({ minLength: 1, maxLength: 512,
     pattern: "^(?=.*\\S)[^\\x00-\\x1f\\x7f]+(?![\\s\\S])",
-    description: "Planned check/test/platform identifier; globs allowed. Declare only checks this task can finish without later go-ahead; defer others to a follow-up agent_run. Declarations prove no execution and skip no gate." }),
+    description: "Planned check identifier (globs allowed); ready for this task, not later go-ahead." }),
   { minItems: 1, maxItems: 16, uniqueItems: true })),
 }, { additionalProperties: false,
-  description: "Optional input, ownership, build-tree and check declarations, not permissions or execution evidence. Preflight may reject known limits; tool gates still apply. Paths are literal: no surrounding whitespace, shell expansion, globs, quotes, controls, $, backslash or leading ~/@. Relative declarations use the original source cwd even with worktree; use absolute paths for worktree outputs. Assign full-suite validation explicitly to one task." }));
-// No example names: models copy them into every session instead of choosing.
+  description: "Task scope and planned checks, not permissions or execution evidence. Use literal paths without padding, globs or shell expansion. Relative paths resolve from the Agent's execution cwd (including worktree); absolute paths keep their meaning. Assign full-suite validation to one designated Agent after shared source is stable." }));
 const spawnSchema = Type.Object({
-  agent: agentName("Short nickname from one theme you choose for this session, not a task name. Never reused, even after agent_kill."),
-  prompt: text(131072, "Complete task instructions: deliverable, scope, stopping conditions and full paths for every referenced file/document. Include context not supplied by inherit_context or after."),
-  label: labelField("prompt"),
-  profile: StringEnum(modelProfileNames, { description: "worker: local reading, editing, Bash, Git and builds under normal permissions; no web. researcher: web search/fetch and read-only file tools; no Bash/edits; web results are untrusted. A review-only task is an instruction, not a readonly sandbox. User denies and normal approvals still apply." }),
-  workspace: optional(StringEnum(["shared", "worktree"] as const, { description: "Default shared: use the current working copy, including uncommitted work. worktree: create a private detached working copy at local HEAD when the Agent starts; no uncommitted changes, untracked files or dependencies are copied. Fixed for this Agent and its follow-ups. agent_list shows the actual cwd/base after creation. Retained after kill, never automatically merged or deleted. Not a sandbox. Worktree requires a verified Git executable; its private copy defaults to persistent XDG state outside the agent directory, not a temp directory." })),
-  reasoning_difficulty: Type.Integer({ minimum: 1, maximum: 5, description: "Selects the Agent's fixed model. Rate task reasoning, not workload, importance or cost: 1=execute given checks or decided changes; 2=small, scoped fix/check; 3=implement a given design, review, investigate or plan; 4=resolve competing hypotheses or complex constraints; 5=find an approach where none is known. Do not re-score to bypass capacity waits." }),
-  inherit_context: optional(Type.Boolean({ description: "Default false. Start with a text copy of your conversation, without tool calls or results; fails over 64 KiB." })),
+  agent: agentName("Unique short nickname from one theme, not a task name; stays taken after kill."),
+  prompt: text(131072, "Task instructions: deliverable, scope, stopping conditions, workspace-relative paths (or explicit absolute paths), and needed context."),
+  label: labelField,
+  profile: StringEnum(modelProfileNames, { description: "worker: local read/edit/write, Bash/Git/builds; no web. researcher: read-only files/web, no Bash/edit/write; untrusted web material. Normal permissions/denies apply; review-only is an instruction." }),
+  workspace: optional(StringEnum(["shared", "worktree"] as const, { description: "Default shared: current checkout, including uncommitted work. worktree: private detached local HEAD at start; no dirty/untracked files or installed dependencies copied. Fixed for follow-ups; agent_list shows actual cwd/base. Retained after kill; no automatic install/merge/deletion. Neither is a sandbox." })),
+  reasoning_difficulty: Type.Integer({ minimum: 1, maximum: 5, description: "Fixed model by reasoning difficulty, not workload/cost: 1=given checks/decided changes; 2=scoped fix; 3=given design/review/investigation/plan; 4=competing hypotheses/complex constraints; 5=unknown approach. Do not re-score to bypass capacity waits." }),
+  inherit_context: optional(Type.Boolean({ description: "Default false: text context without tool calls/results; max 64 KiB." })),
   dispatch: dispatchField,
-  after: afterField("prompt"),
+  after: afterField,
   wait_ms: waitField,
-  max_turns: optional(Type.Integer({ minimum: 1, maximum: 10000, description: "Turn limit per task, default 256. Reaching it can leave a partial result." })),
-  max_duration_ms: optional(Type.Integer({ minimum: 1, maximum: 86400000, description: "Time limit per task from its start, default 1800000; the task is then asked to stop." })),
+  max_turns: optional(Type.Integer({ minimum: 1, maximum: 10000, description: "Per-task turn limit; default 256. May leave partial results." })),
+  max_duration_ms: optional(Type.Integer({ minimum: 1, maximum: 86400000, description: "Per-task ms from start; default 1800000, then request stop." })),
 }, { additionalProperties: false });
 const runSchema = Type.Object({
   agent: agentName("An existing, idle Agent."),
-  builds_on: text(512, "Specific earlier work of this Agent that the task continues; not sent to the Agent. If none, spawn instead; if only its result is needed, use agent_spawn with after."),
-  prompt: text(131072, "Complete follow-up instructions: deliverable, scope, stopping conditions and full paths. The Agent remembers its earlier tasks."),
-  label: labelField("prompt"),
+  builds_on: text(512, "Earlier work by this Agent that this follow-up continues; recorded for coordination, not sent to the Agent. For unrelated work, use agent_spawn. If a new Agent only needs this Agent's output, use agent_spawn with after."),
+  prompt: text(131072, "Follow-up instructions with scope, deliverable and workspace-relative paths (or explicit absolute paths); earlier conversation is retained."),
+  label: labelField,
   dispatch: dispatchField,
-  after: afterField("prompt"),
+  after: afterField,
   wait_ms: waitField,
 }, { additionalProperties: false });
 const sendSchema = Type.Object({
-  agent: agentName("An existing Agent; this call stays with the task selected now."),
+  agent: agentName("Agent whose task is selected now; never retargets later work."),
   message: text(16384, "A correction or extra instruction for the current task. Never an answer (use agent_answer) or another task."),
-  wait_ms: optional(waitMs("Wait for this task, its question, an issue or its alerts. Default 0 returns now; timeout/abort never interrupts it.")),
+  wait_ms: waitField,
 }, { additionalProperties: false });
 const answerSchema = Type.Object({
   agent: agentName("The Agent with the pending question."),
   question_id: Type.String({ minLength: 34, maxLength: 34, pattern: QUESTION_ID_PATTERN,
-    description: "Copy question_id exactly from the reply showing this question; never derive it from an Agent name or task number." }),
+    description: "Copy the pending question_id exactly from wait/read." }),
   answer: text(16384, "Answer to this pending question."),
   wait_ms: waitField,
 }, { additionalProperties: false });
 const agentOnly = Type.Object({ agent: agentName("An existing Agent by name.") }, { additionalProperties: false });
 /** A label the model omitted: the first nonblank line of its instructions. */
 const labelOf = (label: string | undefined, instructions: string): string =>
-  label ?? utf16Prefix(instructions.split("\n").map((line) => line.trim()).find(Boolean) ?? "task", 120);
+  label ?? utf16Prefix(instructions.split("\n").map((line) => line.trim()).find(Boolean) ?? "task", COMMUNICATION_LIMITS.label_units);
 const KILLED_SHOWN = 32;
 
 export interface ToolProfile { definition: string; tools: readonly string[] }
@@ -158,7 +161,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
   const independent = (ctx: ExtensionContext, read: () => object): CommunicationToolResult =>
     controller.validateObservationEntry(() => {
       assertCurrent(ctx);
-      return { content: [{ type: "text", text: JSON.stringify(read()) }], details: undefined };
+      return packIndependentCommunication(read() as Record<string, unknown>);
     });
 
   const make = <S extends TObject>(name: string, description: string, schema: S,
@@ -186,14 +189,8 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         allowed: Object.keys(schema.properties),
         resolution: "The arguments do not match this tool's schema; check the required fields, their types and bounds." });
       if ((name === "agent_spawn" || name === "agent_run") && fields.dispatch !== undefined) validateDispatch(fields.dispatch);
-      // Same admission constraint as core, rejected pre-effect where the spawn
-      // arguments themselves select worktree mode. Core stays authoritative for
-      // direct entry and agent_run follow-ups (workspace is not in run args).
-      if (name === "agent_spawn" && fields.workspace === "worktree" && fields.dispatch !== undefined &&
-        typeof (fields.dispatch as Record<string, unknown>).tree === "string") {
-        throw new HarnessError("DISPATCH_WORKTREE_UNINITIALIZED", { key: "tree",
-          requested: (fields.dispatch as Record<string, unknown>).tree, resolution: WORKTREE_TREE_RESOLUTION });
-      }
+      if (name === "agent_read" && fields.task !== undefined && fields.cursor !== undefined)
+        throw new HarnessError("INVALID_PARAMETERS", { key: "task", resolution: "Choose task to start its first page, or cursor to continue the original page; do not supply both." });
       return structuredClone(raw);
     };
     return { name, label: name, description, parameters: schema,
@@ -225,14 +222,14 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
       const status = modelTaskStatus(view.status);
       throw new HarnessError("DEPENDENCY_NOT_COMPLETED", { agent: name, key: "after", reason: status,
         resolution: view.has_question ?
-          `${name}'s task ended with a question, so it cannot complete. Answer it with agent_answer first; once that answer is accepted, after: ["${name}"] waits for the answering task.` :
+          `${name}'s task ended with a question, so it cannot complete. Answer it with agent_answer first; wait until agent_answer returns, then after: ["${name}"] waits for the answering task.` :
           `${name}'s latest task ended ${status}, so it cannot complete. Omit after, or name ${name} only once it has a new task.` });
     }
     return run_id;
   });
 
   const tools = [
-    make("agent_spawn", "Create a named background Agent and its first task. Shared checkout by default, optional private worktree; neither is a sandbox. No nested delegation. Spawn for new work/reviews or different settings; agent_run is for that Agent's follow-ups. Model, profile, workspace, reasoning difficulty, context and per-task budgets are fixed. Queued work counts toward capacity: kill finished reviewers/accepted work first; keep workers awaiting build/test fixes. Reply: action, reason, agents, alerts; alerts do not mean completion. If acceptance is unclear, check agent_list before repeating.", spawnSchema,
+    make("agent_spawn", "Create an Agent and submit its first task for new work or reviews; execution may queue. Model, profile, workspace, context and budgets stay fixed; no nested delegation. Use agent_run for follow-ups. If acceptance is unclear, check agent_list before repeating. Queued work is accepted; wait, do not respawn.", spawnSchema,
       async (args, ctx, id, signal) => {
         // Capture mutable SDK inputs before admission can await an earlier call.
         // Route/context resolution still happens only on first acceptance.
@@ -269,7 +266,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         accepted(view);
         return observe({ kind: "action", run_id: view.run_id, action: { type: "agent_spawn" }, wait_ms }, ctx, signal);
       }),
-    make("agent_run", "Give an idle Agent a follow-up to its own work. Each turn re-reads its conversation (context_tokens); use agent_spawn for new/unrelated work or different settings. Model/profile/workspace/reasoning difficulty/budgets stay fixed despite routing changes. Waits up to 30 s for an ending task; a running Agent is busy (agent_send or agent_wait). Pending questions require agent_answer. Returns the shared envelope.",
+    make("agent_run", "Submit an idle Agent's follow-up; each turn re-reads its conversation. Use agent_spawn for unrelated work or different settings. For a running task, use agent_send or agent_wait; for a pending question, use agent_answer.",
       runSchema, async (args, ctx, id, signal) => {
         const target = find(args.agent);
         const { wait_ms, ...submission } = args;
@@ -288,14 +285,14 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         accepted(view);
         return observe({ kind: "action", run_id: view.run_id, action: { type: "agent_run" }, wait_ms }, ctx, signal);
       }),
-    make("agent_send", "Add instructions to the task selected now, never a later task. action.delivery: joined=added to prompt; steered=sent while running; not_delivered=nothing sent. Delivery is not proof of action. Not an answer or new task: use agent_answer, agent_spawn, or agent_run for follow-ups. Waiting covers only this task and its alerts.",
+    make("agent_send", "Add instructions to the task selected now, not an answer or new task. delivery: joined=added to prompt, steered=sent while running, not_delivered=nothing sent. Delivery does not prove action.",
       sendSchema, async ({ agent, message, wait_ms }, ctx, id, signal) => {
         const target = find(agent);
         const { delivery, view } = await controller.send(`tool:agent_send:${digest(id)}`, target.agent_id, message, { signal,
           prepare: () => controller.validateObservationEntry(() => assertPrepared(ctx, signal)) });
         return observe({ kind: "action", run_id: view.run_id, action: { type: "agent_send", delivery }, wait_ms }, ctx, signal);
       }),
-    make("agent_answer", "Answer an exact pending question_id and start a continuation. Requires settled needs_input and an idle, reusable Agent; stale/reserved IDs fail, never redirect. Keeps original model/settings/budgets despite routing changes, and the asking task's label/dispatch. If workers_disabled, ask the user to enable delegation first.",
+    make("agent_answer", "Answer the exact pending question_id and submit a continuation. First wait for status=\"needs_input\" and a current question_id from agent_wait or agent_read; historical text alone cannot be answered. Keeps fixed settings and the asking task's label/dispatch. workers_disabled: ask the user to enable delegation before answering.",
       answerSchema, async ({ agent, question_id, answer, wait_ms }, ctx, id, signal) => {
         const target = find(agent);
         const view = await controller.answer(`tool:agent_answer:${digest(id)}`, target.agent_id, question_id, answer, { signal,
@@ -303,38 +300,43 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         accepted(view);
         return observe({ kind: "action", run_id: view.run_id, action: { type: "agent_answer" }, wait_ms }, ctx, signal);
       }),
-    make("agent_wait", "Wait on tasks selected now for completion, a question, task issue, harness fault or scoped alert. Complete displayed FIFO-prefix alerts are consumed; completion may leave alerts pending. Questions remain pending until answered; name other agents to defer one and narrow alert scope. Nothing pending returns immediately. Prefer long waits to polling; questions/issues/alerts return early. Timeout/abort never stops workers. workers_disabled blocks new tasks, steering and answers; ask the user to enable delegation.",
-      Type.Object({ agents: optional(agentNames(16, "Each Agent's current task, else pending-question task, else latest; alerts span all its tasks. Omit for unfinished tasks, answerable questions when enabled, and all Agents' alerts including old/killed sources. Selection stays fixed.")),
+    make("agent_wait", `Wait for selected tasks; questions, issues or alerts return early. Prefer long waits to polling. Questions stay pending; name other Agents to defer one. Nothing pending returns now; timeout/abort never stops work. ${offGuidance}`,
+      Type.Object({ agents: optional(agentNames(16, `Bind each named Agent's active (running/queued) task, else its pending question, else its latest finished task, once at this call. Alerts span those Agents. Omit to wait on unfinished tasks, answerable questions and all Agents' alerts. Queued wait="capacity" means waiting for a provider slot; wait="dependencies" waits for fixed tasks. ${workspaceFacts}`)),
         mode: optional(StringEnum(["all", "any"] as const, { default: "all",
-          description: "all (default): every selected task must end; any: one, even if already ended. Questions, issues, faults or alerts may return sooner." })),
-        wait_ms: optional(waitMs("Milliseconds, default/maximum 300000. 0 checks once.")) }, { additionalProperties: false }),
+          description: "all (default): every selected task ends; any: one ends. Other events may return earlier." })),
+        wait_ms: optional(waitMs("Wait duration; default 300000 ms. 0 checks once.")) }, { additionalProperties: false }),
       ({ agents, mode = "all", wait_ms = 300000 }, ctx, _id, signal) => {
         const agent_ids = agents ? [...new Set(agents)].map((name) => find(name, "agents").agent_id) : undefined;
         return observe({ kind: "wait", ...(agent_ids ? { agent_ids } : {}), mode, wait_ms }, ctx, signal);
       }),
-    make("agent_read", "Read a task's question/result page now. Full question first; alerts span this Agent's tasks, independent of the page cursor. Unshown alerts stay pending. Keep next_cursor to continue the original result after reuse. If workers_disabled, ask the user to enable delegation before agent_answer.",
-      Type.Object({ agent: agentName("Current task, else pending-question task, else latest. A cursor selects its original task; read can recover question_truncated text."),
-        cursor: optional(text(1024, "Copy next_cursor exactly with the Agent it came from; it continues that task's result after reuse.")),
-        max_chars: optional(Type.Integer({ minimum: 1, maximum: 16384, description: "Result page size in UTF-16 units, default/max 16384. Reply limits may set result_omitted/result_truncated; omitted_chars is text never retained." })) }, { additionalProperties: false }),
-      ({ agent, cursor, max_chars = 16384 }, ctx, _id, signal) =>
-        observe({ kind: "read", agent_id: find(agent).agent_id, cursor, max_chars }, ctx, signal)),
-    make("agent_interrupt", "Request a stop, not confirmed settlement; the task may still finish completed, failed or needs_input. Confirm with agent_wait or agent_read. The conversation remains: answer pending questions with agent_answer, otherwise use agent_run for follow-ups. Returns current status; no pending alerts or completion notices.",
+    make("agent_read", `Read a task's result/question and this Agent's alerts, including after reuse or kill. Prioritizes the full question; keep next_cursor to continue the original task. ${offGuidance}`,
+      Type.Object({ agent: agentName(`Agent to read. Without task or cursor, selects its active task, else its pending question, else its latest finished task. ${workspaceFacts}`),
+        task: optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER,
+          description: "Returned task number; starts its first page. Mutually exclusive with cursor; read-only selector." })),
+        cursor: optional(text(1024, "Copy next_cursor with its Agent to continue that original task. Do not also supply task.")),
+        max_chars: optional(Type.Integer({ minimum: 1, maximum: 16384, description: "Page size, default/max 16384 characters; reply limits may shorten it." })) }, { additionalProperties: false }),
+      ({ agent, task, cursor, max_chars = 16384 }, ctx, _id, signal) =>
+        observe({ kind: "read", agent_id: find(agent).agent_id, task, cursor, max_chars }, ctx, signal)),
+    make("agent_interrupt", "Request a stop, not settlement; confirm with wait/read. An already ending task keeps its outcome. Keeps the conversation for follow-ups; consumes no alerts.",
       agentOnly, ({ agent }, ctx) => {
         const snapshot = controller.cancel(find(agent).run_id).snapshot;
         return independent(ctx, () => taskReply(snapshot, nameOf));
       }),
-    make("agent_kill", "Permanently end an Agent and interrupt its task. Name stays taken, results readable, old alerts pending. Status: killed; exiting=cleanup continues; cleanup_uncertain=release unconfirmed, no retry. No pending alerts or completion notices; use agent_wait or agent_read.",
+    make("agent_kill", "Permanently end an Agent, requesting stop of its task. exiting or cleanup_uncertain does not confirm release. Name stays taken, results stay readable; consumes no alerts. Retained worktrees are not deleted.",
       agentOnly, async ({ agent }, ctx) => {
-        const { state } = await controller.kill(find(agent).agent_id);
-        return independent(ctx, () => ({ agent, status: state === "released" ? "killed" : state }));
+        const target = find(agent);
+        const { state } = await controller.kill(target.agent_id);
+        return independent(ctx, () => ({ agent, status: state === "released" ? "killed" : state,
+          label: taskMetadata(controller.view(target.run_id)).label,
+          ...(state === "exiting" ? { resolution: "Still stopping; use agent_wait or agent_read." } :
+            state === "cleanup_uncertain" ? { resolution: "Cleanup unconfirmed; tell the user, do not retry." } : {}) }));
       }),
-    make("agent_list", "Read-only roster, current/latest tasks and bounded history: earlier labels, context_tokens, successful edit/write paths (not Bash changes). has_question means currently pending; get question_id via agent_wait or agent_read, then agent_answer when enabled. unavailable is boolean; unavailable_reason gives diagnostics. No pending alerts or completion notices; no automatic parent turn.",
+    make("agent_list", `Read-only roster with current/latest task labels and workspace locations. Get pending questions through wait/read. Consumes no alerts or completion notices. ${workspaceFacts}`,
       Type.Object({}, { additionalProperties: false }), (_args, ctx) => independent(ctx, () => {
         const views = controller.list(), live = views.filter((view) => view.resident);
         const killed = views.filter((view) => !view.resident).map((view) => view.name);
         const addressed = (view: RunView) => controller.view(controller.findAgent(view.name)?.run_id ?? view.run_id);
-        const recoveryHints = new Set<string>();
-        return { agents: live.map((view) => agentRow(addressed(view), controller.agentSummary(view.agent_id), nameOf, recoveryHints)),
+        return { agents: live.map((view) => agentRow(addressed(view), nameOf)),
           ...(killed.length ? { killed: killed.slice(-KILLED_SHOWN) } : {}),
           ...(killed.length > KILLED_SHOWN ? { killed_omitted: killed.length - KILLED_SHOWN } : {}) };
       })),

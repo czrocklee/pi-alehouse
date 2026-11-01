@@ -1,6 +1,7 @@
 import type { AdmittedAgentConfig, DrainWait, ExecutionFacts, HistoryRef, Outcome, Output, RunExecutionIdentity, RunIdentity, RunTelemetry, WorkspaceInfo } from "./contracts.js";
 import type { UsageLedger } from "./usage-ledger.js";
-import type { ValidationReceipt } from "./dispatch.js";
+import type { DispatchWorkspacePolicy, ValidationReceipt } from "./dispatch.js";
+import type { WorkspaceDetails } from "./workspace-metadata.js";
 
 export interface HistoryPort {
   /** Local SDK writer uncertainty. It does not by itself stop other Agents. */
@@ -26,12 +27,13 @@ export interface RunCallbacks {
   alert(text: string): void;
   /** Harness-only feedback; never registered as a child tool. */
   managedBlock?(fact: RepeatedManagedBlock): void;
-  /** Observation only: a successful edit/write tool call's path argument. */
-  touched?(path: string): void;
 }
 export interface AgentSessionPort {
   readonly session_id: string;
   readonly workspace?: WorkspaceInfo;
+  readonly workspace_details?: WorkspaceDetails;
+  /** Live authority-owned alias checks; private, never public workspace metadata. */
+  readonly workspace_policy?: DispatchWorkspacePolicy;
   readonly history?: HistoryPort;
   canInput(): boolean;
   run(prompt: string, callbacks: RunCallbacks, identity: RunExecutionIdentity): Promise<ExecutionFacts>;

@@ -86,7 +86,7 @@ function observe(last, task, historical = false) {
     assert.deepEqual(reply.action, { type: expectedCommand.name, agent, task });
   } else assert.equal(reply.action, undefined);
   assert.equal(reply.workers_disabled, undefined);
-  assert(["alert", "done", "snapshot"].includes(reply.reason), text(last));
+  assert([undefined, "alert"].includes(reply.reason), text(last));
   assert.equal(reply.agents.length, 1);
   assert.equal(reply.agents[0].agent, agent);
   assert.equal(reply.agents[0].task, task);
@@ -105,7 +105,7 @@ function observe(last, task, historical = false) {
       denyReason, "own scratch directory", "toolCallId", "path_write"]) assert(!alert.message.includes(secret), secret);
     tasks[task - 1].alerts.push(alert);
   }
-  assert.equal(reply.alerts_pending, 0, "the accepted summary is consumed by ordinary publication");
+  assert.equal(Object.hasOwn(reply, "alerts_pending"), false, "the accepted summary is consumed; no zero count is emitted");
   expectedCommand = undefined;
   return reply.agents[0];
 }

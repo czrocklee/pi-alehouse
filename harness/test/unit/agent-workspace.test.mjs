@@ -9,9 +9,14 @@ import test from "node:test";
 import ts from "typescript";
 import { resolveGit } from "../../../bin/runtime-support.mjs";
 
+const dataModule = (source) => `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+const compilerOptions = { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 };
+const metadataUrl = dataModule(ts.transpileModule(readFileSync(new URL("../../src/core/workspace-metadata.ts", import.meta.url), "utf8"), { compilerOptions }).outputText);
+const { workspaceRecoveryOf } = await import(metadataUrl);
 const source = readFileSync(new URL("../../src/runtime/agent-workspace.ts", import.meta.url), "utf8");
-const output = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
-const { createAgentWorkspace, AgentWorkspaceError } = await import(`data:text/javascript;base64,${Buffer.from(output).toString("base64")}`);
+const output = ts.transpileModule(source, { compilerOptions }).outputText
+  .replace('"../core/workspace-metadata.js"', JSON.stringify(metadataUrl));
+const { createAgentWorkspace, AgentWorkspaceError } = await import(dataModule(output));
 const trustedGit = resolveGit();
 assert.ok(trustedGit, "Trusted Git unavailable; supply an absolute verified PI_HARNESS_GIT (no PATH lookup or skip)");
 
@@ -135,8 +140,10 @@ for (const key of ["filter.fixture.smudge", "filter.fixture.clean", "filter.fixt
     await assert.rejects(f.create(), (error) => {
       assert.ok(error instanceof AgentWorkspaceError);
       assert.match(error.message, /unsupported_git_helper_or_partial_configuration/);
-      assert.match(error.message, /retained path: .*recovery manifest:/);
+      assert.match(error.message, /checkout target: .*recovery manifest:/);
       assert.equal(existsSync(error.retained_path), false);
+      assert.deepEqual(workspaceRecoveryOf(error), { mode: "worktree", state: "partial", source_cwd: f.repository,
+        allocated_path: dirname(error.manifest), recovery_manifest: error.manifest });
       assert.deepEqual(records(error.manifest).map((entry) => entry.state), ["allocated", "failed_retained"]);
       return true;
     });
@@ -205,6 +212,8 @@ test("a selected state root inside immutable agentDir fails before any allocatio
     assert.match(error.reason, /worktree_root_is_immutable_agent_directory/);
     assert.equal(error.retained_path, undefined, "no leaf is allocated");
     assert.equal(error.manifest, undefined);
+    assert.deepEqual(workspaceRecoveryOf(error), { mode: "worktree", state: "partial", source_cwd: f.repository },
+      "preallocation failure supplies no invented recovery location");
     return true;
   });
   assert.equal(existsSync(join(f.agentDir, "inside-agent-state")), false,
@@ -319,6 +328,7 @@ test("trusted Git is mandatory; relative/project PATH executables are never used
       assert.ok(error instanceof AgentWorkspaceError);
       assert.match(error.reason, /trusted_git_unavailable/);
       assert.match(error.reason, /PI_HARNESS_GIT/, "the diagnostic names the verified absolute override");
+      assert.deepEqual(workspaceRecoveryOf(error), { mode: "worktree", state: "partial", source_cwd: f.repository });
       return true;
     });
   }

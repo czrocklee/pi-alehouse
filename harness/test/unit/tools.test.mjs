@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolve } from "node:path";
+import { isAbsolute, normalize, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { createChildTools } from "../../dist/tools/child-tools.js";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createOwnerTools } from "../../dist/tools/parent-tools.js";
 import { defaultDelegation, delegationGuideline, delegationModes, eagernessLevels } from "../../dist/delegation.js";
@@ -10,10 +12,8 @@ import { blockedDelegationToolNames as blockedDelegationTools, cleanupToolNames,
   agentProfileNames, modelProfileNames, workerToolSelection } from "../../dist/tools/tool-names.js";
 import { digest } from "../../dist/runtime/context-snapshot.js";
 import { ParentHistoryError } from "../../dist/core/ports.js";
-import { modelRecoveryHint } from "../../dist/core/model-recovery.js";
 import { taskReply } from "../../dist/tools/replies.js";
 import { FakePort, deferred, ended, fixture, task, tick, until } from "../support/controller-fixture.mjs";
-import { WORKTREE_TREE_RESOLUTION } from "../../dist/core/owner-controller.js";
 
 const model = { provider: "fixture", id: "controlled", levels: ["off", "high"] };
 const preset = (name = "fixture", modelId = "fixture/controlled", version = "v1") => ({
@@ -49,7 +49,17 @@ function toolsFor(f, hooks = {}) {
     assert.equal(result.details, undefined); assert.equal(result.content.length, 1); assert.equal(result.content[0].type, "text");
     const reply = JSON.parse(result.content[0].text);
     if (["agent_spawn", "agent_run", "agent_send", "agent_answer", "agent_wait", "agent_read"].includes(name)) {
-      assert(Array.isArray(reply.agents)); assert.equal(typeof reply.reason, "string"); assert.equal(typeof reply.alerts_pending, "number");
+      assert(Array.isArray(reply.agents));
+      if (Object.hasOwn(reply, "reason")) {
+        assert.equal(typeof reply.reason, "string"); assert(!["snapshot", "done"].includes(reply.reason));
+      }
+      for (const key of ["alerts_pending", "finished_pending"]) if (Object.hasOwn(reply, key)) assert(reply[key] > 0);
+      assert.equal(Object.hasOwn(reply, "pending"), false);
+      for (const row of reply.agents) {
+        for (const key of ["context_tokens", "time_wrapped", "recovery_hint", "earlier_labels", "touched", "touched_omitted", "elapsed_s"])
+          assert.equal(Object.hasOwn(row, key), false, key);
+        assert.notEqual(row.result, "", "empty results are absent");
+      }
       for (const retired of ["agent", "status", "delivery", "result", "question", "progress", "progress_omitted", "agents_omitted", "pending_omitted"])
         assert.equal(Object.hasOwn(reply, retired), false, `${name} must preserve the unified envelope, not flatten ${retired}`);
     }
@@ -105,13 +115,18 @@ test("model tool assembly accepts sixteen residents but rejects seventeen withou
 });
 
 test("only agent_spawn carries the delegation guideline, as static text", async (t) => {
-  const f = await fixture(t), { tools } = toolsFor(f);
+  const f = await fixture(t), { tools, options } = toolsFor(f);
   for (const tool of tools) {
     assert.deepEqual(tool.promptGuidelines, tool.name === "agent_spawn" ? [delegationGuideline(defaultDelegation)] : undefined, tool.name);
   }
   const lines = new Set();
   for (const mode of delegationModes) for (const eagerness of eagernessLevels) {
     const line = delegationGuideline({ mode, eagerness });
+    const registered = createOwnerTools({ ...options, guideline: line });
+    assertCallerTools(registered);
+    for (const tool of registered) {
+      assert.deepEqual(tool.promptGuidelines, tool.name === "agent_spawn" ? [line] : undefined, `${mode}/${eagerness}: ${tool.name}`);
+    }
     assert.doesNotMatch(line, /\d|\$\{|undefined|\n/, "no counts, dates or interpolation in a cached prompt prefix");
     assert.doesNotMatch(line, /agent_(spawn|run|send|wait|read|kill|list|interrupt)|profile|difficulty/,
       "organization strategy only; tool semantics stay in schemas");
@@ -125,8 +140,8 @@ test("only prompt carries the assignment; labels, names and default-disabled con
   state.entries = [{ message: { role: "user", content: "PARENT_CONTEXT_NOT_INHERITED" } }];
   const prompt = "Inspect source only; no edits. Return findings and evidence.";
   const reply = await call("agent_spawn", create({ agent: "label-agent", prompt, label: "TASK_LABEL_NOT_INSTRUCTIONS" }));
-  assert.deepEqual(reply, { action: { type: "agent_spawn", agent: "label-agent", task: 1 }, reason: "snapshot",
-    agents: [{ agent: "label-agent", task: 1, status: "running", result: "" }], pending: ["label-agent"], alerts_pending: 0, finished_pending: 0 }, "a receipt carries no IDs or settings");
+  assert.deepEqual(reply, { action: { type: "agent_spawn", agent: "label-agent", task: 1 },
+    agents: [{ agent: "label-agent", task: 1, status: "running", label: "TASK_LABEL_NOT_INSTRUCTIONS" }] }, "a receipt carries no IDs or settings");
   await until(() => f.ports[0]?.streaming);
   assert.equal(f.ports[0].calls[0].prompt, prompt);
   assert.equal(viewOf(f, "label-agent").effective_settings.context_snapshot, undefined);
@@ -144,8 +159,8 @@ test("the same host call ID replays accepted work; a fresh call cannot duplicate
   await assert.rejects(call("agent_spawn", args, "host-call-2"), code("AGENT_EXISTS"));
   await until(() => f.ports[0]?.streaming);
   assert.deepEqual(await call("agent_send", send("orca", { message: "also check docs" }), "host-call-3"),
-    { action: { type: "agent_send", agent: "orca", task: 1, delivery: "steered" }, reason: "snapshot",
-      agents: [{ agent: "orca", task: 1, status: "running", result: "" }], pending: ["orca"], alerts_pending: 0, finished_pending: 0 }, "a busy Agent's task takes the message");
+    { action: { type: "agent_send", agent: "orca", task: 1, delivery: "steered" },
+      agents: [{ agent: "orca", task: 1, status: "running", label: "Recoverable task label" }] }, "a busy Agent's task takes the message");
   const listed = await call("agent_list", {});
   assert.deepEqual(listed.agents.map((row) => [row.agent, row.label, row.status]), [["orca", "Recoverable task label", "running"]]);
   assert(!("prompt" in listed.agents[0]));
@@ -194,7 +209,10 @@ test("closed schemas reject unknown, mutated and malformed inputs before admissi
   }
   for (const [name, args] of [
     ["agent_read", { agent: "orca", path: "/private/session.jsonl" }], ["agent_read", { agent: "orca", limit: 10 }],
+    ["agent_read", { agent: "orca", view: "metadata" }], ["agent_read", { agent: "orca", view: "result" }],
     ["agent_read", { agent: "orca", max_chars: 16385 }], ["agent_read", { agent: "orca", max_chars: 0 }],
+    ["agent_read", { agent: "orca", task: 1, cursor: "garbage" }],
+    ...[0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((task) => ["agent_read", { agent: "orca", task }]),
     ["agent_wait", { mode: "other" }], ["agent_wait", { agents: [] }],
     ["agent_wait", { agents: Array.from({ length: 17 }, (_, i) => `a${i}`) }],
     ["agent_send", { agent: "orca" }], ["agent_send", { agent: "orca", message: "x", profile: "reader" }],
@@ -271,7 +289,7 @@ test("spawn creates and send addresses: each rejects the other's names with a po
   });
   for (const name of ["agent_read", "agent_interrupt", "agent_kill"]) await assert.rejects(call(name, { agent: "ghost" }), code("AGENT_NOT_FOUND"));
   await assert.rejects(call("agent_wait", { agents: ["ghost"] }), code("AGENT_NOT_FOUND"));
-  assert.deepEqual(await call("agent_kill", { agent: "orca" }), { agent: "orca", status: "killed" });
+  assert.deepEqual(await call("agent_kill", { agent: "orca" }), { agent: "orca", status: "killed", label: "task" });
   await assert.rejects(call("agent_run", run("orca"), "released-reuse"), (error) => {
     const result = JSON.parse(error.message).error;
     assert.equal(result.code, "AGENT_UNAVAILABLE"); assert.equal(result.agent, "orca"); assert.equal(result.reason, "explicitly_released");
@@ -288,16 +306,18 @@ test("read_result pages UTF-16 output and returns the separate full question", a
   const text = "🚀" + "x".repeat(20000);
   f.ports[0].finish(text); f.ports[1].finish("other"); await settle(f, "orca"); await settle(f, "otter");
   const whole = await call("agent_read", { agent: "orca" });
-  assert.equal(whole.reason, "snapshot"); assert.equal(whole.action, undefined);
+  assert.equal(Object.hasOwn(whole, "reason"), false); assert.equal(whole.action, undefined);
   assert.equal(whole.agents[0].status, "needs_input"); assert.equal(whole.agents[0].question, "Full recorded question");
   assert.equal(whole.agents[0].result.length, 16384 - "Full recorded question".length); assert(whole.agents[0].next_cursor);
   const first = await call("agent_read", { agent: "orca", max_chars: 1 });
   assert.equal(first.agents[0].result, "🚀", "a surrogate pair is never split");
+  await assert.rejects(call("agent_read", { agent: "orca", task: 1, cursor: first.agents[0].next_cursor }), code("INVALID_PARAMETERS"));
   const rest = await call("agent_read", { agent: "orca", cursor: first.agents[0].next_cursor });
   const tail = await call("agent_read", { agent: "orca", cursor: rest.agents[0].next_cursor });
   assert.equal(first.agents[0].result + rest.agents[0].result + tail.agents[0].result, text); assert.equal(tail.agents[0].next_cursor, undefined);
   await assert.rejects(call("agent_read", { agent: "otter", cursor: first.agents[0].next_cursor }), code("INVALID_CURSOR"));
   await assert.rejects(call("agent_read", { agent: "orca", cursor: "garbage" }), code("INVALID_CURSOR"));
+  await assert.rejects(call("agent_read", { agent: "orca", cursor: `m1_${"a".repeat(22)}.${"0".repeat(11)}` }), code("INVALID_CURSOR"));
 });
 
 test("resolver exposes bounded abstract choices and incompatibility without model inventory", async (t) => {
@@ -572,7 +592,7 @@ for (const effect of ["cancel", "observe", "spawn"]) test(`guarded SDK context g
   Object.defineProperty(ctx, "sessionManager", { configurable: true, value: manager });
   assert.equal(f.controller.stats().runs, 1); assert.equal(viewOf(f, "orca").status, "running");
   assert.equal(f.ports[0].stopped, 0); assert.equal(f.controller.stats().internal_error, undefined);
-  assert.equal((await call("agent_read", { agent: "orca" })).reason, "snapshot");
+  assert.equal(Object.hasOwn(await call("agent_read", { agent: "orca" }), "reason"), false);
 });
 
 test("an aborted wait is not an interrupt; kill ends a busy Agent and frees its capacity", async (t) => {
@@ -589,9 +609,9 @@ test("an aborted wait is not an interrupt; kill ends a busy Agent and frees its 
   assert.equal((await call("agent_wait", { agents: ["one"] }, "wait", undefined, abort.signal)).reason, "aborted");
   assert.equal(f.ports[0].stopped, 0);
   assert.deepEqual(await call("agent_send", send("one", { message: "continue" })), {
-    action: { type: "agent_send", agent: "one", task: 1, delivery: "steered" }, reason: "snapshot",
-    agents: [{ agent: "one", task: 1, status: "running", result: "" }], pending: ["one"], alerts_pending: 0, finished_pending: 0 });
-  assert.deepEqual(await call("agent_interrupt", { agent: "one" }), { agent: "one", task: 1, status: "interrupting" });
+    action: { type: "agent_send", agent: "one", task: 1, delivery: "steered" },
+    agents: [{ agent: "one", task: 1, status: "running", label: "task" }] });
+  assert.deepEqual(await call("agent_interrupt", { agent: "one" }), { agent: "one", task: 1, status: "interrupting", label: "task" });
   f.ports[0].finish("partial", "aborted"); await settle(f, "one");
   assert.equal((await call("agent_read", { agent: "one" })).agents[0].status, "interrupted");
   const next = await call("agent_run", run("one", { prompt: "redo" }), "redo");
@@ -600,7 +620,7 @@ test("an aborted wait is not an interrupt; kill ends a busy Agent and frees its 
   const killing = call("agent_kill", { agent: "one" });
   await until(() => f.ports[0].stopped === 2);
   f.ports[0].finish("partial again", "aborted");
-  assert.deepEqual(await killing, { agent: "one", status: "killed" });
+  assert.deepEqual(await killing, { agent: "one", status: "killed", label: "task" });
   const kept = await call("agent_read", { agent: "one" });
   assert.equal(kept.agents[0].result, "partial again"); assert.equal(kept.agents[0].status, "interrupted");
   assert.equal(kept.agents[0].unavailable, true); assert.equal(kept.agents[0].unavailable_reason, "explicitly_released");
@@ -682,7 +702,7 @@ test("context invalidation before publication rejects only the observer and pres
   state.active = true;
   const recovered = await call("agent_read", { agent: "orca" });
   assert.equal(recovered.alerts[0].message, "preserved for the next valid observation");
-  assert.equal(recovered.alerts_pending, 0);
+  assert.equal(Object.hasOwn(recovered, "alerts_pending"), false);
 });
 
 test("ambiguous preset model keys fail without inventory; long tool-call IDs remain bounded and idempotent", async (t) => {
@@ -707,7 +727,8 @@ test("uncertain release remains an explicit negative receipt through the tool ad
   await call("agent_spawn", create(), "uncertain-tool");
   await until(() => f.ports[0]?.streaming); f.ports[0].finish(); await settle(f, "orca");
   f.ports[0].dispose = async () => ({ shutdownExited: false, errors: ["unknown"] });
-  assert.deepEqual(await call("agent_kill", { agent: "orca" }), { agent: "orca", status: "cleanup_uncertain" });
+  assert.deepEqual(await call("agent_kill", { agent: "orca" }), { agent: "orca", status: "cleanup_uncertain", label: "task",
+    resolution: "Cleanup unconfirmed; tell the user, do not retry." });
   assert.equal(f.controller.stats().resident, 1); assert.equal(f.controller.stats().closed, false);
   const listed = await call("agent_list", {});
   assert.deepEqual(listed.agents.map((row) => [row.agent, row.unavailable, row.unavailable_reason]), [["orca", true, "owner_cleanup_uncertain"]]);
@@ -752,8 +773,13 @@ test("reuse keeps an Agent's name, settings and conversation while each task has
   assert.equal(f.ports.length, 2, "reuse runs in the same session");
   assert.deepEqual(routed(f, "orca"), settings);
   const [row] = (await call("agent_list", {})).agents;
-  assert.deepEqual([row.agent, row.label, row.task, row.earlier_labels], ["orca", "复核取消修复", 2, ["检查取消竞态"]]);
+  assert.deepEqual([row.agent, row.label, row.task], ["orca", "复核取消修复", 2]);
+  assert.equal(Object.hasOwn(row, "earlier_labels"), false);
   assert.equal(f.controller.view(first).description, "检查取消竞态", "reuse does not rewrite earlier task metadata");
+  const original = (await call("agent_read", { agent: "orca", task: 1 })).agents[0];
+  assert.equal(original.task, 1); assert.equal(original.label, "检查取消竞态");
+  assert.equal(original.result, "race findings", "explicit task restarts the original result, not the latest task");
+  assert.equal((await call("agent_read", { agent: "orca" })).agents[0].label, "复核取消修复");
   f.ports[0].finish("reviewed"); f.ports[1].finish("cost findings");
   await settle(f, "orca"); await settle(f, "otter");
 });
@@ -800,7 +826,7 @@ test("whole wait replies bound questions, results, alerts and diagnostics withou
   assert(reply.agents.some((entry) => entry.question_truncated));
   assert(reply.agents.every((entry) => !entry.owner_error || entry.owner_error.length <= 512));
   assert(reply.response_limit_reached);
-  assert.equal(reply.alerts_pending + (reply.alerts?.length ?? 0), 1, "unshown alerts stay pending, not omitted");
+  assert.equal((reply.alerts_pending ?? 0) + (reply.alerts?.length ?? 0), 1, "unshown alerts stay pending, not omitted");
   const includedText = reply.agents.reduce((count, entry) => count + (entry.question?.length ?? 0) + (entry.result?.length ?? 0), 0) +
     (reply.alerts ?? []).reduce((count, alert) => count + alert.message.length, 0);
   assert(includedText <= 16384);
@@ -901,9 +927,9 @@ test("a virtual selected preset is rejected even when its thinking levels match"
 
 test("wait defaults are tool-local; inline waiting does not alter accepted task identity", async (t) => {
   const f = await fixture(t), { call } = toolsFor(f);
-  assert.deepEqual(await call("agent_wait", {}, "empty"), { reason: "nothing_pending", agents: [], alerts_pending: 0, finished_pending: 0 });
+  assert.deepEqual(await call("agent_wait", {}, "empty"), { reason: "nothing_pending", agents: [] });
   const receipt = await call("agent_spawn", create({ wait_ms: 0 }), "background");
-  assert.equal(receipt.reason, "snapshot");
+  assert.equal(Object.hasOwn(receipt, "reason"), false);
   assert.deepEqual(receipt.action, { type: "agent_spawn", agent: "orca", task: 1 });
   const seen = [], realObserve = f.controller.observe.bind(f.controller);
   t.mock.method(f.controller, "observe", (request, options) => {
@@ -914,7 +940,7 @@ test("wait defaults are tool-local; inline waiting does not alter accepted task 
   await call("agent_wait", { agents: ["orca"], mode: "any", wait_ms: 0 }, "w2");
   await call("agent_wait", { agents: ["orca"], wait_ms: 1000 }, "w3");
   const all = await call("agent_wait", {}, "w4");
-  assert.deepEqual(all, { reason: "timeout", agents: [{ agent: "orca", task: 1, status: "running", result: "" }], pending: ["orca"], alerts_pending: 0, finished_pending: 0 });
+  assert.deepEqual(all, { reason: "timeout", agents: [{ agent: "orca", task: 1, status: "running", label: "task" }] });
   const replay = await call("agent_spawn", create({ wait_ms: 300000 }), "background");
   assert.equal(replay.reason, "timeout"); assert.deepEqual(replay.action, receipt.action);
   assert.deepEqual(seen.map(({ kind, agent_ids, mode, wait_ms }) => [kind, agent_ids?.length, mode, wait_ms]),
@@ -962,7 +988,7 @@ test("accepted-request retries invoke the UI safeguard while Off without admitti
 test("Off keeps pending question identity inspectable but hides and rejects new answers", async (t) => {
   const admission = { enabled: true, revision: 0 };
   const f = await fixture(t, { controller: { admission: () => ({ ...admission }) } });
-  const { call, tool } = toolsFor(f);
+  const { call } = toolsFor(f);
   await call("agent_spawn", create(), "setup"); await until(() => f.ports[0]?.streaming);
   f.ports[0].callbacks.question("Choose a branch?"); f.ports[0].finish("decision needed"); await settle(f, "orca");
   const question_id = (await call("agent_read", { agent: "orca" })).agents[0].question_id;
@@ -975,7 +1001,6 @@ test("Off keeps pending question identity inspectable but hides and rejects new 
     assert.equal(observed.workers_disabled, true); assert.equal(observed.agents[0].question_id, question_id);
     assert.equal(observed.agents[0].has_question, true);
   }
-  assert.match(tool("agent_answer").description, /workers_disabled.*ask the user to enable delegation first/);
   const args = { agent: "orca", question_id, answer: "main" };
   await assert.rejects(call("agent_answer", args, "off-answer"), (error) => {
     assert(code("WORKERS_DISABLED")(error));
@@ -1002,15 +1027,15 @@ test("spawn returns a whole question and explicit answer continues it; UI failur
   const asking = await first, question_id = asking.agents[0].question_id;
   assert.match(question_id, /^q_[0-9a-f]{32}$/);
   assert.deepEqual(asking, { action: { type: "agent_spawn", agent: "orca", task: 1 }, reason: "question",
-    agents: [{ agent: "orca", task: 1, status: "needs_input", has_question: true, question_id, question, result: "need an answer" }], alerts_pending: 0, finished_pending: 0 });
+    agents: [{ agent: "orca", task: 1, status: "needs_input", label: "task", has_question: true, question_id, question, result: "need an answer" }] });
   const unsent = await call("agent_send", send("orca", { message: "not an answer" }), "no-implicit-answer");
   assert.deepEqual(unsent.action, { type: "agent_send", agent: "orca", task: 1, delivery: "not_delivered" });
   assert.equal(unsent.agents[0].question_id, question_id); assert.equal(f.controller.stats().runs, 1);
   const args = { agent: "orca", question_id, answer: "answer", wait_ms: 300000 };
   const next = call("agent_answer", args, "answer");
   await until(() => f.ports[0].calls.length === 2); f.ports[0].finish("accepted answer");
-  assert.deepEqual(await next, { action: { type: "agent_answer", agent: "orca", task: 2 }, reason: "done",
-    agents: [{ agent: "orca", task: 2, status: "completed", result: "accepted answer" }], alerts_pending: 0, finished_pending: 0 });
+  assert.deepEqual(await next, { action: { type: "agent_answer", agent: "orca", task: 2 },
+    agents: [{ agent: "orca", task: 2, status: "completed", label: "task", result: "accepted answer" }] });
   assert.equal(accepted.length, 2);
   assert.equal((await call("agent_answer", { ...args, wait_ms: 1 }, "answer")).agents[0].result, "accepted answer");
   assert.equal(f.ports[0].calls.length, 2);
@@ -1031,11 +1056,11 @@ test("accepted waits neither hold admission nor cancel workers on timeout or par
   assert.equal(accepted.length, 2, "another delegate is not behind the first wait");
   abort.abort();
   assert.deepEqual(await first, { action: { type: "agent_spawn", agent: "orca", task: 1 }, reason: "aborted",
-    agents: [{ agent: "orca", task: 1, status: "running", result: "" }], pending: ["orca"], alerts_pending: 0, finished_pending: 0 });
+    agents: [{ agent: "orca", task: 1, status: "running", label: "task" }] });
   assert.equal(f.ports[0].stopped, 0); assert.equal(viewOf(f, "peer").status, "running");
   assert.deepEqual(await call("agent_spawn", create({ wait_ms: 1 }), "held"), {
     action: { type: "agent_spawn", agent: "orca", task: 1 }, reason: "timeout",
-    agents: [{ agent: "orca", task: 1, status: "running", result: "" }], pending: ["orca"], alerts_pending: 0, finished_pending: 0 });
+    agents: [{ agent: "orca", task: 1, status: "running", label: "task" }] });
   f.ports[0].finish("first done"); await settle(f, "orca");
   const reuseAbort = new AbortController();
   const reused = call("agent_run", run("orca", { prompt: "next", wait_ms: 300000 }), "next", undefined, reuseAbort.signal);
@@ -1067,18 +1092,21 @@ test("alerts wake model waits while work continues; FIFO budget leaves unshown a
   f.ports[0].callbacks.alert(first);
   const reply = await waiting;
   assert.equal(reply.reason, "alert"); assert.equal(reply.alerts[0].message, first);
-  assert.deepEqual(reply.pending, agents); assert.equal(viewOf(f, "p0").status, "running");
+  assert.equal(Object.hasOwn(reply, "pending"), false);
+  assert.deepEqual(reply.agents.map(({ agent, status }) => [agent, status]), agents.map((agent) => [agent, "running"]));
+  assert.equal(viewOf(f, "p0").status, "running");
   for (let index = 0; index < 16; index++) f.ports[0].callbacks.alert(`${index}: ${"甲🚀".repeat(2000)}`);
   assert.throws(() => f.ports[0].callbacks.alert("over quota"), { code: "ALERT_QUEUE_FULL" });
   f.ports[0].finish("x".repeat(4000)); await settle(f, "p0");
   const next = await call("agent_wait", { agents, mode: "any" }, "done");
-  assert.equal(next.reason, "done"); assert.deepEqual(next.pending, agents.slice(1));
+  assert.equal(Object.hasOwn(next, "reason"), false); assert.equal(Object.hasOwn(next, "pending"), false);
+  assert.deepEqual(next.agents.slice(1).map(({ agent, status }) => [agent, status]), agents.slice(1).map((agent) => [agent, "running"]));
   assert.equal(next.alerts.length, 2); assert.equal(next.alerts_pending, 14);
   assert.deepEqual(next.alerts.map((alert) => alert.message.slice(0, 3)), ["0: ", "1: "]);
   assert.equal(next.agents[0].result.length, 4000); assert.equal(next.agents[0].next_cursor, undefined);
   assert.equal(next.agents[0].progress, undefined); assert.equal(next.progress_omitted, undefined);
   const again = await call("agent_wait", { agents, mode: "any" }, "again");
-  assert.equal(again.reason, "done"); assert.match(again.alerts[0].message, /^2: /);
+  assert.equal(Object.hasOwn(again, "reason"), false); assert.match(again.alerts[0].message, /^2: /);
   assert.equal(viewOf(f, "p0").pending_messages, again.alerts_pending);
 });
 
@@ -1165,34 +1193,31 @@ test("thinking incompatibility identifies inherited level and route but hides th
   });
 });
 
-test("list_agents adds per-Agent history for choosing reuse versus a new Agent", async (t) => {
-  let now = 1_000;
-  const f = await fixture(t, { controller: { clock: { wall: () => now, mono: () => performance.now() } } }), { call } = toolsFor(f);
+test("agent_list hides per-Agent telemetry while original Run views retain observed context", async (t) => {
+  const f = await fixture(t), { call } = toolsFor(f);
   await call("agent_spawn", create({ label: "Port tests" }));
   await until(() => f.ports[0]?.streaming);
   f.ports[0].callbacks.runtime({ activity: "tool", context: { tokens: 50_000, context_window: 200_000 } });
-  f.ports[0].callbacks.touched("src/a.ts");
   f.ports[0].finish(); await settle(f, "orca");
+  const original = runOf(f, "orca");
   await call("agent_run", run("orca", { prompt: "more", label: "Fix flaky test" }), "second");
   await until(() => f.ports[0].calls.length === 2); f.ports[0].finish(); await settle(f, "orca");
-  now += 7_000;
-  // Idle time, spend and the run count are known to the host but never listed.
   assert.deepEqual((await call("agent_list", {})).agents, [{ agent: "orca", profile: "worker", reasoning_difficulty: 3,
-    label: "Fix flaky test", task: 2, status: "completed", earlier_labels: ["Port tests"], context_tokens: 50_000,
-    touched: ["src/a.ts"] }]);
-  const summary = f.controller.agentSummary(f.controller.findAgent("orca").agent_id);
-  assert.deepEqual([summary.runs, summary.observed_cost, summary.idle_ms], [2, 0, 7_000]);
+    label: "Fix flaky test", task: 2, status: "completed" }]);
+  assert.equal(f.controller.view(original).description, "Port tests");
+  assert.equal(f.controller.view(original).runtime.context.tokens, 50_000);
 });
 
-test("only an idle Agent's latest task shows context_tokens, the size its next task re-reads", async (t) => {
+test("model reads omit context_tokens across reuse, history and kill while core context stays real", async (t) => {
   const f = await fixture(t), { call } = toolsFor(f);
   const row = (reply) => reply.agents.find((entry) => entry.agent === "orca");
   await call("agent_spawn", create()); await until(() => f.ports[0]?.streaming);
   f.ports[0].callbacks.runtime({ activity: "tool", context: { tokens: 50_000, context_window: 1_000_000 } });
-  assert.equal(row(await call("agent_read", { agent: "orca" })).context_tokens, undefined, "a running task is not a reuse decision yet");
+  assert.equal(row(await call("agent_read", { agent: "orca" })).context_tokens, undefined, "context telemetry stays host-side while running");
   f.ports[0].finish("first"); await settle(f, "orca");
   const done = row(await call("agent_wait", { agents: ["orca"], wait_ms: 0 }));
-  assert.equal(done.status, "completed"); assert.equal(done.context_tokens, 50_000, "absolute tokens, not a share of a large window");
+  assert.equal(done.status, "completed"); assert.equal(Object.hasOwn(done, "context_tokens"), false);
+  assert.equal(viewOf(f, "orca").runtime.context.tokens, 50_000);
   const { next_cursor: cursor } = row(await call("agent_read", { agent: "orca", max_chars: 2 }, "page"));
   assert.equal(typeof cursor, "string");
   const next = await call("agent_run", run("orca", { prompt: "follow-up" }), "follow-up");
@@ -1200,11 +1225,12 @@ test("only an idle Agent's latest task shows context_tokens, the size its next t
   await until(() => f.ports[0].calls.length === 2);
   f.ports[0].callbacks.runtime({ activity: "generating", context: { tokens: 80_000, context_window: 1_000_000 } });
   f.ports[0].finish("second"); await settle(f, "orca");
-  assert.equal(row(await call("agent_read", { agent: "orca" })).context_tokens, 80_000);
+  assert.equal(Object.hasOwn(row(await call("agent_read", { agent: "orca" })), "context_tokens"), false);
+  assert.equal(viewOf(f, "orca").runtime.context.tokens, 80_000);
   const older = row(await call("agent_read", { agent: "orca", cursor }, "older"));
-  assert.equal(older.task, 1); assert.equal(older.context_tokens, undefined, "an older task's row does not describe the Agent's current size");
+  assert.equal(older.task, 1); assert.equal(older.context_tokens, undefined, "historical reads also omit context telemetry");
   await call("agent_kill", { agent: "orca" });
-  assert.equal(row(await call("agent_read", { agent: "orca" }, "killed")).context_tokens, undefined, "a killed Agent cannot be reused");
+  assert.equal(row(await call("agent_read", { agent: "orca" }, "killed")).context_tokens, undefined, "kill does not make context telemetry public");
 });
 
 test("an Agent with a pending question shows no context_tokens: only agent_answer can continue it", async (t) => {
@@ -1237,8 +1263,8 @@ test("only observation replies present finished tasks; roster, interrupt and kil
   f.ports[0].finish("A done"); await settle(f, "a");
   const sent = await call("agent_send", send("b", { message: "hurry" }));
   assert.deepEqual(sent.action, { type: "agent_send", agent: "b", task: 1, delivery: "steered" });
-  assert.deepEqual(sent.agents, [{ agent: "b", task: 1, status: "running", result: "" }]);
-  assert.deepEqual(sent.finished, [{ agent: "a", task: 1, status: "completed" }]);
+  assert.deepEqual(sent.agents, [{ agent: "b", task: 1, status: "running", label: "task" }]);
+  assert.deepEqual(sent.finished, [{ agent: "a", task: 1, status: "completed", label: "task" }]);
   assert.equal((await call("agent_send", send("b", { message: "again" }), "m2")).finished, undefined, "reported once");
   f.ports[1].finish("B done"); await settle(f, "b");
   assert.equal((await call("agent_wait", { agents: ["b"] })).finished, undefined, "a bound terminal task is not repeated as a reminder");
@@ -1250,7 +1276,7 @@ test("only observation replies present finished tasks; roster, interrupt and kil
   assert.equal((await call("agent_kill", { agent: "c" })).finished, undefined);
   assert.equal(original.finished_presented, false); assert.equal(viewOf(f, "c").pending_messages, 1);
   const read = await call("agent_read", { agent: "a" });
-  assert.deepEqual(read.finished, [{ agent: "c", task: 1, status: "completed", unavailable: true }]);
+  assert.deepEqual(read.finished, [{ agent: "c", task: 1, status: "completed", unavailable: true, label: "task" }]);
   assert.equal(original.finished_presented, true); assert.equal(viewOf(f, "c").pending_messages, 1, "read scopes alerts to a different Agent");
   const alert = await call("agent_wait", {});
   assert.equal(alert.reason, "alert"); assert.equal(alert.alerts[0].agent, "c");
@@ -1265,15 +1291,16 @@ test("an omitted label is the first nonblank line of the instructions", async (t
   await call("agent_run", { agent: "orca", prompt: "Now update the docs.\nKeep it short.", builds_on: "the parser fix" }, "run");
   await until(() => f.ports[0].calls.length === 2); f.ports[0].finish(); await settle(f, "orca");
   const [row] = (await call("agent_list", {})).agents;
-  assert.equal(row.label, "Now update the docs."); assert.deepEqual(row.earlier_labels, ["Fix the parser"]);
+  assert.equal(row.label, "Now update the docs."); assert.equal(Object.hasOwn(row, "earlier_labels"), false);
+  assert.equal((await call("agent_read", { agent: "orca", task: 1 })).agents[0].label, "Fix the parser");
 });
 
 test("after queues a follow-up with the earlier result and reports what it waits for", async (t) => {
   const f = await fixture(t), { call } = toolsFor(f);
   await call("agent_spawn", create({ agent: "author", label: "write" }), "author");
   const reviewer = await call("agent_spawn", create({ agent: "reviewer", prompt: "Review it.", after: ["author"] }), "reviewer");
-  assert.deepEqual(reviewer, { action: { type: "agent_spawn", agent: "reviewer", task: 1 }, reason: "snapshot",
-    agents: [{ agent: "reviewer", task: 1, status: "queued", wait: "dependencies", result: "" }], pending: ["reviewer"], alerts_pending: 0, finished_pending: 0 });
+  assert.deepEqual(reviewer, { action: { type: "agent_spawn", agent: "reviewer", task: 1 },
+    agents: [{ agent: "reviewer", task: 1, status: "queued", label: "task", wait: "dependencies" }] });
   assert.deepEqual((await call("agent_list", {})).agents.find((row) => row.agent === "reviewer").waiting_for, ["author"]);
   await until(() => f.ports[0]?.streaming); f.ports[0].finish("diff summary"); await settle(f, "author");
   await until(() => f.ports[1]?.streaming);
@@ -1282,7 +1309,7 @@ test("after queues a follow-up with the earlier result and reports what it waits
   f.ports[1].finish(); await settle(f, "reviewer");
 });
 
-test("after rejects a task that already ended without completing; an accepted answer's task can be awaited", async (t) => {
+test("after rejects a task that already ended without completing; after agent_answer returns its task can be awaited", async (t) => {
   const f = await fixture(t, { controller: { concurrency: 2 } }), { call } = toolsFor(f);
   await call("agent_spawn", create({ agent: "author", label: "write" }), "author");
   await call("agent_spawn", create({ agent: "breaker" }), "breaker");
@@ -1290,7 +1317,7 @@ test("after rejects a task that already ended without completing; an accepted an
   f.ports[0].callbacks.question("Which API?"); f.ports[0].finish("need an API"); await settle(f, "author");
   f.ports[1].finish("broken", "error", "boom"); await settle(f, "breaker");
   for (const [dependency, reason, resolution] of [
-    ["author", "needs_input", /ended with a question.*agent_answer first; once that answer is accepted, after: \["author"\] waits for the answering task/],
+    ["author", "needs_input", /ended with a question.*agent_answer first; wait until agent_answer returns, then after: \["author"\] waits for the answering task/],
     ["breaker", "failed", /latest task ended failed, so it cannot complete. Omit after/]]) {
     await assert.rejects(call("agent_spawn", create({ agent: "reviewer", after: [dependency] }), `reviewer-${dependency}`), (error) => {
       const result = JSON.parse(error.message).error;
@@ -1494,7 +1521,7 @@ for (const name of ["agent_run", "agent_send"]) test(`a context replaced while $
   assert.equal(f.ports[0].calls.length, 1, "no task was started by the stale call");
 });
 
-test("a retained failed model outcome has no recovery_hint until async finalization truly settles", async (t) => {
+test("failed model outcomes remain finishing until finalization and never expose recovery_hint", async (t) => {
   const finishGate = deferred(); let finalizationBlocked = false;
   t.after(() => finishGate.resolve());
   const f = await fixture(t, { history: async (point) => {
@@ -1504,9 +1531,10 @@ test("a retained failed model outcome has no recovery_hint until async finalizat
   await call("agent_spawn", create(), "finishing-error"); await until(() => f.ports[0]?.streaming);
   f.ports[0].finish("retained artifacts", "error", "synthetic provider failure", "error");
   await until(() => finalizationBlocked);
-  const finishing = viewOf(f, "orca"), hint = modelRecoveryHint(finishing.outcome);
+  const finishing = viewOf(f, "orca");
   assert.equal(finishing.execution_exited, true); assert.equal(finishing.finalization_pending, true);
-  assert.equal(finishing.outcome.status, "failed"); assert.equal(typeof hint, "string");
+  assert.equal(finishing.outcome.status, "failed"); assert.equal(finishing.outcome.reason, "execution_error");
+  assert.equal(finishing.outcome.model_stop_reason, "error");
   for (const name of ["agent_read", "agent_list", "agent_interrupt"]) {
     const reply = await call(name, name === "agent_list" ? {} : { agent: "orca" });
     const projected = name === "agent_interrupt" ? reply : reply.agents[0];
@@ -1522,11 +1550,11 @@ test("a retained failed model outcome has no recovery_hint until async finalizat
   for (const name of ["agent_read", "agent_list", "agent_interrupt"]) {
     const reply = await call(name, name === "agent_list" ? {} : { agent: "orca" });
     const projected = name === "agent_interrupt" ? reply : reply.agents[0];
-    assert.equal(projected.status, "failed"); assert.equal(projected.recovery_hint, hint, name);
+    assert.equal(projected.status, "failed"); assert.equal(Object.hasOwn(projected, "recovery_hint"), false, name);
   }
 });
 
-test("failed model errors project the same conditional hint in wait/read/list/interrupt without extra publication state", async (t) => {
+test("failed model errors retain diagnostics but omit recovery_hint without extra publication state", async (t) => {
   const f = await fixture(t), { call } = toolsFor(f);
   const started = await call("agent_spawn", create(), "recoverable-error");
   assert.equal(started.agents[0].recovery_hint, undefined);
@@ -1535,29 +1563,29 @@ test("failed model errors project the same conditional hint in wait/read/list/in
   const raw = "fixture/controlled RAW_PROVIDER_DETAIL quota disabled";
   f.ports[0].finish("artifact path and handoff", "error", raw, "error"); await settle(f, "orca");
   const original = f.controller.runs.get(runOf(f, "orca")), before = structuredClone(original.record);
-  const events = structuredClone(f.events), hint = modelRecoveryHint(original.record.outcome);
-  assert.equal(typeof hint, "string"); assert.doesNotMatch(hint, /fixture|controlled|RAW_PROVIDER_DETAIL|quota|disabled/);
+  const events = structuredClone(f.events);
+  assert.equal(original.record.outcome.error, raw); assert.equal(original.record.outcome.model_stop_reason, "error");
   assert.equal(original.finished_presented, false); assert.equal(viewOf(f, "orca").pending_messages, 1);
   for (const projected of [(await call("agent_list", {})).agents[0], await call("agent_interrupt", { agent: "orca" })]) {
     assert.equal(projected.status, "failed"); assert.equal(projected.reason, "execution_error");
-    assert.equal(projected.recovery_hint, hint); assert.equal(projected.error, raw, "raw error remains a separate untrusted diagnostic");
+    assert.equal(Object.hasOwn(projected, "recovery_hint"), false); assert.equal(projected.error, raw, "raw error remains a separate untrusted diagnostic");
     assert.equal(projected.unavailable, undefined, "a model error is not an Agent availability verdict");
   }
   assert.deepEqual(original.record, before); assert.deepEqual(f.events, events);
-  assert.equal(Object.hasOwn(original.record, "recovery_hint"), false, "the hint is derived, never Run state");
+  assert.equal(Object.hasOwn(original.record, "recovery_hint"), false, "public omission must not invent retained hint state");
   assert.equal(original.finished_presented, false); assert.equal(viewOf(f, "orca").pending_messages, 1,
     "independent projections consume neither alerts nor finished reminders");
   const waiting = await call("agent_wait", { agents: ["orca"], wait_ms: 0 });
-  assert.equal(waiting.reason, "task_issue"); assert.equal(waiting.agents[0].recovery_hint, hint);
+  assert.equal(waiting.reason, "task_issue"); assert.equal(Object.hasOwn(waiting.agents[0], "recovery_hint"), false);
   assert.equal(waiting.alerts[0].message, "retain this artifact pointer");
   assert.equal(original.finished_presented, true); assert.equal(viewOf(f, "orca").pending_messages, 0);
   const reading = await call("agent_read", { agent: "orca" });
-  assert.equal(reading.agents[0].recovery_hint, hint); assert.equal(reading.alerts, undefined);
+  assert.equal(Object.hasOwn(reading.agents[0], "recovery_hint"), false); assert.equal(reading.alerts, undefined);
   assert.deepEqual(original.record, before, "publication changes presentation bits, not retained outcome or model state");
   assert.equal(f.ports[0].calls.length, 1); assert.equal(f.ports[0].stopped, 0);
 });
 
-test("roster and communication deduplicate shared recovery only on the first qualifying task, afresh for every response", async (t) => {
+test("roster and communication omit recovery hints for every failed task on repeated observations", async (t) => {
   const f = await fixture(t), { call } = toolsFor(f);
   for (const [index, agent] of ["plain", "first", "second"].entries()) {
     await call("agent_spawn", create({ agent }), `dedup-${agent}`);
@@ -1565,32 +1593,32 @@ test("roster and communication deduplicate shared recovery only on the first qua
     f.ports[index].finish("artifacts", index === 0 ? "success" : "error", index === 0 ? undefined : "controlled failure", index === 0 ? "stop" : "error");
     await settle(f, agent);
   }
-  const hint = modelRecoveryHint(viewOf(f, "first").outcome);
+  assert.equal(viewOf(f, "first").outcome.reason, "execution_error");
+  assert.equal(viewOf(f, "second").outcome.reason, "execution_error");
   for (let attempt = 0; attempt < 2; attempt++) {
     const roster = await call("agent_list", {});
-    assert.deepEqual(roster.agents.map((entry) => entry.recovery_hint), [undefined, hint, undefined]);
+    assert(roster.agents.every((entry) => !Object.hasOwn(entry, "recovery_hint")));
     assert.equal(roster.response_limit_reached, undefined);
     const waiting = await call("agent_wait", { agents: ["plain", "second", "first"], wait_ms: 0 });
-    assert.deepEqual(waiting.agents.map((entry) => entry.recovery_hint), [undefined, hint, undefined]);
-    assert.equal(waiting.agents[1].agent, "second", "first qualifying bound task, not a name/status guess");
-    assert.equal(waiting.response_limit_reached, undefined, "intentional dedup is not packing pressure");
+    assert(waiting.agents.every((entry) => !Object.hasOwn(entry, "recovery_hint")));
+    assert.equal(waiting.agents[1].agent, "second", "explicit bound order remains unchanged");
+    assert.equal(waiting.response_limit_reached, undefined, "omitting retired hints is not packing pressure");
   }
-  assert.equal((await call("agent_read", { agent: "first" })).agents[0].recovery_hint, hint,
-    "an independently read task remains qualified despite earlier roster dedup");
+  assert.equal(Object.hasOwn((await call("agent_read", { agent: "first" })).agents[0], "recovery_hint"), false);
 });
 
-for (const quarantine of [false, true]) test(`fixed-model guidance remains conditional on unavailable retained history (quarantine=${quarantine})`, async (t) => {
+for (const quarantine of [false, true]) test(`unavailable retained history keeps lifecycle facts but omits model recovery hints (quarantine=${quarantine})`, async (t) => {
   const f = await fixture(t), { call } = toolsFor(f);
   await call("agent_spawn", create(), "unavailable-hint"); await until(() => f.ports[0]?.streaming);
   if (quarantine) f.ports[0].clearInputs = () => { throw new Error("controlled input cleanup failure"); };
   f.ports[0].finish("retained artifacts", "error", "controlled failure", "error"); await settle(f, "orca");
   if (!quarantine) await call("agent_kill", { agent: "orca" });
-  const view = viewOf(f, "orca"), hint = modelRecoveryHint(view.outcome);
+  const view = viewOf(f, "orca");
   assert.equal(view.status, "failed"); assert.equal(view.phase, "settled"); assert.equal(view.execution_exited, true);
   assert.equal(view.finalization_pending, false); assert.equal(view.resumable, false);
   const read = await call("agent_read", { agent: "orca" });
-  assert.equal(read.agents[0].unavailable, true); assert.equal(read.agents[0].recovery_hint, hint);
-  assert.doesNotMatch(hint, /agent_run|agent_answer/); assert.match(hint, /explicitly spawning a fresh Agent/);
+  assert.equal(read.agents[0].unavailable, true); assert.equal(Object.hasOwn(read.agents[0], "recovery_hint"), false);
+  assert.equal(view.outcome.reason, "execution_error"); assert.equal(view.outcome.model_stop_reason, "error");
   await assert.rejects(call("agent_run", run("orca"), "cannot-reuse"), code("AGENT_UNAVAILABLE"));
   for (const partial of [{ phase: undefined }, { phase: "finalizing" }, { execution_exited: undefined },
     { execution_exited: false }, { finalization_pending: true }])
@@ -1610,11 +1638,11 @@ test("routing changes before resume, replay and answer never re-resolve or migra
   await call("agent_spawn", spawnArgs, "pinned-spawn"); await until(() => f.ports[0]?.streaming);
   const bound = structuredClone(routed(f, "orca")), session = f.ports[0].session_id;
   f.ports[0].finish("first artifacts", "error", "synthetic provider error", "error"); await settle(f, "orca");
-  const hint = modelRecoveryHint(viewOf(f, "orca").outcome);
+  assert.equal(viewOf(f, "orca").outcome.reason, "execution_error");
   state.preset = preset("changed", "missing/replacement", "v2"); state.catalog = []; state.thinking = "high";
   admission.enabled = false; admission.revision++;
   const replay = await call("agent_spawn", spawnArgs, "pinned-spawn");
-  assert.equal(replay.workers_disabled, true); assert.equal(replay.agents[0].task, 1); assert.equal(replay.agents[0].recovery_hint, hint);
+  assert.equal(replay.workers_disabled, true); assert.equal(replay.agents[0].task, 1); assert.equal(Object.hasOwn(replay.agents[0], "recovery_hint"), false);
   assert.deepEqual(routed(f, "orca"), bound); assert.equal(f.ports[0].calls.length, 1);
   await assert.rejects(call("agent_run", run("orca"), "off-new-run"), code("WORKERS_DISABLED"));
   admission.enabled = true; admission.revision++;
@@ -1639,7 +1667,7 @@ test("routing changes before resume, replay and answer never re-resolve or migra
   admission.enabled = false; admission.revision++;
   const answerReplay = await call("agent_answer", answerArgs, "pinned-answer");
   assert.equal(answerReplay.workers_disabled, true); assert.deepEqual(answerReplay.action, answered.action);
-  assert.equal(answerReplay.agents[0].recovery_hint, hint);
+  assert.equal(Object.hasOwn(answerReplay.agents[0], "recovery_hint"), false);
   const runReplay = await call("agent_run", runArgs, "pinned-run");
   assert.equal(runReplay.agents[0].task, 2); assert.equal(runReplay.agents[0].status, "needs_input");
   assert.equal(runReplay.agents[0].recovery_hint, undefined, "replay projects its original outcome, not the latest task's failure");
@@ -1698,48 +1726,235 @@ test("an interrupted answer that never started leaves the question answerable th
   f.ports[0].finish("done"); await settle(f, "orca");
 });
 
-test("a worktree Agent cannot declare tree before its workspace exists; an initialized follow-up can", async (t) => {
+test("a fitting nonempty independent roster stops the optional-field loop after its first size check", async (t) => {
+  const f = await fixture(t), { call, tool, ctx } = toolsFor(f);
+  await call("agent_spawn", create()); await until(() => f.ports[0]?.streaming);
+  const stringify = JSON.stringify; let inner = 0, outer = 0, raw;
+  t.mock.method(JSON, "stringify", (value, ...args) => {
+    if (value?.agents?.[0]?.agent === "orca") inner++;
+    if (value?.content?.[0]?.text?.includes('"agents"')) outer++;
+    return stringify(value, ...args);
+  });
+  try { raw = await tool("agent_list").execute("serializer-count", {}, undefined, undefined, ctx); }
+  finally { t.mock.restoreAll(); }
+  assert.equal(inner, 3, "one fitting probe, the final guard, and final serialization");
+  assert.equal(outer, 2, "both byte checks include the outer JSON layer");
+  assert.equal(JSON.parse(raw.content[0].text).agents[0].label, "task");
+  assert.equal(Object.hasOwn(JSON.parse(raw.content[0].text), "response_limit_reached"), false);
+});
+
+test("independent roster pressure drops optional fields in order, preserving every row and pending control", async (t) => {
+  const f = await fixture(t), { call } = toolsFor(f);
+  await call("agent_spawn", create()); await until(() => f.ports[0]?.streaming);
+  f.ports[0].callbacks.alert("independent serialization is not an ACK");
+  const original = viewOf(f, "orca"), huge = "/" + "\0".repeat(20000);
+  // Synthetic read-only projection seam, not mutation of retained Runs or a
+  // claim that a queued task has executed. The real serializer does all fitting.
+  const views = Array.from({ length: 16 }, (_, index) => ({ ...original,
+    name: `worker-${index}`, run_id: `synthetic-${index}`, task: 1, status: "queued", queued_for: "dependencies",
+    isolation: "worktree", workspace: index ? undefined : { mode: "worktree", cwd: huge, source_cwd: "/tmp", base_commit: "a".repeat(40) },
+    recovery: undefined, retained_paths: undefined, execution_exited: false, finalization_pending: false,
+    description: "\0".repeat(120), cancellation_source: "human", blocked_by: [],
+    owner_error: "\0".repeat(512), unavailable_reason: "\0".repeat(512),
+    outcome: { ...original.outcome, error: "\0".repeat(512) },
+  }));
+  // The first row also has an observed retained-path field, tested independently
+  // of the pending rows so no row invents pending alongside a recovery fact.
+  views[0].recovery = { mode: "worktree", state: "checkout_ready", source_cwd: "/tmp", allocated_path: huge };
+  const byId = new Map(views.map(view => [view.run_id, view]));
+  t.mock.method(f.controller, "list", () => views);
+  t.mock.method(f.controller, "view", id => byId.get(id));
+  t.mock.method(f.controller, "findAgent", () => undefined);
+  let reply;
+  try { reply = await call("agent_list", {}); }
+  finally { t.mock.restoreAll(); }
+  assert(Buffer.byteLength(JSON.stringify({ content: [{ type: "text", text: JSON.stringify(reply) }] })) <= 65536);
+  assert.equal(reply.response_limit_reached, true); assert.equal(reply.agents.length, 16);
+  for (const [index, row] of reply.agents.entries()) {
+    assert.equal(row.agent, `worker-${index}`); assert.equal(row.task, 1); assert.equal(row.status, "queued");
+    assert.equal(row.wait, "dependencies"); assert.equal(row.workspace_pending, index ? true : undefined);
+    assert.equal(row.workspace, undefined); assert.equal(row.retained_paths, undefined);
+    assert.equal(row.label, "\0".repeat(120)); assert.equal(row.cancellation_source, "human");
+  }
+  assert(reply.agents.some(row => row.error === undefined), "bounded diagnostics yield before labels");
+  assert.equal(viewOf(f, "orca").pending_messages, 1);
+  assert.equal(f.controller.runs.get(original.run_id).finished_presented, false);
+});
+
+test("independent final guard rejects unrepresentable required facts instead of deleting controls", async (t) => {
+  const f = await fixture(t), { call } = toolsFor(f);
+  await call("agent_spawn", create()); await until(() => f.ports[0]?.streaming);
+  f.ports[0].callbacks.alert("must stay pending");
+  const original = viewOf(f, "orca");
+  // Deliberately impossible projection: exercise the final guard, not admission.
+  const oversized = { ...original, blocked_by: Array(20000).fill(original.run_id) };
+  t.mock.method(f.controller, "view", () => oversized);
+  try { await assert.rejects(call("agent_list", {}), code("COMMUNICATION_REPLY_TOO_LARGE")); }
+  finally { t.mock.restoreAll(); }
+  assert.equal(viewOf(f, "orca").pending_messages, 1);
+  assert.equal(f.controller.runs.get(original.run_id).finished_presented, false);
+});
+
+test("wait/read/list alone expose an original unbound worktree task's pending marker", async (t) => {
+  const gate = deferred(), ports = [];
+  const f = await fixture(t, { controller: { createSession: async () => {
+    await gate.promise;
+    const port = new FakePort(); port.autoStop = true;
+    port.workspace = { mode: "worktree", cwd: "/tmp/ready-tree", source_cwd: "/tmp", base_commit: "a".repeat(40) };
+    ports.push(port); return port;
+  } }, beforeShutdown: () => { gate.resolve(); for (const port of ports) if (port.streaming) port.finish("cleanup", "aborted"); } });
+  const { call } = toolsFor(f);
+  const spawned = await call("agent_spawn", create({ workspace: "worktree" }));
+  assert.equal(Object.hasOwn(spawned.agents[0], "workspace_pending"), false);
+  for (const [name, args] of [["agent_list", {}], ["agent_read", { agent: "orca" }], ["agent_wait", { agents: ["orca"], wait_ms: 0 }]]) {
+    const row = (await call(name, args)).agents[0];
+    assert.equal(row.workspace_pending, true); assert.equal(row.workspace, undefined); assert.equal(row.retained_paths, undefined);
+  }
+  const sent = await call("agent_send", send("orca"));
+  assert.equal(Object.hasOwn(sent.agents[0], "workspace_pending"), false);
+  const interrupted = await call("agent_interrupt", { agent: "orca" });
+  assert.equal(Object.hasOwn(interrupted, "workspace_pending"), false);
+  gate.resolve(); await settle(f, "orca");
+  const stopped = (await call("agent_read", { agent: "orca" })).agents[0];
+  assert.equal(stopped.status, "interrupted"); assert.equal(Object.hasOwn(stopped, "workspace_pending"), false);
+  assert.equal(Object.hasOwn(await call("agent_kill", { agent: "orca" }), "workspace_pending"), false);
+});
+
+test("one worktree spawn declares relative tree before initialization; inspectors expose binding, not actions or kill", async (t) => {
   const workspace = { mode: "worktree", cwd: "/tmp/private-worktree/repo", source_cwd: "/tmp", base_commit: "a".repeat(40) };
   const port = new FakePort(); port.workspace = workspace;
-  let creates = 0, prepares = 0;
+  port.workspace_details = { checkout_root: "/tmp/private-worktree", recovery_manifest: "/tmp/private-worktree/recovery.jsonl" };
+  let creates = 0, prepares = 0, observedTree;
   const dispatch = { prepare(declaration, context) {
       prepares++;
-      const path = (word) => ({ path: resolve(context.cwd, word), canonical: resolve(context.cwd, word) });
+      const path = (word) => context.unbound_worktree && !isAbsolute(word)
+        ? { kind: "unbound_worktree", agent_id: context.unbound_worktree, rel: normalize(word) }
+        : { path: resolve(context.cwd, word), canonical: resolve(context.cwd, word) };
       return { declaration: structuredClone(declaration), inputs: [], ownership: [],
         ...(declaration.tree === undefined ? {} : { tree: path(declaration.tree) }) };
-    }, async start() { return {}; } };
+    }, async start(prepared) { observedTree = prepared.tree.path; return {}; } };
   const f = await fixture(t, { controller: { createSession: async () => { creates++; return port; }, dispatch },
     beforeShutdown: () => { if (port.streaming) port.finish("cleanup", "aborted"); } });
   const { tool, call } = toolsFor(f);
-  const treeError = (error) => {
-    const result = JSON.parse(error.message).error;
-    assert.equal(result.code, "DISPATCH_WORKTREE_UNINITIALIZED");
-    assert.equal(result.parameter, "tree");
-    assert.equal(result.path, "build");
-    assert.equal(result.requested, "build");
-    assert.equal(result.agent, undefined, "a pre-effect spawn rejection names no Agent");
-    assert.equal(result.resolution, WORKTREE_TREE_RESOLUTION);
-    return true;
-  };
-  // The public spawn arguments carry workspace mode, so the same admission
-  // constraint rejects them pre-effect in prepareArguments and in execute.
-  assert.throws(() => tool("agent_spawn").prepareArguments(create({ agent: "wren", workspace: "worktree", dispatch: { tree: "build" } })), treeError);
-  await assert.rejects(call("agent_spawn", create({ agent: "wren", workspace: "worktree", dispatch: { tree: "build" } }), "tree-spawn"), treeError);
-  assert.equal(f.controller.findAgent("wren"), undefined, "a rejected spawn takes no name");
-  assert.equal(f.controller.stats().runs, 0, "no task was allocated");
-  assert.equal(f.controller.claims.size, 0);
-  assert.equal(creates, 0, "no session or worktree was created");
-  assert.equal(prepares, 0, "dispatch.prepare never ran");
-  // The first task starts without tree and confirms the actual workspace.
-  await call("agent_spawn", create({ agent: "wren", workspace: "worktree" }), "first-spawn");
+  const args = create({ agent: "wren", workspace: "worktree", dispatch: { tree: "build" } });
+  assert.deepEqual(tool("agent_spawn").prepareArguments(args), args);
+  assert.equal(creates, 0, "argument preparation allocates no session/worktree");
+  assert.equal(prepares, 0, "schema preparation does no dispatch IO");
+  const first = await call("agent_spawn", args, "first-spawn");
+  assert.deepEqual(first.action, { type: "agent_spawn", agent: "wren", task: 1 });
+  assert.equal(Object.hasOwn(first.agents[0], "workspace"), false);
   await until(() => port.streaming);
   assert.deepEqual(viewOf(f, "wren").workspace, workspace);
+  const expectedWorkspace = { ...workspace, checkout_root: port.workspace_details.checkout_root };
+  for (const [name, args] of [["agent_list", {}], ["agent_read", { agent: "wren" }], ["agent_wait", { agents: ["wren"], wait_ms: 0 }]]) {
+    const row = (await call(name, args)).agents[0];
+    assert.deepEqual(row.workspace, expectedWorkspace);
+    assert.equal(Object.hasOwn(row, "recovery"), false);
+    assert.equal(Object.hasOwn(row.workspace, "state"), false); assert.equal(Object.hasOwn(row.workspace, "recovery_manifest"), false);
+  }
   port.finish(); await settle(f, "wren");
-  // A follow-up may declare the actual absolute tree once agent_list shows it.
-  const follow = await call("agent_run", run("wren", { dispatch: { tree: `${workspace.cwd}/build` } }), "tree-followup");
+  assert.equal(observedTree, `${workspace.cwd}/build`);
+  assert(prepares >= 2, "provisional declarations are rechecked after binding");
+  // A follow-up keeps the same natural relative-path rule.
+  const follow = await call("agent_run", run("wren", { dispatch: { tree: "build" } }), "tree-followup");
   assert.deepEqual(follow.action, { type: "agent_run", agent: "wren", task: 2 });
+  assert.equal(Object.hasOwn(follow.agents[0], "workspace"), false, "normal action replies do not repeat workspace");
   await until(() => port.calls.length === 2);
   assert.equal(creates, 1, "the follow-up reuses the initialized session");
   port.finish(); await settle(f, "wren");
   assert.equal(viewOf(f, "wren").status, "completed");
+  const killed = await call("agent_kill", { agent: "wren" });
+  assert.deepEqual(killed, { agent: "wren", status: "killed", label: "task" });
+  assert.deepEqual((await call("agent_read", { agent: "wren" })).agents[0].workspace, expectedWorkspace);
+  assert.deepEqual(viewOf(f, "wren").workspace_details, port.workspace_details, "kill retains internal recovery manifest details");
+});
+
+const quickstartFlows = [...readFileSync(new URL("../../docs/agent-tools-quickstart.md", import.meta.url), "utf8")
+  .matchAll(/```json\n([\s\S]*?)\n```/g)].map(match => JSON.parse(match[1]));
+assert.equal(quickstartFlows.length, 4, "all four documented workflows have executable call examples");
+for (const [flowIndex, steps] of quickstartFlows.entries()) test(`quickstart workflow ${flowIndex + 1} uses registered tools and actual returned identities`, async (t) => {
+  const worktreePort = new FakePort(), starts = [];
+  worktreePort.autoStop = true;
+  worktreePort.workspace = { mode: "worktree", cwd: "/tmp/quickstart/repo", source_cwd: "/tmp", base_commit: "a".repeat(40) };
+  const dispatch = { prepare(declaration, context) {
+    const path = word => context.unbound_worktree && !isAbsolute(word)
+      ? { kind: "unbound_worktree", agent_id: context.unbound_worktree, rel: normalize(word) }
+      : { path: resolve(context.cwd, word), canonical: resolve(context.cwd, word) };
+    return { declaration: structuredClone(declaration), inputs: (declaration.inputs ?? []).map(path),
+      ownership: (declaration.ownership ?? []).map(path), ...(declaration.tree ? { tree: path(declaration.tree) } : {}) };
+  }, async start(prepared, context) { starts.push({ prepared, context }); return {}; } };
+  const f = await fixture(t, flowIndex === 3 ? { controller: { dispatch, createSession: async () => worktreePort },
+    beforeShutdown: () => { if (worktreePort.streaming) worktreePort.finish("cleanup", "aborted"); } } : { controller: { concurrency: 2 } });
+  const { call, tool } = toolsFor(f);
+  let questionId, cursor, firstPage, waits = 0;
+  const oldResult = "retained first-task evidence ".repeat(20);
+  for (const [stepIndex, step] of steps.entries()) {
+    const args = structuredClone(step.arguments);
+    if (args.question_id === "<INVALID_QUESTION_ID>") {
+      assert.throws(() => tool(step.tool).prepareArguments(args), code("INVALID_PARAMETERS"));
+      assert.match(questionId, /^q_[0-9a-f]{32}$/); args.question_id = questionId;
+    }
+    if (args.cursor === "<INVALID_RESULT_CURSOR>") {
+      // Cursors are opaque at schema level; runtime rejects the deliberately invalid placeholder.
+      await assert.rejects(call(step.tool, args, `invalid-cursor-${flowIndex}`), code("INVALID_CURSOR"));
+      assert.match(cursor, /^r1_/); args.cursor = cursor;
+    }
+    assert.deepEqual(tool(step.tool).prepareArguments(args), args, "examples match the actual closed schema");
+    if (step.tool === "agent_wait") {
+      waits++;
+      if (flowIndex === 0) {
+        await until(() => f.ports.length === 2 && f.ports.every(port => port.streaming));
+        f.ports[0].finish("parser findings"); f.ports[1].finish("documentation findings");
+        await settle(f, "alpha"); await settle(f, "beta");
+      } else if (flowIndex === 1 && waits === 1) {
+        await until(() => f.ports[0]?.streaming);
+        const port = f.ports[0], child = createChildTools(() => port.callbacks, { accepting: true, stopped: false });
+        const ask = child.find(item => item.name === "ask_parent");
+        assert.match(ask.description, /stop calling tools and end your turn/);
+        const receipt = await ask.execute("ask", { question: "Which format?" });
+        assert.match(receipt.content[0].text, /Stop calling tools and end your turn/);
+        await ask.execute("second-ask", { question: "Not a replacement" });
+        assert.equal(port.streaming, true, "ask records a question; it does not force suspension");
+        assert.equal(viewOf(f, "alpha").question_id, undefined, "no actionable token before settlement");
+        port.finish("waiting for the required choice"); await settle(f, "alpha");
+      } else if (flowIndex === 1) {
+        await until(() => f.ports[0].streaming);
+        assert.equal(f.ports.length, 1, "fixed after dependency has not started beta early");
+        f.ports[0].finish("compatible parser change"); await settle(f, "alpha");
+        await until(() => f.ports[1]?.streaming);
+        assert.match(f.ports[1].calls[0].prompt, /compatible parser change/, "after supplies real continuation output");
+        f.ports[1].finish("review findings"); await settle(f, "beta");
+      } else if (flowIndex === 2) {
+        await until(() => f.ports[0]?.streaming);
+        f.ports[0].finish(waits === 1 ? oldResult : "latest result"); await settle(f, "alpha");
+      } else {
+        await until(() => worktreePort.streaming);
+        assert.equal(starts.length, 1);
+        assert.equal(starts[0].context.cwd, worktreePort.workspace.cwd);
+        assert.equal(starts[0].prepared.inputs[0].path, "/tmp/quickstart/repo/src/parser.ts");
+        assert.equal(starts[0].prepared.ownership[0].path, "/tmp/quickstart/repo/src/parser.ts");
+        assert.equal(starts[0].prepared.tree.path, "/tmp/quickstart/repo/build");
+        assert.match(worktreePort.calls[0].prompt, /Execution cwd: "\/tmp\/quickstart\/repo"/);
+        worktreePort.finish("synthetic assigned check report; no real parser check executed"); await settle(f, "alpha");
+      }
+    }
+    const reply = await call(step.tool, args, `quickstart-${flowIndex}-${stepIndex}`);
+    if (flowIndex === 0 && step.tool === "agent_read") {
+      assert.equal(reply.agents[0].status, "completed");
+      assert.equal(reply.agents[0].result, args.agent === "alpha" ? "parser findings" : "documentation findings");
+    }
+    if (flowIndex === 1 && step.tool === "agent_wait" && waits === 1) {
+      assert.equal(reply.agents[0].status, "needs_input"); assert.equal(reply.agents[0].question, "Which format?");
+      questionId = reply.agents[0].question_id;
+    }
+    if (flowIndex === 1 && step.tool === "agent_answer") assert.equal(reply.action.task, 2);
+    if (flowIndex === 1 && step.tool === "agent_spawn" && args.after) assert.equal(reply.agents[0].status, "queued");
+    if (flowIndex === 2 && step.tool === "agent_read" && args.task) {
+      assert.equal(reply.agents[0].task, 1); firstPage = reply.agents[0].result; cursor = reply.agents[0].next_cursor;
+    } else if (flowIndex === 2 && step.tool === "agent_read") {
+      assert.equal(reply.agents[0].task, 1); assert.equal(firstPage + reply.agents[0].result, oldResult);
+      assert.equal(reply.agents[0].next_cursor, undefined);
+    }
+    if (flowIndex === 3 && step.tool === "agent_read") assert.equal(reply.agents[0].workspace.cwd, worktreePort.workspace.cwd);
+  }
 });

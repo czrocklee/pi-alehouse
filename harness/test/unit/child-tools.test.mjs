@@ -101,8 +101,8 @@ test("question receipts distinguish first recording from first-write-wins accept
   const first = await tool.execute("first", { question: "Which factor?" });
   const second = await tool.execute("second", { question: "A different valid question" });
   assert.equal(original, "Which factor?");
-  assert.equal(first.content[0].text, "Question recorded. Finish this task now.");
-  assert.equal(second.content[0].text, "This task already has a question; it was not replaced. Finish this task now.");
+  assert.equal(first.content[0].text, "Question recorded. Stop calling tools and end your turn now.");
+  assert.equal(second.content[0].text, "This task already has a question; it was not replaced. Stop calling tools and end your turn now.");
   assert.notEqual(first.content[0].text, second.content[0].text);
   await assert.rejects(tool.execute("invalid-repeat", { question: " " }), { code: "INVALID_PARAMETERS" });
   assert.deepEqual(calls, ["Which factor?", "A different valid question"]);

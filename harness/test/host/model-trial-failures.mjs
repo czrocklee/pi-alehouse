@@ -34,7 +34,7 @@ for (const fault of ["parent-answer-error", "post-assembly", "post-assembly-clea
     const answer = report.calls.filter((call) => call.name === "agent_answer" && call.is_error === false).at(-1);
     assert.match(answer.args.question_id, /^q_[0-9a-f]{32}$/);
     assert.deepEqual(answer.value.action, { type: "agent_answer", agent: "worker", task: 2 });
-    assert.equal(answer.value.reason, "done");
+    assert.equal(Object.hasOwn(answer.value, "reason"), false);
     assert.equal(answer.value.agents[0].status, "completed"); assert.equal(answer.value.agents[0].next_cursor, undefined);
     assert.equal(answer.value.agents[0].result, scenario.final);
     const transcript = JSON.parse(readFileSync(join(output, "controlled-parent.json"), "utf8"));

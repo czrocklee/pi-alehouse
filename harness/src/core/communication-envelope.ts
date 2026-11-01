@@ -1,11 +1,11 @@
 import type { CancellationSource, RunStatus } from "./contracts.js";
 import type { QuestionId } from "./question-id.js";
 import { encodeResultCursor } from "./result-cursor.js";
+import type { TaskMetadata } from "./task-metadata.js";
 
 /** Fixed model-facing bounds, not limits on a general-purpose OwnerController. */
 export const COMMUNICATION_LIMITS = Object.freeze({
   agents: 16,
-  pending: 16,
   finished: 8,
   text_units: 16384,
   envelope_bytes: 65536,
@@ -40,11 +40,14 @@ export const modelTaskStatus = (status: RunStatus): Exclude<TaskStatus, "finishi
   status === "cancelled" ? "interrupted" : status === "cancelling" ? "interrupting" : status;
 export type CommunicationReason = "snapshot" | "aborted" | "owner_blocked" | "question" |
   "task_issue" | "done" | "alert" | "nothing_pending" | "timeout";
+/** Ordinary snapshots/completion need no trigger annotation in public replies. */
+export const visibleCommunicationReason = (reason: CommunicationReason): Exclude<CommunicationReason, "snapshot" | "done"> | undefined =>
+  reason === "snapshot" || reason === "done" ? undefined : reason;
 
 /** Dispatch notes the parent can act on: tree_shared means another session
  * holds the declared build tree. Lock and source-capture uncertainty stay
- * host diagnostics on the Run. Filtered before packing, so a hidden note
- * never spends envelope bytes or sets response_limit_reached. */
+ * host diagnostics on the Run. Each final serializer filters before fitting,
+ * so a hidden note never spends envelope bytes or sets response_limit_reached. */
 const MODEL_DISPATCH_NOTES: ReadonlySet<string> = new Set(["tree_shared"]);
 export const modelDispatchNotes = (notes: readonly string[] | undefined): string[] | undefined => {
   const shown = notes?.filter((note) => MODEL_DISPATCH_NOTES.has(note));
@@ -68,19 +71,12 @@ export interface ThinTaskEntry {
 }
 
 /** Optional text/metadata can yield to the retained control layer when packing. */
-export interface TaskEntry extends ThinTaskEntry {
+export interface TaskEntry extends ThinTaskEntry, Partial<TaskMetadata> {
   /** Explicit human Stop provenance; optional metadata may yield at saturation. */
   readonly cancellation_source?: CancellationSource;
   /** Whole bounded notes (at most two, each 1..120 nonblank UTF-16 units).
    * Optional diagnostics yield to retained controls/body; no recovery promise. */
   readonly dispatch_notes?: readonly string[];
-  /** Warning was attempted, not proof of delivery or a checkpoint. */
-  readonly time_wrapped?: true;
-  /** Idle Agent's conversation size on its latest task: what its next task re-reads. */
-  readonly context_tokens?: number;
-  /** Whole conditional pinned-model guidance on a settled failed task, at most 384 UTF-16 units.
-   * Optional envelope metadata, not an availability fact or body-budget text. */
-  readonly recovery_hint?: string;
   readonly question_id?: QuestionId;
   readonly question?: string;
   readonly result?: string;
@@ -111,20 +107,21 @@ export interface AlertEntry {
   readonly source?: "harness";
 }
 export interface FinishedEntry extends ThinTaskEntry {
+  /** Optional independently of the thin row and its presentation commit. */
+  readonly label?: string;
   /** May yield independently of the finished row and its presentation commit. */
   readonly cancellation_source?: CancellationSource;
 }
 
 /** Projection only; these arrays must never become another persistent registry.
- * Counts are nonnegative safe integers. Arrays are bounded by COMMUNICATION_LIMITS. */
+ * Counts are safe integers, emitted only when positive. Arrays are bounded by COMMUNICATION_LIMITS. */
 export interface RetainedEnvelope {
   readonly action?: CommunicationAction;
-  readonly reason: CommunicationReason;
+  readonly reason?: Exclude<CommunicationReason, "snapshot" | "done">;
   readonly workers_disabled?: true;
   readonly agents: readonly ThinTaskEntry[];
   readonly alerts?: readonly AlertEntry[];
-  readonly alerts_pending: number;
-  readonly pending?: readonly string[];
+  readonly alerts_pending?: number;
   readonly finished_pending?: number;
   readonly response_limit_reached?: true;
 }
@@ -143,7 +140,7 @@ export function communicationEnvelopeBytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify({ content: [{ type: "text", text }] }), "utf8");
 }
 
-/** Only question, result and alert.message spend the UTF-16 body budget. */
+/** Only question, result and alert.message spend the body budget. */
 export function communicationTextUnits(value: CommunicationEnvelope): number {
   return value.agents.reduce((sum, row) => sum + (row.question?.length ?? 0) + (row.result?.length ?? 0), 0) +
     (value.alerts ?? []).reduce((sum, alert) => sum + alert.message.length, 0);
@@ -163,7 +160,7 @@ export function communicationBudget(value: CommunicationEnvelope): Communication
   const envelope_bytes = communicationEnvelopeBytes(value);
   return { text_units, envelope_bytes,
     fits: text_units <= COMMUNICATION_LIMITS.text_units && envelope_bytes <= COMMUNICATION_LIMITS.envelope_bytes &&
-      value.agents.length <= COMMUNICATION_LIMITS.agents && (value.pending?.length ?? 0) <= COMMUNICATION_LIMITS.pending &&
+      value.agents.length <= COMMUNICATION_LIMITS.agents &&
       (value.finished?.length ?? 0) <= COMMUNICATION_LIMITS.finished &&
       (value.alerts?.length ?? 0) <= COMMUNICATION_LIMITS.pending_alerts };
 }
@@ -178,7 +175,7 @@ export interface RetainedEnvelopeBound extends Omit<RetainedEnvelope, "action" |
     readonly task: number;
     readonly delivery: "not_delivered";
   };
-  readonly agents: readonly (ThinTaskEntry & { readonly question_id?: QuestionId; readonly question?: string; readonly next_cursor?: string })[];
+  readonly agents: readonly (ThinTaskEntry & Pick<TaskMetadata, "workspace_pending"> & { readonly question_id?: QuestionId; readonly question?: string; readonly next_cursor?: string })[];
 }
 
 /** Fresh pure proof data, with one complete alert and every bounded control
@@ -186,9 +183,11 @@ export interface RetainedEnvelopeBound extends Omit<RetainedEnvelope, "action" |
  * child-sized body. Six flags coexist conservatively with wait:"dependencies"
  * on the longest non-queued status; that pairing is a byte ceiling, not a
  * legal packed row. No stored Owner/Run state.
- * The 65484-byte bound adds 26 double-JSON bytes per row (416 across 16) for
- * that conservative wait to the prior 65068-byte tagged shape. The 65068-byte
- * shape adds 23 double-JSON bytes to the old 65045-byte shape.
+ * The bound excludes any redundant pending-name array. Normal reasons are
+ * omitted, but this fixture reserves the longest exceptional reason. Including
+ * all question IDs/cursors/empty question fields, sixteen workspace_pending
+ * controls and an 8192-NUL alert costs 65438 double-JSON bytes (98 spare).
+ * Each pending control costs 27 bytes; removing pending names saves 478 bytes.
  * The proof depends on these exact keys and bounds, not arbitrary JSON data. */
 export function retainedEnvelopeFixture(message: string, withQuestionIds = false, withResultCursors = false): RetainedEnvelopeBound {
   const name = "a".repeat(COMMUNICATION_LIMITS.agent_name_units);
@@ -198,7 +197,7 @@ export function retainedEnvelopeFixture(message: string, withQuestionIds = false
     action: { type: "agent_answer", agent: name, task: max, delivery: "not_delivered" },
     agents: Array.from({ length: COMMUNICATION_LIMITS.agents }, () => ({
       agent: name, task: max, status: "interrupting",
-      wait: "dependencies",
+      wait: "dependencies", workspace_pending: true,
       has_question: true, limit_reached: true, unavailable: true,
       question_truncated: true, result_omitted: true, result_truncated: true,
       ...(withQuestionIds ? { question_id: `q_${"f".repeat(32)}` } : {}),
@@ -206,7 +205,6 @@ export function retainedEnvelopeFixture(message: string, withQuestionIds = false
         ...(withQuestionIds ? { question: "" } : {}) } : {}),
     })),
     alerts: [{ agent: name, task: max, label: "\u0000".repeat(COMMUNICATION_LIMITS.label_units), message, source: "harness" }],
-    pending: Array.from({ length: COMMUNICATION_LIMITS.pending }, () => name),
     workers_disabled: true,
     alerts_pending: max,
     finished_pending: max,
@@ -215,7 +213,7 @@ export function retainedEnvelopeFixture(message: string, withQuestionIds = false
 }
 
 /** Enqueue size admission uses the entire worst-case retained shape, including
- * 16 question IDs, empty question fields and fixed-width result cursors, not
+ * 16 pending controls, question IDs, empty question fields and fixed-width result cursors, not
  * message-only JSON. Whole omitted results remain historically addressable. Callers still validate nonblank
  * text, source Run/generation/gate, and Owner-first/Agent-second FIFO quotas.
  * A false size admission can be mapped to ALERT_TOO_LARGE without enqueuing.

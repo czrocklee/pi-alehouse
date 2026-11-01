@@ -70,7 +70,7 @@ Alehouse uses your existing Pi installation and provider setup. Start it with `p
 
 **Early preview · Linux · MIT.** Available from source; not yet published to npm. Fresh setups start with workers off: configure a lineup, then select its preset to bring them in.
 
-**[Get started](harness/docs/getting-started.md)** · [Panel guide](harness/docs/interface.md) · [Configure your crew](harness/docs/routing.md) · [Support & limits](harness/docs/limitations.md)
+**[Get started](harness/docs/getting-started.md)** · [Agent tools quickstart](harness/docs/agent-tools-quickstart.md) · [Panel guide](harness/docs/interface.md) · [Configure your crew](harness/docs/routing.md) · [Support & limits](harness/docs/limitations.md)
 
 For contributors: [development](harness/docs/development.md), [architecture](harness/docs/architecture.md), [security](harness/docs/security.md), and [validation](harness/docs/validation-evidence.md).
 

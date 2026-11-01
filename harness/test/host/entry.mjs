@@ -133,12 +133,6 @@ let expectedWorkers = "off-empty", initialOffPrompt;
 const offRequests = [];
 const heldResponse = Promise.withResolvers();
 let heldResponseEntered = false;
-// An idle Agent's completed row carries its real SDK context size as a reuse-cost
-// hint; check it is a plain count, then compare the rest of the row exactly.
-const settledRows = (agents) => agents.map(({ context_tokens, ...row }) => {
-  assert(Number.isSafeInteger(context_tokens) && context_tokens >= 0, `context_tokens on ${row.agent}/${row.task}`);
-  return row;
-});
 const text = (message) => typeof message?.content === "string" ? message.content : (message?.content ?? []).filter((p) => p.type === "text").map((p) => p.text).join("");
 provider.respond(async ({ context, maxTokens }) => {
   if (maxTokens === 1) return { text: "SYNTHETIC_CACHE_WARM" };
@@ -483,9 +477,9 @@ try {
     entry.customType === "harness:run-link:v1");
   const first = await invoke("agent_spawn", { agent: "entry", profile: "worker", reasoning_difficulty: 3,
     prompt: "Read source.txt", label: "Entry smoke", max_turns: 4, wait_ms: 60000 });
-  assert.equal(first.reason, "done");
+  assert.equal(Object.hasOwn(first, "reason"), false);
   assert.deepEqual(first.action, { type: "agent_spawn", agent: "entry", task: 1 });
-  assert.deepEqual(settledRows(first.agents), [{ agent: "entry", task: 1, status: "completed", result: "ENTRY_READ_OK" }],
+  assert.deepEqual(first.agents, [{ agent: "entry", task: 1, status: "completed", label: "Entry smoke", result: "ENTRY_READ_OK" }],
     "unified replies name the Agent/task and carry no routing");
   const fixedLink = lastLink();
   assert(fixedLink, "the real SDK child must record a parent run link");
@@ -538,16 +532,16 @@ try {
   const offResult = await invoke("agent_read", { agent: "entry" });
   assert.deepEqual(parent.getActiveToolNames().filter((name) => delegationTools.includes(name)), cleanupToolNames,
     "the next request must repair tool visibility without changing the Off selection");
-  assert.equal(offResult.reason, "snapshot"); assert.equal(offResult.workers_disabled, true);
+  assert.equal(Object.hasOwn(offResult, "reason"), false); assert.equal(offResult.workers_disabled, true);
   assert.equal(offResult.agents[0].status, "running", "Off keeps inspection of the accepted task");
   heldResponse.resolve();
   assert.equal((await finish(held)).result, "ENTRY_HOLD_DONE", "accepted work must finish while Off");
   await parent.prompt("/harness-preset entry-other");
   expectedWorkers = "on";
   const next = await invoke("agent_run", { agent: "entry", prompt: "Read source.txt again", builds_on: "its earlier read of source.txt", label: "Entry again", wait_ms: 60000 });
-  assert.equal(next.reason, "done");
+  assert.equal(Object.hasOwn(next, "reason"), false);
   assert.deepEqual(next.action, { type: "agent_run", agent: "entry", task: 3 });
-  assert.deepEqual(settledRows(next.agents), [{ agent: "entry", task: 3, status: "completed", result: "ENTRY_READ_OK" }]);
+  assert.deepEqual(next.agents, [{ agent: "entry", task: 3, status: "completed", label: "Entry again", result: "ENTRY_READ_OK" }]);
   assert.deepEqual(lastLink().data.routing, fixedLink.data.routing, "reenabling a different preset must not reconfigure a reused fixed-effort Agent");
   await parent.prompt("/harness-preset entry-fixture");
   assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
@@ -562,9 +556,9 @@ try {
   assert.equal(presetStatus(), "delegation: co-worker/entry-fixture*");
   const inherited = await invoke("agent_spawn", { agent: "inherit", profile: "worker", reasoning_difficulty: 3,
     prompt: "Read source.txt", label: "Explicit inherit control", max_turns: 4, wait_ms: 60000 });
-  assert.equal(inherited.reason, "done");
+  assert.equal(Object.hasOwn(inherited, "reason"), false);
   assert.deepEqual(inherited.action, { type: "agent_spawn", agent: "inherit", task: 1 });
-  assert.deepEqual(settledRows(inherited.agents), [{ agent: "inherit", task: 1, status: "completed", result: "ENTRY_READ_OK" }], "effort provenance never reaches the model");
+  assert.deepEqual(inherited.agents, [{ agent: "inherit", task: 1, status: "completed", label: "Explicit inherit control", result: "ENTRY_READ_OK" }], "effort provenance never reaches the model");
   const inheritedLink = lastLink();
   assert.equal(inheritedLink?.data.routing.effort_source, "user_override");
   assert.equal(inheritedLink?.data.routing.thinking_resolution, "identity",

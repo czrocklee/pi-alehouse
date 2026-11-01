@@ -549,6 +549,7 @@ export default function harnessExtension(pi: ExtensionAPI) {
     } });
     const permission = await jiti.import<{
       getPermissionsService: (id: string) => unknown;
+      /** Matched authority returns a live alias lease, validated at assembly. */
       bindWorkspacePolicy: WorkspacePolicyBinder;
       subscribeManagedBlocks: ManagedBlockSubscription;
     }>(join(permissionRoot, "index.ts"));

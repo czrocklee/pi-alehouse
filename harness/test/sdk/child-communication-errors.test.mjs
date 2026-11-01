@@ -121,8 +121,8 @@ test("pinned SDK exposes Agent16 queue rejection across reused Runs and preserve
   const first = await invoke(tools, "ask_parent", { question: "Which option?" }, "first-question");
   const second = await invoke(tools, "ask_parent", { question: "Different valid question?" }, "second-question");
   assert.equal(first.isError, false); assert.equal(second.isError, false);
-  assert.equal(first.result.content[0].text, "Question recorded. Finish this task now.");
-  assert.equal(second.result.content[0].text, "This task already has a question; it was not replaced. Finish this task now.");
+  assert.equal(first.result.content[0].text, "Question recorded. Stop calling tools and end your turn now.");
+  assert.equal(second.result.content[0].text, "This task already has a question; it was not replaced. Stop calling tools and end your turn now.");
   sameFIFO(c, accepted);
   port.finish("awaiting decision");
   assert.equal(await c.waitForRuns([current.run_id], { mode: "all", timeout_ms: 3000 }), "ready");
@@ -130,7 +130,8 @@ test("pinned SDK exposes Agent16 queue rejection across reused Runs and preserve
   sameFIFO(c, accepted);
   const observed = await publication(c);
   assert.deepEqual(observed.alerts, expected, "all sixteen original events still publish in cross-Run FIFO order");
-  assert.equal(observed.alerts_pending, 0); assert.equal(c.alerts.length, 0);
+  assert.equal(Object.hasOwn(observed, "pending"), false);
+  assert.equal(Object.hasOwn(observed, "alerts_pending"), false); assert.equal(c.alerts.length, 0);
 });
 
 test("pinned SDK exposes Owner64 before Agent16, denies a fifth Agent without reserved space and never evicts", async (t) => {
@@ -157,7 +158,10 @@ test("pinned SDK exposes Owner64 before Agent16, denies a fifth Agent without re
   const observed = await publication(c);
   assert.equal(observed.reason, "alert");
   assert.deepEqual(observed.alerts, expected, "all sixty-four original events survive both rejected admissions in FIFO order");
-  assert.equal(observed.alerts_pending, 0); assert.equal(c.alerts.length, 0);
+  assert.equal(Object.hasOwn(observed, "pending"), false);
+  assert.equal(Object.hasOwn(observed, "finished_pending"), false);
+  for (const row of observed.agents) assert.equal(Object.hasOwn(row, "result"), false, "live empty results are omitted");
+  assert.equal(Object.hasOwn(observed, "alerts_pending"), false); assert.equal(c.alerts.length, 0);
   await acceptAlert(toolsFor(newcomer.port), "capacity released by publication");
   assert.equal(c.view(newcomer.run.run_id).pending_messages, 1);
 });

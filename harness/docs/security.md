@@ -50,7 +50,10 @@ The [migration notice](git-permission-migration.md) lists concrete changes to
 seed queries, broad user allows and yolo. Selected PATH/loader/helper prefixes
 requested by the model retain a deny-only guard. Other assignment-bearing Git
 asks and selected destructive Git asks have Jev hard checkpoints, not an
-additional per-operation permission system. Checkpoints defer eligible asks to
+additional per-operation permission system. The selected prefix deny inventory
+includes EDITOR, VISUAL and GIT_PROXY_COMMAND as well as Git-specific editor,
+pager and transport helpers; it examines requested prefixes, not inherited
+environment. Checkpoints defer eligible asks to
 ordinary human approval; they do not run for an existing allow or under yolo.
 
 The current contract is [literal Git restrictions](git-read-proof.md): repository
@@ -94,10 +97,29 @@ replace source authority. The trusted whole checkout root maps to the source
 repository root for restriction aliases, including siblings above a nested cwd.
 Aliases add deny/ask only, never ALLOW or external-directory exemptions. Other
 checkouts keep ordinary external policy, not inherited source deny. Relative
-dispatch paths retain source cwd; an uninitialized worktree cannot declare a
-tree, so declare its actual absolute path on a later task. Checks without a tree
-may run initially and observe actual child cwd. List/detail expose uninitialized mode or actual cwd, source cwd and
-baseline after creation. Linked-layout source-state capture may stay unknown.
+dispatch paths use execution cwd; source cwd remains the policy/settings base.
+First-task worktree inputs/ownership/tree can be relative, including `..`.
+Before binding, source candidates are deny-only checks, not existence or ALLOW
+facts; provisional paths are not proof of disjoint resources. Binding performs
+actual canonical/boundary/permission/input/claim checks before child input, using
+the live authority-owned alias seam, not a caller-supplied root. A healthy
+session survives a binding preflight failure idle/reusable. See
+[workspace binding](workspaces.md#dispatch-paths-and-binding). Checks observe
+actual child cwd. Only wait/read/list expose whole
+Run-local confirmed workspace bindings: four fields plus optional checkout root,
+without public state or recovery_manifest. Queries reserve a bounded
+workspace_pending:true control for queued/running worktree tasks still awaiting
+binding, not exited tasks or tasks with recovery facts. Ordinary
+action/interrupt/kill omit workspace details. Failures may expose small retained_paths containing observed
+allocation directories, verified checkout roots and created manifests, never an
+intended nonexistent target. Verified checkout can precede failed SDK assembly;
+no later Agent baseline fills an earlier task's missing binding. Internal
+recovery transport preserves typed/frozen errors and cleanup authority. The human
+detail pane renders those observed retained locations without promoting them to
+successful session binding. Optional paths fit after result text and may yield
+whole under the cap, without a metadata-retrieval mode or unlimited recovery
+promise. See [workspace metadata](workspaces.md#workspace-and-recovery-metadata).
+Linked-layout source-state capture may stay unknown.
 
 Worktrees and private recovery manifests are not deleted on completion, kill,
 failure or shutdown. Default storage is XDG_STATE_HOME/pi-alehouse/worktrees
@@ -173,7 +195,10 @@ The harness enforces the rest:
 - `fetch_content` has no `auth` (browser-cookie) parameter and accepts only
   absolute `http(s)` URLs.  Upstream accepts local video paths (by extension,
   default 50 MB) and uploads them for analysis or extracts frames, outside the
-  path permission gates; a researcher cannot.
+  path permission gates; a researcher cannot. Its adapted fetch description and
+  URL/timestamp/frame parameter descriptions do not promise local-video access.
+  Assembly rejects drift in the required upstream local-video description
+  rewrite; URL/schema and execution checks enforce the input boundary separately.
 - `web_search`, `source_check` and `fetch_content` have no `proxy` parameter.
   Upstream checks only its scheme, not its host, so a model-chosen proxy could
   reach loopback or private services, or bypass the configured proxy.  A proxy
@@ -454,8 +479,9 @@ structural harness-source tag, which commit validates against the original queue
 entry. Full allowances reject new messages without evicting accepted ones; only
 successful scoped publication releases quota. No deny, Git/path/web boundary, immutable resource floor or lease
 rule is relaxed. Task-condition targets bind once; alert scopes are separately
-typed Owner/Agents/Run. Read spans one Agent's pending alerts independently of
-its page cursor; inline command observations see only their bound Run.
+typed Owner/Agents/Run. Result read spans one Agent's pending alerts independently
+of its task/page selector.
+Inline command observations see only their bound Run.
 
 Entry/default-admission validation, return validation and publication are
 synchronous read-only phases. Supported Owner effecting entries reject reentrancy
@@ -470,7 +496,12 @@ membership are checked against retained Run authority, not snapshot/body agreeme
 Compact result cursors bind Owner/generation/Run/version using a domain-separated
 128-bit digest and exact offset; they are locators, not permission credentials.
 Lookup derives from retained Runs, rejects ambiguous/foreign matches, and grants
-no restart hydration or additional access. One failed observer rejects and cleans
+no restart hydration or additional access. Read-only task ordinals select only
+that named Agent's retained Runs, never command targets. Task and cursor are
+mutually exclusive. There is no metadata-only view or metadata cursor. Whole
+optional summary fields/finished labels
+never weaken thin controls or original-Run provenance checks; omitted labels do
+not defer/reset finished consumption. One failed observer rejects and cleans
 itself without consuming alerts/finished/fault facts, rejecting accepted child
 callbacks, stalling lifecycle settlement or latching an Owner fault. Lifecycle
 observations share the drain, not model validation/publication; shutdown still
@@ -531,6 +562,12 @@ changes ordinary quota-header display/accounting. Only enable these integrations
 deliberately.
 
 ## Leases, cleanup, and cancellation
+
+Public Owner admission and child-input faults share recovery guidance:
+closed/closing Owners cannot reopen through routing or a new Agent; tell the
+user and use a fresh session only after confirmed closure. Cleanup uncertainty
+has no retry or force release. Internal faults and unavailable parent history
+writers likewise require telling the user, not retrying or diagnosing a model.
 
 A private local `FileOwnerLease` plus absolute util-linux `flock` serializes an
 Owner for its parent session.  It is not an OS sandbox, distributed lock, or

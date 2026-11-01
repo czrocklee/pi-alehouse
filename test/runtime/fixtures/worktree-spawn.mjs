@@ -3,7 +3,8 @@
 // Product retention is checked before the wrapper may discard this fixture's files.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import { syncBuiltinESMExports } from "node:module";
@@ -69,7 +70,11 @@ writeFileSync(ordinary, "COMMITTED_BASELINE\n");
 writeFileSync(secret, "SYNTHETIC_PRIVATE_NOTE_MUST_NOT_REACH_MODEL\n");
 writeFileSync(instructions, "CHECKED_OUT_INSTRUCTION_NOT_SOURCE_AUTHORITY\n");
 writeFileSync(projectConfig, permissiveConfig);
-runGit("add", "--", "ordinary.txt", "private-note.txt", "AGENTS.md", ".pi");
+// Both real worktrees inherit this committed symlink, but its target is owned
+// by this fixture outside either checkout. Never infer worktree state layout.
+const sharedOutput = join(home, "shared-output"); mkdirSync(sharedOutput);
+symlinkSync(sharedOutput, join(cwd, "shared-build"));
+runGit("add", "--", "ordinary.txt", "private-note.txt", "AGENTS.md", ".pi", "shared-build");
 runGit("commit", "--no-gpg-sign", "-m", "offline fixture baseline");
 const baseCommit = runGit("rev-parse", "HEAD").trim();
 assert.match(baseCommit, /^[0-9a-f]{40,64}$/);
@@ -118,9 +123,34 @@ const result = (message, id, denied = false) => {
 };
 const management = ["agent_spawn", "agent_run", "agent_send", "agent_answer", "agent_wait", "agent_read", "agent_interrupt", "agent_kill", "agent_list"];
 let workspace, manifest, scriptFailure, waits = 0;
+let holderWorkspace, contenderWorkspace, contenderSessionId;
+let holderCalls = 0, contenderCalls = 0;
+const holderLabel = "CONFLICT_HOLDER_TASK: ask whether to continue, then finish; do not edit.";
+const contenderLabel = "CONFLICT_CONTENDER_TASK: this input must never reach the child.";
+const safeLabel = "CONFLICT_SAFE_TASK: report SAFE_DONE without tools or edits.";
 const firstDone = "FIRST_DONE: expected configured read denied; no retry.", secondDone = "SECOND_DONE";
+const firstLabel = "BASELINE_TASK: read ordinary, write a worktree file, report the expected denied read without retrying.";
+const secondLabel = "FOLLOWUP_TASK: read your prior worktree output.";
+const firstDispatch = { inputs: ["ordinary.txt"], ownership: [outputName], tree: "build", checks: ["controlled worktree read/write"] };
+const nextDispatch = { inputs: [outputName], tree: "build" };
+const treeLeasePath = (base) => join(agentDir, "harness-trees", createHash("sha256").update(join(base, "build")).digest("hex"), "owner.lock");
+const dispatchDeclaration = (message) => {
+  const matches = [...text(message).matchAll(/\n(\{[^\n]+\})\n--- End of dispatch declarations ---/g)];
+  assert.equal(matches.length, 1, "the current task has exactly one dispatch declaration body");
+  return JSON.parse(matches[0][1]);
+};
+const workspaceSummary = () => ({ ...workspace, checkout_root: workspace.cwd });
 const childSteps = [
-  (last) => { assert.equal(last.role, "user"); return call("baseline-read", "read", { path: "ordinary.txt" }); },
+  (last) => {
+    assert.equal(last.role, "user");
+    assert.match(text(last), /Relative inputs, ownership, and tree paths resolve from this execution cwd/);
+    assert(text(last).includes(`Execution cwd: ${JSON.stringify(workspace.cwd)}\n`));
+    assert(text(last).includes(`source cwd (${JSON.stringify(cwd)})`));
+    assert.deepEqual(dispatchDeclaration(last), firstDispatch, "first spawn carries all relative dispatch declarations without initialization calls");
+    assert(existsSync(treeLeasePath(realpathSync(workspace.cwd))), "tree observation uses the bound worktree canonical path before child input");
+    assert.equal(existsSync(treeLeasePath(realpathSync(cwd))), false, "no source-tree lease is fabricated");
+    return call("baseline-read", "read", { path: "ordinary.txt" });
+  },
   (last) => {
     assert.match(result(last, "baseline-read"), /COMMITTED_BASELINE/);
     assert.doesNotMatch(text(last), /DIRTY_SOURCE_ONLY/);
@@ -132,7 +162,12 @@ const childSteps = [
     assert.doesNotMatch(text(last), /SYNTHETIC_PRIVATE_NOTE_MUST_NOT_REACH_MODEL/);
     return { text: firstDone };
   },
-  (last) => { assert.equal(last.role, "user"); assert.match(text(last), /FOLLOWUP_TASK/); return call("followup-read", "read", { path: outputName }); },
+  (last) => {
+    assert.equal(last.role, "user"); assert.match(text(last), /FOLLOWUP_TASK/);
+    assert(text(last).includes(`Execution cwd: ${JSON.stringify(workspace.cwd)}\n`));
+    assert.deepEqual(dispatchDeclaration(last), nextDispatch, "follow-up relative input is the prior worktree output, not a missing source file");
+    return call("followup-read", "read", { path: outputName });
+  },
   (last) => { assert.match(result(last, "followup-read"), /WORKTREE_ONLY_OUTPUT/); return { text: secondDone }; },
 ];
 const parentSteps = [];
@@ -147,6 +182,9 @@ const settled = (task, tool, next) => (last) => {
     return call(`wait-${waits}`, "agent_wait", { agents: ["marten"], wait_ms: 60000 });
   }
   assert.equal(row.result, task === 1 ? firstDone : secondDone);
+  assert.equal(row.label, task === 1 ? firstLabel : secondLabel);
+  if (tool === "agent_wait") assert.deepEqual(row.workspace, workspaceSummary());
+  else assert.equal(Object.hasOwn(row, "workspace"), false, "action replies omit workspace");
   return next();
 };
 provider.respond(async (request) => {
@@ -168,12 +206,31 @@ provider.respond(async (request) => {
     assert.match(prompt, /SOURCE_ONLY_TRUSTED_INSTRUCTION/, "real child resource loader inherits live source instructions");
     assert.doesNotMatch(prompt, /CHECKED_OUT_INSTRUCTION_NOT_SOURCE_AUTHORITY/);
     const current = JSON.parse(/Workspace: (\{[^\n]+\})/.exec(prompt)?.[1] ?? "null");
+    assert.deepEqual(Object.keys(current).sort(), ["base_commit", "cwd", "mode", "source_cwd"], "child WorkspaceInfo stays the four-field binding");
     assert.equal(current.mode, "worktree"); assert.equal(current.source_cwd, cwd); assert.equal(current.base_commit, baseCommit);
     assert(isAbsolute(current.cwd)); assert.notEqual(current.cwd, cwd);
     assert(relative(join(stateRoot, "pi-alehouse", "worktrees"), current.cwd).startsWith("pi-alehouse-worktree-"),
       "worktree stays under the wrapper-owned XDG_STATE_HOME worktrees root");
     assert.equal(current.cwd.startsWith(temporaryRoot), false, "TMPDIR no longer drives allocation");
     assert.equal(current.cwd.startsWith(join(stateRoot, "pi-alehouse", "worktrees")), true);
+    const taskText = text(request.context.messages.at(-1));
+    if (taskText.includes("CONFLICT_HOLDER_TASK") || holderWorkspace?.cwd === current.cwd) {
+      holderWorkspace ??= current;
+      assert.deepEqual(current, holderWorkspace);
+      assert.equal(realpathSync(join(current.cwd, "shared-build")), sharedOutput);
+      assert(existsSync(join(agentDir, "harness-trees", createHash("sha256").update(sharedOutput).digest("hex"), "owner.lock")),
+        "holder acquired the actual shared canonical tree before input");
+      if (++holderCalls === 1) return call("holder-question", "ask_parent", { question: "Continue holding the shared output?" });
+      assert.equal(holderCalls, 2); result(request.context.messages.at(-1), "holder-question");
+      return { text: "HOLDER_WAITING" };
+    }
+    assert(!taskText.includes("CONFLICT_CONTENDER_TASK"), "binding conflict must prevent original contender child input");
+    if (taskText.includes("CONFLICT_SAFE_TASK")) {
+      contenderCalls++;
+      assert.equal(contenderCalls, 1);
+      assert.equal(current.cwd, contenderWorkspace.cwd, "safe follow-up reuses the successfully initialized contender workspace");
+      return { text: "SAFE_DONE" };
+    }
     if (workspace) assert.deepEqual(current, workspace, "follow-up retains the same worktree");
     else workspace = current;
     manifest ??= /Recovery manifest: ([^\n]+)/.exec(prompt)?.[1];
@@ -208,7 +265,9 @@ const checkRoster = (last, task) => {
   const reply = parse(last, "agent_list"); assert.equal(reply.agents.length, 1);
   const row = reply.agents[0];
   assert.equal(row.agent, "marten"); assert.equal(row.profile, "worker");
-  assert.equal(row.task, task); assert.equal(row.status, "completed"); assert.deepEqual(row.workspace, workspace);
+  assert.equal(row.task, task); assert.equal(row.status, "completed");
+  assert.equal(row.label, task === 1 ? firstLabel : secondLabel);
+  assert.deepEqual(row.workspace, workspaceSummary());
   assert.equal(lifecycle.filter((event) => event.kind === "session-created").length, 1, "agent_run reuses the actual SDK session");
   assert.equal(lifecycle.filter((event) => event.kind === "bound").length, 1);
   assert.equal(lifecycle.filter((event) => event.kind === "disposed").length, 0);
@@ -219,16 +278,85 @@ try {
   assert.deepEqual(errors, []); assert(session.getActiveToolNames().includes("agent_spawn"));
   parentSteps.push(
     () => call("spawn-worktree", "agent_spawn", { agent: "marten", profile: "worker", workspace: "worktree",
-      prompt: "BASELINE_TASK: read ordinary, write a worktree file, report the expected denied read without retrying.", reasoning_difficulty: 1, wait_ms: 60000 }),
+      prompt: firstLabel, reasoning_difficulty: 1, dispatch: firstDispatch, wait_ms: 60000 }),
     settled(1, "agent_spawn", () => call("list-first", "agent_list", {})),
-    (last) => { checkRoster(last, 1); return call("reuse-worktree", "agent_run", { agent: "marten", builds_on: "First task's worktree output", prompt: "FOLLOWUP_TASK: read your prior worktree output.", wait_ms: 60000 }); },
+    (last) => { checkRoster(last, 1); return call("reuse-worktree", "agent_run", { agent: "marten", builds_on: "First task's worktree output", prompt: secondLabel, dispatch: nextDispatch, wait_ms: 60000 }); },
     settled(2, "agent_run", () => call("list-second", "agent_list", {})),
     (last) => { checkRoster(last, 2); return call("kill-worktree", "agent_kill", { agent: "marten" }); },
     (last) => {
-      assert.deepEqual(parse(last, "agent_kill"), { agent: "marten", status: "killed" });
+      assert.deepEqual(parse(last, "agent_kill"), { agent: "marten", status: "killed", label: secondLabel });
       const [disposed] = lifecycle.filter((event) => event.kind === "disposed");
       assert(disposed); assert.equal(disposed.cleanup.shutdownExited, true); assert.deepEqual(disposed.cleanup.errors, []);
-      checkRetained(); return { text: "PARENT_DONE" };
+      checkRetained();
+      return call("read-killed-task", "agent_read", { agent: "marten", task: 2 });
+    },
+    (last) => {
+      const reply = parse(last, "agent_read");
+      assert.equal(Object.hasOwn(reply, "reason"), false);
+      assert.deepEqual(reply.agents, [{ agent: "marten", task: 2, status: "completed", unavailable: true, unavailable_reason: "explicitly_released",
+        label: secondLabel, result: secondDone, workspace: workspaceSummary() }]);
+      assert.equal(Object.hasOwn(reply, "pending"), false);
+      assert.equal(Object.hasOwn(reply, "alerts_pending"), false); assert.equal(reply.alerts, undefined);
+      assert.equal(Object.hasOwn(reply, "finished_pending"), false); assert.equal(reply.finished, undefined);
+      checkRetained();
+      return call("spawn-holder", "agent_spawn", { agent: "otter", profile: "worker", workspace: "worktree",
+        prompt: holderLabel, reasoning_difficulty: 1, dispatch: { tree: "shared-build" }, wait_ms: 60000 });
+    },
+  );
+  const conflictSettled = (agent, status, tool, next) => last => {
+    const reply = parse(last, tool), row = reply.agents.find(entry => entry.agent === agent);
+    assert(row, text(last));
+    if (row.status !== status) {
+      assert(["queued", "running", "finishing"].includes(row.status), text(last));
+      assert(++waits <= 12);
+      parentSteps.unshift(conflictSettled(agent, status, "agent_wait", next));
+      return call(`conflict-wait-${waits}`, "agent_wait", { agents: [agent], wait_ms: 60000 });
+    }
+    return next(row);
+  };
+  parentSteps.push(
+    conflictSettled("otter", "needs_input", "agent_spawn", row => {
+      assert(row.question_id); assert.equal(row.result, "HOLDER_WAITING");
+      return call("read-holder", "agent_read", { agent: "otter" });
+    }),
+    last => {
+      const row = parse(last, "agent_read").agents[0];
+      assert.equal(row.status, "needs_input"); assert.deepEqual(row.workspace, { ...holderWorkspace, checkout_root: holderWorkspace.cwd });
+      assert.equal(holderCalls, 2);
+      return call("spawn-contender", "agent_spawn", { agent: "badger", profile: "worker", workspace: "worktree",
+        prompt: contenderLabel, reasoning_difficulty: 1, dispatch: { tree: "shared-build" }, wait_ms: 60000 });
+    },
+    conflictSettled("badger", "failed", "agent_spawn", row => {
+      assert.match(row.error, /BUILD_TREE_BUSY/); assert.equal(row.unavailable, undefined);
+      assert.equal(contenderCalls, 0, "conflicting task never requested model transport");
+      return call("read-contender", "agent_read", { agent: "badger" });
+    }),
+    last => {
+      const row = parse(last, "agent_read").agents[0];
+      contenderWorkspace = row.workspace; assert(contenderWorkspace);
+      assert.notEqual(contenderWorkspace.cwd, holderWorkspace.cwd, "two independent real worktrees");
+      assert.equal(realpathSync(join(contenderWorkspace.cwd, "shared-build")), sharedOutput);
+      const created = lifecycle.filter(event => event.kind === "session-created");
+      assert.equal(created.length, 3); contenderSessionId = created.at(-1).sessionId;
+      for (const file of readdirSync(sessions).filter(name => name.includes(contenderSessionId))) {
+        const journal = readFileSync(join(sessions, file), "utf8");
+        assert(!journal.includes("harness:run-start:v1"), "binding refusal precedes child history.begin");
+        assert(!journal.includes('"role":"assistant"'), "no model output before conflict refusal");
+      }
+      assert.equal(lifecycle.filter(event => event.kind === "disposed").length, 1, "healthy contender was not disposed");
+      return call("reuse-contender", "agent_run", { agent: "badger", builds_on: "The retained workspace from the preflight-failed task",
+        prompt: safeLabel, dispatch: { tree: "safe-build" }, wait_ms: 60000 });
+    },
+    conflictSettled("badger", "completed", "agent_run", row => {
+      assert.equal(row.result, "SAFE_DONE"); assert.equal(contenderCalls, 1);
+      assert.equal(lifecycle.filter(event => event.kind === "session-created").length, 3, "follow-up reused the healthy session");
+      return call("kill-contender", "agent_kill", { agent: "badger" });
+    }),
+    last => { assert.equal(parse(last, "agent_kill").status, "killed"); return call("kill-holder", "agent_kill", { agent: "otter" }); },
+    last => {
+      assert.equal(parse(last, "agent_kill").status, "killed");
+      assert.equal(holderCalls, 2); assert.equal(contenderCalls, 1);
+      return { text: "PARENT_DONE" };
     },
   );
   await session.prompt("START", { expandPromptTemplates: false });
@@ -246,11 +374,16 @@ assert.deepEqual(errors, []);
 assert(!notifications.some(({ type }) => type === "error"), JSON.stringify(notifications));
 const created = lifecycle.filter((event) => event.kind === "session-created").map((event) => event.sessionId);
 const disposed = lifecycle.filter((event) => event.kind === "disposed");
-assert.equal(created.length, 1); assert.deepEqual(disposed.map((event) => event.sessionId), created);
+assert.equal(created.length, 3); assert.deepEqual(disposed.map(event => event.sessionId).sort(), [...created].sort());
+assert.equal(contenderSessionId, created.at(-1));
+assert(disposed.every(event => event.cleanup.shutdownExited && event.cleanup.errors.length === 0));
+assert.deepEqual(readdirSync(sharedOutput), [], "conflict declarations and synthetic tools do not write the external output");
 assert.equal(disposed[0].cleanup.shutdownExited, true); assert.deepEqual(disposed[0].cleanup.errors, []);
 checkRetained(); // Both kill and confirmed parent shutdown retain the dirty output and recovery manifest.
 for (const [path, bytes] of sourceFiles) assert.deepEqual(readFileSync(path), bytes, `source bytes unchanged: ${path}`);
 assert.equal(existsSync(join(cwd, outputName)), false, "SDK builtin wrote in actual worktree cwd, never source");
+assert.equal(existsSync(join(cwd, "build")), false, "relative tree did not allocate source output");
+assert.equal(existsSync(join(workspace.cwd, "build")), false, "tree declaration and lease alone do not create user output");
 assert.equal(runGit("rev-parse", "HEAD").trim(), baseCommit, "no auto commit/merge");
 assert.deepEqual(readFileSync(join(cwd, ".git/index")), sourceIndex, "source index bytes unchanged");
 assert.equal(runGit("status", "--porcelain=v1", "--untracked-files=all"), sourceStatus, "source status unchanged (not whole-tree identity)");
@@ -259,4 +392,4 @@ assert.deepEqual(dialogs, []); assert.deepEqual(network, []);
 // Cleanup is a TEST-only wrapper action, enabled only after all closure and
 // retention assertions. Failure/timeout leaves private artifacts for inspection.
 writeFileSync(closedMarker, "confirmed fixture closure; retained output checked\n", { flag: "wx", mode: 0o600 });
-console.log("PASS: real composition worker worktree uses committed baseline and SDK cwd, inherits source deny not checked-out config, reuses child and retains dirty output after kill and confirmed shutdown; source files and index unchanged; offline");
+console.log("PASS: real composition worktrees inherit source policy and SDK cwd, reject shared canonical tree conflict before child input/history, retain a healthy reusable session and dirty output through confirmed shutdown; source files and index unchanged; offline");

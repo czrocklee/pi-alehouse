@@ -2,6 +2,7 @@ import type { CommunicationAction, CommunicationEnvelope, CommunicationReason, T
 import type { CancellationSource } from "./contracts.js";
 import type { QuestionId } from "./question-id.js";
 import type { ResultCursorIdentity } from "./result-cursor.js";
+import type { TaskMetadata } from "./task-metadata.js";
 
 /** Ordinary, immutable-by-contract data only. Snapshot indices, not live Run
  * objects, cross the publisher boundary; the Owner retains their provenance.
@@ -17,7 +18,9 @@ export interface ResultWindow {
    * reserved before text packing; its actual offset is computed AFTER packing. */
   readonly cursor?: ResultCursorIdentity;
 }
-export interface TaskSnapshot {
+export interface TaskSnapshot extends Partial<TaskMetadata> {
+  // workspace_pending is captured task-local metadata, but packing reserves it
+  // as a bounded control before any optional locations or result body.
   /** Required control facts only; arbitrary strings belong in diagnostics. */
   readonly row: ThinTaskEntry;
   readonly settled: boolean;
@@ -27,14 +30,9 @@ export interface TaskSnapshot {
   readonly diagnostics?: Pick<TaskEntry, "error" | "owner_error" | "unavailable_reason">;
   /** Optional bounded attribution, outside the required thin control row. */
   readonly cancellation_source?: CancellationSource;
-  /** Optional whole diagnostics, outside the required thin control row. */
+  /** Bounded host notes in the private capture; the packer filters model-visible
+   * notes before fitting, outside the required thin control row. */
   readonly dispatch_notes?: readonly string[];
-  readonly time_wrapped?: true;
-  /** Only on an idle, reusable Agent's latest settled task with a known size. */
-  readonly context_tokens?: number;
-  /** Derived from the retained Outcome only after confirmed failed settlement;
-   * whole optional envelope metadata. */
-  readonly recovery_hint?: string;
 }
 export interface AlertSnapshot {
   readonly agent: string;
@@ -44,6 +42,7 @@ export interface AlertSnapshot {
   readonly source?: "harness";
 }
 export interface FinishedSnapshot {
+  readonly label?: string;
   readonly row: ThinTaskEntry;
   readonly cancellation_source?: CancellationSource;
   /** Explicit original-Run association with a bound tasks row. Absence means

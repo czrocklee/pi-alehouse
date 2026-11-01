@@ -1,8 +1,7 @@
-import { terminal, validDifficulty, type AgentSummary, type RunView } from "../core/contracts.js";
+import { terminal, validDifficulty, type RunView } from "../core/contracts.js";
 import { isQueueWait, modelDispatchNotes, modelTaskStatus, type QueueWait } from "../core/communication-envelope.js";
-import { modelRecoveryHint } from "../core/model-recovery.js";
-import { isSettledRecord } from "../core/communication-state.js";
 import { profileLabel } from "./tool-names.js";
+import { taskMetadata } from "../core/task-metadata.js";
 
 // Model-facing projections. The model addresses Agents by name and calls each
 // assignment a task; Run and Agent IDs, routing and diagnostics stay host-only.
@@ -25,24 +24,22 @@ const queueWait = (view: RunView): QueueWait | undefined => {
   return isQueueWait(view.queued_for) ? view.queued_for : undefined;
 };
 
-/** Independent interrupt/roster projection. Communication observations are
- * projected and serialized in core before their presentation commit. */
-export function taskReply(view: RunView, nameOf: NameOf) {
+/** Independent interrupt/roster projection. Only roster inspection opts in to
+ * task-local workspace/pending facts; the RunView supplies original status/exit.
+ * Communication observations serialize in core before presentation commit. */
+export function taskReply(view: RunView, nameOf: NameOf, inspectWorkspace = false) {
   const unavailable = view.owner_blocked || (terminal(view.status) && !view.resumable) ||
     !!(view.unavailable_reason && view.unavailable_reason !== "agent_busy");
   const dispatch_notes = modelDispatchNotes(view.dispatch_notes);
-  const recovery_hint = isSettledRecord(view) ? modelRecoveryHint(view.outcome) : undefined;
   const wait = queueWait(view);
-  return { agent: view.name, task: view.task, status: statusOf(view),
+  return { agent: view.name, task: view.task, status: statusOf(view), ...taskMetadata(view, inspectWorkspace),
     ...(wait === undefined ? {} : { wait }),
     ...(view.has_question ? { has_question: true } : {}),
     ...(view.outcome?.reason ? { reason: view.outcome.reason } : {}),
     ...(view.cancellation_source === "human" || view.outcome?.cancellation_source === "human" ? { cancellation_source: "human" as const } : {}),
     // Qualifies `status`: a turn-capped task still settles as "completed".
     ...(view.outcome?.limit_reached ? { limit_reached: true } : {}),
-    ...(view.time_wrapped || view.outcome?.time_wrapped ? { time_wrapped: true } : {}),
     ...(dispatch_notes ? { dispatch_notes } : {}),
-    ...(recovery_hint === undefined ? {} : { recovery_hint }),
     ...(view.outcome?.error ? { error: utf16Prefix(view.outcome.error, 512) } : {}),
     ...(view.owner_error ? { owner_error: utf16Prefix(view.owner_error, 512) } : {}),
     // Dependency names stay; wait is only the queued reason, not a replacement.
@@ -51,35 +48,10 @@ export function taskReply(view: RunView, nameOf: NameOf) {
     ...(unavailable && view.unavailable_reason ? { unavailable_reason: utf16Prefix(view.unavailable_reason, 512) } : {}) };
 }
 
-const EARLIER_SHOWN = 4;
-const TOUCHED_SHOWN = 8;
-/** A roster row: what the parent needs to choose between reusing this Agent
- * and creating another. Model, preset and effort stay hidden: exposing them
- * invites tuning difficulty to pick a model. Provider identity and queue counts
- * stay hidden; a queued task exposes only wait. Spend and idle time stay hidden
- * too: spend is sunk and reveals which difficulty is dearer, and idle time
- * cannot tell the parent whether a provider cache is still warm. */
-export function agentRow(view: RunView, summary: AgentSummary, nameOf: NameOf, recoveryHints = new Set<string>()) {
-  const earlier = summary.earlier_descriptions.slice(0, EARLIER_SHOWN).map((text) => utf16Prefix(text, 120));
-  const context = summary.context;
-  const touched = summary.touched.slice(0, TOUCHED_SHOWN).map((path) => utf16Prefix(path, 160));
-  const touchedOmitted = summary.touched.length - touched.length + summary.touched_omitted;
-  const running = view.status === "running" && !view.execution_exited;
-  const { agent, recovery_hint: hint, ...task } = taskReply(view, nameOf);
-  // This set belongs to one roster construction only, never retained state.
-  const recovery_hint = hint !== undefined && !recoveryHints.has(hint) ? hint : undefined;
-  if (recovery_hint !== undefined) recoveryHints.add(recovery_hint);
-  return { agent, profile: profileLabel(view.effective_settings.profile), reasoning_difficulty: view.effective_settings.difficulty,
-    ...(view.isolation === "worktree" ? { workspace: view.workspace ? { ...view.workspace } : { mode: "worktree", state: "uninitialized" } } : {}),
-    label: utf16Prefix(view.description, 120), ...task,
-    ...(recovery_hint === undefined ? {} : { recovery_hint }),
-    ...(running && view.execution_elapsed_ms !== undefined ? { elapsed_s: Math.round(view.execution_elapsed_ms / 1000) } : {}),
-    ...(earlier.length ? { earlier_labels: earlier } : {}),
-    // Absolute size, not a share of the window: a large window makes a costly
-    // conversation look small, and every turn of the next task re-reads all of it.
-    ...(context && context.tokens !== null ? { context_tokens: context.tokens } : {}),
-    ...(touched.length ? { touched } : {}),
-    ...(touchedOmitted ? { touched_omitted: touchedOmitted } : {}) };
+/** Current identity, capability and work location; history/usage stay in the UI. */
+export function agentRow(view: RunView, nameOf: NameOf) {
+  return { profile: profileLabel(view.effective_settings.profile), reasoning_difficulty: view.effective_settings.difficulty,
+    ...taskReply(view, nameOf, true) };
 }
 
 const ALLOWED_SHOWN = 32;

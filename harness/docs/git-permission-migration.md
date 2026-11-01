@@ -33,16 +33,27 @@ See the current [Git contract](git-read-proof.md).
 
 Model-requested Git environment prefixes that replace PATH, dynamic loaders
 (`LD_*`/`DYLD_*`) or named executable helpers/pagers/editors are rejected by
-the deny-only guard. This applies to inline assignments and supported `env`
+the deny-only guard. This includes EDITOR, VISUAL and GIT_PROXY_COMMAND as well
+as the Git-specific editor/transport variables. This applies to inline assignments and supported `env`
 prefixes. It does not rewrite the command or alter an operator's launch
 environment. Other assignment-bearing Git asks stay eligible for ordinary
 human approval, but cannot be approved solely by Jev. The variable inventory
 is bounded, not a complete shell/environment sandbox.
 
 For eligible asks, Jev's existing hard-checkpoint mechanism keeps selected
-high-impact operations human: push, hard reset, forced clean, path-discarding
-checkout/restore, branch deletion (including combined short flags), stash
-clear/drop, ref updates and filter-branch, among the existing checkpoints.
+high-impact operations human: push, hard/merge reset, forced or interactive
+clean, path-discarding checkout/restore, forced switch, forced branch/tag
+updates and branch deletion (including combined short flags and --delete-merged
+with reordered options), stash clear/drop, ref updates and filter-branch, among
+the existing checkpoints. Checkout patch groups with attached context counts
+(such as `-pU3`) stay human; `-U`/`--unified`/`--inter-hunk-context` values remain
+data rather than extra option flags. Bounded destructive long-option
+prefixes are recognized at option positions, not after `--` or as required option
+values. Ambiguous prefixes may conservatively checkpoint even if Git rejects
+them; this is not proof of native acceptance. Checkout bare ref/path operands
+and implicit patch/pathspec sources are conservatively human because no
+repository probe distinguishes a branch from a path; `checkout -` and ordinary
+branch creation remain controls, not claimed data-loss cases.
 A checkpoint defers to ordinary approval; it is **not a configured deny** and
 does not override an already applicable allow or yolo.
 

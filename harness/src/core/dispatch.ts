@@ -8,12 +8,28 @@ export interface Dispatch {
   tree?: string;
   checks?: string[];
 }
-export interface DispatchPath { path: string; canonical: string }
+export interface DispatchPath { kind?: "bound"; path: string; canonical: string }
+/** A provisional resource, not a filesystem location or permission fact. */
+export interface UnboundWorktreePath {
+  kind: "unbound_worktree";
+  agent_id: string;
+  rel: string;
+}
+export type PreparedPath = DispatchPath | UnboundWorktreePath;
 export interface PreparedDispatch {
   declaration: Dispatch;
+  inputs: PreparedPath[];
+  ownership: PreparedPath[];
+  tree?: PreparedPath;
+}
+export interface BoundDispatch extends PreparedDispatch {
   inputs: DispatchPath[];
   ownership: DispatchPath[];
   tree?: DispatchPath;
+}
+/** Authority-owned, live binding validation; never serialized or model supplied. */
+export interface DispatchWorkspacePolicy {
+  aliases(paths: readonly string[]): readonly string[];
 }
 export type SourceState = {
   state: "observed";
@@ -34,11 +50,20 @@ export interface ValidationReceipt {
 }
 export interface DispatchLease { assertHeld(): void; close(): void }
 export interface DispatchObservation { source_state?: SourceState; notes?: string[]; lease?: DispatchLease }
-export interface DispatchContext { cwd: string; profile: string }
+export interface DispatchContext {
+  cwd: string;
+  profile: string;
+  /** Immutable source policy/settings cwd, distinct from actual execution cwd. */
+  source_cwd?: string;
+  /** Trusted Agent identity while no execution workspace exists. */
+  unbound_worktree?: string;
+  /** Required by the runtime for a successfully bound worktree. */
+  workspace_policy?: DispatchWorkspacePolicy;
+}
 /** Host adaptation owns filesystem/permission/subprocess details, never lifecycle. */
 export interface DispatchPort {
   prepare(dispatch: Dispatch, context: DispatchContext & { deferInputs: boolean }): PreparedDispatch;
-  start?(dispatch: PreparedDispatch, context: DispatchContext & { acquireTree: boolean }): Promise<DispatchObservation>;
+  start?(dispatch: BoundDispatch, context: DispatchContext & { acquireTree: boolean }): Promise<DispatchObservation>;
 }
 
 export function validateDispatch(value: unknown): asserts value is Dispatch {
@@ -63,8 +88,35 @@ export function pathsOverlap(left: DispatchPath, right: DispatchPath): boolean {
   };
   return [left.path, left.canonical].some(a => [right.path, right.canonical].some(b => within(a, b) || within(b, a)));
 }
-export function dispatchText(dispatch: Dispatch | undefined): string {
-  return dispatch === undefined ? "" : `Parent dispatch declarations (scope and planned checks, not permission grants or completed validation):\n${JSON.stringify(dispatch)}\n--- End of dispatch declarations ---`;
+export function resourcesOverlap(left: PreparedPath, right: PreparedPath): boolean {
+  if (left.kind === "unbound_worktree" || right.kind === "unbound_worktree") {
+    // Different workspaces and bound/unbound pairs have no established overlap
+    // yet. This is NOT proof of disjointness, especially for .. and symlinks.
+    // Every provisional claim must be bound and rechecked before child input.
+    if (left.kind !== "unbound_worktree" || right.kind !== "unbound_worktree" || left.agent_id !== right.agent_id) return false;
+    // Owner currently prevents concurrent claims on one Agent, but keep this
+    // exported comparison well-defined for provisional callers/future lineages.
+    const logical = (rel: string) => {
+      const parts = rel.split("/").filter(part => part && part !== ".");
+      const first = parts.findIndex(part => part !== "..");
+      const up = first < 0 ? parts.length : first;
+      return { up, tail: parts.slice(up) };
+    };
+    const a = logical(left.rel), b = logical(right.rel);
+    const within = (base: typeof a, path: typeof a) => base.up > path.up ? !base.tail.length :
+      base.up === path.up && base.tail.length <= path.tail.length && base.tail.every((part, i) => part === path.tail[i]);
+    // Do not resolve logical paths against this process's cwd: arbitrarily many
+    // leading .. must not collapse at the host filesystem root before binding.
+    return within(a, b) || within(b, a);
+  }
+  return pathsOverlap(left, right);
+}
+export function isBoundDispatch(prepared: PreparedDispatch): prepared is BoundDispatch {
+  return [...prepared.inputs, ...prepared.ownership, ...(prepared.tree ? [prepared.tree] : [])]
+    .every(path => path.kind !== "unbound_worktree");
+}
+export function dispatchText(dispatch: Dispatch | undefined, executionCwd: string, sourceCwd = executionCwd): string {
+  return dispatch === undefined ? "" : `Parent dispatch (coordination scope and planned checks, not permissions or execution evidence):\nExecution cwd: ${JSON.stringify(executionCwd)}\nRelative inputs, ownership, and tree paths resolve from this execution cwd. Policy and settings inherit from source cwd (${JSON.stringify(sourceCwd)}); declarations grant no permissions.\n${JSON.stringify(dispatch)}\n--- End of dispatch declarations ---`;
 }
 export function validSourceState(value: unknown): value is SourceState {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;

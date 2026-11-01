@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { WorkspaceInfo } from "../core/contracts.js";
+import { withWorkspaceRecovery } from "../core/workspace-metadata.js";
 
 /** Execution metadata only: neither a permission grant nor an OS sandbox. */
 export type AgentWorkspace = Readonly<WorkspaceInfo>;
@@ -21,7 +22,7 @@ export interface AgentWorkspaceHandle {
 /** No cleanup API: even incomplete worktrees are retained for manual recovery. */
 export class AgentWorkspaceError extends Error {
   constructor(readonly reason: string, readonly retained_path?: string, readonly manifest?: string, cause?: unknown) {
-    super(`WORKTREE_CREATION_FAILED: ${reason}${retained_path ? `; retained path: ${retained_path}; recovery manifest: ${manifest}` : ""}`, { cause });
+    super(`WORKTREE_CREATION_FAILED: ${reason}${retained_path ? `; checkout target: ${retained_path}` : ""}${manifest ? `; recovery manifest: ${manifest}` : ""}`, { cause });
     this.name = "AgentWorkspaceError";
   }
 }
@@ -130,7 +131,7 @@ export async function createAgentWorkspace(input: {
   /** Launcher-verified absolute Git, never a project PATH lookup. */
   git: string | undefined;
 }): Promise<AgentWorkspaceHandle> {
-  let retained: string | undefined, manifest: string | undefined;
+  let allocated: string | undefined, retained: string | undefined, manifest: string | undefined;
   let record: ((state: string, extra?: Record<string, unknown>) => Promise<void>) | undefined;
   let stage = "workspace_preflight";
   try {
@@ -162,10 +163,12 @@ export async function createAgentWorkspace(input: {
     outsideImmutableAgentDirectory(root, agentRoot);
     await sameDirectory(worktrees, worktreesIdentity);
     const leaf = await mkdtemp(join(root, "pi-alehouse-worktree-"));
+    allocated = leaf;
     retained = join(leaf, "tree");
-    manifest = join(leaf, "recovery.jsonl");
+    const manifestPath = join(leaf, "recovery.jsonl");
     const leafIdentity = await privateDirectory(leaf);
-    const file = await open(manifest, constants.O_CREAT | constants.O_EXCL | constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+    const file = await open(manifestPath, constants.O_CREAT | constants.O_EXCL | constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+    manifest = manifestPath;
     try {
       record = async (state, extra = {}) => {
         await file.writeFile(`${JSON.stringify({ version: 1, state, agent_id: input.agentId,
@@ -258,6 +261,12 @@ export async function createAgentWorkspace(input: {
     } finally { await file.close(); }
   } catch (error) {
     const reason = error instanceof Error ? error.message : stage;
-    throw new AgentWorkspaceError(`${stage}: ${reason}`, retained, manifest, error);
+    throw withWorkspaceRecovery(new AgentWorkspaceError(`${stage}: ${reason}`, retained, manifest, error), {
+      mode: "worktree", state: "partial", source_cwd: input.sourceCwd,
+      // The intended checkout target stays in the typed error/manifest for
+      // diagnostics, never in the observed-location recovery attachment.
+      ...(allocated ? { allocated_path: allocated } : {}),
+      ...(manifest ? { recovery_manifest: manifest } : {}),
+    });
   }
 }

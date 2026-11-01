@@ -117,11 +117,23 @@ Core admission and source `settings.cwd` remain immutable; the runtime binds
 source project instructions/settings/config/trust to the actual child cwd.
 The known whole checkout root maps to the source repository root for deny/ask
 aliases only, never ALLOW or external-directory exemptions; source policy still
-loads at source cwd. Relative dispatch paths still use source cwd. An
-uninitialized worktree cannot declare `dispatch.tree`; declare it on a follow-up
-once the actual absolute path is known. First-task checks without a tree remain
-valid and observe actual execution cwd. List/detail expose
-uninitialized mode or actual cwd, source cwd and baseline after initialization.
+loads at source cwd. Relative dispatch paths use actual execution cwd, including
+first-task worktree declarations of inputs/ownership/tree. Uninitialized relative
+paths (including `..`) remain provisional with source deny-only preflight, not
+source existence checks. Binding checks actual paths, boundaries, permissions,
+inputs and claims before child input. Claim refinement is one-time; subsequent
+ownership/tree comparisons stay strict, while inputs are revalidated, not locked.
+An already-created healthy session survives binding preflight failure as idle.
+Child dispatch text distinguishes execution path base from source inheritance.
+See [binding details](workspaces.md#dispatch-paths-and-binding). Wait/read/list expose optional
+whole Run-local confirmed workspace bindings (four fields plus optional checkout
+root), not public states or manifests. A reserved `workspace_pending: true`
+marks a queued/running worktree task still awaiting binding, not an exited task
+or one with observed recovery facts. Failures expose only small observed
+retained-path summaries; intended nonexistent targets stay private. Action,
+interrupt and kill replies omit workspace details. Internal typed/frozen recovery
+errors, cleanup authority and retained artifacts remain intact. No earlier task
+borrows a later Agent baseline. See [workspace metadata](workspaces.md#workspace-and-recovery-metadata).
 
 Retain worktrees and the private recovery manifest through completion, kill,
 failure and shutdown for manual inspection/cleanup. Default allocations use
@@ -154,8 +166,9 @@ Git capture and local tree locks. Do not put claim/IO side effects into tool
 preparation or accepted-request replay. Checks capture superproject-only partial
 metadata at execution start; optional failures are unknown/advisory, not Owner
 faults. Preserve pending-question claims and any lease on pre-input answer
-rollback. Keep notes/time_wrapped in pre-commit optional packing, never thin
-controls or post-observe additions. Receipts require a valid history boundary
+rollback. Keep optional public notes in pre-commit packing, never thin controls
+or post-observe additions. Warning-attempt facts stay in core/UI/history, not
+parent-model telemetry. Receipts require a valid history boundary
 and the sole successful end append; its SDK append ID is not disk/fsync proof,
 and missing boundaries remain coverage gaps. Offline journal audit uses
 `scripts/analyze-pi-harness-journal.mjs`, distinct from session analysis: strict
@@ -166,16 +179,27 @@ stay strict without retry. Derive time_wrapped_attempts from recorded attempts,
 not delivery. Source status fixes --untracked-files=normal; global LFS helpers
 and configured fsmonitor=false still conservatively withhold known state.
 
-Workers should produce minimal reviewable results, explore only unresolved
-questions and never retry the same denied operation class. [Runtime feedback](runtime-feedback.md)
-adds partial exact-tool block summaries and conditional fixed-model guidance,
-not a semantic denial counter or availability diagnosis. Keep temporary evidence
-paths out of source; report actual comparisons, platform/configuration, commands
-and unrun/blocked/interrupted/zero-match checks. Worker-body edits change generated
-digests: use matched resources and a fresh process, never replace user files or
-claim documentation changes as validation/deployment acceptance.
+The shared worker prompt requires scoped, reviewable work, denial/ownership
+coordination and concise actual check results with unfinished or blocked work.
+It does not carry a universal evidence-audit checklist. [Runtime feedback](runtime-feedback.md)
+adds partial exact-tool block summaries, not a semantic denial counter or
+availability diagnosis. The explicitly assigned validation owner must report
+actual comparisons, platform/configuration, commands and unrun, blocked,
+interrupted or zero-match checks. Keep temporary evidence outside source.
+Worker-body edits change generated digests: use matched resources and a fresh
+process, never replace user files or claim documentation changes as validation
+or deployment acceptance.
 
 ## Tool metadata and Off
+
+The scoped simplification removes only the abandoned metadata-only `agent_read`
+view as a functional feature. Keep all nine names and other arguments/features:
+required `builds_on`, optional label/after/dispatch, budgets, inherit_context,
+wait's all/any selection, every wait_ms and max_chars. Parent replies omit routine telemetry. Live Run context, usage and elapsed time
+remain UI observations; warning attempts remain outcome/history facts and task
+descriptions stay on their Runs. The unused Agent summary and its dedicated
+touched-path tracking are removed, as is generic model-recovery hint generation. No new details flags or
+modes replace the removed view. This is not authority or lifecycle deletion.
 
 The [tool contract](tool-contract.md) defines model-visible behavior;
 [concepts](concepts.md) describes the underlying identities and lifecycle.
@@ -231,9 +255,10 @@ without rechecking the clock. Zero waits check readiness and empty selection
 before arming any timer.
 
 Spawn/run/send/answer/wait/read produce the same envelope, including derived
-task sequence and action facts. Task binding is separate from typed alert scope.
-All bound rows/pending names remain complete; createOwnerTools must reject
-resident >16 (extension fixes twelve), leaving core capacity configurable. As the
+task sequence and action facts. Snapshot/done omit reason; zero pending counts,
+the redundant pending array and empty result text are absent. Task binding is
+separate from typed alert scope. All bound rows remain complete;
+createOwnerTools must reject resident >16 (extension fixes twelve), leaving core capacity configurable. As the
 last assembly step, it explicitly binds the Owner to model-compatible names:
 all retained Agents, including released history, must have unique valid model
 names. Failed binding has no effects; successful binding lasts for that Owner,
@@ -242,8 +267,11 @@ allocation. Replays remain before new-work validation. Unbound generic core
 Owners retain optional, arbitrary or repeated display names. Low-level `observe`
 is a model-packing seam with representability preconditions, not a conversion
 of arbitrary generic history. Never filter or rename accepted facts to make an
-incompatible Owner appear supported. Read prioritizes whole questions and pins cursor Run independently of Agent alerts;
-inline observations see only their accepted/bound Run. Do not use legacy progress
+incompatible Owner appear supported. Default result read prioritizes whole
+questions and pins cursor Run independently of Agent alerts; a positive safe
+`task` selects a retained Run read-only, never a command target. Task and cursor
+are mutually exclusive. There is no metadata-only read view or metadata paging.
+Inline observations see only their accepted/bound Run. Do not use legacy progress
 claims or name-based finished consumption.
 
 One Owner pending FIFO derives independent child (64 Owner / 16 Agent) and
@@ -275,8 +303,15 @@ omits next_cursor. Promise/thenable observation ports are interface errors, not
 awaitable work. A fixed-width
 37-character stateless cursor is reserved for every bound terminal window with
 unshown retained text, even if the whole page is displaced after Agent reuse.
-The conservative tagged-alert/control/token/cursor/queue-wait reservation bound is 65484 bytes;
-see [packing budgets](tool-contract.md#budget-and-local-publication).
+Whole optional labels and observed location fields yield with
+response_limit_reached; there is no unlimited metadata-recovery promise.
+Finished labels can yield without delaying or resetting that original's finished
+bit. Keep required controls, question identity and stateless r1_ result cursors
+reserved. Kill returns independent lifecycle status without workspace details;
+named task reads remain available within the Owner. The double-JSON content cap
+is 65536 bytes; the conservative retained-envelope fixture includes the bounded
+workspace-pending control, not arbitrary labels/paths or the retired pending-name
+array. See [packing budgets](tool-contract.md#budget-and-local-publication).
 Tool success only passes that result through, without later
 assertCurrent/serialization/withChanges/UI. onRunAccepted UI wake stays separate
 best-effort before observation. The SDK tool_result hook may append usage, not
@@ -311,6 +346,8 @@ one migration unit:
   checks exact definition digests, including worker-body changes. Absent-only
   init never repairs existing mismatches or overwrites files/symlinks. Preserve
   user choices and credentials; never copy credentials or silently enable models.
+  This reconciliation is a deliberate operator action, not a runtime write to
+  user files; documentation/source updates do not migrate installed resources.
   Routing defaults to Off. Existing user `reader.md` files are not automatically
   deleted or replaced; they provide no supported runtime profile or capability.
 - Keep all nine management tools and retired names denied/excluded in children;

@@ -88,9 +88,6 @@ const ownerCases = {
   view: { kind: "projection", args: (f) => [f.run.run_id], check: (value, f) => {
     assert.equal(value.run_id, f.run.run_id); assert.equal(value.status, "running");
   } },
-  agentSummary: { kind: "projection", args: (f) => [f.run.agent_id], check: (value, f) => {
-    assert.equal(value.agent_id, f.run.agent_id); assert.equal(value.runs, 1);
-  } },
   findAgent: { kind: "projection", args: () => ["otter"], check: (value, f) => {
     assert.deepEqual(value, { agent_id: f.run.agent_id, run_id: f.run.run_id });
   } },
@@ -120,7 +117,6 @@ const callbackCases = {
   question: { kind: "effect", args: () => ["forbidden?"] },
   alert: { kind: "effect", args: () => ["forbidden"] },
   managedBlock: { kind: "effect", args: () => [{ toolName: "bash" }] },
-  touched: { kind: "effect", args: () => ["forbidden.txt"] },
 };
 const surfaces = [
   { label: "OwnerController", surface: sourceSurface(new URL("../../src/core/owner-controller.ts", import.meta.url), "OwnerController"),
@@ -159,7 +155,7 @@ function stableState(f) {
     run: pick(view, "status phase execution_exited finalization_pending resident unavailable_reason owner_error owner_blocked turns stop_reason cancellation_source outcome usage runtime cleanup_errors discarded_inputs has_question question_id pending_messages delivered_updates"),
     drain: view.drain?.waiting_for,
     result: pick(f.c.getResult(f.run.run_id), "text truncated retained_chars total_chars"),
-    agent: pick(f.c.agentSummary(f.run.agent_id), "runs touched touched_omitted pending_updates observed_cost cost_partial"),
+    inbox: [...f.c.agents.get(f.run.agent_id).inbox],
     question: retained.question, finished_presented: retained.finished_presented,
     input_entered: retained.record.input_entered, input_count: retained.inputCount, pending_inputs: retained.inputs.size,
     alerts: f.c.alerts.map(({ run, message }) => ({ run_id: run.record.run_id, message })),

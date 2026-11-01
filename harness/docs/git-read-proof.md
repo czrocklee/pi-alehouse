@@ -25,10 +25,16 @@ remain. Researcher has no Bash/edit/write tools. No live user definition or
 policy is overwritten by building this package.
 
 Dangerous model-requested PATH/loader/helper environment prefixes remain a
-deny-only guard concern. Other assignment-bearing Git asks and selected
-high-impact Git asks defer to human approval instead of model-only Jev review.
-These checkpoints apply to asks, not existing allows or yolo; they are not a
-second Git authorization matrix.
+deny-only guard concern, including requested EDITOR, VISUAL and GIT_PROXY_COMMAND
+prefixes, never the operator's inherited environment. Other assignment-bearing
+Git asks and selected high-impact Git asks defer to human approval instead of
+model-only Jev review. Destructive long-option prefixes and branch
+--delete-merged are recognized regardless of option order. Checkout operands
+that could be paths, implicit patch mode and pathspec-file input conservatively
+checkpoint without repository IO; previous-branch `checkout -` and ordinary
+branch creation are not claimed destructive cases. Option values and `--` keep
+their argv roles. These checkpoints apply to asks, not existing allows or yolo;
+they are not a second Git authorization matrix.
 
 Raw global/project/agent/project-agent Bash restrictions are checked before
 session composition. A selected explicit deny is not erased by a recorded

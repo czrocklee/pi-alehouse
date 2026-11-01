@@ -14,10 +14,10 @@ const OFFSET_WIDTH = 11; // MAX_SAFE_INTEGER in base 36.
 const PATTERN = /^r1_([A-Za-z0-9_-]{22})\.([0-9a-z]{11})$/;
 
 /** Uniform recovery guidance for syntax, identity, range and UTF-16 failures.
- * A cursorless read is not a recovery selector for an Agent's older task. */
+ * Explicit task starts that original task's first page, without a cursor. */
 export function invalidResultCursor(): HarnessError {
   return new HarnessError("INVALID_CURSOR", { resolution:
-    "Pass agent and next_cursor exactly as returned together in an earlier reply. Without a cursor, agent_read selects the current, pending-question, or latest task; it does not recover a specific older task." });
+    "Copy agent and next_cursor from the same reply. Or omit cursor and use that Agent's task number to restart its first page." });
 }
 
 /** First 128 SHA256 bits, with an independent domain from question identity.

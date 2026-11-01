@@ -1,13 +1,15 @@
+import { isAbsolute } from "node:path";
 import {
-  COMMUNICATION_LIMITS, communicationBudget, communicationTextUnits, isModelAgentName as validName,
-  isQueueWait,
+  COMMUNICATION_LIMITS, communicationBudget, communicationEnvelopeBytes, communicationTextUnits, isModelAgentName as validName,
+  isQueueWait, modelDispatchNotes, visibleCommunicationReason,
   type CommunicationAction, type CommunicationEnvelope, type CommunicationReason,
   type FinishedEntry, type TaskEntry, type TaskStatus, type ThinTaskEntry,
 } from "./communication-envelope.js";
 import type {
-  CommunicationSnapshot, PackedCommunication, ResultWindow,
+  CommunicationSnapshot, CommunicationToolResult, PackedCommunication, ResultWindow,
 } from "./communication-snapshot.js";
-import { MODEL_RECOVERY_HINT_MAX_UNITS } from "./model-recovery.js";
+import { validWorkspace } from "./contracts.js";
+import type { TaskMetadata } from "./task-metadata.js";
 import { isQuestionId } from "./question-id.js";
 import { encodeResultCursor } from "./result-cursor.js";
 import { HarnessError } from "./ports.js";
@@ -29,6 +31,32 @@ const invalid = (message: string): never => {
 const tooLarge = (): never => {
   throw new CommunicationPackingError("COMMUNICATION_REPLY_TOO_LARGE", "Required communication facts exceed the envelope budget");
 };
+const toolResult = (value: unknown): CommunicationToolResult =>
+  ({ content: [{ type: "text", text: JSON.stringify(value) }], details: undefined });
+
+/** Independent roster/lifecycle replies have no bodies, cursors or publication
+ * references. Keep their existing optional-field priority separate from result
+ * packing, but use the same byte cap, whole-field omission and final serializer.
+ * This pure projection never mutates the captured object or consumes facts. */
+export function packIndependentCommunication(captured: Record<string, unknown>): CommunicationToolResult {
+  const value = structuredClone(captured);
+  let limited = value.response_limit_reached === true;
+  value.response_limit_reached = true;
+  const rows = Array.isArray(value.agents) ? value.agents as Record<string, unknown>[] : [value];
+  // workspace_pending is a required bounded control, never a drop target.
+  optionalFields: for (const field of ["workspace", "retained_paths", "error", "owner_error", "unavailable_reason", "dispatch_notes", "label"] as const) {
+    for (const row of [...rows].reverse()) {
+      if (communicationEnvelopeBytes(value) <= COMMUNICATION_LIMITS.envelope_bytes) break optionalFields;
+      if (row[field] === undefined) continue;
+      delete row[field]; limited = true;
+    }
+  }
+  if (communicationEnvelopeBytes(value) > COMMUNICATION_LIMITS.envelope_bytes)
+    throw new HarnessError("COMMUNICATION_REPLY_TOO_LARGE", { resolution: "Read one Agent/task instead of the roster. Required lifecycle facts could not fit; do not repeat a management command blindly." });
+  if (!limited) delete value.response_limit_reached;
+  return toolResult(value);
+}
+
 const flags = ["has_question", "limit_reached", "unavailable", "question_truncated", "result_omitted", "result_truncated"] as const;
 const diagnostics = ["error", "owner_error", "unavailable_reason"] as const;
 const statuses: Readonly<Record<TaskStatus, true>> = {
@@ -92,6 +120,22 @@ function validateWindow(window: ResultWindow): void {
     invalid("Invalid stable result cursor identity");
 }
 
+function validateMetadata(metadata: Partial<TaskMetadata>): void {
+  if (metadata.workspace_pending !== undefined && metadata.workspace_pending !== true) invalid("Invalid workspace_pending control");
+  if (metadata.label !== undefined && (typeof metadata.label !== "string" || metadata.label.length > COMMUNICATION_LIMITS.label_units))
+    invalid("Invalid bounded task label");
+  if (metadata.retained_paths !== undefined && (!Array.isArray(metadata.retained_paths) || metadata.retained_paths.length < 1 || metadata.retained_paths.length > 2 ||
+      new Set(metadata.retained_paths).size !== metadata.retained_paths.length ||
+      Array.from(metadata.retained_paths).some((path: unknown) => typeof path !== "string" || !isAbsolute(path))))
+    invalid("Invalid retained paths");
+  const workspace = metadata.workspace;
+  if (workspace === undefined) return;
+  if (!validWorkspace(workspace) || Object.keys(workspace).some(key =>
+      !["mode", "cwd", "source_cwd", "base_commit", "checkout_root"].includes(key))) invalid("Invalid workspace metadata");
+  if (workspace.checkout_root !== undefined && (typeof workspace.checkout_root !== "string" || !isAbsolute(workspace.checkout_root)))
+    invalid("Invalid workspace location");
+}
+
 /** Preserve pairs in the original text, while keeping originally lone surrogates. */
 function prefix(text: string, limit: number): string {
   let end = Math.min(text.length, Math.max(0, limit));
@@ -101,6 +145,15 @@ function prefix(text: string, limit: number): string {
 
 function replaceRow(envelope: CommunicationEnvelope, index: number, row: TaskEntry): CommunicationEnvelope {
   return { ...envelope, agents: envelope.agents.map((current, at) => at === index ? row : current) };
+}
+
+/** Counts are reminders, not zero-valued scaffolding. Shape every trial before
+ * measuring/serializing so optional omission cannot follow publication commit. */
+function withCount(envelope: CommunicationEnvelope, field: "alerts_pending" | "finished_pending", count: number): CommunicationEnvelope {
+  const result: { -readonly [K in keyof CommunicationEnvelope]: CommunicationEnvelope[K] } = { ...envelope };
+  if (count > 0) result[field] = count;
+  else delete result[field];
+  return result;
 }
 
 /** Full text is tried separately: completing a page can remove a cursor or a
@@ -154,6 +207,8 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     if (taskKeys.has(key)) invalid("Duplicate bound task");
     taskKeys.add(key);
     if (task.settled !== terminalStatus(row.status)) invalid("Task settlement must match its control status");
+    validateMetadata(task);
+    if (task.workspace_pending === true) row.workspace_pending = true;
     if (task.question_id !== undefined) {
       if (!isQuestionId(task.question_id)) invalid("Invalid bounded question identity");
       row.question_id = task.question_id;
@@ -180,11 +235,6 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
         invalid("Invalid diagnostic text");
     }
     if (task.cancellation_source !== undefined && task.cancellation_source !== "human") invalid("Invalid cancellation_source metadata");
-    if (task.time_wrapped !== undefined && task.time_wrapped !== true) invalid("Invalid time_wrapped diagnostic flag");
-    if (task.context_tokens !== undefined && (!safeCount(task.context_tokens) || !task.settled)) invalid("Invalid context_tokens hint");
-    if (task.recovery_hint !== undefined && (!task.settled || row.status !== "failed" ||
-        !nonblank(task.recovery_hint) || task.recovery_hint.length > MODEL_RECOVERY_HINT_MAX_UNITS))
-      invalid("Invalid bounded recovery_hint");
     if (task.dispatch_notes !== undefined && (!Array.isArray(task.dispatch_notes) || task.dispatch_notes.length > 2 ||
         Array.from(task.dispatch_notes).some((note: unknown) => typeof note !== "string" || !nonblank(note) || note.length > 120))) invalid("Invalid bounded dispatch notes");
     return row;
@@ -206,6 +256,7 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     const row = copyRow(candidate.row);
     if (!terminalStatus(row.status)) invalid("Finished candidate requires a terminal status");
     if (candidate.cancellation_source !== undefined && candidate.cancellation_source !== "human") invalid("Invalid finished cancellation_source metadata");
+    validateMetadata({ label: candidate.label });
     const key = `${row.agent}:${row.task}`;
     if (finishedKeys.has(key)) invalid("Duplicate finished candidate");
     finishedKeys.add(key);
@@ -223,21 +274,20 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     return row;
   });
 
-  const pending = snapshot.tasks.filter((task) => !task.settled).map((task) => task.row.agent);
+  const reason = visibleCommunicationReason(snapshot.reason);
   let envelope: CommunicationEnvelope = {
-    reason: snapshot.reason,
+    ...(reason === undefined ? {} : { reason }),
     ...(action ? { action } : {}),
     ...(snapshot.workers_disabled ? { workers_disabled: true } : {}),
     agents,
-    ...(pending.length ? { pending } : {}),
-    alerts_pending: alerts.length,
-    finished_pending: finished.length - presented.size,
+    ...(alerts.length ? { alerts_pending: alerts.length } : {}),
+    ...(finished.length > presented.size ? { finished_pending: finished.length - presented.size } : {}),
     response_limit_reached: true,
   };
   let shownAlerts = 0;
   let limited = false;
   if (snapshot.reason === "alert") {
-    envelope = { ...envelope, alerts: [alerts[0]!], alerts_pending: alerts.length - 1 };
+    envelope = withCount({ ...envelope, alerts: [alerts[0]!] }, "alerts_pending", alerts.length - 1);
     shownAlerts = 1;
   }
   if (!communicationBudget(envelope).fits) tooLarge();
@@ -261,26 +311,18 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
 
   if (!suppressPresentation) {
     for (; shownAlerts < alerts.length; shownAlerts++) {
-      const candidate = { ...envelope, alerts: alerts.slice(0, shownAlerts + 1), alerts_pending: alerts.length - shownAlerts - 1 };
+      const candidate = withCount({ ...envelope, alerts: alerts.slice(0, shownAlerts + 1) }, "alerts_pending", alerts.length - shownAlerts - 1);
       if (!communicationBudget(candidate).fits) { limited = true; break; }
       envelope = candidate;
     }
   }
 
-  // Optional metadata, NOT reserved thin controls: human Stop attribution, all
-  // warning attempts, then reuse-cost and whole recovery hints, before result or
-  // string diagnostic. Never clip hints or spend the body-text budget;
-  // previously fitted bodies/cursors never yield. Identical recovery prose is
-  // intentionally shown only on its first qualified row, not a packing loss.
-  const recoveryHints = new Set<string>();
-  for (const field of ["cancellation_source", "time_wrapped", "context_tokens", "recovery_hint"] as const) {
+  // Bounded labels and Stop attribution retain their priority. Arbitrary-sized
+  // locations follow result fitting, so a fitting path cannot starve payload.
+  for (const field of ["cancellation_source", "label"] as const) {
     for (let index = 0; index < snapshot.tasks.length; index++) {
       const value = snapshot.tasks[index]![field];
       if (value === undefined) continue;
-      if (field === "recovery_hint" && typeof value === "string") {
-        if (recoveryHints.has(value)) continue;
-        recoveryHints.add(value);
-      }
       const candidate = replaceRow(envelope, index, { ...envelope.agents[index]!, [field]: value });
       if (communicationBudget(candidate).fits) envelope = candidate;
       else limited = true;
@@ -299,7 +341,8 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
       const row: MutableRow = { ...base };
       const hasRetainedText = window.offset < window.retained_chars;
       const omitted = shown.length === 0 && (window.text.length > 0 || hasRetainedText);
-      if (!omitted) row.result = shown;
+      if (shown.length > 0) row.result = shown;
+      else delete row.result;
       if (omitted || task.row.result_omitted) row.result_omitted = true;
       else delete row.result_omitted;
       if (task.row.result_truncated || (!window.cursor && window.offset + shown.length < window.retained_chars)) row.result_truncated = true;
@@ -323,6 +366,18 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     }
   }
 
+  // Whole observed locations spend only bytes left AFTER the result pages.
+  // Never clip a path, refit a published body, or displace a reserved control.
+  for (const field of ["workspace", "retained_paths"] as const) {
+    for (let index = 0; index < snapshot.tasks.length; index++) {
+      const value = snapshot.tasks[index]![field];
+      if (value === undefined) continue;
+      const candidate = replaceRow(envelope, index, { ...envelope.agents[index]!, [field]: structuredClone(value) });
+      if (communicationBudget(candidate).fits) envelope = candidate;
+      else limited = true;
+    }
+  }
+
   for (let index = 0; index < snapshot.tasks.length; index++) {
     const task = snapshot.tasks[index]!;
     for (const key of diagnostics) {
@@ -340,7 +395,7 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     }
     // Notes remain low-priority whole diagnostics, not reserved controls.
     // A later locatable observation can try again, but no cursor is introduced.
-    for (const note of task.dispatch_notes ?? []) {
+    for (const note of modelDispatchNotes(task.dispatch_notes) ?? []) {
       const base = envelope.agents[index]!;
       const candidate = replaceRow(envelope, index, { ...base, dispatch_notes: [...(base.dispatch_notes ?? []), note] });
       if (!communicationBudget(candidate).fits) { limited = true; break; }
@@ -353,17 +408,18 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     for (let index = 0; index < finished.length; index++) {
       if (presented.has(index)) continue;
       if (listed.length === COMMUNICATION_LIMITS.finished) { limited = true; break; }
-      const candidate = { ...envelope, finished: [...listed, finished[index]!], finished_pending: finished.length - presented.size - 1 };
+      const candidate = withCount({ ...envelope, finished: [...listed, finished[index]!] }, "finished_pending", finished.length - presented.size - 1);
       if (!communicationBudget(candidate).fits) { limited = true; break; }
       // Attribute only after the thin row fits. If metadata cannot fit, still
       // present/commit that original Run; no second reminder/ACK is invented.
       let row: FinishedEntry = finished[index]!;
-      const source = snapshot.finished[index]!.cancellation_source;
       envelope = candidate;
-      if (source !== undefined) {
-        const attributed = { ...row, cancellation_source: source };
-        const withSource = { ...envelope, finished: [...listed, attributed] };
-        if (communicationBudget(withSource).fits) { envelope = withSource; row = attributed; }
+      for (const field of ["cancellation_source", "label"] as const) {
+        const value = snapshot.finished[index]![field];
+        if (value === undefined) continue;
+        const attributed = { ...row, [field]: value };
+        const withMetadata = { ...envelope, finished: [...listed, attributed] };
+        if (communicationBudget(withMetadata).fits) { envelope = withMetadata; row = attributed; }
         else limited = true;
       }
       listed.push(row);
@@ -376,10 +432,9 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     envelope = complete;
   }
   if (!communicationBudget(envelope).fits) tooLarge();
-  const text = JSON.stringify(envelope);
   return {
     envelope,
-    result: { content: [{ type: "text", text }], details: undefined },
+    result: toolResult(envelope),
     references: {
       alerts: Array.from({ length: shownAlerts }, (_, index) => index),
       finished: [...presented].sort((left, right) => left - right),

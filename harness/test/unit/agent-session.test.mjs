@@ -94,6 +94,28 @@ for (const [label, started, result] of [
   assert.equal(session.listenerCount(), 0);
 });
 
+test("tool activity retains context and usage without inspecting edit/write paths", async () => {
+  const session = stubSession([{ provider: "p", model: "m", usage: priced(2) }]);
+  session.getContextUsage = () => ({ tokens: 50000, contextWindow: 100000 });
+  const subscribe = session.subscribe, prompt = session.prompt; let emit;
+  session.subscribe = listener => { emit = listener; return subscribe(listener); };
+  session.prompt = async () => {
+    for (const [toolCallId, toolName] of [["edit-1", "edit"], ["write-1", "write"]]) {
+      emit({ type: "tool_execution_start", toolCallId, toolName,
+        get args() { throw new Error("tool paths are not telemetry"); } });
+    }
+    emit({ type: "tool_execution_end", toolCallId: "edit-1", isError: false });
+    emit({ type: "tool_execution_end", toolCallId: "write-1", isError: false });
+    await prompt();
+  };
+  const snapshots = [], port = new SdkRunPort({ session, parentBus: { emit() {} }, gate: new RunInputGate(), readiness() {} });
+  const facts = await port.run("go", { ...silentCallbacks(), runtime: snapshot => snapshots.push(snapshot) });
+  assert.equal(facts.kind, "success"); assert.equal(facts.usage.total.cost, 2);
+  assert.deepEqual(snapshots.slice(1, 5).map(snapshot => snapshot.activity), ["tool", "tool", "tool", "generating"]);
+  for (const snapshot of snapshots) assert.deepEqual(snapshot.context, { tokens: 50000, context_window: 100000 });
+  assert.equal(snapshots.at(-1).usage.total.cost, 2); assert.equal(session.listenerCount(), 0);
+});
+
 test("missing compaction end retains unknown spend and clears retry telemetry before cleanup", async () => {
   let listener, unsubscribed = false;
   const session = { ...stubSession([]), model: { provider: "p", id: "m" },

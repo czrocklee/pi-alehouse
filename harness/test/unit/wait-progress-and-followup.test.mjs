@@ -26,7 +26,7 @@ test("alerts survive absent waiters, wake matching observations, and are present
   assert.deepEqual((await one).alerts.map((entry) => entry.message), ["one publication"]);
   let resolved = false; const completion = two.then((value) => { resolved = true; return value; });
   await tick(); assert.equal(resolved, false, "the loser keeps waiting on the same task");
-  ports[0].finish("A"); assert.equal((await completion).reason, "done");
+  ports[0].finish("A"); assert.equal(Object.hasOwn(await completion, "reason"), false);
   assert.equal(c.view(a.run_id).pending_messages, 0);
   ports[1].finish("B"); await ended(c, b);
   assert.deepEqual((await read(c, b)).alerts.map((entry) => entry.message), ["B before wait"]);
@@ -40,9 +40,10 @@ test("a terminal any return can present alerts from all explicitly scoped Agents
   for (const port of ports) { port.callbacks.alert("first"); port.callbacks.alert("second"); }
   ports[0].finish("done"); await ended(c, runs[0]);
   const reply = await wait(c, runs, { mode: "any" });
-  assert.equal(reply.reason, "done"); assert.equal(reply.agents.length, 16); assert.equal(reply.alerts.length, 32);
-  assert.deepEqual(reply.pending, runs.slice(1).map((_, index) => `r${index + 1}`));
-  assert.equal(reply.alerts_pending, 0);
+  assert.equal(Object.hasOwn(reply, "reason"), false); assert.equal(reply.agents.length, 16); assert.equal(reply.alerts.length, 32);
+  assert.equal(Object.hasOwn(reply, "pending"), false);
+  assert.deepEqual(reply.agents.slice(1).map(({ agent, status }) => [agent, status]), runs.slice(1).map((_, index) => [`r${index + 1}`, "running"]));
+  assert.equal(Object.hasOwn(reply, "alerts_pending"), false);
   assert(runs.every((run) => c.view(run.run_id).pending_messages === 0));
 });
 
@@ -56,7 +57,8 @@ test("pending questions remain level-triggered across concurrent and repeated pu
     assert.equal(reply.reason, "question"); assert.equal(reply.agents[0].question, "which option?"); assert(reply.agents[0].question_id);
   }
   const again = await wait(c, [a, b], { wait_ms: 0 });
-  assert.equal(again.reason, "question"); assert.deepEqual(again.pending, ["b"]);
+  assert.equal(again.reason, "question"); assert.equal(Object.hasOwn(again, "pending"), false);
+  assert.deepEqual(again.agents.map(({ agent, status }) => [agent, status]), [["a", "needs_input"], ["b", "running"]]);
   assert.equal((await wait(c, [b], { wait_ms: 0 })).reason, "timeout");
 });
 
@@ -82,7 +84,7 @@ test("full Agent inbox rejects without evicting accepted alerts; stale callbacks
   ports[0].finish("FINAL"); await ended(c, a);
   const reply = await read(c, a);
   assert.deepEqual(reply.alerts.map((entry) => entry.message), Array.from({ length: 16 }, (_, index) => `message ${index}`));
-  assert.equal(reply.alerts_pending, 0); assert.equal(reply.agents[0].result, "FINAL");
+  assert.equal(Object.hasOwn(reply, "alerts_pending"), false); assert.equal(reply.agents[0].result, "FINAL");
   const b = await c.submit("b", { resume: a.agent_id, prompt: "b" }); await until(() => ports[0].calls.length === 2);
   assert.throws(() => old.alert("STALE"), errorCode("RUN_INPUT_CLOSED"));
   assert.throws(() => old.question("STALE?"), errorCode("RUN_INPUT_CLOSED"));

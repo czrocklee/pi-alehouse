@@ -8,11 +8,22 @@ import test from "node:test";
 import ts from "typescript";
 
 const dataModule = (source) => `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+const compilerOptions = { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 };
+const sourceOutput = (path) => ts.transpileModule(readFileSync(new URL(path, import.meta.url), "utf8"), { compilerOptions }).outputText;
+// Use the actual source core error and WeakMap helpers, not fake classes or a
+// potentially stale dist generation. Only SDK/IO boundaries below are seams.
+const portsUrl = dataModule(sourceOutput("../../src/core/ports.ts"));
+const metadataUrl = dataModule(sourceOutput("../../src/core/workspace-metadata.ts"));
+const workspaceUrl = dataModule(sourceOutput("../../src/runtime/agent-workspace.ts")
+  .replace('"../core/workspace-metadata.js"', JSON.stringify(metadataUrl)));
+const { SessionInitializationError } = await import(portsUrl);
 const seamUrl = dataModule(`
 import { createHash } from "node:crypto";
 export { SessionManager } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-coding-agent"))};
+export { SessionInitializationError } from ${JSON.stringify(portsUrl)};
+export { AgentWorkspaceError } from ${JSON.stringify(workspaceUrl)};
+export { withWorkspaceRecovery, workspaceRecoveryOf } from ${JSON.stringify(metadataUrl)};
 export const state = {};
-export class SessionInitializationError extends Error {}
 export const digest = (text) => createHash("sha256").update(text).digest("hex");
 export const createEventBus = () => ({});
 export const createAgentSession = () => {};
@@ -101,7 +112,7 @@ function fixture(t, profile = "editor") {
   for (const key of Object.keys(seam.state)) delete seam.state[key];
   Object.assign(seam.state, { loaders: [], prompts: [], assemblies: [], runs: [], cleanups: 0,
     blockRuns: [], blockEnds: 0, blockFlushes: 0, blockUnsubscribes: 0,
-    workspaceCalls: [], policyBinds: [], policyReleases: [], policyBindsAtReload: [], activities: [], approvalBegins: [],
+    workspaceCalls: [], policyBinds: [], policyReleases: [], policyAliases: [], policyBindsAtReload: [], activities: [], approvalBegins: [],
     workspaceResult: { workspace: Object.freeze({ mode: "worktree", cwd: join(directory, "execution"), source_cwd: directory, base_commit: "a".repeat(40) }),
       checkout_root: join(directory, "execution"), source_root: directory, manifest: join(directory, "recovery.jsonl") },
     cleanupReport: { shutdownExited: true, errors: [] } });
@@ -123,7 +134,18 @@ function fixture(t, profile = "editor") {
     approvalBindings: { childExtension: (id) => { approvals.push(id); return () => {}; }, begin: (...args) => seam.state.approvalBegins.push(args), end() {} },
     activities: { track: (id, cwd) => { seam.state.activities.push({ id, cwd }); return { extension() {}, begin() {} }; } },
     git: "/fixture/trusted-git",
-    bindWorkspacePolicy: (input) => { seam.state.policyBinds.push(input); return { release: () => seam.state.policyReleases.push(input.sessionId) }; },
+    bindWorkspacePolicy: (input) => {
+      seam.state.policyBinds.push(input);
+      let live = true;
+      return {
+        aliases(paths) {
+          assert(live, "fixture policy binding released");
+          seam.state.policyAliases.push({ sessionId: input.sessionId, paths: [...paths] });
+          return seam.state.policyAliasResult ?? [];
+        },
+        release() { live = false; seam.state.policyReleases.push(input.sessionId); },
+      };
+    },
     web: { acquire: async () => ({ factory() {}, release: () => webReleases.push("released") }) },
   };
   return { agent, options, webReleases, approvals,
@@ -133,6 +155,8 @@ function fixture(t, profile = "editor") {
 test("shared default creates no workspace or policy alias", async (t) => {
   const f = fixture(t, "editor"), port = await f.create();
   assert.equal(port.workspace, undefined);
+  assert.equal(port.workspace_details, undefined);
+  assert.equal(port.workspace_policy, undefined);
   assert.deepEqual(seam.state.workspaceCalls, []);
   assert.deepEqual(seam.state.policyBinds, []);
   assert.equal(seam.state.assemblies[0].options.cwd, f.agent.settings.cwd);
@@ -146,6 +170,16 @@ test("worktree actual cwd reaches SDK manager/tools/activity/approval; source al
   const manager = seam.state.assemblies[0].options.sessionManager;
   assert.deepEqual(seam.state.workspaceCalls, [{ agentDir: f.options.agentDir, agentId: f.agent.agent_id, sourceCwd: f.agent.settings.cwd, git: f.options.git }]);
   assert.equal(port.workspace, workspace); assert.ok(Object.isFrozen(port.workspace));
+  assert.deepEqual(Object.keys(workspace).sort(), ["base_commit", "cwd", "mode", "source_cwd"], "WorkspaceInfo stays unchanged");
+  assert.deepEqual(port.workspace_details, { checkout_root: seam.state.workspaceResult.checkout_root,
+    recovery_manifest: seam.state.workspaceResult.manifest });
+  assert.ok(Object.isFrozen(port.workspace_details));
+  assert.ok(Object.isFrozen(port.workspace_policy));
+  assert.deepEqual(Object.keys(port.workspace_policy), ["aliases"], "core gets neither root mapping nor release authority");
+  assert.deepEqual(seam.state.policyAliases, [{ sessionId: port.session_id, paths: [] }], "validate the live authority seam before loading extensions");
+  seam.state.policyAliasResult = [join(workspace.source_cwd, "file")];
+  assert.deepEqual(port.workspace_policy.aliases([join(workspace.cwd, "file")]), seam.state.policyAliasResult);
+  assert.deepEqual(seam.state.policyAliases.at(-1), { sessionId: port.session_id, paths: [join(workspace.cwd, "file")] });
   assert.equal(f.agent.settings.cwd, f.options.ctx.cwd, "admitted source remains unchanged");
   assert.equal(seam.state.assemblies[0].options.cwd, workspace.cwd);
   assert.equal(manager.getCwd(), workspace.cwd);
@@ -168,6 +202,7 @@ test("worktree actual cwd reaches SDK manager/tools/activity/approval; source al
   assert.deepEqual(seam.state.policyReleases, [], "a dispose attempt alone is not cleanup proof");
   disposal.resolve({ shutdownExited: true, errors: [] });
   await pending; assert.deepEqual(seam.state.policyReleases, [port.session_id]);
+  assert.throws(() => port.workspace_policy.aliases([]), /binding released/, "release cannot leave a cached authorization alias");
   assert.equal(port.workspace, workspace, "termination retains recovery metadata, not deletion");
 });
 
@@ -183,6 +218,7 @@ test("nested execution inherits the whole known checkout root pair, not just its
   assert.equal(bound.source_root, seam.state.workspaceResult.source_root);
   assert.notEqual(bound.checkout_root, bound.cwd);
   assert.notEqual(bound.source_root, bound.source_cwd);
+  assert.equal(port.workspace_details.checkout_root, bound.checkout_root, "recovery root is not the nested execution cwd");
   await port.dispose();
 });
 
@@ -201,6 +237,14 @@ test("worktree bridge is mandatory before any checkout/session; no source fallba
   assert.deepEqual(seam.state.workspaceCalls, []); assert.deepEqual(seam.state.assemblies, []);
 });
 
+test("old authority without live aliases fails before SDK assembly and releases its binding", async (t) => {
+  const f = fixture(t); f.agent.settings.workspace = "worktree";
+  f.options.bindWorkspacePolicy = () => ({ release: () => seam.state.policyReleases.push("old-authority") });
+  await assert.rejects(f.create(), /Worktree policy binding is unavailable/);
+  assert.deepEqual(seam.state.assemblies, []);
+  assert.deepEqual(seam.state.policyReleases, ["old-authority"]);
+});
+
 test("worktree creation failure is cached per Agent, never a source-cwd fallback or blind retry", async (t) => {
   const f = fixture(t, "editor"); f.agent.settings.workspace = "worktree";
   seam.state.workspaceError = new Error("WORKTREE_CREATION_FAILED retained path: fixture-path");
@@ -208,13 +252,50 @@ test("worktree creation failure is cached per Agent, never a source-cwd fallback
   await assert.rejects(create(f.agent), /WORKTREE_CREATION_FAILED/);
   await assert.rejects(create(f.agent), /WORKTREE_CREATION_FAILED/);
   assert.equal(seam.state.workspaceCalls.length, 1); assert.deepEqual(seam.state.assemblies, []);
+  assert.equal(seam.workspaceRecoveryOf(seam.state.workspaceError), undefined, "never parse location facts from diagnostic text");
+});
+
+test("workspace creation forwards attached partial recovery unchanged across cached failures", async (t) => {
+  const f = fixture(t); f.agent.settings.workspace = "worktree";
+  const recovery = { mode: "worktree", state: "partial", source_cwd: f.agent.settings.cwd,
+    allocated_path: join(f.options.ctx.cwd, "allocation") };
+  const failure = Object.freeze(new seam.AgentWorkspaceError("x".repeat(1200), join(recovery.allocated_path, "tree")));
+  seam.state.workspaceError = seam.withWorkspaceRecovery(failure, recovery);
+  const create = createChildSessionFactory(f.options);
+  for (let i = 0; i < 2; i++) await assert.rejects(create(f.agent), (error) => {
+    assert.equal(error, failure);
+    assert.deepEqual(seam.workspaceRecoveryOf(error), recovery, "no successful binding or manifest is invented");
+    return true;
+  });
+  assert.equal(seam.state.workspaceCalls.length, 1);
+  assert.deepEqual(seam.state.assemblies, []);
+  assert.deepEqual(seam.state.policyBinds, []);
+});
+
+test("bare synthetic AgentWorkspaceError fields are not promoted to observed recovery", async (t) => {
+  const f = fixture(t); f.agent.settings.workspace = "worktree";
+  const retained = join(f.options.ctx.cwd, "retained"), manifest = join(f.options.ctx.cwd, "recovery.jsonl");
+  const failure = Object.freeze(new seam.AgentWorkspaceError("x".repeat(1200), retained, manifest));
+  seam.state.workspaceError = failure;
+  await assert.rejects(f.create(), (error) => {
+    assert.equal(error, failure);
+    assert.equal(seam.workspaceRecoveryOf(error), undefined, "only the private observed-metadata attachment carries recovery facts");
+    assert.equal(error.retained_path, retained);
+    assert.equal(error.manifest, manifest);
+    return true;
+  });
 });
 
 test("confirmed failed assembly releases policy binding but reuses the retained Agent worktree", async (t) => {
   const f = fixture(t, "editor"); f.agent.settings.workspace = "worktree";
   const create = createChildSessionFactory(f.options); seam.state.loaderError = new Error("fixture loader failure");
   await assert.rejects(create(f.agent), (error) => {
-    assert.match(error.message, /retained worktree cwd:/); assert.match(error.message, /recovery manifest:/); return true;
+    assert.equal(error, seam.state.loaderError);
+    assert.equal(error.message, "fixture loader failure", "diagnostic text is not mutated for recovery transport");
+    assert.deepEqual(seam.workspaceRecoveryOf(error), { ...seam.state.workspaceResult.workspace, state: "checkout_ready",
+      checkout_root: seam.state.workspaceResult.checkout_root,
+      recovery_manifest: seam.state.workspaceResult.manifest });
+    return true;
   });
   assert.equal(seam.state.policyReleases.length, 1);
   delete seam.state.loaderError;
@@ -224,10 +305,48 @@ test("confirmed failed assembly releases policy binding but reuses the retained 
   await port.dispose();
 });
 
+test("ready checkout recovery survives a frozen SDK assembly failure without replacing the error", async (t) => {
+  const f = fixture(t, "researcher"); f.agent.settings.workspace = "worktree";
+  const failure = Object.freeze(new Error("synthetic SDK assembly failure ".repeat(80)));
+  seam.state.assemblyError = failure;
+  await assert.rejects(f.create(), (error) => {
+    assert.equal(error, failure);
+    assert.deepEqual(seam.workspaceRecoveryOf(error), { ...seam.state.workspaceResult.workspace, state: "checkout_ready",
+      checkout_root: seam.state.workspaceResult.checkout_root,
+      recovery_manifest: seam.state.workspaceResult.manifest });
+    return true;
+  });
+  assert.equal(seam.state.assemblies.length, 1);
+  assert.equal(seam.state.policyReleases.length, 1);
+  assert.deepEqual(f.webReleases, ["released"]);
+});
+
+test("real frozen SessionInitializationError retains identity, causes, ready recovery and both uncertain leases", async (t) => {
+  const f = fixture(t, "researcher"); f.agent.settings.workspace = "worktree";
+  const original = new Error("synthetic SDK assembly failure"), cleanup = new Error("synthetic cleanup uncertainty");
+  const failure = Object.freeze(new SessionInitializationError(original, cleanup)), message = failure.message;
+  seam.state.assemblyError = failure;
+  await assert.rejects(f.create(), (error) => {
+    assert.equal(error, failure);
+    assert.ok(error instanceof SessionInitializationError, "the actual core AggregateError type, not a seam-only class");
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.code, "CHILD_INITIALIZATION_FAILED");
+    assert.equal(error.cause, original);
+    assert.deepEqual(error.errors, [original, cleanup]);
+    assert.equal(error.message, message);
+    assert.deepEqual(seam.workspaceRecoveryOf(error), { ...seam.state.workspaceResult.workspace, state: "checkout_ready",
+      checkout_root: seam.state.workspaceResult.checkout_root,
+      recovery_manifest: seam.state.workspaceResult.manifest });
+    return true;
+  });
+  assert.deepEqual(seam.state.policyReleases, []);
+  assert.deepEqual(f.webReleases, []);
+});
+
 for (const failedAssembly of [false, true]) test(`worktree policy binding retained on uncertain ${failedAssembly ? "assembly" : "disposal"}`, async (t) => {
   const f = fixture(t, "editor"); f.agent.settings.workspace = "worktree";
   if (failedAssembly) {
-    seam.state.assemblyError = new seam.SessionInitializationError("uncertain fixture shutdown");
+    seam.state.assemblyError = new SessionInitializationError(new Error("fixture assembly failure"), new Error("uncertain fixture shutdown"));
     await assert.rejects(f.create(), seam.SessionInitializationError);
   } else {
     const port = await f.create(); seam.state.cleanupReport = { shutdownExited: false, errors: [] };
@@ -276,18 +395,27 @@ for (const failure of ["loaderError", "assemblyError"]) test(`${failure} before 
 
 test("SessionInitializationError retains web lease on uncertain assembly cleanup", async (t) => {
   const f = fixture(t, "researcher");
-  seam.state.assemblyError = new seam.SessionInitializationError("uncertain assembly");
+  seam.state.assemblyError = new SessionInitializationError(new Error("fixture assembly failure"), new Error("uncertain assembly"));
   await assert.rejects(f.create(), seam.SessionInitializationError);
   assert.deepEqual(f.webReleases, []);
 });
 
-for (const uncertain of [false, true]) test(`post-assembly validation failure ${uncertain ? "retains" : "releases"} web lease with cleanup proof`, async (t) => {
-  const f = fixture(t, "researcher");
+for (const uncertain of [false, true]) test(`post-assembly validation failure ${uncertain ? "retains" : "releases"} web and policy leases with cleanup proof`, async (t) => {
+  const f = fixture(t, "researcher"); f.agent.settings.workspace = "worktree";
   seam.state.badThinking = true;
   if (uncertain) seam.state.cleanupReport = { shutdownExited: false, errors: [] };
-  await assert.rejects(f.create(), uncertain ? seam.SessionInitializationError : /strictly equal/);
+  await assert.rejects(f.create(), (error) => {
+    if (uncertain) {
+      assert.ok(error instanceof SessionInitializationError, "factory-created cleanup uncertainty keeps the real core type");
+      assert.match(error.cause.message, /strictly equal/);
+      assert.match(error.errors[1].message, /Child cleanup incomplete/);
+    } else assert.match(error.message, /strictly equal/);
+    assert.equal(seam.workspaceRecoveryOf(error).state, "checkout_ready");
+    return true;
+  });
   assert.equal(seam.state.cleanups, 1);
   assert.equal(f.webReleases.length, uncertain ? 0 : 1);
+  assert.equal(seam.state.policyReleases.length, uncertain ? 0 : 1);
 });
 
 test("managed-block subscription follows actual SDK identity and seals on every Run exit and stop", async (t) => {

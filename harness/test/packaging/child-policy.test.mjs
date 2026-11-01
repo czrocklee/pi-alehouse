@@ -37,7 +37,7 @@ test("generated managed definitions deny all current/retired parent tools and no
       assert(!tools.includes(tool), `${name}: forbidden declared tool ${tool}`);
     }
     assert.equal(rendered.metadata[name].digest, createHash("sha256").update(definition).digest("hex"));
-    assert.match(definition, /Use alert_parent for decision-relevant facts/);
+    for (const fact of [/alert_parent for/, /important findings/, /then continue/]) assert.match(definition, fact);
     assert.doesNotMatch(definition.split("---\n").at(-1), /notify_parent/);
     for (const spelling of ["git commit *", "git -C * push *", "git config *"])
       assert.equal(rendered.metadata[name].bashDenies.includes(spelling), name !== "editor", `${name}: shipped Git floor ${spelling}`);
@@ -56,7 +56,8 @@ test("source render keeps cooperative editor Git permission-checked and research
   assert.deepEqual(rendered.metadata.editor.bashDenies, [], "no shipped child-only blanket Git bans for the cooperative worker");
   assert.match(rendered.agents.editor, /^ {2}bash:\n {4}"\*": ask$/m);
   assert.doesNotMatch(rendered.agents.editor, /^ {4}"git .*": allow$/m, "no blanket or command-specific Git allow");
-  assert.match(rendered.agents.editor, /including add and commit, remain permission-checked, not automatically approved/);
+  for (const fact of [/Git remains permission-checked/, /not automatically approved/, /preserve user denies/])
+    assert.match(rendered.agents.editor, fact);
   assert.doesNotMatch(rendered.agents.editor, /Git mutations stay with the parent/);
   for (const name of ["researcher"]) {
     assert.equal(policy.profiles[name].legacyGitDenies, undefined, `${name}: no opt-out`);

@@ -157,7 +157,7 @@ try {
   const alert = JSON.parse((await waiting).content[0].text);
   assert.equal(alert.reason, "alert");
   assert.deepEqual(alert.alerts, [{ agent: run.name, task: 1, label: "synthetic child", message: "REAL_SDK_ALERT_BEFORE_WAIT" }]);
-  assert.equal(alert.agents[0].status, "running"); assert.equal(alert.alerts_pending, 0);
+  assert.equal(alert.agents[0].status, "running"); assert.equal(Object.hasOwn(alert, "alerts_pending"), false);
   assert.equal(controller.view(run.run_id).pending_messages, 0);
   const timeout = JSON.parse((await observeRun(0)).content[0].text);
   assert.equal(timeout.reason, "timeout"); assert.equal(timeout.alerts, undefined);

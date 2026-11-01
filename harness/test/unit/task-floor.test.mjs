@@ -76,7 +76,7 @@ const envelope = result => JSON.parse(result.content[0].text);
 async function ask(port, question = "Which safe next step?") {
   const tools = createChildTools(() => port.callbacks, { accepting: true, stopped: false });
   const receipt = await tools.find(tool => tool.name === "ask_parent").execute("ask", { question });
-  assert.equal(receipt.content[0].text, "Question recorded. Finish this task now.");
+  assert.equal(receipt.content[0].text, "Question recorded. Stop calling tools and end your turn now.");
 }
 
 function withholdInputEntry(port) {
@@ -107,14 +107,13 @@ async function withBudgetTimers(delays, body) {
 }
 const serial = { concurrency: false };
 
-test("wall-clock delay formula includes short-window boundaries and exports checkpoint guidance", serial, () => {
+test("wall-clock delay formula includes short-window boundaries and exports finish guidance", serial, () => {
   for (const [duration, expected] of [[1, undefined], [1000, undefined], [1001, 1000], [1500, 1000],
     [2000, 1000], [5000, 4000], [10000, 8000], [150000, 120000], [240000, 210000]]) {
     assert.equal(softDeadlineDelay(duration), expected, `max_duration_ms=${duration}`);
   }
-  assert.match(softTimeBudgetMessage, /checkpoint/i);
-  assert.match(softTimeBudgetMessage, /evidence paths/i);
-  assert.match(softTimeBudgetMessage, /does not extend the deadline/i);
+  for (const instruction of [/finish/i, /results/i, /unfinished/i, /checks/i, /do not start.*work/i])
+    assert.match(softTimeBudgetMessage, instruction);
 });
 
 test("240s timer warns at exactly 210s, invalidates approval via soft_budget, and preserves hard deadline", serial, async t => {
@@ -143,7 +142,7 @@ test("240s timer warns at exactly 210s, invalidates approval via soft_budget, an
     assert.equal(c.view(run.run_id).time_wrapped, true);
     assert.equal(c.view(run.run_id).outcome, undefined);
     const read = envelope(await c.observe({ kind: "read", agent_id: run.agent_id }, { validate() {} }));
-    assert.equal(read.agents[0].time_wrapped, true);
+    assert.equal(Object.hasOwn(read.agents[0], "time_wrapped"), false, "warning attempts stay in core telemetry, not model returns");
     const thinRow = c.communicationRow(c.runs.get(run.run_id), [...c.runs.values()], true);
     assert.equal(Object.hasOwn(thinRow, "time_wrapped"), false, "thin controls stay unchanged");
     port.callbacks.turnEnd(true); await tick();
@@ -710,9 +709,15 @@ test("pending question â†’ queued answer cancel restores the same claim/lease â†
   const { controller: c, ports } = await memoryFixture(t, { controller: { dispatch } });
   const question = await c.submit("question", task("question", { name: "worker", dispatch: declaration }));
   await until(() => ports[0]?.streaming);
-  assert.match(ports[0].calls[0].prompt, /Parent dispatch declarations/);
-  assert.match(ports[0].calls[0].identity.task_prompt, /Parent dispatch declarations/);
-  assert.match(ports[0].calls[0].identity.task_prompt, /focused/);
+  for (const prompt of [ports[0].calls[0].prompt, ports[0].calls[0].identity.task_prompt]) {
+    assert.match(prompt, /Parent dispatch.*scope.*planned checks/i);
+    assert.match(prompt, /not permissions or execution evidence/i);
+    assert(prompt.includes(`Execution cwd: ${JSON.stringify(settings.cwd)}`));
+    assert.match(prompt, /Relative inputs, ownership, and tree paths resolve from this execution cwd/);
+    assert(prompt.includes(`Policy and settings inherit from source cwd (${JSON.stringify(settings.cwd)})`));
+    assert.match(prompt, /declarations grant no permissions/);
+    assert.match(prompt, /focused/);
+  }
   await ask(ports[0]); ports[0].finish("waiting"); await ended(c, question);
   const originalClaim = claimFor(c, question), questionId = c.view(question.run_id).question_id;
   assert(questionId); assert.equal(originalClaim.lease, lease); assert.equal(lease.closes, 0);
@@ -909,7 +914,7 @@ test("optional start observation rejection records notes but does not poison Own
   }
 });
 
-test("model observations show only tree_shared; hidden notes stay on the Run and never reach packing", serial, async t => {
+test("model observations show only tree_shared; private hidden notes never spend reply budget", serial, async t => {
   // One settled Agent per Owner, so no other task's finished row shares the
   // envelope. Each "\0" costs seven bytes there, so a page that exactly fills
   // the byte cap leaves less room than any note would take.

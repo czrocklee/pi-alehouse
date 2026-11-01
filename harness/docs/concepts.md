@@ -52,9 +52,15 @@ automatic install, patch transfer or merge occurs.
 Tools use the actual child cwd while source instructions/settings/config/trust
 remain inherited through a live binding. Core admission and source `settings.cwd`
 remain immutable. The whole known checkout root maps to the source repository
-root for deny/ask aliases only, never ALLOW or external-boundary exemptions. List/detail expose uninitialized mode or actual cwd, source cwd and
-baseline after creation. Worktrees and private recovery manifests remain on
-completion/kill/failure/shutdown for manual cleanup, not automatic deletion or
+root for deny/ask aliases only, never ALLOW or external-boundary exemptions.
+Only wait/read/list expose confirmed task workspace bindings: four fields plus
+optional checkout root, without public state or recovery_manifest. Failures may
+show small retained_paths of observed allocation directories, verified checkout
+roots and created manifests, never intended nonexistent targets. Internal
+recovery transport keeps typed/frozen errors and cleanup authority. A verified
+checkout can precede failed SDK assembly. These facts belong to the original
+Run, never a later Agent baseline; action/interrupt/kill omit workspace details.
+Worktrees and private recovery manifests remain on completion/kill/failure/shutdown for manual cleanup, not automatic deletion or
 acceptance of changes. Defaults use absolute XDG_STATE_HOME (otherwise
 ~/.local/state), beneath pi-alehouse/worktrees outside agentDir, not TMPDIR;
 persistent placement is not indefinite retention or backup. Uninitialized
@@ -88,9 +94,10 @@ A **Run** is one queued or executing task on an Agent; parent tools call it a
 outcome, result reference, telemetry, and optional SDK-history links.  A reused
 Agent receives a new Run; it never changes the Agent's admitted routing or
 permission configuration. Model replies derive a 1-based `task` sequence within
-that Agent from enqueue order, without exposing the internal Run UUID. Labels
-are auxiliary, not task identity. A question continuation is a new Run admitted
-only by explicit `agent_answer`, never by `agent_send`.
+that Agent from enqueue order, without exposing the internal Run UUID. That
+ordinal is a read-only selector for retained task pages, never a command target.
+Labels are optional whole summary metadata, auxiliary rather than task identity.
+A question continuation is a new Run admitted only by explicit `agent_answer`, never by `agent_send`.
 
 Core lifecycle states are `queued`, `running`, `cancelling`, `completed`,
 `needs_input`, `failed`, and `cancelled`; phases further distinguish
@@ -117,14 +124,18 @@ share its cap, and a saturated provider does not block another.  See
 Optional spawn/run `dispatch` declares inputs (≤8), ownership (≤16), one tree
 and checks (≤16), with strings bounded to 512 UTF-16 units. Inputs are existing
 ordinary files/directories; output ownership/tree may be new. Relative paths
-still resolve at source cwd, not a later worktree cwd; use actual absolute
-paths for worktree output claims. Literal paths are not shell globs/expansions;
+resolve at the Agent's execution cwd; absolute paths keep their meaning. An
+uninitialized worktree can declare relative inputs/ownership/tree, including
+`..`, without guessing a future cwd. Binding checks actual resources before
+child input; source candidates are deny-only preflight, not existence or ALLOW
+facts. The child preface separates execution path base from source policy/settings
+inheritance. See [workspace binding](workspaces.md#dispatch-paths-and-binding). Literal paths are not shell globs/expansions;
 lexical and nearest-existing-ancestor canonical
 aliases identify scope/conflicts. Profile/external preflight is approximate,
 not permission or a guarantee of successful tools.
 
-A **claim** is Owner-local declared resource ownership, not the UI `touched`
-list or OS isolation. It survives queued/running/finalizing phases and a healthy
+A **claim** is Owner-local declared resource ownership, not inferred file effects
+or OS isolation. It survives queued/running/finalizing phases and a healthy
 pending question. Explicit answer inherits dispatch/the same claim lineage;
 pre-input rollback that restores a question also restores its claim and existing
 tree lease. Final termination and required confirmed cleanup permit release. A needs-input
@@ -136,10 +147,9 @@ settles without completing fails its queued dependents at once, without a slot.
 
 Wall-clock **soft wrap** is a guarded warning attempt with a bounded Δ window,
 not receipt/checkpoint or turn limit_reached. Its soft-budget input invalidates
-the approval witness without changing the hard deadline. Optional time_wrapped
-and notes yield during packing, with no guaranteed recovery or persistence.
-The time flag is optionally tried after questions/FIFO alerts and before
-results; long ASCII results do not inherently omit it. Run-local due may wait
+the approval witness without changing the hard deadline. Warning attempts stay
+in core/UI/history as applicable, not parent-model telemetry. Optional public
+notes may yield without guaranteed recovery or persistence. Run-local due may wait
 for real original inputEntered/canInput or post-budget turnStart, never pre-run
 injection or retry after a rejected attempt.
 
@@ -174,7 +184,10 @@ do not keep an SDK execution environment alive.
 `agent_spawn` requires `agent`, `prompt`, `profile` (`worker` or `researcher`)
 and `reasoning_difficulty`, and takes optional `workspace` (`shared` or
 `worktree`, default shared). `agent_run` requires `agent`, `builds_on` and
-`prompt`. Both take optional `label` and `dispatch`. `agent_send`
+`prompt`; `builds_on` briefly names the earlier work continued (otherwise spawn,
+with `after` if only its result is needed). Both take optional `label`, `after`,
+`wait_ms` and `dispatch`; spawn also accepts budgets and `inherit_context`.
+`agent_read` retains `max_chars`. `agent_send`
 joins/steers the task bound when called; it never starts a continuation.
 `agent_answer` takes `agent`, the exact pending `question_id`, and `answer`,
 with optional wait_ms. It preserves the asking task's label, dispatch and Agent settings;
@@ -183,7 +196,7 @@ run cannot bypass an unanswered question.
 - **`prompt`** is the execution instruction.  It may be up to 131072 UTF-16
   units at parent-tool admission, although permission provenance has stricter
   review limits.  It is not a name, a policy profile, or a routing request.
-- **`label`** is a short task label (up to 120 UTF-16 units) for roster/UI use,
+- **`label`** is a short task label (up to 120 UTF-16 units) for summaries/roster/UI use,
   stored as the Run's description and defaulting to the instructions' first
   nonblank line.  It is neither injected as a summary nor a
   substitute for the prompt.
@@ -232,13 +245,22 @@ conversation without adding it again.
 ## Alerts, questions, results and presentation
 
 Results are retained Owner-local text with UTF-16/surrogate-safe cursors.
-`agent_read` independently reads a recorded question and a result page; cursors
-pin the original Run, even after Agent reuse. Each selected terminal result with
-unread retained text reserves a fixed-width cursor before optional text packing;
+`agent_read` defaults to a recorded question/result page; result cursors
+pin the original Run, even after Agent reuse. Optional positive safe-integer
+`task` restarts that named Agent's retained task from page one, including after
+kill in the same Owner. Task and cursor are mutually exclusive; with neither,
+read selects current, pending-question or latest. No command gains a task target.
+Each selected terminal result with unread retained text reserves a fixed-width cursor before optional text packing;
 a wholly omitted page keeps its starting offset. Text never retained
 (omitted_chars) cannot be recovered; text omitted only by packing can be fetched
-on a later page. Keep returned cursors: task ordinals are not historical-read
-selectors. See [result cursor identity](tool-contract.md#result-cursors).
+on a later page. Keep returned cursors to continue a page; use the task selector
+to restart it. See [result cursor identity](tool-contract.md#result-cursors).
+
+Whole optional labels and observed workspace/retained paths may yield with
+response_limit_reached under the 65536-byte cap. Paths are not clipped into
+misleading usable values. There is no metadata-only view, new details flag or
+unlimited metadata-retrieval guarantee. Real result paging and the task selector
+remain read-only Owner memory, not persistence, hydration or permission authority.
 
 `alert_parent` records decision-relevant facts and wakes matching observations
 while the child continues, without starting a parent turn or interrupting parent
@@ -265,9 +287,11 @@ inputEntered, failure may reopen the same question on a reusable Agent; after
 it, failure cannot. Historical questions remain readable without actionable
 tokens. Off forbids new tasks/steering/answers but accepted child work continues.
 
-Spawn/run/send/answer/wait/read share one envelope with reason, complete bound
-Agent/task rows, optional action fact, top-level alerts, scoped pending count
-and bounded finished reminders. Task conditions bind once; alert scopes are
+Spawn/run/send/answer/wait/read share one envelope with complete bound
+Agent/task rows, optional action fact, top-level alerts, positive scoped pending
+counts and bounded finished reminders. Reason is omitted for snapshot/done;
+zero alerts_pending/finished_pending, the redundant pending array and empty
+result text are absent. Task conditions bind once; alert scopes are
 separate: inline sees its selected Run only, explicit wait/read span the chosen
 Agents' Runs, default wait receives all Owner alerts. Default On also selects
 healthy pending questions level-triggered, independent of finished presentation;
@@ -279,11 +303,17 @@ vacuous done. Timeout or abort ends observation, not worker execution. UI/list
 are count/read-only projections and never consume communication.
 
 The harness does not inject an Agent/Run roster after compaction. `agent_list`
-exposes Owner-local state, including killed names, labels, earlier tasks, context
-and touched paths, not full assignments, spend or admission authority. Finished
+exposes Owner-local status, labels and bounded killed names, not full
+assignments, spend or admission authority. Live Run context, usage and elapsed
+time remain UI observations; warning attempts remain outcome/history facts.
+Task descriptions stay on their original Runs. There is no separate touched-path
+or earlier-label summary, nor a retained generic model-recovery hint. Finished
 reminders use fixed finished_presented and settled_seq on each original Run;
-only explicitly showing that task's terminal row commits its bit. Running rows
-with the same Agent name, alerts/list/UI/count do not. Results stay rereadable
+only explicitly showing that task's terminal row commits its bit. A finished
+label is optional and validated against that original Run; omission never delays or resets consumption.
+Running rows with the same Agent name, alerts/list/UI/count do not. Kill returns
+independent status without workspace details or consumption; list retains bounded
+killed names, not full historical rows. Results stay rereadable
 and pending questions can reopen without resetting that bit. See
 [finished presentation](tool-contract.md#finished-presentation).
 

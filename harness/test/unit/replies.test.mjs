@@ -10,7 +10,7 @@ const observe = async (c, request, signal) => JSON.parse((await c.observe(reques
 const read = (c, run, rest = {}) => observe(c, { kind: "read", agent_id: run.agent_id, ...rest });
 const wait = (c, runs, rest = {}) => observe(c, { kind: "wait", agent_ids: runs.map((run) => run.agent_id), ...rest });
 const compact = (value) => {
-  const forbidden = /"(?:run_id|agent_id|owner_id|generation|phase|execution_exited|finalization_pending|history_ref|result_ref|cleanup_errors|effective_settings|outcome|snapshots|runtime|drain|resumable|model_stop_reason|max_duration_ms|settings|model|preset|tasks|cost_usd|cost_partial|idle_s)"/;
+  const forbidden = /"(?:run_id|agent_id|owner_id|generation|phase|execution_exited|finalization_pending|history_ref|result_ref|cleanup_errors|effective_settings|outcome|snapshots|runtime|drain|resumable|model_stop_reason|max_duration_ms|settings|model|preset|tasks|cost_usd|cost_partial|idle_s|context_tokens|time_wrapped|recovery_hint|earlier_labels|touched|touched_omitted|elapsed_s|pending)"/;
   assert(!forbidden.test(JSON.stringify(value)), JSON.stringify(value));
 };
 
@@ -19,15 +19,15 @@ test("wait/read share the envelope, original task ordinal and result without exp
   const a = await c.submit("a", named("orca")); await until(() => ports[0]?.streaming);
   ports[0].finish("answer"); await ended(c, a);
   const reply = await wait(c, [a]); compact(reply);
-  assert.equal(reply.reason, "done");
-  assert.deepEqual(reply.agents, [{ agent: "orca", task: 1, status: "completed", result: "answer" }]);
-  assert.equal(reply.alerts_pending, 0); assert.equal(reply.finished_pending, 0);
+  assert.equal(Object.hasOwn(reply, "reason"), false);
+  assert.deepEqual(reply.agents, [{ agent: "orca", task: 1, status: "completed", label: "orca", result: "answer" }]);
+  assert.equal(Object.hasOwn(reply, "alerts_pending"), false); assert.equal(Object.hasOwn(reply, "finished_pending"), false);
   const page = await read(c, a); compact(page);
-  assert.equal(page.reason, "snapshot"); assert.deepEqual(page.agents, reply.agents);
-  assert.deepEqual(taskReply(a, namesOf(c)), { agent: "orca", task: 1, status: "running" });
+  assert.equal(Object.hasOwn(page, "reason"), false); assert.deepEqual(page.agents, reply.agents);
+  assert.deepEqual(taskReply(a, namesOf(c)), { agent: "orca", task: 1, status: "running", label: "orca" });
 });
 
-test("only roster and alert rows carry bounded labels; projection never changes stored descriptions", async (t) => {
+test("roster and independent task replies carry bounded original labels; projection never changes stored descriptions", async (t) => {
   const { controller: c, ports } = await fixture(t);
   const a = await c.submit("label", named("orca")); await until(() => ports[0]?.streaming);
   ports[0].finish("answer"); await ended(c, a);
@@ -37,9 +37,9 @@ test("only roster and alert rows carry bounded labels; projection never changes 
     ["文".repeat(4096), "文".repeat(120)],
   ]) {
     const view = { ...c.view(a.run_id), description };
-    const row = agentRow(view, c.agentSummary(a.agent_id), namesOf(c)); compact(row);
+    const row = agentRow(view, namesOf(c)); compact(row);
     assert.equal(row.label, expected); assert(row.label.isWellFormed());
-    assert.equal(taskReply(view, namesOf(c)).label, undefined);
+    assert.equal(taskReply(view, namesOf(c)).label, expected);
   }
   assert.equal(c.view(a.run_id).description, "orca");
 });
@@ -58,18 +58,19 @@ test("finalizing is finishing, has no stable result cursor and is not yet answer
   assert.equal((await read(c, a)).agents[0].status, "needs_input");
 });
 
-test("live runtime/drain facts stay out of model replies while roster retains context and elapsed time", async (t) => {
+test("runtime/drain/context/elapsed telemetry stays in core, not model replies", async (t) => {
   let mono = 0;
   const { controller: c, ports } = await fixture(t, { controller: { clock: { wall: Date.now, mono: () => mono } } });
   const a = await c.submit("runtime", named("orca")); await until(() => ports[0]?.streaming);
   ports[0].callbacks.runtime({ activity: "generating", context: { tokens: 20, context_window: 8192 } });
   ports[0].callbacks.drain("sdk_idle"); mono = 5000;
   compact(await read(c, a)); compact(await wait(c, [a], { wait_ms: 0 }));
-  const row = agentRow(c.view(a.run_id), c.agentSummary(a.agent_id), namesOf(c)); compact(row);
-  assert.equal(row.elapsed_s, 5); assert.equal(row.context_tokens, 20);
+  const view = c.view(a.run_id), row = agentRow(view, namesOf(c)); compact(row);
+  assert.equal(view.execution_elapsed_ms, 5000);
+  assert.equal(view.runtime.context.tokens, 20); assert.equal(view.drain.waiting_for, "sdk_idle");
   ports[0].finish("done"); await ended(c, a);
-  const settled = agentRow(c.view(a.run_id), c.agentSummary(a.agent_id), namesOf(c));
-  assert.equal(settled.elapsed_s, undefined); assert.equal(settled.context_tokens, 20);
+  compact(agentRow(c.view(a.run_id), namesOf(c)));
+  assert.equal(c.view(a.run_id).runtime.context.tokens, 20);
 });
 
 test("alerts live at envelope top level and can wake a still-running task before its later question", async (t) => {
@@ -167,23 +168,22 @@ test("bounded error choices retain remainder counts and hide concrete routing in
   for (const allowed of ["not an array", [], undefined]) assert.equal(errorReply({ code: "X", details: { allowed } }).error.allowed, undefined);
 });
 
-test("independent task/roster replies show only tree_shared dispatch notes and live or final time warning without a turn-limit flag", () => {
+test("independent task/roster replies retain tree_shared notes but hide live and final time telemetry", () => {
   const base = { name: "otter", task: 1, status: "running", description: "task", resumable: true,
     owner_blocked: false, has_question: false, effective_settings: { profile: "editor", difficulty: 3 } };
   const notes = Object.freeze(["tree_shared", "tree_lock_unknown"]);
   const live = { ...base, time_wrapped: true, dispatch_notes: notes }, reply = taskReply(live, () => "otter");
-  assert.deepEqual(reply, { agent: "otter", task: 1, status: "running", time_wrapped: true, dispatch_notes: ["tree_shared"] });
+  assert.deepEqual(reply, { agent: "otter", task: 1, status: "running", label: "task", dispatch_notes: ["tree_shared"] });
   assert.notEqual(reply.dispatch_notes, notes, "independent projections cannot alias retained view arrays");
   reply.dispatch_notes[0] = "changed output"; assert.deepEqual(notes, ["tree_shared", "tree_lock_unknown"]);
   const terminalView = { ...base, status: "completed", dispatch_notes: notes,
     outcome: { status: "completed", limit_reached: false, time_wrapped: true } };
   const final = taskReply(terminalView, () => "otter");
-  assert.equal(final.time_wrapped, true); assert.equal(final.limit_reached, undefined);
+  assert.equal(Object.hasOwn(final, "time_wrapped"), false); assert.equal(terminalView.outcome.time_wrapped, true); assert.equal(final.limit_reached, undefined);
   assert.deepEqual(final.dispatch_notes, ["tree_shared"]); assert.equal(final.next_cursor, undefined);
   // Spend, idle time and the run count stay host-side even when known.
-  const summary = { runs: 3, earlier_descriptions: [], touched: [], touched_omitted: 0, observed_cost: 1.5, cost_partial: true, idle_ms: 7_000 };
-  const roster = agentRow(terminalView, summary, () => "otter");
-  assert.equal(roster.time_wrapped, true); assert.deepEqual(roster.dispatch_notes, ["tree_shared"]); compact(roster);
+  const roster = agentRow(terminalView, () => "otter");
+  assert.equal(Object.hasOwn(roster, "time_wrapped"), false); assert.deepEqual(roster.dispatch_notes, ["tree_shared"]); compact(roster);
   assert.equal(roster.reasoning_difficulty, 3); assert.equal(Object.hasOwn(roster, "difficulty"), false);
   assert.equal(taskReply(base, () => "otter").dispatch_notes, undefined);
   assert.equal(taskReply({ ...base, dispatch_notes: [] }, () => "otter").dispatch_notes, undefined);
@@ -231,11 +231,11 @@ test("preflight denials project the checked surface and target profile only for 
   assert.equal(filesystem.surface, undefined); assert.equal(filesystem.profile, undefined);
 });
 
-test("a tree declared before worktree initialization classifies as an actionable dispatch error", () => {
-  const resolution = "Start without tree; after initialization use agent_list actual cwd and declare its absolute tree on follow-up.";
-  const result = errorReply({ code: "DISPATCH_WORKTREE_UNINITIALIZED",
+test("a changed bound resource classifies as a dispatch error without a path-discovery workaround", () => {
+  const resolution = "The declared resource changed after binding. Inspect the workspace and its aliases before continuing.";
+  const result = errorReply({ code: "DISPATCH_RESOURCE_CHANGED",
     details: { agent: "wren", key: "tree", requested: "build", resolution } }).error;
-  assert.deepEqual(result, { code: "DISPATCH_WORKTREE_UNINITIALIZED", agent: "wren", parameter: "tree",
+  assert.deepEqual(result, { code: "DISPATCH_RESOURCE_CHANGED", agent: "wren", parameter: "tree",
     path: "build", requested: "build", resolution });
 });
 
@@ -255,7 +255,7 @@ test("historical stopped questions remain readable without actionable token; sen
   ports[0].callbacks.question("factor?"); c.cancel(a.run_id); ports[0].finish("partial", "aborted"); await ended(c, a);
   const page = await read(c, a); assert.equal(page.agents[0].question, "factor?");
   assert.equal(page.agents[0].question_id, undefined); assert.equal(page.agents[0].has_question, undefined);
-  assert.equal(agentRow(c.view(a.run_id), c.agentSummary(a.agent_id), namesOf(c)).has_question, undefined);
+  assert.equal(agentRow(c.view(a.run_id), namesOf(c)).has_question, undefined);
   assert.equal((await c.send("s", a.agent_id, "answer")).delivery, "not_delivered");
   const b = await c.submit("b", named("otter")); await until(() => ports[1]?.streaming);
   ports[1].callbacks.question("why?"); ports[1].finish("asked"); await ended(c, b);
@@ -270,7 +270,7 @@ test("task replies copy queued_for to wait and keep dependency names without pro
     blocked_by: ["run-author", "run-editor"] };
   const names = (id) => id === "run-author" ? "author" : id === "run-editor" ? "editor" : "other";
   assert.deepEqual(taskReply({ ...base, queued_for: "dependencies" }, names), {
-    agent: "otter", task: 2, status: "queued", wait: "dependencies", waiting_for: ["author", "editor"],
+    agent: "otter", task: 2, status: "queued", label: "task", wait: "dependencies", waiting_for: ["author", "editor"],
   });
   const capacity = taskReply({ ...base, queued_for: "capacity" }, names);
   assert.equal(capacity.wait, "capacity");
@@ -282,7 +282,7 @@ test("task replies copy queued_for to wait and keep dependency names without pro
   assert.equal(Object.hasOwn(plain, "wait"), false);
   assert.deepEqual(plain.waiting_for, ["author", "editor"]);
   const noNames = taskReply({ ...base, blocked_by: [], queued_for: "capacity" }, names);
-  assert.deepEqual(noNames, { agent: "otter", task: 2, status: "queued", wait: "capacity" });
+  assert.deepEqual(noNames, { agent: "otter", task: 2, status: "queued", label: "task", wait: "capacity" });
   for (const status of ["running", "completed", "failed", "needs_input", "interrupting"]) {
     const reply = taskReply({ ...base, status, queued_for: "dependencies" }, names);
     assert.equal(Object.hasOwn(reply, "wait"), false, status);
@@ -296,8 +296,7 @@ test("task replies copy queued_for to wait and keep dependency names without pro
     assert.equal(JSON.stringify(reply).includes("provider"), false);
     assert.equal(JSON.stringify(reply).includes("concurrency"), false);
   }
-  const summary = { runs: 1, earlier_descriptions: [], touched: [], touched_omitted: 0, observed_cost: 9, cost_partial: true };
-  const roster = agentRow({ ...base, queued_for: "dependencies" }, summary, names);
+  const roster = agentRow({ ...base, queued_for: "dependencies" }, names);
   assert.equal(roster.wait, "dependencies");
   assert.deepEqual(roster.waiting_for, ["author", "editor"]);
   assert.equal(Object.hasOwn(roster, "queued_for"), false);

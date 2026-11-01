@@ -4,7 +4,9 @@ import { createAgentSession, createEventBus, DefaultResourceLoader, SessionManag
   type CreateAgentSessionOptions, type EventBus, type ExtensionContext, type ModelRuntime,
   type SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { AdmittedAgentConfig, RunIdentity } from "../core/contracts.js";
+import type { DispatchWorkspacePolicy } from "../core/dispatch.js";
 import { SessionInitializationError, type AgentSessionPort, type RunCallbacks } from "../core/ports.js";
+import { withWorkspaceRecovery } from "../core/workspace-metadata.js";
 import { PiRunJournal } from "../history/run-journal.js";
 import type { ApprovalBindings } from "../permissions/approval-provenance.js";
 import { requireReadiness } from "../permissions/readiness.js";
@@ -26,9 +28,9 @@ export interface ChildProfile {
   tools: string[];
 }
 
-/** Authority-owned policy discovery alias, not a cwd or path-effect rewrite. */
+/** Authority-owned live restriction aliases, not a cwd or path-effect rewrite. */
 export type WorkspacePolicyBinder = (input: { sessionId: string; cwd: string; source_cwd: string;
-  checkout_root: string; source_root: string; projectTrusted: boolean }) => { release(): void };
+  checkout_root: string; source_root: string; projectTrusted: boolean }) => DispatchWorkspacePolicy & { release(): void };
 interface ChildLeases {
   web?: WebLease;
   policy?: ReturnType<WorkspacePolicyBinder>;
@@ -99,9 +101,13 @@ export function createChildSessionFactory(options: {
         leases.policy?.release();
         leases.web?.release();
       }
-      if (leases.workspace && error instanceof Error) {
-        error.message += `; retained worktree cwd: ${leases.workspace.workspace.cwd}; recovery manifest: ${leases.workspace.manifest}`;
+      if (leases.workspace) {
+        const handle = leases.workspace;
+        throw withWorkspaceRecovery(error, { ...handle.workspace, state: "checkout_ready",
+          checkout_root: handle.checkout_root, recovery_manifest: handle.manifest });
       }
+      // Workspace failures already carry observed facts through the private
+      // recovery attachment; constructor fields alone are not observations.
       throw error;
     }
   };
@@ -131,7 +137,9 @@ export function createChildSessionFactory(options: {
       assert.equal(typeof projectTrusted, "boolean", "Source project trust is unavailable");
       leases.policy = options.bindWorkspacePolicy!({ sessionId: manager.getSessionId(), cwd,
         source_cwd: agent.settings.cwd, checkout_root: handle.checkout_root, source_root: handle.source_root, projectTrusted });
-      assert(leases.policy && typeof leases.policy.release === "function", "Worktree policy binding is unavailable");
+      assert(leases.policy && typeof leases.policy.release === "function" && typeof leases.policy.aliases === "function",
+        "Worktree policy binding is unavailable; restart with a matched pi-alehouse runtime");
+      assert.deepEqual(leases.policy.aliases([]), [], "Worktree policy binding is unavailable");
     }
     const loader = new DefaultResourceLoader({ cwd: agent.settings.cwd, agentDir: options.agentDir,
       settingsManager: childSettings, eventBus: bus,
@@ -177,7 +185,11 @@ export function createChildSessionFactory(options: {
         history: new PiRunJournal({ parent: options.parentHistory, session: manager }),
         readiness: () => requireReadiness(bus, options.getPermissionsService, child.session.sessionId,
           agent.settings.profile, agent.settings.definition_digest) });
-      return { session_id: port.session_id, history: port.history, ...(workspace ? { workspace } : {}),
+      return { session_id: port.session_id, history: port.history,
+        ...(workspace ? { workspace, workspace_details: Object.freeze({ checkout_root: handle.checkout_root, recovery_manifest: handle.manifest }),
+          // The authority retains roots and validates liveness on every query.
+          // Core receives only the deny-alias seam, never release authority.
+          workspace_policy: Object.freeze({ aliases: (paths: readonly string[]) => leases.policy!.aliases(paths) }) } : {}),
         // Reset at submission, before the child can report this Run's activity.
         run: async (prompt, cb, identity) => {
           options.approvalBindings.begin(identity, { sessionId: port.session_id, cwd,

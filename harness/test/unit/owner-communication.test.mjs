@@ -9,9 +9,10 @@ import { OwnerController } from "../../dist/core/owner-controller.js";
 import { HarnessError, ParentHistoryError } from "../../dist/core/ports.js";
 import { questionId } from "../../dist/core/question-id.js";
 import { decodeResultCursor, encodeResultCursor } from "../../dist/core/result-cursor.js";
+import { communicationEnvelopeBytes } from "../../dist/core/communication-envelope.js";
 import { emptyLedger } from "../../dist/core/usage-ledger.js";
 import { FileOwnerLease } from "../../dist/runtime/owner-lease.js";
-import { FakePort, deferred, task, tick, until } from "../support/controller-fixture.mjs";
+import { FakePort, deferred, settings, task, tick, until } from "../support/controller-fixture.mjs";
 import { flock } from "../support/flock.mjs";
 import { managedBlockToolNames } from "../../../lib/managed-block-tools.mjs";
 
@@ -79,6 +80,39 @@ async function question(c, ports, id = "question", name = "otter", rest = {}) {
 }
 const pendingCount = (c, runs) => runs.reduce((sum, run) => sum + c.view(run.run_id).pending_messages, 0);
 const finishedBit = (c, run) => c.runs.get(run.run_id).finished_presented; // Inspect ONLY original Run presentation evidence.
+
+test("sixteen original worktree result payloads precede fitting-but-crowding paths and commit notifications atomically", async (t) => {
+  let next = 0;
+  const { c, ports } = await ownerFixture(t, { controller: { concurrency: 16 }, createPort: () => {
+    const port = new FakePort(), path = "/" + `tree-${next++}-`.padEnd(1999, "p");
+    port.workspace = { mode: "worktree", cwd: path, source_cwd: "/tmp", base_commit: "a".repeat(40) };
+    port.workspace_details = { checkout_root: path, recovery_manifest: "/state/manifest" };
+    return port;
+  } });
+  const runs = [], text = "r".repeat(1000);
+  for (let index = 0; index < 16; index++) runs.push(await c.submit(`payload-${index}`, task(`task-${index}`, {
+    name: `worker-${index}`, settings: { ...settings, workspace: "worktree" },
+  })));
+  await until(() => ports.length === 16 && ports.every(port => port.streaming));
+  ports.forEach((port, index) => { port.callbacks.alert(`fact-${index}`); port.finish(text); });
+  await Promise.all(runs.map(run => settled(c, run)));
+  await assert.rejects(wait(c, runs.map(run => run.agent_id), 0, context(() => { throw new Error("synthetic validator failure"); })));
+  assert.equal(pendingCount(c, runs), 16); assert(runs.every(run => !finishedBit(c, run)));
+  const published = await wait(c, runs.map(run => run.agent_id));
+  assert.equal(published.agents.length, 16);
+  assert(published.agents.every(row => row.result === text));
+  assert.equal(published.agents.reduce((sum, row) => sum + row.result.length, 0), 16000);
+  assert(published.agents.some(row => row.workspace === undefined));
+  for (const [index, row] of published.agents.entries()) {
+    assert.equal(row.task, 1); assert.equal(row.status, "completed"); assert.equal(row.next_cursor, undefined);
+    if (row.workspace) assert.deepEqual(row.workspace, { ...ports[index].workspace, checkout_root: ports[index].workspace_details.checkout_root });
+  }
+  assert.deepEqual(published.alerts.map(entry => entry.message), ports.map((_port, index) => `fact-${index}`));
+  assert.equal(published.alerts_pending, undefined); assert.equal(published.finished_pending, undefined);
+  assert.equal(pendingCount(c, runs), 0); assert(runs.every(run => finishedBit(c, run)));
+  assert.equal(published.response_limit_reached, true); assert(communicationEnvelopeBytes(published) <= 65536);
+  assert.equal((await wait(c, undefined)).alerts, undefined, "successful publication alone consumed the original FIFO prefix");
+});
 
 test("unlatched lease loss removes question tokens from both views and explicit observations without admitting an answer", async (t) => {
   const { c, ports, owner } = await ownerFixture(t), { run, token } = await question(c, ports);
@@ -269,12 +303,12 @@ test("accepted alert wakes an observation before execution ends; no waiter leave
   assert.doesNotThrow(() => port.callbacks.alert("important"));
   const first = await watching;
   assert.equal(first.reason, "alert"); assert.deepEqual(first.alerts, [{ agent: "otter", task: 1, label: "early", message: "important" }]);
-  assert.equal(first.alerts_pending, 0); assert.equal(c.view(run.run_id).status, "running"); assert.equal(port.stopped, 0);
+  assert.equal(Object.hasOwn(first, "alerts_pending"), false); assert.equal(c.view(run.run_id).status, "running"); assert.equal(port.stopped, 0);
   port.callbacks.alert("same body"); port.callbacks.alert("same body");
   assert.equal(c.view(run.run_id).pending_messages, 2);
   const snapshot = await read(c, run);
-  assert.equal(snapshot.reason, "snapshot"); assert.deepEqual(snapshot.alerts.map(({ message }) => message), ["same body", "same body"]);
-  assert.equal(snapshot.alerts_pending, 0); assert.equal((await read(c, run)).alerts, undefined);
+  assert.equal(Object.hasOwn(snapshot, "reason"), false); assert.deepEqual(snapshot.alerts.map(({ message }) => message), ["same body", "same body"]);
+  assert.equal(Object.hasOwn(snapshot, "alerts_pending"), false); assert.equal((await read(c, run)).alerts, undefined);
   assert.equal(finishedBit(c, run), false); assert.equal(c.stats().active, 1);
 });
 
@@ -362,11 +396,11 @@ test("trusted managed feedback wakes scoped observations through Off without spe
   a.port.callbacks.managedBlock({ toolName: "read" });
   assert.equal(c.view(next.run_id).pending_messages, 0, "the old Agent1 harness summary remains, with no replacement or retry");
   const action = await inline(c, next);
-  assert.equal(action.alerts, undefined); assert.equal(action.alerts_pending, 0, "inline scope cannot drain old task alerts");
+  assert.equal(action.alerts, undefined); assert.equal(Object.hasOwn(action, "alerts_pending"), false, "inline scope cannot drain old task alerts");
   const all = await read(c, next);
   assert.equal(all.alerts.length, 17); assert.equal(all.alerts[15].source, "harness");
   assert.equal(all.alerts[16].message, wake.alerts[0].message); assert.equal(all.alerts[16].source, undefined);
-  assert(all.alerts.every((entry) => entry.task === 1)); assert.equal(all.alerts_pending, 0);
+  assert(all.alerts.every((entry) => entry.task === 1)); assert.equal(Object.hasOwn(all, "alerts_pending"), false);
   c.cancel(next.run_id);
   assert.throws(() => a.port.callbacks.managedBlock({ toolName: "read" }), hasCode("RUN_INPUT_CLOSED"));
   assert.equal(a.port.calls.length, 2, "feedback never admits another child input or task");
@@ -391,7 +425,7 @@ test("real FIFO enforces Agent 16 across reused Runs, no eviction, and lifecycle
   const publication = await wait(c, undefined);
   assert.equal(publication.reason, "alert"); assert.deepEqual(publication.agents, []);
   assert.deepEqual(publication.alerts.map(({ task }) => task), [...Array(10).fill(1), ...Array(6).fill(2)]);
-  assert.equal(publication.alerts_pending, 0); assert.equal(pendingCount(c, [old, next]), 0);
+  assert.equal(Object.hasOwn(publication, "alerts_pending"), false); assert.equal(pendingCount(c, [old, next]), 0);
 });
 
 test("Owner 64 quota precedes Agent quota; killed history still blocks a newly admitted Agent until publication", async (t) => {
@@ -405,7 +439,7 @@ test("Owner 64 quota precedes Agent quota; killed history still blocks a newly a
   assert.throws(() => newcomer.port.callbacks.alert("no reserved space"), hasCode("ALERT_QUEUE_FULL", { scope: "owner", limit: 64 }));
   assert.equal(c.view(newcomer.run.run_id).pending_messages, 0);
   const history = await read(c, running[0].run);
-  assert.equal(history.alerts.length, 16); assert.equal(history.alerts_pending, 0);
+  assert.equal(history.alerts.length, 16); assert.equal(Object.hasOwn(history, "alerts_pending"), false);
   assert.equal(pendingCount(c, running.map(({ run }) => run)), 48);
   assert.doesNotThrow(() => newcomer.port.callbacks.alert("publication released capacity"));
   assert.equal(c.view(newcomer.run.run_id).pending_messages, 1);
@@ -438,8 +472,8 @@ test("action snapshots/waits bind exactly the new Run while cursor read keeps or
   const current = await c.submit("current", { resume: old.agent_id, prompt: "current", description: "current" });
   await until(() => port.calls.length === 2 && port.streaming);
   const immediate = await inline(c, current);
-  assert.equal(immediate.reason, "snapshot"); assert.deepEqual(immediate.action, { type: "agent_run", agent: "otter", task: 2 });
-  assert.equal(immediate.alerts, undefined); assert.equal(immediate.alerts_pending, 0); assert.equal(c.view(old.run_id).pending_messages, 1);
+  assert.equal(Object.hasOwn(immediate, "reason"), false); assert.deepEqual(immediate.action, { type: "agent_run", agent: "otter", task: 2 });
+  assert.equal(immediate.alerts, undefined); assert.equal(Object.hasOwn(immediate, "alerts_pending"), false); assert.equal(c.view(old.run_id).pending_messages, 1);
   let resolved = false;
   const positive = inline(c, current, "agent_run", 3000).then((value) => { resolved = true; return value; });
   await tick(); assert.equal(resolved, false, "old same-Agent message cannot intercept inline wait");
@@ -448,10 +482,10 @@ test("action snapshots/waits bind exactly the new Run while cursor read keeps or
   assert.equal(c.view(old.run_id).pending_messages, 1);
   port.callbacks.alert("new message for Agent read");
   const cursorRead = await read(c, old, { cursor: page.next_cursor, max_chars: 3 });
-  assert.equal(cursorRead.reason, "snapshot"); assert.equal(cursorRead.action, undefined);
+  assert.equal(Object.hasOwn(cursorRead, "reason"), false); assert.equal(cursorRead.action, undefined);
   assert.equal(cursorRead.agents[0].task, 1); assert.equal(cursorRead.agents[0].result, "def");
   assert.deepEqual(cursorRead.alerts.map(({ task, message }) => [task, message]), [[1, "old task alert"], [2, "new message for Agent read"]]);
-  assert.equal(cursorRead.alerts_pending, 0);
+  assert.equal(Object.hasOwn(cursorRead, "alerts_pending"), false);
   assert.equal(decodeResultCursor(cursorRead.agents[0].next_cursor).offset, 6);
   const latest = await read(c, current); assert.equal(latest.agents[0].task, 2); assert.equal(latest.agents[0].status, "running");
 });
@@ -483,8 +517,9 @@ test("compact cursor binding rejects foreign fingerprints and invalid retained o
     }
     const guided = (error) => {
       assert(hasCode("INVALID_CURSOR")(error));
-      assert.match(error.details.resolution, /agent and next_cursor exactly as returned together/);
-      assert.match(error.details.resolution, /does not recover a specific older task/);
+      assert.match(error.details.resolution, /agent.*next_cursor.*same reply/i);
+      assert.match(error.details.resolution, /omit cursor/i);
+      assert.match(error.details.resolution, /task number.*restart.*first page/i);
       assert.doesNotMatch(error.details.resolution, /Re-read.*without a cursor/);
       return true;
     };
@@ -497,8 +532,9 @@ test("compact cursor binding rejects foreign fingerprints and invalid retained o
     assert.equal(c.stats().internal_error, undefined); assert.equal(c.stats().cleanup_uncertain, false);
   }
   const eof = await read(c, current, { cursor: encodeResultCursor(identity, text.length) });
-  assert.equal(eof.reason, "snapshot"); assert.equal(eof.agents[0].task, 1); assert.equal(eof.agents[0].status, "completed");
-  assert.equal(eof.agents[0].result, ""); assert.equal(Object.hasOwn(eof.agents[0], "next_cursor"), false);
+  assert.equal(Object.hasOwn(eof, "reason"), false); assert.equal(eof.agents[0].task, 1); assert.equal(eof.agents[0].status, "completed");
+  assert.equal(eof.agents[0].label, "cursor-original", "cursor labels belong to the original task, not its current successor");
+  assert.equal(Object.hasOwn(eof.agents[0], "result"), false); assert.equal(Object.hasOwn(eof.agents[0], "next_cursor"), false);
   assert.equal(eof.agents[0].result_omitted, undefined);
   assert.deepEqual(eof.alerts.map(({ task, message }) => [task, message]), [[1, "original pending alert"], [2, "current pending alert"]]);
   assert.equal(finishedBit(c, original), true); assert.equal(finishedBit(c, current), false);
@@ -541,7 +577,7 @@ for (const [budget, aText] of [["escaped-byte", "\u0000".repeat(16000)], ["text"
   await until(() => b.port.calls.length === 2 && b.port.streaming);
   a.port.finish(aText); await settled(c, a.run);
   const result = await bound;
-  assert.equal(result.reason, "done");
+  assert.equal(Object.hasOwn(result, "reason"), false);
   assert.deepEqual(result.agents.map(({ agent, task }) => [agent, task]), [["otter", 1], ["orca", 1]]);
   const [large, omitted] = result.agents;
   if (budget === "escaped-byte") {
@@ -588,7 +624,7 @@ for (const wait_ms of [0, 300000]) test(`default empty wait returns nothing_pend
   t.mock.method(globalThis, "setTimeout", (...args) => { armed++; return native(...args); });
   const empty = await wait(c, undefined, wait_ms);
   t.mock.restoreAll();
-  assert.equal(empty.reason, "nothing_pending"); assert.deepEqual(empty.agents, []); assert.equal(empty.alerts_pending, 0); assert.equal(armed, 0);
+  assert.equal(empty.reason, "nothing_pending"); assert.deepEqual(empty.agents, []); assert.equal(Object.hasOwn(empty, "alerts_pending"), false); assert.equal(armed, 0);
 });
 
 test("Off initial default binding excludes existing question, stays bound across On/new work, and does not drift", async (t) => {
@@ -601,7 +637,7 @@ test("Off initial default binding excludes existing question, stays bound across
   const later = await started(c, ports, "later", "marten");
   peer.port.finish("peer done"); await settled(c, peer.run);
   const result = await boundOff;
-  assert.equal(result.reason, "done"); assert.deepEqual(result.agents.map(({ agent }) => agent), ["orca"]);
+  assert.equal(Object.hasOwn(result, "reason"), false); assert.deepEqual(result.agents.map(({ agent }) => agent), ["orca"]);
   assert.equal(result.workers_disabled, undefined); assert.equal(c.view(later.run.run_id).status, "running");
   const nextOn = await wait(c, undefined);
   assert.equal(nextOn.reason, "question"); assert.deepEqual(nextOn.agents.map(({ agent }) => agent), ["otter", "marten"]);
@@ -739,7 +775,7 @@ test("same name/task in another Owner generation cannot accept the prior questio
 });
 
 for (const effect of ["submit", "send", "answer", "cancel", "observe", "lifecycle", "kill", "shutdown", "release", "steer",
-  "drainUsage", "returnUsage", "alert", "question", "output", "inputEntered", "runtime", "drain", "turnStart", "turnEnd", "touched", "fault"])
+  "drainUsage", "returnUsage", "alert", "question", "output", "inputEntered", "runtime", "drain", "turnStart", "turnEnd", "fault"])
   test(`guarded entry validator forbids swallowed ${effect} reentry before ANY effects`, async (t) => {
     const { c, ports, events } = await ownerFixture(t), { run, port } = await started(c, ports, "gate", "otter");
     let nestedValidation = 0;
@@ -764,7 +800,6 @@ for (const effect of ["submit", "send", "answer", "cancel", "observe", "lifecycl
       drain: () => port.callbacks.drain("deliveries"),
       turnStart: () => port.callbacks.turnStart(),
       turnEnd: () => port.callbacks.turnEnd(true),
-      touched: () => port.callbacks.touched("forbidden.txt"),
       fault: () => c.latchParentHistoryFailure(new ParentHistoryError("forbidden")),
     };
     const eventCount = events.length, initialTurns = c.view(run.run_id).turns;
@@ -777,7 +812,7 @@ for (const effect of ["submit", "send", "answer", "cancel", "observe", "lifecycl
     assert.equal(c.view(run.run_id).status, "running"); assert.equal(c.view(run.run_id).pending_messages, 0);
     assert.equal(c.getResult(run.run_id).text, ""); assert.equal(c.view(run.run_id).outcome, undefined);
     assert.equal(c.view(run.run_id).turns, initialTurns); assert.equal(c.view(run.run_id).runtime, undefined);
-    assert.equal(c.view(run.run_id).drain, undefined); assert.deepEqual(c.agentSummary(run.agent_id).touched, []);
+    assert.equal(c.view(run.run_id).drain, undefined);
     assert.equal(c.stats().unreported_usage, undefined);
     assert.equal(nestedValidation, 0); assert.equal(events.length, eventCount); assert.deepEqual(port.inputs, []); assert.equal(port.stopped, 0);
     port.finish("normal after rejected reentry"); await settled(c, run);
@@ -842,7 +877,7 @@ test("finished is original task identity: current running task 3 plus old task a
   c.list({ include_released: true }); assert.equal(finishedBit(c, first), false, "roster is non-consuming");
   const publication = await wait(c, [first.agent_id]);
   assert.equal(publication.reason, "alert"); assert.equal(publication.agents[0].task, 3); assert.equal(publication.agents[0].status, "running");
-  assert.deepEqual(publication.pending, ["otter"]); assert.equal(publication.alerts[0].task, 1);
+  assert.equal(Object.hasOwn(publication, "pending"), false); assert.equal(publication.alerts[0].task, 1);
   assert.equal(publication.finished.length, 8); assert(publication.finished.every(({ agent }) => agent !== "otter"));
   assert(otherRuns.every((run) => finishedBit(c, run))); assert.equal(finishedBit(c, first), false); assert.equal(finishedBit(c, second), false);
   assert.equal(publication.finished_pending, 2); assert.equal(finishedBit(c, current), false);
@@ -859,9 +894,13 @@ for (const [space, aText] of [["ample", "A original result"], ["byte pressure", 
     a.port.finish(aText); await settled(c, a.run);
     const firstA = await read(c, a.run);
     assert.equal(firstA.agents[0].task, 1); assert.equal(finishedBit(c, a.run), true);
+    assert.equal(Object.hasOwn(firstA, "finished_pending"), false);
+    assert(communicationEnvelopeBytes(firstA) <= 65536);
     if (space === "byte pressure") {
       assert(firstA.agents[0].result.length > 0 && firstA.agents[0].result.length < aText.length);
+      assert.equal(firstA.agents[0].result, aText.slice(0, firstA.agents[0].result.length));
       assert(firstA.agents[0].next_cursor, "present A's terminal row with only a partial result before B exists");
+      assert.equal(decodeResultCursor(firstA.agents[0].next_cursor).offset, firstA.agents[0].result.length);
     }
     const b = await started(c, ports, "original-b", "otter"), bText = "B distinct original result";
     b.port.finish(bText); await settled(c, b.run);
@@ -871,21 +910,27 @@ for (const [space, aText] of [["ample", "A original result"], ["byte pressure", 
     assert.deepEqual([c.view(b.run.run_id).name, c.view(b.run.run_id).task], ["otter", 1]);
     assert.equal(finishedBit(c, b.run), false);
     const secondA = await read(c, a.run);
-    assert.equal(secondA.agents.length, 1); assert.equal(secondA.agents[0].result, firstA.agents[0].result);
+    assert.equal(secondA.agents.length, 1); assert(communicationEnvelopeBytes(secondA) <= 65536);
     assert.equal(finishedBit(c, a.run), true);
     if (space === "ample") {
-      assert.deepEqual(secondA.finished, [{ agent: "otter", task: 1, status: "completed" }],
+      assert.equal(secondA.agents[0].result, aText);
+      assert.deepEqual(secondA.finished, [{ agent: "otter", task: 1, status: "completed", label: "original-b" }],
         "B is the only unpresented candidate: it needs its own explicit finished row, not an implicit link to A");
-      assert.equal(finishedBit(c, b.run), true); assert.equal(secondA.finished_pending, 0);
+      assert.equal(finishedBit(c, b.run), true); assert.equal(Object.hasOwn(secondA, "finished_pending"), false);
     } else {
       assert.equal(secondA.response_limit_reached, true); assert.equal(secondA.finished, undefined);
+      const row = secondA.agents[0];
+      assert(row.result.length > 0 && row.result.length < aText.length);
+      assert.equal(row.result, aText.slice(0, row.result.length), "a positive finished count may shorten the shown prefix");
+      assert.equal(decodeResultCursor(row.next_cursor).offset, row.result.length);
+      assert.equal(row.result + c.getResult(a.run.run_id, { cursor: row.next_cursor, limit: 16384 }).text, aText);
       assert.equal(finishedBit(c, b.run), false, "A's same-name/task/status row must not commit undisplayed B");
       assert.equal(secondA.finished_pending, 1);
     }
     const actualB = await read(c, b.run);
     assert.equal(actualB.agents.length, 1); assert.equal(actualB.agents[0].result, bText);
     assert.equal(actualB.agents[0].task, 1); assert.equal(actualB.agents[0].status, "completed");
-    assert.equal(actualB.finished, undefined); assert.equal(actualB.finished_pending, 0);
+    assert.equal(actualB.finished, undefined); assert.equal(Object.hasOwn(actualB, "finished_pending"), false);
     assert.equal(finishedBit(c, b.run), true); assert.equal(finishedBit(c, a.run), true);
     assert.equal(c.getResult(a.run.run_id).text, aText.slice(0, 4096));
     assert.equal(c.getResult(b.run.run_id).text, bText);
@@ -903,7 +948,7 @@ test("Owner fault broadcasts to A/B captured before edge; later waits do not rep
 test("snapshot read does not consume waiting-only fault edge; failure to validate does not acknowledge it", async (t) => {
   const { c, ports } = await ownerFixture(t), { run } = await started(c, ports, "fault-read", "otter");
   c.latchParentHistoryFailure(new ParentHistoryError("unreported edge"));
-  assert.equal((await read(c, run)).reason, "snapshot");
+  assert.equal(Object.hasOwn(await read(c, run), "reason"), false);
   await assert.rejects(async () => c.observe({ kind: "wait", agent_ids: [run.agent_id], wait_ms: 0 }, context(() => { throw new HarnessError("STALE_CONTEXT"); })), hasCode("STALE_CONTEXT"));
   assert.equal((await wait(c, [run.agent_id])).reason, "owner_blocked"); assert.equal((await wait(c, [run.agent_id])).reason, "timeout");
 });

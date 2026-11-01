@@ -16,15 +16,15 @@ function adapter({ notes = false, pressure = false } = {}) {
     get sessionManager() { if (!state.active) throw new Error("stale after publication"); return manager; },
     modelRegistry: registry, cwd: "/tmp", thinkingLevel: "off",
   };
-  // Saturation must precede the optional warning phase: a complete mandatory
-  // alert plus a worst-byte question, not a result that the warning outranks.
+  // A complete mandatory alert plus a worst-byte question saturates the
+  // envelope before optional dispatch notes can fit.
   const published = packCommunication({ reason: pressure ? "alert" : "snapshot", tasks: [{
     row: { agent: "otter", task: 1, status: pressure ? "needs_input" : "running", ...(pressure ? { has_question: true } : {}) }, settled: pressure,
     ...(pressure ? { question_id: `q_${"a".repeat(32)}`, question: "\0".repeat(8192),
       result: { text: "retained", offset: 0, retained_chars: 16384, total_chars: 16384,
         cursor: { owner: "owner", generation: "generation", run: "prior", version: "v" } } } : {}),
-    // The controller filters notes to what the model may see before packing.
-    ...(notes ? { time_wrapped: true, dispatch_notes: ["tree_shared"] } : {}),
+    // The packer filters private host notes at the model egress boundary.
+    ...(notes ? { dispatch_notes: ["tree_shared", "tree_lock_unknown"] } : {}),
   }], alerts: pressure ? [{ agent: "otter", task: 1, label: "\0".repeat(120), message: "\0".repeat(8192) }] : [], finished: [] }).result;
   Object.freeze(published.content[0]); Object.freeze(published.content); Object.freeze(published);
   const controller = {
@@ -126,7 +126,7 @@ for (const name of ["agent_spawn", "agent_run"]) {
     assert.equal(a.submissions.length, 1); assert.deepEqual(a.submissions[0].request.dispatch, declaration);
     assert.notEqual(a.submissions[0].request.dispatch, declaration);
     const parsed = JSON.parse(result.content[0].text);
-    assert.equal(parsed.agents[0].time_wrapped, true);
+    assert.equal(Object.hasOwn(parsed.agents[0], "time_wrapped"), false);
     assert.deepEqual(parsed.agents[0].dispatch_notes, ["tree_shared"]);
     declaration.inputs.push("late-mutation"); assert.deepEqual(a.submissions[0].request.dispatch.inputs, ["ordinary.txt"]);
   });
@@ -151,7 +151,7 @@ for (const name of ["agent_spawn", "agent_run"]) {
     const result = await a.execute(name, prepared);
     assert.equal(result, a.published);
     assert(!Object.hasOwn(a.submissions[0].request, "dispatch"));
-    assert.equal(result.content[0].text, '{"reason":"snapshot","agents":[{"agent":"otter","task":1,"status":"running"}],"pending":["otter"],"alerts_pending":0,"finished_pending":0}');
+    assert.equal(result.content[0].text, '{"agents":[{"agent":"otter","task":1,"status":"running"}]}');
     if (name === "agent_run") assert.equal(JSON.stringify(a.submissions[0].request), '{"resume":"agent-id","prompt":"task","description":"task"}');
   });
 }

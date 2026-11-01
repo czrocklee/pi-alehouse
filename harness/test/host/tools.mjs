@@ -225,7 +225,7 @@ try {
   const firstArgs = newTask("ASK_FACTOR", "worker", { agent: "orca", inherit_context: true, label: "Find the missing factor 🚀" });
   const first = await invoke("agent_spawn", firstArgs, { id: "stable-call", prompt: inheritedMarker }); await settled("orca");
   const firstRun = runOf("orca");
-  assert.equal(first.reason, "snapshot");
+  assert.equal(Object.hasOwn(first, "reason"), false);
   assert.deepEqual(first.action, { type: "agent_spawn", agent: "orca", task: 1 });
   assert.equal(first.agents[0].agent, "orca"); assert.equal(first.agents[0].task, 1);
   assert.equal(JSON.stringify(first).includes(firstRun), false, "a receipt carries no internal Run UUID");
@@ -238,12 +238,12 @@ try {
   assert.equal(waited.reason, "question");
   assert.deepEqual([...(first.alerts ?? []), ...(waited.alerts ?? [])],
     [{ agent: "orca", task: 1, label: firstArgs.label, message: "SYNTHETIC_ALERT_BEFORE_WAIT" }]);
-  assert.equal(waited.alerts_pending, 0); assert.equal(controller.view(firstRun).pending_messages, 0);
+  assert.equal(Object.hasOwn(waited, "alerts_pending"), false); assert.equal(controller.view(firstRun).pending_messages, 0);
   assert.equal(waited.agents[0].question, "What is the factor?"); assert.equal(waited.agents[0].question_truncated, undefined);
   assert.match(waited.agents[0].question_id, /^q_[0-9a-f]{32}$/);
-  assert.equal("label" in waited.agents[0], false);
+  assert.equal(waited.agents[0].label, firstArgs.label);
   const questionResult = await invoke("agent_read", { agent: "orca" });
-  assert.equal(questionResult.reason, "snapshot");
+  assert.equal(Object.hasOwn(questionResult, "reason"), false);
   const question = questionResult.agents[0];
   assert.equal(question.question, "What is the factor?"); assert.equal(question.result, "QUESTION_RECORDED");
   assert.equal(question.question_id, waited.agents[0].question_id);
@@ -274,7 +274,7 @@ try {
       { error: "INVALID_PARAMETERS" });
   }
   const answered = await invoke("agent_answer", { agent: "orca", question_id: question.question_id, answer: "ANSWER_FACTOR 3", wait_ms: 300000 });
-  assert.equal(answered.reason, "done");
+  assert.equal(Object.hasOwn(answered, "reason"), false);
   assert.deepEqual(answered.action, { type: "agent_answer", agent: "orca", task: 2 });
   assert.equal(answered.agents[0].status, "completed"); assert.equal(answered.agents[0].result, receipt, "a lone result arrives whole in the combined wait");
   const answerRequests = provider.requests.slice(beforeAnswer).filter((call) => !isParent(call)); assert(answerRequests.length > 0);
@@ -299,9 +299,11 @@ try {
   activePreset = route("reasoning-team", "harness-fixture/reasoning", "v2");
   const blocking = await invoke("agent_spawn", newTask("BLOCK_FOR_CANCEL", "worker"));
   await until(() => children.length === 2 && children[1].session.isStreaming);
-  assert.equal(blocking.reason, "snapshot");
+  assert.equal(Object.hasOwn(blocking, "reason"), false);
   assert.deepEqual(blocking.action, { type: "agent_spawn", agent: "block-for-cancel", task: 1 });
   assert.equal(blocking.agents[0].status, "running");
+  assert.equal(Object.hasOwn(blocking.agents[0], "result"), false, "empty live results are omitted");
+  assert.equal(Object.hasOwn(blocking, "pending"), false);
   const blockingRoute = controller.view(runOf("block-for-cancel")).effective_settings;
   assert.equal(blockingRoute.preset, "reasoning-team"); assert.equal(blockingRoute.parent_thinking, "high");
   assert.equal(blockingRoute.thinking, "high"); assert.equal(blockingRoute.thinking_resolution, "identity");

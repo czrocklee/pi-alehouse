@@ -338,7 +338,7 @@ test("wait-any can publish a ready successor queued without a blocker before pum
   });
   portFor(ports, "dep").finish("done");
   const body = JSON.parse((await observation).content[0].text);
-  assert.equal(body.reason, "done");
+  assert.equal(Object.hasOwn(body, "reason"), false);
   assert.equal(body.agents.find((row) => row.agent === "alpha-dep").status, "completed");
   const row = body.agents.find((entry) => entry.agent === "beta-wait");
   assert.equal(row.status, "queued");

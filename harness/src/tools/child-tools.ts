@@ -26,7 +26,7 @@ export function createChildTools(current: () => RunCallbacks | undefined,
   return ([["alert_parent", "message"], ["ask_parent", "question"]] as const).map(([name, key]) => {
     const parameters = Type.Object({ [key]: text(8192) }, { additionalProperties: false });
     return { name, label: name, parameters,
-      description: name === "ask_parent" ? "Record a question requiring the parent's decision, then finish this task. An existing question is kept, not replaced." : "Queue an important fact that affects the parent's decisions, then continue working. It wakes matching parent observations, not a new parent model turn. Use ask_parent when a decision is required, then finish the task.",
+      description: name === "ask_parent" ? "Record a blocking question for the parent, then stop calling tools and end your turn so the task can settle for an answer. Only the first question is kept. This call does not force suspension." : "Queue a decision-relevant fact, then continue. Queued does not mean read; no new parent turn. For a required decision, use ask_parent and finish.",
       async execute(_id: string, args: unknown) {
         // Like owner tools, recheck AFTER mutable SDK tool_call hooks, before
         // callbacks can enqueue an alert or record the first question.
@@ -39,8 +39,8 @@ export function createChildTools(current: () => RunCallbacks | undefined,
         if (name === "ask_parent") {
           const accepted = callbacks.question(value);
           receipt = accepted === "already_recorded"
-            ? "This task already has a question; it was not replaced. Finish this task now."
-            : "Question recorded. Finish this task now.";
+            ? "This task already has a question; it was not replaced. Stop calling tools and end your turn now."
+            : "Question recorded. Stop calling tools and end your turn now.";
         } else {
           try { callbacks.alert(value); }
           catch (error) { throw childAlertError(error); }

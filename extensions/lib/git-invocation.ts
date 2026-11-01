@@ -15,11 +15,11 @@ const GIT_CONFIG_ASSIGNMENT = /^GIT_CONFIG(?:_[A-Za-z0-9_]*)?=/;
 const SIMPLE_WRAPPERS = new Set(["command", "builtin", "nohup"]);
 // A bounded risk-word inventory for unknown Git global option positions.
 // It only helps select eligible-ask checkpoints, never authorizes an operation.
-const CHECKPOINT_SUBCOMMANDS = new Set(["diff", "blame", "show", "config", "push", "reset", "clean", "reflog", "branch", "tag", "checkout", "restore", "stash", "update-ref", "filter-branch"]);
+const CHECKPOINT_SUBCOMMANDS = new Set(["diff", "blame", "show", "config", "push", "reset", "clean", "reflog", "branch", "tag", "checkout", "switch", "restore", "stash", "update-ref", "filter-branch"]);
 // Selected executable/loader/helper overrides, not an exhaustive environment
 // taxonomy. Only model-requested command prefixes are inspected, never the
 // operator's inherited process environment. Git config keeps its human checkpoint.
-const DANGEROUS_ENVIRONMENT_ASSIGNMENT = /^(?:PATH|LD_[A-Za-z0-9_]*|DYLD_[A-Za-z0-9_]*|GIT_EXTERNAL_DIFF|GIT_SSH|GIT_SSH_COMMAND|GIT_ASKPASS|SSH_ASKPASS|GIT_PAGER|PAGER|GIT_EXEC_PATH|GIT_EDITOR|GIT_SEQUENCE_EDITOR)=/;
+const DANGEROUS_ENVIRONMENT_ASSIGNMENT = /^(?:PATH|LD_[A-Za-z0-9_]*|DYLD_[A-Za-z0-9_]*|GIT_EXTERNAL_DIFF|GIT_SSH|GIT_SSH_COMMAND|GIT_ASKPASS|SSH_ASKPASS|GIT_PAGER|PAGER|GIT_EXEC_PATH|GIT_EDITOR|GIT_SEQUENCE_EDITOR|EDITOR|VISUAL|GIT_PROXY_COMMAND)=/;
 const QUERY_SUBCOMMANDS = new Set(["status", "log", "show"]);
 
 const GIT_GLOBALS_NONE = new Set([
@@ -401,22 +401,49 @@ function mentionsSubcommand(invocation: GitInvocation, names: ReadonlySet<string
   return [invocation.subcommand, ...invocation.args].some((token) => token !== undefined && names.has(token.toLowerCase()));
 }
 
-// Git accepts options after operands, but never after --. Skip the bounded
-// required-value flags used below so option DATA (e.g. branch --format -d)
-// cannot be mistaken for a destructive short-option group.
-function optionsBeforeTerminator(args: readonly string[], valueFlags: readonly string[] = []): string[] {
-  const options: string[] = [];
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (arg === "--") break;
-    if (valueFlags.includes(arg)) { index += 1; continue; }
-    if (arg.startsWith("-")) options.push(arg);
-  }
-  return options;
+// Git accepts bounded long-option abbreviations. Ambiguous prefixes may also
+// checkpoint an eligible ask; this is not proof that Git accepts the spelling.
+function isLongOption(arg: string, name: string): boolean {
+  const head = arg.split("=", 1)[0] ?? "";
+  return head.startsWith("--") && head.length > 2 && name.startsWith(head);
 }
 
-function hasForceFlag(args: readonly string[]): boolean {
-  return args.some((arg) => arg === "--force" || /^-([A-Za-z]*f[A-Za-z]*)$/.test(arg));
+// Git accepts options after operands, but never after --. Preserve required
+// option DATA, including a value spelling -- or a destructive option. In short
+// groups, the remainder after a value-taking flag is DATA, not more flags.
+// This is a bounded checkpoint inventory, not a complete Git option parser.
+function checkpointArgv(args: readonly string[], valueFlags: readonly string[] = []): {
+  options: string[]; operands: string[]; hasSeparatedOperands: boolean;
+} {
+  const options: string[] = [], operands: string[] = [];
+  let terminated = false, hasSeparatedOperands = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!terminated && arg === "--") { terminated = true; continue; }
+    if (terminated || !arg.startsWith("-") || arg === "-") {
+      operands.push(arg);
+      if (terminated) hasSeparatedOperands = true;
+      continue;
+    }
+    if (arg.startsWith("--")) {
+      options.push(arg);
+      if (!arg.includes("=") && valueFlags.some((flag) => isLongOption(arg, flag))) index += 1;
+      continue;
+    }
+    let option = arg;
+    for (let offset = 1; offset < arg.length; offset += 1) {
+      if (!valueFlags.includes(`-${arg[offset]}`)) continue;
+      option = arg.slice(0, offset + 1);
+      if (offset + 1 === arg.length) index += 1;
+      break;
+    }
+    options.push(option);
+  }
+  return { options, operands, hasSeparatedOperands };
+}
+
+function hasForceFlag(options: readonly string[]): boolean {
+  return options.some((arg) => isLongOption(arg, "--force") || /^-([A-Za-z]*f[A-Za-z]*)$/.test(arg));
 }
 
 function hasExtDiffOrOutput(args: readonly string[]): boolean {
@@ -434,29 +461,43 @@ export function gitInvocationNeedsHuman(invocation: GitInvocation): boolean {
   const subcommand = invocation.subcommand?.toLowerCase();
   if (invocation.hasEnvironmentAssignments || invocation.configOverride) return true;
   if (subcommand === "show" || subcommand === "config" || subcommand === "push") return true;
-  if (subcommand === "reset" && invocation.args.includes("--hard")) return true;
-  if (subcommand === "clean" && hasForceFlag(invocation.args)) return true;
+  if (subcommand === "reset" && checkpointArgv(invocation.args, ["--pathspec-from-file"]).options.some(
+    (arg) => isLongOption(arg, "--hard") || isLongOption(arg, "--merge"),
+  )) return true;
+  if (subcommand === "clean") {
+    const { options } = checkpointArgv(invocation.args, ["-e", "--exclude"]);
+    if (hasForceFlag(options) || options.some(arg => /^-[A-Za-z]*i[A-Za-z]*$/.test(arg) || isLongOption(arg, "--interactive"))) return true;
+  }
   if (subcommand === "reflog" && ["delete", "expire"].includes((invocation.args[0] ?? "").toLowerCase())) return true;
   if (subcommand === "checkout") {
-    const options = optionsBeforeTerminator(invocation.args, ["-b", "--conflict", "--pathspec-from-file"]);
-    const separator = invocation.args.indexOf("--");
-    if ((separator >= 0 && separator + 1 < invocation.args.length) || options.some((arg) => {
-      if (arg === "--force") return true;
-      if (!/^-[^-]/.test(arg)) return false;
-      for (const flag of arg.slice(1)) {
-        if (flag === "f" || flag === "B") return true;
-        if (flag === "b") break; // The rest is a new branch NAME, not flags.
-      }
-      return false;
-    })) return true;
+    const { options, operands, hasSeparatedOperands } = checkpointArgv(invocation.args,
+      ["-b", "-B", "-U", "--unified", "--inter-hunk-context", "--orphan", "--conflict", "--pathspec-from-file"]);
+    if (hasSeparatedOperands || hasForceFlag(options) || options.some(
+      // Patch mode can discard hunks from implicit paths using stdin answers.
+      (arg) => /^-[A-Za-z]*[Bp][A-Za-z]*$/.test(arg) || isLongOption(arg, "--patch") || isLongOption(arg, "--pathspec-from-file"),
+    )) return true;
+    const createsBranch = options.some((arg) => /^-[A-Za-z]*b[A-Za-z]*$/.test(arg) || isLongOption(arg, "--orphan"));
+    // A bare operand can be a ref OR a path that discards local edits. Without
+    // repository IO we cannot distinguish them; checkpoint conservatively.
+    // `checkout -` is the known previous-branch control, not a path discard.
+    if (!createsBranch && operands.some((arg) => arg !== "-")) return true;
+  }
+  if (subcommand === "switch") {
+    const { options } = checkpointArgv(invocation.args, ["-c", "-C", "--create", "--force-create", "--orphan", "--conflict"]);
+    if (hasForceFlag(options) || options.some(arg => /^-[A-Za-z]*C[A-Za-z]*$/.test(arg) ||
+        isLongOption(arg, "--discard-changes") || isLongOption(arg, "--force-create"))) return true;
   }
   if (subcommand === "restore" || subcommand === "update-ref" || subcommand === "filter-branch") return true;
   if (subcommand === "stash" && ["clear", "drop"].includes((invocation.args[0] ?? "").toLowerCase())) return true;
-  if (subcommand === "branch" && optionsBeforeTerminator(invocation.args, ["--format", "--sort"]).some(
-    (arg) => arg === "--delete" || /^-[A-Za-z]*[dD][A-Za-z]*$/.test(arg),
+  if (subcommand === "branch" && checkpointArgv(invocation.args,
+    ["--format", "--sort", "--points-at", "-u", "--set-upstream-to", "--forked", "--delete-merged"]).options.some(
+    // --delete-merged consumes an upstream-pattern value, not a branch name.
+    (arg) => isLongOption(arg, "--delete") || isLongOption(arg, "--delete-merged") ||
+      isLongOption(arg, "--force") || /^-[A-Za-z]*[dDfMC][A-Za-z]*$/.test(arg),
   )) return true;
-  if (subcommand === "tag" && optionsBeforeTerminator(invocation.args, ["--format", "--sort"]).some(
-    (arg) => arg === "--delete" || /^-[A-Za-z]*d[A-Za-z]*$/.test(arg),
+  if (subcommand === "tag" && checkpointArgv(invocation.args,
+    ["--format", "--sort", "--points-at", "-m", "--message", "-F", "--file", "-u", "--local-user", "--trailer"]).options.some(
+    (arg) => isLongOption(arg, "--delete") || isLongOption(arg, "--force") || /^-[A-Za-z]*[df][A-Za-z]*$/.test(arg),
   )) return true;
   if ((subcommand === "diff" || subcommand === "log" || subcommand === "show") && hasExtDiffOrOutput(invocation.args)) {
     return true;

@@ -60,11 +60,17 @@ export function assertWorkspacePolicy(binding: WorkspacePolicyBinding): void {
     "Workspace policy directory binding changed");
 }
 
+export interface WorkspacePolicyLease {
+  /** Live, restriction-only aliases; rejects after release or root changes. */
+  aliases(values: readonly string[]): readonly string[];
+  release(): void;
+}
+
 /** Runtime-only inputs, registered before the child's permission extension loads.
  * The caller must retain this lease until confirmed child shutdown. */
 export function bindWorkspacePolicy(input: {
   sessionId: string; cwd: string; source_cwd: string; checkout_root: string; source_root: string; projectTrusted: boolean;
-}): { release(): void } {
+}): WorkspacePolicyLease {
   sessionId(input.sessionId);
   directory(input.cwd); directory(input.source_cwd); directory(input.checkout_root); directory(input.source_root);
   assert(typeof input.projectTrusted === "boolean", "Invalid workspace policy trust decision");
@@ -81,9 +87,12 @@ export function bindWorkspacePolicy(input: {
     source_cwd: input.source_cwd, checkout_root: input.checkout_root, source_root: input.source_root,
     projectTrusted: input.projectTrusted, canonicalCwd, canonicalSourceCwd, canonicalCheckoutRoot, canonicalSourceRoot });
   entries.set(binding.sessionId, binding);
-  return Object.freeze({ release() {
-    if (entries.get(binding.sessionId) === binding) entries.set(binding.sessionId, null);
-  } });
+  return Object.freeze({
+    aliases: (values: readonly string[]) => workspacePolicyAliases(binding, values),
+    release() {
+      if (entries.get(binding.sessionId) === binding) entries.set(binding.sessionId, null);
+    },
+  });
 }
 
 export function workspacePolicyForContext(ctx: Pick<ExtensionContext, "cwd" | "sessionManager"> | undefined): WorkspacePolicyBinding | undefined {

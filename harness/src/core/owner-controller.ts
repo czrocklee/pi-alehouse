@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { isAbsolute, relative, resolve } from "node:path";
-import { normalizeFacts, normalizeRuntime, terminal, validSettings, validWorkspace, type WorkspaceInfo, type AdmittedAgentConfig, type AgentSummary, type ExecutionFacts,
+import { isAbsolute, normalize, resolve } from "node:path";
+import { normalizeFacts, normalizeRuntime, terminal, validSettings, validWorkspace, type WorkspaceInfo, type AdmittedAgentConfig, type ExecutionFacts,
   type CancellationSource, type HistoryRef, type ModelStopReason, type Outcome, type Output, type Phase, type ResultPage, type ResultRef,
   type RunStatus, type RunTelemetry, type RunView, type StopReason, type SubmitRequest } from "./contracts.js";
 import { HarnessError, ParentHistoryError, SessionInitializationError, SessionUnavailableError, workersDisabled,
@@ -12,13 +12,14 @@ import { actionableQuestionId, applyCommunicationCommit, canAnswerQuestion, comm
   enqueueAlert, enqueueManagedBlock, finishedCandidates, isCommunicationSettled, recordFirstQuestion, scopedAlerts, snapshotManagedBlockTools, taskOrdinal, validateCommunicationCommit,
   type AlertScope, type CommunicationCommitPlan, type CommunicationCommitSnapshot, type PendingAlert } from "./communication-state.js";
 import { packCommunication } from "./communication-packer.js";
-import { AGENT_EXISTS_RESOLUTION, COMMUNICATION_LIMITS, isModelAgentName, modelDispatchNotes, modelTaskStatus, type CommunicationAction, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.js";
+import { AGENT_EXISTS_RESOLUTION, COMMUNICATION_LIMITS, isModelAgentName, modelTaskStatus, type CommunicationAction, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.js";
 import type { CommunicationSnapshot, CommunicationToolResult, ResultWindow, TaskSnapshot } from "./communication-snapshot.js";
-import { modelRecoveryHint } from "./model-recovery.js";
+import { taskMetadata } from "./task-metadata.js";
+import { validWorkspaceDetails, workspaceRecoveryOf, type WorkspaceDetails, type WorkspaceRecovery } from "./workspace-metadata.js";
 import { isQuestionId } from "./question-id.js";
 import { decodeResultCursor, invalidResultCursor, resultCursorKey, type ResultCursorIdentity } from "./result-cursor.js";
-import { dispatchText, pathsOverlap, validateDispatch, validSourceState, type Dispatch, type DispatchLease,
-  type DispatchPort, type PreparedDispatch, type SourceState, type ValidationReceipt } from "./dispatch.js";
+import { dispatchText, isBoundDispatch, resourcesOverlap, validateDispatch, validSourceState, type Dispatch, type DispatchLease,
+  type DispatchPort, type PreparedDispatch, type PreparedPath, type SourceState, type ValidationReceipt } from "./dispatch.js";
 
 interface RunRecord {
   owner_id: string;
@@ -63,6 +64,8 @@ interface RunRecord {
   dispatch_notes?: string[];
   source_state?: SourceState;
   workspace?: WorkspaceInfo;
+  workspace_details?: WorkspaceDetails;
+  recovery?: WorkspaceRecovery;
   time_wrapped?: true;
 }
 type ProviderActivity = ReadonlyMap<string, { readonly active: number }>;
@@ -77,12 +80,12 @@ interface Agent {
   id: string; name: string; settings: AdmittedAgentConfig; resident: boolean;
   current?: string; session?: AgentSessionPort; unavailable?: string; release?: Promise<void>;
   workspace?: WorkspaceInfo;
+  workspace_details?: WorkspaceDetails;
   /** Confirmed disposal; the reservation can still await current Run finalization. */
   cleanupComplete?: true;
   question?: { run_id: string; reserved_by?: string };
   /** Parent messages for the next prompt this Agent composes; memory only. */
   inbox: string[];
-  touched: Set<string>; touchedOmitted: number;
   /** Per-task budgets chosen at creation; each task uses them. */
   limits: { max_turns?: number; max_duration_ms?: number };
   /** kill() on a busy Agent: release once its task settles. */
@@ -158,7 +161,7 @@ export type Delivery = "joined" | "steered" | "not_delivered";
 export interface SettleOptions { agent_id: string; ms?: number; signal?: AbortSignal }
 export type OwnerObservationRequest =
   { kind: "wait"; agent_ids?: string[]; mode?: "all" | "any"; wait_ms?: number } |
-  { kind: "read"; agent_id: string; cursor?: string; max_chars?: number } |
+  { kind: "read"; agent_id: string; task?: number; cursor?: string; max_chars?: number } |
   { kind: "action"; run_id: string; wait_ms?: number; action:
     { type: "agent_spawn" | "agent_run" | "agent_answer" } | { type: "agent_send"; delivery: Delivery } };
 const stable = (value: unknown, ancestors = new Set<object>()): string => {
@@ -230,14 +233,11 @@ export const INBOX_CHARS = 32768;
 /** Bounded replay window for send deliveries; like `messages`, the oldest
  * entries fall out instead of growing for the Owner's whole life. */
 export const DELIVERY_LOG_LIMIT = 512;
-const TOUCHED_LIMIT = 64;
 const updatesText = (updates: readonly string[]): string => !updates.length ? "" :
   `Messages from the parent, sent before this task started (oldest first):\n\n${
     updates.map((text, index) => `[${index + 1}] ${text}`).join("\n\n")}\n\n--- End of messages ---`;
-export const softBudgetMessage = "The turn budget has been reached. Finish now with your best supported final answer, noting unfinished work. Do not start new work.";
-/** Model-facing resolution for a tree declared before a worktree workspace exists. */
-export const WORKTREE_TREE_RESOLUTION = "Start without tree; after initialization use agent_list actual cwd and declare its absolute tree on follow-up.";
-export const softTimeBudgetMessage = "The wall-clock deadline is approaching. Finish with a checkpoint now: supported findings, exact evidence paths, checks actually run and their results, unfinished work, and the next safe step. Do not start new work. This hint does not extend the deadline.";
+export const softBudgetMessage = "Turn limit reached. Finish with supported results and unfinished work. Do not start new work.";
+export const softTimeBudgetMessage = "Deadline approaching. Finish now with results, checks run, unfinished work and blockers. Do not start new work.";
 export const softDeadlineDelay = (duration: number): number | undefined => duration <= 1000 ? undefined :
   Math.max(1000, duration - Math.max(1000, Math.min(30000, duration / 5)));
 const settingsView = (settings: AdmittedAgentConfig): RunView["effective_settings"] => {
@@ -440,10 +440,8 @@ export class OwnerController {
    * release, result reads and drain all remain available. */
   assertOwnerAvailable(): void {
     this.assertEffectAllowed();
-    if (this.closed || this.closing) throw new HarnessError("OWNER_CLOSED");
-    if (this.cleanupUncertain) throw new HarnessError("OWNER_CLEANUP_UNCERTAIN");
-    if (this.internalError) throw new HarnessError("OWNER_INTERNAL_ERROR", { error: this.internalError });
-    if (this.parentError) throw new HarnessError("OWNER_PARENT_UNAVAILABLE", { error: this.parentError });
+    const fault = this.ownerFault(true);
+    if (fault) throw fault;
     try { this.options.owner.assertHeld(); }
     catch (error) { this.internalError ??= errorText(error); this.wake(); throw error; }
   }
@@ -603,7 +601,7 @@ export class OwnerController {
     // only explicitly bound model integrations require name-addressable Agents.
     const agent: Agent = reuse ? this.requireAgent(request.resume) : {
       id: randomUUID(), name: request.name ?? "", settings: structuredClone(request.settings), resident: true,
-      inbox: [], touched: new Set(), touchedOmitted: 0,
+      inbox: [],
       limits: { max_turns: request.max_turns, max_duration_ms: request.max_duration_ms },
     };
     if (agent.current) throw new HarnessError("AGENT_BUSY", { run_id: agent.current });
@@ -620,15 +618,9 @@ export class OwnerController {
     const original = reuse && request.answer_to_run_id ? this.requireRun(request.answer_to_run_id) : undefined;
     if (original && request.dispatch !== undefined) throw new HarnessError("IMMUTABLE_DISPATCH");
     const declaration = original ? original.record.dispatch : request.dispatch;
-    // A worktree exists only after runtime initialization confirmed its actual
-    // cwd/baseline; admission never creates one. Before that confirmation a
-    // declared tree cannot name the (not yet existing) working copy, so reject
-    // synchronously — before preparation, claims, queue or any session.
-    if (declaration?.tree !== undefined && agent.settings.workspace === "worktree" && !agent.workspace) {
-      throw new HarnessError("DISPATCH_WORKTREE_UNINITIALIZED", { agent: agent.name, key: "tree", requested: declaration.tree,
-        resolution: WORKTREE_TREE_RESOLUTION });
-    }
-    const prepared = declaration === undefined ? undefined : this.prepareDispatch(declaration, agent.settings, !!request.after?.length);
+    // Until runtime confirms a worktree, relative declarations reserve logical
+    // resources. Preparation and accepted replay never allocate a working copy.
+    const prepared = declaration === undefined ? undefined : this.prepareDispatch(declaration, agent, !!request.after?.length);
     const inheritedClaim = original?.claim;
     if (inheritedClaim && !this.claims.has(inheritedClaim)) throw new HarnessError("DISPATCH_CLAIM_LOST");
     if (prepared) {
@@ -650,6 +642,8 @@ export class OwnerController {
       ...(reuse && request.answer_to_run_id ? { answer_to_run_id: request.answer_to_run_id } : {}),
       ...(request.after ? { after: [...request.after] } : {}),
       ...(declaration === undefined ? {} : { dispatch: structuredClone(declaration) }),
+      ...(agent.workspace ? { workspace: structuredClone(agent.workspace) } : {}),
+      ...(agent.workspace_details ? { workspace_details: structuredClone(agent.workspace_details) } : {}),
       input_entered: false, status: "queued", phase: "queued", execution_exited: false,
       submitted_at: this.clock.wall(), turns: 0, limit_reached: false, cleanup_errors: [], discarded_inputs: [],
     };
@@ -677,22 +671,34 @@ export class OwnerController {
     return this.view(record.run_id);
   }
 
-  private prepareDispatch(declaration: Dispatch, settings: AdmittedAgentConfig, deferInputs: boolean): PreparedDispatch {
+  private prepareDispatch(declaration: Dispatch, agent: Agent, deferInputs: boolean): PreparedDispatch {
     validateDispatch(declaration);
     const port = this.options.dispatch;
     if (!port) throw new HarnessError("DISPATCH_UNAVAILABLE");
+    const { settings } = agent;
+    const unbound = settings.workspace === "worktree" && !agent.workspace;
+    const cwd = agent.workspace?.cwd ?? settings.cwd;
     const prepared = this.validateObservationEntry(() => structuredClone(synchronousObservationPort(port.prepare(
-      structuredClone(declaration), { cwd: settings.cwd, profile: settings.profile, deferInputs }))));
-    const path = (item: unknown): boolean => !!item && typeof item === "object" &&
-      ["path", "canonical"].every(key => {
-        const value = (item as Record<string, unknown>)[key];
-        // eslint-disable-next-line no-control-regex -- reject unsupported control-bearing filesystem paths
-        return typeof value === "string" && value.length <= 4096 && isAbsolute(value) && !/[\x00-\x1f\x7f]/.test(value);
-      });
+      structuredClone(declaration), { cwd, source_cwd: settings.cwd, profile: settings.profile, deferInputs,
+        ...(unbound ? { unbound_worktree: agent.id } : {}),
+        ...(agent.workspace ? { workspace_policy: agent.session?.workspace_policy } : {}) }))));
+    const path = (item: unknown, requested: string | undefined): boolean => {
+      if (!item || typeof item !== "object" || requested === undefined) return false;
+      const value = item as Record<string, unknown>;
+      if (unbound && !isAbsolute(requested)) return value.kind === "unbound_worktree" && value.agent_id === agent.id &&
+        value.rel === normalize(requested) && Object.keys(value).every(key => ["kind", "agent_id", "rel"].includes(key));
+      return (value.kind === undefined || value.kind === "bound") && value.path === resolve(cwd, requested) &&
+        Object.keys(value).every(key => ["kind", "path", "canonical"].includes(key)) && ["path", "canonical"].every(key => {
+          const text = value[key];
+          // eslint-disable-next-line no-control-regex -- reject unsupported control-bearing filesystem paths
+          return typeof text === "string" && text.length <= 4096 && isAbsolute(text) && !/[\x00-\x1f\x7f]/.test(text);
+        });
+    };
     if (!prepared || !Array.isArray(prepared.inputs) || !Array.isArray(prepared.ownership) ||
         prepared.inputs.length !== (declaration.inputs?.length ?? 0) || prepared.ownership.length !== (declaration.ownership?.length ?? 0) ||
-        !Array.from(prepared.inputs).every(path) || !Array.from(prepared.ownership).every(path) ||
-        ((prepared.tree !== undefined) !== (declaration.tree !== undefined)) || (prepared.tree && !path(prepared.tree)))
+        !Array.from(prepared.inputs).every((item, i) => path(item, declaration.inputs?.[i])) ||
+        !Array.from(prepared.ownership).every((item, i) => path(item, declaration.ownership?.[i])) ||
+        ((prepared.tree !== undefined) !== (declaration.tree !== undefined)) || (prepared.tree && !path(prepared.tree, declaration.tree)))
       throw new HarnessError("INVALID_PREPARED_DISPATCH");
     prepared.declaration = structuredClone(declaration);
     return prepared;
@@ -707,7 +713,43 @@ export class OwnerController {
     return result;
   }
   private sameResources(left: PreparedDispatch, right: PreparedDispatch): boolean {
-    return stable({ ownership: left.ownership, tree: left.tree }) === stable({ ownership: right.ownership, tree: right.tree });
+    const identity = (path: PreparedPath | undefined) => path?.kind === "unbound_worktree" ? path :
+      path ? { path: path.path, canonical: path.canonical } : undefined;
+    return stable({ ownership: left.ownership.map(identity), tree: identity(left.tree) }) ===
+      stable({ ownership: right.ownership.map(identity), tree: identity(right.tree) });
+  }
+  /** One-way refinement, never a replacement for strict rechecks after binding.
+   * Inputs are revalidated observations, not claimed resources. */
+  private bindsResources(previous: PreparedDispatch, next: PreparedDispatch, agent: Agent): boolean {
+    if (!agent.workspace || !isBoundDispatch(next)) return false;
+    const binds = (before: PreparedPath | undefined, after: PreparedPath | undefined): boolean => {
+      if (!before || !after) return before === after;
+      if (after.kind === "unbound_worktree") return false;
+      if (before.kind === "unbound_worktree") return before.agent_id === agent.id &&
+        after.path === resolve(agent.workspace!.cwd, before.rel);
+      return before.path === after.path && before.canonical === after.canonical;
+    };
+    return previous.ownership.length === next.ownership.length &&
+      previous.ownership.every((path, i) => binds(path, next.ownership[i])) && binds(previous.tree, next.tree);
+  }
+  private dispatchFailure(run: ManagedRun, error: unknown): void {
+    const code = error instanceof HarnessError ? error.code : undefined;
+    let detail = errorText(error);
+    if (error instanceof HarnessError) {
+      const { path, agent, surface } = error.details;
+      const where = typeof path === "string" ? ` (${JSON.stringify(path)})` : "";
+      if (code === "DISPATCH_INPUT_MISSING") detail = `${code}: Declared input is missing in the execution workspace${where}.` +
+        (run.record.settings.workspace === "worktree" ? " Source dirty/untracked files are not copied into the worktree; verify the committed baseline or explicitly choose shared mode for new work." : " Verify the input or its producing task.");
+      else if (code === "PREFLIGHT_DENIED") detail = `${code}: ` +
+        (typeof error.details.reason === "string" ? error.details.reason :
+          `Permission policy denied this declaration${where}` + (typeof surface === "string" ? ` on ${surface}` : "")) +
+        "; this is not a missing-file or model-execution failure. Report the restriction; do not bypass it.";
+      else if (code === "DISPATCH_TREE_TYPE" || code === "DISPATCH_INPUT_TYPE") detail = `${code}: Declared ${code === "DISPATCH_TREE_TYPE" ? "tree must be a directory" : "input must be a file or directory"}${where}.`;
+      else if (code === "RESOURCE_OWNED" || code === "BUILD_TREE_BUSY") detail = `${code}: The resolved resource${where} conflicts with another unfinished task` +
+        (typeof agent === "string" ? ` on Agent ${JSON.stringify(agent)}` : "") + ". Inspect its task; resolve a pending question or wait for confirmed release before submitting a follow-up.";
+    }
+    run.prestartFailure = { reason: code === "DISPATCH_INPUT_MISSING" ? "dependency_input_missing" : "dispatch_preflight_failed",
+      error: detail.slice(0, 2048) };
   }
   private checkClaims(prepared: PreparedDispatch, own?: ResourceClaim, predecessors = new Set<string>(), futureOf?: string): void {
     const entries = (p: PreparedDispatch) => [
@@ -730,12 +772,13 @@ export class OwnerController {
       // Accepted successors reserve their place, not a concurrent execution.
       if (futureOf && other.record.status === "queued" && ancestors.has(futureOf)) continue;
       for (const wanted of entries(prepared)) for (const held of entries(claim.prepared)) {
-        if (!pathsOverlap(wanted.path, held.path)) continue;
+        if (!resourcesOverlap(wanted.path, held.path)) continue;
         // Report a holder that is not being released over one that is: no
         // release wait can resolve the admission while such a holder remains.
         const agent = this.agents.get(claim.agent_id), notReleasing = !agent || !this.releasing(agent);
         if (!conflict || notReleasing) conflict = { claim, other, tree: wanted.tree && held.tree,
-          key: wanted.tree ? "tree" : "ownership", requested: wanted.requested, path: wanted.path.path };
+          key: wanted.tree ? "tree" : "ownership", requested: wanted.requested,
+          path: wanted.path.kind === "unbound_worktree" ? wanted.path.rel : wanted.path.path };
         if (notReleasing) break claims;
         continue claims;
       }
@@ -757,6 +800,7 @@ export class OwnerController {
   }
   private async observeDispatch(run: ManagedRun): Promise<void> {
     const prepared = run.prepared!;
+    if (!isBoundDispatch(prepared)) throw new HarnessError("DISPATCH_WORKSPACE_UNBOUND");
     const capture = !!prepared.declaration.checks?.length;
     const claim = run.claim;
     try {
@@ -807,7 +851,7 @@ export class OwnerController {
     const checks = run.record.dispatch?.checks;
     if (!checks?.length) return;
     return { version: 1, checks: [...checks], cwd: run.record.workspace?.cwd ?? run.record.settings.cwd,
-      ...(run.prepared?.tree ? { tree: run.prepared.tree.canonical } : {}),
+      ...(run.prepared?.tree && run.prepared.tree.kind !== "unbound_worktree" ? { tree: run.prepared.tree.canonical } : {}),
       source_state: run.record.source_state ?? { state: "unknown", reason: "not_captured" },
       outcome: { status: outcome.status, ...(outcome.reason ? { reason: outcome.reason } : {}),
         ...(outcome.time_wrapped ? { time_wrapped: true } : {}) } };
@@ -900,16 +944,15 @@ export class OwnerController {
       if (unmet) { this.failDependency(run, unmet); continue; }
       if (run.record.dispatch) {
         try {
-          const prepared = this.prepareDispatch(run.record.dispatch, run.record.settings, false);
+          const prepared = this.prepareDispatch(run.record.dispatch, this.requireAgent(run.record.agent_id), false);
           if (run.prepared && !this.sameResources(prepared, run.prepared)) throw new HarnessError("DISPATCH_RESOURCE_CHANGED");
           // Predecessor exemption permits queuing, never unsafe early handoff.
           this.checkClaims(prepared, run.claim, new Set(), run.record.run_id);
           run.prepared = prepared;
           if (run.claim) run.claim.prepared = prepared;
         } catch (error) {
-          run.prestartFailure = { reason: error instanceof HarnessError && error.code === "DISPATCH_INPUT_MISSING" ?
-            "dependency_input_missing" : "dispatch_preflight_failed", error: errorText(error) };
-          this.track(this.finish(run, { kind: "error", error: run.prestartFailure.error, output: run.output }));
+          this.dispatchFailure(run, error);
+          this.track(this.finish(run, { kind: "error", error: run.prestartFailure!.error, output: run.output }));
           continue;
         }
       }
@@ -992,13 +1035,34 @@ export class OwnerController {
           run.quarantine = "workspace_mismatch";
           throw new HarnessError("INVALID_WORKSPACE_BINDING");
         }
+        const details = structuredClone(port.workspace_details);
+        if (details !== undefined && (!validWorkspaceDetails(details) ||
+            (agent.workspace_details && JSON.stringify(details) !== JSON.stringify(agent.workspace_details)))) {
+          run.quarantine = "workspace_mismatch";
+          throw new HarnessError("INVALID_WORKSPACE_BINDING");
+        }
         agent.workspace = workspace;
         run.record.workspace = structuredClone(workspace);
+        if (details !== undefined) agent.workspace_details = run.record.workspace_details = details;
         this.assertOwnerAvailable();
-        if (!run.record.stop_reason && run.prepared && (run.prepared.tree || run.prepared.declaration.checks?.length)) {
-          await this.observeDispatch(run);
+        if (!run.record.stop_reason && run.record.dispatch) {
+          try {
+            const prepared = this.prepareDispatch(run.record.dispatch, agent, false);
+            if (run.prepared && !this.bindsResources(run.prepared, prepared, agent)) throw new HarnessError("DISPATCH_RESOURCE_CHANGED");
+            // Synchronous check + commit before any observation/lock await. A
+            // failure must leave an answer's inherited claim and lease intact.
+            this.checkClaims(prepared, run.claim, new Set(), run.record.run_id);
+            run.prepared = prepared;
+            if (run.claim) run.claim.prepared = prepared;
+          } catch (error) {
+            // A healthy session already exists. Fail only this task, not its
+            // Agent, and preserve any pre-input question reservation rollback.
+            this.dispatchFailure(run, error);
+            throw error;
+          }
+          if (run.prepared.tree || run.prepared.declaration.checks?.length) await this.observeDispatch(run);
         }
-      } else if (port.workspace !== undefined) {
+      } else if (port.workspace !== undefined || port.workspace_details !== undefined) {
         run.quarantine = "workspace_mismatch";
         throw new HarnessError("UNEXPECTED_WORKSPACE_BINDING");
       }
@@ -1078,16 +1142,6 @@ export class OwnerController {
             this.assertCommunicationOpen(run); // Guard before any metadata inspection.
             if (enqueueManagedBlock(this.alerts, run, fact, this.managedBlockTools)) this.wake();
           },
-          touched: (path) => {
-            this.assertEffectAllowed();
-            if (!this.current(run) || run.record.execution_exited || typeof path !== "string" || !path) return;
-            const cwd = agent.workspace?.cwd ?? agent.settings.cwd;
-            const absolute = resolve(cwd, path), local = relative(cwd, absolute);
-            const shown = (local && !local.startsWith("..") && !isAbsolute(local) ? local : absolute).slice(0, 512);
-            if (agent.touched.has(shown)) return;
-            if (agent.touched.size >= TOUCHED_LIMIT) agent.touchedOmitted++;
-            else agent.touched.add(shown);
-          },
         };
         // Queued updates are the parent's own instructions, so the approval
         // witness's task_prompt carries them. Handed-off text is another
@@ -1096,7 +1150,7 @@ export class OwnerController {
         run.promptComposed = true;
         const first = !agent.prompted; agent.prompted = true;
         if (updates.length) run.record.delivered_updates = updates.length;
-        const declaration = dispatchText(run.record.dispatch);
+        const declaration = dispatchText(run.record.dispatch, run.record.workspace?.cwd ?? run.record.settings.cwd, run.record.settings.cwd);
         const instructions = [updatesText(updates), declaration, run.record.prompt].filter(Boolean).join("\n\n");
         const task = [updatesText(updates), this.handoffText(run.record), declaration, run.record.prompt].filter(Boolean).join("\n\n");
         const prompt = first && run.record.settings.context_snapshot ?
@@ -1105,6 +1159,9 @@ export class OwnerController {
           agent_id: run.record.agent_id, run_id: run.record.run_id, task_prompt: instructions });
       }
     } catch (error) {
+      const recovery = workspaceRecoveryOf(error);
+      if (recovery && agent.settings.workspace === "worktree" && recovery.source_cwd === agent.settings.cwd)
+        run.record.recovery = recovery;
       if (error instanceof SessionUnavailableError) run.quarantine = error.reason;
       // Record the affected writer's uncertainty without poisoning healthy peers.
       if (run.session?.history?.error) this.historyFailed(run, run.session.history.error);
@@ -1113,7 +1170,7 @@ export class OwnerController {
         run.quarantine = "cleanup_uncertain";
         run.record.cleanup_errors.push(errorText(error));
       }
-      facts = { kind: "error", error: errorText(error), output: run.output,
+      facts = { kind: "error", error: run.prestartFailure?.error ?? errorText(error), output: run.output,
         // A quarantined session may still have billed for what it did stream.
         ...(error instanceof SessionUnavailableError && error.usage ? { usage: error.usage } : {}) };
     }
@@ -1410,13 +1467,20 @@ export class OwnerController {
     this.submitTail = submission.catch(() => {});
     return submission;
   }
+  private ownerFault(includeClosed: boolean): HarnessError | undefined {
+    if (includeClosed && (this.closed || this.closing)) return new HarnessError("OWNER_CLOSED", {
+      resolution: "This harness is closed. Tell the user; start a fresh session only after confirmed closure." });
+    if (this.cleanupUncertain) return new HarnessError("OWNER_CLEANUP_UNCERTAIN", {
+      resolution: "Cleanup is unconfirmed. Tell the user; there is no retry or force release." });
+    if (this.internalError) return new HarnessError("OWNER_INTERNAL_ERROR", { error: this.internalError,
+      resolution: "The harness stopped after an internal fault. Tell the user; do not retry." });
+    if (this.parentError) return new HarnessError("OWNER_PARENT_UNAVAILABLE", { error: this.parentError,
+      resolution: "The session history writer is unavailable. Tell the user; do not retry." });
+    return undefined;
+  }
   private assertInputOpen(run: ManagedRun): void {
-    if (this.cleanupUncertain) throw new HarnessError("OWNER_CLEANUP_UNCERTAIN",
-      { resolution: "A child cleanup could not be confirmed. This is a harness problem, not a task problem; tell the user. There is no retry or force release." });
-    if (this.internalError) throw new HarnessError("OWNER_INTERNAL_ERROR", { error: this.internalError,
-      resolution: "The harness hit an internal fault and has stopped accepting work. Tell the user; do not retry." });
-    if (this.parentError) throw new HarnessError("OWNER_PARENT_UNAVAILABLE", { error: this.parentError,
-      resolution: "The parent session's history writer is unavailable. Tell the user; do not retry." });
+    const fault = this.ownerFault(false);
+    if (fault) throw fault;
     if (!this.acceptsInput(run)) throw new HarnessError("RUN_INPUT_CLOSED");
   }
   private dispatchInput(run: ManagedRun, message: string, kind: "steer" | "soft_budget"): { accepted: true; event_id: string } {
@@ -1509,7 +1573,9 @@ export class OwnerController {
       unavailable_reason: unavailable, owner_error: this.parentError ?? this.internalError,
       owner_blocked: !!this.parentError || !!this.internalError || this.cleanupUncertain,
       isolation: record.settings.workspace ?? "shared",
-      ...((record.workspace ?? agent.workspace) ? { workspace: record.workspace ?? agent.workspace } : {}), elapsed_ms: record.elapsed_ms ?? Math.max(0, this.clock.mono() - run.submittedMono),
+      ...(record.workspace ? { workspace: record.workspace } : {}),
+      ...(record.workspace_details ? { workspace_details: record.workspace_details } : {}),
+      ...(record.recovery ? { recovery: record.recovery } : {}), elapsed_ms: record.elapsed_ms ?? Math.max(0, this.clock.mono() - run.submittedMono),
       turn_elapsed_ms: run.turnStarted === undefined ? undefined : Math.max(0, this.clock.mono() - run.turnStarted),
       turns: record.turns, max_turns: record.max_turns, max_duration_ms: record.max_duration_ms,
       execution_elapsed_ms: record.execution_elapsed_ms ?? (run.executionStartedMono === undefined ? undefined :
@@ -1528,26 +1594,6 @@ export class OwnerController {
       ...(this.blockedBy(run).length ? { blocked_by: this.blockedBy(run) } : {}),
       ...(queued_for ? { queued_for } : {}),
       ...(record.delivered_updates ? { delivered_updates: record.delivered_updates } : {}) });
-  }
-  /** Last observed SDK context occupancy of one Agent's Runs, retained after settlement. */
-  private lastContext(runs: readonly ManagedRun[]) { return runs.findLast((run) => run.runtime?.context)?.runtime?.context; }
-  /** On-demand Agent history for choosing between resume and a fresh Agent. */
-  agentSummary(agent_id: string): AgentSummary {
-    const agent = this.requireAgent(agent_id);
-    const runs = [...this.runs.values()].filter((run) => run.record.agent_id === agent_id);
-    const latest = runs.at(-1);
-    let cost = 0, partial = false;
-    for (const run of runs) {
-      const usage = run.record.usage ?? run.runtime?.usage;
-      if (!usage) continue;
-      cost += usage.total.cost; partial ||= usage.partial.includes("cost");
-    }
-    const context = this.lastContext(runs);
-    return structuredClone({ agent_id, runs: runs.length,
-      earlier_descriptions: runs.slice(0, -1).reverse().map((run) => run.record.description),
-      ...(context ? { context } : {}), observed_cost: cost, cost_partial: partial,
-      touched: [...agent.touched], touched_omitted: agent.touchedOmitted, pending_updates: agent.inbox.length,
-      ...(!agent.current && latest?.record.finished_at !== undefined ? { idle_ms: Math.max(0, this.clock.wall() - latest.record.finished_at) } : {}) });
   }
   /** Agent lookup by its label, for hosts that address Agents by name. */
   /** The task an Agent is addressed by: its current task, else the task whose
@@ -1705,7 +1751,10 @@ export class OwnerController {
       }
     } else if (request.kind === "read") {
       const agent = this.requireAgent(request.agent_id);
-      const run = request.cursor ? this.resultRun(agent.id, request.cursor) : this.requireRun(this.addressable(agent)!);
+      if (request.task !== undefined && (!positive(request.task) || request.cursor !== undefined))
+        throw new HarnessError("INVALID_PARAMETERS", { key: "task", resolution: "Use a positive safe task number to start its first page, or a cursor to continue its original task; do not supply both." });
+      const run = request.cursor !== undefined ? this.resultRun(agent.id, request.cursor) :
+        request.task === undefined ? this.requireRun(this.addressable(agent)!) : this.ordinalRun(agent.id, request.task);
       if (run.record.agent_id !== agent.id) throw invalidResultCursor();
       targets = [run]; scope = { kind: "agents", agent_ids: [agent.id] }; cursor = request.cursor;
     } else {
@@ -1731,13 +1780,16 @@ export class OwnerController {
         return this.readAdmissionState().enabled;
       },
       snapshot: (reason, enabled) => {
-        const all = [...this.runs.values()], alerts = scopedAlerts(this.alerts, scope), finished = finishedCandidates(all);
+        const all = [...this.runs.values()], alerts = scopedAlerts(this.alerts, scope);
+        const finished = finishedCandidates(all);
         const healthy = this.communicationHealthy() && leaseHeld, providers = this.projectionActivity(targets);
         const data: CommunicationSnapshot = { reason, ...(action ? { action } : {}), ...(!enabled ? { workers_disabled: true } : {}),
-          tasks: targets.map((run) => this.communicationTask(run, all, healthy, providers, limit, cursor, request.kind === "read")),
+          tasks: targets.map((run) => this.communicationTask(run, all, healthy, providers, limit, cursor,
+            request.kind === "read", request.kind !== "action")),
           alerts: alerts.map(({ run, message, source }) => ({ agent: run.record.name, task: taskOrdinal(run, all),
-            label: boundedOutput(run.record.description, 120).text, message, ...(source === undefined ? {} : { source }) })),
+            label: boundedOutput(run.record.description, COMMUNICATION_LIMITS.label_units).text, message, ...(source === undefined ? {} : { source }) })),
           finished: finished.map((run) => ({ row: this.communicationRow(run, all, healthy, providers),
+            label: boundedOutput(run.record.description, COMMUNICATION_LIMITS.label_units).text,
             ...(run.record.cancellation_source ? { cancellation_source: run.record.cancellation_source } : {}),
             ...(targets.includes(run) ? { task_index: targets.indexOf(run) } : {}) })), blocked: this.communicationBlock() };
         snapshot = { data, targets, alerts, finished, reportedBlockAtStart };
@@ -1774,26 +1826,19 @@ export class OwnerController {
       ...(record.limit_reached ? { limit_reached: true } : {}), ...(unavailable ? { unavailable: true } : {}) };
   }
   private communicationTask(run: ManagedRun, all: readonly ManagedRun[], healthy: boolean, providers: ProviderActivity,
-    limit: number, cursor: string | undefined, historical: boolean): TaskSnapshot {
+    limit: number, cursor: string | undefined, historical: boolean, inspectWorkspace: boolean): TaskSnapshot {
     const agent = this.requireAgent(run.record.agent_id);
     const question_id = actionableQuestionId(agent, run, healthy);
-    // Reuse cost belongs where the parent decides on reuse: the latest task of
-    // an Agent that could take another one. Older or unavailable rows omit it.
-    const own = all.filter((candidate) => candidate.record.agent_id === agent.id);
-    const reusable = healthy && isCommunicationSettled(run) && own.at(-1) === run && !agent.current && !agent.question &&
-      agent.resident && !agent.unavailable && !agent.release && !agent.exiting && !run.quarantine;
-    const context_tokens = reusable ? this.lastContext(own)?.tokens ?? undefined : undefined;
-    const dispatch_notes = modelDispatchNotes(run.record.dispatch_notes);
-    const recovery_hint = isCommunicationSettled(run) ? modelRecoveryHint(run.record.outcome) : undefined;
+    // Keep host diagnostics in the private capture; the final packer owns the
+    // model-visible allowlist before notes can spend any reply budget.
+    const dispatch_notes = run.record.dispatch_notes?.slice();
     return { row: this.communicationRow(run, all, healthy, providers), settled: isCommunicationSettled(run),
+      ...taskMetadata({ ...run.record, isolation: run.record.settings.workspace ?? "shared" }, inspectWorkspace),
       ...(question_id ? { question_id } : {}),
       ...(run.question !== undefined && (historical || isCommunicationSettled(run)) ? { question: run.question } : {}),
       result: this.communicationWindow(run, limit, cursor),
       ...(dispatch_notes ? { dispatch_notes } : {}),
       ...(run.record.cancellation_source ? { cancellation_source: run.record.cancellation_source } : {}),
-      ...(run.record.time_wrapped ? { time_wrapped: true as const } : {}),
-      ...(context_tokens === undefined ? {} : { context_tokens }),
-      ...(recovery_hint === undefined ? {} : { recovery_hint }),
       diagnostics: { error: run.record.outcome?.error, owner_error: this.parentError ?? this.internalError,
         unavailable_reason: !healthy ? "owner_unavailable" : agent.unavailable ?? (agent.exiting ? "exiting" : run.quarantine) } };
   }
@@ -1802,8 +1847,16 @@ export class OwnerController {
     return { owner: record.owner_id, generation: record.generation, run: record.run_id,
       version: record.result?.digest ?? sha256(run.output.text) };
   }
+  /** Read-only ordinal selector: commands never target tasks by ordinal. */
+  private ordinalRun(agent_id: string, task: number): ManagedRun {
+    const run = [...this.runs.values()].filter(candidate => candidate.record.agent_id === agent_id)
+      .sort((a, b) => a.record.enqueue_sequence - b.record.enqueue_sequence)[task - 1];
+    if (!run) throw new HarnessError("TASK_NOT_FOUND", { agent_id, key: "task",
+      resolution: "Use a task number previously returned for this Agent, or omit task and cursor to read its current, pending-question, or latest task." });
+    return run;
+  }
   /** Scan original retained Runs, not a second cursor registry. Scope and
-   * ambiguous digest matches fail closed; the ordinal is never an input target. */
+   * ambiguous digest matches fail closed. */
   private resultRun(agent_id: string, cursor: string): ManagedRun {
     if (typeof cursor !== "string" || cursor.length > 1024) throw invalidResultCursor();
     if (!cursor.startsWith("r1_")) {

@@ -84,31 +84,30 @@ test("handoff places the settled result before the prompt as labelled reference 
   f.ports[1].finish(); await ended(f.controller, reviewer);
 });
 
-test("agent summary keeps task history, last context, cost and touched paths across Runs", async (t) => {
-  let now = 1_000;
-  const f = await fixture(t, { controller: { clock: { wall: () => now, mono: () => performance.now() } } });
+test("Run views retain original descriptions, context and usage across Agent reuse", async (t) => {
+  const f = await fixture(t);
   const first = await f.controller.submit("a", task("Port tests"));
   await until(() => f.ports[0]?.streaming);
   const port = f.ports[0];
   port.callbacks.runtime({ activity: "tool", context: { tokens: 50_000, context_window: 200_000 }, usage: ledger(1.5) });
-  port.callbacks.touched("src/a.ts"); port.callbacks.touched("/tmp/src/a.ts"); port.callbacks.touched("/etc/hosts");
   port.finish("done"); await ended(f.controller, first);
   const second = await f.controller.submit("b", { resume: first.agent_id, prompt: "fix", description: "Fix flaky test" });
   await until(() => port.calls.length === 2);
   port.callbacks.runtime({ activity: "generating", context: { tokens: 90_000, context_window: 200_000 }, usage: ledger(0.5) });
   port.finish("done"); await ended(f.controller, second);
-  now += 5_000;
-  assert.deepEqual(f.controller.agentSummary(first.agent_id), {
-    agent_id: first.agent_id, runs: 2, earlier_descriptions: ["Port tests"],
-    context: { tokens: 90_000, context_window: 200_000 }, observed_cost: 2, cost_partial: false,
-    touched: ["src/a.ts", "/etc/hosts"], touched_omitted: 0, pending_updates: 0, idle_ms: 5_000 });
+  const original = f.controller.view(first.run_id), latest = f.controller.view(second.run_id);
+  assert.equal(original.description, "Port tests"); assert.equal(latest.description, "Fix flaky test");
+  assert.deepEqual(original.runtime.context, { tokens: 50_000, context_window: 200_000 });
+  assert.deepEqual(latest.runtime.context, { tokens: 90_000, context_window: 200_000 });
+  assert.equal(original.usage.total.cost, 1.5); assert.equal(latest.usage.total.cost, 0.5);
+  assert.equal(f.controller.list()[0].run_id, second.run_id);
 });
 
 test("finished reminders report original Runs once in settlement order without a second log", async (t) => {
   const f = await fixture(t, { controller: { concurrency: 2 } });
   const start = JSON.parse((await f.controller.observe({ kind: "wait", wait_ms: 0 }, { validate() {} })).content[0].text);
   assert.equal(start.reason, "nothing_pending"); assert.equal(start.finished, undefined);
-  const a = await f.controller.submit("a", task("work a", { name: "alpha" }));
+  const a = await f.controller.submit("a", task("work a", { name: "alpha", description: `${"a".repeat(119)}😀` }));
   const b = await f.controller.submit("b", task("work b", { name: "beta" }));
   await until(() => f.ports.length === 2 && f.ports.every((port) => port.streaming));
   f.ports[1].finish("B"); await ended(f.controller, b);
@@ -118,6 +117,7 @@ test("finished reminders report original Runs once in settlement order without a
   assert.equal(f.controller.runs.get(a.run_id).finished_presented, false, "lifecycle settlement is not presentation");
   const next = JSON.parse((await f.controller.observe({ kind: "wait", wait_ms: 0 }, { validate() {} })).content[0].text);
   assert.deepEqual(next.finished.map(({ agent, task }) => ({ agent, task })), [{ agent: "beta", task: 1 }, { agent: "alpha", task: 1 }]);
+  assert.deepEqual(next.finished.map(row => row.label), ["work b", "a".repeat(119)], "original labels retain Unicode-safe bounds");
   assert.equal(f.controller.runs.get(a.run_id).finished_presented, true);
   const again = JSON.parse((await f.controller.observe({ kind: "wait", wait_ms: 0 }, { validate() {} })).content[0].text);
   assert.equal(again.finished, undefined);

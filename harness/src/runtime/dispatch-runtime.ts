@@ -2,9 +2,9 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { accessSync, constants, lstatSync, realpathSync, statSync } from "node:fs";
 import { lstat, mkdir } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
-import { validateDispatch, type Dispatch, type DispatchContext, type DispatchObservation, type DispatchPath, type DispatchPort, type PreparedDispatch, type SourceState } from "../core/dispatch.js";
+import { validateDispatch, type BoundDispatch, type Dispatch, type DispatchContext, type DispatchObservation, type DispatchPath, type DispatchPort, type PreparedDispatch, type PreparedPath, type SourceState } from "../core/dispatch.js";
 import { HarnessError } from "../core/ports.js";
 import { profileLabel } from "../tools/tool-names.js";
 import { FileLeaseLock } from "./owner-lease.js";
@@ -196,6 +196,17 @@ export function createDispatchRuntime(options: { agentDir: string; flock: string
       validateDispatch(dispatch);
       if (!isAbsolute(context.cwd)) throw new HarnessError("DISPATCH_PATH_UNKNOWN", { path: context.cwd });
       const lexicalCwd = supportedLiteralPath(resolve(context.cwd));
+      if (context.source_cwd !== undefined && !isAbsolute(context.source_cwd)) throw new HarnessError("DISPATCH_PATH_UNKNOWN", { path: context.source_cwd });
+      const sourceCwd = supportedLiteralPath(resolve(context.source_cwd ?? lexicalCwd));
+      const unbound = context.unbound_worktree;
+      if (unbound !== undefined && (typeof unbound !== "string" || !unbound || sourceCwd !== lexicalCwd || context.workspace_policy !== undefined))
+        throw new HarnessError("DISPATCH_PREFLIGHT_UNAVAILABLE");
+      const policy = context.workspace_policy;
+      try {
+        if (policy !== undefined && (!policy || typeof policy !== "object" || Array.isArray(policy) || "then" in policy || typeof policy.aliases !== "function") ||
+            unbound === undefined && sourceCwd !== lexicalCwd && policy === undefined)
+          throw new Error("INVALID_WORKSPACE_POLICY");
+      } catch { throw new HarnessError("DISPATCH_PREFLIGHT_UNAVAILABLE"); }
       const service = permissionQuery(options.getPermissionsService);
       const declaration: Dispatch = {
         ...(dispatch.inputs ? { inputs: [...dispatch.inputs] } : {}),
@@ -203,54 +214,107 @@ export function createDispatchRuntime(options: { agentDir: string; flock: string
         ...(dispatch.tree ? { tree: dispatch.tree } : {}),
         ...(dispatch.checks ? { checks: [...dispatch.checks] } : {}),
       };
-      type Target = { key: PathField; requested: string; path: string; canonical?: string; lexicalExternal?: boolean };
+      type Target = { key: PathField; requested: string; path: string; unbound: boolean; canonical?: string; lexicalExternal?: boolean };
       const target = (requested: string, key: PathField): Target => {
         const path = resolve(lexicalCwd, requested);
         try { supportedLiteralPath(path); }
         catch { throw new HarnessError("DISPATCH_PATH_UNKNOWN", { key, requested, path }); }
-        return { key, requested, path };
+        return { key, requested, path, unbound: unbound !== undefined && !isAbsolute(requested) };
       };
       const inputs = (declaration.inputs ?? []).map(item => target(item, "inputs"));
       const ownership = (declaration.ownership ?? []).map(item => target(item, "ownership"));
       const tree = declaration.tree ? target(declaration.tree, "tree") : undefined;
       const targets = [...inputs, ...ownership, ...(tree ? [tree] : [])];
+      // Lexical and canonical alias passes can produce the same query. Dedup
+      // only within this synchronous prepare and this declaration, by BOTH
+      // surface and path: a newly discovered external surface must still run.
+      const checked = new Map<Target, Set<string>>();
       const denied = (entry: Target, surface: string, path: string): void => {
+        const key = JSON.stringify([surface, path]);
+        if (checked.get(entry)?.has(key)) return;
         // A policy verdict for this declaration, not a filesystem classification
         // or a suggestion to change the path, drop the tree or escalate.
         if (permissionState(service, surface, path, context.profile, entry.key, entry.requested) === "deny") {
           throw new HarnessError("PREFLIGHT_DENIED", { key: entry.key, requested: entry.requested, surface, path,
             profile: context.profile,
-            reason: `Permission policy denied ${surface} for profile ${profileLabel(context.profile)} on this declared path; this is a permission decision, not a missing or wrong-type filesystem result.` });
+            reason: entry.unbound ?
+              `Provisional preflight denied ${surface} for profile ${profileLabel(context.profile)} on the source-path candidate for this relative declaration. The worktree is not bound yet; this is a conservative permission restriction, not an actual worktree path or an existence result.` :
+              `Permission policy denied ${surface} for profile ${profileLabel(context.profile)} on this declared path; this is a permission decision, not a missing or wrong-type filesystem result.` });
+        }
+        const queries = checked.get(entry) ?? new Set<string>();
+        queries.add(key); checked.set(entry, queries);
+      };
+      const surface = (entry: Target): string => entry.key === "inputs" ? "path_read" : "path_write";
+      const external = (entry: Target): string => entry.key === "inputs" ? "external_directory_read" : "external_directory_write";
+      const aliases = (entry: Target, values: string[]): void => {
+        if (!policy) return;
+        let paths: readonly string[];
+        try {
+          const result: unknown = policy.aliases(values);
+          if (!Array.isArray(result) || "then" in result) throw new Error("INVALID_WORKSPACE_POLICY_ALIASES");
+          paths = Array.from(result, (path: unknown) => {
+            if (typeof path !== "string" || !isAbsolute(path) || resolve(path) !== path || supportedLiteralPath(path) !== path)
+              throw new Error("INVALID_WORKSPACE_POLICY_ALIAS");
+            return path;
+          });
+        } catch { throw new HarnessError("DISPATCH_PREFLIGHT_UNAVAILABLE", { key: entry.key, requested: entry.requested }); }
+        // Authority-owned aliases add denies only. An alias ALLOW never replaces
+        // an actual-path or external-boundary verdict, and never proves existence.
+        for (const path of new Set(paths)) {
+          denied(entry, surface(entry), path);
+          if (!inside(lexicalCwd, entry.path) || entry.canonical !== undefined && cwd !== undefined && !inside(cwd, entry.canonical))
+            denied(entry, external(entry), path);
         }
       };
-      const external = (entry: Target): string => entry.key === "inputs" ? "external_directory_read" : "external_directory_write";
       // First query every lexical declaration before ANY ancestry inspection.
       // Known denies must not be replaced by dangling/EACCES/ENOTDIR diagnostics.
       for (const entry of targets) {
-        denied(entry, entry.key === "inputs" ? "path_read" : "path_write", entry.path);
+        denied(entry, surface(entry), entry.path);
         if (!inside(lexicalCwd, entry.path)) { denied(entry, external(entry), entry.path); entry.lexicalExternal = true; }
       }
       let cwd: string | undefined;
+      // Validate the live binding even for checks-only dispatch. In particular,
+      // a released/tampered binding must not degrade to a policy-free preflight.
+      if (policy) {
+        try {
+          const empty = policy.aliases([]);
+          if (!Array.isArray(empty) || "then" in empty || empty.length) throw new Error("INVALID_WORKSPACE_POLICY_ALIASES");
+        } catch { throw new HarnessError("DISPATCH_PREFLIGHT_UNAVAILABLE"); }
+        for (const entry of targets) aliases(entry, [entry.path]);
+      }
+      const boundTargets = targets.filter(entry => !entry.unbound);
       let pathError: HarnessError | undefined;
-      try { cwd = canonicalPath(lexicalCwd); }
-      catch { pathError = new HarnessError("DISPATCH_PATH_UNKNOWN", { path: lexicalCwd }); }
-      for (const entry of targets) {
+      if (unbound === undefined || boundTargets.length) {
+        try { cwd = canonicalPath(lexicalCwd); }
+        catch { pathError = new HarnessError("DISPATCH_PATH_UNKNOWN", { path: lexicalCwd }); }
+      }
+      for (const entry of boundTargets) {
         try { entry.canonical = canonicalPath(entry.path); }
         catch { pathError ??= new HarnessError("DISPATCH_PATH_UNKNOWN", { key: entry.key, requested: entry.requested, path: entry.path }); }
         if (cwd !== undefined && entry.canonical !== undefined && !inside(cwd, entry.canonical) &&
             !(entry.lexicalExternal && entry.path === entry.canonical)) denied(entry, external(entry), entry.canonical);
+        if (entry.canonical !== undefined) aliases(entry, [entry.path, entry.canonical]);
       }
       // Complete all still-possible permissions before reporting a path error,
       // and EVERY permission before classifying ANY input/tree.
       if (pathError) throw pathError;
-      const resolved = (entry: Target): DispatchPath => ({ path: entry.path, canonical: entry.canonical! });
+      // Logical paths retain the requested normalization, including trailing
+      // separators and all leading .. segments. A source deny candidate may be
+      // root-clamped by resolve(); it must never supply the future workspace rel.
+      const resolved = (entry: Target): PreparedPath => entry.unbound
+        ? { kind: "unbound_worktree", agent_id: unbound!, rel: normalize(entry.requested) }
+        : { path: entry.path, canonical: entry.canonical! };
       const prepared: PreparedDispatch = { declaration, inputs: inputs.map(resolved), ownership: ownership.map(resolved),
         ...(tree ? { tree: resolved(tree) } : {}) };
-      if (!context.deferInputs) prepared.inputs.forEach((path, i) => classify(path, "inputs", declaration.inputs![i]!));
-      if (prepared.tree) classify(prepared.tree, "tree", declaration.tree!);
+      // A source candidate is only a deny probe, never the uncreated worktree's
+      // canonical IO or classification. Absolute declarations remain immediate.
+      if (!context.deferInputs) prepared.inputs.forEach((path, i) => {
+        if (path.kind !== "unbound_worktree") classify(path, "inputs", declaration.inputs![i]!);
+      });
+      if (prepared.tree && prepared.tree.kind !== "unbound_worktree") classify(prepared.tree, "tree", declaration.tree!);
       return prepared;
     },
-    async start(dispatch: PreparedDispatch, context: DispatchContext & { acquireTree: boolean }): Promise<DispatchObservation> {
+    async start(dispatch: BoundDispatch, context: DispatchContext & { acquireTree: boolean }): Promise<DispatchObservation> {
       const observation: DispatchObservation = {};
       if (dispatch.tree && context.acquireTree) {
         let lock: FileLeaseLock | undefined;

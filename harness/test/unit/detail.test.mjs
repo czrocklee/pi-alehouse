@@ -99,6 +99,58 @@ test("detail worktree fields preserve actual cwd, source and full base after exe
   assert.deepEqual(v, before, "rendering neither rewrites source settings nor owns worktree lifecycle");
 });
 
+test("detail exposes successful checkout root and manifest without repeating the same cwd", () => {
+  const workspace = { mode: "worktree", cwd: "/retained/tree/nested", source_cwd: "/source/nested", base_commit: "a".repeat(40) };
+  const workspace_details = { checkout_root: "/retained/tree", recovery_manifest: "/retained/recovery.jsonl" };
+  const text = joined({ isolation: "worktree", workspace, workspace_details });
+  assert.match(text, /checkout\s+\/retained\/tree/);
+  assert.match(text, /manifest\s+\/retained\/recovery\.jsonl/);
+  const rootCwd = joined({ isolation: "worktree", workspace: { ...workspace, cwd: workspace_details.checkout_root }, workspace_details });
+  assert.doesNotMatch(rootCwd, /^ {2}checkout\s/m);
+  assert.equal(rootCwd.split(workspace_details.checkout_root).length - 1, 1, "same root is already visible as cwd");
+});
+
+test("detail shows original Run checkout recovery without inventing a successful SDK binding", () => {
+  const recovery = Object.freeze({ mode: "worktree", state: "checkout_ready", source_cwd: "/original/source",
+    cwd: "/retained/tree/nested", checkout_root: "/retained/tree", base_commit: "b".repeat(40),
+    recovery_manifest: "/retained/recovery.jsonl" });
+  const v = Object.freeze(view({ isolation: "worktree", status: "failed", execution_exited: true, resumable: false,
+    recovery, outcome: { error: "SDK assembly failure ".repeat(80).slice(0, 1024) } }));
+  const before = structuredClone(v);
+  const text = renderDetailFields({ view: v, live: live() }, theme, 120).join("\n");
+  assert.match(text, /workspace\s+worktree · retained verified checkout/);
+  assert.match(text, /session\s+SDK session unavailable/);
+  for (const value of [recovery.source_cwd, recovery.cwd, recovery.checkout_root, recovery.base_commit, recovery.recovery_manifest]) {
+    assert.ok(text.includes(value), value);
+  }
+  assert.doesNotMatch(text, /not initialized|worktree working copy|\/workspace\/project/);
+  assert.equal(v.workspace, undefined);
+  assert.deepEqual(v, before, "recovery is display-only, not a successful workspace/session binding");
+  assert.doesNotMatch(joined({ isolation: "worktree", recovery: { ...recovery, checkout_root: recovery.cwd } }), /^ {2}checkout\s/m);
+});
+
+test("partial recovery shows only observed allocation and created manifest, never the intended checkout target", () => {
+  const recovery = { mode: "worktree", state: "partial", source_cwd: "/original/source",
+    retained_path: "/intended/nonexistent/tree" };
+  for (const observed of [{}, { allocated_path: "/observed/allocation" }, { recovery_manifest: "/observed/recovery.jsonl" },
+    { allocated_path: "/observed/allocation", recovery_manifest: "/observed/recovery.jsonl" }]) {
+    const v = view({ isolation: "worktree", status: "failed", recovery: { ...recovery, ...observed },
+      outcome: { error: "setup failed; retained target: /diagnostic/not-an-observation" } });
+    const before = structuredClone(v);
+    const text = renderDetailFields({ view: v, live: live() }, theme, 120).join("\n");
+    assert.match(text, /workspace\s+worktree · partial setup/);
+    assert.match(text, /source\s+\/original\/source/);
+    assert.doesNotMatch(text, /\/intended\/nonexistent\/tree|not initialized|verified checkout/);
+    assert.doesNotMatch(text, /^ {2}(?:cwd|base|checkout)\s/m);
+    for (const [label, value] of [["allocated", observed.allocated_path], ["manifest", observed.recovery_manifest]]) {
+      if (value) assert.ok(text.includes(`${label.padEnd(10)}${value}`));
+      else assert.doesNotMatch(text, new RegExp(`^ {2}${label}\\s`, "m"));
+    }
+    assert.deepEqual(v, before);
+    assert.equal(v.workspace, undefined);
+  }
+});
+
 test("detail uninitialized worktree shows source without promising creation after failure", () => {
   for (const status of ["queued", "running", "failed"]) {
     const text = joined({ isolation: "worktree", status, workspace: undefined });
@@ -122,6 +174,28 @@ test("narrow detail worktree fields wrap complete paths and base without clippin
       for (let i = at + 1; i < lines.length && lines[i].startsWith(" ".repeat(12)); i++) restored += lines[i].slice(12);
       assert.equal(restored, value, `${label}: ${width}`);
     }
+  }
+});
+
+test("narrow recovery fields wrap complete observed paths and base without promoting intended targets", () => {
+  const root = `/state/${"工作副本/".repeat(12)}checkout`;
+  const ready = { mode: "worktree", state: "checkout_ready", cwd: `${root}/nested`, checkout_root: root,
+    source_cwd: `/source/${"project/".repeat(12)}original`, base_commit: "c".repeat(64), recovery_manifest: `${root}/recovery.jsonl` };
+  const partial = { mode: "worktree", state: "partial", source_cwd: ready.source_cwd,
+    allocated_path: root, retained_path: "/intended/absent", recovery_manifest: ready.recovery_manifest };
+  for (const recovery of [ready, partial]) for (const width of [40, 62, 100]) {
+    const lines = body({ isolation: "worktree", status: "failed", recovery }, {}, width);
+    assert.ok(lines.every((line) => visibleWidth(line) <= width));
+    const fields = [["source", recovery.source_cwd], ["manifest", recovery.recovery_manifest],
+      ...(recovery === ready ? [["cwd", ready.cwd], ["checkout", ready.checkout_root], ["base", ready.base_commit]] : [["allocated", partial.allocated_path]])];
+    for (const [label, value] of fields) {
+      const at = lines.findIndex((line) => new RegExp(`^ {2}${label}\\s`).test(line));
+      assert.ok(at >= 0, label);
+      let restored = lines[at].slice(12);
+      for (let i = at + 1; i < lines.length && lines[i].startsWith(" ".repeat(12)); i++) restored += lines[i].slice(12);
+      assert.equal(restored, value, `${label}: ${width}`);
+    }
+    assert.doesNotMatch(lines.join("\n"), /\/intended\/absent/);
   }
 });
 

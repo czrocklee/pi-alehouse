@@ -406,7 +406,7 @@ try {
         answer: "ANSWER_FACTOR 3", wait_ms: 60000 });
       const answerEnvelope = result("answer"), answerResult = answerEnvelope.agents[0];
       assert.deepEqual(answerEnvelope.action, { type: "agent_answer", agent: "worker", task: 2 });
-      assert.equal(answerEnvelope.reason, "done");
+      assert.equal(Object.hasOwn(answerEnvelope, "reason"), false);
       assert.equal(answerResult.status, "completed"); assert.equal(answerResult.next_cursor, undefined);
       return { text: answerResult.result, ...(fault === "parent-answer-error" ? { reason: "error", error: "SYNTHETIC_PARENT_ANSWER_ERROR" } : {}) };
     });

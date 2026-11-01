@@ -1,143 +1,154 @@
 import assert from "node:assert/strict";
 
-// Inspect serialized caller metadata, not source literals. Presence checks
-// guard assembly; scripted runtime tests check mechanics, not model decisions.
+// Inspect provider-visible declarations. Guard schema and essential choices,
+// not exact prose; scripted runtime tests cover mechanics, not model decisions.
 export function assertCallerTools(tools) {
   const names = ["agent_answer", "agent_interrupt", "agent_kill", "agent_list", "agent_read", "agent_run", "agent_send", "agent_spawn", "agent_wait"];
-  // Provider-visible lists also carry built-in and other extensions' tools.
-  const byName = new Map(JSON.parse(JSON.stringify(tools)).filter((tool) => names.includes(tool.name)).map((tool) => [tool.name, tool]));
+  const declarations = JSON.parse(JSON.stringify(tools)).filter((tool) => names.includes(tool.name));
+  const byName = new Map(declarations.map((tool) => [tool.name, tool]));
+  assert.equal(declarations.length, names.length);
   assert.deepEqual([...byName.keys()].sort(), names);
-  assert([...byName.values()].reduce((sum, tool) => sum + tool.description.length, 0) <= 3600,
-    "keep the nine tool descriptions concise; change this budget deliberately");
-  for (const tool of byName.values()) {
-    assert(tool.description.length <= 600, `${tool.name} description exceeds its copy budget`);
+  const descriptionChars = (value) => {
+    if (!value || typeof value !== "object") return 0;
+    return Object.entries(value).reduce((sum, [key, child]) =>
+      sum + (key === "description" && typeof child === "string" ? child.length : descriptionChars(child)), 0);
+  };
+  assert(JSON.stringify(declarations).length <= 16000, "keep whole declarations concise, with headroom for existing delegation modes");
+  assert(declarations.reduce((sum, tool) => sum + descriptionChars(tool.parameters), 0) <= 6500,
+    "schema copy budget is independent of the 65536-byte tool-result envelope cap");
+  for (const tool of declarations) {
+    assert(tool.description.length > 0 && tool.description.length <= 340, tool.name);
     assert.equal(tool.parameters.additionalProperties, false);
-    const serialized = JSON.stringify(tool);
-    assert.doesNotMatch(serialized, /run_id|agent_id|\bRun\b|\bcancel/, `${tool.name} exposes no internal IDs or Run/cancel vocabulary`);
+    assert.doesNotMatch(JSON.stringify(tool), /run_id|agent_id|\bRun\b|\bcancel|\bm1_|metadata-only|view:metadata/);
   }
   const spawn = byName.get("agent_spawn"), fields = spawn.parameters.properties;
-  assert.deepEqual(spawn.parameters.required.sort(), ["agent", "profile", "prompt", "reasoning_difficulty"]);
-  assert.match(fields.agent.description, /Short nickname from one theme.*not a task name\. Never reused/);
-  assert.doesNotMatch(fields.agent.description, /orca|otter/, "example names get copied into every session");
-  assert.match(fields.prompt.description, /deliverable, scope, stopping conditions and full paths.*referenced file\/document/);
-  assert.match(fields.prompt.description, /context not supplied by inherit_context or after/);
-  assert.match(fields.label.description, /agent_list label, not instructions.*prompt's first line/);
+  assert.deepEqual(spawn.parameters.required.toSorted(), ["agent", "profile", "prompt", "reasoning_difficulty"]);
+  assert.deepEqual(Object.keys(fields).sort(), ["after", "agent", "dispatch", "inherit_context", "label", "max_duration_ms", "max_turns", "profile", "prompt", "reasoning_difficulty", "wait_ms", "workspace"]);
+  assert.equal(fields.agent.pattern, "^[a-z][a-z0-9-]{0,23}$");
+  assert.match(fields.agent.description, /[Uu]nique/);
+  assert.match(fields.agent.description, /taken/);
+  assert.match(fields.agent.description, /theme/);
+  assert.match(fields.agent.description, /not a task name/);
+  assert.doesNotMatch(fields.agent.description, /orca|otter/);
+  assert.equal(fields.prompt.minLength, 1); assert.equal(fields.prompt.maxLength, 131072);
+  for (const fact of [/deliverable/, /scope/, /stopping/, /paths/, /context/]) assert.match(fields.prompt.description, fact);
+  assert.equal(fields.label.minLength, 1); assert.equal(fields.label.maxLength, 120);
+  assert.match(fields.label.description, /not instructions/); assert.match(fields.label.description, /first nonblank line/);
   assert.deepEqual(fields.profile.enum, ["worker", "researcher"]);
-  assert.match(fields.profile.description, /worker: local reading, editing, Bash, Git and builds under normal permissions; no web/);
-  assert.match(fields.profile.description, /researcher: web search\/fetch and read-only file tools; no Bash\/edits.*untrusted/);
-  assert.match(fields.profile.description, /instruction, not a readonly sandbox.*User denies and normal approvals still apply/);
+  for (const fact of [/worker:.*Bash.*Git.*no web/, /researcher:.*read-only.*web.*no Bash\/edit\/write/, /untrusted/, /permissions/, /denies/, /review-only/]) assert.match(fields.profile.description, fact);
   assert.deepEqual(fields.workspace.enum, ["shared", "worktree"]);
-  assert.match(fields.workspace.description, /Default shared.*uncommitted work.*detached.*local HEAD/);
-  assert.match(fields.workspace.description, /no uncommitted changes, untracked files or dependencies are copied.*Fixed for this Agent.*agent_list.*actual cwd\/base.*Retained after kill.*Not a sandbox/);
-  const difficulty = fields.reasoning_difficulty.description;
+  for (const fact of [/Default shared/, /uncommitted/, /detached local HEAD/, /no dirty\/untracked/, /dependencies/, /Fixed/, /actual cwd/, /Retained after kill/, /no automatic.*merge/, /Neither.*sandbox/]) assert.match(fields.workspace.description, fact);
   assert.equal(fields.reasoning_difficulty.type, "integer");
   assert.equal(fields.reasoning_difficulty.minimum, 1); assert.equal(fields.reasoning_difficulty.maximum, 5);
-  assert.equal(Object.hasOwn(fields, "difficulty"), false, "the legacy score parameter is not a provider-visible alias");
-  assert.match(difficulty, /Selects the Agent's fixed model/);
-  assert.match(difficulty, /Rate task reasoning, not workload, importance or cost/);
-  assert.match(difficulty, /1=execute given checks or decided changes.*2=small, scoped fix\/check.*3=implement a given design, review, investigate or plan.*4=resolve competing hypotheses or complex constraints.*5=find an approach where none is known/);
-  assert.doesNotMatch(difficulty, /light|standard|strong|slot/i);
-  assert.match(difficulty, /Do not re-score to bypass capacity waits/);
-  assert.match(fields.inherit_context.description, /Default false.*text copy.*without tool calls or results.*64 KiB/);
-  assert.match(fields.after.description, /All must complete.*question, failure or interrupt fails this task before starting.*admission rejects/);
-  assert.match(fields.after.description, /current or latest tasks now.*16384 characters.*reference only.*name its Agent after agent_answer returns/);
-  assert.match(fields.wait_ms.description, /accepted task, question, issue or alerts.*Default 0.*snapshot.*Timeout never stops/);
-  assert.match(fields.wait_ms.description, /Queued wait: dependencies or capacity.*do not respawn queued work/);
-  assert.match(fields.max_turns.description, /per task, default 256.*partial result/);
-  assert.match(fields.max_duration_ms.description, /per task.*asked to stop/);
-  for (const key of ["model", "effort", "strength", "thinking", "name", "description", "message", "difficulty"]) assert.equal(key in fields, false, key);
-  assert.match(spawn.description, /Shared checkout by default, optional private worktree; neither is a sandbox.*No nested delegation/);
-  assert.match(spawn.description, /Spawn for new work\/reviews or different settings; agent_run is for that Agent's follow-ups/);
-  assert.match(spawn.description, /Model, profile, workspace, reasoning difficulty, context and per-task budgets are fixed/);
-  assert.match(spawn.description, /Queued work counts toward capacity.*kill finished reviewers\/accepted work first.*keep workers awaiting build\/test fixes/);
-  assert.match(spawn.description, /check agent_list before repeating/);
-  assert.match(spawn.description, /action, reason, agents, alerts; alerts do not mean completion/);
+  for (const fact of [/reasoning difficulty/, /not workload\/cost/, /1=.*checks/, /2=.*fix/, /3=.*design.*review.*plan/, /4=.*hypotheses.*constraints/, /5=.*approach/]) assert.match(fields.reasoning_difficulty.description, fact);
+  assert.equal(fields.inherit_context.type, "boolean");
+  for (const fact of [/Default false/, /text/, /without tool calls\/results/, /64 KiB/]) assert.match(fields.inherit_context.description, fact);
+  assert.equal(fields.max_turns.minimum, 1); assert.equal(fields.max_turns.maximum, 10000);
+  assert.match(fields.max_turns.description, /[Pp]er.task.*256/);
+  assert.equal(fields.max_duration_ms.minimum, 1); assert.equal(fields.max_duration_ms.maximum, 86400000);
+  assert.match(fields.max_duration_ms.description, /[Pp]er.task.*1800000/);
+  assert.match(spawn.description, /submit its first task/); assert.match(spawn.description, /execution may queue/);
+  assert.match(spawn.description, /stay fixed/);
+  assert.match(spawn.description, /no nested delegation/); assert.match(spawn.description, /agent_list/);
+  assert.match(spawn.description, /Queued work is accepted.*do not respawn/);
+  assert.match(fields.reasoning_difficulty.description, /Do not re-score to bypass capacity waits/);
+
   const run = byName.get("agent_run"), runFields = run.parameters.properties;
-  assert.deepEqual(run.parameters.required.sort(), ["agent", "builds_on", "prompt"]);
-  assert.deepEqual(Object.keys(runFields).sort(), ["after", "agent", "builds_on", "dispatch", "label", "prompt", "wait_ms"],
-    "profile, reasoning_difficulty, context and budgets belong to the Agent; dispatch belongs to each task");
-  assert.deepEqual(Object.keys(runFields).slice(0, 3), ["agent", "builds_on", "prompt"], "the reuse reason comes before the prompt it justifies");
+  assert.deepEqual(run.parameters.required.toSorted(), ["agent", "builds_on", "prompt"]);
+  assert.deepEqual(Object.keys(runFields).sort(), ["after", "agent", "builds_on", "dispatch", "label", "prompt", "wait_ms"]);
+  assert.deepEqual(Object.keys(runFields).slice(0, 3), ["agent", "builds_on", "prompt"]);
+  assert.equal(runFields.builds_on.minLength, 1); assert.equal(runFields.builds_on.maxLength, 512);
+  assert.equal(runFields.builds_on.pattern, "\\S");
+  for (const fact of [/Earlier work by this Agent/, /not sent/, /unrelated work.*agent_spawn/, /new Agent.*output.*after/]) assert.match(runFields.builds_on.description, fact);
+  assert.equal(runFields.prompt.maxLength, 131072);
+  assert.deepEqual(runFields.label, fields.label);
+  for (const fact of [/idle/, /follow-up/, /re-reads/, /agent_spawn for unrelated/, /pending question.*agent_answer/]) assert.match(run.description, fact);
   for (const tool of [spawn, run]) {
-    const dispatch = tool.parameters.properties.dispatch;
+    const { dispatch, after } = tool.parameters.properties;
+    assert.equal(after.minItems, 1); assert.equal(after.maxItems, 4);
+    assert.equal(after.items.pattern, fields.agent.pattern);
+    for (const fact of [/current or latest task/, /fixed when this call is accepted/, /reach completed/, /other settled status fails/, /reference context/, /until agent_answer returns/]) assert.match(after.description, fact);
     assert.equal(dispatch.type, "object"); assert.equal(dispatch.additionalProperties, false);
     assert(!tool.parameters.required.includes("dispatch"));
     assert.deepEqual(Object.keys(dispatch.properties).sort(), ["checks", "inputs", "ownership", "tree"]);
-    assert.match(dispatch.description, /not permissions or execution evidence.*tool gates still apply.*full-suite validation explicitly to one task/);
+    for (const fact of [/not permissions or execution evidence/, /literal paths/, /Relative paths resolve from the Agent's execution cwd/, /absolute paths keep their meaning/, /one designated Agent after shared source is stable/]) assert.match(dispatch.description, fact);
     for (const [field, limit] of [["inputs", 8], ["ownership", 16], ["checks", 16]]) {
       const array = dispatch.properties[field];
       assert.equal(array.type, "array"); assert.equal(array.minItems, 1); assert.equal(array.maxItems, limit);
       assert.equal(array.uniqueItems, true); assert.equal(array.items.minLength, 1); assert.equal(array.items.maxLength, 512);
       assert.equal(typeof array.items.pattern, "string");
     }
-    assert.equal(dispatch.properties.tree.type, "string"); assert.equal(dispatch.properties.tree.minLength, 1);
-    assert.equal(dispatch.properties.tree.maxLength, 512);
-    assert.match(dispatch.description, /Paths are literal.*no surrounding whitespace, shell expansion, globs, quotes, controls, \$, backslash or leading ~\/@/);
-    assert.match(dispatch.properties.checks.items.description, /globs allowed.*prove no execution and skip no gate/);
-    assert.match(dispatch.properties.checks.items.description, /finish without later go-ahead.*follow-up agent_run/);
-    assert.match(dispatch.properties.tree.description, /Build-tree.*need write capability.*path_write.*Unfinished overlaps in this session reject/);
-    assert.match(dispatch.properties.tree.description, /Other sessions only produce a tree_shared note; execution still starts/);
-    assert.match(dispatch.properties.tree.description, /commands, other hosts and agent directories are not coordinated.*Omission neither forbids builds nor makes sharing safe.*no note does not prove a free tree/);
-    assert.match(dispatch.properties.ownership.items.description, /Assign each shared file to one task; others report needed changes/);
-    assert.match(dispatch.description, /Relative declarations use the original source cwd even with worktree; use absolute paths for worktree outputs/);
+    assert.equal(dispatch.properties.tree.type, "string");
+    assert.equal(dispatch.properties.tree.minLength, 1); assert.equal(dispatch.properties.tree.maxLength, 512);
+    assert.match(dispatch.properties.tree.description, /write permission/);
+    assert.match(dispatch.properties.tree.description, /if it exists, must be a directory/);
+    assert.match(dispatch.properties.tree.description, /within this Owner/);
+    assert.match(dispatch.properties.tree.description, /cross-Owner.*advisory.*not global exclusivity/);
+    assert.match(dispatch.properties.ownership.items.description, /one editor/);
+    assert.match(dispatch.properties.checks.items.description, /globs allowed/);
+    assert.match(dispatch.properties.checks.items.description, /not later go-ahead/);
   }
-  assert.match(run.description, /idle Agent a follow-up to its own work.*running Agent is busy.*agent_send or agent_wait.*Pending questions require agent_answer/);
-  assert.match(run.description, /Each turn re-reads its conversation \(context_tokens\).*agent_spawn for new\/unrelated work or different settings/);
-  assert.match(run.description, /Model\/profile\/workspace\/reasoning difficulty\/budgets stay fixed despite routing changes/);
-  assert.match(run.description, /Waits up to 30 s for an ending task/);
-  assert.equal(runFields.builds_on.minLength, 1); assert.equal(runFields.builds_on.maxLength, 512);
-  assert.match(runFields.builds_on.description, /earlier work of this Agent that the task continues; not sent to the Agent.*If none, spawn instead.*only its result is needed.*agent_spawn with after/);
   const send = byName.get("agent_send"), sendFields = send.parameters.properties;
-  assert.deepEqual(send.parameters.required.sort(), ["agent", "message"]);
-  assert.deepEqual(Object.keys(sendFields).sort(), ["agent", "message", "wait_ms"], "a message has no task fields");
-  assert.equal(sendFields.message.maxLength, 16384);
-  assert.match(sendFields.message.description, /Never an answer \(use agent_answer\) or another task/);
-  assert.doesNotMatch(sendFields.message.description, /agent_run/, "another task is a spawn decision, not a run");
-  assert.match(send.description, /task selected now, never a later task.*action.delivery: joined=.*steered=.*not_delivered=/);
-  assert.match(send.description, /Not an answer or new task: use agent_answer, agent_spawn, or agent_run for follow-ups/);
-  assert.doesNotMatch(send.description, /delivery.*answered\b/);
+  assert.deepEqual(send.parameters.required.toSorted(), ["agent", "message"]);
+  assert.deepEqual(Object.keys(sendFields).sort(), ["agent", "message", "wait_ms"]);
+  assert.equal(sendFields.message.minLength, 1); assert.equal(sendFields.message.maxLength, 16384);
+  assert.match(sendFields.message.description, /Never an answer/);
+  for (const fact of [/selected now/, /not an answer or new task/, /joined=/, /steered=/, /not_delivered=/, /does not prove action/]) assert.match(send.description, fact);
   const answer = byName.get("agent_answer"), answerFields = answer.parameters.properties;
-  assert.deepEqual(answer.parameters.required.sort(), ["agent", "answer", "question_id"]);
+  assert.deepEqual(answer.parameters.required.toSorted(), ["agent", "answer", "question_id"]);
   assert.deepEqual(Object.keys(answerFields).sort(), ["agent", "answer", "question_id", "wait_ms"]);
   assert.equal(answerFields.question_id.pattern, "^q_[0-9a-f]{32}$");
   assert.equal(answerFields.question_id.minLength, 34); assert.equal(answerFields.question_id.maxLength, 34);
   assert.equal(answerFields.answer.minLength, 1); assert.equal(answerFields.answer.maxLength, 16384);
-  assert.match(answerFields.question_id.description, /Copy question_id exactly.*never derive it from an Agent name or task number/);
-  assert.match(answer.description, /exact pending question_id.*continuation.*settled needs_input.*idle, reusable Agent.*stale\/reserved IDs fail, never redirect/);
-  assert.match(answer.description, /workers_disabled.*user to enable delegation first/);
-  assert.match(answer.description, /Keeps original model\/settings\/budgets despite routing changes.*asking task's label\/dispatch/);
+  assert.match(answerFields.question_id.description, /Copy.*exactly/);
+  for (const fact of [/exact pending question_id/, /continuation/, /status="needs_input"/, /current question_id from agent_wait or agent_read/, /historical text alone cannot be answered/, /fixed settings/, /label\/dispatch/]) assert.match(answer.description, fact);
+  for (const tool of [byName.get("agent_wait"), byName.get("agent_read"), answer]) {
+    assert.match(tool.description, /workers_disabled/);
+    assert.match(tool.description, /ask the user to enable delegation/);
+  }
   for (const tool of [spawn, run, send, answer]) {
-    assert.equal(tool.parameters.properties.wait_ms.minimum, 0);
-    assert.equal(tool.parameters.properties.wait_ms.maximum, 300000);
+    const wait = tool.parameters.properties.wait_ms;
+    assert.equal(wait.type, "integer"); assert.equal(wait.minimum, 0); assert.equal(wait.maximum, 300000);
+    assert.match(wait.description, /default 0/); assert.match(wait.description, /never stops work/);
   }
   const wait = byName.get("agent_wait"), waitFields = wait.parameters.properties;
-  assert.equal(waitFields.agents.maxItems, 16);
-  assert.equal(waitFields.wait_ms.maximum, 300000);
-  assert.equal(waitFields.mode.default, "all");
-  assert.match(wait.description, /Wait on tasks selected now/);
-  assert.match(wait.description, /question, task issue, harness fault or scoped alert.*completion may leave alerts pending/);
-  assert.match(wait.description, /Complete displayed FIFO-prefix alerts are consumed/);
-  assert.match(wait.description, /Questions remain pending until answered.*name other agents to defer one and narrow alert scope/);
-  assert.match(waitFields.agents.description, /current task, else pending-question task, else latest.*alerts span all its tasks.*unfinished tasks, answerable questions when enabled.*all Agents' alerts including old\/killed sources.*Selection stays fixed/);
-  assert.match(waitFields.mode.description, /all \(default\).*every selected task.*any: one.*already ended.*may return sooner/);
-  assert.match(wait.description, /workers_disabled blocks new tasks, steering and answers.*user to enable delegation/);
-  assert.match(wait.description, /Prefer long waits to polling; questions\/issues\/alerts return early/);
-  assert.match(wait.description, /Timeout\/abort never stops workers/);
+  assert.deepEqual(Object.keys(waitFields).sort(), ["agents", "mode", "wait_ms"]);
+  assert.equal(waitFields.agents.minItems, 1); assert.equal(waitFields.agents.maxItems, 16);
+  assert.equal(waitFields.agents.items.pattern, fields.agent.pattern);
+  assert.deepEqual(waitFields.mode.enum, ["all", "any"]); assert.equal(waitFields.mode.default, "all");
+  assert.equal(waitFields.wait_ms.minimum, 0); assert.equal(waitFields.wait_ms.maximum, 300000);
+  assert.match(waitFields.wait_ms.description, /default 300000/);
+  for (const fact of [/active \(running\/queued\) task, else its pending question, else its latest finished task/, /once at this call/, /Omit to wait on unfinished tasks/, /all Agents' alerts/]) assert.match(waitFields.agents.description, fact);
+  assert.match(waitFields.agents.description, /wait="capacity".*provider slot/);
+  assert.match(waitFields.agents.description, /wait="dependencies".*fixed tasks/);
+  assert.match(wait.description, /accepted work and inspection continue/);
+  for (const fact of [/questions, issues or alerts return early/, /long waits/, /Questions stay pending/, /defer one/, /Nothing pending/, /never stops work/]) assert.match(wait.description, fact);
   const read = byName.get("agent_read"), readFields = read.parameters.properties;
-  assert.match(read.description, /Full question first.*alerts span this Agent's tasks, independent of the page cursor.*Unshown alerts stay pending.*Keep next_cursor.*original result after reuse/);
-  assert.match(readFields.agent.description, /Current task, else pending-question task, else latest.*cursor selects its original task.*question_truncated/);
-  assert.match(readFields.max_chars.description, /result_omitted\/result_truncated.*omitted_chars is text never retained/);
-  assert.match(readFields.cursor.description, /Copy next_cursor exactly with the Agent it came from.*continues that task's result after reuse/);
-  assert.match(read.description, /workers_disabled.*enable delegation before agent_answer/);
-  for (const tool of [answer, wait, read]) assert.doesNotMatch(JSON.stringify(tool), /\bOwner\b|\bbound\b|\binbox\b/);
-  assert.match(byName.get("agent_interrupt").description, /Request a stop, not confirmed settlement.*completed, failed or needs_input.*Confirm with agent_wait or agent_read.*conversation remains.*agent_answer.*agent_run for follow-ups/);
-  for (const name of ["agent_interrupt", "agent_kill", "agent_list"]) assert.match(byName.get(name).description, /[Nn]o pending alerts or completion notices/, name);
-  assert.match(byName.get("agent_kill").description, /Permanently end an Agent.*interrupt its task.*Name stays taken, results readable, old alerts pending.*killed; exiting=cleanup continues; cleanup_uncertain=release unconfirmed, no retry/);
-  assert.match(byName.get("agent_list").description, /Read-only roster.*has_question means currently pending.*question_id.*agent_answer when enabled/);
-  assert.match(byName.get("agent_list").description, /unavailable is boolean; unavailable_reason gives diagnostics/);
-  assert.match(byName.get("agent_list").description, /bounded history: earlier labels, context_tokens, successful edit\/write paths \(not Bash changes\)/);
-  assert.doesNotMatch(byName.get("agent_list").description, /\bcost\b|idle/, "the roster shows no spend or idle time");
-  // Host contract terms the model has no definition for.
-  for (const tool of byName.values()) assert.doesNotMatch(JSON.stringify(tool), /prefer the default timeout|extra get\b|progress_omitted|finished_omitted|finished reminders|exit evidence|projection|starting offset/);
+  assert.deepEqual(read.parameters.required, ["agent"]);
+  assert.deepEqual(Object.keys(readFields).sort(), ["agent", "cursor", "max_chars", "task"], "no read mode or metadata transport");
+  assert.equal(readFields.task.minimum, 1); assert.equal(readFields.task.maximum, Number.MAX_SAFE_INTEGER);
+  assert.match(readFields.task.description, /first page/); assert.match(readFields.task.description, /exclusive with cursor/);
+  assert.equal(readFields.cursor.minLength, 1); assert.equal(readFields.cursor.maxLength, 1024);
+  assert.equal(readFields.max_chars.minimum, 1); assert.equal(readFields.max_chars.maximum, 16384);
+  assert.match(readFields.max_chars.description, /default\/max 16384/);
+  for (const fact of [/result\/question/, /Agent's alerts/, /after reuse or kill/, /full question/, /original task/]) assert.match(read.description, fact);
+  assert.match(readFields.agent.description, /active task, else its pending question, else its latest finished task/);
+  assert.match(readFields.cursor.description, /next_cursor.*Agent/);
+  for (const copy of [waitFields.agents.description, readFields.agent.description, byName.get("agent_list").description]) {
+    assert.match(copy, /workspace_pending.*binding is unconfirmed.*not eventual creation/);
+    assert.match(copy, /retained_paths.*observed failure locations.*not a usable session/);
+    assert.match(copy, /optional paths may be omitted/);
+  }
+  assert.match(byName.get("agent_interrupt").description, /Request a stop, not settlement/);
+  assert.match(byName.get("agent_interrupt").description, /Keeps the conversation/);
+  assert.match(byName.get("agent_kill").description, /Permanently end/);
+  assert.match(byName.get("agent_kill").description, /Name stays taken, results stay readable/);
+  assert.match(byName.get("agent_kill").description, /worktrees are not deleted/);
+  assert.match(byName.get("agent_kill").description, /exiting or cleanup_uncertain does not confirm release/);
+  for (const name of ["agent_interrupt", "agent_kill", "agent_list"]) assert.match(byName.get(name).description, /[Cc]onsumes no alerts/);
+  assert.deepEqual(Object.keys(byName.get("agent_list").parameters.properties), []);
+  assert.match(byName.get("agent_list").description, /Read-only roster/);
+  assert.match(byName.get("agent_list").description, /task labels and workspace locations/);
 }
 
 export function assertNoOrchestrationPrompt(prompt) {

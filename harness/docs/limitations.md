@@ -175,6 +175,11 @@ memory are outside result accounting. There is no automatic eviction; hitting
 the limit requires closing the Owner for new admissions.
 
 The [tool contract](tool-contract.md) defines communication and retention.
+Public reason is omitted for snapshot/done; zero alerts_pending/finished_pending,
+the redundant pending array and empty result text are absent. Positive counts,
+notification semantics, original-Run provenance and atomic publication remain.
+The scoped simplification removes only the abandoned metadata-only read view,
+not other tools, arguments, execution features or retained artifacts.
 One FIFO preserves accepted alert order across Runs. Child-origin limits remain
 64 per Owner / 16 per Agent; optional harness feedback has separate limits of
 16 per Owner / one pending per Agent, for at most 80 entries total. Reserved
@@ -199,12 +204,12 @@ turn; ask asks the child to end rather than forcing suspension. Only a true
 healthy pending needs-input settlement can be explicitly answered. Historical
 questions are not permission or an actionable continuation.
 
-Question/result/alert text shares 16384 UTF-16 units and the double-JSON content
-envelope is capped at 65536 UTF-8 bytes. Labels/tokens/diagnostics count against
+Question/result/alert text shares 16384 UTF-16 units and the
+double-JSON content envelope is capped at 65536 UTF-8 bytes. Labels/tokens/diagnostics count against
 the byte limit, even when outside the text budget. A complete first alert is
 reserved for reason=alert; full worst-case question and alert cannot always fit
 together. Read prioritizes the complete recorded question; unshown alerts stay
-pending. Mandatory control rows, pending names and truncation flags stay intact;
+pending. Mandatory control rows and truncation flags stay intact;
 the model tool adapter requires resident ≤16 (production twelve), while core can
 support more. Model tool assembly also explicitly binds lifetime-valid unique
 model names, rejecting incompatible existing generic history before exposing
@@ -216,11 +221,17 @@ binding preserves pending alerts but does not make their bodies model-readable;
 silently filtered or renamed. Increasing adapter bounds needs a new packing
 proof, not silent truncation. Fixed-width recovery cursors are reserved for bound terminal
 windows with remaining text, including wholly omitted pages after Agent reuse;
-the conservative tagged-alert/queue-wait reservation bound is 65484 bytes. Keep returned cursors: task
-ordinals are not historical-read parameters, and a convenience-only finished row
-or wholly shown/empty result does not newly acquire an all-history selector.
-Cursors are stateless 128-bit Owner/generation/Run/version locators with accepted
-negligible collision risk, not permission grants. Timeout/abort do not drain
+the conservative retained-envelope fixture includes the bounded workspace-pending
+control under the 65536-byte cap, excluding the retired pending-name array.
+Whole optional labels and observed paths can yield with response_limit_reached;
+there is no metadata-only view or unlimited metadata-retrieval promise. Keep
+returned result cursors to continue a page, or use a positive safe
+`agent_read.task` to restart that named Agent's retained task from page one.
+Task/cursor are mutually exclusive; ordinals never target commands. No all-history
+dump, new registry, restart hydration or persistence is added. Result r1_ cursors
+remain stateless 128-bit Owner/generation/Run/version locators with accepted
+negligible collision risk, not permission grants. Named task reads remain
+available after kill in the same Owner, not after restart. Timeout/abort do not drain
 alerts or finished reminders.
 
 Publication consumes only after constructing final local content and validating
@@ -236,14 +247,16 @@ Owner-closure proof. Cooperative execution/lease limits above are unchanged.
 
 Finished reminders use each original Run's fixed finished_presented bit and
 settled_seq, not a second log or cursor. Showing that original task's terminal
-row commits its bit; a running row with the same Agent name, alert/list/UI/count
-never does. Result/history remain rereadable and pending questions can reopen
-without resetting the bit. Joined `agent_send` messages and `agent_list`
-history (earlier task labels, last context, touched paths) likewise are bounded
-Owner-memory state, lost with the Owner and never replayed from journals. Old
-notify/progress/send-answered logs stay readable literally, never rewritten or
-hydrated as new pending work. `touched` lists only paths passed to successful `edit`/`write` calls,
-not files a shell command changed. Handed-off text is another child's retained
+row commits its bit;
+a running row with the same Agent name, alert/list/UI/count never does. A
+finished label is optional and checked against that original Run; omission
+neither delays consumption nor resets the bit. Result/history remain rereadable
+and pending questions can reopen without resetting the bit. Joined `agent_send`
+messages and host-side live history projections are bounded Owner-memory state,
+not restored from journals. Live Run context, usage and elapsed time remain UI
+observations; warning attempts remain outcome/history facts. Task descriptions
+stay on their Runs, without a separate earlier-label or touched-path summary. Old notify/progress/send-answered logs stay readable literally,
+never rewritten or hydrated as new pending work. Handed-off text is another child's retained
 final output, bounded and framed as reference; it is not verified.
 
 SDK journals are the only historical transcript source, but are not immediate
@@ -268,9 +281,10 @@ footer or audit entry.
 
 [Runtime feedback](runtime-feedback.md) observes only the managed authority's
 own returned blocks. Its bounded exact-tool counter is partial, not semantic
-retry detection or reason classification; silence is unknown. Recovery hints
-neither diagnose model availability/ability nor migrate Agents. The linked
-contract lists unobserved paths and publication limits.
+retry detection or reason classification; silence is unknown. Generic
+model-recovery hints are not generated. Concrete errors and Owner/cursor
+resolutions neither diagnose model ability nor authorize migration or retry.
+The linked contract lists unobserved paths and publication limits.
 
 The harness depends on, but does not own, generated worker policy, permission
 authority, static guards, search policy, and Jev review policy. New model
@@ -287,8 +301,9 @@ keep an unknown, yolo-satisfiable base; the speculative HOME-stability fold is
 retired. See [redirect-buried argv](security.md#redirect-buried-argv-and-home-cd).
 
 Nested delegation is excluded for every child. Only researcher has web tools;
-worker has no web tool table. Researcher file reads and web calls together can move project content
-to the network; its prompt forbids that but cannot enforce it (see
+worker has no web tool table. Researcher fetch schemas and capability wording
+allow only absolute HTTP(S) URLs, never local-video paths. Researcher file reads
+and web calls together can move project content to the network; its prompt forbids that but cannot enforce it (see
 [researcher web access](security.md#researcher-web-access)). Tool availability
 is not authorization.
 
@@ -334,12 +349,30 @@ binding, not copied or replaced by checked-out `.pi` content. Core admission
 and source `settings.cwd` remain immutable. The known whole checkout root maps
 to the source repository root for deny/ask aliases only, not ALLOW or external
 boundary exemptions. Other checkouts keep ordinary external policy. Relative
-dispatch declarations still resolve at source cwd; uninitialized worktrees
-cannot declare a tree. Declare its actual absolute path on a follow-up once
-known; first-task checks without a tree remain available.
-Checks observe actual child cwd, not proof that the source checkout was tested;
-linked-layout source capture may remain unknown. List/detail expose
-uninitialized mode or actual cwd, source cwd and baseline after initialization.
+dispatch declarations resolve at execution cwd, including first-task worktree
+inputs/ownership/tree; absolute paths keep their meaning. Uninitialized relative
+paths, including `..`, remain provisional with source deny-only preflight, not
+source existence or disjointness claims. Actual paths, boundaries, permissions,
+inputs and claims are checked after binding before child input. A healthy
+created session remains idle/reusable if binding preflight fails. See
+[workspace binding](workspaces.md#dispatch-paths-and-binding).
+Checks observe actual child cwd, not proof that source was tested; linked-layout
+source capture may remain unknown. The child dispatch preface separates
+execution path base from source policy/settings inheritance.
+Only wait/read/list expose optional whole task-local confirmed workspace
+bindings: four fields plus optional checkout_root, without public state or
+recovery_manifest. Shared/unbound tasks omit workspace. A bounded
+workspace_pending:true control marks only queued/running worktree tasks still
+awaiting binding, not exited tasks or retained recovery. Failures may show small
+retained_paths of observed allocation directories, verified checkout roots and
+created manifests, not an intended nonexistent target. Verified checkout can
+precede failed SDK assembly; internal typed/frozen errors and cleanup authority
+remain intact. The human detail pane renders those observed recovery locations,
+separating retained checkout facts from a successfully initialized session.
+Earlier task metadata never borrows a later Agent baseline.
+Action/interrupt/kill omit workspace details; list keeps only bounded killed
+names. Named/task read retains result access, but overlarge optional paths may
+yield honestly under the cap without guaranteed retrieval. See [workspace metadata](workspaces.md#workspace-and-recovery-metadata).
 
 Worktrees and private recovery manifests are retained on completion, kill,
 failure and Owner shutdown for manual recovery/cleanup. Defaults use absolute
@@ -359,6 +392,11 @@ handling as delegation_unbound, because its script evidence remains source-cwd
 based. Do not relax only the runtime cwd comparison. Existing allows/yolo remain
 outside that eligible ask path. Worktree setup requires verified absolute Git
 (PI_HARNESS_GIT or a trusted launcher candidate); shared mode does not.
+The authority's existing registry permits 4096 cumulative successful workspace
+session bindings per Pi process, including bindings followed by assembly failure.
+Released bindings remain tombstones and still count; new worktree assembly fails
+at the limit. Confirm Owner closure before starting a fresh Pi process. No
+registry eviction, automatic retry or live reload restores capacity.
 
 Jev review concurrency is independent of worker capacity: up to four root and
 eight distinct subagent reviews can be in flight. Extra reviews defer with
@@ -382,8 +420,10 @@ do not prove execution, and undeclared effects or different agentDir/host/tree
 identities are not automatically coordinated. Profile/external preflight is
 approximate: ask/unknown is not a grant; child gates may be stricter. Literal
 paths and lexical/canonical aliases do not provide hardlink tracking or atomic
-filesystem protection. Inputs must exist when checked, whereas ownership/tree
-may name new outputs. Pump rechecks can wait for a free slot on that Run's own provider; failing a task
+filesystem protection. Inputs must exist when actually checked, whereas ownership/tree may name new
+outputs. Inputs are revalidated, not held resource locks. Provisional-to-bound
+ownership/tree refinement is one-time; later pump/answer rechecks retain strict
+claimed-resource equality. Pump rechecks can wait for a free slot on that Run's own provider; failing a task
 whose dependency settled without completing does not. The admission wait for a
 release already under way is bounded (10 s) and does not make parallel
 tool-batch order a guarantee.
@@ -394,13 +434,12 @@ Cleanup uncertainty, including sticky tree-lease close failure, still retains
 resources; later SDK cleanup success does not clear that failure. Local tree
 contention is advisory, not exclusivity evidence. Synchronous flock blocks the
 event loop even when contention is nonblocking. A guarded wall-clock warning may
-invalidate approval yet never reach the model before deadline; `time_wrapped`
-means an attempt, not a checkpoint. Due is retained only for the original Run
-until the real inputEntered/canInput boundary or post-budget turnStart permits
-one guarded pre-deadline attempt; rejected attempts are not retried. Optional
-time flags are tried after questions/FIFO alerts and before results, but may
-yield at byte saturation; long ASCII results do not inherently hide them.
-The hard stop remains cooperative.
+invalidate approval yet never reach the model before deadline. Internal
+`time_wrapped` means an attempt, not a checkpoint, and stays out of parent-model
+replies. Due is retained only for the original Run until the real
+inputEntered/canInput boundary or post-budget turnStart permits one guarded
+pre-deadline attempt; rejected attempts are not retried. The hard stop remains
+cooperative.
 
 Checks-only `source_state` is superproject-only partial non-atomic metadata,
 with submodules ignored: not a content fingerprint, validated source version
@@ -421,9 +460,10 @@ receipt is dropped with validation_receipt_error: 'invalid_validation_receipt',
 a live cleanup diagnostic and recorded-history warning; mandatory core checks
 and append failures stay strict and never trigger a second append. It is consumed through trusted history/offline
 audit, not automatically by the parent model, and skips no validation gate.
-Run data and optional notes/time_wrapped projections are memory-only; they may
-yield during packing and cannot be guaranteed recoverable after omission or
-Agent reuse. No new notes cursor, persistent ACK or task hydration is promised.
+Run notes and optional public note projections are memory-only; they may yield
+and cannot be guaranteed recoverable after omission or Agent reuse. Warning
+attempts remain core/UI/history facts as applicable, not parent-model telemetry.
+No new notes cursor, persistent ACK or task hydration is promised.
 Derived time_wrapped_attempts counts attempts, not delivery/checkpoint rates.
 The journal analyzer remains strict JSON-only; --json is an explicit alias, not
 salvage mode, and failure does not mean zero usage. A needs-input resource
@@ -477,8 +517,9 @@ New package, generated agents/policy/seeds/integrity manifest and managed user
 definitions/permissions must match in a fresh Pi process; no open-Owner reload or
 runtime swap. The launcher verifies managed definition digests, including worker
 body changes. Absent-only init never repairs existing mismatches automatically;
-reconcile deliberately without replacing user symlinks or weakening permission
-floors. Rollback must coordinate the same resources; see
+reconcile deliberately as an operator, without automatic writes to existing
+user files, replacing user symlinks or weakening permission floors. Rollback must
+coordinate the same resources; see
 [matched resource migration](development.md#matched-resource-migration).
 Nix validation/activation, host collectors, live model/network trials, human
 approval and publication require separate authorization and scoped evidence.

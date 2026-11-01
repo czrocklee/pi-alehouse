@@ -154,7 +154,7 @@ test("bound tools keep read/wait, timeout/abort and accepted child communication
   assert.equal(aborted.reason, "aborted"); assert.equal(aborted.workers_disabled, true);
   assert.equal(aborted.alerts, undefined); assert.equal(c.view(run.run_id).pending_messages, 1); assert.equal(finishedBit(c, run), false);
   const snapshot = await call("agent_read", { agent: "otter" });
-  assert.equal(snapshot.reason, "snapshot"); assert.equal(snapshot.workers_disabled, true);
+  assert.equal(Object.hasOwn(snapshot, "reason"), false); assert.equal(snapshot.workers_disabled, true);
   assert.equal(snapshot.alerts[0].message, "accepted while Off"); assert.equal(port.stopped, 0);
   const offTimeout = await call("agent_wait", { agents: ["otter"], wait_ms: 0 });
   assert.equal(offTimeout.reason, "timeout"); assert.equal(offTimeout.workers_disabled, true);

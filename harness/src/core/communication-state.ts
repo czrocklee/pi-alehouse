@@ -1,6 +1,8 @@
-import { COMMUNICATION_LIMITS, alertAdmissionBudget, modelTaskStatus, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.js";
+import { COMMUNICATION_LIMITS, alertAdmissionBudget, modelTaskStatus, visibleCommunicationReason, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.js";
 import type { CommunicationReferences, CommunicationSnapshot } from "./communication-snapshot.js";
-import { terminal, type Phase, type RunStatus } from "./contracts.js";
+import { terminal, type Phase, type RunStatus, type WorkspaceInfo, type WorkspaceMode } from "./contracts.js";
+import { taskMetadata, type TaskMetadata } from "./task-metadata.js";
+import type { WorkspaceDetails, WorkspaceRecovery } from "./workspace-metadata.js";
 import type { CoreObservationReason } from "./observation-scheduler.js";
 import { HarnessError, type RepeatedManagedBlock } from "./ports.js";
 import { boundedOutput } from "./result-text.js";
@@ -21,6 +23,10 @@ export interface CommunicationRun {
     readonly enqueue_sequence: number;
     readonly name: string;
     readonly description: string;
+    readonly settings?: { readonly workspace?: WorkspaceMode };
+    readonly workspace?: WorkspaceInfo;
+    readonly workspace_details?: WorkspaceDetails;
+    readonly recovery?: WorkspaceRecovery;
     readonly status: RunStatus;
     readonly phase: Phase;
     readonly execution_exited: boolean;
@@ -240,6 +246,51 @@ const matchesRun = (run: CommunicationRun, row: ThinTaskEntry, runs: readonly Co
   return record.name === row.agent && taskOrdinal(run, runs) === row.task && status === row.status;
 };
 
+const originalMetadata = (run: CommunicationRun): TaskMetadata => taskMetadata({
+  description: run.record.description, isolation: run.record.settings?.workspace ?? "shared",
+  status: run.record.status, execution_exited: run.record.execution_exited,
+  workspace: run.record.workspace, workspace_details: run.record.workspace_details, recovery: run.record.recovery,
+}, true);
+/** These projections contain scalar leaves, plain records and ordered path
+ * arrays. Compare exact own data keys independent of record key order;
+ * reject accessors/symbols without invoking caller code during validation.
+ * A general deep-equality helper is not equivalent: it may read getters or
+ * ignore non-enumerable keys that this provenance boundary must reject. */
+function samePlainProjection(left: unknown, right: unknown): boolean {
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return Object.is(left, right);
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || Object.getPrototypeOf(left) !== Array.prototype ||
+        Object.getPrototypeOf(right) !== Array.prototype || left.length !== right.length ||
+        Reflect.ownKeys(left).length !== left.length + 1 || Reflect.ownKeys(right).length !== right.length + 1) return false;
+    for (let index = 0; index < left.length; index++) {
+      const a = Object.getOwnPropertyDescriptor(left, String(index)), b = Object.getOwnPropertyDescriptor(right, String(index));
+      if (!a || !b || !a.enumerable || !b.enumerable || !("value" in a) || !("value" in b) || !samePlainProjection(a.value, b.value)) return false;
+    }
+    return true;
+  }
+  if (Object.getPrototypeOf(left) !== Object.prototype || Object.getPrototypeOf(right) !== Object.prototype) return false;
+  const keys = Reflect.ownKeys(left);
+  if (keys.length !== Reflect.ownKeys(right).length) return false;
+  return keys.every(key => {
+    if (typeof key !== "string") return false;
+    const a = Object.getOwnPropertyDescriptor(left, key), b = Object.getOwnPropertyDescriptor(right, key);
+    return a !== undefined && b !== undefined && a.enumerable === true && b.enumerable === true &&
+      "value" in a && "value" in b && samePlainProjection(a.value, b.value);
+  });
+}
+
+/** Missing optional projections stay compatible with structural fixtures. Any
+ * supplied fact must match the original, not merely a forged snapshot/body pair. */
+function validateMetadataProvenance(run: CommunicationRun, captured: Partial<TaskMetadata>, shown?: Partial<TaskMetadata>): void {
+  const original = originalMetadata(run);
+  for (const field of ["label", "workspace_pending", "workspace", "retained_paths"] as const) {
+    if (captured[field] !== undefined && !samePlainProjection(captured[field], original[field])) invalidCommit();
+    if (shown?.[field] !== undefined && (captured[field] === undefined || !samePlainProjection(shown[field], original[field]))) invalidCommit();
+  }
+  // Unlike whole optional locations, a captured pending control cannot yield.
+  if (captured.workspace_pending !== undefined && captured.workspace_pending !== shown?.workspace_pending) invalidCommit();
+}
+
 /** All checks precede ALL mutation. This is pure, SDK-free reference checking,
  * not an effecting port or a retry loop. The final body was already serialized.
  * reportedBlock itself is deliberately NOT checked: pre-edge A/B both qualify. */
@@ -255,7 +306,7 @@ export function validateCommunicationCommit<Run extends CommunicationRun>(option
 }): CommunicationCommitPlan<Run> {
   const { pending, snapshot, references, envelope } = options;
   const data = snapshot.data;
-  if (data.reason !== envelope.reason || data.alerts.length !== snapshot.alerts.length || data.finished.length !== snapshot.finished.length ||
+  if (visibleCommunicationReason(data.reason) !== envelope.reason || data.alerts.length !== snapshot.alerts.length || data.finished.length !== snapshot.finished.length ||
     snapshot.targets.length !== data.tasks.length || envelope.agents.length !== snapshot.targets.length) invalidCommit();
   const suppressed = data.reason === "aborted" || data.reason === "timeout";
   if (suppressed) {
@@ -266,7 +317,7 @@ export function validateCommunicationCommit<Run extends CommunicationRun>(option
   const scoped = scopedAlerts(pending, options.scope);
   const shownAlerts = envelope.alerts ?? [];
   if ((data.reason === "alert" && references.alerts.length === 0) || references.alerts.length !== shownAlerts.length ||
-      envelope.alerts_pending !== scoped.length - references.alerts.length) invalidCommit();
+      (envelope.alerts_pending ?? 0) !== scoped.length - references.alerts.length) invalidCommit();
   const alert_indices: number[] = [];
   const seenAlerts = new Set<PendingAlert<Run>>();
   for (const [index, reference] of references.alerts.entries()) {
@@ -288,6 +339,7 @@ export function validateCommunicationCommit<Run extends CommunicationRun>(option
     const task = data.tasks[index]!, shown = envelope.agents[index]!;
     if (!task || !shown || boundIndices.has(run) || !options.runs.includes(run) || task.settled !== isCommunicationSettled(run) ||
       !matchesRun(run, task.row, options.runs) || !sameRow(task.row, shown)) invalidCommit();
+    validateMetadataProvenance(run, task, shown);
     boundIndices.set(run, index);
   }
   const seen = new Set<number>();
@@ -303,6 +355,7 @@ export function validateCommunicationCommit<Run extends CommunicationRun>(option
     const run = snapshot.finished[index]!;
     if (!candidate || !run || seenRuns.has(run) || !options.runs.includes(run) || !isCommunicationSettled(run) ||
       run.finished_presented || !matchesRun(run, candidate.row, options.runs)) invalidCommit();
+    validateMetadataProvenance(run, { label: candidate.label });
     seenRuns.add(run);
     // The explicit link must identify THIS original Run, not another Agent
     // whose display name, per-Agent ordinal and status happen to be equal.
@@ -315,7 +368,11 @@ export function validateCommunicationCommit<Run extends CommunicationRun>(option
     const presented = targetIndex !== undefined || listed;
     if (seen.has(index) !== presented) invalidCommit();
     if (!presented) continue;
-    if (listed && !sameRow(rows[nextRow++]!, candidate.row)) invalidCommit();
+    if (listed) {
+      const shown = rows[nextRow++]!;
+      if (!sameRow(shown, candidate.row)) invalidCommit();
+      validateMetadataProvenance(run, { label: candidate.label }, { label: shown.label });
+    }
     finished.push(run);
   }
   if (nextRow !== rows.length) invalidCommit();

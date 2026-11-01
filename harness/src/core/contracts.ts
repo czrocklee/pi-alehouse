@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path";
 import { normalizeLedger, type UsageLedger } from "./usage-ledger.js";
 import { validOutput } from "./result-text.js";
 import type { Dispatch } from "./dispatch.js";
+import type { WorkspaceDetails, WorkspaceRecovery } from "./workspace-metadata.js";
 
 export type RunStatus = "queued" | "running" | "cancelling" | "completed" | "needs_input" | "failed" | "cancelled";
 export type StopReason = "user_cancel" | "hard_budget" | "deadline";
@@ -169,6 +170,8 @@ export interface RunView {
   /** Working-copy arrangement, not a sandbox claim. */
   isolation: WorkspaceMode;
   workspace?: WorkspaceInfo;
+  workspace_details?: WorkspaceDetails;
+  recovery?: WorkspaceRecovery;
   elapsed_ms: number;
   execution_elapsed_ms?: number;
   turn_elapsed_ms?: number;
@@ -195,23 +198,6 @@ export interface RunView {
   queued_for?: "dependencies" | "capacity";
   /** Parent updates queued while idle and delivered with this Run's prompt. */
   delivered_updates?: number;
-}
-/** Per-Agent history for the on-demand roster; never injected into context. */
-export interface AgentSummary {
-  agent_id: string;
-  runs: number;
-  /** Newest first, excluding the latest Run's own description. */
-  earlier_descriptions: string[];
-  /** Last observed SDK context occupancy, retained after the Run settles. */
-  context?: { tokens: number | null; context_window: number };
-  observed_cost: number;
-  cost_partial: boolean;
-  /** Relative paths the Agent edited or wrote successfully, first seen first. */
-  touched: string[];
-  touched_omitted: number;
-  pending_updates: number;
-  /** Wall time since the latest Run settled; absent while busy. */
-  idle_ms?: number;
 }
 export interface ResultPage {
   snapshot: RunView;

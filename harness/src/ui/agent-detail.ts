@@ -177,6 +177,23 @@ export function renderDetailFields(input: DetailInput, theme: Theme, width: numb
     field("cwd", view.workspace.cwd);
     field("source", view.workspace.source_cwd);
     field("base", view.workspace.base_commit);
+    if (view.workspace_details) {
+      if (view.workspace_details.checkout_root !== view.workspace.cwd) field("checkout", view.workspace_details.checkout_root);
+      field("manifest", view.workspace_details.recovery_manifest);
+    }
+  } else if (view.recovery) {
+    // Recovery belongs to this original Run. A verified checkout is not a
+    // successful SDK/session binding; partial targets need not exist at all.
+    const recovery = view.recovery;
+    field("workspace", recovery.state === "checkout_ready" ? "worktree · retained verified checkout" : "worktree · partial setup");
+    field("session", "SDK session unavailable");
+    field("source", recovery.source_cwd);
+    if (recovery.state === "checkout_ready") {
+      if (recovery.cwd) field("cwd", recovery.cwd);
+      if (recovery.base_commit) field("base", recovery.base_commit);
+      if (recovery.checkout_root && recovery.checkout_root !== recovery.cwd) field("checkout", recovery.checkout_root);
+    } else if (recovery.allocated_path) field("allocated", recovery.allocated_path);
+    if (recovery.recovery_manifest) field("manifest", recovery.recovery_manifest);
   } else if (view.isolation === "worktree") {
     field("workspace", "worktree · not initialized");
     field("source", s.cwd);

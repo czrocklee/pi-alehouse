@@ -161,7 +161,8 @@ test("all model waits continue past normal completion but prioritize questions a
   ports[5].callbacks.turnEnd(true); ports[5].finish("best effort"); await ended(c, limited);
   value = JSON.parse((await c.observe({ kind: "wait", agent_ids: [limited.agent_id, peer.agent_id], mode: "all" }, { validate() {} })).content[0].text);
   assert.equal(value.reason, "task_issue"); assert.equal(value.agents[0].limit_reached, true);
-  assert.deepEqual(value.pending, ["peer"]);
+  assert.equal(Object.hasOwn(value, "pending"), false);
+  assert.equal(value.agents.find(({ agent }) => agent === "peer").status, "running");
   // Task issues outrank done even for any and already-terminal targets.
   assert.equal(JSON.parse((await c.observe({ kind: "wait", agent_ids: [failed.agent_id, peer.agent_id], mode: "any" }, { validate() {} })).content[0].text).reason, "task_issue");
 });

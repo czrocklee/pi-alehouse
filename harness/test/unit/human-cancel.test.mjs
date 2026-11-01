@@ -228,7 +228,7 @@ test("list/interrupt projection and an original finished reminder retain human o
   assert.equal(taskReply(c.view(original.run_id), () => "otter").cancellation_source, "human");
   ports[0].finish("partial", "aborted"); await ended(c, original);
   const roster = c.list()[0];
-  assert.equal(agentRow(roster, c.agentSummary(original.agent_id), () => "otter").cancellation_source, "human");
+  assert.equal(agentRow(roster, () => "otter").cancellation_source, "human");
   const next = await c.submit("next", { resume: original.agent_id, prompt: "next" });
   await until(() => ports[0].calls.length === 2);
   const projected = await read(c, next);
@@ -274,8 +274,8 @@ test("provenance is optional bounded task/finished metadata, never a new thin co
   assert.equal(packed.envelope.agents[0].cancellation_source, "human");
   assert.equal(packed.envelope.finished[0].cancellation_source, "human");
   assert.deepEqual(packed.references.finished, [0, 1]);
-  assert.equal(communicationEnvelopeBytes(retainedEnvelopeFixture("\0".repeat(8192), true, true)), 65484,
-    "the reserved thin-shape proof is unchanged");
+  assert.equal(communicationEnvelopeBytes(retainedEnvelopeFixture("\0".repeat(8192), true, true)), 65438,
+    "the retained shape reserves workspace-pending controls and cursors, not human provenance");
   const absent = snapshot({ tasks: [{ row: row(), settled: true }] });
   const explicitUndefined = structuredClone(absent); explicitUndefined.tasks[0].cancellation_source = undefined;
   assert.equal(packCommunication(explicitUndefined).result.content[0].text, packCommunication(absent).result.content[0].text,
@@ -313,7 +313,8 @@ test("task provenance yields whole at exact byte saturation without changing con
   assert.equal(communicationEnvelopeBytes(packed.envelope), 65536);
   assert.deepEqual(packed.envelope.agents, baseline.envelope.agents);
   assert.deepEqual(packed.envelope.alerts, baseline.envelope.alerts);
-  assert.deepEqual(packed.envelope.pending, baseline.envelope.pending);
+  assert.equal(Object.hasOwn(packed.envelope, "pending"), false);
+  assert.equal(Object.hasOwn(baseline.envelope, "pending"), false);
   assert.deepEqual(packed.references, baseline.references);
   assert.deepEqual(packed.references, { alerts: [0], finished: [0] });
   for (const entry of input.tasks) delete entry.cancellation_source;
@@ -338,7 +339,7 @@ test("a finished row still presents its original Run when only its provenance ca
   assert.deepEqual(packed.envelope.finished, [extra]); assert.equal(packed.envelope.response_limit_reached, true);
   assert.equal(communicationEnvelopeBytes(packed.envelope), 65536);
   assert.deepEqual(packed.references, { alerts: [0], finished: [0, 1] });
-  assert.equal(packed.envelope.finished_pending, 0, "metadata omission is not a persistent retry/ACK obligation");
+  assert.equal(Object.hasOwn(packed.envelope, "finished_pending"), false, "metadata omission is not a persistent retry/ACK obligation");
 });
 
 const message = (text) => ({ role: "assistant", api: "fixture", provider: "fixture", model: "controlled",
