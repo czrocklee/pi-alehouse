@@ -35,12 +35,29 @@ allowing ordinary worker Git mutations without Jev/checkpoint review.
 ## Lifecycle and cancellation
 
 Esc interrupts the parent's wait, not child work. In Agent details it only
-closes the pane, or goes back from Stop confirmation. **S** / **[S Stop]** opens a
-confirmation bound to the displayed task; **Ctrl+S** / **[Confirm stop]** then
-requests cooperative cancellation through the Owner. Stop is offered only when
-the full confirmation identity/task and hint fit the pane's width and height
-budget. Ordinary typing and plain Enter never execute Stop; hidden controls
-cannot be activated. Human-origin
+closes the pane, or cancels an armed Stop confirmation before a later Esc closes
+it. **S** / the bottom-right, rightmost **[S Stop]** arms confirmation in the
+footer without replacing the title/body/transcript or changing scroll or height.
+The footer shows `best-effort · Ctrl+S · Esc cancel · [Confirm stop]`, with the
+warning-colored bold action rightmost (ordinary Stop is dim);
+**Ctrl+S** or a separate single click then requests cooperative cancellation through
+the Owner; rapid double/triple clicks do not confirm. Initial Stop requires the
+full inline confirmation hint plus compact live status to fit the footer and the
+normal pane height to fit a known finite
+viewport, not full identity/task text to fit a separate confirmation body.
+Long or CJK task/name text alone no longer suppresses Stop. Ordinary typing,
+plain Enter and repeated S never confirm Stop; hidden controls cannot be
+activated. Confirmation binds the originally painted Owner/generation/Agent/Run;
+user scrolling by keys or wheel, stale geometry, selection changes, replacement
+work and permission hiding retire it rather than retargeting. Confirmation expires
+after ten seconds of monotonic elapsed time, checked before rendering or acting
+even without repaint; background transcript growth alone preserves it. Exited
+execution, including finishing work, is never stoppable. The title reserves task
+text and a valid task ordinal (`#N`), or an abbreviated Run ID, before optional
+nickname/profile text. Ordinary metadata is sanitized independently of styled SDK
+transcripts: whitespace is normalized readably, recognized terminal protocols
+stripped and remaining control/bidirectional-control characters escaped, while
+ZWJ/ZWNJ/variation selectors are preserved. Human-origin
 metadata and a non-triggering parent message distinguish a new human stop from
 model interruption, but optional metadata may yield under packing pressure and
 message queuing is not model acknowledgement. Cancellation, turn-limit stop, and
@@ -484,7 +501,7 @@ popover.  Multiplexers can further limit mouse motion.  Pi's unexported native
 tool renderers mean child transcripts fall back to plain tool argument/output
 blocks for built-in tools.  PTY/UI fixtures and scripted permission RPC are not
 human-TUI acceptance. Expanded Agent inspection is paginated within a widget
-budget (at most twelve lines and one third of terminal height, with a further
+budget (at most thirteen lines and one third of terminal height, with a further
 reserve for normal SDK input chrome and transcript space), not an unbounded
 roster in the input dock. Tall editors, additional queued prompts, other extensions
 and tiny viewports can still constrain available space; expansion is suppressed

@@ -1,21 +1,31 @@
-import { matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { terminal, validDifficulty, type RunView } from "../core/contracts.js";
+import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { validDifficulty, type RunView } from "../core/contracts.js";
 import { reported, type UsageComponent } from "../core/usage-ledger.js";
 import { profileLabel } from "../tools/tool-names.js";
 import { formatContextPercent, formatContextTokens, formatCost, formatDrain, formatMs, formatTokens, formatTurns,
-  GLYPHS, SPINNER, withoutBreaks, type ActiveTool, type Theme, type TranscriptRows } from "./format.js";
+  type ActiveTool, type Theme, type TranscriptRows } from "./format.js";
 import { POPOVER, isPopoverCloseClick, popoverInlay, popoverInlayWidth, popoverSide } from "./popover.js";
+import { singleLineText, wrapPlainText as wrapText } from "./text.js";
+import { runPresentation } from "./run-presentation.js";
+export { wrapText };
 
 /** Label column, so every field's value starts at the same place. */
 const LABEL = 10;
 const STOP_LABEL = "[S Stop]";
 const CONFIRM_LABEL = "[Confirm stop]";
-const CONFIRM_HINT = `${CONFIRM_LABEL} · Ctrl+S · Esc back`;
-type StopTarget = Pick<RunView, "owner_id" | "generation" | "agent_id" | "run_id" | "name" | "description">;
-/** Actionable identity must be plain text: strip terminal protocols, then make
- * remaining C0/DEL/C1 controls visible rather than letting them move/hide text. */
-const confirmationText = (text: string): string => stripTerminalSequences(text)
-  .replace(/\p{Cc}/gu, (char) => `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`);
+const CONFIRM_HELP = "best-effort · Ctrl+S · Esc cancel";
+const CONFIRM_HINT = `${CONFIRM_HELP} · ${CONFIRM_LABEL}`;
+const CONFIRM_LIFETIME_MS = 10_000;
+type StopTarget = Pick<RunView, "owner_id" | "generation" | "agent_id" | "run_id">;
+interface PaintDimensions { columns: number; rows: number; width: number }
+interface StopAction { kind: "stop" | "confirm"; from: number; to: number }
+interface StopPaint { target: StopTarget; action: StopAction; dimensions: PaintDimensions }
+interface StopConfirmation { target: StopTarget; expiresAt: number; dimensions: PaintDimensions }
+interface FooterFrame { text: string; action?: StopAction }
+const sameStop = (target: StopTarget, view: RunView | undefined, selected: string): boolean =>
+  selected === target.agent_id && !!view && view.agent_id === target.agent_id &&
+  view.owner_id === target.owner_id && view.generation === target.generation &&
+  view.run_id === target.run_id && stoppable(view);
 /** Stop requests only apply to live execution, never settled or draining work. */
 const stoppable = (view: RunView): boolean =>
   (view.status === "queued" || view.status === "running") && !view.execution_exited && !view.stop_reason;
@@ -25,39 +35,6 @@ const key = (label: string): string => label.length >= LABEL ? `${label.slice(0,
 /** Upstream has no warning glyph and documents why — a glyph no monospace font
  * covers is drawn by a proportional fallback that overruns its cell, and East
  * Asian Width cannot detect that. So every severity here is a word, not a symbol. */
-
-/**
- * Wraps PLAIN text by display columns: CJK breaks anywhere, latin prefers the
- * last space. Styling is applied to the produced lines, never before — an ANSI
- * sequence has no width and would be cut in half here.
- */
-export function wrapText(text: string, columns: number): string[] {
-  if (columns <= 0) return [];
-  const out: string[] = [];
-  for (const paragraph of text.split("\n")) {
-    let line = "", used = 0, breakAt = -1;
-    // A newline is a paragraph break here, but a tab or a stray carriage return
-    // moves the cursor without costing a column, so the arithmetic below would
-    // be measuring one thing and the terminal drawing another.
-    for (const char of paragraph.replace(/[\t\v\f\r\u0085\u2028\u2029]+/g, " ")) {
-      const w = visibleWidth(char);
-      if (used + w > columns) {
-        if (breakAt > 0) { out.push(line.slice(0, breakAt)); line = line.slice(breakAt + 1); }
-        else { out.push(line); line = ""; }
-        used = visibleWidth(line);
-        breakAt = -1;
-        // A combining-only prefix before a space can free just one column.
-        // Recheck the remainder before appending a two-column character.
-        if (used + w > columns && line) { out.push(line); line = ""; used = 0; }
-      }
-      if (char === " ") breakAt = line.length;
-      line += char;
-      used += w;
-    }
-    out.push(line);
-  }
-  return out;
-}
 
 /** Live child state the pane shows beside the Run projection. */
 export interface DetailLive {
@@ -78,9 +55,6 @@ const DISPATCH_NOTES: ReadonlyMap<string, string> = new Map([
   ["tree_lock_unknown", "build-tree lock could not be confirmed"],
   ["source_state_unknown", "source state for the declared checks was not captured"],
 ]);
-const statusWord = (view: RunView): RunView["status"] | "finishing" =>
-  view.status === "running" && view.finalization_pending ? "finishing" : view.status;
-
 /**
  * Joins the two halves of a chrome row. Framed, the space between them is part
  * of the border, so it is drawn as rule: an inlay that stops mid-row leaves the
@@ -100,40 +74,32 @@ const spanRow = (left: string, right: string, width: number, theme: Theme, rule:
 
 /** Live status chrome, shared by docked and framed lower-left footers. */
 const renderDetailStatus = (view: RunView, spinnerFrame: number, theme: Theme, width: number): string => {
-  const word = statusWord(view);
-  const compact = { queued: "queued", running: "run", finishing: "finish", cancelling: "cancel",
-    completed: "done", needs_input: "input", failed: "failed", cancelled: "cancel" };
-  const label = visibleWidth(word) + 2 <= width ? word : compact[word];
-  const running = !terminal(view.status);
-  const icon = running ? theme.fg("accent", SPINNER[spinnerFrame % SPINNER.length]!) :
-    view.status === "completed" ? theme.fg("success", GLYPHS.success) :
-    view.status === "needs_input" ? theme.fg("warning", GLYPHS.question) :
-    view.status === "cancelled" ? theme.fg("dim", GLYPHS.stopped) : theme.fg("error", GLYPHS.failure);
-  return `${icon} ${theme.fg(running ? "accent" : "dim", label)}`;
+  const state = runPresentation(view.status, spinnerFrame, view.finalization_pending);
+  const label = visibleWidth(state.label) + 2 <= width ? state.label : state.compact;
+  return `${theme.fg(state.color, state.glyph)} ${theme.fg(state.color, label)}`;
 };
 
 /** The pane's own title row: identity and task, without live status. */
 export function renderDetailTitle(input: DetailInput, _spinnerFrame: number, theme: Theme, width: number,
   rule = false): string {
   const { view } = input;
-  // The title is one row -- inlaid into the top border when the pane floats, so
-  // a line break in it would break the frame, not just the line.
-  const profile = profileLabel(view.effective_settings.profile);
-  const name = withoutBreaks(view.name || profile);
-  // Without a nickname the profile is already the title; repeating it as a tag
-  // would label one fact twice, the same way the widget row avoids it.
-  const tags = [view.name ? profile : ""].filter(Boolean).map(withoutBreaks);
-  const identity = tags.length ? `${theme.bold(name)} ${theme.fg("dim", `(${tags.join(" · ")})`)}` : theme.bold(name);
-  // The task follows the identity and tags in the title. The widget adds
-  // model/signals too; this is not a copy of its whole row. The chrome never
-  // scrolls: the `task` field can be scrolled out of the body, and
-  // a profile like `researcher` names a capability, never the work. It
-  // takes only the room the identity leaves; below that it is dropped rather
-  // than shown as an ellipsis. Live status belongs to the lower-left footer.
-  const room = width - visibleWidth(identity) - 6;
-  const task = view.description && room >= 12 ?
-    `  ${theme.fg("muted", truncateToWidth(withoutBreaks(view.description), room))}` : "";
-  return spanRow(identity + task, "", width, theme, rule);
+  const profile = singleLineText(profileLabel(view.effective_settings.profile));
+  const name = singleLineText(view.name || profile);
+  const task = singleLineText(view.description).trim() || "task";
+  const marker = Number.isSafeInteger(view.task) && view.task > 0 ? `#${view.task}` : shortId(singleLineText(view.run_id));
+  const suffix = ` · ${marker}`;
+  // The task/Run cue never scrolls away. Sacrifice nickname/profile space first
+  // so Agent reuse cannot leave two different tasks with identical chrome.
+  const minimumContext = Math.min(8, visibleWidth(task)) + visibleWidth(suffix);
+  let tag = view.name ? ` (${profile})` : "";
+  let nameRoom = width - minimumContext - 2 - visibleWidth(tag);
+  if (nameRoom < 3) { tag = ""; nameRoom = width - minimumContext - 2; }
+  const shortName = truncateToWidth(name, Math.max(1, Math.min(32, nameRoom)), "…");
+  const identity = theme.bold(shortName) + (tag ? theme.fg("dim", tag) : "");
+  const taskRoom = width - visibleWidth(identity) - 2 - visibleWidth(suffix);
+  const text = taskRoom > 0 ? identity + "  " + theme.fg("muted", truncateToWidth(task, taskRoom, "…")) +
+    theme.fg("dim", suffix) : theme.fg("muted", truncateToWidth(`${marker} ${task}`, width, "…"));
+  return spanRow(text, "", width, theme, rule);
 }
 
 /**
@@ -155,8 +121,8 @@ export function renderDetailFields(input: DetailInput, theme: Theme, width: numb
   const blank = (): void => { if (out.length && out[out.length - 1] !== "") out.push(""); };
 
   if (view.description) { field("task", view.description); blank(); }
-  field("run", `${shortId(view.run_id)} · agent ${shortId(view.agent_id)}` +
-    (view.history_ref ? ` · session ${shortId(view.history_ref.session_id)}` : ""));
+  field("run", `${shortId(singleLineText(view.run_id))} · agent ${shortId(singleLineText(view.agent_id))}` +
+    (view.history_ref ? ` · session ${shortId(singleLineText(view.history_ref.session_id))}` : ""));
   const s = view.effective_settings;
   const resolution = s.thinking_resolution === "preset_fixed" ? "preset fixed" :
     s.thinking_resolution === "automatic_mapping" ? `${s.parent_thinking}→${s.thinking} (auto map)` :
@@ -278,29 +244,6 @@ const CHROME_LINES = 2;
 const MIN_VIEWPORT = 3;
 const VIEWPORT_HEIGHT_PCT = 70;
 
-/**
- * Exact sanitized confirmation rows, or undefined when the full hint or the
- * unsliced body cannot fit. Shared by the initial Stop affordance and the
- * confirmation paint so neither can offer a control the other cannot show.
- * Pure: no Owner snapshot and no shortening of identity or task.
- */
-const confirmationLayout = (target: StopTarget, inner: number, chrome: number, rows: number): string[] | undefined => {
-  // NaN comparisons are false, and Infinity would clear the height cap. Reject
-  // both before measuring so a malformed host cannot advertise Stop.
-  if (!Number.isFinite(inner) || !Number.isFinite(chrome) || !Number.isFinite(rows) || inner < 1 || chrome < 1 || rows < 1)
-    return undefined;
-  if (visibleWidth(CONFIRM_HINT) > chrome) return undefined;
-  const body = ["Stop this task? Cancellation is best-effort.",
-    `Agent: ${confirmationText(target.name || target.agent_id)} (${confirmationText(target.agent_id)})`,
-    `Run: ${confirmationText(target.run_id)}`, `Task: ${confirmationText(target.description)}`]
-    .flatMap((line) => wrapText(line, inner));
-  // Never infer full visibility from the row count alone: an oversized row
-  // would be clipped by a framed host or rejected by the regular renderer.
-  if (body.length === 0 || body.some((line) => visibleWidth(line) > inner) ||
-      body.length + CHROME_LINES > Math.floor(rows * VIEWPORT_HEIGHT_PCT / 100)) return undefined;
-  return body;
-};
-
 /** Pads a styled row to `columns` display columns; ANSI has no width of its own. */
 const padTo = (line: string, columns: number): string =>
   line + " ".repeat(Math.max(0, columns - visibleWidth(line)));
@@ -316,6 +259,8 @@ export interface PaneMouseEvent {
   x?: number;
   y?: number;
   wheelDelta?: number;
+  /** Consecutive clicks reported by the host's normalized mouse dispatcher. */
+  clickCount?: number;
 }
 export interface DetailPaneOptions {
   tui: PaneTui;
@@ -360,11 +305,8 @@ export class DetailPane {
   /** Width of the last framed paint; the close control's hit area follows it. */
   private paintedWidth = 0;
   private paintedHeight = 0;
-  private stopTarget: StopTarget | undefined;
-  private stopColumns: { from: number; to: number } | undefined;
-  private confirmation: StopTarget | undefined;
-  private confirmPainted = false;
-  private stopPaintDimensions: { columns: number; rows: number } | undefined;
+  private stopPaint: StopPaint | undefined;
+  private confirmation: StopConfirmation | undefined;
   private frame = 0;
   private readonly timer: ReturnType<typeof setInterval>;
 
@@ -423,64 +365,58 @@ export class DetailPane {
 
   /** Hiding/yielding must discard intent as well as stale hit geometry. */
   resetStopInteraction(): void {
-    this.stopTarget = undefined;
-    this.stopColumns = undefined;
+    this.stopPaint = undefined;
     this.confirmation = undefined;
-    this.confirmPainted = false;
-    this.stopPaintDimensions = undefined;
   }
 
-  /** The pane knows its last paint and terminal dimensions, not whether an
-   * arbitrary host has clipped/occluded it. Never reuse that paint after resize. */
-  private retireResizedStopPaint(): void {
-    const painted = this.stopPaintDimensions;
+  /** Never reuse geometry after resize or an intent after its monotonic expiry.
+   * Input checks this too: a delayed repaint cannot extend confirmation. */
+  private retireStopPaint(width?: number): void {
+    const painted = this.stopPaint?.dimensions ?? this.confirmation?.dimensions;
     const terminal = this.options.tui.terminal;
-    if (painted && (painted.columns !== terminal.columns || painted.rows !== terminal.rows))
-      this.resetStopInteraction();
+    if ((this.confirmation && performance.now() >= this.confirmation.expiresAt) ||
+        (painted && (painted.columns !== terminal.columns || painted.rows !== terminal.rows ||
+          (width !== undefined && painted.width !== width)))) this.resetStopInteraction();
   }
 
-  /** Action-time validation, independent of the render-time affordance. Never
-   * fall back to another Agent or a replacement task. */
+  /** Actions get fresh authority; rendering reuses its one captured snapshot. */
   private validStop(target: StopTarget): boolean {
     const entry = this.options.snapshot().find((entry) => entry.agent_id === target.agent_id);
-    const view = entry?.input.view;
-    return this.selected === target.agent_id && !!view && view.agent_id === target.agent_id &&
-      view.owner_id === target.owner_id && view.generation === target.generation &&
-      view.run_id === target.run_id && stoppable(view);
+    return sameStop(target, entry?.input.view, this.selected);
   }
 
   private requestStop(): void {
-    const target = this.stopTarget;
-    if (!target || !this.stopColumns || !this.options.onStop || !this.validStop(target)) {
+    const paint = this.stopPaint;
+    if (!paint || paint.action.kind !== "stop" || !this.options.onStop || !this.validStop(paint.target)) {
       this.resetStopInteraction();
       return;
     }
-    const dimensions = this.stopPaintDimensions;
     this.resetStopInteraction();
-    this.confirmation = target;
-    this.stopPaintDimensions = dimensions;
+    this.confirmation = { target: paint.target, dimensions: paint.dimensions,
+      expiresAt: performance.now() + CONFIRM_LIFETIME_MS };
     this.options.tui.requestRender();
   }
 
   private confirmStop(): void {
-    const target = this.confirmation;
-    if (!target || !this.confirmPainted || !this.options.onStop) return;
-    const valid = this.validStop(target);
+    const confirmation = this.confirmation, paint = this.stopPaint;
+    if (!confirmation || !paint || paint.action.kind !== "confirm" ||
+        paint.target !== confirmation.target || !this.options.onStop) return;
+    const valid = performance.now() < confirmation.expiresAt && this.validStop(confirmation.target);
     // Consume intent before invoking a host callback, including a throwing one.
     this.resetStopInteraction();
-    if (valid) this.options.onStop(target.run_id);
+    if (valid) this.options.onStop(confirmation.target.run_id);
     this.options.tui.requestRender();
   }
 
   handleInput(data: string): void {
     if (this.closed) return;
     if (matchesKey(data, "ctrl+s")) {
-      this.retireResizedStopPaint();
+      this.retireStopPaint();
       this.confirmStop();
       return;
     }
     if (matchesKey(data, "s") || matchesKey(data, "shift+s")) {
-      this.retireResizedStopPaint();
+      this.retireStopPaint();
       if (!this.confirmation) this.requestStop();
       return;
     }
@@ -506,15 +442,20 @@ export class DetailPane {
     // for "already at the end", silently turning the follow back on.
     if (this.painted === 0) return;
     const { viewportHeight, maxScroll } = this.bounds(this.painted);
-    // Home and End state an intent about the tail; the relative keys infer one.
-    if (matchesKey(data, "home")) { this.scrollOffset = 0; this.followTail = false; return; }
-    if (matchesKey(data, "end")) { this.scrollOffset = maxScroll; this.followTail = true; return; }
-    if (matchesKey(data, "up") || matchesKey(data, "k")) this.scrollOffset = Math.max(0, this.scrollOffset - 1);
-    else if (matchesKey(data, "down") || matchesKey(data, "j")) this.scrollOffset = Math.min(maxScroll, this.scrollOffset + 1);
-    else if (matchesKey(data, "pageUp") || matchesKey(data, "shift+up")) this.scrollOffset = Math.max(0, this.scrollOffset - viewportHeight);
-    else if (matchesKey(data, "pageDown") || matchesKey(data, "shift+down")) this.scrollOffset = Math.min(maxScroll, this.scrollOffset + viewportHeight);
-    else return;
-    this.followTail = this.scrollOffset >= maxScroll;
+    // Deliberate reading/navigation ends a pending cancellation decision;
+    // background transcript growth does not. Home/End explicitly set follow.
+    if (matchesKey(data, "home")) { this.scrollOffset = 0; this.followTail = false; }
+    else if (matchesKey(data, "end")) { this.scrollOffset = maxScroll; this.followTail = true; }
+    else {
+      if (matchesKey(data, "up") || matchesKey(data, "k")) this.scrollOffset = Math.max(0, this.scrollOffset - 1);
+      else if (matchesKey(data, "down") || matchesKey(data, "j")) this.scrollOffset = Math.min(maxScroll, this.scrollOffset + 1);
+      else if (matchesKey(data, "pageUp") || matchesKey(data, "shift+up")) this.scrollOffset = Math.max(0, this.scrollOffset - viewportHeight);
+      else if (matchesKey(data, "pageDown") || matchesKey(data, "shift+down")) this.scrollOffset = Math.min(maxScroll, this.scrollOffset + viewportHeight);
+      else return;
+      this.followTail = this.scrollOffset >= maxScroll;
+    }
+    this.resetStopInteraction();
+    this.options.tui.requestRender();
   }
 
   /**
@@ -526,11 +467,17 @@ export class DetailPane {
    */
   handleMouse(event: PaneMouseEvent): { handled: boolean } | undefined {
     if (this.closed) return undefined;
-    this.retireResizedStopPaint();
-    if (event.type === "click" && event.button === "left" && event.y === this.paintedHeight - 1 &&
-        event.x !== undefined && this.stopColumns && event.x >= this.stopColumns.from && event.x < this.stopColumns.to) {
-      if (this.confirmation) this.confirmStop();
-      else this.requestStop();
+    this.retireStopPaint();
+    const action = this.stopPaint?.action;
+    if ((event.type === "press" || event.type === "click") && event.button === "left" && event.y === this.paintedHeight - 1 &&
+        event.x !== undefined && action && event.x >= action.from && event.x < action.to) {
+      // Claim button presses so the SDK counts clicks by component/position,
+      // not by text-selection words that change when the label is repainted.
+      // Presses and subsequent clicks in one multi-click gesture never confirm.
+      if (event.type === "click" && (event.clickCount ?? 1) === 1) {
+        if (this.confirmation) this.confirmStop();
+        else this.requestStop();
+      }
       return { handled: true };
     }
     if (this.options.frame && !this.closed && event.x !== undefined && event.y !== undefined &&
@@ -541,6 +488,7 @@ export class DetailPane {
       return { handled: true };
     }
     if (event.type !== "wheel" || !event.wheelDelta || this.painted === 0) return undefined;
+    this.resetStopInteraction();
     const { maxScroll } = this.bounds(this.painted);
     this.scrollOffset = Math.max(0, Math.min(maxScroll, this.scrollOffset + event.wheelDelta));
     // Same rule as the keys: reaching the end resumes following the live tail.
@@ -550,12 +498,10 @@ export class DetailPane {
   }
 
   render(width: number): string[] {
-    this.retireResizedStopPaint();
-    this.stopTarget = undefined;
-    this.stopColumns = undefined;
-    this.confirmPainted = false;
+    this.retireStopPaint(width);
+    this.stopPaint = undefined;
     this.paintedHeight = 0;
-    if (this.closed || width < 12) { this.resetStopInteraction(); return []; }
+    if (this.closed || !Number.isFinite(width) || width < 12) { this.resetStopInteraction(); return []; }
     // Floating, the two side columns come out of the body's width.
     const inner = this.options.frame ? width - 2 : width;
     if (inner < 10) { this.resetStopInteraction(); return []; }
@@ -571,39 +517,24 @@ export class DetailPane {
     if (!entry) {
       this.resetStopInteraction();
       this.painted = 0; // No visible body for keys/wheel to scroll against.
+      this.paintedHeight = CHROME_LINES + 1;
       return this.dress(this.options.theme.fg("dim", "harness"),
         [truncateToWidth(this.options.theme.fg("dim", "No agents are available to inspect."), inner)],
-        this.footer(chrome, 0, 0, 0, 0), width, inner);
+        this.footer(chrome, 0, 0, 0, 0, undefined, false, false).text, width, inner);
     }
-    if (this.confirmation) {
-      const target = this.confirmation;
-      // Same pure layout as the initial affordance. validStop remains the
-      // action/render identity recheck and is the only extra snapshot here.
-      const body = confirmationLayout(target, inner, chrome, this.options.tui.terminal.rows);
-      if (body && this.validStop(target)) {
-        this.painted = 0;
-        this.confirmPainted = true;
-        const from = this.options.frame ? 3 : 0;
-        this.stopColumns = { from, to: from + visibleWidth(CONFIRM_LABEL) };
-        return this.dress(truncateToWidth(this.options.theme.fg("warning", "Confirm stop"), titleWidth), body,
-          this.options.theme.fg("warning", CONFIRM_HINT), width, inner);
-      }
-      this.resetStopInteraction();
-    }
-    if (this.options.onStop && stoppable(entry.input.view)) {
-      const { owner_id, generation, agent_id, run_id, name, description } = entry.input.view;
-      const target = { owner_id, generation, agent_id, run_id, name, description };
-      // Offer the label only when this exact body and hint fit. Do not re-read
-      // the Owner here; request/confirm still validate through validStop.
-      if (confirmationLayout(target, inner, chrome, this.options.tui.terminal.rows)) this.stopTarget = target;
-    }
+    const view = entry.input.view;
+    if (this.confirmation && !sameStop(this.confirmation.target, view, this.selected)) this.resetStopInteraction();
+    const { owner_id, generation, agent_id, run_id } = view;
+    const target = this.confirmation?.target ?? { owner_id, generation, agent_id, run_id };
+    // Confirmation changes only the footer action. Keep the same selected Run,
+    // title, transcript and scroll position instead of replacing the pane.
     // Fields first, then a rule, then the transcript Pi's own components render.
     const fields = renderDetailFields(entry.input, this.options.theme, inner);
     const rows = this.options.transcript(entry.agent_id);
     const transcript = rows?.lineCount(inner) ?? 0;
     const total = fields.length + 1 + transcript;
     this.painted = total;
-    const { viewportHeight, maxScroll } = this.bounds(total);
+    const { viewportHeight, maxScroll, fits } = this.bounds(total);
     // A live transcript grows under the reader; only follow when they are at the end.
     // Clamped, not merely read: a body that SHRANK -- compaction, a resize, an
     // Agent with a shorter transcript -- would otherwise leave the offset above
@@ -612,9 +543,17 @@ export class DetailPane {
     this.scrollOffset = Math.min(this.scrollOffset, maxScroll);
     if (this.followTail) this.scrollOffset = maxScroll;
     const start = this.scrollOffset;
+    const footer = this.footer(chrome, index + 1, entries.length, start + viewportHeight, total, view,
+      fits && Number.isFinite(this.options.tui.terminal.columns) && this.options.tui.terminal.columns > 0 &&
+        !!this.options.onStop && stoppable(view), !!this.confirmation);
+    this.paintedHeight = viewportHeight + CHROME_LINES;
+    // Geometry is published once for this frame; formatting has no interaction
+    // side effects. A hidden/unrenderable control cannot remain armed.
+    if (footer.action) this.stopPaint = { target, action: footer.action,
+      dimensions: { columns: this.options.tui.terminal.columns, rows: this.options.tui.terminal.rows, width } };
+    else this.resetStopInteraction();
     return this.dress(renderDetailTitle(entry.input, this.frame, this.options.theme, titleWidth, !!this.options.frame),
-      this.window(fields, rows, inner, start, viewportHeight),
-      this.footer(chrome, index + 1, entries.length, start + viewportHeight, total, entry.input.view), width, inner);
+      this.window(fields, rows, inner, start, viewportHeight), footer.text, width, inner);
   }
 
   invalidate(): void { this.resetStopInteraction(); }
@@ -644,7 +583,7 @@ export class DetailPane {
       return out;
     }
     const from = Math.max(0, start - fields.length - 1);
-    out.push(...rows.slice(width, from, remaining).map((row) => truncateToWidth(row, width)));
+    out.push(...rows.slice(width, from, remaining).slice(0, remaining).map((row) => truncateToWidth(row, width)));
     while (out.length < height) out.push("");
     return out;
   }
@@ -656,13 +595,6 @@ export class DetailPane {
    * would show that much less transcript.
    */
   private dress(title: string, body: string[], footer: string, width: number, inner: number): string[] {
-    this.paintedHeight = body.length + CHROME_LINES;
-    if (this.paintedHeight > Math.floor(this.options.tui.terminal.rows * VIEWPORT_HEIGHT_PCT / 100))
-      this.resetStopInteraction();
-    if (this.stopColumns && (this.stopTarget || this.confirmPainted)) {
-      const { columns, rows } = this.options.tui.terminal;
-      this.stopPaintDimensions = { columns, rows };
-    }
     if (!this.options.frame) return [truncateToWidth(title, width), ...body, footer];
     const th = this.options.theme;
     const side = popoverSide(th);
@@ -674,26 +606,34 @@ export class DetailPane {
   /** The one place a row count becomes a viewport, so `render` and `handleInput`
    * cannot disagree about how far the pane scrolls. Content-sized and capped at
    * a share of the terminal, never a fixed reservation of blank rows. */
-  private bounds(total: number): { viewportHeight: number; maxScroll: number } {
-    const cap = Math.floor((this.options.tui.terminal.rows * VIEWPORT_HEIGHT_PCT) / 100) - CHROME_LINES;
-    const viewportHeight = Math.max(MIN_VIEWPORT, Math.min(total, cap));
-    return { viewportHeight, maxScroll: Math.max(0, total - viewportHeight) };
+  private bounds(total: number): { viewportHeight: number; maxScroll: number; fits: boolean } {
+    const rows = this.options.tui.terminal.rows;
+    const budget = Number.isFinite(rows) ? Math.max(0, Math.floor(rows * VIEWPORT_HEIGHT_PCT / 100)) : 0;
+    const viewportHeight = Math.max(MIN_VIEWPORT, Math.min(total, Math.max(0, budget - CHROME_LINES)));
+    return { viewportHeight, maxScroll: Math.max(0, total - viewportHeight), fits: viewportHeight + CHROME_LINES <= budget };
   }
-  private footer(width: number, position: number, count: number, shown: number, total: number, view?: RunView): string {
+
+  /** Pure chrome layout. Only render publishes its optional painted action. */
+  private footer(width: number, position: number, count: number, shown: number, total: number,
+    view: RunView | undefined, available: boolean, confirming: boolean): FooterFrame {
     const th = this.options.theme;
     const counts = th.fg("dim", count ? `${position}/${count} agents · ${Math.min(shown, total)}/${total} lines` : "no agents");
-    const status = view ? renderDetailStatus(view, this.frame, th, width) : undefined;
-    // Counters yield only after the confirmation layout has already accepted Stop.
-    const reserved = this.stopTarget ? visibleWidth(STOP_LABEL) + 1 : 0;
+    const confirmRoom = width - visibleWidth(CONFIRM_HINT) - 1;
+    const canStop = available && view && visibleWidth(renderDetailStatus(view, this.frame, th, confirmRoom)) <= confirmRoom;
+    const action = canStop ? (confirming ? CONFIRM_LABEL : STOP_LABEL) : "";
+    const required = action && confirming ? CONFIRM_HINT : action;
+    const reserved = required ? visibleWidth(required) + 1 : 0;
+    const status = view ? renderDetailStatus(view, this.frame, th, width - reserved) : undefined;
     const left = status === undefined ? counts : visibleWidth(status) + 3 + visibleWidth(counts) + reserved > width ? status :
       `${status}${th.fg("dim", " · ")}${counts}`;
-    const navigation = ["←→ agent · ↑↓ scroll · Esc close", "←→ · ↑↓ · Esc", "Esc"];
-    const choices = this.stopTarget ? [...navigation.map((text) => `${STOP_LABEL} · ${text}`), STOP_LABEL, "Esc", ""] : [...navigation, ""];
+    const navigation = confirming && action ? [CONFIRM_HELP] : ["←→ agent · ↑↓ scroll · Esc close", "←→ · ↑↓ · Esc", "Esc"];
+    const choices = action ? [...navigation.map((text) => `${text} · ${action}`), ...(confirming ? [] : [action]), ""] : [...navigation, ""];
     const hints = choices.find((text) => visibleWidth(left) + 1 + visibleWidth(text) <= width) ?? "";
-    if (hints.startsWith(STOP_LABEL)) {
-      const from = (this.options.frame ? 3 : 0) + width - visibleWidth(hints);
-      this.stopColumns = { from, to: from + visibleWidth(STOP_LABEL) };
-    } else this.stopTarget = undefined;
-    return spanRow(left, th.fg("dim", hints), width, th, !!this.options.frame);
+    const painted = !!action && hints.endsWith(action);
+    const right = painted ? th.fg("dim", hints.slice(0, -action.length)) +
+      (confirming ? th.bold(th.fg("warning", action)) : th.fg("dim", action)) : th.fg("dim", hints);
+    const from = (this.options.frame ? 3 : 0) + width - visibleWidth(action);
+    return { text: spanRow(left, right, width, th, !!this.options.frame),
+      ...(painted ? { action: { kind: confirming ? "confirm" : "stop", from, to: from + visibleWidth(action) } } : {}) };
   }
 }

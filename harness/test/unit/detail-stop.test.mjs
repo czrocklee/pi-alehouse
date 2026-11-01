@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createEventBus, initTheme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
-import { DetailPane, wrapText } from "../../dist/ui/agent-detail.js";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { DetailPane, renderDetailFields, renderDetailTitle, wrapText } from "../../dist/ui/agent-detail.js";
 import { HarnessWidget } from "../../dist/ui/agent-widget.js";
 import { PanelCoordinator } from "../../dist/ui/panel-coordinator.js";
 import { ended, fixture, settings, task, until } from "../support/controller-fixture.mjs";
@@ -12,6 +12,12 @@ const theme = { fg: (_color, text) => text, bold: (text) => text };
 const live = { active_tools: [], tool_uses: 0, preview: "" };
 // Raw Ctrl+S works without Kitty; plain CR/LF must never substitute for it.
 const CONFIRM = "\x13";
+const CONFIRM_HINT = "best-effort · Ctrl+S · Esc cancel · [Confirm stop]";
+function monotonicClock(t, initial = 1000) {
+  let now = initial;
+  t.mock.method(performance, "now", () => now);
+  return { advance: (ms) => { now += ms; } };
+}
 const accepted = { result: "cancel_requested", already_stopping: false };
 const view = (agent_id = "a", extra = {}) => ({
   owner_id: "owner", generation: "generation", agent_id, run_id: `run-${agent_id}`, name: agent_id,
@@ -21,28 +27,45 @@ const view = (agent_id = "a", extra = {}) => ({
   turns: 1, max_turns: 8, cleanup_errors: [], discarded_inputs: [], ...extra,
 });
 const entry = (v) => ({ agent_id: v.agent_id, input: { view: v, live } });
-function paneFixture(t, { frame = false, onStop, views = [view()] } = {}) {
-  let closes = 0;
+function paneFixture(t, { frame = false, onStop, views = [view()], transcript = () => undefined, paneTheme = theme } = {}) {
+  let closes = 0, snapshots = 0;
   const terminal = { columns: 120, rows: 40 };
   const pane = new DetailPane({
-    tui: { terminal, requestRender() {} }, theme, frame,
-    initial: views[0]?.agent_id ?? "a", snapshot: () => views.map(entry), transcript: () => undefined,
+    tui: { terminal, requestRender() {} }, theme: paneTheme, frame,
+    initial: views[0]?.agent_id ?? "a", snapshot: () => { snapshots++; return views.map(entry); }, transcript,
     done: () => { closes++; }, onStop,
   });
   t.after(() => pane.dispose());
-  return { pane, views, terminal, get closes() { return closes; } };
+  return { pane, views, terminal, frame, get closes() { return closes; }, get snapshots() { return snapshots; } };
 }
-function clickLabel(pane, lines, label, offset = 0) {
+function clickLabel(pane, lines, label, offset = 0, clickCount) {
   const footer = lines.at(-1), at = footer.indexOf(label);
   assert(at >= 0, `expected painted ${label}`);
   return pane.handleMouse({ type: "click", button: "left",
-    x: visibleWidth(footer.slice(0, at)) + offset, y: lines.length - 1 });
+    x: visibleWidth(footer.slice(0, at)) + offset, y: lines.length - 1,
+    ...(clickCount === undefined ? {} : { clickCount }) });
+}
+function assertInlineConfirmation(before, after) {
+  assert.equal(after.length, before.length, "arming does not change pane height");
+  assert.deepEqual(after.slice(0, -1), before.slice(0, -1), "title, body and scroll window stay in place");
+  assert(stripTerminalSequences(after.at(-1)).includes(CONFIRM_HINT), "the complete best-effort and cancellation hint is painted");
+  assert.doesNotMatch(after.at(-1), /\[S Stop\]/);
+}
+function assertRightmostLabel(lines, label, width, frame) {
+  assert(lines.every((line) => visibleWidth(line) <= width));
+  const footer = stripTerminalSequences(lines.at(-1)), at = footer.indexOf(label);
+  assert(at >= 0, `expected painted ${label}`);
+  assert.equal(visibleWidth(footer.slice(0, at)) + visibleWidth(label), width - (frame ? 3 : 0),
+    "action ends at the right edge of the footer inlay");
+  assert.equal(footer.slice(at + label.length), frame ? " ─╯" : "", "only frame chrome follows the action");
+  assert.match(footer.slice(0, at), /\b(?:run(?:ning)?|queued|finish(?:ing)?)\b/, "live status remains before the action");
 }
 function arm(pane, width = 120, key = "s") {
-  assert.match(pane.render(width).at(-1), /\[S Stop\]/);
+  const before = pane.render(width);
+  assert.match(before.at(-1), /\[S Stop\]/);
   pane.handleInput(key);
   const lines = pane.render(width);
-  assert.match(lines.at(-1), /\[Confirm stop\].*Ctrl\+S.*Esc back/);
+  assertInlineConfirmation(before, lines);
   return lines;
 }
 
@@ -54,10 +77,12 @@ for (const frame of [false, true]) for (const key of ["s", "S"]) {
     } });
     h.pane.handleInput(key); h.pane.handleInput(CONFIRM);
     assert.deepEqual(stopped, [], "before paint there is no displayed target");
-    h.pane.render(120); h.pane.handleInput(key); h.pane.handleInput(CONFIRM);
+    const before = h.pane.render(120);
+    h.pane.handleInput(key); h.pane.handleInput(CONFIRM);
     assert.deepEqual(stopped, [], "unpainted confirmation is not actionable");
-    const lines = h.pane.render(120), text = lines.join("\n");
-    assert.match(text, /Agent: a \(a\)/); assert.match(text, /Run: run-a/); assert.match(text, /Task: Stop fixture/);
+    const lines = h.pane.render(120);
+    assertInlineConfirmation(before, lines);
+    assertRightmostLabel(lines, "[Confirm stop]", 120, frame);
     for (const input of ["s", "S", "\r", "\n", "\x1b[13;5u", "sure", "please"]) h.pane.handleInput(input);
     assert.deepEqual(stopped, [], "printing and Enter never execute Stop");
     h.pane.handleInput("\x1b");
@@ -91,24 +116,86 @@ for (const frame of [false, true]) for (const word of ["sure", "please", "Sure",
 for (const frame of [false, true]) test(`Stop and confirm click geometry follows painting (frame=${frame})`, (t) => {
   const stopped = [];
   const h = paneFixture(t, { frame, onStop: (id) => stopped.push(id) });
-  for (const width of [120, 80, 61, 46]) {
-    for (const offset of [0, "[S Stop]".length - 1]) {
+  const minimum = frame ? 62 : 56;
+  const widths = [...Array.from({ length: 121 - minimum }, (_, i) => minimum + i), 160, 240];
+  for (const width of widths) {
+    for (const edge of ["first", "last"]) {
       const lines = h.pane.render(width), before = stopped.length;
-      assert(lines.every((line) => visibleWidth(line) <= width));
+      assertRightmostLabel(lines, "[S Stop]", width, frame);
       const footer = lines.at(-1), x = visibleWidth(footer.slice(0, footer.indexOf("[S Stop]"))), y = lines.length - 1;
       assert.equal(h.pane.handleMouse({ type: "click", button: "right", x, y }), undefined);
       assert.equal(h.pane.handleMouse({ type: "click", button: "left", x, y: y - 1 }), undefined);
-      assert.deepEqual(clickLabel(h.pane, lines, "[S Stop]", offset), { handled: true });
-      assert.equal(stopped.length, before, "the first click only opens intent");
+      for (const offset of [-1, "[S Stop]".length]) {
+        assert.equal(clickLabel(h.pane, lines, "[S Stop]", offset), undefined);
+        assert.doesNotMatch(h.pane.render(width).at(-1), /\[Confirm stop\]/, "adjacent columns do not arm intent");
+      }
+      if (width >= 80) assert.match(footer, /Esc.*\[S Stop\]/, "navigation precedes Stop");
+      assert.deepEqual(clickLabel(h.pane, lines, "[S Stop]", edge === "first" ? 0 : "[S Stop]".length - 1), { handled: true });
+      clickLabel(h.pane, lines, "[S Stop]"); h.pane.handleInput(CONFIRM);
+      assert.equal(stopped.length, before, "first click and unpainted input only arm intent");
       const confirmation = h.pane.render(width);
-      assert(confirmation.every((line) => visibleWidth(line) <= width));
-      assert.deepEqual(clickLabel(h.pane, confirmation, "[Confirm stop]", offset ? "[Confirm stop]".length - 1 : 0), { handled: true });
-      assert.equal(stopped.length, before + 1);
+      assertInlineConfirmation(lines, confirmation);
+      assertRightmostLabel(confirmation, "[Confirm stop]", width, frame);
+      const confirmX = width - (frame ? 3 : 0) - "[Confirm stop]".length;
+      assert.equal(h.pane.handleMouse({ type: "click", button: "right", x: confirmX, y }), undefined);
+      assert.equal(h.pane.handleMouse({ type: "click", button: "left", x: confirmX, y: y - 1 }), undefined);
+      for (const offset of [-1, "[Confirm stop]".length]) {
+        assert.equal(clickLabel(h.pane, confirmation, "[Confirm stop]", offset), undefined);
+      }
+      assert.equal(clickLabel(h.pane, confirmation, "Ctrl+S"), undefined, "the keyboard hint is not a second click target");
+      assert.equal(stopped.length, before);
+      assert.deepEqual(clickLabel(h.pane, confirmation, "[Confirm stop]", edge === "first" ? 0 : "[Confirm stop]".length - 1), { handled: true });
+      h.pane.handleInput(CONFIRM); clickLabel(h.pane, confirmation, "[Confirm stop]");
+      assert.equal(stopped.length, before + 1, "consumed confirmation cannot execute twice without repaint");
       assert.equal(stopped.at(-1), "run-a");
     }
     assert.equal(h.closes, 0);
   }
 });
+
+for (const frame of [false, true]) for (const position of ["tail", "scrolled"]) for (const pointer of [false, true]) {
+  test(`inline intent preserves transcript, scroll and height (frame=${frame}, position=${position}, pointer=${pointer})`, (t) => {
+    let count = 100;
+    const rows = { lineCount: () => count, slice: (_width, start, take) =>
+      Array.from({ length: Math.max(0, Math.min(take, count - start)) }, (_, i) => `transcript-${start + i}`) };
+    const h = paneFixture(t, { frame, transcript: () => rows, onStop: () => assert.fail("Esc is not confirmation") });
+    const tail = h.pane.render(120);
+    assert(tail.at(-2).includes("transcript-99"), "normal pane follows the transcript tail");
+    if (position === "scrolled") h.pane.handleInput("\x1b[5~");
+    const before = h.pane.render(120);
+    if (position === "scrolled") assert(!before.some((line) => line.includes("transcript-99")));
+    if (pointer) clickLabel(h.pane, before, "[S Stop]");
+    else h.pane.handleInput("s");
+    const confirmation = h.pane.render(120);
+    assertInlineConfirmation(before, confirmation);
+    assertRightmostLabel(confirmation, "[Confirm stop]", 120, frame);
+    for (const input of ["s", "S", "\r", "\n", "sure", "please"]) h.pane.handleInput(input);
+    assertInlineConfirmation(before, h.pane.render(120));
+    count++;
+    const grown = h.pane.render(120);
+    assert.equal(grown.length, before.length);
+    assert.equal(grown[0], before[0]);
+    if (position === "tail") assert(grown.at(-2).includes("transcript-100"), "confirmation keeps following live output");
+    else assert.deepEqual(grown.slice(0, -1), before.slice(0, -1), "growth cannot move a scrolled confirmation");
+    h.pane.handleInput("\x1b[A");
+    const scrolled = h.pane.render(120);
+    assert.equal(scrolled.length, before.length);
+    assert.equal(scrolled[0], before[0]);
+    assert.notDeepEqual(scrolled.slice(1, -1), grown.slice(1, -1), "scrolling still moves the normal transcript window");
+    assertRightmostLabel(scrolled, "[S Stop]", 120, frame);
+    h.pane.handleInput(CONFIRM);
+    const rearmed = arm(h.pane);
+    assert.deepEqual(rearmed.slice(0, -1), scrolled.slice(0, -1));
+    h.pane.handleInput("\x1b");
+    assert.equal(h.closes, 0);
+    const cancelled = h.pane.render(120);
+    assert.deepEqual(cancelled.slice(0, -1), scrolled.slice(0, -1), "cancel preserves the new scroll window too");
+    assertRightmostLabel(cancelled, "[S Stop]", 120, frame);
+    h.pane.handleInput(CONFIRM);
+    h.pane.handleInput("\x1b");
+    assert.equal(h.closes, 1, "second Esc closes only after cancelling intent");
+  });
+}
 
 for (const frame of [false, true]) for (const width of [8, 14, 24, 32]) {
   test(`narrow/unrenderable confirmation drops intent (frame=${frame}, width=${width})`, (t) => {
@@ -164,6 +251,26 @@ for (const change of ["columns", "rows"]) test(`resize followed by repaint alone
   h.pane.render(120); h.pane.handleInput(CONFIRM);
 });
 
+for (const frame of [false, true]) for (const width of [80, 121]) for (const pointer of [false, true]) {
+  test(`component width alone retires inline confirmation (frame=${frame}, width=${width}, pointer=${pointer})`, (t) => {
+    const stopped = [];
+    const h = paneFixture(t, { frame, onStop: (id) => stopped.push(id) });
+    const old = arm(h.pane);
+    const repainted = h.pane.render(width);
+    assert.deepEqual(h.terminal, { columns: 120, rows: 40 }, "terminal dimensions did not change");
+    assert.doesNotMatch(repainted.at(-1), /\[Confirm stop\]/);
+    assertRightmostLabel(repainted, "[S Stop]", width, frame);
+    if (pointer) clickLabel(h.pane, old, "[Confirm stop]");
+    else h.pane.handleInput(CONFIRM);
+    assert.deepEqual(stopped, [], "old confirmation cannot execute against changed paint width");
+    h.pane.render(120); h.pane.handleInput(CONFIRM);
+    assert.doesNotMatch(h.pane.render(120).at(-1), /\[Confirm stop\]/, "restoring paint width cannot restore intent");
+    assert.deepEqual(stopped, []);
+    arm(h.pane, width); h.pane.handleInput(CONFIRM);
+    assert.deepEqual(stopped, ["run-a"]);
+  });
+}
+
 for (const change of ["columns", "rows"]) test(`Esc still backs out before resized confirmation repaints (${change})`, (t) => {
   const h = paneFixture(t, { onStop: () => assert.fail("Esc is never Stop") });
   arm(h.pane); h.terminal[change] = 4;
@@ -178,35 +285,49 @@ for (const { label, prefix, suffix, plainPrefix = "", plainSuffix = "" } of [
   { label: "CSI erase/cursor", prefix: "\x1b[2J\x1b[10;10H", suffix: "\x1b[1G\x1b[K" },
   { label: "OSC8", prefix: "\x1b]8;;https://example.invalid/hidden\x1b\\", suffix: "\x1b]8;;\x1b\\" },
   { label: "OSC title", prefix: "\x1b]0;spoof title\x07", suffix: "\x1b]2;another title\x1b\\" },
-  { label: "raw C0/DEL/C1", prefix: "\x00\x08\t\r\n\x7f\x85\x9b", suffix: "\x01\x9f",
-    plainPrefix: "\\x00\\x08\\x09\\x0d\\x0a\\x7f\\x85\\x9b", plainSuffix: "\\x01\\x9f" },
-]) for (const frame of [false, true]) test(`confirmation interpolations are plain terminal text (${label}, frame=${frame})`, (t) => {
+  { label: "raw C0/DEL/C1", prefix: "\x00\x08\x7f\x9b", suffix: "\x01\x9f",
+    plainPrefix: "\\x00\\x08\\x7f\\x9b", plainSuffix: "\\x01\\x9f" },
+]) for (const frame of [false, true]) test(`ordinary and inline identity are plain terminal text (${label}, frame=${frame})`, (t) => {
   const decorate = (text) => prefix + text + suffix;
   const plain = (text) => plainPrefix + text + plainSuffix;
-  const agent_id = decorate("agent");
-  const h = paneFixture(t, { frame, views: [view(agent_id, {
+  const agent_id = decorate("agent"), stopped = [];
+  const original = view(agent_id, {
     name: decorate("name"), run_id: decorate("run"), description: decorate("task"),
-  })], onStop: () => {} });
-  const lines = arm(h.pane);
-  assert(lines.every((line) => !/\p{Cc}/u.test(line)), "no ANSI/OSC/raw controls may reach confirmation output");
-  const body = lines.slice(1, -1).join("\n");
-  assert(body.includes(`Agent: ${plain("name")} (${plain("agent")})`));
-  assert(body.includes(`Run: ${plain("run")}`));
-  assert(body.includes(`Task: ${plain("task")}`));
-  assert(!body.includes("spoof title")); assert(!body.includes("https://example.invalid"));
-  assert(lines.every((line) => visibleWidth(line) <= 120));
+  });
+  const h = paneFixture(t, { frame, views: [original], onStop: (id) => stopped.push(id) });
+  h.terminal.columns = 240;
+  h.pane.render(240); h.pane.handleInput("\x1b[H");
+  const ordinary = h.pane.render(240);
+  assert(ordinary[0].includes(plain("name")), "a roomy ordinary title uses visible sanitized identity");
+  const body = ordinary.slice(1, -1).join("\n");
+  assert(body.includes(plain("task")), "the ordinary task field is sanitized too");
+  if (!plainPrefix) assert(body.includes("run · agent agent"), "terminal protocols are stripped before identity shortening");
+  const confirmation = arm(h.pane, 240);
+  assertInlineConfirmation(ordinary, confirmation);
+  for (const lines of [ordinary, confirmation]) {
+    assert(lines.every((line) => !/\p{Cc}/u.test(line)), "no ANSI/OSC/raw controls may reach the pane");
+    const text = lines.join("\n");
+    assert(!text.includes("spoof title")); assert(!text.includes("another title"));
+    assert(!text.includes("https://example.invalid"));
+    assert(lines.every((line) => visibleWidth(line) <= 240));
+  }
+  h.pane.handleInput(CONFIRM);
+  assert.deepEqual(stopped, [decorate("run")], "sanitized presentation never rewrites the bound original Run");
+  assert.equal(original.agent_id, agent_id); assert.equal(original.run_id, decorate("run"));
 });
 
-for (const field of ["name", "description", "agent_id", "run_id"]) {
-  test(`fit is measured after raw-control escaping (${field})`, (t) => {
-    const h = paneFixture(t, { views: [view("a", { [field]: "\x08".repeat(1000) })],
-      onStop: () => assert.fail("full sanitized identity/task does not fit") });
-    assert.doesNotMatch(h.pane.render(120).at(-1), /\[S Stop\]/, "expanded controls do not fit, so Stop is not offered");
-    h.pane.handleInput("s");
-    assert.doesNotMatch(h.pane.render(120).at(-1), /\[Confirm stop\]/);
-    h.pane.handleInput(CONFIRM);
-  });
-}
+for (const frame of [false, true]) test(`short ordinary Run and Agent controls are visibly escaped (frame=${frame})`, (t) => {
+  const stopped = [];
+  const h = paneFixture(t, { frame, views: [view("\x08agent", {
+    run_id: "\x08run", name: "\x08name", description: "\x08task",
+  })], onStop: (id) => stopped.push(id) });
+  h.pane.render(120); h.pane.handleInput("\x1b[H");
+  const lines = h.pane.render(120), body = lines.slice(1, -1).join("\n");
+  assert(lines[0].includes("\\x08name"));
+  assert(body.includes("\\x08run · agent \\x08agent"));
+  assert(body.includes("\\x08task"));
+  assertStopFits(h, 120, stopped, "\x08run");
+});
 
 test("an unpainted Stop hint disables S, even when the body is renderable", (t) => {
   const h = paneFixture(t, { frame: true, onStop: () => assert.fail("Stop hint is not painted") });
@@ -230,125 +351,366 @@ function assertNoStopAction(h, width) {
   assert(!again.some((line) => line.includes("[S Stop]") || line.includes("[Confirm stop]")));
   h.pane.handleInput(CONFIRM);
 }
-function assertStopFits(h, width, stopped, identity) {
+function assertStopFits(h, width, stopped, run_id = "run-a") {
+  const before = h.pane.render(width);
+  assertRightmostLabel(before, "[S Stop]", width, h.frame);
   const lines = arm(h.pane, width);
-  assert(lines.every((line) => visibleWidth(line) <= width));
-  const text = lines.join("\n");
-  assert.match(text, /\[Confirm stop\].*Ctrl\+S.*Esc back/);
-  assert.match(text, /Stop this task\?/);
-  assert.match(text, /best-effort\./);
-  for (const piece of identity) assert(text.includes(piece), `missing ${piece}`);
-  assert(!lines.some((line) => /\p{Cc}/u.test(line)), "confirmation stays plain text");
+  assertRightmostLabel(lines, "[Confirm stop]", width, h.frame);
+  // pi-tui's truncateToWidth inserts SGR resets around ellipses even with this
+  // plain theme. Permit only those exact title markers, never arbitrary ANSI;
+  // separate title pieces can each be truncated. Body/footer stay control-free.
+  assert(!lines.some((line, row) => /\p{Cc}/u.test(row === 0 ?
+    line.replaceAll("\x1b[0m...\x1b[0m", "...").replaceAll("\x1b[0m…\x1b[0m", "…") : line)),
+  "only SDK title-truncation resets may accompany plain text");
   h.pane.handleInput(CONFIRM);
-  assert.deepEqual(stopped, ["run-a"]);
+  assert.deepEqual(stopped, [run_id]);
 }
 
-// [S Stop] is eight columns and used to appear from width 24. Offer it only when
-// the full confirmation fits: docked hint needs 34, framed chrome is width-6.
-for (const [frame, width] of [[false, 24], [false, 30], [false, 32], [false, 33], [true, 24], [true, 32], [true, 34], [true, 39]]) {
-  test(`unfittable confirmation is not offered (frame=${frame}, width=${width})`, (t) => {
-    const h = paneFixture(t, { frame, onStop: () => assert.fail("hidden Stop is not actionable") });
+// Reserve the full 50-column hint, one separator and compact live status (5).
+// Framed chrome is width-6: running Stop starts at docked 56 / framed 62.
+for (const frame of [false, true]) {
+  const minimum = frame ? 62 : 56;
+  for (const width of [24, 40, 46, 50, minimum - 1]) {
+    test(`unfittable inline hint/status is not offered (frame=${frame}, width=${width})`, (t) => {
+      const h = paneFixture(t, { frame, onStop: () => assert.fail("hidden Stop is not actionable") });
+      assertNoStopAction(h, width);
+    });
+  }
+  for (const width of [minimum, minimum + 1, 80, 120]) {
+    test(`Stop fits the full inline hint and live status (frame=${frame}, width=${width})`, (t) => {
+      const stopped = [];
+      const h = paneFixture(t, { frame, onStop: (id) => stopped.push(id) });
+      assertStopFits(h, width, stopped);
+    });
+  }
+  for (const rows of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    test(`non-finite terminal rows do not advertise Stop (frame=${frame}, rows=${rows})`, (t) => {
+      const h = paneFixture(t, { frame, onStop: () => assert.fail("malformed geometry is not a Stop affordance") });
+      h.terminal.rows = rows;
+      assertNoStopAction(h, 120);
+    });
+  }
+  for (const rows of [6, 7, 8, 9]) test(`normal pane height boundary gates Stop (frame=${frame}, rows=${rows})`, (t) => {
+    const stopped = [];
+    const h = paneFixture(t, { frame, onStop: (id) => stopped.push(id) });
+    h.terminal.rows = rows;
+    if (rows < 8) assertNoStopAction(h, minimum);
+    else {
+      assert.equal(h.pane.render(minimum).length, rows === 8 ? 5 : 6, "normal pane uses its unchanged 70% height cap");
+      assertStopFits(h, minimum, stopped);
+    }
+    assert.deepEqual(stopped, rows < 8 ? [] : ["run-a"]);
+  });
+}
+for (const frame of [false, true]) for (const fits of [false, true]) {
+  const width = (frame ? 65 : 59) - (fits ? 0 : 1);
+  test(`queued compact status also fits alongside confirmation (frame=${frame}, width=${width})`, (t) => {
+    const stopped = [];
+    const h = paneFixture(t, { frame, views: [view("a", { status: "queued" })], onStop: (id) => stopped.push(id) });
+    if (fits) assertStopFits(h, width, stopped);
+    else { assertNoStopAction(h, width); assert.deepEqual(stopped, []); }
+  });
+}
+for (const frame of [false, true]) for (const width of [56, 59, 62, 65, 80, 120]) {
+  test(`real finishing execution offers no Stop at any width (frame=${frame}, width=${width})`, (t) => {
+    const h = paneFixture(t, { frame, views: [view("a", { execution_exited: true, finalization_pending: true })],
+      onStop: () => assert.fail("finishing execution has already exited") });
     assertNoStopAction(h, width);
   });
 }
-for (const [frame, width] of [[false, 34], [true, 40], [false, 80], [true, 80]]) {
-  test(`Stop is offered only when the exact confirmation fits (frame=${frame}, width=${width})`, (t) => {
+
+for (const frame of [false, true]) test(`finishing retires an already armed live Run before repaint (frame=${frame})`, (t) => {
+  const h = paneFixture(t, { frame, onStop: () => assert.fail("execution already exited") });
+  arm(h.pane, 80);
+  Object.assign(h.views[0], { execution_exited: true, finalization_pending: true });
+  h.pane.handleInput(CONFIRM);
+  assertNoStopAction(h, 80);
+});
+
+for (const frame of [false, true]) for (const field of ["name", "description", "agent_id", "run_id"]) {
+  for (const [kind, value] of [["long", "full target ".repeat(500)], ["CJK", "測".repeat(1000)], ["raw-control", "\x08".repeat(1000)]]) {
+    test(`long target text does not disable inline Stop (frame=${frame}, field=${field}, kind=${kind})`, (t) => {
+      const stopped = [], original = view("a", { [field]: value });
+      const h = paneFixture(t, { frame, views: [original], onStop: (id) => stopped.push(id) });
+      h.terminal.rows = 8;
+      const width = frame ? 62 : 56;
+      assert.equal(h.pane.render(width).length, 5);
+      assertStopFits(h, width, stopped, original.run_id);
+      assert.equal(original[field], value, "display sanitizing/clipping does not mutate the bound identity/task");
+    });
+  }
+}
+
+for (const frame of [false, true]) for (const input of [
+  "\x1b[A", "\x1b[B", "k", "j", "\x1b[H", "\x1b[F", "\x1b[5~", "\x1b[6~", "wheel-up", "wheel-down",
+]) test(`deliberate scrolling disarms without changing normal scroll behavior (frame=${frame}, input=${JSON.stringify(input)})`, (t) => {
+  const rows = { lineCount: () => 100, slice: (_width, start, take) =>
+    Array.from({ length: Math.max(0, Math.min(take, 100 - start)) }, (_, i) => `row-${start + i}`) };
+  const options = { frame, transcript: () => rows, onStop: () => assert.fail("scrolling disarmed confirmation") };
+  const armed = paneFixture(t, options), normal = paneFixture(t, options);
+  for (const h of [armed, normal]) { h.pane.render(120); h.pane.handleInput("\x1b[5~"); h.pane.render(120); }
+  arm(armed.pane);
+  for (const h of [armed, normal]) {
+    if (input.startsWith("wheel-")) h.pane.handleMouse({ type: "wheel", wheelDelta: input === "wheel-up" ? -1 : 1 });
+    else h.pane.handleInput(input);
+  }
+  armed.pane.handleInput(CONFIRM);
+  const actual = armed.pane.render(120), expected = normal.pane.render(120);
+  assert.deepEqual(actual, expected, "armed and ordinary panes perform the same scroll, including follow-tail state");
+  assertRightmostLabel(actual, "[S Stop]", 120, frame);
+  armed.pane.handleInput(CONFIRM);
+});
+
+for (const frame of [false, true]) test(`End at the tail still cancels pending intent (frame=${frame})`, (t) => {
+  const h = paneFixture(t, { frame, onStop: () => assert.fail("even a no-motion scroll disarms") });
+  const before = arm(h.pane);
+  h.pane.handleInput("\x1b[F"); h.pane.handleInput(CONFIRM);
+  const after = h.pane.render(120);
+  assert.deepEqual(after.slice(0, -1), before.slice(0, -1));
+  assertRightmostLabel(after, "[S Stop]", 120, frame);
+});
+
+for (const frame of [false, true]) for (const elapsed of [9999, 10000, 10001]) for (const pointer of [false, true]) {
+  test(`monotonic confirmation expiry is exact without repaint (frame=${frame}, elapsed=${elapsed}, pointer=${pointer})`, (t) => {
+    const clock = monotonicClock(t), stopped = [];
+    const h = paneFixture(t, { frame, onStop: (id) => stopped.push(id) });
+    const confirmation = arm(h.pane);
+    clock.advance(elapsed);
+    // Old painted geometry/input is deliberately used without a render.
+    if (pointer) clickLabel(h.pane, confirmation, "[Confirm stop]", "[Confirm stop]".length - 1);
+    else h.pane.handleInput(CONFIRM);
+    assert.deepEqual(stopped, elapsed < 10000 ? ["run-a"] : []);
+    if (elapsed >= 10000) {
+      h.pane.handleInput(CONFIRM);
+      assertRightmostLabel(h.pane.render(120), "[S Stop]", 120, frame);
+      h.pane.handleInput(CONFIRM);
+      assert.deepEqual(stopped, [], "repaint does not restore expired intent");
+      arm(h.pane); h.pane.handleInput(CONFIRM);
+      assert.deepEqual(stopped, ["run-a"], "a freshly painted deliberate interaction is required");
+    }
+  });
+}
+
+for (const frame of [false, true]) for (const event of ["render", "s", "press"]) {
+  test(`expired intent cannot be refreshed by old paint (frame=${frame}, event=${event})`, (t) => {
+    const clock = monotonicClock(t), stopped = [];
+    const h = paneFixture(t, { frame, onStop: (id) => stopped.push(id) });
+    const lines = arm(h.pane);
+    clock.advance(10000);
+    if (event === "render") assertRightmostLabel(h.pane.render(120), "[S Stop]", 120, frame);
+    else if (event === "s") h.pane.handleInput("s");
+    else {
+      const footer = lines.at(-1), x = visibleWidth(footer.slice(0, footer.indexOf("[Confirm stop]")));
+      h.pane.handleMouse({ type: "press", button: "left", x, y: lines.length - 1 });
+    }
+    h.pane.handleInput(CONFIRM);
+    assertRightmostLabel(h.pane.render(120), "[S Stop]", 120, frame);
+    assert.deepEqual(stopped, []);
+  });
+}
+
+for (const frame of [false, true]) test(`unpainted confirmation also expires (frame=${frame})`, (t) => {
+  const clock = monotonicClock(t);
+  const h = paneFixture(t, { frame, onStop: () => assert.fail("unpainted/expired intent is inert") });
+  h.pane.render(120); h.pane.handleInput("s");
+  clock.advance(10000); h.pane.handleInput(CONFIRM);
+  assertRightmostLabel(h.pane.render(120), "[S Stop]", 120, frame);
+});
+
+for (const frame of [false, true]) test(`repeated S and wall-clock changes cannot extend intent (frame=${frame})`, (t) => {
+  const clock = monotonicClock(t), stopped = [];
+  let wall = 0;
+  t.mock.method(Date, "now", () => wall);
+  const h = paneFixture(t, { frame, onStop: (id) => stopped.push(id) });
+  arm(h.pane);
+  wall = 1_000_000_000; clock.advance(9999);
+  h.pane.handleInput("s"); h.pane.handleInput("S");
+  assert(h.pane.render(120).at(-1).includes("[Confirm stop]"), "wall time does not expire monotonic intent early");
+  wall = -1_000_000_000; clock.advance(1);
+  h.pane.handleInput(CONFIRM);
+  assert.deepEqual(stopped, [], "S, repaint and a backward wall clock cannot renew the deadline");
+  assertRightmostLabel(h.pane.render(120), "[S Stop]", 120, frame);
+});
+
+for (const frame of [false, true]) test(`Esc cancels the visible expired intent before repaint (frame=${frame})`, (t) => {
+  const clock = monotonicClock(t);
+  const h = paneFixture(t, { frame, onStop: () => assert.fail("Esc never stops work") });
+  const before = arm(h.pane);
+  clock.advance(10000); h.pane.handleInput("\x1b");
+  assert.equal(h.closes, 0, "first Esc cancels even after the unpainted deadline");
+  const after = h.pane.render(120);
+  assert.deepEqual(after.slice(0, -1), before.slice(0, -1));
+  assertRightmostLabel(after, "[S Stop]", 120, frame);
+  h.pane.handleInput("\x1b"); assert.equal(h.closes, 1);
+});
+
+for (const frame of [false, true]) for (const count of [undefined, 0, 1, 2, 3]) for (const confirming of [false, true]) {
+  test(`button presses and click counts require a single deliberate click (frame=${frame}, count=${count}, confirming=${confirming})`, (t) => {
     const stopped = [];
     const h = paneFixture(t, { frame, onStop: (id) => stopped.push(id) });
-    assertStopFits(h, width, stopped, ["Agent: a (a)", "Run: run-a", "Task: Stop fixture"]);
+    const lines = confirming ? arm(h.pane) : h.pane.render(120);
+    const label = confirming ? "[Confirm stop]" : "[S Stop]";
+    const footer = lines.at(-1), x = visibleWidth(footer.slice(0, footer.indexOf(label))), y = lines.length - 1;
+    assert.deepEqual(h.pane.handleMouse({ type: "press", button: "left", x, y }), { handled: true });
+    assert.deepEqual(stopped, []);
+    assert.deepEqual(clickLabel(h.pane, lines, label, 0, count), { handled: true });
+    const single = count === undefined || count === 1;
+    assert.deepEqual(stopped, confirming && single ? ["run-a"] : []);
+    const repainted = h.pane.render(120);
+    if (!confirming) assert.equal(repainted.at(-1).includes("[Confirm stop]"), single);
+    else if (!single) assert(repainted.at(-1).includes("[Confirm stop]"), "multi-clicks do not consume confirmation either");
   });
 }
-for (const rows of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
-  test(`non-finite terminal rows do not advertise Stop (${rows})`, (t) => {
-    const h = paneFixture(t, { onStop: () => assert.fail("malformed geometry is not a Stop affordance") });
-    h.terminal.rows = rows;
-    assertNoStopAction(h, 120);
+
+for (const frame of [false, true]) test(`Stop is dim while Confirm is warning and bold (frame=${frame})`, (t) => {
+  const colors = [], bold = [];
+  const paneTheme = {
+    fg: (color, text) => { colors.push({ color, text }); return color === "warning" ? `\x1b[33m${text}\x1b[39m` : color === "dim" ? `\x1b[2m${text}\x1b[22m` : text; },
+    bold: (text) => { bold.push(text); return `\x1b[1m${text}\x1b[22m`; },
+  };
+  const h = paneFixture(t, { frame, paneTheme, onStop() {} });
+  h.pane.render(120);
+  assert(colors.some(({ color, text }) => color === "dim" && text.includes("[S Stop]")));
+  assert(!colors.some(({ color, text }) => color === "warning" && text.includes("[S Stop]")));
+  assert(!bold.some((text) => text.includes("[S Stop]")));
+  colors.length = 0; bold.length = 0;
+  const confirmation = arm(h.pane);
+  assert(colors.some(({ color, text }) => color === "warning" && text.includes("[Confirm stop]")));
+  assert(bold.some((text) => text.includes("[Confirm stop]")));
+  assert(stripTerminalSequences(confirmation.at(-1)).includes(CONFIRM_HINT));
+});
+
+for (const frame of [false, true]) for (const width of [frame ? 62 : 56, 80, 120]) {
+  test(`task cue and ordinal survive long nickname, tail and Agent reuse (frame=${frame}, width=${width})`, (t) => {
+    const stopped = [];
+    const original = view("a", { name: "longnickname".repeat(20), description: "Build", task: 17, run_id: "run-old" });
+    const rows = { lineCount: () => 100, slice: (_width, start, take) =>
+      Array.from({ length: Math.max(0, Math.min(take, 100 - start)) }, (_, i) => `history-${start + i}`) };
+    const h = paneFixture(t, { frame, views: [original], transcript: () => rows, onStop: (id) => stopped.push(id) });
+    h.terminal.rows = 8;
+    const before = h.pane.render(width), title = stripTerminalSequences(before[0]);
+    assert(title.includes("Build") && title.includes("#17"), "task and ordinal outrank nickname/profile at the minimum width");
+    assert(before.at(-2).includes("history-99"), "identity fields are scrolled off at the tail");
+    assertInlineConfirmation(before, arm(h.pane, width));
+    Object.assign(original, { description: "Check", task: 18, run_id: "run-new" });
+    h.pane.handleInput(CONFIRM);
+    assert.deepEqual(stopped, [], "old target cannot stop the new Run");
+    const replacement = h.pane.render(width), nextTitle = stripTerminalSequences(replacement[0]);
+    assert(nextTitle.includes("Check") && nextTitle.includes("#18"));
+    assert(!nextTitle.includes("#17"));
+    assert.notEqual(nextTitle, title, "reuse is visible even though name, transcript and scroll position are unchanged");
+    assert.deepEqual(replacement.slice(1, -1), before.slice(1, -1));
+    assertInlineConfirmation(replacement, arm(h.pane, width));
+    h.pane.handleInput(CONFIRM); assert.deepEqual(stopped, ["run-new"]);
   });
 }
-for (const rows of [8, 9]) test(`default confirmation height boundary suppresses before S (rows=${rows})`, (t) => {
+
+for (const task of [undefined, 0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "17"]) {
+  test(`invalid or absent task ordinal retains Run cue (${task})`, () => {
+    const input = { view: view("a", { name: "nickname".repeat(30), description: "Build", task }), live };
+    const title = stripTerminalSequences(renderDetailTitle(input, 0, theme, 56));
+    assert(title.includes("Build") && title.includes("run-a"));
+    assert(!title.includes("#"), "only a valid immutable ordinal is presented as #N");
+  });
+}
+
+test("ordinary and armed renders each take one snapshot, actions still read fresh authority", (t) => {
   const stopped = [];
   const h = paneFixture(t, { onStop: (id) => stopped.push(id) });
-  h.terminal.rows = rows;
-  if (rows < 9) assertNoStopAction(h, 80);
-  else assertStopFits(h, 80, stopped, ["Agent: a (a)", "Run: run-a", "Task: Stop fixture"]);
-  assert.deepEqual(stopped, rows < 9 ? [] : ["run-a"]);
+  h.pane.render(120); assert.equal(h.snapshots, 1);
+  const beforeArm = h.snapshots;
+  h.pane.handleInput("s"); assert(h.snapshots > beforeArm, "arming validates current authority");
+  const beforePaint = h.snapshots;
+  h.pane.render(120); assert.equal(h.snapshots - beforePaint, 1, "armed paint reuses its one snapshot");
+  h.views[0].generation = "replacement-generation";
+  const beforeConfirm = h.snapshots;
+  h.pane.handleInput(CONFIRM);
+  assert(h.snapshots > beforeConfirm, "confirmation gets a new action-time snapshot");
+  assert.deepEqual(stopped, []);
 });
-test("long description on a short terminal suppresses the initial Stop action", (t) => {
-  const h = paneFixture(t, { views: [view("a", { description: "full task ".repeat(500) })],
-    onStop: () => assert.fail("a task that cannot be shown in full is not cancellable from here") });
-  h.terminal.rows = 10;
-  assertNoStopAction(h, 120);
-  h.terminal.rows = 40;
-  assert.doesNotMatch(h.pane.render(120).at(-1), /\[S Stop\]/, "40 rows still cannot hold the wrapped task");
-  h.views[0].description = "Stop fixture";
-  assert.match(h.pane.render(120).at(-1), /\[S Stop\]/, "a later identity that fits is rechecked, not latched off");
-});
-for (const [count, rows, offered] of [[34, 9, true], [35, 9, false], [35, 10, true]]) {
-  test(`CJK identity is not clipped to enable Stop (count=${count}, rows=${rows})`, (t) => {
-    const name = "\u6d4b".repeat(count);
-    const stopped = [];
-    const h = paneFixture(t, { views: [view("a", { name })], onStop: (id) => stopped.push(id) });
-    h.terminal.rows = rows;
-    if (!offered) {
-      assertNoStopAction(h, 80);
-      assert.deepEqual(stopped, []);
-      return;
-    }
-    assertStopFits(h, 80, stopped, [name, "(a)", "Task: Stop fixture"]);
+
+for (const [labelSource, description] of [["explicit multiline", "First\tline\nSecond line"], ["default first nonblank line", "First\tline"]]) {
+  test(`task label whitespace stays readable (${labelSource})`, () => {
+    const input = { view: view("a", { description }), live };
+    const title = renderDetailTitle(input, 0, theme, 120), fields = renderDetailFields(input, theme, 120);
+    assert(!/[\t\r\n]/u.test(title));
+    assert(!title.includes("\\x09") && !title.includes("\\x0a"));
+    const taskRows = fields.slice(0, fields.indexOf(""));
+    assert.equal(taskRows.map((line) => line.replace(/^\s*task\s*/, "")).join(" ").replace(/\s+/g, " ").trim(),
+      description.replace(/\s+/g, " "));
+    assert(fields.every((line) => !/\p{Cc}/u.test(line)));
+    assert.equal(input.view.description, description, "display normalization never rewrites the Run label");
   });
 }
-const combiningTask = "a".repeat(73) + " \u0301 " + "測".repeat(39) + "A測";
 
+const unsafeMetadata = "\x1b[8mx\x1b[0m\x1b]0;spoof\x07\x08";
+const metadataInput = (extra = {}, extraLive = {}) => ({ view: view("a", extra), live: { ...live, ...extraLive } });
+for (const [field, input] of [
+  ["task", metadataInput({ description: unsafeMetadata })],
+  ["run/agent/session", metadataInput({ run_id: unsafeMetadata, agent_id: unsafeMetadata, history_ref: { session_id: unsafeMetadata } })],
+  ["routing", metadataInput({ effective_settings: { ...settings, preset: unsafeMetadata, preset_version: unsafeMetadata, strength: unsafeMetadata } })],
+  ["effort", metadataInput({ effective_settings: { ...settings, thinking: unsafeMetadata, parent_thinking: unsafeMetadata, thinking_resolution: "automatic_mapping" } })],
+  ["model", metadataInput({ effective_settings: { ...settings, model: unsafeMetadata } })],
+  ["cwd", metadataInput({ effective_settings: { ...settings, cwd: unsafeMetadata } })],
+  ["tools", metadataInput({ effective_settings: { ...settings, tools: [unsafeMetadata] } })],
+  ["workspace", metadataInput({ workspace: { cwd: unsafeMetadata, source_cwd: unsafeMetadata, base_commit: unsafeMetadata },
+    workspace_details: { checkout_root: "different" + unsafeMetadata, recovery_manifest: unsafeMetadata } })],
+  ["recovery", metadataInput({ recovery: { state: "checkout_ready", cwd: unsafeMetadata, source_cwd: unsafeMetadata,
+    base_commit: unsafeMetadata, checkout_root: "different" + unsafeMetadata, recovery_manifest: unsafeMetadata } })],
+  ["phase", metadataInput({ phase: unsafeMetadata })],
+  ["activity", metadataInput({ runtime: { activity: unsafeMetadata } })],
+  ["model stop", metadataInput({ model_stop_reason: unsafeMetadata })],
+  ["draft", metadataInput({}, { preview: unsafeMetadata })],
+  ["active tools", metadataInput({}, { active_tools: [{ name: unsafeMetadata, detail: unsafeMetadata }] })],
+  ["asked", metadataInput({ outcome: { question: unsafeMetadata } })],
+  ["error", metadataInput({ outcome: { error: unsafeMetadata } })],
+  ["reason", metadataInput({ outcome: { reason: unsafeMetadata } })],
+  ["dispatch", metadataInput({ dispatch_notes: [unsafeMetadata] })],
+  ["session", metadataInput({ unavailable_reason: unsafeMetadata })],
+  ["owner", metadataInput({ owner_error: unsafeMetadata })],
+  ["history", metadataInput({ history_error: unsafeMetadata })],
+  ["cleanup", metadataInput({ cleanup_errors: [unsafeMetadata] })],
+  ["discarded", metadataInput({ discarded_inputs: [unsafeMetadata] })],
+]) test(`all metadata values are sanitized before field styling/wrapping (${field})`, () => {
+  const fields = renderDetailFields(input, theme, 120);
+  assert(fields.every((line) => !/\p{Cc}/u.test(line)), "no user terminal sequence or raw control reaches any field row");
+  assert(fields.join("").includes("x\\x08"), "safe visible content and explicit unsafe-control escape remain");
+  assert(!fields.join("").includes("spoof"));
+  assert(fields.every((line) => visibleWidth(line) <= 120));
+});
+
+for (const frame of [false, true]) test(`bidi is explicit while script and emoji joiners remain readable (frame=${frame})`, (t) => {
+  const description = "a\u200cb 👩\u200d💻 \u202eRTL\u202c \u2066LTR\u2069";
+  const h = paneFixture(t, { frame, views: [view("a", { description })], onStop() {} });
+  h.pane.render(120); h.pane.handleInput("\x1b[H");
+  const ordinary = h.pane.render(120), text = ordinary.join("\n");
+  assert(!/\p{Bidi_Control}/u.test(text));
+  for (const code of ["202e", "202c", "2066", "2069"]) assert(text.includes(`\\u${code}`));
+  assert(text.includes("a\u200cb") && text.includes("👩\u200d💻"));
+  assertInlineConfirmation(ordinary, arm(h.pane));
+});
+
+test("detail grapheme wrapping preserves complete ZWJ emoji and combining clusters", () => {
+  assert.deepEqual(wrapText("👩\u200d💻👩\u200d💻", 2), ["👩\u200d💻", "👩\u200d💻"]);
+  assert.deepEqual(wrapText("e\u0301e\u0301", 1), ["e\u0301", "e\u0301"]);
+});
+
+const combiningTask = "a".repeat(73) + " \u0301 " + "測".repeat(39) + "A測";
 test("word wrapping rechecks a wide character after a combining-only word break", () => {
   const source = `Task: ${combiningTask}`, lines = wrapText(source, 80);
   assert(lines.every((line) => visibleWidth(line) <= 80), "a word break must not leave an 81-column remainder");
   assert.equal(lines.join("").replace(/ /g, ""), source.replace(/ /g, ""), "wrapping does not drop task characters");
 });
 
-for (const frame of [false, true]) test(`combining-prefix task remains fully visible before confirmation (frame=${frame})`, (t) => {
-  const stopped = [], width = frame ? 82 : 80;
-  const h = paneFixture(t, { frame, views: [view("a", { description: combiningTask })],
-    onStop: (id) => stopped.push(id) });
-  h.terminal.columns = width;
-  const lines = arm(h.pane, width);
-  assert(lines.every((line) => visibleWidth(line) <= width));
-  const body = lines.slice(1, -1).map((line) => frame ? line.slice(1, -1) : line);
-  const start = body.findIndex((line) => line.startsWith("Task: "));
-  assert(start >= 0);
-  assert.equal(body.slice(start).join("").replace(/\s/gu, ""), `Task: ${combiningTask}`.replace(/\s/gu, ""),
-    "the confirmed task is neither clipped nor replaced with an ellipsis");
-  h.pane.handleInput(CONFIRM);
-  assert.deepEqual(stopped, ["run-a"]);
-});
-
-test("ANSI and raw controls are measured after sanitizing before Stop is offered", (t) => {
-  const concealed = `\x1b[8m${"\u6d4b".repeat(10)}\x1b[0m`;
-  const stripped = [];
-  const plain = paneFixture(t, { views: [view("a", { name: concealed, description: "\x1b[31mStop fixture\x1b[0m" })],
-    onStop: (id) => stripped.push(id) });
-  plain.terminal.rows = 9;
-  // CSI is stripped before the fit measurement; the confirmation shows the CJK, not the protocol.
-  assertStopFits(plain, 80, stripped, ["\u6d4b".repeat(10), "Task: Stop fixture"]);
-  const expanded = paneFixture(t, { views: [view("a", { description: "\x08".repeat(19) })],
-    onStop: () => assert.fail("sanitized expansion does not fit") });
-  expanded.terminal.rows = 9;
-  assertNoStopAction(expanded, 80);
-  const escaped = [];
-  const fitting = paneFixture(t, { views: [view("a", { description: "\x08".repeat(18) })],
-    onStop: (id) => escaped.push(id) });
-  fitting.terminal.rows = 9;
-  assertStopFits(fitting, 80, escaped, ["\\x08".repeat(18)]);
-});
-
-for (const change of ["short", "long-task"]) test(`confirmation cannot hide identity rows (${change})`, (t) => {
-  const h = paneFixture(t, { views: [view("a", change === "long-task" ? { description: "full task ".repeat(500) } : {})],
-    onStop: () => assert.fail("confirmation does not fit") });
-  h.pane.render(120); h.pane.handleInput("s");
-  if (change === "short") h.terminal.rows = 6;
-  assert(!h.pane.render(120).some((line) => line.includes("[Confirm stop]")));
-  h.pane.handleInput(CONFIRM);
+for (const frame of [false, true]) test(`shrinking below normal pane height retires inline confirmation (frame=${frame})`, (t) => {
+  const h = paneFixture(t, { frame, onStop: () => assert.fail("old confirmation was retired") });
+  arm(h.pane);
+  h.terminal.rows = 7;
+  assertNoStopAction(h, 120);
   h.terminal.rows = 40;
-  h.pane.render(120); h.pane.handleInput(CONFIRM);
+  assert.match(h.pane.render(120).at(-1), /\[S Stop\]/);
+  h.pane.handleInput(CONFIRM);
+  assert.doesNotMatch(h.pane.render(120).at(-1), /\[Confirm stop\]/);
 });
 
 for (const overrides of [

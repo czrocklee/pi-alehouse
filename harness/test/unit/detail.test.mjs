@@ -4,6 +4,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { DetailPane, renderDetailFields, renderDetailTitle, transcriptRule, wrapText }
   from "../../dist/ui/agent-detail.js";
 import { paneRow } from "../../dist/ui/format.js";
+import { plainText, singleLineText } from "../../dist/ui/text.js";
 import { renderWidget } from "../../dist/ui/agent-widget.js";
 import { addToLedger } from "../../dist/core/usage-ledger.js";
 
@@ -44,25 +45,64 @@ test("wrapText breaks latin at spaces and keeps every explicit newline", () => {
   assert.deepEqual(wrapText("one\ntwo", 40), ["one", "two"]);
 });
 
-test("the title keeps identity/task while leaving live status to the footer", () => {
-  const title = renderDetailTitle({ view: view(), live: live() }, 0, theme, 60);
-  assert.match(title, /^reviewer \(researcher\)/);
-  assert.match(title, /审查/);
-  assert.equal(visibleWidth(title) <= 60, true);
-  assert.match(renderDetailTitle({ view: view(), live: live() }, 0, theme, 100), /\) {2}审查 controller\.ts/);
+test("plain metadata normalizes whitespace and escapes controls without destroying joiners", () => {
+  const joiners = "👩‍💻 می‌خواهم ✈️";
+  assert.equal(plainText("one\ttwo\r\nthree"), "one two\nthree");
+  assert.equal(singleLineText(" one\ttwo\r\nthree "), "one two three");
+  assert.equal(plainText("\u001b[31mred\u001b[0m"), "red");
+  assert.equal(plainText("a\u0000b\u0007c\u202ed\u2066e"), "a\\x00b\\x07c\\u202ed\\u2066e");
+  assert.equal(plainText(joiners), joiners, "ZWJ, ZWNJ and variation selectors are not bidi controls");
+});
+
+test("shared wrapping keeps grapheme clusters whole and bounds emoji display width", () => {
+  const clusters = ["👩‍💻", "✈️", "é", "👨‍👩‍👧‍👦"];
+  for (const cluster of clusters) {
+    const width = visibleWidth(cluster);
+    const lines = wrapText(cluster.repeat(3), width);
+    assert.deepEqual(lines, [cluster, cluster, cluster]);
+    assert(lines.every((line) => visibleWidth(line) <= width));
+    if (width > 1) assert.deepEqual(wrapText(cluster, 1), ["…"], "an oversized cluster is not split");
+  }
+});
+
+test("ordinary detail metadata cannot inject terminal or bidi controls", () => {
+  const raw = "before\tword\nnext\u001b[31mred\u001b[0m\u0007\u202e👩‍💻";
+  const v = view({ name: raw, description: raw,
+    effective_settings: { ...view().effective_settings, model: raw, cwd: raw },
+    outcome: { error: raw } });
+  const before = structuredClone(v);
+  const fields = renderDetailFields({ view: v, live: live({ preview: raw }) }, theme, 120).join("\n");
+  assert.doesNotMatch(fields.replaceAll("\n", ""), /[\p{Cc}\p{Bidi_Control}]/u);
+  assert.match(fields, /\\x07/);
+  assert.match(fields, /\\u202e/);
+  assert.match(fields, /👩‍💻/u);
+  assert.deepEqual(v, before);
+});
+
+test("the title reserves task and Run reuse cue before optional identity text", () => {
+  const title = renderDetailTitle({ view: view(), live: live() }, 0, theme, 100);
+  assert.match(title, /reviewer/);
+  assert.match(title, /researcher/);
+  assert.match(title, /审查 controller\.ts/);
+  assert.match(title, /r-8f3a/);
   for (const overrides of [{}, { status: "completed" }, { finalization_pending: true }]) {
     const header = renderDetailTitle({ view: view(overrides), live: live() }, 0, theme, 60);
     assert.doesNotMatch(header, /running|completed|finishing|⠋|✓/);
+    assert(visibleWidth(header) <= 60);
   }
-  const unnamed = renderDetailTitle({ view: view({ name: "" }), live: live() }, 0, theme, 60);
-  assert.match(unnamed, /^researcher {2}审查/, "an unnamed Agent shows its profile only once");
-  assert.doesNotMatch(unnamed, /\(/);
   for (const width of [60, 44, 30]) {
-    const long = view({ name: "", description: "审查".repeat(60) });
+    const long = view({ task: 27, name: "nickname".repeat(50), description: "审查".repeat(60) });
+    const before = structuredClone(long);
     const tight = renderDetailTitle({ view: long, live: live() }, 0, theme, width);
-    assert.equal(visibleWidth(tight), width, JSON.stringify(tight));
-    assert.match(tight, /^researcher {2}审查/);
-    assert.doesNotMatch(tight, /⠋ running/);
+    assert(visibleWidth(tight) <= width, JSON.stringify(tight));
+    assert.match(tight, /#27/);
+    assert.match(tight, /审查/);
+    assert.deepEqual(long, before, "title fitting is a projection, not a metadata rewrite");
+  }
+  for (const task of [undefined, 0, -1, 1.5, NaN, Infinity]) {
+    const fallback = renderDetailTitle({ view: view({ task }), live: live() }, 0, theme, 100);
+    assert.match(fallback, /r-8f3a/, "invalid task ordinals fall back to the Run ID");
+    assert.doesNotMatch(fallback, /#(?:0|-1|1\.5|NaN|Infinity)/);
   }
 });
 
@@ -72,7 +112,8 @@ test("detail profile labels say worker without renaming nicknames or historical 
       const v = view({ name, effective_settings: { ...view().effective_settings, profile } });
       const before = structuredClone(v);
       const title = renderDetailTitle({ view: v, live: live() }, 0, theme, 100);
-      assert.ok(title.startsWith(name ? `${name} (${displayed})` : `${displayed}  `), title);
+      assert.ok(title.includes(name ? `${name} (${displayed})` : displayed), title);
+      if (!name) assert.equal(title.split(displayed).length - 1, 1, "unnamed profile appears only once");
       assert.deepEqual(v, before, "profile labels are a display projection, not a settings migration");
     }
   }
@@ -408,7 +449,7 @@ test("every field line fits the width, counting CJK by the columns it occupies",
 test("a click on an Agent row resolves to that Agent, and chrome rows resolve to none", () => {
   const base = { turns: 3, max_turns: 256, elapsed_ms: 1, tool_uses: 0, active_tools: [], preview: "",
     question: false, limit_reached: false, pending_messages: 0, has_run_warnings: false,
-    finishing: false, name: "", profile: "editor", description: "Task" };
+    finishing: false, resident: true, name: "", profile: "editor", description: "Task" };
   const run = (id, overrides) => ({ ...base, agent_id: id, run_id: `${id}-run`, ...overrides });
   const { lines, hits } = renderWidget({
     runs: [run("q", { status: "queued" }), run("r", { status: "running" }), run("f", { status: "completed" })],
@@ -427,7 +468,7 @@ test("a click on an Agent row resolves to that Agent, and chrome rows resolve to
 test("an overflowing widget still answers correctly for the rows it did paint", () => {
   const base = { turns: 1, max_turns: 256, elapsed_ms: 1, tool_uses: 0, active_tools: [], preview: "",
     question: false, limit_reached: false, pending_messages: 0, has_run_warnings: false,
-    finishing: false, name: "", profile: "editor", description: "Task", status: "running" };
+    finishing: false, resident: true, name: "", profile: "editor", description: "Task", status: "running" };
   const runs = Array.from({ length: 8 }, (_, i) => ({ ...base, agent_id: `a${i}`, run_id: `a${i}-run` }));
   const { lines, hits } = renderWidget({ runs, owner: { blocked: false, resident: 8, resident_limit: 8 },
     spinnerFrame: 0, width: 120, theme, shouldShowFinished: () => true });
@@ -604,15 +645,15 @@ test("a short body is not padded into a tall pane, and a tall one is capped", (t
   assert.ok(short.render(80).length < tall.render(80).length, "content-sized, not a fixed share");
 });
 
-for (const frame of [false, true]) test(`live status stays at the lower left with original glyphs/colors (frame=${frame})`, (t) => {
+for (const frame of [false, true]) test(`live status stays at the lower left with shared lifecycle glyphs/colors (frame=${frame})`, (t) => {
   let current = view(); const colors = [];
   const recording = { ...theme, fg: (color, text) => { colors.push([color, text]); return text; } };
   const p = pane(40, 30, { frame, theme: recording,
     snapshot: () => [{ agent_id: "a", input: { view: current, live: live() } }] });
   t.after(() => p.dispose());
   for (const [status, pending, icon, label, color] of [
-    ["queued", false, "⠋", "queued", "accent"], ["running", false, "⠋", "running", "accent"],
-    ["running", true, "⠋", "finishing", "accent"], ["cancelling", false, "⠋", "cancelling", "accent"],
+    ["queued", false, "◦", "queued", "muted"], ["running", false, "⠋", "running", "accent"],
+    ["running", true, "⠋", "finishing", "dim"], ["cancelling", false, "⠋", "cancelling", "warning"],
     ["completed", false, "✓", "completed", "success"], ["needs_input", false, "?", "needs_input", "warning"],
     ["failed", false, "✗", "failed", "error"], ["cancelled", false, "■", "cancelled", "dim"],
   ]) {
@@ -622,7 +663,7 @@ for (const frame of [false, true]) test(`live status stays at the lower left wit
     assert(!lines[0].includes(badge), lines[0]);
     assert.match(lines.at(-1), /←→ agent · ↑↓ scroll · Esc close/);
     assert(colors.some(([used, text]) => used === color && text === icon));
-    assert(colors.some(([used, text]) => used === (color === "accent" ? "accent" : "dim") && text === label));
+    assert(colors.some(([used, text]) => used === color && text === label));
   }
 });
 
@@ -650,7 +691,7 @@ test("minimum-width framed footers keep every status readable without crowding i
     snapshot: () => [{ agent_id: "a", input: { view: current, live: live() } }] });
   t.after(() => p.dispose());
   for (const [status, pending, badge] of [
-    ["queued", false, "⠋ queued"], ["running", false, "⠋ run"], ["running", true, "⠋ finish"],
+    ["queued", false, "◦ queued"], ["running", false, "⠋ run"], ["running", true, "⠋ finish"],
     ["cancelling", false, "⠋ cancel"], ["completed", false, "✓ done"], ["needs_input", false, "? input"],
     ["failed", false, "✗ failed"], ["cancelled", false, "■ cancel"],
   ]) {

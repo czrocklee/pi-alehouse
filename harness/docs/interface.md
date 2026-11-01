@@ -11,10 +11,12 @@ protocol so that a closing `ui.custom` cannot pop a newer overlay.
 
 The widget shows child work while active and lingers briefly after settlement.
 In fullscreen mode, idle residents keep a compact heading even after their
-outcome rows age out. Click the heading (`▸`/`▾`) to expand the whole inspectable
-roster or return to the automatic compact view. Expansion pages through all idle
-residents and individually listed queued Agents using **[Prev]** / **[Next]**;
-Agent rows still open their details. The widget uses at most twelve lines and at
+outcome rows age out. Click anywhere on the heading to expand the whole inspectable
+roster or return to the automatic compact view. Its leading marker is `▸` when
+collapsed and `▾` when expanded; there is no separate trailing disclosure arrow. Expansion shows the whole roster
+when it fits, otherwise pages through idle residents and individually listed
+queued Agents using **[Prev]** / **[Next]**; Agent rows still open their details.
+The widget uses at most thirteen lines (a heading plus twelve settled Agents) and at
 most one third of the terminal height (six lines if host height is unknown),
 and additionally reserves normal SDK input chrome and transcript space rather
 than growing the input dock without limit. Owner-blocked diagnostics sit above
@@ -78,8 +80,24 @@ During exit confirmation the activity line instead shows `draining Ns` and
 whether tracked inputs/abort or SDK idle is still awaited. The detail pane and
 `/harness-status` expose the same wait and elapsed time; this is an observation,
 not a new lifecycle phase or permission to release ownership.
-`?` marks a child waiting for an answer.  The heading says, for example,
-`3 resident` or `12 resident (full)` rather than implying all slots exist.
+`?` marks a child waiting for an answer. The heading gives the resident count
+and a compact resident-only status summary, for example
+`▸ Agents 3 · ▹2 ✓1` or `▸ Agents 4 · ?1 ▹1 ◦1 ✓1`;
+expanding the first shows `▾ Agents 3 · ▹2 ✓1`. An idle full roster can show
+`▸ Agents 12 (full) · ✓12`.
+Nonzero counts appear in order: needs input `?`, dim static active `▹`, queued `◦`,
+dim completed `✓`, failed `✗`, cancelled `■`. In both compact and expanded headings,
+the active rollup uses a static, dim `▹N` (small hollow triangle, text presentation); animation stays
+confined to active Agent/detail rows. Released failures can linger in the body
+but never inflate resident summary counts. `(full)` stays beside the resident
+count. A dim ` · ` separates this prefix from a nonempty summary, including in
+regular mode; no summary means no separator. Narrow headings drop both together.
+The leading disclosure stays at column zero as counts and capacity change. Its color retains the existing active,
+idle or Owner-error meaning; the explicit warning row carries the fault.
+Without usable heading inspection (regular/unknown renderer, no projected rows,
+insufficient height/control budget, or a resident-count prefix too wide to fit),
+the marker stays a static `●`/`○` status dot instead of advertising an unavailable
+action. Heading clicks are disabled there; `Alt+A` remains the inspection entry.
 
 ## Agent detail and transcript
 
@@ -87,16 +105,26 @@ not a new lifecycle phase or permission to release ownership.
 Agent, or closes it when clicking the selected Agent.  `←`/`→` choose an Agent,
 `↑`/`↓` scroll, and **only** `Esc` closes it, restoring typed editor text.  The
 pane keeps focus: unbound printable input does not dismiss it.
-**S** or a click on the visible **[S Stop]** opens a confirmation identifying the
-original Agent, Run and task. Only **Ctrl+S** or **[Confirm stop]** then requests
-cooperative cancellation; **Esc** dismisses confirmation without closing details.
-Ordinary typing and plain `Enter` never execute Stop. Both steps require their
-controls to be painted. Stop itself is offered only when its complete sanitized
-Agent/Run/task confirmation and hint fit the pane's width and height budget;
-there is no visible but unusable Stop button or hidden keyboard action.
-Navigation, replacement work, permission hiding and closing retire the confirmation.
-The host rechecks the original target before invoking the Owner: a stale control
-never stops another Agent or a replacement task. This is not steering, Agent kill,
+The dim **[S Stop]** is the rightmost action at the footer's bottom-right. **S** or a
+click arms confirmation in place: the footer shows
+`best-effort · Ctrl+S · Esc cancel · [Confirm stop]`, with warning-colored,
+bold **[Confirm stop]** rightmost.
+Arming does not replace the title, body or transcript, change the scroll position,
+or resize the pane. Only **Ctrl+S** or a separate single click on **[Confirm stop]**
+then requests cooperative cancellation; rapid double/triple clicks do not confirm.
+**Esc** cancels confirmation, and a subsequent
+**Esc** closes details. Ordinary typing, plain `Enter` and repeated **S** never
+confirm Stop. Both steps require their controls to be painted. Initial Stop is
+offered only when the full inline confirmation hint and compact live status fit
+the footer and the normal pane height fits a known finite viewport. Full task/name
+text need not fit a separate confirmation body; long or CJK text alone does not
+suppress Stop. There is no visible but unusable Stop button or hidden keyboard action.
+Confirmation expires after ten seconds of monotonic elapsed time, checked before
+rendering or acting even without a repaint. User scrolling (scroll keys or wheel),
+stale geometry, Agent selection changes, replacement work, permission hiding and
+closing retire it. Background transcript growth alone does not. The intent stays bound to the originally painted
+Owner, generation, Agent and Run. The host rechecks that original target before
+invoking the Owner: a stale control never stops another Agent or a replacement task. This is not steering, Agent kill,
 or Owner shutdown, and it also works for queued tasks and while delegation is Off.
 Once stopping starts or execution exits the control disappears. Status and drain
 diagnostics, not the command's acceptance notice, confirm progress toward exit.
@@ -110,7 +138,14 @@ optional metadata; byte pressure may omit it. The host also attempts a visible
 asking the model not to repeat the task automatically. Neither queuing a message
 nor displaying a notice proves model receipt. An earlier model/budget stop or an
 already-exited task is not relabelled as a new human cancellation.
-The title carries identity/task; live status and its spinner or outcome glyph
+The title reserves space for the task and a Run reuse cue: `#N` for a valid task
+ordinal, otherwise an abbreviated Run ID. Nickname/profile text yields first.
+Ordinary metadata normalizes tabs/newlines readably, strips recognized terminal
+protocols and explicitly escapes remaining control and bidirectional-control
+characters; ZWJ, ZWNJ and variation selectors remain intact. This does not
+blanket-strip styled SDK transcripts or their hyperlinks. Wrapping respects
+grapheme clusters and display width.
+Live status and its spinner or outcome glyph
 sit at the lower left, before the Agent/line counts, in both docked and floating layouts.
 
 The pane shows the fields a row cannot: identity, profile/name/task, internally

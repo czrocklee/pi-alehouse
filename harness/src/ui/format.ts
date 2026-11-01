@@ -1,10 +1,11 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { RunView } from "../core/contracts.js";
 import { formatTokenCount } from "../../../lib/token-format.mjs";
+import { plainText, singleLineText } from "./text.js";
 
 export const GLYPHS = {
   turns: "↻", success: "✓", failure: "✗", stopped: "■", question: "?",
-  subLine: "⎿", toolCall: "▸", queued: "◦", agentsActive: "●", agentsIdle: "○",
+  subLine: "⎿", toolCall: "▸", running: "▹", queued: "◦", agentsActive: "●", agentsIdle: "○",
 } as const;
 export const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 export type Theme = { fg(color: string, text: string): string; bold(text: string): string };
@@ -19,10 +20,9 @@ const TOOL_ACTION: Record<string, { verb: string; noun?: string; joiner?: string
   // Historical journals only: display the retired name without registering it.
   notify_parent: { verb: "notifying you", joiner: ": " },
 };
-const oneLine = (value: string): string => value.replace(/\s+/g, " ").trim();
-
 export function shortPath(value: string, cwd: string, columns: number): string {
-  const relative = cwd && value.startsWith(`${cwd}/`) ? value.slice(cwd.length + 1) : value;
+  const path = singleLineText(value), base = singleLineText(cwd);
+  const relative = base && path.startsWith(`${base}/`) ? path.slice(base.length + 1) : path;
   if (visibleWidth(relative) <= columns) return relative;
   const parts = relative.split("/");
   let tail = parts.pop() ?? relative;
@@ -38,8 +38,8 @@ export function describeToolArgs(name: string, args: unknown, cwd: string, colum
     const value = str(key);
     return value ? shortPath(value, cwd, columns) : undefined;
   };
-  const bounded = (text: string): string => truncateToWidth(oneLine(text), columns);
-  switch (name) {
+  const bounded = (text: string): string => truncateToWidth(singleLineText(text), columns);
+  switch (singleLineText(name)) {
     case "read": case "edit": case "write": return path("path");
     case "ls": return path("path") ?? ".";
     case "bash": { const command = str("command"); return command ? bounded(command) : undefined; }
@@ -55,9 +55,10 @@ export function describeToolArgs(name: string, args: unknown, cwd: string, colum
   }
 }
 const phrase = (tool: ActiveTool, columns: number): string => {
-  const action = TOOL_ACTION[tool.name];
-  const verb = action?.verb ?? tool.name;
-  return tool.detail ? truncateToWidth(`${verb}${action?.joiner ?? " "}${tool.detail}`, columns) : `${verb}…`;
+  const name = singleLineText(tool.name), detail = tool.detail ? singleLineText(tool.detail) : "";
+  const action = TOOL_ACTION[name];
+  const verb = action?.verb ?? name;
+  return detail ? truncateToWidth(`${verb}${action?.joiner ?? " "}${detail}`, columns) : `${verb}…`;
 };
 
 export const formatTokens = (count: number, unit = " token"): string =>
@@ -84,25 +85,22 @@ export function describeActivity(tools: readonly ActiveTool[], preview: string):
   if (tools.length === 2) return tools.map((tool) => phrase(tool, 34)).join(", ");
   if (tools.length > 2) {
     const groups = new Map<string, number>();
-    for (const tool of tools) groups.set(tool.name, (groups.get(tool.name) ?? 0) + 1);
+    for (const tool of tools) {
+      const name = singleLineText(tool.name);
+      groups.set(name, (groups.get(name) ?? 0) + 1);
+    }
     return [...groups].map(([name, count]) => {
       const action = TOOL_ACTION[name];
       return count > 1 && action?.noun ? `${action.verb} ${count} ${action.noun}` : action?.verb ?? name;
     }).join(", ") + "…";
   }
-  const line = preview.split("\n").findLast((text) => text.trim())?.trim() ?? "";
+  const line = plainText(preview).split("\n").findLast((text) => text.trim())?.trim() ?? "";
   return line ? truncateToWidth(line, 72) : "thinking…";
 }
 
-/**
- * Folds everything that would end a row early into a space. A row is one array
- * element and one terminal line; a newline in a nickname, a tab in a bash
- * command or a caught error carrying either makes those two things disagree,
- * and then every hit index below that row names the wrong Agent. Model text,
- * tool arguments and `String(cause)` error text all reach these rows, so this
- * is enforced at the row boundary rather than field by field. ANSI is left
- * alone on purpose: styling costs no column and breaks no line.
- */
+/** Fold row breaks without removing already-applied theme styling. This is
+ * deliberately NOT a sanitizer: raw fields must pass through plainText or
+ * singleLineText before styling, measuring or assembling a rendered row. */
 const ROW_BREAKS = /[\t\n\v\f\r\u0085\u2028\u2029]+/g;
 export const withoutBreaks = (text: string): string => text.replace(ROW_BREAKS, " ");
 

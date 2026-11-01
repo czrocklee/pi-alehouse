@@ -94,7 +94,7 @@ pi-alehouse
 
 Choose the main model normally. Use **Alt+S** to set the delegation mode (how much the main model hands off to Agents) and select a model preset, then **E** to adjust effort. The main model is unchanged. Existing agents keep the configuration they started with.
 
-- **Alt+A**: inspect agents and their conversations; **S** / **[S Stop]** opens a task-specific confirmation. **Ctrl+S** / **[Confirm stop]** then requests cooperative cancellation; **Esc** goes back.
+- **Alt+A**: inspect agents and their conversations. The title keeps the task and `#N` task cue (or short Run ID). **S** / dim bottom-right **[S Stop]** arms in place without replacing details. The footer shows `best-effort · Ctrl+S · Esc cancel · [Confirm stop]`; **Ctrl+S** or a separate single click on the bold warning action requests cooperative cancellation. Rapid double/triple clicks, Enter and repeated S do not confirm. Confirmation expires after ten seconds; scrolling cancels it, but background transcript growth alone does not. **Esc** cancels confirmation, then closes details on a later press.
 - **Alt+S**: delegation mode, model preset and effort.
 - **`/stats`**: activity, models and tools.
 - **`/harness-close`**: request shutdown; wait for confirmed closure.

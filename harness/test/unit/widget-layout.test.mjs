@@ -56,13 +56,13 @@ function layoutFixture(t, rows, blocked) {
   return { widget, views, opened, terminal, paint, boxOf, linesOf, pointer };
 }
 
-for (const [rows, blocked] of [[15, false], [16, true], [18, false], [18, true], [36, false], [36, true]]) {
+for (const [rows, blocked] of [[15, false], [16, true], [18, false], [18, true], [36, false], [36, true], [39, true]]) {
   test(`real SDK dock preserves readable pages and input chrome (rows=${rows}, blocked=${blocked})`, (t) => {
     const h = layoutFixture(t, rows, blocked);
     let frame = h.paint(), lines = h.linesOf(frame);
     assert.equal(lines[0], "", "the real SDK adds a leading widget spacer");
     const heading = lines.findIndex((line) => line.includes("Agents"));
-    assert(heading >= 0 && lines[heading].includes("▸"));
+    assert(heading >= 0 && lines[heading].startsWith("▸ Agents"));
     assert.deepEqual(h.pointer(frame, heading), { handled: true, render: true });
     let pageCount = 0;
     for (;;) {
@@ -73,7 +73,7 @@ for (const [rows, blocked] of [[15, false], [16, true], [18, false], [18, true],
       for (const text of ["queued prompt", "dequeue hint", "status", "editor top", "editor input", "editor bottom",
         "footer workspace", "footer model"]) assert(screen.includes(text), `missing ${text}`);
       assert.equal(box.clip.height, box.lines.length, "actual SDK wrapper, Agents and controls are not clipped");
-      assert(box.lines.length - 1 <= Math.min(12, Math.floor(rows / 3), rows - 12));
+      assert(box.lines.length - 1 <= Math.min(13, Math.floor(rows / 3), rows - 12));
       assert(box.lines.every((line) => visibleWidth(line) <= h.terminal.columns));
       if (blocked) {
         const warning = lines.findIndex((line) => line.includes("owner blocked: BROKEN"));
@@ -81,7 +81,7 @@ for (const [rows, blocked] of [[15, false], [16, true], [18, false], [18, true],
         assert.match(screen[box.rect.y + warning], /owner blocked: BROKEN/);
       }
       for (let y = 0; y < lines.length; y++) {
-        if (lines[y].includes("✓")) assert.deepEqual(h.pointer(frame, y), { handled: true });
+        if (/^[├└]─ ✓/.test(lines[y])) assert.deepEqual(h.pointer(frame, y), { handled: true });
       }
       const y = lines.findIndex((line) => line.includes("[Next]"));
       assert(y >= 0 && y < box.clip.height, "page controls must be inside the allocated wrapper viewport");
@@ -101,6 +101,37 @@ for (const [rows, blocked] of [[15, false], [16, true], [18, false], [18, true],
   });
 }
 
+for (const rows of [39, 60]) {
+  test(`real SDK dock fits heading and all twelve completed Agents without pagination (rows=${rows})`, (t) => {
+    const h = layoutFixture(t, rows, false);
+    let frame = h.paint(), lines = h.linesOf(frame);
+    const heading = lines.findIndex((line) => line.includes("Agents"));
+    assert.equal(heading, 1, "the real SDK adds exactly one leading widget spacer");
+    assert.equal(lines[heading], "▸ Agents 12 (full) · ✓12");
+    assert.deepEqual(h.pointer(frame, heading), { handled: true, render: true });
+    frame = h.paint(); lines = h.linesOf(frame);
+    const box = h.boxOf(frame), screen = frame.lines.map(stripTerminalSequences);
+    assert.equal(lines[0], "");
+    assert.equal(lines[heading], "▾ Agents 12 (full) · ✓12");
+    assert.equal(lines.length - 1, 13, "the widget is exactly heading plus twelve Agent rows, excluding SDK spacer");
+    assert.equal(lines.filter((line) => /^[├└]─ ✓/.test(line)).length, 12);
+    assert(!lines.some((line) => /\[Prev\]|\[Next\]|\+\d+ more/.test(line)), "the entire roster fits without controls or overflow");
+    assert.equal(box.clip.height, box.lines.length, "the SDK wrapper and all Agent rows are unclipped");
+    assert(box.lines.length - 1 <= Math.min(13, Math.floor(rows / 3), rows - 12));
+    assert(box.lines.every((line) => visibleWidth(line) <= h.terminal.columns));
+    assert(frame.root.children[0].rect.height >= 2, "normal input chrome leaves multiple transcript rows");
+    assert(screen.filter((line) => line.startsWith("transcript ")).length >= 2);
+    for (const text of ["queued prompt", "dequeue hint", "status", "editor top", "editor input", "editor bottom",
+      "footer workspace", "footer model"]) assert(screen.includes(text), `missing ${text}`);
+    for (let y = heading + 1; y < lines.length; y++) {
+      assert.equal(screen[box.rect.y + y], lines[y], "each Agent row is actually visible on screen");
+      assert.deepEqual(h.pointer(frame, y), { handled: true });
+    }
+    assert.deepEqual(h.opened, h.views.map((view) => view.agent_id), "every resident opens through real SDK mouse forwarding");
+    assert.deepEqual(h.paint().lines, frame.lines, "idle repaint preserves the complete roster");
+  });
+}
+
 for (const [rows, blocked] of [[9, false], [9, true], [12, false], [12, true], [13, false], [14, true], [15, true]]) {
   test(`tiny SDK dock never advertises clipped pagination (rows=${rows}, blocked=${blocked})`, (t) => {
     const h = layoutFixture(t, rows, blocked), frame = h.paint(), lines = h.linesOf(frame);
@@ -110,6 +141,28 @@ for (const [rows, blocked] of [[9, false], [9, true], [12, false], [12, true], [
     assert.equal(h.widget.agents().length, 12, "Alt+A still has a fresh inspection projection");
   });
 }
+
+test("real SDK diagnostic rows stay clickable without inflating resident summary counts", (t) => {
+  const h = layoutFixture(t, 60, false);
+  h.views.push({ ...idle(12), status: "failed", resident: false, name: "released diagnostic" });
+  h.widget.wake();
+  let frame = h.paint(), lines = h.linesOf(frame);
+  const heading = lines.findIndex((line) => line.includes("Agents"));
+  assert.equal(lines[heading], "▸ Agents 12 (full) · ✓12");
+  assert(lines.some((line) => line.includes("✗ released diagnostic")));
+  assert.deepEqual(h.pointer(frame, lines.findIndex((line) => line.includes("✗ released diagnostic"))), { handled: true });
+  h.pointer(frame, heading);
+  frame = h.paint(); lines = h.linesOf(frame);
+  const arrow = lines[heading].indexOf("▾"), next = lines.findIndex((line) => line.includes("[Next]"));
+  assert.equal(arrow, 0);
+  assert(next >= 0);
+  assert.deepEqual(h.pointer(frame, next, lines[next].indexOf("[Next]")), { handled: true, render: true });
+  frame = h.paint(); lines = h.linesOf(frame);
+  assert.equal(lines[heading].indexOf("▾"), arrow);
+  assert.equal(lines[heading], "▾ Agents 12 (full) · ✓12");
+  assert.deepEqual(h.pointer(frame, lines.findIndex((line) => line.includes("✗ released diagnostic"))), { handled: true });
+  assert.deepEqual(h.opened, ["agent-12", "agent-12"]);
+});
 
 test("shrinking the real dock retires old page coordinates before they can act", (t) => {
   const h = layoutFixture(t, 18, false);
