@@ -11,6 +11,7 @@ import { requireReadiness } from "../permissions/readiness.js";
 import { createChildTools } from "../tools/child-tools.js";
 import { webProfileNames, type AgentProfileName } from "../tools/tool-names.js";
 import { PiAgentSessionAdapter, ChildRunGate } from "./agent-session.js";
+import { createAgentWorkspace, type AgentWorkspaceHandle } from "./agent-workspace.js";
 import type { ChildActivityRegistry } from "./activity-observer.js";
 import { assembleChildSession, disposeChildSession } from "./child-session.js";
 import { childWebExtension, type ChildWebModules, type WebLease } from "./child-web.js";
@@ -23,6 +24,15 @@ export interface ChildProfile {
   definition: string;
   body: string;
   tools: string[];
+}
+
+/** Authority-owned policy discovery alias, not a cwd or path-effect rewrite. */
+export type WorkspacePolicyBinder = (input: { sessionId: string; cwd: string; source_cwd: string;
+  checkout_root: string; source_root: string; projectTrusted: boolean }) => { release(): void };
+interface ChildLeases {
+  web?: WebLease;
+  policy?: ReturnType<WorkspacePolicyBinder>;
+  workspace?: AgentWorkspaceHandle;
 }
 
 /** Builds the controller's session port without moving adapter execution state. */
@@ -45,7 +55,14 @@ export function createChildSessionFactory(options: {
   subscribeManagedBlocks?: ManagedBlockSubscription;
   /** Isolated pi-web-access instances; required only by web profiles. */
   web?: ChildWebModules;
+  /** Launcher-verified Git for optional actual-assembly worktree creation. */
+  git?: string;
+  /** Mandatory authority bridge for worktree sessions; never copy .pi files. */
+  bindWorkspacePolicy?: WorkspacePolicyBinder;
 }): (agent: { agent_id: string; name: string; settings: AdmittedAgentConfig }) => Promise<AgentSessionPort> {
+  // Agent lifetime, not Run lifetime. Successful workspaces and failed creation
+  // diagnostics survive assembly failure; no blind retry or automatic removal.
+  const workspaces = new Map<string, Promise<AgentWorkspaceHandle>>();
   return async (agent): Promise<AgentSessionPort> => {
     assert(options.parentPermission(), "Parent permission service is missing");
     const profile = options.profiles[agent.settings.profile];
@@ -57,28 +74,45 @@ export function createChildSessionFactory(options: {
     // physical model; do not construct a child on a per-request router.
     const model = options.runtime.getPhysicalModel(agent.settings.provider, agent.settings.model);
     assert(model, "Agent model is no longer physical");
-    let web: WebLease | undefined;
-    if (webProfileNames.includes(agent.settings.profile as AgentProfileName)) {
-      assert(options.web, "Researcher web access is unavailable; start through the pi-alehouse launcher");
-      web = await options.web.acquire();
-    }
+    const leases: ChildLeases = {};
     try {
-      return await assemble(agent, profile, model, web);
+      if (agent.settings.workspace === "worktree") {
+        assert(typeof options.bindWorkspacePolicy === "function", "Worktree policy inheritance is unavailable; start through the pi-alehouse launcher");
+        assert(typeof options.ctx.isProjectTrusted === "function", "Source project trust is unavailable");
+        let pending = workspaces.get(agent.agent_id);
+        if (!pending) {
+          pending = createAgentWorkspace({ agentDir: options.agentDir, agentId: agent.agent_id, sourceCwd: agent.settings.cwd, git: options.git });
+          workspaces.set(agent.agent_id, pending);
+        }
+        leases.workspace = await pending;
+        assert.equal(leases.workspace.workspace.source_cwd, agent.settings.cwd, "Agent workspace source changed");
+      }
+      if (webProfileNames.includes(agent.settings.profile as AgentProfileName)) {
+        assert(options.web, "Researcher web access is unavailable; start through the pi-alehouse launcher");
+        leases.web = await options.web.acquire();
+      }
+      return await assemble(agent, profile, model, leases);
     } catch (error) {
       // No execution was created, or assembly confirmed cleanup. Uncertain
-      // shutdown retains isolated web authority.
+      // shutdown retains both workspace policy and isolated web authority.
       if (!(error instanceof SessionInitializationError)) {
-        web?.release();
+        leases.policy?.release();
+        leases.web?.release();
+      }
+      if (leases.workspace && error instanceof Error) {
+        error.message += `; retained worktree cwd: ${leases.workspace.workspace.cwd}; recovery manifest: ${leases.workspace.manifest}`;
       }
       throw error;
     }
   };
   async function assemble(agent: { agent_id: string; name: string; settings: AdmittedAgentConfig }, profile: ChildProfile,
     model: NonNullable<ReturnType<ModelRuntime["getModel"]>>,
-    web: WebLease | undefined): Promise<AgentSessionPort> {
+    leases: ChildLeases): Promise<AgentSessionPort> {
+    const { web, workspace: handle } = leases;
+    const workspace = handle?.workspace, cwd = workspace?.cwd ?? agent.settings.cwd;
     const bus = createEventBus(), gate = new ChildRunGate(), childSettings = options.settings();
     // Held, not re-fetched: this is the observer instance bound to the child.
-    const activity = options.activities.track(agent.agent_id, agent.settings.cwd);
+    const activity = options.activities.track(agent.agent_id, cwd);
     // Attachment is lazy at first Run: failed assembly creates no parent-side
     // telemetry registration, even if loading failed before SDK shutdown bound.
     const stats = new WorkerStatsObserver(options.parentBus, options.parentId, agent.agent_id);
@@ -87,15 +121,25 @@ export function createChildSessionFactory(options: {
     const customTools = createChildTools(() => callbacks, gate);
     // Pi reserves an ID/path here but does not create the journal until its
     // first assistant response, so a failed reload leaves no JSONL.
-    const manager = SessionManager.create(options.ctx.cwd, options.ctx.sessionManager.getSessionDir(), {
+    const manager = SessionManager.create(cwd, options.ctx.sessionManager.getSessionDir(), {
       parentSession: options.ctx.sessionManager.getSessionFile(),
     });
-    const loader = new DefaultResourceLoader({ cwd: options.ctx.cwd, agentDir: options.agentDir,
+    // Bind before permission extensions load. Discovery stays source-scoped,
+    // while SDK paths, permission effects and approval facts use actual cwd.
+    if (workspace) {
+      const projectTrusted = options.ctx.isProjectTrusted();
+      assert.equal(typeof projectTrusted, "boolean", "Source project trust is unavailable");
+      leases.policy = options.bindWorkspacePolicy!({ sessionId: manager.getSessionId(), cwd,
+        source_cwd: agent.settings.cwd, checkout_root: handle.checkout_root, source_root: handle.source_root, projectTrusted });
+      assert(leases.policy && typeof leases.policy.release === "function", "Worktree policy binding is unavailable");
+    }
+    const loader = new DefaultResourceLoader({ cwd: agent.settings.cwd, agentDir: options.agentDir,
       settingsManager: childSettings, eventBus: bus,
       noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true,
       additionalExtensionPaths: [join(options.permissionRoot, "index.ts"),
         join(options.policyRoot, "static-safety-guard.ts"), join(options.policyRoot, "policy-grep.ts")],
-      appendSystemPromptOverride: () => [profile.body, `<active_agent name="${agent.settings.profile}"/>`],
+      appendSystemPromptOverride: () => [profile.body, `<active_agent name="${agent.settings.profile}"/>`,
+        ...(workspace ? [`Workspace: ${JSON.stringify(workspace)}\nRecovery manifest: ${handle.manifest}\nOnly the committed baseline is present; source dirty/untracked files are not copied. This worktree is retained; no automatic merge, commit or removal.`] : [])],
       // The gate must stay LAST. Inline factories load after every path above,
       // and cache_warming_decision is last-writer-wins in the runner, so only
       // the final handler's stop is authoritative. The activity observer has no
@@ -104,7 +148,7 @@ export function createChildSessionFactory(options: {
       extensionFactories: [orderFreeToolSchemaExtension, ...(web ? [childWebExtension(web.factory)] : []), activity.extension,
         options.approvalBindings.childExtension(manager.getSessionId()), stats.extension, gate.extension] });
     await loader.reload();
-    manager.appendCustomEntry("active_agent", { name: agent.settings.profile, routing: {
+    manager.appendCustomEntry("active_agent", { name: agent.settings.profile, ...(workspace ? { workspace } : {}), routing: {
       preset: agent.settings.preset, preset_version: agent.settings.preset_version,
       selection_digest: agent.settings.selection_digest, difficulty: agent.settings.difficulty, strength: agent.settings.strength,
       provider: agent.settings.provider, model: agent.settings.model, thinking: agent.settings.thinking,
@@ -113,7 +157,7 @@ export function createChildSessionFactory(options: {
       ...(agent.settings.effort_source !== undefined ? { effort_source: agent.settings.effort_source } : {}),
     } });
     const child = await assembleChildSession({ createSession: createAgentSession,
-      options: { cwd: options.ctx.cwd, agentDir: options.agentDir, resourceLoader: loader,
+      options: { cwd, agentDir: options.agentDir, resourceLoader: loader,
         settingsManager: childSettings, sessionManager: manager,
         modelRuntime: options.runtime, model,
         thinkingLevel: agent.settings.thinking as CreateAgentSessionOptions["thinkingLevel"],
@@ -133,10 +177,10 @@ export function createChildSessionFactory(options: {
         history: new PiRunJournal({ parent: options.parentHistory, session: manager }),
         readiness: () => requireReadiness(bus, options.getPermissionsService, child.session.sessionId,
           agent.settings.profile, agent.settings.definition_digest) });
-      return { session_id: port.session_id, history: port.history,
+      return { session_id: port.session_id, history: port.history, ...(workspace ? { workspace } : {}),
         // Reset at submission, before the child can report this Run's activity.
         run: async (prompt, cb, identity) => {
-          options.approvalBindings.begin(identity, { sessionId: port.session_id, cwd: agent.settings.cwd,
+          options.approvalBindings.begin(identity, { sessionId: port.session_id, cwd,
             profile: agent.settings.profile, definitionDigest: agent.settings.definition_digest, prompt });
           approvalRun = identity;
           activity.begin();
@@ -175,6 +219,9 @@ export function createChildSessionFactory(options: {
           const report = await port.dispose();
           stats.dispose();
           if (report.shutdownExited) {
+            // Match core's confirmed-cleanup boundary for the workspace alias;
+            // an exited shutdown with reported errors is still uncertain.
+            if (!report.errors.length) leases.policy?.release();
             web?.release();
           }
           return report;

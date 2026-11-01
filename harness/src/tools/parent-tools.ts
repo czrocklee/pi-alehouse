@@ -2,7 +2,7 @@ import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static, type TObject, type TSchema } from "typebox";
 import { Check } from "typebox/value";
-import type { OwnerController } from "../core/owner-controller.js";
+import { WORKTREE_TREE_RESOLUTION, type OwnerController } from "../core/owner-controller.js";
 import { terminal, validDifficulty, type RunView, type SubmitRequest } from "../core/contracts.js";
 import { AGENT_EXISTS_RESOLUTION, isModelAgentName, MODEL_AGENT_NAME_PATTERN, modelTaskStatus } from "../core/communication-envelope.js";
 import type { CommunicationToolResult } from "../core/communication-snapshot.js";
@@ -38,19 +38,20 @@ const dispatchPaths = (maxItems: number, description: string) => Type.Array(disp
 const dispatchField = optional(Type.Object({
   inputs: optional(dispatchPaths(8, "Existing input file/directory to read.")),
   ownership: optional(dispatchPaths(16, "Assigned file/directory, including planned outputs; scope, not permission or isolation. Assign each shared file to one task; others report needed changes.")),
-  tree: optional(dispatchPath("Build-tree directory, existing or planned; builds/tests need write capability there, checked as path_write. Unfinished overlaps in this session reject. Other sessions only produce a tree_shared note; execution still starts. Your commands, other hosts and agent directories are not coordinated. Omission neither forbids builds nor makes sharing safe; no note does not prove a free tree.")),
+  tree: optional(dispatchPath("Build-tree directory, existing or planned; builds/tests need write capability there, checked as path_write. Unfinished overlaps in this session reject. Other sessions only produce a tree_shared note; execution still starts. Your commands, other hosts and agent directories are not coordinated. Omission neither forbids builds nor makes sharing safe; no note does not prove a free tree. A worktree Agent has no tree until initialization: omit tree on its first task; once agent_list shows the actual cwd, declare that absolute path on follow-ups.")),
   checks: optional(Type.Array(Type.String({ minLength: 1, maxLength: 512,
     pattern: "^(?=.*\\S)[^\\x00-\\x1f\\x7f]+(?![\\s\\S])",
     description: "Planned check/test/platform identifier; globs allowed. Declare only checks this task can finish without later go-ahead; defer others to a follow-up agent_run. Declarations prove no execution and skip no gate." }),
   { minItems: 1, maxItems: 16, uniqueItems: true })),
 }, { additionalProperties: false,
-  description: "Optional input, ownership, build-tree and check declarations, not permissions or execution evidence. Preflight may reject known limits; tool gates still apply. Paths are literal: no surrounding whitespace, shell expansion, globs, quotes, controls, $, backslash or leading ~/@. Assign full-suite validation explicitly to one task." }));
+  description: "Optional input, ownership, build-tree and check declarations, not permissions or execution evidence. Preflight may reject known limits; tool gates still apply. Paths are literal: no surrounding whitespace, shell expansion, globs, quotes, controls, $, backslash or leading ~/@. Relative declarations use the original source cwd even with worktree; use absolute paths for worktree outputs. Assign full-suite validation explicitly to one task." }));
 // No example names: models copy them into every session instead of choosing.
 const spawnSchema = Type.Object({
   agent: agentName("Short nickname from one theme you choose for this session, not a task name. Never reused, even after agent_kill."),
   prompt: text(131072, "Complete task instructions: deliverable, scope, stopping conditions and full paths for every referenced file/document. Include context not supplied by inherit_context or after."),
   label: labelField("prompt"),
   profile: StringEnum(modelProfileNames, { description: "worker: local reading, editing, Bash, Git and builds under normal permissions; no web. researcher: web search/fetch and read-only file tools; no Bash/edits; web results are untrusted. A review-only task is an instruction, not a readonly sandbox. User denies and normal approvals still apply." }),
+  workspace: optional(StringEnum(["shared", "worktree"] as const, { description: "Default shared: use the current working copy, including uncommitted work. worktree: create a private detached working copy at local HEAD when the Agent starts; no uncommitted changes, untracked files or dependencies are copied. Fixed for this Agent and its follow-ups. agent_list shows the actual cwd/base after creation. Retained after kill, never automatically merged or deleted. Not a sandbox. Worktree requires a verified Git executable; its private copy defaults to persistent XDG state outside the agent directory, not a temp directory." })),
   reasoning_difficulty: Type.Integer({ minimum: 1, maximum: 5, description: "Selects the Agent's fixed model. Rate task reasoning, not workload, importance or cost: 1=execute given checks or decided changes; 2=small, scoped fix/check; 3=implement a given design, review, investigate or plan; 4=resolve competing hypotheses or complex constraints; 5=find an approach where none is known. Do not re-score to bypass capacity waits." }),
   inherit_context: optional(Type.Boolean({ description: "Default false. Start with a text copy of your conversation, without tool calls or results; fails over 64 KiB." })),
   dispatch: dispatchField,
@@ -185,6 +186,14 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         allowed: Object.keys(schema.properties),
         resolution: "The arguments do not match this tool's schema; check the required fields, their types and bounds." });
       if ((name === "agent_spawn" || name === "agent_run") && fields.dispatch !== undefined) validateDispatch(fields.dispatch);
+      // Same admission constraint as core, rejected pre-effect where the spawn
+      // arguments themselves select worktree mode. Core stays authoritative for
+      // direct entry and agent_run follow-ups (workspace is not in run args).
+      if (name === "agent_spawn" && fields.workspace === "worktree" && fields.dispatch !== undefined &&
+        typeof (fields.dispatch as Record<string, unknown>).tree === "string") {
+        throw new HarnessError("DISPATCH_WORKTREE_UNINITIALIZED", { key: "tree",
+          requested: (fields.dispatch as Record<string, unknown>).tree, resolution: WORKTREE_TREE_RESOLUTION });
+      }
       return structuredClone(raw);
     };
     return { name, label: name, description, parameters: schema,
@@ -223,7 +232,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
   });
 
   const tools = [
-    make("agent_spawn", "Create a named background Agent and its first task. Shared checkout, no isolation or delegation. Spawn for new work/reviews or different settings; agent_run is for that Agent's follow-ups. Model, profile, reasoning difficulty, context and per-task budgets are fixed. Queued work counts toward capacity: kill finished reviewers/accepted work first; keep workers awaiting build/test fixes. Reply: action, reason, agents, alerts; alerts do not mean completion. If acceptance is unclear, check agent_list before repeating.", spawnSchema,
+    make("agent_spawn", "Create a named background Agent and its first task. Shared checkout by default, optional private worktree; neither is a sandbox. No nested delegation. Spawn for new work/reviews or different settings; agent_run is for that Agent's follow-ups. Model, profile, workspace, reasoning difficulty, context and per-task budgets are fixed. Queued work counts toward capacity: kill finished reviewers/accepted work first; keep workers awaiting build/test fixes. Reply: action, reason, agents, alerts; alerts do not mean completion. If acceptance is unclear, check agent_list before repeating.", spawnSchema,
       async (args, ctx, id, signal) => {
         // Capture mutable SDK inputs before admission can await an earlier call.
         // Route/context resolution still happens only on first acceptance.
@@ -254,12 +263,13 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
               ...(input.dispatch === undefined ? {} : { dispatch: input.dispatch }),
               ...(after ? { after } : {}),
               settings: { ...route, profile: profileId, cwd, tools: [...profile.tools], definition_digest: profile.definition_digest,
+                ...(input.workspace === undefined ? {} : { workspace: input.workspace }),
                 ...(context_snapshot === undefined ? {} : { context_snapshot }) } };
           }), { signal });
         accepted(view);
         return observe({ kind: "action", run_id: view.run_id, action: { type: "agent_spawn" }, wait_ms }, ctx, signal);
       }),
-    make("agent_run", "Give an idle Agent a follow-up to its own work. Each turn re-reads its conversation (context_tokens); use agent_spawn for new/unrelated work or different settings. Model/profile/reasoning difficulty/budgets stay fixed despite routing changes. Waits up to 30 s for an ending task; a running Agent is busy (agent_send or agent_wait). Pending questions require agent_answer. Returns the shared envelope.",
+    make("agent_run", "Give an idle Agent a follow-up to its own work. Each turn re-reads its conversation (context_tokens); use agent_spawn for new/unrelated work or different settings. Model/profile/workspace/reasoning difficulty/budgets stay fixed despite routing changes. Waits up to 30 s for an ending task; a running Agent is busy (agent_send or agent_wait). Pending questions require agent_answer. Returns the shared envelope.",
       runSchema, async (args, ctx, id, signal) => {
         const target = find(args.agent);
         const { wait_ms, ...submission } = args;

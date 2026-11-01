@@ -27,20 +27,22 @@ Children receive only their profile's local `read`/Bash/search/edit tools as
 filtered by the harness, plus fixed `alert_parent`/`ask_parent`. `notify_parent`
 is retired and explicitly denied, not a runtime alias. They receive
 no parent management tools, no nested delegation and no arbitrary extensions.
-Worker (stable internal `editor`) receives no web tool table. This differs
-from its declared generated definition, whose web tools the harness excludes.
-Tool availability is not network authorization. Plain `pi` has no delegation.
+Worker (`editor` internally) receives no web tool table. Tool availability is
+never network authorization. Plain `pi` has no delegation tools at all.
 
-New model requests select `worker` or `researcher` only. Worker has local
-read/edit/write/Bash/build tools under normal permissions, no web; review-only
-work is an instruction, not an enforced readonly mode. Researcher has read-only
-file tools and web, no Bash/edit/write. Agents share one checkout and Git index;
-coordinate overlapping edits and Git writes with the parent. Worker has no extra
-child-only blanket Git mutation ban and no automatic Git allow. User-configured
-command/path denies and base credential/resource/high-risk protections remain;
-generated policy never overwrites live user configuration. Existing user
-`reader.md` files are not deleted or replaced and historical profile IDs stay
-literal display data; no retired profile alias or scratch capability is supported.
+New model requests select `worker` or `researcher`. Worker maps to the stable
+internal `editor` profile ID. No legacy profile aliases or capabilities are
+supported. Either public profile can use
+[shared or worktree mode](workspaces.md), independently of its tools.
+
+| Public profile | Capability | Meaning |
+| --- | --- | --- |
+| `worker` (`editor` internally) | local read/edit/write/Bash/Git/builds | cooperative developer under normal permission; no web and no strict readonly promise |
+| `researcher` | read-only file tools and four web tools; no Bash/edit/write | web-derived material is untrusted |
+
+Worker has no extra child-only blanket Git mutation ban and no automatic Git
+allow. Review-only work is a task instruction. User-configured command/path denies and base credential/resource/high-risk
+protections remain; generated policy never overwrites live user configuration.
 
 ### Cooperative Git commands
 
@@ -56,7 +58,9 @@ queries and writes use ordinary Bash permission, with no Git subprocess probing
 or historical file-provenance claim. Only bounded literal version queries can
 qualify for the automatic fixed-query lane. Raw configured Bash denies/specific
 asks, explicit path/output facts and actual redirects remain independent.
-Worker Git mutations do not receive a readonly shortcut.
+Worker Git mutations do not receive a readonly shortcut. Worktree selection is
+not a grant; source project policy is inherited while tool paths resolve at the
+actual child cwd. See [workspaces](workspaces.md).
 
 There is no complete historical-content separation promise for a worker with
 ordinary Git access. Literal path denies remain useful protection, not a data
@@ -64,11 +68,50 @@ taint tracker for repository objects. A selected configured deny survives sessio
 grants/yolo; ordinary asks keep ordinary approval, and invalid configuration
 still fails closed. Researcher has no Bash tool and keeps its profile ceiling.
 
-Git commands are never silently rewritten: command bytes, environment, executable
-selection and leading `cd` stay unchanged. Native index cache writes and locks
-remain possible. No zero-write, automatic retry, safe lock removal or
-freedom-from-conflicts claim is made. Ordinary Git is not reauthorized through a
-second per-operation effect matrix.
+Git commands are never silently rewritten. Native index cache writes and locks
+remain possible; separate worktrees reduce same-index contention but share
+objects, most refs and configuration. No zero-write, automatic retry, safe lock
+removal or freedom-from-conflicts claim is made. The host's fixed worktree setup
+commands are separate from the worker's unchanged Bash execution. Ordinary Git
+is not reauthorized through a second per-operation effect matrix.
+
+### Workspace binding and retention
+
+Spawn fixes shared (default) or worktree mode independently of profile; neither
+lets the caller choose an arbitrary directory. Runtime creates a private detached
+worktree only at actual execution/session initialization, pinned to a
+recorded local HEAD commit. Admission, preparation and replay create none. Setup
+failure is visible, never silent shared fallback. No dirty/untracked/ignored
+files, installed dependencies or build caches are transferred, nor host/user
+credentials or settings. Committed configuration files remain in the checkout;
+this is not a secret-scrubbing export. There is no automatic install, patch
+transfer or merge.
+
+The child's actual cwd is its workspace. Core admission and source `settings.cwd`
+remain immutable; source project instructions, settings, permission configuration
+and trust are inherited through a live binding. Checked-out `.pi` content cannot
+replace source authority. The trusted whole checkout root maps to the source
+repository root for restriction aliases, including siblings above a nested cwd.
+Aliases add deny/ask only, never ALLOW or external-directory exemptions. Other
+checkouts keep ordinary external policy, not inherited source deny. Relative
+dispatch paths retain source cwd; an uninitialized worktree cannot declare a
+tree, so declare its actual absolute path on a later task. Checks without a tree
+may run initially and observe actual child cwd. List/detail expose uninitialized mode or actual cwd, source cwd and
+baseline after creation. Linked-layout source-state capture may stay unknown.
+
+Worktrees and private recovery manifests are not deleted on completion, kill,
+failure or shutdown. Default storage is XDG_STATE_HOME/pi-alehouse/worktrees
+(absolute XDG_STATE_HOME only, otherwise ~/.local/state), outside agentDir and not
+TMPDIR. This restores ordinary external-directory asks for cross-session reads
+under the seed, not forced isolation against configured allows/grants/yolo.
+Persistent placement is not backup or perpetual retention; custom volatile or
+broadly allowed state locations can differ. Session release revokes bound authority; it does not delete files,
+accept edits or prove all descendants exited. Cleanup is manual, after work has
+stopped and results are accepted or explicitly discarded; no new cleanup tool
+exists. Separate indexes/files reduce contention, but objects, most refs and
+configuration remain shared. Worktree mode does not confine Git or provide
+strict readonly, historical secrecy, zero locks or OS isolation. See
+[workspaces](workspaces.md).
 
 ### Redirect-buried argv and home `cd`
 
@@ -174,8 +217,11 @@ turn budget, or context inheritance.  Generated profile integrity and static
 Bash denies are checked by the external authority.  Existing sensitive paths,
 external writes, subprocess restrictions, Git configuration protections, and
 permission-search rules continue to apply. Opaque Bash programs can perform
-internal IO outside the classifier's view, so this is not an OS sandbox.
+internal IO that the classifier cannot see, so this is not an OS sandbox.
 Forwarded asks must retain the requesting child's edge-stamped principal.
+Workspace restriction aliases supplement those facts; they never replace the
+principal, actual match values or execution/boundary paths. Invalid binding
+facts produce a fail-closed `gate_error` response rather than a stalled ask.
 
 ## Dispatch preflight and validation observations
 
@@ -187,7 +233,10 @@ not policy unknown. Claims detect declared lexical/canonical overlap, not opaque
 program effects or OS isolation, and remain through pending questions/answer
 rollback until final termination and necessary cleanup are confirmed.
 
-Checks-only execution-start source capture uses trusted absolute Git, never
+Checks-only execution-start source capture observes the actual child cwd, not
+an assertion that the source checkout was tested. This bounded runtime metadata
+capture is separate from model Git command classification, which has no
+provenance probes. Capture uses trusted absolute Git, never
 project PATH, with isolated redirection/config/executable/trace environment,
 helper/partial configuration guards before status overrides, and disabled lazy
 fetch/locks/paging/replacements. Fixed `--ignore-submodules=all` makes this
@@ -269,6 +318,12 @@ records avoid prompt text.  Asynchronous review is revalidated after the
 verdict.  Missing/stale provenance, invalid tool observation, or a leftover
 witness disables automatic approval for that Run while preserving normal human
 forwarding through the existing authority.
+
+Eligible forwarded worktree asks currently defer as `delegation_unbound` to
+ordinary human handling. Jev's script evidence still uses the parent's source
+cwd; accepting a different runtime cwd by relaxing that comparison alone would
+review the wrong working copy. Existing configured allows and yolo can satisfy
+ordinary asks before this review path, unchanged.
 
 Jev is the only model judge. Its static checkpoints
 (`extensions/lib/hard-checkpoint.ts`) run before any model call. The launch
@@ -440,8 +495,10 @@ The parent tool captures the real `ExtensionContext`; all relevant identity is
 rechecked after preparation/awaits and before publication commit, never by a
 success wrapper after consumption. A parent-tool caller may choose `profile`
 and `reasoning_difficulty`,
-but cannot choose the concrete provider/model/thinking resolution, parent/child
-cwd, owner, generation, session ID, history path, or profile tool table.
+but cannot choose the concrete provider/model/thinking resolution, arbitrary
+parent/child cwd, owner, generation, session ID, history path, or profile tool
+table. The workspace enum asks the host to create a retained working copy; it
+cannot select an arbitrary directory or widen the profile.
 Optional inherited context is a bounded 64 KiB text snapshot with an aggregate
 digest, not a history fork or tool/settings transfer. It uses the SDK's
 model-visible projection, respecting context omissions/replacements and compaction

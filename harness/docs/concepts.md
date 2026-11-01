@@ -31,16 +31,39 @@ wrong owner.
 An **Agent** is a resident reusable worker reservation with one immutable
 admitted configuration:
 
-- permission profile and rendered-definition digest (public `worker` maps to
-  stable internal `editor`; the other public choice is `researcher`);
+- permission profile and rendered-definition digest (model-facing `worker`
+  maps to stable internal `editor`; the other public choice is `researcher`);
 - preset/version/digest, immutable difficulty (1–5), its internally resolved
   preset slot, exact provider/model, resolved thinking and recorded effort source;
-- parent cwd and optional text-only inherited context snapshot;
+- source cwd, workspace mode (`shared` by default or `worktree`) and optional
+  text-only inherited context snapshot;
 - one child SDK session while it remains healthy and reusable.
 
-Spawning does not isolate filesystem work: Agents share the parent's cwd and
-checkout, including the Git index and any shared build outputs. Different Agent
-IDs do not allocate separate worktrees, indexes or build directories.
+Workspace is independent of profile and fixed at spawn. Shared mode uses the
+parent's cwd, including dirty files, Git index and build outputs. Worktree mode
+asks runtime to create a private detached checkout at actual
+execution/session initialization, pinned to recorded local HEAD. Admission,
+preparation and replay create none; setup failure is visible, not shared
+fallback. No dirty/untracked/ignored files, installed dependencies or caches
+are transferred, nor host/user credentials or settings. Committed configuration
+files remain part of the checkout; it is not a secret-scrubbing export. No
+automatic install, patch transfer or merge occurs.
+
+Tools use the actual child cwd while source instructions/settings/config/trust
+remain inherited through a live binding. Core admission and source `settings.cwd`
+remain immutable. The whole known checkout root maps to the source repository
+root for deny/ask aliases only, never ALLOW or external-boundary exemptions. List/detail expose uninitialized mode or actual cwd, source cwd and
+baseline after creation. Worktrees and private recovery manifests remain on
+completion/kill/failure/shutdown for manual cleanup, not automatic deletion or
+acceptance of changes. Defaults use absolute XDG_STATE_HOME (otherwise
+~/.local/state), beneath pi-alehouse/worktrees outside agentDir, not TMPDIR;
+persistent placement is not indefinite retention or backup. Uninitialized
+worktrees cannot declare a dispatch tree; declare it on a follow-up after the
+actual path is known. Eligible forwarded worktree asks defer from Jev as
+delegation_unbound to ordinary human handling; existing allows/yolo are unchanged.
+Separate files/indexes still share objects, most refs
+and configuration. Neither mode is OS isolation, strict readonly, historical
+secrecy or zero-lock protection. See [workspaces](workspaces.md).
 
 An Agent can have only one current Run.  It is reusable only after execution,
 input drain, history boundary handling, and cleanup state allow it.  Cancelling
@@ -93,8 +116,10 @@ share its cap, and a saturated provider does not block another.  See
 
 Optional spawn/run `dispatch` declares inputs (≤8), ownership (≤16), one tree
 and checks (≤16), with strings bounded to 512 UTF-16 units. Inputs are existing
-ordinary files/directories; output ownership/tree may be new. Literal paths
-are not shell globs/expansions; lexical and nearest-existing-ancestor canonical
+ordinary files/directories; output ownership/tree may be new. Relative paths
+still resolve at source cwd, not a later worktree cwd; use actual absolute
+paths for worktree output claims. Literal paths are not shell globs/expansions;
+lexical and nearest-existing-ancestor canonical
 aliases identify scope/conflicts. Profile/external preflight is approximate,
 not permission or a guarantee of successful tools.
 
@@ -120,8 +145,9 @@ injection or retry after a rejected attempt.
 
 A validation **receipt** is optional valid-boundary run-end observation, not a
 passed-check or permission certificate. Parent-declared checks trigger a
-superproject-only partial metadata source observation, with submodules ignored,
-not a content fingerprint. Status includes non-ignored untracked entries via
+superproject-only partial metadata observation at actual child execution cwd,
+with submodules ignored, not proof the source checkout was tested or a content
+fingerprint. Linked worktree capture may remain unknown. Status includes non-ignored untracked entries via
 fixed --untracked-files=normal, not all disk contents. Invalid optional receipts
 are locally dropped with an end marker/live diagnostic/recorded-history warning;
 mandatory history and append errors remain strict, with no retry.
@@ -145,8 +171,10 @@ do not keep an SDK execution environment alive.
 
 ## Task fields, not roles
 
-`agent_spawn` requires `agent`, `prompt`, `profile` (`worker` or `researcher`) and `reasoning_difficulty`; `agent_run`
-requires `agent`, `builds_on` and `prompt`. Both take optional `label` and `dispatch`. `agent_send`
+`agent_spawn` requires `agent`, `prompt`, `profile` (`worker` or `researcher`)
+and `reasoning_difficulty`, and takes optional `workspace` (`shared` or
+`worktree`, default shared). `agent_run` requires `agent`, `builds_on` and
+`prompt`. Both take optional `label` and `dispatch`. `agent_send`
 joins/steers the task bound when called; it never starts a continuation.
 `agent_answer` takes `agent`, the exact pending `question_id`, and `answer`,
 with optional wait_ms. It preserves the asking task's label, dispatch and Agent settings;
@@ -181,8 +209,9 @@ at submission, with identity or the automatic supported-level rule; inheritance
 never crosses the off boundary). Session effort
 overrides are operator configuration, not model tool arguments. Reuse preserves
 all accepted settings and does not accept or re-score difficulty.
-Callers may choose only profile/reasoning_difficulty, never a concrete worker model or
-thinking level, cwd, owner, generation, session path, or history path.
+Callers choose profile, reasoning difficulty and workspace mode, never a
+concrete worker model or thinking level, arbitrary cwd, owner, generation,
+session path or history path.
 
 Worker is a cooperative developer with read/edit/write/Bash/Git/build tools
 under normal permissions, no web or enforced readonly review ceiling.

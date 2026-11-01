@@ -71,7 +71,7 @@ build and installed runtime separate; a changed protected generation requires a
 fresh Pi process. This is a permission floor, not an OS sandbox or protection
 against opaque programs; see [security](security.md#immutable-resource-floor-in-writable-installations).
 
-## Cooperative Git
+## Cooperative Git and workspaces
 
 The [Git contract](git-read-proof.md) keeps the original command, environment,
 executable selection and leading `cd` unchanged. Existing non-Git hardeners
@@ -104,11 +104,38 @@ never ALLOW or a truncated-command shortcut. Redirects, outputs and sibling
 commands retain independent effects. The speculative HOME-stability fold is
 retired; dynamic `cd` retains ordinary unknown-base behavior.
 
-Agents share the checkout and Git index; coordinate overlapping edits and Git
-writes. Native Git can refresh index caches and take locks: no zero-write,
+New model requests select `worker` or `researcher`; worker maps to internal
+`editor`. No legacy profile aliases or capabilities are supported.
+Independently, spawn fixes `workspace: "shared" | "worktree"`, default
+shared. See [workspaces](workspaces.md) for the full contract. Runtime allocates
+a detached private worktree at actual execution/session initialization,
+not admission, preparation or replay, pinned to a local HEAD commit. It copies
+no dirty/untracked files, installed dependencies or host/user credentials and
+settings. Committed configuration files remain part of the checkout; it is not
+a secret-scrubbing export. It never auto-installs, merges or commits. Setup failure is visible, not shared fallback.
+Core admission and source `settings.cwd` remain immutable; the runtime binds
+source project instructions/settings/config/trust to the actual child cwd.
+The known whole checkout root maps to the source repository root for deny/ask
+aliases only, never ALLOW or external-directory exemptions; source policy still
+loads at source cwd. Relative dispatch paths still use source cwd. An
+uninitialized worktree cannot declare `dispatch.tree`; declare it on a follow-up
+once the actual absolute path is known. First-task checks without a tree remain
+valid and observe actual execution cwd. List/detail expose
+uninitialized mode or actual cwd, source cwd and baseline after initialization.
+
+Retain worktrees and the private recovery manifest through completion, kill,
+failure and shutdown for manual inspection/cleanup. Default allocations use
+absolute XDG_STATE_HOME (otherwise ~/.local/state), under pi-alehouse/worktrees,
+not TMPDIR or agentDir. Persistent placement is not indefinite retention or a
+backup guarantee; custom volatile state roots remain the operator's choice.
+Eligible forwarded worktree asks currently defer from Jev as delegation_unbound
+to ordinary human handling; existing allows/yolo are unchanged. Authority release is not
+worktree deletion or acceptance of results. There is no cleanup tool. Separate
+indexes reduce contention but objects, most refs and configuration remain
+shared. Native Git can refresh index caches and take locks: no zero-write,
 automatic retry or safe lock-removal guarantee. An operator may explicitly launch
 `GIT_OPTIONAL_LOCKS=0 pi-alehouse`; it is not injected and does not disable
-required writer locks or all IO. Shared execution is not OS isolation.
+required writer locks or all IO. Neither workspace mode is OS isolation.
 
 Generated copies are not source; use the matched migration and single validation
 owner below. `node scripts/check-pi-git-grammar.mjs` checks source grammar/tokenizer
@@ -323,6 +350,19 @@ fallback; on Linux supply an absolute trusted util-linux path, e.g.
 `PI_HARNESS_FLOCK` or checks trusted absolute util-linux candidates
 (`/usr/bin/flock`, `/bin/flock`, `/run/current-system/sw/bin/flock`); it does
 not use an arbitrary `flock` from PATH. This is not a sandbox/distributed lock.
+
+Worktree creation and its primary local-Git/composition tests require verified
+absolute Git. The launcher checks `/usr/bin/git`, `/bin/git`, and
+`/run/current-system/sw/bin/git`; otherwise supply an explicit absolute override,
+for example `PI_HARNESS_GIT=/absolute/trusted/bin/git npm run check` (and the same
+override when launching `pi-alehouse`). Nix dev-shell/PATH availability alone is
+not enough when those candidates are absent. The resolver validates realpath and
+`git --version`, never searches project PATH, and does not fall back after a bad
+override. These primary tests fail rather than silently skip missing coverage.
+Shared mode can still run without Git; optional source-state capture is unknown,
+whereas requested worktree creation fails with `trusted_git_unavailable`.
+Tests allocating state must override HOME and XDG_STATE_HOME to owned fixtures;
+never leave worktrees in the developer's real state directory.
 
 ## Static quality gate
 

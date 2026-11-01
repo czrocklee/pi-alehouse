@@ -78,6 +78,53 @@ test("detail profile labels say worker without renaming nicknames or historical 
   }
 });
 
+test("detail shows shared working-copy mode without inventing worktree metadata", () => {
+  const text = joined();
+  assert.match(text, /workspace\s+shared working copy/);
+  assert.match(text, /cwd\s+\/workspace\/project/);
+  assert.doesNotMatch(text, /^ {2}(?:source|base)\s/m);
+  assert.doesNotMatch(text, /sandbox|isolated/);
+});
+
+test("detail worktree fields preserve actual cwd, source and full base after execution", () => {
+  const workspace = { mode: "worktree", cwd: "/tmp/worker-copy", source_cwd: "/source/original", base_commit: "a".repeat(40) };
+  const v = view({ isolation: "worktree", workspace, status: "completed", execution_exited: true });
+  const before = structuredClone(v);
+  const text = renderDetailFields({ view: v, live: live() }, theme, 120).join("\n");
+  assert.match(text, /workspace\s+worktree working copy/);
+  assert.match(text, /cwd\s+\/tmp\/worker-copy/);
+  assert.match(text, /source\s+\/source\/original/);
+  assert.ok(text.includes(workspace.base_commit));
+  assert.doesNotMatch(text, /\/workspace\/project|pending creation|sandbox|isolated|\[.*(?:cleanup|remove).*\]/i);
+  assert.deepEqual(v, before, "rendering neither rewrites source settings nor owns worktree lifecycle");
+});
+
+test("detail uninitialized worktree shows source without promising creation after failure", () => {
+  for (const status of ["queued", "running", "failed"]) {
+    const text = joined({ isolation: "worktree", status, workspace: undefined });
+    assert.match(text, /workspace\s+worktree · not initialized/);
+    assert.match(text, /source\s+\/workspace\/project/);
+    assert.doesNotMatch(text, /^ {2}(?:cwd|base)\s/m);
+    assert.doesNotMatch(text, /pending creation/);
+  }
+});
+
+test("narrow detail worktree fields wrap complete paths and base without clipping", () => {
+  const workspace = { mode: "worktree", cwd: `/tmp/${"工作副本/".repeat(12)}checkout`,
+    source_cwd: `/source/${"project/".repeat(12)}original`, base_commit: "b".repeat(64) };
+  for (const width of [40, 62, 100]) {
+    const lines = body({ isolation: "worktree", workspace }, {}, width);
+    assert.ok(lines.every((line) => visibleWidth(line) <= width));
+    for (const [label, value] of [["cwd", workspace.cwd], ["source", workspace.source_cwd], ["base", workspace.base_commit]]) {
+      const at = lines.findIndex((line) => new RegExp(`^ {2}${label}\\s`).test(line));
+      assert.ok(at >= 0, label);
+      let restored = lines[at].slice(12);
+      for (let i = at + 1; i < lines.length && lines[i].startsWith(" ".repeat(12)); i++) restored += lines[i].slice(12);
+      assert.equal(restored, value, `${label}: ${width}`);
+    }
+  }
+});
+
 test("the body carries the identity, configuration and lifecycle the widget line cannot", () => {
   const text = joined();
   assert.match(text, /task\s+审查 controller\.ts 的生命周期合同/);

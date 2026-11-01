@@ -273,29 +273,35 @@ neither diagnose model availability/ability nor migrate Agents. The linked
 contract lists unobserved paths and publication limits.
 
 The harness depends on, but does not own, generated worker policy, permission
-authority, static guards, search policy, and Jev review policy. Public profiles
-are worker (stable internal editor) and researcher. Worker has local
-read/edit/write/Bash/build tools under normal permissions and no web; reviews
-are instructions, not an enforced readonly ceiling. Researcher has read-only
-file tools and web, no Bash/edit/write. Agents share one checkout and Git index;
-coordinate overlapping edits and Git writes. Worker has no extra child-only
-blanket Git mutation deny and no blanket Git allow.
-No legacy profile aliases or scratch capabilities remain. Existing user files
-and literal historical records are not rewritten. No profile is an OS sandbox.
-Opaque programs can perform internal IO outside the classifier's view.
-Researcher reads and web calls can move project content to the network; prompt
-guidance cannot enforce secrecy. Tool availability is not authorization; see
-[researcher web access](security.md#researcher-web-access).
+authority, static guards, search policy, and Jev review policy. New model
+requests offer only `worker` and `researcher`. Worker maps to stable internal
+`editor`, with local read/edit/write/Bash/Git/build tools under normal permission;
+a review assignment is not an enforced readonly ceiling. Researcher has read-only
+file tools and web, no Bash/edit/write. Basic credential/resource/high-risk
+protection and user-configured denies remain. No profile is an OS sandbox.
+
+No legacy profile aliases or capabilities are supported. Opaque programs can
+perform internal IO outside the classifier's view. Redirect-buried argv belongs only to the last command of a redirected
+body; completed spellings add restrictions, never ALLOW. Dynamic `cd` targets
+keep an unknown, yolo-satisfiable base; the speculative HOME-stability fold is
+retired. See [redirect-buried argv](security.md#redirect-buried-argv-and-home-cd).
+
+Nested delegation is excluded for every child. Only researcher has web tools;
+worker has no web tool table. Researcher file reads and web calls together can move project content
+to the network; its prompt forbids that but cannot enforce it (see
+[researcher web access](security.md#researcher-web-access)). Tool availability
+is not authorization.
 
 [Git literal restrictions](git-read-proof.md) inventory identifiable literal
 file operands, historical path spellings, explicit outputs and redirects, not
 arbitrary historical content. Repository queries and mutations use ordinary
 Bash permission; only bounded literal Git version queries can qualify for
-fixed-query automatic allowance. There is no second per-operation effect
-authorization matrix. Commands, environment, executable selection and leading
-`cd` stay unchanged. Raw configured denies/specific asks and independent
-path/output/redirect facts remain. A selected deny survives grants/yolo; normal
-yolo can satisfy ordinary asks, not invalid-config fail-closed asks.
+fixed-query automatic allowance. There is no blanket Git allow, extra
+worker-only blanket mutation deny or second per-operation effect authorization
+matrix. Commands, environment, executable selection and leading `cd` stay
+unchanged. Raw configured denies/specific asks and independent path/output/
+redirect facts remain. A selected deny survives grants/yolo; normal yolo can
+satisfy ordinary asks, not invalid-config fail-closed asks.
 
 There are no command-classification Git subprocess provenance probes,
 history/object walks or unattributed-sentinel workflow. Literal historical
@@ -310,10 +316,49 @@ is promised. An operator may explicitly launch with `GIT_OPTIONAL_LOCKS=0`;
 the product does not inject it, and it disables neither required writer locks
 nor all IO. Portable path tests are not native Windows/MSYS Git validation.
 
-Redirect-buried argv belongs only to the last command of a redirected body;
-completed spellings add restrictions, never ALLOW. Dynamic `cd` targets keep
-an unknown, yolo-satisfiable base; the speculative HOME-stability fold is
-retired. See [redirect-buried argv](security.md#redirect-buried-argv-and-home-cd).
+### Optional workspaces
+
+[Workspaces](workspaces.md) are independent of profile: spawn fixes shared
+(default) or worktree for that Agent, never an arbitrary cwd. Runtime creates a
+private detached worktree only at actual execution/session
+initialization, from a recorded local HEAD commit. Admission, preparation and
+replay create none. Setup failure is visible, not shared fallback. No dirty,
+untracked or ignored files, installed dependencies or build caches are
+transferred, nor host/user credentials or settings. Committed configuration
+files remain in the checkout; this is not a secret-scrubbing export. No
+automatic installation, patch transfer or merge is provided.
+
+Actual child tools run in the selected workspace, while source instructions,
+settings, permission configuration and trust are inherited through a live
+binding, not copied or replaced by checked-out `.pi` content. Core admission
+and source `settings.cwd` remain immutable. The known whole checkout root maps
+to the source repository root for deny/ask aliases only, not ALLOW or external
+boundary exemptions. Other checkouts keep ordinary external policy. Relative
+dispatch declarations still resolve at source cwd; uninitialized worktrees
+cannot declare a tree. Declare its actual absolute path on a follow-up once
+known; first-task checks without a tree remain available.
+Checks observe actual child cwd, not proof that the source checkout was tested;
+linked-layout source capture may remain unknown. List/detail expose
+uninitialized mode or actual cwd, source cwd and baseline after initialization.
+
+Worktrees and private recovery manifests are retained on completion, kill,
+failure and Owner shutdown for manual recovery/cleanup. Defaults use absolute
+XDG_STATE_HOME (otherwise ~/.local/state), beneath pi-alehouse/worktrees and
+outside agentDir, not TMPDIR. Persistent default placement is not indefinite
+retention or backup: custom state locations can be volatile or broadly allowed,
+and unique detached commits can become reclaimable after worktree loss/pruning. Release revokes
+session-bound authority, not edits or working copies, and does not prove every
+descendant stopped. There is no new cleanup tool. Separate files/indexes reduce
+contention but objects, most refs and configuration remain shared. Worktree
+mode is not strict readonly, historical secrecy, zero-lock protection, Git
+confinement or OS isolation. Integration and safe manual cleanup remain the
+operator's responsibility.
+
+Eligible forwarded worktree asks currently defer from Jev to ordinary human
+handling as delegation_unbound, because its script evidence remains source-cwd
+based. Do not relax only the runtime cwd comparison. Existing allows/yolo remain
+outside that eligible ask path. Worktree setup requires verified absolute Git
+(PI_HARNESS_GIT or a trusted launcher candidate); shared mode does not.
 
 Jev review concurrency is independent of worker capacity: up to four root and
 eight distinct subagent reviews can be in flight. Extra reviews defer with

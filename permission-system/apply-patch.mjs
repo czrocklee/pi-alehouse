@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { applyProfileDisplayPatch } from "./profile-display-patch.mjs";
 import { applyNativeGitPatch } from "./native-git-patch.mjs";
 import { applyRedirectArgvPatch } from "./redirect-argv-patch.mjs";
+import { applyWorkspacePolicyPatch } from "./workspace-policy-patch.mjs";
 const root = process.argv[2];
 assert(root, "Usage: node apply-patch.mjs PACKAGE_ROOT");
 assert.equal(JSON.parse(readFileSync(join(root, "package.json"))).version, "32.0.3");
@@ -368,8 +369,9 @@ patch("src/authority/forwarded-request-server.ts", [
 ]);
 applyNativeGitPatch(root, patch);
 applyRedirectArgvPatch(root, patch);
+applyWorkspacePolicyPatch(root);
 applyProfileDisplayPatch(root, patch);
 // Dynamic cd targets (including ~) retain upstream's unknown-base handling.
 // Do not infer HOME stability from an AST: arbitrary earlier programs can
 // change the environment or the directory named by a later shell expansion.
-console.log("Applied managed permission/provenance/profile/yolo, original-command Git scope, redirect-buried argv and immutable resource-floor patches to pi-permission-system 32.0.3");
+console.log("Applied managed permission/provenance/profile/yolo, original-command Git scope, redirect-buried argv, workspace policy and immutable resource-floor patches to pi-permission-system 32.0.3");

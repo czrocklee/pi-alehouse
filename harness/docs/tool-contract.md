@@ -77,9 +77,10 @@ while accepted-request replay remains intact. This is an adapter opt-in, not a
 restriction on optional/repeated display names in an unbound generic core Owner.
 
 Spawn requires `agent`, `prompt` (1--131072 UTF-16 units), `profile`
-(`worker` or `researcher`; worker maps to stable internal `editor`) and integer `reasoning_difficulty` (1--5,
-from easiest to hardest). Optional
-fields are `label` (1--120), `inherit_context`, `after` (1--4 other names),
+(`worker` or `researcher`) and integer `reasoning_difficulty` (1--5,
+from easiest to hardest). Worker maps to stable internal `editor`.
+Optional fields are `workspace` (`shared` or `worktree`, default `shared`),
+`label` (1--120), `inherit_context`, `after` (1--4 other names),
 `wait_ms` (0--300000), `max_turns` (1--10000, default 256) and
 `max_duration_ms` (1--86400000, default 1800000), plus optional `dispatch`.
 
@@ -91,30 +92,56 @@ not shell globs or expansions. See [task dispatch](task-dispatch.md) for exact p
 profile/external preflight, claims, after rechecks and validation observations.
 These declarations do not grant permissions or prove that checks ran. In
 particular, `tree` is checked as `path_write`; it cannot create an output-root
-exception. Preflight permission errors expose the target `profile` and checked
+exception. An uninitialized worktree Agent cannot declare it: start without a
+tree (checks alone are valid), then use the actual absolute cwd from agent_list
+on a follow-up. This fails before dispatch preparation or resource allocation. Preflight permission errors expose the target `profile` and checked
 `surface`, separately from missing-input and wrong-type filesystem errors.
 
-Profile, reasoning difficulty, context and budgets are fixed for the Agent at spawn;
-later tasks and routing changes do not migrate an existing Agent's model.
-Use a new Agent for a different binding.
-Prompt is the full task instruction, including the deliverable, scope and
-stopping conditions; label defaults to its first nonblank line and is never
-forwarded as an instruction. Worker has local read/edit/write/Bash/Git/build
-tools under normal permissions, no web. Review-only work is an instruction, not
-an enforced readonly ceiling. It has no extra child-only blanket Git mutation
-deny and no blanket Git allow. Repository queries and mutations use ordinary
-Bash permission; only bounded literal Git version queries can qualify for
-fixed-query automatic allowance. Raw configured denies/specific asks, explicit
-literal paths/outputs, redirects and credential/resource/high-risk protection
-remain. Normal yolo applies to ordinary asks, not denies or invalid-config
-fail-closed asks. There are no historical-provenance probes or second
-Git-operation authorization matrix. See [Git restrictions](git-read-proof.md).
+Profile, workspace, reasoning difficulty, context and budgets are fixed for the
+Agent at spawn; later tasks, steering and routing changes do not migrate them.
+Use a new Agent for a different binding. Prompt is the full task instruction,
+including deliverable, scope and stopping conditions; label defaults to its
+first nonblank line and is never forwarded as an instruction.
+
+Worker has local read/edit/write/Bash/Git/build tools under normal permissions,
+without web. Review-only work is an instruction, not an enforced readonly
+ceiling. It has no extra child-only blanket Git mutation deny and no blanket Git
+allow. Repository queries and mutations use ordinary Bash permission; only
+bounded literal Git version queries can qualify for fixed-query automatic
+allowance. Raw configured denies/specific asks, explicit literal paths/outputs,
+redirects and credential/resource/high-risk protection remain. Normal yolo
+applies to ordinary asks, not denies or invalid-config fail-closed asks. There
+are no historical-provenance probes or second Git-operation authorization
+matrix. See [Git restrictions](git-read-proof.md).
 
 Researcher has read-only file tools and web, no Bash/edit/write, and returns
-web-derived untrusted material. No legacy profile aliases or scratch
-capabilities remain. Bash/web remain permission-gated; no profile is an OS
-sandbox. All Agents share the checkout and Git index; coordinate overlapping
-edits and Git writes with the parent.
+web-derived untrusted material. No legacy profile aliases or capabilities are
+supported. Bash/web remain permission-gated;
+no profile or workspace is an OS sandbox.
+
+Workspace is independent of profile. Shared uses the original cwd and pending
+local files. Worktree requests a private detached checkout of a
+recorded local HEAD at actual execution/session initialization, not admission,
+preparation or replay. Setup failure is visible, not shared fallback. Dirty,
+untracked/ignored files, installed dependencies and caches are not transferred,
+nor host/user credentials or settings. Committed configuration files remain in
+the checkout; this is not a secret-scrubbing export. There is no automatic
+install, patch transfer or merge.
+Source project instructions/settings/config/trust remain inherited through
+binding while tools execute at actual child cwd. The whole known checkout root
+maps to the source repository root for deny/ask aliases only, not ALLOW or
+external-directory exemptions. Relative dispatch
+paths still use source cwd; use actual absolute paths for worktree output
+claims. Checks observe actual child cwd. Worktrees and private recovery
+manifests remain on completion/kill/failure/shutdown for manual cleanup; kill
+is not deletion or acceptance of edits. Default storage is absolute XDG_STATE_HOME
+(or ~/.local/state), beneath pi-alehouse/worktrees outside agentDir, not TMPDIR;
+persistent placement is not perpetual retention or backup. Other sessions retain
+ordinary external policy, normally ask under the seed rather than source deny.
+Eligible forwarded worktree asks currently defer from Jev as delegation_unbound
+to ordinary human handling; existing allows/yolo are unchanged. Separate files/indexes still share
+objects, most refs and configuration. No strict readonly, historical secrecy,
+zero-lock guarantee or new cleanup tool follows. See [workspaces](workspaces.md).
 
 Difficulty describes reasoning and quality, not permissions: 1--5 resolve
 one-to-one to `d1`--`d5`. Model-facing descriptions give the
@@ -176,8 +203,8 @@ Delivery is not proof of action.
 agent_answer({ agent, question_id, answer, wait_ms? })
 ```
 
-Answer is 1--16384 nonblank UTF-16 units. No profile, reasoning_difficulty, budgets, label
-or after is accepted. The original task must already be truly settled
+Answer is 1--16384 nonblank UTF-16 units. No profile, workspace,
+reasoning_difficulty, budgets, label or after is accepted. The original task must already be truly settled
 `needs_input`, still pending and unreserved, with no current Run and a healthy,
 reusable Agent/Owner. Answer does not wait and then silently answer a future
 question. It reserves the original question and admits a continuation with the
@@ -543,6 +570,12 @@ still waits for actual execution/cleanup promises, not an empty observer set.
 
 List is a read-only roster with `profile`/`reasoning_difficulty`, label/task projection,
 current pending-question identity via has_question, and elapsed_s when running.
+Worktree rows also expose source cwd and actual cwd/base commit after successful
+initialization; without confirmed metadata they show `state: "uninitialized"`,
+including failed setup. Shared rows omit `workspace`; the detail pane shows
+either mode. No working path or future creation is invented. These are observations, not
+permission grants or source-checkout validation. Public worker maps to the
+stable internal editor identity, without rewriting historical profile IDs.
 Unavailable is a boolean availability fact with unavailable_reason diagnostics.
 History observations include four newest earlier_labels, context_tokens, and
 eight successful-edit/write `touched` paths plus touched_omitted. Bash changes
@@ -575,8 +608,8 @@ Both closed schemas require 1--8192 nonblank UTF-16 units and revalidate after
 SDK hooks against current Run/generation, accepting gate and stop/exit state.
 Closed callbacks fail explicitly (`RUN_INPUT_CLOSED`), never report acceptance.
 All nine management tools and retired names are excluded/denied in children.
-Only researcher receives web tools, with its own instance; declared editor
-web capability is excluded by the effective harness allowlist. See
+Only researcher receives web tools, with its own instance; worker has no web
+tool table. See
 [security](security.md).
 
 Alert is for decision-relevant facts, not routine progress. Successful acceptance

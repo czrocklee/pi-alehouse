@@ -1,4 +1,4 @@
-import type { AdmittedAgentConfig, DrainWait, ExecutionFacts, HistoryRef, Outcome, Output, RunExecutionIdentity, RunIdentity, RunTelemetry } from "./contracts.js";
+import type { AdmittedAgentConfig, DrainWait, ExecutionFacts, HistoryRef, Outcome, Output, RunExecutionIdentity, RunIdentity, RunTelemetry, WorkspaceInfo } from "./contracts.js";
 import type { UsageLedger } from "./usage-ledger.js";
 import type { ValidationReceipt } from "./dispatch.js";
 
@@ -31,6 +31,7 @@ export interface RunCallbacks {
 }
 export interface AgentSessionPort {
   readonly session_id: string;
+  readonly workspace?: WorkspaceInfo;
   readonly history?: HistoryPort;
   canInput(): boolean;
   run(prompt: string, callbacks: RunCallbacks, identity: RunExecutionIdentity): Promise<ExecutionFacts>;

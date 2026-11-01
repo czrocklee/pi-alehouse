@@ -70,6 +70,7 @@ export function agentRow(view: RunView, summary: AgentSummary, nameOf: NameOf, r
   const recovery_hint = hint !== undefined && !recoveryHints.has(hint) ? hint : undefined;
   if (recovery_hint !== undefined) recoveryHints.add(recovery_hint);
   return { agent, profile: profileLabel(view.effective_settings.profile), reasoning_difficulty: view.effective_settings.difficulty,
+    ...(view.isolation === "worktree" ? { workspace: view.workspace ? { ...view.workspace } : { mode: "worktree", state: "uninitialized" } } : {}),
     label: utf16Prefix(view.description, 120), ...task,
     ...(recovery_hint === undefined ? {} : { recovery_hint }),
     ...(running && view.execution_elapsed_ms !== undefined ? { elapsed_s: Math.round(view.execution_elapsed_ms / 1000) } : {}),

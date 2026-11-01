@@ -170,7 +170,20 @@ export function renderDetailFields(input: DetailInput, theme: Theme, width: numb
   field("routing", `${s.preset}@${s.preset_version} · ${route}`);
   field("effort", `${s.thinking} · ${resolution}${source ? ` · source: ${source}` : ""} · fixed at creation`);
   field("model", s.model);
-  field("cwd", s.cwd);
+  // Working-copy metadata is observational, not an isolation or cleanup grant.
+  // Admission cwd remains the source; do not present it as a pending worktree.
+  if (view.workspace) {
+    field("workspace", "worktree working copy");
+    field("cwd", view.workspace.cwd);
+    field("source", view.workspace.source_cwd);
+    field("base", view.workspace.base_commit);
+  } else if (view.isolation === "worktree") {
+    field("workspace", "worktree · not initialized");
+    field("source", s.cwd);
+  } else {
+    field("workspace", "shared working copy");
+    field("cwd", s.cwd);
+  }
   field("tools", s.tools.join(" "));
   field("phase", [view.phase, view.resumable ? "resumable" : "", view.execution_exited ? "exited" : ""].filter(Boolean).join(" · "));
   if (!view.execution_exited && view.drain) field("drain", formatDrain(view.drain), "warning");

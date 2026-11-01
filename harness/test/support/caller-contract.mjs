@@ -26,6 +26,9 @@ export function assertCallerTools(tools) {
   assert.match(fields.profile.description, /worker: local reading, editing, Bash, Git and builds under normal permissions; no web/);
   assert.match(fields.profile.description, /researcher: web search\/fetch and read-only file tools; no Bash\/edits.*untrusted/);
   assert.match(fields.profile.description, /instruction, not a readonly sandbox.*User denies and normal approvals still apply/);
+  assert.deepEqual(fields.workspace.enum, ["shared", "worktree"]);
+  assert.match(fields.workspace.description, /Default shared.*uncommitted work.*detached.*local HEAD/);
+  assert.match(fields.workspace.description, /no uncommitted changes, untracked files or dependencies are copied.*Fixed for this Agent.*agent_list.*actual cwd\/base.*Retained after kill.*Not a sandbox/);
   const difficulty = fields.reasoning_difficulty.description;
   assert.equal(fields.reasoning_difficulty.type, "integer");
   assert.equal(fields.reasoning_difficulty.minimum, 1); assert.equal(fields.reasoning_difficulty.maximum, 5);
@@ -43,9 +46,9 @@ export function assertCallerTools(tools) {
   assert.match(fields.max_turns.description, /per task, default 256.*partial result/);
   assert.match(fields.max_duration_ms.description, /per task.*asked to stop/);
   for (const key of ["model", "effort", "strength", "thinking", "name", "description", "message", "difficulty"]) assert.equal(key in fields, false, key);
-  assert.match(spawn.description, /Shared checkout, no isolation or delegation/);
+  assert.match(spawn.description, /Shared checkout by default, optional private worktree; neither is a sandbox.*No nested delegation/);
   assert.match(spawn.description, /Spawn for new work\/reviews or different settings; agent_run is for that Agent's follow-ups/);
-  assert.match(spawn.description, /Model, profile, reasoning difficulty, context and per-task budgets are fixed/);
+  assert.match(spawn.description, /Model, profile, workspace, reasoning difficulty, context and per-task budgets are fixed/);
   assert.match(spawn.description, /Queued work counts toward capacity.*kill finished reviewers\/accepted work first.*keep workers awaiting build\/test fixes/);
   assert.match(spawn.description, /check agent_list before repeating/);
   assert.match(spawn.description, /action, reason, agents, alerts; alerts do not mean completion/);
@@ -75,10 +78,11 @@ export function assertCallerTools(tools) {
     assert.match(dispatch.properties.tree.description, /Other sessions only produce a tree_shared note; execution still starts/);
     assert.match(dispatch.properties.tree.description, /commands, other hosts and agent directories are not coordinated.*Omission neither forbids builds nor makes sharing safe.*no note does not prove a free tree/);
     assert.match(dispatch.properties.ownership.items.description, /Assign each shared file to one task; others report needed changes/);
+    assert.match(dispatch.description, /Relative declarations use the original source cwd even with worktree; use absolute paths for worktree outputs/);
   }
   assert.match(run.description, /idle Agent a follow-up to its own work.*running Agent is busy.*agent_send or agent_wait.*Pending questions require agent_answer/);
   assert.match(run.description, /Each turn re-reads its conversation \(context_tokens\).*agent_spawn for new\/unrelated work or different settings/);
-  assert.match(run.description, /Model\/profile\/reasoning difficulty\/budgets stay fixed despite routing changes/);
+  assert.match(run.description, /Model\/profile\/workspace\/reasoning difficulty\/budgets stay fixed despite routing changes/);
   assert.match(run.description, /Waits up to 30 s for an ending task/);
   assert.equal(runFields.builds_on.minLength, 1); assert.equal(runFields.builds_on.maxLength, 512);
   assert.match(runFields.builds_on.description, /earlier work of this Agent that the task continues; not sent to the Agent.*If none, spawn instead.*only its result is needed.*agent_spawn with after/);

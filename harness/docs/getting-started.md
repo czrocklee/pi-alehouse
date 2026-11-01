@@ -105,7 +105,7 @@ See the [panel guide](interface.md) for mouse controls and renderer differences.
 
 - Choosing `off` disables new worker work; it does not cancel accepted work.
 - Never `/reload` while an Owner is open. Close it and start a fresh Pi process after updating Alehouse.
-- Cancellation is cooperative, not a guaranteed immediate stop. Worker (internal editor) and researcher profiles are not OS sandboxes.
+- Cancellation is cooperative, not a guaranteed immediate stop. Tasks use worker (internal editor) or researcher. Neither profile nor optional worktree mode is an OS sandbox; see [workspaces](workspaces.md).
 - Alehouse protects its own installed code from model-tool writes. To work on Alehouse's source using Alehouse, launch a separately installed copy rather than that source checkout.
 - Optional Jev review can send action and review context to an external service. Without a configured key it defers to human approval. Read [data handling and security](security.md) before enabling it.
 - Dashboard posting and Grok billing access are opt-in; see [footer integrations](interface.md#optional-footer-network-integrations).

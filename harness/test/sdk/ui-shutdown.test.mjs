@@ -42,6 +42,7 @@ for (const fault of ["widget", "panel", "all"]) test(`quit drains before later S
   await writeFile(join(authority, "package.json"), JSON.stringify({ type: "module", exports: "./index.js" }));
   await writeFile(join(authority, "index.js"), "export const getPermissionsService = () => ({});\n");
   await writeFile(join(permissionRoot, "index.ts"), 'export { getPermissionsService } from "./node_modules/@gotgenes/pi-permission-system/index.js";\n' +
+    'export const bindWorkspacePolicy = () => { throw new Error("FakePort shutdown fixture must not bind an SDK workspace"); };\n' +
     'export const subscribeManagedBlocks = () => { throw new Error("FakePort shutdown fixture must not observe an SDK child"); };\n');
   t.mock.method(globalThis, "fetch", () => { assert.fail("shutdown fixture attempted network IO"); });
   t.mock.method(OwnerController, "open", async () => h.controller);

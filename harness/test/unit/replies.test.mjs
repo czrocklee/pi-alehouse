@@ -231,6 +231,14 @@ test("preflight denials project the checked surface and target profile only for 
   assert.equal(filesystem.surface, undefined); assert.equal(filesystem.profile, undefined);
 });
 
+test("a tree declared before worktree initialization classifies as an actionable dispatch error", () => {
+  const resolution = "Start without tree; after initialization use agent_list actual cwd and declare its absolute tree on follow-up.";
+  const result = errorReply({ code: "DISPATCH_WORKTREE_UNINITIALIZED",
+    details: { agent: "wren", key: "tree", requested: "build", resolution } }).error;
+  assert.deepEqual(result, { code: "DISPATCH_WORKTREE_UNINITIALIZED", agent: "wren", parameter: "tree",
+    path: "build", requested: "build", resolution });
+});
+
 test("Esc abort is not task interruption, and neither consumes finished presentation", async (t) => {
   const { controller: c, ports } = await fixture(t);
   const run = await c.submit("a", named("orca")); await until(() => ports[0]?.streaming);

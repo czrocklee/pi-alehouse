@@ -33,12 +33,24 @@ Path fields are literal relative/absolute filesystem paths, not shell words or
 shell globs. No expansion is performed. Reject leading/trailing whitespace,
 glob syntax, control characters,
 shell quoting, `$`, backslash and leading `~` or `@`; do not wrap a path in shell
-quotes to express spaces. Resolve against the admitted cwd, then use lexical
-absolute and canonical aliases derived through the nearest existing ancestor
+quotes to express spaces. Resolve against the immutable admitted **source cwd**,
+including when the Agent selects worktree mode, then use lexical absolute and
+canonical aliases derived through the nearest existing ancestor
 for permission, external scope, conflicts and tree identity. This also handles
 not-yet-created outputs and symlink aliases. Prefix overlap uses directory
 separator boundaries, not arbitrary string prefixes. It is not hardlink/inode
 tracking, a TOCTOU barrier or a filesystem snapshot.
+
+[Workspace selection](workspaces.md) does not rebase relative dispatch paths.
+Use actual absolute paths for worktree output ownership/build trees once known;
+relative paths continue to name source-checkout resources. An uninitialized
+worktree Agent cannot declare `dispatch.tree`: start without it, inspect
+`agent_list` after initialization, then declare the actual tree on a follow-up.
+First-task checks without a tree remain valid. Rejection occurs before dispatch
+preparation, claims, queueing or workspace creation. Queued worktrees have no
+invented cwd: `agent_list`/detail expose uninitialized mode (also used after
+failed setup), then actual cwd, source cwd and baseline after initialization. Dispatch remains a declaration, not a grant,
+file copy, patch transfer or integration step.
 
 Only `inputs` must already exist as ordinary files/directories. `ownership` and
 `tree` may name new outputs; an existing `tree` must be a directory. Missing
@@ -48,8 +60,8 @@ not interchangeable diagnoses.
 ## Preflight and admission
 
 The synchronous read-only host preflight uses the target internal permission
-**profile**, not the Agent nickname. Public `worker` maps to stable `editor`;
-the other public choice is `researcher`:
+**profile**, not the Agent nickname. New model choices are `worker` (mapped to
+stable `editor`) and `researcher`:
 
 - inputs: `path_read`;
 - ownership/tree: `path_write`;
@@ -59,12 +71,9 @@ the other public choice is `researcher`:
 Known deny rejects admission (`PREFLIGHT_DENIED`) before additional input
 classification stat; permission lookup itself may canonicalize paths. The error
 reports the target `profile` and checked permission `surface`; it is not a
-missing-directory/type result. Worker supports edits, Bash/Git and builds under
-normal permission; researcher has no Bash/edit/write. Git has no extra
-worker-only blanket mutation deny or blanket allow; configured denies and
-ordinary approvals still apply. Agents share the checkout and Git index, so
-coordinate overlapping edits and Git writes. A `tree` declaration creates no
-profile or output-root exception. Policy
+missing-directory/type result. Worker supports project edits/builds under normal
+permission; researcher has no Bash/edit/write.
+A `tree` declaration does not create a profile or output-root exception. Policy
 ask/unknown does not trigger approval and may pass this approximate preflight.
 It is **not a grant**: child per-session rules and ordinary tool gates still
 apply. A missing/throwing/invalid port is an interface failure, not a policy
@@ -72,6 +81,15 @@ unknown to silently admit. Immediate missing inputs use
 `DISPATCH_INPUT_MISSING`. Preparation has no claim-installation side effects;
 core finally rechecks and atomically installs the accepted claim. Accepted
 request replay returns the original Run without new claims or observations.
+Neither preparation, admission nor replay creates a worktree. Runtime allocates
+the retained detached checkout only at actual execution/session
+initialization, pinned to local HEAD. Core admission and source `settings.cwd`
+remain immutable. The actual child cwd is workspace-local, while source project
+instructions/settings/config/trust are inherited through binding, not copied.
+The known whole checkout root maps to the source repository root for deny/ask
+aliases only, never ALLOW or external-directory exemptions; worktree selection
+cannot silently load a checked-out policy. Persistent state placement and normal
+cross-session external policy are described in [workspaces](workspaces.md).
 
 Same-Owner overlapping ownership declarations reject with `RESOURCE_OWNED`;
 a conflicting build tree rejects with `BUILD_TREE_BUSY`. Lexical and canonical
@@ -134,6 +152,12 @@ that confirmed release within a bound, then rechecks everything; see
 Optional observation failure must not poison the Owner. Claims are Owner-memory state,
 not persisted locks, grants or restart hydration.
 
+Dispatch claim release and session-authority revocation do not delete worktrees
+or accept edits. Worktrees and private recovery manifests remain after
+completion, kill, failure and shutdown for manual recovery/cleanup. Separate
+files/indexes still share objects, most refs and configuration; no strict
+readonly, historical secrecy, zero-lock or OS isolation guarantee follows.
+
 ## Wall-clock soft wrap
 
 Let `D = max_duration_ms`. For `D > 1000`, reserve
@@ -171,7 +195,8 @@ Normal human permission handling and immutable/profile floors remain.
 
 Only Runs declaring `checks` capture `source_state`, at execution start, not
 admission. It is a **superproject-only, partial, non-atomic metadata observation**
-of the admitted cwd, not the build-tree parameter, validated source version,
+of the actual child execution cwd, not the source checkout by assumption,
+build-tree parameter, validated source version,
 content fingerprint or whole-tree clean proof. HEAD and status can change
 between calls; identical status text can hide different contents. Submodules
 are explicitly ignored. Missing or failed capture is unknown and does not block

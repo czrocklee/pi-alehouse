@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isAbsolute, relative, resolve } from "node:path";
-import { normalizeFacts, normalizeRuntime, terminal, validSettings, type AdmittedAgentConfig, type AgentSummary, type ExecutionFacts,
+import { normalizeFacts, normalizeRuntime, terminal, validSettings, validWorkspace, type WorkspaceInfo, type AdmittedAgentConfig, type AgentSummary, type ExecutionFacts,
   type CancellationSource, type HistoryRef, type ModelStopReason, type Outcome, type Output, type Phase, type ResultPage, type ResultRef,
   type RunStatus, type RunTelemetry, type RunView, type StopReason, type SubmitRequest } from "./contracts.js";
 import { HarnessError, ParentHistoryError, SessionInitializationError, SessionUnavailableError, workersDisabled,
@@ -62,6 +62,7 @@ interface RunRecord {
   dispatch?: Dispatch;
   dispatch_notes?: string[];
   source_state?: SourceState;
+  workspace?: WorkspaceInfo;
   time_wrapped?: true;
 }
 type ProviderActivity = ReadonlyMap<string, { readonly active: number }>;
@@ -75,6 +76,7 @@ interface ResourceClaim {
 interface Agent {
   id: string; name: string; settings: AdmittedAgentConfig; resident: boolean;
   current?: string; session?: AgentSessionPort; unavailable?: string; release?: Promise<void>;
+  workspace?: WorkspaceInfo;
   /** Confirmed disposal; the reservation can still await current Run finalization. */
   cleanupComplete?: true;
   question?: { run_id: string; reserved_by?: string };
@@ -233,6 +235,8 @@ const updatesText = (updates: readonly string[]): string => !updates.length ? ""
   `Messages from the parent, sent before this task started (oldest first):\n\n${
     updates.map((text, index) => `[${index + 1}] ${text}`).join("\n\n")}\n\n--- End of messages ---`;
 export const softBudgetMessage = "The turn budget has been reached. Finish now with your best supported final answer, noting unfinished work. Do not start new work.";
+/** Model-facing resolution for a tree declared before a worktree workspace exists. */
+export const WORKTREE_TREE_RESOLUTION = "Start without tree; after initialization use agent_list actual cwd and declare its absolute tree on follow-up.";
 export const softTimeBudgetMessage = "The wall-clock deadline is approaching. Finish with a checkpoint now: supported findings, exact evidence paths, checks actually run and their results, unfinished work, and the next safe step. Do not start new work. This hint does not extend the deadline.";
 export const softDeadlineDelay = (duration: number): number | undefined => duration <= 1000 ? undefined :
   Math.max(1000, duration - Math.max(1000, Math.min(30000, duration / 5)));
@@ -616,6 +620,14 @@ export class OwnerController {
     const original = reuse && request.answer_to_run_id ? this.requireRun(request.answer_to_run_id) : undefined;
     if (original && request.dispatch !== undefined) throw new HarnessError("IMMUTABLE_DISPATCH");
     const declaration = original ? original.record.dispatch : request.dispatch;
+    // A worktree exists only after runtime initialization confirmed its actual
+    // cwd/baseline; admission never creates one. Before that confirmation a
+    // declared tree cannot name the (not yet existing) working copy, so reject
+    // synchronously — before preparation, claims, queue or any session.
+    if (declaration?.tree !== undefined && agent.settings.workspace === "worktree" && !agent.workspace) {
+      throw new HarnessError("DISPATCH_WORKTREE_UNINITIALIZED", { agent: agent.name, key: "tree", requested: declaration.tree,
+        resolution: WORKTREE_TREE_RESOLUTION });
+    }
     const prepared = declaration === undefined ? undefined : this.prepareDispatch(declaration, agent.settings, !!request.after?.length);
     const inheritedClaim = original?.claim;
     if (inheritedClaim && !this.claims.has(inheritedClaim)) throw new HarnessError("DISPATCH_CLAIM_LOST");
@@ -752,7 +764,7 @@ export class OwnerController {
         try { claim.lease.assertHeld(); } catch { this.dispatchNote(run, "tree_lock_unknown"); }
       }
       const result = await this.options.dispatch?.start?.(structuredClone(prepared), {
-        cwd: run.record.settings.cwd, profile: run.record.settings.profile, acquireTree: !!prepared.tree && !claim?.lease,
+        cwd: run.record.workspace?.cwd ?? run.record.settings.cwd, profile: run.record.settings.profile, acquireTree: !!prepared.tree && !claim?.lease,
       });
       // This await is owned by execute: stop cannot settle or close the Owner
       // until late observations/handles have been classified and released.
@@ -794,7 +806,7 @@ export class OwnerController {
   private validationReceipt(run: ManagedRun, outcome: Outcome): ValidationReceipt | undefined {
     const checks = run.record.dispatch?.checks;
     if (!checks?.length) return;
-    return { version: 1, checks: [...checks], cwd: run.record.settings.cwd,
+    return { version: 1, checks: [...checks], cwd: run.record.workspace?.cwd ?? run.record.settings.cwd,
       ...(run.prepared?.tree ? { tree: run.prepared.tree.canonical } : {}),
       source_state: run.record.source_state ?? { state: "unknown", reason: "not_captured" },
       outcome: { status: outcome.status, ...(outcome.reason ? { reason: outcome.reason } : {}),
@@ -966,13 +978,30 @@ export class OwnerController {
     const agent = this.requireAgent(run.record.agent_id);
     let facts: ExecutionFacts;
     try {
-      if (run.prepared && (run.prepared.tree || run.prepared.declaration.checks?.length)) {
+      if (agent.settings.workspace !== "worktree" && run.prepared && (run.prepared.tree || run.prepared.declaration.checks?.length)) {
         await this.observeDispatch(run);
         this.assertOwnerAvailable();
         if (run.record.stop_reason) { await this.finish(run, { kind: "aborted", output: run.output }); return; }
       }
       const port = agent.session ?? await this.options.createSession({ agent_id: agent.id, name: agent.name, settings: structuredClone(agent.settings) });
       agent.session = run.session = port;
+      if (agent.settings.workspace === "worktree") {
+        const workspace = structuredClone(port.workspace);
+        if (!validWorkspace(workspace) || workspace.source_cwd !== agent.settings.cwd ||
+            (agent.workspace && JSON.stringify(agent.workspace) !== JSON.stringify(workspace))) {
+          run.quarantine = "workspace_mismatch";
+          throw new HarnessError("INVALID_WORKSPACE_BINDING");
+        }
+        agent.workspace = workspace;
+        run.record.workspace = structuredClone(workspace);
+        this.assertOwnerAvailable();
+        if (!run.record.stop_reason && run.prepared && (run.prepared.tree || run.prepared.declaration.checks?.length)) {
+          await this.observeDispatch(run);
+        }
+      } else if (port.workspace !== undefined) {
+        run.quarantine = "workspace_mismatch";
+        throw new HarnessError("UNEXPECTED_WORKSPACE_BINDING");
+      }
       // Session creation can await arbitrary SDK initialization. Recheck even
       // without a journal, and keep owner loss out of child-history diagnosis.
       this.assertOwnerAvailable();
@@ -1052,7 +1081,8 @@ export class OwnerController {
           touched: (path) => {
             this.assertEffectAllowed();
             if (!this.current(run) || run.record.execution_exited || typeof path !== "string" || !path) return;
-            const absolute = resolve(agent.settings.cwd, path), local = relative(agent.settings.cwd, absolute);
+            const cwd = agent.workspace?.cwd ?? agent.settings.cwd;
+            const absolute = resolve(cwd, path), local = relative(cwd, absolute);
             const shown = (local && !local.startsWith("..") && !isAbsolute(local) ? local : absolute).slice(0, 512);
             if (agent.touched.has(shown)) return;
             if (agent.touched.size >= TOUCHED_LIMIT) agent.touchedOmitted++;
@@ -1478,7 +1508,8 @@ export class OwnerController {
       finalization_pending: record.execution_exited && !terminal(record.status), resident: agent.resident, resumable: !unavailable,
       unavailable_reason: unavailable, owner_error: this.parentError ?? this.internalError,
       owner_blocked: !!this.parentError || !!this.internalError || this.cleanupUncertain,
-      isolation: "shared", elapsed_ms: record.elapsed_ms ?? Math.max(0, this.clock.mono() - run.submittedMono),
+      isolation: record.settings.workspace ?? "shared",
+      ...((record.workspace ?? agent.workspace) ? { workspace: record.workspace ?? agent.workspace } : {}), elapsed_ms: record.elapsed_ms ?? Math.max(0, this.clock.mono() - run.submittedMono),
       turn_elapsed_ms: run.turnStarted === undefined ? undefined : Math.max(0, this.clock.mono() - run.turnStarted),
       turns: record.turns, max_turns: record.max_turns, max_duration_ms: record.max_duration_ms,
       execution_elapsed_ms: record.execution_elapsed_ms ?? (run.executionStartedMono === undefined ? undefined :

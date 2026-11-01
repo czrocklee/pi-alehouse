@@ -16,6 +16,11 @@ export class SessionInitializationError extends Error {}
 export const digest = (text) => createHash("sha256").update(text).digest("hex");
 export const createEventBus = () => ({});
 export const createAgentSession = () => {};
+export const createAgentWorkspace = async (input) => {
+  state.workspaceCalls.push(input);
+  if (state.workspaceError) throw state.workspaceError;
+  return state.workspaceResult;
+};
 export const requireReadiness = () => {};
 export const createChildTools = () => [];
 export const webProfileNames = ["researcher"];
@@ -39,6 +44,7 @@ export class WorkerStatsObserver {
 export class DefaultResourceLoader {
   constructor(options) { this.options = options; state.loaders.push(this); }
   async reload() {
+    state.policyBindsAtReload.push(state.policyBinds.length);
     state.prompts.push(this.options.appendSystemPromptOverride());
     if (state.loaderError) throw state.loaderError;
   }
@@ -95,6 +101,9 @@ function fixture(t, profile = "editor") {
   for (const key of Object.keys(seam.state)) delete seam.state[key];
   Object.assign(seam.state, { loaders: [], prompts: [], assemblies: [], runs: [], cleanups: 0,
     blockRuns: [], blockEnds: 0, blockFlushes: 0, blockUnsubscribes: 0,
+    workspaceCalls: [], policyBinds: [], policyReleases: [], policyBindsAtReload: [], activities: [], approvalBegins: [],
+    workspaceResult: { workspace: Object.freeze({ mode: "worktree", cwd: join(directory, "execution"), source_cwd: directory, base_commit: "a".repeat(40) }),
+      checkout_root: join(directory, "execution"), source_root: directory, manifest: join(directory, "recovery.jsonl") },
     cleanupReport: { shutdownExited: true, errors: [] } });
   const webReleases = [], approvals = [];
   const definition = `${profile} synthetic definition`, tools = ["read", "alert_parent", "ask_parent"];
@@ -104,20 +113,137 @@ function fixture(t, profile = "editor") {
   } };
   const model = { provider: "synthetic", id: "synthetic" };
   const options = {
-    ctx: { cwd: directory, sessionManager: { getSessionDir: () => directory,
+    ctx: { cwd: directory, isProjectTrusted: () => true, sessionManager: { getSessionDir: () => directory,
       getSessionFile: () => join(directory, "parent.jsonl") } },
     parentBus: {}, agentDir: directory, permissionRoot: directory, policyRoot: directory, parentId: "parent",
     runtime: { getModel: () => model, getPhysicalModel: () => model },
     profiles: { [profile]: { definition, body: "Shared worker body.", tools } }, settings: () => ({}),
     parentHistory: {}, parentPermission: () => ({}), getPermissionsService: () => undefined,
     subscribeManagedBlocks: () => () => {},
-    approvalBindings: { childExtension: (id) => { approvals.push(id); return () => {}; }, begin() {}, end() {} },
-    activities: { track: () => ({ extension() {}, begin() {} }) },
+    approvalBindings: { childExtension: (id) => { approvals.push(id); return () => {}; }, begin: (...args) => seam.state.approvalBegins.push(args), end() {} },
+    activities: { track: (id, cwd) => { seam.state.activities.push({ id, cwd }); return { extension() {}, begin() {} }; } },
+    git: "/fixture/trusted-git",
+    bindWorkspacePolicy: (input) => { seam.state.policyBinds.push(input); return { release: () => seam.state.policyReleases.push(input.sessionId) }; },
     web: { acquire: async () => ({ factory() {}, release: () => webReleases.push("released") }) },
   };
   return { agent, options, webReleases, approvals,
     create: () => createChildSessionFactory(options)(agent) };
 }
+
+test("shared default creates no workspace or policy alias", async (t) => {
+  const f = fixture(t, "editor"), port = await f.create();
+  assert.equal(port.workspace, undefined);
+  assert.deepEqual(seam.state.workspaceCalls, []);
+  assert.deepEqual(seam.state.policyBinds, []);
+  assert.equal(seam.state.assemblies[0].options.cwd, f.agent.settings.cwd);
+  assert.equal(seam.state.loaders[0].options.cwd, f.agent.settings.cwd);
+  await port.dispose();
+});
+
+test("worktree actual cwd reaches SDK manager/tools/activity/approval; source alone drives instruction discovery", async (t) => {
+  const f = fixture(t, "editor"); f.agent.settings.workspace = "worktree";
+  const port = await f.create(), workspace = seam.state.workspaceResult.workspace;
+  const manager = seam.state.assemblies[0].options.sessionManager;
+  assert.deepEqual(seam.state.workspaceCalls, [{ agentDir: f.options.agentDir, agentId: f.agent.agent_id, sourceCwd: f.agent.settings.cwd, git: f.options.git }]);
+  assert.equal(port.workspace, workspace); assert.ok(Object.isFrozen(port.workspace));
+  assert.equal(f.agent.settings.cwd, f.options.ctx.cwd, "admitted source remains unchanged");
+  assert.equal(seam.state.assemblies[0].options.cwd, workspace.cwd);
+  assert.equal(manager.getCwd(), workspace.cwd);
+  assert.equal(seam.state.loaders[0].options.cwd, workspace.source_cwd, "do not load the worktree's checked-out .pi as authority");
+  assert.deepEqual(seam.state.activities, [{ id: f.agent.agent_id, cwd: workspace.cwd }]);
+  assert.deepEqual(seam.state.policyBinds, [{ sessionId: port.session_id, cwd: workspace.cwd, source_cwd: workspace.source_cwd,
+    checkout_root: seam.state.workspaceResult.checkout_root, source_root: seam.state.workspaceResult.source_root, projectTrusted: true }]);
+  assert.deepEqual(seam.state.policyBindsAtReload, [1], "bind source policy before permission module loading");
+  assert.ok(seam.state.prompts[0].at(-1).includes(JSON.stringify(workspace)));
+  assert.ok(seam.state.prompts[0].at(-1).includes(seam.state.workspaceResult.manifest));
+  const metadata = manager.getEntries().find((entry) => entry.type === "custom" && entry.customType === "active_agent");
+  assert.deepEqual(metadata.data.workspace, workspace);
+  await port.run("initial", {}, { run_id: "first" });
+  await port.run("answer or follow-up", {}, { run_id: "second" });
+  assert.deepEqual(seam.state.approvalBegins.map((args) => args[1].cwd), [workspace.cwd, workspace.cwd]);
+  assert.equal(seam.state.workspaceCalls.length, 1, "Agent workspace is reused across Runs and answers");
+  await port.stop(); assert.deepEqual(seam.state.policyReleases, []);
+  const disposal = Promise.withResolvers(); seam.state.disposal = disposal.promise;
+  const pending = port.dispose();
+  assert.deepEqual(seam.state.policyReleases, [], "a dispose attempt alone is not cleanup proof");
+  disposal.resolve({ shutdownExited: true, errors: [] });
+  await pending; assert.deepEqual(seam.state.policyReleases, [port.session_id]);
+  assert.equal(port.workspace, workspace, "termination retains recovery metadata, not deletion");
+});
+
+test("nested execution inherits the whole known checkout root pair, not just its cwd", async (t) => {
+  const f = fixture(t, "editor"); f.agent.settings.workspace = "worktree";
+  f.agent.settings.cwd = join(f.options.ctx.cwd, "nested");
+  seam.state.workspaceResult.workspace = Object.freeze({ ...seam.state.workspaceResult.workspace,
+    cwd: join(seam.state.workspaceResult.checkout_root, "nested"), source_cwd: f.agent.settings.cwd });
+  const port = await f.create(), bound = seam.state.policyBinds[0];
+  assert.equal(bound.cwd, seam.state.workspaceResult.workspace.cwd);
+  assert.equal(bound.source_cwd, f.agent.settings.cwd);
+  assert.equal(bound.checkout_root, seam.state.workspaceResult.checkout_root);
+  assert.equal(bound.source_root, seam.state.workspaceResult.source_root);
+  assert.notEqual(bound.checkout_root, bound.cwd);
+  assert.notEqual(bound.source_root, bound.source_cwd);
+  await port.dispose();
+});
+
+for (const trusted of [false, true]) test(`worktree source project trust ${trusted} is explicit, never inferred from new cwd`, async (t) => {
+  const f = fixture(t, "editor"); f.agent.settings.workspace = "worktree";
+  f.options.ctx.isProjectTrusted = () => trusted;
+  const port = await f.create();
+  assert.equal(seam.state.policyBinds[0].projectTrusted, trusted);
+  await port.dispose();
+});
+
+test("worktree bridge is mandatory before any checkout/session; no source fallback", async (t) => {
+  const f = fixture(t, "editor"); f.agent.settings.workspace = "worktree";
+  delete f.options.bindWorkspacePolicy;
+  await assert.rejects(f.create(), /Worktree policy inheritance is unavailable/);
+  assert.deepEqual(seam.state.workspaceCalls, []); assert.deepEqual(seam.state.assemblies, []);
+});
+
+test("worktree creation failure is cached per Agent, never a source-cwd fallback or blind retry", async (t) => {
+  const f = fixture(t, "editor"); f.agent.settings.workspace = "worktree";
+  seam.state.workspaceError = new Error("WORKTREE_CREATION_FAILED retained path: fixture-path");
+  const create = createChildSessionFactory(f.options);
+  await assert.rejects(create(f.agent), /WORKTREE_CREATION_FAILED/);
+  await assert.rejects(create(f.agent), /WORKTREE_CREATION_FAILED/);
+  assert.equal(seam.state.workspaceCalls.length, 1); assert.deepEqual(seam.state.assemblies, []);
+});
+
+test("confirmed failed assembly releases policy binding but reuses the retained Agent worktree", async (t) => {
+  const f = fixture(t, "editor"); f.agent.settings.workspace = "worktree";
+  const create = createChildSessionFactory(f.options); seam.state.loaderError = new Error("fixture loader failure");
+  await assert.rejects(create(f.agent), (error) => {
+    assert.match(error.message, /retained worktree cwd:/); assert.match(error.message, /recovery manifest:/); return true;
+  });
+  assert.equal(seam.state.policyReleases.length, 1);
+  delete seam.state.loaderError;
+  const port = await create(f.agent);
+  assert.equal(seam.state.workspaceCalls.length, 1); assert.equal(seam.state.policyBinds.length, 2);
+  assert.equal(port.workspace, seam.state.workspaceResult.workspace);
+  await port.dispose();
+});
+
+for (const failedAssembly of [false, true]) test(`worktree policy binding retained on uncertain ${failedAssembly ? "assembly" : "disposal"}`, async (t) => {
+  const f = fixture(t, "editor"); f.agent.settings.workspace = "worktree";
+  if (failedAssembly) {
+    seam.state.assemblyError = new seam.SessionInitializationError("uncertain fixture shutdown");
+    await assert.rejects(f.create(), seam.SessionInitializationError);
+  } else {
+    const port = await f.create(); seam.state.cleanupReport = { shutdownExited: false, errors: [] };
+    await port.dispose();
+  }
+  assert.deepEqual(seam.state.policyReleases, []);
+});
+
+test("worktree policy binding retained when shutdown exited but cleanup reported errors", async (t) => {
+  const f = fixture(t, "editor"); f.agent.settings.workspace = "worktree";
+  const port = await f.create();
+  seam.state.cleanupReport = { shutdownExited: true, errors: ["fixture cleanup error"] };
+  assert.deepEqual(await port.dispose(), seam.state.cleanupReport);
+  assert.deepEqual(seam.state.policyReleases, [], "core still treats the cleanup as uncertain");
+  assert.equal(port.workspace, seam.state.workspaceResult.workspace, "retained workspace metadata remains available");
+});
 
 test("child and approval identities use the real SDK manager ID across Runs", async (t) => {
   const f = fixture(t), port = await f.create();
@@ -126,27 +252,21 @@ test("child and approval identities use the real SDK manager ID across Runs", as
   assert.notEqual(port.session_id, f.agent.agent_id);
   assert.notEqual(port.session_id, f.options.parentId);
   assert.deepEqual(f.approvals, [port.session_id]);
-  assert.deepEqual(seam.state.prompts[0], ["Shared worker body.", '<active_agent name="editor"/>']);
-  assert.equal(seam.state.assemblies[0].options.cwd, f.agent.settings.cwd);
   await port.run("initial", {}, { run_id: "first" });
   await port.run("follow-up", {}, { run_id: "second" });
   assert.deepEqual(seam.state.runs, ["initial", "follow-up"]);
   await port.dispose();
 });
 
-for (const profile of ["editor", "researcher"]) test(  profile + " preserves prompt and web lifecycle", async (t) => {
+for (const profile of ["editor", "researcher"]) test(`${profile} preserves profile prompt and web lifecycle`, async (t) => {
   const f = fixture(t, profile), port = await f.create();
-  assert.deepEqual(seam.state.prompts[0], ["Shared worker body.", '<active_agent name="' + profile + '"/>']);
+  assert.deepEqual(seam.state.prompts[0], ["Shared worker body.", `<active_agent name="${profile}"/>`]);
   assert.deepEqual(f.webReleases, []);
-  const disposal = Promise.withResolvers(); seam.state.disposal = disposal.promise;
-  const pending = port.dispose();
-  assert.deepEqual(f.webReleases, [], "dispose attempt alone is not exit proof");
-  disposal.resolve({ shutdownExited: true, errors: [] });
-  await pending;
+  await port.dispose();
   assert.equal(f.webReleases.length, profile === "researcher" ? 1 : 0);
 });
 
-for (const failure of ["loaderError", "assemblyError"]) test(failure + " with confirmed cleanup releases web lease", async (t) => {
+for (const failure of ["loaderError", "assemblyError"]) test(`${failure} before execution or after confirmed assembly cleanup releases web lease`, async (t) => {
   const f = fixture(t, "researcher");
   seam.state[failure] = new Error("synthetic assembly failure");
   await assert.rejects(f.create(), /synthetic assembly failure/);
@@ -161,7 +281,7 @@ test("SessionInitializationError retains web lease on uncertain assembly cleanup
   assert.deepEqual(f.webReleases, []);
 });
 
-for (const uncertain of [false, true]) test("post-assembly validation follows cleanup proof: " + uncertain, async (t) => {
+for (const uncertain of [false, true]) test(`post-assembly validation failure ${uncertain ? "retains" : "releases"} web lease with cleanup proof`, async (t) => {
   const f = fixture(t, "researcher");
   seam.state.badThinking = true;
   if (uncertain) seam.state.cleanupReport = { shutdownExited: false, errors: [] };

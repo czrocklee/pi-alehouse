@@ -450,7 +450,7 @@ export class HarnessWidget {
       const child = this.activities.get(view.agent_id);
       return { agent_id: view.agent_id, view,
         live: child?.snapshot() ?? { active_tools: [], tool_uses: 0, preview: "" },
-        cwd: child?.workspace ?? view.effective_settings.cwd,
+        cwd: child?.workspace ?? view.workspace?.cwd ?? view.effective_settings.cwd,
         // A pane may retain these thunks while a queued Agent has no child yet.
         entries: () => this.activities.get(view.agent_id)?.entries(),
         inFlight: () => this.activities.get(view.agent_id)?.inFlight() };

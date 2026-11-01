@@ -124,24 +124,54 @@ processes exited, a distributed lock, or recovery from abrupt process loss.
 Lock files/directories persist to preserve inode identity and have no automatic
 pruning.  Do not remove them while a Pi process could hold a lease.
 
-## Profiles
+## Profiles and workspace boundary
 
-New model requests offer `worker` and `researcher` only. Worker maps to stable
-internal `editor`, with local read/edit/write/Bash/build tools under normal
-permissions and no web. Reviews are task instructions, not an enforced readonly
-mode. Researcher has read-only file tools and web, no Bash/edit/write. All
-Agents share the checkout and Git index; coordinate overlapping edits and Git
-writes. Existing user `reader.md` files and historical records are never rewritten.
+The model API offers `worker` and `researcher` only. Worker maps to the stable
+internal `editor` profile ID. No legacy profile aliases or capabilities are
+supported.
+Worker has local read/edit/write/Bash/Git/build tools under normal permissions;
+researcher has read-only file tools and web, no Bash/edit/write. Worker has no
+extra child-only blanket Git mutation deny and no blanket Git allow. Ordinary
+repository Git queries/mutations use ordinary Bash permission, not a second
+per-operation effect matrix. Only bounded literal Git version queries can
+qualify for fixed-query automatic allowance. Raw configured denies/specific
+asks, literal path/output/redirect facts and credential/resource/high-risk
+protection remain. The [Git classifier](git-read-proof.md) does no subprocess
+provenance probes or history/object walks.
 
-Worker has no extra child-only blanket Git mutation deny and no blanket Git
-allow. Ordinary repository Git queries/mutations use ordinary Bash permission,
-not a second per-operation effect matrix. Only bounded literal Git version
-queries can qualify for fixed-query automatic allowance. Raw configured
-denies/specific asks, literal path/output/redirect facts and
-credential/resource/high-risk protection remain. The
-[Git classifier](git-read-proof.md) does no subprocess provenance probes or
-history/object walks; commands, environment, executable selection and leading
-`cd` remain unchanged.
+Workspace is an independent immutable Agent choice: shared (default) or
+worktree. Core keeps admitted source `settings.cwd` immutable. Runtime owns
+worktree allocation and actual execution cwd, creating a private detached
+checkout from a recorded local HEAD only at execution/session
+initialization, not admission, preparation or accepted replay. Failure is
+visible, never silent shared fallback. No dirty/untracked/ignored files,
+installed dependencies or caches are transferred, nor host/user credentials or
+settings. Committed configuration files remain part of the checkout; it is not
+a secret-scrubbing export. No automatic install, patch transfer or merge occurs.
+
+Runtime binds source project instructions/settings/config/trust to the child
+without letting checked-out `.pi` content replace source policy. Tools resolve
+at actual workspace cwd. Trusted whole checkout/source repository roots mirror
+literal restrictions as deny/ask aliases only, never ALLOW or boundary exemptions.
+Other checkouts retain ordinary external policy. Relative dispatch keeps source
+cwd semantics; worktree output claims use actual absolute paths once known.
+Uninitialized worktrees cannot declare a tree; initial checks without one remain
+valid and observe actual child cwd. List/detail project uninitialized mode or
+actual cwd, source cwd and baseline after creation; UI owns neither allocation
+nor cleanup. Without confirmed metadata, worktree rows say `uninitialized`
+(including after failed setup), not that creation will eventually succeed.
+
+Worktrees and private recovery manifests remain through completion, kill,
+failure and shutdown for manual cleanup. Default storage is absolute
+XDG_STATE_HOME (otherwise ~/.local/state), under pi-alehouse/worktrees outside
+agentDir rather than TMPDIR; this is not perpetual retention or backup.
+Eligible forwarded worktree asks currently defer from Jev to ordinary human
+handling as delegation_unbound; its evidence is still source-cwd based.
+Revoking a session binding does not
+delete files, accept results or prove every descendant stopped. Separate working
+files/indexes still share objects, most refs and configuration; worktrees are
+not OS isolation, strict readonly, historical secrecy or a zero-lock guarantee.
+There is no new cleanup tool. See [workspaces](workspaces.md).
 
 ## Task dispatch boundary
 
@@ -155,8 +185,11 @@ closures permit admission queuing only; pump rechecks before startup. Confirmed
 final termination/necessary cleanup controls release, not optional observation
 success or a requested stop.
 
-Runtime owns checks-only execution-start superproject metadata capture through
-trusted Git and tree-only local advisory leases. Core owns their tracked timing,
+Runtime owns checks-only execution-start superproject metadata capture at actual
+child cwd through trusted Git, and tree-only local advisory leases. Capture is
+not a claim that the source checkout was tested; linked worktree layouts may
+remain unknown. These fixed metadata subprocesses are separate from model Git
+command classification. Core owns their tracked timing,
 lineage and cleanup. Source Git subprocess probes are asynchronous with
 per-probe 2-second/4 MiB and aggregate 8-second/8 MiB limits, not hard-realtime
 or kill guarantees; synchronous tree flock still blocks the event loop.

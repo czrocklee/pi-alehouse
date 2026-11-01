@@ -36,6 +36,8 @@ In one session, each admitted provider runs at most four workers at once. Models
 
 Choose a **worker** for local code, Bash/Git and builds, or a **researcher** for read-only file tools and web research. Worker is the public name of the stable internal `editor` profile. Reviews are task instructions, not a strict readonly worker mode. Normal permissions, configured denies and credential/resource protections still apply; there is no blanket Git allow.
 
+Agents default to the shared checkout, including pending local changes. Either profile can instead use an optional **worktree**, fixed at spawn: a detached checkout of local HEAD created when work actually starts, without dirty files or dependencies copied in, automatic installation or merging. It is retained for manual recovery and cleanup even after completion or kill. Worktrees reduce shared-file/index contention, not shared Git refs/objects or host access; they are not a sandbox. See [workspace behavior and limits](harness/docs/workspaces.md).
+
 ## See the work—not just the final summary
 
 Parallel work shouldn't disappear behind a spinner.

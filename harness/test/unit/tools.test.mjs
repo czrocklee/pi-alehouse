@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { resolve } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createOwnerTools } from "../../dist/tools/parent-tools.js";
 import { defaultDelegation, delegationGuideline, delegationModes, eagernessLevels } from "../../dist/delegation.js";
@@ -11,7 +12,8 @@ import { digest } from "../../dist/runtime/context-snapshot.js";
 import { ParentHistoryError } from "../../dist/core/ports.js";
 import { modelRecoveryHint } from "../../dist/core/model-recovery.js";
 import { taskReply } from "../../dist/tools/replies.js";
-import { deferred, ended, fixture, task, tick, until } from "../support/controller-fixture.mjs";
+import { FakePort, deferred, ended, fixture, task, tick, until } from "../support/controller-fixture.mjs";
+import { WORKTREE_TREE_RESOLUTION } from "../../dist/core/owner-controller.js";
 
 const model = { provider: "fixture", id: "controlled", levels: ["off", "high"] };
 const preset = (name = "fixture", modelId = "fixture/controlled", version = "v1") => ({
@@ -67,10 +69,18 @@ test("worker maps to stable editor identity and retired model profile names are 
     assert.throws(() => tool("agent_spawn").prepareArguments(create({ profile })), code("INVALID_PROFILE"));
     await assert.rejects(call("agent_spawn", create({ profile }), `retired-${profile}`), code("INVALID_PROFILE"));
   }
-  await call("agent_spawn", create());
+  for (const workspace of ["shared", "worktree"]) {
+    assert.equal(tool("agent_spawn").prepareArguments(create({ workspace })).workspace, workspace);
+  }
+  for (const workspace of [false, null, {}, "sandbox", "/tmp"]) {
+    assert.throws(() => tool("agent_spawn").prepareArguments(create({ workspace })), code("INVALID_PARAMETERS"));
+  }
+  await call("agent_spawn", create({ workspace: "shared" }));
   await until(() => f.ports[0]?.streaming);
   assert.equal(routed(f, "orca").profile, "editor");
+  assert.equal(routed(f, "orca").workspace, "shared");
   assert.equal((await call("agent_list", {})).agents[0].profile, "worker");
+  await assert.rejects(call("agent_run", run("orca", { workspace: "worktree" })), code("INVALID_PARAMETERS"));
   f.ports[0].finish(); await settle(f, "orca");
 });
 
@@ -1686,4 +1696,50 @@ test("an interrupted answer that never started leaves the question answerable th
   await until(() => f.ports[0].calls.length === 2);
   assert.equal(f.ports[0].calls[1].prompt, "4", "only the answer that ran reached the conversation");
   f.ports[0].finish("done"); await settle(f, "orca");
+});
+
+test("a worktree Agent cannot declare tree before its workspace exists; an initialized follow-up can", async (t) => {
+  const workspace = { mode: "worktree", cwd: "/tmp/private-worktree/repo", source_cwd: "/tmp", base_commit: "a".repeat(40) };
+  const port = new FakePort(); port.workspace = workspace;
+  let creates = 0, prepares = 0;
+  const dispatch = { prepare(declaration, context) {
+      prepares++;
+      const path = (word) => ({ path: resolve(context.cwd, word), canonical: resolve(context.cwd, word) });
+      return { declaration: structuredClone(declaration), inputs: [], ownership: [],
+        ...(declaration.tree === undefined ? {} : { tree: path(declaration.tree) }) };
+    }, async start() { return {}; } };
+  const f = await fixture(t, { controller: { createSession: async () => { creates++; return port; }, dispatch },
+    beforeShutdown: () => { if (port.streaming) port.finish("cleanup", "aborted"); } });
+  const { tool, call } = toolsFor(f);
+  const treeError = (error) => {
+    const result = JSON.parse(error.message).error;
+    assert.equal(result.code, "DISPATCH_WORKTREE_UNINITIALIZED");
+    assert.equal(result.parameter, "tree");
+    assert.equal(result.path, "build");
+    assert.equal(result.requested, "build");
+    assert.equal(result.agent, undefined, "a pre-effect spawn rejection names no Agent");
+    assert.equal(result.resolution, WORKTREE_TREE_RESOLUTION);
+    return true;
+  };
+  // The public spawn arguments carry workspace mode, so the same admission
+  // constraint rejects them pre-effect in prepareArguments and in execute.
+  assert.throws(() => tool("agent_spawn").prepareArguments(create({ agent: "wren", workspace: "worktree", dispatch: { tree: "build" } })), treeError);
+  await assert.rejects(call("agent_spawn", create({ agent: "wren", workspace: "worktree", dispatch: { tree: "build" } }), "tree-spawn"), treeError);
+  assert.equal(f.controller.findAgent("wren"), undefined, "a rejected spawn takes no name");
+  assert.equal(f.controller.stats().runs, 0, "no task was allocated");
+  assert.equal(f.controller.claims.size, 0);
+  assert.equal(creates, 0, "no session or worktree was created");
+  assert.equal(prepares, 0, "dispatch.prepare never ran");
+  // The first task starts without tree and confirms the actual workspace.
+  await call("agent_spawn", create({ agent: "wren", workspace: "worktree" }), "first-spawn");
+  await until(() => port.streaming);
+  assert.deepEqual(viewOf(f, "wren").workspace, workspace);
+  port.finish(); await settle(f, "wren");
+  // A follow-up may declare the actual absolute tree once agent_list shows it.
+  const follow = await call("agent_run", run("wren", { dispatch: { tree: `${workspace.cwd}/build` } }), "tree-followup");
+  assert.deepEqual(follow.action, { type: "agent_run", agent: "wren", task: 2 });
+  await until(() => port.calls.length === 2);
+  assert.equal(creates, 1, "the follow-up reuses the initialized session");
+  port.finish(); await settle(f, "wren");
+  assert.equal(viewOf(f, "wren").status, "completed");
 });
