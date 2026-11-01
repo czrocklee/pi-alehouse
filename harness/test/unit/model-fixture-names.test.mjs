@@ -60,8 +60,8 @@ test("request replay keeps its name; resume cannot rename the original Agent or 
   const { submit, requests } = recordingSubmit("hare");
   const first = submit("first", "task one"), peer = submit("peer", "task two");
   assert.equal(submit("first", "task one").name, first.name); assert.notEqual(peer.name, first.name);
-  const resumed = submit("resume", "follow-up", "existing-agent", { max_turns: 1, max_duration_ms: 100, after: ["peer"] });
-  assert.deepEqual(resumed, { resume: "existing-agent", prompt: "follow-up", max_turns: 1, max_duration_ms: 100, after: ["peer"] });
+  const resumed = submit("resume", "follow-up", "existing-agent", { max_turns: 1, after: ["peer"] });
+  assert.deepEqual(resumed, { resume: "existing-agent", prompt: "follow-up", max_turns: 1, after: ["peer"] });
   assert.equal(requests.length, 4);
 });
 test("identity/settings overrides and invalid naming themes fail before submission", () => {

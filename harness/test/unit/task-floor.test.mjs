@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { resolve } from "node:path";
-import { OwnerController, softBudgetMessage, softTimeBudgetMessage, softDeadlineDelay } from "../../dist/core/owner-controller.js";
+import { OwnerController, softBudgetMessage } from "../../dist/core/owner-controller.js";
 import { HarnessError } from "../../dist/core/ports.js";
 import { ApprovalBindings } from "../../dist/permissions/approval-provenance.js";
 import { createChildTools } from "../../dist/tools/child-tools.js";
@@ -79,392 +79,96 @@ async function ask(port, question = "Which safe next step?") {
   assert.equal(receipt.content[0].text, "Question recorded. Stop calling tools and end your turn now.");
 }
 
-function withholdInputEntry(port) {
-  const run = port.run.bind(port);
-  port.run = (prompt, callbacks, identity) => {
-    port.enterInput = () => callbacks.inputEntered();
-    return run(prompt, { ...callbacks, inputEntered() {} }, identity);
-  };
-}
-
-// Capture only this case's budget timers. The fixture's 3s lifecycle waits and
-// Node scheduling remain real. No injected clock is mistaken for a timer driver.
-// Top-level tests explicitly run serially, and globals restore before teardown.
-async function withBudgetTimers(delays, body) {
-  const nativeSet = globalThis.setTimeout, nativeClear = globalThis.clearTimeout;
-  const timers = [];
-  globalThis.setTimeout = (callback, delay, ...args) => {
-    if (!delays.includes(delay)) return nativeSet(callback, delay, ...args);
-    const timer = { delay, cleared: false, unref() { return this; }, fire() { callback(...args); } };
-    timers.push(timer); return timer;
-  };
-  globalThis.clearTimeout = timer => {
-    if (timers.includes(timer)) timer.cleared = true;
-    else nativeClear(timer);
-  };
-  try { await body(timers); }
-  finally { globalThis.setTimeout = nativeSet; globalThis.clearTimeout = nativeClear; }
-}
 const serial = { concurrency: false };
+const twoDays = 2 * 24 * 60 * 60 * 1000;
 
-test("wall-clock delay formula includes short-window boundaries and exports finish guidance", serial, () => {
-  for (const [duration, expected] of [[1, undefined], [1000, undefined], [1001, 1000], [1500, 1000],
-    [2000, 1000], [5000, 4000], [10000, 8000], [150000, 120000], [240000, 210000]]) {
-    assert.equal(softDeadlineDelay(duration), expected, `max_duration_ms=${duration}`);
+test("retired execution duration is rejected before admission, including on reuse", serial, async t => {
+  const { controller: c, ports } = await memoryFixture(t);
+  for (const value of [1, 300000, 1800000, null]) {
+    await assert.rejects(c.submit(`retired-${String(value)}`, task("invalid", { max_duration_ms: value })), errorCode("UNSUPPORTED_PARAMETER"));
   }
-  for (const instruction of [/finish/i, /results/i, /unfinished/i, /checks/i, /do not start.*work/i])
-    assert.match(softTimeBudgetMessage, instruction);
+  assert.equal(c.stats().runs, 0); assert.equal(ports.length, 0);
+  const first = await c.submit("first", task("ordinary")); await until(() => ports[0]?.streaming);
+  ports[0].finish(); await ended(c, first);
+  await assert.rejects(c.submit("retired-reuse", { resume: first.agent_id, prompt: "next", max_duration_ms: 300000 }), errorCode("UNSUPPORTED_PARAMETER"));
+  assert.equal(c.stats().runs, 1); assert.equal(c.view(first.run_id).resumable, true);
 });
 
-test("240s timer warns at exactly 210s, invalidates approval via soft_budget, and preserves hard deadline", serial, async t => {
-  const { controller: c, ports } = await memoryFixture(t);
+test("initialization has no execution timer; explicit cancellation still prevents child input", serial, async t => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const gate = deferred(), scheduled = [], nativeSet = globalThis.setTimeout;
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+    scheduled.push(delay); return nativeSet(callback, delay, ...args);
+  });
+  const { controller: c, ports, events } = await memoryFixture(t, { sessionGate: gate });
+  const run = await c.submit("initializing", task("initialize"));
+  assert.equal(c.view(run.run_id).phase, "initializing");
+  assert.deepEqual(scheduled, [], "taking a slot must not arm a hard or soft execution deadline");
+  t.mock.timers.tick(twoDays); await tick();
+  assert.equal(c.view(run.run_id).status, "running"); assert.equal(c.view(run.run_id).stop_reason, undefined);
+  assert.equal(ports[0].stopped, 0); assert.equal(c.stats().active, 1);
+  assert.deepEqual(events.map(event => event.kind), ["submit"]);
+  c.cancel(run.run_id); gate.resolve(); await ended(c, run);
+  assert.equal(ports[0].calls.length, 0); assert.equal(c.view(run.run_id).status, "cancelled");
+});
+
+test("long execution keeps claims and approval; observation timeout cannot stop the task", serial, async t => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const { controller: c, ports } = await memoryFixture(t, { controller: { dispatch: dispatchPort(),
+    clock: { wall: () => Date.now(), mono: () => Date.now() } } });
   const busEvents = [], bindings = new ApprovalBindings({ emit: (name, payload) => busEvents.push({ name, payload }) }, c.identity);
   c.options.onContextChange = bindings.contextChanged;
-  await withBudgetTimers([240000, 210000], async timers => {
-    const run = await c.submit("time", task("checkpoint", { name: "worker", max_duration_ms: 240000, max_turns: 1 }));
-    await until(() => ports[0]?.streaming);
-    assert.deepEqual(timers.map(timer => timer.delay), [240000, 210000]);
-    const port = ports[0], identity = port.calls[0].identity;
-    assert.equal(bindings.begin(identity, { sessionId: port.session_id, cwd: settings.cwd,
-      profile: settings.profile, definitionDigest: settings.definition_digest, prompt: port.calls[0].prompt }), true);
-    t.after(() => bindings.end(port.session_id, identity));
-    const facts = globalThis[Symbol.for("@rocklee/jev-auto-approval:child-runtime-facts")].get(port.session_id);
-    assert.equal(facts.contextChanged, false);
-    assert.doesNotThrow(() => timers[1].fire());
-    assert.doesNotThrow(() => timers[1].fire());
-    await tick();
-    assert.deepEqual(port.inputs, [softTimeBudgetMessage]);
-    assert.equal(facts.contextChanged, true);
-    const invalidated = busEvents.filter(event => event.name === "pi-harness:approval:invalidated");
-    assert.equal(invalidated.length, 1);
-    assert.equal(invalidated[0].payload.kind, "soft_budget");
-    assert.equal(invalidated[0].payload.run_id, run.run_id);
-    assert.equal(c.view(run.run_id).time_wrapped, true);
-    assert.equal(c.view(run.run_id).outcome, undefined);
-    const read = envelope(await c.observe({ kind: "read", agent_id: run.agent_id }, { validate() {} }));
-    assert.equal(Object.hasOwn(read.agents[0], "time_wrapped"), false, "warning attempts stay in core telemetry, not model returns");
-    const thinRow = c.communicationRow(c.runs.get(run.run_id), [...c.runs.values()], true);
-    assert.equal(Object.hasOwn(thinRow, "time_wrapped"), false, "thin controls stay unchanged");
-    port.callbacks.turnEnd(true); await tick();
-    assert.deepEqual(port.inputs, [softTimeBudgetMessage, softBudgetMessage], "wall-clock does not consume turn wrap");
-    assert.equal(c.view(run.run_id).stop_reason, undefined);
-    timers[0].fire();
-    assert.equal(c.view(run.run_id).stop_reason, "deadline");
-    port.finish("checkpoint", "aborted"); await ended(c, run);
-    assert.equal(c.view(run.run_id).outcome.reason, "deadline");
-    assert.equal(c.view(run.run_id).outcome.time_wrapped, true);
-    assert.equal(c.view(run.run_id).outcome.limit_reached, true, "only the later turn wrap sets this");
-    assert(timers.every(timer => timer.cleared));
-    assert.doesNotThrow(() => timers[1].fire(), "late exited callback is harmless");
-  });
+  const run = await c.submit("long", task("long command", { name: "worker", max_turns: 1, dispatch: { ownership: ["output"] } }));
+  await until(() => ports[0]?.streaming);
+  const port = ports[0], identity = port.calls[0].identity;
+  assert.equal(bindings.begin(identity, { sessionId: port.session_id, cwd: settings.cwd,
+    profile: settings.profile, definitionDigest: settings.definition_digest, prompt: port.calls[0].prompt }), true);
+  t.after(() => bindings.end(port.session_id, identity));
+  const facts = globalThis[Symbol.for("@rocklee/jev-auto-approval:child-runtime-facts")].get(port.session_id);
+  t.mock.timers.tick(twoDays); await tick();
+  port.callbacks.inputEntered(); await tick();
+  const view = c.view(run.run_id);
+  assert.equal(view.status, "running"); assert.equal(view.execution_elapsed_ms, twoDays);
+  assert.equal(view.stop_reason, undefined); assert.equal(c.runs.get(run.run_id).record.limit_reached, false);
+  assert.equal(Object.hasOwn(view, "max_duration_ms"), false); assert.equal(Object.hasOwn(view, "time_wrapped"), false);
+  assert.equal(facts.contextChanged, false); assert.deepEqual(port.inputs, []); assert.equal(port.stopped, 0);
+  assert.equal(c.claims.size, 1); assert.equal(c.stats().active, 1);
+  const waiting = c.observe({ kind: "wait", agent_ids: [run.agent_id], wait_ms: 5 }, { validate() {} });
+  t.mock.timers.tick(5);
+  assert.equal(envelope(await waiting).reason, "timeout");
+  assert.equal(c.view(run.run_id).status, "running"); assert.equal(port.stopped, 0);
+  port.callbacks.turnEnd(true); await tick();
+  assert.deepEqual(port.inputs, [softBudgetMessage], "the turn-limit reminder remains");
+  assert.equal(facts.contextChanged, true);
+  assert.equal(busEvents.filter(event => event.name === "pi-harness:approval:invalidated").length, 1);
+  port.finish("finished after long command"); await ended(c, run);
+  assert.equal(c.view(run.run_id).outcome.limit_reached, true);
+  assert.equal(Object.hasOwn(c.view(run.run_id).outcome, "time_wrapped"), false);
+  assert.equal(Object.hasOwn(c.stats(), "time_wrapped_attempts"), false);
+  assert.equal(c.claims.size, 0);
 });
 
-test("1500ms has exact 1000ms warning, never sets turn limit, and clears both timers", serial, async t => {
-  const { controller: c, ports } = await memoryFixture(t);
-  await withBudgetTimers([1500, 1000], async timers => {
-    const run = await c.submit("short", task("short", { max_duration_ms: 1500 }));
-    await until(() => ports[0]?.streaming);
-    assert.deepEqual(timers.map(timer => timer.delay), [1500, 1000]);
-    assert.equal(c.stats().time_wrapped_attempts, 0);
-    timers[1].fire(); await tick();
-    assert.deepEqual(ports[0].inputs, [softTimeBudgetMessage]);
-    assert.equal(c.stats().time_wrapped_attempts, 0, "only terminal outcomes contribute to this derived count");
-    ports[0].finish(); await ended(c, run);
-    assert.equal(c.view(run.run_id).outcome.limit_reached, false);
-    assert.equal(c.view(run.run_id).outcome.time_wrapped, true);
-    assert.equal(c.view(run.run_id).status, "completed");
-    assert.equal(c.stats().time_wrapped_attempts, 1);
-    assert(timers.every(timer => timer.cleared));
-  });
+test("follow-ups and answer continuations retain only the turn limit, with no timed input", serial, async t => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const { controller: c, ports, events } = await memoryFixture(t);
+  const first = await c.submit("first", task("first", { max_turns: 7 })); await until(() => ports[0]?.streaming);
+  t.mock.timers.tick(twoDays); await tick();
+  ports[0].finish("first done"); await ended(c, first);
+  const next = await c.submit("next", { resume: first.agent_id, prompt: "follow up" });
+  await until(() => ports[0].calls.length === 2);
+  t.mock.timers.tick(twoDays); await tick();
+  assert.equal(c.view(next.run_id).max_turns, 7); assert.equal(ports[0].stopped, 0); assert.deepEqual(ports[0].inputs, []);
+  await ask(ports[0]); ports[0].finish("waiting"); await ended(c, next);
+  const answer = await c.answer("answer", next.agent_id, c.view(next.run_id).question_id, "continue");
+  await until(() => ports[0].calls.length === 3);
+  t.mock.timers.tick(twoDays); await tick();
+  assert.equal(c.view(answer.run_id).max_turns, 7); assert.equal(c.view(answer.run_id).status, "running");
+  assert.equal(c.agents.get(first.agent_id).question, undefined, "real answer input still consumes the old reservation");
+  assert.equal(ports[0].stopped, 0); assert.deepEqual(ports[0].inputs, []);
+  assert(events.every(event => !["soft_budget", "deadline"].includes(event.kind)));
+  ports[0].finish("answer done"); await ended(c, answer);
+  assert.equal(c.view(answer.run_id).status, "completed"); assert.equal(ports.length, 1);
 });
-
-test("<=1000ms arms only hard stop; turn-first wrap suppresses the wall-clock message", serial, async t => {
-  const { controller: c, ports } = await memoryFixture(t);
-  await withBudgetTimers([1000, 1500], async timers => {
-    const small = await c.submit("small", task("small", { max_duration_ms: 1000 }));
-    await until(() => ports[0]?.streaming);
-    assert.deepEqual(timers.map(timer => timer.delay), [1000]);
-    ports[0].finish(); await ended(c, small);
-    assert.equal(c.view(small.run_id).outcome.time_wrapped, undefined);
-    const turn = await c.submit("turn", { resume: small.agent_id, prompt: "turn", max_turns: 1, max_duration_ms: 1500 });
-    await until(() => ports[0].calls.length === 2);
-    ports[0].callbacks.turnEnd(true); await tick();
-    timers[2].fire(); await tick();
-    assert.deepEqual(ports[0].inputs, [softBudgetMessage]);
-    ports[0].finish(); await ended(c, turn);
-    assert.equal(c.view(turn.run_id).outcome.limit_reached, true);
-    assert.equal(c.view(turn.run_id).outcome.time_wrapped, undefined);
-  });
-});
-
-test("timer due during initialization is delivered once at input readiness; stopped/exited callbacks are harmless", serial, async t => {
-  const gate = deferred();
-  const { controller: c, ports } = await memoryFixture(t, { sessionGate: gate });
-  await withBudgetTimers([240000, 210000], async timers => {
-    try {
-      const run = await c.submit("init", task("initializing", { max_duration_ms: 240000 }));
-      assert.equal(c.view(run.run_id).phase, "initializing");
-      assert.doesNotThrow(() => timers[1].fire());
-      assert.equal(c.view(run.run_id).time_wrapped, undefined);
-      assert.equal(c.stats().time_wrapped_attempts, 0);
-      gate.resolve(); await until(() => ports[0]?.streaming);
-      await tick(); assert.deepEqual(ports[0].inputs, [softTimeBudgetMessage], "the due latch waits for real input readiness");
-      ports[0].callbacks.inputEntered(); ports[0].callbacks.turnStart(); await tick();
-      assert.deepEqual(ports[0].inputs, [softTimeBudgetMessage], "later ready events never duplicate the attempt");
-      c.cancel(run.run_id);
-      assert.doesNotThrow(() => timers[1].fire());
-      ports[0].finish("partial", "aborted"); await ended(c, run);
-      assert.doesNotThrow(() => timers[1].fire());
-      assert.equal(c.view(run.run_id).outcome.time_wrapped, true);
-      assert.equal(c.view(run.run_id).outcome.reason, undefined);
-      assert.equal(c.stats().time_wrapped_attempts, 1);
-      assert.deepEqual(c.view(run.run_id).cleanup_errors, []);
-    } finally { gate.resolve(); }
-  });
-});
-
-for (const readyEvent of ["inputEntered", "turnStart"]) {
-  test(`due warning waits for input entry and canInput, then retries on ${readyEvent} exactly once`, serial, async t => {
-    let ready = false;
-    const { controller: c, ports, events } = await memoryFixture(t, { configurePort(port) {
-      withholdInputEntry(port); port.canInput = () => ready && port.streaming;
-    } });
-    await withBudgetTimers([240000, 210000], async timers => {
-      const run = await c.submit("ready", task("ready", { max_duration_ms: 240000 }));
-      await until(() => ports[0]?.streaming);
-      timers[1].fire(); await tick();
-      assert.equal(c.view(run.run_id).time_wrapped, undefined);
-      assert.deepEqual(ports[0].inputs, []);
-      ports[0].enterInput(); ports[0].callbacks.turnStart(); await tick();
-      assert.equal(c.view(run.run_id).time_wrapped, undefined, "entry alone is not SDK input readiness");
-      assert.deepEqual(c.view(run.run_id).cleanup_errors, []);
-      assert.equal(events.filter(event => event.kind === "soft_budget").length, 0);
-      ready = true;
-      if (readyEvent === "inputEntered") ports[0].enterInput();
-      else ports[0].callbacks.turnStart();
-      await tick();
-      assert.deepEqual(ports[0].inputs, [softTimeBudgetMessage]);
-      assert.equal(c.view(run.run_id).time_wrapped, true);
-      ports[0].enterInput(); ports[0].callbacks.turnStart(); timers[1].fire(); await tick();
-      assert.deepEqual(ports[0].inputs, [softTimeBudgetMessage]);
-      assert.equal(events.filter(event => event.kind === "soft_budget").length, 1);
-      ports[0].finish(); await ended(c, run);
-      assert.equal(c.view(run.run_id).outcome.limit_reached, false);
-      assert.equal(c.stats().time_wrapped_attempts, 1);
-    });
-  });
-}
-
-test("answer input entry clears the old question reservation before a latched warning invalidates context", serial, async t => {
-  let ready = true;
-  const dispatch = dispatchPort();
-  const { controller: c, ports } = await memoryFixture(t, { controller: { dispatch }, configurePort(port) {
-    withholdInputEntry(port); port.canInput = () => ready && port.streaming;
-  } });
-  await withBudgetTimers([240000, 210000], async timers => {
-    const question = await c.submit("question", task("question", { max_duration_ms: 240000, dispatch: { ownership: ["x"] } }));
-    await until(() => ports[0]?.streaming);
-    ports[0].enterInput(); await ask(ports[0]); ports[0].finish("waiting"); await ended(c, question);
-    const questionId = c.view(question.run_id).question_id;
-    assert(questionId);
-    let warningChanges = 0;
-    c.options.onContextChange = event => {
-      if (event.kind !== "soft_budget") return;
-      warningChanges++;
-      assert.equal(c.agents.get(question.agent_id).question, undefined, "reservation clears before warning context change");
-      assert.equal(c.runs.get(event.run_id).record.input_entered, true);
-    };
-    ready = false;
-    const answer = await c.answer("answer", question.agent_id, questionId, "continue");
-    await until(() => ports[0].calls.length === 2);
-    timers[3].fire(); await tick();
-    assert.equal(warningChanges, 0); assert.equal(c.view(answer.run_id).time_wrapped, undefined);
-    assert.equal(c.agents.get(question.agent_id).question.reserved_by, answer.run_id);
-    ready = true; ports[0].enterInput(); await tick();
-    assert.equal(warningChanges, 1); assert.deepEqual(ports[0].inputs, [softTimeBudgetMessage]);
-    ports[0].enterInput(); ports[0].callbacks.turnStart(); await tick();
-    assert.equal(warningChanges, 1);
-    ports[0].finish("done"); await ended(c, answer);
-    assert.equal(c.view(answer.run_id).status, "completed"); assert.equal(c.claims.size, 0);
-    assert.equal(c.stats().time_wrapped_attempts, 1);
-  });
-});
-
-test("turnStart applies turn wrap before considering a due wall-clock warning", serial, async t => {
-  let ready = false;
-  const { controller: c, ports } = await memoryFixture(t, { configurePort(port) {
-    port.canInput = () => ready && port.streaming;
-  } });
-  await withBudgetTimers([240000, 210000], async timers => {
-    const run = await c.submit("turn-priority", task("turn priority", { max_duration_ms: 240000, max_turns: 1 }));
-    await until(() => ports[0]?.streaming);
-    timers[1].fire(); await tick();
-    assert.equal(c.view(run.run_id).time_wrapped, undefined);
-    ready = true; ports[0].callbacks.turnStart(); await tick();
-    assert.deepEqual(ports[0].inputs, [softBudgetMessage]);
-    ports[0].finish(); await ended(c, run);
-    assert.equal(c.view(run.run_id).outcome.limit_reached, true);
-    assert.equal(c.view(run.run_id).outcome.time_wrapped, undefined);
-    assert.equal(c.stats().time_wrapped_attempts, 0);
-  });
-});
-
-for (const boundary of ["cancelled", "expired"]) {
-  test(`initialization-delayed warning never attempts after ${boundary} boundary`, serial, async t => {
-    const gate = deferred();
-    const { controller: c, ports } = await memoryFixture(t, { sessionGate: gate });
-    await withBudgetTimers([240000, 210000], async timers => {
-      try {
-        const run = await c.submit(boundary, task(boundary, { max_duration_ms: 240000 }));
-        // Test-only private budget anchor aging; observation clocks do not own deadlines.
-        c.runs.get(run.run_id).budgetStartedMono = performance.now() - 210000;
-        await tick();
-        assert.equal(c.view(run.run_id).time_wrapped, undefined, "aging the budget cannot deliver before input readiness");
-        timers[1].fire();
-        if (boundary === "cancelled") c.cancel(run.run_id);
-        else c.runs.get(run.run_id).budgetStartedMono = performance.now() - 240000;
-        // The real budget is expired even if the captured hard callback has not yet run.
-        gate.resolve(); await tick(); await tick();
-        if (boundary === "expired") {
-          await until(() => ports[0]?.streaming);
-          ports[0].callbacks.inputEntered(); ports[0].callbacks.turnStart(); await tick();
-          assert.deepEqual(ports[0].inputs, []);
-          assert.equal(c.view(run.run_id).time_wrapped, undefined);
-          timers[0].fire(); ports[0].finish("deadline", "aborted");
-        }
-        await ended(c, run);
-        assert.doesNotThrow(() => timers[1].fire());
-        assert.equal(c.view(run.run_id).outcome.time_wrapped, undefined);
-        assert.equal(c.view(run.run_id).outcome.reason, boundary === "expired" ? "deadline" : undefined);
-        assert.equal(c.stats().time_wrapped_attempts, 0);
-        assert.deepEqual(c.view(run.run_id).cleanup_errors, []);
-      } finally { gate.resolve(); }
-    });
-  });
-}
-
-test("observation clock jumps neither trigger warnings nor suppress an actually due warning", serial, async t => {
-  let observed = 0;
-  const { controller: c, ports } = await memoryFixture(t, {
-    controller: { clock: { wall: () => observed, mono: () => observed } },
-  });
-  await withBudgetTimers([240000, 210000], async timers => {
-    const run = await c.submit("observation-only", task("observation only", { max_duration_ms: 240000 }));
-    await until(() => ports[0]?.streaming);
-    const budgetAnchor = c.runs.get(run.run_id).budgetStartedMono;
-    assert.equal(typeof budgetAnchor, "number");
-    for (const jump of [210000, 1e12, -1e12]) {
-      observed = jump;
-      ports[0].callbacks.inputEntered(); ports[0].callbacks.turnStart(); await tick();
-      assert.equal(c.view(run.run_id).time_wrapped, undefined, "readiness callbacks use real budget time, not observed elapsed time");
-      assert.equal(c.view(run.run_id).stop_reason, undefined);
-      assert.deepEqual(ports[0].inputs, []);
-      assert.equal(c.runs.get(run.run_id).budgetStartedMono, budgetAnchor);
-    }
-    observed = 1e12;
-    assert(c.view(run.run_id).elapsed_ms > run.max_duration_ms, "the observation projection really did jump past the deadline");
-    timers[1].fire(); await tick();
-    assert.deepEqual(ports[0].inputs, [softTimeBudgetMessage], "an observed deadline overrun cannot hide a real due timer");
-    assert.equal(c.view(run.run_id).time_wrapped, true);
-    assert.equal(c.view(run.run_id).stop_reason, undefined);
-    ports[0].finish(); await ended(c, run);
-    assert.equal(c.view(run.run_id).status, "completed");
-    assert.equal(c.stats().time_wrapped_attempts, 1);
-  });
-});
-
-test("due latch and old callbacks never transfer to the next Run on a reused Agent", serial, async t => {
-  let ready = false;
-  const { controller: c, ports } = await memoryFixture(t, { configurePort(port) {
-    port.canInput = () => ready && port.streaming;
-  } });
-  await withBudgetTimers([240000, 210000, 1000], async timers => {
-    const first = await c.submit("first-due", task("first due", { max_duration_ms: 240000 }));
-    await until(() => ports[0]?.streaming);
-    const oldCallbacks = ports[0].callbacks;
-    timers[1].fire(); await tick();
-    assert.equal(c.view(first.run_id).time_wrapped, undefined);
-    ports[0].finish(); await ended(c, first);
-    ready = true;
-    const second = await c.submit("second-fresh", { resume: first.agent_id, prompt: "fresh", max_duration_ms: 240000 });
-    await until(() => ports[0].calls.length === 2);
-    oldCallbacks.inputEntered(); oldCallbacks.turnStart(); timers[1].fire();
-    ports[0].callbacks.inputEntered(); ports[0].callbacks.turnStart(); await tick();
-    assert.deepEqual(ports[0].inputs, []);
-    assert.equal(c.view(first.run_id).outcome.time_wrapped, undefined);
-    assert.equal(c.view(second.run_id).time_wrapped, undefined);
-    timers[3].fire(); await tick();
-    assert.deepEqual(ports[0].inputs, [softTimeBudgetMessage]);
-    ports[0].finish(); await ended(c, second);
-    assert.equal(c.stats().time_wrapped_attempts, 1);
-    const tiny = await c.submit("third-tiny", { resume: first.agent_id, prompt: "tiny", max_duration_ms: 1000 });
-    await until(() => ports[0].calls.length === 3);
-    assert.deepEqual(timers.map(timer => timer.delay), [240000, 210000, 240000, 210000, 1000]);
-    ports[0].callbacks.inputEntered(); ports[0].callbacks.turnStart(); await tick();
-    assert.deepEqual(ports[0].inputs, []);
-    ports[0].finish(); await ended(c, tiny);
-    assert.equal(c.view(tiny.run_id).outcome.time_wrapped, undefined);
-    assert.equal(c.stats().time_wrapped_attempts, 1);
-  });
-  await c.shutdown(20);
-  assert.equal(c.stats().time_wrapped_attempts, 1, "derived terminal count survives Owner close");
-});
-
-test("throwing readiness probe cannot escape the soft timer or consume a warning attempt", serial, async t => {
-  const { controller: c, ports } = await memoryFixture(t);
-  await withBudgetTimers([240000, 210000], async timers => {
-    const run = await c.submit("readiness-fault", task("readiness fault", { max_duration_ms: 240000 }));
-    await until(() => ports[0]?.streaming);
-    const port = ports[0], canInput = port.canInput.bind(port);
-    port.canInput = () => { throw new Error("readiness probe failed"); };
-    assert.doesNotThrow(() => timers[1].fire());
-    assert.equal(c.view(run.run_id).time_wrapped, undefined);
-    assert.match(c.view(run.run_id).cleanup_errors.join("\n"), /SOFT_TIME_MESSAGE_REJECTED.*readiness probe failed/);
-    port.canInput = canInput;
-    port.callbacks.turnStart(); await tick();
-    assert.deepEqual(port.inputs, [softTimeBudgetMessage]);
-    port.finish(); await ended(c, run);
-    assert.equal(c.view(run.run_id).outcome.time_wrapped, true);
-  });
-});
-
-for (const mode of ["context_throw", "sync_throw", "async_reject", "queued_false"]) {
-  test(`wall-clock delivery ${mode} is safely classified, never an unhandled timer/Promise failure`, serial, async t => {
-    const { controller: c, ports } = await memoryFixture(t);
-    await withBudgetTimers([240000, 210000], async timers => {
-      const run = await c.submit(mode, task(mode, { max_duration_ms: 240000 }));
-      await until(() => ports[0]?.streaming);
-      const port = ports[0];
-      if (mode === "context_throw") c.options.onContextChange = event => { if (event.kind === "soft_budget") throw new Error("witness error"); };
-      if (mode === "sync_throw") port.steer = () => { throw new Error("sync steer failure"); };
-      if (mode === "async_reject") port.steer = async () => { throw new Error("async steer failure"); };
-      if (mode === "queued_false") port.steer = async () => false;
-      assert.doesNotThrow(() => timers[1].fire());
-      await tick(); await tick();
-      const errorsAfterAttempt = [...c.view(run.run_id).cleanup_errors];
-      timers[1].fire(); port.callbacks.inputEntered(); port.callbacks.turnStart(); await tick();
-      assert.deepEqual(c.view(run.run_id).cleanup_errors, errorsAfterAttempt, "an actual failed/discarded attempt is never retried");
-      port.finish(); await ended(c, run);
-      const view = c.view(run.run_id);
-      assert.equal(view.outcome.time_wrapped, true, "guarded attempt, not delivery evidence");
-      assert.equal(view.outcome.limit_reached, false);
-      assert.equal(c.stats().cleanup_uncertain, false);
-      assert.equal(c.stats().internal_error, undefined);
-      assert.equal(c.stats().time_wrapped_attempts, 1);
-      if (mode === "context_throw") {
-        assert.match(view.cleanup_errors.join("\n"), /SOFT_TIME_MESSAGE_REJECTED/);
-        assert.equal(view.resumable, true);
-      } else if (mode === "queued_false") {
-        assert.deepEqual(view.discarded_inputs, [softTimeBudgetMessage]);
-        assert.equal(view.resumable, true);
-      } else {
-        assert.match(view.cleanup_errors.join("\n"), /steer failure/);
-        assert.equal(view.unavailable_reason, "input_delivery_uncertain");
-        assert.equal(port.disposed, 1);
-      }
-    });
-  });
-}
 
 test("direct dispatch without host port fails before acceptance; no-dispatch remains usable", serial, async t => {
   const { controller: c, ports } = await memoryFixture(t);

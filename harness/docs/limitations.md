@@ -43,7 +43,8 @@ budget. Ordinary typing and plain Enter never execute Stop; hidden controls
 cannot be activated. Human-origin
 metadata and a non-triggering parent message distinguish a new human stop from
 model interruption, but optional metadata may yield under packing pressure and
-message queuing is not model acknowledgement. Cancellation, deadline expiry, and explicit close use best-effort stop paths and quarantine uncertain sessions;
+message queuing is not model acknowledgement. Cancellation, turn-limit stop, and
+explicit close use best-effort stop paths and quarantine uncertain sessions;
 they do not roll back filesystem/provider effects, prove zero further provider
 activity, prove child exit, or restore an old input safely.  An execution slot
 is freed only after actual execution exit; it can then run a queued peer before
@@ -51,8 +52,11 @@ history finalization completes.  That slot is per admitted provider
 (`concurrency`, default 4; models share it), Owner-local and not a
 cross-process or account rate limiter: separate provider IDs sharing an account
 still receive separate slots. Resident capacity is 12 Owner-wide.  The Agent reservation and Owner lease remain
-until finalization and cleanup confirm release.  A deadline is not a hard
-monetary or provider-output cap.  Observed cost is telemetry, not a budget.
+until finalization and cleanup confirm release. Runs have no wall-clock
+execution deadline or timed wrap-up message; `max_duration_ms` is retired.
+Turn limits cannot stop a single long-running tool or prove that it is hung.
+Command/request-specific timeouts, observation waits and cleanup bounds remain
+separate. Observed cost is telemetry, not a hard monetary budget.
 
 A session that never confirms idle can keep its Run/slot and prevent Owner
 closure indefinitely. The widget, detail pane and `/harness-status` show the
@@ -66,8 +70,7 @@ rather than awaiting the drain indefinitely.
 The settle path is observable the same way but deliberately not bounded:
 `stats()` reports `finalizing_waits` — which of its awaits (inputs, release,
 history) a finalizing Run is parked on and for how long — and `stopping` for
-stop requests that execution exit has not yet confirmed, including deadline
-overruns. These are diagnostics only; a wedged finalization keeps its
+stop requests that execution exit has not yet confirmed. These are diagnostics only; a wedged finalization keeps its
 reservation, its Agent and the Owner lease exactly as before, because
 converting a local wait into a timeout would either assume completion or
 latch the whole Owner over one Agent's fault.
@@ -254,7 +257,7 @@ neither delays consumption nor resets the bit. Result/history remain rereadable
 and pending questions can reopen without resetting the bit. Joined `agent_send`
 messages and host-side live history projections are bounded Owner-memory state,
 not restored from journals. Live Run context, usage and elapsed time remain UI
-observations; warning attempts remain outcome/history facts. Task descriptions
+observations; legacy timed warnings remain history-only facts. Task descriptions
 stay on their Runs, without a separate earlier-label or touched-path summary. Old notify/progress/send-answered logs stay readable literally,
 never rewritten or hydrated as new pending work. Handed-off text is another child's retained
 final output, bounded and framed as reference; it is not verified.
@@ -433,13 +436,11 @@ continuations; reopening a question before input entry restores its claim.
 Cleanup uncertainty, including sticky tree-lease close failure, still retains
 resources; later SDK cleanup success does not clear that failure. Local tree
 contention is advisory, not exclusivity evidence. Synchronous flock blocks the
-event loop even when contention is nonblocking. A guarded wall-clock warning may
-invalidate approval yet never reach the model before deadline. Internal
-`time_wrapped` means an attempt, not a checkpoint, and stays out of parent-model
-replies. Due is retained only for the original Run until the real
-inputEntered/canInput boundary or post-budget turnStart permits one guarded
-pre-deadline attempt; rejected attempts are not retried. The hard stop remains
-cooperative.
+event loop even when contention is nonblocking. There is no execution-time timer
+or timed warning input: a blocked tool cannot read queued steering until it
+returns. Turn-limit stops and manual cancellation remain cooperative. Historical
+`deadline` outcomes and `time_wrapped` warning-attempt facts remain readable
+literally, not active Run controls or new parent-model telemetry.
 
 Checks-only `source_state` is superproject-only partial non-atomic metadata,
 with submodules ignored: not a content fingerprint, validated source version
@@ -461,10 +462,11 @@ a live cleanup diagnostic and recorded-history warning; mandatory core checks
 and append failures stay strict and never trigger a second append. It is consumed through trusted history/offline
 audit, not automatically by the parent model, and skips no validation gate.
 Run notes and optional public note projections are memory-only; they may yield
-and cannot be guaranteed recoverable after omission or Agent reuse. Warning
-attempts remain core/UI/history facts as applicable, not parent-model telemetry.
+and cannot be guaranteed recoverable after omission or Agent reuse. Legacy timed
+warning attempts remain history-only facts, not parent-model telemetry.
 No new notes cursor, persistent ACK or task hydration is promised.
-Derived time_wrapped_attempts counts attempts, not delivery/checkpoint rates.
+The offline time_wrapped_attempts counter still counts historical attempts, not
+delivery/checkpoint rates; live stats no longer emit it.
 The journal analyzer remains strict JSON-only; --json is an explicit alias, not
 salvage mode, and failure does not mean zero usage. A needs-input resource
 conflict needs answer or explicit abandonment/kill with confirmed release,

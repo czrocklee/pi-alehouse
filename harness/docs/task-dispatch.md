@@ -1,6 +1,6 @@
 # Task dispatch and validation ownership
 
-This is the bounded dispatch, soft-wrap and validation-observation contract.
+This is the bounded dispatch and validation-observation contract.
 It does not introduce a DAG/batch scheduler, permission grant, OS sandbox,
 mechanical full-suite lock or durable task recovery. Owner lifecycle remains in
 core; host permission/filesystem/Git/lock IO belongs to runtime ports. See
@@ -27,7 +27,7 @@ parent's planned checks (for example test-file/glob identifiers or platform),
 not executable shell commands, evidence they ran or permission to execute them.
 It is not a full/focused scheduler enum. There is no dispatch override that
 bypasses a resource conflict. Omitting dispatch adds no dispatch claim or
-validation observation; wall-clock soft wrap is a separate budget behavior.
+validation observation. Task execution has no wall-clock deadline or timed warning.
 
 Path fields are literal relative/absolute filesystem paths, not shell words or
 shell globs. No expansion is performed. Reject leading/trailing whitespace,
@@ -181,38 +181,25 @@ completion, kill, failure and shutdown for manual recovery/cleanup. Separate
 files/indexes still share objects, most refs and configuration; no strict
 readonly, historical secrecy, zero-lock or OS isolation guarantee follows.
 
-## Wall-clock soft wrap
+## Execution limits
 
-Let `D = max_duration_ms`. For `D > 1000`, reserve
-`Δ = max(1000, min(30000, D / 5))` and arm the warning after
-`max(1000, D − Δ)` ms from execution-slot assignment/initialization, not queue
-admission. For `D ≤ 1000`, no wall-clock warning is armed; hard deadline remains.
-In the short-budget clamp range the actual warning window may be smaller than
-Δ. This changes neither duration nor the existing turn/deadline classification.
+Runs have a turn limit, not a wall-clock execution deadline. `max_duration_ms`
+is retired and rejected at admission; no hard execution timer or timed
+wrap-up message is armed during queueing, initialization, execution, reuse or
+answer continuation. Long tool calls cannot consume a queued steering reminder
+until they return, and elapsed time alone is not evidence of a hung command.
 
-The timer latches due on its original Run. If not ready, retain due for one
-best-effort attempt after the real original `inputEntered` boundary with
-`canInput()` true, or at `turnStart` after hard/turn-budget decisions. Do not
-inject before `port.run()` or merely when core sets inputOpen: approval binding
-and the original answer-input boundary must already be established. Require the
-current Run, original input entered, input readiness, no stop/exit/turn wrap,
-and a hard deadline not yet reached. Not-ready checks do not count as attempts;
-once attempted, catch rejection and never retry, with input drain owning
-asynchronous failures. Stop prevents further attempts; execution exit clears
-due/timer. Neither carries to another Run or continuation. Wall-clock does not set turn `limit_reached`; turn wrap
-can still follow a wall-clock attempt.
+Turn wrap still uses `soft_budget`, invalidates the automatic-approval witness
+and emits `pi-harness:approval:invalidated`. The turn-limit grace and hard stop,
+manual interruption, human Stop and Owner shutdown remain cooperative. These
+operations do not guarantee remote process exit or roll back effects.
+Observation waits, command/request-specific timeouts and stop/cleanup bounds
+remain separate and unchanged.
 
-Internal `time_wrapped` means **a warning was attempted after passing the guard**,
-not that the SDK/model received it or produced a checkpoint. This remains an
-outcome/core/UI/history fact as applicable, not parent-model telemetry. Long tools, turn-boundary
-input delivery and event-loop blocking can prevent any checkpoint before the
-unchanged hard stop. This is not forced termination or a hard monetary cap.
-
-The warning uses `soft_budget` context change. Like turn wrap, this invalidates
-the Run's automatic-approval witness and emits
-`pi-harness:approval:invalidated`; subsequent automatic approval cannot rely on
-the old witness. It is therefore **not merely harmless prompt injection**.
-Normal human permission handling and immutable/profile floors remain.
+Historical `deadline` outcomes and `time_wrapped: true` facts remain readable
+without rewriting existing journals. A legacy `time_wrapped` fact records a
+warning attempt, not receipt or a checkpoint. It does not restore a timer or
+inject input into a new Run.
 
 ## Execution-start observations
 
@@ -273,15 +260,15 @@ already stay out of its context. Notes are memory-only: the run-end journal
 append does not record them.
 Public notes are optional, yielding projections, not reserved thin controls.
 Construct them through the unified snapshot/packer/final ToolResult path before
-publication commit; never append after `observe` returns. `time_wrapped` stays
-host-side rather than entering parent-model replies. Retained Run notes are
+publication commit; never append after `observe` returns. Legacy `time_wrapped`
+facts remain history-only rather than entering parent-model replies. Retained Run notes are
 memory-only. The read-only task ordinal selector locates retained Runs after
 reuse but does not guarantee complete diagnostic recovery. There is no notes
 cursor, metadata-only view or persistence.
 
 A checks Run may attach a validation receipt to its **single existing run-end
 append**, only with a successfully established valid history boundary and a
-successful unique end append. This includes recordable failed/deadline outcomes,
+successful unique end append. This includes recordable failed outcomes,
 not every accepted or failed Run. Unstarted tasks, missing/invalid boundaries
 and failed append leave coverage gaps; do not fabricate sessions/start/end,
 perform a repair append or promise persistence from `run.record`. Parent/child
@@ -313,11 +300,11 @@ Offline usage buckets use recorded run-end usage; latest handoff residue,
 partial accounting and missing-boundary coverage are separate. Residue snapshots
 are not additive spend or inferred stage costs.
 
-`time_wrapped_attempts` is derived from retained settled Runs in live stats and
-from deduplicated run-end outcomes offline, not only checks/receipt Runs. It
-counts recorded warning attempts, not delivery, checkpoints or effective
-wrap-up; missing journals still leave coverage gaps. It changes neither outcome
-reasons nor usage/residue totals.
+The offline analyzer retains `time_wrapped_attempts` for deduplicated historical
+run-end outcomes, not only checks/receipt Runs. It counts legacy warning
+attempts, not delivery, checkpoints or effective wrap-up; missing journals still
+leave coverage gaps. Live stats no longer emit this retired counter. Historical
+outcome reasons and usage/residue totals remain unchanged.
 
 ## Worker and validation discipline
 

@@ -682,14 +682,15 @@ test("atomic question reference: pre-settlement/foreign/stale answers do not all
 });
 
 test("answer identity replays exactly once, conflicts reject, and two new request IDs compete for one reservation", async (t) => {
-  const { c, ports } = await ownerFixture(t), asking = await question(c, ports, "fixed-question", "otter", { max_turns: 7, max_duration_ms: 123456 });
+  const { c, ports } = await ownerFixture(t), asking = await question(c, ports, "fixed-question", "otter", { max_turns: 7 });
   let prepared = 0;
   const accepted = c.answer("answer-a", asking.run.agent_id, asking.token, "chosen", { prepare: () => { prepared++; } });
   const competing = c.answer("answer-b", asking.run.agent_id, asking.token, "alternative");
   const [one, two] = await Promise.allSettled([accepted, competing]);
   assert.equal(one.status, "fulfilled"); assert.equal(two.status, "rejected"); harnessFailure(two.reason);
   const continuation = one.value; assert.equal(prepared, 1); assert.equal(c.stats().runs, 2); assert.equal(continuation.task, 2);
-  assert.equal(continuation.description, asking.run.description); assert.equal(continuation.max_turns, 7); assert.equal(continuation.max_duration_ms, 123456);
+  assert.equal(continuation.description, asking.run.description); assert.equal(continuation.max_turns, 7);
+  assert.equal(Object.hasOwn(continuation, "max_duration_ms"), false);
   assert.deepEqual(continuation.effective_settings, asking.run.effective_settings);
   const replay = await c.answer("answer-a", asking.run.agent_id, asking.token, "chosen", { prepare: () => { prepared++; } });
   assert.equal(replay.run_id, continuation.run_id); assert.equal(prepared, 1);

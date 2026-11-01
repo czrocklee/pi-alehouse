@@ -8,7 +8,7 @@ export function createModelFixtureSubmit(controller, settings, theme = "hare") {
   const names = new Map();
   return (id, prompt, resume, options = {}) => {
     assert(typeof id === "string" && id.trim(), "A fixture request needs an ID");
-    assert(Object.keys(options).every((key) => ["description", "max_turns", "max_duration_ms", "after"].includes(key)),
+    assert(Object.keys(options).every((key) => ["description", "max_turns", "after"].includes(key)),
       "Fixture options cannot override Agent identity or settings");
     if (resume !== undefined) return controller.submit(id, { resume, prompt, ...options });
     let name = names.get(id);

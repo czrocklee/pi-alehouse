@@ -41,7 +41,7 @@ const dispatchPaths = (maxItems: number, description: string) => Type.Array(disp
 });
 const dispatchField = optional(Type.Object({
   inputs: optional(dispatchPaths(8, "Input file/directory; must exist when checked.")),
-  ownership: optional(dispatchPaths(16, "Assigned file/directory or planned output; one editor per shared file.")),
+  ownership: optional(dispatchPaths(16, "File/directory to edit or create; needs write permission, one editor per shared file. Omit for read-only tasks.")),
   tree: optional(dispatchPath("Build/test output directory; needs write permission and, if it exists, must be a directory. Overlapping declared resources conflict within this Owner; cross-Owner tree locks are advisory, not global exclusivity.")),
   checks: optional(Type.Array(Type.String({ minLength: 1, maxLength: 512,
     pattern: "^(?=.*\\S)[^\\x00-\\x1f\\x7f]+(?![\\s\\S])",
@@ -60,8 +60,7 @@ const spawnSchema = Type.Object({
   dispatch: dispatchField,
   after: afterField,
   wait_ms: waitField,
-  max_turns: optional(Type.Integer({ minimum: 1, maximum: 10000, description: "Per-task turn limit; default 256. May leave partial results." })),
-  max_duration_ms: optional(Type.Integer({ minimum: 1, maximum: 86400000, description: "Per-task ms from start; default 1800000, then request stop." })),
+  max_turns: optional(Type.Integer({ minimum: 1, maximum: 10000, description: "Per-task turn limit; default 256, fixed for follow-ups. No task wall-clock deadline. May leave partial results." })),
 }, { additionalProperties: false });
 const runSchema = Type.Object({
   agent: agentName("An existing, idle Agent."),
@@ -229,7 +228,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
   });
 
   const tools = [
-    make("agent_spawn", "Create an Agent and submit its first task for new work or reviews; execution may queue. Model, profile, workspace, context and budgets stay fixed; no nested delegation. Use agent_run for follow-ups. If acceptance is unclear, check agent_list before repeating. Queued work is accepted; wait, do not respawn.", spawnSchema,
+    make("agent_spawn", "Create an Agent and submit its first task for new work or reviews; execution may queue. Model, profile, workspace, context and turn limit stay fixed; no nested delegation. Use agent_run for follow-ups. If acceptance is unclear, check agent_list before repeating. Queued work is accepted; wait, do not respawn.", spawnSchema,
       async (args, ctx, id, signal) => {
         // Capture mutable SDK inputs before admission can await an earlier call.
         // Route/context resolution still happens only on first acceptance.
@@ -256,7 +255,6 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
             }
             return { prompt: input.prompt, description: labelOf(input.label, input.prompt), name: input.agent,
               ...(input.max_turns === undefined ? {} : { max_turns: input.max_turns }),
-              ...(input.max_duration_ms === undefined ? {} : { max_duration_ms: input.max_duration_ms }),
               ...(input.dispatch === undefined ? {} : { dispatch: input.dispatch }),
               ...(after ? { after } : {}),
               settings: { ...route, profile: profileId, cwd, tools: [...profile.tools], definition_digest: profile.definition_digest,

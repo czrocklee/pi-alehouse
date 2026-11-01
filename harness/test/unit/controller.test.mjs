@@ -448,7 +448,7 @@ test("a parked settle path and an unconfirmed stop are observable, never release
   ports[0].deliveryGate.resolve();
   await ended(c, run);
   assert.equal(c.stats().finalizing_waits, undefined, "the wait marker clears once the await settles");
-  // An unconfirmed stop is visible with its reason, including deadline overruns.
+  // An unconfirmed stop remains visible with its reason and elapsed wait.
   const second = await c.submit("second", task("second"));
   await until(() => ports[1]?.streaming);
   mono += 600_000; // A long-running task...

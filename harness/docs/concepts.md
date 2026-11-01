@@ -90,7 +90,7 @@ packing is not a generic-name conversion API.
 ## Run
 
 A **Run** is one queued or executing task on an Agent; parent tools call it a
-*task* and never expose its ID.  It has its own internal `run_id`, request identity/digest, prompt boundary, deadline, turn budget,
+*task* and never expose its ID.  It has its own internal `run_id`, request identity/digest, prompt boundary, turn limit,
 outcome, result reference, telemetry, and optional SDK-history links.  A reused
 Agent receives a new Run; it never changes the Agent's admitted routing or
 permission configuration. Model replies derive a 1-based `task` sequence within
@@ -109,7 +109,8 @@ until true settlement. A terminal outcome is not necessarily a complete answer:
 - `needs_input` has a separately recorded question;
 - an unrecovered provider `length` stop is `failed`/`output_limit` with readable
   partial output;
-- deadline expiry is `failed` with `deadline` stop/reason;
+- legacy deadline failures remain readable as `failed`/`deadline`, but new Runs
+  have no wall-clock execution deadline;
 - unknown, `pending`, and `deferred` SDK stop reasons fail closed.
 
 An `agent_send` `steered` report is only admission to the child-input path, not delivery.
@@ -145,13 +146,11 @@ After exemptions bind predecessor Run IDs at admission, not dynamic names;
 pump still rechecks inputs/resources before execution. A dependency that
 settles without completing fails its queued dependents at once, without a slot.
 
-Wall-clock **soft wrap** is a guarded warning attempt with a bounded Δ window,
-not receipt/checkpoint or turn limit_reached. Its soft-budget input invalidates
-the approval witness without changing the hard deadline. Warning attempts stay
-in core/UI/history as applicable, not parent-model telemetry. Optional public
-notes may yield without guaranteed recovery or persistence. Run-local due may wait
-for real original inputEntered/canInput or post-budget turnStart, never pre-run
-injection or retry after a rejected attempt.
+Runs have no wall-clock execution deadline or timed wrap-up input. The turn
+limit and its cooperative wrap/stop remain; observation waits and tool-specific
+timeouts are separate. Legacy timed-warning facts stay readable in history, not
+new live controls or injected reminders. Optional public notes may yield without
+guaranteed recovery or persistence.
 
 A validation **receipt** is optional valid-boundary run-end observation, not a
 passed-check or permission certificate. Parent-declared checks trigger a
@@ -186,7 +185,7 @@ and `reasoning_difficulty`, and takes optional `workspace` (`shared` or
 `worktree`, default shared). `agent_run` requires `agent`, `builds_on` and
 `prompt`; `builds_on` briefly names the earlier work continued (otherwise spawn,
 with `after` if only its result is needed). Both take optional `label`, `after`,
-`wait_ms` and `dispatch`; spawn also accepts budgets and `inherit_context`.
+`wait_ms` and `dispatch`; spawn also accepts `max_turns` and `inherit_context`.
 `agent_read` retains `max_chars`. `agent_send`
 joins/steers the task bound when called; it never starts a continuation.
 `agent_answer` takes `agent`, the exact pending `question_id`, and `answer`,
@@ -305,7 +304,7 @@ are count/read-only projections and never consume communication.
 The harness does not inject an Agent/Run roster after compaction. `agent_list`
 exposes Owner-local status, labels and bounded killed names, not full
 assignments, spend or admission authority. Live Run context, usage and elapsed
-time remain UI observations; warning attempts remain outcome/history facts.
+time remain UI observations; legacy timed warnings remain history-only facts.
 Task descriptions stay on their original Runs. There is no separate touched-path
 or earlier-label summary, nor a retained generic model-recovery hint. Finished
 reminders use fixed finished_presented and settled_seq on each original Run;

@@ -159,7 +159,7 @@ source or public release evidence.
 ## Task floor and validation ownership
 
 [Task dispatch](task-dispatch.md) is the central contract for literal inputs,
-resource claims, wall-clock soft wrap and validation observations. Core owns
+resource claims, execution limits and validation observations. Core owns
 atomic claim admission, dependency/answer lineage and confirmed cleanup;
 runtime ports own synchronous profile/external preflight, path aliases, trusted
 Git capture and local tree locks. Do not put claim/IO side effects into tool
@@ -167,16 +167,16 @@ preparation or accepted-request replay. Checks capture superproject-only partial
 metadata at execution start; optional failures are unknown/advisory, not Owner
 faults. Preserve pending-question claims and any lease on pre-input answer
 rollback. Keep optional public notes in pre-commit packing, never thin controls
-or post-observe additions. Warning-attempt facts stay in core/UI/history, not
-parent-model telemetry. Receipts require a valid history boundary
+or post-observe additions. Runs have no execution-time deadline or timed warning;
+keep legacy deadline/time_wrapped facts readable only as history, not new controls. Receipts require a valid history boundary
 and the sole successful end append; its SDK append ID is not disk/fsync proof,
 and missing boundaries remain coverage gaps. Offline journal audit uses
 `scripts/analyze-pi-harness-journal.mjs`, distinct from session analysis: strict
 batch validation, JSON-only output, with `--json` an explicit alias. Optional
 receipt corruption drops only that receipt with an invalid_validation_receipt
 marker/live cleanup diagnostic; mandatory history checks and append failures
-stay strict without retry. Derive time_wrapped_attempts from recorded attempts,
-not delivery. Source status fixes --untracked-files=normal; global LFS helpers
+stay strict without retry. The offline time_wrapped_attempts counter derives
+from historical recorded attempts, not delivery; live stats do not emit it. Source status fixes --untracked-files=normal; global LFS helpers
 and configured fsmonitor=false still conservatively withhold known state.
 
 The shared worker prompt requires scoped, reviewable work, denial/ownership
@@ -194,9 +194,11 @@ or deployment acceptance.
 
 The scoped simplification removes only the abandoned metadata-only `agent_read`
 view as a functional feature. Keep all nine names and other arguments/features:
-required `builds_on`, optional label/after/dispatch, budgets, inherit_context,
-wait's all/any selection, every wait_ms and max_chars. Parent replies omit routine telemetry. Live Run context, usage and elapsed time
-remain UI observations; warning attempts remain outcome/history facts and task
+required `builds_on`, optional label/after/dispatch, max_turns, inherit_context,
+wait's all/any selection, every wait_ms and max_chars. The later execution-limit
+retirement removes max_duration_ms and its hard/soft wall-clock timers, not
+command, observation or stop/cleanup timeouts. Parent replies omit routine telemetry. Live Run context, usage and elapsed time
+remain UI observations; legacy timed warnings remain history-only facts and task
 descriptions stay on their Runs. The unused Agent summary and its dedicated
 touched-path tracking are removed, as is generic model-recovery hint generation. No new details flags or
 modes replace the removed view. This is not authority or lifecycle deletion.

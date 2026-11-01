@@ -5,6 +5,7 @@ import type { Dispatch } from "./dispatch.js";
 import type { WorkspaceDetails, WorkspaceRecovery } from "./workspace-metadata.js";
 
 export type RunStatus = "queued" | "running" | "cancelling" | "completed" | "needs_input" | "failed" | "cancelled";
+/** `deadline` remains readable in historical records; live Runs never emit it. */
 export type StopReason = "user_cancel" | "hard_budget" | "deadline";
 /** Explicit trusted-host human Stop only; absence makes no claim about origin. */
 export type CancellationSource = "human";
@@ -71,7 +72,6 @@ export type SubmitRequest = {
   name?: string;
   settings: AdmittedAgentConfig;
   max_turns?: number;
-  max_duration_ms?: number;
   dispatch?: Dispatch;
   after?: string[];
 } | {
@@ -79,7 +79,6 @@ export type SubmitRequest = {
   prompt: string;
   description?: string;
   max_turns?: number;
-  max_duration_ms?: number;
   answer_to_run_id?: string;
   dispatch?: Dispatch;
   after?: string[];
@@ -114,7 +113,7 @@ export interface Outcome {
   error?: string;
   question?: string;
   limit_reached: boolean;
-  /** A wall-clock hint was attempted; not proof it was received. */
+  /** Legacy journal fact: a retired timed hint was attempted; receipt is unknown. */
   time_wrapped?: true;
 }
 export interface ResultRef {
@@ -166,7 +165,6 @@ export interface RunView {
   pending_messages: number;
   dispatch?: Dispatch;
   dispatch_notes?: string[];
-  time_wrapped?: true;
   /** Working-copy arrangement, not a sandbox claim. */
   isolation: WorkspaceMode;
   workspace?: WorkspaceInfo;
@@ -179,7 +177,6 @@ export interface RunView {
   drain?: { waiting_for: DrainWait; elapsed_ms: number };
   turns: number;
   max_turns: number;
-  max_duration_ms: number;
   runtime?: RunTelemetry;
   stop_reason?: StopReason;
   cancellation_source?: CancellationSource;

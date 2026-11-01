@@ -23,7 +23,7 @@ export function assertCallerTools(tools) {
   }
   const spawn = byName.get("agent_spawn"), fields = spawn.parameters.properties;
   assert.deepEqual(spawn.parameters.required.toSorted(), ["agent", "profile", "prompt", "reasoning_difficulty"]);
-  assert.deepEqual(Object.keys(fields).sort(), ["after", "agent", "dispatch", "inherit_context", "label", "max_duration_ms", "max_turns", "profile", "prompt", "reasoning_difficulty", "wait_ms", "workspace"]);
+  assert.deepEqual(Object.keys(fields).sort(), ["after", "agent", "dispatch", "inherit_context", "label", "max_turns", "profile", "prompt", "reasoning_difficulty", "wait_ms", "workspace"]);
   assert.equal(fields.agent.pattern, "^[a-z][a-z0-9-]{0,23}$");
   assert.match(fields.agent.description, /[Uu]nique/);
   assert.match(fields.agent.description, /taken/);
@@ -45,8 +45,9 @@ export function assertCallerTools(tools) {
   for (const fact of [/Default false/, /text/, /without tool calls\/results/, /64 KiB/]) assert.match(fields.inherit_context.description, fact);
   assert.equal(fields.max_turns.minimum, 1); assert.equal(fields.max_turns.maximum, 10000);
   assert.match(fields.max_turns.description, /[Pp]er.task.*256/);
-  assert.equal(fields.max_duration_ms.minimum, 1); assert.equal(fields.max_duration_ms.maximum, 86400000);
-  assert.match(fields.max_duration_ms.description, /[Pp]er.task.*1800000/);
+  assert.match(fields.max_turns.description, /fixed for follow-ups/);
+  assert.match(fields.max_turns.description, /No task wall-clock deadline/);
+  assert.equal(Object.hasOwn(fields, "max_duration_ms"), false);
   assert.match(spawn.description, /submit its first task/); assert.match(spawn.description, /execution may queue/);
   assert.match(spawn.description, /stay fixed/);
   assert.match(spawn.description, /no nested delegation/); assert.match(spawn.description, /agent_list/);
@@ -84,7 +85,8 @@ export function assertCallerTools(tools) {
     assert.match(dispatch.properties.tree.description, /if it exists, must be a directory/);
     assert.match(dispatch.properties.tree.description, /within this Owner/);
     assert.match(dispatch.properties.tree.description, /cross-Owner.*advisory.*not global exclusivity/);
-    assert.match(dispatch.properties.ownership.items.description, /one editor/);
+    for (const fact of [/edit or create/, /write permission/, /one editor/, /[Oo]mit for read-only/])
+      assert.match(dispatch.properties.ownership.items.description, fact);
     assert.match(dispatch.properties.checks.items.description, /globs allowed/);
     assert.match(dispatch.properties.checks.items.description, /not later go-ahead/);
   }

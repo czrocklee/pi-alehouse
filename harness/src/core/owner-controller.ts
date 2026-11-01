@@ -34,7 +34,6 @@ interface RunRecord {
   prompt: string;
   description: string;
   max_turns: number;
-  max_duration_ms: number;
   answer_to_run_id?: string;
   input_entered: boolean;
   status: RunStatus;
@@ -50,7 +49,7 @@ interface RunRecord {
   execution_elapsed_ms?: number;
   turns: number;
   limit_reached: boolean;
-  stop_reason?: StopReason;
+  stop_reason?: Exclude<StopReason, "deadline">;
   cancellation_source?: CancellationSource;
   model_stop_reason?: ModelStopReason;
   outcome?: Outcome;
@@ -66,7 +65,6 @@ interface RunRecord {
   workspace?: WorkspaceInfo;
   workspace_details?: WorkspaceDetails;
   recovery?: WorkspaceRecovery;
-  time_wrapped?: true;
 }
 type ProviderActivity = ReadonlyMap<string, { readonly active: number }>;
 interface ResourceClaim {
@@ -86,8 +84,8 @@ interface Agent {
   question?: { run_id: string; reserved_by?: string };
   /** Parent messages for the next prompt this Agent composes; memory only. */
   inbox: string[];
-  /** Per-task budgets chosen at creation; each task uses them. */
-  limits: { max_turns?: number; max_duration_ms?: number };
+  /** Per-task turn limit chosen at creation; each task uses it. */
+  limits: { max_turns?: number };
   /** kill() on a busy Agent: release once its task settles. */
   exiting?: true;
   /** A prompt has been composed; the inherited context snapshot went with it. */
@@ -95,11 +93,7 @@ interface Agent {
 }
 interface ManagedRun {
   record: RunRecord; output: Output; submittedMono: number;
-  executionStartedMono?: number; deadlineTimer?: ReturnType<typeof setTimeout>;
-  softDeadlineTimer?: ReturnType<typeof setTimeout>;
-  softDeadlineDue?: true;
-  /** Real budget time; the injected clock is observation-only. */
-  budgetStartedMono?: number;
+  executionStartedMono?: number;
   prepared?: PreparedDispatch;
   claim?: ResourceClaim;
   turnStarted?: number; inputOpen: boolean; active: boolean; outputReserved: boolean;
@@ -149,8 +143,8 @@ export interface OwnerControllerOptions {
   /** Real-time bound, default 10 s, for a new admission blocked only by an
    * Agent whose explicit kill/release is already under way. 0 disables it. */
   release_wait_ms?: number;
-  /** Timestamp/elapsed observation only. Deadlines and wait timeouts use real
-   * event-loop timers; advancing an injected clock does not fire them. */
+  /** Timestamp/elapsed observation only. Observation and cleanup timeouts use
+   * real event-loop timers; execution has no wall-clock deadline. */
   clock?: { wall(): number; mono(): number };
   /** Read-only host admission state. Omission retains always-enabled behavior.
    * Broken readers fail command admission closed but reject observations without
@@ -237,9 +231,6 @@ const updatesText = (updates: readonly string[]): string => !updates.length ? ""
   `Messages from the parent, sent before this task started (oldest first):\n\n${
     updates.map((text, index) => `[${index + 1}] ${text}`).join("\n\n")}\n\n--- End of messages ---`;
 export const softBudgetMessage = "Turn limit reached. Finish with supported results and unfinished work. Do not start new work.";
-export const softTimeBudgetMessage = "Deadline approaching. Finish now with results, checks run, unfinished work and blockers. Do not start new work.";
-export const softDeadlineDelay = (duration: number): number | undefined => duration <= 1000 ? undefined :
-  Math.max(1000, duration - Math.max(1000, Math.min(30000, duration / 5)));
 const settingsView = (settings: AdmittedAgentConfig): RunView["effective_settings"] => {
   const { context_snapshot, ...visible } = settings;
   return { ...visible, context_mode: context_snapshot === undefined ? "none" : "text_snapshot",
@@ -384,8 +375,8 @@ export class OwnerController {
 
   private validate(request: SubmitRequest): void {
     const reuse = "resume" in request;
-    const allowed = reuse ? ["resume", "prompt", "description", "max_turns", "max_duration_ms", "answer_to_run_id", "after", "dispatch"] :
-      ["prompt", "description", "max_turns", "max_duration_ms", "name", "settings", "after", "dispatch"];
+    const allowed = reuse ? ["resume", "prompt", "description", "max_turns", "answer_to_run_id", "after", "dispatch"] :
+      ["prompt", "description", "max_turns", "name", "settings", "after", "dispatch"];
     for (const key of Object.keys(request)) {
       if (allowed.includes(key)) continue;
       if (reuse && ["settings", "model", "provider", "thinking", "effort", "effort_source", "effort_overrides", "difficulty", "strength", "preset", "subagent_type", "profile", "inherit_context", "cwd", "tools", "name"].includes(key)) {
@@ -402,8 +393,6 @@ export class OwnerController {
       }
     }
     if (request.max_turns !== undefined && (!positive(request.max_turns) || request.max_turns > 10000)) throw new HarnessError("INVALID_PARAMETER", { key: "max_turns" });
-    if (request.max_duration_ms !== undefined && (!positive(request.max_duration_ms) || request.max_duration_ms > 86_400_000))
-      throw new HarnessError("INVALID_PARAMETER", { key: "max_duration_ms" });
     if (!reuse && !validSettings(request.settings)) throw new HarnessError("INVALID_EFFECTIVE_SETTINGS");
     if (request.dispatch !== undefined) validateDispatch(request.dispatch);
     const ids = request.after;
@@ -602,7 +591,7 @@ export class OwnerController {
     const agent: Agent = reuse ? this.requireAgent(request.resume) : {
       id: randomUUID(), name: request.name ?? "", settings: structuredClone(request.settings), resident: true,
       inbox: [],
-      limits: { max_turns: request.max_turns, max_duration_ms: request.max_duration_ms },
+      limits: { max_turns: request.max_turns },
     };
     if (agent.current) throw new HarnessError("AGENT_BUSY", { run_id: agent.current });
     // An Agent lives until kill. One whose first task never started has no
@@ -638,7 +627,6 @@ export class OwnerController {
       run_id: randomUUID(), agent_id: agent.id, request_id, request_digest, enqueue_sequence: ++this.sequence,
       name: agent.name, settings: structuredClone(agent.settings), prompt: request.prompt,
       description: request.description ?? "Follow-up task", max_turns: request.max_turns ?? agent.limits.max_turns ?? 256,
-      max_duration_ms: request.max_duration_ms ?? agent.limits.max_duration_ms ?? 1_800_000,
       ...(reuse && request.answer_to_run_id ? { answer_to_run_id: request.answer_to_run_id } : {}),
       ...(request.after ? { after: [...request.after] } : {}),
       ...(declaration === undefined ? {} : { dispatch: structuredClone(declaration) }),
@@ -853,8 +841,7 @@ export class OwnerController {
     return { version: 1, checks: [...checks], cwd: run.record.workspace?.cwd ?? run.record.settings.cwd,
       ...(run.prepared?.tree && run.prepared.tree.kind !== "unbound_worktree" ? { tree: run.prepared.tree.canonical } : {}),
       source_state: run.record.source_state ?? { state: "unknown", reason: "not_captured" },
-      outcome: { status: outcome.status, ...(outcome.reason ? { reason: outcome.reason } : {}),
-        ...(outcome.time_wrapped ? { time_wrapped: true } : {}) } };
+      outcome: { status: outcome.status, ...(outcome.reason ? { reason: outcome.reason } : {}) } };
   }
 
   private removeQueued(id: string): void {
@@ -929,7 +916,7 @@ export class OwnerController {
       if (this.closing || this.closed || this.parentError || this.internalError || this.cleanupUncertain) return;
       // FIFO among dependency-ready Runs with room in their admitted provider.
       // A saturated provider must not block another provider's ready work.
-      // Skipped Runs keep their queue place and have not started their deadline.
+      // Skipped Runs keep their queue place and hold no execution slot.
       const index = this.queue.findIndex((id) => {
         const run = this.requireRun(id);
         return (activeByProvider.get(run.record.settings.provider) ?? 0) < this.limits.concurrency && !this.blockedBy(run).length;
@@ -960,17 +947,7 @@ export class OwnerController {
       const provider = run.record.settings.provider;
       activeByProvider.set(provider, (activeByProvider.get(provider) ?? 0) + 1);
       run.executionStartedMono = this.clock.mono();
-      run.budgetStartedMono = performance.now();
       run.record.status = "running"; run.record.phase = "initializing"; run.record.started_at = this.clock.wall();
-      // Real event-loop time, like wait(): a stop request, not a hard interrupt.
-      // A late callback cannot demote a Run whose execution exit was recorded.
-      run.deadlineTimer = setTimeout(() => this.stop(run, "deadline"), run.record.max_duration_ms);
-      run.deadlineTimer.unref?.();
-      const softDelay = softDeadlineDelay(run.record.max_duration_ms);
-      if (softDelay !== undefined) {
-        run.softDeadlineTimer = setTimeout(() => this.timeWrapUp(run, true), softDelay);
-        run.softDeadlineTimer.unref?.();
-      }
       this.track(this.execute(run));
     }
     } finally { this.pumping = undefined; }
@@ -995,23 +972,6 @@ export class OwnerController {
     run.record.limit_reached = true;
     try { this.dispatchInput(run, softBudgetMessage, "soft_budget"); }
     catch (error) { run.record.cleanup_errors.push(`SOFT_BUDGET_MESSAGE_REJECTED: ${errorText(error)}`); }
-  }
-  private timeWrapUp(run: ManagedRun, timerExpired = false): void {
-    this.assertEffectAllowed();
-    if (!this.current(run) || run.record.time_wrapped || run.record.limit_reached || run.record.stop_reason || run.record.execution_exited) return;
-    const delay = softDeadlineDelay(run.record.max_duration_ms);
-    if (delay === undefined || run.budgetStartedMono === undefined) return;
-    if (timerExpired) run.softDeadlineDue = true;
-    const elapsed = performance.now() - run.budgetStartedMono;
-    if ((!run.softDeadlineDue && elapsed < delay) || elapsed >= run.record.max_duration_ms || !run.record.input_entered) return;
-    try {
-      if (!this.acceptsInput(run)) return;
-      // Only actual readiness after the original input boundary can consume the
-      // attempt. This also puts approval invalidation after the fresh run binding.
-      run.softDeadlineDue = undefined;
-      run.record.time_wrapped = true;
-      this.dispatchInput(run, softTimeBudgetMessage, "soft_budget");
-    } catch (error) { run.record.cleanup_errors.push(`SOFT_TIME_MESSAGE_REJECTED: ${errorText(error)}`); }
   }
   private execute(run: ManagedRun): Promise<void> {
     this.assertEffectAllowed();
@@ -1095,7 +1055,6 @@ export class OwnerController {
             if (!this.current(run) || run.record.execution_exited) return;
             run.record.input_entered = true;
             if (agent.question?.reserved_by === run.record.run_id) agent.question = undefined;
-            this.timeWrapUp(run);
           },
           output: (value) => { this.assertEffectAllowed(); if (this.current(run) && !run.record.execution_exited) this.output(run, value); },
           runtime: (value) => {
@@ -1120,7 +1079,6 @@ export class OwnerController {
             if (run.record.turns > run.record.max_turns + this.limits.grace) {
               run.record.limit_reached = true; this.stop(run, "hard_budget");
             } else if (run.record.turns > run.record.max_turns) this.wrapUp(run);
-            this.timeWrapUp(run);
           },
           turnEnd: (continuing) => {
             this.assertEffectAllowed();
@@ -1184,8 +1142,6 @@ export class OwnerController {
   private async finishRun(run: ManagedRun, facts: ExecutionFacts): Promise<void> {
     if (!this.current(run) || run.record.execution_exited) return;
     run.inputOpen = false; run.record.execution_exited = true;
-    clearTimeout(run.deadlineTimer); run.deadlineTimer = undefined;
-    clearTimeout(run.softDeadlineTimer); run.softDeadlineTimer = undefined; run.softDeadlineDue = undefined;
     run.record.exited_at = this.clock.wall(); run.record.phase = "finalizing"; run.turnStarted = undefined;
     run.record.execution_elapsed_ms = run.executionStartedMono === undefined ? undefined :
       Math.max(0, this.clock.mono() - run.executionStartedMono);
@@ -1229,16 +1185,15 @@ export class OwnerController {
     agent = this.requireAgent(run.record.agent_id);
     if (agent.question?.reserved_by === run.record.run_id && !run.record.input_entered) agent.question.reserved_by = undefined;
     run.record.outcome = {
-      status: stopped === "user_cancel" ? "cancelled" : stopped === "hard_budget" || stopped === "deadline" || facts.kind !== "success" ? "failed" : run.question ? "needs_input" : "completed",
+      status: stopped === "user_cancel" ? "cancelled" : stopped === "hard_budget" || facts.kind !== "success" ? "failed" : run.question ? "needs_input" : "completed",
       model_stop_reason: facts.model_stop_reason,
-      reason: stopped === "hard_budget" ? "turn_limit" : stopped === "deadline" ? "deadline" : stopped ? undefined :
+      reason: stopped === "hard_budget" ? "turn_limit" : stopped ? undefined :
         facts.model_stop_reason === "length" ? "output_limit" :
         run.quarantine === "context_change_failed" ? "context_change_failed" : run.prestartFailure ? run.prestartFailure.reason :
           facts.kind === "aborted" ? "unexpected_abort" :
           facts.kind === "error" ? "execution_error" : undefined,
       error: facts.error?.slice(0, 2048), question: run.question, limit_reached: run.record.limit_reached,
       ...(run.record.cancellation_source ? { cancellation_source: run.record.cancellation_source } : {}),
-      ...(run.record.time_wrapped ? { time_wrapped: true } : {}),
     };
     } catch (error) {
       // A synchronous finalization fault (internal bug or a hostile getter in
@@ -1261,8 +1216,7 @@ export class OwnerController {
         model_stop_reason: run.record.model_stop_reason, reason: "finalization_failed",
         error: `FINALIZATION_FAILED: ${errorText(error)}`.slice(0, 2048),
         question: run.question, limit_reached: run.record.limit_reached,
-        ...(run.record.cancellation_source ? { cancellation_source: run.record.cancellation_source } : {}),
-        ...(run.record.time_wrapped ? { time_wrapped: true } : {}) };
+        ...(run.record.cancellation_source ? { cancellation_source: run.record.cancellation_source } : {}) };
     }
     // A freed execution slot belongs to healthy peers, even while this Run's
     // input/finalization/isolated session cleanup drains. Its own Agent stays busy.
@@ -1511,7 +1465,7 @@ export class OwnerController {
     void delivery.then(() => run.inputs.delete(delivery), () => run.inputs.delete(delivery));
     return { accepted: true, event_id };
   }
-  private stop(run: ManagedRun, reason: StopReason, source?: CancellationSource): void {
+  private stop(run: ManagedRun, reason: Exclude<StopReason, "deadline">, source?: CancellationSource): void {
     this.assertEffectAllowed();
     if (run.record.execution_exited || terminal(run.record.status) || run.record.stop_reason) return;
     // Freeze reason AND attribution before a consumer can throw/reenter cancel().
@@ -1577,7 +1531,7 @@ export class OwnerController {
       ...(record.workspace_details ? { workspace_details: record.workspace_details } : {}),
       ...(record.recovery ? { recovery: record.recovery } : {}), elapsed_ms: record.elapsed_ms ?? Math.max(0, this.clock.mono() - run.submittedMono),
       turn_elapsed_ms: run.turnStarted === undefined ? undefined : Math.max(0, this.clock.mono() - run.turnStarted),
-      turns: record.turns, max_turns: record.max_turns, max_duration_ms: record.max_duration_ms,
+      turns: record.turns, max_turns: record.max_turns,
       execution_elapsed_ms: record.execution_elapsed_ms ?? (run.executionStartedMono === undefined ? undefined :
         Math.max(0, this.clock.mono() - run.executionStartedMono)), runtime: run.runtime,
       stop_reason: record.stop_reason, model_stop_reason: record.model_stop_reason, outcome: record.outcome,
@@ -1586,7 +1540,6 @@ export class OwnerController {
       cleanup_errors: record.cleanup_errors, discarded_inputs: record.discarded_inputs,
       ...(record.dispatch === undefined ? {} : { dispatch: record.dispatch }),
       ...(record.dispatch_notes?.length ? { dispatch_notes: record.dispatch_notes } : {}),
-      ...(record.time_wrapped ? { time_wrapped: true } : {}),
       task, has_question: agent.question?.run_id === run_id,
       question_id: actionableQuestionId(agent, run, this.communicationHealthy() && leaseHeld),
       pending_messages: this.alerts.filter((alert) => alert.run === run).length,
@@ -1669,14 +1622,12 @@ export class OwnerController {
       .map((run) => ({ run_id: run.record.run_id, agent_id: run.record.agent_id, stop_reason: run.record.stop_reason,
         elapsed_ms: run.stopRequestedMono === undefined ? undefined : Math.max(0, this.clock.mono() - run.stopRequestedMono) }));
     const settled_reasons: Record<string, number> = {};
-    let time_wrapped_attempts = 0;
     for (const run of this.runs.values()) if (terminal(run.record.status)) {
       const key = `${run.record.status}/${run.record.outcome?.reason ?? "none"}`;
       settled_reasons[key] = (settled_reasons[key] ?? 0) + 1;
-      if (run.record.outcome?.time_wrapped) time_wrapped_attempts++;
     }
     return { active: this.active, queued: this.queue.length, concurrency_scope: "provider" as const,
-    providers: [...this.providerActivity().values()], time_wrapped_attempts, ...(draining.length ? { draining } : {}),
+    providers: [...this.providerActivity().values()], ...(draining.length ? { draining } : {}),
     ...(Object.keys(settled_reasons).length ? { settled_reasons } : {}),
     ...(finalizingWaits.length ? { finalizing_waits: finalizingWaits } : {}),
     ...(stopping.length ? { stopping } : {}),

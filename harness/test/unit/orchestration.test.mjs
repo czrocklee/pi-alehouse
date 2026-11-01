@@ -317,12 +317,12 @@ test("kill has one deadline for stopping and cleanup; unconfirmed cleanup stays 
   assert.deepEqual(await f.controller.kill(run.agent_id), { agent_id: run.agent_id, state: "released" });
 });
 
-test("budgets chosen at creation apply to every task of that Agent", async (t) => {
+test("the turn limit chosen at creation applies to every task of that Agent", async (t) => {
   const f = await fixture(t);
-  const first = await f.controller.submit("a", task("one", { max_turns: 3, max_duration_ms: 60_000 }));
+  const first = await f.controller.submit("a", task("one", { max_turns: 3 }));
   await until(() => f.ports[0]?.streaming); f.ports[0].finish(); await ended(f.controller, first);
   const next = await resume(f.controller, "r", first.agent_id, "two");
-  assert.equal(next.max_turns, 3); assert.equal(next.max_duration_ms, 60_000);
+  assert.equal(next.max_turns, 3); assert.equal(Object.hasOwn(next, "max_duration_ms"), false);
   await until(() => f.ports[0].calls.length === 2); f.ports[0].finish(); await ended(f.controller, next);
 });
 

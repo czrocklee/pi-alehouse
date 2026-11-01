@@ -89,8 +89,9 @@ Spawn requires `agent`, `prompt` (1--131072 UTF-16 units), `profile`
 from easiest to hardest). Worker maps to stable internal `editor`.
 Optional fields are `workspace` (`shared` or `worktree`, default `shared`),
 `label` (1--120), `inherit_context`, `after` (1--4 other names),
-`wait_ms` (0--300000), `max_turns` (1--10000, default 256) and
-`max_duration_ms` (1--86400000, default 1800000), plus optional `dispatch`.
+`wait_ms` (0--300000), `max_turns` (1--10000, default 256), plus optional
+`dispatch`. Task execution has no wall-clock deadline. The retired
+`max_duration_ms` parameter is rejected, not ignored.
 
 Spawn/run `dispatch` is closed plain data: `inputs` ≤8 paths, `ownership` ≤16
 paths, `tree` one build-root path and `checks` ≤16 parent-declared identifiers;
@@ -99,8 +100,8 @@ to 512 UTF-16 units. Paths have no leading/trailing whitespace and are literal,
 not shell globs or expansions. See [task dispatch](task-dispatch.md) for exact path language,
 profile/external preflight, claims, after rechecks and validation observations.
 These declarations do not grant permissions or prove that checks ran. In
-particular, `tree` is checked as `path_write`; it cannot create an output-root
-exception. Relative paths use the Agent's execution cwd, including on the first
+particular, `ownership` and `tree` are checked as `path_write`; omit `ownership`
+for read-only tasks, and `tree` cannot create an output-root exception. Relative paths use the Agent's execution cwd, including on the first
 worktree task; absolute paths keep their meaning. Uninitialized worktree relative
 paths (including `..`) bind after session creation, before child input, with
 source deny-only preflight and no source existence assumption. Overlapping
@@ -110,7 +111,7 @@ and checked `surface`, separately from missing-input and wrong-type errors.
 A binding preflight failure fails the task but leaves an already-created healthy
 session idle and reusable; see [workspace binding](workspaces.md#dispatch-paths-and-binding).
 
-Profile, workspace, reasoning difficulty, context and budgets are fixed for the
+Profile, workspace, reasoning difficulty, context and turn limit are fixed for the
 Agent at spawn; later tasks, steering and routing changes do not migrate them.
 Use a new Agent for a different binding. Spawn creates the Agent and submits its
 first task, which may queue rather than execute immediately. Prompt is the full
@@ -212,11 +213,11 @@ agent_answer({ agent, question_id, answer, wait_ms? })
 ```
 
 Answer is 1--16384 nonblank UTF-16 units. No profile, workspace,
-reasoning_difficulty, budgets, label or after is accepted. The original task must already be truly settled
+reasoning_difficulty, turn limit, label or after is accepted. The original task must already be truly settled
 `needs_input`, still pending and unreserved, with no current Run and a healthy,
 reusable Agent/Owner. Answer does not wait and then silently answer a future
 question. It reserves the original question and admits a continuation with the
-Agent's fixed settings/budgets and the asking task's label and dispatch. Its
+Agent's fixed settings/turn limit and the asking task's label and dispatch. Its
 resource claim lineage remains held across the pending question; pre-input
 rollback that reopens the question also restores that claim, including any
 existing tree lease. Final termination/required cleanup, not a stop request,
@@ -263,8 +264,8 @@ continuation; to wait for one, name the Agent after `agent_answer` returns, not
 in the same tool batch. Naming a task that has already settled without
 completing (needs-input, failed or interrupted) is rejected with
 `DEPENDENCY_NOT_COMPLETED`, carrying that Agent and its status as `reason`,
-before any Agent, name or task is allocated. Queued tasks hold no execution slot
-and their duration budget has not started; `waiting_for` names unsettled
+before any Agent, name or task is allocated. Queued tasks hold no execution slot;
+`waiting_for` names unsettled
 dependencies. They still count toward queue capacity, and their Agents toward
 resident capacity. Active work is capped at four Runs per admitted provider
 (models share it); waiting on that provider does not block another. Queued rows
@@ -325,15 +326,12 @@ rejection unchanged. Only a release
 already under way when admission rejects is waited for: parallel tool-batch
 order is not a guarantee, and a later kill is not anticipated.
 
-Duration begins at slot assignment/initialization, not queue admission. The
-[wall-clock soft wrap](task-dispatch.md#wall-clock-soft-wrap) uses a bounded Δ
-warning window without changing the hard deadline. Guarded `soft_budget` input
-invalidates the approval witness (`pi-harness:approval:invalidated`). Internal
-`time_wrapped` records a warning attempt, not receipt/checkpoint or the turn
-`limit_reached`; it is not parent-model telemetry. Timer due remains Run-local
-until original inputEntered plus canInput readiness, or a post-budget turnStart
-boundary, permits a single attempt before hard deadline. It never injects ahead
-of port.run, retries a rejected attempt or carries due across Runs.
+Execution has a turn limit but no wall-clock deadline or timed wrap-up input;
+see [execution limits](task-dispatch.md#execution-limits). Turn wrap still uses
+`soft_budget` and invalidates the approval witness
+(`pi-harness:approval:invalidated`). Elapsed time remains an observation, not a
+stop condition. Legacy `deadline`/`time_wrapped` history remains literal and
+readable, never restored as active timers or injected reminders.
 
 `agent_wait({agents?, mode?, wait_ms?})` accepts `mode: "all" | "any"`
 (default `all`): all selected tasks must end, or any one must end. Questions,
@@ -449,8 +447,8 @@ condition applies; it is a mandatory bounded control, including in list/interrup
 projections, not optional diagnostic text. Dependency names remain in the roster's
 `waiting_for`. Owner faults remain separately reported; an unavailable Owner is
 not diagnosed as provider saturation. Routing identities remain host-only.
-Live Run context, usage and elapsed time remain UI observations; warning attempts
-remain outcome/history facts. Task descriptions stay on their original Runs.
+Live Run context, usage and elapsed time remain UI observations; legacy timed
+warning attempts remain history-only facts. Task descriptions stay on their original Runs.
 There is no separate touched-path/earlier-label summary or generic model-recovery
 hint. Question fields are `question_id`, `question`, `question_truncated`;
 historical text need not have a token. Results use `result`, `next_cursor`, `result_omitted`,
@@ -530,8 +528,8 @@ whole with `response_limit_reached`, never as misleading clipped paths. There
 is no separate metadata retrieval mode or unlimited recovery promise.
 
 `dispatch_notes` (at most 2 × 120 units) remain optional. Model projections show
-only `tree_shared`; other notes stay on the Run and detail pane. Warning attempts
-and other host telemetry do not enter parent-model replies. Validation receipts
+only `tree_shared`; other notes stay on the Run and detail pane. Legacy warning
+facts and other host telemetry do not enter parent-model replies. Validation receipts
 stay in trusted history/offline audit; see
 [notes and receipts](task-dispatch.md#notes-receipts-and-coverage).
 Each string diagnostic has a fixed 512-unit display cap. That cap alone does
@@ -597,7 +595,7 @@ consume neither alerts nor finished reminders.
 
 Interrupt requests stop; wait for settlement, not just an interrupting status.
 A task that already settled, already exited, or is already stopping for its
-deadline or turn limit keeps that outcome (completed, failed or needs_input);
+turn limit keeps that outcome (completed, failed or needs_input);
 only a stop this call records settles interrupted.
 The Agent keeps its conversation for a later run. Even a first task stopped or
 failed before session creation leaves an Agent whose next task can create it.
@@ -629,7 +627,7 @@ Public worker maps to stable internal editor without rewriting historical IDs.
 Unavailable is a boolean fact with unavailable_reason diagnostics.
 
 Run context, usage and elapsed time are live UI observations, not roster
-telemetry; warning attempts remain outcome/history facts. There is no dedicated
+telemetry; legacy timed warning attempts remain history-only facts. There is no dedicated
 Agent summary, touched-history collection, earlier-label list or idle-duration
 projection. Owner/cursor errors retain concrete guidance, not generic model
 recovery hints. There is no redundant task count. Questions are read
@@ -688,7 +686,7 @@ turn so the task can settle for an answer. The first successful call gives the
 same end-turn instruction. No body comparison. Invalid
 input/closed gates still fail, with no truncation. Ask itself neither declares
 settlement nor forces suspension; only normal true needs-input settlement may
-make it answerable. Cancelled/failed/timeout questions remain historical text,
+make it answerable. Cancelled/failed questions remain historical text,
 not actionable question tokens.
 
 Old notify/progress/send-answered journals are display-only compatibility:

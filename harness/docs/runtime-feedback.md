@@ -62,8 +62,8 @@ Task replies show concrete errors and availability facts, not a generic
 or ability. An Agent's model stays fixed across routing changes, `agent_run`
 and `agent_answer`; different settings require a fresh Agent.
 
-Usage, context size and warning attempts remain host/UI/history observations,
-not routine parent-model fields. Permission, question, claim and cleanup gates
+Usage and context size remain host/UI observations, not routine parent-model
+fields. Retired timed-warning attempts remain history-only facts. Permission, question, claim and cleanup gates
 remain unchanged; no failure message authorizes automatic retry or release.
 
 Use [matched resources and a fresh process](development.md#matched-resource-migration),

@@ -7,6 +7,21 @@ import { agentProfileNames, blockedDelegationToolNames, managementToolNames } fr
 
 const json = (relative) => JSON.parse(readFileSync(new URL(relative, import.meta.url), "utf8"));
 
+test("harness README lists the actual management tools and absent-only resource inventory", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const tools = /parent has (\w+) fixed harness management tools \(([^)]+)\)/.exec(readme);
+  assert(tools); assert.equal(tools[1], "nine");
+  assert.deepEqual([...tools[2].matchAll(/`([^`]+)`/g)].map(match => match[1]), managementToolNames);
+  const definitions = /five agent definitions: ([^;]+);/.exec(readme);
+  assert(definitions);
+  const actual = Object.keys(renderWorkers().agents).sort();
+  assert.equal(actual.length, 5);
+  assert.deepEqual([...definitions[1].matchAll(/`([^`]+)`/g)].map(match => match[1]).sort(), actual);
+  assert.match(readme, /seven files total/);
+  assert.match(readme, /Tasks have a turn limit.*not a wall-clock execution deadline/);
+  assert.match(readme, /agent_answer.*settled pending question/);
+});
+
 test("production and portable seeds allow the two current child tools and answer, preserving send while denying retired notify", () => {
   for (const relative of ["../../../resources/permissions.json", "../../../test/policy/permissions.json"]) {
     const permission = json(relative).permission;

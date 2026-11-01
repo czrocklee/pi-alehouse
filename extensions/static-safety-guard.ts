@@ -540,7 +540,7 @@ function registerGuard(pi: ExtensionAPI, root = resolve(process.env.PI_CODING_AG
         return { block: true, reason: "Static rg requires --no-config, safe flags, -d 0, then -- and a pattern plus literal paths (or stdin - without -d 0); --files lists only the current directory. Use an env wrapper for normal approval of other forms." };
       }
       if (indirectReaderInput(event.input.command, denies)) {
-        return { block: true, reason: "Reader static allowance requires literal paths and direct input; expand filenames explicitly or use an env wrapper for normal approval." };
+        return { block: true, reason: "Static file-read allowance requires literal paths and direct input; expand filenames explicitly or use an env wrapper for normal approval." };
       }
       if (expandingHeredocFeedsWhitelist(event.input.command, denies)) {
         return { block: true, reason: "Command substitutions in an expanding heredoc are outside the static whitelist; use an explicit env wrapper for normal approval." };

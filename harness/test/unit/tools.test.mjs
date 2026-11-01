@@ -197,8 +197,10 @@ test("closed schemas reject unknown, mutated and malformed inputs before admissi
   await assert.rejects(call("agent_spawn", rescored), code("INVALID_DIFFICULTY"));
   const reprofiled = tool("agent_spawn").prepareArguments(create()); reprofiled.profile = "admin";
   await assert.rejects(call("agent_spawn", reprofiled), code("INVALID_PROFILE"));
-  for (const max_duration_ms of [0, 86400001, 1.5]) {
+  for (const max_duration_ms of [0, 1, 300000, 1800000, 86400001, 1.5]) {
     assert.throws(() => tool("agent_spawn").prepareArguments(create({ max_duration_ms })), code("INVALID_PARAMETERS"));
+    assert.throws(() => tool("agent_run").prepareArguments(run("orca", { max_duration_ms })), code("INVALID_PARAMETERS"));
+    assert.throws(() => tool("agent_answer").prepareArguments({ agent: "orca", question_id: "q_" + "a".repeat(32), answer: "continue", max_duration_ms }), code("INVALID_PARAMETERS"));
   }
   for (const wait_ms of [-1, 300001, 1.5]) {
     assert.throws(() => tool("agent_spawn").prepareArguments(create({ wait_ms })), code("INVALID_PARAMETERS"));
@@ -298,7 +300,7 @@ test("spawn creates and send addresses: each rejects the other's names with a po
   await assert.rejects(call("agent_spawn", create(), "released-name"), code("AGENT_EXISTS"), "a killed name stays taken");
 });
 
-test("read_result pages UTF-16 output and returns the separate full question", async (t) => {
+test("agent_read pages UTF-16 output and returns the separate full question", async (t) => {
   const f = await fixture(t, { controller: { concurrency: 2 } }), { call } = toolsFor(f);
   await call("agent_spawn", create(), "orca"); await call("agent_spawn", create({ agent: "otter" }), "otter");
   await until(() => f.ports.length === 2 && f.ports.every((port) => port.streaming));
@@ -472,7 +474,7 @@ test("preset/profile/context snapshots pin at admission; same ID keeps first acc
   state.catalog = [state.model];
   await until(() => f.ports[0]?.streaming);
   const view = viewOf(f, "orca");
-  assert.equal(view.max_duration_ms, 1_800_000);
+  assert.equal(Object.hasOwn(view, "max_duration_ms"), false);
   assert.equal(view.effective_settings.model, "controlled"); assert.equal(view.effective_settings.thinking, "off");
   assert.equal(view.effective_settings.parent_thinking, "off");
   assert.equal(view.effective_settings.thinking_resolution, "identity");
@@ -496,7 +498,8 @@ test("preset/profile/context snapshots pin at admission; same ID keeps first acc
   const first = runOf(f, "orca");
   assert.equal((await call("agent_run", run("orca", { prompt: "follow-up" }), "reuse")).agents[0].status, "running");
   assert.notEqual(runOf(f, "orca"), first);
-  assert.equal(viewOf(f, "orca").max_duration_ms, 1_800_000, "each task uses the Agent's budgets");
+  assert.equal(viewOf(f, "orca").max_turns, view.max_turns, "each task uses the Agent's turn limit");
+  assert.equal(Object.hasOwn(viewOf(f, "orca"), "max_duration_ms"), false);
   assert.equal(routed(f, "orca").preset, "fixture"); assert.equal(routed(f, "orca").difficulty, 3);
   assert.equal(routed(f, "orca").thinking, "off");
   assert.equal(routed(f, "orca").parent_thinking, "off"); assert.equal(routed(f, "orca").thinking_resolution, "identity");

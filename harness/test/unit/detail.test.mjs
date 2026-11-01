@@ -21,7 +21,7 @@ const view = (overrides = {}) => ({
     cwd, tools: ["read", "grep", "find", "ls"], definition_digest: "0".repeat(64), context_mode: "none" },
   status: "running", phase: "executing", execution_exited: false, finalization_pending: false, resumable: true,
   owner_blocked: false, pending_messages: 0, isolation: "shared",
-  elapsed_ms: 93000, turn_elapsed_ms: 1100, turns: 3, max_turns: 256, max_duration_ms: 1800000, execution_elapsed_ms: 93000,
+  elapsed_ms: 93000, turn_elapsed_ms: 1100, turns: 3, max_turns: 256, execution_elapsed_ms: 93000,
   usage: spend(61200, 3100, 19900, 0, null),
   cleanup_errors: [], discarded_inputs: [], ...overrides,
 });
@@ -319,16 +319,17 @@ test("effort provenance wraps on narrow panes without clipping or inventing a so
   }
 });
 
-test("deadline display distinguishes unstarted Runs from zero elapsed execution", () => {
+test("execution display distinguishes unstarted Runs from zero elapsed without a task deadline", () => {
   for (const status of ["queued", "cancelled"]) {
     const text = joined({ status, phase: status === "queued" ? "queued" : "settled", execution_exited: status === "cancelled",
-      max_duration_ms: 1800000, execution_elapsed_ms: undefined });
-    assert.match(text, /deadline\s+not started · 30m00s execution limit/);
-    assert.doesNotMatch(text, /0\.0s \/ 30m00s/);
+      execution_elapsed_ms: undefined });
+    assert.match(text, /execution\s+not started/);
+    assert.doesNotMatch(text, /deadline|execution limit|requests stop/);
   }
-  assert.match(joined({ max_duration_ms: 1800000, execution_elapsed_ms: 0 }), /deadline\s+0\.0s \/ 30m00s execution/);
-  assert.match(joined({ max_duration_ms: 1800000, execution_elapsed_ms: 1000, status: "completed", execution_exited: true }),
-    /deadline\s+1\.0s \/ 30m00s execution/);
+  assert.match(joined({ execution_elapsed_ms: 0 }), /execution\s+0\.0s/);
+  const finished = joined({ execution_elapsed_ms: 1000, status: "completed", execution_exited: true });
+  assert.match(finished, /execution\s+1\.0s/);
+  assert.doesNotMatch(finished, /deadline|execution limit|requests stop/);
 });
 
 test("both clocks and the full usage split are spelled out", () => {

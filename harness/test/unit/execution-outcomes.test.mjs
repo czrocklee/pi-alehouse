@@ -139,39 +139,45 @@ test("unexpected successful port stop reasons gain diagnostics without replacing
   }
 });
 
-test("deadline starts on execution, covers initialization, and cannot release a hung slot or owner", async (t) => {
+test("cancellation during initialization cannot release a hung slot or owner", async (t) => {
   const initialization = deferred(), entered = deferred(), port = new FakePort();
+  t.after(() => initialization.resolve());
   const f = await fixture(t, { controller: { createSession: async () => { entered.resolve(); await initialization.promise; return port; } } });
-  const run = await f.controller.submit("deadline-init", task("deadline-init", { max_duration_ms: 10 }));
-  await entered.promise; await until(() => f.controller.view(run.run_id).stop_reason === "deadline");
-  assert.deepEqual(f.events.map((event) => event.kind), ["submit", "deadline"]);
+  const run = await f.controller.submit("cancel-init", task("cancel-init"));
+  await entered.promise; f.controller.cancel(run.run_id);
+  assert.deepEqual(f.events.map((event) => event.kind), ["submit", "cancel"]);
   assert.equal(f.controller.view(run.run_id).status, "cancelling"); assert.equal(f.controller.stats().active, 1);
   assert.equal((await f.controller.shutdown(1)).closed, false); f.owner.assertHeld();
   initialization.resolve(); const done = (await ended(f.controller, run)).snapshots[0];
-  assert.equal(done.status, "failed"); assert.equal(done.outcome.reason, "deadline");
+  assert.equal(done.status, "cancelled"); assert.equal(done.outcome.reason, undefined);
   assert.equal(port.calls.length, 0); assert.equal(f.controller.stats().active, 0);
 });
 
-test("queued time is excluded and a non-cooperative deadline only requests stop", async (t) => {
+test("queued time remains observation only and shutdown timeout cannot imply execution exit", async (t) => {
   const { controller: c, ports, owner } = await fixture(t);
   const blocker = await c.submit("blocker", task("blocker")); await until(() => ports[0]?.streaming);
-  const queued = await c.submit("queued-deadline", task("queued-deadline", { max_duration_ms: 10 }));
+  const queued = await c.submit("queued", task("queued"));
   await new Promise((resolve) => setTimeout(resolve, 25));
   assert.equal(c.view(queued.run_id).status, "queued"); assert.equal(c.view(queued.run_id).execution_elapsed_ms, undefined);
-  ports[0].finish("free slot"); await ended(c, blocker); await until(() => ports[1]?.stopped === 1);
-  assert.equal(c.view(queued.run_id).status, "cancelling"); assert.equal(c.stats().active, 1);
+  ports[0].finish("free slot"); await ended(c, blocker); await until(() => ports[1]?.streaming);
+  assert.equal(c.view(queued.run_id).status, "running"); assert.equal(ports[1].stopped, 0);
   assert.equal((await c.shutdown(1)).closed, false); owner.assertHeld();
+  assert.equal(c.view(queued.run_id).status, "cancelling"); assert.equal(c.stats().active, 1);
   ports[1].finish("late partial", "aborted"); const done = (await ended(c, queued)).snapshots[0];
-  assert.equal(done.status, "failed"); assert.equal(done.outcome.reason, "deadline");
+  assert.equal(done.status, "cancelled"); assert.equal(done.outcome.reason, undefined);
   assert(done.execution_elapsed_ms >= 0);
 });
 
-test("normal exit clears its deadline and a resumed Run owns a fresh timer", async (t) => {
+test("natural completion and reuse retain elapsed observations without deadline metadata", async (t) => {
   const { controller: c, ports } = await fixture(t);
-  const first = await c.submit("first-timer", task("first-timer", { max_duration_ms: 50 })); await until(() => ports[0]?.streaming);
+  const first = await c.submit("first", task("first")); await until(() => ports[0]?.streaming);
   ports[0].finish("first"); await ended(c, first);
-  const resumed = await c.submit("fresh-timer", { resume: first.agent_id, prompt: "next", max_duration_ms: 200 });
-  await until(() => ports[0].calls.length === 2); await new Promise((resolve) => setTimeout(resolve, 75));
+  const resumed = await c.submit("next", { resume: first.agent_id, prompt: "next" });
+  await until(() => ports[0].calls.length === 2);
+  for (const run of [first, resumed]) {
+    assert.equal(Object.hasOwn(c.view(run.run_id), "max_duration_ms"), false);
+    assert.equal(Object.hasOwn(c.view(run.run_id), "time_wrapped"), false);
+  }
   assert.equal(c.view(resumed.run_id).status, "running"); assert.equal(ports[0].stopped, 0);
   ports[0].finish("second"); await ended(c, resumed);
 });

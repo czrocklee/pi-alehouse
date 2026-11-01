@@ -18,7 +18,7 @@ const view = (agent_id = "a", extra = {}) => ({
   description: "Stop fixture", effective_settings: settings, status: "running", phase: "executing",
   execution_exited: false, finalization_pending: false, resident: true, resumable: false,
   owner_blocked: false, pending_messages: 0, isolation: "shared", elapsed_ms: 0,
-  turns: 1, max_turns: 8, max_duration_ms: 300000, cleanup_errors: [], discarded_inputs: [], ...extra,
+  turns: 1, max_turns: 8, cleanup_errors: [], discarded_inputs: [], ...extra,
 });
 const entry = (v) => ({ agent_id: v.agent_id, input: { view: v, live } });
 function paneFixture(t, { frame = false, onStop, views = [view()] } = {}) {

@@ -213,9 +213,7 @@ export function renderDetailFields(input: DetailInput, theme: Theme, width: numb
   blank();
   const clock = view.turn_elapsed_ms !== undefined ? ` · this turn ${formatMs(view.turn_elapsed_ms)}` : "";
   field("turns", `${formatTurns(view.turns, view.max_turns)}${clock} · total ${formatMs(view.elapsed_ms)}`);
-  field("deadline", view.execution_elapsed_ms === undefined ?
-    `not started · ${formatMs(view.max_duration_ms)} execution limit` :
-    `${formatMs(view.execution_elapsed_ms)} / ${formatMs(view.max_duration_ms)} execution (requests stop, not exit)`);
+  field("execution", view.execution_elapsed_ms === undefined ? "not started" : formatMs(view.execution_elapsed_ms));
   const u = view.usage;
   // `?` is nothing reported at all; `≥` is a real figure that some response
   // left out of, so it is a floor. Collapsing the two would hide either the

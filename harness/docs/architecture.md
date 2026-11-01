@@ -94,9 +94,9 @@ host's post-guard input boundary is not atomic; see
 [limitations](limitations.md).
 
 A Run goes through initialization, prompt/input dispatch, adapter drain,
-history finalization, and child cleanup.  Its execution deadline starts only
-when that provider's execution slot is assigned and initialization begins.  `stop`,
-cancellation, or deadline only requests the existing stop path.  On actual
+history finalization, and child cleanup. Execution has a turn limit, not a
+wall-clock deadline or timed wrap-up message. Cancellation and turn-limit stops
+only request the existing cooperative stop path.  On actual
 execution exit, the Controller frees that **execution slot** and can schedule a
 queued peer before history finalization completes.  The Run's **Agent
 reservation** and the Owner lease remain held through finalization and required
@@ -196,13 +196,12 @@ command classification. Core owns their tracked timing,
 lineage and cleanup. Source Git subprocess probes are asynchronous with
 per-probe 2-second/4 MiB and aggregate 8-second/8 MiB limits, not hard-realtime
 or kill guarantees; synchronous tree flock still blocks the event loop.
-A failed optional observation is unknown/advisory, not an Owner fault. Wall-clock
-soft-budget input invalidates approval; Run-local due waits for the real
-original inputEntered/canInput or post-budget turnStart boundary, not pre-run
-injection. time_wrapped is an attempted warning fact, never delivery.
+A failed optional observation is unknown/advisory, not an Owner fault. Turn-wrap
+soft-budget input still invalidates approval; no wall-clock timer injects input
+or stops a Run. Historical deadline/time_wrapped facts remain read-only history.
 Actionable notes use the pre-commit projection/packer path, not reserved thin
-rows or post-publication mutation. Warning-attempt telemetry stays host-side
-and in recorded outcomes, not in routine parent-model replies.
+rows or post-publication mutation. Host telemetry stays out of routine
+parent-model replies.
 
 Receipts extend the sole valid run-end append only when its history boundary
 exists and append succeeds. Invalid optional receipts alone are soft-dropped

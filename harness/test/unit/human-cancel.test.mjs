@@ -94,18 +94,18 @@ for (const firstSource of [undefined, human]) test(`context-change reentry canno
   if (firstSource) attributed(c.view(run.run_id)); else unattributed(c.view(run.run_id));
 });
 
-for (const reason of ["hard_budget", "deadline"]) test(`earlier ${reason} wins over human Stop without attribution`, async (t) => {
+test("an earlier turn-limit stop wins over human Stop without attribution", async (t) => {
+  const reason = "hard_budget";
   const { controller: c, ports } = await fixture(t, { controller: { grace_turns: 0 } });
-  const run = await c.submit(reason, task(reason, { name: "otter", max_turns: 1,
-    ...(reason === "deadline" ? { max_duration_ms: 25 } : {}) }));
+  const run = await c.submit(reason, task(reason, { name: "otter", max_turns: 1 }));
   await until(() => ports[0]?.streaming);
-  if (reason === "hard_budget") ports[0].callbacks.turnStart();
+  ports[0].callbacks.turnStart();
   await until(() => c.view(run.run_id).stop_reason === reason);
   const result = c.cancel(run.run_id, human);
   assert.equal(result.already_stopping, true); assert.equal(result.stop_reason, reason); unattributed(result.snapshot);
   ports[0].finish("partial", "aborted"); await ended(c, run);
   assert.equal(c.view(run.run_id).status, "failed"); unattributed(c.view(run.run_id));
-  assert.equal(c.view(run.run_id).outcome.reason, reason === "hard_budget" ? "turn_limit" : "deadline");
+  assert.equal(c.view(run.run_id).outcome.reason, "turn_limit");
 });
 
 test("human Stop before a later turn-limit callback keeps user_cancel and its attribution", async (t) => {

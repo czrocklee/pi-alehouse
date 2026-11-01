@@ -280,9 +280,11 @@ Invalid optional receipts are locally dropped with a bounded end marker/live
 cleanup diagnostic and cold-reader warning; mandatory history validation and
 append failures remain strict, with no retry.
 
-Wall-clock `soft_budget` warning attempts invalidate the automatic-approval
-witness and emit `pi-harness:approval:invalidated`, like turn wrap. This is not
-just a harmless reminder or a guarantee that a model received it. Worker
+Runs have no wall-clock execution deadline or timed wrap-up input. The retained
+turn-wrap `soft_budget` input invalidates the automatic-approval witness and
+emits `pi-harness:approval:invalidated`. This is not merely a harmless reminder
+or a guarantee that a model received it. Historical `deadline`/`time_wrapped`
+facts remain readable without restoring their retired execution mechanism. Worker
 same-class denied-operation escalation remains guidance. [Runtime feedback](runtime-feedback.md)
 observes actual managed blocks through session/service-bound leases, not UI
 decisions or inferred reasons. It attempts one structurally tagged harness alert
@@ -582,7 +584,7 @@ A retired host/pane or a target that changed while confirmation was visible cann
 redirect the intent. First-accepted human provenance is an observation, not an
 approval credential or a durable notification guarantee.
 
-Cancellation, deadline expiry, and explicit shutdown seal the harness gate and
+Cancellation, turn-limit stop, and explicit shutdown seal the harness gate and
 request the existing SDK stop path.  They do not roll back file or provider
 effects. Switch/fork guards require confirmed closure: an unused Owner starts
 shutdown before its first await, while a used Owner requires literal `true` from a
