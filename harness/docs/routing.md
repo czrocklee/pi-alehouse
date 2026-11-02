@@ -320,8 +320,18 @@ workspace requires confirmation. Merely changing scope copies or writes
 nothing.
 
 The closed version-2 document has optional `preset`, partial `delegation`
-(`mode`, `eagerness`), per-preset/per-slot `effort`, `approval`, and custom
-model `presets`. Delegation uses the modes and eagerness values above; effort
+(`mode`, `eagerness`), per-preset/per-slot `effort`, `approval`, custom
+model `presets`, and partial `ui` preferences. `ui` accepts only the optional
+boolean `beerMugs`: `true` enables the [beer-mug widget Easter egg](interface.md#beer-mug-easter-egg),
+while missing or `false` uses the normal arrows. UI leaves merge global then
+trusted workspace, so an explicit workspace `false` disables a global `true`;
+an empty workspace `ui` inherits the global setting. This appearance-only choice
+is read at every session startup (including restored sessions), with no branch
+record or worker/model effect. `/harness-settings` also offers **Beer mugs:
+on/off** for an immediate live toggle. It is session-only at the initial save
+scope; an explicitly selected global/workspace scope queues only `ui.beerMugs`,
+flushed by **Save pending now** or normal exit. Startup still writes nothing.
+Delegation uses the modes and eagerness values above; effort
 uses `inherit` or a Pi thinking level. `approval` is one of `manual`, `judge`,
 `judge+sub`, or `yolo`. Each custom `presets` entry has the same body shape as a
 base preset: required `version` and five-entry `slots`, with `model` and optional
@@ -393,8 +403,9 @@ cannot reuse pending consent.
 
 `/harness-settings` or **P Settings** opens the scope and save menu. **Remember
 current worker settings** uses the same exact-patch/destination confirmation;
-it remembers worker preset/delegation/effort settings, not approval (use the
-approval menu's **Save as global/project default** or `/approval save`). **Save pending now**, **Discard pending writes**,
+it remembers worker preset/delegation/effort settings, not the beer-mug appearance
+or approval (use the approval menu's **Save as global/project default** or
+`/approval save`). **Save pending now**, **Discard pending writes**,
 **Remove a saved override**, and **Show paths and pending changes** are explicit
 menu actions. Workspace writes require project trust. See the
 [interface guide](interface.md#settings-and-preset-editor) for the controls.

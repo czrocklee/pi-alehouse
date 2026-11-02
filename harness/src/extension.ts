@@ -620,6 +620,7 @@ export default function harnessExtension(pi: ExtensionAPI) {
       // Register once, then hide inactive tools before any model request. Later
       // registration of another extension's tools must not reactivate ours.
       syncWorkerTools();
+      widget.setBeerMugs(preferences.ui?.beerMugs === true);
       widget.setUi(ctx.ui);
       // Panels always mount through the session-start context wrapped by the
       // prompt queue, and observe approvals on the parent bus.
@@ -631,6 +632,7 @@ export default function harnessExtension(pi: ExtensionAPI) {
       ready = true;
       unregisterSettings = registerSettingsStore(parentId, settingsStore);
       settingsUi = new PreferencesControls({ ctx, store: settingsStore, ready: () => ready && routingContext === ctx,
+        beerMugs: { current: () => widget.beerMugsEnabled, set: (enabled) => widget.setBeerMugs(enabled) },
         createModelSelector: (options) => createPresetModelSelector({ ...options, runtime }),
         modelPopover: () => panels.isFullscreen(),
         modelSelectionAllowed: () => panels.modelSelectionAllowed(),

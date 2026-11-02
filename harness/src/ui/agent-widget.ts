@@ -10,6 +10,7 @@ import { clipPlainText, singleLineText } from "./text.js";
 import { activityPresentation, runPresentation } from "./run-presentation.js";
 
 const BRANCH = "├─", LAST = "└─", TRUNK = "│  ";
+const WIDGET_TITLE = "Subagents";
 
 /** One rendered Agent row: the Agent's latest Run plus its ephemeral activity. */
 export interface WidgetRun extends GenerationPreview {
@@ -215,8 +216,10 @@ export function renderWidget(params: {
   page?: number;
   /** Mouse inspection entry: regular/unknown modes need no ordinary idle heading. */
   disclosure?: boolean;
+  /** Opt-in Easter egg; normal disclosure uses arrows. */
+  beerMugs?: boolean;
 }): WidgetFrame {
-  const { runs, owner, spinnerFrame, width, theme, shouldShowFinished, expanded = false, disclosure = true } = params;
+  const { runs, owner, spinnerFrame, width, theme, shouldShowFinished, expanded = false, disclosure = true, beerMugs = false } = params;
   const maxLines = Number.isFinite(params.maxLines) ?
     Math.max(0, Math.min(MAX_WIDGET_LINES, Math.floor(params.maxLines!))) : 6;
   if (maxLines === 0) return { lines: [], hits: [] };
@@ -256,15 +259,16 @@ export function renderWidget(params: {
   const controlWidth = visibleWidth(`[Prev] ${runs.length}/${runs.length} [Next]`);
   const inspectable = runs.length > 0 && bodyBudget >= (needsPages ? 2 : 1) &&
     width >= (needsPages ? controlWidth : 16);
+  const disclosureGlyph = beerMugs ? (expanded ? "🍻" : "🍺") : (expanded ? "▾" : "▸");
   const canDisclose = disclosure && inspectable &&
-    visibleWidth(`▸ Agents ${owner.resident}${saturated ? " full" : ""}`) <= width;
-  // One leading marker owns disclosure. Without a usable inspection surface,
-  // keep a status dot instead of advertising an action the user cannot take.
-  const glyph = canDisclose ? (expanded ? "▾" : "▸") : hasActive ? GLYPHS.agentsActive : GLYPHS.agentsIdle;
-  const baseTitle = `${theme.fg(color, glyph)} ${theme.fg(color, "Agents")}${theme.fg("dim", ` ${owner.resident}`)}`;
+    visibleWidth(`${disclosureGlyph} ${WIDGET_TITLE}${saturated ? " full" : ""}`) <= width;
+  // Unavailable headings keep status dots by default. The opt-in Easter egg
+  // keeps a single mug for branding, never an unavailable expanded marker.
+  const glyph = canDisclose ? disclosureGlyph : beerMugs ? "🍺" : hasActive ? GLYPHS.agentsActive : GLYPHS.agentsIdle;
+  const baseTitle = `${theme.fg(color, glyph)} ${theme.fg(color, WIDGET_TITLE)}`;
   const ownerError = owner.error ? singleLineText(owner.error).slice(0, 80) : "";
   const warning = theme.fg("error", `owner blocked${ownerError ? `: ${ownerError}` : ""}`);
-  // The leading arrow never moves. Keep capacity before optional counts;
+  // The leading marker never moves. Keep capacity before optional counts;
   // drop counts first, then compact capacity if needed.
   const fallback = disclosure && runs.length && !canDisclose ? theme.fg("dim", " · Alt+A") : "";
   const prefix = baseTitle + capacity;
@@ -436,6 +440,7 @@ export class HarnessWidget {
   private repaint?: ReturnType<typeof setTimeout>;
   private snapshot?: { runs: WidgetRun[]; owner: WidgetOwner };
   private expanded = false;
+  private beerMugs = false;
   private open?: (agent_id: string) => void;
   private rosterUpdate?: (inspectableCount: number) => void;
   /** Latest Run's linger per Agent. Expired ages remain as small tombstones so
@@ -455,6 +460,18 @@ export class HarnessWidget {
     this.snapshot = undefined;
     this.lastMode = undefined;
     this.expanded = false;
+  }
+  /** Read-only appearance projection for the settings menu. */
+  get beerMugsEnabled(): boolean { return this.beerMugs; }
+  /** Appearance only: retire hit geometry without refreshing Owner projections. */
+  setBeerMugs(enabled: boolean): void {
+    if (this.beerMugs === enabled) return;
+    this.beerMugs = enabled;
+    const mount = this.mount, instance = mount?.instance;
+    if (!mount || !instance) return;
+    instance.paint = undefined;
+    try { instance.tui.requestRender(); }
+    catch (error) { this.retryMount(mount); throw error; }
   }
   /** What a click on an Agent row does. Unset until the host can mount a pane. */
   onOpen(handler: ((agent_id: string) => void) | undefined): void { this.open = handler; }
@@ -610,7 +627,7 @@ export class HarnessWidget {
       render: (width: number) => {
         if (!current() || !this.snapshot) return [];
         const frame = renderWidget({ ...this.snapshot, spinnerFrame: this.frame, expanded: this.expanded && tui.mode === "fullscreen",
-          maxLines: lineBudget(tui.terminal.rows), page: instance.page, disclosure: tui.mode === "fullscreen",
+          maxLines: lineBudget(tui.terminal.rows), page: instance.page, disclosure: tui.mode === "fullscreen", beerMugs: this.beerMugs,
           width: width || tui.terminal.columns, theme, shouldShowFinished: (id, status) => this.lingering(id, status) });
         instance.page = frame.pagination?.page ?? 0;
         instance.paint = { frame, columns: tui.terminal.columns, rows: tui.terminal.rows };

@@ -1471,6 +1471,7 @@ test("direct preset editing owns the shared UI latch so a footer click cannot st
   const runtime = { getAvailableSnapshot: () => [model], getModel: () => model, getError: () => undefined,
     refresh: async () => ({ aborted: false, errors: new Map() }) };
   controls = new PreferencesControls({ ctx: h.ctx, store: { scope: "session" }, ready: () => true,
+    beerMugs: { current: () => false, set() {} },
     router: () => h.router, delegation: () => ({}),
     createModelSelector: (options) => createPresetModelSelector({ ...options, runtime }),
     modelPopover: () => h.panels.isFullscreen(), modelSelectionAllowed: () => h.panels.modelSelectionAllowed(),

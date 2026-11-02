@@ -20,6 +20,7 @@ export interface PreferencesControlsOptions {
   /** Step cooperating overlays aside before SDK custom completion pops top. */
   beforeModelClose?: () => void;
   store: SettingsStore;
+  beerMugs: { current(): boolean; set(enabled: boolean): void };
   ready(): boolean;
   router(): PresetRouter;
   delegation(): DelegationSetting;
@@ -95,15 +96,30 @@ export class PreferencesControls {
   async open(): Promise<void> {
     await this.interaction(async () => {
       const { ctx, store } = this.options;
-      const action = await ctx.ui.select(this.summary(), ["Change save scope", "Remember current worker settings", "Save pending now",
+      const beerMugsAction = `Beer mugs: ${this.options.beerMugs.current() ? "on" : "off"}`;
+      const action = await ctx.ui.select(this.summary(), [beerMugsAction, "Change save scope", "Remember current worker settings", "Save pending now",
         "Discard pending writes", "Remove a saved override", "Show paths and pending changes"]);
       this.assertLive();
-      if (action === "Change save scope") {
+      if (action === beerMugsAction) {
+        const enabled = !this.options.beerMugs.current();
+        this.options.beerMugs.set(enabled);
+        const description = `Beer mugs: ${enabled ? "on" : "off"}`;
+        if (store.scope === "session") {
+          ctx.ui.notify(`${description} (session only; no configuration write).`, "info");
+        } else {
+          try { store.stage(store.scope, ["ui", "beerMugs"], enabled); }
+          catch (error) {
+            ctx.ui.notify(`${description} is live for this session, but defaults were not queued: ${String(error).slice(0, 512)}`, "warning");
+            return;
+          }
+          ctx.ui.notify(`${description}. ${this.summary()}`, "info");
+        }
+      } else if (action === "Change save scope") {
         const scope = await ctx.ui.select("Future explicit changes in this session save to", ["session", "global", "workspace"]);
         this.assertLive();
         if (scope === "session") store.setScope("session");
         else if (scopes.includes(scope as PersistentScope) && await this.confirm(scope as PersistentScope,
-          "Future applied worker and approval choices in this session will also update defaults. Switching scope alone copies nothing.")) {
+          "Future applied worker, approval and appearance choices in this session will also update defaults. Switching scope alone copies nothing.")) {
           store.setScope(scope as PersistentScope);
         }
         this.notifyPending();
@@ -124,6 +140,7 @@ export class PreferencesControls {
         const paths: string[][] = [];
         if (layer.preset !== undefined) paths.push(["preset"]);
         if (layer.approval !== undefined) paths.push(["approval"]);
+        if (layer.ui?.beerMugs !== undefined) paths.push(["ui", "beerMugs"]);
         for (const key of Object.keys(layer.delegation ?? {})) paths.push(["delegation", key]);
         for (const [name, slots] of Object.entries(layer.effort ?? {})) for (const key of Object.keys(slots)) paths.push(["effort", name, key]);
         for (const name of Object.keys(layer.presets ?? {})) paths.push(["presets", name]);

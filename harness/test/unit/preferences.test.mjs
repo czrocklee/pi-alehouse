@@ -148,6 +148,7 @@ test("applied changes stage only explicit fields; reset masks pins and Off prese
 
 function controls(f, answers = [], confirmations = []) {
   const notifications = [], published = [], confirmPrompts = [], selectPrompts = [];
+  const beerMugs = { enabled: f.store.effective().ui?.beerMugs === true, calls: [] };
   let live = true;
   const ctx = { hasUI: true, ui: {
     select: async (prompt, choices) => { selectPrompts.push({ prompt, choices }); return answers.shift(); }, input: async () => answers.shift(),
@@ -155,11 +156,178 @@ function controls(f, answers = [], confirmations = []) {
     notify: (text, level) => notifications.push({ text, level }),
   }, modelRegistry: { getAll: () => [{ provider: "fixture", id: "worker", api: "fixture", reasoning: false }] } };
   const ui = new PreferencesControls({ ctx, store: f.store, router: () => f.router, ready: () => live,
+    beerMugs: { current: () => beerMugs.enabled, set: (enabled) => { beerMugs.enabled = enabled; beerMugs.calls.push(enabled); } },
     delegation: () => f.delegation ?? ({ mode: "lead", eagerness: "eager" }),
     publishDefinition: (candidate, name, definition) => published.push({ candidate, name, definition }),
   });
-  return { ui, ctx, notifications, published, confirmPrompts, selectPrompts, retire: () => { live = false; } };
+  return { ui, ctx, beerMugs, notifications, published, confirmPrompts, selectPrompts, retire: () => { live = false; } };
 }
+
+test("beer mugs toggles live on/off with dynamic labels; session choices never stage or create config", async (t) => {
+  const f = await fixture(t), before = f.router.current();
+  const catalogue = await readFile(f.path, "utf8"), c = controls(f, ["Beer mugs: off", "Beer mugs: on"]);
+  assert.equal(c.beerMugs.enabled, false);
+  await c.ui.open();
+  assert.equal(c.beerMugs.enabled, true);
+  assert(c.selectPrompts[0].choices.includes("Beer mugs: off"));
+  await c.ui.open();
+  assert.equal(c.beerMugs.enabled, false);
+  assert(c.selectPrompts[1].choices.includes("Beer mugs: on"));
+  assert.deepEqual(c.beerMugs.calls, [true, false]);
+  assert.deepEqual(c.confirmPrompts, [], "appearance toggles need no extra dialog");
+  assert(c.notifications.every(({ text, level }) => level === "info" && text.includes("session only")));
+  assert.deepEqual(f.store.pending(), []);
+  assert.deepEqual(f.store.flush(), []);
+  for (const path of Object.values(f.store.paths)) await assert.rejects(readFile(path), { code: "ENOENT" });
+  assert.deepEqual(f.router.current(), before);
+  assert.equal(await readFile(f.path, "utf8"), catalogue);
+});
+
+for (const scope of ["global", "workspace"]) test(`explicit ${scope} scope queues only the beer-mug leaf and Save pending now persists it`, async (t) => {
+  const f = await fixture(t), c = controls(f, ["Change save scope", scope, "Beer mugs: off", "Save pending now"], [true]);
+  await c.ui.open();
+  assert.equal(f.store.scope, scope);
+  assert.deepEqual(f.store.pending(), [], "scope consent alone copies nothing");
+  assert.match(c.confirmPrompts[0].text, /worker, approval and appearance choices/);
+  await c.ui.open();
+  assert.equal(c.beerMugs.enabled, true);
+  assert.deepEqual(f.store.pending(), [{ scope, path: ["ui", "beerMugs"], value: true }]);
+  await assert.rejects(readFile(f.store.paths[scope]), { code: "ENOENT" }, "toggle only queues persistence");
+  assert(c.notifications.some(({ text }) => text.includes("1 pending until exit")));
+  assert(!c.notifications.some(({ text }) => text.includes("Settings saved")));
+  await c.ui.open();
+  assert.deepEqual(JSON.parse(await readFile(f.store.paths[scope], "utf8")), { version: 2, ui: { beerMugs: true } });
+  assert.deepEqual(f.store.pending(), []);
+  const other = scope === "global" ? "workspace" : "global";
+  await assert.rejects(readFile(f.store.paths[other]), { code: "ENOENT" });
+  f.store.stage(scope, ["approval"], "manual");
+  assert(f.store.flush().every((result) => !result.error));
+  const off = controls(f, ["Beer mugs: on", "Save pending now"]);
+  assert.equal(off.beerMugs.enabled, true, "the helper initializes from effective preferences");
+  await off.ui.open();
+  assert.deepEqual(f.store.pending(), [{ scope, path: ["ui", "beerMugs"], value: false }]);
+  await off.ui.open();
+  assert.deepEqual(JSON.parse(await readFile(f.store.paths[scope], "utf8")), {
+    version: 2, ui: { beerMugs: false }, approval: "manual",
+  });
+});
+
+test("workspace beer-mug false masks global true and survives reload without replacing other fields", async (t) => {
+  const f = await fixture(t);
+  f.store.stage("global", ["ui", "beerMugs"], true);
+  f.store.stage("workspace", ["delegation", "mode"], "manual");
+  assert(f.store.flush().every((result) => !result.error));
+  const c = controls(f, ["Change save scope", "workspace", "Beer mugs: on", "Save pending now"], [true]);
+  assert.equal(c.beerMugs.enabled, true);
+  await c.ui.open(); await c.ui.open();
+  assert.equal(c.beerMugs.enabled, false);
+  assert.deepEqual(f.store.pending(), [{ scope: "workspace", path: ["ui", "beerMugs"], value: false }]);
+  await c.ui.open();
+  assert.deepEqual(JSON.parse(await readFile(f.store.paths.workspace, "utf8")), {
+    version: 2, delegation: { mode: "manual" }, ui: { beerMugs: false },
+  });
+  f.store = new SettingsStore({ agentDir: join(f.root, "agent"), cwd: join(f.root, "work"), projectTrusted: true });
+  assert.equal(f.store.get("global").ui.beerMugs, true);
+  assert.equal(f.store.effective().ui.beerMugs, false);
+  assert.equal(controls(f).beerMugs.enabled, false);
+});
+
+for (const change of ["cancel", "retire", "dispose"]) test(`a ${change} settings menu never toggles appearance or queues writes`, async (t) => {
+  const f = await fixture(t), c = controls(f);
+  c.ctx.ui.select = async () => {
+    if (change === "retire") c.retire();
+    if (change === "dispose") c.ui.dispose();
+    return change === "cancel" ? undefined : "Beer mugs: off";
+  };
+  if (change === "cancel") await c.ui.open();
+  else await assert.rejects(c.ui.open(), { code: "SETTINGS_SESSION_CHANGED" });
+  assert.deepEqual(c.beerMugs.calls, []);
+  assert.equal(c.beerMugs.enabled, false);
+  assert.deepEqual(f.store.pending(), []);
+  for (const path of Object.values(f.store.paths)) await assert.rejects(readFile(path), { code: "ENOENT" });
+});
+
+test("busy settings menus and missing UI cannot dispatch another appearance toggle", async (t) => {
+  const f = await fixture(t), c = controls(f);
+  let answer, selects = 0;
+  c.ctx.ui.select = () => { selects++; return new Promise((resolve) => { answer = resolve; }); };
+  const opening = c.ui.open();
+  await c.ui.open();
+  assert.equal(selects, 1);
+  assert.deepEqual(c.beerMugs.calls, []);
+  answer(undefined); await opening;
+  c.ctx.hasUI = false;
+  await assert.rejects(c.ui.open(), { code: "SETTINGS_UI_REQUIRED" });
+  assert.equal(selects, 1);
+  assert.deepEqual(c.beerMugs.calls, []);
+  assert.deepEqual(f.store.pending(), []);
+  for (const path of Object.values(f.store.paths)) await assert.rejects(readFile(path), { code: "ENOENT" });
+});
+
+test("unrelated menu choices and cancelled nested dialogs do not toggle or write appearance", async (t) => {
+  const f = await fixture(t);
+  for (const action of ["Change save scope", "Remember current worker settings", "Show paths and pending changes",
+    "Save pending now", "Discard pending writes", "Remove a saved override"]) {
+    const c = controls(f, [action]);
+    await c.ui.open();
+    assert.deepEqual(c.beerMugs.calls, [], action);
+    assert.equal(c.beerMugs.enabled, false);
+    assert.equal(f.store.scope, "session");
+    assert.deepEqual(f.store.pending(), []);
+  }
+  for (const path of Object.values(f.store.paths)) await assert.rejects(readFile(path), { code: "ENOENT" });
+});
+
+test("discard and removal of a saved false affect persistence only, never the live appearance", async (t) => {
+  const f = await fixture(t);
+  f.store.stage("workspace", ["ui", "beerMugs"], false);
+  f.store.stage("workspace", ["approval"], "manual");
+  assert(f.store.flush().every((result) => !result.error));
+  const path = JSON.stringify(["ui", "beerMugs"]);
+  const c = controls(f, ["Change save scope", "workspace", "Beer mugs: off", "Discard pending writes",
+    "Remove a saved override", "workspace", path, "Save pending now"], [true, true, true]);
+  await c.ui.open(); await c.ui.open();
+  assert.equal(c.beerMugs.enabled, true);
+  await c.ui.open();
+  assert.deepEqual(f.store.pending(), []);
+  assert.equal(f.store.get("workspace").ui.beerMugs, false);
+  assert.equal(c.beerMugs.enabled, true);
+  await c.ui.open();
+  assert(c.selectPrompts.at(-3).choices.includes("Beer mugs: on"), "the label follows the live choice, not the discarded saved false");
+  assert(c.selectPrompts.at(-1).choices.includes(path), "saved false is removable");
+  assert.deepEqual(f.store.pending(), [{ scope: "workspace", path: ["ui", "beerMugs"], value: undefined }]);
+  await c.ui.open();
+  assert.deepEqual(JSON.parse(await readFile(f.store.paths.workspace, "utf8")), { version: 2, ui: {}, approval: "manual" });
+  assert.deepEqual(c.beerMugs.calls, [true]);
+  assert.equal(c.beerMugs.enabled, true);
+});
+
+for (const failure of ["sealed store", "byte cap"]) test(`appearance stays live with a warning if queuing fails (${failure})`, async (t) => {
+  const f = await fixture(t);
+  if (failure === "byte cap") f.store.stage("global", ["presets"], nearLimitPreferences({ version: 2 }, 0).presets);
+  const c = controls(f, ["Change save scope", "global", "Beer mugs: off"], [true]);
+  await c.ui.open();
+  if (failure === "sealed store") f.store.seal();
+  const pending = f.store.pending();
+  await c.ui.open();
+  assert.equal(c.beerMugs.enabled, true);
+  assert.deepEqual(c.beerMugs.calls, [true]);
+  assert.deepEqual(f.store.pending(), pending);
+  assert(c.notifications.some(({ text, level }) => level === "warning" && /live for this session.*defaults were not queued/.test(text)));
+  assert(!c.notifications.some(({ text }) => text.includes("Settings saved")));
+  await assert.rejects(readFile(f.store.paths.global), { code: "ENOENT" });
+});
+
+test("Remember current worker settings does not implicitly remember the live appearance", async (t) => {
+  const f = await fixture(t), c = controls(f, ["Beer mugs: off", "Remember current worker settings", "global"], [true]);
+  await c.ui.open(); await c.ui.open();
+  assert.equal(c.beerMugs.enabled, true);
+  assert.equal(f.store.scope, "session");
+  assert.equal(Object.hasOwn(f.store.get("global"), "ui"), false);
+  assert(f.store.pending().every(({ path }) => path[0] !== "ui"));
+  assert.deepEqual(c.beerMugs.calls, [true]);
+  await assert.rejects(readFile(f.store.paths.global), { code: "ENOENT" });
+});
 
 test("scope consent stages nothing; explicit remember previews and queues a snapshot, not a hidden disk write", async (t) => {
   const f = await fixture(t);
@@ -189,6 +357,9 @@ test("cancelled or stale scope consent never changes save scope or creates files
   await assert.rejects(stale.ui.open(), { code: "SETTINGS_SESSION_CHANGED" });
   assert.equal(f.store.scope, "session");
   assert.deepEqual(f.store.pending(), []);
+  assert.deepEqual(c.beerMugs.calls, []);
+  assert.deepEqual(stale.beerMugs.calls, []);
+  for (const path of Object.values(f.store.paths)) await assert.rejects(readFile(path), { code: "ENOENT" });
 });
 
 test("discard only drops pending persistence, while no-UI and untrusted workspace cannot opt in", async (t) => {
@@ -517,6 +688,7 @@ function tuiControls(f, options = {}) {
   const double = options.runtimeDouble ? options.runtimeDouble(registry.models) : runtimeDouble({ models: registry.models });
   const notifications = [], published = [], pickers = [], selectors = [], selectPrompts = [], inputPrompts = [], confirmPrompts = [];
   const answers = [...options.selects ?? []], confirmations = [...options.confirms ?? []], typed = [...options.inputs ?? []];
+  const beerMugs = { enabled: f.store.effective().ui?.beerMugs === true, calls: [] };
   let live = true, queuedFactory;
   const mockTui = { mode: options.tuiMode ?? "regular",
     terminal: { rows: options.rows ?? 30, columns: options.columns ?? 100,
@@ -554,6 +726,7 @@ function tuiControls(f, options = {}) {
     // Preset editing must never touch the main model or its SDK defaults.
     get model() { throw new Error("MAIN_MODEL_TOUCHED"); } };
   const ui = new PreferencesControls({ ctx, store: f.store, router: () => f.router, ready: () => live,
+    beerMugs: { current: () => beerMugs.enabled, set: (enabled) => { beerMugs.enabled = enabled; beerMugs.calls.push(enabled); } },
     delegation: () => ({ mode: "lead", eagerness: "eager" }),
     // The UI layer owns no runtime value import: the selector constructor is
     // injected here exactly like the extension binds the acquired host runtime.
@@ -571,7 +744,7 @@ function tuiControls(f, options = {}) {
       options.publishDefinition?.(candidate, name, definition);
     } });
   f.after(() => ui.cancelModelSelection());
-  return { ui, ctx, tui: mockTui, registry, state: double.state, pickers, selectors, selectPrompts, inputPrompts, confirmPrompts,
+  return { ui, ctx, beerMugs, tui: mockTui, registry, state: double.state, pickers, selectors, selectPrompts, inputPrompts, confirmPrompts,
     notifications, published, retire: () => { live = false; },
     runQueuedFactory: () => { const run = queuedFactory; queuedFactory = undefined; run?.(); } };
 }

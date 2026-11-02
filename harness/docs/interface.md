@@ -119,24 +119,53 @@ During exit confirmation, when no tool is still observed, the activity line show
 The detail pane and `/harness-status` always expose that wait and elapsed time,
 including while the compact line retains a real tool. This is an observation,
 not a new lifecycle phase or permission to release ownership.
-`?` marks a child waiting for an answer. The heading gives the resident count
-and a compact resident-only status summary, for example
-`▸ Agents 3 · ▹2 ✓1` or `▸ Agents 4 · ?1 ▹1 ◦1 ✓1`;
-expanding the first shows `▾ Agents 3 · ▹2 ✓1`. An idle full roster can show
-`▸ Agents 12 (full) · ✓12`.
+`?` marks a child waiting for an answer. The heading gives a compact
+resident-only status summary without a redundant total, for example
+`▸ Subagents · ▹2 ✓1` or `▸ Subagents · ?1 ▹1 ◦1 ✓1`;
+expanding the first shows `▾ Subagents · ▹2 ✓1`. An idle full roster can show
+`▸ Subagents (full) · ✓12`.
 Nonzero counts appear in order: needs input `?`, dim static active `▹`, queued `◦`,
 dim completed `✓`, failed `✗`, cancelled `■`. In both compact and expanded headings,
 the active rollup uses a static, dim `▹N` (small hollow triangle, text presentation); animation stays
 confined to active Agent/detail rows. Released failures can linger in the body
-but never inflate resident summary counts. `(full)` stays beside the resident
-count. A dim ` · ` separates this prefix from a nonempty summary, including in
+but never inflate resident summary counts. `(full)` stays beside `Subagents`.
+A dim ` · ` separates this prefix from a nonempty summary, including in
 regular mode; no summary means no separator. Narrow headings drop both together.
-The leading disclosure stays at column zero as counts and capacity change. Its color retains the existing active,
-idle or Owner-error meaning; the explicit warning row carries the fault.
+The leading marker stays at column zero as counts and capacity change. The title retains the existing active,
+idle or Owner-error theme color; the explicit warning row carries the fault.
 Without usable heading inspection (regular/unknown renderer, no projected rows,
-insufficient height/control budget, or a resident-count prefix too wide to fit),
-the marker stays a static `●`/`○` status dot instead of advertising an unavailable
-action. Heading clicks are disabled there; `Alt+A` remains the inspection entry.
+insufficient height/control budget, or a title/capacity prefix too wide to fit),
+the marker stays a static `●`/`○` status dot.
+Heading clicks are disabled there; `Alt+A` remains the inspection entry.
+
+### Beer-mug Easter egg
+
+Arrows are the default. In `/harness-settings`, select **Beer mugs: off** or
+**Beer mugs: on** to toggle `🍺 Subagents` (collapsed) and `🍻 Subagents`
+(expanded) immediately. The initial **session** save scope keeps the change
+session-only and creates no file. To remember it, use **Change save scope** to
+confirm **global** or trusted **workspace** before toggling, then **Save pending
+now** or normal exit writes just `ui.beerMugs`. Other preferences are preserved.
+**Remember current worker settings** does not include this appearance choice.
+
+Alternatively, add `ui.beerMugs: true` to the version-2
+[scoped preferences](routing.md#scoped-user-preferences), preserving other settings:
+
+```json
+{
+  "version": 2,
+  "ui": { "beerMugs": true }
+}
+```
+
+The global path is `<agentDir>/extensions/pi-alehouse/config.json`; a trusted
+project can override it at `<current-cwd>/.pi/extensions/pi-alehouse/config.json`.
+Missing or `false` uses arrows. Saved preferences are read at session startup;
+manual file edits need a fresh Pi process, not a live-Owner `/reload`. The menu
+toggle needs no restart and changes no worker behavior. Discarding pending writes
+or removing a saved override leaves the current appearance unchanged. When
+inspection is unavailable, the opt-in marker stays `🍺`, never `🍻`, and clicks
+remain disabled.
 
 ## Agent detail and transcript
 
@@ -347,9 +376,11 @@ creation-time route, which may differ from the current picker defaults.
 
 Open **P Settings** in the Delegation panel or run `/harness-settings`. Every
 new Pi session starts with save scope **session**. The menu offers **Change save
-scope**, **Remember current worker settings**, **Save pending now**, **Discard
-pending writes**, **Remove a saved override**, and **Show paths and pending
-changes**. Choosing global or workspace as the future scope requires a
+scope**, **Beer mugs: on/off**, **Remember current worker settings**, **Save
+pending now**, **Discard pending writes**, **Remove a saved override**, and
+**Show paths and pending changes**. The beer-mug switch changes the live widget;
+only a persistent save scope queues its preference. Choosing global or
+workspace as the future scope requires a
 confirmation; changing scope alone copies and writes nothing. Workspace scope
 is available only for a trusted project and targets the current working
 directory, not a discovered Git root.

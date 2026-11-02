@@ -27,6 +27,7 @@ export type SettingsDocument = {
   effort?: EffortPolicy;
   approval?: ApprovalPreference;
   presets?: Record<string, PresetDefinition>;
+  ui?: { beerMugs?: boolean };
 };
 export type SettingsPatch = { scope: PersistentScope; path: string[]; value: unknown };
 export type SettingsFlushResult = { scope: PersistentScope; path: string; error?: string };
@@ -46,7 +47,7 @@ export class SettingsStore {
   /** Explicit path patch of 1 to 5 keys. undefined deletes the key; unchanged values are clean. */
   stage(scope: PersistentScope, path: readonly string[], value: unknown): void;
   get(scope: PersistentScope): SettingsDocument;
-  /** Global then trusted workspace; preset bodies replace by name. */
+  /** Global then trusted workspace; delegation/ui merge by leaf, preset bodies replace by name. */
   effective(): SettingsDocument;
   pending(): SettingsPatch[];
   /** In-memory discard only; does not reload disk. */

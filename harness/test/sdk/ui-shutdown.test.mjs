@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { ExtensionRunner, initTheme } from "@earendil-works/pi-coding-agent";
@@ -15,8 +15,9 @@ initTheme(undefined, false);
 // Real extension, Owner state machine/lease and SDK event dispatch. Child IO is
 // FakePort; the authority locator below is deliberately NOT a permission test.
 // No provider, user configuration, terminal or managed policy is loaded.
-for (const fault of ["widget", "panel", "all"]) test(`quit drains before later SDK teardown despite ${fault} UI faults`, async (t) => {
-  const h = await fixture(t), log = [], errors = [], handlers = new Map(), shortcuts = new Map();
+for (const [fault, beerMugs] of [["widget", undefined], ["panel", true], ["all", false]]) test(`quit drains before later SDK teardown despite ${fault} UI faults (beerMugs: ${beerMugs ?? "missing"})`, async (t) => {
+  const h = await fixture(t), log = [], errors = [], handlers = new Map(), shortcuts = new Map(), commands = new Map();
+  const beerMugSelections = [];
   const root = h.directory, agentDir = join(root, "agent"), permissionRoot = join(root, "permission");
   const envKeys = ["PI_CODING_AGENT_DIR", "PI_HARNESS_PERMISSION_ROOT", "PI_HARNESS_POLICY_ROOT", "PI_HARNESS_FLOCK"];
   const previous = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
@@ -31,6 +32,10 @@ for (const fault of ["widget", "panel", "all"]) test(`quit drains before later S
   process.env.PI_HARNESS_FLOCK = "/unused-fixture-flock"; // The already-held real fixture lease is injected below.
   await mkdir(join(agentDir, "agents"), { recursive: true });
   await writePresetConfig(join(agentDir, "harness-presets.json"));
+  const preferencesPath = join(agentDir, "extensions/pi-alehouse/config.json");
+  const preferencesBytes = JSON.stringify({ version: 2, ...(beerMugs === undefined ? {} : { ui: { beerMugs } }) }, null, 2) + "\n";
+  await mkdir(join(agentDir, "extensions/pi-alehouse"), { recursive: true });
+  await writeFile(preferencesPath, preferencesBytes);
   for (const name of ["editor"]) {
     await writeFile(join(agentDir, "agents", `${name}.md`), "---\ntools: [read]\n---\nFixture only.\n");
   }
@@ -79,6 +84,11 @@ for (const fault of ["widget", "panel", "all"]) test(`quit drains before later S
     sessionManager: { getSessionId: () => h.owner_id, getBranch: () => [], getSessionFile: () => undefined },
     modelRegistry: { runtime: { getModel() {}, getPhysicalModel() {}, streamSimple() {} } },
     ui: {
+      async select(_title, items) {
+        const action = items.find((item) => /^Beer mugs: (on|off)$/.test(item));
+        beerMugSelections.push(action);
+        return action;
+      },
       setStatus(_key, value) {
         if (value !== undefined) return;
         log.push("status-clear");
@@ -102,13 +112,14 @@ for (const fault of ["widget", "panel", "all"]) test(`quit drains before later S
   let activeTools = [];
   harnessExtension({ events: bus, on: (event, handler) => {
     const list = handlers.get(event) ?? []; list.push(handler); handlers.set(event, list);
-  }, registerShortcut: (name, spec) => shortcuts.set(name, spec), registerCommand() {}, registerTool() {},
+  }, registerShortcut: (name, spec) => shortcuts.set(name, spec), registerCommand: (name, spec) => commands.set(name, spec), registerTool() {},
   getAllTools: () => [], getActiveTools: () => [...activeTools], setActiveTools: (names) => { activeTools = [...names]; }, appendEntry() {} });
   t.after(async () => {
     failing = false;
     for (const stop of handlers.get("session_shutdown")) await stop({ reason: "quit" }, ctx);
   });
   for (const start of handlers.get("session_start")) await start({}, ctx);
+  assert.equal(await readFile(preferencesPath, "utf8"), preferencesBytes, "startup must not rewrite existing preferences");
   // session_start assembled the model tools and bound their naming contract.
   const run = await h.controller.submit("shutdown-ui", task("Hold until quit", { name: "otter" }));
   await until(() => h.ports[0]?.streaming);
@@ -118,7 +129,30 @@ for (const fault of ["widget", "panel", "all"]) test(`quit drains before later S
     log.push("child-dispose"); return dispose();
   });
   for (const turn of handlers.get("turn_start")) turn({}, ctx);
-  assert.match(component.render(100).join("\n"), /Hold until quit/);
+  const lines = component.render(100);
+  assert.match(lines.join("\n"), /Hold until quit/);
+  // This regular/unknown-mode host has no disclosure control: defaults retain
+  // status dots, while only an explicit saved true enables the mug branding.
+  assert.match(lines[0], beerMugs === true ? /^🍺 Subagents(?: ·|$)/u : /^● Subagents(?: ·|$)/u);
+  assert.doesNotMatch(lines[0], /🍻|▸|▾|\btotal\b/u);
+  const toolsBeforeToggle = [...activeTools], portsBeforeToggle = h.ports.length;
+  const settings = commands.get("harness-settings");
+  assert(settings, "the real extension registers /harness-settings");
+  for (const enabled of [beerMugs !== true, beerMugs === true]) {
+    await settings.handler("", ctx);
+    assert.equal(beerMugSelections.at(-1), `Beer mugs: ${enabled ? "off" : "on"}`, "settings label reflects the live state before toggling");
+    const toggled = component.render(100);
+    assert.match(toggled[0], enabled ? /^🍺 Subagents(?: ·|$)/u : /^● Subagents(?: ·|$)/u, "settings selection updates the mounted widget immediately");
+    assert.match(toggled.join("\n"), /Hold until quit/);
+    assert.equal(await readFile(preferencesPath, "utf8"), preferencesBytes, "session-only toggles must not write preferences");
+    assert.equal(h.ports.length, portsBeforeToggle);
+    assert.equal(child.streaming, true);
+    assert.equal(child.stopped, 0);
+    assert.equal(child.disposed, 0);
+    assert.equal(h.controller.view(run.run_id).status, "running");
+    assert.deepEqual(activeTools, toolsBeforeToggle, "cosmetic settings must not change management tools");
+  }
+  assert.equal(beerMugSelections.length, 2, "each command opens exactly one settings selection");
   const opening = shortcuts.get("alt+a").handler();
   assert(pane); assert.equal(timers.size, 2, "widget and pane redraw timers really started");
   t.after(() => { failing = false; pane?.dispose(); });
@@ -150,4 +184,5 @@ for (const fault of ["widget", "panel", "all"]) test(`quit drains before later S
   assert.equal(authorityPresent, false);
   assert([...listeners.values()].every((set) => set.size === 0));
   assert.deepEqual(errors, [], "best-effort UI failure does not escape SDK shutdown");
+  assert.equal(await readFile(preferencesPath, "utf8"), preferencesBytes, "shutdown after session-only toggles must not rewrite preferences");
 });

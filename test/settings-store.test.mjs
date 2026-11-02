@@ -109,6 +109,165 @@ test("global and trusted workspace merge by the contracted units", (t) => {
   assert(!Object.hasOwn(store.effective().presets.base.slots.d1, "effort"), "preset bodies do not merge");
 });
 
+test("ui schema is closed, optional and strictly boolean without defaulting or coercion", () => {
+  for (const ui of [{}, { beerMugs: true }, { beerMugs: false }]) {
+    const document = { version: 2, ui };
+    const validated = validateSettings(document);
+    assert.deepEqual(validated, document);
+    assert.notEqual(validated.ui, ui);
+  }
+  assert.equal(Object.hasOwn(validateSettings({ version: 2 }), "ui"), false);
+  const ui = Object.assign(Object.create(null), { beerMugs: false });
+  assert.deepEqual(validateSettings({ version: 2, ui }), { version: 2, ui: { beerMugs: false } });
+  for (const ui of [undefined, null, [], true, "true", 1, { beerMugs: true, extra: false }])
+    assert.throws(() => validateSettings({ version: 2, ui }), /Invalid settings/);
+  for (const beerMugs of [undefined, null, "true", "false", 0, 1, NaN, [], {}, Object(false)])
+    assert.throws(() => validateSettings({ version: 2, ui: { beerMugs } }), /ui.beerMugs must be a boolean/);
+});
+
+test("ui rejects unsafe records and descriptors without executing them or changing staged patches", (t) => {
+  const f = fixture(t), store = f.store();
+  store.stage("global", ["approval"], "judge");
+  let invoked = 0;
+  const getter = {};
+  Object.defineProperty(getter, "beerMugs", { enumerable: true, get() { invoked++; return true; } });
+  const setter = {};
+  Object.defineProperty(setter, "beerMugs", { enumerable: true, set(_value) { invoked++; } });
+  const hidden = {};
+  Object.defineProperty(hidden, "beerMugs", { value: true });
+  const root = { version: 2 };
+  Object.defineProperty(root, "ui", { enumerable: true, get() { invoked++; return {}; } });
+  assert.throws(() => validateSettings(root));
+  for (const ui of [
+    getter, setter, hidden, { [Symbol("key")]: true },
+    Object.create({ beerMugs: true }),
+    { toJSON() { invoked++; return { beerMugs: true }; } },
+    ...["__proto__", "constructor", "prototype"].map((key) => JSON.parse(`{"${key}":true}`)),
+  ]) {
+    assert.throws(() => validateSettings({ version: 2, ui }));
+    assert.throws(() => store.stage("global", ["ui"], ui));
+  }
+  assert.equal(invoked, 0);
+  assert.deepEqual(store.pending(), [{ scope: "global", path: ["approval"], value: "judge" }]);
+  assert.equal(Object.hasOwn(store.get("global"), "ui"), false);
+  assert.deepEqual(readdirSync(f.root), []);
+});
+
+test("ui merges by leaves: empty or omitted workspace inherits and false masks true", (t) => {
+  const f = fixture(t);
+  for (const [globalUi, workspaceUi, expected] of [
+    [undefined, undefined, undefined], [undefined, {}, {}],
+    [{ beerMugs: true }, undefined, { beerMugs: true }],
+    [{ beerMugs: true }, {}, { beerMugs: true }],
+    [{ beerMugs: true }, { beerMugs: false }, { beerMugs: false }],
+    [{ beerMugs: false }, {}, { beerMugs: false }],
+    [{ beerMugs: false }, { beerMugs: true }, { beerMugs: true }],
+    [undefined, { beerMugs: true }, { beerMugs: true }],
+  ]) {
+    f.put("global", { version: 2, ...(globalUi === undefined ? {} : { ui: globalUi }) });
+    f.put("workspace", { version: 2, ...(workspaceUi === undefined ? {} : { ui: workspaceUi }) });
+    const store = f.store();
+    assert.deepEqual(store.effective().ui, expected);
+    if (expected === undefined) assert.equal(Object.hasOwn(store.effective(), "ui"), false);
+    else {
+      store.effective().ui.beerMugs = "not a persisted mutation";
+      assert.deepEqual(store.effective().ui, expected);
+    }
+    assert.deepEqual(store.pending(), []);
+  }
+});
+
+test("untrusted workspace ui is not inspected, even if it enables mugs or is malformed", (t) => {
+  const f = fixture(t, false);
+  f.put("global", { version: 2, ui: { beerMugs: false } });
+  for (const ui of [{ beerMugs: true }, { beerMugs: "SECRET-invalid" }]) {
+    f.put("workspace", { version: 2, ui });
+    const store = intercept("lstatSync", (original, [path, ...options]) => {
+      assert.notEqual(path, f.paths.workspace);
+      return original(path, ...options);
+    }, () => f.store());
+    assert.deepEqual(store.effective().ui, { beerMugs: false });
+    assert.throws(() => store.stage("workspace", ["ui", "beerMugs"], true), /trust/);
+    assert.deepEqual(store.flush(), []);
+    assert.deepEqual(read(f.paths.workspace).ui, ui);
+  }
+});
+
+test("reading ui and saving unrelated preferences never seed, inherit or implicitly rewrite ui", (t) => {
+  const f = fixture(t);
+  f.put("global", { version: 2, ui: { beerMugs: true } });
+  f.put("workspace", { version: 2 });
+  for (const path of Object.values(f.paths)) writeFileSync(path, `${JSON.stringify(read(path), null, 2)}\n`);
+  const before = Object.fromEntries(Object.entries(f.paths).map(([scope, path]) =>
+    [scope, { bytes: readFileSync(path), inode: lstatSync(path).ino }]));
+  const store = f.store();
+  assert.deepEqual(store.effective().ui, { beerMugs: true });
+  assert.deepEqual(store.get("workspace"), { version: 2 });
+  store.setScope("workspace");
+  store.discard();
+  store.seal();
+  assert.deepEqual(store.flush(), []);
+  for (const [scope, path] of Object.entries(f.paths)) {
+    assert.deepEqual(readFileSync(path), before[scope].bytes);
+    assert.equal(lstatSync(path).ino, before[scope].inode);
+    assert.deepEqual(ownArtifacts(path), []);
+  }
+  const explicit = f.store();
+  explicit.stage("global", ["approval"], "manual");
+  explicit.stage("workspace", ["approval"], "judge");
+  assert.deepEqual(explicit.flush(), [
+    { scope: "global", path: f.paths.global }, { scope: "workspace", path: f.paths.workspace },
+  ]);
+  assert.deepEqual(read(f.paths.global), { version: 2, ui: { beerMugs: true }, approval: "manual" });
+  assert.deepEqual(read(f.paths.workspace), { version: 2, approval: "judge" });
+  assert.deepEqual(f.store().effective().ui, { beerMugs: true });
+});
+
+test("explicit ui leaves persist true and false exactly; deletion restores inheritance", (t) => {
+  const f = fixture(t), store = f.store();
+  store.stage("global", ["ui", "beerMugs"], true);
+  store.stage("workspace", ["ui", "beerMugs"], false);
+  assert.deepEqual(readdirSync(f.root), [], "staging alone does not create configuration");
+  assert.deepEqual(store.pending(), [
+    { scope: "global", path: ["ui", "beerMugs"], value: true },
+    { scope: "workspace", path: ["ui", "beerMugs"], value: false },
+  ]);
+  assert.deepEqual(store.flush(), [
+    { scope: "global", path: f.paths.global }, { scope: "workspace", path: f.paths.workspace },
+  ]);
+  assert.deepEqual(read(f.paths.global), { version: 2, ui: { beerMugs: true } });
+  assert.deepEqual(read(f.paths.workspace), { version: 2, ui: { beerMugs: false } });
+  const reloaded = f.store();
+  assert.deepEqual(reloaded.effective().ui, { beerMugs: false });
+  assert.throws(() => reloaded.stage("workspace", ["ui", "beerMugs"], "false"), /boolean/);
+  assert.deepEqual(reloaded.pending(), []);
+  reloaded.stage("workspace", ["ui", "beerMugs"], undefined);
+  assert.deepEqual(reloaded.effective().ui, { beerMugs: true });
+  assert.deepEqual(reloaded.flush(), [{ scope: "workspace", path: f.paths.workspace }]);
+  assert.deepEqual(read(f.paths.workspace), { version: 2, ui: {} });
+  assert.deepEqual(f.store().effective().ui, { beerMugs: true });
+});
+
+test("invalid stored ui is rejected without rewriting files or leaking rejected values", (t) => {
+  const f = fixture(t);
+  f.put("global", { version: 2, ui: { beerMugs: "SECRET-invalid" } });
+  const before = readFileSync(f.paths.global);
+  assert.throws(() => f.store(), (error) => {
+    assert.match(error.message, /ui.beerMugs must be a boolean/);
+    assert(!error.message.includes("SECRET"));
+    return true;
+  });
+  assert.deepEqual(readFileSync(f.paths.global), before);
+  f.put("global", { version: 2 });
+  const store = f.store();
+  store.stage("global", ["approval"], "manual");
+  writeFileSync(f.paths.global, before);
+  assert.match(store.flush()[0].error, /ui.beerMugs must be a boolean/);
+  assert.deepEqual(readFileSync(f.paths.global), before);
+  assert.equal(store.pending().length, 1);
+  assert.deepEqual(ownArtifacts(f.paths.global), []);
+});
+
 test("individually bounded preference layers remain loadable when their merge exceeds one file cap", (t) => {
   const f = fixture(t), store = f.store();
   const presets = (prefix) => Object.fromEntries(Array.from({ length: 350 }, (_unused, index) =>

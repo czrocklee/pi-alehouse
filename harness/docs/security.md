@@ -428,8 +428,8 @@ child not in that registry is not covered and keeps asking.
 Optional version-2 user preferences are read from `<agentDir>/extensions/pi-alehouse/config.json`
 and, only for a trusted project, `<current-cwd>/.pi/extensions/pi-alehouse/config.json`.
 The workspace lookup is the current working directory only, not a Git-root
-search. It contains user-selected routing, delegation, effort, approval, and
-custom model definitions; it is not a credential store and does not change the
+search. It contains user-selected routing, delegation, effort, approval,
+appearance, and custom model definitions; it is not a credential store and does not change the
 required, read-only-to-the-UI base `harness-presets.json` catalogue. Valid
 read-only settings can load. Invalid settings fail visibly and are not
 replaced. Startup/restoration makes no configuration writes; persistent
