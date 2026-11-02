@@ -4,10 +4,10 @@ import { accessSync, constants, lstatSync, realpathSync, statSync } from "node:f
 import { lstat, mkdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
-import { validateDispatch, type BoundDispatch, type Dispatch, type DispatchContext, type DispatchObservation, type DispatchPath, type DispatchPort, type PreparedDispatch, type PreparedPath, type SourceState } from "../core/dispatch.js";
-import { HarnessError } from "../core/ports.js";
-import { profileLabel } from "../tools/tool-names.js";
-import { FileLeaseLock } from "./owner-lease.js";
+import { validateDispatch, type BoundDispatch, type Dispatch, type DispatchContext, type DispatchObservation, type DispatchPath, type DispatchPort, type PreparedDispatch, type PreparedPath, type SourceState } from "../core/dispatch.ts";
+import { HarnessError } from "../core/ports.ts";
+import { profileLabel } from "../tools/tool-names.ts";
+import { FileLeaseLock } from "./owner-lease.ts";
 
 const PROBE_MS = 2_000;
 const CAPTURE_MS = 8_000;

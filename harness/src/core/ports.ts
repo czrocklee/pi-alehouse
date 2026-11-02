@@ -1,7 +1,7 @@
-import type { AdmittedAgentConfig, DrainWait, ExecutionFacts, HistoryRef, Outcome, Output, RunExecutionIdentity, RunIdentity, RunTelemetry, WorkspaceInfo } from "./contracts.js";
-import type { UsageLedger } from "./usage-ledger.js";
-import type { DispatchWorkspacePolicy, ValidationReceipt } from "./dispatch.js";
-import type { WorkspaceDetails } from "./workspace-metadata.js";
+import type { AdmittedAgentConfig, DrainWait, ExecutionFacts, HistoryRef, Outcome, Output, OutputDelta, RunExecutionIdentity, RunIdentity, RunTelemetry, WorkspaceInfo } from "./contracts.ts";
+import type { UsageLedger } from "./usage-ledger.ts";
+import type { DispatchWorkspacePolicy, ValidationReceipt } from "./dispatch.ts";
+import type { WorkspaceDetails } from "./workspace-metadata.ts";
 
 export interface HistoryPort {
   /** Local SDK writer uncertainty. It does not by itself stop other Agents. */
@@ -18,6 +18,9 @@ export interface RepeatedManagedBlock { readonly toolName: string }
 export interface RunCallbacks {
   inputEntered(): void;
   output(output: Output): void;
+  /** Optional incremental execution seam. The Owner computes totals and caps;
+   * final output still validates the observed prefix in the same revision. */
+  outputDelta?(delta: OutputDelta): void;
   runtime?(snapshot: RunTelemetry): void;
   /** Diagnostic observation only. Does not settle, cancel or release execution. */
   drain?(waiting_for: DrainWait): void;

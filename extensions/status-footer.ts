@@ -20,7 +20,6 @@ import { POPOVER_DOCK_ROWS, focusOrigin, focusRevealed, joinPopoverStack, stacke
 import { SPEND_FIELDS, usageTotals, readUsageAttribution as attribution,
   type UsageTotals, type HostModelSpend as SpendAttribution } from "../lib/usage-attribution.mjs";
 
-const FOOTER_MARKER = "\u0000pi-status-footer\u0000";
 // Pi assigns this API id to virtual catalog entries. It is not a package export;
 // any other API is a physical model, and a missing API is not treated as virtual.
 const VIRTUAL_MODEL_API = "pi-virtual";
@@ -36,6 +35,7 @@ const GROK_BILLING_URL = `${(process.env.GROK_CLI_CHAT_PROXY_BASE_URL ?? "https:
 const REQUEST_TIMEOUT_MS = 1_000;
 const GROK_REQUEST_TIMEOUT_MS = 5_000;
 const GROK_BILLING_MIN_INTERVAL_MS = 60_000;
+const GROK_BILLING_FORCE_MIN_INTERVAL_MS = 10_000;
 const WEEKLY_WINDOW_MINUTES = 7 * 24 * 60;
 const RESET_TIME_TOLERANCE_SECONDS = 5;
 const QUOTA_BUCKET_NAMES = ["primary", "secondary"] as const;
@@ -486,8 +486,7 @@ function unclaimed(usage: Usage | undefined, claims: readonly SpendAttribution[]
  * walking the entries a second time, so the overlay can never disagree with the
  * totals the user clicked.
  */
-function collectSpend(ctx: ExtensionContext): ModelSpend[] {
-  const byKey = new Map<string, UsageTotals>();
+function addSpend(byKey: Map<string, UsageTotals>, entries: readonly SessionEntry[]): void {
   const bucket = (key: string): UsageTotals => {
     const existing = byKey.get(key);
     if (existing) return existing;
@@ -496,7 +495,7 @@ function collectSpend(ctx: ExtensionContext): ModelSpend[] {
     return totals;
   };
 
-  for (const entry of ctx.sessionManager.getEntries()) {
+  for (const entry of entries) {
     if (entry.type === "message" && entry.message.role === "assistant") {
       // A router alias is not a model: bill the one that answered, when known.
       const message = entry.message;
@@ -520,11 +519,105 @@ function collectSpend(ctx: ExtensionContext): ModelSpend[] {
       addUsage(bucket(SUMMARY_SPEND_KEY), entry.usage);
     }
   }
+}
 
+function spendRows(byKey: Map<string, UsageTotals>): ModelSpend[] {
   return [...byKey]
     .map(([key, totals]) => ({ key, ...totals }))
     .filter((row) => row.cost > 0 || spendTokens(row) > 0)
     .sort((a, b) => b.cost - a.cost || spendTokens(b) - spendTokens(a) || a.key.localeCompare(b.key));
+}
+
+type SessionStamp = { id: string; leaf: string | null; count?: number };
+type SessionSource = { manager: ExtensionContext["sessionManager"]; stamp?: SessionStamp };
+type ContextSource = SessionSource & { key?: string };
+
+/** Public branch identity; count is an optional FULL journal revision. A leaf
+ * identifies immutable branch context, not all billed/abandoned entries. */
+function sessionStamp(manager: ExtensionContext["sessionManager"]): SessionStamp | undefined {
+  try {
+    const id = manager.getSessionId?.();
+    const leaf = manager.getLeafId?.();
+    // Public on SessionManager, but optional/not in every host's read-only
+    // extension view. Never reach into fileEntries/byId to synthesize it.
+    const count = (manager as typeof manager & { getEntryCount?: () => number }).getEntryCount?.();
+    if (typeof id !== "string" || !id || !(leaf === null || typeof leaf === "string")) return undefined;
+    return { id, leaf, ...(typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? { count } : {}) };
+  } catch { return undefined; }
+}
+
+function sessionSource(ctx: ExtensionContext): SessionSource {
+  const manager = ctx.sessionManager;
+  return { manager, stamp: sessionStamp(manager) };
+}
+
+/** Presentation-only memo, including valid undefined results (no route). An
+ * unavailable public key NEVER reuses data. Each consumer owns its own memo. */
+function presentationMemo<T>() {
+  let cached: { manager: SessionSource["manager"]; key: string; value: T } | undefined;
+  return {
+    read(source: ContextSource, collect: () => T, key = source.key): T {
+      if (key === undefined) return collect();
+      if (cached?.manager === source.manager && cached.key === key) return cached.value;
+      const value = collect();
+      cached = { manager: source.manager, key, value };
+      return value;
+    },
+    clear() { cached = undefined; },
+  };
+}
+
+/** Full-session accounting, not a branch projection. A parent walk is usable
+ * only when it accounts for EVERY newly appended entry; otherwise rebuild from
+ * all entries, including abandoned branches. No SDK-owned arrays are retained. */
+function spendReader(): (source: SessionSource) => ModelSpend[] {
+  let manager: ExtensionContext["sessionManager"] | undefined;
+  let identity: string | undefined;
+  let count: number | undefined;
+  let leaf: string | null | undefined;
+  let rows: ModelSpend[] = [];
+  const seen = new Set<string>();
+  const byKey = new Map<string, UsageTotals>();
+  return (source) => {
+    const { stamp } = source;
+    const sameSession = manager === source.manager && identity === stamp?.id;
+    // Without a reliable full-journal revision, A → unobserved paid B → A
+    // cannot be detected from the leaf. Read all spend freshly in that case.
+    if (sameSession && stamp?.count !== undefined && stamp.count === count && stamp.leaf === leaf) return rows;
+    let added: SessionEntry[] | undefined;
+    if (sameSession && stamp?.count !== undefined && count !== undefined && stamp.count >= count) {
+      const delta = stamp.count - count;
+      if (delta === 0) {
+        leaf = stamp.leaf;
+        return rows; // Tree navigation never subtracts session spend.
+      }
+      if (typeof source.manager.getEntry === "function") {
+        try {
+          const pending: SessionEntry[] = [];
+          let id = stamp.leaf;
+          while (id && !seen.has(id) && pending.length < delta) {
+            const entry = source.manager.getEntry(id);
+            if (!entry || entry.id !== id) break;
+            pending.push(entry);
+            id = entry.parentId;
+          }
+          if (pending.length === delta && (id === null || (id !== undefined && seen.has(id)))) {
+            added = pending.reverse();
+          }
+        } catch { /* Unknown traversal: use the complete public entry list. */ }
+      }
+    }
+    if (!added) {
+      added = source.manager.getEntries();
+      byKey.clear(); seen.clear();
+    }
+    addSpend(byKey, added);
+    for (const entry of added) seen.add(entry.id);
+    rows = spendRows(byKey);
+    manager = source.manager; identity = stamp?.id;
+    count = stamp?.count; leaf = stamp?.leaf;
+    return rows;
+  };
 }
 
 function sumSpend(rows: ModelSpend[]): UsageTotals {
@@ -673,10 +766,9 @@ function subscriptionSuffix(ctx: ExtensionContext): string {
   }
 }
 
-function modelLabel(ctx: ExtensionContext, theme: Theme): string {
+function modelLabel(ctx: ExtensionContext, theme: Theme, route: ReturnType<typeof physicalRoute>): string {
   const selected = ctx.model?.id ?? "no-model";
   const thinking = ctx.model?.reasoning ? ` (${ctx.thinkingLevel ?? "off"})` : "";
-  const route = physicalRoute(ctx);
   const selection = `${theme.fg("accent", selected)}${thinking ? theme.fg("muted", thinking) : ""}`;
   if (!route) return selection;
   const level = route.thinkingLevel ? theme.fg("muted", ` (${route.thinkingLevel})`) : "";
@@ -874,7 +966,7 @@ function fitFooterSegments(segments: FooterSegment[], width: number): FooterSegm
 /** A clickable span of the footer row: the usage figures, or one status. */
 type FooterHit = { x: number; width: number; key?: string; context?: boolean };
 
-/** Read once per paint; the context panel receives this same SDK total. */
+/** Read at a context boundary; the context panel receives this same SDK total. */
 function contextUsage(ctx: ExtensionContext): ContextUsage {
   try {
     const usage = ctx.getContextUsage();
@@ -915,9 +1007,16 @@ export default function (pi: ExtensionAPI) {
   let lastPublishedQuota: CodexQuotaSnapshot | undefined;
   let requestFooterRender: (() => void) | undefined;
   let grokPublishInFlight = false;
-  let grokPublishQueued = false;
-  let grokPublishForceQueued = false;
-  let lastGrokFetchAt = 0;
+  let grokForcePending = false;
+  let grokActivity = 0, grokAttempted = 0;
+  let grokRunActive = false;
+  let grokContext: ExtensionContext | undefined;
+  let lastGrokFetchAt: number | undefined;
+  let lastGrokSuccessAt: number | undefined;
+  let grokFetchFailed = false;
+  let grokPublishTimer: ReturnType<typeof setTimeout> | undefined;
+  let grokPublishGeneration = 0;
+  let grokPublishStopped = false;
   const compaction = new CompactionProgress();
   let compactionTimer: ReturnType<typeof setInterval> | undefined;
   let compactionUsage: ContextUsage | undefined;
@@ -926,15 +1025,26 @@ export default function (pi: ExtensionAPI) {
   // Foreground assistant events observe a dispatch; they never predict a route.
   let observedReplayModel: ContextModelIdentity | undefined;
   let replaySource: "active-request" | "last-observed-request" = "last-observed-request";
-  let cachedContext: ContextSnapshot | undefined;
-  let cachedContextKey: string | undefined;
   let contextRevision = 0;
+  const usageMemo = presentationMemo<ContextUsage>();
+  const routeMemo = presentationMemo<ReturnType<typeof physicalRoute>>();
+  const snapshotMemo = presentationMemo<ContextSnapshot>();
+  // Capture once per synchronous footer paint. Independently painted panels
+  // capture their own current source, never a stale previous footer frame.
+  const captureSource = (ctx: ExtensionContext): ContextSource => {
+    const source = sessionSource(ctx), model = ctx.model;
+    return { ...source, key: source.stamp && JSON.stringify([source.stamp, contextRevision,
+      model?.provider, model?.id, model?.api, model?.contextWindow, ctx.thinkingLevel, observedReplayModel, replaySource]) };
+  };
+  const currentUsage = (ctx: ExtensionContext, source: ContextSource): ContextUsage =>
+    usageMemo.read(source, () => contextUsage(ctx));
+  const currentRoute = (ctx: ExtensionContext, source: ContextSource): ReturnType<typeof physicalRoute> =>
+    routeMemo.read(source, () => physicalRoute(ctx));
   let inspectContext: ((focus: boolean) => void) | undefined;
   let retireContextUI: (() => void) | undefined;
   const clearContext = () => {
     contextRevision++;
-    cachedContext = undefined;
-    cachedContextKey = undefined;
+    usageMemo.clear(); routeMemo.clear(); snapshotMemo.clear();
   };
   const stopCompactionTimer = () => {
     if (compactionTimer) clearInterval(compactionTimer);
@@ -956,18 +1066,12 @@ export default function (pi: ExtensionAPI) {
     try { effectivePrompt = ctx.getSystemPrompt(); } catch { /* A failed new-run capture remains unknown. */ }
     clearContext();
   };
-  const contextSnapshot = (ctx: ExtensionContext, usage = compactionUsage ?? contextUsage(ctx)): ContextSnapshot => {
+  const contextSnapshot = (ctx: ExtensionContext, usage?: ContextUsage, source = captureSource(ctx)): ContextSnapshot => {
     if (compactionUsage && frozenContext) return frozenContext;
-    let leaf: string | null | undefined;
-    try { leaf = ctx.sessionManager.getLeafId?.(); } catch { /* Lifecycle invalidation remains available. */ }
-    const key = JSON.stringify([contextRevision, leaf, ctx.model?.provider, ctx.model?.id,
-      observedReplayModel, replaySource, usage.tokens, usage.contextWindow, usage.percent]);
-    if (!cachedContext || key !== cachedContextKey) {
-      cachedContext = collectContextSnapshot(ctx, { usage, effectiveSystemPrompt: effectivePrompt,
-        replayModel: observedReplayModel ?? (ctx.model?.api === VIRTUAL_MODEL_API ? null : undefined), replaySource });
-      cachedContextKey = key;
-    }
-    return cachedContext;
+    const total = usage ?? compactionUsage ?? currentUsage(ctx, source);
+    const key = source.key && JSON.stringify([source.key, total.tokens, total.contextWindow, total.percent]);
+    return snapshotMemo.read(source, () => collectContextSnapshot(ctx, { usage: total, effectiveSystemPrompt: effectivePrompt,
+      replayModel: observedReplayModel ?? (ctx.model?.api === VIRTUAL_MODEL_API ? null : undefined), replaySource }), key);
   };
   const invalidateContext = () => { clearContext(); requestFooterRender?.(); };
   const observeReplay = (value: unknown, completed: boolean) => {
@@ -983,6 +1087,10 @@ export default function (pi: ExtensionAPI) {
     effectivePrompt = undefined; observedReplayModel = undefined; rememberPrompt(ctx);
   });
   pi.on("turn_start", () => { observedReplayModel = undefined; invalidateContext(); });
+  pi.on("turn_end", invalidateContext);
+  // Virtual routing can change the limits model before an assistant is stored.
+  // Observe the public dispatch boundary, never resolve model credentials.
+  pi.on("before_provider_request", () => { invalidateContext(); });
   pi.on("context_with_system", (_event, ctx) => { rememberPrompt(ctx); });
   pi.on("message_start", (event) => { observeReplay(event.message, false); invalidateContext(); });
   pi.on("message_end", (event) => { observeReplay(event.message, true); invalidateContext(); });
@@ -995,11 +1103,12 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_tree", resetContextSource);
   pi.on("model_select", resetContextSource);
   pi.on("session_before_compact", (event, ctx) => {
-    compactionUsage = contextUsage(ctx);
-    frozenContext = undefined;
     clearContext();
+    const source = captureSource(ctx);
+    compactionUsage = currentUsage(ctx, source);
+    frozenContext = undefined;
     // Capture the complete pre-compaction composition now, not on a later paint.
-    frozenContext = contextSnapshot(ctx, compactionUsage);
+    frozenContext = contextSnapshot(ctx, compactionUsage, source);
     compaction.start({
       modelKey: ctx.model && ctx.model.api !== VIRTUAL_MODEL_API ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
       tokensBefore: event.preparation.tokensBefore,
@@ -1031,55 +1140,88 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify(contextSummary(contextSnapshot(ctx), "The pinned context panel requires fullscreen Pi."), "info");
     },
   });
-  // The stack asks every member for its preferred width during each overlay
-  // layout. Keep the session walk local to this footer, but let lifecycle
-  // boundaries clear it before a width getter can be the first reader.
-  let invalidateSpend = () => {};
-  const invalidateSpendCache = () => invalidateSpend();
-  pi.on("message_end", invalidateSpendCache);
-  pi.on("tool_execution_end", invalidateSpendCache);
-  pi.on("session_compact", invalidateSpendCache);
-  pi.on("session_tree", invalidateSpendCache);
-  pi.on("agent_settled", invalidateSpendCache);
-
-  const scheduleGrokPublish = (force = false) => {
-    if (!GROK_BILLING_ENABLED) return;
-    if (force) grokPublishForceQueued = true;
-    if (grokPublishInFlight) {
-      grokPublishQueued = true;
+  const clearGrokTimer = () => {
+    if (grokPublishTimer) clearTimeout(grokPublishTimer);
+    grokPublishTimer = undefined;
+  };
+  const grokApplicable = () => {
+    try { return !grokPublishStopped && grokContext?.model?.provider === "xai"; }
+    catch { return false; } // A retired SDK context cannot authorize a refresh.
+  };
+  const repaintBilling = () => {
+    try { requestFooterRender?.(); } catch { /* Display failure cannot strand an in-flight billing request. */ }
+  };
+  const scheduleGrokPublish = () => {
+    if (!GROK_BILLING_ENABLED || !grokApplicable() || grokActivity <= grokAttempted || grokPublishInFlight) return;
+    clearGrokTimer();
+    const interval = grokForcePending ? GROK_BILLING_FORCE_MIN_INTERVAL_MS : GROK_BILLING_MIN_INTERVAL_MS;
+    const now = performance.now();
+    const delay = lastGrokFetchAt === undefined ? 0 : Math.max(0, interval - (now - lastGrokFetchAt));
+    if (delay > 0) {
+      grokPublishTimer = setTimeout(() => {
+        grokPublishTimer = undefined;
+        // A model can leave xai without another billing event. Never read auth
+        // or issue a delayed request for a no-longer-applicable selection.
+        scheduleGrokPublish();
+      }, delay);
+      grokPublishTimer.unref?.();
+      repaintBilling();
       return;
     }
     grokPublishInFlight = true;
-    // Fetch billing in Pi, update the footer locally, then inject into the dashboard.
+    grokForcePending = false;
+    // Cover only activity known at dispatch. Responses/settlement that arrive
+    // DURING this request remain dirty and coalesce into one trailing refresh.
+    // Failed/no-auth attempts are not retried autonomously at every interval.
+    grokAttempted = grokActivity;
+    lastGrokFetchAt = now;
+    const generation = grokPublishGeneration;
+    repaintBilling();
     void (async () => {
       try {
-        const shouldForce = grokPublishForceQueued;
-        grokPublishForceQueued = false;
-        grokPublishQueued = false;
-        if (
-          !shouldForce &&
-          lastGrokFetchAt > 0 &&
-          Date.now() - lastGrokFetchAt < GROK_BILLING_MIN_INTERVAL_MS
-        ) {
-          return;
-        }
         const billing = await fetchGrokBilling();
-        lastGrokFetchAt = Date.now();
+        if (!grokApplicable() || generation !== grokPublishGeneration) return;
         const quota = grokWeeklyQuotaFromBilling(billing);
-        if (quota && !grokQuotasEqual(grokWeeklyQuota, quota)) {
-          grokWeeklyQuota = quota;
-          requestFooterRender?.();
+        grokFetchFailed = !quota;
+        if (quota) {
+          if (!grokQuotasEqual(grokWeeklyQuota, quota)) grokWeeklyQuota = quota;
+          lastGrokSuccessAt = performance.now();
+          if (billing) void injectGrokQuota(billing);
         }
-        if (billing) void injectGrokQuota(billing);
       } finally {
         grokPublishInFlight = false;
-        if (grokPublishQueued || grokPublishForceQueued) {
-          grokPublishQueued = false;
-          scheduleGrokPublish();
-        }
+        repaintBilling();
+        if (grokActivity > grokAttempted) scheduleGrokPublish();
       }
     })();
   };
+  pi.on("before_agent_start", (_event, ctx) => {
+    if (!GROK_BILLING_ENABLED || ctx.model?.provider !== "xai") return;
+    grokContext = ctx; grokRunActive = true;
+  });
+  pi.on("model_select", (_event, ctx) => {
+    if (!GROK_BILLING_ENABLED) return;
+    grokContext = ctx;
+    if (!grokApplicable()) {
+      clearGrokTimer();
+      grokPublishGeneration++;
+      if (grokRunActive) grokActivity++;
+      grokRunActive = false;
+      // Preserve dirty final usage across leaving/returning to xai, but retire
+      // any old in-flight snapshot and never publish it after a round trip.
+      if (grokPublishInFlight) grokAttempted = 0;
+    } else if (grokActivity > grokAttempted) {
+      grokForcePending = true;
+      scheduleGrokPublish();
+    }
+  });
+  pi.on("session_shutdown", () => {
+    grokPublishStopped = true;
+    grokPublishGeneration++;
+    clearGrokTimer();
+    grokContext = undefined; grokRunActive = false;
+    grokActivity = grokAttempted = 0; grokForcePending = false;
+  });
 
   const rememberCodexQuota = (provider: string, snapshot: CodexQuotaSnapshot) => {
     codexQuotaSnapshots.set(provider, snapshot);
@@ -1136,41 +1278,53 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("after_provider_response", (_event, ctx) => {
-    if (ctx.model?.provider !== "xai") return;
+    if (!GROK_BILLING_ENABLED || grokPublishStopped || ctx.model?.provider !== "xai") return;
+    grokContext = ctx; grokRunActive = true; grokActivity++;
     scheduleGrokPublish();
   });
 
   pi.on("agent_settled", (_event, ctx) => {
-    if (ctx.model?.provider !== "xai") return;
-    scheduleGrokPublish(true);
+    if (!GROK_BILLING_ENABLED || grokPublishStopped || ctx.model?.provider !== "xai" || !grokRunActive) return;
+    grokContext = ctx; grokRunActive = false; grokActivity++;
+    // Headers can precede the stream's final billable work. One final dirty
+    // revision must be sampled, but duplicate idle notifications add no work.
+    grokForcePending = true;
+    scheduleGrokPublish();
   });
 
   pi.on("session_start", (_event, ctx) => {
+    grokPublishGeneration++;
+    grokPublishStopped = false;
+    clearGrokTimer();
+    grokContext = ctx; grokRunActive = false;
+    grokActivity = grokAttempted = 0; grokForcePending = false;
     resetContext();
     ctx.ui.setFooter((tui, theme, footerData) => {
       // Pi's component tree is top-aligned and has no flex spacer before the
       // footer. Add one at the render boundary so the footer stays on the
       // last terminal row instead of leaving unused rows below it.
+      // A synchronous render-local token replaces the old in-band NUL marker.
+      // The footer only identifies its own row inside this invocation; nested
+      // renders restore the outer token and cannot borrow a previous paint.
+      let renderFrame: { row?: string } | undefined;
       const originalRender = tui.render.bind(tui);
       const renderWithBottomFooter = (width: number): string[] => {
-        const rendered = originalRender(width);
-        const footerIndex = rendered.findIndex((line) =>
-          line.includes(FOOTER_MARKER),
-        );
-        const lines = rendered.map((line) => line.replace(FOOTER_MARKER, ""));
-
-        if (footerIndex < 0 || footerIndex !== lines.length - 1) {
-          return lines;
-        }
-
-        const padding = Math.max(0, tui.terminal.rows - lines.length);
-        if (padding === 0) return lines;
-
-        return [
-          ...lines.slice(0, footerIndex),
-          ...Array(padding).fill(" ".repeat(width)),
-          ...lines.slice(footerIndex),
-        ];
+        const previous = renderFrame;
+        const frame: { row?: string } = {};
+        renderFrame = frame;
+        let rendered: string[];
+        try { rendered = originalRender(width); } finally { renderFrame = previous; }
+        if (tui.mode === "fullscreen" || frame.row === undefined || rendered.at(-1) !== frame.row) return rendered;
+        const padding = Math.max(0, tui.terminal.rows - rendered.length);
+        if (padding === 0) return rendered;
+        // Only a short viewport is copied, never the history-sized buffer. The
+        // host may share/cache its array, so even this bounded copy is detached.
+        const lines = rendered.slice();
+        const footerIndex = lines.length - 1;
+        lines.length += padding;
+        lines.fill(" ".repeat(width), footerIndex, footerIndex + padding);
+        lines[footerIndex + padding] = frame.row;
+        return lines;
       };
       tui.render = renderWithBottomFooter;
 
@@ -1187,25 +1341,10 @@ export default function (pi: ExtensionAPI) {
       // so it keeps its place in the bottom-right popover column.
       let member: StackMember | undefined;
       let overlay: OverlayHandle | undefined;
-      let cachedSpend: ModelSpend[] | undefined;
-      let cachedSpendStamp: string | undefined;
-      const resetSpend = () => { cachedSpend = undefined; cachedSpendStamp = undefined; };
-      const spendStamp = (): string | undefined => {
-        try {
-          const leaf = ctx.sessionManager.getLeafId?.();
-          return leaf === null || typeof leaf === "string" ? JSON.stringify(leaf) : undefined;
-        } catch { return undefined; }
-      };
-      // SDK appends, including independent usage records, advance the leaf.
-      // Animation/focus paints reuse data; lifecycle invalidation covers tree
-      // changes. Older hosts without a leaf getter keep the per-frame fallback.
-      const spend = () => {
-        const stamp = spendStamp();
-        if (stamp !== undefined && stamp !== cachedSpendStamp) cachedSpend = undefined;
-        cachedSpendStamp = stamp;
-        return cachedSpend ??= collectSpend(ctx);
-      };
-      invalidateSpend = resetSpend;
+      // Only a full journal count permits reuse of whole-session spend. A
+      // branch-only/legacy host stays fresh, including unobserved side branches.
+      const readSpend = spendReader();
+      const spend = (source = sessionSource(ctx)) => readSpend(source);
       let restoreTimer: ReturnType<typeof setTimeout> | undefined;
       let promptDepth = 0;
       const pinnedHolds = new Set<object>();
@@ -1228,7 +1367,7 @@ export default function (pi: ExtensionAPI) {
         if (pinned) tui.requestRender();
       };
       const breakdown = {
-        invalidate: resetSpend,
+        invalidate() {},
         // Share the leaf/revision-keyed data with every stacked width getter;
         // layout and focus changes do not invalidate historical accounting.
         render: (width: number): string[] => {
@@ -1278,7 +1417,6 @@ export default function (pi: ExtensionAPI) {
           if (member && !overlay && tui.mode === "fullscreen") mountBreakdown(member);
         }, 0);
       };
-      let paintedContextUsage: ContextUsage | undefined;
       let contextPanel: { member: StackMember; view: ContextView; handle?: OverlayHandle } | undefined;
       let contextRestore: ReturnType<typeof setTimeout> | undefined;
       let pendingContextFocus: { view: ContextView; origin: unknown[] | undefined } | undefined;
@@ -1331,7 +1469,7 @@ export default function (pi: ExtensionAPI) {
           const place = joinPopoverStack(tui);
           const view = new ContextView({
             theme,
-            snapshot: () => contextSnapshot(ctx, compactionUsage ?? paintedContextUsage ?? contextUsage(ctx)),
+            snapshot: () => contextSnapshot(ctx),
             availableRows: () => place.available(),
             requestRender: () => { if (currentFooter()) tui.requestRender(); },
             close: hideContext,
@@ -1432,12 +1570,11 @@ export default function (pi: ExtensionAPI) {
           unsubscribeTransientOverlayHide();
           unsubscribeBranch();
           if (requestFooterRender === renderFooter) requestFooterRender = undefined;
-          if (invalidateSpend === resetSpend) invalidateSpend = () => {};
           if (tui.render === renderWithBottomFooter) {
             tui.render = originalRender;
           }
         },
-        invalidate: resetSpend,
+        invalidate() {},
 
         handleMouse(event: TuiMouseEvent) {
           if (event.type !== "click" || event.button !== "left" || event.y !== 0) return undefined;
@@ -1459,14 +1596,11 @@ export default function (pi: ExtensionAPI) {
         },
 
         render(width: number): string[] {
-          // Width queries and animation reuse grouped spend until the SDK leaf
-          // or a lifecycle signal changes. No-leaf hosts retain the old fallback.
-          if (spendStamp() === undefined) resetSpend();
-          const totals = sumSpend(spend());
-          const context = compactionUsage ?? contextUsage(ctx);
-          paintedContextUsage = context;
+          const source = captureSource(ctx);
+          const totals = sumSpend(spend(source));
+          const context = compactionUsage ?? currentUsage(ctx, source);
           // A context panel paint shares this frame's SDK total with the footer.
-          if (contextPanel) contextSnapshot(ctx, context);
+          if (contextPanel) contextSnapshot(ctx, context, source);
 
           const branch = footerData.getGitBranch();
           const location = `${theme.fg("accent", formatCwd(ctx.cwd))}${
@@ -1485,7 +1619,7 @@ export default function (pi: ExtensionAPI) {
           )}${subscription ? theme.fg("dim", subscription) : ""}`;
           const input = `${value(formatTokens(totalInput))} (${cacheHitDisplay})`;
 
-          const modelDisplay = modelLabel(ctx, theme);
+          const modelDisplay = modelLabel(ctx, theme, currentRoute(ctx, source));
           const statuses = [...footerData.getExtensionStatuses()]
             // Subagent status belongs in its own widget, not in this footer.
             .filter(([key]) => key !== "subagents")
@@ -1535,7 +1669,18 @@ export default function (pi: ExtensionAPI) {
             if (visibleWidth(oneLine(throughCredits)) <= prefixRoom) codexParts.push(creditDisplay);
           }
           const codexDisplay = codexParts.join(" ");
-          const quotaDisplay = codexDisplay || (grokWeekly ? remaining("W", grokWeekly.remainingPercent) : undefined);
+          let grokDisplay: string | undefined;
+          if (provider === "xai" && GROK_BILLING_ENABLED) {
+            const pending = grokPublishInFlight || grokActivity > grokAttempted;
+            const age = lastGrokSuccessAt === undefined ? undefined : Math.max(0, Math.floor((performance.now() - lastGrokSuccessAt) / 1000));
+            const stale = grokFetchFailed || !grokWeekly || (age !== undefined && age * 1000 >= GROK_BILLING_MIN_INTERVAL_MS);
+            const state = pending ? "pending" : stale ? "stale" : "";
+            const freshness = age === undefined ? (pending ? "pending" : grokFetchFailed ? "unavailable" : "not checked")
+              : `${state ? `${state}; ` : ""}updated ${age}s ago`;
+            grokDisplay = `${grokWeekly ? remaining("W", grokWeekly.remainingPercent) : label("billing")} ` +
+              theme.fg(state || age === undefined ? "warning" : "dim", `[${freshness}]`);
+          }
+          const quotaDisplay = codexDisplay || grokDisplay;
 
           // Quota values are atomic: never turn W 12% into W 1…. Path/model
           // chrome gives way first; right-hand approval/health stay unchanged.
@@ -1550,10 +1695,6 @@ export default function (pi: ExtensionAPI) {
           const prefix = chrome && quotaText ? `${chrome}${FOOTER_SEPARATOR}${quotaText}` : chrome || quotaText;
           const contextX = prefix && contextDisplay ? visibleWidth(prefix) + FOOTER_SEPARATOR.length : 0;
           const left = prefix && contextDisplay ? `${prefix}${FOOTER_SEPARATOR}${contextDisplay}` : prefix || contextDisplay;
-          // The shim that reads this marker wraps the regular renderer's own
-          // render(); the alternate screen lays the dock out from its layout
-          // root instead, never calls it, and would print the marker verbatim.
-          const marker = tui.mode === "fullscreen" ? "" : FOOTER_MARKER;
           // Geometry comes only from this fitted paint, including shortened
           // worker values. Hidden controls and separators have no indicator hit.
           let x = rightStart(right, width);
@@ -1564,7 +1705,9 @@ export default function (pi: ExtensionAPI) {
             if (span > 0) footerHits.push({ x, width: span, key: segment.key });
             x += span;
           });
-          return [`${alignFooter(left, right, width)}${marker}`];
+          const row = alignFooter(left, right, width);
+          if (renderFrame) renderFrame.row = row;
+          return [row];
         },
       };
     });

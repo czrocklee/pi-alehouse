@@ -1,41 +1,39 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { getAgentDir, getPackageDir, parseFrontmatter, SettingsManager,
+import { getAgentDir, parseFrontmatter, SettingsManager,
   type ExtensionAPI, type ExtensionContext, type ModelRuntime, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { DEFAULT_OWNER_LIMITS, OwnerController } from "./core/owner-controller.js";
+import { DEFAULT_OWNER_LIMITS, OwnerController } from "./core/owner-controller.ts";
 import { defaultDelegation, delegationGuideline, delegationLabel, delegationStatus, isDelegationSetting, parseDelegation,
-  restoreDelegation, type DelegationSetting } from "./delegation.js";
-import { HarnessError } from "./core/ports.js";
-import { historicalRunsCommand } from "./history/history-command.js";
-import { reportUnreportedUsage } from "./history/usage-audit.js";
-import { ApprovalBindings } from "./permissions/approval-provenance.js";
+  restoreDelegation, type DelegationSetting } from "./delegation.ts";
+import { HarnessError } from "./core/ports.ts";
+import { historicalRunsCommand } from "./history/history-command.ts";
+import { reportUnreportedUsage } from "./history/usage-audit.ts";
+import { ApprovalBindings } from "./permissions/approval-provenance.ts";
 import { isOffPreset, presetLabel, PresetRouter, resolveSlotRoute, selectPhysicalWorkerModel, strengths, thinkingLevels, validEffortOverrides,
-  type EffortOverrides, type PresetCandidate, type PresetPublication, type PresetSelection, type PresetSnapshot, type Strength } from "./routing.js";
-import { ChildActivityRegistry } from "./runtime/activity-observer.js";
-import { createChildSessionFactory, type WorkspacePolicyBinder } from "./runtime/child-factory.js";
-import { ChildWebModules, nativeWebLoader } from "./runtime/child-web.js";
-import { configureChildRuntime } from "./runtime/execution-policy.js";
-import type { ManagedBlockSubscription } from "./runtime/permission-blocks.js";
-import { createDispatchRuntime } from "./runtime/dispatch-runtime.js";
-import { researcherHostModules } from "./runtime/host-modules.js";
-import { requestHumanStop } from "./runtime/human-stop.js";
-import { FileOwnerLease } from "./runtime/owner-lease.js";
-import { ownerSessionReplacementGuard } from "./runtime/owner-lifecycle.js";
-import { registerOrderFreeToolSchemas } from "./runtime/provider-schema.js";
-import { createPresetModelSelector } from "./runtime/preset-model-selector.js";
-import { hostUsage } from "./runtime/tool-usage.js";
-import { createOwnerTools } from "./tools/parent-tools.js";
+  type EffortOverrides, type PresetCandidate, type PresetPublication, type PresetSelection, type PresetSnapshot, type Strength } from "./routing.ts";
+import { ChildActivityRegistry } from "./runtime/activity-observer.ts";
+import { createChildSessionFactory, type WorkspacePolicyBinder } from "./runtime/child-factory.ts";
+import { ChildWebModules, nativeWebLoader } from "./runtime/child-web.ts";
+import { configureChildRuntime } from "./runtime/execution-policy.ts";
+import type { ManagedBlockSubscription } from "./runtime/permission-blocks.ts";
+import { createDispatchRuntime } from "./runtime/dispatch-runtime.ts";
+import { researcherHostModules } from "./runtime/host-modules.ts";
+import { requestHumanStop } from "./runtime/human-stop.ts";
+import { FileOwnerLease } from "./runtime/owner-lease.ts";
+import { ownerSessionReplacementGuard } from "./runtime/owner-lifecycle.ts";
+import { registerOrderFreeToolSchemas } from "./runtime/provider-schema.ts";
+import { createPresetModelSelector } from "./runtime/preset-model-selector.ts";
+import { hostUsage } from "./runtime/tool-usage.ts";
+import { createOwnerTools } from "./tools/parent-tools.ts";
 import { agentProfileNames, blockedDelegationToolNames, managementToolNames, webProfileNames, webToolNames,
-  workerToolSelection } from "./tools/tool-names.js";
-import { HarnessWidget } from "./ui/agent-widget.js";
-import { PanelCoordinator } from "./ui/panel-coordinator.js";
-import { HIDE_TRANSIENT_OVERLAYS_EVENT } from "./ui/overlay-request.js";
-import type { EffortCapabilities } from "./ui/preset-picker.js";
-import { PreferencesControls, stageWorkerSelection } from "./ui/preferences-controls.js";
+  workerToolSelection } from "./tools/tool-names.ts";
+import { HarnessWidget } from "./ui/agent-widget.ts";
+import { PanelCoordinator } from "./ui/panel-coordinator.ts";
+import { HIDE_TRANSIENT_OVERLAYS_EVENT } from "./ui/overlay-request.ts";
+import type { EffortCapabilities } from "./ui/preset-picker.ts";
+import { PreferencesControls, stageWorkerSelection } from "./ui/preferences-controls.ts";
 import { SettingsStore, registerSettingsStore, validateSettings, type PresetDefinition, type SettingsDocument } from "../../lib/settings-store.mjs";
 import { managedBlockToolNames } from "../../lib/managed-block-tools.mjs";
 const localTools = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
@@ -175,8 +173,18 @@ export function validateWorkerEfforts<M extends { provider: string; id: string }
   }
 }
 
+/** The already-loaded matched authority, supplied by the guarded composition.
+ * Resolve session services per use; never cache an authority service here. */
+export interface HarnessStartup {
+  permission: {
+    getPermissionsService: (id: string) => unknown;
+    bindWorkspacePolicy: WorkspacePolicyBinder;
+    subscribeManagedBlocks: ManagedBlockSubscription;
+  };
+}
+
 /** Explicit launcher only: no global discovery, settings migration or old-backend fallback. */
-export default function harnessExtension(pi: ExtensionAPI) {
+export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStartup) {
   let controller: OwnerController | undefined, ready = false;
   let router: PresetRouter | undefined;
   let routingContext: ExtensionContext | undefined;
@@ -537,22 +545,9 @@ export default function harnessExtension(pi: ExtensionAPI) {
     const permissionRoot = process.env.PI_HARNESS_PERMISSION_ROOT, policyRoot = process.env.PI_HARNESS_POLICY_ROOT;
     const flock = process.env.PI_HARNESS_FLOCK;
     assert(permissionRoot && isAbsolute(permissionRoot) && policyRoot && isAbsolute(policyRoot) && flock && isAbsolute(flock), "Use the pi-alehouse launcher");
-    const hostRoot = getPackageDir(), hostRequire = createRequire(join(hostRoot, "package.json"));
-    const { createJiti } = hostRequire("jiti") as typeof import("jiti");
-    // Pi peers expose import-only exports and may be hoisted by npm. Resolve
-    // ESM conditions from the actual host, not require() or a nested layout.
-    const hostResolver = createJiti(join(hostRoot, "package.json"));
-    const jiti = createJiti(import.meta.url, { alias: {
-      "@earendil-works/pi-coding-agent": join(hostRoot, "dist/index.js"),
-      "@earendil-works/pi-ai": fileURLToPath(hostResolver.esmResolve("@earendil-works/pi-ai")),
-      "@earendil-works/pi-tui": fileURLToPath(hostResolver.esmResolve("@earendil-works/pi-tui")),
-    } });
-    const permission = await jiti.import<{
-      getPermissionsService: (id: string) => unknown;
-      /** Matched authority returns a live alias lease, validated at assembly. */
-      bindWorkspacePolicy: WorkspacePolicyBinder;
-      subscribeManagedBlocks: ManagedBlockSubscription;
-    }>(join(permissionRoot, "index.ts"));
+    const permission = startup?.permission;
+    assert(permission && typeof permission.getPermissionsService === "function",
+      "Use the pi-alehouse composition with its matched permission interface; no SDK or authority fallback is supported");
     assert(typeof permission.bindWorkspacePolicy === "function", "Worktree policy binding is unavailable; restart with a matched pi-alehouse runtime");
     assert(typeof permission.subscribeManagedBlocks === "function", "Managed block observations are unavailable; restart with a matched pi-alehouse runtime");
     // The launcher loads us first so shutdown drains children BEFORE tearing

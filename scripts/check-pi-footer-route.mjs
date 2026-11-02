@@ -64,6 +64,7 @@ const registry = {
 
 const branch = [];
 const abandoned = [];
+let branchReads = 0;
 const ctx = {
   cwd: directory,
   hasUI: false,
@@ -72,8 +73,11 @@ const ctx = {
   thinkingLevel: "off",
   modelRegistry: registry,
   sessionManager: {
+    getSessionId: () => "synthetic-footer-route",
+    getLeafId: () => branch.at(-1)?.id ?? null,
+    getEntryCount: () => abandoned.length + branch.length,
     getEntries: () => [...abandoned, ...branch],
-    getBranch: () => branch,
+    getBranch() { branchReads++; return branch; },
   },
   getContextUsage: () => ({ tokens: 10, contextWindow: 1000, percent: 1 }),
   ui: {},
@@ -180,6 +184,12 @@ try {
   const routed = line();
   assert.match(routed, /auto \(high\) → gpt-5\.6-luna \(medium\)/);
   assert.doesNotMatch(routed, /pre-selection-model|stale-abandoned-model/);
+  const readsAfterRoute = branchReads;
+  for (let frame = 0; frame < 100; frame++) assert.equal(line(), routed);
+  assert.equal(branchReads, readsAfterRoute, "virtual route is read once per branch revision, not per animation frame");
+  await emit("session_tree", {});
+  assert.equal(line(), routed);
+  assert.equal(branchReads, readsAfterRoute + 1, "tree lifecycle invalidates the cached virtual route");
 
   replaceBranch([
     select("selection", "router", "auto"),
@@ -586,12 +596,12 @@ try {
     for (const width of [20, 40, 80, 160]) {
       const rows = footer.render(width);
       assert.equal(rows.length, 1, `${mode} footer remains one row at width ${width}`);
-      // The regular renderer consumes this out-of-band routing marker before paint.
-      const painted = rows[0].replace("\u0000pi-status-footer\u0000", "");
+      assert(!rows[0].includes("\u0000pi-status-footer\u0000"), "footer never emits an in-band layout marker");
+      const painted = rows[0];
       assert(visibleWidth(painted) <= width, `${mode} footer stays within width ${width}`);
     }
     for (let width = 20; width <= 160; width++) {
-      const painted = stripVTControlCharacters(footer.render(width)[0].replace("\u0000pi-status-footer\u0000", ""));
+      const painted = stripVTControlCharacters(footer.render(width)[0]);
       const creditLabel = /(?:^|[ ·])(?:C|Cr)(?:\s|…|$)/;
       if (creditLabel.test(painted)) {
         assert.match(painted, /Cr 123\b/, `${mode} credit balance is whole or absent at width ${width}`);

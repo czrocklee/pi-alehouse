@@ -4,15 +4,15 @@ import {
   isQueueWait, modelDispatchNotes, visibleCommunicationReason,
   type CommunicationAction, type CommunicationEnvelope, type CommunicationReason,
   type FinishedEntry, type TaskEntry, type TaskStatus, type ThinTaskEntry,
-} from "./communication-envelope.js";
+} from "./communication-envelope.ts";
 import type {
   CommunicationSnapshot, CommunicationToolResult, PackedCommunication, ResultWindow,
-} from "./communication-snapshot.js";
-import { validWorkspace } from "./contracts.js";
-import type { TaskMetadata } from "./task-metadata.js";
-import { isQuestionId } from "./question-id.js";
-import { encodeResultCursor } from "./result-cursor.js";
-import { HarnessError } from "./ports.js";
+} from "./communication-snapshot.ts";
+import { validWorkspace } from "./contracts.ts";
+import type { TaskMetadata } from "./task-metadata.ts";
+import { isQuestionId } from "./question-id.ts";
+import { encodeResultCursor } from "./result-cursor.ts";
+import { HarnessError } from "./ports.ts";
 
 type MutableRow = { -readonly [K in keyof TaskEntry]: TaskEntry[K] };
 type PackingCode = "INVALID_COMMUNICATION_SNAPSHOT" | "COMMUNICATION_REPLY_TOO_LARGE";

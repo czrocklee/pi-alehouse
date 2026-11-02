@@ -1,5 +1,5 @@
-import type { RunView } from "../core/contracts.js";
-import { formatDrain, GLYPHS, SPINNER } from "./format.js";
+import type { RunView } from "../core/contracts.ts";
+import { formatDrain, GLYPHS, SPINNER } from "./format.ts";
 
 export interface ActivityState {
   status: RunView["status"];

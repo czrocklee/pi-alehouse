@@ -529,6 +529,37 @@ for (const status of ["completed", "needs_input"]) {
   });
 }
 
+for (const boundary of ["settlement", "idle release"]) test(`tree claim release failure invalidates presentation through ${boundary}`, serial, async t => {
+  let revisionAtFailure;
+  const lease = { assertHeld() {}, close() {
+    revisionAtFailure = c.presentationRevision;
+    throw new Error("synthetic tree close uncertainty");
+  } };
+  const dispatch = dispatchPort({ start: () => ({ lease }) });
+  const { controller: c, ports } = await memoryFixture(t, {
+    cleanupUncertainExpected: true, controller: { dispatch },
+  });
+  const run = await c.submit("release-presentation", task("release presentation", {
+    dispatch: { ownership: ["output"], tree: "build" },
+  }));
+  await until(() => ports[0]?.streaming);
+  if (boundary === "idle release") await ask(ports[0]);
+  ports[0].finish("execution complete"); await ended(c, run);
+  if (boundary === "idle release") {
+    assert.equal(revisionAtFailure, undefined, "a pending question retains its claim");
+    assert.equal(c.view(run.run_id).status, "needs_input");
+    await c.release(run.agent_id);
+  }
+  assert.equal(typeof revisionAtFailure, "number", "the failing close actually ran");
+  assert(c.presentationRevision > revisionAtFailure, "the caller wakes presentation after the synchronous failure");
+  assert.equal(c.stats().cleanup_uncertain, true);
+  const row = c.list()[0];
+  assert.equal(row.owner_blocked, true);
+  assert.equal(row.unavailable_reason, "owner_cleanup_uncertain");
+  assert.equal(row.resident, true);
+  assert.match(row.cleanup_errors.join("\n"), /TREE_RELEASE_FAILED/);
+});
+
 test("tree lease close failure is sticky even when a later close would no-op and SDK cleanup succeeds", serial, async t => {
   const lease = { closes: 0, assertHeld() {}, close() {
     this.closes++;

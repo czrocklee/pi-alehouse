@@ -1,8 +1,8 @@
 import { isAbsolute } from "node:path";
-import { normalizeLedger, type UsageLedger } from "./usage-ledger.js";
-import { validOutput } from "./result-text.js";
-import type { Dispatch } from "./dispatch.js";
-import type { WorkspaceDetails, WorkspaceRecovery } from "./workspace-metadata.js";
+import { normalizeLedger, type UsageLedger } from "./usage-ledger.ts";
+import { validOutput } from "./result-text.ts";
+import type { Dispatch } from "./dispatch.ts";
+import type { WorkspaceDetails, WorkspaceRecovery } from "./workspace-metadata.ts";
 
 export type RunStatus = "queued" | "running" | "cancelling" | "completed" | "needs_input" | "failed" | "cancelled";
 /** `deadline` remains readable in historical records; live Runs never emit it. */
@@ -90,6 +90,9 @@ export interface Output {
   /** Run-local assistant-message revision. */
   revision?: number;
 }
+/** Raw assistant text, never a cumulative string. Reset replaces the candidate;
+ * append counts observed UTF-16 units even after prefix retention closes. */
+export type OutputDelta = { type: "reset"; revision: number; max_chars?: number } | { type: "append"; revision: number; text: string };
 export type RunActivity = "generating" | "tool" | "compacting" | "retrying";
 export interface RunTelemetry {
   activity: RunActivity;

@@ -59,6 +59,7 @@ function fixture(mode = "tui", sdkDispatch = false) {
   const terminal = { setTitle: (title) => titles.push(title) };
   const originalSetTitle = terminal.setTitle;
   let name;
+  let sessionNameReads = 0;
   const ctx = {
     mode,
     cwd: "/fixture/project",
@@ -78,7 +79,7 @@ function fixture(mode = "tui", sdkDispatch = false) {
       handlers.set(event, list);
       return () => { const index = list.indexOf(handler); if (index >= 0) list.splice(index, 1); };
     },
-    getSessionName: () => name,
+    getSessionName: () => { sessionNameReads++; return name; },
     events: {
       on(event, handler) {
         const list = listeners.get(event) ?? new Set();
@@ -94,6 +95,7 @@ function fixture(mode = "tui", sdkDispatch = false) {
   if (sdkDispatch) pi.events = createEventBus();
   return {
     pi, ctx, titles, listeners, terminal, originalSetTitle, widgets, errors,
+    sessionNameReads: () => sessionNameReads,
     rename: (value) => { name = value; },
     async emit(event, value = {}) {
       if (sdkDispatch) return ExtensionRunner.prototype.emit.call({
@@ -108,6 +110,28 @@ function fixture(mode = "tui", sdkDispatch = false) {
 
 const TITLE_MARKS = /[\u0305\u0332\u0333\u033f]/;
 const plainTitle = (title) => title.replace(/[\u0305\u0332\u0333\u033f]/g, "");
+
+test("title animation reuses its session label until rename or cwd change", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const f = fixture();
+  titleExtension(f.pi);
+  t.after(() => f.emit("session_shutdown"));
+  await f.emit("session_start");
+  const initialReads = f.sessionNameReads();
+  await f.emit("agent_start");
+  t.mock.timers.tick(33 * 100);
+  assert.equal(f.sessionNameReads(), initialReads, "animation does not scan session history");
+  f.rename("new name");
+  await f.emit("session_info_changed");
+  assert.equal(f.sessionNameReads(), initialReads + 1);
+  assert.equal(plainTitle(f.titles.at(-1)), "π - new name");
+  f.rename(undefined);
+  await f.emit("session_info_changed");
+  f.ctx.cwd = "/fixture/elsewhere";
+  t.mock.timers.tick(33);
+  assert.equal(plainTitle(f.titles.at(-1)), "π - elsewhere");
+  assert.equal(f.sessionNameReads(), initialReads + 3, "fallback follows the actual cwd");
+});
 
 test("title highlight circles the bottom and top with connected corner frames", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
@@ -410,11 +434,12 @@ const closeColumn = (top) => stripVTControlCharacters(top).indexOf(POPOVER.close
 const nextTick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 /** Real footer and SDK overlay compositor; no terminal I/O or scheduled paints. */
-async function mountFooter({ mode = "regular", entries = [], sessionManager, statuses = new Map(), theme } = {}) {
+async function mountFooter({ mode = "regular", entries = [], sessionManager, statuses = new Map(), theme,
+  renderRoot = () => [] } = {}) {
   const f = fixture();
   const overlays = [];
   const inputHandlers = new Set();
-  const originalRender = () => [];
+  const originalRender = width => renderRoot(width, footer);
   const terminal = { rows: FOOTER_ROWS, columns: FOOTER_COLUMNS, hideCursor() {} };
   const compositor = new TuiAltScreen(terminal, false, undefined, {});
   compositor.requestRender = () => {};
@@ -465,7 +490,7 @@ async function mountFooter({ mode = "regular", entries = [], sessionManager, sta
     f, footer, tui, overlays, visible, paintOverlay,
     bounds: () => visible().at(-1).handle.getBounds(),
     originalRender,
-    line: (width = FOOTER_COLUMNS) => footer.render(width)[0].replace(MARKER, ""),
+    line: (width = FOOTER_COLUMNS) => footer.render(width)[0],
     wasUnsubscribed: () => unsubscribed,
     inputHandlers,
     feed: (data) => { for (const handler of inputHandlers) handler(data); },
@@ -523,7 +548,7 @@ test("footer hides subagent indicators but retains unrelated status and metrics"
       assert(line.includes(expected), `Missing footer content: ${expected}`);
     }
     for (const width of [1, 20, 80, 300]) {
-      assert(visibleWidth(footer.render(width)[0].replace(MARKER, "")) <= width);
+      assert(visibleWidth(footer.render(width)[0]) <= width);
     }
     assert.equal(f.listeners.get("subagents:created"), undefined, "footer does not track subagent activity");
     assert.equal(f.listeners.get(HIDE_TRANSIENT_OVERLAYS_EVENT)?.size, 1);
@@ -795,11 +820,14 @@ test("a pinned panel follows real SDK resize layout and widens for new model usa
   } finally { mounted.footer.dispose(); }
 });
 
-test("usage preferred width shares one fresh spend walk across a three-popover native frame", async () => {
-  const entries = [];
-  let entryReads = 0;
+test("usage preferred width shares one fresh spend read across a three-popover native frame", async () => {
+  const manager = SessionManager.inMemory("/fixture/project");
+  let entryReads = 0, fullWalks = 0;
   const mounted = await mountFooter({ mode: "fullscreen", sessionManager: {
-    getEntries() { entryReads++; return entries; },
+    getSessionId: () => manager.getSessionId(), getLeafId: () => manager.getLeafId(),
+    getEntryCount: () => manager.getEntryCount(),
+    getEntry(id) { entryReads++; return manager.getEntry(id); },
+    getEntries() { entryReads++; fullWalks++; return manager.getEntries(); },
   } });
   const extra = [];
   const addPanel = (preferredWidth) => {
@@ -814,16 +842,23 @@ test("usage preferred width shares one fresh spend walk across a three-popover n
   };
   try {
     mounted.clickFooter();
-    addPanel(30); addPanel(44);
     const usagePanel = mounted.visible().at(-1);
+    addPanel(30); addPanel(44);
     const panels = [{ component: usagePanel.component, options: usagePanel.options }, ...extra];
-    // Pi renders the root footer before compositeOverlays. Its one walk serves
-    // footer totals, all three width getters, and their component renders.
+    // Pi renders the root footer before compositeOverlays. One public append
+    // per frame forces fresh work; its single entry read serves footer totals,
+    // all three width getters and their component renders. Unchanged frames
+    // must not refresh merely because layout asks for the preferred width.
+    assert.equal(fullWalks, 1, "the first layout initializes accounting with one full-session walk");
     entryReads = 0;
     for (let frame = 0; frame < 4; frame++) {
+      manager.appendCustomEntry("ui-frame-fixture", { frame });
       const before = entryReads;
       mounted.paintOverlay();
-      assert.equal(entryReads, before + 1, "one getEntries/collectSpend per native frame, not per panel getter");
+      assert.equal(entryReads, before + 1, "one fresh entry read per changed native frame, not per panel getter");
+      mounted.paintOverlay();
+      assert.equal(entryReads, before + 1, "an unchanged native frame shares the cached spend");
+      assert.equal(fullWalks, 1, "new entries are incremental, never historical rescans");
     }
     const initialWidth = mounted.bounds().width;
 
@@ -837,9 +872,10 @@ test("usage preferred width shares one fresh spend walk across a three-popover n
     assert.equal(entryReads, beforeStreaming, "streaming probes reuse the current frame snapshot");
 
     const longModel = "model-added-after-the-last-frame-".repeat(3);
-    entries.push({ type: "message", message: { role: "assistant", provider: "fixture", model: longModel,
-      usage: usage(10, 1, 0, 0, 1) } });
-    await mounted.f.emit("message_end", { message: entries.at(-1).message });
+    const message = { role: "assistant", provider: "fixture", api: "openai-responses", model: longModel,
+      content: [], stopReason: "stop", timestamp: 1, usage: usage(10, 1, 0, 0, 1) };
+    manager.appendMessage(message);
+    await mounted.f.emit("message_end", { message });
     const beforeFirstWidth = entryReads;
     const grownWidth = usagePanel.options.width;
     assert.equal(entryReads, beforeFirstWidth + 1, "a width getter first after finalization refreshes the snapshot");
@@ -847,10 +883,13 @@ test("usage preferred width shares one fresh spend walk across a three-popover n
     assert(usagePanel.component.render(grownWidth).length > 0, "the already fresh width paints immediately");
     assert.equal(entryReads, beforeFirstWidth + 1, "the first paint shares the width getter's work");
 
-    entries.length = 0;
+    assert.equal(fullWalks, 1, "finalized usage also avoids another full-session walk");
+    assert(mounted.line().includes("$1.000"));
+    manager.resetLeaf();
     await mounted.f.emit("session_tree");
-    const shrunkenWidth = usagePanel.options.width;
-    assert(shrunkenWidth < grownWidth, "an invalidated snapshot can shrink without remounting");
+    assert.equal(usagePanel.options.width, grownWidth, "tree navigation keeps abandoned-branch spend and its model row");
+    assert.equal(entryReads, beforeFirstWidth + 1, "tree navigation does not reread unchanged session spend");
+    assert(mounted.line().includes("$1.000"), "the all-session total cannot regress with the active branch");
     mounted.tui.terminal.columns = 20;
     mounted.paintOverlay();
     assert.equal(mounted.bounds().width, 20, "resize still clamps the shared live width");
@@ -1287,23 +1326,66 @@ test("the renderer consumes mouse and focus reports before extension listeners",
   assert.deepEqual(seen, ["a", "\u001b[200~x\u001b[201~"]);
 });
 
-test("the breakdown and the bottom-row marker are regular/fullscreen exclusive", async () => {
-  const regular = await mountFooter({ entries: spendEntries });
+test("breakdown is fullscreen-only and bottom padding uses this render's footer row without markers or shared-array mutation", async () => {
+  let shared, renderRoot = (width, footer) => (shared = Object.freeze(["body", footer.render(width)[0]]));
+  const regular = await mountFooter({ entries: spendEntries, renderRoot: (width, footer) => renderRoot(width, footer) });
   try {
     // Mouse reports never reach a regular-mode footer, but a host that sent one
     // must not get an overlay composited into the lines backing scrollback.
     regular.hover();
     regular.clickFooter();
     assert.deepEqual(regular.visible(), []);
-    assert(regular.footer.render(80)[0].includes(MARKER), "the padding shim needs its marker");
+    assert(!regular.footer.render(80)[0].includes(MARKER), "regular rows never emit an in-band padding marker");
+    regular.tui.terminal.rows = 6;
+    const padded = regular.tui.render(80);
+    assert.deepEqual(padded, ["body", ...Array(4).fill(" ".repeat(80)), shared[1]]);
+    assert.equal(shared.length, 2, "the frozen host buffer is not padded in place");
+    assert.notEqual(padded, shared);
+    const oldPaint = Object.freeze([regular.footer.render(80)[0]]);
+    renderRoot = () => oldPaint;
+    assert.equal(regular.tui.render(80), oldPaint, "a cached row without a same-render footer call cannot authorize padding");
+    renderRoot = (width, footer) => (shared = Object.freeze([footer.render(width)[0], "tail"]));
+    assert.equal(regular.tui.render(80), shared, "a non-last footer is not padded or copied");
+    renderRoot = () => (shared = Object.freeze([`literal${MARKER}${MARKER}`, "tail"]));
+    assert.equal(regular.tui.render(80), shared, "retired marker spellings are ordinary content, never a scan trigger");
+    let indexedReads = 0;
+    renderRoot = (width, footer) => {
+      shared = new Proxy(Object.freeze([...Array(10000).fill("history"), footer.render(width)[0]]), {
+        get(target, key, receiver) {
+          if (typeof key === "string" && /^\d+$/.test(key)) indexedReads++;
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      return shared;
+    };
+    assert.equal(regular.tui.render(80), shared, "long history needs neither padding nor a transcript-sized copy");
+    assert.equal(indexedReads, 1, "only the last history row is inspected");
+    let nested = false, inner;
+    renderRoot = (width, footer) => {
+      const row = footer.render(width)[0];
+      if (!nested) {
+        nested = true;
+        try { inner = regular.tui.render(width); } finally { nested = false; }
+      }
+      return Object.freeze([nested ? "inner" : "outer", row]);
+    };
+    const outer = regular.tui.render(80);
+    assert.equal(inner.length, 6); assert.equal(inner[0], "inner");
+    assert.equal(outer.length, 6); assert.equal(outer[0], "outer", "nested renders restore the outer row observation");
+    renderRoot = (width, footer) => { footer.render(width); throw new Error("synthetic-render"); };
+    assert.throws(() => regular.tui.render(80), /synthetic-render/);
+    renderRoot = () => oldPaint;
+    assert.equal(regular.tui.render(80), oldPaint, "throwing renders restore the token in finally");
   } finally {
     regular.footer.dispose();
   }
-  const full = await mountFooter({ mode: "fullscreen", entries: spendEntries });
+  const full = await mountFooter({ mode: "fullscreen", entries: spendEntries,
+    renderRoot: (width, footer) => (shared = Object.freeze(["body", footer.render(width)[0]])) });
   try {
-    // The alternate screen lays the dock out from its layout root and never
-    // calls the wrapped render(), so an unstripped marker would be printed.
-    assert(!full.footer.render(80)[0].includes("pi-status-footer"));
+    assert(!full.footer.render(80)[0].includes(MARKER));
+    assert.equal(full.tui.render(80), shared, "fullscreen uses its native dock and never pads or copies the root buffer");
+    full.clickFooter();
+    assert.equal(full.visible().length, 1, "the usage breakdown remains available in fullscreen");
   } finally {
     full.footer.dispose();
   }

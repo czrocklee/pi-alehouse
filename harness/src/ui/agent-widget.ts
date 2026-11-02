@@ -1,13 +1,13 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { terminal, type RunView } from "../core/contracts.js";
-import { reported } from "../core/usage-ledger.js";
-import { profileLabel } from "../tools/tool-names.js";
-import type { ActivityObservationSource } from "../runtime/activity-observer.js";
-import type { ActiveTool, GenerationPreview } from "../runtime/activity-types.js";
+import { terminal, type RunView } from "../core/contracts.ts";
+import { reported } from "../core/usage-ledger.ts";
+import { profileLabel } from "../tools/tool-names.ts";
+import type { ActivityHistoryState, ActivityObservationSource, ChildActivityObservation, ChildActivitySnapshot } from "../runtime/activity-observer.ts";
+import type { ActiveTool, GenerationPreview } from "../runtime/activity-types.ts";
 import { renderActivity, formatContextPercent, formatCost, formatMs, formatTurns, GLYPHS,
-  withoutBreaks, type Theme } from "./format.js";
-import { clipPlainText, singleLineText } from "./text.js";
-import { activityPresentation, runPresentation } from "./run-presentation.js";
+  withoutBreaks, type Theme } from "./format.ts";
+import { clipPlainText, singleLineText } from "./text.ts";
+import { activityPresentation, runPresentation } from "./run-presentation.ts";
 
 const BRANCH = "├─", LAST = "└─", TRUNK = "│  ";
 const WIDGET_TITLE = "Subagents";
@@ -406,9 +406,12 @@ export interface AgentDetail {
   live: GenerationPreview & { active_tools: ActiveTool[]; tool_uses: number };
   cwd: string;
   entries(): unknown[] | undefined;
+  historyState?(): ActivityHistoryState | undefined;
   inFlight(): unknown;
 }
 interface WidgetController {
+  /** Presentation hint only. Commands and explicit inspection remain fresh. */
+  readonly presentationRevision?: number;
   list(options: { include_released?: boolean }): RunView[];
   stats(): { resident: number; parent_error?: string; internal_error?: string; cleanup_uncertain: boolean };
 }
@@ -424,7 +427,7 @@ interface WidgetMount {
 interface WidgetInstance {
   tui: WidgetTui;
   page: number;
-  paint?: { frame: WidgetFrame; columns: number; rows?: number };
+  paint?: { frame: WidgetFrame; columns: number; rows?: number; width: number; theme: Theme };
 }
 /**
  * The main-screen display: a tree above the editor, and nothing in the footer
@@ -439,6 +442,15 @@ export class HarnessWidget {
   private timer?: ReturnType<typeof setInterval>;
   private repaint?: ReturnType<typeof setTimeout>;
   private snapshot?: { runs: WidgetRun[]; owner: WidgetOwner };
+  private sampled?: { runs: WidgetRun[]; owner: WidgetOwner };
+  private sampledAt = 0;
+  private revision?: number;
+  private rosterEpoch = 0;
+  private detailIds: string[] = [];
+  private detailCache?: { revision: number; epoch: number; at: number; views: RunView[] };
+  private version = 0;
+  private versionKey: unknown[] = [];
+  private readonly liveCache = new Map<string, { child: ChildActivityObservation; revision: number; live: ChildActivitySnapshot }>();
   private expanded = false;
   private beerMugs = false;
   private open?: (agent_id: string) => void;
@@ -458,6 +470,8 @@ export class HarnessWidget {
     this.detachMount();
     this.ui = ui;
     this.snapshot = undefined;
+    this.sampled = undefined;
+    this.detailCache = undefined;
     this.lastMode = undefined;
     this.expanded = false;
   }
@@ -489,16 +503,60 @@ export class HarnessWidget {
    * as unknown would dock a pane the alternate screen should float. */
   tuiMode(): string | undefined { return this.mount?.instance?.tui.mode ?? this.lastMode; }
   /** Resident Agents plus released failures still in their diagnostic linger. */
-  agents(): AgentDetail[] {
-    return this.views().map((view) => {
+  agents(): AgentDetail[] { return this.details(this.views()); }
+  /** Pane animation reads detached presentation data, never admission evidence. */
+  presentationAgents(): AgentDetail[] {
+    const revision = this.controller.presentationRevision;
+    if (revision === undefined) return this.agents();
+    let cached = this.detailCache;
+    if (!cached || cached.revision !== revision || cached.epoch !== this.rosterEpoch) {
+      const views = this.views();
+      cached = this.detailCache ?? { revision, epoch: this.rosterEpoch, at: performance.now(), views };
+    }
+    const delta = Math.max(0, performance.now() - cached.at);
+    return this.details(cached.views.map((view) => terminal(view.status) ? view : {
+      ...view, elapsed_ms: view.elapsed_ms + delta,
+      ...(view.turn_elapsed_ms === undefined ? {} : { turn_elapsed_ms: view.turn_elapsed_ms + delta }),
+      ...(view.execution_elapsed_ms === undefined || view.execution_exited ? {} : { execution_elapsed_ms: view.execution_elapsed_ms + delta }),
+      ...(view.drain ? { drain: { ...view.drain, elapsed_ms: view.drain.elapsed_ms + delta } } : {}),
+    }));
+  }
+  /** Cheap pane wake key. Undefined asks structural/legacy sources to poll fresh. */
+  presentationVersion(): number | undefined {
+    const revision = this.controller.presentationRevision;
+    if (revision === undefined) return undefined;
+    const key: unknown[] = [revision, this.rosterEpoch];
+    for (const id of this.detailIds) {
+      const child = this.activities.get(id);
+      const history = child?.historyState?.();
+      if (child && (child.presentationRevision === undefined || !history)) return undefined;
+      key.push(id, child, child?.presentationRevision, history);
+    }
+    if (key.length !== this.versionKey.length || key.some((part, i) => part !== this.versionKey[i])) {
+      this.versionKey = key; this.version++;
+    }
+    return this.version;
+  }
+  private details(views: RunView[]): AgentDetail[] {
+    this.detailIds = views.map((view) => view.agent_id);
+    return views.map((view) => {
       const child = this.activities.get(view.agent_id);
-      return { agent_id: view.agent_id, view,
-        live: child?.snapshot() ?? { active_tools: [], tool_uses: 0, preview: "" },
+      return { agent_id: view.agent_id, view, live: this.live(view.agent_id),
         cwd: child?.workspace ?? view.workspace?.cwd ?? view.effective_settings.cwd,
-        // A pane may retain these thunks while a queued Agent has no child yet.
+        // Late binding follows queued → bound and retains released diagnostics.
         entries: () => this.activities.get(view.agent_id)?.entries(),
+        historyState: () => this.activities.get(view.agent_id)?.historyState?.(),
         inFlight: () => this.activities.get(view.agent_id)?.inFlight() };
     });
+  }
+  private live(id: string): ChildActivitySnapshot {
+    const child = this.activities.get(id);
+    if (!child) { this.liveCache.delete(id); return { active_tools: [], tool_uses: 0, preview: "" }; }
+    const revision = child.presentationRevision, cached = this.liveCache.get(id);
+    if (revision !== undefined && cached?.child === child && cached.revision === revision) return cached.live;
+    const snapshot = child.snapshot(), live = { ...snapshot, active_tools: snapshot.active_tools.map((tool) => ({ ...tool })) };
+    if (revision !== undefined) this.liveCache.set(id, { child, revision, live });
+    return live;
   }
   /**
    * Any delegation tool may have changed the picture; `update` owns the loop and
@@ -510,6 +568,7 @@ export class HarnessWidget {
    */
   wake(): void { this.update(); }
   onTurnStart(): void {
+    this.rosterEpoch++;
     for (const age of this.age.values()) age.turns = Math.min(age.turns + 1, HarnessWidget.LINGER.error);
     this.update();
   }
@@ -523,21 +582,30 @@ export class HarnessWidget {
     return (this.age.get(agent_id)?.turns ?? 0) < limit;
   }
   private project(view: RunView): WidgetRun {
-    const live = this.activities.get(view.agent_id)?.snapshot() ?? { active_tools: [], tool_uses: 0, preview: "" };
+    const live = this.live(view.agent_id);
     return { agent_id: view.agent_id, run_id: view.run_id, resident: view.resident, name: view.name, profile: view.effective_settings.profile,
       difficulty: view.effective_settings.difficulty, model: view.effective_settings.model,
       effort: view.effective_settings.thinking,
       description: view.description, status: view.status, finishing: view.finalization_pending, execution_exited: view.execution_exited,
       turns: view.turns, max_turns: view.max_turns, elapsed_ms: view.elapsed_ms, turn_elapsed_ms: view.turn_elapsed_ms,
-      cost: reported(view.usage, "cost"), cost_partial: view.usage?.partial.includes("cost"), runtime: view.runtime, drain: view.drain,
+      cost: reported(view.usage, "cost"), cost_partial: view.usage?.partial.includes("cost"), runtime: view.runtime ? { ...view.runtime, context: view.runtime.context ? { ...view.runtime.context } : undefined } : undefined,
+      drain: view.drain ? { ...view.drain } : undefined,
       question: !!view.outcome?.question, limit_reached: !!view.outcome?.limit_reached,
       error: view.outcome?.error, reason: view.outcome?.reason, pending_messages: view.pending_messages,
       has_run_warnings: view.cleanup_errors.length > 0, ...live };
   }
   private views(): RunView[] {
+    // Always resample lease health on fresh reads, including Stop/inspection.
+    // Retire the wake hint even without an Owner revision edge; the same fresh
+    // detached batch becomes the pane's next presentation baseline below.
+    this.detailCache = undefined;
+    this.versionKey = [];
+    const revision = this.controller.presentationRevision;
     const all = this.controller.list({ include_released: true });
+    const at = performance.now();
     const known = new Set(all.map((view) => view.agent_id));
     for (const id of this.age.keys()) if (!known.has(id)) this.age.delete(id);
+    for (const id of this.liveCache.keys()) if (!known.has(id)) this.liveCache.delete(id);
     for (const view of all) {
       if (!terminal(view.status)) this.age.delete(view.agent_id);
       else if (this.age.get(view.agent_id)?.run_id !== view.run_id) {
@@ -547,6 +615,7 @@ export class HarnessWidget {
     }
     const views = all.filter((view) => view.resident ||
       ((view.status === "failed" || view.outcome?.status === "failed") && this.lingering(view.agent_id, "failed")));
+    this.detailCache = revision === undefined ? undefined : { revision, epoch: this.rosterEpoch, at, views };
     // Report presentation retention without owning observers or SDK sessions.
     // Released failure transcripts survive only their diagnostic linger.
     this.onVisibleAgents?.(new Set(views.map((view) => view.agent_id)));
@@ -570,7 +639,10 @@ export class HarnessWidget {
     }
     let snapshot: { runs: WidgetRun[]; owner: WidgetOwner };
     // A closed or failing owner must not take the parent UI down with it.
-    try { snapshot = structuredClone(this.rows()); } catch { this.clear(); return; }
+    try { snapshot = this.rows(); } catch { this.clear(); return; }
+    this.revision = this.controller.presentationRevision;
+    this.sampledAt = performance.now();
+    this.sampled = snapshot;
     this.snapshot = snapshot;
     if (this.mount?.instance) this.mount.instance.paint = undefined;
     // Best-effort UI coordination uses this projection, including hidden idle
@@ -630,7 +702,7 @@ export class HarnessWidget {
           maxLines: lineBudget(tui.terminal.rows), page: instance.page, disclosure: tui.mode === "fullscreen", beerMugs: this.beerMugs,
           width: width || tui.terminal.columns, theme, shouldShowFinished: (id, status) => this.lingering(id, status) });
         instance.page = frame.pagination?.page ?? 0;
-        instance.paint = { frame, columns: tui.terminal.columns, rows: tui.terminal.rows };
+        instance.paint = { frame, columns: tui.terminal.columns, rows: tui.terminal.rows, width: width || tui.terminal.columns, theme };
         return frame.lines;
       },
       // Pi normalizes `y` to this component. Regular mode leaves the mouse to
@@ -643,7 +715,10 @@ export class HarnessWidget {
         const { frame } = paint;
         if (event.y === 0 && event.x < (frame.headingWidth ?? 0)) {
           // Explicit inspection refreshes presentation, never model-facing ACKs.
-          try { this.snapshot = structuredClone(this.rows()); } catch { this.clear(); return undefined; }
+          try {
+            this.snapshot = this.rows(); this.sampled = this.snapshot;
+            this.sampledAt = performance.now(); this.revision = this.controller.presentationRevision;
+          } catch { this.clear(); return undefined; }
           if (!this.snapshot.runs.length && !this.snapshot.owner.blocked && !this.snapshot.owner.resident) {
             this.clear(); return undefined;
           }
@@ -690,8 +765,36 @@ export class HarnessWidget {
   }
 
   private updateFromTimer(refresh = false): void {
-    try { this.update(refresh); }
-    catch { /* The failing setter/render request retired its own mount before throwing. */ }
+    try {
+      if (refresh || !this.sampled || this.controller.presentationRevision === undefined ||
+          this.controller.presentationRevision !== this.revision) { this.update(refresh); return; }
+      // No list/stats/clones on an animation tick. Clocks and activity have
+      // independent invalidation; an unchanged Owner revision cannot hide them.
+      const delta = Math.max(0, performance.now() - this.sampledAt);
+      this.snapshot = { owner: this.sampled.owner, runs: this.sampled.runs.map((run) => {
+        const live = this.live(run.agent_id);
+        return { ...run, ...live,
+          // Omitted live fields mean cleared, not inherited from the sampled row.
+          thinking: live.thinking, channel: live.channel, preparing_tool: live.preparing_tool,
+          elapsed_ms: run.elapsed_ms + (active(run) ? delta : 0),
+          ...(run.turn_elapsed_ms === undefined ? {} : { turn_elapsed_ms: run.turn_elapsed_ms + delta }),
+          ...(run.drain ? { drain: { ...run.drain, elapsed_ms: run.drain.elapsed_ms + delta } } : {}),
+        };
+      }) };
+      this.frame++;
+      const mount = this.mount, instance = mount?.instance;
+      if (!mount || !instance || mount.phase !== "ready") return;
+      const paint = instance.paint;
+      if (paint) {
+        const next = renderWidget({ ...this.snapshot, spinnerFrame: this.frame,
+          expanded: this.expanded && instance.tui.mode === "fullscreen", maxLines: lineBudget(instance.tui.terminal.rows),
+          page: instance.page, disclosure: instance.tui.mode === "fullscreen", beerMugs: this.beerMugs,
+          width: paint.width, theme: paint.theme, shouldShowFinished: (id, status) => this.lingering(id, status) });
+        if (next.lines.length === paint.frame.lines.length && next.lines.every((line, i) => line === paint.frame.lines[i])) return;
+      }
+      instance.paint = undefined;
+      try { instance.tui.requestRender(); } catch (error) { this.retryMount(mount); throw error; }
+    } catch { /* The failing setter/render request retired its own mount before throwing. */ }
   }
 
   /** Retire before host removal/rebinding, including when that host throws. */
@@ -709,6 +812,7 @@ export class HarnessWidget {
   private clear(): void {
     const mount = this.detachMount();
     this.snapshot = undefined;
+    this.sampled = undefined;
     this.expanded = false;
     if (mount) this.ui?.setWidget?.("harness-agents", undefined);
   }
@@ -723,6 +827,10 @@ export class HarnessWidget {
       this.rosterUpdate = undefined;
       this.lastMode = undefined;
       this.age.clear();
+      this.liveCache.clear();
+      this.detailCache = undefined;
+      this.detailIds = [];
+      this.versionKey = [];
     }
   }
 }

@@ -7,6 +7,7 @@ import { applyProfileDisplayPatch } from "./profile-display-patch.mjs";
 import { applyNativeGitPatch } from "./native-git-patch.mjs";
 import { applyRedirectArgvPatch } from "./redirect-argv-patch.mjs";
 import { applyWorkspacePolicyPatch } from "./workspace-policy-patch.mjs";
+import { applyPermissionPerformancePatch } from "./performance-patch.mjs";
 const root = process.argv[2];
 assert(root, "Usage: node apply-patch.mjs PACKAGE_ROOT");
 assert.equal(JSON.parse(readFileSync(join(root, "package.json"))).version, "32.0.3");
@@ -371,6 +372,7 @@ applyNativeGitPatch(root, patch);
 applyRedirectArgvPatch(root, patch);
 applyWorkspacePolicyPatch(root);
 applyProfileDisplayPatch(root, patch);
+applyPermissionPerformancePatch(root);
 // Dynamic cd targets (including ~) retain upstream's unknown-base handling.
 // Do not infer HOME stability from an AST: arbitrary earlier programs can
 // change the environment or the directory named by a later shell expansion.

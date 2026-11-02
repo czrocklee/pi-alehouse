@@ -2,6 +2,7 @@
 import { strict as assert } from "node:assert";
 import { realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { synchronousPermissionSample } from "./managed-permission-snapshot";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { PATH_SURFACES } from "#src/access-intent/path-surfaces";
 import type { ForwardedAccessIntent } from "#src/authority/permission-forwarding";
@@ -55,8 +56,11 @@ export function assertWorkspacePolicy(binding: WorkspacePolicyBinding): void {
   sessionId(binding.sessionId);
   assert(registry().entries.get(binding.sessionId) === binding && Object.isFrozen(binding),
     "Workspace policy binding is stale or forged");
-  assert(realpathSync(binding.cwd) === binding.canonicalCwd && realpathSync(binding.source_cwd) === binding.canonicalSourceCwd &&
-    realpathSync(binding.checkout_root) === binding.canonicalCheckoutRoot && realpathSync(binding.source_root) === binding.canonicalSourceRoot,
+  // Registry/tombstone checks above are NEVER cached. Realpaths can share a
+  // sample only inside a synchronous producer, never across approval awaits.
+  const canonical = (path: string) => synchronousPermissionSample("workspace-realpath", path, () => realpathSync(path));
+  assert(canonical(binding.cwd) === binding.canonicalCwd && canonical(binding.source_cwd) === binding.canonicalSourceCwd &&
+    canonical(binding.checkout_root) === binding.canonicalCheckoutRoot && canonical(binding.source_root) === binding.canonicalSourceRoot,
     "Workspace policy directory binding changed");
 }
 

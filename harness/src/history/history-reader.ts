@@ -2,13 +2,13 @@ import type { FileEntry, SessionManager } from "@earendil-works/pi-coding-agent"
 import { constants } from "node:fs";
 import { open, realpath } from "node:fs/promises";
 import { isAbsolute, sep } from "node:path";
-import type { HistoryRef, Outcome, Output, ResultRef, RunIdentity } from "../core/contracts.js";
-import type { ValidationReceipt } from "../core/dispatch.js";
-import { HarnessError } from "../core/ports.js";
-import { describeResult, isId } from "../core/result-text.js";
-import { normalizeLedger, type UsageLedger } from "../core/usage-ledger.js";
+import type { HistoryRef, Outcome, Output, ResultRef, RunIdentity } from "../core/contracts.ts";
+import type { ValidationReceipt } from "../core/dispatch.ts";
+import { HarnessError } from "../core/ports.ts";
+import { describeResult, isId } from "../core/result-text.ts";
+import { normalizeLedger, type UsageLedger } from "../core/usage-ledger.ts";
 import { dataOf, entryId, finalMessage, historyTypes, invalidHistory, sameRun, textOf,
-  receiptOf, validationReceiptError, validIdentity, validModelStopReason, validRef, validRouting, type HistoricalRouting } from "./run-journal.js";
+  receiptOf, validationReceiptError, validIdentity, validModelStopReason, validRef, validRouting, type HistoricalRouting } from "./run-journal.ts";
 
 export interface HistoricalRun {
   state: "recorded" | "unknown" | "unavailable";

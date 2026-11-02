@@ -204,8 +204,8 @@ const callbackFaults = [
   ["inputEntered", "inputEntered", () => true],
   ["turnStart", "turnStart", () => true],
   ["turnEnd", "turnEnd", () => true],
-  ["output-start", "output", (value) => value.text === ""],
-  ["output-delta", "output", (value) => value.text === "CALLBACK_"],
+  ["output-start", "outputDelta", (value) => value.type === "reset"],
+  ["output-delta", "outputDelta", (value) => value.type === "append" && value.text === "CALLBACK_"],
   ["output-end", "output", (value) => value.text === "CALLBACK_FINAL"],
 ];
 for (const [point, method, matches] of callbackFaults) for (const persistent of [false, true]) {
@@ -218,14 +218,17 @@ for (const [point, method, matches] of callbackFaults) for (const persistent of 
       listeners++; const off = subscribe(listener);
       return () => { listeners--; off(); };
     });
-    t.mock.method(f.port, "run", (prompt, callbacks) => original(prompt, { ...callbacks,
-      [method](...args) {
-        if (matches(...args) && (!failures || persistent)) {
-          failures++; throw new Error(`CONTROL_CALLBACK_FAILED:${point}`);
-        }
-        return callbacks[method](...args);
-      },
-    }));
+    t.mock.method(f.port, "run", (prompt, callbacks) => {
+      assert.equal(typeof callbacks.outputDelta, "function", "the production Owner supplies the incremental seam");
+      return original(prompt, { ...callbacks,
+        [method](...args) {
+          if (matches(...args) && (!failures || persistent)) {
+            failures++; throw new Error(`CONTROL_CALLBACK_FAILED:${point}`);
+          }
+          return callbacks[method](...args);
+        },
+      });
+    });
     const run = await f.submit(f.task("Finish once")), result = await f.end(run);
     assert(failures > 0, "the actual SDK event must reach the selected callback");
     assert.equal(result.status, "failed");
@@ -244,6 +247,31 @@ for (const [point, method, matches] of callbackFaults) for (const persistent of 
     assert.equal(f.controller.drainUsage(), undefined);
   });
 }
+
+test("real SDK: explicit legacy-only observer still receives cumulative snapshots without changing the production seam", { timeout: 10000 }, async (t) => {
+  const fetch = t.mock.method(globalThis, "fetch", () => { assert.fail("legacy callback fixture attempted network IO"); });
+  const f = await fixture(t, async () => ({ text: "CALLBACK_FINAL", deltas: ["CALLBACK_", "FINAL"] }));
+  const original = f.port.run.bind(f.port), observed = [];
+  t.mock.method(f.port, "run", (prompt, callbacks) => {
+    // This one compatibility test deliberately models a non-incremental port
+    // consumer. The fault matrix above must retain the production Owner seam.
+    const { outputDelta, ...legacy } = callbacks;
+    assert.equal(typeof outputDelta, "function"); assert.equal(Object.hasOwn(legacy, "outputDelta"), false);
+    return original(prompt, { ...legacy,
+      output(value) { observed.push({ ...value }); return callbacks.output(value); },
+    });
+  });
+  const run = await f.submit(f.task("Finish once")), result = await f.end(run);
+  assert.deepEqual(observed.map(value => value.text), ["", "CALLBACK_", "CALLBACK_FINAL", "CALLBACK_FINAL"]);
+  assert(observed.every(value => value.revision === 1 && value.total_chars === value.text.length && !value.truncated));
+  assert.equal(result.status, "completed"); assert.equal(result.resumable, true);
+  assert.equal(result.execution_exited, true); assert.equal(f.session.isIdle, true);
+  assert.deepEqual(result.cleanup_errors, []); assert.equal(result.usage.total.cost, 1);
+  assert.equal(f.controller.getResult(run.run_id).text, "CALLBACK_FINAL");
+  assert.equal((await f.historical(run)).output.text, "CALLBACK_FINAL");
+  assert.equal(f.requests.length, 1); assert.equal(f.controller.drainUsage().total.cost, 1);
+  assert.equal(f.controller.drainUsage(), undefined); assert.equal(fetch.mock.callCount(), 0);
+});
 
 for (const rejects of [false, true]) for (const revokeThrows of [false, true]) test(`real SDK: opaque callback failure retains ownership through its tracked abort (rejects=${rejects}, revokeThrows=${revokeThrows})`, { timeout: 10000 }, async (t) => {
   const released = latch(), abortEntered = latch(), order = [];

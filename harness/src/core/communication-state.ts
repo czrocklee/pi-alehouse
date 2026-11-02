@@ -1,12 +1,12 @@
-import { COMMUNICATION_LIMITS, alertAdmissionBudget, modelTaskStatus, visibleCommunicationReason, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.js";
-import type { CommunicationReferences, CommunicationSnapshot } from "./communication-snapshot.js";
-import { terminal, type Phase, type RunStatus, type WorkspaceInfo, type WorkspaceMode } from "./contracts.js";
-import { taskMetadata, type TaskMetadata } from "./task-metadata.js";
-import type { WorkspaceDetails, WorkspaceRecovery } from "./workspace-metadata.js";
-import type { CoreObservationReason } from "./observation-scheduler.js";
-import { HarnessError, type RepeatedManagedBlock } from "./ports.js";
-import { boundedOutput } from "./result-text.js";
-import { questionId, type QuestionId } from "./question-id.js";
+import { COMMUNICATION_LIMITS, alertAdmissionBudget, modelTaskStatus, visibleCommunicationReason, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.ts";
+import type { CommunicationReferences, CommunicationSnapshot } from "./communication-snapshot.ts";
+import { terminal, type Phase, type RunStatus, type WorkspaceInfo, type WorkspaceMode } from "./contracts.ts";
+import { taskMetadata, type TaskMetadata } from "./task-metadata.ts";
+import type { WorkspaceDetails, WorkspaceRecovery } from "./workspace-metadata.ts";
+import type { CoreObservationReason } from "./observation-scheduler.ts";
+import { HarnessError, type RepeatedManagedBlock } from "./ports.ts";
+import { boundedOutput } from "./result-text.ts";
+import { questionId, type QuestionId } from "./question-id.ts";
 
 /** Structural views of ORIGINAL Owner objects, not another set of records.
  * The production controller satisfies these interfaces directly. These
@@ -165,6 +165,21 @@ export function taskOrdinal(run: CommunicationRun, runs: readonly CommunicationR
   return 1 + runs.filter((candidate) => candidate.record.agent_id === run.record.agent_id &&
     candidate.record.enqueue_sequence < run.record.enqueue_sequence).length;
 }
+/** One ephemeral index per projection/validation. Keys are original objects,
+ * never names/IDs supplied by a snapshot. Accept unordered structural inputs;
+ * Owner storage is already enqueue-ordered and takes the linear fast path. */
+export function taskOrdinals<Run extends CommunicationRun>(runs: readonly Run[]): ReadonlyMap<Run, number> {
+  const ordered = runs.every((run, index) => index === 0 || runs[index - 1]!.record.enqueue_sequence <= run.record.enqueue_sequence) ?
+    runs : [...runs].sort((a, b) => a.record.enqueue_sequence - b.record.enqueue_sequence);
+  const counts = new Map<string, { count: number; sequence: number; ordinal: number }>(), ordinals = new Map<Run, number>();
+  for (const run of ordered) {
+    const { agent_id, enqueue_sequence } = run.record, previous = counts.get(agent_id);
+    const ordinal = previous?.sequence === enqueue_sequence ? previous.ordinal : (previous?.count ?? 0) + 1;
+    counts.set(agent_id, { count: (previous?.count ?? 0) + 1, sequence: enqueue_sequence, ordinal });
+    ordinals.set(run, ordinal);
+  }
+  return ordinals;
+}
 export function finishedCandidates<Run extends CommunicationRun>(runs: readonly Run[]): Run[] {
   const candidates = runs.filter((run) => isCommunicationSettled(run) && !run.finished_presented);
   if (candidates.some((run) => !Number.isSafeInteger(run.settled_seq) || run.settled_seq! <= 0)) {
@@ -239,11 +254,11 @@ function invalidCommit(): never { throw new HarnessError("INVALID_COMMUNICATION_
 const sameRow = (a: ThinTaskEntry, b: ThinTaskEntry): boolean =>
   a.agent === b.agent && a.task === b.task && a.status === b.status && a.wait === b.wait;
 /** Compare a projection with a KNOWN original, never discover identity from it. */
-const matchesRun = (run: CommunicationRun, row: ThinTaskEntry, runs: readonly CommunicationRun[]): boolean => {
+const matchesRun = <Run extends CommunicationRun>(run: Run, row: ThinTaskEntry, ordinals: ReadonlyMap<Run, number>): boolean => {
   const record = run.record;
   const status = record.execution_exited && !terminal(record.status) ? "finishing" :
     modelTaskStatus(record.status);
-  return record.name === row.agent && taskOrdinal(run, runs) === row.task && status === row.status;
+  return record.name === row.agent && ordinals.get(run) === row.task && status === row.status;
 };
 
 const originalMetadata = (run: CommunicationRun): TaskMetadata => taskMetadata({
@@ -305,6 +320,8 @@ export function validateCommunicationCommit<Run extends CommunicationRun>(option
   readonly currentBlocked?: string;
 }): CommunicationCommitPlan<Run> {
   const { pending, snapshot, references, envelope } = options;
+  // Recompute from authoritative retained originals, independently of capture.
+  const ordinals = taskOrdinals(options.runs);
   const data = snapshot.data;
   if (visibleCommunicationReason(data.reason) !== envelope.reason || data.alerts.length !== snapshot.alerts.length || data.finished.length !== snapshot.finished.length ||
     snapshot.targets.length !== data.tasks.length || envelope.agents.length !== snapshot.targets.length) invalidCommit();
@@ -325,8 +342,8 @@ export function validateCommunicationCommit<Run extends CommunicationRun>(option
     if (reference !== index) invalidCommit();
     const alert = snapshot.alerts[reference], projected = data.alerts[reference], shown = shownAlerts[index];
     if (!alert || seenAlerts.has(alert) || !projected || !shown || scoped[index] !== alert || alert.message !== projected.message ||
-      !options.runs.includes(alert.run) || alert.run.record.name !== projected.agent ||
-      taskOrdinal(alert.run, options.runs) !== projected.task ||
+      !ordinals.has(alert.run) || alert.run.record.name !== projected.agent ||
+      ordinals.get(alert.run) !== projected.task ||
       boundedOutput(alert.run.record.description, COMMUNICATION_LIMITS.label_units).text !== projected.label ||
       alert.source !== projected.source || projected.source !== shown.source ||
       projected.message !== shown.message || projected.label !== shown.label ||
@@ -337,8 +354,8 @@ export function validateCommunicationCommit<Run extends CommunicationRun>(option
   const boundIndices = new Map<Run, number>();
   for (const [index, run] of snapshot.targets.entries()) {
     const task = data.tasks[index]!, shown = envelope.agents[index]!;
-    if (!task || !shown || boundIndices.has(run) || !options.runs.includes(run) || task.settled !== isCommunicationSettled(run) ||
-      !matchesRun(run, task.row, options.runs) || !sameRow(task.row, shown)) invalidCommit();
+    if (!task || !shown || boundIndices.has(run) || !ordinals.has(run) || task.settled !== isCommunicationSettled(run) ||
+      !matchesRun(run, task.row, ordinals) || !sameRow(task.row, shown)) invalidCommit();
     validateMetadataProvenance(run, task, shown);
     boundIndices.set(run, index);
   }
@@ -353,8 +370,8 @@ export function validateCommunicationCommit<Run extends CommunicationRun>(option
   let nextRow = 0;
   for (const [index, candidate] of data.finished.entries()) {
     const run = snapshot.finished[index]!;
-    if (!candidate || !run || seenRuns.has(run) || !options.runs.includes(run) || !isCommunicationSettled(run) ||
-      run.finished_presented || !matchesRun(run, candidate.row, options.runs)) invalidCommit();
+    if (!candidate || !run || seenRuns.has(run) || !ordinals.has(run) || !isCommunicationSettled(run) ||
+      run.finished_presented || !matchesRun(run, candidate.row, ordinals)) invalidCommit();
     validateMetadataProvenance(run, { label: candidate.label });
     seenRuns.add(run);
     // The explicit link must identify THIS original Run, not another Agent

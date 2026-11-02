@@ -7,7 +7,7 @@ import * as piAiCompat from "@earendil-works/pi-ai/compat";
 import * as piCodingAgent from "@earendil-works/pi-coding-agent";
 import * as piTui from "@earendil-works/pi-tui";
 import * as typebox from "typebox";
-import type { HostModules } from "./host-module-bridge.js";
+import type { HostModules } from "./host-module-bridge.ts";
 
 export const researcherHostModules: HostModules = Object.freeze({
   "@earendil-works/pi-coding-agent": piCodingAgent,

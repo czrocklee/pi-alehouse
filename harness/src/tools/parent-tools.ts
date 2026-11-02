@@ -2,20 +2,20 @@ import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static, type TObject, type TSchema } from "typebox";
 import { Check } from "typebox/value";
-import type { OwnerController } from "../core/owner-controller.js";
-import { terminal, validDifficulty, type RunView, type SubmitRequest } from "../core/contracts.js";
-import { AGENT_EXISTS_RESOLUTION, COMMUNICATION_LIMITS, isModelAgentName, MODEL_AGENT_NAME_PATTERN, modelTaskStatus } from "../core/communication-envelope.js";
-import { taskMetadata } from "../core/task-metadata.js";
-import { packIndependentCommunication } from "../core/communication-packer.js";
-import type { CommunicationToolResult } from "../core/communication-snapshot.js";
-import { QUESTION_ID_PATTERN } from "../core/question-id.js";
-import { validateDispatch } from "../core/dispatch.js";
-import { HarnessError } from "../core/ports.js";
-import { digest, textSnapshot } from "../runtime/context-snapshot.js";
-import { defaultDelegation, delegationGuideline } from "../delegation.js";
-import { invalidDifficultyResolution, resolveRoute, type PresetSelection } from "../routing.js";
-import { agentRow, errorReply, taskReply, utf16Prefix, type ErrorNames } from "./replies.js";
-import { agentProfileNames, blockedDelegationToolNames, internalProfile, modelProfileNames } from "./tool-names.js";
+import type { OwnerController } from "../core/owner-controller.ts";
+import { terminal, validDifficulty, type RunView, type SubmitRequest } from "../core/contracts.ts";
+import { AGENT_EXISTS_RESOLUTION, COMMUNICATION_LIMITS, isModelAgentName, MODEL_AGENT_NAME_PATTERN, modelTaskStatus } from "../core/communication-envelope.ts";
+import { taskMetadata } from "../core/task-metadata.ts";
+import { packIndependentCommunication } from "../core/communication-packer.ts";
+import type { CommunicationToolResult } from "../core/communication-snapshot.ts";
+import { QUESTION_ID_PATTERN } from "../core/question-id.ts";
+import { validateDispatch } from "../core/dispatch.ts";
+import { HarnessError } from "../core/ports.ts";
+import { digest, textSnapshot } from "../runtime/context-snapshot.ts";
+import { defaultDelegation, delegationGuideline } from "../delegation.ts";
+import { invalidDifficultyResolution, resolveRoute, type PresetSelection } from "../routing.ts";
+import { agentRow, errorReply, taskReply, utf16Prefix, type ErrorNames } from "./replies.ts";
+import { agentProfileNames, blockedDelegationToolNames, internalProfile, modelProfileNames } from "./tool-names.ts";
 
 // The model's whole vocabulary: an Agent (a named worker with a conversation)
 // does one task at a time. Agents are addressed by name; no Run ID is model-facing.

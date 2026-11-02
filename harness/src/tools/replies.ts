@@ -1,7 +1,7 @@
-import { terminal, validDifficulty, type RunView } from "../core/contracts.js";
-import { isQueueWait, modelDispatchNotes, modelTaskStatus, type QueueWait } from "../core/communication-envelope.js";
-import { profileLabel } from "./tool-names.js";
-import { taskMetadata } from "../core/task-metadata.js";
+import { terminal, validDifficulty, type RunView } from "../core/contracts.ts";
+import { isQueueWait, modelDispatchNotes, modelTaskStatus, type QueueWait } from "../core/communication-envelope.ts";
+import { profileLabel } from "./tool-names.ts";
+import { taskMetadata } from "../core/task-metadata.ts";
 
 // Model-facing projections. The model addresses Agents by name and calls each
 // assignment a task; Run and Agent IDs, routing and diagnostics stay host-only.

@@ -66,6 +66,7 @@ const ctx = {
   getContextUsage() { totalReads++; return { ...currentUsage }; },
   sessionManager: {
     getSessionId: () => "synthetic-context-footer", getLeafId: () => entries.at(-1)?.id,
+    getEntryCount: () => entries.length, getEntry: id => entries.find(entry => entry.id === id),
     getEntries: () => entries, getBranch: () => entries,
     buildSessionProjection() { projectionReads++; return buildSessionProjection(entries, entries.at(-1)?.id); },
   },
@@ -93,7 +94,7 @@ globalThis.setInterval = (callback, milliseconds) => {
 };
 globalThis.clearInterval = (handle) => { intervals.delete(handle); };
 globalThis.fetch = () => { throw new Error("Context UI must not fetch"); };
-const plain = text => stripVTControlCharacters(text).replace("\u0000pi-status-footer\u0000", "");
+const plain = text => stripVTControlCharacters(text);
 const paintFooter = (width = 160) => {
   const lines = footer.render(width);
   assert.equal(lines.length, 1);
@@ -118,7 +119,9 @@ try {
   const beforeInitial = projectionReads;
   const reads = totalReads;
   assert.match(paintFooter(), /357k\/500k/);
-  assert.equal(totalReads, reads + 1, "one SDK total per footer paint");
+  assert.equal(totalReads, reads + 1, "first footer paint reads one SDK total");
+  for (let frame = 0; frame < 100; frame++) paintFooter();
+  assert.equal(totalReads, reads + 1, "idle animation frames reuse the SDK total");
   assert.equal(projectionReads, beforeInitial, "closed context panels do not materialize their tables");
   clickContext();
   assert.equal(live().length, 1, "context click opens exactly the context panel");

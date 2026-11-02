@@ -84,6 +84,7 @@ export default async function alehouse(pi: ExtensionAPI) {
     const { getPackageDir } = await import("@earendil-works/pi-coding-agent");
     const permissionEntry = await import(pathToFileURL(join(paths.permissionRoot, "index.ts")).href);
     permissionEntry.initializeManagedResourceProtection(support.protectionResources(paths, process.env, support.packageRoot, getPackageDir()));
+    const { loadParentWeb } = await import("./harness/src/runtime/parent-web.ts");
     const entries = [
       ["harness", join(support.packageRoot, "harness/src/extension.ts")],
       ["ui-prompt-queue", join(paths.runtime, "policy/ui-prompt-queue.ts")],
@@ -98,9 +99,14 @@ export default async function alehouse(pi: ExtensionAPI) {
       ["web-access", paths.web],
     ];
     for (const [name, path] of entries) {
-      const extension = await import(pathToFileURL(path).href);
+      // Reuse the module already checked above; a second loader must not bind
+      // an unbundled SDK graph. Factories and lifecycle registrations retain
+      // their original order, including harness shutdown before authority.
+      const extension = name === "managed-permissions" ? permissionEntry : name === "web-access"
+        ? await loadParentWeb(path) : await import(pathToFileURL(path).href);
       if (typeof extension.default !== "function") throw new Error(`Invalid factory: ${name}`);
-      await extension.default(scoped(name));
+      if (name === "harness") await extension.default(scoped(name), { permission: permissionEntry });
+      else await extension.default(scoped(name));
     }
     if (failureLatched) return; // A factory may have caught its own collision.
     const { managementToolNames } = await import("./harness/src/tools/tool-names.ts");

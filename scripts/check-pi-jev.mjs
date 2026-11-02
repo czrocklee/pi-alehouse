@@ -7,7 +7,9 @@
 // Bounded overflow regressions (257 refusals and 256 pending requests) and
 // independent review-capacity regressions (4 root / 8 subagent outstanding,
 // identical-digest coalescing, release recovery) are part of this file's
-// default hermetic run, with mocked fetch.
+// default hermetic run, with mocked fetch. Same-leaf in-place freshness and
+// synchronous audit failure regressions are offline too; no performance check
+// ever selects one of the opt-in live modes below.
 // check-pi-agents.sh runs this mode by default. collect-pi-harness-evidence.sh
 // invokes it only with --jev-only; neither its default lane nor --all includes
 // these policy tests. Only this hermetic mode is suitable for gating a rebuild,
@@ -29,12 +31,40 @@
 // instead of discovering sessions.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { createRequire, findPackageJSON } from "node:module";
+import childProcess from "node:child_process";
+import fs, { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createRequire, findPackageJSON, syncBuiltinESMExports } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { globalInstructionFixture, projectInstructionFixture } from "../harness/test/support/project-instructions.mjs";
+import { resolveFlock } from "../bin/runtime-support.mjs";
+
+// Stable before Jiti loads the rendered helper: replacing a named FS import
+// after its first read can silently miss a fault injection or leak an old mock.
+const auditIo = new Map();
+const originalAuditIo = { writeSync: fs.writeSync, closeSync: fs.closeSync, spawnSync: childProcess.spawnSync };
+for (const [name, original] of Object.entries(originalAuditIo)) {
+  const module = name === "spawnSync" ? childProcess : fs;
+  module[name] = (...args) => {
+    const active = auditIo.get(name);
+    if (!active) return Reflect.apply(original, module, args);
+    active.calls++;
+    return Reflect.apply(active.handler, module, args);
+  };
+}
+syncBuiltinESMExports();
+async function withAuditIo(name, handler, run, expectedCalls) {
+  const active = { handler, calls: 0 };
+  assert.equal(auditIo.has(name), false);
+  auditIo.set(name, active);
+  try { return await run(); }
+  finally {
+    auditIo.delete(name);
+    assert.equal(active.calls, expectedCalls, `${name}: actual fault injection hits`);
+  }
+}
+process.env.PI_HARNESS_FLOCK = resolveFlock();
 
 // Captured before the extension is imported: loading it deletes this variable
 // from the environment so gated Bash calls cannot inherit the key's location.
@@ -449,6 +479,7 @@ function registeredHarness({ withSignal = true, mode = "enforce", hasUI = true }
   const branch = [];
   const statuses = [], notices = [];
   const published = [];
+  const reads = { systemPrompt: 0, branch: 0, policy: 0 };
   const sessionId = `jev-offline-${++harnessSerial}`;
   let authorizer;
   let systemPrompt = defaultSystemPrompt();
@@ -472,12 +503,12 @@ function registeredHarness({ withSignal = true, mode = "enforce", hasUI = true }
     cwd: offlineRuntime,
     hasUI,
     ...(withSignal ? { signal: abort.signal } : {}),
-    getSystemPrompt: () => systemPrompt,
+    getSystemPrompt: () => { reads.systemPrompt++; return systemPrompt; },
     ui: { setStatus(key, value) { statuses.push([key, value]); }, notify(message, level) { notices.push({ message, level }); } },
     sessionManager: {
       getSessionId: () => sessionId,
       getHeader: () => ({}),
-      getBranch: () => branch,
+      getBranch: () => { reads.branch++; return branch; },
       getSessionFile: () => join(offlineRuntime, `${sessionId}.jsonl`),
     },
   };
@@ -534,13 +565,14 @@ function registeredHarness({ withSignal = true, mode = "enforce", hasUI = true }
   };
   const queryState = { value: "ask" };
   const query = {
-    checkPermission: () => ({
-      state: queryState.value, source: "bash", origin: "global", matchedPattern: "bash:*",
-    }),
+    checkPermission: () => {
+      reads.policy++;
+      return { state: queryState.value, source: "bash", origin: "global", matchedPattern: "bash:*" };
+    },
   };
   const log = { review(_event, detail) { reviews.push(detail); } };
   return {
-    hooks, bus, branch, ctx, abort, reviews, live, untrustedUser, call, query, queryState, statuses, published, notices,
+    hooks, bus, branch, ctx, abort, reviews, live, untrustedUser, call, query, queryState, statuses, published, notices, reads,
     setMode: (mode, includeSubagents) => {
       const request = { mode, includeSubagents, applied: false };
       bus.get("approval:set-judge")(request);
@@ -960,6 +992,90 @@ for (const variant of ["intact", "prompt-at-limit", "prompt-over-limit", "wrong-
   release();
   check("changed loaded project restrictions make review stale", await pending, { kind: "defer" });
   check("project-stale audit marks context change", h.reviews.at(-1).failureCode, "review_context_changed");
+}
+
+// These edits do NOT append entries, advance provenance, or change the leaf.
+// Reused policy objects and changed bodies must be compared to pre-await values,
+// not to the now-mutated baseline object, even when presentation stamps agree.
+for (const change of ["reused-policy-object", "historical-user", "current-action", "script-body"]) {
+  const h = registeredHarness();
+  h.live("Inspect the synthetic local project.");
+  const scriptPath = join(offlineRuntime, "jev-freshness-script.sh");
+  writeFileSync(scriptPath, "#!/bin/sh\nprintf 'before\\n'\n", { mode: 0o600 });
+  const details = h.call(`same-leaf-${change}`, change === "script-body" ? "./jev-freshness-script.sh" : "git status");
+  const countBefore = h.branch.length;
+  h.ctx.sessionManager.getLeafId = () => "same-leaf";
+  h.ctx.sessionManager.getEntryCount = () => h.branch.length;
+  const reused = h.query.checkPermission();
+  if (change === "reused-policy-object") h.query.checkPermission = () => reused;
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls++;
+    if (change === "reused-policy-object") reused.matchedPattern = "bash:git *";
+    if (change === "historical-user") h.branch[0].message.content[0].text = "Never inspect the repository.";
+    if (change === "current-action") h.branch.at(-1).message.content[0].arguments.command = "git diff";
+    if (change === "script-body") writeFileSync(scriptPath, "#!/bin/sh\nprintf 'changed\\n'\n", { mode: 0o600 });
+    return mockResponse(allowAnswers());
+  };
+  try {
+    check(`${change}: same-leaf mutation invalidates approval`, await h.authorize(details), { kind: "defer" });
+    check(`${change}: reviewer was actually called once`, fetchCalls, 1);
+    check(`${change}: branch length is unchanged`, h.branch.length, countBefore);
+    check(`${change}: audit names freshness failure`, h.reviews.at(-1).failureCode, "review_context_changed");
+  } finally { rmSync(scriptPath, { force: true }); }
+}
+
+{
+  const h = registeredHarness();
+  h.live("Inspect synthetic repository status.");
+  globalThis.fetch = async () => mockResponse(allowAnswers());
+  const before = { ...h.reads };
+  check("unchanged review still allows", await h.authorize(h.call("fresh-samples")), { kind: "allow" });
+  check("freshness samples prompt/branch/policy before review, after review, and again after audit lock wait", {
+    systemPrompt: h.reads.systemPrompt - before.systemPrompt,
+    branch: h.reads.branch - before.branch,
+    policy: h.reads.policy - before.policy,
+  }, { systemPrompt: 3, branch: 3, policy: 3 });
+}
+
+// A crash-left/contended audit-specific lock must never become an unlogged
+// allow. This lock is unrelated to the Owner lease; production never steals it.
+{
+  const h = registeredHarness();
+  h.live("Inspect synthetic repository status.");
+  const lock = join(offlineAgentDir, "logs/.jev-auto-approval.jsonl.lock");
+  const savedLock = join(offlineRuntime, "stopped-fixture-kernel-lock");
+  // This isolated fixture has no pending writers. Preserve the regular inode
+  // while emulating an old mkdir artifact; this is not a live recovery API.
+  renameSync(lock, savedLock);
+  mkdirSync(lock, { mode: 0o700 });
+  let fetchCalls = 0;
+  globalThis.fetch = async () => { fetchCalls++; return mockResponse(allowAnswers()); };
+  try {
+    check("audit lock failure downgrades allow", await h.authorize(h.call("audit-unavailable")), { kind: "defer" });
+    check("audit failure keeps actual model call", fetchCalls, 1);
+    check("audit failure is explicit", h.reviews.at(-1).failureCode, "audit_unavailable");
+    check("legacy failure is independently visible", h.notices.at(-1)?.message.includes("legacy_lock_requires_offline_recovery"), true);
+    check("recovery requires stopped writers", h.notices.at(-1)?.message.includes("Stop every Pi sharing this agent directory"), true);
+    check("repeated legacy failure still defers", await h.authorize(h.call("audit-unavailable-again")), { kind: "defer" });
+    check("repeated audit diagnostics are deduplicated", h.notices.filter(row => row.message.startsWith("Jev audit unavailable")).length, 1);
+    check("failed allows are never published as audited allows", h.reviews.some(row => row.effectiveVerdict === "allow"), false);
+  } finally { rmSync(lock, { recursive: true }); renameSync(savedLock, lock); }
+  check("unlocked later request is independently reviewed", await h.authorize(h.call("audit-recovered")), { kind: "allow" });
+  check("audit recovery never reuses an old approval", fetchCalls, 3);
+}
+
+{
+  const h = registeredHarness();
+  h.live("Inspect synthetic repository status.");
+  globalThis.fetch = async () => mockResponse(allowAnswers());
+  await withAuditIo("writeSync", () => { throw new Error("synthetic audit IO failure"); }, async () => {
+    check("actual audit IO failure cannot allow", await h.authorize(h.call("injected-audit-io")), { kind: "defer" });
+    check("actual IO reason is independently visible", h.notices.at(-1)?.message.includes("audit_io_failed"), true);
+    check("public failure code stays compatible", h.reviews.at(-1).failureCode, "audit_unavailable");
+    check("IO failure never publishes an audited allow", h.reviews.some(row => row.effectiveVerdict === "allow"), false);
+  }, 2);
+  check("normal audit resumes after synthetic IO restoration", await h.authorize(h.call("injected-audit-recovered")), { kind: "allow" });
 }
 
 // user_denied pauses the same complete action across new IDs. Queued/extension

@@ -4,8 +4,8 @@ import { access, lstat, mkdir, mkdtemp, open, realpath, stat, symlink } from "no
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
-import type { WorkspaceInfo } from "../core/contracts.js";
-import { withWorkspaceRecovery } from "../core/workspace-metadata.js";
+import type { WorkspaceInfo } from "../core/contracts.ts";
+import { withWorkspaceRecovery } from "../core/workspace-metadata.ts";
 
 /** Execution metadata only: neither a permission grant nor an OS sandbox. */
 export type AgentWorkspace = Readonly<WorkspaceInfo>;

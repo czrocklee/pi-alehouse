@@ -1,7 +1,7 @@
-import type { RunStatus, WorkspaceInfo, WorkspaceMode } from "./contracts.js";
-import { boundedOutput } from "./result-text.js";
-import { COMMUNICATION_LIMITS } from "./communication-envelope.js";
-import type { WorkspaceDetails, WorkspaceRecovery } from "./workspace-metadata.js";
+import type { RunStatus, WorkspaceInfo, WorkspaceMode } from "./contracts.ts";
+import { boundedOutput } from "./result-text.ts";
+import { COMMUNICATION_LIMITS } from "./communication-envelope.ts";
+import type { WorkspaceDetails, WorkspaceRecovery } from "./workspace-metadata.ts";
 
 /** Small task summary, not a metadata transport or a recovery state machine. */
 export interface TaskMetadata {

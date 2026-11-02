@@ -1,8 +1,8 @@
-import type { CommunicationAction, CommunicationEnvelope, CommunicationReason, TaskEntry, ThinTaskEntry } from "./communication-envelope.js";
-import type { CancellationSource } from "./contracts.js";
-import type { QuestionId } from "./question-id.js";
-import type { ResultCursorIdentity } from "./result-cursor.js";
-import type { TaskMetadata } from "./task-metadata.js";
+import type { CommunicationAction, CommunicationEnvelope, CommunicationReason, TaskEntry, ThinTaskEntry } from "./communication-envelope.ts";
+import type { CancellationSource } from "./contracts.ts";
+import type { QuestionId } from "./question-id.ts";
+import type { ResultCursorIdentity } from "./result-cursor.ts";
+import type { TaskMetadata } from "./task-metadata.ts";
 
 /** Ordinary, immutable-by-contract data only. Snapshot indices, not live Run
  * objects, cross the publisher boundary; the Owner retains their provenance.

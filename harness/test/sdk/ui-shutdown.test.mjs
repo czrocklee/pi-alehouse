@@ -41,14 +41,13 @@ for (const [fault, beerMugs] of [["widget", undefined], ["panel", true], ["all",
   }
   await writeFile(join(agentDir, "agents", "researcher.md"),
     "---\ntools: [read, web_search, source_check, fetch_content, get_search_content]\n---\nFixture only.\n");
-  const authority = join(permissionRoot, "node_modules/@gotgenes/pi-permission-system");
-  await mkdir(authority, { recursive: true });
-  await writeFile(join(permissionRoot, "package.json"), "{}");
-  await writeFile(join(authority, "package.json"), JSON.stringify({ type: "module", exports: "./index.js" }));
-  await writeFile(join(authority, "index.js"), "export const getPermissionsService = () => ({});\n");
-  await writeFile(join(permissionRoot, "index.ts"), 'export { getPermissionsService } from "./node_modules/@gotgenes/pi-permission-system/index.js";\n' +
-    'export const bindWorkspacePolicy = () => { throw new Error("FakePort shutdown fixture must not bind an SDK workspace"); };\n' +
-    'export const subscribeManagedBlocks = () => { throw new Error("FakePort shutdown fixture must not observe an SDK child"); };\n');
+  await mkdir(permissionRoot, { recursive: true });
+  await writeFile(join(permissionRoot, "index.ts"), 'throw new Error("Harness must reuse the explicitly injected permission interface");\n');
+  const permission = {
+    getPermissionsService: () => ({}),
+    bindWorkspacePolicy() { throw new Error("FakePort shutdown fixture must not bind an SDK workspace"); },
+    subscribeManagedBlocks() { throw new Error("FakePort shutdown fixture must not observe an SDK child"); },
+  };
   t.mock.method(globalThis, "fetch", () => { assert.fail("shutdown fixture attempted network IO"); });
   t.mock.method(OwnerController, "open", async () => h.controller);
   t.mock.method(FileOwnerLease, "open", async () => h.owner);
@@ -113,7 +112,7 @@ for (const [fault, beerMugs] of [["widget", undefined], ["panel", true], ["all",
   harnessExtension({ events: bus, on: (event, handler) => {
     const list = handlers.get(event) ?? []; list.push(handler); handlers.set(event, list);
   }, registerShortcut: (name, spec) => shortcuts.set(name, spec), registerCommand: (name, spec) => commands.set(name, spec), registerTool() {},
-  getAllTools: () => [], getActiveTools: () => [...activeTools], setActiveTools: (names) => { activeTools = [...names]; }, appendEntry() {} });
+  getAllTools: () => [], getActiveTools: () => [...activeTools], setActiveTools: (names) => { activeTools = [...names]; }, appendEntry() {} }, { permission });
   t.after(async () => {
     failing = false;
     for (const stop of handlers.get("session_shutdown")) await stop({ reason: "quit" }, ctx);

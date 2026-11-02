@@ -1,9 +1,9 @@
 import { SessionManager, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { isId, boundedOutput } from "../core/result-text.js";
-import { USAGE_COMPONENTS, type Usage } from "../core/usage-ledger.js";
-import { historyTypes } from "./run-journal.js";
-import { readSdkRun } from "./history-reader.js";
-import { residueType } from "./usage-audit.js";
+import { isId, boundedOutput } from "../core/result-text.ts";
+import { USAGE_COMPONENTS, type Usage } from "../core/usage-ledger.ts";
+import { historyTypes } from "./run-journal.ts";
+import { readSdkRun } from "./history-reader.ts";
+import { residueType } from "./usage-audit.ts";
 
 const DEFAULT_MAX_MIB = 8, MAX_MIB = 64;
 const commandUsage = "/harness-history RUN_ID [nonnegative UTF-16 offset] [--max-mib N] (N: 1..64, default 8; per file, not RAM)";

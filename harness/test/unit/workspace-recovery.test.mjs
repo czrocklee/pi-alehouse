@@ -8,7 +8,7 @@ import test from "node:test";
 import ts from "typescript";
 
 const dataModule = (source) => `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
-const compilerOptions = { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 };
+const compilerOptions = { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, rewriteRelativeImportExtensions: true };
 const sourceOutput = (path) => ts.transpileModule(readFileSync(new URL(path, import.meta.url), "utf8"), { compilerOptions }).outputText;
 const metadataUrl = dataModule(sourceOutput("../../src/core/workspace-metadata.ts"));
 const { workspaceRecoveryOf } = await import(metadataUrl);

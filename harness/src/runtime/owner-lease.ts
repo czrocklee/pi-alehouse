@@ -3,8 +3,8 @@ import { randomUUID } from "node:crypto";
 import { closeSync, constants, fchmodSync, fstatSync, lstatSync, openSync, realpathSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { mkdir } from "node:fs/promises";
-import { isId } from "../core/result-text.js";
-import { HarnessError, type OwnerLease } from "../core/ports.js";
+import { isId } from "../core/result-text.ts";
+import { HarnessError, type OwnerLease } from "../core/ports.ts";
 
 /** Linux/local-filesystem primitive, NOT proof that detached descendants exited. */
 export class FileLeaseLock {

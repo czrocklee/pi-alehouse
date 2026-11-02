@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import { HarnessError, workersDisabled } from "./core/ports.js";
-import { difficultySlots, validDifficulty, type Difficulty, type WorkerSlot } from "./core/contracts.js";
-import { defaultDelegation, delegationModes, eagernessLevels, type DelegationSetting } from "./delegation.js";
+import { HarnessError, workersDisabled } from "./core/ports.ts";
+import { difficultySlots, validDifficulty, type Difficulty, type WorkerSlot } from "./core/contracts.ts";
+import { defaultDelegation, delegationModes, eagernessLevels, type DelegationSetting } from "./delegation.ts";
 import { validateSettings, type PresetDefinition } from "../../lib/settings-store.mjs";
 
 // Task ratings and configured slots have one fixed, one-to-one correspondence.

@@ -1,8 +1,8 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { RunView } from "../core/contracts.js";
+import type { RunView } from "../core/contracts.ts";
 import { formatTokenCount } from "../../../lib/token-format.mjs";
-import type { ActiveTool, GenerationPreview } from "../runtime/activity-types.js";
-import { clipPlainText, previewText, singleLineText } from "./text.js";
+import type { ActiveTool, GenerationPreview } from "../runtime/activity-types.ts";
+import { clipPlainText, previewText, singleLineText } from "./text.ts";
 
 export const GLYPHS = {
   turns: "↻", success: "✓", failure: "✗", stopped: "■", question: "?",
@@ -158,7 +158,13 @@ export function renderActivity(tools: readonly ActiveTool[], live: GenerationPre
 const ROW_BREAKS = /[\t\n\v\f\r\u0085\u2028\u2029]+/g;
 export const withoutBreaks = (text: string): string => text.replace(ROW_BREAKS, " ");
 
+export interface TranscriptFrame {
+  readonly lineCount: number;
+  slice(start: number, count: number): string[];
+}
 export interface TranscriptRows {
+  /** Capture settled history and the streaming tail once for a pane frame. */
+  frame?(width: number): TranscriptFrame;
   lineCount(width: number): number;
   slice(width: number, start: number, count: number): string[];
   invalidate(): void;

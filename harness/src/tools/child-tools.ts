@@ -1,9 +1,9 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Check } from "typebox/value";
-import { COMMUNICATION_LIMITS } from "../core/communication-envelope.js";
-import { ALERT_QUEUE_FULL_RESOLUTION } from "../core/communication-state.js";
-import { HarnessError, type RunCallbacks } from "../core/ports.js";
+import { COMMUNICATION_LIMITS } from "../core/communication-envelope.ts";
+import { ALERT_QUEUE_FULL_RESOLUTION } from "../core/communication-state.ts";
+import { HarnessError, type RunCallbacks } from "../core/ports.ts";
 
 const text = (maxLength: number) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
 

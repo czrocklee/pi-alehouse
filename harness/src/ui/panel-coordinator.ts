@@ -6,16 +6,17 @@ import { FOOTER_INDICATOR_CLICK_EVENT, PINNED_POPOVER_YIELD_EVENT, WORKER_PRESET
   type PinnedPopoverYield }
   from "../../../lib/overlay-protocol.mjs";
 import { focusOrigin, focusRevealed, joinPopoverStack, stackedOverlayOptions, type StackMember } from "../../../lib/popover-stack.mjs";
-import type { DelegationSetting } from "../delegation.js";
-import { HarnessError } from "../core/ports.js";
-import type { EffortOverrides, PresetCandidate, PresetPublication, PresetRouter, PresetSnapshot, Strength } from "../routing.js";
-import { DetailPane, type DetailInput } from "./agent-detail.js";
-import { HarnessWidget, type AgentDetail } from "./agent-widget.js";
-import { HIDE_TRANSIENT_OVERLAYS_EVENT } from "./overlay-request.js";
-import { ApprovalWatch, mountable, PaneRequest, PaneYield, paneYieldHandlers } from "./permission-dialog-yield.js";
+import type { ActivityHistoryState } from "../runtime/activity-observer.ts";
+import type { DelegationSetting } from "../delegation.ts";
+import { HarnessError } from "../core/ports.ts";
+import type { EffortOverrides, PresetCandidate, PresetPublication, PresetRouter, PresetSnapshot, Strength } from "../routing.ts";
+import { DetailPane, type DetailInput } from "./agent-detail.ts";
+import { HarnessWidget, type AgentDetail } from "./agent-widget.ts";
+import { HIDE_TRANSIENT_OVERLAYS_EVENT } from "./overlay-request.ts";
+import { ApprovalWatch, mountable, PaneRequest, PaneYield, paneYieldHandlers } from "./permission-dialog-yield.ts";
 import { PRESET_PICKER_MIN_ROWS, PresetPicker, PresetPickerRequest,
-  type EffortCapabilities, type ModelPickerPosition, type PresetChoice } from "./preset-picker.js";
-import { TranscriptContent } from "./transcript.js";
+  type EffortCapabilities, type ModelPickerPosition, type PresetChoice } from "./preset-picker.ts";
+import { TranscriptContent } from "./transcript.ts";
 
 export interface HumanStopResult {
   result: "cancel_requested" | "already_terminal" | "already_exited";
@@ -61,6 +62,11 @@ export interface PanelCoordinatorOptions {
 }
 
 type PickerState = { router: PresetRouter; candidate: PresetCandidate };
+interface HistoryCache {
+  state?: ActivityHistoryState;
+  messages?: readonly unknown[];
+  projected: WeakMap<SessionEntry, readonly unknown[]>;
+}
 
 /** Owns only parent UI mounting, selection and approval-yield state. */
 export class PanelCoordinator {
@@ -308,12 +314,24 @@ export class PanelCoordinator {
     return !!this.host && this.options.ready() && mountable(this.yielding, this.approvals.pending);
   }
 
-  private messagesOf(agent: AgentDetail): readonly unknown[] {
+  private messagesOf(agent: AgentDetail, cache: HistoryCache): readonly unknown[] {
+    const state = agent.historyState?.();
+    if (state && cache.state === state && cache.messages) return cache.messages;
     const entries = agent.entries();
     if (!entries) return [];
-    // Display raw attempts within the compaction-aware branch, not the edited
-    // model projection: a retry omission must not erase diagnostic transcript.
-    try { return buildContextEntries(entries as SessionEntry[]).flatMap(sessionEntryToContextMessages); } catch { return []; }
+    // Preserve source-entry identity even for summaries/custom messages whose
+    // SDK projection creates new objects. A branch change still rebuilds its
+    // raw, compaction-aware path; model context edits never hide attempts here.
+    if (cache.state?.session !== state?.session) cache.projected = new WeakMap();
+    try {
+      const messages = buildContextEntries(entries as SessionEntry[], state?.leaf).flatMap((entry) => {
+        let projected = cache.projected.get(entry);
+        if (!projected) { projected = sessionEntryToContextMessages(entry); cache.projected.set(entry, projected); }
+        return projected;
+      });
+      cache.state = state; cache.messages = messages;
+      return messages;
+    } catch { return []; }
   }
 
   private async openDetail(agent_id?: string): Promise<void> {
@@ -330,32 +348,63 @@ export class PanelCoordinator {
     const request = new PaneRequest(() => this.options.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {}));
     this.closePane = request.close;
     const mounted = new Map<string, TranscriptContent>();
+    const cwds = new Map<string, string>();
+    let currentAgents = new Map<string, AgentDetail>();
     try {
       const floating = this.floating();
-      const markdownTheme = getMarkdownTheme();
+      let markdownTheme = getMarkdownTheme();
       this.paneAgent = agent_id ?? agents[0]!.agent_id;
       await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
         if (!request.mount(() => done(undefined), this.yielding, this.approvals.pending)) {
           return { render: () => [], invalidate() {} };
         }
+        // The SDK's public colors getter returns a frozen palette generation,
+        // replaced on theme/terminal-color changes even though its Theme Proxy
+        // is stable. Structural hosts without that capability stay conservative.
+        const paletteGeneration = () => {
+          const colors = theme.colors;
+          return colors && typeof colors === "object" && Object.isFrozen(colors) ? colors : undefined;
+        };
+        let palette = paletteGeneration();
         const pane = new DetailPane({
           tui, theme, done: request.close,
           initial: this.paneAgent!,
           snapshot: () => {
-            const agents = this.options.widget.agents();
-            const visible = new Set(agents.map((agent) => agent.agent_id));
-            for (const [id, content] of mounted) if (!visible.has(id)) { content.dispose(); mounted.delete(id); }
+            const agents = this.options.widget.presentationAgents?.() ?? this.options.widget.agents();
+            currentAgents = new Map(agents.map((agent) => [agent.agent_id, agent]));
+            for (const [id, content] of mounted) if (!currentAgents.has(id)) {
+              content.dispose(); mounted.delete(id); cwds.delete(id);
+            }
             return agents.map((agent) => ({ agent_id: agent.agent_id,
               input: { view: agent.view, live: agent.live } satisfies DetailInput }));
           },
+          freshSnapshot: () => this.options.widget.agents().map((agent) => ({ agent_id: agent.agent_id,
+            input: { view: agent.view, live: agent.live } satisfies DetailInput })),
+          revision: () => this.options.widget.presentationVersion?.(),
+          visible: () => mountable(this.yielding, this.approvals.pending),
+          invalidate: () => {
+            const next = paletteGeneration();
+            if (!next || next !== palette) {
+              // Native components also retain literal ANSI/default-style prefixes;
+              // dynamic Markdown callbacks alone cannot repair a palette change.
+              markdownTheme = getMarkdownTheme();
+              for (const content of mounted.values()) content.setTheme(markdownTheme);
+            } else {
+              for (const content of mounted.values()) content.invalidateLayout();
+            }
+            palette = next;
+          },
           transcript: (id) => {
-            const agent = this.options.widget.agents().find((candidate) => candidate.agent_id === id);
+            const agent = currentAgents.get(id);
             if (!agent) return undefined;
             let content = mounted.get(id);
+            if (content && cwds.get(id) !== agent.cwd) { content.dispose(); mounted.delete(id); content = undefined; }
             if (!content) {
+              const cache: HistoryCache = { projected: new WeakMap() };
+              cwds.set(id, agent.cwd);
               content = new TranscriptContent({ tui, cwd: agent.cwd, markdownTheme, source: {
-                messages: () => this.messagesOf(agent),
-                inFlight: () => agent.inFlight(),
+                messages: () => { const current = currentAgents.get(id); return current ? this.messagesOf(current, cache) : []; },
+                inFlight: () => currentAgents.get(id)?.inFlight(),
                 toolDefinition: () => undefined,
               } });
               mounted.set(id, content);

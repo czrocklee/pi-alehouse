@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { OwnerController } from "../core/owner-controller.js";
+import type { OwnerController } from "../core/owner-controller.ts";
 
 export const residueType = "harness:unreported-usage:v1";
 // Presentation-only deduplication, never an accounting drain or durable receipt.

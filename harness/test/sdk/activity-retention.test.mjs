@@ -85,6 +85,37 @@ async function fixture(t, respond, { retry = false } = {}) {
   return { root, activity, session, port, owner, events, submit, end, shutdowns: () => shutdowns };
 }
 
+test("activity public observation types expose stable cheap history identities and retain them at shutdown", t => {
+  const child = new ChildActivity("/synthetic"), handlers = new Map();
+  child.extension({ on: (name, handler) => handlers.set(name, handler) });
+  /** @type {import("../../dist/runtime/activity-observer.js").ChildActivityObservation} */
+  const observation = child;
+  const historyState = () => observation.historyState?.();
+  assert.equal(historyState(), undefined, "queued observations have no session identity");
+  const sessionManager = sdk.SessionManager.inMemory("/synthetic");
+  const entries = t.mock.method(sessionManager, "getEntries", sessionManager.getEntries.bind(sessionManager));
+  handlers.get("session_start")({}, { sessionManager });
+  const empty = historyState();
+  assert(empty);
+  assert.equal(empty.session_id, sessionManager.getSessionId());
+  assert.equal(empty.session, sessionManager); assert.equal(empty.count, 0); assert.equal(empty.leaf, null);
+  assert.equal(historyState(), empty, "unchanged stamps keep object identity");
+  assert.equal(entries.mock.callCount(), 0, "stamp reads never copy entries");
+  const leaf = sessionManager.appendMessage({ role: "user", content: "RETAINED_ENTRY", timestamp: 0 });
+  const appended = historyState();
+  assert(appended);
+  assert.notEqual(appended, empty); assert.equal(appended.leaf, leaf); assert.equal(appended.count, 1);
+  const revision = observation.presentationRevision;
+  handlers.get("session_shutdown")();
+  const afterRevision = observation.presentationRevision;
+  assert(typeof revision === "number" && typeof afterRevision === "number" && afterRevision > revision);
+  assert.equal(historyState(), appended, "shutdown retires live activity, not retained history");
+  assert.equal(observation.entries()?.length, 1);
+  const before = historyState();
+  sessionManager.resetLeaf();
+  assert.notEqual(historyState(), before, "branch changes invalidate without an entry-count change");
+});
+
 function textDelta(stream, message, text, index = 0) {
   const part = { type: "text", text };
   message.content[index] = part;

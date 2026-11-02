@@ -1,4 +1,4 @@
-import { USAGE_COMPONENTS, type UsageComponent, type UsageLedger } from "../core/usage-ledger.js";
+import { USAGE_COMPONENTS, type UsageComponent, type UsageLedger } from "../core/usage-ledger.ts";
 
 import { readUsageAttribution, type HostModelSpend, type HostUsage } from "../../../lib/usage-attribution.mjs";
 export type { HostModelSpend, HostUsage } from "../../../lib/usage-attribution.mjs";

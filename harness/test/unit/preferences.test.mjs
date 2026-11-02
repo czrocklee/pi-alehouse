@@ -232,6 +232,61 @@ test("workspace beer-mug false masks global true and survives reload without rep
   assert.equal(controls(f).beerMugs.enabled, false);
 });
 
+for (const global of [false, true]) for (const workspace of [false, true]) {
+  test(`global beer-mug toggle explains workspace precedence (global=${global}, workspace=${workspace})`, async (t) => {
+    const f = await fixture(t);
+    f.store.stage("global", ["ui", "beerMugs"], global);
+    f.store.stage("global", ["approval"], "manual");
+    f.store.stage("workspace", ["ui", "beerMugs"], workspace);
+    f.store.stage("workspace", ["delegation", "mode"], "lead");
+    assert(f.store.flush().every((result) => !result.error));
+    const workspaceBytes = await readFile(f.store.paths.workspace, "utf8");
+    const c = controls(f, ["Change save scope", "global", `Beer mugs: ${workspace ? "on" : "off"}`, "Save pending now"], [true]);
+    await c.ui.open();
+    assert.deepEqual(f.store.pending(), [], "scope consent alone stages nothing");
+    await c.ui.open();
+    const enabled = !workspace, noWrite = global === enabled;
+    assert.equal(c.beerMugs.enabled, enabled);
+    assert.deepEqual(f.store.pending(), noWrite ? [] : [{ scope: "global", path: ["ui", "beerMugs"], value: enabled }]);
+    const notice = c.notifications.find(({ text }) => text.includes("workspace ui.beerMugs override"));
+    assert(notice, "explain shadowing even when the global leaf already equals the live toggle");
+    assert.equal(notice.level, "info");
+    assert(notice.text.includes(`Current session: Beer mugs: ${enabled ? "on" : "off"}`));
+    assert(notice.text.includes("Save scope: global"));
+    assert(notice.text.includes(`Next startup after saving pending writes, if any: Beer mugs: ${workspace ? "on" : "off"}`));
+    assert(notice.text.includes("takes precedence") && notice.text.includes("not removed"));
+    assert.equal(await readFile(f.store.paths.workspace, "utf8"), workspaceBytes);
+    await c.ui.open();
+    assert.deepEqual(f.store.pending(), []);
+    assert.deepEqual(JSON.parse(await readFile(f.store.paths.global, "utf8")), { version: 2, ui: { beerMugs: enabled }, approval: "manual" });
+    assert.equal(await readFile(f.store.paths.workspace, "utf8"), workspaceBytes, "global saves never remove workspace overrides");
+    const restored = new SettingsStore({ agentDir: join(f.root, "agent"), cwd: join(f.root, "work"), projectTrusted: true });
+    assert.equal(restored.effective().ui.beerMugs, workspace);
+    assert.equal(c.beerMugs.enabled, enabled, "saving defaults does not replace the live choice");
+    if (noWrite) {
+      assert(c.notifications.some(({ text }) => text === "No pending configuration writes."));
+      assert(!c.notifications.some(({ text }) => text.includes("Settings saved")));
+    }
+  });
+}
+
+test("global appearance notices ignore untrusted workspace overrides and preserve unrelated pending leaves", async (t) => {
+  const f = await fixture(t);
+  f.store.stage("global", ["ui", "beerMugs"], false);
+  f.store.stage("workspace", ["ui", "beerMugs"], true);
+  assert(f.store.flush().every((result) => !result.error));
+  const workspaceBytes = await readFile(f.store.paths.workspace, "utf8");
+  f.store = new SettingsStore({ agentDir: join(f.root, "agent"), cwd: join(f.root, "work"), projectTrusted: false });
+  f.store.stage("global", ["approval"], "manual");
+  const pending = f.store.pending(), c = controls(f, ["Change save scope", "global", "Beer mugs: off"], [true]);
+  await c.ui.open(); await c.ui.open();
+  assert.equal(c.beerMugs.enabled, true);
+  assert.deepEqual(f.store.pending(), [...pending, { scope: "global", path: ["ui", "beerMugs"], value: true }]);
+  assert.deepEqual(f.store.get("workspace"), { version: 2 });
+  assert(!c.notifications.some(({ text }) => text.includes("workspace ui.beerMugs override")));
+  assert.equal(await readFile(f.store.paths.workspace, "utf8"), workspaceBytes);
+});
+
 for (const change of ["cancel", "retire", "dispose"]) test(`a ${change} settings menu never toggles appearance or queues writes`, async (t) => {
   const f = await fixture(t), c = controls(f);
   c.ctx.ui.select = async () => {
@@ -292,6 +347,10 @@ test("discard and removal of a saved false affect persistence only, never the li
   assert.deepEqual(f.store.pending(), []);
   assert.equal(f.store.get("workspace").ui.beerMugs, false);
   assert.equal(c.beerMugs.enabled, true);
+  const restoredAfterDiscard = new SettingsStore({ agentDir: join(f.root, "agent"), cwd: join(f.root, "work"), projectTrusted: true });
+  assert.equal(restoredAfterDiscard.effective().ui.beerMugs, false, "discarded live choices do not become startup defaults");
+  assert.match(c.confirmPrompts.find(({ title }) => title === "Discard pending configuration writes?").text, /Next startup follows the existing on-disk.*not the discarded changes/);
+  assert(c.notifications.some(({ text }) => /Pending writes discarded.*Current session choices stay unchanged.*next startup follows the existing on-disk defaults/.test(text)));
   await c.ui.open();
   assert(c.selectPrompts.at(-3).choices.includes("Beer mugs: on"), "the label follows the live choice, not the discarded saved false");
   assert(c.selectPrompts.at(-1).choices.includes(path), "saved false is removable");
@@ -316,6 +375,30 @@ for (const failure of ["sealed store", "byte cap"]) test(`appearance stays live 
   assert(c.notifications.some(({ text, level }) => level === "warning" && /live for this session.*defaults were not queued/.test(text)));
   assert(!c.notifications.some(({ text }) => text.includes("Settings saved")));
   await assert.rejects(readFile(f.store.paths.global), { code: "ENOENT" });
+});
+
+test("removing a saved workspace appearance explains next-start inheritance without changing live or disk early", async (t) => {
+  const f = await fixture(t);
+  f.store.stage("global", ["ui", "beerMugs"], true);
+  f.store.stage("workspace", ["ui", "beerMugs"], false);
+  f.store.stage("workspace", ["approval"], "manual");
+  assert(f.store.flush().every((result) => !result.error));
+  const before = await readFile(f.store.paths.workspace, "utf8");
+  const c = controls(f, ["Remove a saved override", "workspace", JSON.stringify(["ui", "beerMugs"]), "Save pending now"], [true]);
+  assert.equal(c.beerMugs.enabled, false);
+  await c.ui.open();
+  assert.deepEqual(c.beerMugs.calls, []);
+  assert.equal(c.beerMugs.enabled, false);
+  assert.deepEqual(f.store.pending(), [{ scope: "workspace", path: ["ui", "beerMugs"], value: undefined }]);
+  assert.equal(await readFile(f.store.paths.workspace, "utf8"), before, "removal stays pending until explicit save or exit");
+  assert.match(c.confirmPrompts[0].text, /Current session choices are unchanged.*After saving pending writes, next startup follows the remaining saved layers or defaults/);
+  assert(c.notifications.some(({ text }) => /Override removal staged for workspace.*Current session choices stay unchanged.*next startup follows the remaining saved layers/.test(text)));
+  await c.ui.open();
+  assert.equal(c.beerMugs.enabled, false);
+  assert.deepEqual(c.beerMugs.calls, []);
+  assert.deepEqual(JSON.parse(await readFile(f.store.paths.workspace, "utf8")), { version: 2, ui: {}, approval: "manual" });
+  const restored = new SettingsStore({ agentDir: join(f.root, "agent"), cwd: join(f.root, "work"), projectTrusted: true });
+  assert.equal(restored.effective().ui.beerMugs, true, "only the next startup inherits the lower global appearance");
 });
 
 test("Remember current worker settings does not implicitly remember the live appearance", async (t) => {

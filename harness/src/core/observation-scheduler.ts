@@ -1,5 +1,5 @@
-import type { CommunicationReason } from "./communication-envelope.js";
-import { HarnessError } from "./ports.js";
+import type { CommunicationReason } from "./communication-envelope.ts";
+import { HarnessError } from "./ports.ts";
 
 /** SDK-free communication scheduler. Each Owner owns one instance shared by
  * model AND lifecycle observations; no separate legacy wait path remains.

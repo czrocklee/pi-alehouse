@@ -15,6 +15,23 @@ const paneOver = (messages, width = 80) => {
   return () => content.slice(width, 0, content.lineCount(width)).join("\n");
 };
 
+test("a branch rewrite before an unchanged last message replaces the consumed prefix", () => {
+  const last = { role: "user", content: "UNCHANGED_LAST_MESSAGE", timestamp: 1 };
+  let messages = [{ role: "user", content: "OLD_BRANCH_PREFIX", timestamp: 0 }, last];
+  const content = new TranscriptContent({ tui, cwd: "/w", markdownTheme: getMarkdownTheme(), source: {
+    messages: () => messages, inFlight: () => undefined, toolDefinition: () => undefined,
+  } });
+  try {
+    let frame = content.frame(120);
+    assert.match(frame.slice(0, frame.lineCount).join("\n"), /OLD_BRANCH_PREFIX/);
+    messages = [{ role: "user", content: "NEW_BRANCH_PREFIX", timestamp: 2 }, last];
+    frame = content.frame(120);
+    const text = frame.slice(0, frame.lineCount).join("\n");
+    assert.match(text, /NEW_BRANCH_PREFIX/); assert.match(text, /UNCHANGED_LAST_MESSAGE/);
+    assert.doesNotMatch(text, /OLD_BRANCH_PREFIX/);
+  } finally { content.dispose(); }
+});
+
 const call = (id, name = "bash") => ({ type: "toolCall", id, name, arguments: { command: "npm test" } });
 const assistant = (content, extra = {}) => ({ role: "assistant", content, stopReason: "toolUse", ...extra });
 

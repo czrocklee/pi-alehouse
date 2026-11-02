@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { EventBus, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import type { ContextChange } from "../core/owner-controller.js";
-import type { RunExecutionIdentity, RunIdentity } from "../core/contracts.js";
+import type { ContextChange } from "../core/owner-controller.ts";
+import type { RunExecutionIdentity, RunIdentity } from "../core/contracts.ts";
 
 /** Host-only witness, not a tool or a child authorizer. Jev reads this registry
  * and snapshots parent authorization on admission. No transcript heuristics,

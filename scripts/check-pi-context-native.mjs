@@ -25,10 +25,13 @@ let checks = 0;
 
 async function fixture(rows = 24, columns = 120) {
   const handlers = new Map(), events = new Map(), commands = new Map();
-  const state = { entries: ["a", "b", "c"].map(id => ({ type: "message", id,
+  const sessionId = `synthetic-context-native-${fixtures.length}`;
+  const state = { entries: ["a", "b", "c"].map((id, index, ids) => ({ type: "message", id,
+    parentId: index > 0 ? ids[index - 1] : null,
     message: { role: "assistant", provider: "fixture", model: id, api: "openai-responses",
       content: [], stopReason: "stop", usage: { ...totals } } })), projection: [],
-    usage: { tokens: 357421, contextWindow: 500000, percent: 71.4842 }, entriesReads: 0, projectionReads: 0 };
+    usage: { tokens: 357421, contextWindow: 500000, percent: 71.4842 },
+    entriesReads: 0, entryReads: 0, usageReads: 0, projectionReads: 0 };
   const terminal = { rows, columns, hideCursor() {} };
   const tui = new TuiAltScreen(terminal, false, undefined, {});
   tui.requestRender = () => {};
@@ -49,8 +52,12 @@ async function fixture(rows = 24, columns = 120) {
     model: { id: "m", provider: "fixture", api: "openai-codex-responses", contextWindow: 500000 },
     modelRegistry: { isUsingOAuth: () => false, getProvider: () => undefined,
       getApiKeyAndHeaders() { throw new Error("Credential resolution is forbidden"); } },
-    getContextUsage: () => ({ ...state.usage }), getSystemPrompt: () => "SYNTHETIC SYSTEM BODY",
+    getContextUsage() { state.usageReads++; return { ...state.usage }; }, getSystemPrompt: () => "SYNTHETIC SYSTEM BODY",
     sessionManager: { getEntries() { state.entriesReads++; return state.entries.slice(); }, getBranch: () => [],
+      // Model the public append-only SDK seam. A leaf alone is not reliable
+      // session identity, and incremental accounting must verify the new chain.
+      getSessionId: () => sessionId, getEntryCount: () => state.entries.length,
+      getEntry(id) { state.entryReads++; return state.entries.find(entry => entry.id === id); },
       getLeafId: () => state.entries.at(-1)?.id ?? null,
       buildSessionProjection() { state.projectionReads++; return { entries: state.projection }; } },
     ui: { notify(message) { notifications.push(message); }, onTerminalInput: callback => tui.addInputListener(callback),
@@ -297,10 +304,12 @@ try {
       if (/\b5h\b/.test(line)) assert.match(line, /5h 80%/);
     }
     h.state.usage = { tokens: 5040, contextWindow: 10000, percent: 50.4 };
+    await h.emit("turn_end"); // New SDK totals arrive at a public context boundary.
     const panel = await h.command();
     assert.match(plain(h.footer.render(120)[0]), /5\.0k\/10k/);
     assert.match(panel.component.render(panel.options.width).map(plain).join("\n"), /5\.0k\/10k/);
-    h.state.usage = { tokens: null, contextWindow: 10000, percent: null }; h.paint();
+    h.state.usage = { tokens: null, contextWindow: 10000, percent: null };
+    await h.emit("turn_end"); h.paint();
     assert.match(plain(h.footer.render(120)[0]), /\?\/10k/);
     assert.match(panel.component.render(panel.options.width).map(plain).join("\n"), /\?\/10k/);
     checks++;
@@ -315,17 +324,35 @@ try {
     try {
       await h.emit("session_before_compact", { preparation: { tokensBefore: 357421 }, reason: "manual" });
       const baseline = h.state.entriesReads, projected = h.state.projectionReads;
+      const lookups = h.state.entryReads, usageReads = h.state.usageReads;
+      assert.match(plain(h.footer.render(120)[0]), /\$0\.300/);
       for (let i = 0; i < 10; i++) { callback(); h.paint(); }
       assert.equal(h.state.entriesReads, baseline, "unchanged leaf does not rescan spend on 10Hz paints");
+      assert.equal(h.state.entryReads, lookups, "unchanged leaf does not repeat incremental lookups either");
+      assert.equal(h.state.usageReads, usageReads, "compaction animation shares its frozen SDK total");
       assert.equal(h.state.projectionReads, projected, "frozen composition is not recollected");
-      h.state.entries.push({ type: "usage", id: "warm", provider: "fixture", model: "warming", usage: totals });
-      h.paint(); assert.equal(h.state.entriesReads, baseline + 1, "usage-only leaf append refreshes spend once");
+      h.state.entries.push({ type: "usage", id: "warm", parentId: h.ctx.sessionManager.getLeafId(),
+        provider: "fixture", model: "warming", usage: totals });
+      h.paint();
+      assert.equal(h.state.entriesReads, baseline, "usage-only append avoids rescanning historical spend");
+      assert.equal(h.state.entryReads, lookups + 1, "usage-only leaf append refreshes spend exactly once");
+      assert.match(plain(h.footer.render(120)[0]), /\$0\.400/, "independent usage is included in the rendered total");
+      h.paint();
+      assert.equal(h.state.entryReads, lookups + 1, "later paints reuse the refreshed independent usage");
       await h.emit("session_compact_failed", { aborted: true });
       assert.equal(callback, undefined);
     } finally { globalThis.setInterval = realInterval; globalThis.clearInterval = realClear; }
+    const getLeafId = h.ctx.sessionManager.getLeafId;
     delete h.ctx.sessionManager.getLeafId;
-    const baseline = h.state.entriesReads; h.footer.render(120); h.footer.render(120);
+    let baseline = h.state.entriesReads; h.footer.render(120); h.footer.render(120);
     assert.equal(h.state.entriesReads, baseline + 2, "no-leaf hosts retain a fresh per-frame fallback");
+    h.ctx.sessionManager.getLeafId = getLeafId;
+    delete h.ctx.sessionManager.getSessionId;
+    baseline = h.state.entriesReads;
+    const usageReads = h.state.usageReads;
+    h.footer.render(120); h.footer.render(120);
+    assert.equal(h.state.entriesReads, baseline + 2, "a leaf without session identity must also read spend freshly");
+    assert.equal(h.state.usageReads, usageReads + 2, "a leaf without session identity cannot cache SDK context usage");
     checks++;
   }
   console.log(`PASS: ${checks} native Context lifecycle/focus/route/quota/cache scenarios (offline synthetic, no terminal/model/network)`);

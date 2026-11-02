@@ -1,15 +1,30 @@
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { describeToolArgs } from "../ui/format.js";
-import { singleLineText } from "../ui/text.js";
-import type { ActiveTool, GenerationPreview } from "./activity-types.js";
-import { boundedPreview, LinePreview } from "./line-preview.js";
+import { describeToolArgs } from "../ui/format.ts";
+import { singleLineText } from "../ui/text.ts";
+import type { ActiveTool, GenerationPreview } from "./activity-types.ts";
+import { boundedPreview, LinePreview } from "./line-preview.ts";
 
-export interface SessionEntries { getEntries(): unknown[] }
+export interface SessionEntries {
+  getEntries(): unknown[];
+  getSessionId?(): string;
+  getLeafId?(): string | null;
+  getEntryCount?(): number;
+}
+/** Opaque history identity, not a model projection or execution capability. */
+export interface ActivityHistoryState {
+  readonly session: object;
+  readonly session_id: string;
+  readonly leaf: string | null;
+  readonly count: number;
+}
 export interface ChildActivitySnapshot extends GenerationPreview {
   active_tools: ActiveTool[];
   tool_uses: number;
 }
 export interface ChildActivityObservation {
+  /** Pure invalidation hints; optional for structural observation sources. */
+  readonly presentationRevision?: number;
+  historyState?(): ActivityHistoryState | undefined;
   snapshot(): ChildActivitySnapshot;
   entries(): unknown[] | undefined;
   inFlight(): unknown;
@@ -32,6 +47,8 @@ export class ChildActivity implements ChildActivityObservation {
   private preparingTool?: string;
   private uses = 0;
   private sessions?: SessionEntries;
+  private revision = 0;
+  private history?: ActivityHistoryState;
   constructor(private readonly cwd: string) {}
 
   private clearPreviews(): void {
@@ -40,10 +57,10 @@ export class ChildActivity implements ChildActivityObservation {
     this.channel = undefined;
     this.preparingTool = undefined;
   }
-  private clearGeneration(): void { this.clearPreviews(); this.streaming = undefined; }
+  private clearGeneration(): void { this.clearPreviews(); this.streaming = undefined; this.revision++; }
 
   readonly extension: ExtensionFactory = (pi) => {
-    pi.on("session_start", (_event, ctx) => { this.sessions = ctx.sessionManager; });
+    pi.on("session_start", (_event, ctx) => { this.sessions = ctx.sessionManager; this.history = undefined; this.revision++; });
     pi.on("turn_start", () => this.clearGeneration());
     pi.on("agent_start", () => this.clearGeneration());
     pi.on("agent_end", () => this.clearGeneration());
@@ -53,13 +70,14 @@ export class ChildActivity implements ChildActivityObservation {
     // ChildActivityRegistry.retain owns the observation's eventual lifetime.
     pi.on("session_shutdown", () => { this.clearGeneration(); this.running.clear(); });
     pi.on("tool_execution_start", (event) => {
+      this.revision++;
       const detail = describeToolArgs(event.toolName, event.args, this.cwd, Infinity);
       this.preparingTool = undefined;
       this.running.set(event.toolCallId, { name: observedToolName(event.toolName),
         detail: detail ? boundedPreview(detail, 4096) : undefined });
     });
     pi.on("tool_execution_end", (event) => {
-      if (this.running.delete(event.toolCallId)) this.uses++;
+      if (this.running.delete(event.toolCallId)) { this.uses++; this.revision++; }
     });
     pi.on("message_start", (event) => {
       if (event.message.role !== "assistant") return;
@@ -68,6 +86,7 @@ export class ChildActivity implements ChildActivityObservation {
     });
     pi.on("message_update", (event) => {
       if (event.message.role !== "assistant") return;
+      this.revision++;
       this.streaming = event.message;
       const update = event.assistantMessageEvent;
       if (update.type === "toolcall_start" || update.type === "toolcall_delta" || update.type === "toolcall_end") {
@@ -100,6 +119,18 @@ export class ChildActivity implements ChildActivityObservation {
     return { active_tools: [...this.running.values()], tool_uses: this.uses, preview: this.prose.value(),
       ...(thinking ? { thinking } : {}), ...(this.channel ? { channel: this.channel } : {}),
       ...(this.preparingTool !== undefined ? { preparing_tool: this.preparingTool } : {}) };
+  }
+  get presentationRevision(): number { return this.revision; }
+  historyState(): ActivityHistoryState | undefined {
+    const session = this.sessions;
+    if (!session?.getSessionId || !session.getLeafId || !session.getEntryCount) return undefined;
+    try {
+      const session_id = session.getSessionId(), leaf = session.getLeafId(), count = session.getEntryCount();
+      if (!this.history || this.history.session !== session || this.history.session_id !== session_id ||
+          this.history.leaf !== leaf || this.history.count !== count)
+        this.history = { session, session_id, leaf, count };
+      return this.history;
+    } catch { return undefined; }
   }
   entries(): unknown[] | undefined {
     try { return this.sessions?.getEntries(); } catch { return undefined; }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, readFileSync, realpathSync, statSync } from "node:fs";
+import { accessSync, constants, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -183,6 +183,12 @@ function absoluteUserPath(path) {
 }
 export function protectionResources(paths = {}, env = process.env, root = packageRoot, hostRoot) {
   const agentDir = paths.agentDir ?? agentDirectory(env);
+  const auditArchives = join(agentDir, "logs/jev-auto-approval.jsonl.archives");
+  try {
+    const info = lstatSync(auditArchives);
+    assert(info.isDirectory() && !info.isSymbolicLink(),
+      "Jev audit archives must be a real directory; reconcile existing artifacts offline before restarting Pi");
+  } catch (error) { if (error.code !== "ENOENT") throw error; }
   const retained = globalThis[Symbol.for("@rocklee/jev-auto-approval:api-key-file")];
   const keyFile = env.PI_JEV_API_KEY_FILE || (typeof retained === "string" ? retained : undefined);
   const readFiles = [join(agentDir, "auth.json"), join(agentDir, "web-search.json"),
@@ -193,8 +199,13 @@ export function protectionResources(paths = {}, env = process.env, root = packag
   // config/profile symlink can target an otherwise writable output directory.
   const writeFiles = ["extensions/pi-permission-system/config.json", "extensions/pi-alehouse/config.json",
     "harness-presets.json", "managed-permissions.json", "settings.json", "models.json", "trust.json",
-    ...managedAgentNames.map(name => `agents/${name}.md`)].map(path => join(agentDir, path));
+    ...managedAgentNames.map(name => `agents/${name}.md`),
+    // Pin audit artifacts separately: logs may be a user-selected symlink to a
+    // shared directory. Do not make unrelated extensions' logs read-only.
+    "logs/jev-auto-approval.jsonl", "logs/.jev-auto-approval.jsonl.lock",
+  ].map(path => join(agentDir, path));
   return { writeRoots: [...new Set([resolve(root), agentDir,
+    auditArchives,
     paths.permissionRoot ?? join(root, "runtime/permission-system"), paths.policyRoot ?? join(root, "runtime/policy"),
     ...dependencyCodeRoots(root), ...(hostRoot ? [hostRoot, ...dependencyCodeRoots(hostRoot)] : [])])],
     readFiles: [...new Set(readFiles)], writeFiles };

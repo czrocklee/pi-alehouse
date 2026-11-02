@@ -306,7 +306,9 @@ test("preserved invalid preset fails closed for real SDK tool and user_bash disp
 });
 
 test("real composition runs researcher and worker Agents with forwarded asks, configured denies and a mode switch, offline", { timeout: 60000 }, (t) => {
-  const dir = temporary(t), agentDir = join(dir, "agent");
+  // Always exercise exact path matching across wrapped permission previews,
+  // even when the runner's TMPDIR happens to be short.
+  const dir = join(temporary(t), "forwarded-permission-preview-wrap-regression"), agentDir = join(dir, "agent");
   const output = execFileSync(process.execPath, [join(packageRoot, "test/runtime/fixtures/researcher-spawn.mjs")], {
     env: { HOME: dir, PATH: process.env.PATH, PI_CODING_AGENT_DIR: agentDir,
       PI_JEV_API_KEY_FILE: join(dir, "nonexistent-test-key"), PI_OFFLINE: "1", NO_COLOR: "1" },

@@ -81,6 +81,8 @@ export default function (pi: ExtensionAPI) {
   let frameIndex = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
   let lastTitle: string | undefined;
+  let cachedLabel: string | undefined;
+  let labelCwd: string | undefined;
   const pendingPermissionRequests = new Set<string>();
 
   function rawLabel(): string {
@@ -88,7 +90,14 @@ export default function (pi: ExtensionAPI) {
   }
 
   function label(): string {
-    return sanitizeTitle(rawLabel());
+    // Animation changes only the marks. Session-name lookup can walk the whole
+    // journal; rename/start hooks invalidate it, and cwd changes refresh the
+    // unnamed-session fallback without reading history on every frame.
+    if (cachedLabel === undefined || labelCwd !== context?.cwd) {
+      cachedLabel = sanitizeTitle(rawLabel());
+      labelCwd = context?.cwd;
+    }
+    return cachedLabel;
   }
 
   function currentState(): AnimatedState | "approval" | "settled" | "idle" {
@@ -172,6 +181,7 @@ export default function (pi: ExtensionAPI) {
     running = false;
     settled = false;
     lastTitle = undefined;
+    cachedLabel = undefined;
     pendingPermissionRequests.clear();
     if (ctx.mode === "tui") {
       // Core rewrites the title after session_start (and before rename hooks).
@@ -200,6 +210,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_info_changed", (_event, ctx) => {
     context = ctx;
+    cachedLabel = undefined;
     setTitle();
   });
 
@@ -229,6 +240,8 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.setWidget(TITLE_WIDGET_KEY, undefined);
     }
     lastTitle = undefined;
+    cachedLabel = undefined;
+    labelCwd = undefined;
     context = undefined;
     unsubscribePermissionPrompt();
     for (const unsubscribe of unsubscribePermissionEnds) unsubscribe();

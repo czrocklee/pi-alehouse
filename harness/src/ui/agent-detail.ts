@@ -1,13 +1,13 @@
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { validDifficulty, type RunView } from "../core/contracts.js";
-import { reported, type UsageComponent } from "../core/usage-ledger.js";
-import { profileLabel } from "../tools/tool-names.js";
-import type { ActiveTool, GenerationPreview } from "../runtime/activity-types.js";
+import { validDifficulty, type RunView } from "../core/contracts.ts";
+import { reported, type UsageComponent } from "../core/usage-ledger.ts";
+import { profileLabel } from "../tools/tool-names.ts";
+import type { ActiveTool, GenerationPreview } from "../runtime/activity-types.ts";
 import { formatContextPercent, formatContextTokens, formatCost, formatDrain, formatMs, formatTokens, formatTurns, generationLine, shortPath,
-  type Theme, type TranscriptRows } from "./format.js";
-import { POPOVER, isPopoverCloseClick, popoverInlay, popoverInlayWidth, popoverSide } from "./popover.js";
-import { clipPlainText, singleLineText, wrapPlainText as wrapText } from "./text.js";
-import { activityPresentation, runPresentation } from "./run-presentation.js";
+  type Theme, type TranscriptFrame, type TranscriptRows } from "./format.ts";
+import { POPOVER, isPopoverCloseClick, popoverInlay, popoverInlayWidth, popoverSide } from "./popover.ts";
+import { clipPlainText, singleLineText, wrapPlainText as wrapText } from "./text.ts";
+import { activityPresentation, runPresentation } from "./run-presentation.ts";
 export { wrapText };
 
 /** Label column, so every field's value starts at the same place. */
@@ -109,12 +109,12 @@ export function renderDetailTitle(input: DetailInput, _spinnerFrame: number, the
  * condition under its own label. The transcript follows these rows and is
  * rendered by Pi's own components, not here.
  */
-export function renderDetailFields(input: DetailInput, theme: Theme, width: number): string[] {
+export function renderDetailFields(input: DetailInput, theme: Theme, width: number, wrap = wrapText): string[] {
   const { view, live } = input;
   const inner = Math.max(8, width - LABEL - 2);
   const out: string[] = [];
   const field = (label: string, value: string, color = "text"): void => {
-    for (const [i, line] of wrapText(value, inner).entries()) {
+    for (const [i, line] of wrap(value, inner).entries()) {
       out.push(truncateToWidth(`  ${theme.fg("dim", i === 0 ? key(label) : " ".repeat(LABEL))}` +
         (color === "text" ? line : theme.fg(color, line)), width));
     }
@@ -285,6 +285,12 @@ export interface DetailPaneOptions {
   theme: Theme;
   /** Re-read every frame, so the pane cannot disagree with the widget or the tools. */
   snapshot: () => { agent_id: string; input: DetailInput }[];
+  /** Actions bypass all presentation caches. */
+  freshSnapshot?: () => { agent_id: string; input: DetailInput }[];
+  /** Cheap data invalidation hint, independent of animation and elapsed time. */
+  revision?: () => unknown;
+  visible?: () => boolean;
+  invalidate?: () => void;
   /** One Agent's transcript rows, created once per Agent and reused; undefined
    * when its child session has not started and there is nothing to render. */
   transcript: (agent_id: string) => TranscriptRows | undefined;
@@ -328,12 +334,18 @@ export class DetailPane {
   private stopPaint: StopPaint | undefined;
   private confirmation: StopConfirmation | undefined;
   private frame = 0;
+  private readonly wrapped = new Map<string, { width: number; rows: string[] }>();
+  private animating = false;
+  private renderedRevision: unknown;
   private readonly timer: ReturnType<typeof setInterval>;
 
   constructor(private readonly options: DetailPaneOptions) {
     this.selected = options.initial;
     this.timer = setInterval(() => {
-      if (this.closed) return;
+      if (this.closed || this.options.visible?.() === false) return;
+      const staleStop = this.staleStopPaint();
+      const revision = this.options.revision?.();
+      if (!staleStop && !this.animating && revision !== undefined && revision === this.renderedRevision) return;
       this.frame++;
       this.options.tui.requestRender();
     }, 120);
@@ -390,19 +402,27 @@ export class DetailPane {
     this.confirmation = undefined;
   }
 
-  /** Never reuse geometry after resize or an intent after its monotonic expiry.
-   * Input checks this too: a delayed repaint cannot extend confirmation. */
-  private retireStopPaint(width?: number): void {
+  /** Timers request repaint without consuming the still-visible confirmation:
+   * its first Esc must cancel, even if the render request has not been serviced. */
+  private staleStopPaint(width?: number): boolean {
     const painted = this.stopPaint?.dimensions ?? this.confirmation?.dimensions;
     const terminal = this.options.tui.terminal;
-    if ((this.confirmation && performance.now() >= this.confirmation.expiresAt) ||
-        (painted && (painted.columns !== terminal.columns || painted.rows !== terminal.rows ||
-          (width !== undefined && painted.width !== width)))) this.resetStopInteraction();
+    return !!((this.confirmation && performance.now() >= this.confirmation.expiresAt) ||
+      (painted && (painted.columns !== terminal.columns || painted.rows !== terminal.rows ||
+        (width !== undefined && painted.width !== width))));
+  }
+
+  /** Actions and rendering retire expired intent/stale geometry immediately.
+   * A delayed repaint cannot extend the confirmation's ten-second lifetime. */
+  private retireStopPaint(width?: number): void {
+    if (!this.staleStopPaint(width)) return;
+    this.resetStopInteraction();
+    this.options.tui.requestRender();
   }
 
   /** Actions get fresh authority; rendering reuses its one captured snapshot. */
   private validStop(target: StopTarget): boolean {
-    const entry = this.options.snapshot().find((entry) => entry.agent_id === target.agent_id);
+    const entry = (this.options.freshSnapshot ?? this.options.snapshot)().find((entry) => entry.agent_id === target.agent_id);
     return sameStop(target, entry?.input.view, this.selected);
   }
 
@@ -454,6 +474,7 @@ export class DetailPane {
       this.options.done();
       return;
     }
+    this.retireStopPaint();
     const { entries, index } = this.current();
     if (matchesKey(data, "left") || matchesKey(data, "h")) return this.select(entries, index - 1);
     if (matchesKey(data, "right") || matchesKey(data, "l") || matchesKey(data, "tab")) return this.select(entries, index + 1);
@@ -522,6 +543,7 @@ export class DetailPane {
     this.retireStopPaint(width);
     this.stopPaint = undefined;
     this.paintedHeight = 0;
+    this.animating = false;
     if (this.closed || !Number.isFinite(width) || width < 12) {
       this.transcriptAnchor = undefined;
       this.resetStopInteraction(); return [];
@@ -538,6 +560,8 @@ export class DetailPane {
     this.paintedWidth = this.options.frame ? width : 0;
     const { entries, index } = this.current();
     const entry = entries[index];
+    this.renderedRevision = this.options.revision?.();
+    this.animating = false;
     if (!entry) {
       this.resetStopInteraction();
       this.painted = 0; // No visible body for keys/wheel to scroll against.
@@ -548,15 +572,25 @@ export class DetailPane {
         this.footer(chrome, 0, 0, 0, 0, undefined, false, false).text, width, inner);
     }
     const view = entry.input.view;
+    this.animating = view.status === "queued" || view.status === "running" || view.status === "cancelling";
     if (this.confirmation && !sameStop(this.confirmation.target, view, this.selected)) this.resetStopInteraction();
     const { owner_id, generation, agent_id, run_id } = view;
     const target = this.confirmation?.target ?? { owner_id, generation, agent_id, run_id };
     // Confirmation changes only the footer action. Keep the same selected Run,
     // title, transcript and scroll position instead of replacing the pane.
     // Fields first, then a rule, then the transcript Pi's own components render.
-    const fields = renderDetailFields(entry.input, this.options.theme, inner);
-    const rows = this.options.transcript(entry.agent_id);
-    const transcript = rows?.lineCount(inner) ?? 0;
+    const fields = renderDetailFields(entry.input, this.options.theme, inner, (text, width) => {
+      const cached = this.wrapped.get(text);
+      this.wrapped.delete(text);
+      const rows = cached?.width === width ? cached.rows : wrapText(text, width);
+      this.wrapped.set(text, { width, rows });
+      if (this.wrapped.size > 64) this.wrapped.delete(this.wrapped.keys().next().value!);
+      return rows;
+    });
+    const source = this.options.transcript(entry.agent_id);
+    const rows = source?.frame?.(inner) ?? (source ? { lineCount: source.lineCount(inner),
+      slice: (start: number, count: number) => source.slice(inner, start, count) } : undefined);
+    const transcript = rows?.lineCount ?? 0;
     const transcriptStart = fields.length + 1;
     const previous = this.transcriptAnchor;
     if (!this.followTail && previous?.width === inner && this.scrollOffset >= previous.start &&
@@ -591,11 +625,12 @@ export class DetailPane {
       this.window(fields, rows, inner, start, viewportHeight), footer.text, width, inner);
   }
 
-  invalidate(): void { this.resetStopInteraction(); }
+  invalidate(): void { this.resetStopInteraction(); this.wrapped.clear(); this.options.invalidate?.(); }
   dispose(): void {
     this.closed = true;
     this.resetStopInteraction();
     clearInterval(this.timer);
+    this.wrapped.clear();
   }
 
   // ---- Private ----
@@ -605,7 +640,7 @@ export class DetailPane {
    * this module produced; the transcript is sliced by its own owner, which
    * renders each settled message once per width rather than on every scroll.
    */
-  private window(fields: string[], rows: TranscriptRows | undefined, width: number, start: number, height: number): string[] {
+  private window(fields: string[], rows: TranscriptFrame | undefined, width: number, start: number, height: number): string[] {
     const out: string[] = [];
     for (let i = start; i < start + height; i++) {
       if (i < fields.length) out.push(fields[i]!);
@@ -618,7 +653,7 @@ export class DetailPane {
       return out;
     }
     const from = Math.max(0, start - fields.length - 1);
-    out.push(...rows.slice(width, from, remaining).slice(0, remaining).map((row) => truncateToWidth(row, width)));
+    out.push(...rows.slice(from, remaining).slice(0, remaining).map((row) => truncateToWidth(row, width)));
     while (out.length < height) out.push("");
     return out;
   }

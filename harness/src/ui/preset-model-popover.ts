@@ -1,8 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, stripTerminalSequences, truncateToWidth, visibleWidth, type Container, type Component, type Focusable,
   type OverlayOptions, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
-import type { ModelPickerPosition } from "./preset-picker.js";
-import { isPopoverCloseClick, popoverInlay, popoverRow, popoverTitle, type PopoverTheme } from "./popover.js";
+import type { ModelPickerPosition } from "./preset-picker.ts";
+import { isPopoverCloseClick, popoverInlay, popoverRow, popoverTitle, type PopoverTheme } from "./popover.ts";
 
 type Model = ReturnType<ExtensionContext["modelRegistry"]["getAll"]>[number];
 type NativeSelector = Component & Focusable & { dispose(): void; children: Component[] };

@@ -1,5 +1,5 @@
 import type { EventBus } from "@earendil-works/pi-coding-agent";
-import { OverlayRequest } from "./overlay-request.js";
+import { OverlayRequest } from "./overlay-request.ts";
 
 /**
  * Watches the permission system's public broadcasts so the detail pane can get

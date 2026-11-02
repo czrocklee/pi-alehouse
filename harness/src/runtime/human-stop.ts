@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { OwnerController } from "../core/owner-controller.js";
+import type { OwnerController } from "../core/owner-controller.ts";
 
 export const humanCancellationMessage = "harness:human-cancellation:v1";
 

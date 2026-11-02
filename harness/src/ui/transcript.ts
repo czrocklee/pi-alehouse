@@ -13,8 +13,8 @@
 import { AssistantMessageComponent, BashExecutionComponent, BranchSummaryMessageComponent,
   CompactionSummaryMessageComponent, parseSkillBlock, SkillInvocationMessageComponent,
   ToolExecutionComponent, UserMessageComponent, type sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
-import { Container, Spacer, type MarkdownTheme, type TUI } from "@earendil-works/pi-tui";
-import { paneRow, type TranscriptRows } from "./format.js";
+import { Box, Container, Spacer, type Component, type MarkdownTheme, type TUI } from "@earendil-works/pi-tui";
+import { paneRow, type TranscriptFrame, type TranscriptRows } from "./format.ts";
 
 /** Where a child's messages come from. Structural, so the pane never holds a session. */
 export interface TranscriptSource {
@@ -59,7 +59,8 @@ const role = (message: unknown): unknown =>
 export class TranscriptContent implements TranscriptRows {
   private blocks: Block[] = [];
   private consumed = 0;
-  private lastConsumed: unknown;
+  private consumedMessages: readonly unknown[] = [];
+  private messagesIdentity: readonly unknown[] | undefined;
   /** Whether anything above a user message was rendered, driving its spacer. */
   private visible = false;
   private readonly pending = new Map<string, Pending>();
@@ -70,6 +71,25 @@ export class TranscriptContent implements TranscriptRows {
   private inFlightRows: readonly string[] | undefined;
 
   constructor(private readonly options: TranscriptOptions) {}
+
+  frame(width: number): TranscriptFrame {
+    const settled = width > 0 ? this.settled(width) : [], tail = width > 0 ? this.tail(width) : [];
+    return { lineCount: settled.length + tail.length, slice: (start, count) => {
+      const end = start + count, out = settled.slice(start, Math.min(end, settled.length));
+      if (end > settled.length) out.push(...tail.slice(Math.max(0, start - settled.length), end - settled.length));
+      return out;
+    } };
+  }
+
+  /** Explicit MarkdownTheme/palette replacement rebuilds captured components,
+   * including literal ANSI and SDK Markdown default-style prefixes. A fresh
+   * getMarkdownTheme() wrapper alone is not evidence of a palette change. */
+  setTheme(markdownTheme: MarkdownTheme): void {
+    this.options.markdownTheme = markdownTheme;
+    this.reset();
+    this.inFlight = undefined;
+    this.inFlightRows = undefined;
+  }
 
   lineCount(width: number): number {
     if (width <= 0) return 0;
@@ -88,7 +108,25 @@ export class TranscriptContent implements TranscriptRows {
     return out;
   }
 
-  /** Drop every cached row, in this object and in the mounted components. */
+  /** Layout invalidation for a known unchanged palette. Native message/tool
+   * invalidate() overrides can rebuild Markdown, so traverse their public tree
+   * instead. Box render caches self-check width, child rows and background.
+   * Opaque wrappers (including MouseRegion) use public invalidate(); the native
+   * assistant's thinking wrapper delegates to its Markdown/Text leaf. */
+  invalidateLayout(): void {
+    const invalidate = (component: Component): void => {
+      if (component instanceof Container || component instanceof Box) {
+        for (const child of component.children) invalidate(child);
+      } else component.invalidate();
+    };
+    for (const block of this.blocks) { invalidate(block.container); block.rows = undefined; }
+    this.rows = undefined;
+    if (this.inFlight) invalidate(this.inFlight);
+    this.inFlightRows = undefined;
+  }
+
+  /** Ordinary external invalidation retains its native-component semantics.
+   * Palette replacement should use setTheme() to refresh captured ANSI too. */
   invalidate(): void {
     for (const block of this.blocks) { block.container.invalidate(); block.rows = undefined; }
     this.rows = undefined;
@@ -97,9 +135,7 @@ export class TranscriptContent implements TranscriptRows {
   }
 
   dispose(): void {
-    this.blocks = [];
-    this.pending.clear();
-    this.rows = undefined;
+    this.reset();
     this.inFlight = undefined;
     this.inFlightRows = undefined;
   }
@@ -152,18 +188,26 @@ export class TranscriptContent implements TranscriptRows {
    * consumed prefix no longer mirrors the source — history rewritten by a
    * compaction or a branch — start over rather than appending onto stale blocks.
    */
+  private reset(): void {
+    this.blocks = [];
+    this.consumed = 0;
+    this.consumedMessages = [];
+    this.messagesIdentity = undefined;
+    this.visible = false;
+    this.pending.clear();
+    this.rows = undefined;
+  }
+
   private consume(): void {
     const messages = this.options.source.messages();
+    if (messages === this.messagesIdentity && messages.length === this.consumed) return;
+    // Only inspect prefixes when the source history actually changed. A branch
+    // can replace an earlier entry while retaining the same last message.
     const rewritten = messages.length < this.consumed ||
-      (this.consumed > 0 && messages[this.consumed - 1] !== this.lastConsumed);
-    if (rewritten) {
-      this.blocks = [];
-      this.consumed = 0;
-      this.lastConsumed = undefined;
-      this.visible = false;
-      this.pending.clear();
-      this.rows = undefined;
-    }
+      this.consumedMessages.some((message, i) => i < this.consumed && messages[i] !== message);
+    if (rewritten) this.reset();
+    this.messagesIdentity = messages;
+    this.consumedMessages = messages.slice();
     if (messages.length === this.consumed) return;
     for (let i = this.consumed; i < messages.length; i++) {
       // Pi's own components assume well-formed messages -- array content, a
@@ -175,7 +219,6 @@ export class TranscriptContent implements TranscriptRows {
       try { this.consumeOne(messages[i]); } catch { /* one block short, not one pane */ }
     }
     this.consumed = messages.length;
-    this.lastConsumed = messages.at(-1);
     this.rows = undefined;
   }
 

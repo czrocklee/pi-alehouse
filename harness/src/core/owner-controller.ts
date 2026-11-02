@@ -1,25 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { isAbsolute, normalize, resolve } from "node:path";
 import { normalizeFacts, normalizeRuntime, terminal, validSettings, validWorkspace, type WorkspaceInfo, type AdmittedAgentConfig, type ExecutionFacts,
-  type CancellationSource, type HistoryRef, type ModelStopReason, type Outcome, type Output, type Phase, type ResultPage, type ResultRef,
-  type RunStatus, type RunTelemetry, type RunView, type StopReason, type SubmitRequest } from "./contracts.js";
+  type CancellationSource, type HistoryRef, type ModelStopReason, type Outcome, type Output, type OutputDelta, type Phase, type ResultPage, type ResultRef,
+  type RunStatus, type RunTelemetry, type RunView, type StopReason, type SubmitRequest } from "./contracts.ts";
 import { HarnessError, ParentHistoryError, SessionInitializationError, SessionUnavailableError, workersDisabled,
-  type AgentSessionPort, type OwnerLease, type RunCallbacks } from "./ports.js";
-import { boundedOutput, describeResult, sha256, validOutput } from "./result-text.js";
-import { emptyLedger, mergeLedgers, totalOf, USAGE_COMPONENTS, type UsageLedger } from "./usage-ledger.js";
-import { ObservationScheduler, synchronousObservationPort, validateLifecycleWait, type LifecycleObservationResult } from "./observation-scheduler.js";
+  type AgentSessionPort, type OwnerLease, type RunCallbacks } from "./ports.ts";
+import { boundedOutput, describeResult, OutputBuffer, sha256, validOutput } from "./result-text.ts";
+import { emptyLedger, mergeLedgers, totalOf, USAGE_COMPONENTS, type UsageLedger } from "./usage-ledger.ts";
+import { ObservationScheduler, synchronousObservationPort, validateLifecycleWait, type LifecycleObservationResult } from "./observation-scheduler.ts";
 import { actionableQuestionId, applyCommunicationCommit, canAnswerQuestion, communicationReadiness, defaultObservationTargets,
-  enqueueAlert, enqueueManagedBlock, finishedCandidates, isCommunicationSettled, recordFirstQuestion, scopedAlerts, snapshotManagedBlockTools, taskOrdinal, validateCommunicationCommit,
-  type AlertScope, type CommunicationCommitPlan, type CommunicationCommitSnapshot, type PendingAlert } from "./communication-state.js";
-import { packCommunication } from "./communication-packer.js";
-import { AGENT_EXISTS_RESOLUTION, COMMUNICATION_LIMITS, isModelAgentName, modelTaskStatus, type CommunicationAction, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.js";
-import type { CommunicationSnapshot, CommunicationToolResult, ResultWindow, TaskSnapshot } from "./communication-snapshot.js";
-import { taskMetadata } from "./task-metadata.js";
-import { validWorkspaceDetails, workspaceRecoveryOf, type WorkspaceDetails, type WorkspaceRecovery } from "./workspace-metadata.js";
-import { isQuestionId } from "./question-id.js";
-import { decodeResultCursor, invalidResultCursor, resultCursorKey, type ResultCursorIdentity } from "./result-cursor.js";
+  enqueueAlert, enqueueManagedBlock, finishedCandidates, isCommunicationSettled, recordFirstQuestion, scopedAlerts, snapshotManagedBlockTools, taskOrdinal, taskOrdinals, validateCommunicationCommit,
+  type AlertScope, type CommunicationCommitPlan, type CommunicationCommitSnapshot, type PendingAlert } from "./communication-state.ts";
+import { packCommunication } from "./communication-packer.ts";
+import { AGENT_EXISTS_RESOLUTION, COMMUNICATION_LIMITS, isModelAgentName, modelTaskStatus, type CommunicationAction, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.ts";
+import type { CommunicationSnapshot, CommunicationToolResult, ResultWindow, TaskSnapshot } from "./communication-snapshot.ts";
+import { taskMetadata } from "./task-metadata.ts";
+import { validWorkspaceDetails, workspaceRecoveryOf, type WorkspaceDetails, type WorkspaceRecovery } from "./workspace-metadata.ts";
+import { isQuestionId } from "./question-id.ts";
+import { decodeResultCursor, invalidResultCursor, resultCursorKey, type ResultCursorIdentity } from "./result-cursor.ts";
 import { dispatchText, isBoundDispatch, resourcesOverlap, validateDispatch, validSourceState, type Dispatch, type DispatchLease,
-  type DispatchPort, type PreparedDispatch, type PreparedPath, type SourceState, type ValidationReceipt } from "./dispatch.js";
+  type DispatchPort, type PreparedDispatch, type PreparedPath, type SourceState, type ValidationReceipt } from "./dispatch.ts";
 
 interface RunRecord {
   owner_id: string;
@@ -76,6 +76,7 @@ interface ResourceClaim {
 }
 interface Agent {
   id: string; name: string; settings: AdmittedAgentConfig; resident: boolean;
+  effectiveSettings: RunView["effective_settings"];
   current?: string; session?: AgentSessionPort; unavailable?: string; release?: Promise<void>;
   workspace?: WorkspaceInfo;
   workspace_details?: WorkspaceDetails;
@@ -92,7 +93,8 @@ interface Agent {
   prompted?: true;
 }
 interface ManagedRun {
-  record: RunRecord; output: Output; submittedMono: number;
+  record: RunRecord; output: Output; stream?: OutputBuffer; submittedMono: number;
+  effectiveSettings: RunView["effective_settings"];
   executionStartedMono?: number;
   prepared?: PreparedDispatch;
   claim?: ResourceClaim;
@@ -256,6 +258,7 @@ export class OwnerController {
   /** The sole Owner FIFO. Origin and quota identity derive from original Runs. */
   private readonly alerts: PendingAlert<ManagedRun>[] = [];
   private settledSeq = 0;
+  private presentationVersion = 0;
   private reportedBlock?: string;
   /** Explicit lifetime adapter binding, never inferred from display equality. */
   private modelCommunication = false;
@@ -339,6 +342,7 @@ export class OwnerController {
       this.runs.get(run.record.run_id) === run && this.agents.get(run.record.agent_id)?.current === run.record.run_id;
   }
   private changed(kind: ContextChange["kind"], run: ManagedRun): string {
+    this.presentationVersion++;
     const event_id = randomUUID();
     try {
       const result: unknown = this.options.onContextChange?.({ event_id, kind, owner_id: this.options.owner.owner_id,
@@ -353,12 +357,13 @@ export class OwnerController {
     } catch (error) { throw new HarnessError("CONTEXT_CHANGE_FAILED", { error: errorText(error) }); }
     return event_id;
   }
-  private wake(): void { this.observations.requestDrain(); }
+  private wake(): void { this.presentationVersion++; this.observations.requestDrain(); }
   assertEffectAllowed(): void { this.observations.assertEffectAllowed(); }
   validateObservationEntry<T>(read: () => T): T { return this.observations.validateEntry(read); }
   private historyFailed(run: ManagedRun, error: unknown): string {
     this.assertEffectAllowed();
     run.quarantine = "history_error";
+    this.presentationVersion++;
     // A child writer is local. Only a failed SHARED parent SDK write blocks the owner.
     if (error instanceof ParentHistoryError) this.latchParentHistoryFailure(error);
     return run.record.history_error ??= errorText(error);
@@ -380,7 +385,7 @@ export class OwnerController {
     for (const key of Object.keys(request)) {
       if (allowed.includes(key)) continue;
       if (reuse && ["settings", "model", "provider", "thinking", "effort", "effort_source", "effort_overrides", "difficulty", "strength", "preset", "subagent_type", "profile", "inherit_context", "cwd", "tools", "name"].includes(key)) {
-        throw new HarnessError("IMMUTABLE_SETTING", { key, effective_settings: settingsView(this.requireAgent(request.resume).settings) });
+        throw new HarnessError("IMMUTABLE_SETTING", { key, effective_settings: structuredClone(this.requireAgent(request.resume).effectiveSettings) });
       }
       throw new HarnessError("UNSUPPORTED_PARAMETER", { key, allowed });
     }
@@ -412,6 +417,10 @@ export class OwnerController {
   /** Monotonic acceptance fact for tool exposure/replacement confirmation.
    * Run records are never evicted; this is not proof of Owner closure. */
   get hasAcceptedRuns(): boolean { return this.runs.size > 0; }
+
+  /** Conservative UI invalidation hint only. No clock/lease/admission sampling;
+   * never reuse it as command authority or a retained task ordinal cache. */
+  get presentationRevision(): number { return this.presentationVersion; }
 
   /** A synchronous SDK append to the shared parent threw. The SDK may already
    * have changed memory or disk, so this is a sticky safety latch, not rollback. */
@@ -590,6 +599,7 @@ export class OwnerController {
     // only explicitly bound model integrations require name-addressable Agents.
     const agent: Agent = reuse ? this.requireAgent(request.resume) : {
       id: randomUUID(), name: request.name ?? "", settings: structuredClone(request.settings), resident: true,
+      effectiveSettings: settingsView(request.settings),
       inbox: [],
       limits: { max_turns: request.max_turns },
     };
@@ -635,7 +645,7 @@ export class OwnerController {
       input_entered: false, status: "queued", phase: "queued", execution_exited: false,
       submitted_at: this.clock.wall(), turns: 0, limit_reached: false, cleanup_errors: [], discarded_inputs: [],
     };
-    const run: ManagedRun = { record, output: emptyOutput(), submittedMono: this.clock.mono(), inputOpen: false,
+    const run: ManagedRun = { record, output: emptyOutput(), effectiveSettings: agent.effectiveSettings, submittedMono: this.clock.mono(), inputOpen: false,
       active: false, outputReserved: true, inputs: new Set(), inputCount: 0, finished_presented: false,
       hadSession: !!agent.session, session: agent.session, prepared };
     if (prepared && (prepared.ownership.length || prepared.tree)) {
@@ -784,7 +794,7 @@ export class OwnerController {
   private dispatchNote(run: ManagedRun, note: string): void {
     const notes = run.record.dispatch_notes ??= [];
     const bounded = note.slice(0, 120);
-    if (bounded.trim() && notes.length < 2 && !notes.includes(bounded)) notes.push(bounded);
+    if (bounded.trim() && notes.length < 2 && !notes.includes(bounded)) { notes.push(bounded); this.presentationVersion++; }
   }
   private async observeDispatch(run: ManagedRun): Promise<void> {
     const prepared = run.prepared!;
@@ -948,6 +958,7 @@ export class OwnerController {
       activeByProvider.set(provider, (activeByProvider.get(provider) ?? 0) + 1);
       run.executionStartedMono = this.clock.mono();
       run.record.status = "running"; run.record.phase = "initializing"; run.record.started_at = this.clock.wall();
+      this.presentationVersion++;
       this.track(this.execute(run));
     }
     } finally { this.pumping = undefined; }
@@ -957,6 +968,7 @@ export class OwnerController {
     if (!validOutput(value)) {
       run.quarantine = "invalid_execution_facts";
       run.record.cleanup_errors.push("INVALID_OUTPUT");
+      this.presentationVersion++;
       return false;
     }
     const revision = value.revision ?? 0, previous = run.output.revision ?? 0;
@@ -964,7 +976,34 @@ export class OwnerController {
     if (revision === previous && (value.total_chars < run.output.total_chars || !value.text.startsWith(run.output.text))) return false;
     const bounded = boundedOutput(value.text, this.limits.output);
     run.output = { ...bounded, total_chars: value.total_chars, truncated: value.truncated || bounded.truncated, revision };
+    run.stream = undefined;
+    this.presentationVersion++;
     return true;
+  }
+  private outputDelta(run: ManagedRun, value: OutputDelta): void {
+    // Effect guard is deliberately before inspecting any adapter-owned fields.
+    this.assertEffectAllowed();
+    try {
+    if (!value || typeof value !== "object") throw new HarnessError("INVALID_OUTPUT_DELTA");
+    const { type, revision } = value;
+    if (!Number.isSafeInteger(revision) || revision < 0 ||
+        Object.keys(value).some(key => !["type", "revision", ...(type === "append" ? ["text"] : ["max_chars"])].includes(key)))
+      throw new HarnessError("INVALID_OUTPUT_DELTA");
+    if (type === "reset") {
+      const cap = value.max_chars === undefined ? this.limits.output : value.max_chars;
+      if (revision <= (run.output.revision ?? 0) || !Number.isSafeInteger(cap) || cap < 0) throw new HarnessError("INVALID_OUTPUT_DELTA");
+      run.output = run.stream = new OutputBuffer(Math.min(this.limits.output, cap), revision);
+      this.presentationVersion++;
+    } else if (type === "append" && run.stream && run.stream.revision === revision && typeof value.text === "string") {
+      run.stream.append(value.text);
+      if (value.text.length) this.presentationVersion++;
+    } else throw new HarnessError("INVALID_OUTPUT_DELTA");
+    } catch (error) {
+      run.quarantine = "invalid_execution_facts";
+      run.record.cleanup_errors.push("INVALID_OUTPUT_DELTA");
+      this.presentationVersion++;
+      throw error;
+    }
   }
   private wrapUp(run: ManagedRun): void {
     this.assertEffectAllowed();
@@ -1004,6 +1043,7 @@ export class OwnerController {
         agent.workspace = workspace;
         run.record.workspace = structuredClone(workspace);
         if (details !== undefined) agent.workspace_details = run.record.workspace_details = details;
+        this.presentationVersion++;
         this.assertOwnerAvailable();
         if (!run.record.stop_reason && run.record.dispatch) {
           try {
@@ -1049,14 +1089,20 @@ export class OwnerController {
       } else {
         this.assertOwnerAvailable();
         run.record.phase = "executing"; run.inputOpen = true;
+        this.presentationVersion++;
         const callbacks: RunCallbacks = {
           inputEntered: () => {
             this.assertEffectAllowed();
             if (!this.current(run) || run.record.execution_exited) return;
             run.record.input_entered = true;
+            this.presentationVersion++;
             if (agent.question?.reserved_by === run.record.run_id) agent.question = undefined;
           },
           output: (value) => { this.assertEffectAllowed(); if (this.current(run) && !run.record.execution_exited) this.output(run, value); },
+          outputDelta: (value) => {
+            this.assertEffectAllowed();
+            if (this.current(run) && !run.record.execution_exited) this.outputDelta(run, value);
+          },
           runtime: (value) => {
             this.assertEffectAllowed();
             if (!this.current(run) || run.record.execution_exited) return;
@@ -1066,16 +1112,19 @@ export class OwnerController {
             const previous = run.runtime;
             run.runtime = { activity: next.activity, context: next.context ?? previous?.context,
               usage: next.usage ? cumulativeUsage(previous?.usage, next.usage) : previous?.usage };
+            this.presentationVersion++;
           },
           drain: (waiting_for) => {
             this.assertEffectAllowed();
             if (!this.current(run) || run.record.execution_exited || !["deliveries", "sdk_idle"].includes(waiting_for)) return;
             run.drain = { waiting_for, startedMono: run.drain?.startedMono ?? this.clock.mono() };
+            this.presentationVersion++;
           },
           turnStart: () => {
             this.assertEffectAllowed();
             if (!this.current(run) || run.record.execution_exited) return;
             run.record.turns++; run.turnStarted = this.clock.mono();
+            this.presentationVersion++;
             if (run.record.turns > run.record.max_turns + this.limits.grace) {
               run.record.limit_reached = true; this.stop(run, "hard_budget");
             } else if (run.record.turns > run.record.max_turns) this.wrapUp(run);
@@ -1089,7 +1138,9 @@ export class OwnerController {
           },
           question: (text) => {
             this.assertCommunicationOpen(run);
-            return recordFirstQuestion(run, text);
+            const result = recordFirstQuestion(run, text);
+            if (result === "recorded") this.presentationVersion++;
+            return result;
           },
           alert: (text) => {
             this.assertCommunicationOpen(run);
@@ -1154,6 +1205,10 @@ export class OwnerController {
     const stopped = run.record.stop_reason;
     let accrued = false;
     try {
+    // Seal the private append buffer BEFORE touching possibly hostile final
+    // facts. Even the finalization-error/history path must carry plain Output.
+    if (run.output instanceof OutputBuffer) run.output = run.output.snapshot();
+    run.stream = undefined;
     const normalized = normalizeFacts(facts, run.output);
     facts = normalized.facts;
     if (normalized.invalid) run.quarantine = "invalid_execution_facts";
@@ -1167,7 +1222,8 @@ export class OwnerController {
     if (!this.output(run, facts.output)) {
       // Different messages may replace each other; a final report may not erase
       // the last observed prefix within the SAME message revision.
-      run.output = { ...run.output, truncated: true };
+      run.output = { text: run.output.text, total_chars: run.output.total_chars, revision: run.output.revision, truncated: true };
+      run.stream = undefined;
       run.quarantine = "output_uncertain"; run.record.cleanup_errors.push("EXECUTION_OUTPUT_REGRESSED");
       if (facts.kind === "success") facts = { ...facts, kind: "error", error: "EXECUTION_OUTPUT_REGRESSED" };
     }
@@ -1225,8 +1281,8 @@ export class OwnerController {
     // settle before SDK queue clearing or reuse. A hung delivery keeps ownership.
     // Each settle-path await is observable (stats().finalizing_waits) so a
     // wedged finalization is diagnosable without weakening its fail-closed hold.
-    run.finalizeWait = { wait: "inputs", startedMono: this.clock.mono() };
-    try { await Promise.all([...run.inputs]); } finally { run.finalizeWait = undefined; }
+    run.finalizeWait = { wait: "inputs", startedMono: this.clock.mono() }; this.presentationVersion++;
+    try { await Promise.all([...run.inputs]); } finally { run.finalizeWait = undefined; this.presentationVersion++; }
     if (run.session) {
       try { run.record.discarded_inputs.push(...run.session.clearInputs()); }
       catch (error) { run.quarantine = error instanceof SessionUnavailableError ? error.reason : "input_cleanup_uncertain"; run.record.cleanup_errors.push(errorText(error)); }
@@ -1241,8 +1297,8 @@ export class OwnerController {
     // the Agent in place; only a failed initialization or quarantine ends it.
     if (run.quarantine || (!run.hadSession && !run.record.input_entered && !run.record.stop_reason && !run.prestartFailure)) {
       run.cleanup = this.releaseAgent(agent, run.quarantine ?? "initialization_failed", run);
-      run.finalizeWait = { wait: "release", startedMono: this.clock.mono() };
-      try { await run.cleanup; } finally { run.finalizeWait = undefined; } // Known cleanup facts precede optional history metadata.
+      run.finalizeWait = { wait: "release", startedMono: this.clock.mono() }; this.presentationVersion++;
+      try { await run.cleanup; } finally { run.finalizeWait = undefined; this.presentationVersion++; } // Known cleanup facts precede optional history metadata.
     }
     const finished: RunRecord = { ...run.record, status: run.record.outcome.status,
       phase: "settled", finished_at: this.clock.wall(), result: describeResult(run.record.run_id, run.output),
@@ -1259,14 +1315,15 @@ export class OwnerController {
           this.internalError ??= errorText(error);
           throw error;
         }
-        run.finalizeWait = { wait: "history", startedMono: this.clock.mono() };
-        try { finished.history_ref = await run.session.history.finish(finished.history_ref, { ...finished.outcome! }, { ...run.output }, finished.usage,
+        run.finalizeWait = { wait: "history", startedMono: this.clock.mono() }; this.presentationVersion++;
+        try { finished.history_ref = await run.session.history.finish(finished.history_ref, { ...finished.outcome! },
+          { text: run.output.text, total_chars: run.output.total_chars, truncated: run.output.truncated, revision: run.output.revision }, finished.usage,
           this.validationReceipt(run, finished.outcome!), () => {
             this.assertEffectAllowed();
             if (run.finalizeWait?.wait === "history" && !run.record.cleanup_errors.includes("VALIDATION_RECEIPT_INVALID"))
               run.record.cleanup_errors.push("VALIDATION_RECEIPT_INVALID");
           }); }
-        finally { run.finalizeWait = undefined; }
+        finally { run.finalizeWait = undefined; this.presentationVersion++; }
       } catch (error) { finished.history_error = this.historyFailed(run, error); }
     }
     // Input drain and history no longer need this per-Run reference. The Agent
@@ -1407,7 +1464,7 @@ export class OwnerController {
           if (agent.inbox.length >= INBOX_LIMIT || agent.inbox.reduce((sum, text) => sum + text.length, message.length) > INBOX_CHARS) {
             throw new HarnessError("UPDATE_LIMIT", { agent_id, resolution: "Wait for this task to start, then send one combined message." });
           }
-          agent.inbox.push(message);
+          agent.inbox.push(message); this.presentationVersion++;
           return done("joined", target);
         }
         if (this.acceptsInput(bound)) { this.dispatchInput(bound, message, "steer"); return done("steered", target); }
@@ -1456,9 +1513,9 @@ export class OwnerController {
     // Schedule after recording the reservation, so synchronous port exceptions
     // and very fast exits are handled exactly like asynchronous preparation.
     const delivery = Promise.resolve().then(() => run.session!.steer(message, () => this.acceptsInput(run))).then((queued) => {
-      if (!queued) run.record.discarded_inputs.push(message);
+      if (!queued) { run.record.discarded_inputs.push(message); this.presentationVersion++; }
     }).catch((error: unknown) => {
-      run.record.cleanup_errors.push(errorText(error)); run.quarantine = "input_delivery_uncertain";
+      run.record.cleanup_errors.push(errorText(error)); run.quarantine = "input_delivery_uncertain"; this.presentationVersion++;
     });
     run.inputs.add(delivery);
     // Delivery failure was classified above; cleanup observes both outcomes.
@@ -1482,7 +1539,7 @@ export class OwnerController {
     } else if (run.session) {
       // stop() may hang; only run() completion is execution-exit evidence.
       const stopping = Promise.resolve().then(() => run.session!.stop()).catch((error: unknown) => {
-        run.quarantine = "stop_uncertain"; run.record.cleanup_errors.push(errorText(error));
+        run.quarantine = "stop_uncertain"; run.record.cleanup_errors.push(errorText(error)); this.presentationVersion++;
       });
       run.inputs.add(stopping);
       // Stop failure was classified above; cleanup is not another stop owner.
@@ -1520,7 +1577,7 @@ export class OwnerController {
     const unavailable = this.closed || this.closing ? "owner_closed" : this.cleanupUncertain ? "owner_cleanup_uncertain" : this.internalError ? "owner_internal_error" : this.parentError ? "owner_parent_unavailable" :
       !leaseHeld ? "owner_lease_lost" : agent.unavailable ?? (agent.exiting ? "exiting" : agent.current ? "agent_busy" : undefined);
     return structuredClone({ owner_id: record.owner_id, generation: record.generation, run_id, agent_id: record.agent_id,
-      name: record.name, description: record.description, effective_settings: settingsView(record.settings),
+      name: record.name, description: record.description, effective_settings: run.effectiveSettings,
       status: record.status, phase: record.phase, execution_exited: record.execution_exited,
       history_ref: record.history_ref, history_error: record.history_error, drain: this.drainView(run),
       finalization_pending: record.execution_exited && !terminal(record.status), resident: agent.resident, resumable: !unavailable,
@@ -1581,6 +1638,7 @@ export class OwnerController {
     this.assertEffectAllowed();
     const pending = this.unreported;
     this.unreported = undefined;
+    if (pending) this.presentationVersion++;
     return pending;
   }
   /** Puts a drained ledger back, for a caller that could not deliver it. The
@@ -1589,6 +1647,7 @@ export class OwnerController {
   returnUsage(ledger: UsageLedger | undefined): void {
     this.assertEffectAllowed();
     this.unreported = mergeLedgers(this.unreported, ledger);
+    if (ledger) this.presentationVersion++;
   }
   list(options: { include_released?: boolean } = {}): RunView[] {
     const latest = new Map<string, ManagedRun>(), ordinals = new Map<string, number>();
@@ -1608,23 +1667,24 @@ export class OwnerController {
     return [...latest.values()].map((run) => this.projectRun(run, leaseHeld, ordinals.get(run.record.agent_id)!, providers));
   }
   stats() {
-    const draining = [...this.runs.values()].flatMap((run) => {
-      const drain = this.drainView(run);
-      return drain ? [{ run_id: run.record.run_id, agent_id: run.record.agent_id, ...drain }] : [];
-    });
-    // Settle-path and stop-path diagnostics only: what a finalizing Run is
-    // parked on, and how long a stop request has gone unconfirmed. Neither
-    // gates anything; a stuck wait keeps ownership exactly as before.
-    const finalizingWaits = [...this.runs.values()].flatMap((run) => run.finalizeWait ?
-      [{ run_id: run.record.run_id, agent_id: run.record.agent_id, wait: run.finalizeWait.wait,
-        elapsed_ms: Math.max(0, this.clock.mono() - run.finalizeWait.startedMono) }] : []);
-    const stopping = [...this.runs.values()].filter((run) => run.record.stop_reason && !run.record.execution_exited)
-      .map((run) => ({ run_id: run.record.run_id, agent_id: run.record.agent_id, stop_reason: run.record.stop_reason,
-        elapsed_ms: run.stopRequestedMono === undefined ? undefined : Math.max(0, this.clock.mono() - run.stopRequestedMono) }));
+    const draining: Array<{ run_id: string; agent_id: string } & NonNullable<RunView["drain"]>> = [];
+    const finalizingWaits: Array<{ run_id: string; agent_id: string; wait: "inputs" | "release" | "history"; elapsed_ms: number }> = [];
+    const stopping: Array<{ run_id: string; agent_id: string; stop_reason: StopReason; elapsed_ms: number | undefined }> = [];
     const settled_reasons: Record<string, number> = {};
-    for (const run of this.runs.values()) if (terminal(run.record.status)) {
-      const key = `${run.record.status}/${run.record.outcome?.reason ?? "none"}`;
-      settled_reasons[key] = (settled_reasons[key] ?? 0) + 1;
+    let finalizing = 0;
+    // Derive diagnostics together, without maintaining another lifecycle ledger.
+    for (const run of this.runs.values()) {
+      const record = run.record, identity = { run_id: record.run_id, agent_id: record.agent_id };
+      const drain = this.drainView(run);
+      if (drain) draining.push({ ...identity, ...drain });
+      if (run.finalizeWait) finalizingWaits.push({ ...identity, wait: run.finalizeWait.wait,
+        elapsed_ms: Math.max(0, this.clock.mono() - run.finalizeWait.startedMono) });
+      if (record.stop_reason && !record.execution_exited) stopping.push({ ...identity, stop_reason: record.stop_reason,
+        elapsed_ms: run.stopRequestedMono === undefined ? undefined : Math.max(0, this.clock.mono() - run.stopRequestedMono) });
+      if (terminal(record.status)) {
+        const key = `${record.status}/${record.outcome?.reason ?? "none"}`;
+        settled_reasons[key] = (settled_reasons[key] ?? 0) + 1;
+      } else if (record.execution_exited) finalizing++;
     }
     return { active: this.active, queued: this.queue.length, concurrency_scope: "provider" as const,
     providers: [...this.providerActivity().values()], ...(draining.length ? { draining } : {}),
@@ -1638,7 +1698,7 @@ export class OwnerController {
     limits: { ...this.limits },
     retained_output_chars: this.retainedOutputChars, reserved_output_chars: this.reservedOutputChars,
     unreported_usage: this.unreported ? structuredClone(this.unreported) : undefined,
-    finalizing: [...this.runs.values()].filter((r) => r.record.execution_exited && !terminal(r.record.status)).length,
+    finalizing,
     parent_error: this.parentError, internal_error: this.internalError, cleanup_uncertain: this.cleanupUncertain, cleaning: this.cleaning, closed: this.closed }; }
 
   getResult(run_id: string, options: { cursor?: string; limit?: number } = {}): ResultPage {
@@ -1732,17 +1792,18 @@ export class OwnerController {
       },
       snapshot: (reason, enabled) => {
         const all = [...this.runs.values()], alerts = scopedAlerts(this.alerts, scope);
+        const ordinals = taskOrdinals(all), targetIndices = new Map(targets.map((run, index) => [run, index]));
         const finished = finishedCandidates(all);
         const healthy = this.communicationHealthy() && leaseHeld, providers = this.projectionActivity(targets);
         const data: CommunicationSnapshot = { reason, ...(action ? { action } : {}), ...(!enabled ? { workers_disabled: true } : {}),
-          tasks: targets.map((run) => this.communicationTask(run, all, healthy, providers, limit, cursor,
+          tasks: targets.map((run) => this.communicationTask(run, ordinals.get(run)!, healthy, providers, limit, cursor,
             request.kind === "read", request.kind !== "action")),
-          alerts: alerts.map(({ run, message, source }) => ({ agent: run.record.name, task: taskOrdinal(run, all),
+          alerts: alerts.map(({ run, message, source }) => ({ agent: run.record.name, task: ordinals.get(run)!,
             label: boundedOutput(run.record.description, COMMUNICATION_LIMITS.label_units).text, message, ...(source === undefined ? {} : { source }) })),
-          finished: finished.map((run) => ({ row: this.communicationRow(run, all, healthy, providers),
+          finished: finished.map((run) => ({ row: this.communicationRow(run, ordinals.get(run)!, healthy, providers),
             label: boundedOutput(run.record.description, COMMUNICATION_LIMITS.label_units).text,
             ...(run.record.cancellation_source ? { cancellation_source: run.record.cancellation_source } : {}),
-            ...(targets.includes(run) ? { task_index: targets.indexOf(run) } : {}) })), blocked: this.communicationBlock() };
+            ...(targetIndices.has(run) ? { task_index: targetIndices.get(run)! } : {}) })), blocked: this.communicationBlock() };
         snapshot = { data, targets, alerts, finished, reportedBlockAtStart };
         return data;
       },
@@ -1755,6 +1816,7 @@ export class OwnerController {
       },
       commit: () => {
         applyCommunicationCommit(this.alerts, plan);
+        if (plan.alert_indices.length || plan.finished.length || plan.blocked !== undefined) this.presentationVersion++;
         if (plan.blocked !== undefined) this.reportedBlock = plan.blocked;
       },
     });
@@ -1767,23 +1829,23 @@ export class OwnerController {
   private observationLeaseHeld(): boolean {
     try { this.options.owner.assertHeld(); return true; } catch { return false; }
   }
-  private communicationRow(run: ManagedRun, all: readonly ManagedRun[], healthy: boolean, providers: ProviderActivity): ThinTaskEntry {
+  private communicationRow(run: ManagedRun, task: number, healthy: boolean, providers: ProviderActivity): ThinTaskEntry {
     const agent = this.requireAgent(run.record.agent_id), record = run.record;
     const unavailable = !healthy || !agent.resident || !!agent.unavailable || !!agent.exiting || !!run.quarantine;
     const wait = this.queuedFor(run, healthy, providers);
-    return { agent: record.name, task: taskOrdinal(run, all), ...(wait ? { wait } : {}), status: record.execution_exited && !terminal(record.status) ? "finishing" :
+    return { agent: record.name, task, ...(wait ? { wait } : {}), status: record.execution_exited && !terminal(record.status) ? "finishing" :
       modelTaskStatus(record.status),
       ...(agent.question?.run_id === record.run_id ? { has_question: true } : {}),
       ...(record.limit_reached ? { limit_reached: true } : {}), ...(unavailable ? { unavailable: true } : {}) };
   }
-  private communicationTask(run: ManagedRun, all: readonly ManagedRun[], healthy: boolean, providers: ProviderActivity,
+  private communicationTask(run: ManagedRun, task: number, healthy: boolean, providers: ProviderActivity,
     limit: number, cursor: string | undefined, historical: boolean, inspectWorkspace: boolean): TaskSnapshot {
     const agent = this.requireAgent(run.record.agent_id);
     const question_id = actionableQuestionId(agent, run, healthy);
     // Keep host diagnostics in the private capture; the final packer owns the
     // model-visible allowlist before notes can spend any reply budget.
     const dispatch_notes = run.record.dispatch_notes?.slice();
-    return { row: this.communicationRow(run, all, healthy, providers), settled: isCommunicationSettled(run),
+    return { row: this.communicationRow(run, task, healthy, providers), settled: isCommunicationSettled(run),
       ...taskMetadata({ ...run.record, isolation: run.record.settings.workspace ?? "shared" }, inspectWorkspace),
       ...(question_id ? { question_id } : {}),
       ...(run.question !== undefined && (historical || isCommunicationSettled(run)) ? { question: run.question } : {}),
@@ -1800,11 +1862,10 @@ export class OwnerController {
   }
   /** Read-only ordinal selector: commands never target tasks by ordinal. */
   private ordinalRun(agent_id: string, task: number): ManagedRun {
-    const run = [...this.runs.values()].filter(candidate => candidate.record.agent_id === agent_id)
-      .sort((a, b) => a.record.enqueue_sequence - b.record.enqueue_sequence)[task - 1];
-    if (!run) throw new HarnessError("TASK_NOT_FOUND", { agent_id, key: "task",
+    let ordinal = 0;
+    for (const run of this.runs.values()) if (run.record.agent_id === agent_id && ++ordinal === task) return run;
+    throw new HarnessError("TASK_NOT_FOUND", { agent_id, key: "task",
       resolution: "Use a task number previously returned for this Agent, or omit task and cursor to read its current, pending-question, or latest task." });
-    return run;
   }
   /** Scan original retained Runs, not a second cursor registry. Scope and
    * ambiguous digest matches fail closed. */
@@ -1867,7 +1928,7 @@ export class OwnerController {
       if (errors.length > 16) shown.push(`CLEANUP_ERRORS_OMITTED: ${errors.length - 16}`);
       diagnosticRun?.record.cleanup_errors.push(...shown);
     };
-    this.cleaning++;
+    this.cleaning++; this.presentationVersion++;
     const releasing = Promise.resolve().then(async () => {
       let clean = reason !== "cleanup_uncertain";
       try {
@@ -1946,7 +2007,7 @@ export class OwnerController {
   private async shutdownOwner(timeout_ms: number) {
     if (!Number.isFinite(timeout_ms) || timeout_ms < 0) throw new HarnessError("INVALID_LIMIT");
     if (this.closed) return this.stats();
-    this.closing = true;
+    this.closing = true; this.presentationVersion++;
     for (const run of this.runs.values()) this.cancel(run.record.run_id);
     const settle = (async () => {
       await this.submitTail;
@@ -1970,7 +2031,7 @@ export class OwnerController {
     if (done && !this.tasks.size && !this.cleaning && !this.cleanupUncertain && !this.active && !this.stats().finalizing) {
       // Unsaved history may be lost. It does not require keeping a fully drained
       // owner alive; uncertain execution/cleanup still absolutely does.
-      this.options.owner.close(); this.closed = true;
+      this.options.owner.close(); this.closed = true; this.presentationVersion++;
     }
     return this.stats(); // Timeout never unlocks a still-owned execution/finalization.
   }

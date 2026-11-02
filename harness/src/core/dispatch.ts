@@ -1,5 +1,5 @@
 import { isAbsolute, relative } from "node:path";
-import { HarnessError } from "./ports.js";
+import { HarnessError } from "./ports.ts";
 
 /** Parent declarations, not permissions or evidence that checks were executed. */
 export interface Dispatch {

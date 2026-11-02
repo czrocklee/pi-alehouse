@@ -106,10 +106,12 @@ const ownerCases = {
     assert.deepEqual(value, { owner_id: f.owner.owner_id, generation: f.owner.generation });
   } },
   hasAcceptedRuns: { kind: "projection", shape: "getter", check: (value) => assert.equal(value, true) },
+  presentationRevision: { kind: "projection", shape: "getter", check: (value) => assert(Number.isSafeInteger(value) && value > 0) },
 };
 const callbackCases = {
   inputEntered: { kind: "effect", args: () => [] },
   output: { kind: "effect", args: () => [{ text: "forbidden", total_chars: 9, truncated: false }] },
+  outputDelta: { kind: "effect", args: () => [{ type: "reset", revision: 1 }] },
   runtime: { kind: "effect", args: () => [{ activity: "tool", usage: ledger() }] },
   drain: { kind: "effect", args: () => ["deliveries"] },
   turnStart: { kind: "effect", args: () => [] },

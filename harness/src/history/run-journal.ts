@@ -1,10 +1,10 @@
 import type { SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import { difficultySlots, validDifficulty, type AdmittedAgentConfig, type Difficulty, type HistoryRef,
-  type Outcome, type Output, type RunIdentity, type WorkerSlot } from "../core/contracts.js";
-import { HarnessError, ParentHistoryError, type HistoryPort } from "../core/ports.js";
-import { validValidationReceipt, type ValidationReceipt } from "../core/dispatch.js";
-import { describeResult, isId } from "../core/result-text.js";
-import { normalizeLedger, type UsageLedger } from "../core/usage-ledger.js";
+  type Outcome, type Output, type RunIdentity, type WorkerSlot } from "../core/contracts.ts";
+import { HarnessError, ParentHistoryError, type HistoryPort } from "../core/ports.ts";
+import { validValidationReceipt, type ValidationReceipt } from "../core/dispatch.ts";
+import { describeResult, isId } from "../core/result-text.ts";
+import { normalizeLedger, type UsageLedger } from "../core/usage-ledger.ts";
 
 export const historyTypes = { link: "harness:run-link:v1", start: "harness:run-start:v1", end: "harness:run-end:v1" } as const;
 export const invalidHistory = (): never => { throw new HarnessError("INVALID_SDK_HISTORY"); };

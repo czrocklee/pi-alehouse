@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { HarnessError } from "./ports.js";
+import { HarnessError } from "./ports.ts";
 
 /** Stateless, Owner/generation/result-bound continuation identity. Original
  * retained Runs remain the only lookup source; no cursor registry or cache. */

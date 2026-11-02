@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { OwnerController } from "../core/owner-controller.js";
-import { reportUnreportedUsage } from "../history/usage-audit.js";
+import type { OwnerController } from "../core/owner-controller.ts";
+import { reportUnreportedUsage } from "../history/usage-audit.ts";
 
 const cancelled = Object.freeze({ cancel: true as const });
 const notify = (ctx: ExtensionContext, message: string, level: "info" | "warning" = "warning"): void => {

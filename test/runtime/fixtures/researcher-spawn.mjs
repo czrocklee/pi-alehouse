@@ -109,7 +109,10 @@ function respond(request) {
 // the local read of a *.pem path (an ask rule) is approved, and so is each
 // fixture worker's approved report write (the synthetic path_write asks).
 // Explicit configured denies and secret-path blocks never ask.
-const dialogs = [], statuses = [];
+const dialogs = [], statuses = [], notices = [];
+// Permission previews hard-wrap long paths. Match the same complete synthetic
+// path across presentation newlines, never approve by basename or a prefix.
+const showsPath = (title, path) => title.replaceAll("\n", "").includes(path);
 const noop = () => {};
 const uiContext = {
   select: async (title, options) => {
@@ -118,11 +121,11 @@ const uiContext = {
     assert(options.includes("No"));
     if (/tool\s*:\s*read\b/.test(title)) return "Yes";
     if (/subagent\s*:\s*worker\b/.test(title) && [approvedReport, siblingReport]
-      .some((path) => title.includes(path))) return "Yes";
+      .some((path) => showsPath(title, path))) return "Yes";
     return "No";
   },
   confirm: async () => false, input: async () => undefined, editor: async () => undefined, custom: async () => undefined,
-  notify: noop, onTerminalInput: () => noop, setStatus: (key, value) => { if (key === "harness-preset") statuses.push(value); }, setWorkingMessage: noop, setWorkingVisible: noop,
+  notify: (message, level) => notices.push({ message, level }), onTerminalInput: () => noop, setStatus: (key, value) => { if (key === "harness-preset") statuses.push(value); }, setWorkingMessage: noop, setWorkingVisible: noop,
   setWorkingIndicator: noop, setHiddenThinkingLabel: noop, setWidget: noop, setFooter: noop, setHeader: noop, setTitle: noop,
   pasteToEditor: noop, setEditorText: noop, getEditorText: () => "", addAutocompleteProvider: noop, setEditorComponent: noop,
   getEditorComponent: () => undefined, getAllThemes: () => [], getTheme: () => undefined, setTheme: () => ({ success: false }),
@@ -134,9 +137,9 @@ const { session } = await createAgentSession({ cwd, agentDir, resourceLoader: lo
 const errors = [];
 const spawned = (message, agent, profile) => {
   assert.equal(message?.toolName, management[0]);
-  assert.equal(message.isError, false, text(message));
+  assert.equal(message.isError, false, JSON.stringify({ toolResult: message, notices, errors }));
   const reply = JSON.parse(text(message));
-  assert.equal(Object.hasOwn(reply, "reason"), false);
+  assert.equal(Object.hasOwn(reply, "reason"), false, JSON.stringify({ reply, notices, errors, dialogs }));
   assert.deepEqual(reply.action, { type: "agent_spawn", agent, task: 1 });
   const [row] = reply.agents;
   assert.equal(reply.agents.length, 1);
@@ -210,8 +213,9 @@ try {
   }
   assert.match(dialogs.find((title) => /web_search/.test(title)), /alehouse fixture/, "the parent sees the query it approves");
   for (const path of [approvedReport, siblingReport]) {
-    const ask = dialogs.find((title) => title.includes(path));
+    const ask = dialogs.find((title) => showsPath(title, path));
     assert(ask, `the worker's forwarded ask names the actual ${path} artifact`);
+    assert(!ask.includes(path), "the regression fixture must actually wrap the full path across preview lines");
     assert.match(ask, /Permission Required \(Subagent\)[\s\S]*subagent\s*:\s*worker\b/, "forwarded ask titles show the public worker label");
     assert.doesNotMatch(ask, /subagent\s*:\s*editor\b/, "internal profile IDs are not shown as requester labels");
     assert.match(ask, /tool\s*:\s*write\b/, "the forwarded write ask names the write tool");

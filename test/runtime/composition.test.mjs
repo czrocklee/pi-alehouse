@@ -25,7 +25,7 @@ const fixtures = [
   ["stats", "runtime/policy/stats.ts"], ["title", "runtime/policy/terminal-title-status.ts"], ["web", "web.ts"],
 ];
 const registryKey = Symbol.for("@gotgenes/pi-permission-system:session-services");
-async function fixture(t, replacements = {}) {
+async function fixture(t, replacements = {}, initializeProtection = "") {
   const root = temporary(t);
   const observations = [];
   const key = `alehouse-test-${root}`;
@@ -34,6 +34,10 @@ async function fixture(t, replacements = {}) {
   cpSync(join(packageRoot, "composition.ts"), join(root, "composition.ts"));
   write(join(root, "package.json"), '{"type":"module"}');
   write(join(root, "harness/src/tools/tool-names.ts"), 'export const managementToolNames = ["fixture-management"];');
+  // The real helper is exercised separately with a production-shaped native
+  // module. This fixture keeps every factory synthetic and order-observable.
+  write(join(root, "harness/src/runtime/parent-web.ts"), `import { pathToFileURL } from "node:url";
+export const loadParentWeb = (entry) => import(pathToFileURL(entry).href);`);
   write(join(root, "bin/runtime-support.mjs"), `export const packageRoot=${JSON.stringify(root)};
 export function preflight(){return {runtime:packageRoot+'/runtime',policyRoot:packageRoot+'/runtime/policy',permissionRoot:packageRoot+'/runtime/permission-system',web:packageRoot+'/web.ts'};}
 export function runtimeEnvironment(){return {};}
@@ -41,7 +45,7 @@ export function protectionResources(){return {writeRoots:[],readFiles:[]};}`);
   for (const [name, path] of fixtures) {
     const register = name === "harness" ? 'pi.registerTool({name:"fixture-management",description:"fixture",parameters:{type:"object",properties:{}},execute:async()=>({content:[],details:{}})});' : '';
     const source = replacements[name] ?? `export default function(pi){globalThis[${JSON.stringify(key)}].push(${JSON.stringify(name)}); pi.on('session_start',()=>{globalThis[${JSON.stringify(key)}].push(${JSON.stringify(name + ':start')});${register}});}`;
-    write(join(root, path), source + (name === "permission" ? '\nexport function initializeManagedResourceProtection(){}' : ''));
+    write(join(root, path), source + (name === "permission" ? `\nexport function initializeManagedResourceProtection(){${initializeProtection}}\nexport function getPermissionsService(){}` : ''));
   }
   const loaded = await loadExtensions([join(root, "composition.ts")], root);
   assert.deepEqual(loaded.errors, []);
@@ -68,6 +72,84 @@ test("single composition invokes its ordered factories", async (t) => {
   globalThis[registryKey].set("ordered", {});
   assert.match((await blocked(extension)).reason, /authority/);
   assert.throws(() => extension.handlers.get("user_bash")[0](), /authority/);
+});
+
+test("early immutable resource floor precedes Jev module key capture and ordered factories", async (t) => {
+  const root = temporary(t), key = `alehouse-floor-${root}`;
+  // A synthetic path only; no credential file is created or read.
+  const keyPath = join(root, "synthetic-jev-key"), previous = process.env.PI_JEV_API_KEY_FILE;
+  const state = { floor: false, order: [], captured: undefined, protectedKey: undefined };
+  globalThis[key] = state;
+  process.env.PI_JEV_API_KEY_FILE = keyPath;
+  t.after(() => {
+    delete globalThis[key];
+    if (previous === undefined) delete process.env.PI_JEV_API_KEY_FILE;
+    else process.env.PI_JEV_API_KEY_FILE = previous;
+  });
+  const access = `globalThis[${JSON.stringify(key)}]`;
+  const guardedFactory = (name) => `export default function(){
+    if (!${access}.floor) throw new Error("Factory ran before immutable floor");
+    ${access}.order.push(${JSON.stringify(name + ":factory")});
+  }`;
+  const { extension } = await fixture(t, {
+    permission: `${access}.order.push("permission:module"); ${guardedFactory("permission")}`,
+    harness: guardedFactory("harness"), queue: guardedFactory("queue"),
+    jev: `const state = ${access};
+if (!state.floor) throw new Error("Jev module imported before immutable floor");
+state.order.push("jev:module");
+state.captured = process.env.PI_JEV_API_KEY_FILE;
+delete process.env.PI_JEV_API_KEY_FILE;
+export default function(){
+  if (!state.floor || state.captured !== state.protectedKey) throw new Error("Unprotected Jev key capture");
+  state.order.push("jev:factory");
+}`,
+  }, `${access}.order.push("floor:init");
+${access}.protectedKey = process.env.PI_JEV_API_KEY_FILE;
+${access}.floor = true;`);
+  assert.deepEqual(state.order, ["permission:module", "floor:init", "harness:factory", "queue:factory", "jev:module", "jev:factory", "permission:factory"]);
+  assert.equal(state.protectedKey, keyPath, "the initializer observes the key path before Jev removes it");
+  assert.equal(state.captured, keyPath);
+  assert.equal(process.env.PI_JEV_API_KEY_FILE, undefined);
+  assert.equal((await blocked(extension)).reason, "Alehouse session is not ready", "assembly succeeded without pretending a session started");
+});
+
+test("immutable resource initializer failure retains tool guards and imports no later Jev module or factory", async (t) => {
+  const key = `alehouse-floor-failure-${temporary(t)}`, state = { order: [] };
+  globalThis[key] = state;
+  t.after(() => { delete globalThis[key]; });
+  const access = `globalThis[${JSON.stringify(key)}]`;
+  const { extension, observations } = await fixture(t, {
+    permission: `${access}.order.push("permission:module");
+export default function(){ ${access}.order.push("permission:factory"); }`,
+    jev: `${access}.order.push("jev:module");
+export default function(){ ${access}.order.push("jev:factory"); }`,
+  }, `${access}.order.push("floor:init"); throw new Error("IMMUTABLE_FLOOR_INIT_FAILED");`);
+  assert.deepEqual(state.order, ["permission:module", "floor:init"], "failure prevents even Jev's top-level key capture");
+  assert.deepEqual(observations, [], "no later factory, including harness, is invoked");
+  const result = await blocked(extension);
+  assert.equal(result.block, true);
+  assert.match(result.reason, /IMMUTABLE_FLOOR_INIT_FAILED/);
+  assert.throws(() => extension.handlers.get("user_bash")[0](), /IMMUTABLE_FLOOR_INIT_FAILED/);
+  for (const handler of extension.handlers.get("session_start")) await handler({}, sessionContext("floor-failed"));
+  assert.equal((await blocked(extension)).block, true, "session_start cannot clear the initialization failure latch");
+});
+
+test("composition imports permission once and passes that same interface to harness before invoking its factory", async (t) => {
+  const key = `alehouse-permission-once-${temporary(t)}`;
+  const state = { imports: 0, factories: 0, marker: {}, received: undefined };
+  globalThis[key] = state;
+  t.after(() => { delete globalThis[key]; });
+  const access = `globalThis[${JSON.stringify(key)}]`;
+  const { extension } = await fixture(t, {
+    permission: `${access}.imports++;
+export const marker = ${access}.marker;
+export default function(){ ${access}.factories++; }`,
+    harness: `export default function(_pi, startup){ ${access}.received = startup.permission.marker; }`,
+  });
+  assert.equal(state.imports, 1);
+  assert.equal(state.factories, 1, "the canonical authority factory is invoked once in its ordered slot");
+  assert.equal(state.received, state.marker, "the harness receives the already-imported interface, not a lookup fallback");
+  assert.equal((await blocked(extension)).reason, "Alehouse session is not ready");
 });
 
 test("a later invalid preset cannot reuse a previous session's successful registrations", async (t) => {

@@ -113,6 +113,10 @@ const jiti = createJiti(import.meta.url, {
   alias: {
     "@earendil-works/pi-coding-agent": sdkShim,
     "@earendil-works/pi-tui": require.resolve("@earendil-works/pi-tui"),
+    // The generated vendor now uses explicit .ts specifiers. Intercept that
+    // exact edge as well as the upstream spelling; the shim's absolute import
+    // still delegates to the real class and does not alias back to itself.
+    "#src/authority/forwarded-request-server.ts": frsShim,
     "#src/authority/forwarded-request-server": frsShim,
   },
   fsCache: false,

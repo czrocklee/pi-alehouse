@@ -32,9 +32,9 @@
  */
 
 import { createHash } from "node:crypto";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
   AuthorizerLog,
@@ -48,6 +48,7 @@ import type {
 import { APPROVAL_SET_JUDGE_EVENT, publishJudgeState, readSetJudgeMode } from "./lib/approval-protocol.ts";
 import { hardCheckpointReason } from "./lib/hard-checkpoint.ts";
 import { JEV_MODEL_ID as MODEL_ID, reviewWithNativeJev } from "./lib/jev-classifier.ts";
+import { appendJevAuditDetailed, type JevAuditFailureReason, type JevAuditResult } from "./lib/jev-audit-log.ts";
 
 const AUTHORIZER_NAME = "jev-model-judge";
 const POLICY_VERSION = "jev-auto-approval-v1";
@@ -58,6 +59,25 @@ const API_KEY_FILE_KEY = Symbol.for("@rocklee/jev-auto-approval:api-key-file");
 const CHILD_RUNTIME_FACTS_KEY = Symbol.for("@rocklee/jev-auto-approval:child-runtime-facts");
 const AGENT_DIR = resolve(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"));
 const AUDIT_LOG_PATH = join(AGENT_DIR, "logs", "jev-auto-approval.jsonl");
+const RESOURCE_PROTECTION_KEY = Symbol.for("pi-alehouse:managed-resource-protection:v1");
+
+/** Pin even an absent logs directory at first module load; never rebind a
+ * symlink after startup. Only missing suffixes use lexical names. */
+function fixedAuditDirectory(directory: string): string | undefined {
+  const missing: string[] = [];
+  let ancestor = directory;
+  for (;;) {
+    try { return join(realpathSync(ancestor), ...missing); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
+      const parent = dirname(ancestor);
+      if (parent === ancestor) return undefined;
+      missing.unshift(basename(ancestor));
+      ancestor = parent;
+    }
+  }
+}
+const AUDIT_DIRECTORY = fixedAuditDirectory(dirname(AUDIT_LOG_PATH));
 
 /**
  * Path to the sops-rendered key, never the key itself. An exported
@@ -594,6 +614,7 @@ type RuntimeState = {
   approvalAttempts: Map<string, ApprovalAttempt>;
   pausedActions: Map<string, PausedAction>;
   approvalStateOverflow: boolean;
+  auditNotices?: { lastAt: number; reasons: Map<JevAuditFailureReason, number> };
 };
 
 /* ------------------------------------------------------------------ *
@@ -633,8 +654,8 @@ function canonicalize(value: unknown, seen = new WeakSet<object>()): CanonicalVa
 }
 
 const canonicalJson = (value: unknown): string => JSON.stringify(canonicalize(value));
-const digest = (value: unknown): string =>
-  createHash("sha256").update(canonicalJson(value)).digest("hex");
+const textDigest = (serialized: string): string => createHash("sha256").update(serialized).digest("hex");
+const digest = (value: unknown): string => textDigest(canonicalJson(value));
 
 /** Pessimistic on CJK, which the tokenizer does not divide. Over-counting costs a defer. */
 function estimateTokens(text: string): number {
@@ -833,24 +854,30 @@ export function buildUserContext(
   };
 }
 
-function toolCallsFromBranch(branch: readonly unknown[]): ToolCallFact[] {
-  const calls: ToolCallFact[] = [];
-  for (const rawEntry of branch) {
-    const entry = asRecord(rawEntry);
+/** Newest first, including order within a multi-call assistant message. Stop
+ * as soon as the caller has its evidence; never materialize all historical calls.
+ * Missing/non-string IDs and malformed arguments retain their old normalization. */
+function* reverseToolCalls(branch: readonly unknown[]): Generator<ToolCallFact> {
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    const entry = asRecord(branch[index]);
     if (entry?.type !== "message") continue;
     const message = asRecord(entry.message);
     if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
-    for (const rawBlock of message.content) {
-      const block = asRecord(rawBlock);
+    for (let blockIndex = message.content.length - 1; blockIndex >= 0; blockIndex -= 1) {
+      const block = asRecord(message.content[blockIndex]);
       if (block?.type !== "toolCall" || typeof block.name !== "string") continue;
-      calls.push({
+      yield {
         id: typeof block.id === "string" ? block.id : null,
         name: block.name,
         arguments: asRecord(block.arguments) ?? {},
-      });
+      };
     }
   }
-  return calls;
+}
+
+function lastToolCall(branch: readonly unknown[], id: string): ToolCallFact | undefined {
+  for (const call of reverseToolCalls(branch)) if (call.id === id) return call;
+  return undefined;
 }
 
 export function buildAction(
@@ -873,7 +900,7 @@ export function buildAction(
   const currentToolCall: ToolCallFact | undefined = forwarding
     ? witnessed && asRecord(witnessed.arguments)
       ? { id: childToolId!, name: witnessed.name, arguments: witnessed.arguments } : undefined
-    : details.toolCallId ? toolCallsFromBranch(branch).findLast((call) => call.id === details.toolCallId) : undefined;
+    : details.toolCallId ? lastToolCall(branch, details.toolCallId) : undefined;
 
   // Forwarded gate values may describe only one shell segment. The trusted host
   // must witness the complete child action before a model may review any gate.
@@ -927,7 +954,7 @@ export function buildAction(
   if (estimateTokens(serialized) > MAX_ACTION_TOKENS) {
     return { ok: false, failureCode: "context_oversize" };
   }
-  return { ok: true, action, actionDigest: digest(action), currentToolCall };
+  return { ok: true, action, actionDigest: textDigest(serialized), currentToolCall };
 }
 
 /** Read loaded project instructions, not guessed cwd files. Known loss fails closed. */
@@ -1061,14 +1088,19 @@ export function invokedScriptFact(
   }
 }
 
-function recentToolCallFacts(
+export function recentToolCallFacts(
   branch: readonly unknown[],
   currentToolCallId: string | undefined,
 ): Array<{ name: string; arguments: Record<string, unknown> }> {
-  return toolCallsFromBranch(branch)
-    .filter((call) => call.id !== currentToolCallId)
-    .slice(-MAX_RECENT_TOOL_CALLS)
-    .map((call) => ({ name: call.name, arguments: call.arguments }));
+  const recent: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+  for (const call of reverseToolCalls(branch)) {
+    // Exclude ALL occurrences, not just the last matching ID. Null IDs still
+    // participate when the current ID is undefined, just as filter() did.
+    if (call.id === currentToolCallId) continue;
+    recent.push({ name: call.name, arguments: call.arguments });
+    if (recent.length === MAX_RECENT_TOOL_CALLS) break;
+  }
+  return recent.reverse();
 }
 
 function latestCompactionSummary(branch: readonly unknown[]): string | null {
@@ -1456,30 +1488,61 @@ export function combineVerdict(answers: JevAnswers, surface: string): Decision {
  * Audit
  * ------------------------------------------------------------------ */
 
-let auditPathHardened = false;
-
-function appendAudit(details: Record<string, unknown>): boolean {
-  try {
-    const directory = dirname(AUDIT_LOG_PATH);
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    appendFileSync(AUDIT_LOG_PATH, `${JSON.stringify({ timestamp: new Date().toISOString(), ...details })}\n`, {
-      encoding: "utf8",
-      flag: "a",
-      mode: 0o600,
-    });
-    if (!auditPathHardened) {
-      chmodSync(directory, 0o700);
-      chmodSync(AUDIT_LOG_PATH, 0o600);
-      auditPathHardened = true;
+function auditProtection(): { protectedWriteRoots: readonly string[]; protectedWriteFiles: readonly string[] } | undefined {
+  const value = (globalThis as Record<symbol, unknown>)[RESOURCE_PROTECTION_KEY];
+  if (value === undefined) return undefined; // Ordinary non-symlink offline fixtures.
+  const floor = asRecord(value);
+  if (!floor || !Object.isFrozen(floor) || floor.version !== 1) throw new Error("Invalid resource floor");
+  for (const paths of [floor.writeRoots, floor.readFiles, floor.writeFiles]) {
+    if (!Array.isArray(paths) || !Object.isFrozen(paths) || !paths.every((path: unknown) =>
+      typeof path === "string" && isAbsolute(path) && !path.includes("\0") && resolve(path) === path)) {
+      throw new Error("Invalid resource floor paths");
     }
-    return true;
-  } catch {
-    return false;
   }
+  return { protectedWriteRoots: floor.writeRoots as readonly string[], protectedWriteFiles: floor.writeFiles as readonly string[] };
 }
 
-function writeAudit(
+/** Fixed messages only: never include a packet, key, action or raw exception.
+ * This channel deliberately does not depend on the failing audit sink. */
+function reportAuditFailure(state: RuntimeState, reason: JevAuditFailureReason): void {
+  const now = Date.now();
+  const notices = state.auditNotices ??= { lastAt: -Infinity, reasons: new Map() };
+  if (now - (notices.reasons.get(reason) ?? -Infinity) < 30_000 || now - notices.lastAt < 1_000) return;
+  notices.lastAt = now;
+  notices.reasons.set(reason, now);
+  const recovery = reason === "legacy_lock_requires_offline_recovery" ||
+    reason === "legacy_hardlinks_require_offline_recovery" || reason === "incomplete_tail_requires_offline_recovery"
+    ? " Stop every Pi sharing this agent directory, including old unlocked writers, before offline audit recovery; do not remove an Owner lease lock."
+    : reason === "untrusted_directory_owner"
+      ? " A log directory ancestor's owner is not trusted in the current namespace. Unmapped root may appear as an overflow UID/nobody; check UID/GID mappings. The UID value alone does not establish a namespace cause. This is not a bad lockfile; offline audit recovery or retry cannot fix the ownership/mapping boundary."
+      : reason === "symlink_target_unprotected" || reason === "directory_changed"
+      ? " Start a fresh process with fixed, startup-protected audit active/lock/archive targets; do not retarget a live logs symlink."
+      : reason === "validation_failed" ? " Review context changed before audit commit; no allow was written."
+        : reason === "lock_busy" ? " The bounded audit-lock wait expired; later requests may recover normally."
+          : " Check the private audit files and trusted lock executable; stop all shared-agentDir writers before any manual repair.";
+  const message = `Jev audit unavailable (${reason}); automatic approval defers to normal permission handling.${recovery}`;
+  if (state.ctx?.hasUI) {
+    try { state.ctx.ui.notify(message, "warning"); return; } catch { /* Fall through to an independent visible log. */ }
+  }
+  try { console.warn(message); } catch { /* Diagnostic IO cannot change the permission outcome. */ }
+}
+
+function appendAudit(state: RuntimeState, details: Record<string, unknown>, beforeWrite?: () => boolean): JevAuditResult {
+  let result: JevAuditResult;
+  try {
+    const protection = auditProtection();
+    result = AUDIT_DIRECTORY === undefined ? { ok: false, reason: "unsafe_directory" }
+      : appendJevAuditDetailed(AUDIT_LOG_PATH, { timestamp: new Date().toISOString(), ...details }, {
+        expectedDirectory: AUDIT_DIRECTORY, ...protection, beforeWrite,
+      });
+  } catch { result = { ok: false, reason: "invalid_input" }; }
+  if (!result.ok) reportAuditFailure(state, result.reason);
+  return result;
+}
+
+function writeDecisionAudit(
   log: AuthorizerLog,
+  state: RuntimeState,
   data: {
     requestDigest: string;
     actionDigest?: string;
@@ -1500,7 +1563,8 @@ function writeAudit(
     inputTokens?: number;
     checkpointReason?: string;
   },
-): boolean {
+  beforeWrite?: () => boolean,
+): JevAuditResult {
   const details = {
     event: AUDIT_EVENT,
     policyVersion: POLICY_VERSION,
@@ -1524,12 +1588,16 @@ function writeAudit(
     inputTokens: data.inputTokens ?? null,
     checkpointReason: data.checkpointReason ?? null,
   };
-  try {
-    log.review(AUDIT_EVENT, details);
-  } catch {
-    // The owner-only JSONL remains the authoritative audit sink.
-  }
-  return appendAudit(details);
+  const result = appendAudit(state, details, beforeWrite);
+  // An independently observed suggestion must not masquerade as an audited
+  // allow when the write/close failed or lock-wait revalidation rejected it.
+  const failure = !result.ok && result.reason === "validation_failed" ? "review_context_changed" : "audit_unavailable";
+  const observed = !result.ok ? { ...details, auditFailureReason: result.reason,
+    ...(details.effectiveVerdict === "allow" ? { effectiveVerdict: "defer", reasonCode: failure, failureCode: failure } : {}),
+  } : details;
+  try { log.review(AUDIT_EVENT, observed); }
+  catch { /* The private JSONL remains the authoritative audit sink. */ }
+  return result;
 }
 
 /* ------------------------------------------------------------------ *
@@ -1638,6 +1706,8 @@ async function authorize(
   log: AuthorizerLog,
   state: RuntimeState,
 ): Promise<AuthorizerVerdict> {
+  const writeAudit = (log: AuthorizerLog, data: Parameters<typeof writeDecisionAudit>[2], beforeWrite?: () => boolean) =>
+    writeDecisionAudit(log, state, data, beforeWrite);
   const generation = state.generation;
   const inputRevision = state.provenance.revision;
   const includeSubagents = state.includeSubagents;
@@ -1899,7 +1969,8 @@ async function authorize(
     untrustedBackground,
   };
 
-  const packetTokens = estimateTokens(canonicalJson(packet));
+  const serializedPacket = canonicalJson(packet);
+  const packetTokens = estimateTokens(serializedPacket);
   if (packetTokens > MAX_PACKET_TOKENS) return defer("context_oversize", actionResult.actionDigest);
 
   const now = Date.now();
@@ -1908,17 +1979,30 @@ async function authorize(
     state.circuitOpenUntil = 0;
     state.consecutiveReviewFailures = 0;
   }
-  const packetDigest = digest(packet);
+  const packetDigest = textDigest(serializedPacket);
   if (state.activeReviews[scope] >= MAX_CONCURRENT_REVIEWS[scope] && !state.inFlight.has(packetDigest)) {
     // jev answers in well under a second, so an overloaded reviewer is a real
     // fault rather than a queue to wait out.
     return defer("review_overloaded", actionResult.actionDigest);
   }
 
+  // Capture baseline VALUES before starting asynchronous work. Never re-digest
+  // these mutable objects after the wait (a query may reuse its result object).
+  // The current side below is deliberately rebuilt in full, with no leaf/count
+  // shortcuts, cached approvals or filesystem/policy samples carried over the wait.
+  let baseline: { policy: string; authorization: string; restrictions: string; script: string };
+  try {
+    baseline = {
+      policy: digest(deterministicPolicy),
+      authorization: digest(userContext),
+      restrictions: digest(projectInstructionExcerpts),
+      script: digest(invokedScript),
+    };
+  } catch { return defer("review_context_changed", actionResult.actionDigest); }
   const reviewPromise = trackedReview(state, packet, packetDigest, scope, reviewSignal);
 
   /** Audit one completed review and report whether the line was persisted. */
-  const record = (review: ReviewResult, effective: Verdict, decision?: Decision, failureOverride?: FailureCode): boolean => {
+  const record = (review: ReviewResult, effective: Verdict, decision?: Decision, failureOverride?: FailureCode): JevAuditResult => {
     if (pending) {
       pending.suggestedVerdict = decision?.verdict ?? "defer";
       if (failureOverride || !decision) pending.failureStage = failureOverride ?? review.failureCode ?? "network_error";
@@ -1941,7 +2025,7 @@ async function authorize(
       lane: decision?.lane,
       packetTokens,
       inputTokens: review.inputTokens,
-    });
+    }, effective === "allow" ? reviewIsCurrent : undefined);
   };
 
   // No async work: the final validation and returned verdict are one turn.
@@ -1954,26 +2038,28 @@ async function authorize(
           (mode === "enforce" && (state.pausedActions.has(actionRetryKey) || state.pausedActions.has("*") || state.approvalStateOverflow))) return false;
       const currentPolicy = query.checkPermission(policySurface,
         details.accessIntent?.boundaryValue ?? request.value ?? undefined, details.agentName ?? undefined);
-      if (digest(currentPolicy) !== digest(deterministicPolicy)) return false;
+      if (digest(currentPolicy) !== baseline.policy) return false;
       const currentBranch = ctx.sessionManager.getBranch();
       const currentAction = buildAction(details, currentBranch);
       if (!currentAction.ok || currentAction.actionDigest !== actionResult.actionDigest) return false;
       const authorization = buildUserContext(currentBranch, state.provenance);
-      if (!authorization.ok || digest(authorization.context) !== digest(userContext)) return false;
+      if (!authorization.ok) return false;
+      const authorizationDigest = digest(authorization.context);
+      if (authorizationDigest !== baseline.authorization) return false;
       if (forwardedRequested) {
         const identity = forwardedIdentity(details);
         if (!identity) return false;
         const bound = state.childDelegations.get(identity.sessionId);
         const runtime = childRuntimeFactsRegistry().get(identity.sessionId);
         if (delegationBindingFailure(bound, runtime, { sessionId: state.sessionId, cwd: ctx.cwd,
-          generation: state.generation, authorizationDigest: digest(authorization.context), agentName: identity.agentName }) ||
+          generation: state.generation, authorizationDigest, agentName: identity.agentName }) ||
           !boundedProfileIsValid(ctx.cwd, identity.agentName) ||
           delegationReviewDigest(bound, runtime, details.requestId) !== delegationBindingSnapshot) return false;
       }
       const restrictions = buildProjectRestrictions(ctx);
-      if (!restrictions.ok || digest(restrictions.restrictions) !== digest(projectInstructionExcerpts)) return false;
+      if (!restrictions.ok || digest(restrictions.restrictions) !== baseline.restrictions) return false;
       // Script contents are review evidence too: a changed body invalidates approval.
-      if (digest(invokedScriptFact(ctx.cwd, request.value)) !== digest(invokedScript)) return false;
+      if (digest(invokedScriptFact(ctx.cwd, request.value)) !== baseline.script) return false;
       return true;
     } catch { return false; }
   };
@@ -2013,7 +2099,14 @@ async function authorize(
 
   // An allow whose audit line did not land is an unlogged grant. Downgrade it
   // rather than ship one.
-  if (decision.verdict === "allow" && !audited) {
+  if (decision.verdict === "allow" && !audited.ok) {
+    if (audited.reason === "validation_failed") {
+      if (pending) {
+        pending.failureStage = "review_context_changed";
+        if (pending.deferredAt === undefined) pending.deferredAt = Date.now();
+      }
+      return { kind: "defer" };
+    }
     return defer("audit_unavailable", actionResult.actionDigest);
   }
   if (decision.verdict === "allow") return { kind: "allow" };
@@ -2095,6 +2188,7 @@ export default function jevAutoApproval(pi: ExtensionAPI): void {
     disposeAuthorizer = undefined;
     registeredSessionId = undefined;
     state.ctx = ctx;
+    state.auditNotices = undefined;
     state.sessionId = ctx.sessionManager.getSessionId();
     Object.assign(state, configuredMode(process.env.PI_JEV_APPROVAL_MODE));
     updateModeStatus(pi, ctx, state);
@@ -2140,7 +2234,7 @@ export default function jevAutoApproval(pi: ExtensionAPI): void {
       // fuse deliberately survive: a No is bound to the action and the user's
       // instruction, not to a mode, and only new direct input reopens it.
       state.modeRevision += 1;
-      appendAudit({ event: "jev_model_judge.mode_changed", modelId: MODEL_ID,
+      appendAudit(state, { event: "jev_model_judge.mode_changed", modelId: MODEL_ID,
         previousMode: previous.mode, previousIncludeSubagents: previous.includeSubagents,
         mode: state.mode, includeSubagents: state.includeSubagents, scope: "current_session", source: "indicator" });
     }
@@ -2217,7 +2311,7 @@ export default function jevAutoApproval(pi: ExtensionAPI): void {
       registeredSessionId = sessionId;
     } catch {
       const message = `[${AUTHORIZER_NAME}] failed to register; permission asks will continue to the terminal authorizer`;
-      appendAudit({ event: "jev_model_judge.registration_failed", modelId: MODEL_ID });
+      appendAudit(state, { event: "jev_model_judge.registration_failed", modelId: MODEL_ID });
       // Console output would land in the middle of a fullscreen TUI frame.
       if (state.ctx?.hasUI) {
         try {
@@ -2244,7 +2338,7 @@ export default function jevAutoApproval(pi: ExtensionAPI): void {
     };
     // The join is what makes shadow measurable: it pairs the recorded suggestion
     // with what the human actually chose.
-    appendAudit({
+    appendAudit(state, {
       event: "jev_model_judge.outcome",
       policyVersion: POLICY_VERSION,
       requestDigest: outcome.requestDigest,

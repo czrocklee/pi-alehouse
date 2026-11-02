@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as pause } from "node:timers/promises";
 import type { AgentSession, EventBus, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import type { DrainWait, ExecutionFacts, Output } from "../core/contracts.js";
-import { SessionUnavailableError, type AgentSessionPort, type HistoryPort, type RunCallbacks } from "../core/ports.js";
-import { boundedOutput } from "../core/result-text.js";
-import { addToLedger, normalizeUsage, type UsageLedger } from "../core/usage-ledger.js";
-import { disposeChildSession } from "./child-session.js";
+import type { DrainWait, ExecutionFacts, Output } from "../core/contracts.ts";
+import { SessionUnavailableError, type AgentSessionPort, type HistoryPort, type RunCallbacks } from "../core/ports.ts";
+import { boundedOutput, OutputBuffer } from "../core/result-text.ts";
+import { addToLedger, normalizeUsage, type UsageLedger } from "../core/usage-ledger.ts";
+import { disposeChildSession } from "./child-session.ts";
 
 /** The adapter needs only the live journal controls beyond the core history port. */
 export interface RunJournalPort extends HistoryPort {
@@ -200,14 +200,11 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
     if (this.active || !session.isIdle || this.deliveries.size) throw new Error("SESSION_NOT_IDLE");
     this.assertReady();
     this.clearInputs(); // Check previous Run, never silently revive a quarantined port.
-    this.active = true; gate.accepting = true; gate.stopped = false;
     const cap = this.options.outputChars ?? 1_048_576;
     let revision = 0;
     let output: Output = { text: "", total_chars: 0, truncated: false, revision };
-    // A trailing high surrogate is provisional until the next delta arrives.
-    // While withheld, Output.truncated is true (retained text is shorter than
-    // observed text); this alone does not permanently close prefix retention.
-    let pendingHigh = "", retentionClosed = false;
+    let stream = new OutputBuffer(cap, revision);
+    this.active = true; gate.accepting = true; gate.stopped = false;
     let lastReason: string | undefined, lastError: string | undefined;
     let inputEntered = false, sawAssistant = false;
     let usage: UsageLedger | undefined;
@@ -283,9 +280,9 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
         // A new attempt/turn replaces the previous candidate, including failed
         // drafts and tool-use commentary. The result is not a transcript.
         output = { text: "", total_chars: 0, truncated: false, revision: ++revision };
-        pendingHigh = ""; retentionClosed = false;
+        stream = new OutputBuffer(cap, revision);
         lastReason = lastError = undefined;
-        control(() => callbacks.output(output));
+        control(() => callbacks.outputDelta ? callbacks.outputDelta({ type: "reset", revision, max_chars: cap }) : callbacks.output(output));
       }
       if (event.type === "message_start" && event.message.role === "user" && !gate.accepting) {
         gate.uncertain = true;
@@ -299,17 +296,12 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
       }
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
         const delta = event.assistantMessageEvent.delta;
-        let text = output.text;
-        if (!retentionClosed) {
-          const growing = text + pendingHigh + delta;
-          pendingHigh = /[\uD800-\uDBFF]$/.test(growing) ? growing.slice(-1) : "";
-          const bounded = boundedOutput(growing.slice(0, growing.length - pendingHigh.length), cap);
-          text = bounded.text; retentionClosed = bounded.truncated;
-          if (retentionClosed) pendingHigh = "";
-        }
-        const total_chars = output.total_chars + delta.length;
-        output = { text, total_chars, truncated: text.length < total_chars, revision };
-        control(() => callbacks.output(output));
+        control(() => {
+          stream.append(delta);
+          output = stream;
+          if (callbacks.outputDelta) callbacks.outputDelta({ type: "append", revision, text: delta });
+          else callbacks.output(stream.snapshot()); // Legacy consumers explicitly request full snapshots.
+        });
       }
       if (event.type === "message_end" && event.message.role === "assistant") {
         sawAssistant = true;
@@ -414,7 +406,7 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
     const classificationError = !sawAssistant || !lastReason ? "NO_FINAL_ASSISTANT" :
       lastReason === "length" ? "MODEL_OUTPUT_LIMIT" :
       !["stop", "toolUse", "error", "aborted"].includes(lastReason) ? `UNEXPECTED_MODEL_STOP_REASON: ${lastReason}` : undefined;
-    return { kind, output, ...(lastReason ? { model_stop_reason: lastReason } : {}),
+    return { kind, output: output instanceof OutputBuffer ? output.snapshot() : output, ...(lastReason ? { model_stop_reason: lastReason } : {}),
       error: lastError ?? classificationError, ...(usage ? { usage } : {}) };
   }
 

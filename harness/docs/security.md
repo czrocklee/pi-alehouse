@@ -303,8 +303,12 @@ configured Jev key file, using lexical and canonical path aliases. Its
 project/profile/session/yolo rules; neither project overrides, human session
 grants nor yolo can widen it. Writes to a protected directory's ancestors are
 also conservatively denied because deletion or rename could remove a protected
-descendant; siblings remain usable. Existing files and user configuration are
-not overwritten. Internal children require the same snapshot, and attempting
+descendant; siblings remain usable. Audit active/lock files and the dedicated
+archive root have their own lexical/canonical entries, so a supported external
+logs symlink does not leave current audit artifacts unprotected or make every
+unrelated shared log a protected resource. Archive-root symlinks are rejected
+rather than silently widening that root to an unrelated tree. Existing files
+and user configuration are not overwritten. Internal children require the same snapshot, and attempting
 to load a different unprotected runtime generation requires a fresh Pi process.
 
 This addresses detectable path effects in writable source/npm installs, where
@@ -365,8 +369,42 @@ potentially sensitive instructions/prompt material) to
 `https://api.typesafe.ai/v1/systemone` using fixed `jev-1.13.0`. Transport uses
 a private TypeSafe provider from the host Pi 1.0 classifier API, not the shared
 model/auth registry. The protected key-file is read lazily; environment keys
-and provider fallbacks are not used. Requests retain a two-second cancellation
-budget, no retries and exact-endpoint/no-redirect checks. Independent judge
+and provider fallbacks are not used. Automatic allows still require a successful
+synchronous private audit append. The active audit file rotates at 1 MiB without
+deleting historical archives; total disk use remains unbounded. The Linux writer
+requires `/proc/self/fd` and a launcher-verified absolute util-linux flock. It
+holds the same open-file-description kernel lock after the short helper exits;
+normal cleanup never removes that regular lock inode. A short bounded kernel
+contention wait is followed by fresh policy/action/authorization/restriction/Run/
+mode/script validation before an allow line is written. IO, unsafe identities,
+failed validation or uncertain cleanup still defer. Rotation renames into an
+exclusive private archive container, not a link/unlink pair or an existing slot.
+
+Audit ownership checks require the canonical log directory to appear owned by
+the current UID and all ancestors by the current UID or root, in addition to
+permission/sticky-directory checks. In user namespaces with incomplete UID/GID
+mappings, host-root ancestors may appear as an overflow UID such as 65534
+(`nobody`). Their actual ownership cannot be established from that value, so
+Jev audit and recovery reject them as `untrusted_directory_owner` even if the
+leaf log directory is healthy. Do not whitelist an overflow UID as a substitute
+for verified root/current-user ownership. This fail-closed environment limit
+can disable Jev automatic allows without disabling ordinary human handling or
+existing policy allows; it is not evidence of a bad audit lock. See the
+[namespace limit](jev-audit-recovery.md#user-namespace-ownership-limit).
+
+Process death releases this audit kernel lock, not an Owner reservation or an
+incomplete audit record. Legacy directory locks, extra hard links and incomplete
+active tails require [explicit offline recovery](jev-audit-recovery.md), with
+all writers stopped and evidence preserved. No TTL/PID-only stealing, silent
+truncation, automatic archive deletion or live migration is supported. The
+original unlocked writer cannot safely coexist with the kernel-lock writer;
+all old Pi processes sharing the audit sink must stop before upgrade/rollback.
+Safe owned shared-directory permissions are preserved rather than chmodded on
+each append. Supported symlink layouts pin/protect the exact canonical audit
+artifacts before the immutable floor freezes and reject later retargeting.
+These are not OS-sandbox, fsync or power-loss durability guarantees. TypeSafe
+transport requests retain a two-second cancellation budget, no retries and
+exact-endpoint/no-redirect checks. Independent judge
 backpressure allows four root and eight distinct subagent reviews in flight;
 excess requests defer as `review_overloaded` to normal human handling, while
 identical in-flight packets coalesce. This is not tied to resident worker count:
@@ -442,7 +480,10 @@ not another runtime or copied credentials. Its model queries and scoped list
 exclude virtual models. The scoped list comes directly from the session's
 read-only `ctx.scopedModels` snapshot; no separate settings/trust lookup or
 scope mutation occurs. Its callbacks neither switch the main model nor set Pi's
-model defaults. Native catalogue refresh is preserved: opening the selector can use
+model defaults. Appearance saves report when a workspace leaf shadows a global
+default, including a no-op global save. Discarding queued writes or removing a
+saved override does not silently roll back the live appearance or delete the
+higher-priority workspace choice. Native catalogue refresh is preserved: opening the selector can use
 provider network access, rotate OAuth credentials, and update the host's model
 cache, independently of the preference writer. See
 [routing](routing.md#scoped-user-preferences) for the schema and paths.

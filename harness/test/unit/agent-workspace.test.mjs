@@ -10,7 +10,9 @@ import ts from "typescript";
 import { resolveGit } from "../../../bin/runtime-support.mjs";
 
 const dataModule = (source) => `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
-const compilerOptions = { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 };
+// Match the source build's explicit .ts -> emitted .js rewrite before
+// replacing dependency boundaries with data URLs.
+const compilerOptions = { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, rewriteRelativeImportExtensions: true };
 const metadataUrl = dataModule(ts.transpileModule(readFileSync(new URL("../../src/core/workspace-metadata.ts", import.meta.url), "utf8"), { compilerOptions }).outputText);
 const { workspaceRecoveryOf } = await import(metadataUrl);
 const source = readFileSync(new URL("../../src/runtime/agent-workspace.ts", import.meta.url), "utf8");

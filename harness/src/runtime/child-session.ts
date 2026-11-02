@@ -1,7 +1,7 @@
 import type { AgentSession, CreateAgentSessionOptions, CreateAgentSessionResult, EventBus } from "@earendil-works/pi-coding-agent";
-import { SessionInitializationError } from "../core/ports.js";
-import { requireReadiness } from "../permissions/readiness.js";
-import { blockedDelegationToolNames } from "../tools/tool-names.js";
+import { SessionInitializationError } from "../core/ports.ts";
+import { requireReadiness } from "../permissions/readiness.ts";
+import { blockedDelegationToolNames } from "../tools/tool-names.ts";
 
 /** P0 assembly seam only. The caller supplies the actual host SDK and loader. */
 export async function assembleChildSession(input: {

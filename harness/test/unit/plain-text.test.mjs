@@ -85,6 +85,39 @@ test("whole-candidate wrapping stays bounded without phantom empty rows", () => 
   assert.deepEqual(wrapPlainText("", 2), [""]);
 });
 
+test("grapheme-width fast wrapping preserves the whole-candidate boundary contract", () => {
+  // Deliberately unoptimized oracle: the prior whole-candidate algorithm.
+  const reference = (text, width) => plainText(text).split("\n").flatMap(paragraph => {
+    const out = [], segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+    let line = [];
+    const emit = parts => {
+      let end = parts.length;
+      while (end && parts[end - 1] === " ") end--;
+      const row = parts.slice(0, end).join("");
+      if (row) out.push(row);
+    };
+    for (const { segment } of segmenter.segment(paragraph)) {
+      const cluster = visibleWidth(segment) > width ? "…" : segment;
+      let separator = false;
+      while (visibleWidth(line.join("") + cluster) > width) {
+        if (cluster === " ") { emit(line); line = []; separator = true; break; }
+        const space = line.findLastIndex(part => part === " "), head = line.slice(0, space);
+        if (space > 0 && head.some(part => part !== " ")) {
+          emit(head); line = line.slice(space + 1); while (line[0] === " ") line.shift();
+        } else { emit(line); line = []; }
+      }
+      if (!separator) line.push(cluster);
+    }
+    if (line.length || !out.length) out.push(line.join(""));
+    return out;
+  });
+  const samples = ["  alpha   beta  gamma ", "a \u0301b", "👩‍💻♥️e\u0301漢字", "🇺🇸🇨🇦🇫🇷🇯",
+    "\u0600A\u0301\u200cBC", "\u0301漢字", "می‌روم", "क्‍ष กำ", "a\n\n👨‍👩‍👧‍👦\n", " \u0301".repeat(25),
+    "A".repeat(150) + " \u0301 " + "測".repeat(70) + "Z"];
+  for (const sample of samples) for (const width of [1, 2, 3, 4, 7, 8, 40, 80, 200])
+    assert.deepEqual(wrapPlainText(sample, width), reference(sample, width), `${JSON.stringify(sample)} @${width}`);
+});
+
 test("tool arguments and paths are normalized before width and path decisions", () => {
   for (const [kind, input, expected] of protocols) {
     const argsFor = { read: { path: input }, edit: { path: input }, write: { path: input }, ls: { path: input },

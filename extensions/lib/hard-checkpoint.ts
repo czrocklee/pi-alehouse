@@ -129,6 +129,9 @@ const INLINE_INTERPRETER_INVOCATION = new RegExp(
   `${COMMAND_POSITION}(${INLINE_INTERPRETER_NAME})\\b`,
   "i",
 );
+const INLINE_INTERPRETER_MENTION = new RegExp(`\\b${INLINE_INTERPRETER_BASENAME}\\b`, "i");
+// matchAll clones this private regex; no exec/test call mutates its lastIndex.
+const INLINE_INTERPRETER_INVOCATIONS = new RegExp(INLINE_INTERPRETER_INVOCATION.source, "gi");
 const CODE_LOADING_INTERPRETER_ENV =
   /\b(?:NODE_OPTIONS|NODE_PATH|PERL5LIB|PERL5OPT|PHPRC|PHP_INI_SCAN_DIR|PYTHONHOME|PYTHONINSPECT|PYTHONPATH|PYTHONSTARTUP|PYTHONWARNINGS|RUBYLIB|RUBYOPT|LUA_INIT|LUA_PATH|LUA_CPATH)\s*=/i;
 const OPAQUE_INLINE_SOURCE_PATTERNS: readonly RegExp[] = [
@@ -314,10 +317,10 @@ function knownInterpreterMode(executable: string, tail: string): boolean {
 }
 
 function opaqueInlineInterpreterPayload(command: string): boolean {
-  const mentionsInterpreter = new RegExp(`\\b${INLINE_INTERPRETER_BASENAME}\\b`, "i").test(command);
+  const mentionsInterpreter = INLINE_INTERPRETER_MENTION.test(command);
   if (mentionsInterpreter && CODE_LOADING_INTERPRETER_ENV.test(command)) return true;
 
-  const invocations = [...command.matchAll(new RegExp(INLINE_INTERPRETER_INVOCATION.source, "gi"))];
+  const invocations = [...command.matchAll(INLINE_INTERPRETER_INVOCATIONS)];
   if (invocations.length === 0) return false;
   // Parsing multiple shell/interpreter quote domains correctly is outside this
   // bounded classifier. The reviewer still sees the command after a defer.

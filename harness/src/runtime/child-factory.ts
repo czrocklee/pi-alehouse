@@ -3,24 +3,24 @@ import { join } from "node:path";
 import { createAgentSession, createEventBus, DefaultResourceLoader, SessionManager,
   type CreateAgentSessionOptions, type EventBus, type ExtensionContext, type ModelRuntime,
   type SettingsManager } from "@earendil-works/pi-coding-agent";
-import type { AdmittedAgentConfig, RunIdentity } from "../core/contracts.js";
-import type { DispatchWorkspacePolicy } from "../core/dispatch.js";
-import { SessionInitializationError, type AgentSessionPort, type RunCallbacks } from "../core/ports.js";
-import { withWorkspaceRecovery } from "../core/workspace-metadata.js";
-import { PiRunJournal } from "../history/run-journal.js";
-import type { ApprovalBindings } from "../permissions/approval-provenance.js";
-import { requireReadiness } from "../permissions/readiness.js";
-import { createChildTools } from "../tools/child-tools.js";
-import { webProfileNames, type AgentProfileName } from "../tools/tool-names.js";
-import { PiAgentSessionAdapter, ChildRunGate } from "./agent-session.js";
-import { createAgentWorkspace, type AgentWorkspaceHandle } from "./agent-workspace.js";
-import type { ChildActivityRegistry } from "./activity-observer.js";
-import { assembleChildSession, disposeChildSession } from "./child-session.js";
-import { childWebExtension, type ChildWebModules, type WebLease } from "./child-web.js";
-import { digest } from "./context-snapshot.js";
-import { orderFreeToolSchemaExtension } from "./provider-schema.js";
-import { ManagedBlockObserver, type ManagedBlockSubscription } from "./permission-blocks.js";
-import { WorkerStatsObserver } from "./worker-stats.js";
+import type { AdmittedAgentConfig, RunIdentity } from "../core/contracts.ts";
+import type { DispatchWorkspacePolicy } from "../core/dispatch.ts";
+import { SessionInitializationError, type AgentSessionPort, type RunCallbacks } from "../core/ports.ts";
+import { withWorkspaceRecovery } from "../core/workspace-metadata.ts";
+import { PiRunJournal } from "../history/run-journal.ts";
+import type { ApprovalBindings } from "../permissions/approval-provenance.ts";
+import { requireReadiness } from "../permissions/readiness.ts";
+import { createChildTools } from "../tools/child-tools.ts";
+import { webProfileNames, type AgentProfileName } from "../tools/tool-names.ts";
+import { PiAgentSessionAdapter, ChildRunGate } from "./agent-session.ts";
+import { createAgentWorkspace, type AgentWorkspaceHandle } from "./agent-workspace.ts";
+import type { ChildActivityRegistry } from "./activity-observer.ts";
+import { assembleChildSession, disposeChildSession } from "./child-session.ts";
+import { childWebExtension, type ChildWebModules, type WebLease } from "./child-web.ts";
+import { digest } from "./context-snapshot.ts";
+import { orderFreeToolSchemaExtension } from "./provider-schema.ts";
+import { ManagedBlockObserver, type ManagedBlockSubscription } from "./permission-blocks.ts";
+import { WorkerStatsObserver } from "./worker-stats.ts";
 
 export interface ChildProfile {
   definition: string;

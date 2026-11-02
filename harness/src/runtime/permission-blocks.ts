@@ -1,4 +1,4 @@
-import type { RunCallbacks } from "../core/ports.js";
+import type { RunCallbacks } from "../core/ports.ts";
 import { isManagedBlockTool } from "../../../lib/managed-block-tools.mjs";
 
 /** Metadata from the managed authority's actual SDK handler return, not a UI

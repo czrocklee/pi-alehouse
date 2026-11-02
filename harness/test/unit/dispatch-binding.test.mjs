@@ -11,7 +11,7 @@ import ts from "typescript";
 
 const dataModule = source => `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
 const output = path => ts.transpileModule(readFileSync(new URL(path, import.meta.url), "utf8"), {
-  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, rewriteRelativeImportExtensions: true },
 }).outputText;
 const portsUrl = dataModule(output("../../src/core/ports.ts"));
 const dispatchUrl = dataModule(output("../../src/core/dispatch.ts").replace('"./ports.js"', JSON.stringify(portsUrl)));
@@ -24,8 +24,10 @@ const runtimeUrl = dataModule(output("../../src/runtime/dispatch-runtime.ts")
   .replace('"../tools/tool-names.js"', JSON.stringify(namesUrl))
   .replace('"./owner-lease.js"', JSON.stringify(lockUrl)));
 const pathSurfacesUrl = dataModule(output("../../../node_modules/@gotgenes/pi-permission-system/src/access-intent/path-surfaces.ts"));
+const snapshotUrl = dataModule(output("../../../permission-system/managed-permission-snapshot.ts"));
 const policyUrl = dataModule(output("../../../permission-system/managed-workspace-policy.ts")
-  .replace('"#src/access-intent/path-surfaces"', JSON.stringify(pathSurfacesUrl)));
+  .replace('"#src/access-intent/path-surfaces"', JSON.stringify(pathSurfacesUrl))
+  .replace('"./managed-permission-snapshot"', JSON.stringify(snapshotUrl)));
 const { createDispatchRuntime } = await import(runtimeUrl);
 const { bindWorkspacePolicy, workspacePolicyAliases, workspacePolicyForContext } = await import(policyUrl);
 

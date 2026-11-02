@@ -54,10 +54,40 @@ function substitutionEnd(source: string, start: number): number {
   return -1;
 }
 
+type LiteralEvent =
+  | { kind: "heredoc"; words: string[] }
+  | { kind: "redirect"; word: string; words: string[]; operator: string }
+  | { kind: "command"; words: string[]; expansions: boolean[] };
+type LiteralAnalysis = { commands: string[][] | undefined; events: LiteralEvent[] };
+type LiteralInput = string | LiteralAnalysis;
+
+// Keep event order and partial-parse events, including substitutions/heredocs.
+// This is pure lexical data for ONE synchronous guard invocation, not a policy
+// or identity cache. The original-command guard still performs its own check.
+function analyzeLiteralCommands(source: string): LiteralAnalysis {
+  const events: LiteralEvent[] = [];
+  const commands = parseLiteralCommands(source,
+    words => events.push({ kind: "heredoc", words: [...words] }),
+    (word, words, operator) => events.push({ kind: "redirect", word, words: [...words], operator }),
+    (words, expansions) => events.push({ kind: "command", words: [...words], expansions: [...expansions] }));
+  return { commands, events };
+}
+
+function literalCommands(source: LiteralInput, expandingHeredoc?: (owner: string[]) => void, redirectWord?: (word: string, owner: string[], operator: string) => void, commandWords?: (words: string[], expansions: boolean[]) => void): string[][] | undefined {
+  const analysis = typeof source === "string" ? analyzeLiteralCommands(source) : source;
+  if (!expandingHeredoc && !redirectWord && !commandWords) return analysis.commands;
+  for (const event of analysis.events) {
+    if (event.kind === "heredoc") expandingHeredoc?.([...event.words]);
+    else if (event.kind === "redirect") redirectWord?.(event.word, [...event.words], event.operator);
+    else commandWords?.([...event.words], [...event.expansions]);
+  }
+  return analysis.commands;
+}
+
 // Decode literal shell words, retaining quoted interpreter source as one word.
 // Opaque syntax stays on the upstream permission path. Do not mistake a string
 // inside python -c / node -e for a shell command or split it at its semicolons.
-function literalCommands(source: string, expandingHeredoc?: (owner: string[]) => void, redirectWord?: (word: string, owner: string[], operator: string) => void, commandWords?: (words: string[], expansions: boolean[]) => void): string[][] | undefined {
+function parseLiteralCommands(source: string, expandingHeredoc?: (owner: string[]) => void, redirectWord?: (word: string, owner: string[], operator: string) => void, commandWords?: (words: string[], expansions: boolean[]) => void): string[][] | undefined {
   const commands: string[][] = [];
   let words: string[] = [];
   let word = "";
@@ -119,7 +149,7 @@ function literalCommands(source: string, expandingHeredoc?: (owner: string[]) =>
       const backtick = char === "`";
       const end = backtick ? source.indexOf("`", i + 1) : substitutionEnd(source, i);
       if (end < 0) return undefined;
-      commands.push(...(literalCommands(source.slice(i + (backtick ? 1 : 2), end), expandingHeredoc, redirectWord, commandWords) ?? []));
+      commands.push(...(parseLiteralCommands(source.slice(i + (backtick ? 1 : 2), end), expandingHeredoc, redirectWord, commandWords) ?? []));
       wordExpands = true;
       word += "$dynamic";
       started = true;
@@ -197,7 +227,7 @@ function literalCommands(source: string, expandingHeredoc?: (owner: string[]) =>
   return commands;
 }
 
-function canonicalCommands(source: string): string[] {
+function canonicalCommands(source: LiteralInput): string[] {
   const commands = literalCommands(source);
   if (!commands) return [];
   return commands.flatMap(canonicalWords);
@@ -234,11 +264,21 @@ export function inspectGitCommands(source: string): GitInvocation[] {
   return commands === undefined ? [] : found;
 }
 
+const denyRegexes = new Map<string, RegExp>();
 function matchesDeny(value: string, pattern: string): boolean {
-  const regex = pattern.split("*").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*");
+  let regex = denyRegexes.get(pattern);
+  if (!regex) {
+    const source = pattern.split("*").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*");
+    regex = new RegExp(`^${source}$`, "s");
+    // Do not retain unbounded config patterns. Unlike the wildcard matcher,
+    // this deny language treats ? literally; only * is a wildcard.
+    if (pattern.length <= 8192) {
+      if (denyRegexes.size >= 4096) denyRegexes.clear();
+      denyRegexes.set(pattern, regex);
+    }
+  }
   // A command without operands must not escape an existing `sudo *` deny.
-  return new RegExp(`^${regex}$`, "s").test(value) ||
-    (pattern.endsWith(" *") && value === pattern.slice(0, -2));
+  return regex.test(value) || (pattern.endsWith(" *") && value === pattern.slice(0, -2));
 }
 
 function recordedAgent(ctx: ExtensionContext): string | undefined {
@@ -264,8 +304,13 @@ export function activeAgent(ctx: ExtensionContext): string | undefined {
   return names.values().next().value;
 }
 
+let parsedDenies: { raw: string; denies: Denies } | undefined;
 function loadDenies(root: string): Denies {
-  const config = JSON.parse(readFileSync(join(root, "extensions/pi-permission-system/config.json"), "utf8"));
+  // Always read: a new deny (or an unreadable/malformed file) must be observed
+  // on both sides of asynchronous hardening. Cache successful parsing only.
+  const raw = readFileSync(join(root, "extensions/pi-permission-system/config.json"), "utf8");
+  if (parsedDenies?.raw === raw) return parsedDenies.denies;
+  const config = JSON.parse(raw);
   const global = Object.entries(config.permission.bash as Record<string, unknown>)
     .filter(([, rule]) => rule === "deny" || (rule as { action?: string })?.action === "deny")
     .map(([pattern]) => pattern);
@@ -275,10 +320,12 @@ function loadDenies(root: string): Denies {
   const staticAllows = Object.entries(config.permission.bash as Record<string, unknown>)
     .filter(([, rule]) => rule === "allow" || (rule as { action?: string })?.action === "allow")
     .map(([pattern]) => pattern);
-  return { global, staticAllows, agents };
+  const denies = { global, staticAllows, agents };
+  if (raw.length <= 1024 * 1024) parsedDenies = { raw, denies };
+  return denies;
 }
 
-function bashDenied(command: string, agent: string | undefined, denies: Denies): boolean {
+function bashDenied(command: LiteralInput, agent: string | undefined, denies: Denies): boolean {
   if (agent && !denies.agents.has(agent)) return true;
   // Only declared denies apply. Worker identity is not a Git mutation ban;
   // ordinary editor Git writes still need the normal Bash/path gates.
@@ -299,7 +346,7 @@ export function originalBashDeny(command: string, ctx: ExtensionContext,
   }
 }
 
-function inlineEnvironmentOverridesWhitelist(command: string, denies: Denies): boolean {
+function inlineEnvironmentOverridesWhitelist(command: LiteralInput, denies: Denies): boolean {
   return (literalCommands(command) ?? []).some((original) => {
     const words = [...original];
     while (["if", "then", "else", "elif", "while", "until", "do", "!", "{"].includes(words[0])) words.shift();
@@ -317,7 +364,7 @@ function inlineEnvironmentOverridesWhitelist(command: string, denies: Denies): b
   });
 }
 
-function expandingHeredocFeedsWhitelist(command: string, denies: Denies): boolean {
+function expandingHeredocFeedsWhitelist(command: LiteralInput, denies: Denies): boolean {
   let found = false;
   literalCommands(command, (owner) => {
     if (canonicalWords(owner).some((value) => denies.staticAllows.some((pattern) => matchesDeny(value, pattern)))) {
@@ -327,7 +374,7 @@ function expandingHeredocFeedsWhitelist(command: string, denies: Denies): boolea
   return found;
 }
 
-function indirectReaderInput(command: string, denies: Denies): boolean {
+function indirectReaderInput(command: LiteralInput, denies: Denies): boolean {
   const reader = (words: string[]) => canonicalWords(words).some((value) => /^(head|wc|cat|tail|cut|nl|sha256sum|readlink)( |$)/.test(value));
   // The upstream path gate sees lexical paths, not shell-expanded filenames.
   // Conservative even for quoted metacharacters: enumerate literal paths or
@@ -354,7 +401,7 @@ function indirectReaderInput(command: string, denies: Denies): boolean {
 // Keep printf away from shell-variable assignment (-v / %n), and checksums
 // away from indirect filename lists (--check, including getopt abbreviations).
 // Unsupported forms can use env to enter normal approval.
-function unsafeOutputUtility(command: string): boolean {
+function unsafeOutputUtility(command: LiteralInput): boolean {
   let blocked = false;
   literalCommands(command, undefined, undefined, (words, expansions) => {
     const values = canonicalWords(words);
@@ -385,7 +432,7 @@ function unsafeOutputUtility(command: string): boolean {
 // pattern/path boundary explicit without implementing ripgrep's entire CLI.
 // Existing shell word decoding supplies expansion metadata; quoted regex
 // metacharacters are data, whereas expanded operands evade upstream path gates.
-function unsafeRipgrep(command: string): boolean {
+function unsafeRipgrep(command: LiteralInput): boolean {
   let blocked = false;
   literalCommands(command, undefined, (word, owner) => {
     if (basename(owner[0] ?? "") === "rg" && /[$*?\[\]{}~`]/.test(word.replace(/^~\//, ""))) blocked = true;
@@ -430,8 +477,7 @@ function unsafeRipgrep(command: string): boolean {
 
 // Upstream misses a new bare output filename when classifying worker writes.
 // Keep the action on the normal path gate by requiring its explicit ./ spelling.
-function missedWorkerRedirect(command: string, ctx: ExtensionContext): boolean {
-  const agent = activeAgent(ctx);
+function missedWorkerRedirect(command: LiteralInput, ctx: ExtensionContext, agent: string | undefined): boolean {
   if (agent === undefined || !Object.hasOwn(WORKER_POLICY, agent)) return false;
   const bareTargets: string[] = [];
   const commands = literalCommands(command, undefined, (word, _owner, operator) => {
@@ -527,31 +573,35 @@ function registerGuard(pi: ExtensionAPI, root = resolve(process.env.PI_CODING_AG
       return { block: true, reason: "Static Bash deny policy is unavailable." };
     }
     try {
-      if (canonicalCommands(event.input.command).some(command => /^cd -/.test(command))) {
+      const command = analyzeLiteralCommands(event.input.command);
+      if (canonicalCommands(command).some(value => /^cd -/.test(value))) {
         return { block: true, reason: "Use an explicit directory operand for cd. OLDPWD and cd option forms do not have a proven working-directory scope." };
       }
-      if (missedWorkerRedirect(event.input.command, ctx)) {
+      // Resolve once for this synchronous handler, never by toolCallId and
+      // never across the original-command check or an asynchronous hardener.
+      const agent = activeAgent(ctx);
+      if (missedWorkerRedirect(command, ctx, agent)) {
         return { block: true, reason: "The upstream parser misses worker writes to new bare filenames. Spell the output as ./filename so path_write approval is applied." };
       }
-      if (unsafeOutputUtility(event.input.command)) {
+      if (unsafeOutputUtility(command)) {
         return { block: true, reason: "Static printf requires a literal text/%s/%% format; sha256sum requires direct input and supported output flags. Use an env wrapper for normal approval of other forms." };
       }
-      if (unsafeRipgrep(event.input.command)) {
+      if (unsafeRipgrep(command)) {
         return { block: true, reason: "Static rg requires --no-config, safe flags, -d 0, then -- and a pattern plus literal paths (or stdin - without -d 0); --files lists only the current directory. Use an env wrapper for normal approval of other forms." };
       }
-      if (indirectReaderInput(event.input.command, denies)) {
+      if (indirectReaderInput(command, denies)) {
         return { block: true, reason: "Static file-read allowance requires literal paths and direct input; expand filenames explicitly or use an env wrapper for normal approval." };
       }
-      if (expandingHeredocFeedsWhitelist(event.input.command, denies)) {
+      if (expandingHeredocFeedsWhitelist(command, denies)) {
         return { block: true, reason: "Command substitutions in an expanding heredoc are outside the static whitelist; use an explicit env wrapper for normal approval." };
       }
-      if ((literalCommands(event.input.command) ?? []).some(hasDangerousGitEnvironmentPrefix)) {
+      if ((literalCommands(command) ?? []).some(hasDangerousGitEnvironmentPrefix)) {
         return { block: true, reason: "Requested PATH, loader, or helper-execution environment overrides on recognized Git invocations are statically denied; session approvals cannot override this guard." };
       }
-      if (inlineEnvironmentOverridesWhitelist(event.input.command, denies)) {
+      if (inlineEnvironmentOverridesWhitelist(command, denies)) {
         return { block: true, reason: "Inline environment overrides are outside the static whitelist; use an explicit env wrapper for normal approval." };
       }
-      if (bashDenied(event.input.command, activeAgent(ctx), denies)) {
+      if (bashDenied(command, agent, denies)) {
         return { block: true, reason: "A declarative Bash deny applies to this command after literal normalization; session approvals cannot override it." };
       }
     } catch (error) {

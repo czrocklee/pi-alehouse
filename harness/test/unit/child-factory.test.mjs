@@ -8,7 +8,7 @@ import test from "node:test";
 import ts from "typescript";
 
 const dataModule = (source) => `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
-const compilerOptions = { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 };
+const compilerOptions = { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, rewriteRelativeImportExtensions: true };
 const sourceOutput = (path) => ts.transpileModule(readFileSync(new URL(path, import.meta.url), "utf8"), { compilerOptions }).outputText;
 // Use the actual source core error and WeakMap helpers, not fake classes or a
 // potentially stale dist generation. Only SDK/IO boundaries below are seams.
@@ -95,7 +95,7 @@ const seam = await import(seamUrl);
 const source = readFileSync(new URL("../../src/runtime/child-factory.ts", import.meta.url), "utf8");
 // Replace only dependency boundaries, not the factory implementation under test.
 const output = ts.transpileModule(source, {
-  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  compilerOptions,
   transformers: { before: [(context) => (file) => ts.visitNode(file, function visit(node) {
     if (ts.isImportDeclaration(node) && !node.moduleSpecifier.text.startsWith("node:")) {
       return ts.factory.updateImportDeclaration(node, node.modifiers, node.importClause,

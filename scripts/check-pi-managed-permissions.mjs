@@ -924,15 +924,34 @@ try {
   }
   assert.equal((await researcher.call("bash", { command: "git status --short" }))?.block, true, "Researcher raw Bash deny survives the fixture's exact Git allow");
 
-  const observeMktemp = async (node, label) => {
-    const input = { command: "mktemp -d" };
-    const toolCallId = `mktemp-${label}`;
-    assert.equal((await node.callAs(toolCallId, "bash", input))?.block, undefined);
-    const output = execFileSync("mktemp", ["-d"], { encoding: "utf8" });
-    externalScratch.push(output.trim());
-    await node.result({ toolCallId, toolName: "bash", input, content: [{ type: "text", text: output }], details: undefined, isError: false });
-    return output.trim();
+  const observeMktemp = async (node, label, directory = "/tmp") => {
+    // This existing proof lane deliberately accepts only /tmp/tmp.*. Keep the
+    // exact observed call/result and its actual execution environment aligned;
+    // the collector's nested TMPDIR is for other disposable fixture state.
+    const previousTmpdir = process.env.TMPDIR;
+    process.env.TMPDIR = directory;
+    try {
+      const input = { command: "mktemp -d" };
+      const toolCallId = `mktemp-${label}`;
+      assert.equal((await node.callAs(toolCallId, "bash", input))?.block, undefined);
+      const output = execFileSync("mktemp", ["-d"], { encoding: "utf8" });
+      externalScratch.push(output.trim());
+      await node.result({ toolCallId, toolName: "bash", input, content: [{ type: "text", text: output }], details: undefined, isError: false });
+      return output.trim();
+    } finally {
+      if (previousTmpdir === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previousTmpdir;
+    }
   };
+
+  // Observing a real mktemp result from a nonstandard TMPDIR must NOT widen
+  // the production lane. Its unproven mkdir still reaches ordinary approval.
+  const nonstandardBase = mkdtempSync(join(tmpdir(), "pi-nonstandard-scratch-"));
+  externalScratch.push(nonstandardBase);
+  const nonstandardRoot = await observeMktemp(root, "nonstandard-directory", nonstandardBase);
+  assert.equal(dirname(nonstandardRoot), nonstandardBase);
+  const nonstandardInput = { command: `mkdir -p ${nonstandardRoot}/unproven` };
+  assert.equal((await root.callAs("file-effects-nonstandard-directory", "bash", nonstandardInput))?.block, true);
+  assert.equal(nonstandardInput.command, `mkdir -p ${nonstandardRoot}/unproven`, "nonstandard scratch never receives a rewrite proof");
 
   // A root exists only after the SDK's exact mktemp call/result pair. The
   // resulting mkdir/cp program is hardened in-place, then all ordinary Bash,

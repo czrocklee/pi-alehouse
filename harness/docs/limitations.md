@@ -194,6 +194,36 @@ heap/RSS. Prompts, settings/context snapshots, metadata, and resident SDK
 memory are outside result accounting. There is no automatic eviction; hitting
 the limit requires closing the Owner for new admissions.
 
+Jev audit rotation bounds only the active file, not archived history or total
+disk use. Archives are retained without automatic deletion. Its Linux-only
+synchronous writer requires procfs `/proc/self/fd` and trusted util-linux flock;
+unsafe paths, exhausted contention waits or IO/cleanup failures defer automatic
+approval. The persistent regular lock file is not removed; the kernel releases
+its OFD lock on process death. This is not an Owner lease, and successful append/
+rotation is not fsync or crash durability. Kernel waiting and synchronous IO can
+still block the event loop; the contention budget is not a hard filesystem bound.
+
+Jev also requires verifiable ownership throughout the canonical audit directory's
+ancestry: the leaf must belong to the current UID and every ancestor to that UID
+or root. A user namespace with unmapped host root can display ancestors such as
+`/home` or `/tmp` as overflow UID 65534 (`nobody`). Such a view is unsupported for
+Jev audit/recovery, even with healthy logs, procfs and flock: ownership rejection
+makes Jev automatic allows defer and can fail the offline Jev test lanes. The
+`untrusted_directory_owner` diagnostic points to namespace UID/GID mappings, not
+the lock executable. Numeric overflow IDs are not trusted exceptions, and retry
+or offline log recovery cannot establish the hidden owner. See
+[the namespace limit](jev-audit-recovery.md#user-namespace-ownership-limit).
+
+This does not silently repair legacy directory locks, old link/unlink double
+links or partial JSONL tails. [Audit recovery](jev-audit-recovery.md) is a separate,
+explicit offline operator action with dry-run inspection and retained evidence,
+not a model tool or an Owner force-unlock. Writer shutdown is an operator
+precondition, not something a PID/TTL or confirmation flag proves. The old
+unlocked logger ignores the new protocol; mixed-generation operation is unsafe.
+Stop every writer before upgrade/rollback and use a fresh matched Pi process.
+Safe shared log-directory permissions are preserved; unsafe writable ancestors
+or a changed/unprotected symlink target still defer rather than weaken checks.
+
 The [tool contract](tool-contract.md) defines communication and retention.
 Public reason is omitted for snapshot/done; zero alerts_pending/finished_pending,
 the redundant pending array and empty result text are absent. Positive counts,

@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { controlledProvider, loadHost } from "../support/host.mjs";
 import { disposeChildSession as disposeChild } from "../../dist/runtime/child-session.js";
 import { managementToolNames as delegationTools, cleanupToolNames } from "../../dist/tools/tool-names.js";
@@ -29,7 +30,14 @@ mkdirSync(cwd, { recursive: true }); writeFileSync(join(cwd, "source.txt"), "ENT
 process.env.PI_HARNESS_PERMISSION_ROOT = resolve(permissionRoot, "..");
 process.env.PI_HARNESS_POLICY_ROOT = packaged.policyRoot;
 process.env.PI_HARNESS_FLOCK = packaged.flock;
-const entry = packaged.extensionPaths[0];
+// This fixture intentionally exercises the historical component order rather
+// than composition. Supply the same already-loaded authority seam explicitly;
+// the harness no longer creates a private loader and reimports the SDK graph.
+const entry = join(outputRoot, "injected-harness-entry.ts");
+writeFileSync(entry, `import harness from ${JSON.stringify(pathToFileURL(packaged.extensionPaths[0]).href)};\n` +
+  `import * as permission from ${JSON.stringify(pathToFileURL(join(packaged.permissionRoot, "index.ts")).href)};\n` +
+  "export default function (pi) { return harness(pi, { permission }); }\n");
+const extensionPaths = [entry, ...packaged.extensionPaths.slice(1)];
 const provider = controlledProvider(ai);
 // Synthetic TTL/pricing makes a refresh eligible after one second, including
 // idle sessions. IO still goes exclusively to the controlled provider below.
@@ -201,7 +209,7 @@ const createRuntime = async ({ cwd, sessionManager, sessionStartEvent }) => {
   const services = await sdk.createAgentSessionServices({ cwd, agentDir, modelRuntime: runtime, settingsManager: settings,
     resourceLoaderOptions: { eventBus: bus, noExtensions: true, noSkills: true, noThemes: true,
       noPromptTemplates: true, noContextFiles: true, systemPromptOverride: () => `ENTRY_PARENT\n${orchestration.pi}`,
-      additionalExtensionPaths: packaged.extensionPaths } });
+      additionalExtensionPaths: extensionPaths } });
   const extensions = services.resourceLoader.getExtensions();
   assert.deepEqual(extensions.errors, []);
   assert(!extensions.extensions.some((e) => /luna-auto-approval|pi-subagents/.test(e.path)));

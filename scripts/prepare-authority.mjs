@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { packageRoot } from "./generate-workers.mjs";
+import { normalizeVendorImports, removeGlobalNpmProbe } from "./normalize-runtime-imports.mjs";
 
 export function prepareAuthority(output = join(packageRoot, "runtime/permission-system"), root = packageRoot) {
   // A direct dependency, never the ambient/global Pi installation. Keep its
@@ -16,8 +17,16 @@ export function prepareAuthority(output = join(packageRoot, "runtime/permission-
   const vendor = join(output, "vendor");
   rmSync(vendor, { recursive: true, force: true });
   cpSync(upstream, vendor, { recursive: true, dereference: true,
-    filter: (path) => !path.slice(upstream.length).split(/[\\/]/).includes("node_modules") });
+    filter: (path) => {
+      const parts = relative(upstream, path).split(/[\\/]/);
+      // Non-executable upstream documentation need not be shipped/hashed on
+      // every launch. Retain LICENSE, package imports, schemas and WASM assets.
+      return !parts.includes("node_modules") && !["docs", "README.md", "CHANGELOG.md"].includes(parts[0]);
+    } });
   execFileSync(process.execPath, [join(root, "permission-system/apply-patch.mjs"), vendor], { stdio: "inherit" });
+  const discovery = join(vendor, "src/path/node-modules-discovery.ts");
+  writeFileSync(discovery, removeGlobalNpmProbe(readFileSync(discovery, "utf8"), discovery));
+  normalizeVendorImports(vendor);
   cpSync(join(root, "permission-system/authority-guard.ts"), join(output, "authority-guard.ts"));
   cpSync(join(root, "permission-system/managed-block-observer.ts"), join(output, "managed-block-observer.ts"));
   const scratch = readFileSync(join(root, "permission-system/managed-scratch.ts"), "utf8");

@@ -1,5 +1,5 @@
-import { HarnessError } from "./core/ports.js";
-import type { PresetSelection } from "./routing.js";
+import { HarnessError } from "./core/ports.ts";
+import type { PresetSelection } from "./routing.ts";
 
 /** How Main divides work with Agents, ordered by how much it hands off. */
 export const delegationModes = ["manual", "co-worker", "lead", "supervisor"] as const;

@@ -28,15 +28,16 @@ const view = (agent_id = "a", extra = {}) => ({
 });
 const entry = (v) => ({ agent_id: v.agent_id, input: { view: v, live } });
 function paneFixture(t, { frame = false, onStop, views = [view()], transcript = () => undefined, paneTheme = theme } = {}) {
-  let closes = 0, snapshots = 0;
+  let closes = 0, snapshots = 0, renders = 0;
   const terminal = { columns: 120, rows: 40 };
   const pane = new DetailPane({
-    tui: { terminal, requestRender() {} }, theme: paneTheme, frame,
+    tui: { terminal, requestRender() { renders++; } }, theme: paneTheme, frame,
     initial: views[0]?.agent_id ?? "a", snapshot: () => { snapshots++; return views.map(entry); }, transcript,
     done: () => { closes++; }, onStop,
   });
   t.after(() => pane.dispose());
-  return { pane, views, terminal, frame, get closes() { return closes; }, get snapshots() { return snapshots; } };
+  return { pane, views, terminal, frame, get closes() { return closes; }, get snapshots() { return snapshots; },
+    get renders() { return renders; } };
 }
 function clickLabel(pane, lines, label, offset = 0, clickCount) {
   const footer = lines.at(-1), at = footer.indexOf(label);
@@ -543,6 +544,32 @@ for (const frame of [false, true]) test(`Esc cancels the visible expired intent 
   assertRightmostLabel(after, "[S Stop]", 120, frame);
   h.pane.handleInput("\x1b"); assert.equal(h.closes, 1);
 });
+
+for (const frame of [false, true]) for (const change of ["expiry", "columns", "rows"]) for (const repaint of [false, true]) {
+  test(`timer invalidation preserves Esc semantics until repaint (frame=${frame}, change=${change}, repaint=${repaint})`, t => {
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    const clock = monotonicClock(t);
+    const h = paneFixture(t, { frame, onStop: () => assert.fail("stale confirmation must never stop work") });
+    arm(h.pane);
+    if (change === "expiry") clock.advance(10000);
+    else h.terminal[change]++;
+    const renders = h.renders;
+    t.mock.timers.tick(120);
+    assert(h.renders > renders, "the timer requests a repaint for stale confirmation");
+    assert.equal(h.closes, 0, "a timer cannot close the pane");
+    if (repaint) {
+      assertRightmostLabel(h.pane.render(120), "[S Stop]", 120, frame);
+      h.pane.handleInput("\x1b");
+      assert.equal(h.closes, 1, "after repaint removes confirmation, Esc closes normally");
+    } else {
+      h.pane.handleInput("\x1b");
+      assert.equal(h.closes, 0, "before repaint, first Esc cancels the still-visible confirmation");
+      assertRightmostLabel(h.pane.render(120), "[S Stop]", 120, frame);
+      h.pane.handleInput("\x1b");
+      assert.equal(h.closes, 1, "the next Esc closes the pane");
+    }
+  });
+}
 
 for (const frame of [false, true]) for (const count of [undefined, 0, 1, 2, 3]) for (const confirming of [false, true]) {
   test(`button presses and click counts require a single deliberate click (frame=${frame}, count=${count}, confirming=${confirming})`, (t) => {

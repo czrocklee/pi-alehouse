@@ -1,10 +1,10 @@
 import type { PersistentScope } from "../../../lib/settings-store.mjs";
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
-import { OverlayRequest } from "./overlay-request.js";
-import { isPopoverCloseClick, popoverBottom, popoverDivider, popoverRow, popoverTitle } from "./popover.js";
-import { delegationModes, eagernessLevels, modeLabels, usesEagerness, type DelegationMode, type DelegationSetting } from "../delegation.js";
-import { isOffPreset, strengths, thinkingLevels, type Effort, type EffortOverrides, type PresetSelection, type PresetSnapshot, type Strength, type ThinkingLevel } from "../routing.js";
+import { OverlayRequest } from "./overlay-request.ts";
+import { isPopoverCloseClick, popoverBottom, popoverDivider, popoverRow, popoverTitle } from "./popover.ts";
+import { delegationModes, eagernessLevels, modeLabels, usesEagerness, type DelegationMode, type DelegationSetting } from "../delegation.ts";
+import { isOffPreset, strengths, thinkingLevels, type Effort, type EffortOverrides, type PresetSelection, type PresetSnapshot, type Strength, type ThinkingLevel } from "../routing.ts";
 
 export type PresetChoice
   = string

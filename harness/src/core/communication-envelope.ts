@@ -1,7 +1,7 @@
-import type { CancellationSource, RunStatus } from "./contracts.js";
-import type { QuestionId } from "./question-id.js";
-import { encodeResultCursor } from "./result-cursor.js";
-import type { TaskMetadata } from "./task-metadata.js";
+import type { CancellationSource, RunStatus } from "./contracts.ts";
+import type { QuestionId } from "./question-id.ts";
+import { encodeResultCursor } from "./result-cursor.ts";
+import type { TaskMetadata } from "./task-metadata.ts";
 
 /** Fixed model-facing bounds, not limits on a general-purpose OwnerController. */
 export const COMMUNICATION_LIMITS = Object.freeze({

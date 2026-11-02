@@ -50,52 +50,54 @@ export const clipPlainText = (text: string, columns: number): string =>
 export const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** Wrap plain paragraphs without splitting emoji, combining marks or joiners.
- * Measure the whole candidate: VS/ZWJ clusters cannot be measured by adding
- * code-point widths. An indivisible cluster wider than the budget becomes one
- * visible ellipsis, rather than an oversized row or a broken cluster. */
+ * Sum grapheme (not code-point) widths, verifying whole rows at boundaries.
+ * If concatenation ever changes the SDK's width semantics, use the exact
+ * whole-candidate path for that paragraph. Overwide clusters become ellipses. */
 export function wrapPlainText(text: string, columns: number): string[] {
   if (!(columns >= 1)) return [];
   const width = Math.floor(columns);
   const paragraphs = plainText(text).split("\n");
   if (width === Infinity) return paragraphs;
-  const out: string[] = [];
-  for (const paragraph of paragraphs) {
-    const start = out.length;
-    let line: string[] = [];
-    const emit = (parts: string[]): void => {
-      let end = parts.length;
-      while (end && parts[end - 1] === " ") end--;
-      const row = parts.slice(0, end).join("");
-      if (row) out.push(row);
-    };
-    for (const { segment } of graphemes.segment(paragraph)) {
-      const cluster = visibleWidth(segment) > width ? "…" : segment;
-      let separator = false;
-      while (visibleWidth(line.join("") + cluster) > width) {
-        // A full word already fits: an overflowing separator ends that row,
-        // rather than moving its last word back to the following row.
-        if (cluster === " ") {
-          emit(line);
-          line = [];
-          separator = true;
-          break;
-        }
-        // Only a whole space grapheme is a word break. A space carrying a
-        // combining mark must not be cut away from that mark.
-        const space = line.findLastIndex((part) => part === " ");
-        const head = line.slice(0, space);
-        if (space > 0 && head.some((part) => part !== " ")) {
-          emit(head);
-          line = line.slice(space + 1);
-          while (line[0] === " ") line.shift();
-        } else {
-          emit(line);
-          line = [];
-        }
+  return paragraphs.flatMap((paragraph) => wrapParagraph(paragraph, width));
+}
+
+function wrapParagraph(paragraph: string, width: number, wholeCandidate = false): string[] {
+  const out: string[] = [], widths = new Map<string, number>();
+  const measure = (cluster: string): number => {
+    let value = widths.get(cluster);
+    if (value === undefined) { value = visibleWidth(cluster); widths.set(cluster, value); }
+    return value;
+  };
+  const sum = (parts: string[]): number => parts.reduce((total, part) => total + measure(part), 0);
+  let line: string[] = [], lineWidth = 0, mismatch = false;
+  const emit = (parts: string[], trim = true): void => {
+    let end = parts.length;
+    while (trim && end && parts[end - 1] === " ") end--;
+    const kept = parts.slice(0, end), row = kept.join("");
+    if (!wholeCandidate && visibleWidth(row) !== sum(kept)) mismatch = true;
+    if (row || !trim) out.push(row);
+  };
+  for (const { segment } of graphemes.segment(paragraph)) {
+    const cluster = measure(segment) > width ? "…" : segment, clusterWidth = measure(cluster);
+    let separator = false;
+    while ((wholeCandidate ? visibleWidth(line.join("") + cluster) : lineWidth + clusterWidth) > width) {
+      // Check concatenation only at a boundary, not for every growing prefix.
+      if (!wholeCandidate && visibleWidth(line.join("") + cluster) !== lineWidth + clusterWidth)
+        return wrapParagraph(paragraph, width, true);
+      if (cluster === " ") {
+        emit(line); line = []; lineWidth = 0; separator = true; break;
       }
-      if (!separator) line.push(cluster);
+      // A marked space belongs to its grapheme, never to the word-break path.
+      const space = line.findLastIndex((part) => part === " "), head = line.slice(0, space);
+      if (space > 0 && head.some((part) => part !== " ")) {
+        emit(head);
+        line = line.slice(space + 1);
+        while (line[0] === " ") line.shift();
+        lineWidth = sum(line);
+      } else { emit(line); line = []; lineWidth = 0; }
     }
-    if (line.length || out.length === start) out.push(line.join(""));
+    if (!separator) { line.push(cluster); lineWidth += clusterWidth; }
   }
-  return out;
+  if (line.length || !out.length) emit(line, false);
+  return mismatch ? wrapParagraph(paragraph, width, true) : out;
 }

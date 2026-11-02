@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { bridgedUrl, type HostModules } from "./host-module-bridge.js";
-import { webToolNames } from "../tools/tool-names.js";
+import { bridgedUrl, type HostModules } from "./host-module-bridge.ts";
+import { webToolNames } from "../tools/tool-names.ts";
 
 /** pi-web-access's default export: registers tools and lifecycle handlers. */
 export type WebFactory = (pi: ExtensionAPI) => void | Promise<void>;

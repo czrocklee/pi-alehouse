@@ -403,6 +403,38 @@ whereas requested worktree creation fails with `trusted_git_unavailable`.
 Tests allocating state must override HOME and XDG_STATE_HOME to owned fixtures;
 never leave worktrees in the developer's real state directory.
 
+### Jev audit ownership in user namespaces
+
+The audit writer and offline recovery require the canonical log directory to be
+owned by the current UID. Every ancestor must appear owned by that UID or root;
+existing sticky-directory and write-permission checks apply independently. Linux,
+procfs and flock availability alone do not establish this ownership boundary.
+
+A bubblewrap/rootless-container user namespace that maps only the invoking UID
+can display host-root-owned `/home` or `/tmp` as an overflow UID, often 65534
+(`nobody`). The visible owner cannot then be verified, so a healthy log directory
+still fails with `untrusted_directory_owner`. Jev automatic allows defer, and
+Jev package/policy tests can fail for the same environmental reason. This is not
+a stale lock or a missing flock executable. Offline recovery does not fix it.
+
+Record the namespace/ownership view and actual failures when reporting checks;
+results from a copy with relaxed checks are not verification of the real source.
+Do not whitelist the overflow UID, change the ownership guard, bypass a denied
+sandbox request, or treat a skip as success. A suitable UID/GID mapping and
+verifiable ancestry are operator environment prerequisites, not runtime repairs.
+Numeric 65534 alone proves neither a namespace nor the original owner. See
+[audit recovery](jev-audit-recovery.md#user-namespace-ownership-limit).
+
+## Performance work
+
+See [performance](performance.md) for the append-only streaming seam,
+presentation-cache invalidation, permission freshness boundaries and reproducible
+offline microbenchmarks. Performance caches never replace command admission,
+result retention, original-Run validation or asynchronous approval revalidation.
+Relative TypeScript source imports use explicit `.ts` specifiers to avoid loader
+suffix probing; TypeScript rewrites them to `.js` in `harness/dist`. Normalize
+vendored runtime specifiers in the generator, never in generated output by hand.
+
 ## Static quality gate
 
 Root `npm run check` runs lint, typecheck, package tests and the portable

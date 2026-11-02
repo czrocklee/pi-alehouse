@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createJiti } from "jiti";
+import { protectionResources } from "../bin/runtime-support.mjs";
 
 const vendor = resolve(import.meta.dirname, "../runtime/permission-system/vendor/src");
 const jiti = createJiti(import.meta.url, { interopDefault: false });
@@ -22,8 +23,20 @@ symlinkSync(root, join(dir, "runtime-link"));
 symlinkSync(credentials, join(dir, "key-link"));
 after(() => rmSync(dir, { recursive: true, force: true }));
 
+const agentDir = join(dir, "agent"), sharedLogs = join(dir, "shared-logs");
+mkdirSync(agentDir); mkdirSync(sharedLogs, { mode: 0o750 });
+symlinkSync(sharedLogs, join(agentDir, "logs"));
+const auditActive = join(agentDir, "logs/jev-auto-approval.jsonl");
+const auditLock = join(agentDir, "logs/.jev-auto-approval.jsonl.lock");
+const auditArchives = join(agentDir, "logs/jev-auto-approval.jsonl.archives");
+const resources = protectionResources({ agentDir }, {});
+assert(resources.writeFiles.includes(auditActive));
+assert(resources.writeFiles.includes(auditLock));
+assert(resources.writeRoots.includes(auditArchives));
+assert(!resources.writeRoots.includes(join(agentDir, "logs")), "do not protect the whole shared logs target");
 assert.throws(() => protectionApi.requireManagedResourceProtection(), /must initialize/);
-const protection = protectionApi.initializeManagedResourceProtection({ writeRoots: [root], readFiles: [credentials] });
+const protection = protectionApi.initializeManagedResourceProtection({ writeRoots: [root, auditArchives],
+  readFiles: [credentials], writeFiles: [auditActive, auditLock] });
 function resolver(yolo = false, explicitDeny = false) {
   const allow = { permission: { "*": "allow", path: { "*": "allow" }, path_write: { "*": "allow" } } };
   const loader = {
@@ -71,6 +84,45 @@ test("snapshot is deeply frozen, non-replaceable and cannot be widened by a late
   assert.throws(() => { globalThis[Symbol.for("pi-alehouse:managed-resource-protection:v1")] = {}; }, TypeError);
   assert.equal(protectionApi.initializeManagedResourceProtection({ writeRoots: [join(root, "sub")], readFiles: [credentials] }), protection);
   assert.throws(() => protectionApi.initializeManagedResourceProtection({ writeRoots: [join(dir, "different")], readFiles: [] }), /generation changed/);
+});
+
+test("audit floor pins external log artifacts without covering unrelated shared logs", () => {
+  for (const yolo of [false, true]) {
+    const r = resolver(yolo);
+    for (const path of [auditActive, auditLock, join(auditArchives, "archive", "record.jsonl"),
+      join(sharedLogs, "jev-auto-approval.jsonl"), join(sharedLogs, ".jev-auto-approval.jsonl.lock"),
+      join(sharedLogs, "jev-auto-approval.jsonl.archives/new/record.jsonl"), sharedLogs]) {
+      assert.equal(query(r, "path_write", path).state, "deny", path);
+    }
+    assert.equal(query(r, "path_write", join(sharedLogs, "other-extension.log")).state, "allow");
+    assert.equal(query(r, "path_read", join(sharedLogs, "jev-auto-approval.jsonl")).state, "allow");
+  }
+});
+
+test("an archive-directory symlink is rejected instead of widening the floor to an unrelated tree", () => {
+  const unrelated = join(dir, "unrelated-archive-target");
+  mkdirSync(unrelated);
+  symlinkSync(unrelated, auditArchives);
+  try {
+    assert.throws(() => protectionResources({ agentDir }, {}), /archives must be a real directory/);
+    assert.equal(protectionApi.requireManagedResourceProtection(), protection);
+    assert.equal(query(resolver(), "path_write", join(unrelated, "ordinary.txt")).state, "allow");
+  } finally { unlinkSync(auditArchives); }
+});
+
+test("retargeting the logs symlink cannot silently widen the frozen audit floor", () => {
+  const replacement = join(dir, "replacement-logs");
+  mkdirSync(replacement, { mode: 0o750 });
+  unlinkSync(join(agentDir, "logs")); symlinkSync(replacement, join(agentDir, "logs"));
+  try {
+    assert.equal(query(resolver(), "path_write", auditActive).state, "deny", "the lexical artifact stays protected");
+    assert.equal(query(resolver(), "path_write", join(replacement, "jev-auto-approval.jsonl")).state, "allow",
+      "the writer must reject an unregistered canonical target, not assume a recursive symlink floor");
+    assert.throws(() => protectionApi.initializeManagedResourceProtection({ writeRoots: [auditArchives],
+      readFiles: [], writeFiles: [auditActive, auditLock] }), /generation changed/);
+  } finally {
+    unlinkSync(join(agentDir, "logs")); symlinkSync(sharedLogs, join(agentDir, "logs"));
+  }
 });
 
 test("existing explicit denial retains its policy provenance", () => {

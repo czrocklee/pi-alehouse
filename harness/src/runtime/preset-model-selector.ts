@@ -1,6 +1,6 @@
 import { ModelSelectorComponent, type ModelRuntime, type ScopedModel } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
-import { HarnessError } from "../core/ports.js";
+import { HarnessError } from "../core/ports.ts";
 
 type Model = ReturnType<ModelRuntime["getModels"]>[number];
 const views = new WeakMap<ModelRuntime, ModelRuntime>();

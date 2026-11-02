@@ -1,13 +1,13 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, type TUI } from "@earendil-works/pi-tui";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import type { createPresetModelSelector } from "../runtime/preset-model-selector.js";
+import type { createPresetModelSelector } from "../runtime/preset-model-selector.ts";
 import { type PersistentScope, type PresetDefinition, type SettingsStore, type SettingsDocument, validateSettings } from "../../../lib/settings-store.mjs";
-import type { DelegationSetting } from "../delegation.js";
-import { HarnessError } from "../core/ports.js";
-import { isOffPreset, strengths, thinkingLevels, type PresetCandidate, type PresetRouter, type PresetSelection, type EffortOverrides, type Effort, type Strength } from "../routing.js";
-import { workerSlotDisplayOrder, type ModelPickerPosition } from "./preset-picker.js";
-import { modelPopoverOptions, PresetModelPopover } from "./preset-model-popover.js";
+import type { DelegationSetting } from "../delegation.ts";
+import { HarnessError } from "../core/ports.ts";
+import { isOffPreset, strengths, thinkingLevels, type PresetCandidate, type PresetRouter, type PresetSelection, type EffortOverrides, type Effort, type Strength } from "../routing.ts";
+import { workerSlotDisplayOrder, type ModelPickerPosition } from "./preset-picker.ts";
+import { modelPopoverOptions, PresetModelPopover } from "./preset-model-popover.ts";
 
 export interface PreferencesControlsOptions {
   ctx: ExtensionContext;
@@ -113,6 +113,13 @@ export class PreferencesControls {
             return;
           }
           ctx.ui.notify(`${description}. ${this.summary()}`, "info");
+          const workspace = store.scope === "global" && store.canWriteWorkspace()
+            ? store.get("workspace").ui?.beerMugs : undefined;
+          if (workspace !== undefined) {
+            ctx.ui.notify(`Current session: ${description}. Save scope: global. ` +
+              `Next startup after saving pending writes, if any: Beer mugs: ${workspace ? "on" : "off"}. ` +
+              "The workspace ui.beerMugs override takes precedence over the global default; it was not removed.", "info");
+          }
         }
       } else if (action === "Change save scope") {
         const scope = await ctx.ui.select("Future explicit changes in this session save to", ["session", "global", "workspace"]);
@@ -130,8 +137,10 @@ export class PreferencesControls {
       } else if (action === "Save pending now") {
         this.reportFlush();
       } else if (action === "Discard pending writes") {
-        if (await ctx.ui.confirm("Discard pending configuration writes?", "Current session choices stay unchanged. Nothing on disk is deleted.")) {
+        if (await ctx.ui.confirm("Discard pending configuration writes?", "Current session choices stay unchanged. " +
+          "Next startup follows the existing on-disk global/workspace defaults, not the discarded changes. Nothing on disk is deleted.")) {
           this.assertLive(); store.discard();
+          ctx.ui.notify("Pending writes discarded. Current session choices stay unchanged; next startup follows the existing on-disk defaults.", "info");
         }
       } else if (action === "Remove a saved override") {
         const scope = await this.target();
@@ -146,12 +155,16 @@ export class PreferencesControls {
         for (const name of Object.keys(layer.presets ?? {})) paths.push(["presets", name]);
         if (!paths.length) { ctx.ui.notify("No overrides in this scope.", "info"); return; }
         const labels = paths.map((path) => JSON.stringify(path));
-        const chosen = await ctx.ui.select("Remove this scope's override; next startup follows the lower layer", labels);
+        const chosen = await ctx.ui.select("Remove this scope's override; after saving, next startup follows remaining layers", labels);
         this.assertLive();
         const index = labels.indexOf(chosen ?? "");
         if (index < 0) return;
-        if (await this.confirm(scope, `Remove ${labels[index]}. Current session choices are unchanged. Removing a custom preset may require changing its saved selection too.`)) {
+        if (await this.confirm(scope, `Remove ${labels[index]}. Current session choices are unchanged. ` +
+          "After saving pending writes, next startup follows the remaining saved layers or defaults; higher-priority overrides still apply. " +
+          "Removing a custom preset may require changing its saved selection too.")) {
           store.stage(scope, paths[index]!, undefined);
+          ctx.ui.notify(`Override removal staged for ${scope}. ${this.summary()}. Current session choices stay unchanged. ` +
+            "After saving pending writes, next startup follows the remaining saved layers or defaults; higher-priority overrides still apply.", "info");
         }
       } else if (action === "Show paths and pending changes") {
         ctx.ui.notify(JSON.stringify({ scope: store.scope, paths: store.paths, workspaceTrusted: store.canWriteWorkspace(),

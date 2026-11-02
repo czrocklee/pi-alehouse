@@ -1,5 +1,5 @@
 import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
-import { graphemes, previewText } from "../ui/text.js";
+import { graphemes, previewText } from "../ui/text.ts";
 
 type PreviewEvent = Extract<AssistantMessageEvent, { type:
   "thinking_start" | "thinking_delta" | "thinking_end" | "text_start" | "text_delta" | "text_end" }>;
