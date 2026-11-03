@@ -280,7 +280,7 @@ try {
     () => call("spawn-worktree", "agent_spawn", { agent: "marten", profile: "worker", workspace: "worktree",
       prompt: firstLabel, reasoning_difficulty: 1, dispatch: firstDispatch, wait_ms: 60000 }),
     settled(1, "agent_spawn", () => call("list-first", "agent_list", {})),
-    (last) => { checkRoster(last, 1); return call("reuse-worktree", "agent_run", { agent: "marten", builds_on: "First task's worktree output", prompt: secondLabel, dispatch: nextDispatch, wait_ms: 60000 }); },
+    (last) => { checkRoster(last, 1); return call("reuse-worktree", "agent_run", { agent: "marten", continues: "First task's worktree output", prompt: secondLabel, dispatch: nextDispatch, wait_ms: 60000 }); },
     settled(2, "agent_run", () => call("list-second", "agent_list", {})),
     (last) => { checkRoster(last, 2); return call("kill-worktree", "agent_kill", { agent: "marten" }); },
     (last) => {
@@ -344,7 +344,7 @@ try {
         assert(!journal.includes('"role":"assistant"'), "no model output before conflict refusal");
       }
       assert.equal(lifecycle.filter(event => event.kind === "disposed").length, 1, "healthy contender was not disposed");
-      return call("reuse-contender", "agent_run", { agent: "badger", builds_on: "The retained workspace from the preflight-failed task",
+      return call("reuse-contender", "agent_run", { agent: "badger", continues: "The retained workspace from the preflight-failed task",
         prompt: safeLabel, dispatch: { tree: "safe-build" }, wait_ms: 60000 });
     },
     conflictSettled("badger", "completed", "agent_run", row => {

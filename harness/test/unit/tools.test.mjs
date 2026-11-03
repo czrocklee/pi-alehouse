@@ -69,7 +69,7 @@ function toolsFor(f, hooks = {}) {
 }
 const create = (rest = {}) => ({ agent: "orca", prompt: "task", label: "task", profile: "worker", reasoning_difficulty: 3, ...rest });
 const send = (agent, rest = {}) => ({ agent, message: "task", ...rest });
-const run = (agent, rest = {}) => ({ agent, prompt: "task", builds_on: "its earlier findings", label: "task", ...rest });
+const run = (agent, rest = {}) => ({ agent, prompt: "task", continues: "its earlier findings", label: "task", ...rest });
 
 test("worker maps to stable editor identity and retired model profile names are rejected", async (t) => {
   assert.deepEqual(agentProfileNames, ["editor", "researcher"]);
@@ -508,8 +508,8 @@ test("preset/profile/context snapshots pin at admission; same ID keeps first acc
   assert.equal((await call("agent_read", { agent: "orca" })).agents[0].result, "second");
   assert.equal(f.controller.getResult(first).text, "first", "earlier results are retained");
   await assert.rejects(call("agent_run", run("orca", { prompt: "different" }), "reuse"), code("REQUEST_CONFLICT"));
-  await assert.rejects(call("agent_run", run("orca", { prompt: "follow-up", builds_on: "something else" }), "reuse"),
-    code("REQUEST_CONFLICT"), "builds_on is part of the request identity");
+  await assert.rejects(call("agent_run", run("orca", { prompt: "follow-up", continues: "something else" }), "reuse"),
+    code("REQUEST_CONFLICT"), "continues is part of the request identity");
   assert.equal((await call("agent_run", run("orca", { prompt: "follow-up" }), "reuse")).agents[0].task, 2, "an identical retry replays");
 });
 
@@ -1247,16 +1247,16 @@ test("an Agent with a pending question shows no context_tokens: only agent_answe
   await assert.rejects(call("agent_run", run("orca"), "blocked"), code("PENDING_QUESTION"));
 });
 
-test("agent_run requires builds_on and never forwards it to the Agent", async (t) => {
+test("agent_run requires continues and never forwards it to the Agent", async (t) => {
   const f = await fixture(t), { call } = toolsFor(f);
   await call("agent_spawn", create()); await until(() => f.ports[0]?.streaming); f.ports[0].finish(); await settle(f, "orca");
-  const { builds_on: _omitted, ...missing } = run("orca");
-  for (const args of [missing, run("orca", { builds_on: "" }), run("orca", { builds_on: " " }), run("orca", { builds_on: "x".repeat(513) })])
+  const { continues: _omitted, ...missing } = run("orca");
+  for (const args of [missing, run("orca", { continues: "" }), run("orca", { continues: " " }), run("orca", { continues: "x".repeat(513) })])
     await assert.rejects(call("agent_run", args, "invalid"), code("INVALID_PARAMETERS"));
-  await call("agent_run", run("orca", { prompt: "Review the parser fix", builds_on: "UNIQUE_BUILDS_ON_MARKER" }), "valid");
+  await call("agent_run", run("orca", { prompt: "Review the parser fix", continues: "UNIQUE_CONTINUES_MARKER" }), "valid");
   await until(() => f.ports[0].calls.length === 2);
   assert.match(JSON.stringify(f.ports[0].calls[1]), /Review the parser fix/, "the inspected call is the follow-up prompt");
-  assert.doesNotMatch(JSON.stringify(f.ports[0].calls), /UNIQUE_BUILDS_ON_MARKER/, "a reuse justification is for the parent, not the Agent's prompt");
+  assert.doesNotMatch(JSON.stringify(f.ports[0].calls), /UNIQUE_CONTINUES_MARKER/, "a reuse justification is for the parent, not the Agent's prompt");
 });
 
 test("only observation replies present finished tasks; roster, interrupt and kill leave reminders pending", async (t) => {
@@ -1291,7 +1291,7 @@ test("an omitted label is the first nonblank line of the instructions", async (t
   const { label: _label, ...args } = create({ prompt: "\n  Fix the parser  \nDetails follow." });
   await call("agent_spawn", args, "spawn");
   await until(() => f.ports[0]?.streaming); f.ports[0].finish(); await settle(f, "orca");
-  await call("agent_run", { agent: "orca", prompt: "Now update the docs.\nKeep it short.", builds_on: "the parser fix" }, "run");
+  await call("agent_run", { agent: "orca", prompt: "Now update the docs.\nKeep it short.", continues: "the parser fix" }, "run");
   await until(() => f.ports[0].calls.length === 2); f.ports[0].finish(); await settle(f, "orca");
   const [row] = (await call("agent_list", {})).agents;
   assert.equal(row.label, "Now update the docs."); assert.equal(Object.hasOwn(row, "earlier_labels"), false);

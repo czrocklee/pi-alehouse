@@ -137,7 +137,7 @@ function parentResponse(request) {
       assert.equal(typeof oldCursor, "string", JSON.stringify(reply));
       currentTask = 2;
       parentPhase = "settle";
-      return emit("agent_run", { agent, builds_on: "Continue the same worker's first configured denied-write boundary check with fresh calls.",
+      return emit("agent_run", { agent, continues: "Continue the same worker's first configured denied-write boundary check with fresh calls.",
         label: tasks[1].key, prompt: `Execute ${tasks[1].key} scripted denied-write probes.`, wait_ms: 60000 });
     }
     assert.equal(row.result, "BLOCK_TASK_2_DONE");

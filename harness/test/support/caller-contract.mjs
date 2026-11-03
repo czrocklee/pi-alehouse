@@ -48,22 +48,23 @@ export function assertCallerTools(tools) {
   assert.match(fields.max_turns.description, /fixed for follow-ups/);
   assert.match(fields.max_turns.description, /No task wall-clock deadline/);
   assert.equal(Object.hasOwn(fields, "max_duration_ms"), false);
-  assert.match(spawn.description, /submit its first task/); assert.match(spawn.description, /execution may queue/);
+  assert.match(spawn.description, /submit its first task/); assert.match(spawn.description, /Execution may queue/);
+  assert.match(spawn.description, /default for any new work or review/);
   assert.match(spawn.description, /stay fixed/);
   assert.match(spawn.description, /no nested delegation/); assert.match(spawn.description, /agent_list/);
   assert.match(spawn.description, /Queued work is accepted.*do not respawn/);
   assert.match(fields.reasoning_difficulty.description, /Do not re-score to bypass capacity waits/);
 
   const run = byName.get("agent_run"), runFields = run.parameters.properties;
-  assert.deepEqual(run.parameters.required.toSorted(), ["agent", "builds_on", "prompt"]);
-  assert.deepEqual(Object.keys(runFields).sort(), ["after", "agent", "builds_on", "dispatch", "label", "prompt", "wait_ms"]);
-  assert.deepEqual(Object.keys(runFields).slice(0, 3), ["agent", "builds_on", "prompt"]);
-  assert.equal(runFields.builds_on.minLength, 1); assert.equal(runFields.builds_on.maxLength, 512);
-  assert.equal(runFields.builds_on.pattern, "\\S");
-  for (const fact of [/Earlier work by this Agent/, /not sent/, /unrelated work.*agent_spawn/, /new Agent.*output.*after/]) assert.match(runFields.builds_on.description, fact);
+  assert.deepEqual(run.parameters.required.toSorted(), ["agent", "continues", "prompt"]);
+  assert.deepEqual(Object.keys(runFields).sort(), ["after", "agent", "continues", "dispatch", "label", "prompt", "wait_ms"]);
+  assert.deepEqual(Object.keys(runFields).slice(0, 3), ["agent", "continues", "prompt"]);
+  assert.equal(runFields.continues.minLength, 1); assert.equal(runFields.continues.maxLength, 512);
+  assert.equal(runFields.continues.pattern, "\\S");
+  for (const fact of [/specific earlier work of this Agent/, /not sent/, /cannot name one, use agent_spawn/, /after if only its output/]) assert.match(runFields.continues.description, fact);
   assert.equal(runFields.prompt.maxLength, 131072);
   assert.deepEqual(runFields.label, fields.label);
-  for (const fact of [/idle/, /follow-up/, /re-reads/, /agent_spawn for unrelated/, /pending question.*agent_answer/]) assert.match(run.description, fact);
+  for (const fact of [/idle Agent's own earlier work/, /re-reads its whole conversation/, /even on a related topic.*agent_spawn/, /pending question: agent_answer/]) assert.match(run.description, fact);
   for (const tool of [spawn, run]) {
     const { dispatch, after } = tool.parameters.properties;
     assert.equal(after.minItems, 1); assert.equal(after.maxItems, 4);

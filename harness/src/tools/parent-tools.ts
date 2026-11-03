@@ -68,7 +68,7 @@ const spawnSchema = Type.Object({
 }, { additionalProperties: false });
 const runSchema = Type.Object({
   agent: agentName("An existing, idle Agent."),
-  builds_on: text(512, "Earlier work by this Agent that this follow-up continues; recorded for coordination, not sent to the Agent. For unrelated work, use agent_spawn. If a new Agent only needs this Agent's output, use agent_spawn with after."),
+  continues: text(512, "The specific earlier work of this Agent being continued; not sent to it. If you cannot name one, use agent_spawn (with after if only its output is needed)."),
   prompt: text(131072, "Follow-up instructions with scope, deliverable and workspace-relative paths (or explicit absolute paths); earlier conversation is retained."),
   label: labelField,
   dispatch: dispatchField,
@@ -232,7 +232,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
   });
 
   const tools = [
-    make("agent_spawn", "Create an Agent and submit its first task for new work or reviews; execution may queue. Model, profile, workspace, context and turn limit stay fixed; no nested delegation. Use agent_run for follow-ups. If acceptance is unclear, check agent_list before repeating. Queued work is accepted; wait, do not respawn.", spawnSchema,
+    make("agent_spawn", "Create an Agent and submit its first task: the default for any new work or review. Execution may queue. Model, profile, workspace, context and turn limit stay fixed; no nested delegation. If acceptance is unclear, check agent_list before repeating. Queued work is accepted; wait, do not respawn.", spawnSchema,
       async (args, ctx, id, signal) => {
         // Capture mutable SDK inputs before admission can await an earlier call.
         // Route/context resolution still happens only on first acceptance.
@@ -268,7 +268,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         accepted(view);
         return observe({ kind: "action", run_id: view.run_id, action: { type: "agent_spawn" }, wait_ms }, ctx, signal);
       }),
-    make("agent_run", "Submit an idle Agent's follow-up; each turn re-reads its conversation. Use agent_spawn for unrelated work or different settings. For a running task, use agent_send or agent_wait; for a pending question, use agent_answer.",
+    make("agent_run", "Continue an idle Agent's own earlier work; each turn re-reads its whole conversation. New work, even on a related topic, or different settings: agent_spawn. Running task: agent_send or agent_wait; pending question: agent_answer.",
       runSchema, async (args, ctx, id, signal) => {
         const target = find(args.agent);
         const { wait_ms, ...submission } = args;

@@ -506,7 +506,7 @@ try {
   };
   // Hold a real SDK child in an accepting task, not a finished one whose message
   // would not be delivered. Reuse the same resident Agent.
-  const held = await invoke("agent_run", { agent: "entry", prompt: "ENTRY_HOLD", builds_on: "the entry task", label: "Entry hold" });
+  const held = await invoke("agent_run", { agent: "entry", prompt: "ENTRY_HOLD", continues: "the entry task", label: "Entry hold" });
   await waitUntil(() => heldResponseEntered, "accepting child before Off");
   // Cached definitions bypass active-tool visibility, so these rejections prove
   // execution-side admission rather than merely an unavailable schema.
@@ -527,7 +527,7 @@ try {
   assert.equal("models" in selectedEntries().at(-1).data, false);
   for (const [name, args] of [
     ["agent_spawn", { agent: "blocked", profile: "worker", reasoning_difficulty: 3, prompt: "Must not start", label: "Blocked" }],
-    ["agent_run", { agent: "entry", prompt: "Must not start", builds_on: "the entry task" }],
+    ["agent_run", { agent: "entry", prompt: "Must not start", continues: "the entry task" }],
     ["agent_send", { agent: "entry", message: "Must not steer" }],
     ["agent_answer", { agent: "entry", question_id: `q_${"0".repeat(32)}`, answer: "Must not answer" }],
   ]) {
@@ -546,7 +546,7 @@ try {
   assert.equal((await finish(held)).result, "ENTRY_HOLD_DONE", "accepted work must finish while Off");
   await parent.prompt("/harness-preset entry-other");
   expectedWorkers = "on";
-  const next = await invoke("agent_run", { agent: "entry", prompt: "Read source.txt again", builds_on: "its earlier read of source.txt", label: "Entry again", wait_ms: 60000 });
+  const next = await invoke("agent_run", { agent: "entry", prompt: "Read source.txt again", continues: "its earlier read of source.txt", label: "Entry again", wait_ms: 60000 });
   assert.equal(Object.hasOwn(next, "reason"), false);
   assert.deepEqual(next.action, { type: "agent_run", agent: "entry", task: 3 });
   assert.deepEqual(next.agents, [{ agent: "entry", task: 3, status: "completed", label: "Entry again", result: "ENTRY_READ_OK" }]);
@@ -635,7 +635,7 @@ try {
     prompt: "ENTRY_WRITE: create edited.txt", label: "Writable entry smoke", max_turns: 4 });
   assert.equal((await finish(idle)).result, "ENTRY_WRITE_OK");
   assert.equal(readFileSync(join(cwd, "edited.txt"), "utf8"), "before\n");
-  const edited = await invoke("agent_run", { agent: "writer", prompt: "ENTRY_EDIT: change before to after in edited.txt", builds_on: "the writer task", label: "Edit" });
+  const edited = await invoke("agent_run", { agent: "writer", prompt: "ENTRY_EDIT: change before to after in edited.txt", continues: "the writer task", label: "Edit" });
   assert.deepEqual(edited.action, { type: "agent_run", agent: "writer", task: 2 });
   assert.equal((await finish(edited)).result, "ENTRY_EDIT_OK");
   assert.equal(readFileSync(join(cwd, "edited.txt"), "utf8"), "after\n");

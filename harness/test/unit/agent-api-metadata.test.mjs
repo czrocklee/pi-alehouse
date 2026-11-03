@@ -28,7 +28,7 @@ const read = async (controller, run, rest = {}) => JSON.parse((await controller.
 const telemetry = ["context_tokens", "elapsed_s", "earlier_labels", "touched", "touched_omitted", "time_wrapped", "recovery_hint"];
 const noTelemetry = row => { for (const field of telemetry) assert.equal(Object.hasOwn(row, field), false, field); };
 
-test("default replies are small; builds_on and historical task reads remain", async t => {
+test("default replies are small; continues and historical task reads remain", async t => {
   const f = await fixture(t), { call, tool } = toolsFor(f);
   const first = await call("agent_spawn", spawn());
   assert.deepEqual(first, { action: { type: "agent_spawn", agent: "pine", task: 1 },
@@ -37,8 +37,8 @@ test("default replies are small; builds_on and historical task reads remain", as
   f.ports[0].finish("SHORT_A"); await ended(f.controller, { run_id: f.controller.findAgent("pine").run_id });
   const complete = await call("agent_read", { agent: "pine" });
   assert.deepEqual(complete, { agents: [{ agent: "pine", task: 1, status: "completed", label: "Inspect first", result: "SHORT_A" }] });
-  const follow = { agent: "pine", builds_on: "UNIQUE_REUSE_REASON", prompt: "Follow up", label: "Second inspection" };
-  const { builds_on: _reason, ...missing } = follow;
+  const follow = { agent: "pine", continues: "UNIQUE_REUSE_REASON", prompt: "Follow up", label: "Second inspection" };
+  const { continues: _reason, ...missing } = follow;
   assert.throws(() => tool("agent_run").prepareArguments(missing), errorCode("INVALID_PARAMETERS"));
   await call("agent_run", follow);
   await until(() => f.ports[0].calls.length === 2 && f.ports[0].streaming);

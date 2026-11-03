@@ -200,7 +200,7 @@ or deployment acceptance.
 
 The scoped simplification removes only the abandoned metadata-only `agent_read`
 view as a functional feature. Keep all nine names and other arguments/features:
-required `builds_on`, optional label/after/dispatch, max_turns, inherit_context,
+required `continues`, optional label/after/dispatch, max_turns, inherit_context,
 wait's all/any selection, every wait_ms and max_chars. The later execution-limit
 retirement removes max_duration_ms and its hard/soft wall-clock timers, not
 command, observation or stop/cleanup timeouts. Parent replies omit routine telemetry. Live Run context, usage and elapsed time

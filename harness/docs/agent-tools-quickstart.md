@@ -8,8 +8,8 @@ and [development](development.md) own authority, support and implementation/chec
 
 | Need | Tool |
 | --- | --- |
-| New independent work or review | `agent_spawn` (creates Agent + submits first task; may queue) |
-| Continue this Agent's earlier work | `agent_run` (required `builds_on`; fixed settings/conversation) |
+| New work or review, even on a related topic | `agent_spawn` (creates Agent + submits first task; may queue) |
+| Continue this Agent's own specific earlier work | `agent_run` (required `continues`; fixed settings/conversation) |
 | Correct an unfinished task | `agent_send` (delivery is not action) |
 | Answer a settled pending question | `agent_answer` |
 | Wait for events/end | `agent_wait` (`all`/`any`; prefer long waits) |
@@ -80,7 +80,7 @@ Agent. Both remain Owner-local, not restart recovery.
 [
   {"tool":"agent_spawn","arguments":{"agent":"alpha","profile":"worker","reasoning_difficulty":3,"prompt":"Investigate parser edge cases. Return detailed findings and evidence."}},
   {"tool":"agent_wait","arguments":{"agents":["alpha"],"wait_ms":300000}},
-  {"tool":"agent_run","arguments":{"agent":"alpha","builds_on":"Your parser edge-case investigation","prompt":"Continue that investigation: summarize the highest-priority remaining issue."}},
+  {"tool":"agent_run","arguments":{"agent":"alpha","continues":"Your parser edge-case investigation","prompt":"Continue that investigation: summarize the highest-priority remaining issue."}},
   {"tool":"agent_wait","arguments":{"agents":["alpha"],"wait_ms":300000}},
   {"tool":"agent_read","arguments":{"agent":"alpha","task":1,"max_chars":32}},
   {"tool":"agent_read","arguments":{"agent":"alpha","cursor":"<INVALID_RESULT_CURSOR>"}}

@@ -180,15 +180,17 @@ permission grant. Oversize fails `CONTEXT_SNAPSHOT_TOO_LARGE` before creation.
 
 ## Run, send and explicit answer
 
-`agent_run({agent, builds_on, prompt, label?, after?, wait_ms?, dispatch?})` admits a new task only
+`agent_run({agent, continues, prompt, label?, after?, wait_ms?, dispatch?})` admits a new task only
 when idle. Finishing/stopping is waited out for at most 30 s outside the submit
 queue. Running fails `AGENT_BUSY`; a pending question fails `PENDING_QUESTION`
 and points to explicit answer. Run never delivers into an existing task.
 
-Run requires `builds_on` (1--512 nonblank UTF-16 units, before `prompt`): name
-the earlier work this task continues. Spawn for independent work; use `after`
-when only an earlier result is needed. `builds_on` participates in request
-identity but is not forwarded to the Agent or stored in `harness:*` records.
+Run requires `continues` (1--512 nonblank UTF-16 units, before `prompt`): name
+the specific earlier work of this Agent being continued; if none can be named,
+spawn, even on a related topic, with `after` when only an earlier result is
+needed. The name marks continuation, not dependency (`after`); it replaces
+`builds_on`. `continues` participates in request identity but is not forwarded
+to the Agent or stored in `harness:*` records.
 Reuse retains the conversation and fixed settings. For capacity, kill finished
 Agents whose work is accepted before workers still needed for validation.
 

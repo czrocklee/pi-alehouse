@@ -182,9 +182,10 @@ do not keep an SDK execution environment alive.
 
 `agent_spawn` requires `agent`, `prompt`, `profile` (`worker` or `researcher`)
 and `reasoning_difficulty`, and takes optional `workspace` (`shared` or
-`worktree`, default shared). `agent_run` requires `agent`, `builds_on` and
-`prompt`; `builds_on` briefly names the earlier work continued (otherwise spawn,
-with `after` if only its result is needed). Both take optional `label`, `after`,
+`worktree`, default shared). `agent_run` requires `agent`, `continues` and
+`prompt`; `continues` names the specific earlier work of that Agent being
+continued (if none, spawn, even on a related topic; add `after` if only its
+result is needed). Both take optional `label`, `after`,
 `wait_ms` and `dispatch`; spawn also accepts `max_turns` and `inherit_context`.
 `agent_read` retains `max_chars`. `agent_send`
 joins/steers the task bound when called; it never starts a continuation.
