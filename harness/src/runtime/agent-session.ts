@@ -309,9 +309,10 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
         output = { ...boundedOutput(message.content.filter((part) => part.type === "text").map((part) => part.text).join(""), cap), revision };
         control(() => callbacks.output(output));
         lastReason = message.stopReason; lastError = message.errorMessage;
-        // Per-request spend, which is what the provider bills: cache reads are
-        // charged on every call that re-reads the prefix, so this sum is the
-        // money figure even though the token counts double-count that prefix.
+        // Per-request SDK-observed cost (catalog estimate or provider total):
+        // cache reads can be charged on every call that re-reads the prefix,
+        // so costs accrue even when token counts repeat that prefix. The
+        // ledger does not retain Pi's totalFromProvider source flag.
         //
         // Accrued per response, and against the model that actually answered:
         // a router alias is not a model, and billing one response's silence to

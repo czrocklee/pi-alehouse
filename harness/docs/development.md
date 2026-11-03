@@ -8,7 +8,7 @@ SDK fork, or second permission authority. The root manifest sets
 installed as an extension by `pi install`. The CLI explicitly launches a host
 Pi process with `--no-extensions -e <absolute composition.ts>`, keeping its
 runtime and credentials host-provided. Development Pi/AI/TUI SDK packages are
-pinned to 1.4.0. There is no npm publication automation or
+pinned to 1.5.0. There is no npm publication automation or
 public release acceptance. See the [root README](../../README.md).
 
 ## Layout and responsibilities
@@ -44,11 +44,17 @@ import harness runtime. Permission/policy code lives outside `harness/`.
 The build generates `runtime/agents/{editor,researcher,Explore,Plan,general-purpose}.md`,
 `runtime/worker-policy.json`, `runtime/policy/`, `runtime/lib/`, and a **private
 patched** `runtime/permission-system/vendor/` copy of pinned 32.0.3. Retain
-upstream LICENSE, package imports and WASM assets in that copy. The
+upstream LICENSE, package imports and WASM assets in that copy. A trial 36.2.1
+port did not preserve protected-read path projection for assignment-prefixed
+`HOME`/`PWD` expansions under yolo; the portable policy suite keeps that
+regression, and it blocks moving the authority pin until a port passes it. The
 `runtime/permission-system/index.ts` wrapper is the single authority entry;
 all consumers must use that identity. Root dependencies include the parser
 runtime and pinned `pi-web-access` 0.35.0; do not resolve an ambient globally
-installed web extension. Generated resources and CLI must match the source
+installed web extension. That pin pulls `@modelcontextprotocol/sdk` 1.27.1,
+for which `npm audit` last reported a high-severity advisory (recorded with
+the Pi 1.2.0 update); no override is applied, so recheck it whenever the
+lockfile changes. Generated resources and CLI must match the source
 revision. `pi-alehouse init` seeds only absent files into Pi's agent directory
 (five agent definitions, a version-3 Off routing catalogue and a permission
 config: seven files total), never changes settings/auth or replaces existing policies/catalogues. Old
@@ -475,7 +481,9 @@ must use `npm install --prefix TEMP/install --omit=dev --legacy-peer-deps
 --ignore-scripts PACKAGE.tgz` (with a real temporary path and built tarball).
 `--legacy-peer-deps` avoids npm automatically pulling its own Pi runtime for
 transitive permission/web peer dependencies; the separate host Pi remains
-mandatory. A normal source `npm ci` intentionally includes SDK development pins.
+mandatory. Verify that the installed tree contains no Pi packages or TypeBox.
+That install fetches public npm dependencies; with an empty cache an offline
+attempt fails with `ENOTCACHED`, which is not an offline install pass. A normal source `npm ci` intentionally includes SDK development pins.
 Neither install mode changes public release status from PENDING.
 
 Existing collector script names and P0/P1 identifiers are compatibility

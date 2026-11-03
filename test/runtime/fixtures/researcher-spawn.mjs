@@ -200,7 +200,9 @@ try {
   const research = Object.fromEntries(childResults.RESEARCH_TASK.map((result) => [result.id, result]));
   assert.equal(research.search.error, true);
   assert.match(research.search.text, /The user denied this 'web_search' call for agent 'researcher'/);
-  assert.match(research["local-video"].text, /Validation failed for tool "fetch_content"[\s\S]*must match pattern/);
+  assert.equal(research["local-video"].error, true);
+  assert.match(research["local-video"].text, /Validation failed for tool "fetch_content"[\s\S]*url: expected to match/);
+  assert.equal(research.proxy.error, true);
   assert.match(research.proxy.text, /Validation failed for tool "fetch_content"[\s\S]*proxy/);
   assert.equal(research.outside.error, false, research.outside.text);
   assert.match(research.outside.text, /OUTSIDE_NOTE_CONTENT/);

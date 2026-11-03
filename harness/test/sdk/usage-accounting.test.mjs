@@ -364,6 +364,32 @@ test("hostUsage adds to a tool's own usage instead of replacing it", () => {
     cost: { input: 0.1, output: 0.2, cacheRead: 0.3, cacheWrite: 0.4, total: 1.5 } });
 });
 
+test("hostUsage clears provider-reported cost when child ledger spend is combined, without mutating or upgrading it", () => {
+  for (const providerReported of [true, false]) {
+    const prior = { input: 7, output: 2, cacheRead: 3, cacheWrite: 1, totalTokens: 13,
+      cost: { input: 0.1, output: 0.2, cacheRead: 0.3, cacheWrite: 0.4, total: 1,
+        totalFromProvider: providerReported } };
+    const before = structuredClone(prior);
+    const merged = hostUsage(ledger(100, 20, 500, 10, 0.5), prior);
+    assert.equal(merged.input, 107); assert.equal(merged.output, 22);
+    assert.equal(merged.cacheRead, 503); assert.equal(merged.cacheWrite, 11);
+    assert.equal(merged.totalTokens, 643);
+    assert.deepEqual(merged.cost, { input: 0.1, output: 0.2, cacheRead: 0.3, cacheWrite: 0.4,
+      total: 1.5, totalFromProvider: false }, "all monetary components are preserved while the mixed total is reclassified");
+    assert.deepEqual(prior, before, "merging never mutates Pi's prior usage");
+
+    const repeated = hostUsage(ledger(2, 1, 0, 0, 0.25), merged);
+    assert.equal(repeated.input, 109); assert.equal(repeated.output, 23);
+    assert.equal(repeated.cacheRead, 503); assert.equal(repeated.cacheWrite, 11);
+    assert.equal(repeated.totalTokens, 646);
+    assert.deepEqual(repeated.cost, { input: 0.1, output: 0.2, cacheRead: 0.3, cacheWrite: 0.4,
+      total: 1.75, totalFromProvider: false }, "later merges cannot upgrade the mixed total");
+    assert.deepEqual(prior, before);
+  }
+  const legacy = hostUsage(ledger(1, 1, 0, 0, 0.1), { input: 1, cost: { total: 0.2 } });
+  assert.equal(Object.hasOwn(legacy.cost, "totalFromProvider"), false, "unmarked prior usage stays unmarked");
+});
+
 test("hostUsage carries the reported floor and simply omits what nobody reported", () => {
   const owed = addToLedger(undefined, usage(100, null, null, null, null), MODEL);
   assert.deepEqual(owed.partial, ["output", "cache_read", "cache_write", "cost"]);

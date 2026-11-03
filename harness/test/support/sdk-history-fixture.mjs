@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { Type } from "typebox";
 import { controlledProvider } from "./host.mjs";
 
 export const START = "harness-history-experiment:start";
@@ -42,7 +43,7 @@ export async function createFixture(host, root, label) {
   const { session } = await sdk.createAgentSession({ cwd, agentDir, settingsManager: settings, sessionManager: manager,
     resourceLoader: loader, modelRuntime: runtime, model: runtime.getModel("harness-fixture", "controlled"), thinkingLevel: "off",
     tools: ["synthetic_echo"], customTools: [sdk.defineTool({ name: "synthetic_echo", label: "echo", description: "Return a constant, no side effects.",
-      parameters: ai.Type.Object({}), execute: async () => ({ content: [{ type: "text", text: "synthetic tool result" }], details: {} }) })] });
+      parameters: Type.Object({}), execute: async () => ({ content: [{ type: "text", text: "synthetic tool result" }], details: {} }) })] });
   await session.bindExtensions({});
   session.subscribe((event) => {
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") partialSeen.resolve();

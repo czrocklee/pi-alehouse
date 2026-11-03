@@ -2,7 +2,7 @@
 
 The harness is Pi Alehouse's internal, opt-in Owner-local worker backend, not another npm package or a separate Pi runtime. Launch through the explicit built `pi-alehouse` CLI, not direct extension discovery: root `pi.extensions: []` intentionally prevents source composition autoload or `pi install` extension loading. The CLI supplies `--no-extensions -e <absolute composition.ts>`. It uses the host Pi SDK and the matched generated permission authority and worker definitions. Ordinary `pi` is unchanged; this launcher does not copy authentication or rewrite Pi settings.
 
-**Release acceptance remains PENDING.** The recorded pre-1.0 root portable check (847/847 package tests), controlled full/readonly, Jev and SDK-history repeats, and final installed-tarball RPC smoke passed in their declared scopes. The inherited cooperative-local operating contract documents limitations, not public acceptance. See [limitations](docs/limitations.md), [release policy](release-policy.json) and [validation scope](docs/validation-evidence.md).
+**Release acceptance remains PENDING.** Portable package/policy checks, controlled full/readonly, Jev and SDK-history lanes, and installed-tarball RPC smokes establish only their declared scopes; run records live with the commits they validated. The inherited cooperative-local operating contract documents limitations, not public acceptance. See [limitations](docs/limitations.md), [release policy](release-policy.json) and [validation scope](docs/validation-evidence.md).
 
 ## Operate
 

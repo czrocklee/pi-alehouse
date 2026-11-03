@@ -1502,6 +1502,8 @@ test("floating native selector retains rounded frame, IME search focus and nativ
   const c = tuiControls(f, { ...floating, registry: [worker, heavy, virtual], scopedModels: [{ model: worker }] });
   const editing = c.ui.editModel("team", "d1");
   const picker = await waitForPicker(c, 0), native = c.selectors[0];
+  assert.equal(picker.component.capturesViewportInput, true,
+    "the floating presentation also preserves the native viewport-input capability");
   const lines = picker.component.render(74).map(stripTerminalSequences);
   assert(lines[0].startsWith("╭") && lines[0].endsWith("╮"));
   assert(lines[0].includes("×"));
@@ -1524,7 +1526,10 @@ test("floating native selector retains rounded frame, IME search focus and nativ
   assert(paint(picker).includes("No matching models"));
   assert.equal(native.getSearchInput().getValue(), "hea", "Tab preserves the native search text");
   picker.component.handleInput("\t");
-  assert.match(paint(picker), /→.*heavy/, "the restored selection is painted before Enter can accept it");
+  const namedLines = picker.component.render(74).map(stripTerminalSequences);
+  assert(namedLines.some((line) => line.includes("heavy (Fixture Heavy) [fixture]")),
+    "the real Pi 1.5 selector paints a distinct model name before the provider");
+  assert.match(namedLines.join("\n"), /→.*heavy/, "the restored selection is painted before Enter can accept it");
   picker.component.handleInput("\r");
   await editing;
   assert.equal(c.published[0].definition.slots.d1.model, "fixture/heavy");
@@ -1581,7 +1586,7 @@ test("permission yield is rechecked between slot dialogs and before queued model
   assert.deepEqual(queued.published, []);
 });
 
-test("floating native mouse selection hits actual model/provider text, never padding or stale rows", { timeout: 5000 }, async (t) => {
+test("floating native mouse selection hits actual Pi 1.5 model-name text, never padding or stale rows", { timeout: 5000 }, async (t) => {
   const f = await fixture(t); f.router.select("team");
   const c = tuiControls(f, { ...floating, registry: [worker, heavy] });
   const editing = c.ui.editModel("team", "d3");
@@ -1589,6 +1594,7 @@ test("floating native mouse selection hits actual model/provider text, never pad
   let lines = picker.component.render(width).map(stripTerminalSequences);
   const oldRow = lines.findIndex((line) => line.includes("heavy") && line.includes("[fixture]"));
   assert(oldRow >= 0, "a real native item, not a fixture-synthesized row, is painted");
+  assert.match(lines[oldRow], /heavy \(Fixture Heavy\) \[fixture\]/, "the native row includes Pi 1.5's distinct name");
   const oldX = lines[oldRow].indexOf("heavy");
   mouseClick(picker, width - 3, oldRow, width, lines.length);
   mouseClick(picker, 0, oldRow, width, lines.length);
@@ -1599,9 +1605,9 @@ test("floating native mouse selection hits actual model/provider text, never pad
   for (const key of ["\x7f", "\x7f", "\x7f", "\x7f"]) picker.component.handleInput(key);
   lines = picker.component.render(width).map(stripTerminalSequences);
   const row = lines.findIndex((line) => line.includes("heavy") && line.includes("[fixture]"));
-  const providerX = lines[row].indexOf("[fixture]") + 1;
+  const nameX = lines[row].indexOf("Fixture Heavy") + 2;
   assert(!lines[row].includes("→"), "pointer selection need not match the keyboard arrow");
-  mouseClick(picker, providerX, row, width, lines.length);
+  mouseClick(picker, nameX, row, width, lines.length);
   assert.equal(picker.settled, true, "clicking another visible model must settle the picker");
   await editing;
   assert.equal(c.published.length, 1);
@@ -1609,6 +1615,20 @@ test("floating native mouse selection hits actual model/provider text, never pad
   for (const slot of ["d1", "d2", "d4", "d5"]) assert.equal(c.published[0].definition.slots[slot].model, "fixture/worker");
   assert.deepEqual(c.confirmPrompts, []);
   assert.deepEqual(f.store.pending(), []);
+});
+
+test("fullscreen inline native selector forwards viewport-input capture", { timeout: 5000 }, async (t) => {
+  const f = await singleSlotFixture(t);
+  const c = tuiControls(f, { tuiMode: "fullscreen", modelPopover: () => false, registry: richModels });
+  const editing = c.ui.editModel("team", "d1");
+  const picker = await waitForPicker(c, 0), native = c.selectors[0];
+  assert.equal(c.tui.mode, "fullscreen");
+  assert.equal(native.capturesViewportInput, true);
+  assert.equal(picker.component.capturesViewportInput, true,
+    "the focused inline custom component must keep viewport shortcuts with Pi's selector");
+  picker.component.handleInput("\u001b");
+  await editing;
+  assert.deepEqual(c.published, []);
 });
 
 test("floating native × closes only its own model selection without publishing or dirtying settings", { timeout: 5000 }, async (t) => {
@@ -1862,8 +1882,25 @@ test("an unknown native component tree falls back to keyboard-only painted rows"
     height: () => 12, models: () => [worker], select: (model) => selected.push(model), cancel() {} });
   const rows = view.render(60).map(stripTerminalSequences);
   assert.equal(view.canSelect(), true, "painted keyboard selection is retained without private state");
+  assert.equal(view.canSelect(worker), true, "native Enter on its lone visible arrow is not stranded by an unknown tree");
   const y = rows.findIndex((line) => line.includes("worker [fixture]"));
   mouseClick({ component: view }, 8, y, 60, rows.length);
   assert.deepEqual(selected, [], "unknown public trees do not gain parsed mouse targets");
+  view.dispose();
+});
+
+test("an unknown native tree with lookalike arrows cannot confirm Enter", () => {
+  // A model name or catalog error can paint its own "→ " line. Without an
+  // identified tree, that line could vouch for a native selection cropped away.
+  const lines = ["Scope: all", "> ", "  ✓ worker [fixture]", "→ ✓ heavy (→ ✓ worker) [fixture]",
+    ...Array.from({ length: 12 }, (_, index) => `    other-${index} [fixture]`), "→ ✓ worker [fixture]"];
+  const native = { children: [], focused: false, render: () => lines, handleInput() {}, invalidate() {}, dispose() {} };
+  const view = new PresetModelPopover({ native, title: "team: d1 model", theme: { fg: (_color, text) => text, bold: (text) => text },
+    height: () => 8, models: () => [worker], select() {}, cancel() {} });
+  const rows = view.render(60).map(stripTerminalSequences);
+  assert(!rows.some((line) => line.includes("│→ ✓ worker [fixture]")), "the second arrow is cropped from the popover");
+  assert.equal(view.canSelect(), false, "several native arrows do not identify the Enter selection");
+  assert.equal(view.canSelect(worker), false);
+  assert.equal(view.selectionIssue(worker), "identity_unverified");
   view.dispose();
 });

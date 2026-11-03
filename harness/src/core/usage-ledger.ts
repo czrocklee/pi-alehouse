@@ -3,7 +3,8 @@ export interface Usage {
   output: number | null;
   cache_read: number | null;
   cache_write: number | null;
-  /** Provider-reported spend in USD. Null is "nobody said", not zero. */
+  /** SDK-observed cost in USD (catalog estimate or provider total).
+   * Null is "nobody said", not zero; billing-source metadata is not retained. */
   cost: number | null;
 }
 

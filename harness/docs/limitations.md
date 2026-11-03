@@ -1,10 +1,10 @@
 # Current limitations and release scope
 
 This document defines Pi Alehouse's public support boundary.
-[release-policy.json](../release-policy.json) remains **PENDING**: the historical
-root gate (847/847 package tests), controlled full/readonly,
-Jev and SDK-history lanes, and installed-tarball RPC smoke passed in their
-declared scopes, but public release review is not complete. No private operator's
+[release-policy.json](../release-policy.json) remains **PENDING**: portable,
+controlled-host, Jev, SDK-history and installed-tarball lanes establish only
+their declared [validation scope](validation-evidence.md), and public release
+review is not complete. No private operator's
 local-use decision, inherited test pass, or historical observation grants
 public acceptance. Test reports must declare their own scope.
 
@@ -147,7 +147,7 @@ tool execution, including parallel calls, which has not been verified.
 
 ## Host SDK and runtime scope
 
-Development API checks target Pi/AI/TUI 1.4.0 and TypeBox 1.3.27.  The launcher
+Development API checks target Pi/AI/TUI 1.5.0 and TypeBox 1.3.27.  The launcher
 uses the installed host SDK, not a bundled second SDK or a runtime version lock.
 There is no version allowlist, compatibility fallback, or historical support
 matrix.  Required APIs fail closed when absent/changed.  In particular, the
@@ -161,6 +161,15 @@ resolve the aliased SDK; its eagerly available tools remain under normal parent
 permissions. This warning does not authorize child web, a permission bypass,
 or a second Pi runtime. Researcher children register no activation loader and
 suppress their repeat of that warning.
+
+Pi validates and coerces tool arguments with pi-schema's JSON Schema validator,
+not TypeBox's. TypeBox-only refinements, codecs and custom formats are not
+enforced at that layer, so harness schemas use plain JSON Schema constraints.
+Parent management tools also run a TypeBox `Check` on the raw arguments before
+Pi coerces them (a numeric string is not an integer there), and execution keeps
+its own checks. Child tools rely on Pi's validation and accept its coercion,
+such as a number given for a string field. Validation error text is upstream
+wording, not a contract.
 
 Mistral-hosted GLM constrains all tool arguments to declared property order
 (and whole-string patterns) whenever a request carries a strict tool, which
@@ -178,7 +187,10 @@ expose all failed/cancelled/retried summary attempts or the actual routed model
 for successful summaries; successful summary usage is instead keyed as
 `compaction/<provider>/<requested-model>`.  The ledger retains observed floors
 and partial flags; it cannot prove complete provider billing.  Child
-cache-warming is stopped, but parent warming behavior is unchanged.
+cache-warming is stopped, but parent warming behavior is unchanged.  Since
+Pi 1.4, a compaction summary may use the model's output limit, reduced to fit
+the context; `reserveTokens` controls when compaction starts, not summary
+length, so summaries can add output, latency and observed cost.
 
 The delegation guideline on `agent_spawn` (see
 [tool contract](tool-contract.md)) renders in the default system prompt's
@@ -325,7 +337,11 @@ after the last such result remains
 `unreported_usage` and gets a non-billable audit snapshot when possible; abrupt
 process loss may prevent even that.  Partial usage means incomplete observation,
 not zero price; unreported residue is a separate gap.  Neither is repaired by a
-footer or audit entry.
+footer or audit entry. Pi 1.5's `usage.cost.totalFromProvider` distinguishes
+provider-billed totals from catalog estimates. The harness ledger retains the
+SDK-observed amounts, not this source distinction; its totals are not proof of
+actual billing. Adding child ledger costs to a tool's provider-reported usage
+therefore clears that claim for the combined total.
 
 ## Permission and isolation scope
 
@@ -568,13 +584,18 @@ may refresh provider catalogues and update host credential/cache state, just as
 defaults. Fullscreen model selection is a near-click/centered popover that
 yields to known permission prompts; regular TUI stays docked. Mouse item matching
 uses the native public component tree and rendered labels, not private list
-state; unknown layouts or ambiguous items stay keyboard-only. Very small
+state. In a recognized layout the floating wrapper refuses clicks and Enter
+confirmation when the selected model identity cannot be verified. Unknown
+layouts stay keyboard-only, and Enter is accepted only while the native paint
+has a single, fully visible selection arrow; ambiguous items have no mouse
+target. Very small
 viewports refuse unseen selections. Controlled selector tests use synthetic
 runtimes, not live providers.
 
 The prompt queue yield protects permission dialogs only within the known process
 queue protocol. Queue-owned AbortSignals retire stalled native select/confirm/input
-dialogs before advancing the FIFO, while preserving caller cancellation. Pi 1.4's
+dialogs before advancing the FIFO, while preserving caller cancellation. Pi's
+native inline dialog stacking does not replace this queue/yield protocol. Pi 1.4's
 `editor()` exposes no signal/dismiss API: a stalled editor can remain until the
 user closes it. Shortcut-created UI contexts can also bypass the queue. This is
 not an atomic global UI transaction and `/reload` does not replace its existing

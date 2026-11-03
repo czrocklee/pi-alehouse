@@ -11,7 +11,7 @@ export interface HostModelSpend extends UsageTotals {
 }
 export interface HostUsage {
   input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number; totalFromProvider?: boolean };
   harnessModels?: HostModelSpend[];
   harnessPartial?: PartialUsageComponent[];
 }

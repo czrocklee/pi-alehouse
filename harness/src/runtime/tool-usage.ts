@@ -54,5 +54,8 @@ export function hostUsage(child: UsageLedger, prior?: HostUsage): HostUsage {
   return { input: was(prior.input) + input, output: was(prior.output) + output,
     cacheRead: was(prior.cacheRead) + cacheRead, cacheWrite: was(prior.cacheWrite) + cacheWrite,
     totalTokens: was(prior.totalTokens) + totalTokens,
-    cost: { ...cost, ...prior.cost, total: was(prior.cost?.total) + cost.total }, ...metadata };
+    cost: { ...cost, ...prior.cost, total: was(prior.cost?.total) + cost.total,
+      // The child ledger retains amounts, not Pi 1.5's billing-source flag.
+      // A provider-reported prior cannot certify the newly combined total.
+      ...(prior.cost?.totalFromProvider !== undefined ? { totalFromProvider: false } : {}) }, ...metadata };
 }

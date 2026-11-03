@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { Type } from "typebox";
 import { OwnerController as Controller } from "../../dist/core/owner-controller.js";
 import { FileOwnerLease as ExecutionOwner } from "../../dist/runtime/owner-lease.js";
 import { digest } from "../../dist/runtime/context-snapshot.js";
@@ -75,7 +76,7 @@ const createRuntime = async ({ cwd, sessionManager, sessionStartEvent }) => {
     initEntered.resolve(); await childInit.promise;
     const bus = sdk.createEventBus(), gate = new RunInputGate(); let callbacks;
     const customTools = [sdk.defineTool({ name: "alert_parent", label: "alert", description: "Synthetic decision alert, not authorization",
-      parameters: ai.Type.Object({ message: ai.Type.String({ minLength: 1, maxLength: 8192 }) }, { additionalProperties: false }), execute: async (_id, { message }) => {
+      parameters: Type.Object({ message: Type.String({ minLength: 1, maxLength: 8192 }) }, { additionalProperties: false }), execute: async (_id, { message }) => {
         assert(callbacks && gate.accepting && !gate.stopped); callbacks.alert(message);
         return { content: [{ type: "text", text: "Alert queued; continue working." }], details: {} };
       } })];

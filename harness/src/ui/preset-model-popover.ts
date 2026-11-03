@@ -9,8 +9,11 @@ type NativeSelector = Component & Focusable & { dispose(): void; children: Compo
 type Group = { size: number; target?: { provider: string; id: string } };
 type Row = { text: string; plain: string; model: boolean; selected: boolean; group?: Group; first?: boolean };
 type Target = { start: number; end: number; provider: string; id: string };
-type SelectionProjection = { targets: Map<number, Target>; selectedVisible: boolean; structured: boolean; visibleModel: Group["target"] };
+type SelectionProjection = { targets: Map<number, Target>; selectedVisible: boolean; structured: boolean;
+  ambiguousArrow: boolean; visibleModel: Group["target"] };
 type SelectionIssue = "closed" | "not_visible" | "identity_unverified";
+// eslint-disable-next-line no-control-regex -- model metadata must not manufacture terminal rows
+const hasTerminalControls = (value: string): boolean => /[\u0000-\u001f\u007f-\u009f]/u.test(value);
 
 /** Only public terminal geometry. The host clamps row/col to the visible area
  * again after measuring the component, including on terminal resize. */
@@ -37,8 +40,11 @@ export class PresetModelPopover implements Component, Focusable {
   private targets = new Map<number, Target>();
   private selectedVisible = false;
   /** False when the public tree could not be identified; keyboard then remains
-   * available whenever the arrow itself is visible. */
+   * available only while the native paint has a single, visible arrow. */
   private structured = false;
+  /** An unidentified paint with several arrows: one may be lookalike text (a
+   * model name or error) standing in for a native selection cropped from view. */
+  private ambiguousArrow = false;
   private visibleModel?: { provider: string; id: string };
 
   constructor(private readonly options: {
@@ -55,6 +61,7 @@ export class PresetModelPopover implements Component, Focusable {
 
   get focused(): boolean { return this.options.native.focused; }
   set focused(value: boolean) { this.options.native.focused = value; }
+  get capturesViewportInput(): boolean { return this.options.native.capturesViewportInput === true; }
   /** Never expand a hit map before the host paints that wider layout. A wider
    * dry layout could unwrap prose and move a click to another row. */
   private selectionWidth(): number {
@@ -65,17 +72,18 @@ export class PresetModelPopover implements Component, Focusable {
    * a second click on an item the host has never painted. */
   private recheck(): SelectionProjection {
     const painted = { width: this.width, targets: this.targets, selectedVisible: this.selectedVisible,
-      structured: this.structured, visibleModel: this.visibleModel };
+      structured: this.structured, ambiguousArrow: this.ambiguousArrow, visibleModel: this.visibleModel };
     this.targets = new Map();
     try {
       this.render(this.selectionWidth());
       return { targets: this.targets, selectedVisible: this.selectedVisible,
-        structured: this.structured, visibleModel: this.visibleModel };
+        structured: this.structured, ambiguousArrow: this.ambiguousArrow, visibleModel: this.visibleModel };
     } finally {
       this.width = painted.width;
       this.targets = painted.targets;
       this.selectedVisible = painted.selectedVisible;
       this.structured = painted.structured;
+      this.ambiguousArrow = painted.ambiguousArrow;
       this.visibleModel = painted.visibleModel;
     }
   }
@@ -85,7 +93,9 @@ export class PresetModelPopover implements Component, Focusable {
   selectionIssue(model?: { provider: string; id: string }): SelectionIssue | undefined {
     if (this.closed) return "closed";
     const current = this.recheck();
+    if (current.ambiguousArrow) return "identity_unverified";
     if (!current.selectedVisible) return "not_visible";
+    // An unidentified tree defers to the native selection its lone arrow paints.
     if (!model || !current.structured) return undefined;
     return current.visibleModel?.provider === model.provider && current.visibleModel.id === model.id
       ? undefined : "identity_unverified";
@@ -108,6 +118,7 @@ export class PresetModelPopover implements Component, Focusable {
     this.targets.clear();
     this.selectedVisible = false;
     this.structured = false;
+    this.ambiguousArrow = false;
     this.visibleModel = undefined;
     if (this.closed) return [];
     const height = Math.max(1, this.options.height());
@@ -142,6 +153,11 @@ export class PresetModelPopover implements Component, Focusable {
     const painted = this.options.native.render(width);
     const row = (text: string): Row => ({ text, plain: stripTerminalSequences(text).trimEnd(), model: false, selected: false });
     const tree: Row[] = [];
+    const identityCounts = new Map<string, number>();
+    for (const model of models) {
+      const key = `${model.provider}\0${model.id}`;
+      identityCounts.set(key, (identityCounts.get(key) ?? 0) + 1);
+    }
     for (const child of this.options.native.children) {
       // The SDK may bundle TUI classes separately from its public TUI package.
       // Public structural capabilities, not instanceof, cross that module seam.
@@ -162,10 +178,21 @@ export class PresetModelPopover implements Component, Focusable {
           // Render candidate labels with the same public Text wrapper. This
           // disambiguates spaces/wrapping without reading Text's private value.
           const matches = models.filter((model) => {
-            const label = `${model.id} [${model.provider}]`;
-            if (!label.startsWith(labelStart)) return false;
-            const expected = new Text(prefix + label, 0, 0).render(width).map((text) => stripTerminalSequences(text).trimEnd());
-            return expected.length === lines.length && expected.every((text, index) => text === lines[index]!.plain);
+            const identity = `${model.provider}\0${model.id}`;
+            if (hasTerminalControls(model.id) || hasTerminalControls(model.provider) || identityCounts.get(identity) !== 1) return false;
+            const labels = [`${model.id} [${model.provider}]`];
+            // Pi 1.5 appends a distinct model name before the provider. Names
+            // with controls can manufacture lookalike rows, so they cannot
+            // authorize click or Enter through the model identity map.
+            const name = model.name?.trim();
+            if (name && !hasTerminalControls(name)) {
+              labels.push(`${model.id} (${name}) [${model.provider}]`);
+            }
+            return labels.some((label) => {
+              if (!label.startsWith(labelStart)) return false;
+              const expected = new Text(prefix + label, 0, 0).render(width).map((text) => stripTerminalSequences(text).trimEnd());
+              return expected.length === lines.length && expected.every((text, index) => text === lines[index]!.plain);
+            });
           });
           const model = matches.length === 1 ? matches[0] : undefined;
           const group: Group = { size: lines.length, ...(model ? { target: { provider: model.provider, id: model.id } } : {}) };
@@ -176,14 +203,18 @@ export class PresetModelPopover implements Component, Focusable {
     }
     // Do not assume a future SDK's render override still matches this tree.
     // In that case preserve native keyboard presentation, with no mouse hits.
+    // Count arrows over the whole native paint, before any fitting crops it:
+    // only a lone arrow is known to be the native selection Enter submits.
     const modelRow = (text: string): boolean => /^(?:→ | {2})(?:✓ | {2})\S/u.test(stripTerminalSequences(text));
     if (tree.length === painted.length && tree.every((line, index) => line.text === painted[index]) &&
         (tree.some((line) => line.model) || !painted.some(modelRow))) {
       this.structured = true;
       return tree;
     }
-    return painted.map((text) => ({ ...row(text), model: /^(?:→ | {2})(?:✓ | {2})\S/u.test(stripTerminalSequences(text)),
+    const rows = painted.map((text) => ({ ...row(text), model: modelRow(text),
       selected: stripTerminalSequences(text).startsWith("→ ") }));
+    this.ambiguousArrow = rows.filter((line) => line.selected).length > 1;
+    return rows;
   }
 
   private fit(rows: Row[], budget: number): Row[] {

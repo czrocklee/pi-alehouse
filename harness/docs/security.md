@@ -425,6 +425,13 @@ in-flight review (a monotonic mode revision, so a round trip back to the same
 mode still invalidates it) but keeps human denials, retry pauses and the denial
 fuse, which only new direct input reopens. Jev announces each change.
 
+A run started by a custom message (`pi.sendMessage(..., { triggerTurn: true })`,
+whose `before_agent_start` carries `messageType: "custom"` and no prompt) is not
+a turn boundary: Jev binds no live input to it and keeps the denial fuse. An
+event without `messageType` is treated as a prompt. The child approval witness
+fails closed on such a run, and children never start one: their `triggerTurn`
+is forced off.
+
 The current choice is recorded in the session under its own session id. An
 explicit choice records evidence even when equal to the launch mode. On
 resume, that same-session branch record wins over a saved preference. The judge

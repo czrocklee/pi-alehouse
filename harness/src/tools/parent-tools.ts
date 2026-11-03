@@ -1,5 +1,4 @@
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static, type TObject, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import type { OwnerController } from "../core/owner-controller.ts";
@@ -22,6 +21,11 @@ import { agentProfileNames, blockedDelegationToolNames, internalProfile, modelPr
 
 const text = (maxLength: number, description?: string) => Type.String({ minLength: 1, maxLength, pattern: "\\S",
   ...(description ? { description } : {}) });
+// Pi 1.5's pi-ai root StringEnum returns a pi-schema schema, while Pi's extension
+// loader aliases that import to a TypeBox view. Keep local enums TypeBox-backed
+// for Static/Check under either resolution, with the same {type, enum} wire shape.
+const stringEnum = <T extends readonly string[]>(values: T, options?: { description?: string; default?: T[number] }) =>
+  Type.Unsafe<T[number]>({ type: "string", enum: values, ...options });
 const optional = Type.Optional;
 const offGuidance = "workers_disabled: ask the user to enable delegation for new work, steering or answers; accepted work and inspection continue.";
 const workspaceFacts = "workspace_pending means binding is unconfirmed, not eventual creation. retained_paths lists observed failure locations, not a usable session; optional paths may be omitted.";
@@ -53,8 +57,8 @@ const spawnSchema = Type.Object({
   agent: agentName("Unique short nickname from one theme, not a task name; stays taken after kill."),
   prompt: text(131072, "Task instructions: deliverable, scope, stopping conditions, workspace-relative paths (or explicit absolute paths), and needed context."),
   label: labelField,
-  profile: StringEnum(modelProfileNames, { description: "worker: local read/edit/write, Bash/Git/builds; no web. researcher: read-only files/web, no Bash/edit/write; untrusted web material. Normal permissions/denies apply; review-only is an instruction." }),
-  workspace: optional(StringEnum(["shared", "worktree"] as const, { description: "Default shared: current checkout, including uncommitted work. worktree: private detached local HEAD at start; no dirty/untracked files or installed dependencies copied. Fixed for follow-ups; agent_list shows actual cwd/base. Retained after kill; no automatic install/merge/deletion. Neither is a sandbox." })),
+  profile: stringEnum(modelProfileNames, { description: "worker: local read/edit/write, Bash/Git/builds; no web. researcher: read-only files/web, no Bash/edit/write; untrusted web material. Normal permissions/denies apply; review-only is an instruction." }),
+  workspace: optional(stringEnum(["shared", "worktree"] as const, { description: "Default shared: current checkout, including uncommitted work. worktree: private detached local HEAD at start; no dirty/untracked files or installed dependencies copied. Fixed for follow-ups; agent_list shows actual cwd/base. Retained after kill; no automatic install/merge/deletion. Neither is a sandbox." })),
   reasoning_difficulty: Type.Integer({ minimum: 1, maximum: 5, description: "Fixed model by reasoning difficulty, not workload/cost: 1=given checks/decided changes; 2=scoped fix; 3=given design/review/investigation/plan; 4=competing hypotheses/complex constraints; 5=unknown approach. Do not re-score to bypass capacity waits." }),
   inherit_context: optional(Type.Boolean({ description: "Default false: text context without tool calls/results; max 64 KiB." })),
   dispatch: dispatchField,
@@ -300,7 +304,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
       }),
     make("agent_wait", `Wait for selected tasks; questions, issues or alerts return early. Prefer long waits to polling. Questions stay pending; name other Agents to defer one. Nothing pending returns now; timeout/abort never stops work. ${offGuidance}`,
       Type.Object({ agents: optional(agentNames(16, `Bind each named Agent's active (running/queued) task, else its pending question, else its latest finished task, once at this call. Alerts span those Agents. Omit to wait on unfinished tasks, answerable questions and all Agents' alerts. Queued wait="capacity" means waiting for a provider slot; wait="dependencies" waits for fixed tasks. ${workspaceFacts}`)),
-        mode: optional(StringEnum(["all", "any"] as const, { default: "all",
+        mode: optional(stringEnum(["all", "any"] as const, { default: "all",
           description: "all (default): every selected task ends; any: one ends. Other events may return earlier." })),
         wait_ms: optional(waitMs("Wait duration; default 300000 ms. 0 checks once.")) }, { additionalProperties: false }),
       ({ agents, mode = "all", wait_ms = 300000 }, ctx, _id, signal) => {

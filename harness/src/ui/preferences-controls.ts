@@ -307,6 +307,7 @@ export class PreferencesControls {
         return {
           get focused(): boolean { return native.focused; },
           set focused(value: boolean) { native.focused = value; },
+          get capturesViewportInput(): boolean { return native.capturesViewportInput === true; },
           render: (width: number) => [...title.render(width), ...native.render(width)],
           handleInput: (data: string) => native.handleInput(data),
           invalidate: () => { title.invalidate(); native.invalidate(); },
