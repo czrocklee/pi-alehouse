@@ -10,7 +10,7 @@ const view = (extra = {}) => ({
   owner_id: "owner", generation: "generation", agent_id: "a", run_id: "run-a", name: "a",
   description: "Preview fixture", effective_settings: settings, status: "running", phase: "executing",
   execution_exited: false, finalization_pending: false, resident: true, resumable: false,
-  owner_blocked: false, pending_messages: 0, isolation: "shared", elapsed_ms: 0,
+  owner_blocked: false, pending_messages: 0, elapsed_ms: 0,
   turns: 1, max_turns: 8, cleanup_errors: [], discarded_inputs: [], ...extra,
 });
 const live = (extra = {}) => ({ active_tools: [], tool_uses: 0, preview: "", ...extra });
@@ -86,8 +86,8 @@ test("parallel active tools add exactly one row apiece even with long captured a
 
 for (const name of ["read", "edit", "write", "ls"]) test(`active ${name} shortens a path using remaining columns and keeps its filename`, () => {
   const path = "dir/".repeat(200) + "recognizable-file.ts";
-  const state = view({ workspace: { cwd: "/actual/worktree", source_cwd: settings.cwd, base_commit: "base" } });
-  for (const detail of [path, "/actual/worktree/" + path]) {
+  const state = view();
+  for (const detail of [path, settings.cwd + "/" + path]) {
     const rendered = fields(state, live({ active_tools: [{ name, detail }] }), 50);
     const active = rowFor(rendered, "active");
     assert.match(active, /…\/.*recognizable-file\.ts$/);

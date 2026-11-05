@@ -43,7 +43,7 @@ export function withSynchronousPermissionSnapshot<T>(read: () => T): T {
   finally { scope.current = previous; }
 }
 
-/** Separate spaces keep stamps, workspace bindings and path flavors distinct.
+/** Separate spaces keep file stamps and path flavors distinct.
  * Path callers must supply an already-absolute lexical key; flavor objects
  * separate canonicalization algorithms. Exceptions are never memoized. */
 export function synchronousPermissionSample(space: SampleSpace, key: string, read: () => string): string {

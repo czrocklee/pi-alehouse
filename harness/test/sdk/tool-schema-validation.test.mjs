@@ -68,10 +68,7 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
     type: "string", enum: ["worker", "researcher"],
     description: "worker: local read/edit/write, Bash/Git/builds; no web. researcher: read-only files/web, no Bash/edit/write; untrusted web material. Normal permissions/denies apply; review-only is an instruction.",
   });
-  assert.deepEqual(spawn.parameters.properties.workspace, {
-    type: "string", enum: ["shared", "worktree"],
-    description: "Default shared: current checkout, including uncommitted work. worktree: private detached local HEAD at start; no dirty/untracked files or installed dependencies copied. Fixed for follow-ups; agent_list shows actual cwd/base. Retained after kill; no automatic install/merge/deletion. Neither is a sandbox.",
-  });
+  assert.equal(Object.hasOwn(spawn.parameters.properties, "workspace"), false);
   assert.deepEqual(wait.parameters.properties.mode, {
     type: "string", enum: ["all", "any"], default: "all",
     description: "all (default): every selected task ends; any: one ends. Other events may return earlier.",
@@ -100,7 +97,7 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
   assert.equal(captured[0].reasoning_difficulty, 3);
   for (const args of [
     spawnArgs({ profile: "editor" }),
-    spawnArgs({ workspace: "elsewhere" }),
+    spawnArgs({ workspace: "shared" }), spawnArgs({ workspace: "worktree" }), spawnArgs({ workspace: "elsewhere" }),
     spawnArgs({ extra: true }),
     spawnArgs({ dispatch: { ownership: ["harness/src"], extra: true } }),
     spawnArgs({ dispatch: { ownership: ["harness/*"] } }),
@@ -115,7 +112,7 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
   // generic integer coercion can normalize such values.
   const rawInputContext = { sessionManager: fixture.manager, modelRegistry: fixture.registry, cwd: fixture.context.cwd };
   for (const args of [spawnArgs({ reasoning_difficulty: 3.5 }), spawnArgs({ reasoning_difficulty: "3" }),
-    spawnArgs({ reasoning_difficulty: 3, workspace: null }),
+    spawnArgs({ workspace: "shared" }), spawnArgs({ workspace: "worktree" }), spawnArgs({ workspace: null }),
     // The local TypeBox-backed enums must also close the raw TypeBox Check.
     spawnArgs({ profile: "editor" }), spawnArgs({ workspace: "elsewhere" })]) {
     isToolError(await invoke(spawn, args, rawInputContext));

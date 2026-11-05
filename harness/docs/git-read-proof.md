@@ -1,8 +1,7 @@
 # Git commands in cooperative workers
 
 Workers are cooperative local developers, not a readonly execution sandbox.
-`worker` is the model-facing name of the stable internal `editor` profile. See [security](security.md) and
-[workspaces](workspaces.md).
+`worker` is the model-facing name of the stable internal `editor` profile. See [security](security.md).
 
 See the [migration notice](git-permission-migration.md) for query auto-to-ask,
 broad user allows, worker mutations and yolo/checkpoint behavior changes.
@@ -70,13 +69,10 @@ historical evidence, not current authorization.
 The speculative HOME-stability fold is also retired. Dynamic `cd` targets keep
 the ordinary unknown-base behavior rather than fabricating a certain cwd.
 
-## Worktrees, index locks and limits
+## Index locks and limits
 
-Optional worktrees have independent checked-out files and indexes. They reduce
-ordinary shared-file/index contention, but still share repository objects,
-most refs and configuration. They are not OS isolation, a secrecy boundary,
-or a promise of no conflicts. Git is not confined to the selected cwd by the
-worktree option.
+Agents share the parent's working directory. Alehouse does not create or manage
+worktrees; ordinary Git commands remain subject to normal permissions.
 
 Native Git can update index caches and use locks. No physical zero-write,
 automatic retry or safe lock deletion claim is made. An operator may explicitly

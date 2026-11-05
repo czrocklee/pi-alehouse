@@ -231,8 +231,8 @@ test("preflight denials project the checked surface and target profile only for 
   assert.equal(filesystem.surface, undefined); assert.equal(filesystem.profile, undefined);
 });
 
-test("a changed bound resource classifies as a dispatch error without a path-discovery workaround", () => {
-  const resolution = "The declared resource changed after binding. Inspect the workspace and its aliases before continuing.";
+test("a changed canonical resource classifies as a dispatch error without a path-discovery workaround", () => {
+  const resolution = "The declared resource changed. Inspect its canonical path before continuing.";
   const result = errorReply({ code: "DISPATCH_RESOURCE_CHANGED",
     details: { agent: "wren", key: "tree", requested: "build", resolution } }).error;
   assert.deepEqual(result, { code: "DISPATCH_RESOURCE_CHANGED", agent: "wren", parameter: "tree",

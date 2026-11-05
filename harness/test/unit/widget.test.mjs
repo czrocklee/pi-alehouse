@@ -943,19 +943,17 @@ const pageClick = (h, direction = "Next") => {
   return h.component().handleMouse({ ...headingClick, y, x: lines[y].indexOf(`[${direction}]`) });
 };
 
-test("detail projections retain worktree cwd after the activity observer is gone", (t) => {
-  const view = { ...viewOf("copy", "completed"), isolation: "worktree",
-    workspace: { mode: "worktree", cwd: "/tmp/worker-copy", source_cwd: "/source/project", base_commit: "c".repeat(40) } };
-  const before = structuredClone(view), h = mounted([view]);
+test("detail projections always retain the inherited cwd with or without an activity observer", (t) => {
+  const view = viewOf("copy", "completed"), before = structuredClone(view), h = mounted([view]);
   t.after(() => { h.widget.dispose(); h.activities.clear(); });
-  assert.equal(h.widget.agents()[0].cwd, view.workspace.cwd, "retained actual cwd, not admission source cwd");
-  h.activities.track("copy", "/tmp/live-working-copy");
-  assert.equal(h.widget.agents()[0].cwd, "/tmp/live-working-copy", "the live observer remains authoritative for transcript cwd");
+  assert.equal(h.widget.agents()[0].cwd, view.effective_settings.cwd);
+  h.activities.track("copy", view.effective_settings.cwd);
+  assert.equal(h.widget.agents()[0].cwd, view.effective_settings.cwd);
   h.activities.clear();
-  assert.equal(h.widget.agents()[0].cwd, view.workspace.cwd);
-  h.set([{ ...viewOf("pending", "queued"), isolation: "worktree" }]);
-  assert.equal(h.widget.agents()[0].cwd, "/w", "without a child or metadata, admission cwd remains the fallback");
-  assert.deepEqual(view, before, "UI projection leaves original profile, settings and workspace unchanged");
+  assert.equal(h.widget.agents()[0].cwd, view.effective_settings.cwd);
+  h.set([viewOf("pending", "queued")]);
+  assert.equal(h.widget.agents()[0].cwd, "/w");
+  assert.deepEqual(view, before, "UI projection leaves original profile and settings unchanged");
 });
 
 test("idle editor renders reuse detached projections without Owner reads or observer pruning", (t) => {

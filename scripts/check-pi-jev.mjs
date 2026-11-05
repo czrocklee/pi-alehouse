@@ -658,7 +658,7 @@ for (const command of [
 // Exercise the real profile lookup through the registered authorizer, not a
 // stubbed boundedProfileIsValid. A copied, intact rendered profile must allow a
 // well-bound child; missing/changed profiles and product limits must defer.
-for (const variant of ["intact", "prompt-at-limit", "prompt-over-limit", "wrong-cwd", "worktree-cwd", "changed-profile", "missing-profile",
+for (const variant of ["intact", "prompt-at-limit", "prompt-over-limit", "wrong-cwd", "changed-profile", "missing-profile",
   "other-tool-start", "other-tool-end", "legacy-disposed", "current-tool-changed", "current-tool-ended", "current-ask-rebound", "current-run-changed"]) {
   const h = registeredHarness({ mode: "enforce-subagents" });
   h.live("Inspect repository status with the worker.");
@@ -678,15 +678,7 @@ for (const variant of ["intact", "prompt-at-limit", "prompt-over-limit", "wrong-
   details.payload.request.requester = { forwarded: true, sessionId, agentName: profile };
   details.accessIntent = { surface: "bash", matchValues: ["git status"] };
   globalThis[Symbol.for("@rocklee/jev-auto-approval:child-runtime-facts")] = new Map([[sessionId, {
-    parentSessionId: identity.owner_id,
-    // wrong-cwd is a subdirectory of the parent cwd; worktree-cwd is the real
-    // detached-worktree shape (a retained private checkout tree, never under
-    // the parent source cwd). The cwd comparison is deliberately NOT relaxed
-    // for it: a worktree-mode child defers to manual authority (delegation_unbound)
-    // rather than reaching the model through this seam.
-    cwd: variant === "wrong-cwd" ? join(h.ctx.cwd, "other")
-      : variant === "worktree-cwd" ? join(tmpdir(), "alehouse-worktree-state-fixture", "pi-alehouse", "worktrees", "pi-alehouse-worktree-fixture", "tree")
-      : h.ctx.cwd,
+    parentSessionId: identity.owner_id, cwd: variant === "wrong-cwd" ? join(h.ctx.cwd, "other") : h.ctx.cwd,
     contextChanged: false, initialPromptDigest: hashJson(taskPrompt),
     harness: { ...identity, protocol: 1, profile, definitionDigest, task_prompt: taskPrompt,
       prompt: taskPrompt, systemPrompt: defaultSystemPrompt() },
@@ -723,8 +715,6 @@ for (const variant of ["intact", "prompt-at-limit", "prompt-over-limit", "wrong-
     check(`forwarded review / ${variant} reviewer calls`, fetchCalls, eligible || stale ? 1 : 0);
     if (!eligible) check(`forwarded review / ${variant} fails closed`, h.reviews.at(-1).failureCode,
       stale ? "review_context_changed" : "delegation_unbound");
-    if (variant === "worktree-cwd")
-      check("forwarded review / worktree-cwd never reaches the model", h.reviews.at(-1).modelCalled, false);
   } finally {
     writeFileSync(profilePath, originalProfile);
     globalThis[Symbol.for("@rocklee/jev-auto-approval:child-runtime-facts")].delete(sessionId);

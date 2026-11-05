@@ -32,8 +32,7 @@ never network authorization. Plain `pi` has no delegation tools at all.
 
 New model requests select `worker` or `researcher`. Worker maps to the stable
 internal `editor` profile ID. No legacy profile aliases or capabilities are
-supported. Either public profile can use
-[shared or worktree mode](workspaces.md), independently of its tools.
+supported. Both profiles use the parent's working directory.
 
 | Public profile | Capability | Meaning |
 | --- | --- | --- |
@@ -61,9 +60,7 @@ queries and writes use ordinary Bash permission, with no Git subprocess probing
 or historical file-provenance claim. Only bounded literal version queries can
 qualify for the automatic fixed-query lane. Raw configured Bash denies/specific
 asks, explicit path/output facts and actual redirects remain independent.
-Worker Git mutations do not receive a readonly shortcut. Worktree selection is
-not a grant; source project policy is inherited while tool paths resolve at the
-actual child cwd. See [workspaces](workspaces.md).
+Worker Git mutations do not receive a readonly shortcut.
 
 There is no complete historical-content separation promise for a worker with
 ordinary Git access. Literal path denies remain useful protection, not a data
@@ -74,66 +71,17 @@ still fails closed. Researcher has no Bash tool and keeps its profile ceiling.
 Git commands are never silently rewritten. Native index cache writes and locks
 remain possible; separate worktrees reduce same-index contention but share
 objects, most refs and configuration. No zero-write, automatic retry, safe lock
-removal or freedom-from-conflicts claim is made. The host's fixed worktree setup
-commands are separate from the worker's unchanged Bash execution. Ordinary Git
-is not reauthorized through a second per-operation effect matrix.
+removal or freedom-from-conflicts claim is made. Ordinary Git is not
+reauthorized through a second per-operation effect matrix.
 
-### Workspace binding and retention
+### Shared working directory
 
-Spawn fixes shared (default) or worktree mode independently of profile; neither
-lets the caller choose an arbitrary directory. Runtime creates a private detached
-worktree only at actual execution/session initialization, pinned to a
-recorded local HEAD commit. Admission, preparation and replay create none. Setup
-failure is visible, never silent shared fallback. No dirty/untracked/ignored
-files, installed dependencies or build caches are transferred, nor host/user
-credentials or settings. Committed configuration files remain in the checkout;
-this is not a secret-scrubbing export. There is no automatic install, patch
-transfer or merge.
-
-The child's actual cwd is its workspace. Core admission and source `settings.cwd`
-remain immutable; source project instructions, settings, permission configuration
-and trust are inherited through a live binding. Checked-out `.pi` content cannot
-replace source authority. The trusted whole checkout root maps to the source
-repository root for restriction aliases, including siblings above a nested cwd.
-Aliases add deny/ask only, never ALLOW or external-directory exemptions. Other
-checkouts keep ordinary external policy, not inherited source deny. Relative
-dispatch paths use execution cwd; source cwd remains the policy/settings base.
-First-task worktree inputs/ownership/tree can be relative, including `..`.
-Before binding, source candidates are deny-only checks, not existence or ALLOW
-facts; provisional paths are not proof of disjoint resources. Binding performs
-actual canonical/boundary/permission/input/claim checks before child input, using
-the live authority-owned alias seam, not a caller-supplied root. A healthy
-session survives a binding preflight failure idle/reusable. See
-[workspace binding](workspaces.md#dispatch-paths-and-binding). Checks observe
-actual child cwd. Only wait/read/list expose whole
-Run-local confirmed workspace bindings: four fields plus optional checkout root,
-without public state or recovery_manifest. Queries reserve a bounded
-workspace_pending:true control for queued/running worktree tasks still awaiting
-binding, not exited tasks or tasks with recovery facts. Ordinary
-action/interrupt/kill omit workspace details. Failures may expose small retained_paths containing observed
-allocation directories, verified checkout roots and created manifests, never an
-intended nonexistent target. Verified checkout can precede failed SDK assembly;
-no later Agent baseline fills an earlier task's missing binding. Internal
-recovery transport preserves typed/frozen errors and cleanup authority. The human
-detail pane renders those observed retained locations without promoting them to
-successful session binding. Optional paths fit after result text and may yield
-whole under the cap, without a metadata-retrieval mode or unlimited recovery
-promise. See [workspace metadata](workspaces.md#workspace-and-recovery-metadata).
-Linked-layout source-state capture may stay unknown.
-
-Worktrees and private recovery manifests are not deleted on completion, kill,
-failure or shutdown. Default storage is XDG_STATE_HOME/pi-alehouse/worktrees
-(absolute XDG_STATE_HOME only, otherwise ~/.local/state), outside agentDir and not
-TMPDIR. This restores ordinary external-directory asks for cross-session reads
-under the seed, not forced isolation against configured allows/grants/yolo.
-Persistent placement is not backup or perpetual retention; custom volatile or
-broadly allowed state locations can differ. Session release revokes bound authority; it does not delete files,
-accept edits or prove all descendants exited. Cleanup is manual, after work has
-stopped and results are accepted or explicitly discarded; no new cleanup tool
-exists. Separate indexes/files reduce contention, but objects, most refs and
-configuration remain shared. Worktree mode does not confine Git or provide
-strict readonly, historical secrecy, zero locks or OS isolation. See
-[workspaces](workspaces.md).
+Children use the parent's admitted cwd for tools and resource discovery,
+including project instructions, settings, permissions and trust. There is no
+alternate-checkout policy binding or worktree allocation/cleanup authority.
+The harness does not isolate shared files, indexes or Git state. Ordinary Git
+workflow remains the main agent's responsibility and subject to normal gates.
+Existing user worktrees and historical records are never migrated or deleted.
 
 ### Redirect-buried argv and home `cd`
 
@@ -243,10 +191,8 @@ Bash denies are checked by the external authority.  Existing sensitive paths,
 external writes, subprocess restrictions, Git configuration protections, and
 permission-search rules continue to apply. Opaque Bash programs can perform
 internal IO that the classifier cannot see, so this is not an OS sandbox.
-Forwarded asks must retain the requesting child's edge-stamped principal.
-Workspace restriction aliases supplement those facts; they never replace the
-principal, actual match values or execution/boundary paths. Invalid binding
-facts produce a fail-closed `gate_error` response rather than a stalled ask.
+Forwarded asks must retain the requesting child's edge-stamped principal,
+actual match values and execution/boundary paths.
 
 ## Dispatch preflight and validation observations
 
@@ -349,12 +295,6 @@ records avoid prompt text.  Asynchronous review is revalidated after the
 verdict.  Missing/stale provenance, invalid tool observation, or a leftover
 witness disables automatic approval for that Run while preserving normal human
 forwarding through the existing authority.
-
-Eligible forwarded worktree asks currently defer as `delegation_unbound` to
-ordinary human handling. Jev's script evidence still uses the parent's source
-cwd; accepting a different runtime cwd by relaxing that comparison alone would
-review the wrong working copy. Existing configured allows and yolo can satisfy
-ordinary asks before this review path, unchanged.
 
 Jev is the only model judge. Its static checkpoints
 (`extensions/lib/hard-checkpoint.ts`) run before any model call. The launch
@@ -578,8 +518,7 @@ success wrapper after consumption. A parent-tool caller may choose `profile`
 and `reasoning_difficulty`,
 but cannot choose the concrete provider/model/thinking resolution, arbitrary
 parent/child cwd, owner, generation, session ID, history path, or profile tool
-table. The workspace enum asks the host to create a retained working copy; it
-cannot select an arbitrary directory or widen the profile.
+table. Children use the parent's admitted working directory.
 Optional inherited context is a bounded 64 KiB text snapshot with an aggregate
 digest, not a history fork or tool/settings transfer. It uses the SDK's
 model-visible projection, respecting context omissions/replacements and compaction

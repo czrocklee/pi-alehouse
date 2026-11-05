@@ -1,8 +1,7 @@
 import { COMMUNICATION_LIMITS, alertAdmissionBudget, modelTaskStatus, visibleCommunicationReason, type CommunicationEnvelope, type ThinTaskEntry } from "./communication-envelope.ts";
 import type { CommunicationReferences, CommunicationSnapshot } from "./communication-snapshot.ts";
-import { terminal, type Phase, type RunStatus, type WorkspaceInfo, type WorkspaceMode } from "./contracts.ts";
+import { terminal, type Phase, type RunStatus } from "./contracts.ts";
 import { taskMetadata, type TaskMetadata } from "./task-metadata.ts";
-import type { WorkspaceDetails, WorkspaceRecovery } from "./workspace-metadata.ts";
 import type { CoreObservationReason } from "./observation-scheduler.ts";
 import { HarnessError, type RepeatedManagedBlock } from "./ports.ts";
 import { boundedOutput } from "./result-text.ts";
@@ -23,10 +22,6 @@ export interface CommunicationRun {
     readonly enqueue_sequence: number;
     readonly name: string;
     readonly description: string;
-    readonly settings?: { readonly workspace?: WorkspaceMode };
-    readonly workspace?: WorkspaceInfo;
-    readonly workspace_details?: WorkspaceDetails;
-    readonly recovery?: WorkspaceRecovery;
     readonly status: RunStatus;
     readonly phase: Phase;
     readonly execution_exited: boolean;
@@ -261,49 +256,14 @@ const matchesRun = <Run extends CommunicationRun>(run: Run, row: ThinTaskEntry, 
   return record.name === row.agent && ordinals.get(run) === row.task && status === row.status;
 };
 
-const originalMetadata = (run: CommunicationRun): TaskMetadata => taskMetadata({
-  description: run.record.description, isolation: run.record.settings?.workspace ?? "shared",
-  status: run.record.status, execution_exited: run.record.execution_exited,
-  workspace: run.record.workspace, workspace_details: run.record.workspace_details, recovery: run.record.recovery,
-}, true);
-/** These projections contain scalar leaves, plain records and ordered path
- * arrays. Compare exact own data keys independent of record key order;
- * reject accessors/symbols without invoking caller code during validation.
- * A general deep-equality helper is not equivalent: it may read getters or
- * ignore non-enumerable keys that this provenance boundary must reject. */
-function samePlainProjection(left: unknown, right: unknown): boolean {
-  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return Object.is(left, right);
-  if (Array.isArray(left) || Array.isArray(right)) {
-    if (!Array.isArray(left) || !Array.isArray(right) || Object.getPrototypeOf(left) !== Array.prototype ||
-        Object.getPrototypeOf(right) !== Array.prototype || left.length !== right.length ||
-        Reflect.ownKeys(left).length !== left.length + 1 || Reflect.ownKeys(right).length !== right.length + 1) return false;
-    for (let index = 0; index < left.length; index++) {
-      const a = Object.getOwnPropertyDescriptor(left, String(index)), b = Object.getOwnPropertyDescriptor(right, String(index));
-      if (!a || !b || !a.enumerable || !b.enumerable || !("value" in a) || !("value" in b) || !samePlainProjection(a.value, b.value)) return false;
-    }
-    return true;
-  }
-  if (Object.getPrototypeOf(left) !== Object.prototype || Object.getPrototypeOf(right) !== Object.prototype) return false;
-  const keys = Reflect.ownKeys(left);
-  if (keys.length !== Reflect.ownKeys(right).length) return false;
-  return keys.every(key => {
-    if (typeof key !== "string") return false;
-    const a = Object.getOwnPropertyDescriptor(left, key), b = Object.getOwnPropertyDescriptor(right, key);
-    return a !== undefined && b !== undefined && a.enumerable === true && b.enumerable === true &&
-      "value" in a && "value" in b && samePlainProjection(a.value, b.value);
-  });
-}
+const originalMetadata = (run: CommunicationRun): TaskMetadata => taskMetadata(run.record);
 
 /** Missing optional projections stay compatible with structural fixtures. Any
  * supplied fact must match the original, not merely a forged snapshot/body pair. */
 function validateMetadataProvenance(run: CommunicationRun, captured: Partial<TaskMetadata>, shown?: Partial<TaskMetadata>): void {
   const original = originalMetadata(run);
-  for (const field of ["label", "workspace_pending", "workspace", "retained_paths"] as const) {
-    if (captured[field] !== undefined && !samePlainProjection(captured[field], original[field])) invalidCommit();
-    if (shown?.[field] !== undefined && (captured[field] === undefined || !samePlainProjection(shown[field], original[field]))) invalidCommit();
-  }
-  // Unlike whole optional locations, a captured pending control cannot yield.
-  if (captured.workspace_pending !== undefined && captured.workspace_pending !== shown?.workspace_pending) invalidCommit();
+  if (captured.label !== undefined && captured.label !== original.label) invalidCommit();
+  if (shown?.label !== undefined && (captured.label === undefined || shown.label !== original.label)) invalidCommit();
 }
 
 /** All checks precede ALL mutation. This is pure, SDK-free reference checking,

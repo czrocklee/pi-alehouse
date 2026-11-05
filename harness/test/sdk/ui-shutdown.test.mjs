@@ -45,7 +45,6 @@ for (const [fault, beerMugs] of [["widget", undefined], ["panel", true], ["all",
   await writeFile(join(permissionRoot, "index.ts"), 'throw new Error("Harness must reuse the explicitly injected permission interface");\n');
   const permission = {
     getPermissionsService: () => ({}),
-    bindWorkspacePolicy() { throw new Error("FakePort shutdown fixture must not bind an SDK workspace"); },
     subscribeManagedBlocks() { throw new Error("FakePort shutdown fixture must not observe an SDK child"); },
   };
   t.mock.method(globalThis, "fetch", () => { assert.fail("shutdown fixture attempted network IO"); });

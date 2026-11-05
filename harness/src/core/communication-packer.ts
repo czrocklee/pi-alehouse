@@ -1,4 +1,3 @@
-import { isAbsolute } from "node:path";
 import {
   COMMUNICATION_LIMITS, communicationBudget, communicationEnvelopeBytes, communicationTextUnits, isModelAgentName as validName,
   isQueueWait, modelDispatchNotes, visibleCommunicationReason,
@@ -8,7 +7,6 @@ import {
 import type {
   CommunicationSnapshot, CommunicationToolResult, PackedCommunication, ResultWindow,
 } from "./communication-snapshot.ts";
-import { validWorkspace } from "./contracts.ts";
 import type { TaskMetadata } from "./task-metadata.ts";
 import { isQuestionId } from "./question-id.ts";
 import { encodeResultCursor } from "./result-cursor.ts";
@@ -43,8 +41,7 @@ export function packIndependentCommunication(captured: Record<string, unknown>):
   let limited = value.response_limit_reached === true;
   value.response_limit_reached = true;
   const rows = Array.isArray(value.agents) ? value.agents as Record<string, unknown>[] : [value];
-  // workspace_pending is a required bounded control, never a drop target.
-  optionalFields: for (const field of ["workspace", "retained_paths", "error", "owner_error", "unavailable_reason", "dispatch_notes", "label"] as const) {
+  optionalFields: for (const field of ["error", "owner_error", "unavailable_reason", "dispatch_notes", "label"] as const) {
     for (const row of [...rows].reverse()) {
       if (communicationEnvelopeBytes(value) <= COMMUNICATION_LIMITS.envelope_bytes) break optionalFields;
       if (row[field] === undefined) continue;
@@ -121,19 +118,8 @@ function validateWindow(window: ResultWindow): void {
 }
 
 function validateMetadata(metadata: Partial<TaskMetadata>): void {
-  if (metadata.workspace_pending !== undefined && metadata.workspace_pending !== true) invalid("Invalid workspace_pending control");
   if (metadata.label !== undefined && (typeof metadata.label !== "string" || metadata.label.length > COMMUNICATION_LIMITS.label_units))
     invalid("Invalid bounded task label");
-  if (metadata.retained_paths !== undefined && (!Array.isArray(metadata.retained_paths) || metadata.retained_paths.length < 1 || metadata.retained_paths.length > 2 ||
-      new Set(metadata.retained_paths).size !== metadata.retained_paths.length ||
-      Array.from(metadata.retained_paths).some((path: unknown) => typeof path !== "string" || !isAbsolute(path))))
-    invalid("Invalid retained paths");
-  const workspace = metadata.workspace;
-  if (workspace === undefined) return;
-  if (!validWorkspace(workspace) || Object.keys(workspace).some(key =>
-      !["mode", "cwd", "source_cwd", "base_commit", "checkout_root"].includes(key))) invalid("Invalid workspace metadata");
-  if (workspace.checkout_root !== undefined && (typeof workspace.checkout_root !== "string" || !isAbsolute(workspace.checkout_root)))
-    invalid("Invalid workspace location");
 }
 
 /** Preserve pairs in the original text, while keeping originally lone surrogates. */
@@ -208,7 +194,6 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     taskKeys.add(key);
     if (task.settled !== terminalStatus(row.status)) invalid("Task settlement must match its control status");
     validateMetadata(task);
-    if (task.workspace_pending === true) row.workspace_pending = true;
     if (task.question_id !== undefined) {
       if (!isQuestionId(task.question_id)) invalid("Invalid bounded question identity");
       row.question_id = task.question_id;
@@ -317,8 +302,7 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     }
   }
 
-  // Bounded labels and Stop attribution retain their priority. Arbitrary-sized
-  // locations follow result fitting, so a fitting path cannot starve payload.
+  // Bounded labels and Stop attribution retain their priority.
   for (const field of ["cancellation_source", "label"] as const) {
     for (let index = 0; index < snapshot.tasks.length; index++) {
       const value = snapshot.tasks[index]![field];
@@ -363,18 +347,6 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
       const omitted = build("");
       if (communicationBudget(omitted).fits) envelope = omitted;
       limited = true;
-    }
-  }
-
-  // Whole observed locations spend only bytes left AFTER the result pages.
-  // Never clip a path, refit a published body, or displace a reserved control.
-  for (const field of ["workspace", "retained_paths"] as const) {
-    for (let index = 0; index < snapshot.tasks.length; index++) {
-      const value = snapshot.tasks[index]![field];
-      if (value === undefined) continue;
-      const candidate = replaceRow(envelope, index, { ...envelope.agents[index]!, [field]: structuredClone(value) });
-      if (communicationBudget(candidate).fits) envelope = candidate;
-      else limited = true;
     }
   }
 

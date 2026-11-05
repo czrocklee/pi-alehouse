@@ -124,7 +124,7 @@ processes exited, a distributed lock, or recovery from abrupt process loss.
 Lock files/directories persist to preserve inode identity and have no automatic
 pruning.  Do not remove them while a Pi process could hold a lease.
 
-## Profiles and workspace boundary
+## Profiles and working directory
 
 The model API offers `worker` and `researcher` only. Worker maps to the stable
 internal `editor` profile ID. No legacy profile aliases or capabilities are
@@ -139,42 +139,13 @@ asks, literal path/output/redirect facts and credential/resource/high-risk
 protection remain. The [Git classifier](git-read-proof.md) does no subprocess
 provenance probes or history/object walks.
 
-Workspace is an independent immutable Agent choice: shared (default) or
-worktree. Core keeps admitted source `settings.cwd` immutable. Runtime owns
-worktree allocation and actual execution cwd, creating a private detached
-checkout from a recorded local HEAD only at execution/session
-initialization, not admission, preparation or accepted replay. Failure is
-visible, never silent shared fallback. No dirty/untracked/ignored files,
-installed dependencies or caches are transferred, nor host/user credentials or
-settings. Committed configuration files remain part of the checkout; it is not
-a secret-scrubbing export. No automatic install, patch transfer or merge occurs.
-
-Runtime binds source project instructions/settings/config/trust to the child
-without letting checked-out `.pi` content replace source policy. Tools resolve
-at actual workspace cwd. Trusted whole checkout/source repository roots mirror
-literal restrictions as deny/ask aliases only, never ALLOW or boundary exemptions.
-Other checkouts retain ordinary external policy. Relative dispatch uses the
-Agent's actual execution cwd. First-task worktree paths, including tree and `..`,
-remain provisional until binding; source candidates get deny-only preflight,
-not existence checks. Before input, runtime checks actual paths, authority and
-boundaries, and core refines/rechecks claims once. Later ownership/tree checks
-stay strict; inputs are revalidated, not locked. Healthy sessions survive binding
-preflight failure idle/reusable. See [workspace binding](workspaces.md#dispatch-paths-and-binding). List/detail project uninitialized mode or
-actual cwd, source cwd and baseline after creation; UI owns neither allocation
-nor cleanup. Without confirmed metadata, worktree rows say `uninitialized`
-(including after failed setup), not that creation will eventually succeed.
-
-Worktrees and private recovery manifests remain through completion, kill,
-failure and shutdown for manual cleanup. Default storage is absolute
-XDG_STATE_HOME (otherwise ~/.local/state), under pi-alehouse/worktrees outside
-agentDir rather than TMPDIR; this is not perpetual retention or backup.
-Eligible forwarded worktree asks currently defer from Jev to ordinary human
-handling as delegation_unbound; its evidence is still source-cwd based.
-Revoking a session binding does not
-delete files, accept results or prove every descendant stopped. Separate working
-files/indexes still share objects, most refs and configuration; worktrees are
-not OS isolation, strict readonly, historical secrecy or a zero-lock guarantee.
-There is no new cleanup tool. See [workspaces](workspaces.md).
+Every Agent uses the parent's admitted cwd, including uncommitted files,
+installed dependencies and existing outputs. The cwd remains immutable for the
+Agent's lifetime. Child resource discovery and tool paths use that same cwd;
+there is no separate checkout, source-policy alias registry or working-copy
+lifecycle. The main agent coordinates shared edits and ordinary Git workflow.
+Alehouse does not create, merge or delete worktrees. Existing user files and
+historical journals are not migrated or removed.
 
 ## Task dispatch boundary
 

@@ -933,39 +933,25 @@ for (const policy of [{ kind: "waiting", wait_ms: 0 }, { kind: "waiting", wait_m
     assert.equal(envelope.alerts_pending, undefined); assert.equal(envelope.finished_pending, undefined); assert.equal(f.clock.scheduled.length, 0);
   });
 
-const metadataOf = run => taskMetadata({ description: run.record.description, isolation: run.record.settings?.workspace ?? "shared",
-  status: run.record.status, execution_exited: run.record.execution_exited,
-  workspace: run.record.workspace, workspace_details: run.record.workspace_details, recovery: run.record.recovery }, true);
-function withMetadata(run) {
-  Object.assign(run.record, { settings: { workspace: "worktree" },
-    workspace: { mode: "worktree", cwd: "/tree/sub", source_cwd: "/source/sub", base_commit: "a".repeat(40) },
-    workspace_details: { checkout_root: "/tree", recovery_manifest: "/state/manifest" },
-    recovery: { mode: "worktree", state: "checkout_ready", source_cwd: "/source/sub", cwd: "/tree/sub",
-      checkout_root: "/tree", recovery_manifest: "/state/manifest", base_commit: "a".repeat(40) } });
-  return run;
-}
+const metadataOf = run => taskMetadata(run.record);
 
-for (const field of ["label", "workspace", "retained_paths"])
-  test(`snapshot/body agreement cannot forge original task ${field}`, () => {
-    const run = withMetadata(settledRun("otter", 1)), state = { pending: [], runs: [run] };
-    enqueueAlert(state.pending, run, "accepted fact");
-    const snapshot = capture(state, { targets: [run] }); Object.assign(snapshot.data.tasks[0], metadataOf(run));
-    const forged = field === "label" ? "forged label" : field === "retained_paths" ? ["/forged"] : { ...snapshot.data.tasks[0][field], cwd: "/forged" };
-    snapshot.data.tasks[0][field] = forged;
-    const packed = packCommunication(snapshot.data);
-    assert.deepEqual(packed.envelope.agents[0][field], forged);
-    unchanged(state, () => commit(state, snapshot, packed), "INVALID_COMMUNICATION_COMMIT");
-  });
+test("snapshot/body agreement cannot forge the original task label", () => {
+  const run = settledRun("otter", 1), state = { pending: [], runs: [run] };
+  enqueueAlert(state.pending, run, "accepted fact");
+  const snapshot = capture(state, { targets: [run] }); snapshot.data.tasks[0].label = "forged label";
+  const packed = packCommunication(snapshot.data);
+  assert.equal(packed.envelope.agents[0].label, "forged label");
+  unchanged(state, () => commit(state, snapshot, packed), "INVALID_COMMUNICATION_COMMIT");
+});
 
 test("task summaries and optional finished labels validate against retained original Run facts", () => {
-  const old = withMetadata(settledRun("otter", 1, { description: "a".repeat(119) + "🚀" })),
-    live = withMetadata(originalRun("otter", 2)), state = { pending: [], runs: [old, live] };
+  const old = settledRun("otter", 1, { description: "a".repeat(119) + "🚀" }),
+    live = originalRun("otter", 2), state = { pending: [], runs: [old, live] };
   const snapshot = capture(state, { targets: [live] });
   Object.assign(snapshot.data.tasks[0], metadataOf(live)); snapshot.data.finished[0].label = metadataOf(old).label;
   const packed = packCommunication(snapshot.data);
   assert.equal(packed.envelope.finished[0].label, "a".repeat(119));
-  assert.deepEqual(packed.envelope.agents[0].workspace, { ...live.record.workspace, checkout_root: "/tree" });
-  assert.deepEqual(packed.envelope.agents[0].retained_paths, ["/tree", "/state/manifest"]);
+  assert.equal(packed.envelope.agents[0].label, metadataOf(live).label);
   commit(state, snapshot, packed); assert.equal(old.finished_presented, true); assert.equal(live.finished_presented, false);
 });
 
@@ -991,90 +977,16 @@ for (const reason of ["snapshot", "done"]) test(`${reason} commits its omitted p
 });
 
 test("captured optional summary omission is valid, but cannot authorize a new shown fact", () => {
-  const run = withMetadata(settledRun("otter", 1)), state = { pending: [], runs: [run] }, snapshot = capture(state, { targets: [run] });
+  const run = settledRun("otter", 1), state = { pending: [], runs: [run] }, snapshot = capture(state, { targets: [run] });
   const packed = packCommunication(snapshot.data);
-  for (const field of ["label", "workspace", "retained_paths"]) {
-    const envelope = { ...packed.envelope, agents: [{ ...packed.envelope.agents[0], [field]: metadataOf(run)[field] }] };
-    unchanged(state, () => commit(state, snapshot, { ...packed, envelope }), "INVALID_COMMUNICATION_COMMIT");
-  }
+  const envelope = { ...packed.envelope, agents: [{ ...packed.envelope.agents[0], label: metadataOf(run).label }] };
+  unchanged(state, () => commit(state, snapshot, { ...packed, envelope }), "INVALID_COMMUNICATION_COMMIT");
   commit(state, snapshot, packed); assert.equal(run.finished_presented, true);
 });
 
-for (const field of ["label", "workspace", "retained_paths"]) test(`omitting a forged captured ${field} from the body cannot evade provenance`, () => {
-  const run = withMetadata(settledRun("otter", 1)), state = { pending: [], runs: [run] }, snapshot = capture(state, { targets: [run] });
-  Object.assign(snapshot.data.tasks[0], metadataOf(run));
-  snapshot.data.tasks[0][field] = field === "label" ? "forged" : field === "retained_paths" ? ["/forged"] : { ...metadataOf(run).workspace, cwd: "/forged" };
-  const packed = packCommunication(snapshot.data); delete packed.envelope.agents[0][field];
+test("omitting a forged captured label from the body cannot evade provenance", () => {
+  const run = settledRun("otter", 1), state = { pending: [], runs: [run] }, snapshot = capture(state, { targets: [run] });
+  snapshot.data.tasks[0].label = "forged";
+  const packed = packCommunication(snapshot.data); delete packed.envelope.agents[0].label;
   unchanged(state, () => commit(state, snapshot, packed), "INVALID_COMMUNICATION_COMMIT");
-});
-
-for (const paths of [["/state/manifest", "/tree"], ["/tree"], ["/other", "/state/manifest"]])
-  test(`retained path provenance compares array order, membership and length (${JSON.stringify(paths)})`, () => {
-    const run = withMetadata(settledRun("otter", 1)), state = { pending: [], runs: [run] }, snapshot = capture(state, { targets: [run] });
-    Object.assign(snapshot.data.tasks[0], metadataOf(run)); snapshot.data.tasks[0].retained_paths = paths;
-    const packed = packCommunication(snapshot.data);
-    unchanged(state, () => commit(state, snapshot, packed), "INVALID_COMMUNICATION_COMMIT");
-  });
-
-test("array provenance rejects accessors, symbols, holes and extra keys without invoking getters", () => {
-  const run = withMetadata(settledRun("otter", 1)), state = { pending: [], runs: [run] };
-  const arrays = [];
-  const accessor = ["/tree", "/state/manifest"];
-  Object.defineProperty(accessor, "0", { get() { return assert.fail("provenance must not invoke array accessors"); }, enumerable: true }); arrays.push(accessor);
-  const symbol = ["/tree", "/state/manifest"]; symbol[Symbol("extra")] = true; arrays.push(symbol);
-  const extra = ["/tree", "/state/manifest"]; extra.extra = true; arrays.push(extra);
-  const hole = ["/tree", "/state/manifest"]; delete hole[0]; arrays.push(hole);
-  for (const paths of arrays) {
-    const snapshot = capture(state, { targets: [run] }); Object.assign(snapshot.data.tasks[0], metadataOf(run));
-    // Fault injection after packing, so only the commit comparison sees accessors.
-    const packed = packCommunication(snapshot.data); snapshot.data.tasks[0].retained_paths = paths;
-    assert.throws(() => validate(state, snapshot, packed), hasCode("INVALID_COMMUNICATION_COMMIT"));
-    assert.equal(run.finished_presented, false); assert.deepEqual(state.pending, []);
-  }
-});
-
-for (const status of ["queued", "running"]) test(`original ${status} worktree pending control validates and cannot yield`, () => {
-  const run = originalRun("otter", 1, { status }), state = { pending: [], runs: [run] };
-  run.record.settings = { workspace: "worktree" }; enqueueAlert(state.pending, run, "accepted fact");
-  const snapshot = capture(state, { targets: [run] }); Object.assign(snapshot.data.tasks[0], metadataOf(run));
-  const packed = packCommunication(snapshot.data);
-  assert.equal(packed.envelope.agents[0].workspace_pending, true);
-  const missing = { ...packed, envelope: { ...packed.envelope, agents: [{ ...packed.envelope.agents[0] }] } };
-  delete missing.envelope.agents[0].workspace_pending;
-  unchanged(state, () => commit(state, snapshot, missing), "INVALID_COMMUNICATION_COMMIT");
-  commit(state, snapshot, packed); assert.deepEqual(state.pending, []); assert.equal(run.finished_presented, false);
-});
-
-for (const cause of ["shared", "confirmed", "recovery", "failed", "cancelled", "exited"])
-  for (const omitShown of [false, true]) test(`captured pending forgery cannot evade original ${cause} facts (body omitted=${omitShown})`, () => {
-    const run = ["failed", "cancelled"].includes(cause) ? settledRun("otter", 1, { status: cause }) : originalRun("otter", 1);
-    run.record.settings = { workspace: cause === "shared" ? "shared" : "worktree" };
-    if (cause === "confirmed") run.record.workspace = { mode: "worktree", cwd: "/tree", source_cwd: "/source", base_commit: "a".repeat(40) };
-    if (cause === "recovery") run.record.recovery = { mode: "worktree", state: "failed", source_cwd: "/source" };
-    if (cause === "exited") { run.record.execution_exited = true; run.record.phase = "finalizing"; }
-    const state = { pending: [], runs: [run] }; enqueueAlert(state.pending, run, "must not commit");
-    const snapshot = capture(state, { targets: [run] }); Object.assign(snapshot.data.tasks[0], metadataOf(run), { workspace_pending: true });
-    const packed = packCommunication(snapshot.data);
-    if (omitShown) delete packed.envelope.agents[0].workspace_pending;
-    unchanged(state, () => commit(state, snapshot, packed), "INVALID_COMMUNICATION_COMMIT");
-  });
-
-test("uncaptured shown pending and a false captured marker reject without consuming the FIFO", () => {
-  const run = originalRun("otter", 1), state = { pending: [], runs: [run] };
-  run.record.settings = { workspace: "worktree" }; enqueueAlert(state.pending, run, "retained");
-  const snapshot = capture(state, { targets: [run] }), packed = packCommunication(snapshot.data);
-  packed.envelope.agents[0].workspace_pending = true;
-  unchanged(state, () => commit(state, snapshot, packed), "INVALID_COMMUNICATION_COMMIT");
-  snapshot.data.tasks[0].workspace_pending = false; delete packed.envelope.agents[0].workspace_pending;
-  unchanged(state, () => commit(state, snapshot, packed), "INVALID_COMMUNICATION_COMMIT");
-});
-
-test("task-local provenance cannot borrow a later Agent workspace or fabricate retained failure paths", () => {
-  const earlier = settledRun("otter", 1), later = withMetadata(settledRun("otter", 2)), state = { pending: [], runs: [earlier, later] };
-  earlier.record.settings = { workspace: "worktree" };
-  for (const field of ["workspace", "retained_paths"]) {
-    const snapshot = capture(state, { targets: [earlier] }); snapshot.data.tasks[0][field] = metadataOf(later)[field];
-    const packed = packCommunication(snapshot.data);
-    unchanged(state, () => commit(state, snapshot, packed), "INVALID_COMMUNICATION_COMMIT");
-  }
 });

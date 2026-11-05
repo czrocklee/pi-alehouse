@@ -8,12 +8,11 @@ function freeze(value) {
   if (value && typeof value === "object") { Object.values(value).forEach(freeze); Object.freeze(value); }
   return value;
 }
-const workspace = cwd => ({ mode: "worktree", cwd, source_cwd: "/source", base_commit: "a".repeat(40) });
 
 test("independent packing preserves complete replies and never mutates captured lifecycle facts", () => {
   for (const captured of [
     { agent: "otter", task: 1, status: "interrupting", label: "Stop requested" },
-    { agents: [{ agent: "otter", task: 1, status: "queued", wait: "capacity", workspace_pending: true }], killed: ["badger"] },
+    { agents: [{ agent: "otter", task: 1, status: "queued", wait: "capacity" }], killed: ["badger"] },
     { agent: "otter", status: "cleanup_uncertain", resolution: "Tell the user, do not retry.", response_limit_reached: true },
   ]) {
     const before = structuredClone(captured); freeze(captured);
@@ -26,16 +25,15 @@ test("independent packing preserves complete replies and never mutates captured 
 
 test("independent roster uses deterministic whole-field omission without dropping queued controls", () => {
   const captured = { agents: Array.from({ length: 16 }, (_, i) => ({ agent: `otter${i}`, task: 1,
-    status: "queued", wait: i % 2 ? "capacity" : "dependencies", workspace_pending: true,
-    workspace: workspace(`/retained/${i}/${"\0".repeat(20000)}`),
-    retained_paths: [`/observed/${i}/${"\ud800".repeat(20000)}`], error: "diagnostic", label: "fixture" })), killed: ["badger"] };
+    status: "queued", wait: i % 2 ? "capacity" : "dependencies",
+    error: "\0".repeat(20000), label: "fixture" })), killed: ["badger"] };
   const before = structuredClone(captured); freeze(captured);
   const result = packIndependentCommunication(captured), reply = JSON.parse(result.content[0].text);
   assert(bytes(result) <= 65536); assert.equal(reply.response_limit_reached, true);
   assert.equal(reply.agents.length, 16); assert.deepEqual(reply.killed, ["badger"]);
   for (const [index, row] of reply.agents.entries()) {
-    for (const field of ["agent", "task", "status", "wait", "workspace_pending"]) assert.equal(row[field], before.agents[index][field]);
-    for (const field of ["workspace", "retained_paths", "error", "label"])
+    for (const field of ["agent", "task", "status", "wait"]) assert.equal(row[field], before.agents[index][field]);
+    for (const field of ["error", "label"])
       if (Object.hasOwn(row, field)) assert.deepEqual(row[field], before.agents[index][field], "metadata is whole or omitted, never clipped");
   }
   assert.deepEqual(captured, before);
@@ -43,12 +41,12 @@ test("independent roster uses deterministic whole-field omission without droppin
 
 test("independent omission preserves field priority and removes later rows first", () => {
   const captured = { agents: [0, 1].map(i => ({ agent: `otter${i}`, task: 1, status: "completed",
-    workspace: workspace(`/retained/${i}/${"x".repeat(40000)}`), label: `task ${i}`, error: "kept diagnostic" })) };
+    error: `diagnostic-${i}:` + "x".repeat(40000), label: `task ${i}` })) };
   const reply = JSON.parse(packIndependentCommunication(captured).content[0].text);
-  assert.deepEqual(reply.agents[0].workspace, captured.agents[0].workspace);
-  assert.equal(reply.agents[1].workspace, undefined);
+  assert.deepEqual(reply.agents[0].error, captured.agents[0].error);
+  assert.equal(reply.agents[1].error, undefined);
   for (const [i, row] of reply.agents.entries()) {
-    assert.equal(row.label, captured.agents[i].label); assert.equal(row.error, "kept diagnostic");
+    assert.equal(row.label, captured.agents[i].label);
   }
   assert.equal(reply.response_limit_reached, true);
 });

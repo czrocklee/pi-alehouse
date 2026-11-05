@@ -28,7 +28,6 @@ const stringEnum = <T extends readonly string[]>(values: T, options?: { descript
   Type.Unsafe<T[number]>({ type: "string", enum: values, ...options });
 const optional = Type.Optional;
 const offGuidance = "workers_disabled: ask the user to enable delegation for new work, steering or answers; accepted work and inspection continue.";
-const workspaceFacts = "workspace_pending means binding is unconfirmed, not eventual creation. retained_paths lists observed failure locations, not a usable session; optional paths may be omitted.";
 export const AGENT_NAME_PATTERN = MODEL_AGENT_NAME_PATTERN;
 const agentName = (description?: string) => Type.String({ pattern: AGENT_NAME_PATTERN, ...(description ? { description } : {}) });
 const agentNames = (maxItems: number, description: string) =>
@@ -52,13 +51,12 @@ const dispatchField = optional(Type.Object({
     description: "Planned check identifier (globs allowed); ready for this task, not later go-ahead." }),
   { minItems: 1, maxItems: 16, uniqueItems: true })),
 }, { additionalProperties: false,
-  description: "Task scope and planned checks, not permissions or execution evidence. Use literal paths without padding, globs or shell expansion. Relative paths resolve from the Agent's execution cwd (including worktree); absolute paths keep their meaning. Assign full-suite validation to one designated Agent after shared source is stable." }));
+  description: "Task scope and planned checks, not permissions or execution evidence. Use literal paths without padding, globs or shell expansion. Relative paths resolve from the inherited parent cwd; absolute paths keep their meaning. Assign full-suite validation to one designated Agent after shared source is stable." }));
 const spawnSchema = Type.Object({
   agent: agentName("Unique short nickname from one theme, not a task name; stays taken after kill."),
-  prompt: text(131072, "Task instructions: deliverable, scope, stopping conditions, workspace-relative paths (or explicit absolute paths), and needed context."),
+  prompt: text(131072, "Task instructions: deliverable, scope, stopping conditions, cwd-relative paths (or explicit absolute paths), and needed context."),
   label: labelField,
   profile: stringEnum(modelProfileNames, { description: "worker: local read/edit/write, Bash/Git/builds; no web. researcher: read-only files/web, no Bash/edit/write; untrusted web material. Normal permissions/denies apply; review-only is an instruction." }),
-  workspace: optional(stringEnum(["shared", "worktree"] as const, { description: "Default shared: current checkout, including uncommitted work. worktree: private detached local HEAD at start; no dirty/untracked files or installed dependencies copied. Fixed for follow-ups; agent_list shows actual cwd/base. Retained after kill; no automatic install/merge/deletion. Neither is a sandbox." })),
   reasoning_difficulty: Type.Integer({ minimum: 1, maximum: 5, description: "Fixed model by reasoning difficulty, not workload/cost: 1=given checks/decided changes; 2=scoped fix; 3=given design/review/investigation/plan; 4=competing hypotheses/complex constraints; 5=unknown approach. Do not re-score to bypass capacity waits." }),
   inherit_context: optional(Type.Boolean({ description: "Default false: text context without tool calls/results; max 64 KiB." })),
   dispatch: dispatchField,
@@ -69,7 +67,7 @@ const spawnSchema = Type.Object({
 const runSchema = Type.Object({
   agent: agentName("An existing, idle Agent."),
   continues: text(512, "The specific earlier work of this Agent being continued; not sent to it. If you cannot name one, use agent_spawn (with after if only its output is needed)."),
-  prompt: text(131072, "Follow-up instructions with scope, deliverable and workspace-relative paths (or explicit absolute paths); earlier conversation is retained."),
+  prompt: text(131072, "Follow-up instructions with scope, deliverable and cwd-relative paths (or explicit absolute paths); earlier conversation is retained."),
   label: labelField,
   dispatch: dispatchField,
   after: afterField,
@@ -232,7 +230,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
   });
 
   const tools = [
-    make("agent_spawn", "Create an Agent and submit its first task: the default for any new work or review. Execution may queue. Model, profile, workspace, context and turn limit stay fixed; no nested delegation. If acceptance is unclear, check agent_list before repeating. Queued work is accepted; wait, do not respawn.", spawnSchema,
+    make("agent_spawn", "Create an Agent and submit its first task: the default for any new work or review. Execution may queue. Model, profile, context and turn limit stay fixed; no nested delegation. If acceptance is unclear, check agent_list before repeating. Queued work is accepted; wait, do not respawn.", spawnSchema,
       async (args, ctx, id, signal) => {
         // Capture mutable SDK inputs before admission can await an earlier call.
         // Route/context resolution still happens only on first acceptance.
@@ -262,7 +260,6 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
               ...(input.dispatch === undefined ? {} : { dispatch: input.dispatch }),
               ...(after ? { after } : {}),
               settings: { ...route, profile: profileId, cwd, tools: [...profile.tools], definition_digest: profile.definition_digest,
-                ...(input.workspace === undefined ? {} : { workspace: input.workspace }),
                 ...(context_snapshot === undefined ? {} : { context_snapshot }) } };
           }), { signal });
         accepted(view);
@@ -303,7 +300,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         return observe({ kind: "action", run_id: view.run_id, action: { type: "agent_answer" }, wait_ms }, ctx, signal);
       }),
     make("agent_wait", `Wait for selected tasks; questions, issues or alerts return early. Prefer long waits to polling. Questions stay pending; name other Agents to defer one. Nothing pending returns now; timeout/abort never stops work. ${offGuidance}`,
-      Type.Object({ agents: optional(agentNames(16, `Bind each named Agent's active (running/queued) task, else its pending question, else its latest finished task, once at this call. Alerts span those Agents. Omit to wait on unfinished tasks, answerable questions and all Agents' alerts. Queued wait="capacity" means waiting for a provider slot; wait="dependencies" waits for fixed tasks. ${workspaceFacts}`)),
+      Type.Object({ agents: optional(agentNames(16, `Bind each named Agent's active (running/queued) task, else its pending question, else its latest finished task, once at this call. Alerts span those Agents. Omit to wait on unfinished tasks, answerable questions and all Agents' alerts. Queued wait="capacity" means waiting for a provider slot; wait="dependencies" waits for fixed tasks.`)),
         mode: optional(stringEnum(["all", "any"] as const, { default: "all",
           description: "all (default): every selected task ends; any: one ends. Other events may return earlier." })),
         wait_ms: optional(waitMs("Wait duration; default 300000 ms. 0 checks once.")) }, { additionalProperties: false }),
@@ -312,7 +309,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         return observe({ kind: "wait", ...(agent_ids ? { agent_ids } : {}), mode, wait_ms }, ctx, signal);
       }),
     make("agent_read", `Read a task's result/question and this Agent's alerts, including after reuse or kill. Prioritizes the full question; keep next_cursor to continue the original task. ${offGuidance}`,
-      Type.Object({ agent: agentName(`Agent to read. Without task or cursor, selects its active task, else its pending question, else its latest finished task. ${workspaceFacts}`),
+      Type.Object({ agent: agentName(`Agent to read. Without task or cursor, selects its active task, else its pending question, else its latest finished task.`),
         task: optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER,
           description: "Returned task number; starts its first page. Mutually exclusive with cursor; read-only selector." })),
         cursor: optional(text(1024, "Copy next_cursor with its Agent to continue that original task. Do not also supply task.")),
@@ -324,7 +321,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         const snapshot = controller.cancel(find(agent).run_id).snapshot;
         return independent(ctx, () => taskReply(snapshot, nameOf));
       }),
-    make("agent_kill", "Permanently end an Agent, requesting stop of its task. exiting or cleanup_uncertain does not confirm release. Name stays taken, results stay readable; consumes no alerts. Retained worktrees are not deleted.",
+    make("agent_kill", "Permanently end an Agent, requesting stop of its task. exiting or cleanup_uncertain does not confirm release. Name stays taken, results stay readable; consumes no alerts.",
       agentOnly, async ({ agent }, ctx) => {
         const target = find(agent);
         const { state } = await controller.kill(target.agent_id);
@@ -333,7 +330,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
           ...(state === "exiting" ? { resolution: "Still stopping; use agent_wait or agent_read." } :
             state === "cleanup_uncertain" ? { resolution: "Cleanup unconfirmed; tell the user, do not retry." } : {}) }));
       }),
-    make("agent_list", `Read-only roster with current/latest task labels and workspace locations. Get pending questions through wait/read. Consumes no alerts or completion notices. ${workspaceFacts}`,
+    make("agent_list", "Read-only roster with current/latest task labels. Get pending questions through wait/read. Consumes no alerts or completion notices.",
       Type.Object({}, { additionalProperties: false }), (_args, ctx) => independent(ctx, () => {
         const views = controller.list(), live = views.filter((view) => view.resident);
         const killed = views.filter((view) => !view.resident).map((view) => view.name);

@@ -1,7 +1,6 @@
-import type { AdmittedAgentConfig, DrainWait, ExecutionFacts, HistoryRef, Outcome, Output, OutputDelta, RunExecutionIdentity, RunIdentity, RunTelemetry, WorkspaceInfo } from "./contracts.ts";
+import type { AdmittedAgentConfig, DrainWait, ExecutionFacts, HistoryRef, Outcome, Output, OutputDelta, RunExecutionIdentity, RunIdentity, RunTelemetry } from "./contracts.ts";
 import type { UsageLedger } from "./usage-ledger.ts";
-import type { DispatchWorkspacePolicy, ValidationReceipt } from "./dispatch.ts";
-import type { WorkspaceDetails } from "./workspace-metadata.ts";
+import type { ValidationReceipt } from "./dispatch.ts";
 
 export interface HistoryPort {
   /** Local SDK writer uncertainty. It does not by itself stop other Agents. */
@@ -33,10 +32,6 @@ export interface RunCallbacks {
 }
 export interface AgentSessionPort {
   readonly session_id: string;
-  readonly workspace?: WorkspaceInfo;
-  readonly workspace_details?: WorkspaceDetails;
-  /** Live authority-owned alias checks; private, never public workspace metadata. */
-  readonly workspace_policy?: DispatchWorkspacePolicy;
   readonly history?: HistoryPort;
   canInput(): boolean;
   run(prompt: string, callbacks: RunCallbacks, identity: RunExecutionIdentity): Promise<ExecutionFacts>;

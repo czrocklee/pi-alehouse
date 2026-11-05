@@ -19,8 +19,6 @@ export interface ResultWindow {
   readonly cursor?: ResultCursorIdentity;
 }
 export interface TaskSnapshot extends Partial<TaskMetadata> {
-  // workspace_pending is captured task-local metadata, but packing reserves it
-  // as a bounded control before any optional locations or result body.
   /** Required control facts only; arbitrary strings belong in diagnostics. */
   readonly row: ThinTaskEntry;
   readonly settled: boolean;

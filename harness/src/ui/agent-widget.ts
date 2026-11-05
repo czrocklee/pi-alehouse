@@ -540,10 +540,9 @@ export class HarnessWidget {
   private details(views: RunView[]): AgentDetail[] {
     this.detailIds = views.map((view) => view.agent_id);
     return views.map((view) => {
-      const child = this.activities.get(view.agent_id);
       return { agent_id: view.agent_id, view, live: this.live(view.agent_id),
-        cwd: child?.workspace ?? view.workspace?.cwd ?? view.effective_settings.cwd,
-        // Late binding follows queued → bound and retains released diagnostics.
+        cwd: view.effective_settings.cwd,
+        // Resolve observations lazily as sessions start and retain diagnostics.
         entries: () => this.activities.get(view.agent_id)?.entries(),
         historyState: () => this.activities.get(view.agent_id)?.historyState?.(),
         inFlight: () => this.activities.get(view.agent_id)?.inFlight() };

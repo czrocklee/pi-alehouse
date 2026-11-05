@@ -71,7 +71,7 @@ function decodeCursor(encoded, identity = cursorIdentity) {
 function maximalSnapshot(message) {
   const tasks = Array.from({ length: 16 }, (_, index) => task(
     row(`a${String(index).padStart(2, "0")}${"x".repeat(21)}`, Number.MAX_SAFE_INTEGER, "interrupting", controls),
-    { question_id: questionId(index + 1), workspace_pending: true }));
+    { question_id: questionId(index + 1) }));
   return snapshot({ reason: "alert", workers_disabled: true, tasks,
     action: { type: "agent_send", agent: tasks[0].row.agent, task: Number.MAX_SAFE_INTEGER, delivery: "not_delivered" },
     alerts: [{ ...alert(message, Number.MAX_SAFE_INTEGER, tasks[0].row.agent, "\0".repeat(120)), source: "harness" },
@@ -124,7 +124,7 @@ for (const message of ["\0".repeat(8192), "\ud800".repeat(8192), "\udfff".repeat
     assert.equal(envelope.workers_disabled, true);
     for (const [index, entry] of envelope.agents.entries()) {
       for (const [field, value] of Object.entries(input.tasks[index].row)) assert.equal(entry[field], value);
-      assert.equal(entry.question_id, input.tasks[index].question_id); assert.equal(entry.workspace_pending, true);
+      assert.equal(entry.question_id, input.tasks[index].question_id);
     }
     assert.equal(envelope.alerts.length, 1); assert.equal(envelope.alerts[0].message, message);
     assert.equal(envelope.alerts[0].label, "\0".repeat(120));
@@ -313,7 +313,7 @@ for (const message of ["\0".repeat(8192), "\ud800".repeat(8192), "\udfff".repeat
   test(`worst-byte alert cannot displace sixteen original stable-result locators (${message.charCodeAt(0)})`, () => {
     const tasks = Array.from({ length: 16 }, (_, index) => task(
       row(`a${String(index).padStart(2, "0")}${"x".repeat(21)}`, Number.MAX_SAFE_INTEGER, "needs_input", controls), {
-        question_id: questionId(index + 1), question: "Q".repeat(8192), workspace_pending: true,
+        question_id: questionId(index + 1), question: "Q".repeat(8192),
         result: window("retained", { offset: Number.MAX_SAFE_INTEGER - 1000, retained_chars: Number.MAX_SAFE_INTEGER,
           total_chars: Number.MAX_SAFE_INTEGER, cursor: { ...cursorIdentity, run: `old-run-${index}` } }),
       }));
@@ -393,8 +393,7 @@ test("host-only telemetry is never projected, even if supplied by a stale struct
     result: window("result", { cursor: cursorIdentity }), diagnostics: { error: "failure" },
   })] });
   const expected = pack(plain), legacy = structuredClone(plain);
-  Object.assign(legacy.tasks[0], { context_tokens: 391000, time_wrapped: true, recovery_hint: "host-only hint",
-    recovery: { mode: "worktree", state: "partial", source_cwd: "/source" } });
+  Object.assign(legacy.tasks[0], { context_tokens: 391000, time_wrapped: true, recovery_hint: "host-only hint" });
   assert.deepEqual(pack(legacy), expected, "hidden telemetry spends no bytes and cannot cause packing loss");
   for (const field of ["context_tokens", "time_wrapped", "recovery_hint"]) {
     assert.throws(() => packCommunication(snapshot({ tasks: [task(row("otter", 1, "failed", { [field]: true }))] })), { code: "INVALID_COMMUNICATION_SNAPSHOT" });
@@ -422,64 +421,20 @@ for (const notes of ["tree_shared", null, ["a", "b", "c"], ["x".repeat(121)], ["
     assert.throws(() => packCommunication(snapshot({ tasks: [task(row(), { dispatch_notes: notes })] })), { code: "INVALID_COMMUNICATION_SNAPSHOT" });
   });
 
-const workspace = (path = "/tree") => ({ mode: "worktree", cwd: path, source_cwd: "/source", base_commit: "a".repeat(40), checkout_root: path });
-test("labels precede results and locations; fat whole paths yield without losing controls", () => {
-  const huge = "/" + "\ud800".repeat(20000), label = "\0".repeat(120);
-  const input = snapshot({ tasks: [task(row("otter", 1, "completed"), { label, workspace: workspace(huge), retained_paths: [huge],
-    result: window("r".repeat(20000), { cursor: cursorIdentity }) }), task(row("orca", 1, "completed"), { label: "second label", workspace: workspace() })] });
+test("labels precede results without losing controls", () => {
+  const label = "\0".repeat(120);
+  const input = snapshot({ tasks: [task(row("otter", 1, "completed"), { label,
+    result: window("r".repeat(20000), { cursor: cursorIdentity }) }), task(row("orca", 1, "completed"), { label: "second label" })] });
   const { envelope } = pack(input);
   assert.equal(envelope.agents[0].label, label); assert.equal(envelope.agents[1].label, "second label");
-  assert.equal(envelope.agents[0].workspace, undefined); assert.equal(envelope.agents[0].retained_paths, undefined);
-  assert.deepEqual(envelope.agents[1].workspace, workspace()); assert.equal(envelope.agents[0].result.length, 16384);
-  assert.equal(envelope.response_limit_reached, true);
-});
-
-test("sixteen fitting-but-crowding 2k locations yield after result progress, not instead of payload", () => {
-  const path = "/" + "p".repeat(1999), result = "r".repeat(1000);
-  const tasks = Array.from({ length: 16 }, (_, index) => task(row(`worker-${index}`, 1, index ? "completed" : "needs_input"), {
-    label: `label-${index}`, cancellation_source: "human", workspace: workspace(path), retained_paths: [path],
-    ...(index ? {} : { question_id: questionId(), question: "decision?" }),
-    result: window(result, { offset: 11, retained_chars: 2011, total_chars: 2111,
-      cursor: { ...cursorIdentity, run: `run-${index}` } }),
-  }));
-  const input = snapshot({ tasks, alerts: [alert("first"), alert("second", 2)] });
-  const { envelope, references } = pack(input);
-  assert.equal(envelope.agents.reduce((sum, entry) => sum + (entry.result?.length ?? 0), 0), 16000);
-  assert.equal(envelope.agents[0].question_id, questionId()); assert.equal(envelope.agents[0].question, "decision?");
-  assert.deepEqual(envelope.alerts, input.alerts); assert.deepEqual(references.alerts, [0, 1]);
-  for (const [index, entry] of envelope.agents.entries()) {
-    assert.equal(entry.result, result); assert.equal(entry.omitted_chars, 100);
-    assert.equal(decodeCursor(entry.next_cursor, tasks[index].result.cursor), 1011);
-    assert.equal(entry.label, `label-${index}`); assert.equal(entry.cancellation_source, "human");
-    for (const field of ["workspace", "retained_paths"])
-      if (entry[field] !== undefined) assert.deepEqual(entry[field], tasks[index][field], "locations are whole, never clipped");
-  }
-  assert(envelope.agents.some(entry => entry.workspace !== undefined), "a 2k-path field itself fits and may still be shown");
-  assert(envelope.agents.some(entry => entry.workspace === undefined || entry.retained_paths === undefined), "fitting locations must yield when they crowd payload");
-  assert.equal(envelope.response_limit_reached, true);
-});
-
-for (const workspace_pending of [false, null, 0, "true", {}]) test(`pending marker is true-only (${JSON.stringify(workspace_pending)})`, () => {
-  assert.throws(() => packCommunication(snapshot({ tasks: [task(row(), { workspace_pending })] })), { code: "INVALID_COMMUNICATION_SNAPSHOT" });
-});
-
-test("pending controls survive byte pressure independently of yielding optional locations", () => {
-  const input = maximalSnapshot("\0".repeat(8192));
-  for (const entry of input.tasks) Object.assign(entry, { label: "\0".repeat(120), workspace: workspace("/" + "p".repeat(20000)) });
-  const packed = pack(input);
-  assert(packed.envelope.agents.every(entry => entry.workspace_pending === true));
-  assert.equal(packed.envelope.alerts[0].message, input.alerts[0].message);
-  assert.deepEqual(packed.references.alerts, [0]); assert.equal(packed.envelope.alerts_pending, 1);
-  assert.equal(packed.envelope.response_limit_reached, true);
+  assert.equal(envelope.agents[0].result.length, 16384); assert.equal(envelope.response_limit_reached, true);
 });
 
 test("whole summary fields and human cancellation detach from input and yield independently at byte saturation", () => {
-  const metadata = { label: "\ud800".repeat(120), workspace: workspace(), retained_paths: ["/tree", "/state/manifest"], cancellation_source: "human" };
+  const metadata = { label: "\ud800".repeat(120), cancellation_source: "human" };
   const input = snapshot({ tasks: [task(row(), metadata)] }), packed = pack(input);
-  for (const field of ["label", "workspace", "retained_paths", "cancellation_source"]) assert.deepEqual(packed.envelope.agents[0][field], metadata[field]);
+  for (const field of ["label", "cancellation_source"]) assert.deepEqual(packed.envelope.agents[0][field], metadata[field]);
   assert.equal(bodyUnits(packed.envelope), 0); assert.equal(packed.envelope.response_limit_reached, undefined);
-  packed.envelope.agents[0].workspace.cwd = "/changed"; packed.envelope.agents[0].retained_paths[0] = "/changed";
-  assert.equal(input.tasks[0].workspace.cwd, "/tree"); assert.equal(input.tasks[0].retained_paths[0], "/tree");
   const { input: full, complete } = byteSaturatedSnapshot(), saturated = structuredClone(full);
   for (const entry of saturated.tasks) Object.assign(entry, metadata);
   const omitted = pack(saturated);
@@ -488,10 +443,7 @@ test("whole summary fields and human cancellation detach from input and yield in
 });
 
 for (const metadata of [{ label: "x".repeat(121) }, { label: null }, { label: 42 },
-  { workspace: { ...workspace(), cwd: "relative" } }, { workspace: { ...workspace(), checkout_root: "relative" } },
-  { workspace: { ...workspace(), state: "ready" } }, { workspace: { ...workspace(), recovery_manifest: "/manifest" } },
-  { retained_paths: "not-array" }, { retained_paths: [] }, { retained_paths: ["relative"] }, { retained_paths: ["/a", "/a"] }, { retained_paths: ["/a", "/b", "/c"] },
-  { retained_paths: [null] }, { retained_paths: Array(1) }, { cancellation_source: "model" }])
+  { cancellation_source: "model" }])
   test(`malformed optional summary rejects before publication (${JSON.stringify(metadata)})`, () => {
     assert.throws(() => packCommunication(snapshot({ tasks: [task(row(), metadata)] })), { code: "INVALID_COMMUNICATION_SNAPSHOT" });
   });

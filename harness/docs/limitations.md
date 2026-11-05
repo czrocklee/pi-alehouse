@@ -283,10 +283,9 @@ binding preserves pending alerts but does not make their bodies model-readable;
 silently filtered or renamed. Increasing adapter bounds needs a new packing
 proof, not silent truncation. Fixed-width recovery cursors are reserved for bound terminal
 windows with remaining text, including wholly omitted pages after Agent reuse;
-the conservative retained-envelope fixture includes the bounded workspace-pending
-control under the 65536-byte cap, excluding the retired pending-name array.
-Whole optional labels and observed paths can yield with response_limit_reached;
-there is no metadata-only view or unlimited metadata-retrieval promise. Keep
+the conservative retained-envelope fixture stays under the 65536-byte cap,
+excluding the retired pending-name array. Whole optional labels can yield with
+response_limit_reached; there is no metadata-only view. Keep
 returned result cursors to continue a page, or use a positive safe
 `agent_read.task` to restart that named Agent's retained task from page one.
 Task/cursor are mutually exclusive; ordinals never target commands. No all-history
@@ -397,72 +396,13 @@ is promised. An operator may explicitly launch with `GIT_OPTIONAL_LOCKS=0`;
 the product does not inject it, and it disables neither required writer locks
 nor all IO. Portable path tests are not native Windows/MSYS Git validation.
 
-### Optional workspaces
+### Shared working directory
 
-[Workspaces](workspaces.md) are independent of profile: spawn fixes shared
-(default) or worktree for that Agent, never an arbitrary cwd. Runtime creates a
-private detached worktree only at actual execution/session
-initialization, from a recorded local HEAD commit. Admission, preparation and
-replay create none. Setup failure is visible, not shared fallback. No dirty,
-untracked or ignored files, installed dependencies or build caches are
-transferred, nor host/user credentials or settings. Committed configuration
-files remain in the checkout; this is not a secret-scrubbing export. No
-automatic installation, patch transfer or merge is provided.
-
-Actual child tools run in the selected workspace, while source instructions,
-settings, permission configuration and trust are inherited through a live
-binding, not copied or replaced by checked-out `.pi` content. Core admission
-and source `settings.cwd` remain immutable. The known whole checkout root maps
-to the source repository root for deny/ask aliases only, not ALLOW or external
-boundary exemptions. Other checkouts keep ordinary external policy. Relative
-dispatch declarations resolve at execution cwd, including first-task worktree
-inputs/ownership/tree; absolute paths keep their meaning. Uninitialized relative
-paths, including `..`, remain provisional with source deny-only preflight, not
-source existence or disjointness claims. Actual paths, boundaries, permissions,
-inputs and claims are checked after binding before child input. A healthy
-created session remains idle/reusable if binding preflight fails. See
-[workspace binding](workspaces.md#dispatch-paths-and-binding).
-Checks observe actual child cwd, not proof that source was tested; linked-layout
-source capture may remain unknown. The child dispatch preface separates
-execution path base from source policy/settings inheritance.
-Only wait/read/list expose optional whole task-local confirmed workspace
-bindings: four fields plus optional checkout_root, without public state or
-recovery_manifest. Shared/unbound tasks omit workspace. A bounded
-workspace_pending:true control marks only queued/running worktree tasks still
-awaiting binding, not exited tasks or retained recovery. Failures may show small
-retained_paths of observed allocation directories, verified checkout roots and
-created manifests, not an intended nonexistent target. Verified checkout can
-precede failed SDK assembly; internal typed/frozen errors and cleanup authority
-remain intact. The human detail pane renders those observed recovery locations,
-separating retained checkout facts from a successfully initialized session.
-Earlier task metadata never borrows a later Agent baseline.
-Action/interrupt/kill omit workspace details; list keeps only bounded killed
-names. Named/task read retains result access, but overlarge optional paths may
-yield honestly under the cap without guaranteed retrieval. See [workspace metadata](workspaces.md#workspace-and-recovery-metadata).
-
-Worktrees and private recovery manifests are retained on completion, kill,
-failure and Owner shutdown for manual recovery/cleanup. Defaults use absolute
-XDG_STATE_HOME (otherwise ~/.local/state), beneath pi-alehouse/worktrees and
-outside agentDir, not TMPDIR. Persistent default placement is not indefinite
-retention or backup: custom state locations can be volatile or broadly allowed,
-and unique detached commits can become reclaimable after worktree loss/pruning. Release revokes
-session-bound authority, not edits or working copies, and does not prove every
-descendant stopped. There is no new cleanup tool. Separate files/indexes reduce
-contention but objects, most refs and configuration remain shared. Worktree
-mode is not strict readonly, historical secrecy, zero-lock protection, Git
-confinement or OS isolation. Integration and safe manual cleanup remain the
-operator's responsibility.
-
-Eligible forwarded worktree asks currently defer from Jev to ordinary human
-handling as delegation_unbound, because its script evidence remains source-cwd
-based. Do not relax only the runtime cwd comparison. Existing allows/yolo remain
-outside that eligible ask path. Worktree setup requires verified absolute Git
-(PI_HARNESS_GIT or a trusted launcher candidate); shared mode does not.
-The authority's existing registry permits 4096 cumulative successful workspace
-session bindings per Pi process, including bindings followed by assembly failure.
-Released bindings remain tombstones and still count; new worktree assembly fails
-at the limit. Confirm Owner closure before starting a fresh Pi process. No
-registry eviction, automatic retry or live reload restores capacity.
+All Agents use the parent's working directory, including pending local changes,
+dependencies and outputs. Concurrent edits and Git state are not isolated;
+coordinate them explicitly. The harness does not create or manage worktrees,
+choose an alternate child cwd, or merge and clean working copies. Existing user
+worktrees and historical records are left untouched.
 
 Jev review concurrency is independent of worker capacity: up to four root and
 eight distinct subagent reviews can be in flight. Extra reviews defer with
@@ -487,9 +427,8 @@ identities are not automatically coordinated. Profile/external preflight is
 approximate: ask/unknown is not a grant; child gates may be stricter. Literal
 paths and lexical/canonical aliases do not provide hardlink tracking or atomic
 filesystem protection. Inputs must exist when actually checked, whereas ownership/tree may name new
-outputs. Inputs are revalidated, not held resource locks. Provisional-to-bound
-ownership/tree refinement is one-time; later pump/answer rechecks retain strict
-claimed-resource equality. Pump rechecks can wait for a free slot on that Run's own provider; failing a task
+outputs. Inputs are revalidated, not held resource locks. Pump/answer rechecks
+retain strict claimed-resource equality. Pump rechecks can wait for a free slot on that Run's own provider; failing a task
 whose dependency settled without completing does not. The admission wait for a
 release already under way is bounded (10 s) and does not make parallel
 tool-batch order a guarantee.

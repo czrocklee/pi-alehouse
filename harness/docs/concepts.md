@@ -35,41 +35,13 @@ admitted configuration:
   maps to stable internal `editor`; the other public choice is `researcher`);
 - preset/version/digest, immutable difficulty (1–5), its internally resolved
   preset slot, exact provider/model, resolved thinking and recorded effort source;
-- source cwd, workspace mode (`shared` by default or `worktree`) and optional
-  text-only inherited context snapshot;
+- the parent's cwd and optional text-only inherited context snapshot;
 - one child SDK session while it remains healthy and reusable.
 
-Workspace is independent of profile and fixed at spawn. Shared mode uses the
-parent's cwd, including dirty files, Git index and build outputs. Worktree mode
-asks runtime to create a private detached checkout at actual
-execution/session initialization, pinned to recorded local HEAD. Admission,
-preparation and replay create none; setup failure is visible, not shared
-fallback. No dirty/untracked/ignored files, installed dependencies or caches
-are transferred, nor host/user credentials or settings. Committed configuration
-files remain part of the checkout; it is not a secret-scrubbing export. No
-automatic install, patch transfer or merge occurs.
-
-Tools use the actual child cwd while source instructions/settings/config/trust
-remain inherited through a live binding. Core admission and source `settings.cwd`
-remain immutable. The whole known checkout root maps to the source repository
-root for deny/ask aliases only, never ALLOW or external-boundary exemptions.
-Only wait/read/list expose confirmed task workspace bindings: four fields plus
-optional checkout root, without public state or recovery_manifest. Failures may
-show small retained_paths of observed allocation directories, verified checkout
-roots and created manifests, never intended nonexistent targets. Internal
-recovery transport keeps typed/frozen errors and cleanup authority. A verified
-checkout can precede failed SDK assembly. These facts belong to the original
-Run, never a later Agent baseline; action/interrupt/kill omit workspace details.
-Worktrees and private recovery manifests remain on completion/kill/failure/shutdown for manual cleanup, not automatic deletion or
-acceptance of changes. Defaults use absolute XDG_STATE_HOME (otherwise
-~/.local/state), beneath pi-alehouse/worktrees outside agentDir, not TMPDIR;
-persistent placement is not indefinite retention or backup. Uninitialized
-worktrees cannot declare a dispatch tree; declare it on a follow-up after the
-actual path is known. Eligible forwarded worktree asks defer from Jev as
-delegation_unbound to ordinary human handling; existing allows/yolo are unchanged.
-Separate files/indexes still share objects, most refs
-and configuration. Neither mode is OS isolation, strict readonly, historical
-secrecy or zero-lock protection. See [workspaces](workspaces.md).
+Every Agent shares the parent's working directory, including dirty files, Git
+index and build outputs. Resource discovery and tools use that same cwd. The
+parent coordinates edits and Git workflow; the harness does not create or
+manage working copies. This is cooperative local execution, not OS isolation.
 
 An Agent can have only one current Run.  It is reusable only after execution,
 input drain, history boundary handling, and cleanup state allow it.  Cancelling
@@ -125,13 +97,8 @@ share its cap, and a saturated provider does not block another.  See
 Optional spawn/run `dispatch` declares inputs (≤8), ownership (≤16), one tree
 and checks (≤16), with strings bounded to 512 UTF-16 units. Inputs are existing
 ordinary files/directories; output ownership/tree may be new. Relative paths
-resolve at the Agent's execution cwd; absolute paths keep their meaning. An
-uninitialized worktree can declare relative inputs/ownership/tree, including
-`..`, without guessing a future cwd. Binding checks actual resources before
-child input; source candidates are deny-only preflight, not existence or ALLOW
-facts. The child preface separates execution path base from source policy/settings
-inheritance. See [workspace binding](workspaces.md#dispatch-paths-and-binding). Literal paths are not shell globs/expansions;
-lexical and nearest-existing-ancestor canonical
+resolve at the Agent's cwd; absolute paths keep their meaning. Literal paths
+are not shell globs/expansions; lexical and nearest-existing-ancestor canonical
 aliases identify scope/conflicts. Profile/external preflight is approximate,
 not permission or a guarantee of successful tools.
 
@@ -181,8 +148,7 @@ do not keep an SDK execution environment alive.
 ## Task fields, not roles
 
 `agent_spawn` requires `agent`, `prompt`, `profile` (`worker` or `researcher`)
-and `reasoning_difficulty`, and takes optional `workspace` (`shared` or
-`worktree`, default shared). `agent_run` requires `agent`, `continues` and
+and `reasoning_difficulty`. `agent_run` requires `agent`, `continues` and
 `prompt`; `continues` names the specific earlier work of that Agent being
 continued (if none, spawn, even on a related topic; add `after` if only its
 result is needed). Both take optional `label`, `after`,
@@ -222,7 +188,7 @@ at submission, with identity or the automatic supported-level rule; inheritance
 never crosses the off boundary). Session effort
 overrides are operator configuration, not model tool arguments. Reuse preserves
 all accepted settings and does not accept or re-score difficulty.
-Callers choose profile, reasoning difficulty and workspace mode, never a
+Callers choose profile and reasoning difficulty, never a
 concrete worker model or thinking level, arbitrary cwd, owner, generation,
 session path or history path.
 
@@ -256,10 +222,9 @@ a wholly omitted page keeps its starting offset. Text never retained
 on a later page. Keep returned cursors to continue a page; use the task selector
 to restart it. See [result cursor identity](tool-contract.md#result-cursors).
 
-Whole optional labels and observed workspace/retained paths may yield with
-response_limit_reached under the 65536-byte cap. Paths are not clipped into
-misleading usable values. There is no metadata-only view, new details flag or
-unlimited metadata-retrieval guarantee. Real result paging and the task selector
+Whole optional labels may yield with response_limit_reached under the
+65536-byte cap. There is no metadata-only view or new details flag.
+Real result paging and the task selector
 remain read-only Owner memory, not persistence, hydration or permission authority.
 
 `alert_parent` records decision-relevant facts and wakes matching observations
@@ -312,7 +277,7 @@ reminders use fixed finished_presented and settled_seq on each original Run;
 only explicitly showing that task's terminal row commits its bit. A finished
 label is optional and validated against that original Run; omission never delays or resets consumption.
 Running rows with the same Agent name, alerts/list/UI/count do not. Kill returns
-independent status without workspace details or consumption; list retains bounded
+independent status without communication consumption; list retains bounded
 killed names, not full historical rows. Results stay rereadable
 and pending questions can reopen without resetting that bit. See
 [finished presentation](tool-contract.md#finished-presentation).

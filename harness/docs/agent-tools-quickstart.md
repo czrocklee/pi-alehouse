@@ -2,8 +2,7 @@
 
 Use this as a caller workflow, not a standing system prompt. The
 [tool contract](tool-contract.md) owns schemas, selection and replies;
-[workspaces](workspaces.md) owns paths/binding/retention; [task dispatch](task-dispatch.md)
-owns claims and validation. [Security](security.md), [limitations](limitations.md)
+[task dispatch](task-dispatch.md) owns paths, claims and validation. [Security](security.md), [limitations](limitations.md)
 and [development](development.md) own authority, support and implementation/checks.
 
 | Need | Tool |
@@ -87,31 +86,22 @@ Agent. Both remain Owner-local, not restart recovery.
 ]
 ```
 
-## 4. One worktree submission → work/check → inspect
+## 4. Declare scope → work/check → inspect
 
-No preliminary list or initialization task is needed to declare relative paths.
-All relative paths, including `..`, use the Agent's execution cwd; absolute paths
-keep their meaning. Source cwd still supplies policy/settings. Before binding,
-source candidates are deny-only preflight, not existence or permission grants;
-actual paths, boundaries, permissions, inputs and claims are checked before child
-input. Different Agents' provisional paths are not guaranteed disjoint.
+Agents use the parent's working directory. Relative dispatch paths use that cwd;
+absolute paths keep their meaning. Declarations coordinate work, not permissions
+or proof that a check ran.
 
 ```json
 [
-  {"tool":"agent_spawn","arguments":{"agent":"alpha","profile":"worker","reasoning_difficulty":2,"workspace":"worktree","prompt":"In your assigned workspace, fix src/parser.ts and run only the assigned parser unit check. Report the exact command, result, platform/tool versions and any unrun checks. Do not install dependencies; if unavailable, report the blocker.","dispatch":{"inputs":["src/parser.ts"],"ownership":["src/parser.ts"],"tree":"build","checks":["parser unit check"]}}},
+  {"tool":"agent_spawn","arguments":{"agent":"alpha","profile":"worker","reasoning_difficulty":2,"prompt":"Fix src/parser.ts and run only the assigned parser unit check. Report the exact command, result, platform/tool versions and any unrun checks. Do not install dependencies; if unavailable, report the blocker.","dispatch":{"inputs":["src/parser.ts"],"ownership":["src/parser.ts"],"tree":"build","checks":["parser unit check"]}}},
   {"tool":"agent_wait","arguments":{"agents":["alpha"],"wait_ms":300000}},
   {"tool":"agent_read","arguments":{"agent":"alpha"}}
 ]
 ```
 
-Read actual workspace locations only from confirmed wait/read/list facts; do not
-guess them. The fixture verifies binding/protocol, not a real parser check.
-Worktrees contain committed local HEAD, not source dirty/untracked files,
-dependencies or caches. No automatic install, merge or cleanup occurs. A healthy
-created session survives binding preflight failure idle/reusable, but inspect the
-distinct error and fix the assignment rather than blindly retrying. Integrate
-accepted results explicitly; stop/release and manually clean retained worktrees
-only after acceptance/discard. Neither workspace is a sandbox.
+Coordinate concurrent edits and Git writes explicitly. A declared tree is not
+exclusive across Owners and does not grant write access.
 
 ## Guardrails and recovery
 
@@ -128,6 +118,6 @@ only after acceptance/discard. Neither workspace is a sandbox.
   separate finalization/cleanup boundaries. Interrupting/exiting is not confirmed
   release. For cleanup uncertainty or Owner fault, tell the user; no force release,
   automatic retry or difficulty change repairs authority.
-- Optional locations/labels can yield under the reply cap. Results use real cursor
-  paging; there is no metadata-only/details mode or guaranteed recovery of an
-  overlarge optional path. Alerts are queued, not acknowledged by the model.
+- Optional labels can yield under the reply cap. Results use real cursor paging;
+  there is no metadata-only/details mode. Alerts are queued, not acknowledged by
+  the model.

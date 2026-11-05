@@ -4,9 +4,8 @@ This defines the parent/child communication contract. Packages, generated
 resources and managed definitions/policy must match; see
 [matched resource migration](development.md#matched-resource-migration).
 For complete caller workflows, see the [Agent tools quickstart](agent-tools-quickstart.md).
-This page owns tool inputs, selectors, replies and communication; workspace
-binding/retention belongs to [workspaces](workspaces.md), claims and validation
-observations to [task dispatch](task-dispatch.md), authority to [security](security.md),
+This page owns tool inputs, selectors, replies and communication; paths, claims
+and validation observations belong to [task dispatch](task-dispatch.md), authority to [security](security.md),
 support limits to [limitations](limitations.md), and implementation/check ownership
 to [development](development.md).
 
@@ -87,8 +86,7 @@ restriction on optional/repeated display names in an unbound generic core Owner.
 Spawn requires `agent`, `prompt` (1--131072 UTF-16 units), `profile`
 (`worker` or `researcher`) and integer `reasoning_difficulty` (1--5,
 from easiest to hardest). Worker maps to stable internal `editor`.
-Optional fields are `workspace` (`shared` or `worktree`, default `shared`),
-`label` (1--120), `inherit_context`, `after` (1--4 other names),
+Optional fields are `label` (1--120), `inherit_context`, `after` (1--4 other names),
 `wait_ms` (0--300000), `max_turns` (1--10000, default 256), plus optional
 `dispatch`. Task execution has no wall-clock deadline. The retired
 `max_duration_ms` parameter is rejected, not ignored.
@@ -101,22 +99,19 @@ not shell globs or expansions. See [task dispatch](task-dispatch.md) for exact p
 profile/external preflight, claims, after rechecks and validation observations.
 These declarations do not grant permissions or prove that checks ran. In
 particular, `ownership` and `tree` are checked as `path_write`; omit `ownership`
-for read-only tasks, and `tree` cannot create an output-root exception. Relative paths use the Agent's execution cwd, including on the first
-worktree task; absolute paths keep their meaning. Uninitialized worktree relative
-paths (including `..`) bind after session creation, before child input, with
-source deny-only preflight and no source existence assumption. Overlapping
-declared claims conflict within this Owner; cross-Owner tree locks are advisory,
-not global exclusivity. Preflight permission errors expose the target `profile`
-and checked `surface`, separately from missing-input and wrong-type errors.
-A binding preflight failure fails the task but leaves an already-created healthy
-session idle and reusable; see [workspace binding](workspaces.md#dispatch-paths-and-binding).
+for read-only tasks, and `tree` cannot create an output-root exception. Relative
+paths use the Agent's cwd, shared with the parent; absolute paths keep their
+meaning. Overlapping declared claims conflict within this Owner; cross-Owner
+tree locks are advisory, not global exclusivity. Preflight permission errors
+expose the target `profile` and checked `surface`, separately from missing-input
+and wrong-type errors.
 
-Profile, workspace, reasoning difficulty, context and turn limit are fixed for the
+Profile, cwd, reasoning difficulty, context and turn limit are fixed for the
 Agent at spawn; later tasks, steering and routing changes do not migrate them.
 Use a new Agent for a different binding. Spawn creates the Agent and submits its
 first task, which may queue rather than execute immediately. Prompt is the full
 task instruction, including deliverable, scope, stopping conditions and
-workspace-relative paths (or explicit absolute paths); label defaults to its
+paths relative to the parent's cwd (or explicit absolute paths); label defaults to its
 first nonblank line and is never forwarded as an instruction.
 
 Worker has local read/edit/write/Bash/Git/build tools under normal permissions,
@@ -135,31 +130,13 @@ web-derived untrusted material. Its fetch inputs and descriptions accept only
 absolute HTTP(S) URLs, not local video paths; timestamp/frame descriptions do
 not promise local-video support. No legacy profile aliases or capabilities are
 supported. Bash/web remain permission-gated;
-no profile or workspace is an OS sandbox.
+no profile is an OS sandbox.
 
-Workspace is independent of profile. Shared uses the original cwd and pending
-local files. Worktree requests a private detached checkout of a
-recorded local HEAD at actual execution/session initialization, not admission,
-preparation or replay. Setup failure is visible, not shared fallback. Dirty,
-untracked/ignored files, installed dependencies and caches are not transferred,
-nor host/user credentials or settings. Committed configuration files remain in
-the checkout; this is not a secret-scrubbing export. There is no automatic
-install, patch transfer or merge.
-Source project instructions/settings/config/trust remain inherited through
-binding while tools execute at actual child cwd. The whole known checkout root
-maps to the source repository root for deny/ask aliases only, not ALLOW or
-external-directory exemptions. Relative dispatch paths use actual execution cwd;
-the child-visible preface separates that path base from source policy/settings
-inheritance. Checks observe actual child cwd.
-Worktrees and private recovery manifests remain on completion/kill/failure/shutdown for manual cleanup; kill
-is not deletion or acceptance of edits. Default storage is absolute XDG_STATE_HOME
-(or ~/.local/state), beneath pi-alehouse/worktrees outside agentDir, not TMPDIR;
-persistent placement is not perpetual retention or backup. Other sessions retain
-ordinary external policy, normally ask under the seed rather than source deny.
-Eligible forwarded worktree asks currently defer from Jev as delegation_unbound
-to ordinary human handling; existing allows/yolo are unchanged. Separate files/indexes still share
-objects, most refs and configuration. No strict readonly, historical secrecy,
-zero-lock guarantee or new cleanup tool follows. See [workspaces](workspaces.md).
+All Agents share the parent's admitted cwd, including pending local changes,
+dependencies and outputs. There is no workspace selector, checkout allocation,
+policy rebinding or worktree lifecycle. The removed `workspace` argument is
+rejected, not treated as an alias. The main agent coordinates edits and ordinary
+Git workflow; existing user worktrees and historical records are untouched.
 
 Difficulty describes reasoning and quality, not permissions: 1--5 resolve
 one-to-one to `d1`--`d5`. Model-facing descriptions give the
@@ -214,7 +191,7 @@ Delivery is not proof of action.
 agent_answer({ agent, question_id, answer, wait_ms? })
 ```
 
-Answer is 1--16384 nonblank UTF-16 units. No profile, workspace,
+Answer is 1--16384 nonblank UTF-16 units. No profile, cwd,
 reasoning_difficulty, turn limit, label or after is accepted. The original task must already be truly settled
 `needs_input`, still pending and unreserved, with no current Run and a healthy,
 reusable Agent/Owner. Answer does not wait and then silently answer a future
@@ -286,11 +263,8 @@ at admission, not dynamic Agent names, and allow queuing rather than premature
 execution. Inputs for after tasks defer existence checks; all dispatched tasks
 recheck at pump when it can progress. Missing dependency input produces
 `dependency_input_missing`; other deferred preflight failures produce
-`dispatch_preflight_failed`. Pump failures use no session/slot; binding-time
-preflight may follow healthy session creation and initialization-slot use, but
-still leaves that Agent reusable. Inputs are revalidated rather than locked;
-ownership/tree claims retain strict equality after their one-time worktree
-binding refinement.
+`dispatch_preflight_failed`. Pump failures use no session/slot. Inputs are
+revalidated rather than locked; ownership/tree claims retain strict equality.
 
 Retained final output of dependencies shares a 16384-unit handoff budget, with
 Agent/label/status and never-retained character count. It is framed as reference,
@@ -421,16 +395,9 @@ messages. Alerts are top-level and never part of a result page.
 Zero `alerts_pending`/`finished_pending` counts and the redundant `pending`
 array are absent. Empty result text has no `result` field.
 
-Task rows may carry a whole optional `label`. Only wait/read/list expose a
-confirmed worktree `workspace`: the four binding fields plus optional
-`checkout_root`, with no public state or manifest field. Ordinary action,
-interrupt and kill replies omit workspace details. Setup failures may expose
-`retained_paths` (at most two: an observed allocation directory or verified
-checkout root, plus a created manifest), never an intended nonexistent target.
-These facts belong to the original Run, not an Agent's later baseline. Whole
-optional paths may yield under the cap with `response_limit_reached`; there is
-no metadata paging or promise that repeated reads recover overlarge fields.
-See [workspace metadata](workspaces.md#workspace-and-recovery-metadata).
+Task rows may carry a whole optional `label`, yielding under the cap with
+`response_limit_reached`. No workspace, allocation or recovery-path metadata is
+produced.
 
 Each task row retains `{agent, task, status}` and applicable boolean
 `has_question`, `limit_reached`, `unavailable`; diagnostics use
@@ -508,14 +475,13 @@ communication.
 ### Budget and local publication
 
 Question, alert.message and result text share 16384 UTF-16 units. Whole optional
-labels/paths, tokens, controls and diagnostics are outside that text budget but
+labels, tokens, controls and diagnostics are outside that text budget but
 inside the final **65536-byte** double-JSON UTF-8 content envelope. `max_chars`
 does not override this cap. The conservative retained-envelope fixture is
-**65438 bytes**, leaving **98 bytes**: maximal control rows/counts,
-action/disabled/limit fields, queue-wait reasons, workspace-pending controls,
-result cursors, question IDs,
-empty question fields and a complete worst-case tagged alert. It excludes the
-removed pending-name array and depends on these exact fields and bounds.
+bounded below the cap with maximal control rows/counts, action/disabled/limit
+fields, queue-wait reasons, result cursors, question IDs, empty question fields
+and a complete worst-case tagged alert. It excludes the removed pending-name
+array and depends on these exact fields and bounds.
 
 Result text yields before its reserved cursor; wholly omitted pages keep their
 original offset, partial pages advance by shown units, and EOF needs no cursor.
@@ -523,11 +489,9 @@ Packing retains thin controls and, for reason=alert, a complete first scoped
 FIFO alert. Questions are marked if truncated. Further alerts form a complete
 FIFO prefix: packing stops at the first alert that cannot fit, never skipping
 to a smaller later one. Unshown alerts remain pending. Bounded labels and human
-Stop attribution precede result pages; whole optional workspace/retained paths
-fit only after results. Bounded diagnostics/notes and up to eight finished rows
-use the remaining budget. Optional paths yield
-whole with `response_limit_reached`, never as misleading clipped paths. There
-is no separate metadata retrieval mode or unlimited recovery promise.
+Stop attribution precede result pages. Bounded diagnostics/notes and up to
+eight finished rows use the remaining budget. There is no separate metadata
+retrieval mode.
 
 `dispatch_notes` (at most 2 × 120 units) remain optional. Model projections show
 only `tree_shared`; other notes stay on the Run and detail pane. Legacy warning
@@ -545,9 +509,8 @@ row while whole optional fields yield. This is a pure core packing helper, not
 a second tool-layer byte policy or a communication commit. It shares the byte
 measurement/final serializer with result packing but retains the distinct
 lifecycle/roster omission priority. Already-fitting replies exit the optional
-field-removal loop early; the final byte guard remains. Only list includes
-confirmed workspace metadata and the reserved workspace_pending control;
-interrupt/kill do not. They consume no alerts or finished reminders.
+field-removal loop early; the final byte guard remains. They consume no alerts
+or finished reminders.
 If required facts still cannot fit, COMMUNICATION_REPLY_TOO_LARGE advises reading
 one Agent/task, not blindly repeating a management command.
 
@@ -607,22 +570,15 @@ after settlement. A single 10 s deadline covers stopping/cleanup. Beyond it,
 status is exiting while tracked cleanup continues; cleanup_uncertain retains
 reservations, with no force-release/retry/eviction. Admissions blocked only by a
 release under way wait for it within their own bound (see acceptance above).
-Kill's independent reply includes lifecycle status without workspace details;
-it consumes no communication. Retained results remain readable with `agent_read`,
-including historical task selection, within this Owner. Whole optional paths in
-read may yield under the cap. Cleanup diagnostics do not rewrite historical
+Kill's independent reply includes lifecycle status and consumes no
+communication. Retained results remain readable with `agent_read`, including
+historical task selection, within this Owner. Cleanup diagnostics do not rewrite historical
 outcomes. Lifecycle waits share the drain but have no model validator/publisher
 or presentation commit. Shutdown
 still waits for actual execution/cleanup promises, not an empty observer set.
 
 List is a read-only roster with `profile`/`reasoning_difficulty`, label/task
-projection and `has_question`. Confirmed worktree bindings use the four workspace
-fields plus optional checkout_root, without public state/recovery_manifest.
-Shared or unbound tasks omit workspace. Queries reserve `workspace_pending: true`
-only for queued/running worktree tasks awaiting binding, with no execution exit
-or recovery facts. It promises neither a usable cwd nor eventual creation.
-Failures may show small observed `retained_paths`; no working path or future
-creation is invented. Killed names
+projection and `has_question`. Killed names
 include newest 32 plus killed_omitted; use named/task read for retained results.
 These are observations, not permission grants or source-checkout validation.
 Public worker maps to stable internal editor without rewriting historical IDs.

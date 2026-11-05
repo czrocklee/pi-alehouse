@@ -274,8 +274,8 @@ test("provenance is optional bounded task/finished metadata, never a new thin co
   assert.equal(packed.envelope.agents[0].cancellation_source, "human");
   assert.equal(packed.envelope.finished[0].cancellation_source, "human");
   assert.deepEqual(packed.references.finished, [0, 1]);
-  assert.equal(communicationEnvelopeBytes(retainedEnvelopeFixture("\0".repeat(8192), true, true)), 65438,
-    "the retained shape reserves workspace-pending controls and cursors, not human provenance");
+  assert.equal(communicationEnvelopeBytes(retainedEnvelopeFixture("\0".repeat(8192), true, true)), 65006,
+    "the retained shape reserves task controls and cursors, not human provenance");
   const absent = snapshot({ tasks: [{ row: row(), settled: true }] });
   const explicitUndefined = structuredClone(absent); explicitUndefined.tasks[0].cancellation_source = undefined;
   assert.equal(packCommunication(explicitUndefined).result.content[0].text, packCommunication(absent).result.content[0].text,

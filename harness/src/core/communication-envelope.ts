@@ -175,7 +175,7 @@ export interface RetainedEnvelopeBound extends Omit<RetainedEnvelope, "action" |
     readonly task: number;
     readonly delivery: "not_delivered";
   };
-  readonly agents: readonly (ThinTaskEntry & Pick<TaskMetadata, "workspace_pending"> & { readonly question_id?: QuestionId; readonly question?: string; readonly next_cursor?: string })[];
+  readonly agents: readonly (ThinTaskEntry & { readonly question_id?: QuestionId; readonly question?: string; readonly next_cursor?: string })[];
 }
 
 /** Fresh pure proof data, with one complete alert and every bounded control
@@ -185,9 +185,8 @@ export interface RetainedEnvelopeBound extends Omit<RetainedEnvelope, "action" |
  * legal packed row. No stored Owner/Run state.
  * The bound excludes any redundant pending-name array. Normal reasons are
  * omitted, but this fixture reserves the longest exceptional reason. Including
- * all question IDs/cursors/empty question fields, sixteen workspace_pending
- * controls and an 8192-NUL alert costs 65438 double-JSON bytes (98 spare).
- * Each pending control costs 27 bytes; removing pending names saves 478 bytes.
+ * all question IDs/cursors/empty question fields and an 8192-NUL alert costs
+ * 65006 double-JSON bytes (530 spare).
  * The proof depends on these exact keys and bounds, not arbitrary JSON data. */
 export function retainedEnvelopeFixture(message: string, withQuestionIds = false, withResultCursors = false): RetainedEnvelopeBound {
   const name = "a".repeat(COMMUNICATION_LIMITS.agent_name_units);
@@ -197,7 +196,7 @@ export function retainedEnvelopeFixture(message: string, withQuestionIds = false
     action: { type: "agent_answer", agent: name, task: max, delivery: "not_delivered" },
     agents: Array.from({ length: COMMUNICATION_LIMITS.agents }, () => ({
       agent: name, task: max, status: "interrupting",
-      wait: "dependencies", workspace_pending: true,
+      wait: "dependencies",
       has_question: true, limit_reached: true, unavailable: true,
       question_truncated: true, result_omitted: true, result_truncated: true,
       ...(withQuestionIds ? { question_id: `q_${"f".repeat(32)}` } : {}),
@@ -213,7 +212,7 @@ export function retainedEnvelopeFixture(message: string, withQuestionIds = false
 }
 
 /** Enqueue size admission uses the entire worst-case retained shape, including
- * 16 pending controls, question IDs, empty question fields and fixed-width result cursors, not
+ * question IDs, empty question fields and fixed-width result cursors, not
  * message-only JSON. Whole omitted results remain historically addressable. Callers still validate nonblank
  * text, source Run/generation/gate, and Owner-first/Agent-second FIFO quotas.
  * A false size admission can be mapped to ALERT_TOO_LARGE without enqueuing.

@@ -142,37 +142,7 @@ export function renderDetailFields(input: DetailInput, theme: Theme, width: numb
   field("routing", `${s.preset}@${s.preset_version} · ${route}`);
   field("effort", `${s.thinking} · ${resolution}${source ? ` · source: ${source}` : ""} · fixed at creation`);
   field("model", s.model);
-  // Working-copy metadata is observational, not an isolation or cleanup grant.
-  // Admission cwd remains the source; do not present it as a pending worktree.
-  if (view.workspace) {
-    field("workspace", "worktree working copy");
-    field("cwd", view.workspace.cwd);
-    field("source", view.workspace.source_cwd);
-    field("base", view.workspace.base_commit);
-    if (view.workspace_details) {
-      if (view.workspace_details.checkout_root !== view.workspace.cwd) field("checkout", view.workspace_details.checkout_root);
-      field("manifest", view.workspace_details.recovery_manifest);
-    }
-  } else if (view.recovery) {
-    // Recovery belongs to this original Run. A verified checkout is not a
-    // successful SDK/session binding; partial targets need not exist at all.
-    const recovery = view.recovery;
-    field("workspace", recovery.state === "checkout_ready" ? "worktree · retained verified checkout" : "worktree · partial setup");
-    field("session", "SDK session unavailable");
-    field("source", recovery.source_cwd);
-    if (recovery.state === "checkout_ready") {
-      if (recovery.cwd) field("cwd", recovery.cwd);
-      if (recovery.base_commit) field("base", recovery.base_commit);
-      if (recovery.checkout_root && recovery.checkout_root !== recovery.cwd) field("checkout", recovery.checkout_root);
-    } else if (recovery.allocated_path) field("allocated", recovery.allocated_path);
-    if (recovery.recovery_manifest) field("manifest", recovery.recovery_manifest);
-  } else if (view.isolation === "worktree") {
-    field("workspace", "worktree · not initialized");
-    field("source", s.cwd);
-  } else {
-    field("workspace", "shared working copy");
-    field("cwd", s.cwd);
-  }
+  field("cwd", s.cwd);
   field("tools", s.tools.join(" "));
   field("phase", [view.phase, view.resumable ? "resumable" : "", view.execution_exited ? "exited" : ""].filter(Boolean).join(" · "));
   if (!view.execution_exited && view.drain) field("drain", formatDrain(view.drain), "warning");
@@ -210,7 +180,7 @@ export function renderDetailFields(input: DetailInput, theme: Theme, width: numb
       const name = singleLineText(tool.name);
       let detail = singleLineText(tool.detail ?? "…");
       if (["read", "edit", "write", "ls"].includes(name)) {
-        detail = shortPath(detail, view.workspace?.cwd ?? s.cwd, Math.max(0, lineRoom - visibleWidth(`${name} `)));
+        detail = shortPath(detail, s.cwd, Math.max(0, lineRoom - visibleWidth(`${name} `)));
       }
       oneLineField(i === 0 ? "active" : "", `${name} ${detail}`, "accent");
     }

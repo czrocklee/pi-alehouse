@@ -28,7 +28,6 @@ export interface ChildActivityObservation {
   snapshot(): ChildActivitySnapshot;
   entries(): unknown[] | undefined;
   inFlight(): unknown;
-  readonly workspace: string;
 }
 export interface ActivityObservationSource {
   get(agent_id: string): ChildActivityObservation | undefined;
@@ -136,7 +135,6 @@ export class ChildActivity implements ChildActivityObservation {
     try { return this.sessions?.getEntries(); } catch { return undefined; }
   }
   inFlight(): unknown { return this.streaming; }
-  get workspace(): string { return this.cwd; }
 }
 
 /** Owns activity observers independently from the widget's display lifetime. */

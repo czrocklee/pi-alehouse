@@ -24,15 +24,14 @@ const queueWait = (view: RunView): QueueWait | undefined => {
   return isQueueWait(view.queued_for) ? view.queued_for : undefined;
 };
 
-/** Independent interrupt/roster projection. Only roster inspection opts in to
- * task-local workspace/pending facts; the RunView supplies original status/exit.
- * Communication observations serialize in core before presentation commit. */
-export function taskReply(view: RunView, nameOf: NameOf, inspectWorkspace = false) {
+/** Independent interrupt/roster projection. Communication observations serialize
+ * in core before presentation commit. */
+export function taskReply(view: RunView, nameOf: NameOf) {
   const unavailable = view.owner_blocked || (terminal(view.status) && !view.resumable) ||
     !!(view.unavailable_reason && view.unavailable_reason !== "agent_busy");
   const dispatch_notes = modelDispatchNotes(view.dispatch_notes);
   const wait = queueWait(view);
-  return { agent: view.name, task: view.task, status: statusOf(view), ...taskMetadata(view, inspectWorkspace),
+  return { agent: view.name, task: view.task, status: statusOf(view), ...taskMetadata(view),
     ...(wait === undefined ? {} : { wait }),
     ...(view.has_question ? { has_question: true } : {}),
     ...(view.outcome?.reason ? { reason: view.outcome.reason } : {}),
@@ -48,10 +47,10 @@ export function taskReply(view: RunView, nameOf: NameOf, inspectWorkspace = fals
     ...(unavailable && view.unavailable_reason ? { unavailable_reason: utf16Prefix(view.unavailable_reason, 512) } : {}) };
 }
 
-/** Current identity, capability and work location; history/usage stay in the UI. */
+/** Current identity and capability; history/usage stay in the UI. */
 export function agentRow(view: RunView, nameOf: NameOf) {
   return { profile: profileLabel(view.effective_settings.profile), reasoning_difficulty: view.effective_settings.difficulty,
-    ...taskReply(view, nameOf, true) };
+    ...taskReply(view, nameOf) };
 }
 
 const ALLOWED_SHOWN = 32;

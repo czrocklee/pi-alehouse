@@ -23,7 +23,7 @@ export function assertCallerTools(tools) {
   }
   const spawn = byName.get("agent_spawn"), fields = spawn.parameters.properties;
   assert.deepEqual(spawn.parameters.required.toSorted(), ["agent", "profile", "prompt", "reasoning_difficulty"]);
-  assert.deepEqual(Object.keys(fields).sort(), ["after", "agent", "dispatch", "inherit_context", "label", "max_turns", "profile", "prompt", "reasoning_difficulty", "wait_ms", "workspace"]);
+  assert.deepEqual(Object.keys(fields).sort(), ["after", "agent", "dispatch", "inherit_context", "label", "max_turns", "profile", "prompt", "reasoning_difficulty", "wait_ms"]);
   assert.equal(fields.agent.pattern, "^[a-z][a-z0-9-]{0,23}$");
   assert.match(fields.agent.description, /[Uu]nique/);
   assert.match(fields.agent.description, /taken/);
@@ -36,8 +36,7 @@ export function assertCallerTools(tools) {
   assert.match(fields.label.description, /not instructions/); assert.match(fields.label.description, /first nonblank line/);
   assert.deepEqual(fields.profile.enum, ["worker", "researcher"]);
   for (const fact of [/worker:.*Bash.*Git.*no web/, /researcher:.*read-only.*web.*no Bash\/edit\/write/, /untrusted/, /permissions/, /denies/, /review-only/]) assert.match(fields.profile.description, fact);
-  assert.deepEqual(fields.workspace.enum, ["shared", "worktree"]);
-  for (const fact of [/Default shared/, /uncommitted/, /detached local HEAD/, /no dirty\/untracked/, /dependencies/, /Fixed/, /actual cwd/, /Retained after kill/, /no automatic.*merge/, /Neither.*sandbox/]) assert.match(fields.workspace.description, fact);
+  assert.equal(Object.hasOwn(fields, "workspace"), false);
   assert.equal(fields.reasoning_difficulty.type, "integer");
   assert.equal(fields.reasoning_difficulty.minimum, 1); assert.equal(fields.reasoning_difficulty.maximum, 5);
   for (const fact of [/reasoning difficulty/, /not workload\/cost/, /1=.*checks/, /2=.*fix/, /3=.*design.*review.*plan/, /4=.*hypotheses.*constraints/, /5=.*approach/]) assert.match(fields.reasoning_difficulty.description, fact);
@@ -73,7 +72,7 @@ export function assertCallerTools(tools) {
     assert.equal(dispatch.type, "object"); assert.equal(dispatch.additionalProperties, false);
     assert(!tool.parameters.required.includes("dispatch"));
     assert.deepEqual(Object.keys(dispatch.properties).sort(), ["checks", "inputs", "ownership", "tree"]);
-    for (const fact of [/not permissions or execution evidence/, /literal paths/, /Relative paths resolve from the Agent's execution cwd/, /absolute paths keep their meaning/, /one designated Agent after shared source is stable/]) assert.match(dispatch.description, fact);
+    for (const fact of [/not permissions or execution evidence/, /literal paths/, /Relative paths resolve from the inherited parent cwd/, /absolute paths keep their meaning/, /one designated Agent after shared source is stable/]) assert.match(dispatch.description, fact);
     for (const [field, limit] of [["inputs", 8], ["ownership", 16], ["checks", 16]]) {
       const array = dispatch.properties[field];
       assert.equal(array.type, "array"); assert.equal(array.minItems, 1); assert.equal(array.maxItems, limit);
@@ -137,21 +136,16 @@ export function assertCallerTools(tools) {
   for (const fact of [/result\/question/, /Agent's alerts/, /after reuse or kill/, /full question/, /original task/]) assert.match(read.description, fact);
   assert.match(readFields.agent.description, /active task, else its pending question, else its latest finished task/);
   assert.match(readFields.cursor.description, /next_cursor.*Agent/);
-  for (const copy of [waitFields.agents.description, readFields.agent.description, byName.get("agent_list").description]) {
-    assert.match(copy, /workspace_pending.*binding is unconfirmed.*not eventual creation/);
-    assert.match(copy, /retained_paths.*observed failure locations.*not a usable session/);
-    assert.match(copy, /optional paths may be omitted/);
-  }
+  for (const declaration of declarations) assert.doesNotMatch(JSON.stringify(declaration), /workspace|worktree|retained_paths|source_cwd/);
   assert.match(byName.get("agent_interrupt").description, /Request a stop, not settlement/);
   assert.match(byName.get("agent_interrupt").description, /Keeps the conversation/);
   assert.match(byName.get("agent_kill").description, /Permanently end/);
   assert.match(byName.get("agent_kill").description, /Name stays taken, results stay readable/);
-  assert.match(byName.get("agent_kill").description, /worktrees are not deleted/);
   assert.match(byName.get("agent_kill").description, /exiting or cleanup_uncertain does not confirm release/);
   for (const name of ["agent_interrupt", "agent_kill", "agent_list"]) assert.match(byName.get(name).description, /[Cc]onsumes no alerts/);
   assert.deepEqual(Object.keys(byName.get("agent_list").parameters.properties), []);
   assert.match(byName.get("agent_list").description, /Read-only roster/);
-  assert.match(byName.get("agent_list").description, /task labels and workspace locations/);
+  assert.match(byName.get("agent_list").description, /task labels/);
 }
 
 export function assertNoOrchestrationPrompt(prompt) {

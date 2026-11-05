@@ -12,7 +12,7 @@ import { decodeResultCursor, encodeResultCursor } from "../../dist/core/result-c
 import { communicationEnvelopeBytes } from "../../dist/core/communication-envelope.js";
 import { emptyLedger } from "../../dist/core/usage-ledger.js";
 import { FileOwnerLease } from "../../dist/runtime/owner-lease.js";
-import { FakePort, deferred, settings, task, tick, until } from "../support/controller-fixture.mjs";
+import { FakePort, deferred, task, tick, until } from "../support/controller-fixture.mjs";
 import { flock } from "../support/flock.mjs";
 import { managedBlockToolNames } from "../../../lib/managed-block-tools.mjs";
 
@@ -81,17 +81,11 @@ async function question(c, ports, id = "question", name = "otter", rest = {}) {
 const pendingCount = (c, runs) => runs.reduce((sum, run) => sum + c.view(run.run_id).pending_messages, 0);
 const finishedBit = (c, run) => c.runs.get(run.run_id).finished_presented; // Inspect ONLY original Run presentation evidence.
 
-test("sixteen original worktree result payloads precede fitting-but-crowding paths and commit notifications atomically", async (t) => {
-  let next = 0;
-  const { c, ports } = await ownerFixture(t, { controller: { concurrency: 16 }, createPort: () => {
-    const port = new FakePort(), path = "/" + `tree-${next++}-`.padEnd(1999, "p");
-    port.workspace = { mode: "worktree", cwd: path, source_cwd: "/tmp", base_commit: "a".repeat(40) };
-    port.workspace_details = { checkout_root: path, recovery_manifest: "/state/manifest" };
-    return port;
-  } });
+test("sixteen original result payloads commit notifications atomically", async (t) => {
+  const { c, ports } = await ownerFixture(t, { controller: { concurrency: 16 } });
   const runs = [], text = "r".repeat(1000);
   for (let index = 0; index < 16; index++) runs.push(await c.submit(`payload-${index}`, task(`task-${index}`, {
-    name: `worker-${index}`, settings: { ...settings, workspace: "worktree" },
+    name: `worker-${index}`,
   })));
   await until(() => ports.length === 16 && ports.every(port => port.streaming));
   ports.forEach((port, index) => { port.callbacks.alert(`fact-${index}`); port.finish(text); });
@@ -102,15 +96,14 @@ test("sixteen original worktree result payloads precede fitting-but-crowding pat
   assert.equal(published.agents.length, 16);
   assert(published.agents.every(row => row.result === text));
   assert.equal(published.agents.reduce((sum, row) => sum + row.result.length, 0), 16000);
-  assert(published.agents.some(row => row.workspace === undefined));
-  for (const [index, row] of published.agents.entries()) {
+  for (const row of published.agents) {
     assert.equal(row.task, 1); assert.equal(row.status, "completed"); assert.equal(row.next_cursor, undefined);
-    if (row.workspace) assert.deepEqual(row.workspace, { ...ports[index].workspace, checkout_root: ports[index].workspace_details.checkout_root });
+    for (const field of ["workspace", "workspace_pending", "retained_paths"]) assert.equal(Object.hasOwn(row, field), false);
   }
   assert.deepEqual(published.alerts.map(entry => entry.message), ports.map((_port, index) => `fact-${index}`));
   assert.equal(published.alerts_pending, undefined); assert.equal(published.finished_pending, undefined);
   assert.equal(pendingCount(c, runs), 0); assert(runs.every(run => finishedBit(c, run)));
-  assert.equal(published.response_limit_reached, true); assert(communicationEnvelopeBytes(published) <= 65536);
+  assert.equal(published.response_limit_reached, undefined); assert(communicationEnvelopeBytes(published) <= 65536);
   assert.equal((await wait(c, undefined)).alerts, undefined, "successful publication alone consumed the original FIFO prefix");
 });
 

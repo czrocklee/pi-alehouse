@@ -82,6 +82,64 @@ async function ask(port, question = "Which safe next step?") {
 const serial = { concurrency: false };
 const twoDays = 2 * 24 * 60 * 60 * 1000;
 
+for (const code of ["DISPATCH_INPUT_MISSING", "PREFLIGHT_DENIED"]) {
+  test(`queued answer ${code} restores its pending question, claim and existing lease`, serial, async t => {
+    const lease = treeLease(); let rejectPump = false;
+    const dispatch = dispatchPort({ preflight() {
+      if (rejectPump) throw new HarnessError(code, { path: "/tmp/input" });
+    }, start: (_prepared, context) => context.acquireTree ? { lease } : {} });
+    const { controller: c, ports } = await memoryFixture(t, { controller: { dispatch } });
+    const original = await c.submit("question", task("question", { dispatch: { inputs: ["input"], ownership: ["out"], tree: "build" } }));
+    await until(() => ports[0]?.streaming);
+    await ask(ports[0]); ports[0].finish("waiting"); await ended(c, original);
+    const question = c.view(original.run_id).question_id, held = claimFor(c, original), prepared = held.prepared;
+    const before = structuredClone(prepared), starts = dispatch.starts.length;
+    const blocker = await c.submit("blocker", task("hold the provider slot"));
+    await until(() => ports[1]?.streaming);
+    const answer = await c.answer("answer", original.agent_id, question, "Continue");
+    assert.equal(answer.status, "queued"); assert.equal(held.run_id, answer.run_id);
+    rejectPump = true;
+    ports[1].finish(); await ended(c, blocker); await ended(c, answer);
+    assert.equal(c.view(answer.run_id).outcome.reason, code === "DISPATCH_INPUT_MISSING" ? "dependency_input_missing" : "dispatch_preflight_failed");
+    assert.equal(c.view(original.run_id).question_id, question);
+    assert.equal(c.agents.get(original.agent_id).question.reserved_by, undefined);
+    assert.equal(claimFor(c, original), held); assert.equal(held.run_id, original.run_id);
+    assert.equal(held.prepared, prepared); assert.deepEqual(held.prepared, before);
+    assert.equal(held.lease, lease); assert.equal(lease.closes, 0);
+    assert.equal(ports[0].calls.length, 1); assert.equal(ports[0].disposed, 0);
+    assert.equal(dispatch.starts.length, starts);
+    rejectPump = false;
+    const resumed = await c.answer("answer-again", original.agent_id, question, "Continue");
+    await until(() => ports[0].calls.length === 2 && ports[0].streaming);
+    assert.equal(dispatch.starts.filter(start => start.context.acquireTree).length, 1);
+    ports[0].finish(); await ended(c, resumed); assert.equal(lease.closes, 1);
+  });
+}
+
+test("changed canonical resources reject answer admission without losing the question or lease", serial, async t => {
+  let changed = false;
+  const lease = treeLease(), dispatch = dispatchPort({ canonical: path => changed && path.endsWith("/build") ? "/other/build" : path,
+    start: () => ({ lease }) });
+  const { controller: c, ports } = await memoryFixture(t, { controller: { dispatch } });
+  const original = await c.submit("question", task("question", { dispatch: { tree: "build" } }));
+  await until(() => ports[0]?.streaming);
+  await ask(ports[0]); ports[0].finish(); await ended(c, original);
+  const question = c.view(original.run_id).question_id, held = claimFor(c, original), before = structuredClone(held.prepared);
+  changed = true;
+  await assert.rejects(c.answer("answer", original.agent_id, question, "yes"), errorCode("DISPATCH_RESOURCE_CHANGED"));
+  assert.deepEqual(held.prepared, before); assert.equal(held.run_id, original.run_id);
+  assert.equal(c.view(original.run_id).question_id, question); assert.equal(lease.closes, 0);
+  await c.kill(original.agent_id); assert.equal(lease.closes, 1);
+});
+
+test("retired workspace settings reject before core admission without allocating work", serial, async t => {
+  const { controller: c, ports } = await memoryFixture(t);
+  for (const workspace of ["shared", "worktree"]) {
+    await assert.rejects(c.submit(`retired-workspace-${workspace}`, task("invalid", { settings: { ...settings, workspace } })), errorCode("INVALID_EFFECTIVE_SETTINGS"));
+  }
+  assert.equal(c.stats().runs, 0); assert.equal(c.stats().resident, 0); assert.equal(ports.length, 0);
+});
+
 test("retired execution duration is rejected before admission, including on reuse", serial, async t => {
   const { controller: c, ports } = await memoryFixture(t);
   for (const value of [1, 300000, 1800000, null]) {
@@ -417,8 +475,7 @@ test("pending question â†’ queued answer cancel restores the same claim/lease â†
     assert.match(prompt, /Parent dispatch.*scope.*planned checks/i);
     assert.match(prompt, /not permissions or execution evidence/i);
     assert(prompt.includes(`Execution cwd: ${JSON.stringify(settings.cwd)}`));
-    assert.match(prompt, /Relative inputs, ownership, and tree paths resolve from this execution cwd/);
-    assert(prompt.includes(`Policy and settings inherit from source cwd (${JSON.stringify(settings.cwd)})`));
+    assert.match(prompt, /Relative inputs, ownership, and tree paths resolve from this cwd/);
     assert.match(prompt, /declarations grant no permissions/);
     assert.match(prompt, /focused/);
   }

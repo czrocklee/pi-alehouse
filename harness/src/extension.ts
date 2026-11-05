@@ -14,7 +14,7 @@ import { ApprovalBindings } from "./permissions/approval-provenance.ts";
 import { isOffPreset, presetLabel, PresetRouter, resolveSlotRoute, selectPhysicalWorkerModel, strengths, thinkingLevels, validEffortOverrides,
   type EffortOverrides, type PresetCandidate, type PresetPublication, type PresetSelection, type PresetSnapshot, type Strength } from "./routing.ts";
 import { ChildActivityRegistry } from "./runtime/activity-observer.ts";
-import { createChildSessionFactory, type WorkspacePolicyBinder } from "./runtime/child-factory.ts";
+import { createChildSessionFactory } from "./runtime/child-factory.ts";
 import { ChildWebModules, nativeWebLoader } from "./runtime/child-web.ts";
 import { configureChildRuntime } from "./runtime/execution-policy.ts";
 import type { ManagedBlockSubscription } from "./runtime/permission-blocks.ts";
@@ -178,7 +178,6 @@ export function validateWorkerEfforts<M extends { provider: string; id: string }
 export interface HarnessStartup {
   permission: {
     getPermissionsService: (id: string) => unknown;
-    bindWorkspacePolicy: WorkspacePolicyBinder;
     subscribeManagedBlocks: ManagedBlockSubscription;
   };
 }
@@ -548,7 +547,6 @@ export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStar
     const permission = startup?.permission;
     assert(permission && typeof permission.getPermissionsService === "function",
       "Use the pi-alehouse composition with its matched permission interface; no SDK or authority fallback is supported");
-    assert(typeof permission.bindWorkspacePolicy === "function", "Worktree policy binding is unavailable; restart with a matched pi-alehouse runtime");
     assert(typeof permission.subscribeManagedBlocks === "function", "Managed block observations are unavailable; restart with a matched pi-alehouse runtime");
     // The launcher loads us first so shutdown drains children BEFORE tearing
     // down the parent authority. Permission session_start runs after ours;
@@ -590,7 +588,6 @@ export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStar
     const createSession = createChildSessionFactory({ ctx, parentBus: pi.events, agentDir, permissionRoot, policyRoot,
       parentId, runtime, profiles, settings, parentHistory, approvalBindings, activities,
       parentPermission, getPermissionsService: permission.getPermissionsService,
-      bindWorkspacePolicy: permission.bindWorkspacePolicy, git: process.env.PI_HARNESS_GIT,
       subscribeManagedBlocks: permission.subscribeManagedBlocks, web });
     try {
       controller = await OwnerController.open({ owner,

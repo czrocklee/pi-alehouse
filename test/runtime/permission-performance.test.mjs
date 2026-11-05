@@ -54,12 +54,12 @@ const jiti = createJiti(import.meta.url, { alias: {
 } });
 const load = name => jiti.import(join(vendor, "src", `${name}.ts`));
 const [matcher, snapshot, { FilePolicyLoader }, { PermissionManager }, { PathNormalizer },
-  { posixPathFlavor, win32PathFlavor }, { canonicalizePath }, workspace, guardModule, checkpoint, forwardingWatch,
+  { posixPathFlavor, win32PathFlavor }, { canonicalizePath }, guardModule, checkpoint, forwardingWatch,
   { ForwardingManager }, { createPermissionForwardingLocation }, { ToolCallGatePipeline }, { PermissionResolver },
   { BashProgram }, { resolveToolPreviewLimits }] = await Promise.all([
   load("policy/wildcard-matcher"), load("policy/managed-permission-snapshot"),
   load("config/policy-loader"), load("policy/permission-manager"), load("path/path-normalizer"),
-  load("path/path-flavor"), load("path/canonicalize-path"), load("policy/managed-workspace-policy"),
+  load("path/path-flavor"), load("path/canonicalize-path"),
   jiti.import(join(packageRoot, "runtime/policy/static-safety-guard.ts")),
   jiti.import(join(packageRoot, "extensions/lib/hard-checkpoint.ts")),
   load("authority/managed-forwarding-watch"), load("authority/forwarding-manager"), load("authority/permission-forwarding"),
@@ -325,28 +325,6 @@ test("canonicalization is keyed by absolute path and flavor, discarded before sy
   const scoped = within(() => [normalizer.forPath("item", { resolveBase: a }), normalizer.forPath("item", { resolveBase: b })]);
   assert.notEqual(scoped[0].boundaryValue(), scoped[1].boundaryValue());
   assert.equal(normalizer.forLiteral("item").boundaryValue(), "", "unknown cwd never gets a cached absolute alias");
-});
-
-test("workspace sampling keeps tombstones live and detects source symlink changes after await", async t => {
-  const root = fixture(t), cwd = join(root, "worktree"), a = join(root, "source-a"), b = join(root, "source-b"), source = join(root, "source");
-  for (const path of [cwd, a, b]) fs.mkdirSync(path);
-  fs.symlinkSync(a, source);
-  const sessionId = randomUUID(), ctx = { cwd, sessionManager: { getSessionId: () => sessionId } };
-  const lease = workspace.bindWorkspacePolicy({ sessionId, cwd, source_cwd: source, checkout_root: cwd, source_root: source, projectTrusted: true });
-  t.after(() => lease.release());
-  const binding = workspace.workspacePolicyForContext(ctx);
-  assert.equal(countedFs("realpathSync", () => within(() => {
-    workspace.assertWorkspacePolicy(binding); workspace.assertWorkspacePolicy(binding);
-  })).calls(), 2);
-  await within(async () => { workspace.assertWorkspacePolicy(binding); await Promise.resolve(); });
-  fs.unlinkSync(source); fs.symlinkSync(b, source);
-  assert.throws(() => workspace.assertWorkspacePolicy(binding), /directory binding changed/);
-  fs.unlinkSync(source); fs.symlinkSync(a, source);
-  within(() => {
-    workspace.assertWorkspacePolicy(binding); lease.release();
-    assert.throws(() => workspace.assertWorkspacePolicy(binding), /stale or forged/);
-    assert.throws(() => workspace.workspacePolicyForContext(ctx), /released/);
-  });
 });
 
 test("static guard reads current deny bytes, parses unchanged content once and resolves identity once per phase", t => {

@@ -13,7 +13,7 @@ function expectedRetainedShape(message) {
     action: { type: "agent_answer", agent: "a".repeat(24), task: Number.MAX_SAFE_INTEGER, delivery: "not_delivered" },
     agents: Array.from({ length: 16 }, () => ({
       agent: "a".repeat(24), task: Number.MAX_SAFE_INTEGER, status: "interrupting",
-      wait: "dependencies", workspace_pending: true,
+      wait: "dependencies",
       has_question: true, limit_reached: true, unavailable: true,
       question_truncated: true, result_omitted: true, result_truncated: true,
     })),
@@ -56,13 +56,13 @@ test("model bounds are frozen separately from general-purpose core capacity", ()
 test("retained proof fixes every control key and 16 complete rows without a pending array", () => {
   const value = retainedEnvelopeFixture("");
   assert.deepEqual(value, expectedRetainedShape(""));
-  assert.equal(communicationEnvelopeBytes(value), 5998);
-  assert.equal(independentBytes(value), 5998);
-  assert(5998 <= 65536 - 8192 * 7);
+  assert.equal(communicationEnvelopeBytes(value), 5566);
+  assert.equal(independentBytes(value), 5566);
+  assert(5566 <= 65536 - 8192 * 7);
   for (const row of value.agents) {
     assert.equal(row.agent.length, 24);
     assert.equal(row.task, Number.MAX_SAFE_INTEGER);
-    assert.equal(row.wait, "dependencies"); assert.equal(row.workspace_pending, true);
+    assert.equal(row.wait, "dependencies");
     for (const flag of ["has_question", "limit_reached", "unavailable", "question_truncated", "result_omitted", "result_truncated"])
       assert.equal(row[flag], true);
   }
@@ -73,14 +73,14 @@ test("retained proof fixes every control key and 16 complete rows without a pend
 });
 
 for (const [name, message, bytes] of [
-  ["NUL", "\u0000".repeat(8192), 63342],
-  ["lone high surrogate", "\ud800".repeat(8192), 63342],
-  ["lone low surrogate", "\udfff".repeat(8192), 63342],
-  ["quote", "\"".repeat(8192), 38766],
-  ["backslash", "\\".repeat(8192), 38766],
-  ["ASCII", "a".repeat(8192), 14190],
-  ["CJK", "字".repeat(8192), 30574],
-  ["surrogate pairs", "😀".repeat(4096), 22382],
+  ["NUL", "\u0000".repeat(8192), 62910],
+  ["lone high surrogate", "\ud800".repeat(8192), 62910],
+  ["lone low surrogate", "\udfff".repeat(8192), 62910],
+  ["quote", "\"".repeat(8192), 38334],
+  ["backslash", "\\".repeat(8192), 38334],
+  ["ASCII", "a".repeat(8192), 13758],
+  ["CJK", "字".repeat(8192), 30142],
+  ["surrogate pairs", "😀".repeat(4096), 21950],
 ]) test(`maximal retained controls deliver one complete 8192-unit ${name} alert`, () => {
   const value = retainedEnvelopeFixture(message);
   assert.equal(message.length, 8192);
@@ -88,7 +88,7 @@ for (const [name, message, bytes] of [
   assert.equal(communicationEnvelopeBytes(value), bytes);
   assert.equal(independentBytes(value), bytes);
   assert(bytes <= 65536);
-  assert(bytes - 5998 <= 8192 * 7);
+  assert(bytes - 5566 <= 8192 * 7);
   const parsed = JSON.parse(JSON.parse(JSON.stringify({ content: [{ type: "text", text: JSON.stringify(value) }] })).content[0].text);
   assert.equal(parsed.alerts[0].message, message, "no replacement, truncation, or omitted alert");
   assert.equal(parsed.agents.length, 16);
@@ -99,32 +99,28 @@ for (const [name, message, bytes] of [
 test("all 16 question IDs fit alongside worst-case controls and the whole alert", () => {
   const value = retainedEnvelopeFixture("\u0000".repeat(8192), true);
   for (const row of value.agents) assert.equal(row.question_id, "q_" + "f".repeat(32));
-  assert.equal(communicationEnvelopeBytes(value), 64222);
-  assert.equal(independentBytes(value), 64222);
-  assert.equal(65536 - communicationEnvelopeBytes(value), 1314);
+  assert.equal(communicationEnvelopeBytes(value), 63790);
+  assert.equal(independentBytes(value), 63790);
+  assert.equal(65536 - communicationEnvelopeBytes(value), 1746);
   assert.equal(communicationTextUnits(value), 8192, "labels and question IDs are not body text");
 });
 
 for (const message of ["\0".repeat(8192), "\ud800".repeat(8192), "\udfff".repeat(8192)])
-  test(`65438-byte recovery proof includes sixteen pending controls, fixed-width cursors and empty questions (${message.charCodeAt(0)})`, () => {
+  test(`65006-byte retained proof includes fixed-width cursors and empty questions (${message.charCodeAt(0)})`, () => {
     const value = retainedEnvelopeFixture(message, true, true);
     for (const row of value.agents) {
       assert.match(row.next_cursor, /^r1_[A-Za-z0-9_-]{22}\.2gosa7pa2gv$/);
-      assert.equal(row.next_cursor.length, 37); assert.equal(row.question, ""); assert.equal(row.workspace_pending, true);
+      assert.equal(row.next_cursor.length, 37); assert.equal(row.question, "");
     }
     assert.equal(value.alerts[0].source, "harness");
-    assert.equal(communicationEnvelopeBytes(value), 65438);
-    assert.equal(independentBytes(value), 65438); assert.equal(65536 - independentBytes(value), 98);
-    const withoutPending = structuredClone(value);
-    for (const row of withoutPending.agents) delete row.workspace_pending;
-    assert.equal(independentBytes(withoutPending), 65006);
-    assert.equal(independentBytes(value) - independentBytes(withoutPending), 16 * 27);
+    assert.equal(communicationEnvelopeBytes(value), 65006);
+    assert.equal(independentBytes(value), 65006); assert.equal(65536 - independentBytes(value), 530);
     const untagged = structuredClone(value); delete untagged.alerts[0].source;
-    assert.equal(independentBytes(untagged), 65415, "the source tag costs exactly 23 double-JSON bytes");
+    assert.equal(independentBytes(untagged), 64983, "the source tag costs exactly 23 double-JSON bytes");
     const withoutWait = structuredClone(value);
     for (const row of withoutWait.agents) delete row.wait;
     assert.equal(independentBytes(value) - independentBytes(withoutWait), 16 * 26);
-    assert.deepEqual(alertAdmissionBudget(message), { text_units: 8192, envelope_bytes: 65438, fits: true });
+    assert.deepEqual(alertAdmissionBudget(message), { text_units: 8192, envelope_bytes: 65006, fits: true });
     assert.equal(communicationTextUnits(value), 8192);
     const withOldDuplication = { ...value, pending: Array.from({ length: 16 }, () => "a".repeat(24)) };
     assert.equal(independentBytes(withOldDuplication) - independentBytes(value), 478, "source calculation removes exactly the redundant array cost");
@@ -134,7 +130,7 @@ test("admission measures a complete retained envelope, not message-only JSON", (
   const message = "\u0000".repeat(8192), admitted = alertAdmissionBudget(message);
   assert.equal(admitted.envelope_bytes, communicationEnvelopeBytes(retainedEnvelopeFixture(message, true, true)));
   assert(admitted.envelope_bytes > communicationEnvelopeBytes({ message }));
-  assert.deepEqual(alertAdmissionBudget("x"), { text_units: 1, envelope_bytes: 8095, fits: true });
+  assert.deepEqual(alertAdmissionBudget("x"), { text_units: 1, envelope_bytes: 7663, fits: true });
   assert.equal(alertAdmissionBudget("").fits, false);
   assert.equal(alertAdmissionBudget("a".repeat(8193)).fits, false);
   assert.equal(alertAdmissionBudget("\u0000".repeat(16384)).fits, false);
@@ -147,7 +143,7 @@ test("UTF-16 body accounting includes only questions, results, and alert message
     agents: [{ agent: "otter", task: 2, status: "running", question_id: "q_" + "f".repeat(32),
       question: "😀", result: "甲😀乙", next_cursor: "opaque cursor", omitted_chars: 99,
       error: "diagnostic", owner_error: "owner diagnostic", unavailable_reason: "not reusable",
-      label: "\0".repeat(120), retained_paths: ["/" + "\ud800".repeat(120)], dispatch_notes: ["tree_shared"] }],
+      label: "\0".repeat(120), dispatch_notes: ["tree_shared"] }],
     alerts: [{ agent: "otter", task: 1, label: "\u0000".repeat(120), message: "ab" }],
     finished: [{ agent: "otter", task: 1, status: "completed" }], finished_pending: 99,
   };

@@ -45,9 +45,9 @@ const name = index => `a${String(index).padStart(2, "0")}${"x".repeat(21)}`;
 // Preconditions: 16 rows; one full 8192-unit alert; max-safe task/count/offset;
 // max 24-unit names / 120-unit alert label; all optional controls coexist.
 // Deliberately impossible action and wait/status pairing are a ceiling only.
-// Arbitrary optional labels/locations/diagnostics and finished rows are NOT
+// Arbitrary optional labels/diagnostics and finished rows are NOT
 // promised alongside this ceiling; the real packer must make them yield.
-test("budget contribution ledger reconstructs the 65438-byte conservative envelope from actual fields", () => {
+test("budget contribution ledger reconstructs the 65006-byte conservative envelope from actual fields", () => {
   const proof = retainedEnvelopeFixture("\0".repeat(8192), true, true);
   const value = { agents: [] }, contributions = { empty_reply_with_agents: bytes(value) };
   function add(label, change) {
@@ -60,7 +60,7 @@ test("budget contribution ledger reconstructs the 65438-byte conservative envelo
     value.agents = proof.agents.map(({ agent, task, status }) => ({ agent, task, status }));
   });
   for (const field of ["has_question", "limit_reached", "unavailable", "question_truncated", "result_omitted", "result_truncated",
-    "wait", "workspace_pending", "question_id", "question", "next_cursor"])
+    "wait", "question_id", "question", "next_cursor"])
     add(`sixteen_${field}`, () => value.agents.forEach((row, index) => { row[field] = proof.agents[index][field]; }));
   for (const field of ["reason", "action", "workers_disabled", "alerts_pending", "finished_pending", "response_limit_reached"])
     add(field, () => { value[field] = structuredClone(proof[field]); });
@@ -71,16 +71,15 @@ test("budget contribution ledger reconstructs the 65438-byte conservative envelo
   for (const field of ["label", "source", "message"])
     add(`first_alert_${field}`, () => { value.alerts[0][field] = proof.alerts[0][field]; });
   assert.deepEqual(value, proof);
-  assert.equal(contributions.sixteen_workspace_pending, 432);
   assert.equal(contributions.sixteen_wait, 416);
   assert.equal(contributions.sixteen_question_id, 880);
   assert.equal(contributions.first_alert_label, 120 * 7);
   assert.equal(contributions.first_alert_source, 23);
   assert.equal(contributions.first_alert_message, 8192 * 7);
-  assert.equal(Object.values(contributions).reduce((sum, cost) => sum + cost, 0), 65438);
-  assert.equal(bytes(value), 65438);
+  assert.equal(Object.values(contributions).reduce((sum, cost) => sum + cost, 0), 65006);
+  assert.equal(bytes(value), 65006);
   assert.equal(communicationEnvelopeBytes(value), bytes(value));
-  assert.equal(65536 - bytes(value), 98);
+  assert.equal(65536 - bytes(value), 530);
 });
 
 function generatedSnapshot(seed, scenario) {
@@ -101,13 +100,6 @@ function generatedSnapshot(seed, scenario) {
     // All sixteen questions stress preservation of identities even when text
     // is empty/truncated; scenario 2 leaves body space for result progress.
     if (scenario !== 2 || index === 2) entry.question = unicode(next, scenario === 2 ? 1 : 8192);
-    if (pending) entry.workspace_pending = true;
-    else {
-      const path = `/observed-${index}/` + unicode(next, [1, 120, 4096, 20000][(index + scenario) % 4]);
-      entry.workspace = { mode: "worktree", cwd: path, source_cwd: `/source/${unicode(next, 120)}`,
-        base_commit: "a".repeat(40), ...(index % 2 ? { checkout_root: path } : {}) };
-      entry.retained_paths = index % 2 ? [path, `${path}/manifest`] : [path];
-    }
     if (index % 2) entry.label = unicode(next, 120);
     if (index % 3 === 0) entry.cancellation_source = "human";
     entry.diagnostics = { error: unicode(next, 513) };
@@ -128,7 +120,7 @@ function generatedSnapshot(seed, scenario) {
 }
 
 for (const seed of seeds) for (let scenario = 0; scenario < 4; scenario++)
-  test(`seed=0x${seed.toString(16)} scenario=${scenario}: Unicode/control/path/FIFO combinations obey both budgets`, () => {
+  test(`seed=0x${seed.toString(16)} scenario=${scenario}: Unicode/control/FIFO combinations obey both budgets`, () => {
     const input = generatedSnapshot(seed, scenario), before = structuredClone(input);
     freeze(input);
     const packed = packCommunication(input), { envelope, result, references } = packed;
@@ -147,7 +139,6 @@ for (const seed of seeds) for (let scenario = 0; scenario < 4; scenario++)
       const original = input.tasks[index];
       for (const [field, value] of Object.entries(original.row)) assert.equal(row[field], value, `required ${field} at ${index}`);
       assert.equal(row.question_id, original.question_id);
-      assert.equal(row.workspace_pending, original.workspace_pending);
       if (original.question !== undefined) {
         assert.equal(typeof row.question, "string");
         assertPrefix(row.question, original.question);
@@ -163,9 +154,8 @@ for (const seed of seeds) for (let scenario = 0; scenario < 4; scenario++)
         if (!shown.length) assert.equal(row.result_omitted, true);
       } else assert.equal(row.next_cursor, undefined, "live previews and EOF do not invent locators");
       if (!original.settled && window.offset + shown.length < window.retained_chars) assert.equal(row.result_truncated, true);
-      // Every location object/array yields as a WHOLE; never a believable but
-      // clipped cwd/checkout_root/manifest, and never a later task's path.
-      for (const field of ["workspace", "retained_paths", "label", "cancellation_source"])
+      // Optional summary fields yield whole, never as clipped facts.
+      for (const field of ["label", "cancellation_source"])
         if (Object.hasOwn(row, field)) assert.deepEqual(row[field], original[field], `${field} must remain exact`);
     }
     assert.deepEqual(references.alerts, Array.from({ length: references.alerts.length }, (_, index) => index));
@@ -213,9 +203,7 @@ for (const seed of seeds) test(`seed=0x${seed.toString(16)}: proposed ACKs drain
   let offset = 0, recovered = "", pages = 0;
   while (offset < text.length) {
     const input = { reason: "snapshot", tasks: [{ row: { agent: name(0), task: 1, status: "completed" }, settled: true,
-      result: { text: text.slice(offset), offset, retained_chars: text.length, total_chars: text.length, cursor },
-      // Optional huge paths must yield on each page, never starve the result.
-      retained_paths: ["/observed/" + "\ud800".repeat(20000)] }], alerts: [], finished: [] };
+      result: { text: text.slice(offset), offset, retained_chars: text.length, total_chars: text.length, cursor } }], alerts: [], finished: [] };
     const { envelope } = packCommunication(input), row = envelope.agents[0];
     assert(bytes(envelope) <= 65536 && units(envelope) <= 16384);
     assert(row.result.length > 0);
@@ -225,8 +213,7 @@ for (const seed of seeds) test(`seed=0x${seed.toString(16)}: proposed ACKs drain
     if (offset < text.length) {
       assert.deepEqual(decodeResultCursor(row.next_cursor), { key: resultCursorKey(cursor), offset });
     } else assert.equal(row.next_cursor, undefined);
-    assert.equal(row.retained_paths, undefined);
-    assert.equal(envelope.response_limit_reached, true);
+    assert.equal(envelope.response_limit_reached, offset < text.length ? true : undefined);
     assert(++pages < 20, "bounded progress, not a cursor loop");
   }
   assert.equal(recovered, text, "all original UTF-16 units survive the UTF-8/double-JSON pages");

@@ -77,7 +77,7 @@ build and installed runtime separate; a changed protected generation requires a
 fresh Pi process. This is a permission floor, not an OS sandbox or protection
 against opaque programs; see [security](security.md#immutable-resource-floor-in-writable-installations).
 
-## Cooperative Git and workspaces
+## Cooperative Git
 
 The [Git contract](git-read-proof.md) keeps the original command, environment,
 executable selection and leading `cd` unchanged. Existing non-Git hardeners
@@ -111,49 +111,18 @@ commands retain independent effects. The speculative HOME-stability fold is
 retired; dynamic `cd` retains ordinary unknown-base behavior.
 
 New model requests select `worker` or `researcher`; worker maps to internal
-`editor`. No legacy profile aliases or capabilities are supported.
-Independently, spawn fixes `workspace: "shared" | "worktree"`, default
-shared. See [workspaces](workspaces.md) for the full contract. Runtime allocates
-a detached private worktree at actual execution/session initialization,
-not admission, preparation or replay, pinned to a local HEAD commit. It copies
-no dirty/untracked files, installed dependencies or host/user credentials and
-settings. Committed configuration files remain part of the checkout; it is not
-a secret-scrubbing export. It never auto-installs, merges or commits. Setup failure is visible, not shared fallback.
-Core admission and source `settings.cwd` remain immutable; the runtime binds
-source project instructions/settings/config/trust to the actual child cwd.
-The known whole checkout root maps to the source repository root for deny/ask
-aliases only, never ALLOW or external-directory exemptions; source policy still
-loads at source cwd. Relative dispatch paths use actual execution cwd, including
-first-task worktree declarations of inputs/ownership/tree. Uninitialized relative
-paths (including `..`) remain provisional with source deny-only preflight, not
-source existence checks. Binding checks actual paths, boundaries, permissions,
-inputs and claims before child input. Claim refinement is one-time; subsequent
-ownership/tree comparisons stay strict, while inputs are revalidated, not locked.
-An already-created healthy session survives binding preflight failure as idle.
-Child dispatch text distinguishes execution path base from source inheritance.
-See [binding details](workspaces.md#dispatch-paths-and-binding). Wait/read/list expose optional
-whole Run-local confirmed workspace bindings (four fields plus optional checkout
-root), not public states or manifests. A reserved `workspace_pending: true`
-marks a queued/running worktree task still awaiting binding, not an exited task
-or one with observed recovery facts. Failures expose only small observed
-retained-path summaries; intended nonexistent targets stay private. Action,
-interrupt and kill replies omit workspace details. Internal typed/frozen recovery
-errors, cleanup authority and retained artifacts remain intact. No earlier task
-borrows a later Agent baseline. See [workspace metadata](workspaces.md#workspace-and-recovery-metadata).
+`editor`. No legacy profile aliases or capabilities are supported. All Agents
+use the parent's admitted cwd for resource discovery, policy and tools. Spawn
+has no workspace selector; the harness does not create or manage worktrees.
+Relative dispatch paths use that cwd, and ordinary canonical-path permission
+checks, strict ownership/tree claim rechecks and input revalidation remain.
+Existing user worktrees, files and historical records are not migrated or
+removed. Ordinary Git remains available under normal permission.
 
-Retain worktrees and the private recovery manifest through completion, kill,
-failure and shutdown for manual inspection/cleanup. Default allocations use
-absolute XDG_STATE_HOME (otherwise ~/.local/state), under pi-alehouse/worktrees,
-not TMPDIR or agentDir. Persistent placement is not indefinite retention or a
-backup guarantee; custom volatile state roots remain the operator's choice.
-Eligible forwarded worktree asks currently defer from Jev as delegation_unbound
-to ordinary human handling; existing allows/yolo are unchanged. Authority release is not
-worktree deletion or acceptance of results. There is no cleanup tool. Separate
-indexes reduce contention but objects, most refs and configuration remain
-shared. Native Git can refresh index caches and take locks: no zero-write,
-automatic retry or safe lock-removal guarantee. An operator may explicitly launch
+Native Git can refresh index caches and take locks: no zero-write, automatic
+retry or safe lock-removal guarantee. An operator may explicitly launch
 `GIT_OPTIONAL_LOCKS=0 pi-alehouse`; it is not injected and does not disable
-required writer locks or all IO. Neither workspace mode is OS isolation.
+required writer locks or all IO. Agents are not OS-isolated.
 
 Generated copies are not source; use the matched migration and single validation
 owner below. `node scripts/check-pi-git-grammar.mjs` checks source grammar/tokenizer
@@ -311,15 +280,14 @@ omits next_cursor. Promise/thenable observation ports are interface errors, not
 awaitable work. A fixed-width
 37-character stateless cursor is reserved for every bound terminal window with
 unshown retained text, even if the whole page is displaced after Agent reuse.
-Whole optional labels and observed location fields yield with
-response_limit_reached; there is no unlimited metadata-recovery promise.
+Whole optional labels yield with response_limit_reached; there is no separate
+metadata-retrieval mode.
 Finished labels can yield without delaying or resetting that original's finished
 bit. Keep required controls, question identity and stateless r1_ result cursors
-reserved. Kill returns independent lifecycle status without workspace details;
+reserved. Kill returns independent lifecycle status;
 named task reads remain available within the Owner. The double-JSON content cap
-is 65536 bytes; the conservative retained-envelope fixture includes the bounded
-workspace-pending control, not arbitrary labels/paths or the retired pending-name
-array. See [packing budgets](tool-contract.md#budget-and-local-publication).
+is 65536 bytes; the conservative retained-envelope fixture reserves bounded
+controls, not arbitrary labels or the retired pending-name array. See [packing budgets](tool-contract.md#budget-and-local-publication).
 Tool success only passes that result through, without later
 assertCurrent/serialization/withChanges/UI. onRunAccepted UI wake stays separate
 best-effort before observation. The SDK tool_result hook may append usage, not
@@ -396,18 +364,14 @@ fallback; on Linux supply an absolute trusted util-linux path, e.g.
 (`/usr/bin/flock`, `/bin/flock`, `/run/current-system/sw/bin/flock`); it does
 not use an arbitrary `flock` from PATH. This is not a sandbox/distributed lock.
 
-Worktree creation and its primary local-Git/composition tests require verified
-absolute Git. The launcher checks `/usr/bin/git`, `/bin/git`, and
-`/run/current-system/sw/bin/git`; otherwise supply an explicit absolute override,
-for example `PI_HARNESS_GIT=/absolute/trusted/bin/git npm run check` (and the same
-override when launching `pi-alehouse`). Nix dev-shell/PATH availability alone is
-not enough when those candidates are absent. The resolver validates realpath and
-`git --version`, never searches project PATH, and does not fall back after a bad
-override. These primary tests fail rather than silently skip missing coverage.
-Shared mode can still run without Git; optional source-state capture is unknown,
-whereas requested worktree creation fails with `trusted_git_unavailable`.
-Tests allocating state must override HOME and XDG_STATE_HOME to owned fixtures;
-never leave worktrees in the developer's real state directory.
+Execution-start source-state capture uses verified absolute Git. The launcher
+checks `/usr/bin/git`, `/bin/git`, and `/run/current-system/sw/bin/git`; otherwise
+supply an explicit absolute override, for example
+`PI_HARNESS_GIT=/absolute/trusted/bin/git npm run check`. The resolver validates
+realpath and `git --version`, never searches project PATH, and does not fall back
+after a bad override. Ordinary tasks can run without Git; optional source-state
+capture is then unknown. Tests allocating state must use owned HOME and XDG
+fixtures, never the developer's real state directory.
 
 ### Jev audit ownership in user namespaces
 

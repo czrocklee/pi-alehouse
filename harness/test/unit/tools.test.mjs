@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isAbsolute, normalize, resolve } from "node:path";
+import { resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import { createChildTools } from "../../dist/tools/child-tools.js";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -79,16 +79,17 @@ test("worker maps to stable editor identity and retired model profile names are 
     assert.throws(() => tool("agent_spawn").prepareArguments(create({ profile })), code("INVALID_PROFILE"));
     await assert.rejects(call("agent_spawn", create({ profile }), `retired-${profile}`), code("INVALID_PROFILE"));
   }
-  for (const workspace of ["shared", "worktree"]) {
-    assert.equal(tool("agent_spawn").prepareArguments(create({ workspace })).workspace, workspace);
-  }
-  for (const workspace of [false, null, {}, "sandbox", "/tmp"]) {
+  assert.equal(Object.hasOwn(tool("agent_spawn").parameters.properties, "workspace"), false);
+  for (const workspace of ["shared", "worktree", false, null, {}, "sandbox", "/tmp"]) {
     assert.throws(() => tool("agent_spawn").prepareArguments(create({ workspace })), code("INVALID_PARAMETERS"));
+    await assert.rejects(call("agent_spawn", create({ workspace }), `removed-${String(workspace)}`), code("INVALID_PARAMETERS"));
   }
-  await call("agent_spawn", create({ workspace: "shared" }));
+  assert.equal(f.controller.stats().runs, 0); assert.equal(f.ports.length, 0);
+  await call("agent_spawn", create());
   await until(() => f.ports[0]?.streaming);
   assert.equal(routed(f, "orca").profile, "editor");
-  assert.equal(routed(f, "orca").workspace, "shared");
+  assert.equal(routed(f, "orca").cwd, "/tmp");
+  assert.equal(Object.hasOwn(routed(f, "orca"), "workspace"), false);
   assert.equal((await call("agent_list", {})).agents[0].profile, "worker");
   await assert.rejects(call("agent_run", run("orca", { workspace: "worktree" })), code("INVALID_PARAMETERS"));
   f.ports[0].finish(); await settle(f, "orca");
@@ -1746,24 +1747,20 @@ test("a fitting nonempty independent roster stops the optional-field loop after 
   assert.equal(Object.hasOwn(JSON.parse(raw.content[0].text), "response_limit_reached"), false);
 });
 
-test("independent roster pressure drops optional fields in order, preserving every row and pending control", async (t) => {
+test("independent roster pressure drops optional fields in order, preserving every row and queue control", async (t) => {
   const f = await fixture(t), { call } = toolsFor(f);
   await call("agent_spawn", create()); await until(() => f.ports[0]?.streaming);
   f.ports[0].callbacks.alert("independent serialization is not an ACK");
-  const original = viewOf(f, "orca"), huge = "/" + "\0".repeat(20000);
+  const original = viewOf(f, "orca");
   // Synthetic read-only projection seam, not mutation of retained Runs or a
   // claim that a queued task has executed. The real serializer does all fitting.
   const views = Array.from({ length: 16 }, (_, index) => ({ ...original,
     name: `worker-${index}`, run_id: `synthetic-${index}`, task: 1, status: "queued", queued_for: "dependencies",
-    isolation: "worktree", workspace: index ? undefined : { mode: "worktree", cwd: huge, source_cwd: "/tmp", base_commit: "a".repeat(40) },
-    recovery: undefined, retained_paths: undefined, execution_exited: false, finalization_pending: false,
+    execution_exited: false, finalization_pending: false,
     description: "\0".repeat(120), cancellation_source: "human", blocked_by: [],
     owner_error: "\0".repeat(512), unavailable_reason: "\0".repeat(512),
     outcome: { ...original.outcome, error: "\0".repeat(512) },
   }));
-  // The first row also has an observed retained-path field, tested independently
-  // of the pending rows so no row invents pending alongside a recovery fact.
-  views[0].recovery = { mode: "worktree", state: "checkout_ready", source_cwd: "/tmp", allocated_path: huge };
   const byId = new Map(views.map(view => [view.run_id, view]));
   t.mock.method(f.controller, "list", () => views);
   t.mock.method(f.controller, "view", id => byId.get(id));
@@ -1775,8 +1772,7 @@ test("independent roster pressure drops optional fields in order, preserving eve
   assert.equal(reply.response_limit_reached, true); assert.equal(reply.agents.length, 16);
   for (const [index, row] of reply.agents.entries()) {
     assert.equal(row.agent, `worker-${index}`); assert.equal(row.task, 1); assert.equal(row.status, "queued");
-    assert.equal(row.wait, "dependencies"); assert.equal(row.workspace_pending, index ? true : undefined);
-    assert.equal(row.workspace, undefined); assert.equal(row.retained_paths, undefined);
+    assert.equal(row.wait, "dependencies");
     assert.equal(row.label, "\0".repeat(120)); assert.equal(row.cancellation_source, "human");
   }
   assert(reply.agents.some(row => row.error === undefined), "bounded diagnostics yield before labels");
@@ -1798,96 +1794,49 @@ test("independent final guard rejects unrepresentable required facts instead of 
   assert.equal(f.controller.runs.get(original.run_id).finished_presented, false);
 });
 
-test("wait/read/list alone expose an original unbound worktree task's pending marker", async (t) => {
-  const gate = deferred(), ports = [];
-  const f = await fixture(t, { controller: { createSession: async () => {
-    await gate.promise;
-    const port = new FakePort(); port.autoStop = true;
-    port.workspace = { mode: "worktree", cwd: "/tmp/ready-tree", source_cwd: "/tmp", base_commit: "a".repeat(40) };
-    ports.push(port); return port;
-  } }, beforeShutdown: () => { gate.resolve(); for (const port of ports) if (port.streaming) port.finish("cleanup", "aborted"); } });
-  const { call } = toolsFor(f);
-  const spawned = await call("agent_spawn", create({ workspace: "worktree" }));
-  assert.equal(Object.hasOwn(spawned.agents[0], "workspace_pending"), false);
-  for (const [name, args] of [["agent_list", {}], ["agent_read", { agent: "orca" }], ["agent_wait", { agents: ["orca"], wait_ms: 0 }]]) {
-    const row = (await call(name, args)).agents[0];
-    assert.equal(row.workspace_pending, true); assert.equal(row.workspace, undefined); assert.equal(row.retained_paths, undefined);
-  }
-  const sent = await call("agent_send", send("orca"));
-  assert.equal(Object.hasOwn(sent.agents[0], "workspace_pending"), false);
-  const interrupted = await call("agent_interrupt", { agent: "orca" });
-  assert.equal(Object.hasOwn(interrupted, "workspace_pending"), false);
-  gate.resolve(); await settle(f, "orca");
-  const stopped = (await call("agent_read", { agent: "orca" })).agents[0];
-  assert.equal(stopped.status, "interrupted"); assert.equal(Object.hasOwn(stopped, "workspace_pending"), false);
-  assert.equal(Object.hasOwn(await call("agent_kill", { agent: "orca" }), "workspace_pending"), false);
-});
-
-test("one worktree spawn declares relative tree before initialization; inspectors expose binding, not actions or kill", async (t) => {
-  const workspace = { mode: "worktree", cwd: "/tmp/private-worktree/repo", source_cwd: "/tmp", base_commit: "a".repeat(40) };
-  const port = new FakePort(); port.workspace = workspace;
-  port.workspace_details = { checkout_root: "/tmp/private-worktree", recovery_manifest: "/tmp/private-worktree/recovery.jsonl" };
-  let creates = 0, prepares = 0, observedTree;
+test("spawn and reuse dispatch relative paths from the inherited parent cwd", async (t) => {
+  const port = new FakePort(); let creates = 0, prepares = 0, observedTree;
+  const contexts = [];
   const dispatch = { prepare(declaration, context) {
-      prepares++;
-      const path = (word) => context.unbound_worktree && !isAbsolute(word)
-        ? { kind: "unbound_worktree", agent_id: context.unbound_worktree, rel: normalize(word) }
-        : { path: resolve(context.cwd, word), canonical: resolve(context.cwd, word) };
-      return { declaration: structuredClone(declaration), inputs: [], ownership: [],
-        ...(declaration.tree === undefined ? {} : { tree: path(declaration.tree) }) };
-    }, async start(prepared) { observedTree = prepared.tree.path; return {}; } };
+    prepares++; contexts.push(context);
+    const path = word => ({ path: resolve(context.cwd, word), canonical: resolve(context.cwd, word) });
+    return { declaration: structuredClone(declaration), inputs: [], ownership: [],
+      ...(declaration.tree === undefined ? {} : { tree: path(declaration.tree) }) };
+  }, async start(prepared, context) { observedTree = prepared.tree.path; contexts.push(context); return {}; } };
   const f = await fixture(t, { controller: { createSession: async () => { creates++; return port; }, dispatch },
     beforeShutdown: () => { if (port.streaming) port.finish("cleanup", "aborted"); } });
-  const { tool, call } = toolsFor(f);
-  const args = create({ agent: "wren", workspace: "worktree", dispatch: { tree: "build" } });
+  const { tool, call } = toolsFor(f), args = create({ agent: "wren", dispatch: { tree: "build" } });
   assert.deepEqual(tool("agent_spawn").prepareArguments(args), args);
-  assert.equal(creates, 0, "argument preparation allocates no session/worktree");
-  assert.equal(prepares, 0, "schema preparation does no dispatch IO");
+  assert.equal(creates, 0); assert.equal(prepares, 0, "schema preparation does no dispatch IO");
   const first = await call("agent_spawn", args, "first-spawn");
   assert.deepEqual(first.action, { type: "agent_spawn", agent: "wren", task: 1 });
-  assert.equal(Object.hasOwn(first.agents[0], "workspace"), false);
   await until(() => port.streaming);
-  assert.deepEqual(viewOf(f, "wren").workspace, workspace);
-  const expectedWorkspace = { ...workspace, checkout_root: port.workspace_details.checkout_root };
-  for (const [name, args] of [["agent_list", {}], ["agent_read", { agent: "wren" }], ["agent_wait", { agents: ["wren"], wait_ms: 0 }]]) {
-    const row = (await call(name, args)).agents[0];
-    assert.deepEqual(row.workspace, expectedWorkspace);
-    assert.equal(Object.hasOwn(row, "recovery"), false);
-    assert.equal(Object.hasOwn(row.workspace, "state"), false); assert.equal(Object.hasOwn(row.workspace, "recovery_manifest"), false);
-  }
+  assert.equal(viewOf(f, "wren").effective_settings.cwd, "/tmp");
+  assert.equal(observedTree, "/tmp/build"); assert.equal(prepares, 2, "admission and pump recheck");
   port.finish(); await settle(f, "wren");
-  assert.equal(observedTree, `${workspace.cwd}/build`);
-  assert(prepares >= 2, "provisional declarations are rechecked after binding");
-  // A follow-up keeps the same natural relative-path rule.
   const follow = await call("agent_run", run("wren", { dispatch: { tree: "build" } }), "tree-followup");
   assert.deepEqual(follow.action, { type: "agent_run", agent: "wren", task: 2 });
-  assert.equal(Object.hasOwn(follow.agents[0], "workspace"), false, "normal action replies do not repeat workspace");
-  await until(() => port.calls.length === 2);
-  assert.equal(creates, 1, "the follow-up reuses the initialized session");
+  await until(() => port.calls.length === 2); assert.equal(creates, 1);
+  assert(contexts.every(context => context.cwd === "/tmp" && context.profile === "editor"));
+  for (const context of contexts) assert.deepEqual(Object.keys(context).sort(), ["cwd", "profile", Object.hasOwn(context, "deferInputs") ? "deferInputs" : "acquireTree"].sort());
   port.finish(); await settle(f, "wren");
-  assert.equal(viewOf(f, "wren").status, "completed");
-  const killed = await call("agent_kill", { agent: "wren" });
-  assert.deepEqual(killed, { agent: "wren", status: "killed", label: "task" });
-  assert.deepEqual((await call("agent_read", { agent: "wren" })).agents[0].workspace, expectedWorkspace);
-  assert.deepEqual(viewOf(f, "wren").workspace_details, port.workspace_details, "kill retains internal recovery manifest details");
+  assert.deepEqual(await call("agent_kill", { agent: "wren" }), { agent: "wren", status: "killed", label: "task" });
+  assert.equal((await call("agent_read", { agent: "wren", task: 1 })).agents[0].status, "completed");
 });
 
 const quickstartFlows = [...readFileSync(new URL("../../docs/agent-tools-quickstart.md", import.meta.url), "utf8")
   .matchAll(/```json\n([\s\S]*?)\n```/g)].map(match => JSON.parse(match[1]));
 assert.equal(quickstartFlows.length, 4, "all four documented workflows have executable call examples");
 for (const [flowIndex, steps] of quickstartFlows.entries()) test(`quickstart workflow ${flowIndex + 1} uses registered tools and actual returned identities`, async (t) => {
-  const worktreePort = new FakePort(), starts = [];
-  worktreePort.autoStop = true;
-  worktreePort.workspace = { mode: "worktree", cwd: "/tmp/quickstart/repo", source_cwd: "/tmp", base_commit: "a".repeat(40) };
+  const dispatchPort = new FakePort(), starts = [];
+  dispatchPort.autoStop = true;
   const dispatch = { prepare(declaration, context) {
-    const path = word => context.unbound_worktree && !isAbsolute(word)
-      ? { kind: "unbound_worktree", agent_id: context.unbound_worktree, rel: normalize(word) }
-      : { path: resolve(context.cwd, word), canonical: resolve(context.cwd, word) };
+    const path = word => ({ path: resolve(context.cwd, word), canonical: resolve(context.cwd, word) });
     return { declaration: structuredClone(declaration), inputs: (declaration.inputs ?? []).map(path),
       ownership: (declaration.ownership ?? []).map(path), ...(declaration.tree ? { tree: path(declaration.tree) } : {}) };
   }, async start(prepared, context) { starts.push({ prepared, context }); return {}; } };
-  const f = await fixture(t, flowIndex === 3 ? { controller: { dispatch, createSession: async () => worktreePort },
-    beforeShutdown: () => { if (worktreePort.streaming) worktreePort.finish("cleanup", "aborted"); } } : { controller: { concurrency: 2 } });
+  const f = await fixture(t, flowIndex === 3 ? { controller: { dispatch, createSession: async () => dispatchPort },
+    beforeShutdown: () => { if (dispatchPort.streaming) dispatchPort.finish("cleanup", "aborted"); } } : { controller: { concurrency: 2 } });
   const { call, tool } = toolsFor(f);
   let questionId, cursor, firstPage, waits = 0;
   const oldResult = "retained first-task evidence ".repeat(20);
@@ -1931,14 +1880,14 @@ for (const [flowIndex, steps] of quickstartFlows.entries()) test(`quickstart wor
         await until(() => f.ports[0]?.streaming);
         f.ports[0].finish(waits === 1 ? oldResult : "latest result"); await settle(f, "alpha");
       } else {
-        await until(() => worktreePort.streaming);
+        await until(() => dispatchPort.streaming);
         assert.equal(starts.length, 1);
-        assert.equal(starts[0].context.cwd, worktreePort.workspace.cwd);
-        assert.equal(starts[0].prepared.inputs[0].path, "/tmp/quickstart/repo/src/parser.ts");
-        assert.equal(starts[0].prepared.ownership[0].path, "/tmp/quickstart/repo/src/parser.ts");
-        assert.equal(starts[0].prepared.tree.path, "/tmp/quickstart/repo/build");
-        assert.match(worktreePort.calls[0].prompt, /Execution cwd: "\/tmp\/quickstart\/repo"/);
-        worktreePort.finish("synthetic assigned check report; no real parser check executed"); await settle(f, "alpha");
+        assert.equal(starts[0].context.cwd, "/tmp");
+        assert.equal(starts[0].prepared.inputs[0].path, "/tmp/src/parser.ts");
+        assert.equal(starts[0].prepared.ownership[0].path, "/tmp/src/parser.ts");
+        assert.equal(starts[0].prepared.tree.path, "/tmp/build");
+        assert.match(dispatchPort.calls[0].prompt, /Execution cwd: "\/tmp"/);
+        dispatchPort.finish("synthetic assigned check report; no real parser check executed"); await settle(f, "alpha");
       }
     }
     const reply = await call(step.tool, args, `quickstart-${flowIndex}-${stepIndex}`);
@@ -1958,6 +1907,6 @@ for (const [flowIndex, steps] of quickstartFlows.entries()) test(`quickstart wor
       assert.equal(reply.agents[0].task, 1); assert.equal(firstPage + reply.agents[0].result, oldResult);
       assert.equal(reply.agents[0].next_cursor, undefined);
     }
-    if (flowIndex === 3 && step.tool === "agent_read") assert.equal(reply.agents[0].workspace.cwd, worktreePort.workspace.cwd);
+    if (flowIndex === 3 && step.tool === "agent_read") assert.equal(reply.agents[0].status, "completed");
   }
 });

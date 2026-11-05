@@ -2,7 +2,6 @@ import { isAbsolute } from "node:path";
 import { normalizeLedger, type UsageLedger } from "./usage-ledger.ts";
 import { validOutput } from "./result-text.ts";
 import type { Dispatch } from "./dispatch.ts";
-import type { WorkspaceDetails, WorkspaceRecovery } from "./workspace-metadata.ts";
 
 export type RunStatus = "queued" | "running" | "cancelling" | "completed" | "needs_input" | "failed" | "cancelled";
 /** `deadline` remains readable in historical records; live Runs never emit it. */
@@ -22,22 +21,6 @@ export const difficultySlots = Object.freeze(["d1", "d2", "d3", "d4", "d5"] as c
 export type WorkerSlot = (typeof difficultySlots)[number];
 export const validDifficulty = (value: unknown): value is Difficulty =>
   typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 5;
-
-export type WorkspaceMode = "shared" | "worktree";
-/** Runtime-created working copy. A worktree is not an OS sandbox. */
-export interface WorkspaceInfo {
-  mode: "worktree";
-  cwd: string;
-  source_cwd: string;
-  base_commit: string;
-}
-export const validWorkspace = (value: unknown): value is WorkspaceInfo => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const w = value as WorkspaceInfo;
-  return w.mode === "worktree" && typeof w.cwd === "string" && isAbsolute(w.cwd) &&
-    typeof w.source_cwd === "string" && isAbsolute(w.source_cwd) &&
-    typeof w.base_commit === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(w.base_commit);
-};
 
 /** Settings resolved by the trusted host at creation admission. */
 export interface AdmittedAgentConfig {
@@ -60,8 +43,6 @@ export interface AdmittedAgentConfig {
   preset_version: string;
   selection_digest: string;
   cwd: string;
-  /** Fixed per Agent; cwd remains the source/admission base. */
-  workspace?: WorkspaceMode;
   tools: string[];
   definition_digest: string;
   context_snapshot?: string;
@@ -168,11 +149,6 @@ export interface RunView {
   pending_messages: number;
   dispatch?: Dispatch;
   dispatch_notes?: string[];
-  /** Working-copy arrangement, not a sandbox claim. */
-  isolation: WorkspaceMode;
-  workspace?: WorkspaceInfo;
-  workspace_details?: WorkspaceDetails;
-  recovery?: WorkspaceRecovery;
   elapsed_ms: number;
   execution_elapsed_ms?: number;
   turn_elapsed_ms?: number;
@@ -249,7 +225,7 @@ export const validSettings = (value: unknown): value is AdmittedAgentConfig => {
     (!Object.hasOwn(s, "effort_source") || ["preset", "user_override"].includes(s.effort_source ?? "")) &&
     validDifficulty(s.difficulty) &&
     difficultySlots[s.difficulty - 1] === s.strength && isAbsolute(s.cwd) &&
-    (s.workspace === undefined || s.workspace === "shared" || s.workspace === "worktree") &&
+    !Object.hasOwn(s, "workspace") &&
     Array.isArray(s.tools) && s.tools.every((v) => typeof v === "string") &&
     /^[0-9a-f]{64}$/.test(s.definition_digest) && /^[0-9a-f]{64}$/.test(s.selection_digest) && (s.context_snapshot === undefined ||
       (typeof s.context_snapshot === "string" && Buffer.byteLength(s.context_snapshot) <= 65536));
