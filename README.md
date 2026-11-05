@@ -34,7 +34,9 @@ There is no mandatory research → plan → code → review ritual. Your main ag
 
 In one session, each admitted provider runs at most four workers at once. Models of that provider share the cap; twelve workers can stay resident.
 
-Choose a **worker** for local code, Bash/Git and builds, or a **researcher** for read-only file tools and web research. Worker is the public name of the stable internal `editor` profile. Reviews are task instructions, not a strict readonly worker mode. Normal permissions, configured denies and credential/resource protections still apply; there is no blanket Git allow.
+Choose a **worker** for command-driven investigation, experiments, changes and verification: local read/edit/write, Bash/Git and builds, and no web tools. No web tools is not network isolation. Choose a **scout** to read local code, correlate it with web docs, and aggregate, compare, summarize or extract cited information. Scout keeps read, grep, find, ls and the four web tools, and has no Bash, edit or write.
+
+Worker maps to the stable internal `editor` profile; scout maps to internal `researcher`. Reviews are task instructions, not a strict readonly worker mode. Neither profile is an OS sandbox. See [security](harness/docs/security.md).
 
 Agents use the parent's working directory, including pending local changes. The main agent coordinates edits and Git workflow; Alehouse does not create or manage worktrees.
 

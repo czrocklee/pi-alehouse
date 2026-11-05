@@ -81,7 +81,7 @@ function respond(request) {
   assert(key, `unscripted ${profile} task`);
   childTools[key] ??= request.context.tools.map((tool) => tool.name);
   assert.equal(profile, ["RESEARCH_TASK", "SECOND_TASK"].includes(key) ? "researcher" : "editor",
-    "public worker retains the internal editor profile");
+    "public scout/worker retain internal researcher/editor profiles");
   if (key === "WORKER_TASK" && request.context.messages.at(-1)?.role !== "toolResult") return { tools: [
     { type: "toolCall", id: "worker-report", name: "write", arguments: { path: workerReport, content: "WORKER_REPORT\n" } },
     { type: "toolCall", id: "approved-report", name: "write", arguments: { path: approvedReport, content: "APPROVED_WORKER_REPORT\n" } },
@@ -156,10 +156,11 @@ try {
   await session.bindExtensions({ mode: "rpc", uiContext, onError: (error) => errors.push(error.error) });
   assert.deepEqual(errors, []);
   assert(session.getActiveToolNames().includes("agent_spawn"), "an enabled preset exposes delegation");
+  // Public agent_spawn profiles are scout and worker; active_agent stays internal.
   parentSteps.push(
-    () => spawn("otter", "researcher", "RESEARCH_TASK"),
+    () => spawn("otter", "scout", "RESEARCH_TASK"),
     (last) => { spawned(last, "otter", "RESEARCH_TASK"); return call("kill-otter", "agent_kill", { agent: "otter" }); },
-    (last) => { assert.equal(last.isError, false, text(last)); return spawn("heron", "researcher", "SECOND_TASK"); },
+    (last) => { assert.equal(last.isError, false, text(last)); return spawn("heron", "scout", "SECOND_TASK"); },
     (last) => { spawned(last, "heron", "SECOND_TASK"); return spawn("pike", "worker", "WORKER_TASK"); },
     (last) => { spawned(last, "pike", "WORKER_TASK"); return spawn("perch", "worker", "SIBLING_TASK"); },
     (last) => { spawned(last, "perch", "SIBLING_TASK"); return { text: "PARENT_DONE" }; },
@@ -199,7 +200,8 @@ try {
 
   const research = Object.fromEntries(childResults.RESEARCH_TASK.map((result) => [result.id, result]));
   assert.equal(research.search.error, true);
-  assert.match(research.search.text, /The user denied this 'web_search' call for agent 'researcher'/);
+  assert.match(research.search.text, /The user denied this 'web_search' call for agent 'scout'/);
+  assert.doesNotMatch(research.search.text, /for agent 'researcher'/, "denial text uses the public scout label");
   assert.equal(research["local-video"].error, true);
   assert.match(research["local-video"].text, /Validation failed for tool "fetch_content"[\s\S]*url: expected to match/);
   assert.equal(research.proxy.error, true);
@@ -211,7 +213,8 @@ try {
   assert.equal(dialogs.length, 4, dialogs.join("\n---\n"));
   for (const [tool, dialog] of [["web_search", dialogs.find((title) => /tool\s*:\s*web_search/.test(title))],
     ["read", dialogs.find((title) => /tool\s*:\s*read\b/.test(title))]]) {
-    assert.match(dialog ?? "", /Permission Required \(Subagent\)[\s\S]*subagent\s*:\s*researcher/, tool);
+    assert.match(dialog ?? "", /Permission Required \(Subagent\)[\s\S]*subagent\s*:\s*scout\b/, tool);
+    assert.doesNotMatch(dialog ?? "", /subagent\s*:\s*researcher\b/, "internal researcher is not the requester label");
   }
   assert.match(dialogs.find((title) => /web_search/.test(title)), /alehouse fixture/, "the parent sees the query it approves");
   for (const path of [approvedReport, siblingReport]) {
@@ -258,4 +261,4 @@ assert.equal(readFileSync(approvedReport, "utf8"), "APPROVED_WORKER_REPORT\n", "
 assert.equal(readFileSync(siblingReport, "utf8"), "SIBLING_APPROVED_REPORT\n", "shutdown preserves the sibling's approved report");
 assert.equal(readFileSync(deniedReport, "utf8"), "PROTECTED_FIXTURE_REPORT\n", "shutdown does not alter the denied target");
 assert.deepEqual(network, []);
-console.log("PASS: real composition spawns researcher and worker Agents; forwarded asks reach the parent UI; worker writes and edits stay permission-checked; explicit path-write and secret denies hold; a mode switch reaches the next request; nothing leaves the process");
+console.log("PASS: real composition spawns scout and worker Agents; forwarded asks reach the parent UI; worker writes and edits stay permission-checked; explicit path-write and secret denies hold; a mode switch reaches the next request; nothing leaves the process");

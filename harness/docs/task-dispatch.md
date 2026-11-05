@@ -50,7 +50,7 @@ not interchangeable diagnoses.
 
 The synchronous read-only host preflight uses the target internal permission
 **profile**, not the Agent nickname. New model choices are `worker` (mapped to
-stable `editor`) and `researcher`:
+stable `editor`) and `scout` (mapped to stable `researcher`). Checked surfaces are:
 
 - inputs: `path_read`;
 - ownership/tree: `path_write`;
@@ -61,7 +61,8 @@ Known deny rejects admission (`PREFLIGHT_DENIED`) before additional input
 classification stat; permission lookup itself may canonicalize paths. The error
 reports the target `profile` and checked permission `surface`; it is not a
 missing-directory/type result. Worker supports project edits/builds under normal
-permission; researcher has no Bash/edit/write.
+permission; scout has no model-facing Bash/edit/write. See
+[researcher web access](security.md#researcher-web-access).
 A `tree` declaration does not create a profile or output-root exception. Policy
 ask/unknown does not trigger approval and may pass this approximate preflight.
 It is **not a grant**: child per-session rules and ordinary tool gates still
@@ -284,7 +285,8 @@ forbids building nor makes a shared tree safe. Helpers return concise findings,
 changes, actual check commands/results and unfinished or blocked work. The
 explicit validation owner additionally reports evidence paths and relevant
 platform/tool-version/configuration context, including zero-match checks; these
-are not a universal checklist in every worker's standing prompt. Unrun, blocked
-or interrupted checks are never success. Worker-body changes require
+are not a universal checklist in the worker execution prompt. Shared lifecycle text and scout source hygiene do not add one. Unrun, blocked
+or interrupted checks are never success. Prompt-source changes
+(`resources/agent.md`, `resources/worker.md`, `resources/scout.md`) require
 matched generated definition digests and separately coordinated migration, not
 silent replacement of existing user resources or live-Owner deployment.

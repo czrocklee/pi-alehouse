@@ -1,6 +1,6 @@
 # Agent tools quickstart
 
-Use this as a caller workflow, not a standing system prompt. The
+Use this as a caller workflow, not a standing system prompt. Spawn `profile` is `worker` or `scout` (internal `editor` / `researcher`): worker for command-driven local work, scout for local reads plus web. The examples below use `worker`. The
 [tool contract](tool-contract.md) owns schemas, selection and replies;
 [task dispatch](task-dispatch.md) owns paths, claims and validation. [Security](security.md), [limitations](limitations.md)
 and [development](development.md) own authority, support and implementation/checks.

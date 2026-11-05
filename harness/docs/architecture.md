@@ -126,11 +126,15 @@ pruning.  Do not remove them while a Pi process could hold a lease.
 
 ## Profiles and working directory
 
-The model API offers `worker` and `researcher` only. Worker maps to the stable
-internal `editor` profile ID. No legacy profile aliases or capabilities are
-supported.
-Worker has local read/edit/write/Bash/Git/build tools under normal permissions;
-researcher has read-only file tools and web, no Bash/edit/write. Worker has no
+The model API offers `worker` and `scout` only. Worker maps to the stable
+internal `editor` profile ID; scout maps to the stable internal `researcher`
+ID. Generated filenames and historical records keep those IDs. The public name
+`researcher` is not an alias. See [security](security.md).
+Worker has local read/edit/write/Bash/Git/build tools under normal permissions
+and no web tools; that absence is not network isolation. Scout has read, grep,
+find, ls and the four web tools, and no model-facing Bash/edit/write. It can
+read local code, correlate web docs, and aggregate, compare, summarize or
+extract cited information. Neither profile is an OS sandbox. Worker has no
 extra child-only blanket Git mutation deny and no blanket Git allow. Ordinary
 repository Git queries/mutations use ordinary Bash permission, not a second
 per-operation effect matrix. Only bounded literal Git version queries can

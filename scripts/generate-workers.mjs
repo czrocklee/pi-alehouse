@@ -18,10 +18,16 @@ export function renderWorkers(root = packageRoot) {
   assert.equal(new Set(policy.childToolDenies).size, policy.childToolDenies.length, "Duplicate child tool deny");
   assert(policy.childToolDenies.includes("agent_answer") && policy.childToolDenies.includes("notify_parent"), "Missing communication boundary deny");
   const toolDenies = policy.childToolDenies.map((tool) => `  ${tool}: deny\n`).join("");
-  const prompt = readFileSync(join(root, "resources/worker.md"), "utf8");
+  const commonPrompt = readFileSync(join(root, "resources/agent.md"), "utf8");
+  const profilePrompts = {
+    editor: readFileSync(join(root, "resources/worker.md"), "utf8"),
+    researcher: readFileSync(join(root, "resources/scout.md"), "utf8"),
+  };
   const agents = {}, metadata = {};
   for (const [name, profile] of Object.entries(policy.profiles)) {
     assert.match(name, /^[a-z]+$/);
+    assert(Object.hasOwn(profilePrompts, name), `Missing managed prompt: ${name}`);
+    const prompt = `${commonPrompt}\n${profilePrompts[name]}`;
     // Only the cooperative editor opts out of the shipped child-only Git
     // floor. Researcher keeps its exact denies; no Git allow is added,
     // and user rules plus the independent safety/resource guards still apply.
@@ -38,7 +44,7 @@ export function renderWorkers(root = packageRoot) {
     const tools = [...policy.readTools.filter((tool) => bash || tool !== "bash"),
       ...(profile.edits ? ["edit", "write"] : [])];
     assert(tools.every((tool) => !policy.childToolDenies.includes(tool)), `Denied tool in profile: ${name}`);
-    agents[name] = `---\ndisplay_name: Worker\ndescription: ${JSON.stringify(profile.description)}\ntools: ${JSON.stringify(tools)}\nprompt_mode: replace\ninherit_context: false\npermission:\n` +
+    agents[name] = `---\ndisplay_name: ${name === "researcher" ? "Scout" : "Worker"}\ndescription: ${JSON.stringify(profile.description)}\ntools: ${JSON.stringify(tools)}\nprompt_mode: replace\ninherit_context: false\npermission:\n` +
       toolDenies + (profile.edits ? "" : '  write: deny\n  edit: deny\n  path_write:\n    "*": deny\n') +
       `  bash:\n    "*": ${bash ? "ask" : "deny"}\n` + bashDenies.map((p) => `    ${JSON.stringify(p)}: deny`).join("\n") +
       `\n---\n${prompt}${profile.prompt ? `\n${profile.prompt}\n` : ""}\n`;

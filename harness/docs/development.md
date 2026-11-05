@@ -17,7 +17,7 @@ public release acceptance. See the [root README](../../README.md).
 composition.ts                            explicit Pi extension composition
 bin/pi-alehouse.mjs                       launcher and absent-only init command
 scripts/build.mjs                         offline runtime generation
-resources/                                worker policy and neutral configuration seeds
+resources/                                agent/worker/scout prompts, worker policy, neutral seeds
 runtime/                                 generated matched agents, policy, lib, authority
 harness/src/extension.ts                  harness composition
 harness/src/routing.ts                    trusted preset parser/resolution
@@ -110,8 +110,10 @@ never ALLOW or a truncated-command shortcut. Redirects, outputs and sibling
 commands retain independent effects. The speculative HOME-stability fold is
 retired; dynamic `cd` retains ordinary unknown-base behavior.
 
-New model requests select `worker` or `researcher`; worker maps to internal
-`editor`. No legacy profile aliases or capabilities are supported. All Agents
+New model requests select `worker` or `scout`. Worker maps to internal
+`editor`; scout maps to internal `researcher`. Generated filenames stay
+`editor.md` and `researcher.md`. Spawn `researcher` is unsupported, not an
+alias. No legacy profile aliases or capabilities are supported. All Agents
 use the parent's admitted cwd for resource discovery, policy and tools. Spawn
 has no workspace selector; the harness does not create or manage worktrees.
 Relative dispatch paths use that cwd, and ordinary canonical-path permission
@@ -154,16 +156,24 @@ stay strict without retry. The offline time_wrapped_attempts counter derives
 from historical recorded attempts, not delivery; live stats do not emit it. Source status fixes --untracked-files=normal; global LFS helpers
 and configured fsmonitor=false still conservatively withhold known state.
 
-The shared worker prompt requires scoped, reviewable work, denial/ownership
-coordination and concise actual check results with unfinished or blocked work.
-It does not carry a universal evidence-audit checklist. [Runtime feedback](runtime-feedback.md)
+Prompt text is split. `resources/agent.md` is shared lifecycle, scope,
+permission-communication and result guidance. `resources/worker.md` is
+worker-only execution, checks and tree discipline: scoped, reviewable work,
+denial/ownership coordination and concise actual check results with unfinished
+or blocked work. It does not carry a universal evidence-audit checklist.
+`resources/scout.md` is scout source hygiene: local and web gathering,
+synthesis, extraction, citation and untrusted-data discipline. The generator
+composes that common text, the profile body, and any optional existing
+`profile.prompt`. The researcher profile's trust text moves from
+`profile.prompt` into `resources/scout.md`; the internal ID stays
+`researcher`. Guidance is not enforcement. [Runtime feedback](runtime-feedback.md)
 adds partial exact-tool block summaries, not a semantic denial counter or
 availability diagnosis. The explicitly assigned validation owner must report
 actual comparisons, platform/configuration, commands and unrun, blocked,
 interrupted or zero-match checks. Keep temporary evidence outside source.
-Worker-body edits change generated digests: use matched resources and a fresh
-process, never replace user files or claim documentation changes as validation
-or deployment acceptance.
+Edits to those prompt sources change generated digests: use matched resources
+and a fresh process, never replace user files or claim documentation changes
+as validation or deployment acceptance.
 
 ## Tool metadata and Off
 
@@ -326,6 +336,10 @@ one migration unit:
   user files; documentation/source updates do not migrate installed resources.
   Routing defaults to Off. Existing user `reader.md` files are not automatically
   deleted or replaced; they provide no supported runtime profile or capability.
+  The public rename to `scout` does not rewrite installed `researcher.md` or
+  hydrate an open session. Operators reconcile the matched definitions
+  themselves and start a fresh process; spawn `researcher` is unsupported, not
+  an alias.
 - Keep all nine management tools and retired names denied/excluded in children;
   allow only the intended `alert_parent`/`ask_parent` communication tools and
   retire `notify_parent` to an explicit deny, without an alias. Preserve Git,

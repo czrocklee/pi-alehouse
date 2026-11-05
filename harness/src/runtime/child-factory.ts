@@ -59,7 +59,7 @@ export function createChildSessionFactory(options: {
     assert(model, "Agent model is no longer physical");
     let web: WebLease | undefined;
     if (webProfileNames.includes(agent.settings.profile as AgentProfileName)) {
-      assert(options.web, "Researcher web access is unavailable; start through the pi-alehouse launcher");
+      assert(options.web, "Scout web access is unavailable; start through the pi-alehouse launcher");
       web = await options.web.acquire();
     }
     try {

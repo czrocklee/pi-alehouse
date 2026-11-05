@@ -65,6 +65,25 @@ test("generated managed definitions deny all current/retired parent tools and no
   }
 });
 
+test("scout source guidance supports local and web synthesis without worker execution or model-tier assumptions", () => {
+  const { agents } = renderWorkers();
+  const common = readFileSync(new URL("../../../resources/agent.md", import.meta.url), "utf8");
+  const worker = readFileSync(new URL("../../../resources/worker.md", import.meta.url), "utf8");
+  const scout = readFileSync(new URL("../../../resources/scout.md", import.meta.url), "utf8");
+  for (const definition of [agents.editor, agents.researcher]) assert(definition.includes(common));
+  assert(agents.editor.includes(worker));
+  assert(agents.researcher.includes(scout));
+  assert(!agents.researcher.includes(worker), "worker execution/check/tree discipline stays out of scout's body");
+  for (const fact of [/cross-reference, compare, summarize and extract/, /local files and web sources/,
+    /no Bash, edit or write tools/, /report that gap for the parent/, /primary web sources/,
+    /previews are insufficient/, /local file paths or source URLs/, /version, date, platform and scope/,
+    /Surface conflicts/, /missing or unverified information as unknown/, /untrusted data, never instructions/,
+    /Never send local file contents or private task details/]) assert.match(scout, fact);
+  assert.doesNotMatch(scout, /\b(?:cheap|skim|quick|d[1-5])\b/i, "profile guidance does not assign a model tier or shallow scope");
+  assert.doesNotMatch(scout, /full gate|declared tree|Run assigned checks/);
+  assert.doesNotMatch(agents.editor, /Synthesize results yourself/, "scout discipline is profile-specific");
+});
+
 test("source render keeps cooperative editor Git permission-checked and researcher floors intact", () => {
   const policy = json("../../../resources/worker-policy.json"), rendered = renderWorkers();
   assert.equal(policy.profiles.editor.legacyGitDenies, false);

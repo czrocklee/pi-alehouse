@@ -129,7 +129,7 @@ test("supported dynamic activation never changes the researcher's fixed tool tab
 test("a loader that collapses the instance query fails closed", async () => {
   const factory = () => {};
   const modules = new ChildWebModules(entry, async () => ({ default: factory }));
-  await assert.rejects(modules.acquire(), /not an isolated instance/);
+  await assert.rejects(modules.acquire(), /Scout web module is not an isolated instance/);
 });
 
 test("the real schemas reject auth, proxy and non-http(s) URLs before any prompt", async () => {
@@ -187,7 +187,7 @@ test("adapted web metadata stays concise without changing upstream capabilities 
         pi.registerTool(tool);
       } });
       const assembly = childWebExtension(observed)(api);
-      if (settings.tools) await assert.rejects(assembly, /web tools unavailable: get_search_content/);
+      if (settings.tools) await assert.rejects(assembly, /Scout web tools unavailable: get_search_content\. Keep pi-web-access's default tool names and enable all four tools\./);
       else await assembly;
       // Parameter names, constraints and configuration-driven enums stay intact;
       // only existing auth/proxy/HTTP boundaries and copied descriptions differ.
@@ -317,12 +317,16 @@ test("the researcher wrapper keeps the boundary even past schema validation", as
   }
   assert.equal(fetch.parameters.properties.urls.items[kind], "String");
   assert.deepEqual(Object.getOwnPropertyDescriptors(schema), originalDescriptors);
-  for (const params of [{ url: "https://example.com", auth: false }, { url: "https://example.com", proxy: "http://127.0.0.1:1" },
-    { url: "~/.ssh/id_ed25519" }, { urls: ["javascript:alert(1)"] }]) {
+  for (const [params, expected] of [
+    [{ url: "https://example.com", auth: false }, "auth is unavailable to scout Agents."],
+    [{ url: "https://example.com", proxy: "http://127.0.0.1:1" }, "proxy is unavailable to scout Agents."],
+    [{ url: "~/.ssh/id_ed25519" }, "Scout Agents fetch only absolute http(s) URLs, not local paths or other schemes: ~/.ssh/id_ed25519"],
+    [{ urls: ["javascript:alert(1)"] }, "Scout Agents fetch only absolute http(s) URLs, not local paths or other schemes: javascript:alert(1)"],
+  ]) {
     const result = await fetch.execute("t", params);
-    assert.match(result.details.error, /auth|proxy|http\(s\)/);
+    assert.equal(result.details.error, expected);
   }
-  assert.match((await tools.get("web_search").execute("t", { query: "q", proxy: "http://10.0.0.1:3128" })).details.error, /proxy/);
+  assert.equal((await tools.get("web_search").execute("t", { query: "q", proxy: "http://10.0.0.1:3128" })).details.error, "proxy is unavailable to scout Agents.");
   assert.deepEqual(executed, []);
   await fetch.execute("t", { url: "https://example.com" });
   const youtube = { url: "https://www.youtube.com/watch?v=example", timestamp: "23:41-25:00", frames: 6 };
@@ -330,6 +334,10 @@ test("the researcher wrapper keeps the boundary even past schema validation", as
   await tools.get("web_search").execute("t", { query: "q" });
   assert.equal(executed.length, 3);
   assert.equal(executed[1], youtube, "YouTube options reach only the synthetic executor unchanged; no network");
+  assert.equal(researcherWebProblem("web_search", { proxy: "x" }), "proxy is unavailable to scout Agents.");
+  assert.equal(researcherWebProblem("fetch_content", { auth: false, url: "https://example.com" }), "auth is unavailable to scout Agents.");
+  assert.equal(researcherWebProblem("fetch_content", { url: "file:///etc/passwd" }),
+    "Scout Agents fetch only absolute http(s) URLs, not local paths or other schemes: file:///etc/passwd");
   assert.equal(researcherWebProblem("fetch_content", { urls: ["https://a.example", "https://b.example"] }), undefined);
   assert.equal(researcherWebProblem("get_search_content", { proxy: "x" }), undefined);
 });
@@ -339,8 +347,8 @@ test("renamed, disabled or unexpected web tools fail researcher assembly", async
   const only = (names) => (pi) => { for (const name of names) pi.registerTool({ name,
     description: name === "fetch_content" ? fetchDescription : undefined, parameters, execute: async () => ({}) }); };
   await assert.rejects(childWebExtension(only(webToolNames.filter((name) => name !== "source_check")))(recordingApi().api),
-    /web tools unavailable: source_check/);
-  await assert.rejects(childWebExtension(only(["websearch"]))(recordingApi().api), /Unexpected researcher web tool: websearch/);
+    /Scout web tools unavailable: source_check\. Keep pi-web-access's default tool names and enable all four tools\./);
+  await assert.rejects(childWebExtension(only(["websearch"]))(recordingApi().api), /Unexpected scout web tool: websearch/);
 });
 
 test("overlapping researcher assemblies restore console.warn in any finishing order", async () => {

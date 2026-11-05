@@ -591,7 +591,7 @@ test("the widget shows every profile's admitted difficulty beside its nickname i
   for (const profile of profiles) for (const difficulty of [1, 2, 3, 4, 5]) for (const status of statuses) {
     const row = run("a", { name: "orca", profile, difficulty, status }), before = structuredClone(row);
     const line = render([row])[1];
-    const displayed = profile === "editor" ? "worker" : profile;
+    const displayed = profile === "editor" ? "worker" : profile === "researcher" ? "scout" : profile;
     const identity = `orca${status === "failed" ? " · failed" : ""} (${displayed}/d${difficulty})`;
     assert.ok(line.includes(identity), `${status} ${profile}/d${difficulty}: ${line}`);
     assert.deepEqual(row, before, "display labels never rename the admitted or historical profile");
@@ -615,7 +615,8 @@ test("the main widget projects difficulty from effective settings without changi
   const h = mounted([view]); t.after(() => h.widget.dispose());
   h.widget.wake();
   const line = h.lines()[1];
-  assert.match(line, /orca \(researcher\/d5\) \[m\/xhigh\]/);
+  assert.match(line, /orca \(scout\/d5\) \[m\/xhigh\]/);
+  assert.doesNotMatch(line, /researcher/);
   assert.equal(h.lines()[1], line, "repainting the same Run reuses its admitted difficulty");
   assert.deepEqual(view, before, "projection never rewrites effective settings or the Run");
 });
@@ -699,7 +700,7 @@ test("impossible-width rows keep a nickname prefix before clipped attention and 
     const lines = render([run("a", { name: "otter", profile: "researcher", difficulty: 5, status: "failed",
       has_run_warnings: true, pending_messages: 1, error: "Detailed failure" })], { width });
     assert.match(lines[1], /^└─ ✗ o/);
-    assert.doesNotMatch(lines[1], /\(research/);
+    assert.doesNotMatch(lines[1], /\((?:scout|research)/);
     assert(lines.every((line) => visibleWidth(line) <= width));
   }
 });

@@ -49,7 +49,7 @@ export class ChildWebModules {
       const fresh = defaultExport(await this.load(`${this.href}?alehouse-worker-web=${key}`));
       // Fail closed if a loader ever collapses the query (Jiti's import() does):
       // shared module state is exactly what this class exists to prevent.
-      assert(fresh !== shared && !this.instances.has(fresh), "Researcher web module is not an isolated instance");
+      assert(fresh !== shared && !this.instances.has(fresh), "Scout web module is not an isolated instance");
       this.instances.add(fresh);
       factory = fresh;
     }
@@ -90,7 +90,7 @@ const RESTRICTED_PARAMETERS: Readonly<Record<string, readonly string[]>> = {
 export function researcherWebProblem(tool: string, params: unknown): string | undefined {
   const input = (params ?? {}) as Record<string, unknown>;
   for (const key of RESTRICTED_PARAMETERS[tool] ?? []) {
-    if (input[key] !== undefined) return `${key} is unavailable to researcher Agents.`;
+    if (input[key] !== undefined) return `${key} is unavailable to scout Agents.`;
   }
   if (tool !== "fetch_content") return undefined;
   const urls: unknown[] = [input.url, ...(Array.isArray(input.urls) ? input.urls as unknown[] : [])].filter((url) => url !== undefined);
@@ -98,7 +98,7 @@ export function researcherWebProblem(tool: string, params: unknown): string | un
     let protocol: string | undefined;
     try { protocol = typeof url === "string" ? new URL(url.trim()).protocol : undefined; } catch { /* reported below */ }
     if (protocol !== "http:" && protocol !== "https:") {
-      return `Researcher Agents fetch only absolute http(s) URLs, not local paths or other schemes: ${String(url).slice(0, 200)}`;
+      return `Scout Agents fetch only absolute http(s) URLs, not local paths or other schemes: ${String(url).slice(0, 200)}`;
     }
   }
   return undefined;
@@ -204,7 +204,7 @@ export function childWebExtension(factory: WebFactory): ExtensionFactory {
           // Web tools stay eagerly active: the activation loader would change
           // the admitted child tool table between requests.
           if (tool.name === ACTIVATION_TOOL) return;
-          if (!webToolNames.includes(tool.name)) throw new Error(`Unexpected researcher web tool: ${tool.name}`);
+          if (!webToolNames.includes(tool.name)) throw new Error(`Unexpected scout web tool: ${tool.name}`);
           registered.add(tool.name);
           return target.registerTool(restrictTool(tool) as never);
         };
@@ -223,7 +223,7 @@ export function childWebExtension(factory: WebFactory): ExtensionFactory {
     try { await factory(scoped); } finally { suppressActivationWarning(-1); }
     const missing = webToolNames.filter((name) => !registered.has(name));
     if (missing.length) {
-      throw new Error(`Researcher web tools unavailable: ${missing.join(", ")}. Keep pi-web-access's default tool names and enable all four tools.`);
+      throw new Error(`Scout web tools unavailable: ${missing.join(", ")}. Keep pi-web-access's default tool names and enable all four tools.`);
     }
   };
 }

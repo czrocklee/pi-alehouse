@@ -9,7 +9,7 @@ import { defaultDelegation, delegationGuideline, delegationModes, eagernessLevel
 import { Check } from "typebox/value";
 import { assertCallerTools } from "../support/caller-contract.mjs";
 import { blockedDelegationToolNames as blockedDelegationTools, cleanupToolNames, managementToolNames as delegationTools,
-  agentProfileNames, modelProfileNames, workerToolSelection } from "../../dist/tools/tool-names.js";
+  agentProfileNames, internalProfile, modelProfileNames, profileLabel, workerToolSelection } from "../../dist/tools/tool-names.js";
 import { digest } from "../../dist/runtime/context-snapshot.js";
 import { ParentHistoryError } from "../../dist/core/ports.js";
 import { taskReply } from "../../dist/tools/replies.js";
@@ -71,13 +71,24 @@ const create = (rest = {}) => ({ agent: "orca", prompt: "task", label: "task", p
 const send = (agent, rest = {}) => ({ agent, message: "task", ...rest });
 const run = (agent, rest = {}) => ({ agent, prompt: "task", continues: "its earlier findings", label: "task", ...rest });
 
-test("worker maps to stable editor identity and retired model profile names are rejected", async (t) => {
+test("worker maps to editor and scout maps to researcher; retired public names are rejected", async (t) => {
   assert.deepEqual(agentProfileNames, ["editor", "researcher"]);
-  assert.deepEqual(modelProfileNames, ["worker", "researcher"]);
+  assert.deepEqual(modelProfileNames, ["worker", "scout"]);
+  assert.equal(internalProfile("worker"), "editor");
+  assert.equal(internalProfile("scout"), "researcher");
+  assert.equal(profileLabel("editor"), "worker");
+  assert.equal(profileLabel("researcher"), "scout");
+  assert.equal(profileLabel("reader"), "reader");
+  assert.equal(profileLabel("scout"), "scout");
   const f = await fixture(t), { tool, call } = toolsFor(f);
-  for (const profile of ["reader", "editor"]) {
+  for (const profile of ["reader", "editor", "researcher"]) {
     assert.throws(() => tool("agent_spawn").prepareArguments(create({ profile })), code("INVALID_PROFILE"));
-    await assert.rejects(call("agent_spawn", create({ profile }), `retired-${profile}`), code("INVALID_PROFILE"));
+    await assert.rejects(call("agent_spawn", create({ profile }), `retired-${profile}`), (error) => {
+      const result = JSON.parse(error.message).error;
+      assert.equal(result.code, "INVALID_PROFILE");
+      assert.deepEqual(result.allowed, ["worker", "scout"]);
+      return true;
+    });
   }
   assert.equal(Object.hasOwn(tool("agent_spawn").parameters.properties, "workspace"), false);
   for (const workspace of ["shared", "worktree", false, null, {}, "sandbox", "/tmp"]) {
@@ -93,6 +104,14 @@ test("worker maps to stable editor identity and retired model profile names are 
   assert.equal((await call("agent_list", {})).agents[0].profile, "worker");
   await assert.rejects(call("agent_run", run("orca", { workspace: "worktree" })), code("INVALID_PARAMETERS"));
   f.ports[0].finish(); await settle(f, "orca");
+  await call("agent_spawn", create({ agent: "otter", profile: "scout" }), "scout-admit");
+  await until(() => f.ports[1]?.streaming);
+  assert.equal(routed(f, "otter").profile, "researcher");
+  assert.equal(routed(f, "otter").difficulty, 3);
+  const roster = await call("agent_list", {});
+  assert.equal(roster.agents.find((row) => row.agent === "otter").profile, "scout");
+  assert.equal(roster.agents.find((row) => row.agent === "orca").profile, "worker");
+  f.ports[1].finish(); await settle(f, "otter");
 });
 
 test("serialized tool schemas explain task fields and independent capability/routing choices", async (t) => {
@@ -274,7 +293,7 @@ test("spawn creates and send addresses: each rejects the other's names with a po
     return true;
   });
   await call("agent_spawn", create()); await until(() => f.ports[0]?.streaming); f.ports[0].finish(); await settle(f, "orca");
-  await assert.rejects(call("agent_spawn", create({ profile: "researcher" }), "again"), (error) => {
+  await assert.rejects(call("agent_spawn", create(), "again"), (error) => {
     const result = JSON.parse(error.message).error;
     assert.equal(result.code, "AGENT_EXISTS"); assert.equal(result.agent, "orca");
     assert.match(result.resolution, /check agent_list, it may be your own earlier spawn.*never reused.*for a new Agent, choose another name/);
@@ -334,7 +353,7 @@ test("resolver exposes bounded abstract choices and incompatibility without mode
   }
   await assert.rejects(call("agent_spawn", create({ profile: "unknown" })), (error) => {
     const result = JSON.parse(error.message).error; assert.equal(result.code, "INVALID_PROFILE");
-    assert.deepEqual(result.allowed, ["worker", "researcher"]);
+    assert.deepEqual(result.allowed, ["worker", "scout"]);
     assert.equal(JSON.stringify(result).includes("fixture/controlled"), false); return true;
   });
   state.model = { ...model, levels: ["off"] }; state.catalog = [state.model]; state.thinking = "low";

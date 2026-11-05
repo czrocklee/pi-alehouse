@@ -15,7 +15,7 @@ absolute `composition.ts` path, rejecting additional extension paths. It supplie
 matched generated authority/policy paths and an absolute trusted util-linux
 `flock`; direct harness extension loading without the launcher fails rather than
 guessing paths. Parent web integration uses package-local pinned `pi-web-access`
-0.35.0; only `researcher` children receive web tools (below). The CLI does not make a temporary npm install,
+0.35.0; only scout children (internal `researcher`; [below](#researcher-web-access)) receive web tools. The CLI does not make a temporary npm install,
 copy authentication, overwrite existing user resources, or enable arbitrary
 extension discovery. Explicit initialization creates only absent resources;
 the neutral routing catalogue defaults to `off`. Install a **built tarball** with
@@ -27,17 +27,25 @@ Children receive only their profile's local `read`/Bash/search/edit tools as
 filtered by the harness, plus fixed `alert_parent`/`ask_parent`. `notify_parent`
 is retired and explicitly denied, not a runtime alias. They receive
 no parent management tools, no nested delegation and no arbitrary extensions.
-Worker (`editor` internally) receives no web tool table. Tool availability is
-never network authorization. Plain `pi` has no delegation tools at all.
+Worker (`editor` internally) receives no web tool table. Absence of those
+tools is not network isolation. Tool availability is never network
+authorization. Plain `pi` has no delegation tools at all.
 
-New model requests select `worker` or `researcher`. Worker maps to the stable
-internal `editor` profile ID. No legacy profile aliases or capabilities are
-supported. Both profiles use the parent's working directory.
+New model requests select `worker` or `scout`. Worker maps to the stable
+internal `editor` profile ID; scout maps to the stable internal `researcher`
+ID. Generated filenames, config paths, historical records and
+`#researcher-web-access` keep that internal ID. The former public name
+`researcher` is unsupported, not an alias for scout. There is no live session
+migration: accepted Agents keep their admitted profile, and the new public
+name requires a new Agent after matched resources and a fresh process. No
+legacy profile aliases or capabilities are supported. Both profiles use the
+parent's working directory. Reasoning difficulty is independent of profile;
+scout is not a cheaper, shallower or quicker tier.
 
-| Public profile | Capability | Meaning |
-| --- | --- | --- |
-| `worker` (`editor` internally) | local read/edit/write/Bash/Git/builds | cooperative developer under normal permission; no web and no strict readonly promise |
-| `researcher` | read-only file tools and four web tools; no Bash/edit/write | web-derived material is untrusted |
+| Public profile | Internal ID | Capability | Meaning |
+| --- | --- | --- | --- |
+| `worker` | `editor` | local read/edit/write/Bash/Git/builds; no web tools | command-driven investigation, experiments, changes and verification under normal permission; no web is not network isolation, and review-only is not a readonly promise |
+| `scout` | `researcher` | read, grep, find, ls and the four web tools; no model-facing Bash/edit/write | read local code, correlate it with web docs, and aggregate, compare, summarize or extract cited information; web-derived material is untrusted |
 
 Worker has no extra child-only blanket Git mutation ban and no automatic Git
 allow. Review-only work is a task instruction. User-configured command/path denies and base credential/resource/high-risk
@@ -66,7 +74,7 @@ There is no complete historical-content separation promise for a worker with
 ordinary Git access. Literal path denies remain useful protection, not a data
 taint tracker for repository objects. A selected configured deny survives session
 grants/yolo; ordinary asks keep ordinary approval, and invalid configuration
-still fails closed. Researcher has no Bash tool and keeps its profile ceiling.
+still fails closed. Scout (internal `researcher`) has no model-facing Bash tool and keeps its profile ceiling. That does not remove upstream web subprocess or file effects; see [below](#researcher-web-access).
 
 Git commands are never silently rewritten. Native index cache writes and locks
 remain possible; separate worktrees reduce same-index contention but share
@@ -100,14 +108,23 @@ which yolo can satisfy. This is deliberately not an arbitrary-shell guarantee.
 
 ### Researcher web access
 
-`researcher` is the only profile with web tools, and has no Bash, so its only
-effects outside file reads are the web tools themselves.  They keep the global
-permission rules: the seeded policy asks for `web_search`, `source_check` and
-`fetch_content` and allows `get_search_content`.  Its generated definition adds
-no web rule.  Forwarded child asks reach the parent's human approval, or Jev
-where the approval mode enables it for subagents; Jev never auto-allows
-`fetch_content`.  Local reads keep the normal secret-path denies and
-external-directory asks.
+This heading and `#researcher-web-access` stay for compatibility. The public
+name is `scout`; the internal profile ID and generated `researcher.md` stay
+`researcher`.
+
+Scout is the only profile with web tools. It has no model-facing Bash, edit or
+write tools. That is not a claim that web tools have no subprocess or file
+effects. Upstream pi-web-access can still clone repositories, run helper
+programs, read cookies, send content to another model, and write a shared
+cache. Those residuals are unchanged by the public rename and are listed
+below. No OS sandbox is provided.
+
+The four web tools keep the global permission rules: the seeded policy asks
+for `web_search`, `source_check` and `fetch_content` and allows
+`get_search_content`. Its generated definition adds no web rule. Forwarded
+child asks reach the parent's human approval, or Jev where the approval mode
+enables it for subagents; Jev never auto-allows `fetch_content`. Local reads
+keep the normal secret-path denies and external-directory asks.
 
 pi-web-access itself limits fetches to `http(s)`, blocks loopback, private,
 link-local (including cloud metadata), CGNAT and multicast targets after DNS
@@ -115,15 +132,17 @@ resolution, revalidates every redirect, restricts `auth` to configured
 per-host profiles, and replaces inline `data:` payloads in fetched text.  It
 does not inspect what a URL or query carries.
 
-The residual risk is deliberate: a researcher reads both project files and
+The residual risk is deliberate: a scout reads both project files and
 untrusted pages, and a URL or query can carry data out to any public host.
-Keep `fetch_content` approval human, or do not use `researcher` on projects
-whose contents must not reach the network.  pi-web-access's
+Keep `fetch_content` approval human, or do not use scout on projects whose
+contents must not reach the network. pi-web-access's
 `fetchContent.domainPolicy.allow` in `web-search.json` limits `fetch_content`
-to listed hosts for the parent and every researcher alike; the harness does not
-set it.  Its prompt treats web content as data, not instructions,
-and forbids putting local contents into URLs or queries; that is guidance, not
-enforcement.  Treat its results as web-derived and untrusted.
+to listed hosts for the parent and every scout alike; the harness does not
+set it. Source hygiene in `resources/scout.md` treats web content as data, not
+instructions, and forbids putting local contents into URLs or queries. That
+text moves out of the researcher `profile.prompt`; it is guidance, not
+enforcement. Treat results as web-derived and untrusted. A citation does not
+make a claim safe.
 
 The harness enforces the rest:
 
@@ -143,7 +162,7 @@ The harness enforces the rest:
 - `fetch_content` has no `auth` (browser-cookie) parameter and accepts only
   absolute `http(s)` URLs.  Upstream accepts local video paths (by extension,
   default 50 MB) and uploads them for analysis or extracts frames, outside the
-  path permission gates; a researcher cannot. Its adapted fetch description and
+  path permission gates; a scout cannot. Its adapted fetch description and
   URL/timestamp/frame parameter descriptions do not promise local-video access.
   Assembly rejects drift in the required upstream local-video description
   rewrite; URL/schema and execution checks enforce the input boundary separately.
@@ -169,7 +188,7 @@ shows only the tool input:
   and pull-request URLs are read with `gh`.  A private repository the user can
   access is therefore readable, and outside the path permission gates.
   `githubClone.enabled: false` in `web-search.json` turns cloning off for the
-  parent and every researcher.
+  parent and every scout. The internal profile ID remains `researcher`.
 - YouTube URLs run `yt-dlp`/`ffmpeg`.  If `allowBrowserCookies` (or
   `PI_ALLOW_BROWSER_COOKIES=1`) is set, the Gemini Web path reads local Chrome
   cookies for Google origins; removing `auth` does not remove this path.
@@ -177,20 +196,25 @@ shows only the tool input:
   workflows send fetched content to another configured model, outside the
   child's routed model and its accounting.
 - Fetched pages are cached for an hour in `<agent dir>/web-search-cache`,
-  shared by the parent and every researcher and kept after the session ends.
+  shared by the parent and every scout and kept after the session ends.
 - SSRF checks resolve the host before connecting and the connection resolves it
   again, so a rebinding DNS record can pass validation and reach a private
   address.
 - The launcher checks the pinned pi-web-access version and location, not a
   digest of its code.
 
-The profiles express enforced capabilities, not work roles, model tiers, or
-permission grants.  They share policy body; they do not pin a model, thinking,
-turn budget, or context inheritance.  Generated profile integrity and static
-Bash denies are checked by the external authority.  Existing sensitive paths,
-external writes, subprocess restrictions, Git configuration protections, and
+The profiles express enforced capabilities, not model tiers or permission
+grants. They do not pin a model, thinking, turn budget or context
+inheritance. Shared prompt text is `resources/agent.md` (lifecycle, scope,
+permission communication and results). Worker execution guidance stays in
+`resources/worker.md`; scout source hygiene stays in `resources/scout.md`.
+The generator composes common text, the profile body, and any optional
+existing `profile.prompt`. Generated profile integrity and static Bash denies
+are checked by the external authority. Existing sensitive paths, external
+writes, subprocess restrictions, Git configuration protections, and
 permission-search rules continue to apply. Opaque Bash programs can perform
 internal IO that the classifier cannot see, so this is not an OS sandbox.
+Upstream web features can do the same outside the Bash classifier.
 Forwarded asks must retain the requesting child's edge-stamped principal,
 actual match values and execution/boundary paths.
 

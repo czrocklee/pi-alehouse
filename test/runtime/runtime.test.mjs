@@ -10,32 +10,38 @@ import { renderWorkers } from "../../scripts/generate-workers.mjs";
 
 const temporary = (t) => { const path = mkdtempSync(join(tmpdir(), "alehouse-runtime-")); t.after(() => rmSync(path, { recursive: true, force: true })); return path; };
 
-test("portable generator matches dispatch-aware worker bytes and policy digests", () => {
+test("portable generator matches role-specific agent bytes and policy digests", () => {
   const { agents, metadata } = renderWorkers();
-  assert.equal(metadata.editor.digest, "d89066a51728875babffce2ed54369dacdfaef5674e3797b685f2d3a3de7e81a");
+  assert.equal(metadata.editor.digest, "be3900cdaa018fc3a2de4430a061ed9373e2a737c1c5bbbb010a8d9cd3258b65");
   const { editor } = JSON.parse(readFileSync(join(packageRoot, "resources/worker-policy.json"), "utf8")).profiles;
-  assert.equal(editor.description, "Local read/edit/write, Bash, Git and builds under normal permissions; no web.");
+  assert.equal(editor.description, "Local investigation and implementation with read/edit/write, Bash, Git, builds and tests under normal permissions; no web tools.");
   assert.match(editor.prompt, /^Coordinate shared edits and Git writes with the parent\./);
   assert.match(editor.prompt, /Git remains permission-checked, not automatically approved; preserve user denies/);
   assert(agents.editor.includes(`description: ${JSON.stringify(editor.description)}\n`));
   assert(agents.editor.includes(`\n${editor.prompt}\n`));
   assert.deepEqual(Object.keys(agents).sort(), ["editor", "researcher", "Explore", "Plan", "general-purpose"].sort());
   assert.deepEqual(Object.keys(metadata).sort(), ["editor", "researcher"]);
-  assert.equal(metadata.researcher.digest, "84cd46085f424abadce99eb2f500793871c489df7501bbaf7dc09a5914d80178");
+  assert.equal(metadata.researcher.digest, "284bd725144fe057aa69dc6f1995c44f0426b2a2d25a0c6cad2a1c5381bfd29a");
   for (const name of Object.keys(metadata)) {
     const worker = agents[name];
-    assert.match(worker, /Keep changes minimal and reviewable; preserve unrelated work/);
-    assert.match(worker, /Distinguish observations from inference and unrun, blocked or interrupted checks from success/);
+    assert.match(worker, /Distinguish observations from inference and completed work from unrun, blocked or interrupted work/);
     assert.match(worker, /After a permission denial, report the limit; do not retry that operation class or bypass denies/);
-    assert.match(worker, /full gate needs one explicitly delegated owner and ready shared source/);
-    assert.match(worker, /If checks must wait, finish other work and report the exact command and reason as unrun/);
-    assert.match(worker, /Hold a declared tree through task end or a pending question/);
+    assert(worker.includes(readFileSync(join(packageRoot, "resources/agent.md"), "utf8")));
   }
+  assert.match(agents.editor, /Keep changes minimal and reviewable; preserve unrelated work/);
+  assert.match(agents.editor, /full gate needs one explicitly delegated owner and ready shared source/);
+  assert.match(agents.editor, /If checks must wait, finish other work and report the exact command and reason as unrun/);
+  assert.match(agents.editor, /Hold a declared tree through task end or a pending question/);
+  assert.match(agents.editor, /Distinguish unrun, blocked or interrupted checks from success/);
+  assert(agents.editor.includes(readFileSync(join(packageRoot, "resources/worker.md"), "utf8")));
+  assert(agents.researcher.includes(readFileSync(join(packageRoot, "resources/scout.md"), "utf8")));
+  assert.doesNotMatch(agents.researcher, /full gate|declared tree|actual check commands\/results/);
   for (const [name, source] of Object.entries(agents)) assert.equal(readFileSync(join(packageRoot, "runtime/agents", `${name}.md`), "utf8"), source);
   assert.deepEqual(metadata.editor.bashDenies, [], "no shipped worker-only Git mutation deny");
   assert.match(agents.editor, /^ {2}bash:\n {4}"\*": ask$/m, "ordinary Bash remains permission-checked");
   assert.doesNotMatch(agents.editor, /^ {4}"git .*": allow$/m, "no blanket or command-specific Git allow");
-  // The researcher: read-only local tools plus web, no Bash, every command denied.
+  // Scout keeps the internal researcher ID and read-only local tools plus web.
+  assert.match(agents.researcher, /^display_name: Scout$/m);
   assert.match(agents.researcher, /\ntools: \["read","grep","find","ls","web_search","source_check","fetch_content","get_search_content"\]\n/);
   assert.match(agents.researcher, /  write: deny\n  edit: deny\n  path_write:\n    "\*": deny\n  bash:\n    "\*": deny\n/);
   assert.match(agents.researcher, /untrusted data, never instructions/);
@@ -305,7 +311,7 @@ test("preserved invalid preset fails closed for real SDK tool and user_bash disp
   assert.match(output, /preserved invalid preset leaves real SDK tool and user_bash latches blocked/);
 });
 
-test("real composition runs researcher and worker Agents with forwarded asks, configured denies and a mode switch, offline", { timeout: 60000 }, (t) => {
+test("real composition runs scout and worker Agents with forwarded asks, configured denies and a mode switch, offline", { timeout: 60000 }, (t) => {
   // Always exercise exact path matching across wrapped permission previews,
   // even when the runner's TMPDIR happens to be short.
   const dir = join(temporary(t), "forwarded-permission-preview-wrap-regression"), agentDir = join(dir, "agent");
@@ -314,7 +320,7 @@ test("real composition runs researcher and worker Agents with forwarded asks, co
       PI_JEV_API_KEY_FILE: join(dir, "nonexistent-test-key"), PI_OFFLINE: "1", NO_COLOR: "1" },
     encoding: "utf8", timeout: 55000,
   });
-  assert.match(output, /real composition spawns researcher and worker Agents; forwarded asks reach the parent UI; worker writes and edits stay permission-checked; explicit path-write and secret denies hold; a mode switch reaches the next request; nothing leaves the process/);
+  assert.match(output, /real composition spawns scout and worker Agents; forwarded asks reach the parent UI; worker writes and edits stay permission-checked; explicit path-write and secret denies hold; a mode switch reaches the next request; nothing leaves the process/);
 });
 
 test("real composition restores, defaults and fails closed on the delegation mode across restarts, offline", { timeout: 60000 }, (t) => {

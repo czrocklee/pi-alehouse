@@ -65,8 +65,8 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
   const wait = fixture.tools.find((tool) => tool.name === "agent_wait");
   assert(spawn && wait);
   assert.deepEqual(spawn.parameters.properties.profile, {
-    type: "string", enum: ["worker", "researcher"],
-    description: "worker: local read/edit/write, Bash/Git/builds; no web. researcher: read-only files/web, no Bash/edit/write; untrusted web material. Normal permissions/denies apply; review-only is an instruction.",
+    type: "string", enum: ["worker", "scout"],
+    description: "worker: command-driven local investigation, changes and verification; read/edit/write, Bash/Git/builds; no web tools. scout: read-only local files and web sources; gather, cross-reference, compare, summarize and extract information with cited paths/URLs; no Bash/edit/write. Normal permissions/denies apply; review-only is an instruction; web material is untrusted.",
   });
   assert.equal(Object.hasOwn(spawn.parameters.properties, "workspace"), false);
   assert.deepEqual(wait.parameters.properties.mode, {
@@ -77,6 +77,7 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
   assert.equal(spawn.parameters.properties.dispatch.additionalProperties, false);
   const prepared = spawn.prepareArguments(spawnArgs());
   assert.equal(prepared.profile, "worker", "the TypeBox Check layer accepts its local enum values");
+  assert.equal(spawn.prepareArguments(spawnArgs({ profile: "scout" })).profile, "scout");
   assert.equal(fixture.admissionEffects, 0);
 
   // Bypass only the harness prepareArguments layer to exercise the actual
@@ -96,7 +97,7 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
   assert.equal(captured.length, 1);
   assert.equal(captured[0].reasoning_difficulty, 3);
   for (const args of [
-    spawnArgs({ profile: "editor" }),
+    spawnArgs({ profile: "editor" }), spawnArgs({ profile: "researcher" }),
     spawnArgs({ workspace: "shared" }), spawnArgs({ workspace: "worktree" }), spawnArgs({ workspace: "elsewhere" }),
     spawnArgs({ extra: true }),
     spawnArgs({ dispatch: { ownership: ["harness/src"], extra: true } }),
@@ -114,7 +115,7 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
   for (const args of [spawnArgs({ reasoning_difficulty: 3.5 }), spawnArgs({ reasoning_difficulty: "3" }),
     spawnArgs({ workspace: "shared" }), spawnArgs({ workspace: "worktree" }), spawnArgs({ workspace: null }),
     // The local TypeBox-backed enums must also close the raw TypeBox Check.
-    spawnArgs({ profile: "editor" }), spawnArgs({ workspace: "elsewhere" })]) {
+    spawnArgs({ profile: "editor" }), spawnArgs({ profile: "researcher" }), spawnArgs({ workspace: "elsewhere" })]) {
     isToolError(await invoke(spawn, args, rawInputContext));
   }
   assert.equal(fixture.admissionEffects, 0, "raw type/bound failures have no admission effects");

@@ -216,7 +216,7 @@ test("preflight denials project the checked surface and target profile only for 
   const denial = errorReply({ code: "PREFLIGHT_DENIED", details: { key: "tree", requested: "build/tree", surface: "path_write", profile: "researcher" } }).error;
   assert.equal(denial.parameter, "tree");
   assert.equal(denial.surface, "path_write");
-  assert.equal(denial.profile, "researcher");
+  assert.equal(denial.profile, "scout");
   assert.equal(denial.path, "build/tree");
   const bounded = errorReply({ code: "PREFLIGHT_DENIED", details: { key: "tree", surface: "s".repeat(64), profile: "p".repeat(64) } }).error;
   assert.equal(bounded.surface, "s".repeat(32));

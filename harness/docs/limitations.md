@@ -159,7 +159,7 @@ without a model request. Pinned parent-only web access can warn that dynamic
 tool activation is unavailable when upstream host-version detection cannot
 resolve the aliased SDK; its eagerly available tools remain under normal parent
 permissions. This warning does not authorize child web, a permission bypass,
-or a second Pi runtime. Researcher children register no activation loader and
+or a second Pi runtime. Scout children (internal `researcher`) register no activation loader and
 suppress their repeat of that warning.
 
 Pi validates and coerces tool arguments with pi-schema's JSON Schema validator,
@@ -353,22 +353,33 @@ The linked contract lists unobserved paths and publication limits.
 
 The harness depends on, but does not own, generated worker policy, permission
 authority, static guards, search policy, and Jev review policy. New model
-requests offer only `worker` and `researcher`. Worker maps to stable internal
-`editor`, with local read/edit/write/Bash/Git/build tools under normal permission;
-a review assignment is not an enforced readonly ceiling. Researcher has read-only
-file tools and web, no Bash/edit/write. Basic credential/resource/high-risk
-protection and user-configured denies remain. No profile is an OS sandbox.
+requests offer only `worker` and `scout`. Worker maps to stable internal
+`editor`, with local read/edit/write/Bash/Git/build tools under normal permission
+for command-driven investigation, experiments, changes and verification.
+It has no web tools; that is not network isolation. A review assignment is not
+an enforced readonly ceiling. Scout maps to stable internal `researcher` and
+keeps read, grep, find, ls and the four web tools, with no model-facing
+Bash/edit/write. It can read local code, correlate web docs, and aggregate,
+compare, summarize or extract cited information. No model-facing Bash does not
+mean web tools have no subprocess or file effects: upstream features can still
+clone, run helpers and cache. A citation is not a safety guarantee. Reasoning
+difficulty is independent; scout is not a cheap, shallow or quick tier. Basic
+credential/resource/high-risk protection and user-configured denies remain.
+No profile is an OS sandbox.
 
-No legacy profile aliases or capabilities are supported. Opaque programs can
+The former public name `researcher` is unsupported, not an alias. Generated
+filenames, config paths, historical records and `#researcher-web-access` keep
+the internal ID. There is no live session migration. No legacy profile aliases
+or capabilities are supported. Opaque programs can
 perform internal IO outside the classifier's view. Redirect-buried argv belongs only to the last command of a redirected
 body; completed spellings add restrictions, never ALLOW. Dynamic `cd` targets
 keep an unknown, yolo-satisfiable base; the speculative HOME-stability fold is
 retired. See [redirect-buried argv](security.md#redirect-buried-argv-and-home-cd).
 
-Nested delegation is excluded for every child. Only researcher has web tools;
-worker has no web tool table. Researcher fetch schemas and capability wording
-allow only absolute HTTP(S) URLs, never local-video paths. Researcher file reads
-and web calls together can move project content to the network; its prompt forbids that but cannot enforce it (see
+Nested delegation is excluded for every child. Only scout (internal `researcher`) has web tools;
+worker has no web tool table. Scout fetch schemas and capability wording
+allow only absolute HTTP(S) URLs, never local-video paths. Scout file reads
+and web calls together can move project content to the network; source hygiene forbids that but cannot enforce it (see
 [researcher web access](security.md#researcher-web-access)). Tool availability
 is not authorization.
 
@@ -544,8 +555,10 @@ wrapper.
 
 New package, generated agents/policy/seeds/integrity manifest and managed user
 definitions/permissions must match in a fresh Pi process; no open-Owner reload or
-runtime swap. The launcher verifies managed definition digests, including worker
-body changes. Absent-only init never repairs existing mismatches automatically;
+runtime swap. The public rename to `scout` is the same rule: it does not rewrite
+installed `researcher.md`, alias the old public name, or migrate a live session.
+The launcher verifies managed definition digests, including prompt-body changes.
+Absent-only init never repairs existing mismatches automatically;
 reconcile deliberately as an operator, without automatic writes to existing
 user files, replacing user symlinks or weakening permission floors. Rollback must
 coordinate the same resources; see

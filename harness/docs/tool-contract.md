@@ -84,8 +84,11 @@ while accepted-request replay remains intact. This is an adapter opt-in, not a
 restriction on optional/repeated display names in an unbound generic core Owner.
 
 Spawn requires `agent`, `prompt` (1--131072 UTF-16 units), `profile`
-(`worker` or `researcher`) and integer `reasoning_difficulty` (1--5,
-from easiest to hardest). Worker maps to stable internal `editor`.
+(`worker` or `scout`) and integer `reasoning_difficulty` (1--5,
+from easiest to hardest). Worker maps to stable internal `editor`; scout maps
+to stable internal `researcher`. The public name `researcher` is unsupported,
+not an alias. Accepted Agents are not renamed. Reasoning difficulty is
+independent of profile.
 Optional fields are `label` (1--120), `inherit_context`, `after` (1--4 other names),
 `wait_ms` (0--300000), `max_turns` (1--10000, default 256), plus optional
 `dispatch`. Task execution has no wall-clock deadline. The retired
@@ -114,9 +117,10 @@ task instruction, including deliverable, scope, stopping conditions and
 paths relative to the parent's cwd (or explicit absolute paths); label defaults to its
 first nonblank line and is never forwarded as an instruction.
 
-Worker has local read/edit/write/Bash/Git/build tools under normal permissions,
-without web. Review-only work is an instruction, not an enforced readonly
-ceiling. It has no extra child-only blanket Git mutation deny and no blanket Git
+Worker is for command-driven investigation, experiments, changes and
+verification. It has local read/edit/write/Bash/Git/build tools under normal
+permissions, without web. No web tools is not network isolation. Review-only
+work is an instruction, not an enforced readonly ceiling. It has no extra child-only blanket Git mutation deny and no blanket Git
 allow. Repository queries and mutations use ordinary Bash permission; only
 bounded literal Git version queries can qualify for fixed-query automatic
 allowance. Raw configured denies/specific asks, explicit literal paths/outputs,
@@ -125,11 +129,14 @@ applies to ordinary asks, not denies or invalid-config fail-closed asks. There
 are no historical-provenance probes or second Git-operation authorization
 matrix. See [Git restrictions](git-read-proof.md).
 
-Researcher has read-only file tools and web, no Bash/edit/write, and returns
-web-derived untrusted material. Its fetch inputs and descriptions accept only
+Scout has read, grep, find, ls and the four web tools, and no model-facing
+Bash/edit/write. It can read local code, correlate web docs, and aggregate,
+compare, summarize or extract cited information. It returns web-derived
+untrusted material. Its fetch inputs and descriptions accept only
 absolute HTTP(S) URLs, not local video paths; timestamp/frame descriptions do
-not promise local-video support. No legacy profile aliases or capabilities are
-supported. Bash/web remain permission-gated;
+not promise local-video support. See
+[researcher web access](security.md#researcher-web-access). No legacy profile
+aliases or capabilities are supported. Bash/web remain permission-gated;
 no profile is an OS sandbox.
 
 All Agents share the parent's admitted cwd, including pending local changes,
@@ -612,9 +619,9 @@ Both closed schemas require 1--8192 nonblank UTF-16 units and revalidate after
 SDK hooks against current Run/generation, accepting gate and stop/exit state.
 Closed callbacks fail explicitly (`RUN_INPUT_CLOSED`), never report acceptance.
 All nine management tools and retired names are excluded/denied in children.
-Only researcher receives web tools, with its own instance; worker has no web
+Only scout (internal `researcher`) receives web tools, with its own instance; worker has no web
 tool table. See
-[security](security.md).
+[security](security.md#researcher-web-access).
 
 Alert is for decision-relevant facts, not routine progress. Successful acceptance
 says it was queued and the child may continue, not that the parent read it. It

@@ -160,6 +160,14 @@ for (const profile of ["editor", "researcher"]) test(`${profile} preserves profi
   assert.equal(f.webReleases.length, profile === "researcher" ? 1 : 0);
 });
 
+test("internal researcher without web fails closed with public scout wording", async t => {
+  const f = fixture(t, "researcher");
+  delete f.options.web;
+  await assert.rejects(f.create(), /Scout web access is unavailable; start through the pi-alehouse launcher/);
+  assert.equal(f.webReleases.length, 0);
+  assert.equal(seam.state.assemblies.length, 0);
+});
+
 for (const failure of ["loaderError", "assemblyError"]) test(`${failure} releases web lease after confirmed cleanup`, async t => {
   const f = fixture(t, "researcher");
   seam.state[failure] = Object.freeze(new Error("synthetic assembly failure"));

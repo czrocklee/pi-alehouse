@@ -68,7 +68,7 @@ When you are ready to use Alehouse:
 pi-alehouse init
 ```
 
-Initialization creates only absent required resources: five agent definitions (`editor`, `researcher`, `Explore`, `Plan`, `general-purpose`), a routing catalogue and a permission configuration—seven files total. It preserves existing files and symlinks and does not modify settings or credentials. Conflicting or incompatible existing resources require your explicit attention; they are not silently replaced. Run `pi-alehouse init` again to add missing required files. Existing user `reader.md` files are not automatically deleted or replaced; no legacy runtime profile aliases or capabilities are supported.
+Initialization creates only absent required resources: five agent definitions (`editor`, `researcher`, `Explore`, `Plan`, `general-purpose`), a routing catalogue and a permission configuration—seven files total. Those filenames are internal IDs; new tasks select public `worker` or `scout`. It preserves existing files and symlinks and does not modify settings or credentials. Conflicting or incompatible existing resources require your explicit attention; they are not silently replaced. Run `pi-alehouse init` again to add missing required files. Existing user `reader.md` files are not automatically deleted or replaced; no legacy runtime profile aliases or capabilities are supported. The public name `researcher` is unsupported, not an alias. Prompt or profile updates are not applied by init and do not migrate a live session: reconcile matched definitions manually, then start a fresh process.
 
 The routing catalogue is `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/harness-presets.json`. Its version-3 format uses five independent `slots.d1`–`slots.d5` objects, one per difficulty, each with `model` and optional `effort`. Inherited thinking resolves an unsupported enabled parent level automatically; no per-slot `thinking` field is accepted. It starts with `off` and no model presets. Add your own registered provider/model IDs using the [routing configuration guide](routing.md#preset-configuration). The README's images label historical personal captures and controlled UI examples separately; neither is a built-in model recommendation.
 
@@ -105,7 +105,7 @@ See the [panel guide](interface.md) for mouse controls and renderer differences.
 
 - Choosing `off` disables new worker work; it does not cancel accepted work.
 - Never `/reload` while an Owner is open. Close it and start a fresh Pi process after updating Alehouse.
-- Cancellation is cooperative, not a guaranteed immediate stop. Tasks use worker (internal editor) or researcher. Neither profile is an OS sandbox; agents share the parent's working directory.
+- Cancellation is cooperative, not a guaranteed immediate stop. Tasks use worker (internal `editor`) or scout (internal `researcher`). Neither profile is an OS sandbox; agents share the parent's working directory. Worker's lack of web tools is not network isolation. See [security](security.md).
 - Alehouse protects its own installed code from model-tool writes. To work on Alehouse's source using Alehouse, launch a separately installed copy rather than that source checkout.
 - Optional Jev review can send action and review context to an external service. Without a configured key it defers to human approval. Read [data handling and security](security.md) before enabling it.
 - Dashboard posting and Grok billing access are opt-in; see [footer integrations](interface.md#optional-footer-network-integrations).

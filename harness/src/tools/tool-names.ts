@@ -32,14 +32,15 @@ export const blockedDelegationToolNames: readonly string[] = Object.freeze([
 export const agentProfileNames = ["editor", "researcher"] as const;
 export type AgentProfileName = typeof agentProfileNames[number];
 
-/** Public choices are separate from stable on-disk/history profile IDs. */
-export const modelProfileNames = ["worker", "researcher"] as const;
+/** Public choices are separate from stable on-disk/history profile IDs.
+ * scout admits internal researcher; researcher is not a public alias. */
+export const modelProfileNames = ["worker", "scout"] as const;
 export type ModelProfileName = typeof modelProfileNames[number];
-export const internalProfile = (name: ModelProfileName): AgentProfileName => name === "worker" ? "editor" : name;
-export const profileLabel = (name: string): string => name === "editor" ? "worker" : name;
+export const internalProfile = (name: ModelProfileName): AgentProfileName => name === "worker" ? "editor" : "researcher";
+export const profileLabel = (name: string): string => name === "editor" ? "worker" : name === "researcher" ? "scout" : name;
 
-/** The only child tools besides local ones and alert_parent/ask_parent. Only the
- * researcher receives them, from its own pi-web-access instance; its
- * definition must list all four and no Bash or direct edit tool. */
+/** The only child tools besides local ones and alert_parent/ask_parent. Only
+ * internal researcher (public scout) receives them, from its own pi-web-access
+ * instance; its definition must list all four and no Bash or direct edit tool. */
 export const webToolNames: readonly string[] = Object.freeze(["web_search", "source_check", "fetch_content", "get_search_content"]);
 export const webProfileNames: readonly AgentProfileName[] = Object.freeze(["researcher"]);

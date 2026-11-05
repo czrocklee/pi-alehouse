@@ -54,9 +54,9 @@ const dispatchField = optional(Type.Object({
   description: "Task scope and planned checks, not permissions or execution evidence. Use literal paths without padding, globs or shell expansion. Relative paths resolve from the inherited parent cwd; absolute paths keep their meaning. Assign full-suite validation to one designated Agent after shared source is stable." }));
 const spawnSchema = Type.Object({
   agent: agentName("Unique short nickname from one theme, not a task name; stays taken after kill."),
-  prompt: text(131072, "Task instructions: deliverable, scope, stopping conditions, cwd-relative paths (or explicit absolute paths), and needed context."),
+  prompt: text(131072, "Task instructions: deliverable, scope, stopping conditions, needed context, cwd-relative or absolute paths; source/version/date constraints and output format as relevant."),
   label: labelField,
-  profile: stringEnum(modelProfileNames, { description: "worker: local read/edit/write, Bash/Git/builds; no web. researcher: read-only files/web, no Bash/edit/write; untrusted web material. Normal permissions/denies apply; review-only is an instruction." }),
+  profile: stringEnum(modelProfileNames, { description: "worker: command-driven local investigation, changes and verification; read/edit/write, Bash/Git/builds; no web tools. scout: read-only local files and web sources; gather, cross-reference, compare, summarize and extract information with cited paths/URLs; no Bash/edit/write. Normal permissions/denies apply; review-only is an instruction; web material is untrusted." }),
   reasoning_difficulty: Type.Integer({ minimum: 1, maximum: 5, description: "Fixed model by reasoning difficulty, not workload/cost: 1=given checks/decided changes; 2=scoped fix; 3=given design/review/investigation/plan; 4=competing hypotheses/complex constraints; 5=unknown approach. Do not re-score to bypass capacity waits." }),
   inherit_context: optional(Type.Boolean({ description: "Default false: text context without tool calls/results; max 64 KiB." })),
   dispatch: dispatchField,
@@ -67,7 +67,7 @@ const spawnSchema = Type.Object({
 const runSchema = Type.Object({
   agent: agentName("An existing, idle Agent."),
   continues: text(512, "The specific earlier work of this Agent being continued; not sent to it. If you cannot name one, use agent_spawn (with after if only its output is needed)."),
-  prompt: text(131072, "Follow-up instructions with scope, deliverable and cwd-relative paths (or explicit absolute paths); earlier conversation is retained."),
+  prompt: text(131072, "Follow-up instructions: deliverable, scope, stopping conditions, cwd-relative or absolute paths; source/version/date constraints and output format as relevant; earlier conversation is retained."),
   label: labelField,
   dispatch: dispatchField,
   after: afterField,

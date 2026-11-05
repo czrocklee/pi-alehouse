@@ -20,7 +20,9 @@ Only the bounded literal Git version form can qualify for automatic fixed-query
 allowance. Git add/commit and other writes never gain a readonly shortcut.
 Explicit configured command denies/specific asks, path checks, external-directory
 checks, basic dangerous-operation guards and immutable resource protection
-remain. Researcher has no Bash/edit/write tools. No live user definition or
+remain. Scout (internal `researcher`) has no model-facing Bash/edit/write tools.
+That ceiling does not describe upstream web subprocess or cache effects; see
+[researcher web access](security.md#researcher-web-access). No live user definition or
 policy is overwritten by building this package.
 
 Dangerous model-requested PATH/loader/helper environment prefixes remain a

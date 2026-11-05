@@ -31,11 +31,13 @@ export function assertCallerTools(tools) {
   assert.match(fields.agent.description, /not a task name/);
   assert.doesNotMatch(fields.agent.description, /orca|otter/);
   assert.equal(fields.prompt.minLength, 1); assert.equal(fields.prompt.maxLength, 131072);
-  for (const fact of [/deliverable/, /scope/, /stopping/, /paths/, /context/]) assert.match(fields.prompt.description, fact);
+  for (const fact of [/Task instructions/, /deliverable/, /scope/, /stopping/, /needed context/, /cwd-relative or absolute paths/, /source\/version\/date/, /output format/, /as relevant/]) assert.match(fields.prompt.description, fact);
   assert.equal(fields.label.minLength, 1); assert.equal(fields.label.maxLength, 120);
   assert.match(fields.label.description, /not instructions/); assert.match(fields.label.description, /first nonblank line/);
-  assert.deepEqual(fields.profile.enum, ["worker", "researcher"]);
-  for (const fact of [/worker:.*Bash.*Git.*no web/, /researcher:.*read-only.*web.*no Bash\/edit\/write/, /untrusted/, /permissions/, /denies/, /review-only/]) assert.match(fields.profile.description, fact);
+  assert.deepEqual(fields.profile.enum, ["worker", "scout"]);
+  assert.equal(fields.profile.enum.includes("researcher"), false);
+  for (const fact of [/worker:.*command-driven local investigation, changes and verification/, /read\/edit\/write, Bash\/Git\/builds/, /no web tools/, /scout:.*read-only local files and web sources/, /gather, cross-reference, compare, summarize and extract/, /cited paths\/URLs/, /no Bash\/edit\/write/, /permissions/, /denies/, /review-only/, /web material is untrusted/]) assert.match(fields.profile.description, fact);
+  assert.doesNotMatch(fields.profile.description, /researcher|web_search|source_check|fetch_content|get_search_content|network isolation/);
   assert.equal(Object.hasOwn(fields, "workspace"), false);
   assert.equal(fields.reasoning_difficulty.type, "integer");
   assert.equal(fields.reasoning_difficulty.minimum, 1); assert.equal(fields.reasoning_difficulty.maximum, 5);
@@ -62,6 +64,7 @@ export function assertCallerTools(tools) {
   assert.equal(runFields.continues.pattern, "\\S");
   for (const fact of [/specific earlier work of this Agent/, /not sent/, /cannot name one, use agent_spawn/, /after if only its output/]) assert.match(runFields.continues.description, fact);
   assert.equal(runFields.prompt.maxLength, 131072);
+  for (const fact of [/Follow-up instructions/, /deliverable/, /scope/, /stopping/, /cwd-relative or absolute paths/, /source\/version\/date/, /output format/, /as relevant/, /earlier conversation is retained/]) assert.match(runFields.prompt.description, fact);
   assert.deepEqual(runFields.label, fields.label);
   for (const fact of [/idle Agent's own earlier work/, /re-reads its whole conversation/, /even on a related topic.*agent_spawn/, /pending question: agent_answer/]) assert.match(run.description, fact);
   for (const tool of [spawn, run]) {

@@ -115,7 +115,8 @@ test("tree preflight deny reports target profile and surface without classificat
       assert.equal(failure.details.surface, "path_write");
       assert.equal(failure.details.profile, "researcher");
       assert.equal(failure.details.path, join(f.cwd, "new-tree"));
-      assert.match(failure.details.reason, /Permission policy denied path_write for profile researcher on this declared path/);
+      assert.match(failure.details.reason, /Permission policy denied path_write for profile scout on this declared path/);
+      assert.doesNotMatch(failure.details.reason, /researcher/);
       assert.match(failure.details.reason, /not a missing or wrong-type filesystem result/);
       return true;
     });
@@ -124,7 +125,7 @@ test("tree preflight deny reports target profile and surface without classificat
   assert(!existsSync(join(f.agentDir, "harness-trees")), "known deny allocates no child tree lease");
 });
 
-for (const [profile, publicProfile] of [["editor", "worker"], ["researcher", "researcher"]]) {
+for (const [profile, publicProfile] of [["editor", "worker"], ["researcher", "scout"]]) {
   test(`real preflight denial projects ${profile} as ${publicProfile} in model JSON without effects`, t => {
     const f = fixture(t), context = { ...f.context, profile };
     f.service.checkPermission = (surface, value, queriedProfile) => {
@@ -142,7 +143,7 @@ for (const [profile, publicProfile] of [["editor", "worker"], ["researcher", "re
         assert.equal(projected.reason, `Permission policy denied path_write for profile ${publicProfile} on this declared path; this is a permission decision, not a missing or wrong-type filesystem result.`);
         assert.equal(projected.parameter, "tree");
         assert.equal(projected.requested, "new-tree");
-        assert.doesNotMatch(modelJSON, /editor/);
+        assert.doesNotMatch(modelJSON, /editor|researcher/);
         return true;
       });
     });

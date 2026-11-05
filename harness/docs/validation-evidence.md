@@ -20,7 +20,7 @@ observations into public evidence.
 | --- | --- | --- |
 | Root `npm ci --ignore-scripts && npm run build && npm run check` | Lockfile installation, matched generated runtime, lint/type checks, package unit/SDK/packaging tests and portable policy checks when scripts pass | Real provider quality, deployability, human UI, fresh host compatibility |
 | Portable policy suite (separate from package tests) | Generated worker definitions, static guard, policy-aware grep and patched permission authority under synthetic controlled calls | OS sandboxing, arbitrary scripts/paths or live human authorization |
-| Controlled host integration suite (explicit invocation) | Built entrypoint, actual host SDK/loader, child tool allowlist, parent/researcher web isolation, footer/Stats/UI registration, lease and shutdown with synthetic provider/UI | Remote model use, safe reload, transactionally atomic cancellation or durable recovery |
+| Controlled host integration suite (explicit invocation) | Built entrypoint, actual host SDK/loader, child tool allowlist, parent/scout web isolation (internal `researcher`), footer/Stats/UI registration, lease and shutdown with synthetic provider/UI | Remote model use, safe reload, transactionally atomic cancellation or durable recovery |
 | Optional Jev controlled lane | Review provenance and forwarded asks with fabricated responses in isolated process; defer and no-key paths | Human authorization, calibrated judgments, permission grants for other contexts |
 | PTY/history probes | Selected terminal and journal behavior, negative reload/IO observations | Human-TUI acceptance, fsync/power-loss guarantees |
 | Built tarball install (`--omit=dev --legacy-peer-deps --ignore-scripts`) and installed-tarball RPC smoke | The package carries no Pi SDK/runtime and its CLI can open, status and close an Owner against a separately supplied host Pi without a model request | Editing, human rendering, web requests, billing or live-provider behavior |
@@ -63,7 +63,7 @@ The production tarball install and its checks are described under
 ## Existing contract regressions to preserve
 
 - Core: Owner FIFO/idempotence, four executing per admitted provider/twelve Owner-wide resident reservations, result budgets and paging, Off with retained work, cleanup quarantine, non-regressing usage floor and unreported residue. These are the current regression targets.
-- SDK/host: verified capabilities, controlled prompt/input races, natural-finish steer fallback, real SDK replacement confirmation, worker web exclusion, researcher isolation and parent tool visibility.
+- SDK/host: verified capabilities, controlled prompt/input races, natural-finish steer fallback, real SDK replacement confirmation, worker web exclusion, scout isolation (internal `researcher`) and parent tool visibility.
 - Security: `editor` guarded writes, shell ask behavior, static guard and policy search, approval provenance/defer, and failure-closed readiness against the matched generated authority.
 - UI: permission dialog yield, widget/detail/picker/footer/Stats projection, overlay protocol, and non-atomic replacement warnings; scripted UI is not a person.
 - Negative/optional: unsafe-live-reload assertions and separately invoked Jev tests. A passed *negative* assertion documents an unsupported operation; it does not authorize that operation.

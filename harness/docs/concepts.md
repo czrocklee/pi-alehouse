@@ -32,7 +32,8 @@ An **Agent** is a resident reusable worker reservation with one immutable
 admitted configuration:
 
 - permission profile and rendered-definition digest (model-facing `worker`
-  maps to stable internal `editor`; the other public choice is `researcher`);
+  maps to stable internal `editor`; `scout` maps to stable internal
+  `researcher`);
 - preset/version/digest, immutable difficulty (1–5), its internally resolved
   preset slot, exact provider/model, resolved thinking and recorded effort source;
 - the parent's cwd and optional text-only inherited context snapshot;
@@ -147,7 +148,7 @@ do not keep an SDK execution environment alive.
 
 ## Task fields, not roles
 
-`agent_spawn` requires `agent`, `prompt`, `profile` (`worker` or `researcher`)
+`agent_spawn` requires `agent`, `prompt`, `profile` (`worker` or `scout`)
 and `reasoning_difficulty`. `agent_run` requires `agent`, `continues` and
 `prompt`; `continues` names the specific earlier work of that Agent being
 continued (if none, spawn, even on a related topic; add `after` if only its
@@ -192,16 +193,22 @@ Callers choose profile and reasoning difficulty, never a
 concrete worker model or thinking level, arbitrary cwd, owner, generation,
 session path or history path.
 
-Worker is a cooperative developer with read/edit/write/Bash/Git/build tools
-under normal permissions, no web or enforced readonly review ceiling.
-Researcher retains read-only file tools and web, without Bash/edit/write.
-Repository Git queries/mutations use ordinary Bash permission; only bounded
-literal version queries can qualify for automatic fixed-query allowance.
-There is no extra worker-only blanket Git mutation deny or blanket Git allow.
-Configured denies/specific asks and basic credential/resource/high-risk
-protection remain. No historical-provenance probes or second per-operation Git
-authorization matrix is involved; see [Git restrictions](git-read-proof.md).
-No legacy profile aliases or capabilities are supported.
+Worker is for command-driven investigation, experiments, changes and
+verification, with read/edit/write/Bash/Git/build tools under normal
+permissions, no web tools and no enforced readonly review ceiling. No web
+tools is not network isolation. Scout (internal `researcher`) keeps read,
+grep, find and ls plus the four web tools, and has no model-facing
+Bash/edit/write. It can read local code, correlate web docs, and aggregate,
+compare, summarize or extract cited information. See
+[security](security.md#researcher-web-access). Reasoning difficulty is
+independent of profile. Repository Git queries/mutations use ordinary Bash
+permission; only bounded literal version queries can qualify for automatic
+fixed-query allowance. There is no extra worker-only blanket Git mutation deny
+or blanket Git allow. Configured denies/specific asks and basic
+credential/resource/high-risk protection remain. No historical-provenance
+probes or second per-operation Git authorization matrix is involved; see
+[Git restrictions](git-read-proof.md). The public name `researcher` is not an
+alias. Neither profile is an OS sandbox.
 
 `inherit_context: true` copies a bounded (64 KiB) **text** snapshot only.  It is
 not an SDK history fork and carries neither tools nor routing settings.  It is

@@ -82,7 +82,8 @@ test("ordinary detail metadata cannot inject terminal or bidi controls", () => {
 test("the title reserves task and Run reuse cue before optional identity text", () => {
   const title = renderDetailTitle({ view: view(), live: live() }, 0, theme, 100);
   assert.match(title, /reviewer/);
-  assert.match(title, /researcher/);
+  assert.match(title, /scout/);
+  assert.doesNotMatch(title, /researcher/);
   assert.match(title, /审查 controller\.ts/);
   assert.match(title, /r-8f3a/);
   for (const overrides of [{}, { status: "completed" }, { finalization_pending: true }]) {
@@ -106,8 +107,8 @@ test("the title reserves task and Run reuse cue before optional identity text", 
   }
 });
 
-test("detail profile labels say worker without renaming nicknames or historical settings", () => {
-  for (const [profile, displayed] of [["editor", "worker"], ["reader", "reader"], ["researcher", "researcher"]]) {
+test("detail profile labels say worker and scout without renaming nicknames or historical settings", () => {
+  for (const [profile, displayed] of [["editor", "worker"], ["reader", "reader"], ["researcher", "scout"]]) {
     for (const name of ["", "editor"]) {
       const v = view({ name, effective_settings: { ...view().effective_settings, profile } });
       const before = structuredClone(v);
@@ -706,7 +707,8 @@ test("the floating pane draws a frame that costs columns but never rows", (t) =>
   assert.match(b[0], /^.*\u256d/, "top border");
   assert.match(b.at(-1), /\u256f.*$/, "bottom border");
   // The title and the footer ride on the border rows rather than above and below it.
-  assert.match(b[0], /reviewer \(researcher\)/);
+  assert.match(b[0], /reviewer \(scout\)/);
+  assert.doesNotMatch(b[0], /researcher/);
   assert.match(b.at(-1), /agents/);
   // Riding on the border does not open it: what the inlay does not use is rule.
   assert.doesNotMatch(b[0], / {3}/, `top border left open: ${JSON.stringify(b[0])}`);
