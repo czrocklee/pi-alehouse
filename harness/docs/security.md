@@ -484,6 +484,33 @@ eligibility and after preparation; the non-latching read-only lease probe is not
 an admission gate. Send never creates an answer continuation; run cannot bypass
 a pending question. Child messages are data, not permission grants.
 
+Optional scout `agent_spawn.return_to` admits that same continuation from the
+parent spawn, not a child tool and not an authority bypass. Protected prepare
+calls `requireParentAnswerPermission(service, ctx)` on the live parent permission
+service (`OwnerToolsOptions.parentPermission`) with the parent's own tool-call
+context. The helper does not resolve a principal. It asks the authority for
+`checkToolCallPermission("agent_answer", ctx)`, a read-only method added by the
+managed patch: the authority binds exactly the principal its own tool gate binds
+for that call (a recorded `active_agent`, else the name it remembered, for
+example from an earlier prompt tag that is now gone), never a scout or worker
+profile, and does not update the remembered name. An authority without that
+method is unavailable, not a guess. The decision includes session always-allow
+and managed yolo; a selected deny still survives yolo. `getToolPermission` does
+not include those rules and is not used. Only an exact synchronous
+`state: "allow"` proceeds. Deny, ask, unknown and
+unavailable reject as `RETURN_TO_PERMISSION_DENIED` before either Run is
+installed. The helper does not prompt and does not record a grant. Deny means
+report the denial and do not bypass it. Any other rejection uses ordinary
+separate `agent_spawn` and `agent_answer` under their normal gates. Child
+output, handoff text and `return_to` grant no path, tool or profile authority.
+Omitting the source result from non-read model observations does not omit
+alerts, questions or labels, and is not an OS sandbox or a zero-information
+boundary. `return_to_run_id` is live Owner metadata for the current Owner only.
+It is not a persisted or recoverable journal field. Existing journal names and
+data stay literal; restart does not hydrate a compound pair or restore
+answerability.
+This observed query behavior is not full feature validation.
+
 Alerts are accepted only at an open Run/generation gate, after parameter, quota
 and SDK-free retained-envelope byte checks. A single FIFO preserves order across
 child and harness sources, including historical/killed sources. Child allowances
@@ -495,10 +522,14 @@ successful scoped publication releases quota. No deny, Git/path/web boundary, im
 rule is relaxed. Task-condition targets bind once; alert scopes are separately
 typed Owner/Agents/Run. Result read spans one Agent's pending alerts independently
 of its task/page selector.
-Inline command observations see only their bound Run.
+Inline command observations see only their bound Run, except scout `return_to`,
+whose spawn observation is exactly the source and continuation Runs, with
+readiness from the continuation alone.
 
-Entry/default-admission validation, return validation and publication are
-synchronous read-only phases. Supported Owner effecting entries reject reentrancy
+Entry/default-admission validation, return validation, publication and every
+Owner/tree lease probe are synchronous read-only phases. A lease adapter that
+reenters an Owner effect fails that probe exactly as a failed lease check at the
+same site would, so no decision made before the probe is committed. Supported Owner effecting entries reject reentrancy
 before any mutation or async enqueue, even if a guarded getter catches the
 nested error. Invalid/throwing/asynchronous admission readers reject observations
 without publication; only a valid enabled=false state represents Off. Command

@@ -75,6 +75,9 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
   });
   assert.equal(spawn.parameters.additionalProperties, false);
   assert.equal(spawn.parameters.properties.dispatch.additionalProperties, false);
+  const returnTo = spawn.parameters.properties.return_to;
+  assert.equal(returnTo.additionalProperties, false);
+  assert.deepEqual(returnTo.required.toSorted(), ["agent", "answer", "question_id"]);
   const prepared = spawn.prepareArguments(spawnArgs());
   assert.equal(prepared.profile, "worker", "the TypeBox Check layer accepts its local enum values");
   assert.equal(spawn.prepareArguments(spawnArgs({ profile: "scout" })).profile, "scout");
@@ -96,6 +99,11 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
   assert.equal(valid.isError, false);
   assert.equal(captured.length, 1);
   assert.equal(captured[0].reasoning_difficulty, 3);
+  const routed = spawnArgs({ profile: "scout", return_to: {
+    agent: "otter", question_id: `q_${"a".repeat(32)}`, answer: "Use the attached findings." } });
+  assert.equal(spawn.prepareArguments(routed).return_to.answer, "Use the attached findings.");
+  assert.equal((await invoke(schemaProbe, routed)).isError, false);
+  assert.equal(captured.length, 2);
   for (const args of [
     spawnArgs({ profile: "editor" }), spawnArgs({ profile: "researcher" }),
     spawnArgs({ workspace: "shared" }), spawnArgs({ workspace: "worktree" }), spawnArgs({ workspace: "elsewhere" }),
@@ -103,9 +111,15 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
     spawnArgs({ dispatch: { ownership: ["harness/src"], extra: true } }),
     spawnArgs({ dispatch: { ownership: ["harness/*"] } }),
     spawnArgs({ prompt: "" }),
+    { ...routed, return_to: { ...routed.return_to, extra: true } },
+    { ...routed, return_to: { ...routed.return_to, question_id: "q_bad" } },
+    { ...routed, return_to: { ...routed.return_to, agent: "Not A Name" } },
+    { ...routed, return_to: { ...routed.return_to, answer: " " } },
+    { ...routed, return_to: { ...routed.return_to, answer: "x".repeat(16385) } },
+    { ...routed, return_to: { agent: "otter", question_id: routed.return_to.question_id } },
   ]) {
     isToolError(await invoke(schemaProbe, args));
-    assert.equal(captured.length, 1, "invalid model arguments cannot reach tool execution");
+    assert.equal(captured.length, 2, "invalid model arguments cannot reach tool execution");
   }
 
   // The real adapter's TypeBox Check runs before SDK coercion. Fractional or

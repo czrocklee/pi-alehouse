@@ -179,8 +179,9 @@ as validation or deployment acceptance.
 
 The scoped simplification removes only the abandoned metadata-only `agent_read`
 view as a functional feature. Keep all nine names and other arguments/features:
-required `continues`, optional label/after/dispatch, max_turns, inherit_context,
-wait's all/any selection, every wait_ms and max_chars. The later execution-limit
+required `continues`, optional label/after/dispatch, optional spawn-only
+`return_to`, max_turns, inherit_context, wait's all/any selection, every wait_ms
+and max_chars. `return_to` is not an `agent_run` field and not a tenth tool. The later execution-limit
 retirement removes max_duration_ms and its hard/soft wall-clock timers, not
 command, observation or stop/cleanup timeouts. Parent replies omit routine telemetry. Live Run context, usage and elapsed time
 remain UI observations; legacy timed warnings remain history-only facts and task
@@ -207,8 +208,8 @@ historical context. Keep user workflow choices out of standing policy.
 ## Communication integration obligations
 
 Owner owns one typed model/lifecycle observation collection and non-reentrant
-drain. Entry and ready-to-publish external reads are guarded synchronous
-read-only phases; effecting facades guard before any mutation or async enqueue.
+drain. Entry and ready-to-publish external reads, and every lease probe, are
+guarded synchronous read-only phases (`guardRead` shares an existing frame); effecting facades guard before any mutation or async enqueue.
 Real abort/timer listeners may only latch signals/defer the same drain. A failed
 validator/snapshot/publisher rejects only its observer, with zero communication
 commit and no fabricated Owner cleanup fault. Lifecycle observers never call
@@ -258,8 +259,11 @@ incompatible Owner appear supported. Default result read prioritizes whole
 questions and pins cursor Run independently of Agent alerts; a positive safe
 `task` selects a retained Run read-only, never a command target. Task and cursor
 are mutually exclusive. There is no metadata-only read view or metadata paging.
-Inline observations see only their accepted/bound Run. Do not use legacy progress
-claims or name-based finished consumption.
+Inline observations see only their accepted/bound Run, except scout `return_to`:
+`observe` expands an `agent_spawn` of a source that has `return_to_run_id` to
+that source and its continuation, scopes alerts to exactly those two Runs, and
+takes readiness from the continuation alone (no extra readiness target).
+Do not use legacy progress claims or name-based finished consumption.
 
 One Owner pending FIFO derives independent child (64 Owner / 16 Agent) and
 harness-feedback (16 Owner / one pending per Agent) quotas, at most 80 entries;
@@ -272,6 +276,45 @@ New answer admission must latch observed lease loss before token checks and
 again after preparation; apparent lease recovery cannot reopen authority.
 Observation admission-reader errors reject with zero publication rather than
 masquerading as Off. Commands retain fail-closed admission and accepted replay.
+
+Scout `return_to` is one effecting spawn admission, not a read-only projection
+or a new Owner service. Public arguments are exactly `{agent, question_id,
+answer}`. `OwnerToolsOptions.parentPermission` supplies the parent service;
+`requireParentAnswerPermission(service, ctx)` is the prepare gate: it hands the
+parent's own tool-call context to the authority's patched read-only
+`checkToolCallPermission("agent_answer", ctx)` and never reconstructs the
+principal itself, since only the authority holds the name its gate remembered.
+Core create
+requests keep optional `return_to` as internal `{agent_id, question_id,
+answer}`. Preflight is all-or-none before mutation; Off rejects before
+allocation. Replay of the caller request returns the source Run before new-work
+validation. The continuation request ID is derived, prefixed
+`\u0000pi-alehouse/return-to/v1:`, and direct submission is `INVALID_REQUEST_ID`.
+Source `return_to_run_id` links that continuation. A different `return_to` is
+`REQUEST_CONFLICT`. Return_to-specific checks precede shared capacity. Install
+is callback-free. Each installed Run carries a per-Run `announcing` fact until
+its own notification returns; `pump` and `failDoomed` skip it, so a consumer
+that reenters and pumps cannot start or dependency-fail an unannounced Run.
+There is no Owner-wide suppression flag. A `changed` failure does not uninstall
+either record; that Run is at once quarantined `context_change_failed` and
+dequeued, and finished as an error only after both notifications. Every lease
+probe runs read-only through `guardRead`. Classify the path with the existing effecting
+spawn/answer coverage, including pre-effect rejection. Do not add reserved
+capacity, recursion, a child management tool, a lifecycle deadline or external
+storage. `return_to_run_id` is the sticky exact internal link: live Owner
+metadata for the current Owner only, never a model address, never serialized
+into model tool output, and never a journal field. Non-read observations omit
+the source body through the existing `result_omitted`, `result_truncated` and
+cursor controls, driven by the source's admission-time
+`result_visibility: "explicit_read"` record fact, which `communicationWindow`
+applies before slicing. No new result flag or read mode is added. Explicit
+`agent_read` reads that body normally. `PiRunJournal` keeps serializing
+explicit identity, routing, outcome and result fields; it does not write the
+RunRecord or this link, and no history adapter change is planned. Do not rewrite
+existing journal names or data, and do not hydrate the pair on restart. Stable
+`researcher` and `editor` IDs, on-disk paths, `Symbol.for` keys and `harness:*`
+records stay as they are. An offline permission-interface observation is not
+feature acceptance and is not evidence that the feature's tests passed.
 
 Pure snapshots feed synchronous packing, double-JSON UTF-8 checks and final
 ToolResult construction **before** reference validation and callback-free

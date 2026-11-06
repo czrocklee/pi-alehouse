@@ -67,7 +67,10 @@ const ownerCases = {
   latchParentHistoryFailure: { kind: "effect", args: () => [new ParentHistoryError("forbidden")] },
   assertOwnerAvailable: { kind: "effect", args: () => [] },
   submit: { kind: "effect", args: () => ["forbidden-submit", task("forbidden", { name: "orca" })] },
-  submitPrepared: { kind: "effect", args: (f) => ["forbidden-prepared", task("forbidden", { name: "orca" }), f.prepareRequest,
+  // The compound create branch shares this guarded facade, before inspecting
+  // return_to or enqueuing either admission (including hostile object traps).
+  submitPrepared: { kind: "effect", args: (f) => ["forbidden-prepared", task("forbidden", { name: "orca", return_to: {
+    agent_id: f.run.agent_id, question_id: questionId(f.c.identity.owner_id, f.c.identity.generation, f.run.run_id), answer: "forbidden" } }), f.prepareRequest,
     { settle: { agent_id: f.run.agent_id, ms: 1 } }] },
   answer: { kind: "effect", args: (f) => ["forbidden-answer", f.run.agent_id,
     questionId(f.c.identity.owner_id, f.c.identity.generation, f.run.run_id), "forbidden", { prepare: f.prepareVoid }] },

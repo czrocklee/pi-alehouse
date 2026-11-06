@@ -23,7 +23,7 @@ export function assertCallerTools(tools) {
   }
   const spawn = byName.get("agent_spawn"), fields = spawn.parameters.properties;
   assert.deepEqual(spawn.parameters.required.toSorted(), ["agent", "profile", "prompt", "reasoning_difficulty"]);
-  assert.deepEqual(Object.keys(fields).sort(), ["after", "agent", "dispatch", "inherit_context", "label", "max_turns", "profile", "prompt", "reasoning_difficulty", "wait_ms"]);
+  assert.deepEqual(Object.keys(fields).sort(), ["after", "agent", "dispatch", "inherit_context", "label", "max_turns", "profile", "prompt", "reasoning_difficulty", "return_to", "wait_ms"]);
   assert.equal(fields.agent.pattern, "^[a-z][a-z0-9-]{0,23}$");
   assert.match(fields.agent.description, /[Uu]nique/);
   assert.match(fields.agent.description, /taken/);
@@ -38,6 +38,16 @@ export function assertCallerTools(tools) {
   assert.equal(fields.profile.enum.includes("researcher"), false);
   for (const fact of [/worker:.*command-driven local investigation, changes and verification/, /read\/edit\/write, Bash\/Git\/builds/, /no web tools/, /scout:.*read-only local files and web sources/, /gather, cross-reference, compare, summarize and extract/, /cited paths\/URLs/, /no Bash\/edit\/write/, /permissions/, /denies/, /review-only/, /web material is untrusted/]) assert.match(fields.profile.description, fact);
   assert.doesNotMatch(fields.profile.description, /researcher|web_search|source_check|fetch_content|get_search_content|network isolation/);
+  assert.equal(fields.return_to.type, "object");
+  assert.equal(fields.return_to.additionalProperties, false);
+  assert.deepEqual(fields.return_to.required.toSorted(), ["agent", "answer", "question_id"]);
+  assert.equal(fields.return_to.properties.agent.pattern, fields.agent.pattern);
+  assert.equal(fields.return_to.properties.question_id.pattern, "^q_[0-9a-f]{32}$");
+  assert.equal(fields.return_to.properties.answer.maxLength, 16384);
+  for (const fact of [/Scout only/, /worker's pending question/, /Needs agent_answer allowed for you without a prompt/, /resumes automatically/, /do not read or relay/,
+    /Replies omit the scout's result/, /agent_read/, /wait_ms waits for the worker/, /Kill the scout/])
+    assert.match(fields.return_to.description, fact);
+  assert(!spawn.parameters.required.includes("return_to"));
   assert.equal(Object.hasOwn(fields, "workspace"), false);
   assert.equal(fields.reasoning_difficulty.type, "integer");
   assert.equal(fields.reasoning_difficulty.minimum, 1); assert.equal(fields.reasoning_difficulty.maximum, 5);
@@ -63,6 +73,7 @@ export function assertCallerTools(tools) {
   assert.equal(runFields.continues.minLength, 1); assert.equal(runFields.continues.maxLength, 512);
   assert.equal(runFields.continues.pattern, "\\S");
   for (const fact of [/specific earlier work of this Agent/, /not sent/, /cannot name one, use agent_spawn/, /after if only its output/]) assert.match(runFields.continues.description, fact);
+  assert.equal(Object.hasOwn(runFields, "return_to"), false, "compound return is spawn-only");
   assert.equal(runFields.prompt.maxLength, 131072);
   for (const fact of [/Follow-up instructions/, /deliverable/, /scope/, /stopping/, /cwd-relative or absolute paths/, /source\/version\/date/, /output format/, /as relevant/, /earlier conversation is retained/]) assert.match(runFields.prompt.description, fact);
   assert.deepEqual(runFields.label, fields.label);
@@ -106,6 +117,7 @@ export function assertCallerTools(tools) {
   assert.equal(answerFields.question_id.minLength, 34); assert.equal(answerFields.question_id.maxLength, 34);
   assert.equal(answerFields.answer.minLength, 1); assert.equal(answerFields.answer.maxLength, 16384);
   assert.match(answerFields.question_id.description, /Copy.*exactly/);
+  assert.match(answerFields.answer.description, /A worker's question needs web research.*scout with return_to/);
   for (const fact of [/exact pending question_id/, /continuation/, /status="needs_input"/, /current question_id from agent_wait or agent_read/, /historical text alone cannot be answered/, /fixed settings/, /label\/dispatch/]) assert.match(answer.description, fact);
   for (const tool of [byName.get("agent_wait"), byName.get("agent_read"), answer]) {
     assert.match(tool.description, /workers_disabled/);

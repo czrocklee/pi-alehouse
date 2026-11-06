@@ -12,7 +12,7 @@ const temporary = (t) => { const path = mkdtempSync(join(tmpdir(), "alehouse-run
 
 test("portable generator matches role-specific agent bytes and policy digests", () => {
   const { agents, metadata } = renderWorkers();
-  assert.equal(metadata.editor.digest, "be3900cdaa018fc3a2de4430a061ed9373e2a737c1c5bbbb010a8d9cd3258b65");
+  assert.equal(metadata.editor.digest, "adf3518371e3dec7ab1654704d81118cc893d4ee81c801b6dee238fce14d7d23");
   const { editor } = JSON.parse(readFileSync(join(packageRoot, "resources/worker-policy.json"), "utf8")).profiles;
   assert.equal(editor.description, "Local investigation and implementation with read/edit/write, Bash, Git, builds and tests under normal permissions; no web tools.");
   assert.match(editor.prompt, /^Coordinate shared edits and Git writes with the parent\./);
@@ -29,6 +29,8 @@ test("portable generator matches role-specific agent bytes and policy digests", 
     assert(worker.includes(readFileSync(join(packageRoot, "resources/agent.md"), "utf8")));
   }
   assert.match(agents.editor, /Keep changes minimal and reviewable; preserve unrelated work/);
+  assert.match(agents.editor, /no web tools\. When the task needs external information .* use ask_parent/);
+  assert.doesNotMatch(agents.researcher, /You have no web tools/);
   assert.match(agents.editor, /full gate needs one explicitly delegated owner and ready shared source/);
   assert.match(agents.editor, /If checks must wait, finish other work and report the exact command and reason as unrun/);
   assert.match(agents.editor, /Hold a declared tree through task end or a pending question/);

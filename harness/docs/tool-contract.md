@@ -28,7 +28,7 @@ Routing, models, Owner IDs, generation and SDK session IDs stay internal.
 
 | Tool | Intent |
 | --- | --- |
-| `agent_spawn` | Create a named Agent and give it its first task. |
+| `agent_spawn` | Create a named Agent and give it its first task. Optional scout `return_to` also admits one worker continuation. |
 | `agent_run` | Give an idle Agent a follow-up task; cannot bypass an unanswered question. |
 | `agent_send` | Join/steer the task bound at the call; never create a continuation. |
 | `agent_answer` | Answer one explicit pending question and create a continuation Run. |
@@ -91,8 +91,10 @@ not an alias. Accepted Agents are not renamed. Reasoning difficulty is
 independent of profile.
 Optional fields are `label` (1--120), `inherit_context`, `after` (1--4 other names),
 `wait_ms` (0--300000), `max_turns` (1--10000, default 256), plus optional
-`dispatch`. Task execution has no wall-clock deadline. The retired
-`max_duration_ms` parameter is rejected, not ignored.
+`dispatch` and, on spawn only, `return_to`. Task execution has no wall-clock
+deadline. The retired `max_duration_ms` parameter is rejected, not ignored.
+`return_to` is specified under [Scout return_to](#scout-return_to); on
+`agent_run` it is rejected, not ignored.
 
 Spawn/run `dispatch` is closed plain data: `inputs` ≤8 paths, `ownership` ≤16
 paths, `tree` one build-root path and `checks` ≤16 parent-declared identifiers;
@@ -241,7 +243,9 @@ needed to answer again. After input entry, failure does not reopen the original
 question. Kill, quarantine and Owner loss never restore answerability. Historical
 questions remain readable but consumed/reserved/unavailable ones have no
 actionable token. A finalizing continuation cannot expose the original token
-early, even after reservation release.
+early, even after reservation release. Optional scout `return_to` admits this
+same continuation in one spawn; see [Scout return_to](#scout-return_to). It is
+not a delayed or hidden answer.
 
 ## After and handoff
 
@@ -278,12 +282,97 @@ Agent/label/status and never-retained character count. It is framed as reference
 not instructions, and is not parent-authored approval witness text. It is not
 verified. This permits queuing an author/reviewer without re-pasting results.
 
+## Scout return_to
+
+Optional closed `agent_spawn.return_to` is `{agent, question_id, answer}`, all
+required if present. Omitting it leaves the default one-Run spawn. It is not an
+`agent_answer` alias, a delayed admission, a new tool or a child capability.
+The public object is exactly those three fields. Source `profile` must be
+`scout` (internal `researcher`); `agent` must name a healthy reusable `worker`
+(internal `editor`) whose exact current question is already settled and
+actionable: `needs_input`, pending, unreserved, no current Run. A non-scout
+source or non-worker target fails closed (`INVALID_RETURN_TO` /
+`INVALID_RETURN_TO_PROFILE`). `question_id` is the same `^q_[0-9a-f]{32}$` token.
+`answer` is required parent text, 1--16384 nonblank UTF-16 units. Prepare maps
+`agent` to internal `agent_id` before core admission. The source may still use
+its own `after`; an already settled non-completed dependency is rejected before
+install. One call does not recurse, reserve a capacity pool, start a service,
+arm a lifecycle deadline or write an external store.
+
+Coordinator admission installs two ordinary Runs or neither. The source is the
+new scout Run. The worker continuation is preadmitted `after` that exact source
+Run, with the original `answer_to`, dispatch and claim, and the Agent's fixed
+settings and turn limit exactly as `agent_answer` admits them.
+`return_to.answer` is the continuation `task_prompt` and parent-authored witness
+text. Source output crosses only by the existing handoff prefix, shared
+16384-unit budget and untrusted framing, outside `task_prompt`. Every `return_to`-specific
+refusal (shape, profiles, token, answer, an already settled non-completed source
+dependency) precedes shared capacity, so it is never reported as `QUEUE_FULL` or
+`OWNER_HISTORY_LIMIT`. Those core refusals carry `parameter` and a resolution;
+argument-schema rejections of malformed input come earlier and name no
+`parameter`. Admission needs one free resident Agent slot (only the scout is
+new) and two free queue entries, history Runs and output reservations; one free
+entry of the last three is not enough, and a compound `QUEUE_FULL` resolution
+says two entries are needed. Off, failed eligibility, either preflight or
+any shortfall rejects before admission. The final lease probe before install is
+read-only, so a reentrant lease adapter cannot change what was planned. An
+accepted pair still runs if delegation is later turned Off.
+
+From birth, non-read parent-model observations omit the source result body,
+including live result previews and explicit or default waits. Suppression uses
+only the existing `result_omitted`, `result_truncated` and cursor controls.
+No new result flag or read mode is added. A non-read
+observation does not include that body. Omission is an admission-time fact of
+the source Run, not derived from the link or the continuation's state:
+continuation failure, cancellation or kill never restores the body to non-read
+observations. Explicit `agent_read` reads the retained
+body normally. UI inspection and internal result reads still return it. Alerts,
+questions and labels are not omitted and may reach the parent. This is not an
+OS sandbox or zero information flow. Publishing a terminal source row still
+follows the finished-bit rule.
+
+Source failure, `needs_input` or interruption fails the pending continuation and
+reopens the original question if the worker is healthy and the continuation has
+not entered input. After input entry, or after kill, quarantine or Owner loss,
+the question is not restored. Worker stop or kill does not cancel the scout; the
+scout stays resident until explicit kill. The two cancellations are not one
+transaction.
+
+Compound observation `action` is `agent_spawn` for the source only. `done` is
+the continuation only; the source ending alone is not `done`. Published rows are
+the source and the continuation. Alert scope is exactly those two Runs, not
+older Runs of either Agent. Readiness (question, task issue and `done`) uses
+the continuation only. A scout that fails, asks or is interrupted fails the
+continuation, so the reply returns `task_issue` only once that continuation has
+settled, never showing a doomed continuation as queued; the scout row still
+carries its status and any question. A turn-limited but completed scout hands
+off normally and does not end the wait. A reopened original question is not added to them; wait or read the
+worker. Caller abort or timeout cancels the observation, not the accepted Runs.
+The caller request replays the source Run. Internal `return_to_run_id` on that
+source links the continuation; the continuation request ID is derived and not
+caller-submittable. Any different `return_to` is `REQUEST_CONFLICT`. `observe`
+expands an `agent_spawn` of that source to the pair. Preflight is all-or-none
+and install is callback-free. No installed Run starts or is dependency-failed
+before its own notification returns, even if a consumer reenters and pumps. A
+notification failure does not uninstall either record; that Run is at once
+quarantined `context_change_failed` and dequeued, so nothing can start it, and
+is finished as an error only after both notifications. `return_to_run_id` is the sticky exact internal link: live Owner
+metadata for the current Owner only. It and the source's `result_visibility`
+fact are never serialized into model tool output and are not journal fields. `PiRunJournal` still writes its
+explicit identity, routing, outcome and result fields, not the RunRecord or this
+link. Existing journal names and data stay literal. Restart does not hydrate the
+pair. The prepare-time allow
+is [security](security.md#communication-observation-and-admission). This text is
+not acceptance evidence and does not mean the feature's tests passed.
+
 ## Acceptance, selection and reasons
 
 Request IDs replay **acceptance/delivery facts**, not cached observation results.
 Spawn/run/answer reuse their original Run; send reuses original delivery within
-its bounded 512-record window. Replays cannot restore already-published alerts.
-Different arguments fail `REQUEST_CONFLICT`. New commands recheck context,
+its bounded 512-record window. A spawn `return_to` replays the same source and
+continuation pair, not a second pair. Replays cannot restore already-published
+alerts. Different arguments, including a different `return_to`, fail
+`REQUEST_CONFLICT`. New commands recheck context,
 abort, admission and revision after preparation/settle and before effects.
 `WORKERS_DISABLED` rejects new spawn/run/send/answer and submissions crossing a
 disable/re-enable boundary without allocating failed work or poisoning Owner
@@ -339,6 +428,7 @@ separate:
 | Default wait | Nonterminal tasks; when initially On, also healthy/reusable settled pending questions | Owner-wide, including historical/killed sources and newly arriving alerts |
 | Result read, default / task / cursor | Addressed task / selected ordinal / original cursor Run | All Runs of the named Agent |
 | Spawn/run/send/answer, zero or positive wait | Accepted/delivered fact's one Run | That Run only; no global drain |
+| Spawn with `return_to`, zero or positive wait | Shows source scout and worker continuation; readiness from the continuation only | Exactly those two Runs, not older Runs of either Agent |
 | List/UI/interrupt/kill | Independent roster/lifecycle replies | No consumption |
 
 Default selection contributes at most one task per Agent (current before
@@ -361,7 +451,9 @@ command waits use this priority:
 2. `owner_blocked`: a new Owner fault edge.
 3. `question`: selected truly answerable pending question.
 4. `task_issue`: settled failed/interrupted or limit-reached task.
-5. `done`: nonempty bound set meets all/any terminal condition.
+5. `done`: nonempty bound set meets all/any terminal condition. Compound
+   `return_to` is the exception: question, task issue and `done` all use the
+   worker continuation only.
 6. `alert`: pending alert in scope, with at least one complete message.
 7. `nothing_pending`: no bound task and no scoped alert, immediately.
 8. `timeout`: unique timer's deadline latch; no alert/finished consumption.
@@ -393,8 +485,9 @@ Spawn/run/send/answer/wait/read share one projection/publication path:
 ```
 
 Action is an accepted command fact: type is agent_spawn/run/answer for its new
-Run, or agent_send with joined/steered/not_delivered on the bound target. Wait
-and read have no action. `workers_disabled` says new work/answers are forbidden,
+Run, or agent_send with joined/steered/not_delivered on the bound target.
+Compound `return_to` keeps a single `agent_spawn` action on the source, not an
+`agent_answer` action. Wait and read have no action. `workers_disabled` says new work/answers are forbidden,
 not that observation is forbidden or that the Owner is faulty; enable delegation
 to answer. Pending counts describe this scope **after commit**, never lost
 messages. Alerts are top-level and never part of a result page.

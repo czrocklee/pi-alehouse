@@ -70,7 +70,7 @@ permission configuration. Model replies derive a 1-based `task` sequence within
 that Agent from enqueue order, without exposing the internal Run UUID. That
 ordinal is a read-only selector for retained task pages, never a command target.
 Labels are optional whole summary metadata, auxiliary rather than task identity.
-A question continuation is a new Run admitted only by explicit `agent_answer`, never by `agent_send`.
+A question continuation is a new Run admitted by explicit `agent_answer`, or by one scout `agent_spawn` with `return_to` that installs that same continuation. `agent_send` never admits one. Ordinary answer eligibility, reservation and replay are unchanged. The spawn link is live Owner metadata for the current Owner only; journals do not store or restore it.
 
 Core lifecycle states are `queued`, `running`, `cancelling`, `completed`,
 `needs_input`, `failed`, and `cancelled`; phases further distinguish
@@ -153,7 +153,8 @@ and `reasoning_difficulty`. `agent_run` requires `agent`, `continues` and
 `prompt`; `continues` names the specific earlier work of that Agent being
 continued (if none, spawn, even on a related topic; add `after` if only its
 result is needed). Both take optional `label`, `after`,
-`wait_ms` and `dispatch`; spawn also accepts `max_turns` and `inherit_context`.
+`wait_ms` and `dispatch`; spawn also accepts `max_turns`, `inherit_context` and
+optional `return_to`. `return_to` is spawn-only and is not an `agent_run` field.
 `agent_read` retains `max_chars`. `agent_send`
 joins/steers the task bound when called; it never starts a continuation.
 `agent_answer` takes `agent`, the exact pending `question_id`, and `answer`,

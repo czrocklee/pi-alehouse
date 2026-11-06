@@ -1,6 +1,6 @@
 # Agent tools quickstart
 
-Use this as a caller workflow, not a standing system prompt. Spawn `profile` is `worker` or `scout` (internal `editor` / `researcher`): worker for command-driven local work, scout for local reads plus web. The examples below use `worker`. The
+Use this as a caller workflow, not a standing system prompt. Spawn `profile` is `worker` or `scout` (internal `editor` / `researcher`): worker for command-driven local work, scout for local reads plus web. The examples below use `worker`, except the scout `return_to` example. The
 [tool contract](tool-contract.md) owns schemas, selection and replies;
 [task dispatch](task-dispatch.md) owns paths, claims and validation. [Security](security.md), [limitations](limitations.md)
 and [development](development.md) own authority, support and implementation/checks.
@@ -11,6 +11,7 @@ and [development](development.md) own authority, support and implementation/chec
 | Continue this Agent's own specific earlier work | `agent_run` (required `continues`; fixed settings/conversation) |
 | Correct an unfinished task | `agent_send` (delivery is not action) |
 | Answer a settled pending question | `agent_answer` |
+| Answer a settled worker question using a new scout's findings | `agent_spawn` with scout `return_to`, or scout spawn then `agent_answer` |
 | Wait for events/end | `agent_wait` (`all`/`any`; prefer long waits) |
 | Read results, old task or next page | `agent_read` |
 | Request task stop, retain conversation | `agent_interrupt`, then wait/read for settlement |
@@ -103,11 +104,49 @@ or proof that a check ran.
 Coordinate concurrent edits and Git writes explicitly. A declared tree is not
 exclusive across Owners and does not grant write access.
 
+## Illustration: scout return_to
+
+This is not a fifth JSON workflow. The four fenced `json` examples above remain
+the executable call set. Use `return_to` only after wait/read has returned the
+worker's exact settled `question_id`. Put that value in `questionId`; do not
+invent an id or send a placeholder. One spawn admits the scout and the worker
+continuation, or neither. `answer` is the worker's next instruction, not a
+message to the scout. Do not put `return_to` on `agent_run`, and do not wait for
+a future question. The spawn reply's action is `agent_spawn` for the scout; its
+rows are the scout and the continuation, and the scout result body is omitted
+there. The reply's wait ends with the continuation: a scout failure, question
+or interruption arrives as the continuation's `task_issue`, with the scout row
+showing its status and any question. `agent_read` pages that retained output normally. A later wait on
+the worker observes the continuation, not a second admission; but if the
+continuation failed before input, the original question is reopened and that
+wait reports it with the same `question_id`. If prepare is not your effective
+`agent_answer` allow, spawn the scout and call `agent_answer` separately. Stopping the worker does not stop the scout; kill the scout
+explicitly when finished. This illustration is not feature-test evidence.
+
+```ts
+const questionId = /* exact question_id from agent_wait or agent_read */;
+await agent_spawn({
+  agent: "beta",
+  profile: "scout",
+  reasoning_difficulty: 2,
+  prompt: "Read the local parser notes and correlate them with the cited public docs. Return cited findings only; do not edit.",
+  return_to: {
+    agent: "alpha",
+    question_id: questionId,
+    answer: "Use the existing format; preserve compatibility.",
+  },
+});
+```
+
 ## Guardrails and recovery
 
 - Initial Off hides all nine tools. After accepted work, wait/read/interrupt/kill/
   list remain available; new tasks, steering and answers require delegation On.
-  Ask the user to enable it rather than calling a cached hidden tool.
+  Ask the user to enable it rather than calling a cached hidden tool. Off rejects
+  `return_to` before admission; an already accepted pair still runs.
+- Optional `return_to` is scout-only and needs an already actionable worker
+  question. It is not a delayed answer, not valid on `agent_run`, and not a
+  permission grant. Ask uses ordinary scout spawn plus `agent_answer` instead.
 - Default waits repeat pending questions. To defer one, explicitly wait on other
   Agents; this narrows alerts too. Timeout/abort of a wait never stops child work.
 - Ownership/tree claims coordinate declared overlapping resources in one Owner;

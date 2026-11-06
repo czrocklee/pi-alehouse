@@ -75,6 +75,7 @@ export function errorReply(error: { code?: string; details?: Record<string, unkn
   const parameter = internalParameter === "difficulty" ? "reasoning_difficulty" : internalParameter;
   const dispatchError = error.code === "INVALID_DISPATCH" || error.code?.startsWith("DISPATCH_") ||
     ["PREFLIGHT_DENIED", "RESOURCE_OWNED", "BUILD_TREE_BUSY"].includes(error.code ?? "");
+  const surfaceError = dispatchError || error.code === "RETURN_TO_PERMISSION_DENIED";
   // Keep abstract requested choices at their existing 128-unit cap. Dispatch
   // failures additionally show the concrete declaration/normalized path, with
   // a 512-unit prefix (whole legal raw declarations, bounded resolved paths).
@@ -83,10 +84,9 @@ export function errorReply(error: { code?: string; details?: Record<string, unkn
     ...(agent ? { agent: utf16Prefix(agent, 64) } : {}),
     ...(parameter === undefined ? {} : { parameter }),
     ...(path === undefined ? {} : { path: utf16Prefix(path, 512) }),
-    // Dispatch failures additionally show which permission surface was checked
-    // and for which target profile, bounded; filesystem missing/type errors
-    // carry no surface from the runtime and gain none here.
-    ...(dispatchError && typeof d.surface === "string" ? { surface: utf16Prefix(d.surface, 32) } : {}),
+    // Dispatch failures identify their surface/profile; compound-return refusal
+    // identifies agent_answer. Missing/type filesystem errors gain no surface.
+    ...(surfaceError && typeof d.surface === "string" ? { surface: utf16Prefix(d.surface, 32) } : {}),
     ...(dispatchError && typeof d.profile === "string" ? { profile: utf16Prefix(profileLabel(d.profile), 16) } : {}),
     ...(typeof d.reason === "string" ? { reason: utf16Prefix(d.reason, 512) } : {}),
     ...(typeof d.error === "string" ? { message: utf16Prefix(d.error, 512) } : {}),

@@ -121,6 +121,13 @@ export class ObservationScheduler {
     return this.inPhase("validation", read);
   }
 
+  /** A host-port read made from Owner code that may already be inside a frame
+   * (projection inside publication). It shares an existing frame, whose
+   * violation still fails that frame; otherwise it opens a validation frame. */
+  guardRead<T>(read: () => T): T {
+    return this.frame ? synchronousObservationPort(read()) : this.inPhase("validation", read);
+  }
+
   private inPhase<T>(phase: ReadOnlyFrame["phase"], read: () => T): T {
     this.assertEffectAllowed(); // Never replace an outer frame.
     const frame: ReadOnlyFrame = { phase, violation: false };

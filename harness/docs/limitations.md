@@ -266,6 +266,28 @@ turn; ask asks the child to end rather than forcing suspension. Only a true
 healthy pending needs-input settlement can be explicitly answered. Historical
 questions are not permission or an actionable continuation.
 
+Optional scout `return_to` does not add atomic cancellation, isolation, a
+deadline, reserved capacity, restart recovery or a second admission after the
+scout finishes. One call installs both ordinary Runs or neither. Caller
+abort/timeout cancels the observation only. Stopping the worker does not stop
+the scout; the scout remains resident until explicit kill. Source failure can
+fail the pending continuation and reopen the original question only while that
+continuation is pre-input and the worker is healthy. After input entry, nothing
+here restores the question. Non-read observations may omit the source result
+body; alerts, questions and labels may still reach the parent. That is not an OS
+sandbox. Same-request replay returns the source Run and its linked continuation;
+a different `return_to` conflicts and does not start another pair. The parent
+authority's `checkToolCallPermission("agent_answer", ctx)` decision used by
+compound prepare is made under the principal its own tool gate binds and
+includes session always-allow and managed yolo; a selected deny still survives
+yolo. It does not consult the authorizer chain, so an `ask` that a chain link
+would approve is still refused here. That query
+is not a new grant, and `getToolPermission` is not a substitute. The source link
+is live Owner metadata for the current Owner only. Journals do not persist or
+recover it, and existing journal names and data stay literal. This text is not
+acceptance of the feature. An offline permission-interface observation does not
+mean the feature's tests passed.
+
 Question/result/alert text shares 16384 UTF-16 units and the
 double-JSON content envelope is capped at 65536 UTF-8 bytes. Labels/tokens/diagnostics count against
 the byte limit, even when outside the text budget. A complete first alert is

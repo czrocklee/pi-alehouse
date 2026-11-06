@@ -47,11 +47,14 @@ export interface AdmittedAgentConfig {
   definition_digest: string;
   context_snapshot?: string;
 }
+/** Atomic scout creation plus continuation of one already-settled worker question. */
+export interface ReturnTo { agent_id: string; question_id: string; answer: string }
 export type SubmitRequest = {
   prompt: string;
   description: string;
   name?: string;
   settings: AdmittedAgentConfig;
+  return_to?: ReturnTo;
   max_turns?: number;
   dispatch?: Dispatch;
   after?: string[];
@@ -129,6 +132,8 @@ export interface RunView {
   run_id: string;
   name: string;
   description: string;
+  /** Immutable compound linkage; internal identity, never a model address. */
+  return_to_run_id?: string;
   effective_settings: Omit<AdmittedAgentConfig, "context_snapshot"> & {
     context_mode: "none" | "text_snapshot"; context_digest?: string; context_bytes?: number;
   };

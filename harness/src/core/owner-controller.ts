@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
 import { normalizeFacts, normalizeRuntime, terminal, validSettings, type AdmittedAgentConfig, type ExecutionFacts,
   type CancellationSource, type HistoryRef, type ModelStopReason, type Outcome, type Output, type OutputDelta, type Phase, type ResultPage, type ResultRef,
-  type RunStatus, type RunTelemetry, type RunView, type StopReason, type SubmitRequest } from "./contracts.ts";
+  type ReturnTo, type RunStatus, type RunTelemetry, type RunView, type StopReason, type SubmitRequest } from "./contracts.ts";
 import { HarnessError, ParentHistoryError, SessionInitializationError, SessionUnavailableError, workersDisabled,
   type AgentSessionPort, type OwnerLease, type RunCallbacks } from "./ports.ts";
 import { boundedOutput, describeResult, OutputBuffer, sha256, validOutput } from "./result-text.ts";
@@ -34,6 +34,11 @@ interface RunRecord {
   description: string;
   max_turns: number;
   answer_to_run_id?: string;
+  /** Sticky from installation; never retargeted when either Agent is reused. */
+  return_to_run_id?: string;
+  /** Admission-time fact: automatic observations omit this Run's result text;
+   * only an explicit result read returns it. Never relaxed afterwards. */
+  result_visibility?: "explicit_read";
   input_entered: boolean;
   status: RunStatus;
   phase: Phase;
@@ -96,6 +101,9 @@ interface ManagedRun {
   inputs: Set<Promise<void>>; inputCount: number; question?: string;
   finished_presented: boolean; settled_seq?: number;
   runtime?: RunTelemetry; session?: AgentSessionPort; hadSession: boolean; quarantine?: string; cleanup?: Promise<void>;
+  /** Installed but its own submit/resume notification has not returned. The
+   * scheduler never starts or dependency-fails it: no Run acts before it is announced. */
+  announcing?: true;
   drain?: { waiting_for: NonNullable<RunView["drain"]>["waiting_for"]; startedMono: number };
   /** Diagnostics only: which settle-path await this Run is parked on. Never
    * gates release — a stuck wait keeps ownership exactly as before. */
@@ -107,6 +115,9 @@ interface ManagedRun {
   /** A prestart rejection must not retire an otherwise reusable Agent. */
   prestartFailure?: { reason: "dependency_not_completed" | "dependency_input_missing" | "dispatch_preflight_failed"; error: string };
 }
+interface AdmissionPlan { agent: Agent; run: ManagedRun; reuse: boolean }
+/** Reserved namespace: ordinary submissions/deliveries cannot impersonate a secondary fact. */
+const RETURN_TO_REQUEST_PREFIX = "\u0000pi-alehouse/return-to/v1:";
 export interface ContextChange {
   event_id: string; owner_id: string; generation: string; agent_id: string; run_id: string;
   session_id?: string; kind: "submit" | "resume" | "steer" | "soft_budget" | "cancel" | "hard_budget" | "deadline";
@@ -372,10 +383,10 @@ export class OwnerController {
     void tracked.then(() => { this.tasks.delete(tracked); }, () => { this.tasks.delete(tracked); });
   }
 
-  private validate(request: SubmitRequest): void {
+  private validate(request: SubmitRequest, staged: readonly AdmissionPlan[] = []): void {
     const reuse = "resume" in request;
     const allowed = reuse ? ["resume", "prompt", "description", "max_turns", "answer_to_run_id", "after", "dispatch"] :
-      ["prompt", "description", "max_turns", "name", "settings", "after", "dispatch"];
+      ["prompt", "description", "max_turns", "name", "settings", "after", "dispatch", "return_to"];
     for (const key of Object.keys(request)) {
       if (allowed.includes(key)) continue;
       if (reuse && ["settings", "model", "provider", "thinking", "effort", "effort_source", "effort_overrides", "difficulty", "strength", "preset", "subagent_type", "profile", "inherit_context", "cwd", "tools", "name"].includes(key)) {
@@ -398,7 +409,7 @@ export class OwnerController {
     if (ids !== undefined) {
       if (!Array.isArray(ids) || !ids.length || ids.length > DEPENDENCY_LIMIT || new Set(ids).size !== ids.length ||
           ids.some((id) => typeof id !== "string" || !id)) throw new HarnessError("INVALID_PARAMETER", { key: "after" });
-      for (const id of ids) this.requireRun(id);
+      for (const id of ids) this.plannedRun(id, staged);
     }
   }
   /** Settled Runs this one waits for, in declaration order. */
@@ -434,8 +445,15 @@ export class OwnerController {
     this.assertEffectAllowed();
     const fault = this.ownerFault(true);
     if (fault) throw fault;
-    try { this.options.owner.assertHeld(); }
+    try { this.assertLeaseHeld(); }
     catch (error) { this.internalError ??= errorText(error); this.wake(); throw error; }
+  }
+  /** The lease is a host port probed between decisions and their commits. It
+   * runs read-only: an adapter that reenters an Owner effect is refused there
+   * and fails the probe, so no decision is committed on changed state. Inside
+   * an existing read-only frame the probe shares that frame. */
+  private assertLeaseHeld(lease: { assertHeld(): void } = this.options.owner): void {
+    this.observations.guardRead(() => { lease.assertHeld(); });
   }
 
   private admissionState(): { enabled: boolean; revision: number } | undefined {
@@ -475,7 +493,7 @@ export class OwnerController {
   submitPrepared<T extends object>(request_id: string, input: T, prepare: (identity: T) => SubmitRequest,
     options: { settle?: SettleOptions; signal?: AbortSignal } = {}): Promise<RunView> {
     this.assertEffectAllowed();
-    if (typeof request_id !== "string" || !request_id || request_id.length > 256) return Promise.reject(new HarnessError("INVALID_REQUEST_ID"));
+    if (typeof request_id !== "string" || !request_id || request_id.length > 256 || request_id.startsWith(RETURN_TO_REQUEST_PREFIX)) return Promise.reject(new HarnessError("INVALID_REQUEST_ID"));
     // Capture before awaiting another admission; caller mutation cannot drift it.
     let captured: { request: T; request_digest: string };
     try {
@@ -514,7 +532,7 @@ export class OwnerController {
         // A trusted preparer can synchronously reenter the host and change the
         // selected preset. Do not allocate a Run after that transition.
         this.assertNewWorkAdmission(admission);
-        try { return this.admit(request_id, request_digest, request); }
+        try { return this.admit(request_id, request_digest, request, admission); }
         catch (error) { releasing = this.releasingBlockers(error); throw error; }
       });
       this.submitTail = submission.catch(() => {});
@@ -562,13 +580,112 @@ export class OwnerController {
       .then(() => { if (settle.signal?.aborted) throw new HarnessError("TOOL_INTERRUPTED"); });
   }
 
-  /** Allocate one accepted Run. Callers hold the submit tail and have already
-   * checked request identity and admission. */
-  private admit(request_id: string, request_digest: string, request: SubmitRequest): RunView {
+  /** Plan every record without effects, then install the entire acceptance
+   * without callbacks. Only after both facts exist can notifications dispatch. */
+  private admit(request_id: string, request_digest: string, request: SubmitRequest,
+    admission: { enabled: boolean; revision: number } | undefined): RunView {
     this.assertEffectAllowed();
-    // Recheck after preparation, including sticky loss first observed here.
     this.assertOwnerAvailable();
     this.validate(request);
+    const returnTo = "resume" in request ? undefined : request.return_to;
+    let plans: AdmissionPlan[];
+    if (returnTo === undefined || "resume" in request) plans = [this.planAdmission(request_id, request_digest, request)];
+    else {
+      // Every return_to-specific refusal precedes shared capacity, so a wrong
+      // target or stale token is never misreported as a full queue/history.
+      const original = this.returnToQuestion(request, returnTo);
+      const source = this.planAdmission(request_id, request_digest, request, [], 2);
+      const continuation: SubmitRequest = { resume: original.record.agent_id, prompt: returnTo.answer,
+        description: original.record.description, answer_to_run_id: original.record.run_id, after: [source.run.record.run_id] };
+      this.validate(continuation, [source]);
+      const secondaryId = RETURN_TO_REQUEST_PREFIX + sha256(stable([this.identity, request_id]));
+      const target = this.planAdmission(secondaryId, sha256(stable({ type: "return_to", source_request_digest: request_digest,
+        source_run_id: source.run.record.run_id, original_run_id: original.record.run_id, answer: returnTo.answer })), continuation, [source]);
+      source.run.record.return_to_run_id = target.run.record.run_id;
+      source.run.record.result_visibility = "explicit_read";
+      plans = [source, target];
+    }
+    // Ports/clocks may change external authority while planning; no install yet.
+    this.assertNewWorkAdmission(admission);
+    this.assertOwnerAvailable();
+    this.installAdmissions(plans);
+    // Notify every accepted Run before any failure settles. A consumer may
+    // reenter (e.g. cancel) and pump synchronously: an unannounced Run never
+    // starts, and a failed one is isolated at once so nothing can start it.
+    const failed: Array<{ run: ManagedRun; error: unknown }> = [];
+    for (const { run, reuse } of plans) {
+      try { this.changed(reuse ? "resume" : "submit", run); }
+      catch (error) {
+        run.quarantine = "context_change_failed"; this.removeQueued(run.record.run_id);
+        failed.push({ run, error });
+      } finally { run.announcing = undefined; }
+    }
+    // Settle failures only after every notice: settling one must not fail its peer for the wrong reason.
+    for (const { run, error } of failed) this.track(this.finish(run, { kind: "error", error: errorText(error), output: emptyOutput() }));
+    if (this.closing) for (const { run } of plans) this.cancel(run.record.run_id);
+    this.pump(); this.wake();
+    return this.view(plans[0]!.run.record.run_id);
+  }
+
+  /** Validated before shared capacity; the source request itself is already validated. */
+  private returnToQuestion(request: Extract<SubmitRequest, { settings: unknown }>, returnTo: ReturnTo): ManagedRun {
+    if (!returnTo || typeof returnTo !== "object" || Array.isArray(returnTo) ||
+        Object.keys(returnTo).some(key => !["agent_id", "question_id", "answer"].includes(key)) ||
+        typeof returnTo.agent_id !== "string" || !returnTo.agent_id) throw new HarnessError("INVALID_RETURN_TO", { key: "return_to",
+      resolution: "return_to takes exactly agent, question_id and answer for one worker's pending question." });
+    if (request.settings.profile !== "researcher") throw new HarnessError("INVALID_RETURN_TO_PROFILE", { key: "profile",
+      resolution: "Only a scout spawn can carry return_to. Spawn the scout without return_to, or answer the worker with agent_answer." });
+    this.validAnswer(returnTo.question_id, returnTo.answer, "return_to");
+    if (!this.agents.has(returnTo.agent_id)) throw new HarnessError("AGENT_NOT_FOUND", { agent_id: returnTo.agent_id, key: "return_to.agent",
+      resolution: "return_to.agent must name an existing worker with a pending question." });
+    const target = this.requireAgent(returnTo.agent_id);
+    if (target.settings.profile !== "editor") throw new HarnessError("INVALID_RETURN_TO_PROFILE", { key: "return_to", agent_id: target.id,
+      resolution: "return_to.agent must be a worker with a pending question. Answer other Agents' questions with agent_answer." });
+    const original = this.pendingQuestion(target.id, returnTo.question_id, "return_to");
+    // A compound cannot knowingly admit an already-doomed scout.
+    for (const id of request.after ?? []) {
+      const dependency = this.requireRun(id).record;
+      if (terminal(dependency.status) && dependency.status !== "completed") throw new HarnessError("DEPENDENCY_NOT_COMPLETED", {
+        agent: dependency.name, key: "after", reason: modelTaskStatus(dependency.status),
+        resolution: `${dependency.name}'s latest task ended ${modelTaskStatus(dependency.status)}, so it cannot complete. Omit it from after.` });
+    }
+    return original;
+  }
+  /** Shared by agent_answer and return_to so their eligibility cannot drift. */
+  private validAnswer(question_id: unknown, answer: unknown, prefix?: string): void {
+    const key = (name: string, resolution: string) => prefix === undefined ? {} : { key: `${prefix}.${name}`, resolution };
+    if (!isQuestionId(question_id)) throw new HarnessError("INVALID_QUESTION_ID",
+      key("question_id", "Copy the worker's pending question_id exactly from wait/read."));
+    if (typeof answer !== "string" || !answer.trim() || answer.length > 16384) throw new HarnessError("INVALID_ANSWER",
+      key("answer", "Give the worker's next instruction as non-blank text of at most 16384 characters."));
+  }
+  private pendingQuestion(agent_id: string, question_id: string, key?: string): ManagedRun {
+    const agent = this.requireAgent(agent_id), original = agent.question ? this.requireRun(agent.question.run_id) : undefined;
+    if (!original || actionableQuestionId(agent, original, this.communicationHealthy()) !== question_id) throw new HarnessError("STALE_ANSWER",
+      { agent_id, ...(key === undefined ? {} : { key }),
+        resolution: "Read this Agent's current pending question; answer only its exact question_id. Do not redirect an old answer." });
+    return original;
+  }
+
+  private checkAdmissionBudget(count: number): void {
+    if (this.runs.size + count > this.limits.historyRuns ||
+        count * this.limits.output > this.limits.historyOutput - this.retainedOutputChars - this.reservedOutputChars) {
+      throw new HarnessError("OWNER_HISTORY_LIMIT", { agents: this.agents.size, runs: this.runs.size, requests: this.requests.size,
+        run_limit: this.limits.historyRuns, retained_output_chars: this.retainedOutputChars,
+        reserved_output_chars: this.reservedOutputChars, output_char_limit: this.limits.historyOutput,
+        resolution: "This session's retained task history is full and never evicted. Tell the user to close this harness session and start a fresh one; do not submit more tasks." });
+    }
+    if (this.queue.length + count > this.limits.queue) throw new HarnessError("QUEUE_FULL", { queued: this.queue.length, queue_limit: this.limits.queue,
+      resolution: count > 1 ?
+        `return_to queues two tasks (scout and worker continuation) and only ${Math.max(0, this.limits.queue - this.queue.length)} queue entries are free. Use agent_wait on running tasks and retry once enough settle.` :
+        "Too many tasks are already waiting. Use agent_wait on running tasks and retry once one settles." });
+  }
+
+  private plannedRun(id: string, staged: readonly AdmissionPlan[]): ManagedRun {
+    return staged.find(plan => plan.run.record.run_id === id)?.run ?? this.requireRun(id);
+  }
+  /** Callers validate the request first; staged plans are visible as accepted. */
+  private planAdmission(request_id: string, request_digest: string, request: SubmitRequest, staged: readonly AdmissionPlan[] = [], count = 1): AdmissionPlan {
     // Final admission also covers direct core callers and requests queued before
     // adapter binding. Accepted-request replay happens before this new-work path.
     if (this.modelCommunication && !("resume" in request)) {
@@ -579,15 +696,7 @@ export class OwnerController {
         agent: request.name, key: "agent", resolution: AGENT_EXISTS_RESOLUTION,
       });
     }
-    if (this.runs.size >= this.limits.historyRuns ||
-        this.limits.output > this.limits.historyOutput - this.retainedOutputChars - this.reservedOutputChars) {
-      throw new HarnessError("OWNER_HISTORY_LIMIT", { agents: this.agents.size, runs: this.runs.size, requests: this.requests.size,
-        run_limit: this.limits.historyRuns, retained_output_chars: this.retainedOutputChars,
-        reserved_output_chars: this.reservedOutputChars, output_char_limit: this.limits.historyOutput,
-        resolution: "This session's retained task history is full and never evicted. Tell the user to close this harness session and start a fresh one; do not submit more tasks." });
-    }
-    if (this.queue.length >= this.limits.queue) throw new HarnessError("QUEUE_FULL", { queued: this.queue.length, queue_limit: this.limits.queue,
-      resolution: "Too many tasks are already waiting. Use agent_wait on running tasks and retry once one settles." });
+    if (!staged.length) this.checkAdmissionBudget(count);
     const reuse = "resume" in request;
     // A generic unbound Owner keeps the caller's display name (including none);
     // only explicitly bound model integrations require name-addressable Agents.
@@ -616,7 +725,7 @@ export class OwnerController {
     if (inheritedClaim && !this.claims.has(inheritedClaim)) throw new HarnessError("DISPATCH_CLAIM_LOST");
     if (prepared) {
       if (inheritedClaim && !this.sameResources(prepared, inheritedClaim.prepared)) throw new HarnessError("DISPATCH_RESOURCE_CHANGED");
-      this.checkClaims(prepared, inheritedClaim, this.predecessors(request.after ?? []));
+      this.checkClaims(prepared, inheritedClaim, this.predecessors(request.after ?? [], staged), undefined, staged);
     }
     // Capacity after request-specific conflicts: a release under way can free a
     // slot, but waiting for one must not hide a conflict no release resolves.
@@ -624,39 +733,36 @@ export class OwnerController {
       throw new HarnessError("RESIDENT_LIMIT", { resident_limit: this.limits.resident,
         resolution: "All Agent slots are in use, including by Agents whose tasks are still queued. Kill a finished Agent you no longer need (agent_kill), or agent_wait for one to finish, then retry this agent_spawn. A kill already under way is waited for briefly; an Agent still stopping keeps its slot until agent_kill reports killed." });
     }
+    const now = this.validateObservationEntry(() => ({ wall: this.clock.wall(), mono: this.clock.mono() }));
     const record: RunRecord = {
       owner_id: this.options.owner.owner_id, generation: this.options.owner.generation,
-      run_id: randomUUID(), agent_id: agent.id, request_id, request_digest, enqueue_sequence: ++this.sequence,
+      run_id: randomUUID(), agent_id: agent.id, request_id, request_digest, enqueue_sequence: this.sequence + staged.length + 1,
       name: agent.name, settings: structuredClone(agent.settings), prompt: request.prompt,
       description: request.description ?? "Follow-up task", max_turns: request.max_turns ?? agent.limits.max_turns ?? 256,
       ...(reuse && request.answer_to_run_id ? { answer_to_run_id: request.answer_to_run_id } : {}),
       ...(request.after ? { after: [...request.after] } : {}),
       ...(declaration === undefined ? {} : { dispatch: structuredClone(declaration) }),
       input_entered: false, status: "queued", phase: "queued", execution_exited: false,
-      submitted_at: this.clock.wall(), turns: 0, limit_reached: false, cleanup_errors: [], discarded_inputs: [],
+      submitted_at: now.wall, turns: 0, limit_reached: false, cleanup_errors: [], discarded_inputs: [],
     };
-    const run: ManagedRun = { record, output: emptyOutput(), effectiveSettings: agent.effectiveSettings, submittedMono: this.clock.mono(), inputOpen: false,
+    const run: ManagedRun = { record, output: emptyOutput(), effectiveSettings: agent.effectiveSettings, submittedMono: now.mono, inputOpen: false,
       active: false, outputReserved: true, inputs: new Set(), inputCount: 0, finished_presented: false,
       hadSession: !!agent.session, session: agent.session, prepared };
-    if (prepared && (prepared.ownership.length || prepared.tree)) {
-      run.claim = inheritedClaim ?? { run_id: record.run_id, agent_id: agent.id, prepared };
-      run.claim.run_id = record.run_id;
-      this.claims.add(run.claim);
+    if (prepared && (prepared.ownership.length || prepared.tree)) run.claim = inheritedClaim ?? { run_id: record.run_id, agent_id: agent.id, prepared };
+    return { agent, run, reuse };
+  }
+  /** Callback-free commit: every fallible clone/preflight/clock read is done. */
+  private installAdmissions(plans: readonly AdmissionPlan[]): void {
+    for (const { agent, run } of plans) {
+      const record = run.record;
+      if (run.claim) { run.claim.run_id = record.run_id; this.claims.add(run.claim); }
+      agent.current = record.run_id; run.announcing = true;
+      if (agent.question) agent.question.reserved_by = record.run_id;
+      this.agents.set(agent.id, agent);
+      this.reservedOutputChars += this.limits.output;
+      this.runs.set(record.run_id, run); this.requests.set(record.request_id, record.run_id); this.queue.push(record.run_id);
+      this.sequence = record.enqueue_sequence;
     }
-    agent.current = record.run_id;
-    if (agent.question) agent.question.reserved_by = record.run_id;
-    this.agents.set(agent.id, agent);
-    this.reservedOutputChars += this.limits.output;
-    this.runs.set(record.run_id, run); this.requests.set(request_id, record.run_id); this.queue.push(record.run_id);
-    try { this.changed(reuse ? "resume" : "submit", run); }
-    catch (error) {
-      run.quarantine = "context_change_failed";
-      this.removeQueued(record.run_id);
-      this.track(this.finish(run, { kind: "error", error: errorText(error), output: emptyOutput() }));
-    }
-    if (this.closing) this.cancel(record.run_id);
-    this.pump(); this.wake();
-    return this.view(record.run_id);
   }
 
   private prepareDispatch(declaration: Dispatch, agent: Agent, deferInputs: boolean): PreparedDispatch {
@@ -685,12 +791,12 @@ export class OwnerController {
     prepared.declaration = structuredClone(declaration);
     return prepared;
   }
-  private predecessors(ids: readonly string[]): Set<string> {
+  private predecessors(ids: readonly string[], staged: readonly AdmissionPlan[] = []): Set<string> {
     const result = new Set<string>(), pending = [...ids];
     while (pending.length) {
       const id = pending.pop()!;
       if (result.has(id)) continue;
-      result.add(id); pending.push(...this.dependencies(this.requireRun(id).record));
+      result.add(id); pending.push(...this.dependencies(this.plannedRun(id, staged).record));
     }
     return result;
   }
@@ -716,22 +822,26 @@ export class OwnerController {
     run.prestartFailure = { reason: code === "DISPATCH_INPUT_MISSING" ? "dependency_input_missing" : "dispatch_preflight_failed",
       error: detail.slice(0, 2048) };
   }
-  private checkClaims(prepared: PreparedDispatch, own?: ResourceClaim, predecessors = new Set<string>(), futureOf?: string): void {
+  private checkClaims(prepared: PreparedDispatch, own?: ResourceClaim, predecessors = new Set<string>(), futureOf?: string,
+    staged: readonly AdmissionPlan[] = []): void {
     const entries = (p: PreparedDispatch) => [
       ...p.ownership.map((path, i) => ({ path, tree: false, requested: p.declaration.ownership?.[i] })),
       ...(p.tree ? [{ path: p.tree, tree: true, requested: p.declaration.tree }] : []),
     ];
     let conflict: { claim: ResourceClaim; other: ManagedRun; tree: boolean; key: "tree" | "ownership"; requested?: string; path: string } | undefined;
-    claims: for (const claim of this.claims) {
+    // Only a compound admission has staged claims; never copy the live set otherwise.
+    const claims: Iterable<ResourceClaim> = staged.some(plan => plan.run.claim) ?
+      [...this.claims, ...staged.flatMap(plan => plan.run.claim ? [plan.run.claim] : [])] : this.claims;
+    claims: for (const claim of claims) {
       if (claim === own || predecessors.has(claim.run_id)) continue;
-      const other = this.requireRun(claim.run_id);
-      const ancestors = this.predecessors(this.dependencies(other.record));
+      const other = this.plannedRun(claim.run_id, staged);
+      const ancestors = this.predecessors(this.dependencies(other.record), staged);
       // A fixed failed/questioned ancestor cannot later become completed. Pump
       // fails such a doomed queued successor without a slot, but its claim stays
       // installed until that settlement finishes; meanwhile it cannot block an
       // answer or new owner. Never rebind its after.
       if (other.record.status === "queued" && [...ancestors].some(id => {
-        const status = this.requireRun(id).record.status;
+        const status = this.plannedRun(id, staged).record.status;
         return terminal(status) && status !== "completed";
       })) continue;
       // Accepted successors reserve their place, not a concurrent execution.
@@ -769,7 +879,7 @@ export class OwnerController {
     const claim = run.claim;
     try {
       if (claim?.lease) {
-        try { claim.lease.assertHeld(); } catch { this.dispatchNote(run, "tree_lock_unknown"); }
+        try { this.assertLeaseHeld(claim.lease); } catch { this.dispatchNote(run, "tree_lock_unknown"); }
       }
       const result = await this.options.dispatch?.start?.(structuredClone(prepared), {
         cwd: run.record.settings.cwd, profile: run.record.settings.profile, acquireTree: !!prepared.tree && !claim?.lease,
@@ -831,11 +941,11 @@ export class OwnerController {
   private failDoomed(): void {
     for (const id of [...this.queue]) {
       const run = this.requireRun(id);
-      if (run.record.status !== "queued" || !this.queue.includes(id)) continue;
+      if (run.record.status !== "queued" || run.announcing || !this.queue.includes(id)) continue;
       const unmet = this.dependencies(run.record).map((dep) => this.requireRun(dep).record)
         .find((dep) => terminal(dep.status) && dep.status !== "completed");
       if (!unmet) continue;
-      try { this.options.owner.assertHeld(); }
+      try { this.assertLeaseHeld(); }
       catch (error) { this.internalError = errorText(error); this.wake(); return; }
       this.removeQueued(id);
       this.failDependency(run, unmet);
@@ -895,10 +1005,11 @@ export class OwnerController {
       // Skipped Runs keep their queue place and hold no execution slot.
       const index = this.queue.findIndex((id) => {
         const run = this.requireRun(id);
-        return (activeByProvider.get(run.record.settings.provider) ?? 0) < this.limits.concurrency && !this.blockedBy(run).length;
+        return !run.announcing && (activeByProvider.get(run.record.settings.provider) ?? 0) < this.limits.concurrency && !this.blockedBy(run).length;
       });
       if (index < 0) return;
-      try { this.options.owner.assertHeld(); }
+      // Read-only probe: a reentrant lease adapter cannot move the queue under this index.
+      try { this.assertLeaseHeld(); }
       catch (error) { this.internalError = errorText(error); this.wake(); return; }
       const run = this.requireRun(this.queue.splice(index, 1)[0]!);
       if (run.record.status !== "queued") continue;
@@ -988,10 +1099,15 @@ export class OwnerController {
     try {
       if (run.prepared && (run.prepared.tree || run.prepared.declaration.checks?.length)) {
         await this.observeDispatch(run);
+        if (run.record.execution_exited) return;
         this.assertOwnerAvailable();
         if (run.record.stop_reason) { await this.finish(run, { kind: "aborted", output: run.output }); return; }
       }
-      const port = agent.session ?? await this.options.createSession({ agent_id: agent.id, name: agent.name, settings: structuredClone(agent.settings) });
+      const existing = agent.session;
+      const port = existing ?? await this.options.createSession({ agent_id: agent.id, name: agent.name, settings: structuredClone(agent.settings) });
+      // Settled while the factory was pending: never run a settled Run, and a
+      // session created for it belongs to no Agent, so dispose it here.
+      if (run.record.execution_exited) { if (port !== existing) await this.disposeOrphan(run, port); return; }
       agent.session = run.session = port;
       // Session creation can await arbitrary SDK initialization. Recheck even
       // without a journal, and keep owner loss out of child-history diagnosis.
@@ -1015,6 +1131,7 @@ export class OwnerController {
         facts = { kind: "aborted", output: emptyOutput() };
       } else {
         this.assertOwnerAvailable();
+        if (run.record.execution_exited) return; // Settled during begin(); its cleanup owns the session.
         run.record.phase = "executing"; run.inputOpen = true;
         this.presentationVersion++;
         const callbacks: RunCallbacks = {
@@ -1110,6 +1227,17 @@ export class OwnerController {
     await this.finish(run, facts);
   }
 
+  /** A session no Agent owns. Unconfirmed shutdown keeps the Owner fail-closed. */
+  private async disposeOrphan(run: ManagedRun, port: AgentSessionPort): Promise<void> {
+    let errors: unknown[];
+    try {
+      const report = await port.dispose();
+      errors = [...report.errors.slice(0, 16), ...(report.shutdownExited ? [] : ["shutdown_not_exited"])];
+    } catch (error) { errors = [error]; }
+    if (!errors.length) return;
+    run.record.cleanup_errors.push(...errors.map(errorText));
+    this.cleanupUncertain = true; this.presentationVersion++; this.wake();
+  }
   private finish(run: ManagedRun, facts: ExecutionFacts): Promise<void> {
     this.assertEffectAllowed();
     return this.finishRun(run, facts);
@@ -1231,7 +1359,7 @@ export class OwnerController {
       try {
         // An earlier loss is sticky even if the lock path later looks healthy.
         if (this.internalError) throw new HarnessError("OWNER_INTERNAL_ERROR", { error: this.internalError });
-        try { this.options.owner.assertHeld(); }
+        try { this.assertLeaseHeld(); }
         catch (error) {
           // Loss of shared authority blocks the entire owner, not only this
           // child writer. Skip the write, but still settle proven-exited work
@@ -1304,14 +1432,8 @@ export class OwnerController {
   }
   private async answerQuestion(request_id: string, agent_id: string, question_id: string, answer: string,
     options: { prepare?: () => void; signal?: AbortSignal }): Promise<RunView> {
-    if (!isQuestionId(question_id)) throw new HarnessError("INVALID_QUESTION_ID");
-    if (typeof answer !== "string" || !answer.trim() || answer.length > 16384) throw new HarnessError("INVALID_ANSWER");
-    const pending = () => {
-      const agent = this.requireAgent(agent_id), original = agent.question ? this.requireRun(agent.question.run_id) : undefined;
-      if (!original || actionableQuestionId(agent, original, this.communicationHealthy()) !== question_id) throw new HarnessError("STALE_ANSWER",
-        { agent_id, resolution: "Read this Agent's current pending question; answer only its exact question_id. Do not redirect an old answer." });
-      return original;
-    };
+    this.validAnswer(question_id, answer);
+    const pending = () => this.pendingQuestion(agent_id, question_id);
     if (!this.requests.has(request_id)) {
       this.assertNewWorkAdmission(this.admissionState());
       this.assertOwnerAvailable(); // New commands must remember observed authority loss.
@@ -1346,7 +1468,7 @@ export class OwnerController {
   }
   private async sendMessage(request_id: string, agent_id: string, message: string,
     options: { settle_ms?: number; signal?: AbortSignal; prepare?: () => void }): Promise<{ delivery: Delivery; view: RunView }> {
-    if (typeof request_id !== "string" || !request_id || request_id.length > 256) throw new HarnessError("INVALID_REQUEST_ID");
+    if (typeof request_id !== "string" || !request_id || request_id.length > 256 || request_id.startsWith(RETURN_TO_REQUEST_PREFIX)) throw new HarnessError("INVALID_REQUEST_ID");
     if (typeof message !== "string" || !message.trim() || message.length > 16384) throw new HarnessError("INVALID_MESSAGE");
     const request_digest = sha256(stable({ agent_id, message }));
     const replay = () => {
@@ -1502,6 +1624,7 @@ export class OwnerController {
       !leaseHeld ? "owner_lease_lost" : agent.unavailable ?? (agent.exiting ? "exiting" : agent.current ? "agent_busy" : undefined);
     return structuredClone({ owner_id: record.owner_id, generation: record.generation, run_id, agent_id: record.agent_id,
       name: record.name, description: record.description, effective_settings: run.effectiveSettings,
+      ...(record.return_to_run_id ? { return_to_run_id: record.return_to_run_id } : {}),
       status: record.status, phase: record.phase, execution_exited: record.execution_exited,
       history_ref: record.history_ref, history_error: record.history_error, drain: this.drainView(run),
       finalization_pending: record.execution_exited && !terminal(record.status), resident: agent.resident, resumable: !unavailable,
@@ -1666,6 +1789,7 @@ export class OwnerController {
     });
     let leaseHeld = initial.leaseHeld;
     let targets: ManagedRun[], scope: AlertScope<ManagedRun>;
+    let conditionTargets: ManagedRun[] | undefined;
     let action: CommunicationAction | undefined;
     let cursor: string | undefined;
     const mode = request.kind === "wait" ? request.mode ?? "all" : "all";
@@ -1691,7 +1815,14 @@ export class OwnerController {
       targets = [run]; scope = { kind: "agents", agent_ids: [agent.id] }; cursor = request.cursor;
     } else {
       const run = this.requireRun(request.run_id);
-      targets = [run]; scope = { kind: "run", run };
+      if (run.record.return_to_run_id && request.action.type === "agent_spawn") {
+        // Both exact Runs are shown and scoped for alerts, but only the worker
+        // continuation decides readiness: any non-completed scout already fails
+        // it, so the scout never needs (or may race) a separate earlier trigger.
+        const continuation = this.requireRun(run.record.return_to_run_id);
+        targets = [run, continuation]; conditionTargets = [continuation];
+        scope = { kind: "runs", runs: targets };
+      } else { targets = [run]; scope = { kind: "run", run }; }
       action = { ...request.action, agent: run.record.name, task: taskOrdinal(run, [...this.runs.values()]) };
     }
     const wait_ms = request.kind === "read" ? 0 : request.wait_ms ?? (request.kind === "wait" ? 300000 : 0);
@@ -1703,7 +1834,7 @@ export class OwnerController {
     return this.observations.observe({
       policy: request.kind === "read" || (request.kind === "action" && wait_ms === 0) ? { kind: "snapshot" } : { kind: "waiting", wait_ms },
       signal: options.signal,
-      ready: () => communicationReadiness({ targets, agents: [...this.agents.values()], mode,
+      ready: () => communicationReadiness({ targets: conditionTargets ?? targets, agents: [...this.agents.values()], mode,
         ownerHealthy: this.communicationHealthy() && leaseHeld, currentBlocked: this.communicationBlock(), reportedBlockAtStart,
         pending: this.alerts, scope }),
       validate: () => {
@@ -1748,7 +1879,7 @@ export class OwnerController {
   /** Observation-only lease check: never calls the effecting availability gate
    * or latches an observer failure as an execution/cleanup fault. */
   private observationLeaseHeld(): boolean {
-    try { this.options.owner.assertHeld(); return true; } catch { return false; }
+    try { this.assertLeaseHeld(); return true; } catch { return false; }
   }
   private communicationRow(run: ManagedRun, task: number, healthy: boolean, providers: ProviderActivity): ThinTaskEntry {
     const agent = this.requireAgent(run.record.agent_id), record = run.record;
@@ -1770,7 +1901,7 @@ export class OwnerController {
       ...taskMetadata(run.record),
       ...(question_id ? { question_id } : {}),
       ...(run.question !== undefined && (historical || isCommunicationSettled(run)) ? { question: run.question } : {}),
-      result: this.communicationWindow(run, limit, cursor),
+      result: this.communicationWindow(run, limit, cursor, historical),
       ...(dispatch_notes ? { dispatch_notes } : {}),
       ...(run.record.cancellation_source ? { cancellation_source: run.record.cancellation_source } : {}),
       diagnostics: { error: run.record.outcome?.error, owner_error: this.parentError ?? this.internalError,
@@ -1824,13 +1955,17 @@ export class OwnerController {
       return offset;
     } catch { throw invalidResultCursor(); }
   }
-  private communicationWindow(run: ManagedRun, limit: number, cursor?: string): ResultWindow {
+  /** Only an explicit read returns text of an explicit_read Run; other
+   * observations keep its true window bounds and cursor but never slice it. */
+  private communicationWindow(run: ManagedRun, limit: number, cursor: string | undefined, explicitRead: boolean): ResultWindow {
     const stable = isCommunicationSettled(run);
     const offset = cursor === undefined ? 0 : this.resultOffset(run, cursor);
+    const bounds = { offset, retained_chars: run.output.text.length, total_chars: run.output.total_chars,
+      ...(stable ? { cursor: this.resultIdentity(run) } : {}) };
+    if (!explicitRead && run.record.result_visibility === "explicit_read") return { text: "", ...bounds };
     let end = Math.min(run.output.text.length, offset + limit);
     if (/[\uD800-\uDBFF]/.test(run.output.text[end - 1] ?? "") && /[\uDC00-\uDFFF]/.test(run.output.text[end] ?? "")) end++;
-    return { text: run.output.text.slice(offset, end), offset, retained_chars: run.output.text.length, total_chars: run.output.total_chars,
-      ...(stable ? { cursor: this.resultIdentity(run) } : {}) };
+    return { text: run.output.text.slice(offset, end), ...bounds };
   }
 
   private releaseAgent(agent: Agent, reason: string, run?: ManagedRun): Promise<void> {

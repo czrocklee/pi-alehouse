@@ -51,11 +51,12 @@ export interface PendingAlert<Run extends CommunicationRun = CommunicationRun> {
 export type AlertScope<Run extends CommunicationRun = CommunicationRun> =
   { readonly kind: "owner" } |
   { readonly kind: "agents"; readonly agent_ids: readonly string[] } |
-  { readonly kind: "run"; readonly run: Run };
+  { readonly kind: "run"; readonly run: Run } |
+  { readonly kind: "runs"; readonly runs: readonly Run[] };
 
 export function scopedAlerts<Run extends CommunicationRun>(pending: readonly PendingAlert<Run>[], scope: AlertScope<Run>): PendingAlert<Run>[] {
   return pending.filter((alert) => scope.kind === "owner" || (scope.kind === "run" ?
-    alert.run === scope.run : scope.agent_ids.includes(alert.run.record.agent_id)));
+    alert.run === scope.run : scope.kind === "runs" ? scope.runs.includes(alert.run) : scope.agent_ids.includes(alert.run.record.agent_id)));
 }
 /** Shared original-record/RunView predicate. Owner installs terminal status and
  * settled phase together, but structural callers can supply partial views.

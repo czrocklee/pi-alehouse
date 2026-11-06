@@ -224,11 +224,19 @@ test("preflight denials project the checked surface and target profile only for 
   const unavailable = errorReply({ code: "DISPATCH_PREFLIGHT_UNAVAILABLE", details: { key: "ownership", surface: "path_write", profile: "editor" } }).error;
   assert.equal(unavailable.surface, "path_write");
   assert.equal(unavailable.profile, "worker");
-  // Non-dispatch codes never surface these fields, and unknown detail keys stay
+  // Unrelated codes never surface these fields, and unknown detail keys stay
   // redacted; filesystem type/missing errors gain no permission surface.
   assert.deepEqual(errorReply({ code: "AGENT_BUSY", details: { surface: "path_write", profile: "researcher", secret_fixture: "hidden" } }).error, { code: "AGENT_BUSY" });
   const filesystem = errorReply({ code: "DISPATCH_TREE_TYPE", details: { key: "tree", requested: "file" } }).error;
   assert.equal(filesystem.surface, undefined); assert.equal(filesystem.profile, undefined);
+});
+
+test("compound answer permission refusal exposes its surface without exposing service details", () => {
+  assert.deepEqual(errorReply({ code: "RETURN_TO_PERMISSION_DENIED", details: {
+    key: "return_to", surface: "agent_answer", reason: "ask", profile: "editor", service: "private",
+    resolution: "Use separate spawn and agent_answer for normal approval.",
+  } }).error, { code: "RETURN_TO_PERMISSION_DENIED", parameter: "return_to", surface: "agent_answer", reason: "ask",
+    resolution: "Use separate spawn and agent_answer for normal approval." });
 });
 
 test("a changed canonical resource classifies as a dispatch error without a path-discovery workaround", () => {

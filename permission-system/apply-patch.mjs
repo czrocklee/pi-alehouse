@@ -367,6 +367,50 @@ patch("src/authority/forwarded-request-server.ts", [
     }
     const check = request.accessIntent`],
 ]);
+// Another extension acting for this node (Alehouse return_to) must reach the
+// decision this node's own tool gate would make. Only the authority holds the
+// principal that gate binds (session entry, else the name it last remembered,
+// e.g. from an earlier prompt tag), so it answers under that principal itself:
+// read-only, without remembering a name, prompting or recording a grant.
+patch("src/session/permission-session.ts", [
+  ['  // Read by the `index.ts` config-modal adapter closure:', `  /** Managed: the principal resolveAgentName(ctx) binds for a tool call
+   * (no system prompt there), without updating the remembered name. */
+  peekToolCallAgentName(ctx: ActiveAgentContext): string | null {
+    return getActiveAgentName(ctx) ?? this.knownAgentName;
+  }
+
+  // Read by the \`index.ts\` config-modal adapter closure:`],
+  ['  getActiveAgentName,\n', '  getActiveAgentName,\n  type ActiveAgentContext,\n'],
+]);
+patch("src/service/permissions-service.ts", [
+  ['interface PathNormalizerProvider {\n  getPathNormalizer(): PathNormalizer;\n}', `interface PathNormalizerProvider {
+  getPathNormalizer(): PathNormalizer;
+  peekToolCallAgentName(ctx: ActiveAgentContext): string | null;
+}`],
+  ['import type { PathNormalizer } from "#src/path/path-normalizer";', 'import type { PathNormalizer } from "#src/path/path-normalizer";\nimport type { ActiveAgentContext } from "#src/session/active-agent";'],
+  ['  getToolPermission(\n    toolName: string,', `  checkToolCallPermission(
+    toolName: string,
+    ctx: ActiveAgentContext,
+  ): ReturnType<PermissionsService["checkToolCallPermission"]> {
+    return this.checkPermission(toolName, undefined, this.session.peekToolCallAgentName(ctx) ?? undefined);
+  }
+
+  getToolPermission(
+    toolName: string,`],
+]);
+patch("src/service.ts", [
+  ['import type { PermissionCheckResult, PermissionState } from "./types";', 'import type { PermissionCheckResult, PermissionState } from "./types";\nimport type { ActiveAgentContext } from "#src/session/active-agent";'],
+  ['  isToolFullyDenied(toolName: string, agentName?: string): boolean;\n', `  isToolFullyDenied(toolName: string, agentName?: string): boolean;
+
+  /**
+   * Managed: the decision this node's own tool gate would make for a call of
+   * \`toolName\` in \`ctx\` (one of this node's tool calls), under the principal
+   * that gate binds. Read-only: it neither prompts nor records a grant, and it
+   * does not change the remembered agent name.
+   */
+  checkToolCallPermission(toolName: string, ctx: ActiveAgentContext): PermissionCheckResult;
+`],
+]);
 applyNativeGitPatch(root, patch);
 applyRedirectArgvPatch(root, patch);
 applyProfileDisplayPatch(root, patch);
@@ -374,4 +418,4 @@ applyPermissionPerformancePatch(root);
 // Dynamic cd targets (including ~) retain upstream's unknown-base handling.
 // Do not infer HOME stability from an AST: arbitrary earlier programs can
 // change the environment or the directory named by a later shell expansion.
-console.log("Applied managed permission/provenance/profile/yolo, original-command Git scope, redirect-buried argv and immutable resource-floor patches to pi-permission-system 32.0.3");
+console.log("Applied managed permission/provenance/profile/yolo, tool-call principal query, original-command Git scope, redirect-buried argv and immutable resource-floor patches to pi-permission-system 32.0.3");

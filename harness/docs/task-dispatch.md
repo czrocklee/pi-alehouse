@@ -128,6 +128,20 @@ An existing tree lease moves with that claim, rather than reacquiring against
 itself. Accepted-Run context-change failure is a failed accepted task, not an
 unaccepted rollback; replay still identifies it.
 
+Optional scout `return_to` installs that same continuation in the spawn
+admission, not a later answer call. The continuation is preadmitted `after` the
+exact new source Run and keeps the original `answer_to`, dispatch and claim
+lineage, with the Agent's fixed settings and turn limit as `agent_answer` uses. Source dispatch is a separate scout
+declaration and does not alter the inherited claim. Preflight of both sides is
+all-or-none: a scout path denial, a lost or changed inherited claim, or any
+other admission failure installs neither Run. Existing predecessor exemption and
+`dependency_not_completed` apply to that fixed source Run. Source failure,
+`needs_input` or interruption fails the pending continuation; pre-input reopen
+restores the original question's claim when the worker remains healthy. No new
+lock, lease, journal field or external claim store is added. The source link is
+live Owner metadata for the current Owner only; it is not persisted or
+restart-hydrated.
+
 Release requires final termination and confirmed execution exit/finalization
 and any necessary cleanup. Stop, kill, quarantine or Owner closure requests are
 not release evidence. Tree-lease close failure is sticky: resources remain held,

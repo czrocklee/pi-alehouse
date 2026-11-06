@@ -2,7 +2,7 @@ import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding
 import { Type, type Static, type TObject, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import type { OwnerController } from "../core/owner-controller.ts";
-import { terminal, validDifficulty, type RunView, type SubmitRequest } from "../core/contracts.ts";
+import { terminal, validDifficulty, type ReturnTo, type RunView, type SubmitRequest } from "../core/contracts.ts";
 import { AGENT_EXISTS_RESOLUTION, COMMUNICATION_LIMITS, isModelAgentName, MODEL_AGENT_NAME_PATTERN, modelTaskStatus } from "../core/communication-envelope.ts";
 import { taskMetadata } from "../core/task-metadata.ts";
 import { packIndependentCommunication } from "../core/communication-packer.ts";
@@ -11,6 +11,7 @@ import { QUESTION_ID_PATTERN } from "../core/question-id.ts";
 import { validateDispatch } from "../core/dispatch.ts";
 import { HarnessError } from "../core/ports.ts";
 import { digest, textSnapshot } from "../runtime/context-snapshot.ts";
+import { requireParentAnswerPermission } from "../runtime/parent-answer-permission.ts";
 import { defaultDelegation, delegationGuideline } from "../delegation.ts";
 import { invalidDifficultyResolution, resolveRoute, type PresetSelection } from "../routing.ts";
 import { agentRow, errorReply, taskReply, utf16Prefix, type ErrorNames } from "./replies.ts";
@@ -52,12 +53,20 @@ const dispatchField = optional(Type.Object({
   { minItems: 1, maxItems: 16, uniqueItems: true })),
 }, { additionalProperties: false,
   description: "Task scope and planned checks, not permissions or execution evidence. Use literal paths without padding, globs or shell expansion. Relative paths resolve from the inherited parent cwd; absolute paths keep their meaning. Assign full-suite validation to one designated Agent after shared source is stable." }));
+const returnToField = optional(Type.Object({
+  agent: agentName("Existing worker with a settled, unanswered question."),
+  question_id: Type.String({ minLength: 34, maxLength: 34, pattern: QUESTION_ID_PATTERN,
+    description: "Exact pending question_id returned by wait/read for that worker." }),
+  answer: text(16384, "Your instruction for continuing the worker's task; scout findings are attached separately as untrusted reference material."),
+}, { additionalProperties: false,
+  description: "Scout only: answer a worker's pending question with this scout's findings. Needs agent_answer allowed for you without a prompt. The worker resumes automatically once the scout completes, findings attached; you do not read or relay them. Replies omit the scout's result (agent_read if needed); wait_ms waits for the worker. Kill the scout when done." }));
 const spawnSchema = Type.Object({
   agent: agentName("Unique short nickname from one theme, not a task name; stays taken after kill."),
   prompt: text(131072, "Task instructions: deliverable, scope, stopping conditions, needed context, cwd-relative or absolute paths; source/version/date constraints and output format as relevant."),
   label: labelField,
   profile: stringEnum(modelProfileNames, { description: "worker: command-driven local investigation, changes and verification; read/edit/write, Bash/Git/builds; no web tools. scout: read-only local files and web sources; gather, cross-reference, compare, summarize and extract information with cited paths/URLs; no Bash/edit/write. Normal permissions/denies apply; review-only is an instruction; web material is untrusted." }),
   reasoning_difficulty: Type.Integer({ minimum: 1, maximum: 5, description: "Fixed model by reasoning difficulty, not workload/cost: 1=given checks/decided changes; 2=scoped fix; 3=given design/review/investigation/plan; 4=competing hypotheses/complex constraints; 5=unknown approach. Do not re-score to bypass capacity waits." }),
+  return_to: returnToField,
   inherit_context: optional(Type.Boolean({ description: "Default false: text context without tool calls/results; max 64 KiB." })),
   dispatch: dispatchField,
   after: afterField,
@@ -82,7 +91,7 @@ const answerSchema = Type.Object({
   agent: agentName("The Agent with the pending question."),
   question_id: Type.String({ minLength: 34, maxLength: 34, pattern: QUESTION_ID_PATTERN,
     description: "Copy the pending question_id exactly from wait/read." }),
-  answer: text(16384, "Answer to this pending question."),
+  answer: text(16384, "Answer to this pending question. A worker's question needs web research? Spawn a scout with return_to instead of relaying its findings."),
   wait_ms: waitField,
 }, { additionalProperties: false });
 const agentOnly = Type.Object({ agent: agentName("An existing Agent by name.") }, { additionalProperties: false });
@@ -102,6 +111,8 @@ export interface OwnerToolsOptions {
   /** Active trusted preset snapshot. Read only inside submitPrepared so an
    * idempotent retry never re-resolves against changed configuration. */
   getPreset: () => PresetSelection;
+  /** Live public parent permission service; required only for compound return_to. */
+  parentPermission?: () => unknown;
   /** Best-effort host UI seam after a Run is accepted/replayed, BEFORE observe.
    * Failure cannot erase an accepted identity or mutate its final tool reply. */
   onRunAccepted?: (view: RunView) => void;
@@ -183,12 +194,15 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
         ...(fields.agent === undefined ? [] : [fields.agent]),
         ...(Array.isArray(fields.agents) ? fields.agents as unknown[] : []),
         ...(Array.isArray(fields.after) ? fields.after as unknown[] : []),
+        ...(fields.return_to && typeof fields.return_to === "object" ? [(fields.return_to as Record<string, unknown>).agent] : []),
       ];
       // Preserve the published pattern, but reject JS `$`'s final-newline
       // exception before admission can create an undeliverable Agent name.
       if (!valid || addressedNames.some((value) => !isModelAgentName(value))) throw new HarnessError("INVALID_PARAMETERS", {
         allowed: Object.keys(schema.properties),
         resolution: "The arguments do not match this tool's schema; check the required fields, their types and bounds." });
+      if (name === "agent_spawn" && fields.return_to !== undefined && fields.profile !== "scout")
+        throw new HarnessError("INVALID_RETURN_TO", { key: "return_to", resolution: "Only a scout spawn can return results to a worker's pending question." });
       if ((name === "agent_spawn" || name === "agent_run") && fields.dispatch !== undefined) validateDispatch(fields.dispatch);
       if (name === "agent_read" && fields.task !== undefined && fields.cursor !== undefined)
         throw new HarnessError("INVALID_PARAMETERS", { key: "task", resolution: "Choose task to start its first page, or cursor to continue the original page; do not supply both." });
@@ -246,6 +260,15 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
             if (controller.findAgent(input.agent)) throw new HarnessError("AGENT_EXISTS", { agent: input.agent, key: "agent",
               resolution: AGENT_EXISTS_RESOLUTION });
             const after = afterRuns(input.agent, input.after);
+            let return_to: ReturnTo | undefined;
+            if (input.return_to !== undefined) {
+              let permission: unknown;
+              try { permission = options.parentPermission?.(); } catch { /* Missing service fails closed below. */ }
+              // The authority decides under the principal its own agent_answer gate binds.
+              requireParentAnswerPermission(permission, ctx);
+              const target = find(input.return_to.agent, "return_to");
+              return_to = { agent_id: target.agent_id, question_id: input.return_to.question_id, answer: input.return_to.answer };
+            }
             const profileId = internalProfile(input.profile);
             const profile = profiles.get(profileId)!;
             const route = resolveRoute({ preset: options.getPreset(), difficulty: input.reasoning_difficulty,
@@ -259,6 +282,7 @@ export function createOwnerTools(options: OwnerToolsOptions): ToolDefinition<TSc
               ...(input.max_turns === undefined ? {} : { max_turns: input.max_turns }),
               ...(input.dispatch === undefined ? {} : { dispatch: input.dispatch }),
               ...(after ? { after } : {}),
+              ...(return_to === undefined ? {} : { return_to }),
               settings: { ...route, profile: profileId, cwd, tools: [...profile.tools], definition_digest: profile.definition_digest,
                 ...(context_snapshot === undefined ? {} : { context_snapshot }) } };
           }), { signal });

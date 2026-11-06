@@ -598,7 +598,7 @@ export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStar
         createSession });
       ownerSessionReplacementGuard(controller)(pi);
       for (const tool of createOwnerTools({ controller, context: ctx, profiles, getSupportedThinkingLevels,
-        getPreset: () => router!.current(),
+        getPreset: () => router!.current(), parentPermission,
         // Admission happens before an optional tool-local wait. Paint the new
         // reservation immediately; tool_result remains the sole usage drain.
         // Keep best-effort visibility repair here too: this callback also runs
