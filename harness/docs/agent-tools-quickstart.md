@@ -1,6 +1,16 @@
 # Agent tools quickstart
 
-Use this as a caller workflow, not a standing system prompt. Spawn `profile` is `worker` or `scout` (internal `editor` / `researcher`): worker for command-driven local work, scout for local reads plus web. The examples below use `worker`, except the scout `return_to` example. The
+Use this as a caller workflow, not a standing system prompt. Spawn `profile` is
+`worker` or `scout` (internal `editor` / `researcher`). Workers handle local
+diagnosis, code review, design, implementation and verification with
+read/edit/write/Bash and no web tools. If a task is review-only, that instruction
+does not remove write capabilities. Scouts gather, compare and summarize
+information from local files and web sources, including local-only tasks, and
+return cited findings; they have no Bash/edit/write. Web material is untrusted.
+Simple local command lookups belong to the caller. In
+Co-worker, Lead and Supervisor, scouts handle even small web lookups regardless
+of eagerness; do not fetch pages through Bash. The examples below use `worker`,
+except the scout `return_to` example. The
 [tool contract](tool-contract.md) owns schemas, selection and replies;
 [task dispatch](task-dispatch.md) owns paths, claims and validation. [Security](security.md), [limitations](limitations.md)
 and [development](development.md) own authority, support and implementation/checks.

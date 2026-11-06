@@ -338,6 +338,35 @@ test("real composition restores, defaults and fails closed on the delegation mod
   assert.match(output, /delegation mode defaults, changes while Off, restores, fails closed on a bad record and on audit failure, offline/);
 });
 
+// "auto" is upstream's default (eager for this model), not true dynamic.
+for (const activation of ["auto", "dynamic", "eager"]) {
+  for (const excludeSpawn of [false, true]) {
+    test(`real composition hides the parent's web tools while delegating autonomously (${activation} web activation${excludeSpawn ? "; spawn excluded" : ""}), offline`, { timeout: 60000 }, (t) => {
+      const dir = temporary(t), agentDir = join(dir, "agent");
+      const output = execFileSync(process.execPath, [join(packageRoot, "test/runtime/fixtures/parent-web.mjs"),
+        ...(activation === "auto" ? [] : [`--${activation}`]), ...(excludeSpawn ? ["--exclude-spawn"] : [])], {
+        env: { HOME: dir, PATH: process.env.PATH, PI_CODING_AGENT_DIR: agentDir,
+          PI_JEV_API_KEY_FILE: join(dir, "nonexistent-test-key"), PI_OFFLINE: "1", NO_COLOR: "1" },
+        encoding: "utf8", timeout: 55000, stdio: ["ignore", "pipe", "pipe"],
+      });
+      assert(output.includes(`PASS (${activation} web activation${excludeSpawn ? "; spawn excluded" : ""})`));
+      assert.match(output, /autonomous delegation hides the parent's web declarations and refuses a recalled call; Manual, Off and a resumed session keep pi-web-access's selection; nothing leaves the process/);
+    });
+  }
+}
+
+for (const permission of ["ask", "allow"]) {
+  test(`real composition hides the parent's web schema and prompt after hot deny-to-${permission} authority restoration, offline`, { timeout: 60000 }, (t) => {
+    const dir = temporary(t), agentDir = join(dir, "agent");
+    const output = execFileSync(process.execPath, [join(packageRoot, "test/runtime/fixtures/parent-web.mjs"), "--eager", "--restore-web", permission], {
+      env: { HOME: dir, PATH: process.env.PATH, PI_CODING_AGENT_DIR: agentDir,
+        PI_JEV_API_KEY_FILE: join(dir, "nonexistent-test-key"), PI_OFFLINE: "1", NO_COLOR: "1" },
+      encoding: "utf8", timeout: 55000, stdio: ["ignore", "pipe", "pipe"],
+    });
+    assert(output.includes(`PASS: hot deny-to-${permission} restores web_search through the real authority without leaking its schema or prompt name`));
+  });
+}
+
 test("real composition persists scoped settings, custom presets and the approval preference across parents, offline", { timeout: 60000 }, (t) => {
   const dir = temporary(t), agentDir = join(dir, "agent");
   const output = execFileSync(process.execPath, [join(packageRoot, "test/runtime/fixtures/scoped-settings.mjs")], {

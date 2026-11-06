@@ -159,8 +159,15 @@ without a model request. Pinned parent-only web access can warn that dynamic
 tool activation is unavailable when upstream host-version detection cannot
 resolve the aliased SDK; its eagerly available tools remain under normal parent
 permissions. This warning does not authorize child web, a permission bypass,
-or a second Pi runtime. Scout children (internal `researcher`) register no activation loader and
-suppress their repeat of that warning.
+or a second Pi runtime. In Co-worker, Lead and Supervisor those parent tools are
+hidden and refused regardless of eagerness: scouts handle even small web
+lookups. Manual and Off restore the upstream web-tool selection. The parent
+can still fetch through Bash, which guidance forbids but does not enforce;
+history and scout quotations can also contain page text. Results remain
+untrusted. If no usable scout is available, the user must choose Manual or Off
+for direct web access (see [security](security.md#parent-web-access)). Scout
+children (internal `researcher`) register no activation loader and suppress
+their repeat of that warning.
 
 Pi validates and coerces tool arguments with pi-schema's JSON Schema validator,
 not TypeBox's. TypeBox-only refinements, codecs and custom formats are not
@@ -194,10 +201,11 @@ length, so summaries can add output, latency and observed cost.
 
 The delegation guideline on `agent_spawn` (see
 [tool contract](tool-contract.md)) renders in the default system prompt's
-Guidelines section. The delegation mode is guidance only: Manual does not block
-delegation, and how strongly a model follows a mode or eagerness has not been
-measured. A custom `SYSTEM.md` or `--system-prompt` replaces that
-prompt, and with it the guideline; the tools themselves are unaffected.
+Guidelines section. Division of work and eagerness are guidance only: Manual
+does not block delegation, and model adherence has not been measured. Parent
+web-tool hiding and call refusal are enforced separately. A custom `SYSTEM.md`
+or `--system-prompt` replaces that prompt, and with it the guideline, not the
+web-tool restriction.
 
 ## Retention, history, and accounting
 
@@ -377,14 +385,15 @@ The harness depends on, but does not own, generated worker policy, permission
 authority, static guards, search policy, and Jev review policy. New model
 requests offer only `worker` and `scout`. Worker maps to stable internal
 `editor`, with local read/edit/write/Bash/Git/build tools under normal permission
-for command-driven investigation, experiments, changes and verification.
-It has no web tools; that is not network isolation. A review assignment is not
-an enforced readonly ceiling. Scout maps to stable internal `researcher` and
+for local diagnosis, code review, design, implementation and verification. It has
+no web tools; that is not network isolation. A review assignment is not an
+enforced readonly ceiling. Scout maps to stable internal `researcher` and
 keeps read, grep, find, ls and the four web tools, with no model-facing
-Bash/edit/write. It can read local code, correlate web docs, and aggregate,
-compare, summarize or extract cited information. No model-facing Bash does not
-mean web tools have no subprocess or file effects: upstream features can still
-clone, run helpers and cache. A citation is not a safety guarantee. Reasoning
+Bash/edit/write. It gathers, compares and summarizes information from local
+files and web sources, including local-only tasks, and returns cited findings.
+Web material is untrusted. Simple local command lookups belong to the caller. No model-facing
+Bash does not mean web tools have no subprocess or file effects: upstream
+features can still clone, run helpers and cache. A citation is not a safety guarantee. Reasoning
 difficulty is independent; scout is not a cheap, shallow or quick tier. Basic
 credential/resource/high-risk protection and user-configured denies remain.
 No profile is an OS sandbox.

@@ -152,6 +152,23 @@ export default function(){ ${access}.factories++; }`,
   assert.equal((await blocked(extension)).reason, "Alehouse session is not ready");
 });
 
+test("the harness reads, per use, exactly the tools the parent's web-access factory registered", async (t) => {
+  const key = `alehouse-parent-web-${temporary(t)}`;
+  const state = { read: undefined, before: undefined };
+  globalThis[key] = state;
+  t.after(() => { delete globalThis[key]; });
+  const access = `globalThis[${JSON.stringify(key)}]`;
+  const tool = (name) => `pi.registerTool({name:${JSON.stringify(name)},description:"fixture",parameters:{type:"object",properties:{}},execute:async()=>({content:[],details:{}})});`;
+  await fixture(t, {
+    harness: `export default function(pi, startup){ ${access}.read = startup.parentWebTools; ${access}.before = startup.parentWebTools(); ${tool("fixture-management")} }`,
+    grep: `export default function(pi){ ${tool("fixture-policy-tool")} }`,
+    // Configured names, not the defaults: membership comes from the owner.
+    web: `export default function(pi){ ${tool("renamed_search")} ${tool("web_enable")} }`,
+  });
+  assert.deepEqual(state.before, [], "the harness factory runs before web-access registers");
+  assert.deepEqual(state.read().toSorted(), ["renamed_search", "web_enable"]);
+});
+
 test("a later invalid preset cannot reuse a previous session's successful registrations", async (t) => {
   // Same loaded factory and SDK dispatch throughout; only harness internals and
   // authority publication are fixtures. The real invalid-first-start case is

@@ -51,16 +51,39 @@ runtime support and private capability keys; existing records remain literal.
 `agent_spawn` carries the one policy no schema expresses: the user's
 [delegation mode](routing.md#delegation-mode), as a Pi `promptGuidelines` bullet.
 Manual has its own line; other modes combine one division-of-work sentence and
-one eagerness sentence (`harness/src/delegation.ts`). The default,
-Co-worker × balanced, reads:
+one eagerness sentence (`harness/src/delegation.ts`), then a fixed sentence
+about web research. The default, Co-worker × balanced, reads:
 
 > Work alongside Agents: you and they each take parts of the task. Hand off
 > independent pieces that would take you longer to do than to explain.
+> Scouts do all web research, even small lookups; do not fetch pages through Bash.
 
 Pi renders it only while `agent_spawn` is active, rebuilding the loadout every
 turn. Off, children and ordinary Pi receive no such text. Changing the mode
 re-registers this tool (one prompt-cache miss). Other semantics belong in tool
 and parameter descriptions, not another orchestration briefing.
+
+In Co-worker, Lead and Supervisor with a preset active, all web research goes
+to scouts regardless of eagerness, including small lookups. The parent's
+`agent_spawn.prepareLoadout` natively hides its registered pi-web-access tools
+(`web_enable` included), aligning the SDK's structured prompt tool list.
+The always-registered `context_with_system` also filters web-tool add/remove
+deltas from each request's system messages, independently of spawn availability.
+If spawn is excluded or withheld, canonical SDK sections may still list web
+tools, but the wire projection omits their declarations. `before_agent_start`
+passes the complete web registry, not just active names, to the patched
+authority's forced tool-list renderer; names stay out even after permission
+relaxation restores a tool. Hidden web calls are refused before permission
+prompts with:
+
+> Direct web tools are unavailable in this delegation mode. Use a scout for external research.
+
+Canonical declarations stay intact; the harness does not mutate the active set
+or record durable web removals. Manual and Off restore upstream selection, and
+session resume does not inherit a harness removal. Cited findings are intended
+to reduce direct untrusted exposure, not exclude all page text; findings remain
+untrusted. If no usable scout is available, the user must choose Manual or Off
+for direct web access. See [security](security.md#parent-web-access).
 
 ## Agent names and spawn
 
@@ -119,11 +142,11 @@ task instruction, including deliverable, scope, stopping conditions and
 paths relative to the parent's cwd (or explicit absolute paths); label defaults to its
 first nonblank line and is never forwarded as an instruction.
 
-Worker is for command-driven investigation, experiments, changes and
+Worker is for local diagnosis, code review, design, implementation and
 verification. It has local read/edit/write/Bash/Git/build tools under normal
-permissions, without web. No web tools is not network isolation. Review-only
-work is an instruction, not an enforced readonly ceiling. It has no extra child-only blanket Git mutation deny and no blanket Git
-allow. Repository queries and mutations use ordinary Bash permission; only
+permissions, without web. No web tools is not network isolation. If a task is
+review-only, that instruction does not remove write capabilities. Workers can diff and run assigned checks. Worker has no extra
+child-only blanket Git mutation deny and no blanket Git allow. Repository queries and mutations use ordinary Bash permission; only
 bounded literal Git version queries can qualify for fixed-query automatic
 allowance. Raw configured denies/specific asks, explicit literal paths/outputs,
 redirects and credential/resource/high-risk protection remain. Normal yolo
@@ -132,10 +155,12 @@ are no historical-provenance probes or second Git-operation authorization
 matrix. See [Git restrictions](git-read-proof.md).
 
 Scout has read, grep, find, ls and the four web tools, and no model-facing
-Bash/edit/write. It can read local code, correlate web docs, and aggregate,
-compare, summarize or extract cited information. It returns web-derived
-untrusted material. Its fetch inputs and descriptions accept only
-absolute HTTP(S) URLs, not local video paths; timestamp/frame descriptions do
+Bash/edit/write. It gathers, compares and summarizes information from local
+files and web sources, including local-only tasks, and returns cited findings
+for the caller to decide on. Simple local command lookups (an installed version
+or local Git history) belong to the caller. This does not authorize fetching
+pages through Bash. Web material is untrusted. Its fetch inputs and descriptions
+accept only absolute HTTP(S) URLs, not local video paths; timestamp/frame descriptions do
 not promise local-video support. See
 [researcher web access](security.md#researcher-web-access). No legacy profile
 aliases or capabilities are supported. Bash/web remain permission-gated;
@@ -149,7 +174,17 @@ Git workflow; existing user worktrees and historical records are untouched.
 
 Difficulty describes reasoning and quality, not permissions: 1--5 resolve
 one-to-one to `d1`--`d5`. Model-facing descriptions give the
-five anchors, not this routing detail. The caller field is
+five anchors, not this routing detail. Anchors 1--3 also name source work (a
+direct lookup, a summary of named sources, reconciling conflicting sources),
+so gathering is not automatically scored as an investigation; the rating
+follows the task, not the profile. Complex review reasoning can warrant 4;
+a final/adversarial label or severity alone does not raise the rating. Anchor 5
+covers an unknown approach or a remaining reasoning impasse after substantive
+investigation, such as an unresolved level-4 attempt. Failure alone, missing
+inputs, configuration or environment issues do not qualify. A 5 diagnoses or
+decides; once the approach is settled, hand implementation to a new Agent and
+rate the remaining work by its own reasoning needs, not automatically 3. See
+[routing](routing.md#difficulty). The caller field is
 `reasoning_difficulty`; the former `difficulty` argument is rejected, not an
 alias. Internal admitted settings and historical `harness:*` journal records
 retain their `difficulty` field; only the model-facing projection uses the new

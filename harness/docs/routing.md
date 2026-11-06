@@ -26,6 +26,16 @@ the panel is narrow). This is
 prompt guidance, not enforcement: Manual does not block `agent_spawn` (use
 `off`, or a permission `ask` rule, for that).
 
+Co-worker, Lead and Supervisor also hide and refuse the parent's own web tools
+regardless of eagerness: scouts handle all web research, even small lookups.
+This is an exception to the small-task delegation threshold. Cited findings
+are intended to reduce direct exposure to untrusted pages; they remain
+untrusted, and history, quotations and Bash can still bring page text into the
+parent's context. The guideline forbids fetching pages through Bash, but that
+part is not enforced. Manual and Off restore the upstream web-tool selection.
+If no usable scout is available, the user must choose Manual or Off for direct
+web access. See [security](security.md#parent-web-access).
+
 A change takes effect at once: `agent_spawn` is re-registered with the new line
 (one prompt-cache miss), and the parent's next run uses it. A run already in
 progress keeps the prompt it started with. Running Agents are unchanged. If the
@@ -75,23 +85,39 @@ Assess the reasoning difficulty of the prompt's concrete task and requested
 quality, independently of permission profile:
 
 1. Run given checks or apply decided changes, e.g. tests, CI, lint, listed
-   review nits.
-2. Small, well-scoped fix or check.
-3. Implement a given design, review a change, investigate a failure, or plan.
+   review nits; or a direct lookup, e.g. a release's version or date.
+2. Small, well-scoped fix or check; or a summary of named sources, e.g. a
+   changelog range or a set of advisories.
+3. Implement a given design, review a change, investigate a failure, or plan;
+   or reconcile conflicting sources.
 4. Competing hypotheses or complex constraints, e.g. races, lifetimes,
-   intermittent failures, cross-cutting migrations.
-5. No known approach, e.g. a failure with no leads, or a design without
-   precedent.
+   intermittent failures, cross-cutting migrations, or reviews requiring
+   that reasoning.
+5. No known approach, e.g. a design without precedent; or a remaining reasoning
+   impasse after substantive investigation, e.g. an unresolved level-4 attempt
+   or a choice between well-argued options the main agent still cannot settle.
 
 Do not adjust difficulty for workload, importance, cost, or reassurance; cost
 belongs to the delegation decision, not the rating. A reviewer's requested
-severity or tone does not raise difficulty. Whether a slot's model is strong
+severity or tone, or a final/adversarial label, does not raise difficulty;
+complex reasoning can justify level 4. Whether a slot's model is strong
 enough for its tasks is a preset choice, not a reason to rate higher. These scoring
 anchors live in the model-visible `reasoning_difficulty` parameter description. The fixed
 mapping above is operator documentation, not part of that scoring guidance; it
 is shared by all presets, with no per-preset thresholds. The five slots are
 independently configurable and may share a model, with the same or different
 effort policies. Five slots do not require five distinct models.
+
+Level 5 is not a retry tier: a failure alone, missing inputs, configuration or
+environment problems do not establish a reasoning impasse. Resolve or report
+those blockers rather than escalating them. Escalating means a new Agent at 5,
+since an Agent's difficulty cannot change. A 5 diagnoses or decides; once the
+approach is settled, hand implementation to a new Agent and rate that remaining
+work by its own reasoning needs, not automatically 3. This separates the
+reasoning impasse from settled implementation work. The conclusion is advice
+the main agent weighs: it acts on it or reports why not, and decisions that need
+the user's approval still go to the user. The rung is not a guarantee of greater
+capability: slots may share models, and a 5 can be an independent second opinion.
 
 Difficulty is immutable Agent configuration. Resume does not accept or rescore
 it; creating a new Agent is required to allocate a different difficulty/route.

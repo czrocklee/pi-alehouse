@@ -111,7 +111,7 @@ for (const [fault, beerMugs] of [["widget", undefined], ["panel", true], ["all",
   harnessExtension({ events: bus, on: (event, handler) => {
     const list = handlers.get(event) ?? []; list.push(handler); handlers.set(event, list);
   }, registerShortcut: (name, spec) => shortcuts.set(name, spec), registerCommand: (name, spec) => commands.set(name, spec), registerTool() {},
-  getAllTools: () => [], getActiveTools: () => [...activeTools], setActiveTools: (names) => { activeTools = [...names]; }, appendEntry() {} }, { permission });
+  getAllTools: () => [], getActiveTools: () => [...activeTools], setActiveTools: (names) => { activeTools = [...names]; }, appendEntry() {} }, { permission, parentWebTools: () => [] });
   t.after(async () => {
     failing = false;
     for (const stop of handlers.get("session_shutdown")) await stop({ reason: "quit" }, ctx);

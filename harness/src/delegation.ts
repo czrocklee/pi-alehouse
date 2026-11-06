@@ -20,7 +20,8 @@ export const modeLabels: Readonly<Record<DelegationMode, string>> =
 
 // Organization strategy only: what each tool does and accepts stays in its
 // schema. Each autonomous line is one division-of-work sentence plus one
-// eagerness sentence, so either axis reads the same in every combination.
+// eagerness sentence, so either axis reads the same in every combination,
+// then the fixed web sentence: these modes hide the parent's web tools.
 const manualText = "Start or assign Agent work only when the user asks for it; when delegation would clearly help, suggest it briefly. " +
   "Answer, wait for and collect results from Agents already at work.";
 const modeText: Readonly<Record<Exclude<DelegationMode, "manual">, string>> = Object.freeze({
@@ -34,10 +35,12 @@ const eagernessText: Readonly<Record<Eagerness, string>> = Object.freeze({
   balanced: "Hand off independent pieces that would take you longer to do than to explain.",
   eager: "Hand off any piece that can proceed independently of your own work, even small ones, and keep several Agents running in parallel.",
 });
+/** Whatever the eagerness: the parent's web tools are hidden in these modes. */
+export const autonomousWebText = "Scouts do all web research, even small lookups; do not fetch pages through Bash.";
 
 /** The single line agent_spawn contributes to the parent system prompt. */
 export function delegationGuideline(setting: DelegationSetting): string {
-  return setting.mode === "manual" ? manualText : `${modeText[setting.mode]} ${eagernessText[setting.eagerness]}`;
+  return setting.mode === "manual" ? manualText : `${modeText[setting.mode]} ${eagernessText[setting.eagerness]} ${autonomousWebText}`;
 }
 
 /** Whether eagerness changes anything in this mode. */

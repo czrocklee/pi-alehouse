@@ -10,6 +10,9 @@ export default async function alehouse(pi: ExtensionAPI) {
   let assembled = false;
   let started = false;
   const sessionHarnessTools = new Set<string>();
+  // Whatever the parent's pi-web-access registered, under its configured names:
+  // the harness hides these while autonomous delegation routes web work to scouts.
+  const parentWebTools = new Set<string>();
   let sessionId: string | undefined;
   let authority: unknown;
   const currentAuthority = () => {
@@ -56,6 +59,7 @@ export default async function alehouse(pi: ExtensionAPI) {
           const result = original.apply(target, args);
           owners.set(key, owner);
           if (owner === "harness" && property === "registerTool" && typeof name === "string") sessionHarnessTools.add(name);
+          if (owner === "web-access" && property === "registerTool" && typeof name === "string") parentWebTools.add(name);
           return result;
         };
         if (property === "on") return (event: string, handler: (...args: unknown[]) => unknown) => {
@@ -105,7 +109,9 @@ export default async function alehouse(pi: ExtensionAPI) {
       const extension = name === "managed-permissions" ? permissionEntry : name === "web-access"
         ? await loadParentWeb(path) : await import(pathToFileURL(path).href);
       if (typeof extension.default !== "function") throw new Error(`Invalid factory: ${name}`);
-      if (name === "harness") await extension.default(scoped(name), { permission: permissionEntry });
+      // The harness factory runs before web-access registers, so it reads the
+      // set when it needs it rather than copying it now.
+      if (name === "harness") await extension.default(scoped(name), { permission: permissionEntry, parentWebTools: () => [...parentWebTools] });
       else await extension.default(scoped(name));
     }
     if (failureLatched) return; // A factory may have caught its own collision.

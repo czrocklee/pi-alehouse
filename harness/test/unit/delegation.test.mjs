@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { defaultDelegation, delegationGuideline, delegationLabel, delegationModes, delegationStatus, eagernessLevels,
+import { autonomousWebText, defaultDelegation, delegationGuideline, delegationLabel, delegationModes, delegationStatus, eagernessLevels,
   parseDelegation, restoreDelegation, usesEagerness } from "../../dist/delegation.js";
 import { PresetRouter } from "../../dist/routing.js";
 import { writePresetConfig } from "../support/preset-config.mjs";
@@ -12,14 +12,19 @@ const preset = (name, effort_overrides = {}) => ({ name, version: "v1", digest: 
   effort: {}, effort_defaults: {}, effort_overrides });
 const off = { name: "off", version: "off-v1", digest: "f" };
 
-test("each autonomous guideline is one division sentence plus one eagerness sentence; Manual stands alone", () => {
+test("each autonomous guideline is one division sentence, one eagerness sentence and the web sentence; Manual stands alone", () => {
   for (const mode of delegationModes) for (const eagerness of eagernessLevels) {
     const line = delegationGuideline({ mode, eagerness });
     if (!usesEagerness(mode)) {
       assert.equal(line, delegationGuideline({ mode, eagerness: "balanced" }), "Manual ignores eagerness");
       assert.match(line, /only when the user asks/);
+      assert.doesNotMatch(line, /web|scout/i, "Manual keeps the parent's web tools");
       continue;
     }
+    // Autonomous modes hide the parent's web tools, whatever the eagerness.
+    assert(line.endsWith(` ${autonomousWebText}`), `${mode}/${eagerness}`);
+    assert.match(autonomousWebText, /Scouts do all web research, even small lookups/, "web routing overrides every eagerness threshold");
+    assert.match(autonomousWebText, /do not fetch pages through Bash/);
     // The same eagerness sentence ends every mode; the same mode sentence starts every eagerness.
     const tail = delegationGuideline({ mode: "co-worker", eagerness }).replace(/^[^.]+\. /, "");
     assert(line.endsWith(tail), `${mode}/${eagerness}`);

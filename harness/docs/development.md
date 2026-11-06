@@ -284,6 +284,27 @@ answer}`. `OwnerToolsOptions.parentPermission` supplies the parent service;
 parent's own tool-call context to the authority's patched read-only
 `checkToolCallPermission("agent_answer", ctx)` and never reconstructs the
 principal itself, since only the authority holds the name its gate remembered.
+
+Parent web hiding uses one live mode predicate and the complete registry of tools
+composition saw the parent's pi-web-access register (`HarnessStartup.parentWebTools`,
+read per use because web-access registers after the harness factory runs).
+While `agent_spawn` is active, its native `prepareLoadout` hides web declarations
+and keeps SDK-generated prompt sections consistent. The always-registered
+`context_with_system` also filters web declarations from every request's system
+message add/remove deltas, retaining protection when host exclusions or permission
+filtering withhold spawn. Neither path changes active selection or canonical tool
+declarations. With spawn excluded, persisted SDK tool-list text may still list
+web tools; request schemas and the authority-rendered prompt remain filtered.
+`before_agent_start` passes all registered web names, not just currently active
+ones, in `hiddenTools` to the authority patch in `apply-patch.mjs`. Its rendered/
+forced tool list then omits even tools restored later in that event. SDK loadout
+preparation can overwrite this handoff; request filtering does not depend on it.
+`tool_call` refuses web calls while hidden, since the tools stay active.
+Do not deactivate them instead: pi-web-access re-adds its loader every run,
+and a recorded removal would stick to a resumed session. The real-composition
+fixture `test/runtime/fixtures/parent-web.mjs` covers auto, dynamic and eager
+activation, host exclusion of `agent_spawn`, and hot permission deny-to-ask/allow
+restoration.
 Core create
 requests keep optional `return_to` as internal `{agent_id, question_id,
 answer}`. Preflight is all-or-none before mutation; Off rejects before

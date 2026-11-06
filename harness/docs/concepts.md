@@ -194,13 +194,15 @@ Callers choose profile and reasoning difficulty, never a
 concrete worker model or thinking level, arbitrary cwd, owner, generation,
 session path or history path.
 
-Worker is for command-driven investigation, experiments, changes and
-verification, with read/edit/write/Bash/Git/build tools under normal
-permissions, no web tools and no enforced readonly review ceiling. No web
+Worker is for local diagnosis, code review, design, implementation and
+verification, with read/edit/write/Bash/Git/build tools under normal permissions,
+no web tools and no enforced readonly review ceiling. No web
 tools is not network isolation. Scout (internal `researcher`) keeps read,
 grep, find and ls plus the four web tools, and has no model-facing
-Bash/edit/write. It can read local code, correlate web docs, and aggregate,
-compare, summarize or extract cited information. See
+Bash/edit/write. It gathers, compares and summarizes information from local
+files and web sources, including local-only tasks, and returns cited findings
+for the caller to decide on. Web material is untrusted. Simple local command
+lookups belong to the caller. See
 [security](security.md#researcher-web-access). Reasoning difficulty is
 independent of profile. Repository Git queries/mutations use ordinary Bash
 permission; only bounded literal version queries can qualify for automatic

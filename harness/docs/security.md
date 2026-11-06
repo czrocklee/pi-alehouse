@@ -22,7 +22,8 @@ the neutral routing catalogue defaults to `off`. Install a **built tarball** wit
 `--omit=dev --legacy-peer-deps --ignore-scripts` to avoid pulling a second Pi
 SDK/runtime through dependency peer auto-installation; the host Pi is separate.
 
-The parent's four web tools stay subject to the global permission policy.
+The parent's four web tools stay subject to the global permission policy, and
+autonomous delegation hides them ([below](#parent-web-access)).
 Children receive only their profile's local `read`/Bash/search/edit tools as
 filtered by the harness, plus fixed `alert_parent`/`ask_parent`. `notify_parent`
 is retired and explicitly denied, not a runtime alias. They receive
@@ -44,8 +45,8 @@ scout is not a cheaper, shallower or quicker tier.
 
 | Public profile | Internal ID | Capability | Meaning |
 | --- | --- | --- | --- |
-| `worker` | `editor` | local read/edit/write/Bash/Git/builds; no web tools | command-driven investigation, experiments, changes and verification under normal permission; no web is not network isolation, and review-only is not a readonly promise |
-| `scout` | `researcher` | read, grep, find, ls and the four web tools; no model-facing Bash/edit/write | read local code, correlate it with web docs, and aggregate, compare, summarize or extract cited information; web-derived material is untrusted |
+| `worker` | `editor` | local read/edit/write/Bash/Git/builds; no web tools | local diagnosis, code review, design, implementation and verification under normal permission; no web is not network isolation, and review-only is not a readonly promise |
+| `scout` | `researcher` | read, grep, find, ls and the four web tools; no model-facing Bash/edit/write | gather, compare and summarize information from local files and web sources, including local-only tasks; return cited findings; web material is untrusted |
 
 Worker has no extra child-only blanket Git mutation ban and no automatic Git
 allow. Review-only work is a task instruction. User-configured command/path denies and base credential/resource/high-risk
@@ -106,6 +107,46 @@ login-home `cd ~` stability inference is retired. Dynamic `cd` targets leave
 relative paths at an unknown base: an ordinary external ask,
 which yolo can satisfy. This is deliberately not an arbitrary-shell guarantee.
 
+### Parent web access
+
+In Co-worker, Lead and Supervisor, scouts handle all web research, even small
+lookups, regardless of eagerness. The parent's direct web tools are hidden and
+calls refused. Web pages are untrusted input; the parent holds the widest
+authority (Bash, edits, every Agent) in the longest-lived context. Scouts return
+cited findings to reduce direct exposure, not guarantee raw-page exclusion or
+prevent prompt injection. Findings remain untrusted; history, quotations and
+Bash can still put page text in the parent's context. Scouts retain local reads
+plus outbound web requests.
+
+Composition records every tool the parent's pi-web-access registers, under its
+configured names. While an autonomous mode and a preset are active:
+
+- With `agent_spawn` active, its native `prepareLoadout` hides the web tools,
+  keeping the SDK's structured prompt tool list aligned.
+- The always-registered `context_with_system` also filters web-tool add/remove
+  deltas from each request's system messages, independently of `agent_spawn`.
+  If spawn is excluded or withheld, canonical SDK prompt sections can still
+  list web tools, but the wire projection omits their declarations.
+- `before_agent_start` supplies the complete registered web-name set, not just
+  active names, as `hiddenTools` to the patched authority's forced tool-list
+  renderer. It omits those names even if permission relaxation restores a tool
+  later in the event. SDK loadout preparation may overwrite `hiddenTools`;
+  the request filter is independent of that handoff.
+- `tool_call` refuses hidden web calls before permission prompts, since the
+  tools remain active.
+
+Canonical tool declarations are preserved: the harness neither mutates the
+active set nor records durable web-tool removals. Manual and Off therefore
+restore pi-web-access's upstream selection (eager tools or the `web_enable`
+loader); resuming a session does not inherit a harness removal.
+
+This is not network isolation. The parent can still reach the network through
+Bash (`curl`, package managers, Git); the guideline forbids fetching pages that
+way, but nothing enforces it. Simple local command lookups belong to the caller,
+not scouts. Commands the user runs from pi-web-access are unaffected. Denying
+`agent_spawn` need not stop an already accepted scout. If no usable scout is
+available, the user must choose Manual or Off for direct web access.
+
 ### Researcher web access
 
 This heading and `#researcher-web-access` stay for compatibility. The public
@@ -141,7 +182,7 @@ to listed hosts for the parent and every scout alike; the harness does not
 set it. Source hygiene in `resources/scout.md` treats web content as data, not
 instructions, and forbids putting local contents into URLs or queries. That
 text moves out of the researcher `profile.prompt`; it is guidance, not
-enforcement. Treat results as web-derived and untrusted. A citation does not
+enforcement. Treat web-derived results as untrusted. A citation does not
 make a claim safe.
 
 The harness enforces the rest:

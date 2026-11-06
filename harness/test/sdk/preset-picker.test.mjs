@@ -911,18 +911,25 @@ const delegationState = (initial = { mode: "co-worker", eagerness: "balanced" })
 };
 const nodeColumn = (line, label) => line.indexOf(label);
 
-test("the mode slider paints four nodes and the current guideline; keys change mode and eagerness at once", () => {
+test("the mode slider paints four nodes, fits or clips the current guideline, and applies keys at once", () => {
   const state = delegationState();
   const { picker, result } = fixture({ delegation: state.option, rows: 40 });
-  let lines = picker.render(76).map(stripTerminalSequences);
+  const width = 100;
+  let lines = picker.render(width).map(stripTerminalSequences);
   assert.match(lines[0], /Delegation/);
   assert.match(lines[1], /^│ Mode +○ Manual ─+ ● Co-worker ─+ ○ Lead ─+ ○ Supervisor +│$/);
   assert.match(lines[2], /Eagerness +‹ balanced ›/);
   const divider = lines.findIndex((line, index) => index > 2 && line.startsWith("├"));
   const guideline = lines.slice(3, divider).map((line) => line.slice(1, -1).trim()).join(" ");
-  assert.equal(guideline, delegationGuideline(state.current), "the whole guideline fits in its rows");
+  assert.equal(guideline, delegationGuideline(state.current), "a wide panel shows the whole guideline");
   assert(lines.some((line) => line.includes("Model preset")), "the preset list is titled Model preset");
-  for (const line of lines) assert.equal(visibleWidth(line), 76, line);
+  for (const line of lines) assert.equal(visibleWidth(line), width, line);
+  const narrow = picker.render(76).map(stripTerminalSequences);
+  const narrowDivider = narrow.findIndex((line, index) => index > 2 && line.startsWith("├"));
+  const clipped = narrow.slice(3, narrowDivider).map((line) => line.slice(1, -1).trim()).join(" ");
+  assert(clipped.endsWith("…"), "the longer web-routing guideline clips within the existing row budget");
+  assert(delegationGuideline(state.current).startsWith(clipped.slice(0, -1).trimEnd()));
+  for (const line of narrow) assert.equal(visibleWidth(line), 76, line);
 
   picker.handleInput("\u001b[C"); // right
   assert.deepEqual(state.current, { mode: "lead", eagerness: "balanced" });

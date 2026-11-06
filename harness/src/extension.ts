@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { getAgentDir, parseFrontmatter, SettingsManager,
-  type ExtensionAPI, type ExtensionContext, type ModelRuntime, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+  type ContextWithSystemEvent, type ExtensionAPI, type ExtensionContext, type ModelRuntime, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_OWNER_LIMITS, OwnerController } from "./core/owner-controller.ts";
 import { defaultDelegation, delegationGuideline, delegationLabel, delegationStatus, isDelegationSetting, parseDelegation,
   restoreDelegation, type DelegationSetting } from "./delegation.ts";
@@ -180,6 +180,28 @@ export interface HarnessStartup {
     getPermissionsService: (id: string) => unknown;
     subscribeManagedBlocks: ManagedBlockSubscription;
   };
+  /** Tools the parent's own pi-web-access registered, under its configured
+   * names, as composition observed them. Read per use: it registers later. */
+  parentWebTools: () => readonly string[];
+}
+
+/** Model-facing refusal for a parent web call while scouts own web research. */
+export const PARENT_WEB_OFF_REASON = "Direct web tools are unavailable in this delegation mode. Use a scout for external research.";
+
+/** Request-only projection over every tool delta, including a resumed or
+ * compacted head. Keep the canonical transcript and active selection intact:
+ * Manual and Off must recover pi-web-access's own selection, not a recorded
+ * removal. Only declarations are filtered; historical calls/results stay. */
+export function hideParentWebDeclarations(messages: readonly ContextWithSystemEvent["messages"][number][],
+  webTools: readonly string[]): ContextWithSystemEvent["messages"] {
+  const hidden = new Set(webTools);
+  return messages.map((message) => {
+    if (message.role !== "system") return message;
+    return { ...message,
+      ...(message.toolsAdded ? { toolsAdded: message.toolsAdded.filter((tool) => !hidden.has(tool.name)) } : {}),
+      ...(message.toolsRemoved ? { toolsRemoved: message.toolsRemoved.filter((tool) => !hidden.has(tool.name)) } : {}),
+    };
+  });
 }
 
 /** Explicit launcher only: no global discovery, settings migration or old-backend fallback. */
@@ -209,6 +231,10 @@ export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStar
   const presetEntry = "harness:preset-selection:v1";
   const delegationEntry = "harness:delegation-mode:v1";
   let delegation: DelegationSetting = { ...defaultDelegation };
+  /** Autonomous modes route web research to scouts; Off and Manual keep the
+   * parent's web tools regardless of whether any Agents are working. */
+  const parentWebHidden = (): boolean => ready && !!router && router.admissionState().enabled && delegation.mode !== "manual";
+  const parentWebTools = (): readonly string[] => startup?.parentWebTools() ?? [];
   /** The registered agent_spawn; re-registered to carry a new guideline. */
   let spawnTool: ToolDefinition | undefined;
   /** The guideline agent_spawn actually carries, so a failed re-registration
@@ -424,6 +450,8 @@ export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStar
   // Reads the controller every frame instead of holding a second copy of Run state.
   pi.on("tool_call", (event) => {
     if (!ready || !parentPermission()) return { block: true, reason: "Harness or parent permissions are not ready; inspect the startup error." };
+    // Hidden declarations stay callable, e.g. a name recalled from earlier turns.
+    if (parentWebHidden() && parentWebTools().includes(event.toolName)) return { block: true, reason: PARENT_WEB_OFF_REASON };
     // Delegation may have changed the picture; the widget's loop stops itself when idle.
     if (managementToolNames.includes(event.toolName)) widget.wake();
   });
@@ -451,6 +479,14 @@ export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStar
     catch { controller?.returnUsage(child); return undefined; }
   });
 
+  // Defense in depth: the native loadout hook below only runs while spawn is
+  // active. Keep request hiding even when host exclusions/permissions withhold
+  // it. Both paths use the same live mode and registry, never the active set.
+  // This projection leaves canonical history and tool selection untouched.
+  pi.on("context_with_system", (event) => {
+    if (!parentWebHidden()) return;
+    return { messages: hideParentWebDeclarations(event.messages, parentWebTools()) };
+  });
   // Reconcile after startup/SDK restoration and before the first request, but
   // never inject orchestration text or an Off message into model context: the
   // delegation guideline belongs to agent_spawn and follows its visibility.
@@ -463,6 +499,12 @@ export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStar
     if (spawnTool && publishedGuideline !== undefined) {
       event.systemPromptOptions.toolGuidelines[spawnTool.name] = [publishedGuideline];
     }
+    // The authority can restore currently inactive web tools later in this
+    // event. Give its prompt renderer the complete registry, not the pre-
+    // authority active set. SDK loadout preparation may reset hiddenTools;
+    // request declarations are independently filtered by context_with_system.
+    const hiddenWeb = parentWebHidden() ? parentWebTools() : [];
+    if (hiddenWeb.length) event.systemPromptOptions.hiddenTools = [...new Set([...event.systemPromptOptions.hiddenTools, ...hiddenWeb])];
   });
   pi.on("session_shutdown", async (_event, ctx) => {
     ready = false; routingContext = undefined;
@@ -548,6 +590,7 @@ export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStar
     assert(permission && typeof permission.getPermissionsService === "function",
       "Use the pi-alehouse composition with its matched permission interface; no SDK or authority fallback is supported");
     assert(typeof permission.subscribeManagedBlocks === "function", "Managed block observations are unavailable; restart with a matched pi-alehouse runtime");
+    assert(typeof startup?.parentWebTools === "function", "Use the pi-alehouse composition: the parent web tool registry is unavailable");
     // The launcher loads us first so shutdown drains children BEFORE tearing
     // down the parent authority. Permission session_start runs after ours;
     // tool admission and child creation check its readiness, not this hook.
@@ -606,8 +649,14 @@ export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStar
         onRunAccepted: () => { syncWorkerTools(); widget.wake(); },
         guideline: delegationGuideline(delegation),
       })) {
-        if (tool.name === "agent_spawn") { spawnTool = tool as ToolDefinition; publishedGuideline = delegationGuideline(delegation); }
-        pi.registerTool(tool);
+        if (tool.name !== "agent_spawn") { pi.registerTool(tool); continue; }
+        // Use Pi's native projection while spawn is active so SDK-generated
+        // prompt sections also omit web tools. The request hook above covers
+        // filtered-out spawn; neither path deactivates or removes web tools.
+        spawnTool = { ...tool, prepareLoadout: () => parentWebHidden()
+          ? { hiddenDeclarations: parentWebTools() } : undefined } as ToolDefinition;
+        publishedGuideline = delegationGuideline(delegation);
+        pi.registerTool(spawnTool);
       }
       // Register once, then hide inactive tools before any model request. Later
       // registration of another extension's tools must not reactivate ours.

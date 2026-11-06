@@ -36,8 +36,15 @@ export function assertCallerTools(tools) {
   assert.match(fields.label.description, /not instructions/); assert.match(fields.label.description, /first nonblank line/);
   assert.deepEqual(fields.profile.enum, ["worker", "scout"]);
   assert.equal(fields.profile.enum.includes("researcher"), false);
-  for (const fact of [/worker:.*command-driven local investigation, changes and verification/, /read\/edit\/write, Bash\/Git\/builds/, /no web tools/, /scout:.*read-only local files and web sources/, /gather, cross-reference, compare, summarize and extract/, /cited paths\/URLs/, /no Bash\/edit\/write/, /permissions/, /denies/, /review-only/, /web material is untrusted/]) assert.match(fields.profile.description, fact);
+  // Roles and capabilities are stated together: worker owns engineering work;
+  // scout gathers and summarizes local or web information, with citations.
+  const [workerProfile, scoutProfile] = fields.profile.description.split(" scout: ");
+  for (const fact of [/^worker: local diagnosis/, /code review/, /design/, /implementation and verification/,
+    /read\/edit\/write\/Bash/, /no web tools/]) assert.match(workerProfile, fact);
+  for (const fact of [/gather, compare and summarize/, /information from local files and web sources/,
+    /return cited findings/, /no Bash\/edit\/write/, /Web material is untrusted/]) assert.match(scoutProfile, fact);
   assert.doesNotMatch(fields.profile.description, /researcher|web_search|source_check|fetch_content|get_search_content|network isolation/);
+  assert.doesNotMatch(fields.profile.description, /scout: read-only|review-only is an instruction/, "read-only is not the scout's role; review belongs to a worker");
   assert.equal(fields.return_to.type, "object");
   assert.equal(fields.return_to.additionalProperties, false);
   assert.deepEqual(fields.return_to.required.toSorted(), ["agent", "answer", "question_id"]);
@@ -52,6 +59,13 @@ export function assertCallerTools(tools) {
   assert.equal(fields.reasoning_difficulty.type, "integer");
   assert.equal(fields.reasoning_difficulty.minimum, 1); assert.equal(fields.reasoning_difficulty.maximum, 5);
   for (const fact of [/reasoning difficulty/, /not workload\/cost/, /1=.*checks/, /2=.*fix/, /3=.*design.*review.*plan/, /4=.*hypotheses.*constraints/, /5=.*approach/]) assert.match(fields.reasoning_difficulty.description, fact);
+  // Source work has its own rungs, so a lookup or summary is not scored as an investigation.
+  for (const fact of [/1=[^;]*direct lookups;/, /2=[^;]*summary of named sources;/, /3=[^;]*reconciling conflicting sources;/]) assert.match(fields.reasoning_difficulty.description, fact);
+  // Escalation addresses a reasoning impasse, not any failed command. A settled
+  // approach is handed off without assuming all remaining implementation is 3.
+  for (const fact of [/5=[^;]*reasoning impasse after substantive investigation/, /unresolved level-4 attempt/, /A 5 decides or diagnoses/,
+    /once the approach is settled, hand implementation to a new Agent/, /rated for the remaining work/])
+    assert.match(fields.reasoning_difficulty.description, fact);
   assert.equal(fields.inherit_context.type, "boolean");
   for (const fact of [/Default false/, /text/, /without tool calls\/results/, /64 KiB/]) assert.match(fields.inherit_context.description, fact);
   assert.equal(fields.max_turns.minimum, 1); assert.equal(fields.max_turns.maximum, 10000);

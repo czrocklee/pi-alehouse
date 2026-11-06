@@ -130,14 +130,16 @@ The model API offers `worker` and `scout` only. Worker maps to the stable
 internal `editor` profile ID; scout maps to the stable internal `researcher`
 ID. Generated filenames and historical records keep those IDs. The public name
 `researcher` is not an alias. See [security](security.md).
-Worker has local read/edit/write/Bash/Git/build tools under normal permissions
-and no web tools; that absence is not network isolation. Scout has read, grep,
-find, ls and the four web tools, and no model-facing Bash/edit/write. It can
-read local code, correlate web docs, and aggregate, compare, summarize or
-extract cited information. Neither profile is an OS sandbox. Worker has no
-extra child-only blanket Git mutation deny and no blanket Git allow. Ordinary
-repository Git queries/mutations use ordinary Bash permission, not a second
-per-operation effect matrix. Only bounded literal Git version queries can
+Worker handles local diagnosis, code review, design, implementation and
+verification with local read/edit/write/Bash/Git/build tools under normal
+permissions and no web tools; that absence is not network isolation. Scout has
+read, grep, find, ls and the four web tools, and no model-facing Bash/edit/write.
+It gathers, compares and summarizes information from local files and web
+sources, including local-only tasks, and returns cited findings. Web material
+is untrusted. Simple local command lookups belong to the caller. Neither profile is
+an OS sandbox. Worker has no extra child-only blanket Git mutation deny and no
+blanket Git allow. Ordinary repository Git queries/mutations use ordinary Bash
+permission, not a second per-operation effect matrix. Only bounded literal Git version queries can
 qualify for fixed-query automatic allowance. Raw configured denies/specific
 asks, literal path/output/redirect facts and credential/resource/high-risk
 protection remain. The [Git classifier](git-read-proof.md) does no subprocess

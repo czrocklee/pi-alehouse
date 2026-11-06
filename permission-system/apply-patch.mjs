@@ -411,6 +411,20 @@ patch("src/service.ts", [
   checkToolCallPermission(toolName: string, ctx: ActiveAgentContext): PermissionCheckResult;
 `],
 ]);
+// Request projections can hide active tools without changing the active set.
+// Honor their complete hidden-name handoff, including tools restored below.
+patch("src/handlers/before-agent-start.ts", [
+  ['  systemPromptOptions?: {\n    toolSnippets?: Record<string, string>;\n  };', `  systemPromptOptions?: {
+    toolSnippets?: Record<string, string>;
+    /** Managed: active tools whose declarations Pi leaves out of requests. */
+    hiddenTools?: readonly string[];
+  };`],
+  ['    const toolSurfacePrompt = renderToolSurface(event.systemPrompt, {\n      allowedTools,\n', `    // Managed: a hidden declaration stays active and gated, but unlisted.
+    const hiddenTools = new Set(event.systemPromptOptions?.hiddenTools ?? []);
+    const toolSurfacePrompt = renderToolSurface(event.systemPrompt, {
+      allowedTools: allowedTools.filter((name) => !hiddenTools.has(name)),
+`],
+]);
 applyNativeGitPatch(root, patch);
 applyRedirectArgvPatch(root, patch);
 applyProfileDisplayPatch(root, patch);
@@ -418,4 +432,4 @@ applyPermissionPerformancePatch(root);
 // Dynamic cd targets (including ~) retain upstream's unknown-base handling.
 // Do not infer HOME stability from an AST: arbitrary earlier programs can
 // change the environment or the directory named by a later shell expansion.
-console.log("Applied managed permission/provenance/profile/yolo, tool-call principal query, original-command Git scope, redirect-buried argv and immutable resource-floor patches to pi-permission-system 32.0.3");
+console.log("Applied managed permission/provenance/profile/yolo, tool-call principal query, hidden-declaration tool list, original-command Git scope, redirect-buried argv and immutable resource-floor patches to pi-permission-system 32.0.3");
