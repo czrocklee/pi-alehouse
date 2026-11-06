@@ -27,10 +27,8 @@ const entry = join(dirname(createRequire(import.meta.url).resolve("pi-web-access
 const load = nativeWebLoader(researcherHostModules);
 // Synthetic factories must explicitly model the pinned capability metadata;
 // absent or changed descriptions are unsupported, not a compatibility fallback.
-const fetchDescription = "Fetch URL(s). Available modes: raw. " +
-  "Direct image URLs return resized image content when supported by the selected mode. " +
-  "Supports YouTube transcripts, GitHub repositories, PDFs, and local videos when supported by the selected mode. " +
-  "Full original content is stored for retrieval by responseId.";
+const fetchCapability = "Fetch web pages, PDFs, GitHub repos, images, YouTube and local video, as the mode allows.";
+const fetchDescription = `${fetchCapability} Full content is stored for retrieval with get_search_content.`;
 
 function recordingApi() {
   const tools = new Map(), messages = [];
@@ -100,12 +98,16 @@ export const unsupplied = () => import("@earendil-works/pi-agent-core");`);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("supported dynamic activation never changes the researcher's fixed tool table", async () => {
+test("activation and deferred exposure never change the researcher's direct eager tool table", async () => {
   const config = join(process.env.PI_CODING_AGENT_DIR, "web-search.json");
   mkdirSync(dirname(config), { recursive: true });
   try {
-    for (const mode of ["auto", "dynamic", "eager"]) {
-      writeFileSync(config, JSON.stringify({ toolActivation: mode }));
+    for (const settings of [
+      {}, ...["auto", "dynamic", "eager"].map((toolActivation) => ({ toolActivation, toolExposure: "direct" })),
+      ...["auto", "dynamic", "none"].map((toolActivation) => ({ toolActivation, toolExposure: "deferred" })),
+    ]) {
+      const label = JSON.stringify(settings);
+      writeFileSync(config, label);
       const { factory } = await new ChildWebModules(entry, load).acquire();
       const { api, tools } = recordingApi(), handlers = new Map(), changes = [];
       api.on = (event, handler) => {
@@ -114,14 +116,27 @@ test("supported dynamic activation never changes the researcher's fixed tool tab
       };
       api.setActiveTools = (names) => changes.push([...names]);
       await childWebExtension(factory)(api);
-      assert.deepEqual([...tools.keys()].sort(), [...webToolNames].sort(), mode);
+      assert.deepEqual([...tools.keys()].sort(), [...webToolNames].sort(), label);
+      for (const tool of tools.values()) {
+        assert.equal(tool.exposure, "direct", `${label}: ${tool.name}`);
+        assert.equal(tool.defaultActive, true, `${label}: ${tool.name}`);
+      }
       const ctx = { sessionManager: SessionManager.inMemory(home), model: { api: "openai-responses", compat: {
         supportsMidConvoSystemMessages: true, supportsAdditionalTools: true,
       } } };
       for (const event of ["session_start", "session_tree", "before_agent_start"]) {
         for (const handler of handlers.get(event) ?? []) await handler({}, ctx);
       }
-      assert.deepEqual(changes, [], `${mode}: dropped loader must prevent activation handlers changing child tools`);
+      assert.deepEqual(changes, [], `${label}: dropped loader must prevent activation handlers changing child tools`);
+      for (const handler of handlers.get("session_shutdown") ?? []) await handler({}, ctx);
+    }
+    for (const settings of [{ toolExposure: "deferred", toolActivation: "eager" },
+      { toolExposure: "direct", toolActivation: "none" }]) {
+      writeFileSync(config, JSON.stringify(settings));
+      const { factory } = await new ChildWebModules(entry, load).acquire();
+      const { api, tools } = recordingApi();
+      await assert.rejects(childWebExtension(factory)(api), /toolExposure|toolActivation/);
+      assert.equal(tools.size, 0, "unsupported config is not repaired or partially registered");
     }
   } finally { rmSync(config, { force: true }); }
 });
@@ -160,17 +175,23 @@ test("the real schemas reject auth, proxy and non-http(s) URLs before any prompt
   for (const [name, args] of [["web_search", { query: "pi" }], ["source_check", { claim: "pi" }]]) {
     assert.equal("proxy" in tools.get(name).parameters.properties, false, name);
     assert.deepEqual(validate(name, args), args);
+    assert.equal(tools.get(name).parameters.properties.provider.type, "string");
+    for (const provider of ["auto", "all", "brave", "brave,duckduckgo"]) {
+      assert.deepEqual(validate(name, { ...args, provider }), { ...args, provider });
+    }
+    assert.throws(() => validate(name, { ...args, provider: ["brave", "duckduckgo"] }), /Validation failed/, name);
     assert.throws(() => validate(name, { ...args, proxy: "socks5h://10.0.0.1:1080" }), /Validation failed/, name);
   }
   assert.equal(tools.get("get_search_content").parameters.additionalProperties, undefined, "get_search_content is left as registered");
 });
 
-test("adapted web metadata stays concise without changing upstream capabilities or dynamic guidance", async () => {
+test("adapted web metadata preserves concise upstream metadata and configured capabilities", async () => {
   const config = join(process.env.PI_CODING_AGENT_DIR, "web-search.json");
   mkdirSync(dirname(config), { recursive: true });
   try {
     for (const settings of [{}, { fetch: { allowedModes: ["raw"], defaultMode: "raw" } },
-      { webSearch: { allowedProviders: ["brave", "duckduckgo"] } },
+      { provider: "duckduckgo", webSearch: { allowedProviders: ["brave", "duckduckgo"] } },
+      { fetch: { allowedModes: ["raw", "extract"], defaultMode: "raw" } },
       { tools: { getSearchContent: { enabled: false } } }]) {
       writeFileSync(config, JSON.stringify(settings));
       const { factory } = await new ChildWebModules(entry, load).acquire();
@@ -196,7 +217,8 @@ test("adapted web metadata stays concise without changing upstream capabilities 
         const raw = original.get(name), adapted = tools.get(name);
         const removed = name === "fetch_content" ? ["auth", "proxy"] : ["proxy"];
         assert.deepEqual(Object.keys(adapted.parameters.properties), Object.keys(raw.parameters.properties).filter((key) => !removed.includes(key)), name);
-        assert(adapted.description.length < raw.description.length, `${name}: shorter tool description`);
+        if (name !== "fetch_content") assert.equal(adapted.description, raw.description, `${name}: upstream description`);
+        assert.equal(adapted.promptSnippet, raw.promptSnippet, `${name}: upstream snippet`);
         for (const [key, schema] of Object.entries(adapted.parameters.properties)) {
           const expected = JSON.parse(JSON.stringify(raw.parameters.properties[key], withoutDescriptions));
           if (name === "fetch_content" && key === "url") expected.pattern = schema.pattern;
@@ -205,35 +227,34 @@ test("adapted web metadata stays concise without changing upstream capabilities 
         }
       }
       const search = tools.get("web_search"), rawSearch = original.get("web_search");
-      assert(search.promptSnippet.length < rawSearch.promptSnippet.length);
-      assert.match(search.description, /responseId/);
-      assert.match(search.description, /background/);
-      const providerHeader = rawSearch.description.slice(0, rawSearch.description.indexOf(". The default workflow"));
-      assert(search.description.startsWith(providerHeader), "configured providers and all policy stay verbatim");
+      assert.equal(search.promptSnippet, rawSearch.promptSnippet);
+      if (settings.tools) assert.doesNotMatch(search.description, /responseId/);
+      else assert.match(search.description, /responseId/);
       for (const key of ["query", "queries", "workflow", "provider"]) {
-        const schema = search.parameters.properties[key], raw = rawSearch.parameters.properties[key];
-        assert.notEqual(schema, raw, key);
-        assert(schema.description.length < raw.description.length, `${key}: shorter parameter description`);
-        for (const metadata of ["~kind", "~optional", ...Object.getOwnPropertySymbols(raw)]) {
-          assert.deepEqual(Object.getOwnPropertyDescriptor(schema, metadata), Object.getOwnPropertyDescriptor(raw, metadata), key);
-        }
+        assert.equal(search.parameters.properties[key], rawSearch.parameters.properties[key], `${key}: unchanged schema and descriptors`);
       }
-      assert.match(search.parameters.properties.workflow.description, /none \(default\).*summary-review.*auto-summary/);
-      assert.match(search.parameters.properties.provider.description, /default: configured provider, or auto if none/);
       for (const name of ["web_search", "source_check"]) {
-        const policy = original.get(name).parameters.properties.provider.description.split("; ")[1];
-        assert(tools.get(name).parameters.properties.provider.description.includes(policy), `${name}: configured all policy survives`);
+        const schema = tools.get(name).parameters.properties.provider;
+        assert.equal(schema, original.get(name).parameters.properties.provider, `${name}: provider schema stays verbatim`);
+        assert.match(schema.description, /comma-separated names; omit for the configured default/);
+        if (settings.webSearch) assert.match(schema.description, /Allowed: brave, duckduckgo\./);
       }
-      assert.equal(tools.get("get_search_content"), original.get("get_search_content"), "retrieval metadata and responseId guidance stay upstream");
+      const retrieval = tools.get("get_search_content"), rawRetrieval = original.get("get_search_content");
+      if (settings.tools) assert.equal(retrieval, undefined);
+      else {
+        assert.equal(retrieval.parameters, rawRetrieval.parameters, "retrieval schema stays upstream");
+        assert.equal(retrieval.description, rawRetrieval.description);
+        assert.equal(retrieval.promptSnippet, rawRetrieval.promptSnippet);
+        assert.equal(retrieval.execute, rawRetrieval.execute);
+      }
       const upstream = original.get("fetch_content"), fetch = tools.get("fetch_content");
       assert.notEqual(fetch, upstream);
-      assert.match(upstream.description, /local videos/);
-      assert.match(fetch.description, /^Fetch absolute HTTP\(S\) URL\(s\)\./);
+      assert.match(upstream.description, /local video/);
+      assert.equal(fetch.description, upstream.description.replace(fetchCapability,
+        "Fetch absolute HTTP(S) URLs: web pages, PDFs, GitHub repos, images and YouTube, as the mode allows."));
       assert.doesNotMatch(fetch.description, /local video/i);
-      assert.match(fetch.description, /YouTube transcripts, GitHub repositories, and PDFs/);
-      const modeText = upstream.description.slice(upstream.description.indexOf("Available modes:"), upstream.description.indexOf(". Direct image"));
-      const storageText = upstream.description.slice(upstream.description.indexOf("Full original content"));
-      assert.ok(fetch.description.includes(modeText), "configuration-dependent modes remain verbatim");
+      assert.match(fetch.description, /PDFs, GitHub repos, images and YouTube/);
+      const storageText = upstream.description.slice(upstream.description.indexOf("Full content"));
       assert.ok(fetch.description.endsWith(storageText), "configuration-dependent storage note remains verbatim");
       assert.deepEqual(fetch.parameters.properties.mode, upstream.parameters.properties.mode);
       assert.equal(fetch.promptSnippet, upstream.promptSnippet);
@@ -265,9 +286,9 @@ test("missing or drifted fetch capability metadata rejects assembly before tool 
   const parameters = { type: "object", properties: {
     url: { type: "string" }, urls: { type: "array", items: { type: "string" } },
   } };
-  for (const description of [undefined, "", fetchDescription.replace("local videos", "local video files"),
-    fetchDescription.replace("Fetch URL(s).", "Fetch content."),
-    fetchDescription.replace("Direct image URLs return resized image content when supported by the selected mode.", "Images supported."),
+  for (const description of [undefined, "", fetchDescription.replace("local video", "local video files"),
+    fetchDescription.replace("Fetch web pages", "Fetch content"),
+    fetchDescription.replace("as the mode allows", "in every mode"),
     `${fetchDescription} Local videos are also supported.`, `${fetchDescription} ${fetchDescription}`]) {
     const { api, tools } = recordingApi();
     let executions = 0;
@@ -297,6 +318,7 @@ test("the researcher wrapper keeps the boundary even past schema validation", as
     for (const name of [...webToolNames, "web_enable"]) {
       pi.registerTool({ name, description: name === "fetch_content" ? fetchDescription : undefined,
         parameters: name === "fetch_content" ? schema : { type: "object", properties: {} },
+        exposure: "deferred", defaultActive: false,
         execute: async (_id, params) => { executed.push(params); return { content: [] }; } });
     }
     console.warn("[pi-web-access] Dynamic tool activation requires Pi 0.86.1 or newer; web tools remain eagerly available.");
@@ -308,6 +330,11 @@ test("the researcher wrapper keeps the boundary even past schema validation", as
   console.warn = (...args) => warnings.push(args);
   try { await childWebExtension(factory)(api); } finally { console.warn = warn; }
   assert.deepEqual(warnings, [], "the per-child activation warning is suppressed");
+  assert.deepEqual([...tools.keys()].sort(), [...webToolNames].sort());
+  for (const tool of tools.values()) {
+    assert.equal(tool.exposure, "direct");
+    assert.equal(tool.defaultActive, true);
+  }
   assert.deepEqual(messages.map((m) => m.options), [{ triggerTurn: false }], "background notices never start a turn");
   const fetch = tools.get("fetch_content");
   assert.equal(fetch.parameters[kind], "Object");

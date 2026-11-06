@@ -50,11 +50,11 @@ port did not preserve protected-read path projection for assignment-prefixed
 regression, and it blocks moving the authority pin until a port passes it. The
 `runtime/permission-system/index.ts` wrapper is the single authority entry;
 all consumers must use that identity. Root dependencies include the parser
-runtime and pinned `pi-web-access` 0.35.0; do not resolve an ambient globally
-installed web extension. That pin pulls `@modelcontextprotocol/sdk` 1.27.1,
-for which `npm audit` last reported a high-severity advisory (recorded with
-the Pi 1.2.0 update); no override is applied, so recheck it whenever the
-lockfile changes. Generated resources and CLI must match the source
+runtime and pinned `pi-web-access` 0.47.0; do not resolve an ambient globally
+installed web extension. That pin pulls `@modelcontextprotocol/sdk` 1.32.1,
+which fixes its earlier OAuth-client advisory GHSA-6qxp-vccf-f47h. No dependency
+override is applied; recheck `npm audit` whenever the lockfile changes rather
+than assuming the whole dependency tree is advisory-free. Generated resources and CLI must match the source
 revision. `pi-alehouse init` seeds only absent files into Pi's agent directory
 (five agent definitions, a version-3 Off routing catalogue and a permission
 config: seven files total), never changes settings/auth or replaces existing policies/catalogues. Old
@@ -513,6 +513,70 @@ SDK-history and real-model lanes are never implicitly authorized by
 `npm run check`. Controlled host fixture passes cannot certify human
 interaction or live provider behavior. Do not
 claim a command passed if it was not run, was interrupted, or matched zero tests.
+
+## Dependency upgrade script
+
+Use `node scripts/upgrade-deps.mjs --help` for the source-only maintainer script.
+It does not create a Skill, deploy a package, reconcile user resources, or run
+host/model/publication workflows.
+
+```sh
+# Default is a non-mutating source plan (npm registry/cache IO still occurs).
+node scripts/upgrade-deps.mjs --plan --package pi-web-access --package zod
+# Explicit selections only; direct dependencies use the latest stable tag.
+node scripts/upgrade-deps.mjs --apply --package pi-web-access --package zod
+# Transitive dependencies stay within upstream ranges; the report distinguishes
+# their resolved versions from the global latest tag, never the minimum fix.
+node scripts/upgrade-deps.mjs --apply --package hono --package fast-uri
+# After upstream/API/security/license review, run the portable gate and audits.
+node scripts/upgrade-deps.mjs --verify
+```
+
+Plan without selections lists direct runtime and development dependencies.
+All modes except help require the source manifest and numeric npm lockfile
+version 2 or 3 with valid package records. A present `npm-shrinkwrap.json`
+(including a symlink) is refused instead of staging one lockfile while npm uses
+another. Apply requires a source checkout (`.git`), refuses existing overrides
+or a project `.npmrc`, and keeps permission authority, Pi SDK, TypeBox and parser
+runtime migrations manual. The original and staged protected graphs must match:
+indirect additions, removals, version/integrity or package-record changes also
+stop the upgrade before publication.
+It stages only the manifest/lockfile, preserves manifest formatting and existing
+work, and rejects changed source before publication. The staging npm invocation
+uses normal environment/user configuration. A project `.npmrc` requires manual
+review instead of being silently ignored; neither it nor credentials are copied.
+Supply consistent registry settings through normal npm environment/user
+configuration. Known pi-web-access version references are updated only when
+exact source patterns match; drift stops the update rather than broadly replacing
+historical versions or generated output. Metadata adaptation, security claims
+and license text still need review. The script synchronizes development
+`node_modules` with `npm ci --include=dev --dry-run=false
+--package-lock-only=false --ignore-scripts` (including when `NODE_ENV=production`),
+never a production install. Apply explicitly disables inherited dry-run mode in
+staging and disables both dry-run and lock-only modes in the final install;
+use `--plan` for a non-mutating source preview. Config/shrinkwrap absence is
+rechecked before publication and installation, not an atomic filesystem guard.
+
+Run one upgrade at a time without concurrent source edits. Publication is not a
+multi-file transaction: a failed publication or install is reported as possibly
+partial, with no reset, rollback or automatic retry. Temporary cleanup errors
+retain the original failure and applied/partial facts, report retained paths in
+`cleanupErrors`, and cannot turn a failed or incomplete operation into success.
+Verification is separate; `--verify` streams build/check output, then reports
+runtime and full audits independently. Explicit inclusion flags keep the full
+audit from omitting dev vulnerabilities under `NODE_ENV=production` or inherited
+omit settings. If build fails, the check is marked unrun. Before audits, the
+script queries only npm's effective `offline` boolean (not authentication data).
+Offline or unreadable configuration makes both audits unrun/unknown and the
+command fail; it never treats npm's empty offline response as a clean audit or
+silently overrides an offline choice. Otherwise both audits are attempted with
+explicit online mode. Unsupported audit schemas, malformed severity counts or
+inconsistent totals also remain unknown rather than clean. Any failed gate,
+audit error, unknown/unrun audit, or reported vulnerability gives a
+nonzero exit, including dev-only vulnerabilities. An upstream-constrained
+vulnerability remains visible, not silently overridden or accepted. Coordinate
+one validation owner for `--verify`; it is not evidence of upstream compatibility,
+controlled-host success, release acceptance, or deployment.
 
 ## Maintainer rules
 

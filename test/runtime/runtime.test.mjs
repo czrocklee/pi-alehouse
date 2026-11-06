@@ -265,12 +265,15 @@ test("help and version work before init without creating any resources", (t) => 
 test("web dependency lookup supports npm-hoisted production installs", (t) => {
   const install = temporary(t), root = join(install, "node_modules/pi-alehouse");
   mkdirSync(root, { recursive: true });
-  writeFileSync(join(root, "package.json"), '{"name":"pi-alehouse","dependencies":{"pi-web-access":"0.35.0"}}');
+  writeFileSync(join(root, "package.json"), '{"name":"pi-alehouse","dependencies":{"pi-web-access":"0.47.0"}}');
   const web = join(install, "node_modules/pi-web-access");
   mkdirSync(join(web, "dist"), { recursive: true });
-  writeFileSync(join(web, "package.json"), '{"name":"pi-web-access","version":"0.35.0","pi":{"extensions":["./dist"]}}');
+  const manifest = join(web, "package.json");
+  writeFileSync(manifest, '{"name":"pi-web-access","version":"0.47.0","pi":{"extensions":["./dist"]}}');
   writeFileSync(join(web, "dist/index.js"), 'export default () => {};');
   assert.equal(webEntry(root), join(web, "dist/index.js"));
+  writeFileSync(manifest, '{"name":"pi-web-access","version":"0.35.0","pi":{"extensions":["./dist"]}}');
+  assert.throws(() => webEntry(root), /Package-local pi-web-access must be pinned to 0\.47\.0/);
 });
 
 test("launcher execve preserves PID and native signal exit (no supervisor)", { timeout: 10000 }, async (t) => {

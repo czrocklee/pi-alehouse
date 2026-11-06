@@ -54,10 +54,10 @@
   },
   "dependencies": {
     "@gotgenes/pi-permission-system": "32.0.3",
-    "pi-web-access": "0.35.0",
+    "pi-web-access": "0.47.0",
     "tree-sitter-bash": "0.25.1",
     "web-tree-sitter": "0.26.13",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "1.5.0",

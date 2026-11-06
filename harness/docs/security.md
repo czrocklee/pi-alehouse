@@ -15,7 +15,7 @@ absolute `composition.ts` path, rejecting additional extension paths. It supplie
 matched generated authority/policy paths and an absolute trusted util-linux
 `flock`; direct harness extension loading without the launcher fails rather than
 guessing paths. Parent web integration uses package-local pinned `pi-web-access`
-0.35.0; only scout children (internal `researcher`; [below](#researcher-web-access)) receive web tools. The CLI does not make a temporary npm install,
+0.47.0; only scout children (internal `researcher`; [below](#researcher-web-access)) receive web tools. The CLI does not make a temporary npm install,
 copy authentication, overwrite existing user resources, or enable arbitrary
 extension discovery. Explicit initialization creates only absent resources;
 the neutral routing catalogue defaults to `off`. Install a **built tarball** with
@@ -147,11 +147,10 @@ make a claim safe.
 The harness enforces the rest:
 
 - The child loads its own pi-web-access instance (a query-keyed ESM import of
-  the launcher-verified entry, checked to differ from the parent's). The
-  extension keeps stored results and pending fetches in module scope and clears
-  them on session start/shutdown, so a shared instance would cancel the
-  parent's fetches and drop its stored results.  Instances are reused only
-  after a confirmed child shutdown.
+  the launcher-verified entry, checked to differ from the parent's). Upstream
+  now scopes result ownership and pending fetches per factory session; Alehouse
+  retains separate module instances as a conservative isolation boundary.
+  Instances are reused only after a confirmed child shutdown.
 - A native import bypasses the host's extension loader, and production installs
   omit the Pi SDK.  The entry's own imports of the Pi SDK and TypeBox therefore
   resolve, through a process-wide Node module hook, to the modules the host
@@ -173,9 +172,11 @@ The harness enforces the rest:
 - These three schemas are closed (`get_search_content` is left as upstream
   registers it): violations fail validation before any permission prompt, and
   execution checks again.
-- The dynamic `web_enable` loader is not registered, so the admitted child tool
-  table cannot change; background-fetch notices never start a model turn outside
-  a Run.  Renamed or disabled web tools fail researcher assembly.
+- All four child web tools are registered as direct and active, even when the
+  upstream config requests deferred exposure. The dynamic `web_enable` loader
+  is not registered, so the admitted child tool table cannot change;
+  background-fetch notices never start a model turn outside a Run. Renamed or
+  disabled web tools fail researcher assembly.
 - Curator review has no UI in a child and resolves to no curator.
 
 One approved call can still do more than fetch a page.  These are upstream
@@ -194,7 +195,14 @@ shows only the tool input:
   cookies for Google origins; removing `auth` does not remove this path.
 - `mode: "answer"` with `answerModel`, video/YouTube analysis, and summary
   workflows send fetched content to another configured model, outside the
-  child's routed model and its accounting.
+  child's routed model and its accounting. Opt-in `mode: "extract"` with
+  `fields` sends fetched page text and field instructions to Cloudflare Clairic
+  using host Cloudflare credentials. A `web_search` `model` override can also
+  select its search provider's model independently of the scout's routed model.
+- Configured `fetchContent.curl` runs an external fetch command; configured
+  remote fetch providers and PDF extraction endpoints can receive page URLs
+  or document content. These are upstream configuration-controlled effects,
+  not mediated child Bash calls.
 - Fetched pages are cached for an hour in `<agent dir>/web-search-cache`,
   shared by the parent and every scout and kept after the session ends.
 - SSRF checks resolve the host before connecting and the connection resolves it

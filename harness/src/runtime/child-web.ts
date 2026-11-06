@@ -8,11 +8,10 @@ import { webToolNames } from "../tools/tool-names.ts";
 export type WebFactory = (pi: ExtensionAPI) => void | Promise<void>;
 export type WebModuleLoader = (specifier: string) => Promise<unknown>;
 
-// pi-web-access keeps stored results, pending fetches and curator state in
-// module scope, and its session_start/session_shutdown handlers abort and
-// clear them. A child sharing the parent's instance would cancel the parent's
-// fetches and wipe its stored responseIds, so every open researcher session
-// gets its own instance: a query-keyed native ESM import of the verified entry.
+// pi-web-access keeps per-factory session ownership and pending fetches, plus
+// module-scoped result/clone caches and curator state. Keep each open researcher
+// session separate from the parent and its lifecycle with a query-keyed native
+// ESM import of the verified entry.
 // Native import bypasses the host's Jiti resolution, so the entry's Pi SDK and
 // TypeBox imports are bridged to the host's own modules (see host-modules.ts).
 /** Native loader whose loaded entry imports exactly `modules` from the host. */
@@ -29,8 +28,8 @@ export interface WebLease {
   release(): void;
 }
 
-/** Instances are reused after release (their session_start resets state), so
- * the count is bounded by concurrently open researcher sessions. */
+/** Instances are reused after release (a new factory invocation owns fresh
+ * session state), so the count is bounded by concurrently open researcher sessions. */
 export class ChildWebModules {
   private readonly idle: WebFactory[] = [];
   private readonly instances = new Set<WebFactory>();
@@ -123,40 +122,22 @@ function restrictTool(tool: ToolLike): ToolLike {
   if (!restricted) return tool;
   const properties = Object.fromEntries(Object.entries(tool.parameters.properties ?? {})
     .filter(([key]) => !restricted.includes(key)));
-  let description = tool.description, promptSnippet = tool.promptSnippet;
-  if (tool.name === "web_search") {
-    description = description?.replace(
-      'The default workflow is none: it returns bounded source-linked search results or provider answers without a curator or generated summary, identifies the providers used, and stores full results for retrieval by responseId. For comprehensive research, prefer queries (plural) with 2-4 varied angles over a single query. When includeContent is true, full page content is fetched in the background. Set workflow to "summary-review" to open the curator with an auto-generated summary draft or "auto-summary" to generate a summary without the browser curator. The configured provider is used when provider is omitted or set to auto; omit provider unless explicitly overriding it.',
-      "Returns bounded source-linked results/answers and provider identities; full results stored by responseId. includeContent fetches pages in the background. See workflow/provider for overrides.");
-    promptSnippet = "Search the web; use queries for varied angles.";
-    if (properties.query) properties.query = copySchema(properties.query, { description: "Single query; use queries for multiple angles." });
-    if (properties.queries) properties.queries = copySchema(properties.queries, { description: "Queries with varied angles; searched concurrently, up to three at a time." });
-    if (properties.workflow) properties.workflow = copySchema(properties.workflow, {
-      description: "none (default): results only; summary-review: curator + summary draft; auto-summary: summary without curator." });
-  } else if (tool.name === "source_check") {
-    description = "Gather sources and exact passage citations for manual claim review; returns a bounded research artifact.";
-  }
-  if (typeof properties.provider?.description === "string") properties.provider = copySchema(properties.provider, {
-    description: properties.provider.description
-      .replace("Search provider or non-empty list of allowed providers to search simultaneously", "Provider or nonempty list, searched in parallel")
-      .replace("omit this field to use the configured provider, or use auto when none is configured", "default: configured provider, or auto if none") });
+  let description = tool.description;
   if (tool.name === "fetch_content") {
     const items = properties.urls?.items as SchemaRecord | undefined;
     assert(properties.url && properties.urls && items, "Unexpected fetch_content schema");
     properties.url = copySchema(properties.url, { pattern: HTTP_URL, description: "Single absolute HTTP(S) URL to fetch" });
     properties.urls = copySchema(properties.urls, { items: copySchema(items, { pattern: HTTP_URL }), description: "Multiple absolute HTTP(S) URLs (parallel)" });
     if (properties.timestamp) properties.timestamp = copySchema(properties.timestamp, {
-      description: "YouTube frame time (H:MM:SS, MM:SS or seconds) or range (23:41-25:00; default 6 evenly spaced frames). Single time + frames uses 5s intervals. Requires yt-dlp + ffmpeg." });
+      description: "YouTube frame time ('1:23:45') or range ('23:41-25:00'); needs yt-dlp + ffmpeg" });
     if (properties.frames) properties.frames = copySchema(properties.frames, {
-      description: "YouTube frame count: with a range, sets density; with a time, 5s intervals; alone, samples the video. Requires yt-dlp + ffmpeg." });
+      description: "YouTube frames over a range, 5s apart from one time, or over the video" });
     // Adapt only the pinned fetch description's fixed capability sentences;
     // preserve its configuration-dependent modes and result-storage guidance.
     // Missing/drifted metadata must not silently advertise local file access.
     const rewrites = [
-      ["Fetch URL(s).", "Fetch absolute HTTP(S) URL(s)."],
-      ["Direct image URLs return resized image content when supported by the selected mode.", "Direct image URLs return resized images where supported."],
-      ["Supports YouTube transcripts, GitHub repositories, PDFs, and local videos when supported by the selected mode.",
-        "Supports YouTube transcripts, GitHub repositories, and PDFs where the mode allows."],
+      ["Fetch web pages, PDFs, GitHub repos, images, YouTube and local video, as the mode allows.",
+        "Fetch absolute HTTP(S) URLs: web pages, PDFs, GitHub repos, images and YouTube, as the mode allows."],
     ] as const;
     assert(typeof description === "string", "Unsupported pi-web-access fetch_content metadata: missing description");
     for (const [expected, replacement] of rewrites) {
@@ -167,7 +148,7 @@ function restrictTool(tool: ToolLike): ToolLike {
     assert(!/local videos?/i.test(description), "Unsupported pi-web-access fetch_content metadata: unexpected local-video guidance");
   }
   const parameters = copySchema(tool.parameters, { additionalProperties: false, properties });
-  return { ...tool, description, promptSnippet, parameters, execute: async (...args: unknown[]) => {
+  return { ...tool, description, parameters, execute: async (...args: unknown[]) => {
     const problem = researcherWebProblem(tool.name, args[1]);
     if (problem) return { content: [{ type: "text", text: `Error: ${problem}` }], details: { error: problem } };
     return tool.execute(...args);
@@ -201,12 +182,13 @@ export function childWebExtension(factory: WebFactory): ExtensionFactory {
       get(target, property) {
         const original = Reflect.get(target, property) as unknown;
         if (property === "registerTool") return (tool: ToolLike) => {
-          // Web tools stay eagerly active: the activation loader would change
-          // the admitted child tool table between requests.
+          // Web tools stay direct and eagerly active even when user config
+          // selects deferred exposure. Never expose the activation loader or
+          // mutate upstream objects; mode/provider choices remain upstream.
           if (tool.name === ACTIVATION_TOOL) return;
           if (!webToolNames.includes(tool.name)) throw new Error(`Unexpected scout web tool: ${tool.name}`);
           registered.add(tool.name);
-          return target.registerTool(restrictTool(tool) as never);
+          return target.registerTool({ ...restrictTool(tool), exposure: "direct", defaultActive: true } as never);
         };
         // Background fetch notices must not start a model turn outside a Run.
         if (property === "sendMessage") {

@@ -12,7 +12,7 @@ The harness is Pi Alehouse's internal, opt-in Owner-local worker backend, not an
 
 Off leaves accepted queued/running work and result/cleanup tools available. A fresh initially Off conversation has no harness tool schemas or orchestration reminder; turning Off later cannot remove historical model context. See [Off](docs/routing.md#off).
 
-The parent retains normal footer/title, approval queue, health/Stats, and pinned `pi-web-access` 0.35.0 tools. Child sessions have no nested delegation. New requests use public `worker` (internal `editor`, no web tools) or `scout` (internal `researcher`; read/grep/find/ls and web tools, no model-facing Bash/edit/write). No web tools is not network isolation. Jev is the only model judge. See [security](docs/security.md). Leaving this launcher and starting ordinary `pi` does not retroactively stop its children; close the Owner first.
+The parent retains normal footer/title, approval queue, health/Stats, and pinned `pi-web-access` 0.47.0 tools. Child sessions have no nested delegation. New requests use public `worker` (internal `editor`, no web tools) or `scout` (internal `researcher`; read/grep/find/ls and web tools, no model-facing Bash/edit/write). No web tools is not network isolation. Jev is the only model judge. See [security](docs/security.md). Leaving this launcher and starting ordinary `pi` does not retroactively stop its children; close the Owner first.
 
 ## Limits at a glance
 
