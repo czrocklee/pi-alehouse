@@ -1,0 +1,35 @@
+# Generated output and temporary build/evidence trees are not source.
+/node_modules/
+/runtime/
+/.runtime-build-*/
+/harness/dist/
+/harness/.evidence/
+/artifacts/
+/coverage/
+
+# Local agent state, caches, credentials and transcripts.
+/.pi/
+/.claude/
+/.cache/
+/.mypy_cache/
+/.ruff_cache/
+*.tgz
+*.log
+*.jsonl
+.env
+.env.*
+auth.json
+web-search.json
+
+# Package-manager output and optional Nix packaging use their own tools.
+/package-lock.json
+/flake.lock
+/flake.nix
+/nix/
+
+# Preserve literal prompts/seeds, captured assets and license notices.
+/resources/
+/harness/docs/assets/
+/LICENSE
+/THIRD_PARTY_NOTICES.md
+*.svg

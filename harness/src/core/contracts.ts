@@ -3,13 +3,15 @@ import { normalizeLedger, type UsageLedger } from "./usage-ledger.ts";
 import { validOutput } from "./result-text.ts";
 import type { Dispatch } from "./dispatch.ts";
 
-export type RunStatus = "queued" | "running" | "cancelling" | "completed" | "needs_input" | "failed" | "cancelled";
+export type RunStatus =
+  "queued" | "running" | "cancelling" | "completed" | "needs_input" | "failed" | "cancelled";
 /** `deadline` remains readable in historical records; live Runs never emit it. */
 export type StopReason = "user_cancel" | "hard_budget" | "deadline";
 /** Explicit trusted-host human Stop only; absence makes no claim about origin. */
 export type CancellationSource = "human";
 /** Final provider/SDK assistant stop reason. */
-export type ModelStopReason = "stop" | "length" | "toolUse" | "error" | "aborted" | "pending" | "deferred" | (string & {});
+export type ModelStopReason =
+  "stop" | "length" | "toolUse" | "error" | "aborted" | "pending" | "deferred" | (string & {});
 export type Phase = "queued" | "initializing" | "executing" | "finalizing" | "settled";
 /** Observation only: neither an exit acknowledgement nor a lifecycle phase. */
 export type DrainWait = "deliveries" | "sdk_idle";
@@ -48,25 +50,31 @@ export interface AdmittedAgentConfig {
   context_snapshot?: string;
 }
 /** Atomic scout creation plus continuation of one already-settled worker question. */
-export interface ReturnTo { agent_id: string; question_id: string; answer: string }
-export type SubmitRequest = {
-  prompt: string;
-  description: string;
-  name?: string;
-  settings: AdmittedAgentConfig;
-  return_to?: ReturnTo;
-  max_turns?: number;
-  dispatch?: Dispatch;
-  after?: string[];
-} | {
-  resume: string;
-  prompt: string;
-  description?: string;
-  max_turns?: number;
-  answer_to_run_id?: string;
-  dispatch?: Dispatch;
-  after?: string[];
-};
+export interface ReturnTo {
+  agent_id: string;
+  question_id: string;
+  answer: string;
+}
+export type SubmitRequest =
+  | {
+      prompt: string;
+      description: string;
+      name?: string;
+      settings: AdmittedAgentConfig;
+      return_to?: ReturnTo;
+      max_turns?: number;
+      dispatch?: Dispatch;
+      after?: string[];
+    }
+  | {
+      resume: string;
+      prompt: string;
+      description?: string;
+      max_turns?: number;
+      answer_to_run_id?: string;
+      dispatch?: Dispatch;
+      after?: string[];
+    };
 export interface Output {
   text: string;
   total_chars: number;
@@ -76,7 +84,9 @@ export interface Output {
 }
 /** Raw assistant text, never a cumulative string. Reset replaces the candidate;
  * append counts observed UTF-16 units even after prefix retention closes. */
-export type OutputDelta = { type: "reset"; revision: number; max_chars?: number } | { type: "append"; revision: number; text: string };
+export type OutputDelta =
+  | { type: "reset"; revision: number; max_chars?: number }
+  | { type: "append"; revision: number; text: string };
 export type RunActivity = "generating" | "tool" | "compacting" | "retrying";
 export interface RunTelemetry {
   activity: RunActivity;
@@ -135,7 +145,9 @@ export interface RunView {
   /** Immutable compound linkage; internal identity, never a model address. */
   return_to_run_id?: string;
   effective_settings: Omit<AdmittedAgentConfig, "context_snapshot"> & {
-    context_mode: "none" | "text_snapshot"; context_digest?: string; context_bytes?: number;
+    context_mode: "none" | "text_snapshot";
+    context_digest?: string;
+    context_bytes?: number;
   };
   status: RunStatus;
   phase: Phase;
@@ -194,44 +206,101 @@ export interface ResultPage {
 export const normalizeRuntime = (value: unknown): RunTelemetry | undefined => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const raw = value as Partial<RunTelemetry>;
-  if (!raw.activity || !["generating", "tool", "compacting", "retrying"].includes(raw.activity)) return undefined;
+  if (!raw.activity || !["generating", "tool", "compacting", "retrying"].includes(raw.activity))
+    return undefined;
   let context: RunTelemetry["context"];
   if (raw.context !== undefined) {
-    if (!raw.context || typeof raw.context !== "object" || Array.isArray(raw.context) ||
-        !(raw.context.tokens === null || (Number.isSafeInteger(raw.context.tokens) && raw.context.tokens >= 0)) ||
-        !Number.isSafeInteger(raw.context.context_window) || raw.context.context_window <= 0) return undefined;
+    if (
+      !raw.context ||
+      typeof raw.context !== "object" ||
+      Array.isArray(raw.context) ||
+      !(
+        raw.context.tokens === null ||
+        (Number.isSafeInteger(raw.context.tokens) && raw.context.tokens >= 0)
+      ) ||
+      !Number.isSafeInteger(raw.context.context_window) ||
+      raw.context.context_window <= 0
+    )
+      return undefined;
     context = { tokens: raw.context.tokens, context_window: raw.context.context_window };
   }
   const usage = raw.usage === undefined ? undefined : normalizeLedger(raw.usage);
   if (raw.usage !== undefined && !usage) return undefined;
   return { activity: raw.activity, ...(context ? { context } : {}), ...(usage ? { usage } : {}) };
 };
-export const normalizeFacts = (value: unknown, fallback: Output): { facts: ExecutionFacts; invalid: boolean } => {
+export const normalizeFacts = (
+  value: unknown,
+  fallback: Output,
+): { facts: ExecutionFacts; invalid: boolean } => {
   const f = value as ExecutionFacts | undefined;
-  if (!f || !["success", "error", "aborted"].includes(f.kind) || !validOutput(f.output) || (f.error !== undefined && typeof f.error !== "string")) {
-    return { invalid: true, facts: { kind: "error", output: fallback, error: "INVALID_EXECUTION_FACTS" } };
+  if (
+    !f ||
+    !["success", "error", "aborted"].includes(f.kind) ||
+    !validOutput(f.output) ||
+    (f.error !== undefined && typeof f.error !== "string")
+  ) {
+    return {
+      invalid: true,
+      facts: { kind: "error", output: fallback, error: "INVALID_EXECUTION_FACTS" },
+    };
   }
-  if (f.model_stop_reason !== undefined && (typeof f.model_stop_reason !== "string" || !f.model_stop_reason || f.model_stop_reason.length > 128)) {
-    return { invalid: true, facts: { kind: "error", output: fallback, error: "INVALID_EXECUTION_FACTS" } };
+  if (
+    f.model_stop_reason !== undefined &&
+    (typeof f.model_stop_reason !== "string" ||
+      !f.model_stop_reason ||
+      f.model_stop_reason.length > 128)
+  ) {
+    return {
+      invalid: true,
+      facts: { kind: "error", output: fallback, error: "INVALID_EXECUTION_FACTS" },
+    };
   }
-  return { invalid: false, facts: { kind: f.kind, output: f.output, model_stop_reason: f.model_stop_reason,
-    error: f.error?.slice(0, 2048), usage: normalizeLedger(f.usage) } };
+  return {
+    invalid: false,
+    facts: {
+      kind: f.kind,
+      output: f.output,
+      model_stop_reason: f.model_stop_reason,
+      error: f.error?.slice(0, 2048),
+      usage: normalizeLedger(f.usage),
+    },
+  };
 };
-export const terminal = (status: RunStatus): boolean => !["queued", "running", "cancelling"].includes(status);
+export const terminal = (status: RunStatus): boolean =>
+  !["queued", "running", "cancelling"].includes(status);
 export const validSettings = (value: unknown): value is AdmittedAgentConfig => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const s = value as AdmittedAgentConfig;
-  return [s.provider, s.model, s.thinking, s.profile, s.preset, s.preset_version, s.cwd,
-    s.definition_digest, s.selection_digest].every((v) => typeof v === "string" && !!v) &&
-    ["identity", "automatic_mapping", "preset_mapping", "preset_fixed"].includes(s.thinking_resolution) &&
-    (s.thinking_resolution === "preset_fixed" ?
-      (!Object.hasOwn(s, "parent_thinking") || (typeof s.parent_thinking === "string" && !!s.parent_thinking)) :
-      typeof s.parent_thinking === "string" && !!s.parent_thinking) &&
-    (!Object.hasOwn(s, "effort_source") || ["preset", "user_override"].includes(s.effort_source ?? "")) &&
+  return (
+    [
+      s.provider,
+      s.model,
+      s.thinking,
+      s.profile,
+      s.preset,
+      s.preset_version,
+      s.cwd,
+      s.definition_digest,
+      s.selection_digest,
+    ].every((v) => typeof v === "string" && !!v) &&
+    ["identity", "automatic_mapping", "preset_mapping", "preset_fixed"].includes(
+      s.thinking_resolution,
+    ) &&
+    (s.thinking_resolution === "preset_fixed"
+      ? !Object.hasOwn(s, "parent_thinking") ||
+        (typeof s.parent_thinking === "string" && !!s.parent_thinking)
+      : typeof s.parent_thinking === "string" && !!s.parent_thinking) &&
+    (!Object.hasOwn(s, "effort_source") ||
+      ["preset", "user_override"].includes(s.effort_source ?? "")) &&
     validDifficulty(s.difficulty) &&
-    difficultySlots[s.difficulty - 1] === s.strength && isAbsolute(s.cwd) &&
+    difficultySlots[s.difficulty - 1] === s.strength &&
+    isAbsolute(s.cwd) &&
     !Object.hasOwn(s, "workspace") &&
-    Array.isArray(s.tools) && s.tools.every((v) => typeof v === "string") &&
-    /^[0-9a-f]{64}$/.test(s.definition_digest) && /^[0-9a-f]{64}$/.test(s.selection_digest) && (s.context_snapshot === undefined ||
-      (typeof s.context_snapshot === "string" && Buffer.byteLength(s.context_snapshot) <= 65536));
+    Array.isArray(s.tools) &&
+    s.tools.every((v) => typeof v === "string") &&
+    /^[0-9a-f]{64}$/.test(s.definition_digest) &&
+    /^[0-9a-f]{64}$/.test(s.selection_digest) &&
+    (s.context_snapshot === undefined ||
+      (typeof s.context_snapshot === "string" && Buffer.byteLength(s.context_snapshot) <= 65536))
+  );
 };

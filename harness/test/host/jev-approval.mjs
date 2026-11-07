@@ -18,16 +18,28 @@ import { OwnerController as Controller } from "../../dist/core/owner-controller.
 import { FileOwnerLease as ExecutionOwner } from "../../dist/runtime/owner-lease.js";
 import { digest } from "../../dist/runtime/context-snapshot.js";
 import { requireReadiness } from "../../dist/permissions/readiness.js";
-import { ChildRunGate as RunInputGate, PiAgentSessionAdapter as SdkRunPort } from "../../dist/runtime/agent-session.js";
-import { assembleChildSession as assembleChild, disposeChildSession as disposeChild } from "../../dist/runtime/child-session.js";
+import {
+  ChildRunGate as RunInputGate,
+  PiAgentSessionAdapter as SdkRunPort,
+} from "../../dist/runtime/agent-session.js";
+import {
+  assembleChildSession as assembleChild,
+  disposeChildSession as disposeChild,
+} from "../../dist/runtime/child-session.js";
 import { abortAndWaitForIdle, controlledProvider, loadHost } from "../support/host.mjs";
-import { globalInstructionFixture, projectInstructionFixture } from "../support/project-instructions.mjs";
+import {
+  globalInstructionFixture,
+  projectInstructionFixture,
+} from "../support/project-instructions.mjs";
 import { releaseDecision } from "../support/release-policy.mjs";
 
 const [piExecutable, generatedRootArg, outputRootArg, configSource] = process.argv.slice(2);
-assert(piExecutable && generatedRootArg && outputRootArg && configSource,
-  "Use check-pi-harness.sh --jev-only");
-const generatedRoot = resolve(generatedRootArg), outputRoot = resolve(outputRootArg);
+assert(
+  piExecutable && generatedRootArg && outputRootArg && configSource,
+  "Use check-pi-harness.sh --jev-only",
+);
+const generatedRoot = resolve(generatedRootArg),
+  outputRoot = resolve(outputRootArg);
 assert.equal(process.env.HOME, join(dirname(generatedRoot), "home"));
 assert.equal(process.env.PI_CODING_AGENT_DIR, generatedRoot);
 assert.equal(process.env.PI_CODING_AGENT_SESSION_DIR, join(outputRoot, "jev-sessions"));
@@ -43,12 +55,18 @@ const policyGrepPath = join(generatedRoot, "extensions/policy-grep.ts");
 for (const path of [jevPath, checkpointPath, permissionPath, staticGuardPath, policyGrepPath]) {
   assert(existsSync(path), `Missing rendered fixture resource: ${path}`);
 }
-assert.doesNotMatch(readFileSync(jevPath, "utf8"), /\/\* @worker-policy@ \*\/ \{\}/,
-  "Jev must be the worker-resources-rendered artifact, not unrendered source");
+assert.doesNotMatch(
+  readFileSync(jevPath, "utf8"),
+  /\/\* @worker-policy@ \*\/ \{\}/,
+  "Jev must be the worker-resources-rendered artifact, not unrendered source",
+);
 assert.deepEqual(
-  JSON.parse(readFileSync(join(generatedRoot, "extensions/pi-permission-system/config.json"), "utf8")),
+  JSON.parse(
+    readFileSync(join(generatedRoot, "extensions/pi-permission-system/config.json"), "utf8"),
+  ),
   JSON.parse(readFileSync(configSource, "utf8")),
-  "The Jev probe must not add permission allowances");
+  "The Jev probe must not add permission allowances",
+);
 
 // Jev only reads this file. Overwrite any inherited path before its module is
 // evaluated, clear the rendezvous slot, and remove common direct-key variables.
@@ -66,7 +84,10 @@ const blockedNetwork = (name) => () => {
   networkAttempts.push(name);
   throw new Error(`UNEXPECTED_NETWORK: ${name}`);
 };
-for (const [name, module] of [["http", http], ["https", https]]) {
+for (const [name, module] of [
+  ["http", http],
+  ["https", https],
+]) {
   for (const method of ["request", "get"]) module[method] = blockedNetwork(`${name}.${method}`);
 }
 net.Socket.prototype.connect = blockedNetwork("socket.connect");
@@ -97,22 +118,36 @@ globalThis.fetch = async (url, options = {}) => {
   assert.equal(body.model, "jev-1.13.0");
   assert(body.state && body.questions);
   for (const [id, question] of Object.entries(body.questions)) {
-    assert.equal(question.type, id === "risk" ? "score" : "noul",
-      "native bool questions must use wire noul");
+    assert.equal(
+      question.type,
+      id === "risk" ? "score" : "noul",
+      "native bool questions must use wire noul",
+    );
   }
   const witnessRegistry = globalThis[Symbol.for("@rocklee/jev-auto-approval:child-runtime-facts")];
-  const witnesses = witnessRegistry instanceof Map
-    ? [...witnessRegistry.entries()].map(([sessionId, facts]) => ({ sessionId, facts: structuredClone(facts) }))
-    : [];
-  const call = { state: structuredClone(body.state), witnesses, signal: options.signal, at: Date.now() };
+  const witnesses =
+    witnessRegistry instanceof Map
+      ? [...witnessRegistry.entries()].map(([sessionId, facts]) => ({
+          sessionId,
+          facts: structuredClone(facts),
+        }))
+      : [];
+  const call = {
+    state: structuredClone(body.state),
+    witnesses,
+    signal: options.signal,
+    at: Date.now(),
+  };
   fetchCalls.push(call);
   const response = await review(call);
   return new Response(JSON.stringify(structuredClone(response)), {
-    status: 200, headers: { "content-type": "application/json" },
+    status: 200,
+    headers: { "content-type": "application/json" },
   });
 };
 
-const host = await loadHost(piExecutable), { sdk, ai, permission } = host;
+const host = await loadHost(piExecutable),
+  { sdk, ai, permission } = host;
 const report = {
   authority: host.authority,
   versions: host.versions,
@@ -133,8 +168,16 @@ const report = {
   ],
 };
 const reportPath = join(outputRoot, "jev-approval.json");
-const save = () => writeFileSync(reportPath, JSON.stringify(report, (_key, value) =>
-  value instanceof AbortSignal ? { aborted: value.aborted } : value, 2), { mode: 0o600 });
+const save = () =>
+  writeFileSync(
+    reportPath,
+    JSON.stringify(
+      report,
+      (_key, value) => (value instanceof AbortSignal ? { aborted: value.aborted } : value),
+      2,
+    ),
+    { mode: 0o600 },
+  );
 save();
 
 const runtime = await sdk.ModelRuntime.create({
@@ -148,10 +191,11 @@ const provider = controlledProvider(ai);
 runtime.registerProvider("harness-fixture", provider.config);
 const model = runtime.getModel("harness-fixture", "controlled");
 assert(model);
-const settings = () => sdk.SettingsManager.inMemory({
-  compaction: { enabled: false },
-  retry: { enabled: false },
-});
+const settings = () =>
+  sdk.SettingsManager.inMemory({
+    compaction: { enabled: false },
+    retry: { enabled: false },
+  });
 
 const parentCwd = join(outputRoot, "jev-parent");
 const childCwd = parentCwd; // Production children inherit the owner's cwd.
@@ -170,13 +214,35 @@ writeFileSync(join(childCwd, "PUBLIC.txt"), "JEV_PUBLIC_MARKER\n", { mode: 0o600
 
 function observeBus(bus, node) {
   for (const channel of [
-    "pi-harness:approval:admitted", "pi-harness:approval:started",
-    "pi-harness:approval:invalidated", "pi-harness:approval:finished",
-  ]) bus.on(channel, (value) => report.approval_events.push({ node, channel, ...structuredClone(value),
-    ...(channel === "pi-harness:approval:started" ? { witness: structuredClone(globalThis[Symbol.for("@rocklee/jev-auto-approval:child-runtime-facts")]?.get(value.sessionId)) } : {}) }));
-  for (const channel of [permission.PERMISSIONS_READY_CHANNEL,
-    permission.PERMISSIONS_UI_PROMPT_CHANNEL, permission.PERMISSIONS_DECISION_CHANNEL]) {
-    bus.on(channel, (value) => report.permission_events.push({ node, channel, ...structuredClone(value) }));
+    "pi-harness:approval:admitted",
+    "pi-harness:approval:started",
+    "pi-harness:approval:invalidated",
+    "pi-harness:approval:finished",
+  ])
+    bus.on(channel, (value) =>
+      report.approval_events.push({
+        node,
+        channel,
+        ...structuredClone(value),
+        ...(channel === "pi-harness:approval:started"
+          ? {
+              witness: structuredClone(
+                globalThis[Symbol.for("@rocklee/jev-auto-approval:child-runtime-facts")]?.get(
+                  value.sessionId,
+                ),
+              ),
+            }
+          : {}),
+      }),
+    );
+  for (const channel of [
+    permission.PERMISSIONS_READY_CHANNEL,
+    permission.PERMISSIONS_UI_PROMPT_CHANNEL,
+    permission.PERMISSIONS_DECISION_CHANNEL,
+  ]) {
+    bus.on(channel, (value) =>
+      report.permission_events.push({ node, channel, ...structuredClone(value) }),
+    );
   }
 }
 
@@ -212,7 +278,9 @@ const { session: parent } = await sdk.createAgentSession({
 });
 await parent.bindExtensions({
   mode: "rpc",
-  onError: (error) => { throw new Error(error.error); },
+  onError: (error) => {
+    throw new Error(error.error);
+  },
   uiContext: {
     select: async (title, options) => {
       dialogCount += 1;
@@ -221,8 +289,12 @@ await parent.bindExtensions({
       assert(no, `No deny choice in ${JSON.stringify(options)}`);
       return no;
     },
-    input: async () => { throw new Error("Unexpected free-form approval input"); },
-    notify() {}, setStatus() {}, setWidget() {},
+    input: async () => {
+      throw new Error("Unexpected free-form approval input");
+    },
+    notify() {},
+    setStatus() {},
+    setWidget() {},
   },
 });
 assert(permission.getPermissionsService(parent.sessionId));
@@ -230,10 +302,13 @@ assert(permission.getPermissionsService(parent.sessionId));
 // This must be a real live provenance path. An extension-source injection would
 // make Jev correctly fail context construction and invalidate the whole probe.
 provider.respond(async () => ({ text: "Parent accepted the delegated inspection task." }));
-await parent.prompt("Inspect the public fixture with worker; read-only shell inspection is authorized.", {
-  source: "rpc",
-  expandPromptTemplates: false,
-});
+await parent.prompt(
+  "Inspect the public fixture with worker; read-only shell inspection is authorized.",
+  {
+    source: "rpc",
+    expandPromptTemplates: false,
+  },
+);
 await parent.waitForIdle();
 assert.equal(dialogCount, 0);
 
@@ -249,7 +324,8 @@ const effective = {
   parent_thinking: "off",
   thinking_resolution: "identity",
   profile: "editor",
-  difficulty: 3, strength: "d3",
+  difficulty: 3,
+  strength: "d3",
   preset: "fixture",
   preset_version: "v1",
   selection_digest: "1".repeat(64),
@@ -279,8 +355,14 @@ const controller = await Controller.open({
     const childBus = sdk.createEventBus();
     observeBus(childBus, `child-${ports.length + 1}`);
     const gate = new RunInputGate();
-    const manager = sdk.SessionManager.create(childCwd, sessionDirectory, { parentSession: parent.sessionFile });
-    assert.equal(existsSync(manager.getSessionFile()), false, "SessionManager.create reserves an ID/path but does not create a journal");
+    const manager = sdk.SessionManager.create(childCwd, sessionDirectory, {
+      parentSession: parent.sessionFile,
+    });
+    assert.equal(
+      existsSync(manager.getSessionFile()),
+      false,
+      "SessionManager.create reserves an ID/path but does not create a journal",
+    );
     manager.appendCustomEntry("active_agent", { name: effective.profile });
     const sessionId = manager.getSessionId();
     const loader = new sdk.DefaultResourceLoader({
@@ -298,7 +380,11 @@ const controller = await Controller.open({
       // guards, then its own witness observer, with RunInputGate loaded last.
       additionalExtensionPaths: [permissionPath, staticGuardPath, policyGrepPath],
       appendSystemPromptOverride: () => [
-        definition.split(/^---\s*$/m).slice(2).join("\n").trim(),
+        definition
+          .split(/^---\s*$/m)
+          .slice(2)
+          .join("\n")
+          .trim(),
         '<active_agent name="editor"/>',
       ],
       extensionFactories: [approvals.childExtension(sessionId), gate.extension],
@@ -331,8 +417,14 @@ const controller = await Controller.open({
       session: assembled.session,
       parentBus,
       gate,
-      readiness: () => requireReadiness(childBus, permission.getPermissionsService,
-        assembled.session.sessionId, effective.profile, definitionDigest),
+      readiness: () =>
+        requireReadiness(
+          childBus,
+          permission.getPermissionsService,
+          assembled.session.sessionId,
+          effective.profile,
+          definitionDigest,
+        ),
       invalidateApproval: () => {
         if (activeRun) approvals.end(assembled.session.sessionId, activeRun);
         activeRun = undefined;
@@ -348,10 +440,16 @@ const controller = await Controller.open({
       activeRun = identity;
       if (!identity.task_prompt.includes("MISSING_WITNESS")) {
         if (identity.task_prompt.includes("LEFTOVER_WITNESS")) {
-          approvals.begin({ ...identity, run_id: `${identity.run_id}-leftover` }, {
-            sessionId: assembled.session.sessionId, cwd: childCwd,
-            profile: effective.profile, definitionDigest, prompt,
-          });
+          approvals.begin(
+            { ...identity, run_id: `${identity.run_id}-leftover` },
+            {
+              sessionId: assembled.session.sessionId,
+              cwd: childCwd,
+              profile: effective.profile,
+              definitionDigest,
+              prompt,
+            },
+          );
         }
         approvals.begin(identity, {
           sessionId: assembled.session.sessionId,
@@ -370,7 +468,10 @@ const controller = await Controller.open({
 
 const terminal = (status) => ["completed", "needs_input", "failed", "cancelled"].includes(status);
 async function finish(run) {
-  assert.equal(await controller.waitForRuns([run.run_id], { mode: "all", timeout_ms: 10_000 }), "ready");
+  assert.equal(
+    await controller.waitForRuns([run.run_id], { mode: "all", timeout_ms: 10_000 }),
+    "ready",
+  );
   const snapshot = controller.view(run.run_id);
   assert(terminal(snapshot.status));
   // Internal lifecycle evidence only: no model publication or inbox drain.
@@ -378,24 +479,33 @@ async function finish(run) {
 }
 function scriptedBash(id, finalText) {
   let count = 0;
-  provider.respond(async () => ++count === 1
-    ? { tools: [{ type: "toolCall", id, name: "bash", arguments: { command: "sleep 0" } }] }
-    : { text: finalText });
+  provider.respond(async () =>
+    ++count === 1
+      ? { tools: [{ type: "toolCall", id, name: "bash", arguments: { command: "sleep 0" } }] }
+      : { text: finalText },
+  );
   return () => count;
 }
 function toolResult(session, id) {
-  return session.messages.find((message) => message.role === "toolResult" && message.toolCallId === id);
+  return session.messages.find(
+    (message) => message.role === "toolResult" && message.toolCallId === id,
+  );
 }
 function audits() {
   const path = join(generatedRoot, "logs/jev-auto-approval.jsonl");
-  return existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
+  return existsSync(path)
+    ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse)
+    : [];
 }
 function jevDecisionsSince(start) {
-  return audits().slice(start).filter((row) => row.event === "jev_model_judge.decision");
+  return audits()
+    .slice(start)
+    .filter((row) => row.event === "jev_model_judge.decision");
 }
 async function check(name, action) {
   const item = { name, status: "running" };
-  report.cases.push(item); save();
+  report.cases.push(item);
+  save();
   try {
     await action(item);
     item.status = "passed";
@@ -405,9 +515,13 @@ async function check(name, action) {
     throw error;
   } finally {
     report.decisions = audits();
-    report.fetches = fetchCalls.map((call) => ({ actionBinding: call.state.actionBinding,
-      delegationContext: call.state.delegationContext, userAuthorization: call.state.userAuthorization,
-      witnesses: call.witnesses, aborted: call.signal?.aborted ?? false }));
+    report.fetches = fetchCalls.map((call) => ({
+      actionBinding: call.state.actionBinding,
+      delegationContext: call.state.delegationContext,
+      userAuthorization: call.state.userAuthorization,
+      witnesses: call.witnesses,
+      aborted: call.signal?.aborted ?? false,
+    }));
     save();
   }
   console.log(`PASS JEV: ${name}`);
@@ -416,57 +530,92 @@ async function check(name, action) {
 let primaryError;
 try {
   let first;
-  await check("initial inherited prompt is bound and forwarded Bash ask auto-allows without human UI", async (item) => {
-    const beforeDialogs = dialogCount, beforeAudit = audits().length, beforeFetch = fetchCalls.length;
-    const calls = scriptedBash("jev-initial-bash", "INITIAL_JEV_ALLOWED");
-    first = await controller.submit("jev-initial", {
-      prompt: "Inspect once with sleep 0 and report completion.",
-      description: "Initial bound delegated approval",
-      name: "approval-fixture",
-      settings: effective,
-    });
-    const result = await finish(first);
-    assert.equal(result.snapshots[0].status, "completed");
-    assert.equal(result.results[0].text, "INITIAL_JEV_ALLOWED");
-    assert.equal(calls(), 2);
-    const child = ports[0].session;
-    const tool = toolResult(child, "jev-initial-bash");
-    assert(tool && !tool.isError, "sleep 0 did not execute through the real Bash gate");
-    assert.equal(dialogCount, beforeDialogs, "automatic allow unexpectedly opened human UI");
-    assert.equal(fetchCalls.length, beforeFetch + 1);
-    const packet = fetchCalls.at(-1).state;
-    assert.equal(packet.actionBinding.scope, "delegated_child_exact_action");
-    assert.equal(packet.projectInstructionExcerpts.sourceFileCount, 2);
-    assert.equal(packet.delegationContext.projectInstructionExcerpts.sourceFileCount, 2);
-    assert(JSON.stringify(packet.projectInstructionExcerpts.entries).length / 4 > 700,
-      "realistic loaded instructions must exercise the old budget failure");
-    assert(packet.projectInstructionExcerpts.entries.some((entry) => entry.text.includes("Never commit plaintext secrets.")));
-    assert.match(parent.systemPrompt, /Project-specific instructions and guidelines:/);
-    assert.equal(packet.delegationContext.agentName, effective.profile);
-    assert(packet.userAuthorization.messages.some((message) => message.source === "live_input" &&
-      message.text.includes("Inspect the public fixture")), "Jev packet lost the real root authorization snapshot");
-    const witnessed = fetchCalls.at(-1).witnesses.find((entry) => entry.sessionId === child.sessionId)?.facts;
-    assert(witnessed, "Jev fetch occurred without a host witness");
-    assert.equal(witnessed.parentSessionId, parent.sessionId);
-    assert.equal(witnessed.harness.owner_id, parent.sessionId);
-    assert.equal(witnessed.harness.run_id, first.run_id);
-    assert.equal(witnessed.harness.agent_id, first.agent_id);
-    assert.equal(witnessed.harness.profile, effective.profile);
-    assert.equal(witnessed.harness.definitionDigest, definitionDigest);
-    assert.equal(witnessed.harness.task_prompt, "Inspect once with sleep 0 and report completion.");
-    assert.equal(witnessed.harness.prompt,
-      `${inherited}\n\nInspect once with sleep 0 and report completion.`);
-    assert.match(JSON.stringify(provider.requests.find((request) =>
-      JSON.stringify(request.context.messages).includes("jev-initial-bash"))?.context.messages),
-    /INHERITED_PARENT_CONTEXT_MARKER[\s\S]*Inspect once with sleep 0/);
-    const decision = jevDecisionsSince(beforeAudit).find((row) => row.requestScope === "subagent");
-    assert(decision && decision.effectiveVerdict === "allow" && decision.modelCalled === true,
-      JSON.stringify(jevDecisionsSince(beforeAudit)));
-    item.run_id = first.run_id; item.agent_id = first.agent_id; item.session_id = child.sessionId;
-  });
+  await check(
+    "initial inherited prompt is bound and forwarded Bash ask auto-allows without human UI",
+    async (item) => {
+      const beforeDialogs = dialogCount,
+        beforeAudit = audits().length,
+        beforeFetch = fetchCalls.length;
+      const calls = scriptedBash("jev-initial-bash", "INITIAL_JEV_ALLOWED");
+      first = await controller.submit("jev-initial", {
+        prompt: "Inspect once with sleep 0 and report completion.",
+        description: "Initial bound delegated approval",
+        name: "approval-fixture",
+        settings: effective,
+      });
+      const result = await finish(first);
+      assert.equal(result.snapshots[0].status, "completed");
+      assert.equal(result.results[0].text, "INITIAL_JEV_ALLOWED");
+      assert.equal(calls(), 2);
+      const child = ports[0].session;
+      const tool = toolResult(child, "jev-initial-bash");
+      assert(tool && !tool.isError, "sleep 0 did not execute through the real Bash gate");
+      assert.equal(dialogCount, beforeDialogs, "automatic allow unexpectedly opened human UI");
+      assert.equal(fetchCalls.length, beforeFetch + 1);
+      const packet = fetchCalls.at(-1).state;
+      assert.equal(packet.actionBinding.scope, "delegated_child_exact_action");
+      assert.equal(packet.projectInstructionExcerpts.sourceFileCount, 2);
+      assert.equal(packet.delegationContext.projectInstructionExcerpts.sourceFileCount, 2);
+      assert(
+        JSON.stringify(packet.projectInstructionExcerpts.entries).length / 4 > 700,
+        "realistic loaded instructions must exercise the old budget failure",
+      );
+      assert(
+        packet.projectInstructionExcerpts.entries.some((entry) =>
+          entry.text.includes("Never commit plaintext secrets."),
+        ),
+      );
+      assert.match(parent.systemPrompt, /Project-specific instructions and guidelines:/);
+      assert.equal(packet.delegationContext.agentName, effective.profile);
+      assert(
+        packet.userAuthorization.messages.some(
+          (message) =>
+            message.source === "live_input" && message.text.includes("Inspect the public fixture"),
+        ),
+        "Jev packet lost the real root authorization snapshot",
+      );
+      const witnessed = fetchCalls
+        .at(-1)
+        .witnesses.find((entry) => entry.sessionId === child.sessionId)?.facts;
+      assert(witnessed, "Jev fetch occurred without a host witness");
+      assert.equal(witnessed.parentSessionId, parent.sessionId);
+      assert.equal(witnessed.harness.owner_id, parent.sessionId);
+      assert.equal(witnessed.harness.run_id, first.run_id);
+      assert.equal(witnessed.harness.agent_id, first.agent_id);
+      assert.equal(witnessed.harness.profile, effective.profile);
+      assert.equal(witnessed.harness.definitionDigest, definitionDigest);
+      assert.equal(
+        witnessed.harness.task_prompt,
+        "Inspect once with sleep 0 and report completion.",
+      );
+      assert.equal(
+        witnessed.harness.prompt,
+        `${inherited}\n\nInspect once with sleep 0 and report completion.`,
+      );
+      assert.match(
+        JSON.stringify(
+          provider.requests.find((request) =>
+            JSON.stringify(request.context.messages).includes("jev-initial-bash"),
+          )?.context.messages,
+        ),
+        /INHERITED_PARENT_CONTEXT_MARKER[\s\S]*Inspect once with sleep 0/,
+      );
+      const decision = jevDecisionsSince(beforeAudit).find(
+        (row) => row.requestScope === "subagent",
+      );
+      assert(
+        decision && decision.effectiveVerdict === "allow" && decision.modelCalled === true,
+        JSON.stringify(jevDecisionsSince(beforeAudit)),
+      );
+      item.run_id = first.run_id;
+      item.agent_id = first.agent_id;
+      item.session_id = child.sessionId;
+    },
+  );
 
   await check("same Agent resume receives a fresh Run binding and auto-allows", async (item) => {
-    const beforeDialogs = dialogCount, beforeAudit = audits().length;
+    const beforeDialogs = dialogCount,
+      beforeAudit = audits().length;
     scriptedBash("jev-resume-bash", "RESUMED_JEV_ALLOWED");
     const resumed = await controller.submit("jev-resume", {
       resume: first.agent_id,
@@ -478,22 +627,34 @@ try {
     assert.equal(result.results[0].text, "RESUMED_JEV_ALLOWED");
     assert(!toolResult(ports[0].session, "jev-resume-bash").isError);
     assert.equal(dialogCount, beforeDialogs);
-    assert(jevDecisionsSince(beforeAudit).some((row) =>
-      row.requestScope === "subagent" && row.effectiveVerdict === "allow"));
+    assert(
+      jevDecisionsSince(beforeAudit).some(
+        (row) => row.requestScope === "subagent" && row.effectiveVerdict === "allow",
+      ),
+    );
     item.run_id = resumed.run_id;
   });
 
   await check("controller steer while reviewer is pending expires the allow", async (item) => {
-    const beforeDialogs = dialogCount, beforeAudit = audits().length;
-    const entered = Promise.withResolvers(), release = Promise.withResolvers();
-    review = async () => { entered.resolve(); await release.promise; return { answers: allowAnswers, usage: { input_tokens: 42 } }; };
+    const beforeDialogs = dialogCount,
+      beforeAudit = audits().length;
+    const entered = Promise.withResolvers(),
+      release = Promise.withResolvers();
+    review = async () => {
+      entered.resolve();
+      await release.promise;
+      return { answers: allowAnswers, usage: { input_tokens: 42 } };
+    };
     scriptedBash("jev-steer-bash", "STEER_CASE_FINISHED");
     const run = await controller.submit("jev-steer-expiry", {
       resume: first.agent_id,
       prompt: "Start a bounded sleep 0 inspection while review is pending.",
     });
     await entered.promise;
-    const receipt = controller.steer(run.run_id, "Changed task context while the approval reviewer is pending.");
+    const receipt = controller.steer(
+      run.run_id,
+      "Changed task context while the approval reviewer is pending.",
+    );
     assert.equal(receipt.accepted, true);
     release.resolve();
     const result = await finish(run);
@@ -502,27 +663,45 @@ try {
     assert(tool?.isError, "stale Jev allow executed after steer");
     assert.equal(dialogCount, beforeDialogs + 1, "stale allow did not fall through to fake-No UI");
     const decisions = jevDecisionsSince(beforeAudit);
-    assert(decisions.some((row) => row.requestScope === "subagent" &&
-      row.effectiveVerdict !== "allow" && row.failureCode === "review_context_changed"),
-    JSON.stringify(decisions));
-    assert(report.approval_events.some((event) => event.channel === "pi-harness:approval:invalidated" &&
-      event.run_id === run.run_id && event.kind === "steer"));
-    item.run_id = run.run_id; item.status_after = result.snapshots[0].status;
+    assert(
+      decisions.some(
+        (row) =>
+          row.requestScope === "subagent" &&
+          row.effectiveVerdict !== "allow" &&
+          row.failureCode === "review_context_changed",
+      ),
+      JSON.stringify(decisions),
+    );
+    assert(
+      report.approval_events.some(
+        (event) =>
+          event.channel === "pi-harness:approval:invalidated" &&
+          event.run_id === run.run_id &&
+          event.kind === "steer",
+      ),
+    );
+    item.run_id = run.run_id;
+    item.status_after = result.snapshots[0].status;
   });
 
   await check("a fresh sibling Agent cannot retry the same human-refused action", async (item) => {
-    const beforeDialogs = dialogCount, beforeAudit = audits().length, beforeFetch = fetchCalls.length;
+    const beforeDialogs = dialogCount,
+      beforeAudit = audits().length,
+      beforeFetch = fetchCalls.length;
     scriptedBash("jev-sibling-retry", "SIBLING_RETRY_FINISHED");
     const sibling = await controller.submit("jev-sibling-retry", {
       prompt: "Inspect once with sleep 0 using a different Agent.",
-      description: "Cross-session refusal regression", settings: effective,
+      description: "Cross-session refusal regression",
+      settings: effective,
     });
     await finish(sibling);
     assert.notEqual(ports[1].session.sessionId, ports[0].session.sessionId);
     assert(toolResult(ports[1].session, "jev-sibling-retry")?.isError);
     assert.equal(dialogCount, beforeDialogs, "refusal retry must not reopen the human dialog");
     assert.equal(fetchCalls.length, beforeFetch, "changing Agent must not reopen model approval");
-    assert(jevDecisionsSince(beforeAudit).some((row) => row.failureCode === "approval_retry_paused"));
+    assert(
+      jevDecisionsSince(beforeAudit).some((row) => row.failureCode === "approval_retry_paused"),
+    );
     item.run_id = sibling.run_id;
   });
 
@@ -530,95 +709,167 @@ try {
   // input may reopen that exact operation for the next independent race case.
   provider.respond(async () => ({ text: "New bounded inspection authorized." }));
   await parent.prompt("Authorize a new bounded sleep 0 inspection for the next fixture case.", {
-    source: "rpc", expandPromptTemplates: false,
+    source: "rpc",
+    expandPromptTemplates: false,
   });
   await parent.waitForIdle();
 
-  await check("new live root input expires an in-flight child authorization snapshot", async (item) => {
-    const beforeDialogs = dialogCount, beforeAudit = audits().length;
-    const entered = Promise.withResolvers(), release = Promise.withResolvers();
-    review = async () => { entered.resolve(); await release.promise; return { answers: allowAnswers, usage: { input_tokens: 43 } }; };
-    scriptedBash("jev-root-input-bash", "ROOT_INPUT_CASE_FINISHED");
-    const run = await controller.submit("jev-root-input-expiry", {
-      resume: first.agent_id,
-      prompt: "Begin another bounded sleep 0 inspection.",
-    });
-    await entered.promise;
-    provider.respond(async () => ({ text: "Parent context changed while child review was pending." }));
-    await parent.prompt("New root instruction: the previous delegated authorization snapshot is obsolete.", {
-      source: "rpc",
-      expandPromptTemplates: false,
-    });
-    await parent.waitForIdle();
-    release.resolve();
-    await finish(run);
-    review = async () => ({ answers: allowAnswers, usage: { input_tokens: 41 } });
-    assert(toolResult(ports[0].session, "jev-root-input-bash")?.isError,
-      "old authorization survived a new live root input");
-    assert.equal(dialogCount, beforeDialogs + 1);
-    const decisions = jevDecisionsSince(beforeAudit);
-    assert(decisions.some((row) => row.requestScope === "subagent" &&
-      row.effectiveVerdict !== "allow" && row.failureCode === "review_context_changed"),
-    JSON.stringify(decisions));
-    item.run_id = run.run_id;
-  });
+  await check(
+    "new live root input expires an in-flight child authorization snapshot",
+    async (item) => {
+      const beforeDialogs = dialogCount,
+        beforeAudit = audits().length;
+      const entered = Promise.withResolvers(),
+        release = Promise.withResolvers();
+      review = async () => {
+        entered.resolve();
+        await release.promise;
+        return { answers: allowAnswers, usage: { input_tokens: 43 } };
+      };
+      scriptedBash("jev-root-input-bash", "ROOT_INPUT_CASE_FINISHED");
+      const run = await controller.submit("jev-root-input-expiry", {
+        resume: first.agent_id,
+        prompt: "Begin another bounded sleep 0 inspection.",
+      });
+      await entered.promise;
+      provider.respond(async () => ({
+        text: "Parent context changed while child review was pending.",
+      }));
+      await parent.prompt(
+        "New root instruction: the previous delegated authorization snapshot is obsolete.",
+        {
+          source: "rpc",
+          expandPromptTemplates: false,
+        },
+      );
+      await parent.waitForIdle();
+      release.resolve();
+      await finish(run);
+      review = async () => ({ answers: allowAnswers, usage: { input_tokens: 41 } });
+      assert(
+        toolResult(ports[0].session, "jev-root-input-bash")?.isError,
+        "old authorization survived a new live root input",
+      );
+      assert.equal(dialogCount, beforeDialogs + 1);
+      const decisions = jevDecisionsSince(beforeAudit);
+      assert(
+        decisions.some(
+          (row) =>
+            row.requestScope === "subagent" &&
+            row.effectiveVerdict !== "allow" &&
+            row.failureCode === "review_context_changed",
+        ),
+        JSON.stringify(decisions),
+      );
+      item.run_id = run.run_id;
+    },
+  );
 
-  await check("same session cannot borrow an old grant when the new Run witness is missing", async (item) => {
-    const beforeDialogs = dialogCount, beforeAudit = audits().length, beforeFetch = fetchCalls.length;
-    scriptedBash("jev-missing-witness-bash", "MISSING_WITNESS_FINISHED");
-    const run = await controller.submit("jev-missing-witness", {
-      resume: first.agent_id,
-      prompt: "MISSING_WITNESS: this fixture deliberately omits ApprovalBindings.begin.",
-    });
-    await finish(run);
-    assert(toolResult(ports[0].session, "jev-missing-witness-bash")?.isError);
-    assert.equal(dialogCount, beforeDialogs + 1);
-    assert.equal(fetchCalls.length, beforeFetch, "missing witness reached Jev model fetch");
-    const decisions = jevDecisionsSince(beforeAudit);
-    assert(decisions.some((row) => row.requestScope === "subagent" && row.modelCalled === false &&
-      row.effectiveVerdict === "defer" && row.failureCode === "delegation_unbound"), JSON.stringify(decisions));
-    item.run_id = run.run_id;
-  });
-
-  await check("a throwing witness observer cannot disable normal human forwarding", async (item) => {
-    const beforeDialogs = dialogCount, beforeFetch = fetchCalls.length;
-    const observers = globalThis[Symbol.for("@rocklee/managed-permissions:forwarded-ask-observers")];
-    const sessionId = ports[0].session.sessionId, original = observers.get(sessionId);
-    assert.equal(typeof original, "function");
-    observers.set(sessionId, () => { throw new Error("synthetic observation failure"); });
-    try {
-      scriptedBash("jev-observer-failure", "OBSERVER_FAILURE_FINISHED");
-      const run = await controller.submit("jev-observer-failure", {
-        resume: first.agent_id, prompt: "Inspect once with sleep 0 while the optional witness observer fails.",
+  await check(
+    "same session cannot borrow an old grant when the new Run witness is missing",
+    async (item) => {
+      const beforeDialogs = dialogCount,
+        beforeAudit = audits().length,
+        beforeFetch = fetchCalls.length;
+      scriptedBash("jev-missing-witness-bash", "MISSING_WITNESS_FINISHED");
+      const run = await controller.submit("jev-missing-witness", {
+        resume: first.agent_id,
+        prompt: "MISSING_WITNESS: this fixture deliberately omits ApprovalBindings.begin.",
       });
       await finish(run);
-      assert(toolResult(ports[0].session, "jev-observer-failure")?.isError);
-      assert.equal(dialogCount, beforeDialogs + 1, "forwarding must still reach human No");
-      assert.equal(fetchCalls.length, beforeFetch, "a failed observation must not grant model authority");
+      assert(toolResult(ports[0].session, "jev-missing-witness-bash")?.isError);
+      assert.equal(dialogCount, beforeDialogs + 1);
+      assert.equal(fetchCalls.length, beforeFetch, "missing witness reached Jev model fetch");
+      const decisions = jevDecisionsSince(beforeAudit);
+      assert(
+        decisions.some(
+          (row) =>
+            row.requestScope === "subagent" &&
+            row.modelCalled === false &&
+            row.effectiveVerdict === "defer" &&
+            row.failureCode === "delegation_unbound",
+        ),
+        JSON.stringify(decisions),
+      );
       item.run_id = run.run_id;
-    } finally { observers.set(sessionId, original); }
-  });
+    },
+  );
 
-  await check("a leftover owned witness falls through to human approval instead of killing the Run", async (item) => {
-    const beforeDialogs = dialogCount, beforeFetch = fetchCalls.length;
-    scriptedBash("jev-leftover-witness", "LEFTOVER_WITNESS_FINISHED");
-    const run = await controller.submit("jev-leftover-witness", {
-      resume: first.agent_id, prompt: "LEFTOVER_WITNESS: inspect once with sleep 0.",
-    });
-    const result = await finish(run);
-    assert.equal(result.snapshots[0].status, "completed", "optional approval bookkeeping must not fail the Run");
-    assert.equal(result.results[0].text, "LEFTOVER_WITNESS_FINISHED");
-    assert(toolResult(ports[0].session, "jev-leftover-witness")?.isError);
-    assert.equal(dialogCount, beforeDialogs + 1, "unbound ask should reach human No");
-    assert.equal(fetchCalls.length, beforeFetch);
-    assert.equal(globalThis[Symbol.for("@rocklee/jev-auto-approval:child-runtime-facts")].has(ports[0].session.sessionId), false, "Run exit must retire the manual-only witness");
-    item.run_id = run.run_id;
-  });
+  await check(
+    "a throwing witness observer cannot disable normal human forwarding",
+    async (item) => {
+      const beforeDialogs = dialogCount,
+        beforeFetch = fetchCalls.length;
+      const observers =
+        globalThis[Symbol.for("@rocklee/managed-permissions:forwarded-ask-observers")];
+      const sessionId = ports[0].session.sessionId,
+        original = observers.get(sessionId);
+      assert.equal(typeof original, "function");
+      observers.set(sessionId, () => {
+        throw new Error("synthetic observation failure");
+      });
+      try {
+        scriptedBash("jev-observer-failure", "OBSERVER_FAILURE_FINISHED");
+        const run = await controller.submit("jev-observer-failure", {
+          resume: first.agent_id,
+          prompt: "Inspect once with sleep 0 while the optional witness observer fails.",
+        });
+        await finish(run);
+        assert(toolResult(ports[0].session, "jev-observer-failure")?.isError);
+        assert.equal(dialogCount, beforeDialogs + 1, "forwarding must still reach human No");
+        assert.equal(
+          fetchCalls.length,
+          beforeFetch,
+          "a failed observation must not grant model authority",
+        );
+        item.run_id = run.run_id;
+      } finally {
+        observers.set(sessionId, original);
+      }
+    },
+  );
 
-  for (const channel of ["pi-harness:approval:admitted", "pi-harness:approval:started",
-    "pi-harness:approval:invalidated", "pi-harness:approval:finished"]) {
-    assert(report.approval_events.some((event) => event.channel === channel),
-      `Missing real approval lifecycle event: ${channel}`);
+  await check(
+    "a leftover owned witness falls through to human approval instead of killing the Run",
+    async (item) => {
+      const beforeDialogs = dialogCount,
+        beforeFetch = fetchCalls.length;
+      scriptedBash("jev-leftover-witness", "LEFTOVER_WITNESS_FINISHED");
+      const run = await controller.submit("jev-leftover-witness", {
+        resume: first.agent_id,
+        prompt: "LEFTOVER_WITNESS: inspect once with sleep 0.",
+      });
+      const result = await finish(run);
+      assert.equal(
+        result.snapshots[0].status,
+        "completed",
+        "optional approval bookkeeping must not fail the Run",
+      );
+      assert.equal(result.results[0].text, "LEFTOVER_WITNESS_FINISHED");
+      assert(toolResult(ports[0].session, "jev-leftover-witness")?.isError);
+      assert.equal(dialogCount, beforeDialogs + 1, "unbound ask should reach human No");
+      assert.equal(fetchCalls.length, beforeFetch);
+      assert.equal(
+        globalThis[Symbol.for("@rocklee/jev-auto-approval:child-runtime-facts")].has(
+          ports[0].session.sessionId,
+        ),
+        false,
+        "Run exit must retire the manual-only witness",
+      );
+      item.run_id = run.run_id;
+    },
+  );
+
+  for (const channel of [
+    "pi-harness:approval:admitted",
+    "pi-harness:approval:started",
+    "pi-harness:approval:invalidated",
+    "pi-harness:approval:finished",
+  ]) {
+    assert(
+      report.approval_events.some((event) => event.channel === channel),
+      `Missing real approval lifecycle event: ${channel}`,
+    );
   }
 } catch (error) {
   primaryError = error;
@@ -634,8 +885,11 @@ try {
   try {
     await abortAndWaitForIdle(parent);
     const disposed = await disposeChild(parent, parentBus);
-    report.cleanup.push({ target: "parent", ...disposed,
-      permission_removed: !permission.getPermissionsService(parent.sessionId) });
+    report.cleanup.push({
+      target: "parent",
+      ...disposed,
+      permission_removed: !permission.getPermissionsService(parent.sessionId),
+    });
     assert(disposed.shutdownExited && disposed.errors.length === 0);
     assert.equal(permission.getPermissionsService(parent.sessionId), undefined);
   } catch (error) {
@@ -645,10 +899,16 @@ try {
   report.network_attempts = networkAttempts;
   report.dialog_count = dialogCount;
   report.fetch_count = fetchCalls.length;
-  report.approval_event_channels = [...new Set(report.approval_events.map((event) => event.channel))];
+  report.approval_event_channels = [
+    ...new Set(report.approval_events.map((event) => event.channel)),
+  ];
   report.error = primaryError ? String(primaryError) : undefined;
-  report.status = !primaryError && networkAttempts.length === 0 &&
-    report.cases.every((item) => item.status === "passed") ? "passed" : "failed";
+  report.status =
+    !primaryError &&
+    networkAttempts.length === 0 &&
+    report.cases.every((item) => item.status === "passed")
+      ? "passed"
+      : "failed";
   save();
 }
 

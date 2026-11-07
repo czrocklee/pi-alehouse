@@ -100,7 +100,9 @@ clock = 10_000;
 assert.equal(progress.snapshot().elapsedMs, 0, "invalid start clock cannot train");
 progress.finish(true);
 assert.equal(inspect().percent, undefined);
-const throwing = new CompactionProgress(() => { throw new Error("clock unavailable"); });
+const throwing = new CompactionProgress(() => {
+  throw new Error("clock unavailable");
+});
 throwing.start(options);
 assert.equal(throwing.snapshot().elapsedMs, 0);
 throwing.finish(true);

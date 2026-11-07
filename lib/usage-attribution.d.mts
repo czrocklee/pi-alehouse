@@ -1,7 +1,11 @@
 /** Stable keys in the existing harness usage annotations. */
 export type PartialUsageComponent = "input" | "output" | "cache_read" | "cache_write" | "cost";
 export interface UsageTotals {
-  input: number; output: number; cacheRead: number; cacheWrite: number; cost: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
 }
 /** Shares divide the flat usage; partial flags are conservative bill-wide
  * markers, not evidence locating the unknown amount to a particular model. */
@@ -10,8 +14,19 @@ export interface HostModelSpend extends UsageTotals {
   partial?: PartialUsageComponent[];
 }
 export interface HostUsage {
-  input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number; totalFromProvider?: boolean };
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+    totalFromProvider?: boolean;
+  };
   harnessModels?: HostModelSpend[];
   harnessPartial?: PartialUsageComponent[];
 }

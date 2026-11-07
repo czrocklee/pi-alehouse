@@ -8,9 +8,13 @@ export function plainText(text: string): string {
   return stripTerminalSequences(text)
     .replace(/\r\n?|[\u0085\u2028\u2029]/g, "\n")
     .replace(/[\t\v\f\p{Zs}]/gu, " ")
-    .replace(/\p{Cc}/gu, (char) => char === "\n" ? char :
-      `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`)
-    .replace(/\p{Bidi_Control}/gu, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+    .replace(/\p{Cc}/gu, (char) =>
+      char === "\n" ? char : `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
+    )
+    .replace(
+      /\p{Bidi_Control}/gu,
+      (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
 }
 
 /** Generation previews must not expose a protocol payload merely because its
@@ -18,19 +22,29 @@ export function plainText(text: string): string {
  * escaping contract; previews conservatively omit complete OR unfinished string
  * protocols, including multiline OSC/APC and their C1 spellings. */
 export function previewText(text: string): string {
-  let out = "", from = 0, index = 0;
+  let out = "",
+    from = 0,
+    index = 0;
   while (index < text.length) {
     const code = text.charCodeAt(index);
     const escape = code === 0x1b && "]_PX^".includes(text[index + 1] ?? "\0");
     const c1 = code === 0x90 || code === 0x98 || code === 0x9d || code === 0x9e || code === 0x9f;
-    if (!escape && !c1) { index++; continue; }
+    if (!escape && !c1) {
+      index++;
+      continue;
+    }
     out += text.slice(from, index);
     const osc = escape ? text[index + 1] === "]" : code === 0x9d;
     index += escape ? 2 : 1;
     // BEL terminates OSC only. In APC/DCS/SOS/PM it is still payload; accepting
     // it as a terminator would expose the remainder of an unfinished protocol.
-    while (index < text.length && !(osc && text.charCodeAt(index) === 0x07) && text.charCodeAt(index) !== 0x9c &&
-      !(text.charCodeAt(index) === 0x1b && text[index + 1] === "\\")) index++;
+    while (
+      index < text.length &&
+      !(osc && text.charCodeAt(index) === 0x07) &&
+      text.charCodeAt(index) !== 0x9c &&
+      !(text.charCodeAt(index) === 0x1b && text[index + 1] === "\\")
+    )
+      index++;
     if (index >= text.length) return plainText(out);
     index += text.charCodeAt(index) === 0x1b ? 2 : 1;
     from = index;
@@ -62,41 +76,63 @@ export function wrapPlainText(text: string, columns: number): string[] {
 }
 
 function wrapParagraph(paragraph: string, width: number, wholeCandidate = false): string[] {
-  const out: string[] = [], widths = new Map<string, number>();
+  const out: string[] = [],
+    widths = new Map<string, number>();
   const measure = (cluster: string): number => {
     let value = widths.get(cluster);
-    if (value === undefined) { value = visibleWidth(cluster); widths.set(cluster, value); }
+    if (value === undefined) {
+      value = visibleWidth(cluster);
+      widths.set(cluster, value);
+    }
     return value;
   };
   const sum = (parts: string[]): number => parts.reduce((total, part) => total + measure(part), 0);
-  let line: string[] = [], lineWidth = 0, mismatch = false;
+  let line: string[] = [],
+    lineWidth = 0,
+    mismatch = false;
   const emit = (parts: string[], trim = true): void => {
     let end = parts.length;
     while (trim && end && parts[end - 1] === " ") end--;
-    const kept = parts.slice(0, end), row = kept.join("");
+    const kept = parts.slice(0, end),
+      row = kept.join("");
     if (!wholeCandidate && visibleWidth(row) !== sum(kept)) mismatch = true;
     if (row || !trim) out.push(row);
   };
   for (const { segment } of graphemes.segment(paragraph)) {
-    const cluster = measure(segment) > width ? "…" : segment, clusterWidth = measure(cluster);
+    const cluster = measure(segment) > width ? "…" : segment,
+      clusterWidth = measure(cluster);
     let separator = false;
-    while ((wholeCandidate ? visibleWidth(line.join("") + cluster) : lineWidth + clusterWidth) > width) {
+    while (
+      (wholeCandidate ? visibleWidth(line.join("") + cluster) : lineWidth + clusterWidth) > width
+    ) {
       // Check concatenation only at a boundary, not for every growing prefix.
       if (!wholeCandidate && visibleWidth(line.join("") + cluster) !== lineWidth + clusterWidth)
         return wrapParagraph(paragraph, width, true);
       if (cluster === " ") {
-        emit(line); line = []; lineWidth = 0; separator = true; break;
+        emit(line);
+        line = [];
+        lineWidth = 0;
+        separator = true;
+        break;
       }
       // A marked space belongs to its grapheme, never to the word-break path.
-      const space = line.findLastIndex((part) => part === " "), head = line.slice(0, space);
+      const space = line.findLastIndex((part) => part === " "),
+        head = line.slice(0, space);
       if (space > 0 && head.some((part) => part !== " ")) {
         emit(head);
         line = line.slice(space + 1);
         while (line[0] === " ") line.shift();
         lineWidth = sum(line);
-      } else { emit(line); line = []; lineWidth = 0; }
+      } else {
+        emit(line);
+        line = [];
+        lineWidth = 0;
+      }
     }
-    if (!separator) { line.push(cluster); lineWidth += clusterWidth; }
+    if (!separator) {
+      line.push(cluster);
+      lineWidth += clusterWidth;
+    }
   }
   if (line.length || !out.length) emit(line, false);
   return mismatch ? wrapParagraph(paragraph, width, true) : out;

@@ -178,9 +178,7 @@ export function label(value: unknown, fallback = UNKNOWN, max = MAX_LABEL_LENGTH
     .trim();
   if (!clean) return fallback;
   const characters = Array.from(clean);
-  return characters.length <= max
-    ? clean
-    : `${characters.slice(0, max - 1).join("")}…`;
+  return characters.length <= max ? clean : `${characters.slice(0, max - 1).join("")}…`;
 }
 
 function identifier(value: unknown): string | undefined {
@@ -191,7 +189,7 @@ function identifier(value: unknown): string | undefined {
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : undefined;
 }
 
@@ -226,7 +224,13 @@ export class SessionStats {
   /** stopReason of the current run's latest assistant message, inside a request or not. */
   #runStop: unknown;
   #lastRunSucceeded = false;
-  readonly #recentErrors: { at: number; provider?: string; model: string; message?: string; cleared: boolean }[] = [];
+  readonly #recentErrors: {
+    at: number;
+    provider?: string;
+    model: string;
+    message?: string;
+    cleared: boolean;
+  }[] = [];
   #request?: ActiveRequest;
   readonly #activeTools = new Map<string, ActiveTool>();
   readonly #pendingApprovals = new Set<string>();
@@ -273,8 +277,15 @@ export class SessionStats {
 
   /** Constant-time status read: no clock sampling, copies or aggregate traversal. */
   get health(): SessionHealth {
-    return this.#pendingApprovals.size > 0 ? "waiting" : this.#errorLatched ? "error" :
-      this.#activityStartedAt !== undefined ? "busy" : this.#hasActivityEvidence ? "idle" : "unknown";
+    return this.#pendingApprovals.size > 0
+      ? "waiting"
+      : this.#errorLatched
+        ? "error"
+        : this.#activityStartedAt !== undefined
+          ? "busy"
+          : this.#hasActivityEvidence
+            ? "idle"
+            : "unknown";
   }
 
   /** Constant-time: whether the latest finished response succeeded. */
@@ -319,7 +330,8 @@ export class SessionStats {
     if (this.#request) this.#finishRequest(undefined, now, true);
     const cutShort = this.#activeTools.size > 0;
     for (const id of [...this.#activeTools.keys()]) this.#finishTool(id, false, undefined);
-    this.#lastRunSucceeded = !cutShort && typeof this.#runStop === "string" && FINAL_STOPS.has(this.#runStop);
+    this.#lastRunSucceeded =
+      !cutShort && typeof this.#runStop === "string" && FINAL_STOPS.has(this.#runStop);
     // Permission prompts belong to the parent UI, not the agent loop. A prompt
     // can outlive settlement (or originate while idle), so only its matching
     // decision or collector destruction may close it.
@@ -381,16 +393,31 @@ export class SessionStats {
       const now = this.#now();
       this.#touch(now);
       this.#lastResponseSucceeded = false;
-      this.#latch(now, label(response.provider, ""), label(response.responseModel ?? response.model),
-        label(response.errorMessage, "", MAX_ERROR_LENGTH));
+      this.#latch(
+        now,
+        label(response.provider, ""),
+        label(response.responseModel ?? response.model),
+        label(response.errorMessage, "", MAX_ERROR_LENGTH),
+      );
     } catch {
       this.#runStop = undefined;
     }
   }
 
-  #latch(at: number, provider: string | undefined, model: string, message: string | undefined): void {
+  #latch(
+    at: number,
+    provider: string | undefined,
+    model: string,
+    message: string | undefined,
+  ): void {
     this.#errorLatched = true;
-    this.#recentErrors.unshift({ at, ...(provider ? { provider } : {}), model, ...(message ? { message } : {}), cleared: false });
+    this.#recentErrors.unshift({
+      at,
+      ...(provider ? { provider } : {}),
+      model,
+      ...(message ? { message } : {}),
+      cleared: false,
+    });
     this.#recentErrors.length = Math.min(this.#recentErrors.length, MAX_RECENT_ERRORS);
   }
 
@@ -544,7 +571,8 @@ export class SessionStats {
           provider = label(response.provider, provider ?? UNKNOWN);
           model = label(response.responseModel ?? response.model, model);
           stopReason = response.stopReason;
-          if (stopReason === "error") errorMessage = label(response.errorMessage, "", MAX_ERROR_LENGTH) || undefined;
+          if (stopReason === "error")
+            errorMessage = label(response.errorMessage, "", MAX_ERROR_LENGTH) || undefined;
           const usage = record(response.usage);
           outputTokens = finiteNonNegative(usage?.output);
           cost = finiteNonNegative(record(usage?.cost)?.total);
@@ -586,12 +614,14 @@ export class SessionStats {
     } else {
       this.#lastTtftMs = undefined;
     }
-    this.#lastTextMs = active.firstTextAt === undefined
-      ? undefined
-      : this.#duration(active.startedAt, active.firstTextAt);
+    this.#lastTextMs =
+      active.firstTextAt === undefined
+        ? undefined
+        : this.#duration(active.startedAt, active.firstTextAt);
 
     this.#runStop = stopReason;
-    this.#lastResponseSucceeded = typeof stopReason === "string" && SUCCESSFUL_STOPS.has(stopReason);
+    this.#lastResponseSucceeded =
+      typeof stopReason === "string" && SUCCESSFUL_STOPS.has(stopReason);
     // A later success, e.g. the SDK's auto-retry of this very request, clears it.
     if (this.#lastResponseSucceeded) this.#recover();
     if (isError) this.#latch(now, provider, model, errorMessage);
@@ -620,23 +650,17 @@ export class SessionStats {
 
   #closeApprovalInterval(now: number): void {
     if (this.#approvalStartedAt === undefined) return;
-    this.#approvalMs = addBounded(
-      this.#approvalMs,
-      this.#duration(this.#approvalStartedAt, now),
-    );
+    this.#approvalMs = addBounded(this.#approvalMs, this.#duration(this.#approvalStartedAt, now));
     this.#approvalStartedAt = undefined;
   }
 
   snapshot(): SessionStatsSnapshot {
     const now = this.#now();
     const elapsedMs = this.#duration(this.#openedAt, now);
-    const liveBusyMs = this.#activityStartedAt === undefined
-      ? 0
-      : this.#duration(this.#activityStartedAt, now);
+    const liveBusyMs =
+      this.#activityStartedAt === undefined ? 0 : this.#duration(this.#activityStartedAt, now);
     const busyMs = Math.min(elapsedMs, addBounded(this.#busyMs, liveBusyMs));
-    const modelValues = new Map(
-      [...this.#models].map(([key, value]) => [key, cloneModel(value)]),
-    );
+    const modelValues = new Map([...this.#models].map(([key, value]) => [key, cloneModel(value)]));
 
     let llmMs = this.#llmMs;
     if (this.#request) {
@@ -656,12 +680,16 @@ export class SessionStats {
     // includes the permission gate. The longest one is reported on its own.
     let longestActiveToolMs: number | undefined;
     for (const active of this.#activeTools.values()) {
-      longestActiveToolMs = Math.max(longestActiveToolMs ?? 0, this.#duration(active.startedAt, now));
+      longestActiveToolMs = Math.max(
+        longestActiveToolMs ?? 0,
+        this.#duration(active.startedAt, now),
+      );
     }
 
-    const approvalMs = this.#approvalStartedAt === undefined
-      ? this.#approvalMs
-      : addBounded(this.#approvalMs, this.#duration(this.#approvalStartedAt, now));
+    const approvalMs =
+      this.#approvalStartedAt === undefined
+        ? this.#approvalMs
+        : addBounded(this.#approvalMs, this.#duration(this.#approvalStartedAt, now));
     const models: SessionModelStats[] = [...modelValues.values()].map((value) => ({
       ...(value.provider ? { provider: value.provider } : {}),
       model: value.model,
@@ -703,7 +731,10 @@ export class SessionStats {
       partial: this.#partial || Boolean(this.#request) || this.#activeTools.size > 0,
       models,
       tools,
-      recentErrors: this.#recentErrors.map(({ at, ...error }) => ({ ageMs: this.#duration(at, now), ...error })),
+      recentErrors: this.#recentErrors.map(({ at, ...error }) => ({
+        ageMs: this.#duration(at, now),
+        ...error,
+      })),
     };
   }
 }
@@ -762,36 +793,62 @@ export function bindStatsEvents(
   // turn_start is the foreground SDK attempt boundary. before_provider_request
   // is deliberately not observed: cache warming reuses onPayload and can emit it
   // concurrently with a foreground turn, without a request id to correlate it.
-  register(() => pi.on("turn_start", (_event, ctx) => observe((stats) => {
-    const model = ctx.model;
-    stats.requestStart(model?.id ?? UNKNOWN, model?.provider);
-  })));
-  register(() => pi.on("message_update", (event) => observe((stats) => {
-    const update = event.assistantMessageEvent;
-    if (update.type === "text_delta" || update.type === "thinking_delta" || update.type === "toolcall_delta") {
-      stats.delta(update.type, update.delta);
-    }
-  })));
-  register(() => pi.on("message_end", (event) => observe((stats) => stats.messageEnd(event.message))));
-  register(() => pi.on("tool_execution_start", (event) => observe((stats) => {
-    stats.toolStart(event.toolCallId, event.toolName);
-  })));
+  register(() =>
+    pi.on("turn_start", (_event, ctx) =>
+      observe((stats) => {
+        const model = ctx.model;
+        stats.requestStart(model?.id ?? UNKNOWN, model?.provider);
+      }),
+    ),
+  );
+  register(() =>
+    pi.on("message_update", (event) =>
+      observe((stats) => {
+        const update = event.assistantMessageEvent;
+        if (
+          update.type === "text_delta" ||
+          update.type === "thinking_delta" ||
+          update.type === "toolcall_delta"
+        ) {
+          stats.delta(update.type, update.delta);
+        }
+      }),
+    ),
+  );
+  register(() =>
+    pi.on("message_end", (event) => observe((stats) => stats.messageEnd(event.message))),
+  );
+  register(() =>
+    pi.on("tool_execution_start", (event) =>
+      observe((stats) => {
+        stats.toolStart(event.toolCallId, event.toolName);
+      }),
+    ),
+  );
   // Pi reports no duration only for a call it never executed: unknown tool,
   // invalid arguments, or blocked or aborted before execution.
-  register(() => pi.on("tool_execution_end", (event) => observe((stats) => {
-    stats.toolEnd(event.toolCallId, event.isError, event.durationMs ?? 0);
-  })));
-  register(() => pi.events.on("permissions:ui_prompt", (value) => {
-    const requestId = requestIdFrom(value);
-    if (requestId) observe((stats) => stats.approvalStart(requestId));
-  }));
+  register(() =>
+    pi.on("tool_execution_end", (event) =>
+      observe((stats) => {
+        stats.toolEnd(event.toolCallId, event.isError, event.durationMs ?? 0);
+      }),
+    ),
+  );
+  register(() =>
+    pi.events.on("permissions:ui_prompt", (value) => {
+      const requestId = requestIdFrom(value);
+      if (requestId) observe((stats) => stats.approvalStart(requestId));
+    }),
+  );
   // UI settlement is not a permission verdict. Timeout/error paths can emit a
   // gate_error under a different ID; their original wait nevertheless ended.
   for (const channel of ["permissions:decision", "managed-permissions:ui_prompt_end:v1"]) {
-    register(() => pi.events.on(channel, (value) => {
-      const requestId = requestIdFrom(value);
-      if (requestId) observe((stats) => stats.approvalEnd(requestId));
-    }));
+    register(() =>
+      pi.events.on(channel, (value) => {
+        const requestId = requestIdFrom(value);
+        if (requestId) observe((stats) => stats.approvalEnd(requestId));
+      }),
+    );
   }
 
   return () => {

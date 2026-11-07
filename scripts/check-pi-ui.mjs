@@ -18,27 +18,38 @@ const jiti = createJiti(import.meta.url, {
 });
 const extensions = join(root, "extensions");
 const { default: titleExtension } = await jiti.import(join(extensions, "terminal-title-status.ts"));
-const { default: footerExtension } = await jiti.import(footerEntry ?? join(extensions, "status-footer.ts"));
-const { default: approvalExtension, ApprovalPopover, APPROVAL_ENTRY, approvalChoices, approvalStatus, currentChoice } =
-  await jiti.import(join(extensions, "approval-mode.ts"));
+const { default: footerExtension } = await jiti.import(
+  footerEntry ?? join(extensions, "status-footer.ts"),
+);
+const {
+  default: approvalExtension,
+  ApprovalPopover,
+  APPROVAL_ENTRY,
+  approvalChoices,
+  approvalStatus,
+  currentChoice,
+} = await jiti.import(join(extensions, "approval-mode.ts"));
 const { SESSION_YOLO_KEY } = await jiti.import(join(extensions, "lib/approval-protocol.ts"));
-const { managedSessionYolo } = await jiti.import(join(root, "permission-system/managed-session-yolo.ts"));
+const { managedSessionYolo } = await jiti.import(
+  join(root, "permission-system/managed-session-yolo.ts"),
+);
 const { default: statsExtension, healthStatus } = await jiti.import(join(extensions, "stats.ts"));
 const { SessionStats } = await jiti.import(join(extensions, "lib/session-stats.ts"));
 const { WorkerStats } = await jiti.import(join(extensions, "lib/worker-stats.ts"));
 // Drive the independently loaded footer through the harness's exported shared
 // protocol. This checks their interaction, not merely equality of source text.
 const { HIDE_TRANSIENT_OVERLAYS_EVENT } = await jiti.import(
-  join(root, "harness/src/ui/overlay-request.ts"));
+  join(root, "harness/src/ui/overlay-request.ts"),
+);
 const { FOOTER_INDICATOR_CLICK_EVENT, WORKER_PRESET_INDICATOR, HEALTH_INDICATOR } = await import(
-  pathToFileURL(join(root, "lib/overlay-protocol.mjs")).href);
+  pathToFileURL(join(root, "lib/overlay-protocol.mjs")).href
+);
 // The harness joins the same column from its own bundle; so does this script.
 const { joinPopoverStack, stackedOverlayOptions } = await import(
-  pathToFileURL(join(root, "lib/popover-stack.mjs")).href);
-const { POPOVER } = await jiti.import(
-  join(root, "harness/src/ui/popover.ts"));
-const { PresetPicker } = await jiti.import(
-  join(root, "harness/src/ui/preset-picker.ts"));
+  pathToFileURL(join(root, "lib/popover-stack.mjs")).href
+);
+const { POPOVER } = await jiti.import(join(root, "harness/src/ui/popover.ts"));
+const { PresetPicker } = await jiti.import(join(root, "harness/src/ui/preset-picker.ts"));
 const { TuiAltScreen, visibleWidth } = await import(require.resolve("@earendil-works/pi-tui"));
 // Pi's package export is import-only; resolve its SDK beside the selected CLI,
 // including the installed bundled CLI layout, rather than using dev dependencies.
@@ -47,12 +58,18 @@ while (!existsSync(join(sdkRoot, "package.json"))) {
   assert.notEqual(sdkRoot, dirname(sdkRoot), "Pi package not found");
   sdkRoot = dirname(sdkRoot);
 }
-assert.equal(JSON.parse(readFileSync(join(sdkRoot, "package.json"), "utf8")).name, "@earendil-works/pi-coding-agent");
-const { SessionManager, AgentSession, createEventBus, ExtensionRunner } = await import(pathToFileURL(join(sdkRoot, "dist/index.js")));
+assert.equal(
+  JSON.parse(readFileSync(join(sdkRoot, "package.json"), "utf8")).name,
+  "@earendil-works/pi-coding-agent",
+);
+const { SessionManager, AgentSession, createEventBus, ExtensionRunner } = await import(
+  pathToFileURL(join(sdkRoot, "dist/index.js"))
+);
 const { STATS_WORKER_ATTACH } = await import(pathToFileURL(join(root, "lib/stats-protocol.mjs")));
 
 function fixture(mode = "tui", sdkDispatch = false) {
-  const handlers = new Map(), errors = [];
+  const handlers = new Map(),
+    errors = [];
   const listeners = new Map();
   const titles = [];
   const widgets = new Map();
@@ -77,9 +94,15 @@ function fixture(mode = "tui", sdkDispatch = false) {
       const list = handlers.get(event) ?? [];
       list.push(handler);
       handlers.set(event, list);
-      return () => { const index = list.indexOf(handler); if (index >= 0) list.splice(index, 1); };
+      return () => {
+        const index = list.indexOf(handler);
+        if (index >= 0) list.splice(index, 1);
+      };
     },
-    getSessionName: () => { sessionNameReads++; return name; },
+    getSessionName: () => {
+      sessionNameReads++;
+      return name;
+    },
     events: {
       on(event, handler) {
         const list = listeners.get(event) ?? new Set();
@@ -94,15 +117,29 @@ function fixture(mode = "tui", sdkDispatch = false) {
   };
   if (sdkDispatch) pi.events = createEventBus();
   return {
-    pi, ctx, titles, listeners, terminal, originalSetTitle, widgets, errors,
+    pi,
+    ctx,
+    titles,
+    listeners,
+    terminal,
+    originalSetTitle,
+    widgets,
+    errors,
     sessionNameReads: () => sessionNameReads,
-    rename: (value) => { name = value; },
+    rename: (value) => {
+      name = value;
+    },
     async emit(event, value = {}) {
-      if (sdkDispatch) return ExtensionRunner.prototype.emit.call({
-        extensions: [{ path: "ui-fixture", handlers }], createContext: () => ctx,
-        isSessionBeforeEvent: ExtensionRunner.prototype.isSessionBeforeEvent,
-        emitError: (error) => errors.push(error),
-      }, { ...value, type: event });
+      if (sdkDispatch)
+        return ExtensionRunner.prototype.emit.call(
+          {
+            extensions: [{ path: "ui-fixture", handlers }],
+            createContext: () => ctx,
+            isSessionBeforeEvent: ExtensionRunner.prototype.isSessionBeforeEvent,
+            emitError: (error) => errors.push(error),
+          },
+          { ...value, type: event },
+        );
       for (const handler of [...(handlers.get(event) ?? [])]) await handler(value, ctx);
     },
   };
@@ -146,13 +183,21 @@ test("title highlight circles the bottom and top with connected corner frames", 
   t.mock.timers.tick(33 * 4);
   assert.equal(f.titles.at(-1), "π -\u0333 abcd", "the prefix separator participates in the sweep");
   t.mock.timers.tick(33 * 10);
-  assert.equal(f.titles.at(-1), "π - abc\u0332d\u0333\u0305", "bottom sweep reaches the right corner");
+  assert.equal(
+    f.titles.at(-1),
+    "π - abc\u0332d\u0333\u0305",
+    "bottom sweep reaches the right corner",
+  );
   t.mock.timers.tick(33);
   assert.equal(f.titles.at(-1), "π - abcd\u0332\u0305", "half-cell frame bridges the right corner");
   t.mock.timers.tick(33);
   assert.equal(f.titles.at(-1), "π - abc\u0305d\u0332\u033f", "top sweep starts on the right");
   t.mock.timers.tick(33 * 14);
-  assert.equal(f.titles.at(-1), "π\u0332\u033f - abcd", "top sweep returns to π at the left corner");
+  assert.equal(
+    f.titles.at(-1),
+    "π\u0332\u033f - abcd",
+    "top sweep returns to π at the left corner",
+  );
   t.mock.timers.tick(33);
   assert.equal(f.titles.at(-1), "π\u0332\u0305 - abcd", "half-cell frame bridges the left corner");
   t.mock.timers.tick(33);
@@ -164,7 +209,15 @@ test("title highlight circles the bottom and top with connected corner frames", 
   assert.equal(f.titles.at(-1), firstFrame, "next circuit restarts at the bottom-left corner");
 });
 
-for (const label of ["a", "ab", "project", "two words", "项目配置", "abcdefghijklmnop", "long-title-".repeat(8)]) {
+for (const label of [
+  "a",
+  "ab",
+  "project",
+  "two words",
+  "项目配置",
+  "abcdefghijklmnop",
+  "long-title-".repeat(8),
+]) {
   test(`circling title preserves glyphs and width for ${JSON.stringify(label)}`, async (t) => {
     t.mock.timers.enable({ apis: ["setInterval"] });
     const f = fixture();
@@ -178,30 +231,46 @@ for (const label of ["a", "ab", "project", "two words", "项目配置", "abcdefg
     // Describe the traversal explicitly, independently of the implementation's
     // circular-distance calculation. Each glyph has a bottom and a top slot.
     const bottom = characters.map((_, index) => ({ index, single: "\u0332", double: "\u0333" }));
-    const top = characters.map((_, index) => ({ index, single: "\u0305", double: "\u033f" })).reverse();
+    const top = characters
+      .map((_, index) => ({ index, single: "\u0305", double: "\u033f" }))
+      .reverse();
     const circuit = [...bottom, ...top];
     await f.emit("agent_start");
     const firstFrame = f.titles.at(-1);
     for (let frame = 0; frame < characters.length * 4; frame += 1) {
       const title = f.titles.at(-1);
-      assert.equal(plainTitle(title), idleTitle, `full title including prefix unchanged at frame ${frame}`);
-      assert.equal(visibleWidth(title), visibleWidth(idleTitle), `width unchanged at frame ${frame}`);
+      assert.equal(
+        plainTitle(title),
+        idleTitle,
+        `full title including prefix unchanged at frame ${frame}`,
+      );
+      assert.equal(
+        visibleWidth(title),
+        visibleWidth(idleTitle),
+        `width unchanged at frame ${frame}`,
+      );
       assert(!/\s[\u0305\u0332\u0333\u033f]/u.test(title), "spaces are not decorated");
       const position = Math.floor(frame / 2);
       const offsets = frame % 2 === 0 ? [-1, 0, 1] : [0, 1];
-      const activeSlots = new Set(offsets.map((offset) =>
-        (position + offset + circuit.length) % circuit.length));
+      const activeSlots = new Set(
+        offsets.map((offset) => (position + offset + circuit.length) % circuit.length),
+      );
       const expectedMarks = characters.map(() => []);
       for (const slot of activeSlots) {
         const { index, single, double } = circuit[slot];
         if (/\s/u.test(characters[index])) continue;
         expectedMarks[index].push(frame % 2 === 0 && slot === position ? double : single);
       }
-      const cells = [...title.matchAll(/([^\u0305\u0332\u0333\u033f])([\u0305\u0332\u0333\u033f]*)/gu)];
+      const cells = [
+        ...title.matchAll(/([^\u0305\u0332\u0333\u033f])([\u0305\u0332\u0333\u033f]*)/gu),
+      ];
       assert.equal(cells.length, characters.length);
       for (let index = 0; index < characters.length; index += 1) {
-        assert.deepEqual([...cells[index][2]].sort(), expectedMarks[index].sort(),
-          `exact center and neighbor marks at frame ${frame}, glyph ${index}`);
+        assert.deepEqual(
+          [...cells[index][2]].sort(),
+          expectedMarks[index].sort(),
+          `exact center and neighbor marks at frame ${frame}, glyph ${index}`,
+        );
       }
       t.mock.timers.tick(33);
     }
@@ -249,7 +318,11 @@ test("title keeps π while working and replaces it with ! during approval", asyn
   assert.equal(f.titles.at(-1), "! - 新任务");
   f.pi.events.emit("permissions:decision", { requestId: "b" });
   t.mock.timers.tick(33 * 18);
-  assert.match(f.titles.at(-1), /[\u0305\u033f]/, "working title resumes its upper sweep after approval");
+  assert.match(
+    f.titles.at(-1),
+    /[\u0305\u033f]/,
+    "working title resumes its upper sweep after approval",
+  );
   await f.emit("agent_settled");
   assert.equal(f.titles.at(-1), "✓ - 新任务");
   const settledCount = f.titles.length;
@@ -276,7 +349,11 @@ for (const sdkDispatch of [false, true]) {
     const writes = f.titles.length;
     await f.emit("agent_settled");
     t.mock.timers.tick(10_000);
-    assert.equal(f.titles.length, writes, "settled title is static and duplicate events are harmless");
+    assert.equal(
+      f.titles.length,
+      writes,
+      "settled title is static and duplicate events are harmless",
+    );
     f.terminal.setTitle("core rewrite");
     assert.equal(f.titles.at(-1), "✓ - project", "core cannot erase the marker");
     f.rename("a long completed task 项目配置");
@@ -286,18 +363,30 @@ for (const sdkDispatch of [false, true]) {
       f.pi.events.emit("permissions:ui_prompt", { requestId: channel });
       assert.equal(f.titles.at(-1), "! - a long completed task 项目配置");
       f.pi.events.emit(channel, { requestId: channel });
-      assert.equal(f.titles.at(-1), "✓ - a long completed task 项目配置", "approval restores the settled marker");
+      assert.equal(
+        f.titles.at(-1),
+        "✓ - a long completed task 项目配置",
+        "approval restores the settled marker",
+      );
     }
     await f.emit("agent_start");
     assert.equal(plainTitle(f.titles.at(-1)), "π - a long completed task 项目配置");
     assert.match(f.titles.at(-1), TITLE_MARKS, "the next run restarts animation");
     await f.emit("agent_settled");
     await f.emit("session_start");
-    assert.equal(f.titles.at(-1), "π - a long completed task 项目配置", "a new session clears settlement");
+    assert.equal(
+      f.titles.at(-1),
+      "π - a long completed task 项目配置",
+      "a new session clears settlement",
+    );
     await f.emit("agent_start");
     await f.emit("agent_settled");
     await f.emit("session_shutdown");
-    assert.equal(f.titles.at(-1), "π - a long completed task 项目配置", "shutdown clears the managed marker");
+    assert.equal(
+      f.titles.at(-1),
+      "π - a long completed task 项目配置",
+      "shutdown clears the managed marker",
+    );
     assert.equal(f.terminal.setTitle, f.originalSetTitle);
     assert.deepEqual(f.errors, []);
   });
@@ -335,14 +424,22 @@ for (const running of [false, true]) {
     f.pi.events.emit("permissions:ui_prompt", { requestId: "expired" });
     assert.equal(f.titles.at(-1), "! - project");
     // Upstream's fail-closed exception boundary mints a different request ID.
-    f.pi.events.emit("permissions:decision", { requestId: "gate-error", resolution: "gate_error", result: "deny" });
+    f.pi.events.emit("permissions:decision", {
+      requestId: "gate-error",
+      resolution: "gate_error",
+      result: "deny",
+    });
     assert.equal(f.titles.at(-1), "! - project");
     f.pi.events.emit("managed-permissions:ui_prompt_end:v1", { requestId: "expired" });
     assert.equal(plainTitle(f.titles.at(-1)), "π - project");
     t.mock.timers.tick(33 * 8);
     assert.equal(TITLE_MARKS.test(f.titles.at(-1)), running, "only actual work resumes animation");
     f.terminal.setTitle("core rewrite");
-    assert.equal(plainTitle(f.titles.at(-1)), "π - project", "core writes cannot resurrect the expired marker");
+    assert.equal(
+      plainTitle(f.titles.at(-1)),
+      "π - project",
+      "core writes cannot resurrect the expired marker",
+    );
   });
 }
 
@@ -353,19 +450,37 @@ test("ending one approval never clears another, including a worker ask after par
   await f.emit("session_start");
   await f.emit("agent_start");
   f.pi.events.emit("permissions:ui_prompt", { requestId: "local" });
-  f.pi.events.emit("permissions:ui_prompt", { requestId: "worker", forwarding: { requesterSessionId: "child" } });
+  f.pi.events.emit("permissions:ui_prompt", {
+    requestId: "worker",
+    forwarding: { requesterSessionId: "child" },
+  });
   await f.emit("agent_settled");
   await f.emit("ui_prompt_end", { kind: "custom" });
-  for (const value of [null, undefined, {}, { requestId: "" }, { requestId: 7 }, { requestId: "unrelated" }]) {
+  for (const value of [
+    null,
+    undefined,
+    {},
+    { requestId: "" },
+    { requestId: 7 },
+    { requestId: "unrelated" },
+  ]) {
     f.pi.events.emit("managed-permissions:ui_prompt_end:v1", value);
   }
   assert.equal(f.titles.at(-1), "! - project");
   f.pi.events.emit("managed-permissions:ui_prompt_end:v1", { requestId: "local" });
   f.pi.events.emit("managed-permissions:ui_prompt_end:v1", { requestId: "local" });
   f.pi.events.emit("permissions:decision", { requestId: "local" });
-  assert.equal(f.titles.at(-1), "! - project", "late/duplicate local events leave the worker ask intact");
+  assert.equal(
+    f.titles.at(-1),
+    "! - project",
+    "late/duplicate local events leave the worker ask intact",
+  );
   f.pi.events.emit("managed-permissions:ui_prompt_end:v1", { requestId: "worker" });
-  assert.equal(f.titles.at(-1), "✓ - project", "completion appears only after the final pending approval ends");
+  assert.equal(
+    f.titles.at(-1),
+    "✓ - project",
+    "completion appears only after the final pending approval ends",
+  );
   const writes = f.titles.length;
   f.pi.events.emit("permissions:decision", { requestId: "worker" });
   assert.equal(f.titles.length, writes, "the eventual decision is an idempotent fallback");
@@ -381,7 +496,11 @@ test("title sanitizes labels and releases timers/listeners at shutdown", async (
   await f.emit("agent_start");
   t.mock.timers.tick(330);
   f.pi.events.emit("permissions:ui_prompt", { requestId: "long-title" });
-  assert.equal(f.titles.at(-1), "! - abcdefghijklmnop 项目配置", "approval also preserves the full label");
+  assert.equal(
+    f.titles.at(-1),
+    "! - abcdefghijklmnop 项目配置",
+    "approval also preserves the full label",
+  );
   await f.emit("session_shutdown");
   assert.equal(f.titles.at(-1), "π - abcdefghijklmnop 项目配置");
   const count = f.titles.length;
@@ -416,16 +535,26 @@ const FOOTER_COLUMNS = 300;
 
 function usage(input, output, cacheRead, cacheWrite, cost) {
   return {
-    input, output, cacheRead, cacheWrite,
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
     totalTokens: input + output + cacheRead + cacheWrite,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
   };
 }
 
 /** Every payer the overlay listed, in the order it listed them. */
-const spendKeys = (lines) => lines.slice(1, -1)
-  .map((line) => line.replace(/^\s*│ ?/, "").split(/\s{2,}/)[0].trim())
-  .filter((key) => key && !/^[\u2500-\u257f]+$/.test(key));
+const spendKeys = (lines) =>
+  lines
+    .slice(1, -1)
+    .map((line) =>
+      line
+        .replace(/^\s*│ ?/, "")
+        .split(/\s{2,}/)[0]
+        .trim(),
+    )
+    .filter((key) => key && !/^[\u2500-\u257f]+$/.test(key));
 
 /** The × closes every popover from the right end of its top edge. */
 const CLOSE_TAIL = ` ${POPOVER.close} ${POPOVER.h}${POPOVER.tr}`;
@@ -434,12 +563,18 @@ const closeColumn = (top) => stripVTControlCharacters(top).indexOf(POPOVER.close
 const nextTick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 /** Real footer and SDK overlay compositor; no terminal I/O or scheduled paints. */
-async function mountFooter({ mode = "regular", entries = [], sessionManager, statuses = new Map(), theme,
-  renderRoot = () => [] } = {}) {
+async function mountFooter({
+  mode = "regular",
+  entries = [],
+  sessionManager,
+  statuses = new Map(),
+  theme,
+  renderRoot = () => [],
+} = {}) {
   const f = fixture();
   const overlays = [];
   const inputHandlers = new Set();
-  const originalRender = width => renderRoot(width, footer);
+  const originalRender = (width) => renderRoot(width, footer);
   const terminal = { rows: FOOTER_ROWS, columns: FOOTER_COLUMNS, hideCursor() {} };
   const compositor = new TuiAltScreen(terminal, false, undefined, {});
   compositor.requestRender = () => {};
@@ -451,13 +586,25 @@ async function mountFooter({ mode = "regular", entries = [], sessionManager, sta
     terminal,
     showOverlay(component, options) {
       const entry = { component, options, hidden: false, lines: [], handle: undefined };
-      const handle = compositor.showOverlay({ ...component, render(width) {
-        entry.lines = component.render(width);
-        return entry.lines;
-      } }, options);
+      const handle = compositor.showOverlay(
+        {
+          ...component,
+          render(width) {
+            entry.lines = component.render(width);
+            return entry.lines;
+          },
+        },
+        options,
+      );
       entry.handle = handle;
       overlays.push(entry);
-      return { hide: () => { entry.hidden = true; handle.hide(); }, getBounds: () => handle.getBounds() };
+      return {
+        hide: () => {
+          entry.hidden = true;
+          handle.hide();
+        },
+        getBounds: () => handle.getBounds(),
+      };
     },
   };
   theme ??= { fg: (_color, text) => text, bold: (text) => text };
@@ -466,7 +613,9 @@ async function mountFooter({ mode = "regular", entries = [], sessionManager, sta
     footer = factory(tui, theme, {
       getGitBranch: () => "main",
       getExtensionStatuses: () => statuses,
-      onBranchChange: () => () => { unsubscribed = true; },
+      onBranchChange: () => () => {
+        unsubscribed = true;
+      },
     });
   };
   f.ctx.ui.onTerminalInput = (handler) => {
@@ -487,26 +636,65 @@ async function mountFooter({ mode = "regular", entries = [], sessionManager, sta
     return compositor.compositeOverlays(base, terminal.columns, terminal.rows);
   };
   return {
-    f, footer, tui, overlays, visible, paintOverlay,
+    f,
+    footer,
+    tui,
+    overlays,
+    visible,
+    paintOverlay,
     bounds: () => visible().at(-1).handle.getBounds(),
     originalRender,
     line: (width = FOOTER_COLUMNS) => footer.render(width)[0],
     wasUnsubscribed: () => unsubscribed,
     inputHandlers,
-    feed: (data) => { for (const handler of inputHandlers) handler(data); },
+    feed: (data) => {
+      for (const handler of inputHandlers) handler(data);
+    },
     // The footer is the last row; a pointer over it arrives with local coordinates.
-    hover: (x = 0) => footer.handleMouse({
-      type: "move", button: "none", x, y: 0, screenX: x, screenY: terminal.rows - 1,
-      width: terminal.columns, height: FOOTER_HEIGHT, shift: false, alt: false, ctrl: false,
-    }),
-    clickFooter: (x = 0) => footer.handleMouse({
-      type: "click", button: "left", x, y: 0, screenX: x, screenY: terminal.rows - 1,
-      width: terminal.columns, height: FOOTER_HEIGHT, shift: false, alt: false, ctrl: false,
-    }),
-    clickOverlay: (x = 1, y = 1, button = "left") => visible().at(-1).component.handleMouse({
-      type: "click", button, x, y, screenX: x, screenY: y,
-      width: visible().at(-1).options.width, height: 10, shift: false, alt: false, ctrl: false,
-    }),
+    hover: (x = 0) =>
+      footer.handleMouse({
+        type: "move",
+        button: "none",
+        x,
+        y: 0,
+        screenX: x,
+        screenY: terminal.rows - 1,
+        width: terminal.columns,
+        height: FOOTER_HEIGHT,
+        shift: false,
+        alt: false,
+        ctrl: false,
+      }),
+    clickFooter: (x = 0) =>
+      footer.handleMouse({
+        type: "click",
+        button: "left",
+        x,
+        y: 0,
+        screenX: x,
+        screenY: terminal.rows - 1,
+        width: terminal.columns,
+        height: FOOTER_HEIGHT,
+        shift: false,
+        alt: false,
+        ctrl: false,
+      }),
+    clickOverlay: (x = 1, y = 1, button = "left") =>
+      visible()
+        .at(-1)
+        .component.handleMouse({
+          type: "click",
+          button,
+          x,
+          y,
+          screenX: x,
+          screenY: y,
+          width: visible().at(-1).options.width,
+          height: 10,
+          shift: false,
+          alt: false,
+          ctrl: false,
+        }),
     overlayLines: (width) => {
       if (width !== undefined) return visible().at(-1).component.render(width);
       paintOverlay();
@@ -515,21 +703,27 @@ async function mountFooter({ mode = "regular", entries = [], sessionManager, sta
   };
 }
 
-for (const mode of ["regular", "fullscreen"]) test(`footer input parentheses show only the cache-hit rate (${mode})`, async () => {
-  const entry = { type: "message", message: { role: "assistant", provider: "fixture", model: "cache-model" } };
-  const mounted = await mountFooter({ mode, entries: [entry] });
-  try {
-    for (const [reported, expected] of [
-      [usage(500, 20, 9000, 500, 0.25), "10k (90.0%)"],
-      [usage(0, 20, 0, 1100000, 0.25), "1.1M (0.0%)"],
-      [usage(0, 20, 0, 0, 0.25), "0 (?)"],
-    ]) {
-      entry.message.usage = reported;
-      const line = mounted.line();
-      assert(line.includes(`↑${expected} ↓20 $0.250`), line);
+for (const mode of ["regular", "fullscreen"])
+  test(`footer input parentheses show only the cache-hit rate (${mode})`, async () => {
+    const entry = {
+      type: "message",
+      message: { role: "assistant", provider: "fixture", model: "cache-model" },
+    };
+    const mounted = await mountFooter({ mode, entries: [entry] });
+    try {
+      for (const [reported, expected] of [
+        [usage(500, 20, 9000, 500, 0.25), "10k (90.0%)"],
+        [usage(0, 20, 0, 1100000, 0.25), "1.1M (0.0%)"],
+        [usage(0, 20, 0, 0, 0.25), "0 (?)"],
+      ]) {
+        entry.message.usage = reported;
+        const line = mounted.line();
+        assert(line.includes(`↑${expected} ↓20 $0.250`), line);
+      }
+    } finally {
+      mounted.footer.dispose();
     }
-  } finally { mounted.footer.dispose(); }
-});
+  });
 
 test("footer hides subagent indicators but retains unrelated status and metrics", async () => {
   const mounted = await mountFooter({
@@ -550,7 +744,11 @@ test("footer hides subagent indicators but retains unrelated status and metrics"
     for (const width of [1, 20, 80, 300]) {
       assert(visibleWidth(footer.render(width)[0]) <= width);
     }
-    assert.equal(f.listeners.get("subagents:created"), undefined, "footer does not track subagent activity");
+    assert.equal(
+      f.listeners.get("subagents:created"),
+      undefined,
+      "footer does not track subagent activity",
+    );
     assert.equal(f.listeners.get(HIDE_TRANSIENT_OVERLAYS_EVENT)?.size, 1);
   } finally {
     footer.dispose();
@@ -563,12 +761,37 @@ test("footer hides subagent indicators but retains unrelated status and metrics"
 
 // Four payers in entry order, so the overlay has to do the cost ordering itself.
 const spendEntries = [
-  { type: "message", message: { role: "assistant", provider: "openai-codex", model: "fixture-strong-model", usage: usage(1000, 200, 5000, 100, 0.25) } },
-  { type: "message", message: { role: "assistant", provider: "openai-codex", model: "auto", responseModel: "gpt-5.6-luna", usage: usage(10, 20, 0, 0, 0.01) } },
+  {
+    type: "message",
+    message: {
+      role: "assistant",
+      provider: "openai-codex",
+      model: "fixture-strong-model",
+      usage: usage(1000, 200, 5000, 100, 0.25),
+    },
+  },
+  {
+    type: "message",
+    message: {
+      role: "assistant",
+      provider: "openai-codex",
+      model: "auto",
+      responseModel: "gpt-5.6-luna",
+      usage: usage(10, 20, 0, 0, 0.01),
+    },
+  },
   { type: "message", message: { role: "toolResult", usage: usage(50, 60, 0, 0, 0.5) } },
   { type: "compaction", usage: usage(7, 8, 0, 0, 0.02) },
   // Output with no prompt at all: a hit rate of nothing is unknown, not zero.
-  { type: "message", message: { role: "assistant", provider: "ollama", model: "qwen3.8:27b", usage: usage(0, 500, 0, 0, 0) } },
+  {
+    type: "message",
+    message: {
+      role: "assistant",
+      provider: "ollama",
+      model: "qwen3.8:27b",
+      usage: usage(0, 500, 0, 0, 0),
+    },
+  },
 ];
 
 test("clicking the footer breaks tokens and cost down by model id without providers", async () => {
@@ -584,11 +807,24 @@ test("clicking the footer breaks tokens and cost down by model id without provid
     // Ordered by cost, so the answer to "where did the money go" is the top row.
     // Every payer, in full: filtering to the expected set would let the overlay
     // grow a bogus row, or double one, without the gate noticing.
-    assert.deepEqual(spendKeys(lines), ["model", "tools", "fixture-strong-model", "main · compact/summaries",
-      "gpt-5.6-luna", "qwen3.8:27b", "total"]);
+    assert.deepEqual(spendKeys(lines), [
+      "model",
+      "tools",
+      "fixture-strong-model",
+      "main · compact/summaries",
+      "gpt-5.6-luna",
+      "qwen3.8:27b",
+      "total",
+    ]);
     assert(!lines.some((line) => /openai-codex|ollama/.test(line)));
-    assert(stripVTControlCharacters(lines[0]).endsWith(CLOSE_TAIL), "the × replaces the old Dismiss row");
-    assert(!lines[1].includes(" W "), "cache-write is already included in prompt tokens and need not be an all-zero column");
+    assert(
+      stripVTControlCharacters(lines[0]).endsWith(CLOSE_TAIL),
+      "the × replaces the old Dismiss row",
+    );
+    assert(
+      !lines[1].includes(" W "),
+      "cache-write is already included in prompt tokens and need not be an all-zero column",
+    );
     // `responseModel` is what answered; the `auto` alias never appears.
     assert(!lines.some((line) => /\bauto\b/.test(line)));
     const total = lines.find((line) => line.includes("total"));
@@ -603,13 +839,20 @@ test("clicking the footer breaks tokens and cost down by model id without provid
     assert(astra.includes("82.0%"), astra);
     const local = lines.find((line) => line.includes("qwen3.8:27b"));
     assert(local.includes("?"), local);
-    assert(lines.some((line) => line.includes("6.1k")), "cached prompt tokens are rolled up");
+    assert(
+      lines.some((line) => line.includes("6.1k")),
+      "cached prompt tokens are rolled up",
+    );
     // A pinned panel is not a dialog: it must not take the keyboard, and it
     // must leave the footer row reachable for the next click.
     const options = mounted.visible().at(-1).options;
     assert.equal(options.nonCapturing, true, "a capturing overlay would steal the editor");
     assert.equal(options.anchor, "bottom-right");
-    assert.equal(options.margin.bottom, FOOTER_HEIGHT, "a smaller margin would sit on the footer itself");
+    assert.equal(
+      options.margin.bottom,
+      FOOTER_HEIGHT,
+      "a smaller margin would sit on the footer itself",
+    );
 
     // An overlay wider than the terminal, or one row tall, must still be a box.
     for (const width of [1, 12, 20, 40, 80, 300]) {
@@ -620,68 +863,151 @@ test("clicking the footer breaks tokens and cost down by model id without provid
     // Clipping to a sliver is not the same as still being a box, so check the
     // frame at a width that has room for one.
     const framed = mounted.overlayLines(60);
-    assert(framed[0].startsWith(POPOVER.tl + POPOVER.h) && framed[0].includes(POPOVER.tr), framed[0]);
+    assert(
+      framed[0].startsWith(POPOVER.tl + POPOVER.h) && framed[0].includes(POPOVER.tr),
+      framed[0],
+    );
     // Body rows and the rule that separates the total both carry their verticals.
     for (const line of framed.slice(1, -1)) {
       assert(line.startsWith(POPOVER.v) || line.startsWith(POPOVER.ml), line);
       assert(line.trimEnd().endsWith(POPOVER.v) || line.trimEnd().endsWith(POPOVER.mr), line);
     }
-    assert(framed.at(-1).startsWith(POPOVER.bl) && framed.at(-1).endsWith(POPOVER.br), framed.at(-1));
+    assert(
+      framed.at(-1).startsWith(POPOVER.bl) && framed.at(-1).endsWith(POPOVER.br),
+      framed.at(-1),
+    );
   } finally {
     footer.dispose();
   }
 });
 
 test("native SDK UsageEntries, including unknown kinds, match session totals without double billing", async (t) => {
-  t.mock.method(globalThis, "fetch", () => { assert.fail("footer accounting must not call the network"); });
+  t.mock.method(globalThis, "fetch", () => {
+    assert.fail("footer accounting must not call the network");
+  });
   const manager = SessionManager.inMemory("/fixture/project");
-  const first = manager.appendMessage({ role: "user", content: "accounting fixture", timestamp: 0 });
-  manager.appendMessage({ role: "assistant", provider: "p", model: "alias", responseModel: "shared-model",
-    api: "fixture", content: [], stopReason: "stop", timestamp: 1, usage: usage(100, 20, 30, 40, 1) });
-  manager.appendMessage({ role: "toolResult", toolCallId: "fixture", toolName: "bash", content: [], isError: false,
-    timestamp: 2, usage: { ...usage(50, 6, 7, 8, 2), harnessModels: [workerRow("p/shared-model", 25, 1)] } });
-  manager.appendCompaction("fixture summary", first, 100, undefined, false, usage(9, 10, 11, 12, 0.25));
-  manager.branchWithSummary(manager.getLeafId(), "fixture branch summary", undefined, false, usage(13, 14, 15, 16, 0.5));
+  const first = manager.appendMessage({
+    role: "user",
+    content: "accounting fixture",
+    timestamp: 0,
+  });
+  manager.appendMessage({
+    role: "assistant",
+    provider: "p",
+    model: "alias",
+    responseModel: "shared-model",
+    api: "fixture",
+    content: [],
+    stopReason: "stop",
+    timestamp: 1,
+    usage: usage(100, 20, 30, 40, 1),
+  });
+  manager.appendMessage({
+    role: "toolResult",
+    toolCallId: "fixture",
+    toolName: "bash",
+    content: [],
+    isError: false,
+    timestamp: 2,
+    usage: { ...usage(50, 6, 7, 8, 2), harnessModels: [workerRow("p/shared-model", 25, 1)] },
+  });
+  manager.appendCompaction(
+    "fixture summary",
+    first,
+    100,
+    undefined,
+    false,
+    usage(9, 10, 11, 12, 0.25),
+  );
+  manager.branchWithSummary(
+    manager.getLeafId(),
+    "fixture branch summary",
+    undefined,
+    false,
+    usage(13, 14, 15, 16, 0.5),
+  );
   manager.appendUsage("cache_warm", "p", "shared-model", usage(17, 18, 19, 20, 0.125));
   manager.appendUsage("cache_warm", "q", "shared-model", usage(21, 22, 23, 24, 0.75));
   manager.appendUsage("future-kind", "p", "warm-only", usage(0, 0, 5, 0, 0));
   const mounted = await mountFooter({ mode: "fullscreen", sessionManager: manager });
   try {
-    mounted.clickFooter(); mounted.overlayLines();
+    mounted.clickFooter();
+    mounted.overlayLines();
     // A new kind arrives while the popover stays open. It is ordinary spend,
     // not a reason to drop the entry or add a separate same-model row.
     manager.appendUsage("unknown-operation", "p", "shared-model", usage(1, 2, 3, 4, 0.0625));
     const before = structuredClone(manager.getEntries());
-    const native = AgentSession.prototype.getSessionStats.call({ sessionManager: manager,
-      sessionId: manager.getSessionId(), getContextUsage: () => undefined });
+    const native = AgentSession.prototype.getSessionStats.call({
+      sessionManager: manager,
+      sessionId: manager.getSessionId(),
+      getContextUsage: () => undefined,
+    });
     assert.equal(native.cost, 4.6875);
-    for (const [key, value] of Object.entries({ input: 211, output: 92, cacheRead: 113, cacheWrite: 124 })) {
+    for (const [key, value] of Object.entries({
+      input: 211,
+      output: 92,
+      cacheRead: 113,
+      cacheWrite: 124,
+    })) {
       assert.equal(native.tokens[key], value);
     }
     const prompt = native.tokens.input + native.tokens.cacheRead + native.tokens.cacheWrite;
-    const line = mounted.line(), lines = mounted.overlayLines();
+    const line = mounted.line(),
+      lines = mounted.overlayLines();
     // Cache reads and writes still count toward prompt totals and the hit-rate
     // denominator; only the hit rate is shown inside the footer parentheses.
     assert(line.includes(`↑${prompt} (25.2%)`), line);
     assert(line.includes(`↓${native.tokens.output}`), line);
     assert(line.includes(`$${native.cost.toFixed(3)}`), line);
-    assert.deepEqual(spendKeys(lines), ["model", "shared-model", "tools", "main · compact/summaries", "shared-model", "warm-only", "total"]);
-    const cells = (line) => line.replace(/^│\s*/, "").replace(/\s*│$/, "").split(/\s{2,}/);
-    assert.deepEqual(lines.filter((line) => line.includes("shared-model")).map(cells), [
-      ["shared-model", "259", "52", "20.1%", "40", "2.188"],
-      ["shared-model", "68", "23", "33.8%", "22", "0.750"],
-    ], "same provider/model merges assistant + worker + warming; other providers stay separate");
-    assert.deepEqual(cells(lines.find((line) => line.includes("total"))), ["total", "448", "113", "25.2%", "92", "4.688"]);
+    assert.deepEqual(spendKeys(lines), [
+      "model",
+      "shared-model",
+      "tools",
+      "main · compact/summaries",
+      "shared-model",
+      "warm-only",
+      "total",
+    ]);
+    const cells = (line) =>
+      line
+        .replace(/^│\s*/, "")
+        .replace(/\s*│$/, "")
+        .split(/\s{2,}/);
+    assert.deepEqual(
+      lines.filter((line) => line.includes("shared-model")).map(cells),
+      [
+        ["shared-model", "259", "52", "20.1%", "40", "2.188"],
+        ["shared-model", "68", "23", "33.8%", "22", "0.750"],
+      ],
+      "same provider/model merges assistant + worker + warming; other providers stay separate",
+    );
+    assert.deepEqual(cells(lines.find((line) => line.includes("total"))), [
+      "total",
+      "448",
+      "113",
+      "25.2%",
+      "92",
+      "4.688",
+    ]);
     assert.equal(mounted.visible().length, 1);
     assert.deepEqual(manager.getEntries(), before, "footer only reads the SDK accounting source");
-  } finally { mounted.footer.dispose(); }
+  } finally {
+    mounted.footer.dispose();
+  }
 });
 
 test("the usage overlay uses the same popover chrome as the worker picker", async () => {
   const colors = [];
   const mounted = await mountFooter({
-    mode: "fullscreen", entries: spendEntries,
-    theme: { fg: (color, text) => { colors.push(color); return text; }, bold: (text) => text },
+    mode: "fullscreen",
+    entries: spendEntries,
+    theme: {
+      fg: (color, text) => {
+        colors.push(color);
+        return text;
+      },
+      bold: (text) => text,
+    },
   });
   try {
     mounted.clickFooter();
@@ -691,30 +1017,55 @@ test("the usage overlay uses the same popover chrome as the worker picker", asyn
     assert.ok(colors.includes("accent"), "the title is accent like the picker label");
     assert.ok(!colors.includes("border"), "the old generic border color is not used");
     assert.equal(colors[0], "borderAccent");
-  } finally { mounted.footer.dispose(); }
+  } finally {
+    mounted.footer.dispose();
+  }
 });
 
 test("footer and usage counts carry rounded thousands into millions", async () => {
-  const entry = { type: "message", message: { role: "assistant", provider: "fixture", model: "boundary-model",
-    usage: usage(999499, 0, 0, 0, 1) } };
+  const entry = {
+    type: "message",
+    message: {
+      role: "assistant",
+      provider: "fixture",
+      model: "boundary-model",
+      usage: usage(999499, 0, 0, 0, 1),
+    },
+  };
   const mounted = await mountFooter({ mode: "fullscreen", entries: [entry] });
   try {
     mounted.clickFooter();
-    for (const [tokens, expected] of [[1000, "1.0k"], [999499, "999k"], [999500, "1.0M"],
-      [999949, "1.0M"], [999950, "1.0M"], [999999, "1.0M"], [1000000, "1.0M"]]) {
+    for (const [tokens, expected] of [
+      [1000, "1.0k"],
+      [999499, "999k"],
+      [999500, "1.0M"],
+      [999949, "1.0M"],
+      [999950, "1.0M"],
+      [999999, "1.0M"],
+      [1000000, "1.0M"],
+    ]) {
       entry.message.usage = usage(tokens, 0, 0, 0, 1);
-      mounted.f.ctx.getContextUsage = () => ({ tokens, contextWindow: 2000000, percent: tokens / 20000 });
+      mounted.f.ctx.getContextUsage = () => ({
+        tokens,
+        contextWindow: 2000000,
+        percent: tokens / 20000,
+      });
       assert(mounted.line().includes(`${expected}/2.0M`));
       const lines = mounted.overlayLines(60);
       assert(lines.some((line) => line.includes(expected)));
       assert(!lines.some((line) => line.includes("1000k")));
     }
-  } finally { mounted.footer.dispose(); }
+  } finally {
+    mounted.footer.dispose();
+  }
 });
 
 test("the footer remains one physical row with long labels, paths and statuses", async () => {
   const breaks = /[\t\n\v\f\r\u0085\u2028\u2029]/;
-  const mounted = await mountFooter({ mode: "fullscreen", statuses: new Map([["other", "status\n\t\u2028".repeat(100)]]) });
+  const mounted = await mountFooter({
+    mode: "fullscreen",
+    statuses: new Map([["other", "status\n\t\u2028".repeat(100)]]),
+  });
   try {
     mounted.f.ctx.cwd = "/fixture/长路径\n".repeat(80);
     mounted.f.ctx.model.id = "long-model\r\u2029".repeat(80);
@@ -724,39 +1075,82 @@ test("the footer remains one physical row with long labels, paths and statuses",
       assert.doesNotMatch(lines[0], breaks);
       assert(visibleWidth(lines[0]) <= width);
     }
-  } finally { mounted.footer.dispose(); }
+  } finally {
+    mounted.footer.dispose();
+  }
 });
 
 test("footer model labels preserve the selected model id without providers", async () => {
   const mounted = await mountFooter();
   try {
-    for (const id of ["gpt-5.6-sol", "fixture-strong-model", "gpt-5.6-terra", "gpt-5.6-luna",
-      "qwen3.8:27b", "org/custom-model"]) {
+    for (const id of [
+      "gpt-5.6-sol",
+      "fixture-strong-model",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "qwen3.8:27b",
+      "org/custom-model",
+    ]) {
       mounted.f.ctx.model = { id, provider: "hidden-provider", reasoning: true };
       assert(mounted.line().includes(`${id} (high)`));
       assert(!mounted.line().includes("hidden-provider"));
       assert.equal(mounted.f.ctx.model.id, id);
     }
-  } finally { mounted.footer.dispose(); }
+  } finally {
+    mounted.footer.dispose();
+  }
 });
 
 test("hiding providers does not merge their spend or strip model namespaces", async () => {
   const entries = [
-    { type: "message", message: { role: "assistant", provider: "p", model: "gpt-5.6-sol", usage: usage(100, 0, 0, 0, 1) } },
-    { type: "message", message: { role: "assistant", provider: "q", model: "gpt-5.6-sol", usage: usage(200, 0, 0, 0, 2) } },
-    { type: "message", message: { role: "assistant", provider: "router", model: "org/custom-model", usage: usage(300, 0, 0, 0, 3) } },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        provider: "p",
+        model: "gpt-5.6-sol",
+        usage: usage(100, 0, 0, 0, 1),
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        provider: "q",
+        model: "gpt-5.6-sol",
+        usage: usage(200, 0, 0, 0, 2),
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        provider: "router",
+        model: "org/custom-model",
+        usage: usage(300, 0, 0, 0, 3),
+      },
+    },
   ];
   const before = structuredClone(entries);
   const mounted = await mountFooter({ mode: "fullscreen", entries });
   try {
     mounted.clickFooter();
     const lines = mounted.overlayLines();
-    assert.deepEqual(spendKeys(lines), ["model", "org/custom-model", "gpt-5.6-sol", "gpt-5.6-sol", "total"]);
+    assert.deepEqual(spendKeys(lines), [
+      "model",
+      "org/custom-model",
+      "gpt-5.6-sol",
+      "gpt-5.6-sol",
+      "total",
+    ]);
     const sol = lines.filter((line) => line.includes("gpt-5.6-sol"));
-    assert(sol[0].includes("2.000")); assert(sol[1].includes("1.000"));
+    assert(sol[0].includes("2.000"));
+    assert(sol[1].includes("1.000"));
     assert(mounted.line().includes("$6.000"));
     assert.deepEqual(entries, before);
-  } finally { mounted.footer.dispose(); }
+  } finally {
+    mounted.footer.dispose();
+  }
 });
 
 test("the pinned panel stays live and fits its × and chrome on empty and crowded screens", async () => {
@@ -766,24 +1160,49 @@ test("the pinned panel stays live and fits its × and chrome on empty and crowde
     mounted.clickFooter();
     assert(mounted.overlayLines().some((line) => line.includes("no usage recorded")));
     assert(stripVTControlCharacters(mounted.overlayLines()[0]).endsWith(CLOSE_TAIL));
-    for (let i = 0; i < 40; i++) entries.push({ type: "message", message: { role: "assistant",
-      provider: "hidden-provider", model: `model-${i}`, usage: usage(100, 0, 0, 0, 1) } });
+    for (let i = 0; i < 40; i++)
+      entries.push({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "hidden-provider",
+          model: `model-${i}`,
+          usage: usage(100, 0, 0, 0, 1),
+        },
+      });
     for (const rows of [12, 24, 50]) {
       mounted.tui.terminal.rows = rows;
       const lines = mounted.overlayLines();
       const bounds = mounted.bounds();
-      assert.equal(bounds.row + bounds.height, rows - FOOTER_HEIGHT, "the SDK anchors above the single footer row");
+      assert.equal(
+        bounds.row + bounds.height,
+        rows - FOOTER_HEIGHT,
+        "the SDK anchors above the single footer row",
+      );
       assert.equal(bounds.col + bounds.width, mounted.tui.terminal.columns);
-      assert.equal(bounds.height, lines.length, "all chrome fits above the footer, nothing is clipped");
-      assert(lines.some((line) => line.includes("40.000")), "the total includes hidden rows");
+      assert.equal(
+        bounds.height,
+        lines.length,
+        "all chrome fits above the footer, nothing is clipped",
+      );
+      assert(
+        lines.some((line) => line.includes("40.000")),
+        "the total includes hidden rows",
+      );
       assert(stripVTControlCharacters(lines[0]).endsWith(CLOSE_TAIL));
       assert(lines.at(-1).startsWith(POPOVER.bl), "the frame still closes at the bottom");
-      assert.equal(mounted.overlays.length, 1, "usage updates and resizing do not remount the panel");
+      assert.equal(
+        mounted.overlays.length,
+        1,
+        "usage updates and resizing do not remount the panel",
+      );
     }
     const lines = mounted.overlayLines(60);
     mounted.clickOverlay(closeColumn(lines[0]), 0);
     assert.deepEqual(mounted.visible(), [], "× hit geometry follows the latest paint");
-  } finally { mounted.footer.dispose(); }
+  } finally {
+    mounted.footer.dispose();
+  }
 });
 
 test("a pinned panel follows real SDK resize layout and widens for new model usage", async () => {
@@ -799,11 +1218,14 @@ test("a pinned panel follows real SDK resize layout and widens for new model usa
     const emptyWidth = mounted.bounds().width;
     assert(emptyWidth > 20, "widening cannot retain the opening-click width");
     const model = "a-much-longer-model-identity-after-the-panel-opened";
-    entries.push({ type: "message", message: { role: "assistant", provider: "fixture", model, usage: usage(1000, 1, 0, 0, 1) } });
+    entries.push({
+      type: "message",
+      message: { role: "assistant", provider: "fixture", model, usage: usage(1000, 1, 0, 0, 1) },
+    });
     let lines = mounted.overlayLines();
     const fullWidth = mounted.bounds().width;
     assert(fullWidth > emptyWidth, "new usage changes the panel's desired width without a reopen");
-    assert(lines.some(line => line.includes(model)));
+    assert(lines.some((line) => line.includes(model)));
     for (const columns of [12, 20, 120, 300, 120]) {
       mounted.tui.terminal.columns = columns;
       const screen = mounted.paintOverlay();
@@ -811,29 +1233,51 @@ test("a pinned panel follows real SDK resize layout and widens for new model usa
       assert.equal(bounds.width, Math.min(fullWidth, columns));
       assert.equal(bounds.col + bounds.width, columns);
       assert.equal(bounds.row + bounds.height, mounted.tui.terminal.rows - FOOTER_HEIGHT);
-      assert.equal(screen.at(-1), mounted.footer.render(columns)[0], "the overlay never covers the footer");
+      assert.equal(
+        screen.at(-1),
+        mounted.footer.render(columns)[0],
+        "the overlay never covers the footer",
+      );
       assert.equal(mounted.overlays.length, 1, "layout does not remount or lose the pinned state");
     }
     lines = mounted.overlayLines();
     mounted.clickOverlay(closeColumn(lines[0]), 0);
     assert.deepEqual(mounted.visible(), [], "the × follows the last layout");
-  } finally { mounted.footer.dispose(); }
+  } finally {
+    mounted.footer.dispose();
+  }
 });
 
 test("usage preferred width shares one fresh spend read across a three-popover native frame", async () => {
   const manager = SessionManager.inMemory("/fixture/project");
-  let entryReads = 0, fullWalks = 0;
-  const mounted = await mountFooter({ mode: "fullscreen", sessionManager: {
-    getSessionId: () => manager.getSessionId(), getLeafId: () => manager.getLeafId(),
-    getEntryCount: () => manager.getEntryCount(),
-    getEntry(id) { entryReads++; return manager.getEntry(id); },
-    getEntries() { entryReads++; fullWalks++; return manager.getEntries(); },
-  } });
+  let entryReads = 0,
+    fullWalks = 0;
+  const mounted = await mountFooter({
+    mode: "fullscreen",
+    sessionManager: {
+      getSessionId: () => manager.getSessionId(),
+      getLeafId: () => manager.getLeafId(),
+      getEntryCount: () => manager.getEntryCount(),
+      getEntry(id) {
+        entryReads++;
+        return manager.getEntry(id);
+      },
+      getEntries() {
+        entryReads++;
+        fullWalks++;
+        return manager.getEntries();
+      },
+    },
+  });
   const extra = [];
   const addPanel = (preferredWidth) => {
     const member = joinPopoverStack(mounted.tui);
     const component = {
-      render(width) { const lines = Array(4).fill("p".repeat(width)); member.measure(lines.length); return lines; },
+      render(width) {
+        const lines = Array(4).fill("p".repeat(width));
+        member.measure(lines.length);
+        return lines;
+      },
       invalidate() {},
     };
     const options = stackedOverlayOptions(member, { width: preferredWidth, nonCapturing: true });
@@ -843,19 +1287,28 @@ test("usage preferred width shares one fresh spend read across a three-popover n
   try {
     mounted.clickFooter();
     const usagePanel = mounted.visible().at(-1);
-    addPanel(30); addPanel(44);
+    addPanel(30);
+    addPanel(44);
     const panels = [{ component: usagePanel.component, options: usagePanel.options }, ...extra];
     // Pi renders the root footer before compositeOverlays. One public append
     // per frame forces fresh work; its single entry read serves footer totals,
     // all three width getters and their component renders. Unchanged frames
     // must not refresh merely because layout asks for the preferred width.
-    assert.equal(fullWalks, 1, "the first layout initializes accounting with one full-session walk");
+    assert.equal(
+      fullWalks,
+      1,
+      "the first layout initializes accounting with one full-session walk",
+    );
     entryReads = 0;
     for (let frame = 0; frame < 4; frame++) {
       manager.appendCustomEntry("ui-frame-fixture", { frame });
       const before = entryReads;
       mounted.paintOverlay();
-      assert.equal(entryReads, before + 1, "one fresh entry read per changed native frame, not per panel getter");
+      assert.equal(
+        entryReads,
+        before + 1,
+        "one fresh entry read per changed native frame, not per panel getter",
+      );
       mounted.paintOverlay();
       assert.equal(entryReads, before + 1, "an unchanged native frame shares the cached spend");
       assert.equal(fullWalks, 1, "new entries are incremental, never historical rescans");
@@ -866,35 +1319,74 @@ test("usage preferred width shares one fresh spend read across a three-popover n
     // not walk the transcript again between frames.
     const beforeStreaming = entryReads;
     for (let update = 0; update < 8; update++) {
-      await mounted.f.emit("message_update", { assistantMessageEvent: { type: "text_delta", delta: "live" } });
-      for (const panel of panels) { void panel.options.width; void panel.options.maxHeight; panel.component.render(panel.options.width); }
+      await mounted.f.emit("message_update", {
+        assistantMessageEvent: { type: "text_delta", delta: "live" },
+      });
+      for (const panel of panels) {
+        void panel.options.width;
+        void panel.options.maxHeight;
+        panel.component.render(panel.options.width);
+      }
     }
     assert.equal(entryReads, beforeStreaming, "streaming probes reuse the current frame snapshot");
 
     const longModel = "model-added-after-the-last-frame-".repeat(3);
-    const message = { role: "assistant", provider: "fixture", api: "openai-responses", model: longModel,
-      content: [], stopReason: "stop", timestamp: 1, usage: usage(10, 1, 0, 0, 1) };
+    const message = {
+      role: "assistant",
+      provider: "fixture",
+      api: "openai-responses",
+      model: longModel,
+      content: [],
+      stopReason: "stop",
+      timestamp: 1,
+      usage: usage(10, 1, 0, 0, 1),
+    };
     manager.appendMessage(message);
     await mounted.f.emit("message_end", { message });
     const beforeFirstWidth = entryReads;
     const grownWidth = usagePanel.options.width;
-    assert.equal(entryReads, beforeFirstWidth + 1, "a width getter first after finalization refreshes the snapshot");
+    assert.equal(
+      entryReads,
+      beforeFirstWidth + 1,
+      "a width getter first after finalization refreshes the snapshot",
+    );
     assert(grownWidth > initialWidth, "new finalized usage widens before the panel paints");
-    assert(usagePanel.component.render(grownWidth).length > 0, "the already fresh width paints immediately");
-    assert.equal(entryReads, beforeFirstWidth + 1, "the first paint shares the width getter's work");
+    assert(
+      usagePanel.component.render(grownWidth).length > 0,
+      "the already fresh width paints immediately",
+    );
+    assert.equal(
+      entryReads,
+      beforeFirstWidth + 1,
+      "the first paint shares the width getter's work",
+    );
 
     assert.equal(fullWalks, 1, "finalized usage also avoids another full-session walk");
     assert(mounted.line().includes("$1.000"));
     manager.resetLeaf();
     await mounted.f.emit("session_tree");
-    assert.equal(usagePanel.options.width, grownWidth, "tree navigation keeps abandoned-branch spend and its model row");
-    assert.equal(entryReads, beforeFirstWidth + 1, "tree navigation does not reread unchanged session spend");
-    assert(mounted.line().includes("$1.000"), "the all-session total cannot regress with the active branch");
+    assert.equal(
+      usagePanel.options.width,
+      grownWidth,
+      "tree navigation keeps abandoned-branch spend and its model row",
+    );
+    assert.equal(
+      entryReads,
+      beforeFirstWidth + 1,
+      "tree navigation does not reread unchanged session spend",
+    );
+    assert(
+      mounted.line().includes("$1.000"),
+      "the all-session total cannot regress with the active branch",
+    );
     mounted.tui.terminal.columns = 20;
     mounted.paintOverlay();
     assert.equal(mounted.bounds().width, 20, "resize still clamps the shared live width");
   } finally {
-    for (const panel of extra.reverse()) { panel.handle.hide(); panel.member.leave(); }
+    for (const panel of extra.reverse()) {
+      panel.handle.hide();
+      panel.member.leave();
+    }
     mounted.footer.dispose();
   }
 });
@@ -906,17 +1398,35 @@ const delegated = (flat, rows) => ({
   type: "message",
   message: { role: "toolResult", toolName: "bash", usage: { ...flat, harnessModels: rows } },
 });
-const workerRow = (model, input, cost) => ({ model, input, output: 0, cacheRead: 0, cacheWrite: 0, cost });
+const workerRow = (model, input, cost) => ({
+  model,
+  input,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  cost,
+});
 
 test("a worker's spend is billed to the model that ran it, not to a tools lump", async () => {
-  const mounted = await mountFooter({ mode: "fullscreen", entries: [
-    { type: "message", message: { role: "assistant", provider: "openai-codex", model: "fixture-strong-model", usage: usage(100, 0, 0, 0, 0.5) } },
-    delegated(usage(300, 0, 0, 0, 3), [
-      workerRow("openai-codex/gpt-5.6-sol", 180, 2),
-      // Same model as the parent: "by model" means one row, not two.
-      workerRow("openai-codex/fixture-strong-model", 100, 0.75),
-    ]),
-  ] });
+  const mounted = await mountFooter({
+    mode: "fullscreen",
+    entries: [
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openai-codex",
+          model: "fixture-strong-model",
+          usage: usage(100, 0, 0, 0, 0.5),
+        },
+      },
+      delegated(usage(300, 0, 0, 0, 3), [
+        workerRow("openai-codex/gpt-5.6-sol", 180, 2),
+        // Same model as the parent: "by model" means one row, not two.
+        workerRow("openai-codex/fixture-strong-model", 100, 0.75),
+      ]),
+    ],
+  });
   const { footer } = mounted;
   try {
     mounted.clickFooter();
@@ -938,12 +1448,15 @@ test("a worker's spend is billed to the model that ran it, not to a tools lump",
 });
 
 test("main and worker compaction rows name their different sources", async () => {
-  const mounted = await mountFooter({ mode: "fullscreen", entries: [
-    { type: "compaction", usage: usage(100, 20, 0, 0, 0.2) },
-    delegated(usage(200, 0, 0, 0, 0.3), [
-      workerRow("compaction/openai-codex/gpt-5.6-sol", 200, 0.3),
-    ]),
-  ] });
+  const mounted = await mountFooter({
+    mode: "fullscreen",
+    entries: [
+      { type: "compaction", usage: usage(100, 20, 0, 0, 0.2) },
+      delegated(usage(200, 0, 0, 0, 0.3), [
+        workerRow("compaction/openai-codex/gpt-5.6-sol", 200, 0.3),
+      ]),
+    ],
+  });
   try {
     mounted.clickFooter();
     const lines = mounted.overlayLines();
@@ -972,11 +1485,17 @@ test("a split that is not a real division of the usage is ignored, not believed"
     ["openai-codex/gpt-5.6-sol"],
   ];
   for (const rows of bogus) {
-    const mounted = await mountFooter({ mode: "fullscreen", entries: [delegated(usage(300, 0, 0, 0, 3), rows)] });
+    const mounted = await mountFooter({
+      mode: "fullscreen",
+      entries: [delegated(usage(300, 0, 0, 0, 3), rows)],
+    });
     try {
       mounted.clickFooter();
       const lines = mounted.overlayLines(60);
-      assert(!lines.some((line) => line.includes("gpt-5.6-sol")), `believed a bad split: ${JSON.stringify(rows)}`);
+      assert(
+        !lines.some((line) => line.includes("gpt-5.6-sol")),
+        `believed a bad split: ${JSON.stringify(rows)}`,
+      );
       const tools = lines.find((line) => /│ ?tools/.test(line));
       assert(tools && tools.includes("3.000"), `lump lost the spend: ${tools}`);
       assert(mounted.line().includes("$3.000"));
@@ -993,11 +1512,28 @@ test("a split that is not a real division of the usage is ignored, not believed"
  */
 test("a malformed session entry costs its own figures, never the frame", async () => {
   const malformed = [
-    { type: "message", message: { role: "assistant", provider: "p", model: "m", usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0 } } },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        provider: "p",
+        model: "m",
+        usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0 },
+      },
+    },
     { type: "message", message: { role: "toolResult", usage: { input: 5, cost: null } } },
-    { type: "message", message: { role: "toolResult", usage: { input: 7, cost: { total: "free" } } } },
-    { type: "compaction", usage: { input: Number.NaN, output: 3, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } } },
-    { type: "message", message: { role: "assistant", provider: "p", model: "n", usage: usage(10, 2, 0, 0, 0.25) } },
+    {
+      type: "message",
+      message: { role: "toolResult", usage: { input: 7, cost: { total: "free" } } },
+    },
+    {
+      type: "compaction",
+      usage: { input: Number.NaN, output: 3, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+    },
+    {
+      type: "message",
+      message: { role: "assistant", provider: "p", model: "n", usage: usage(10, 2, 0, 0, 0.25) },
+    },
   ];
   const mounted = await mountFooter({ mode: "fullscreen", entries: malformed });
   try {
@@ -1007,7 +1543,10 @@ test("a malformed session entry costs its own figures, never the frame", async (
     mounted.clickFooter();
     const lines = mounted.overlayLines(60);
     for (const row of lines) assert.ok(!/NaN|undefined/.test(row), row);
-    assert.ok(lines.some((row) => row.includes("0.250")), lines.join("\n"));
+    assert.ok(
+      lines.some((row) => row.includes("0.250")),
+      lines.join("\n"),
+    );
   } finally {
     mounted.footer.dispose();
   }
@@ -1016,11 +1555,25 @@ test("a malformed session entry costs its own figures, never the frame", async (
 /** A claim cannot be checked against a figure that is not one, so an entry
  * missing a component must not wave the whole split through. */
 test("a split riding on a malformed entry is refused like any other bad claim", async () => {
-  const mounted = await mountFooter({ mode: "fullscreen", entries: [
-    { type: "message", message: { role: "toolResult", toolName: "bash",
-      usage: { input: 300, output: 0, cacheRead: 0, cacheWrite: 0,
-        harnessModels: [workerRow("openai-codex/gpt-5.6-sol", 180, 2)] } } },
-  ] });
+  const mounted = await mountFooter({
+    mode: "fullscreen",
+    entries: [
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "bash",
+          usage: {
+            input: 300,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            harnessModels: [workerRow("openai-codex/gpt-5.6-sol", 180, 2)],
+          },
+        },
+      },
+    ],
+  });
   try {
     mounted.clickFooter();
     const lines = mounted.overlayLines(60);
@@ -1041,9 +1594,14 @@ test("the breakdown is click-to-pin, with only the footer and its × toggling it
     mounted.clickFooter();
     assert.equal(mounted.visible().length, 1);
     for (let column = 1; column < 6; column++) mounted.hover(column);
-    for (const data of ["a", "\u001b[200~paste\u001b[201~", "\u001b", "\u001b[5~"]) mounted.feed(data);
+    for (const data of ["a", "\u001b[200~paste\u001b[201~", "\u001b", "\u001b[5~"])
+      mounted.feed(data);
     mounted.clickOverlay();
-    assert.equal(mounted.visible().length, 1, "motion, typing, paste, Esc and table clicks leave it pinned");
+    assert.equal(
+      mounted.visible().length,
+      1,
+      "motion, typing, paste, Esc and table clicks leave it pinned",
+    );
     assert.equal(mounted.inputHandlers.size, 0, "no keyboard interception is needed");
     mounted.clickFooter();
     assert.deepEqual(mounted.visible(), [], "the second footer click dismisses it");
@@ -1090,9 +1648,14 @@ test("the pinned panel steps aside while a harness panel closes, then returns to
       assert.equal(mounted.visible().length, 1, "back once the harness close has run");
       mounted.paintOverlay();
       assert.deepEqual(mounted.bounds(), place);
-      assert.equal(above.bottom, FOOTER_HEIGHT + place.height,
-        "the restored pinned member is still below the member that joined during yield");
-    } finally { above.leave(); }
+      assert.equal(
+        above.bottom,
+        FOOTER_HEIGHT + place.height,
+        "the restored pinned member is still below the member that joined during yield",
+      );
+    } finally {
+      above.leave();
+    }
     mounted.clickFooter();
     assert.deepEqual(mounted.visible(), [], "a returned panel still toggles closed");
 
@@ -1106,7 +1669,9 @@ test("the pinned panel steps aside while a harness panel closes, then returns to
     mounted.footer.dispose();
     await nextTick();
     assert.deepEqual(mounted.visible(), [], "teardown cancels the return");
-  } finally { mounted.footer.dispose(); }
+  } finally {
+    mounted.footer.dispose();
+  }
 });
 
 test("the usage panel and a harness popover share one bottom-right column", async () => {
@@ -1116,15 +1681,35 @@ test("the usage panel and a harness popover share one bottom-right column", asyn
     mounted.clickFooter();
     // A harness popover joining from its own bundle, exactly as the picker does.
     const member = joinPopoverStack(tui);
-    const picker = { render: (width) => { const lines = Array(8).fill("p".repeat(width)); member.measure(8); return lines; },
-      invalidate() {} };
+    const picker = {
+      render: (width) => {
+        const lines = Array(8).fill("p".repeat(width));
+        member.measure(8);
+        return lines;
+      },
+      invalidate() {},
+    };
     const handle = tui.showOverlay(picker, stackedOverlayOptions(member, { width: 50 }));
-    mounted.paintOverlay(); mounted.paintOverlay();
+    mounted.paintOverlay();
+    mounted.paintOverlay();
     const [usagePanel, harness] = mounted.visible().map((entry) => entry.handle.getBounds());
-    assert.equal(usagePanel.row + usagePanel.height, tui.terminal.rows - FOOTER_HEIGHT, "the older panel keeps the footer");
-    assert.equal(harness.row + harness.height, usagePanel.row, "the newer popover rests directly on it");
-    for (const bounds of [usagePanel, harness]) assert.equal(bounds.col + bounds.width, tui.terminal.columns);
-    assert.equal(usagePanel.width, harness.width, "both independently bundled panels use the column width");
+    assert.equal(
+      usagePanel.row + usagePanel.height,
+      tui.terminal.rows - FOOTER_HEIGHT,
+      "the older panel keeps the footer",
+    );
+    assert.equal(
+      harness.row + harness.height,
+      usagePanel.row,
+      "the newer popover rests directly on it",
+    );
+    for (const bounds of [usagePanel, harness])
+      assert.equal(bounds.col + bounds.width, tui.terminal.columns);
+    assert.equal(
+      usagePanel.width,
+      harness.width,
+      "both independently bundled panels use the column width",
+    );
     assert.equal(usagePanel.col, harness.col);
 
     // Closing the lower one drops the upper one onto the footer.
@@ -1134,81 +1719,150 @@ test("the usage panel and a harness popover share one bottom-right column", asyn
     assert.equal(dropped.row + dropped.height, tui.terminal.rows - FOOTER_HEIGHT);
     // Reopened, the usage panel queues above the popover already there.
     mounted.clickFooter();
-    mounted.paintOverlay(); mounted.paintOverlay();
+    mounted.paintOverlay();
+    mounted.paintOverlay();
     const reopened = mounted.visible().at(-1).handle.getBounds();
     assert.equal(reopened.row + reopened.height, dropped.row);
-    handle.hide(); member.leave();
-  } finally { mounted.footer.dispose(); }
-});
-
-for (const order of [
-  ["usage", "approval", "routing"], ["usage", "routing", "approval"],
-  ["approval", "usage", "routing"], ["approval", "routing", "usage"],
-  ["routing", "usage", "approval"], ["routing", "approval", "usage"],
-]) test(`real popovers form a width-aligned upward column: ${order.join(" → ")}`, async () => {
-  const entries = [...spendEntries];
-  const mounted = await mountFooter({ mode: "fullscreen", entries });
-  const { tui } = mounted;
-  tui.terminal.rows = 50;
-  const theme = { fg: (_color, text) => text, bg: (_color, text) => text, bold: (text) => text };
-  const panels = [];
-  const paint = () => { for (let pass = 0; pass < 3; pass++) mounted.paintOverlay(); };
-  const check = () => {
-    paint();
-    const bounds = panels.map((panel) => panel.bounds());
-    let bottom = tui.terminal.rows - FOOTER_HEIGHT;
-    for (const box of bounds) {
-      assert(box, "every open panel fits on screen");
-      assert.equal(box.row + box.height, bottom, "stack directly upward, never overlap or leave a gap");
-      assert.equal(box.col + box.width, tui.terminal.columns);
-      assert.equal(box.width, bounds[0].width);
-      assert.equal(box.col, bounds[0].col, "both edges aligned");
-      bottom = box.row;
-    }
-    for (const entry of mounted.visible()) {
-      const width = entry.handle.getBounds().width;
-      assert(entry.lines.every((line) => visibleWidth(line) === width), "every painted border/body fills the common width");
-      assert(entry.lines[0].endsWith(CLOSE_TAIL), "the close control stays at the right edge");
-      assert.match(entry.lines.at(-1), /^╰─+╯$/);
-    }
-  };
-  try {
-    for (const kind of order) {
-      if (kind === "usage") {
-        mounted.clickFooter();
-        const entry = mounted.visible().at(-1);
-        panels.push({ bounds: () => entry.handle.getBounds(), close: () => mounted.clickFooter() });
-      } else {
-        const member = joinPopoverStack(tui);
-        let handle;
-        const close = () => { handle.hide(); member.leave(); };
-        const component = kind === "approval"
-          ? new ApprovalPopover({ theme, choices: () => approvalChoices("jev"), current: () => "manual", warning: () => undefined,
-            choose() {}, close, requestRender() {}, onRender: (height) => member.measure(height) })
-          : new PresetPicker({ tui, theme, keybindings: { matches: () => false }, activeName: "fixture", pointer: true,
-            presets: [{ name: "fixture", version: "starter-v3", models: Object.fromEntries(
-              ["d1", "d2", "d3", "d4", "d5"].map((slot) => [slot, `fixture/${slot}`])) }],
-            done: close, rows: () => member.available(), onRender: (height) => member.measure(height) });
-        handle = tui.showOverlay(component, stackedOverlayOptions(member, { width: kind === "approval" ? 60 : 76 }));
-        panels.push({ bounds: () => handle.getBounds(), close });
-      }
-      check();
-    }
-    for (const columns of [120, 38, 200]) { tui.terminal.columns = columns; check(); }
-    const before = panels[0].bounds().width;
-    entries.push({ type: "message", message: { role: "assistant", provider: "fixture", model: "long-model-name-".repeat(7), usage: usage(1, 1, 0, 0, 1) } });
-    check();
-    assert(panels[0].bounds().width > before, "new usage widens the entire column without reopening");
-    panels.splice(1, 1)[0].close(); check();
-    panels.shift().close(); check();
+    handle.hide();
+    member.leave();
   } finally {
-    for (const panel of panels.reverse()) panel.close();
     mounted.footer.dispose();
   }
 });
 
+for (const order of [
+  ["usage", "approval", "routing"],
+  ["usage", "routing", "approval"],
+  ["approval", "usage", "routing"],
+  ["approval", "routing", "usage"],
+  ["routing", "usage", "approval"],
+  ["routing", "approval", "usage"],
+])
+  test(`real popovers form a width-aligned upward column: ${order.join(" → ")}`, async () => {
+    const entries = [...spendEntries];
+    const mounted = await mountFooter({ mode: "fullscreen", entries });
+    const { tui } = mounted;
+    tui.terminal.rows = 50;
+    const theme = { fg: (_color, text) => text, bg: (_color, text) => text, bold: (text) => text };
+    const panels = [];
+    const paint = () => {
+      for (let pass = 0; pass < 3; pass++) mounted.paintOverlay();
+    };
+    const check = () => {
+      paint();
+      const bounds = panels.map((panel) => panel.bounds());
+      let bottom = tui.terminal.rows - FOOTER_HEIGHT;
+      for (const box of bounds) {
+        assert(box, "every open panel fits on screen");
+        assert.equal(
+          box.row + box.height,
+          bottom,
+          "stack directly upward, never overlap or leave a gap",
+        );
+        assert.equal(box.col + box.width, tui.terminal.columns);
+        assert.equal(box.width, bounds[0].width);
+        assert.equal(box.col, bounds[0].col, "both edges aligned");
+        bottom = box.row;
+      }
+      for (const entry of mounted.visible()) {
+        const width = entry.handle.getBounds().width;
+        assert(
+          entry.lines.every((line) => visibleWidth(line) === width),
+          "every painted border/body fills the common width",
+        );
+        assert(entry.lines[0].endsWith(CLOSE_TAIL), "the close control stays at the right edge");
+        assert.match(entry.lines.at(-1), /^╰─+╯$/);
+      }
+    };
+    try {
+      for (const kind of order) {
+        if (kind === "usage") {
+          mounted.clickFooter();
+          const entry = mounted.visible().at(-1);
+          panels.push({
+            bounds: () => entry.handle.getBounds(),
+            close: () => mounted.clickFooter(),
+          });
+        } else {
+          const member = joinPopoverStack(tui);
+          let handle;
+          const close = () => {
+            handle.hide();
+            member.leave();
+          };
+          const component =
+            kind === "approval"
+              ? new ApprovalPopover({
+                  theme,
+                  choices: () => approvalChoices("jev"),
+                  current: () => "manual",
+                  warning: () => undefined,
+                  choose() {},
+                  close,
+                  requestRender() {},
+                  onRender: (height) => member.measure(height),
+                })
+              : new PresetPicker({
+                  tui,
+                  theme,
+                  keybindings: { matches: () => false },
+                  activeName: "fixture",
+                  pointer: true,
+                  presets: [
+                    {
+                      name: "fixture",
+                      version: "starter-v3",
+                      models: Object.fromEntries(
+                        ["d1", "d2", "d3", "d4", "d5"].map((slot) => [slot, `fixture/${slot}`]),
+                      ),
+                    },
+                  ],
+                  done: close,
+                  rows: () => member.available(),
+                  onRender: (height) => member.measure(height),
+                });
+          handle = tui.showOverlay(
+            component,
+            stackedOverlayOptions(member, { width: kind === "approval" ? 60 : 76 }),
+          );
+          panels.push({ bounds: () => handle.getBounds(), close });
+        }
+        check();
+      }
+      for (const columns of [120, 38, 200]) {
+        tui.terminal.columns = columns;
+        check();
+      }
+      const before = panels[0].bounds().width;
+      entries.push({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "fixture",
+          model: "long-model-name-".repeat(7),
+          usage: usage(1, 1, 0, 0, 1),
+        },
+      });
+      check();
+      assert(
+        panels[0].bounds().width > before,
+        "new usage widens the entire column without reopening",
+      );
+      panels.splice(1, 1)[0].close();
+      check();
+      panels.shift().close();
+      check();
+    } finally {
+      for (const panel of panels.reverse()) panel.close();
+      mounted.footer.dispose();
+    }
+  });
+
 test("the worker indicator sits in the corner and hands its clicks to the harness", async () => {
-  const statuses = new Map([[WORKER_PRESET_INDICATOR, "delegation: lead/fixture-balanced"], ["other-extension", "OTHER"]]);
+  const statuses = new Map([
+    [WORKER_PRESET_INDICATOR, "delegation: lead/fixture-balanced"],
+    ["other-extension", "OTHER"],
+  ]);
   const mounted = await mountFooter({ mode: "fullscreen", entries: spendEntries, statuses });
   const claimed = [];
   let claim = true;
@@ -1242,7 +1896,11 @@ test("the worker indicator sits in the corner and hands its clicks to the harnes
     mounted.clickFooter(0);
     claim = false;
     mounted.clickFooter(mounted.line().length - 1);
-    assert.equal(mounted.visible().length, 1, "with no harness to claim it, the corner still opens usage");
+    assert.equal(
+      mounted.visible().length,
+      1,
+      "with no harness to claim it, the corner still opens usage",
+    );
     // Narrowing shortens the worker control rather than clipping it; its last
     // drawn cell still belongs to the indicator, not an off-screen hit region.
     const narrow = 40;
@@ -1251,11 +1909,17 @@ test("the worker indicator sits in the corner and hands its clicks to the harnes
     claimed.length = 0;
     mounted.clickFooter(narrow - 1);
     assert.deepEqual(claimed, [WORKER_PRESET_INDICATOR]);
-  } finally { off(); mounted.footer.dispose(); }
+  } finally {
+    off();
+    mounted.footer.dispose();
+  }
 });
 
 test("× hit-testing uses visual columns even when the theme adds ANSI escapes", async () => {
-  const theme = { fg: (_color, text) => `\x1b[33m${text}\x1b[0m`, bold: text => `\x1b[1m${text}\x1b[0m` };
+  const theme = {
+    fg: (_color, text) => `\x1b[33m${text}\x1b[0m`,
+    bold: (text) => `\x1b[1m${text}\x1b[0m`,
+  };
   const mounted = await mountFooter({ mode: "fullscreen", entries: spendEntries, theme });
   try {
     for (const columns of [60, 13]) {
@@ -1270,7 +1934,9 @@ test("× hit-testing uses visual columns even when the theme adds ANSI escapes",
       mounted.clickOverlay(x, 0);
       assert.deepEqual(mounted.visible(), []);
     }
-  } finally { mounted.footer.dispose(); }
+  } finally {
+    mounted.footer.dispose();
+  }
 });
 
 test("a narrow usage panel omits the × instead of painting a non-clickable fragment", async () => {
@@ -1282,7 +1948,10 @@ test("a narrow usage panel omits the × instead of painting a non-clickable frag
     assert(x >= 0);
     for (const width of [8, 4, 1]) {
       const lines = mounted.overlayLines(width);
-      assert(!lines.some((line) => stripVTControlCharacters(line).includes(POPOVER.close)), `partial control at width ${width}`);
+      assert(
+        !lines.some((line) => stripVTControlCharacters(line).includes(POPOVER.close)),
+        `partial control at width ${width}`,
+      );
       for (const line of lines) assert(visibleWidth(line) <= width);
       mounted.clickOverlay(x, 0);
       mounted.clickOverlay(width - 1, 0);
@@ -1292,19 +1961,45 @@ test("a narrow usage panel omits the × instead of painting a non-clickable frag
     assert.deepEqual(mounted.visible(), [], "the footer still closes a panel too narrow for the ×");
     mounted.clickFooter();
     const fits = mounted.overlayLines(9);
-    assert(stripVTControlCharacters(fits[0]).endsWith(CLOSE_TAIL), "the control fits at exactly 9 columns");
+    assert(
+      stripVTControlCharacters(fits[0]).endsWith(CLOSE_TAIL),
+      "the control fits at exactly 9 columns",
+    );
     mounted.clickOverlay(closeColumn(fits[0]), 0);
     assert.deepEqual(mounted.visible(), []);
-  } finally { mounted.footer.dispose(); }
+  } finally {
+    mounted.footer.dispose();
+  }
 });
 
 test("the renderer consumes mouse and focus reports before extension listeners", () => {
   let onInput;
   const terminal = {
-    start(handler) { onInput = handler; }, stop() {}, async drainInput() {}, write() {},
-    get columns() { return 80; }, get rows() { return 24; }, get kittyProtocolActive() { return false; },
-    moveBy() {}, hideCursor() {}, showCursor() {}, clearLine() {}, clearFromCursor() {},
-    clearScreen() {}, setTitle() {}, setProgress() {}, on() {}, off() {},
+    start(handler) {
+      onInput = handler;
+    },
+    stop() {},
+    async drainInput() {},
+    write() {},
+    get columns() {
+      return 80;
+    },
+    get rows() {
+      return 24;
+    },
+    get kittyProtocolActive() {
+      return false;
+    },
+    moveBy() {},
+    hideCursor() {},
+    showCursor() {},
+    clearLine() {},
+    clearFromCursor() {},
+    clearScreen() {},
+    setTitle() {},
+    setProgress() {},
+    on() {},
+    off() {},
   };
   const tui = new TuiAltScreen(terminal, false, undefined, {});
   tui.start();
@@ -1312,13 +2007,18 @@ test("the renderer consumes mouse and focus reports before extension listeners",
   try {
     // Exactly how the footer shows its breakdown, so the check covers the
     // overlay being up rather than only a bare renderer.
-    tui.showOverlay({ render: (width) => ["x".repeat(width)], invalidate() {} },
-      { anchor: "bottom-right", width: 20, nonCapturing: true });
-    tui.addInputListener((data) => { seen.push(data); return undefined; });
-    onInput("\u001b[<35;10;24M");  // pointer move
-    onInput("\u001b[<0;10;24M");   // press
-    onInput("\u001b[O");           // focus out
-    onInput("a");                   // keystroke
+    tui.showOverlay(
+      { render: (width) => ["x".repeat(width)], invalidate() {} },
+      { anchor: "bottom-right", width: 20, nonCapturing: true },
+    );
+    tui.addInputListener((data) => {
+      seen.push(data);
+      return undefined;
+    });
+    onInput("\u001b[<35;10;24M"); // pointer move
+    onInput("\u001b[<0;10;24M"); // press
+    onInput("\u001b[O"); // focus out
+    onInput("a"); // keystroke
     onInput("\u001b[200~x\u001b[201~"); // paste
   } finally {
     tui.stop();
@@ -1327,15 +2027,22 @@ test("the renderer consumes mouse and focus reports before extension listeners",
 });
 
 test("breakdown is fullscreen-only and bottom padding uses this render's footer row without markers or shared-array mutation", async () => {
-  let shared, renderRoot = (width, footer) => (shared = Object.freeze(["body", footer.render(width)[0]]));
-  const regular = await mountFooter({ entries: spendEntries, renderRoot: (width, footer) => renderRoot(width, footer) });
+  let shared,
+    renderRoot = (width, footer) => (shared = Object.freeze(["body", footer.render(width)[0]]));
+  const regular = await mountFooter({
+    entries: spendEntries,
+    renderRoot: (width, footer) => renderRoot(width, footer),
+  });
   try {
     // Mouse reports never reach a regular-mode footer, but a host that sent one
     // must not get an overlay composited into the lines backing scrollback.
     regular.hover();
     regular.clickFooter();
     assert.deepEqual(regular.visible(), []);
-    assert(!regular.footer.render(80)[0].includes(MARKER), "regular rows never emit an in-band padding marker");
+    assert(
+      !regular.footer.render(80)[0].includes(MARKER),
+      "regular rows never emit an in-band padding marker",
+    );
     regular.tui.terminal.rows = 6;
     const padded = regular.tui.render(80);
     assert.deepEqual(padded, ["body", ...Array(4).fill(" ".repeat(80)), shared[1]]);
@@ -1343,47 +2050,79 @@ test("breakdown is fullscreen-only and bottom padding uses this render's footer 
     assert.notEqual(padded, shared);
     const oldPaint = Object.freeze([regular.footer.render(80)[0]]);
     renderRoot = () => oldPaint;
-    assert.equal(regular.tui.render(80), oldPaint, "a cached row without a same-render footer call cannot authorize padding");
+    assert.equal(
+      regular.tui.render(80),
+      oldPaint,
+      "a cached row without a same-render footer call cannot authorize padding",
+    );
     renderRoot = (width, footer) => (shared = Object.freeze([footer.render(width)[0], "tail"]));
     assert.equal(regular.tui.render(80), shared, "a non-last footer is not padded or copied");
     renderRoot = () => (shared = Object.freeze([`literal${MARKER}${MARKER}`, "tail"]));
-    assert.equal(regular.tui.render(80), shared, "retired marker spellings are ordinary content, never a scan trigger");
+    assert.equal(
+      regular.tui.render(80),
+      shared,
+      "retired marker spellings are ordinary content, never a scan trigger",
+    );
     let indexedReads = 0;
     renderRoot = (width, footer) => {
-      shared = new Proxy(Object.freeze([...Array(10000).fill("history"), footer.render(width)[0]]), {
-        get(target, key, receiver) {
-          if (typeof key === "string" && /^\d+$/.test(key)) indexedReads++;
-          return Reflect.get(target, key, receiver);
+      shared = new Proxy(
+        Object.freeze([...Array(10000).fill("history"), footer.render(width)[0]]),
+        {
+          get(target, key, receiver) {
+            if (typeof key === "string" && /^\d+$/.test(key)) indexedReads++;
+            return Reflect.get(target, key, receiver);
+          },
         },
-      });
+      );
       return shared;
     };
-    assert.equal(regular.tui.render(80), shared, "long history needs neither padding nor a transcript-sized copy");
+    assert.equal(
+      regular.tui.render(80),
+      shared,
+      "long history needs neither padding nor a transcript-sized copy",
+    );
     assert.equal(indexedReads, 1, "only the last history row is inspected");
-    let nested = false, inner;
+    let nested = false,
+      inner;
     renderRoot = (width, footer) => {
       const row = footer.render(width)[0];
       if (!nested) {
         nested = true;
-        try { inner = regular.tui.render(width); } finally { nested = false; }
+        try {
+          inner = regular.tui.render(width);
+        } finally {
+          nested = false;
+        }
       }
       return Object.freeze([nested ? "inner" : "outer", row]);
     };
     const outer = regular.tui.render(80);
-    assert.equal(inner.length, 6); assert.equal(inner[0], "inner");
-    assert.equal(outer.length, 6); assert.equal(outer[0], "outer", "nested renders restore the outer row observation");
-    renderRoot = (width, footer) => { footer.render(width); throw new Error("synthetic-render"); };
+    assert.equal(inner.length, 6);
+    assert.equal(inner[0], "inner");
+    assert.equal(outer.length, 6);
+    assert.equal(outer[0], "outer", "nested renders restore the outer row observation");
+    renderRoot = (width, footer) => {
+      footer.render(width);
+      throw new Error("synthetic-render");
+    };
     assert.throws(() => regular.tui.render(80), /synthetic-render/);
     renderRoot = () => oldPaint;
     assert.equal(regular.tui.render(80), oldPaint, "throwing renders restore the token in finally");
   } finally {
     regular.footer.dispose();
   }
-  const full = await mountFooter({ mode: "fullscreen", entries: spendEntries,
-    renderRoot: (width, footer) => (shared = Object.freeze(["body", footer.render(width)[0]])) });
+  const full = await mountFooter({
+    mode: "fullscreen",
+    entries: spendEntries,
+    renderRoot: (width, footer) => (shared = Object.freeze(["body", footer.render(width)[0]])),
+  });
   try {
     assert(!full.footer.render(80)[0].includes(MARKER));
-    assert.equal(full.tui.render(80), shared, "fullscreen uses its native dock and never pads or copies the root buffer");
+    assert.equal(
+      full.tui.render(80),
+      shared,
+      "fullscreen uses its native dock and never pads or copies the root buffer",
+    );
     full.clickFooter();
     assert.equal(full.visible().length, 1, "the usage breakdown remains available in fullscreen");
   } finally {
@@ -1395,8 +2134,14 @@ const plainTheme = { fg: (_color, text) => text, bold: (text) => text, bg: (_col
 const yoloSet = () => globalThis[SESSION_YOLO_KEY] ?? new Set();
 
 test("approval choices follow the loaded judge, and yolo is always offered", () => {
-  assert.deepEqual(approvalChoices(undefined).map((choice) => choice.id), ["manual", "yolo"]);
-  assert.deepEqual(approvalChoices("jev").map((choice) => choice.label), ["manual", "jev", "jev + sub", "yolo"]);
+  assert.deepEqual(
+    approvalChoices(undefined).map((choice) => choice.id),
+    ["manual", "yolo"],
+  );
+  assert.deepEqual(
+    approvalChoices("jev").map((choice) => choice.label),
+    ["manual", "jev", "jev + sub", "yolo"],
+  );
   const jev = (mode, includeSubagents) => ({ judge: "jev", mode, includeSubagents, shown: true });
   assert.equal(currentChoice(undefined, false), "manual");
   assert.equal(currentChoice(jev("shadow", false), false), "manual");
@@ -1404,25 +2149,53 @@ test("approval choices follow the loaded judge, and yolo is always offered", () 
   assert.equal(currentChoice(jev("enforce", true), false), "judge+sub");
   assert.equal(currentChoice(jev("enforce", true), true), "yolo", "yolo wins over any judge mode");
   const colors = [];
-  const recording = { fg: (color, text) => { colors.push(color); return `<${color}>${text}`; }, bold: (text) => text };
+  const recording = {
+    fg: (color, text) => {
+      colors.push(color);
+      return `<${color}>${text}`;
+    },
+    bold: (text) => text,
+  };
   assert.equal(approvalStatus(recording, jev("enforce", true), false), "approval: jev+sub");
   assert.equal(approvalStatus(recording, jev("enforce", false), false), "approval: jev");
   assert.equal(approvalStatus(recording, undefined, false), "approval: manual");
-  assert.equal(approvalStatus(recording, jev("enforce", true), true), "approval: <error>YOLO", "yolo is loud");
+  assert.equal(
+    approvalStatus(recording, jev("enforce", true), true),
+    "approval: <error>YOLO",
+    "yolo is loud",
+  );
 });
 
 /** A session record as approval-mode writes it. */
-const choiceEntry = (sessionId, yolo, judge) => ({ type: "custom", customType: APPROVAL_ENTRY,
-  data: { sessionId, yolo, ...(judge ? { judge } : {}) } });
+const choiceEntry = (sessionId, yolo, judge) => ({
+  type: "custom",
+  customType: APPROVAL_ENTRY,
+  data: { sessionId, yolo, ...(judge ? { judge } : {}) },
+});
 const SUB = { mode: "enforce", includeSubagents: true };
 const ROOT = { mode: "enforce", includeSubagents: false };
 const MANUAL = { mode: "shadow", includeSubagents: false };
 
 /** The approval extension on a real alternate-screen compositor. */
-async function mountApproval({ branch = [], mode = "fullscreen", judges = true, judgeFirst = false, launch = SUB,
-  confirm = true, select, appendThrows = false, sessionId: initial = "approval-root", sdkDispatch = false } = {}) {
+async function mountApproval({
+  branch = [],
+  mode = "fullscreen",
+  judges = true,
+  judgeFirst = false,
+  launch = SUB,
+  confirm = true,
+  select,
+  appendThrows = false,
+  sessionId: initial = "approval-root",
+  sdkDispatch = false,
+} = {}) {
   const f = fixture("tui", sdkDispatch);
-  const entries = [], notices = [], statuses = new Map(), commands = new Map(), setRequests = [], dialogs = [];
+  const entries = [],
+    notices = [],
+    statuses = new Map(),
+    commands = new Map(),
+    setRequests = [],
+    dialogs = [];
   const terminal = { rows: 30, columns: 120, hideCursor() {} };
   const tui = new TuiAltScreen(terminal, false, undefined, {});
   Object.defineProperty(tui, "mode", { value: mode });
@@ -1436,14 +2209,24 @@ async function mountApproval({ branch = [], mode = "fullscreen", judges = true, 
   let sessionId = initial;
   // The fixture hands its own context to every handler it emits to.
   const ctx = Object.assign(f.ctx, {
-    mode: "tui", hasUI: true, cwd: "/fixture",
+    mode: "tui",
+    hasUI: true,
+    cwd: "/fixture",
     ui: {
       theme: plainTheme,
-      setStatus: (key, value) => { if (value === undefined) statuses.delete(key); else statuses.set(key, value); },
+      setStatus: (key, value) => {
+        if (value === undefined) statuses.delete(key);
+        else statuses.set(key, value);
+      },
       notify: (message, level) => notices.push({ level, message }),
-      setWidget: (_key, factory) => { factory?.(tui, plainTheme); },
+      setWidget: (_key, factory) => {
+        factory?.(tui, plainTheme);
+      },
       select: async (_title, options) => select?.(options),
-      confirm: async (title, text) => { dialogs.push({ title, text }); return typeof confirm === "function" ? confirm(title) : confirm; },
+      confirm: async (title, text) => {
+        dialogs.push({ title, text });
+        return typeof confirm === "function" ? confirm(title) : confirm;
+      },
     },
     sessionManager: { getSessionId: () => sessionId, getBranch: () => [...branch, ...entries] },
   });
@@ -1451,13 +2234,15 @@ async function mountApproval({ branch = [], mode = "fullscreen", judges = true, 
   // A stand-in judge that owns its mode, as jev does: each session
   // starts from the launch mode, and every publish names its session.
   const judge = { judge: "jev", ...launch };
-  const publish = () => f.pi.events.emit("approval:judge-state", { ...judge, sessionId, shown: false });
-  if (judges) f.pi.events.on("approval:set-judge", (request) => {
-    setRequests.push({ mode: request.mode, includeSubagents: request.includeSubagents });
-    request.applied = true;
-    Object.assign(judge, { mode: request.mode, includeSubagents: request.includeSubagents });
-    publish();
-  });
+  const publish = () =>
+    f.pi.events.emit("approval:judge-state", { ...judge, sessionId, shown: false });
+  if (judges)
+    f.pi.events.on("approval:set-judge", (request) => {
+      setRequests.push({ mode: request.mode, includeSubagents: request.includeSubagents });
+      request.applied = true;
+      Object.assign(judge, { mode: request.mode, includeSubagents: request.includeSubagents });
+      publish();
+    });
   const start = async () => {
     Object.assign(judge, launch);
     if (judges && judgeFirst) publish();
@@ -1467,13 +2252,34 @@ async function mountApproval({ branch = [], mode = "fullscreen", judges = true, 
   };
   await start();
   const overlays = () => tui.overlayStack.filter((entry) => !entry.hidden);
-  const popover = () => overlays().map((entry) => entry.component).find((component) => component instanceof ApprovalPopover);
-  const lines = () => popover()?.render(60).map((line) => stripVTControlCharacters(line)) ?? [];
-  const click = (x, y, extra = {}) => popover().handleMouse({ type: "click", button: "left", x, y, screenX: x, screenY: y,
-    width: 60, height: 10, shift: false, alt: false, ctrl: false, ...extra });
+  const popover = () =>
+    overlays()
+      .map((entry) => entry.component)
+      .find((component) => component instanceof ApprovalPopover);
+  const lines = () =>
+    popover()
+      ?.render(60)
+      .map((line) => stripVTControlCharacters(line)) ?? [];
+  const click = (x, y, extra = {}) =>
+    popover().handleMouse({
+      type: "click",
+      button: "left",
+      x,
+      y,
+      screenX: x,
+      screenY: y,
+      width: 60,
+      height: 10,
+      shift: false,
+      alt: false,
+      ctrl: false,
+      ...extra,
+    });
   const clickRow = (label) => {
     const rows = lines();
-    const y = rows.findIndex((line) => new RegExp(`^│. . ${label.replace(/[+]/g, "\\+")} `).test(line));
+    const y = rows.findIndex((line) =>
+      new RegExp(`^│. . ${label.replace(/[+]/g, "\\+")} `).test(line),
+    );
     assert(y > 0, `row ${label} in ${rows.join("\n")}`);
     click(5, y);
   };
@@ -1488,55 +2294,116 @@ async function mountApproval({ branch = [], mode = "fullscreen", judges = true, 
     clickRow(label);
     if (popover()?.isArmed()) clickRow(label);
   };
-  return { f, tui, ctx, entries, notices, statuses, commands, setRequests, dialogs, judge, publish, popover, lines, click, clickRow,
-    indicator, pick, failing,
-    switchSession: async (id, restored = []) => { sessionId = id; branch = restored; entries.length = 0; await start(); },
+  return {
+    f,
+    tui,
+    ctx,
+    entries,
+    notices,
+    statuses,
+    commands,
+    setRequests,
+    dialogs,
+    judge,
+    publish,
+    popover,
+    lines,
+    click,
+    clickRow,
+    indicator,
+    pick,
+    failing,
+    switchSession: async (id, restored = []) => {
+      sessionId = id;
+      branch = restored;
+      entries.length = 0;
+      await start();
+    },
     /** /tree: the leaf moves to the first `length` entries of the current branch. */
-    navigate: async (length) => { branch = [...branch, ...entries].slice(0, length); entries.length = 0; await f.emit("session_tree", {}); },
+    navigate: async (length) => {
+      branch = [...branch, ...entries].slice(0, length);
+      entries.length = 0;
+      await f.emit("session_tree", {});
+    },
     history: () => [...branch, ...entries],
-    shutdown: () => f.emit("session_shutdown", {}) };
+    shutdown: () => f.emit("session_shutdown", {}),
+  };
 }
 
 /** Fail real compositor/column cleanup, not a stand-in close implementation. */
 function failApprovalTeardown(m, point) {
-  const calls = [], grantsDuringUi = [];
-  let armed = false, insideHide = false, afterHideRenders = 0, originalHide;
-  const show = m.tui.showOverlay.bind(m.tui), render = m.tui.requestRender;
-  const setStatus = m.ctx.ui.setStatus, setWidget = m.ctx.ui.setWidget;
+  const calls = [],
+    grantsDuringUi = [];
+  let armed = false,
+    insideHide = false,
+    afterHideRenders = 0,
+    originalHide;
+  const show = m.tui.showOverlay.bind(m.tui),
+    render = m.tui.requestRender;
+  const setStatus = m.ctx.ui.setStatus,
+    setWidget = m.ctx.ui.setWidget;
   const hit = (part) => {
     if (!armed) return;
     calls.push(part);
-    grantsDuringUi.push(managedSessionYolo("approval-root", new Map()) || managedSessionYolo("approval-next", new Map()));
+    grantsDuringUi.push(
+      managedSessionYolo("approval-root", new Map()) ||
+        managedSessionYolo("approval-next", new Map()),
+    );
     if (point === part || point === "all") throw new Error(`UI_${part.toUpperCase()}`);
   };
   m.tui.showOverlay = (...args) => {
     const handle = show(...args);
     originalHide = handle.hide.bind(handle);
     handle.hide = () => {
-      hit("hide"); insideHide = true;
-      try { originalHide(); } finally { insideHide = false; }
+      hit("hide");
+      insideHide = true;
+      try {
+        originalHide();
+      } finally {
+        insideHide = false;
+      }
     };
     return handle;
   };
-  m.indicator(); m.lines();
+  m.indicator();
+  m.lines();
   const component = m.popover();
   // A member above the measured approval pane makes its leave() request a
   // repaint. This tests a throwing real leave(), separately from hide/render.
-  const above = joinPopoverStack(m.tui); above.measure(2);
+  const above = joinPopoverStack(m.tui);
+  above.measure(2);
   m.tui.requestRender = () => {
     if (!armed) return render();
-    if (insideHide) { calls.push("hide-render"); return; }
+    if (insideHide) {
+      calls.push("hide-render");
+      return;
+    }
     hit(++afterHideRenders === 1 ? "leave" : "render");
   };
-  m.ctx.ui.setStatus = (...args) => { hit("status"); return setStatus(...args); };
-  m.ctx.ui.setWidget = (...args) => { hit("widget"); return setWidget(...args); };
-  return { calls, grantsDuringUi, above, component,
-    arm() { armed = true; },
+  m.ctx.ui.setStatus = (...args) => {
+    hit("status");
+    return setStatus(...args);
+  };
+  m.ctx.ui.setWidget = (...args) => {
+    hit("widget");
+    return setWidget(...args);
+  };
+  return {
+    calls,
+    grantsDuringUi,
+    above,
+    component,
+    arm() {
+      armed = true;
+    },
     restore() {
       armed = false;
-      m.tui.showOverlay = show; m.tui.requestRender = render;
-      m.ctx.ui.setStatus = setStatus; m.ctx.ui.setWidget = setWidget;
-      originalHide?.(); above.leave();
+      m.tui.showOverlay = show;
+      m.tui.requestRender = render;
+      m.ctx.ui.setStatus = setStatus;
+      m.ctx.ui.setWidget = setWidget;
+      originalHide?.();
+      above.leave();
     },
   };
 }
@@ -1549,42 +2416,72 @@ for (const point of ["hide", "leave", "render", "status", "widget", "all"]) {
     assert.equal(managedSessionYolo("approval-child", chain), true);
     const fault = failApprovalTeardown(m, point);
     try {
-      fault.arm(); await m.shutdown();
+      fault.arm();
+      await m.shutdown();
       assert.equal(managedSessionYolo("approval-root", chain), false);
       assert.equal(managedSessionYolo("approval-child", chain), false);
-      assert(fault.grantsDuringUi.every((granted) => !granted), "revocation precedes the first UI call");
-      for (const part of ["hide", "leave", "render", "status", "widget"]) assert(fault.calls.includes(part), `${part}: ${fault.calls}`);
+      assert(
+        fault.grantsDuringUi.every((granted) => !granted),
+        "revocation precedes the first UI call",
+      );
+      for (const part of ["hide", "leave", "render", "status", "widget"])
+        assert(fault.calls.includes(part), `${part}: ${fault.calls}`);
       assert.equal(fault.above.bottom, 1, "failed hide/leave must not retain the column slot");
-      assert.deepEqual(m.f.errors, [], "expected UI failures are contained, not left to the dispatcher");
-    } finally { fault.restore(); await m.shutdown(); }
+      assert.deepEqual(
+        m.f.errors,
+        [],
+        "expected UI failures are contained, not left to the dispatcher",
+      );
+    } finally {
+      fault.restore();
+      await m.shutdown();
+    }
   });
 }
 
-for (const source of ["command", "restore"]) for (const leave of ["switch", "shutdown"]) for (const point of ["hide", "render"]) {
-  test(`late ${source} confirmation and stale popover cannot grant after ${leave} with ${point} failure`, async () => {
-    let answer;
-    const m = await mountApproval({ sdkDispatch: true,
-      branch: source === "restore" ? [choiceEntry("approval-root", true, SUB)] : [],
-      confirm: () => new Promise((resolve) => { answer = resolve; }) });
-    const fault = failApprovalTeardown(m, point);
-    const pending = source === "command" ? m.commands.get("approval").handler("yolo", m.ctx) : undefined;
-    await nextTick();
-    // Arm the old popover too. Its retained callback must not act for a new
-    // session even if a failed hide leaves that component on the old renderer.
-    fault.component.handleInput("\u001b[F"); fault.component.handleInput("\r");
-    assert.equal(fault.component.isArmed(), true);
-    try {
-      fault.arm();
-      if (leave === "switch") await m.switchSession("approval-next"); else await m.shutdown();
-      answer(true); await pending; await nextTick();
-      fault.component.handleInput("\r");
-      assert.equal(managedSessionYolo("approval-root", new Map()), false);
-      assert.equal(managedSessionYolo("approval-next", new Map()), false);
-      assert.equal(m.entries.some((entry) => entry.data?.yolo), false);
-      assert.deepEqual(m.f.errors, []);
-    } finally { fault.restore(); await m.shutdown(); }
-  });
-}
+for (const source of ["command", "restore"])
+  for (const leave of ["switch", "shutdown"])
+    for (const point of ["hide", "render"]) {
+      test(`late ${source} confirmation and stale popover cannot grant after ${leave} with ${point} failure`, async () => {
+        let answer;
+        const m = await mountApproval({
+          sdkDispatch: true,
+          branch: source === "restore" ? [choiceEntry("approval-root", true, SUB)] : [],
+          confirm: () =>
+            new Promise((resolve) => {
+              answer = resolve;
+            }),
+        });
+        const fault = failApprovalTeardown(m, point);
+        const pending =
+          source === "command" ? m.commands.get("approval").handler("yolo", m.ctx) : undefined;
+        await nextTick();
+        // Arm the old popover too. Its retained callback must not act for a new
+        // session even if a failed hide leaves that component on the old renderer.
+        fault.component.handleInput("\u001b[F");
+        fault.component.handleInput("\r");
+        assert.equal(fault.component.isArmed(), true);
+        try {
+          fault.arm();
+          if (leave === "switch") await m.switchSession("approval-next");
+          else await m.shutdown();
+          answer(true);
+          await pending;
+          await nextTick();
+          fault.component.handleInput("\r");
+          assert.equal(managedSessionYolo("approval-root", new Map()), false);
+          assert.equal(managedSessionYolo("approval-next", new Map()), false);
+          assert.equal(
+            m.entries.some((entry) => entry.data?.yolo),
+            false,
+          );
+          assert.deepEqual(m.f.errors, []);
+        } finally {
+          fault.restore();
+          await m.shutdown();
+        }
+      });
+    }
 
 test("session start revokes old and stale incoming grants before a failing old popover is touched", async () => {
   const m = await mountApproval({ sdkDispatch: true });
@@ -1592,14 +2489,16 @@ test("session start revokes old and stale incoming grants before a failing old p
   const fault = failApprovalTeardown(m, "hide");
   yoloSet().add("approval-next");
   try {
-    fault.arm(); await m.switchSession("approval-next");
+    fault.arm();
+    await m.switchSession("approval-next");
     assert(fault.grantsDuringUi.every((granted) => !granted));
     assert.equal(managedSessionYolo("approval-root", new Map()), false);
     assert.equal(managedSessionYolo("approval-next", new Map()), false);
     assert.equal(m.statuses.get("approval"), "approval: jev+sub");
     assert.deepEqual(m.f.errors, []);
   } finally {
-    fault.restore(); await m.shutdown();
+    fault.restore();
+    await m.shutdown();
     yoloSet().delete("approval-next"); // Isolate even the unfixed startup negative control.
   }
 });
@@ -1610,20 +2509,38 @@ test("a fresh approval instance clears a stale same-ID grant rather than display
   try {
     assert.equal(managedSessionYolo("approval-root", new Map()), false);
     assert.equal(m.statuses.get("approval"), "approval: manual");
-  } finally { await m.shutdown(); }
+  } finally {
+    await m.shutdown();
+  }
 });
 
 test("the approval indicator renders the judge's mode and claims it from the judge", async () => {
   const m = await mountApproval();
   try {
     assert.equal(m.statuses.get("approval"), "approval: jev+sub");
-    const state = { judge: "jev", mode: "shadow", includeSubagents: false, sessionId: "approval-root", shown: false };
+    const state = {
+      judge: "jev",
+      mode: "shadow",
+      includeSubagents: false,
+      sessionId: "approval-root",
+      shown: false,
+    };
     m.f.pi.events.emit("approval:judge-state", state);
-    assert.equal(state.shown, true, "an indicator that renders the mode claims it, so the judge drops its own status");
+    assert.equal(
+      state.shown,
+      true,
+      "an indicator that renders the mode claims it, so the judge drops its own status",
+    );
     assert.equal(m.statuses.get("approval"), "approval: manual");
     m.f.pi.events.emit("approval:judge-state", { judge: "other", mode: "enforce", shown: false });
-    assert.equal(m.statuses.get("approval"), "approval: manual", "malformed judge state is ignored");
-  } finally { await m.shutdown(); }
+    assert.equal(
+      m.statuses.get("approval"),
+      "approval: manual",
+      "malformed judge state is ignored",
+    );
+  } finally {
+    await m.shutdown();
+  }
   assert.equal(m.statuses.has("approval"), false, "shutdown clears the indicator");
 });
 
@@ -1633,8 +2550,10 @@ test("the approval popover is a menu: narrowing applies at once, widening takes 
     assert.equal(m.indicator(), true, "the footer click is claimed");
     const lines = m.lines();
     assert.match(lines[0], /^╭─ Approval ─+ × ─╮$/);
-    assert.deepEqual(lines.slice(1, 5).map((line) => line.slice(1, 16).trim()),
-      ["○ manual", "○ jev", "› ● jev + sub", "○ yolo"]);
+    assert.deepEqual(
+      lines.slice(1, 5).map((line) => line.slice(1, 16).trim()),
+      ["○ manual", "○ jev", "› ● jev + sub", "○ yolo"],
+    );
     m.clickRow("jev");
     assert.deepEqual(m.setRequests.at(-1), ROOT, "jev + sub to jev narrows: one click");
     assert.equal(m.statuses.get("approval"), "approval: jev");
@@ -1649,19 +2568,27 @@ test("the approval popover is a menu: narrowing applies at once, widening takes 
     m.clickRow("jev");
     assert.equal(m.popover().isArmed(), true);
     assert.equal(m.setRequests.length, 2, "nothing applied yet");
-    assert(m.lines().some((line) => line.includes("jev may approve or deny this session's asks")), m.lines().join("\n"));
+    assert(
+      m.lines().some((line) => line.includes("jev may approve or deny this session's asks")),
+      m.lines().join("\n"),
+    );
     assert(m.lines().some((line) => line.includes("Choose jev again to turn it on")));
     m.clickRow("jev");
     assert.deepEqual(m.setRequests.at(-1), ROOT);
     m.indicator();
     m.clickRow("jev + sub");
     assert.equal(m.popover().isArmed(), true, "adding subagents widens too");
-    assert(m.lines().some((line) => line.includes("jev may decide asks here and from subagents")), m.lines().join("\n"));
+    assert(
+      m.lines().some((line) => line.includes("jev may decide asks here and from subagents")),
+      m.lines().join("\n"),
+    );
     m.popover().handleInput("\u001b[B");
     assert.equal(m.popover().isArmed(), false, "moving away disarms");
     m.popover().handleInput("\u001b");
     assert.deepEqual(m.setRequests.at(-1), ROOT);
-  } finally { await m.shutdown(); }
+  } finally {
+    await m.shutdown();
+  }
 });
 
 test("yolo needs a second choice, reaches the authority's set, and is recorded in the session", async () => {
@@ -1675,14 +2602,29 @@ test("yolo needs a second choice, reaches the authority's set, and is recorded i
     // as before: Bash/Git scope with destructive writes, the Jev/checkpoint
     // bypass, and the still-holding denies/floor/static guard plus re-choice.
     // The dialog's full warning keeps the opaque-program fact.
-    for (const warning of ["Bash/Git asks, destructive writes", "bypasses Jev and hard checkpoints", "denies, the floor",
-      "static guard stay. Choose yolo again"]) {
-      assert(m.lines().some((line) => line.includes(warning)), m.lines().join("\n"));
+    for (const warning of [
+      "Bash/Git asks, destructive writes",
+      "bypasses Jev and hard checkpoints",
+      "denies, the floor",
+      "static guard stay. Choose yolo again",
+    ]) {
+      assert(
+        m.lines().some((line) => line.includes(warning)),
+        m.lines().join("\n"),
+      );
     }
     assert(m.lines().at(-1).startsWith("╰"), "the warning fits above the bottom edge");
     m.clickRow("yolo");
-    assert.equal(yoloSet().has("approval-root"), true, "the managed authority now allows this session's asks");
-    assert.deepEqual(m.entries.at(-1), choiceEntry("approval-root", true, SUB), "the judge mode under yolo is recorded with it");
+    assert.equal(
+      yoloSet().has("approval-root"),
+      true,
+      "the managed authority now allows this session's asks",
+    );
+    assert.deepEqual(
+      m.entries.at(-1),
+      choiceEntry("approval-root", true, SUB),
+      "the judge mode under yolo is recorded with it",
+    );
     assert.equal(m.statuses.get("approval"), "approval: YOLO");
     assert.equal(m.notices.at(-1).level, "warning");
     assert.match(m.notices.at(-1).message, /in-process subagents/);
@@ -1698,7 +2640,9 @@ test("yolo needs a second choice, reaches the authority's set, and is recorded i
     assert.deepEqual(m.entries.at(-1), choiceEntry("approval-root", false, SUB));
     assert.equal(m.statuses.get("approval"), "approval: jev+sub");
     assert.match(m.notices.at(-1).message, /yolo is off/);
-  } finally { await m.shutdown(); }
+  } finally {
+    await m.shutdown();
+  }
 });
 
 test("keyboard, × and permission dialogs all close the approval popover without applying", async () => {
@@ -1722,7 +2666,9 @@ test("keyboard, × and permission dialogs all close the approval popover without
     m.indicator();
     assert.equal(m.indicator(), true);
     assert.equal(m.popover(), undefined, "a second indicator click toggles it closed");
-  } finally { await m.shutdown(); }
+  } finally {
+    await m.shutdown();
+  }
 });
 
 test("the approval popover joins the bottom-right column and steps aside for harness panels", async () => {
@@ -1731,10 +2677,20 @@ test("the approval popover joins the bottom-right column and steps aside for har
     const below = joinPopoverStack(m.tui);
     below.measure(6);
     m.indicator();
-    const paint = () => m.tui.compositeOverlays(Array(m.tui.terminal.rows).fill(""), m.tui.terminal.columns, m.tui.terminal.rows);
-    paint(); paint();
+    const paint = () =>
+      m.tui.compositeOverlays(
+        Array(m.tui.terminal.rows).fill(""),
+        m.tui.terminal.columns,
+        m.tui.terminal.rows,
+      );
+    paint();
+    paint();
     const entry = m.tui.overlayStack.find((candidate) => candidate.component === m.popover());
-    assert.equal(entry.bounds.row + entry.bounds.height, m.tui.terminal.rows - FOOTER_HEIGHT - 6, "above what was already open");
+    assert.equal(
+      entry.bounds.row + entry.bounds.height,
+      m.tui.terminal.rows - FOOTER_HEIGHT - 6,
+      "above what was already open",
+    );
     assert.equal(entry.bounds.col + entry.bounds.width, m.tui.terminal.columns);
     assert.equal(entry.options.nonCapturing, false, "it takes the keyboard for ↑↓ Enter Esc");
     m.f.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {});
@@ -1744,49 +2700,102 @@ test("the approval popover joins the bottom-right column and steps aside for har
     // A column too short for every row plus a warning keeps it off screen,
     // rather than clipping the warning under a clickable armed row.
     below.measure(m.tui.terminal.rows - 1 - 9);
-    paint(); paint();
-    assert.equal(m.tui.overlayStack.find((candidate) => candidate.component === m.popover())?.bounds, undefined);
+    paint();
+    paint();
+    assert.equal(
+      m.tui.overlayStack.find((candidate) => candidate.component === m.popover())?.bounds,
+      undefined,
+    );
     below.leave();
-  } finally { await m.shutdown(); }
+  } finally {
+    await m.shutdown();
+  }
 });
 
 for (const judgeFirst of [false, true]) {
   test(`resuming restores the judge mode, never wider than the launch (judge loaded ${judgeFirst ? "first" : "second"})`, async () => {
-    const m = await mountApproval({ judgeFirst, branch: [choiceEntry("approval-root", false, MANUAL)] });
+    const m = await mountApproval({
+      judgeFirst,
+      branch: [choiceEntry("approval-root", false, MANUAL)],
+    });
     try {
       assert.deepEqual(m.setRequests, [MANUAL], "a manual pick survives resume");
       assert.equal(m.statuses.get("approval"), "approval: manual");
       assert.deepEqual(m.entries, [], "a restored mode that matches the record writes nothing");
       await m.switchSession("approval-wide", [choiceEntry("approval-wide", false, SUB)]);
       assert.deepEqual(m.setRequests.at(-1), MANUAL, "(unchanged)");
-      assert.equal(m.statuses.get("approval"), "approval: jev+sub", "a pick equal to the launch mode needs no request");
-    } finally { await m.shutdown(); }
-    const narrow = await mountApproval({ judgeFirst, launch: MANUAL, branch: [choiceEntry("approval-root", false, SUB)] });
+      assert.equal(
+        m.statuses.get("approval"),
+        "approval: jev+sub",
+        "a pick equal to the launch mode needs no request",
+      );
+    } finally {
+      await m.shutdown();
+    }
+    const narrow = await mountApproval({
+      judgeFirst,
+      launch: MANUAL,
+      branch: [choiceEntry("approval-root", false, SUB)],
+    });
     try {
-      assert.deepEqual(narrow.setRequests, [], "an explicit shadow launch wins over a wider recorded pick");
+      assert.deepEqual(
+        narrow.setRequests,
+        [],
+        "an explicit shadow launch wins over a wider recorded pick",
+      );
       assert.equal(narrow.statuses.get("approval"), "approval: manual");
-    } finally { await narrow.shutdown(); }
-    const between = await mountApproval({ judgeFirst, launch: ROOT, branch: [choiceEntry("approval-root", false, SUB)] });
+    } finally {
+      await narrow.shutdown();
+    }
+    const between = await mountApproval({
+      judgeFirst,
+      launch: ROOT,
+      branch: [choiceEntry("approval-root", false, SUB)],
+    });
     try {
       assert.deepEqual(between.setRequests, [], "jev + sub recorded, jev launched: stays jev");
       assert.deepEqual(between.entries.at(-1), undefined);
-    } finally { await between.shutdown(); }
+    } finally {
+      await between.shutdown();
+    }
   });
 }
 
 test("resuming offers yolo back behind a confirmation instead of resuming it", async () => {
-  const declined = await mountApproval({ confirm: false, branch: [choiceEntry("approval-root", true, MANUAL)] });
+  const declined = await mountApproval({
+    confirm: false,
+    branch: [choiceEntry("approval-root", true, MANUAL)],
+  });
   try {
-    assert.equal(yoloSet().has("approval-root"), false, "declined: every ask still goes through review");
+    assert.equal(
+      yoloSet().has("approval-root"),
+      false,
+      "declined: every ask still goes through review",
+    );
     assert.equal(declined.dialogs.at(-1)?.title, "Resume yolo for this session?");
     assert.deepEqual(declined.setRequests, [MANUAL], "the judge mode under yolo is restored");
-    assert.deepEqual(declined.entries.at(-1), choiceEntry("approval-root", false, MANUAL), "the answer is recorded, so it is not asked again");
-    assert.equal(declined.statuses.get("approval"), "approval: manual", "turning yolo down returns to the mode that was picked");
-  } finally { await declined.shutdown(); }
+    assert.deepEqual(
+      declined.entries.at(-1),
+      choiceEntry("approval-root", false, MANUAL),
+      "the answer is recorded, so it is not asked again",
+    );
+    assert.equal(
+      declined.statuses.get("approval"),
+      "approval: manual",
+      "turning yolo down returns to the mode that was picked",
+    );
+  } finally {
+    await declined.shutdown();
+  }
 
   let answer;
-  const pending = new Promise((resolve) => { answer = resolve; });
-  const accepted = await mountApproval({ confirm: () => pending, branch: [choiceEntry("approval-root", true, SUB)] });
+  const pending = new Promise((resolve) => {
+    answer = resolve;
+  });
+  const accepted = await mountApproval({
+    confirm: () => pending,
+    branch: [choiceEntry("approval-root", true, SUB)],
+  });
   try {
     assert.equal(yoloSet().has("approval-root"), false, "until it is answered, yolo is off");
     answer(true);
@@ -1794,17 +2803,33 @@ test("resuming offers yolo back behind a confirmation instead of resuming it", a
     assert.equal(yoloSet().has("approval-root"), true, "accepted: yolo resumes");
     assert.equal(accepted.statuses.get("approval"), "approval: YOLO");
     await accepted.switchSession("approval-other");
-    assert.equal(yoloSet().has("approval-root"), false, "the previous session's grant does not outlive the switch");
-    assert.equal(yoloSet().has("approval-other"), false, "a new session starts from the launch default");
-  } finally { await accepted.shutdown(); }
+    assert.equal(
+      yoloSet().has("approval-root"),
+      false,
+      "the previous session's grant does not outlive the switch",
+    );
+    assert.equal(
+      yoloSet().has("approval-other"),
+      false,
+      "a new session starts from the launch default",
+    );
+  } finally {
+    await accepted.shutdown();
+  }
   assert.equal(yoloSet().size, 0, "shutdown leaves no grant behind");
 
   const headless = await mountApproval({ branch: [choiceEntry("approval-root", true)] });
   try {
     headless.ctx.hasUI = false;
     await headless.switchSession("approval-root", [choiceEntry("approval-root", true)]);
-    assert.equal(yoloSet().has("approval-root"), false, "with nobody to confirm, yolo is not resumed");
-  } finally { await headless.shutdown(); }
+    assert.equal(
+      yoloSet().has("approval-root"),
+      false,
+      "with nobody to confirm, yolo is not resumed",
+    );
+  } finally {
+    await headless.shutdown();
+  }
 });
 
 test("a fork, clone or foreign record restores nothing", async () => {
@@ -1813,9 +2838,13 @@ test("a fork, clone or foreign record restores nothing", async () => {
     assert.equal(m.dialogs.length, 0, "a record copied from another session id is not offered");
     assert.deepEqual(m.setRequests, [], "nor is its judge mode");
     assert.equal(m.statuses.get("approval"), "approval: jev+sub");
-    await m.switchSession("approval-legacy", [{ type: "custom", customType: APPROVAL_ENTRY, data: { yolo: true } }]);
+    await m.switchSession("approval-legacy", [
+      { type: "custom", customType: APPROVAL_ENTRY, data: { yolo: true } },
+    ]);
     assert.equal(m.dialogs.length, 0, "a record naming no session restores nothing");
-  } finally { await m.shutdown(); }
+  } finally {
+    await m.shutdown();
+  }
 });
 
 test("/tree keeps the live state and makes the new branch's record agree", async () => {
@@ -1828,7 +2857,11 @@ test("/tree keeps the live state and makes the new branch's record agree", async
     await m.navigate(1);
     assert.equal(yoloSet().has("approval-root"), false, "navigation does not turn yolo on");
     assert.equal(m.statuses.get("approval"), "approval: manual");
-    assert.deepEqual(m.entries.at(-1), choiceEntry("approval-root", false, MANUAL), "the stale record is revoked at once");
+    assert.deepEqual(
+      m.entries.at(-1),
+      choiceEntry("approval-root", false, MANUAL),
+      "the stale record is revoked at once",
+    );
     await m.switchSession("approval-root", m.history());
     assert.equal(m.dialogs.length, 0, "reopening the session has no yolo to offer");
 
@@ -1836,13 +2869,19 @@ test("/tree keeps the live state and makes the new branch's record agree", async
     m.pick("yolo");
     const before = m.history().length - 1;
     await m.navigate(before);
-    assert.equal(yoloSet().has("approval-root"), true, "live yolo stays on and the indicator still says so");
+    assert.equal(
+      yoloSet().has("approval-root"),
+      true,
+      "live yolo stays on and the indicator still says so",
+    );
     assert.equal(m.statuses.get("approval"), "approval: YOLO");
     assert.equal(m.entries.at(-1).data.yolo, true);
     const recorded = m.history().length;
     await m.navigate(recorded);
     assert.equal(m.history().length, recorded, "a branch that already agrees gets no new record");
-  } finally { await m.shutdown(); }
+  } finally {
+    await m.shutdown();
+  }
 });
 
 test("a change made elsewhere is recorded; a failed record is said out loud and never fails open", async () => {
@@ -1857,15 +2896,29 @@ test("a change made elsewhere is recorded; a failed record is said out loud and 
     // The second review's case: the revocation cannot be written.
     m.failing.append = true;
     m.pick("manual");
-    assert.equal(yoloSet().has("approval-root"), false, "turning yolo off is live even when the record fails");
-    assert(m.notices.some((notice) => notice.level === "warning" && /could not be recorded/.test(notice.message)),
-      JSON.stringify(m.notices));
+    assert.equal(
+      yoloSet().has("approval-root"),
+      false,
+      "turning yolo off is live even when the record fails",
+    );
+    assert(
+      m.notices.some(
+        (notice) => notice.level === "warning" && /could not be recorded/.test(notice.message),
+      ),
+      JSON.stringify(m.notices),
+    );
     m.failing.append = false;
     // The branch still says yolo; resuming only offers it back.
     await m.switchSession("approval-root", m.history());
     assert.equal(yoloSet().has("approval-root"), true, "(the fixture confirms by default)");
-    assert.equal(m.dialogs.at(-1).title, "Resume yolo for this session?", "a stale record reaches nothing without a confirmation");
-  } finally { await m.shutdown(); }
+    assert.equal(
+      m.dialogs.at(-1).title,
+      "Resume yolo for this session?",
+      "a stale record reaches nothing without a confirmation",
+    );
+  } finally {
+    await m.shutdown();
+  }
 });
 
 test("a confirmation answered after the session changed grants nothing to either session", async () => {
@@ -1873,7 +2926,12 @@ test("a confirmation answered after the session changed grants nothing to either
   // old dialog then answers Yes, and the old session is resumed.
   for (const leave of ["switch", "shutdown"]) {
     let answer;
-    const m = await mountApproval({ confirm: () => new Promise((resolve) => { answer = resolve; }) });
+    const m = await mountApproval({
+      confirm: () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    });
     const pending = m.commands.get("approval").handler("yolo", m.ctx);
     await nextTick();
     if (leave === "switch") await m.switchSession("approval-next");
@@ -1882,7 +2940,11 @@ test("a confirmation answered after the session changed grants nothing to either
     await pending;
     assert.equal(yoloSet().has("approval-root"), false, `${leave}: the old session is not granted`);
     assert.equal(yoloSet().has("approval-next"), false, `${leave}: nor is the new one`);
-    assert.equal(m.entries.some((entry) => entry.data?.yolo === true), false, `${leave}: nothing is recorded`);
+    assert.equal(
+      m.entries.some((entry) => entry.data?.yolo === true),
+      false,
+      `${leave}: nothing is recorded`,
+    );
     if (leave === "switch") {
       await m.switchSession("approval-root", m.history());
       assert.equal(yoloSet().has("approval-root"), false, "resuming the old session finds no yolo");
@@ -1907,73 +2969,129 @@ test("/approval takes a mode by name and confirms every widening; the regular re
     assert.deepEqual(declined.setRequests.at(-1), MANUAL, "and a No keeps manual");
     await run("sometimes");
     assert.equal(declined.notices.at(-1).level, "error");
-  } finally { await declined.shutdown(); }
-  const regular = await mountApproval({ mode: "regular", select: (options) => options.find((option) => option.startsWith("yolo")) });
+  } finally {
+    await declined.shutdown();
+  }
+  const regular = await mountApproval({
+    mode: "regular",
+    select: (options) => options.find((option) => option.startsWith("yolo")),
+  });
   try {
     assert.equal(regular.indicator(), true);
     await nextTick();
     assert.equal(regular.popover(), undefined, "no overlay on the regular renderer");
-    assert.equal(yoloSet().has("approval-root"), true, "Pi's select and confirm dialogs stand in for the popover");
-  } finally { await regular.shutdown(); }
+    assert.equal(
+      yoloSet().has("approval-root"),
+      true,
+      "Pi's select and confirm dialogs stand in for the popover",
+    );
+  } finally {
+    await regular.shutdown();
+  }
   const unjudged = await mountApproval({ judges: false });
   try {
     unjudged.f.pi.events.emit("approval:judge-state", undefined);
     unjudged.indicator();
-    assert.deepEqual(unjudged.lines().slice(1, 3).map((line) => line.slice(1).trim().split(/ {2,}/)[0]), ["› ● manual", "○ yolo"]);
-  } finally { await unjudged.shutdown(); }
+    assert.deepEqual(
+      unjudged
+        .lines()
+        .slice(1, 3)
+        .map((line) => line.slice(1).trim().split(/ {2,}/)[0]),
+      ["› ● manual", "○ yolo"],
+    );
+  } finally {
+    await unjudged.shutdown();
+  }
 });
 
 test("approval sits to the right of worker routing in the footer's corner", async () => {
-  const statuses = new Map([["harness-preset", "workers: fixture-balanced"], ["approval", "approval: jev+sub"], ["other-extension", "OTHER"]]);
+  const statuses = new Map([
+    ["harness-preset", "workers: fixture-balanced"],
+    ["approval", "approval: jev+sub"],
+    ["other-extension", "OTHER"],
+  ]);
   const mounted = await mountFooter({ mode: "fullscreen", statuses });
   const claimed = [];
-  const off = mounted.f.pi.events.on(FOOTER_INDICATOR_CLICK_EVENT, (click) => { claimed.push(click.key); click.handled = true; });
+  const off = mounted.f.pi.events.on(FOOTER_INDICATOR_CLICK_EVENT, (click) => {
+    claimed.push(click.key);
+    click.handled = true;
+  });
   try {
     const line = mounted.line();
     assert(line.endsWith("OTHER · fixture-balanced · jev+sub"), line);
     mounted.clickFooter(line.indexOf("jev+sub"));
     assert.deepEqual(claimed, ["approval"]);
-  } finally { off(); mounted.footer.dispose(); }
+  } finally {
+    off();
+    mounted.footer.dispose();
+  }
 });
 
 test("compact corner indicators preserve styled values and route clicks by their unchanged keys", async () => {
   const themed = {
-    fg: (color, text) => color === "error" ? `\x1b[31m${text}\x1b[39m` : text,
+    fg: (color, text) => (color === "error" ? `\x1b[31m${text}\x1b[39m` : text),
     bold: (text) => `\x1b[1m${text}\x1b[22m`,
   };
   const yolo = approvalStatus(themed, undefined, true);
-  const statuses = new Map([[WORKER_PRESET_INDICATOR, "workers: fixture-strong"], ["approval", yolo],
-    ["other-extension", "workers: unrelated"]]);
+  const statuses = new Map([
+    [WORKER_PRESET_INDICATOR, "workers: fixture-strong"],
+    ["approval", yolo],
+    ["other-extension", "workers: unrelated"],
+  ]);
   const mounted = await mountFooter({ mode: "fullscreen", statuses });
   const claimed = [];
-  const off = mounted.f.pi.events.on(FOOTER_INDICATOR_CLICK_EVENT, (click) => { claimed.push(click.key); click.handled = true; });
+  const off = mounted.f.pi.events.on(FOOTER_INDICATOR_CLICK_EVENT, (click) => {
+    claimed.push(click.key);
+    click.handled = true;
+  });
   try {
     for (const columns of [300, 100]) {
       mounted.tui.terminal.columns = columns;
       const painted = mounted.line(columns);
       const line = stripVTControlCharacters(painted);
       assert(line.endsWith("workers: unrelated · fixture-strong · YOLO"), line);
-      assert(painted.includes("\x1b[31m\x1b[1mYOLO\x1b[22m\x1b[39m"), "YOLO keeps its red/bold styling");
+      assert(
+        painted.includes("\x1b[31m\x1b[1mYOLO\x1b[22m\x1b[39m"),
+        "YOLO keeps its red/bold styling",
+      );
       claimed.length = 0;
       for (const label of ["YOLO", "fixture-strong"]) {
         const start = line.indexOf(label);
         mounted.clickFooter(start);
         mounted.clickFooter(start + visibleWidth(label) - 1);
       }
-      assert.deepEqual(claimed, ["approval", "approval", WORKER_PRESET_INDICATOR, WORKER_PRESET_INDICATOR]);
+      assert.deepEqual(claimed, [
+        "approval",
+        "approval",
+        WORKER_PRESET_INDICATOR,
+        WORKER_PRESET_INDICATOR,
+      ]);
       assert.deepEqual(mounted.visible(), [], "claimed clicks never open the usage panel");
     }
-    assert.equal(statuses.get("approval"), yolo, "only the footer presentation changed, not published statuses");
+    assert.equal(
+      statuses.get("approval"),
+      yolo,
+      "only the footer presentation changed, not published statuses",
+    );
     statuses.set("approval", "manual");
     statuses.set(WORKER_PRESET_INDICATOR, "custom@v2");
-    assert(mounted.line().endsWith("custom@v2 · manual"), "already compact values pass through unchanged");
-  } finally { off(); mounted.footer.dispose(); }
+    assert(
+      mounted.line().endsWith("custom@v2 · manual"),
+      "already compact values pass through unchanged",
+    );
+  } finally {
+    off();
+    mounted.footer.dispose();
+  }
 });
 
 test("footer keeps worker/approval/health order and the health edge stable across status changes", async () => {
   const theme = { fg: (_color, text) => text };
-  const statuses = new Map([[HEALTH_INDICATOR, "●"], ["approval", "approval: jev+sub"],
-    [WORKER_PRESET_INDICATOR, "workers: off"]]);
+  const statuses = new Map([
+    [HEALTH_INDICATOR, "●"],
+    ["approval", "approval: jev+sub"],
+    [WORKER_PRESET_INDICATOR, "workers: off"],
+  ]);
   const mounted = await mountFooter({ mode: "fullscreen", statuses });
   try {
     for (const preset of ["off", "fixture-balanced", "研究团队-custom@revision-42"]) {
@@ -1986,12 +3104,17 @@ test("footer keeps worker/approval/health order and the health edge stable acros
         assert.equal(visibleWidth(line), 120, "health remains flush right");
       }
     }
-  } finally { mounted.footer.dispose(); }
+  } finally {
+    mounted.footer.dispose();
+  }
 });
 
 test("footer sheds cache detail before complete usage figures or corner controls", async () => {
-  const statuses = new Map([[WORKER_PRESET_INDICATOR, "workers: fixture-balanced"],
-    ["approval", "approval: manual"], [HEALTH_INDICATOR, "●"]]);
+  const statuses = new Map([
+    [WORKER_PRESET_INDICATOR, "workers: fixture-balanced"],
+    ["approval", "approval: manual"],
+    [HEALTH_INDICATOR, "●"],
+  ]);
   const mounted = await mountFooter({ mode: "fullscreen", statuses, entries: spendEntries });
   try {
     const full = mounted.line(300);
@@ -1999,40 +3122,60 @@ test("footer sheds cache detail before complete usage figures or corner controls
     const narrow = stripVTControlCharacters(mounted.line(visibleWidth(right) - 1));
     assert(narrow.endsWith("↑6.2k ↓788 $0.780 · fixture-balanced · manual · ●"), narrow);
     assert.equal(mounted.line(300), full, "resize restores full cache detail");
-  } finally { mounted.footer.dispose(); }
-});
-
-test("footer fitting stays bounded with any subset of pinned extensions in either renderer", async () => {
-  const pinned = [[WORKER_PRESET_INDICATOR, "workers: custom-long-preset@v2"],
-    ["approval", "approval: jev+sub"], [HEALTH_INDICATOR, "●"]];
-  for (const mode of ["fullscreen", "regular"]) for (let mask = 0; mask < 8; mask++) {
-    const statuses = new Map([["other", "EXTERNAL_STATUS ".repeat(10)],
-      ...pinned.filter((_entry, index) => mask & (1 << index))]);
-    const mounted = await mountFooter({ mode, statuses, entries: spendEntries });
-    try {
-      for (let columns = 0; columns <= 120; columns++) {
-        const line = stripVTControlCharacters(mounted.line(columns));
-        assert(visibleWidth(line) <= columns, `${mode}/${mask}/${columns}: ${line}`);
-        if (mask & 4 && columns >= 1) assert(line.endsWith("●"), line);
-        if (mask & 2 && columns >= 22) assert(line.includes("jev+sub"), "ordinary Pi also retains approval");
-      }
-    } finally { mounted.footer.dispose(); }
+  } finally {
+    mounted.footer.dispose();
   }
 });
 
+test("footer fitting stays bounded with any subset of pinned extensions in either renderer", async () => {
+  const pinned = [
+    [WORKER_PRESET_INDICATOR, "workers: custom-long-preset@v2"],
+    ["approval", "approval: jev+sub"],
+    [HEALTH_INDICATOR, "●"],
+  ];
+  for (const mode of ["fullscreen", "regular"])
+    for (let mask = 0; mask < 8; mask++) {
+      const statuses = new Map([
+        ["other", "EXTERNAL_STATUS ".repeat(10)],
+        ...pinned.filter((_entry, index) => mask & (1 << index)),
+      ]);
+      const mounted = await mountFooter({ mode, statuses, entries: spendEntries });
+      try {
+        for (let columns = 0; columns <= 120; columns++) {
+          const line = stripVTControlCharacters(mounted.line(columns));
+          assert(visibleWidth(line) <= columns, `${mode}/${mask}/${columns}: ${line}`);
+          if (mask & 4 && columns >= 1) assert(line.endsWith("●"), line);
+          if (mask & 2 && columns >= 22)
+            assert(line.includes("jev+sub"), "ordinary Pi also retains approval");
+        }
+      } finally {
+        mounted.footer.dispose();
+      }
+    }
+});
+
 test("narrow footer preserves styled approval and health, with exact ANSI/CJK click geometry after resize", async () => {
-  const theme = { fg: (color, text) => `\x1b[${color === "error" ? 31 : 36}m${text}\x1b[39m`,
-    bold: (text) => `\x1b[1m${text}\x1b[22m` };
+  const theme = {
+    fg: (color, text) => `\x1b[${color === "error" ? 31 : 36}m${text}\x1b[39m`,
+    bold: (text) => `\x1b[1m${text}\x1b[22m`,
+  };
   const yolo = approvalStatus(theme, undefined, true);
-  const statuses = new Map([[WORKER_PRESET_INDICATOR, `workers: ${theme.fg("accent", "研究团队".repeat(30) + "@v2")}`],
-    ["approval", yolo], [HEALTH_INDICATOR, healthStatus(theme, "error")]]);
+  const statuses = new Map([
+    [WORKER_PRESET_INDICATOR, `workers: ${theme.fg("accent", "研究团队".repeat(30) + "@v2")}`],
+    ["approval", yolo],
+    [HEALTH_INDICATOR, healthStatus(theme, "error")],
+  ]);
   const before = [...statuses];
   const mounted = await mountFooter({ mode: "fullscreen", statuses, theme, entries: spendEntries });
   const claimed = [];
-  const off = mounted.f.pi.events.on(FOOTER_INDICATOR_CLICK_EVENT, (click) => { claimed.push(click.key); click.handled = true; });
+  const off = mounted.f.pi.events.on(FOOTER_INDICATOR_CLICK_EVENT, (click) => {
+    claimed.push(click.key);
+    click.handled = true;
+  });
   try {
     for (const columns of [500, 80, 40, 32, 24, 18, 12, 8, 7, 1, 0, 120, 500]) {
-      const painted = mounted.line(columns), line = stripVTControlCharacters(painted);
+      const painted = mounted.line(columns),
+        line = stripVTControlCharacters(painted);
       assert(visibleWidth(line) <= columns, `${columns}: ${line}`);
       claimed.length = 0;
       if (columns === 0) {
@@ -2046,7 +3189,10 @@ test("narrow footer preserves styled approval and health, with exact ANSI/CJK cl
       assert.deepEqual(claimed, [HEALTH_INDICATOR], "rightmost drawn cell always routes to health");
       if (columns >= 8) {
         assert(line.includes("YOLO"), `${columns}: ${line}`);
-        assert(painted.includes("\x1b[31m\x1b[1mYOLO\x1b[22m\x1b[39m"), "narrowing retains the full red/bold warning");
+        assert(
+          painted.includes("\x1b[31m\x1b[1mYOLO\x1b[22m\x1b[39m"),
+          "narrowing retains the full red/bold warning",
+        );
         mounted.clickFooter(visibleWidth(line.slice(0, line.indexOf("YOLO"))));
         assert.equal(claimed.at(-1), "approval");
       } else {
@@ -2057,14 +3203,31 @@ test("narrow footer preserves styled approval and health, with exact ANSI/CJK cl
         const end = visibleWidth(line.slice(0, line.indexOf(" · ", line.indexOf("研究"))));
         claimed.length = 0;
         for (let x = start; x < end; x++) mounted.clickFooter(x);
-        assert(claimed.length > 0 && claimed.every((key) => key === WORKER_PRESET_INDICATOR),
-          "wide glyphs and a shortened label's ellipsis all belong to the worker control");
-        if (columns < 500) assert(line.slice(0, line.indexOf("YOLO")).includes("…"), "long preset is visibly shortened");
-      } else assert(!claimed.includes(WORKER_PRESET_INDICATOR), "hidden worker control has no phantom hit");
-      if (columns === 500) assert(line.includes("研究团队".repeat(30) + "@v2"), "expansion restores the original label");
+        assert(
+          claimed.length > 0 && claimed.every((key) => key === WORKER_PRESET_INDICATOR),
+          "wide glyphs and a shortened label's ellipsis all belong to the worker control",
+        );
+        if (columns < 500)
+          assert(
+            line.slice(0, line.indexOf("YOLO")).includes("…"),
+            "long preset is visibly shortened",
+          );
+      } else
+        assert(
+          !claimed.includes(WORKER_PRESET_INDICATOR),
+          "hidden worker control has no phantom hit",
+        );
+      if (columns === 500)
+        assert(
+          line.includes("研究团队".repeat(30) + "@v2"),
+          "expansion restores the original label",
+        );
     }
     assert.deepEqual([...statuses], before, "fitting never mutates published status values");
-  } finally { off(); mounted.footer.dispose(); }
+  } finally {
+    off();
+    mounted.footer.dispose();
+  }
 });
 
 /** Health is one dot whose color is the state; the Stats fixture's theme spells
@@ -2076,20 +3239,30 @@ async function mountStats(mode = "fullscreen", hasUI = true) {
   const terminal = { rows: 40, columns: 120, hideCursor() {} };
   const tui = new TuiAltScreen(terminal, false, undefined, {});
   tui.requestRender = () => {};
-  const host = mode === "fullscreen" ? tui : { mode, terminal, render: () => [], requestRender() {} };
+  const host =
+    mode === "fullscreen" ? tui : { mode, terminal, render: () => [], requestRender() {} };
   const editor = { render: () => [], invalidate() {}, handleInput() {} };
   tui.setFocus(editor);
-  const theme = { fg: (role, text) => text === "●" ? `●${role}` : text, bold: (text) => text, bg: (_role, text) => text };
-  const statuses = new Map([["approval", "approval: manual"], [WORKER_PRESET_INDICATOR, "workers: fixture-strong"]]);
-  const commands = new Map(), notices = [];
+  const theme = {
+    fg: (role, text) => (text === "●" ? `●${role}` : text),
+    bold: (text) => text,
+    bg: (_role, text) => text,
+  };
+  const statuses = new Map([
+    ["approval", "approval: manual"],
+    [WORKER_PRESET_INDICATOR, "workers: fixture-strong"],
+  ]);
+  const commands = new Map(),
+    notices = [];
   f.pi.registerCommand = (name, command) => commands.set(name, command);
   f.ctx.hasUI = hasUI;
   f.ctx.sessionManager = { getEntries: () => [], getSessionId: () => "stats-root" };
   f.ctx.model = { provider: "fixture", id: "requested", reasoning: false };
   f.ctx.getContextUsage = () => undefined;
   let footer;
-  Object.assign(f.ctx.ui, { theme,
-    setStatus: (key, text) => text === undefined ? statuses.delete(key) : statuses.set(key, text),
+  Object.assign(f.ctx.ui, {
+    theme,
+    setStatus: (key, text) => (text === undefined ? statuses.delete(key) : statuses.set(key, text)),
     notify: (message, level) => notices.push({ message, level }),
     setWidget(key, factory) {
       f.widgets.delete(key);
@@ -2097,28 +3270,49 @@ async function mountStats(mode = "fullscreen", hasUI = true) {
     },
     setFooter(factory) {
       footer?.dispose();
-      footer = factory(host, theme, { getGitBranch: () => "main", getExtensionStatuses: () => statuses, onBranchChange: () => () => {} });
+      footer = factory(host, theme, {
+        getGitBranch: () => "main",
+        getExtensionStatuses: () => statuses,
+        onBranchChange: () => () => {},
+      });
     },
   });
   footerExtension(f.pi);
   statsExtension(f.pi);
   await f.emit("session_start");
   const line = () => footer.render(terminal.columns)[0];
-  return { f, tui, terminal, statuses, commands, notices, editor, line,
-    pane: () => tui.overlayStack.find((entry) => entry.component.constructor.name === "StatsView")?.component,
+  return {
+    f,
+    tui,
+    terminal,
+    statuses,
+    commands,
+    notices,
+    editor,
+    line,
+    pane: () =>
+      tui.overlayStack.find((entry) => entry.component.constructor.name === "StatsView")?.component,
     click() {
-      const text = line(), label = statuses.get(HEALTH_INDICATOR);
+      const text = line(),
+        label = statuses.get(HEALTH_INDICATOR);
       return footer.handleMouse({ type: "click", button: "left", x: text.indexOf(label), y: 0 });
     },
-    paint() { return tui.compositeOverlays(Array(terminal.rows).fill(""), terminal.columns, terminal.rows); },
-    async close() { await f.emit("session_shutdown"); footer.dispose(); },
+    paint() {
+      return tui.compositeOverlays(Array(terminal.rows).fill(""), terminal.columns, terminal.rows);
+    },
+    async close() {
+      await f.emit("session_shutdown");
+      footer.dispose();
+    },
   };
 }
 
 test("health is one dot whose color is the attention state, not a fabricated green score", () => {
   const theme = { fg: (role, text) => `${role}:${text}` };
-  assert.deepEqual(["unknown", "idle", "busy", "waiting", "error"].map((health) => healthStatus(theme, health)),
-    ["dim:●", "dim:●", "accent:●", "warning:●", "error:●"]);
+  assert.deepEqual(
+    ["unknown", "idle", "busy", "waiting", "error"].map((health) => healthStatus(theme, health)),
+    ["dim:●", "dim:●", "accent:●", "warning:●", "error:●"],
+  );
 });
 
 test("the health footer opens a separate Stats view and closes without popping another overlay", async () => {
@@ -2134,16 +3328,26 @@ test("the health footer opens a separate Stats view and closes without popping a
     assert.match(pane.render(100).join("\n"), /Stats/);
     assert.equal(m.tui.getFocusedComponent(), pane);
     const unrelated = { render: () => ["unrelated"], invalidate() {} };
-    const handle = m.tui.showOverlay(unrelated, { anchor: "top-left", width: 20, nonCapturing: true });
+    const handle = m.tui.showOverlay(unrelated, {
+      anchor: "top-left",
+      width: 20,
+      nonCapturing: true,
+    });
     await m.commands.get("stats").handler("", m.f.ctx);
     assert.equal(m.pane(), undefined);
-    assert(m.tui.overlayStack.some((entry) => entry.component === unrelated), "exact-handle close leaves newer overlays alone");
+    assert(
+      m.tui.overlayStack.some((entry) => entry.component === unrelated),
+      "exact-handle close leaves newer overlays alone",
+    );
     handle.hide();
     assert.equal(m.tui.getFocusedComponent(), m.editor);
-    m.click(); m.paint();
+    m.click();
+    m.paint();
     m.pane().handleInput("\u001b");
     assert.equal(m.pane(), undefined);
-  } finally { await m.close(); }
+  } finally {
+    await m.close();
+  }
 });
 
 test("Stats yields to approvals and other dialogs, and never reopens from a stale notification", async () => {
@@ -2157,15 +3361,20 @@ test("Stats yields to approvals and other dialogs, and never reopens from a stal
     assert.equal(m.pane(), undefined, "cannot cover an active approval");
     m.f.pi.events.emit("permissions:decision", { requestId: "ask" });
     assert.equal(m.pane(), undefined, "a stats window is not a reopen intent");
-    m.click(); assert(m.pane());
+    m.click();
+    assert(m.pane());
     await m.f.emit("ui_prompt_start", { kind: "confirm", reason: "ui_prompt" });
     assert.equal(m.pane(), undefined);
-    m.click(); assert.equal(m.pane(), undefined);
+    m.click();
+    assert.equal(m.pane(), undefined);
     await m.f.emit("ui_prompt_end", { kind: "confirm", reason: "ui_prompt" });
-    m.click(); assert(m.pane());
+    m.click();
+    assert(m.pane());
     m.f.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {});
     assert.equal(m.pane(), undefined, "cooperatively closes during harness settlement");
-  } finally { await m.close(); }
+  } finally {
+    await m.close();
+  }
 });
 
 test("Stats session replacement clears live observations and shutdown retires listeners and refresh", async (t) => {
@@ -2176,16 +3385,33 @@ test("Stats session replacement clears live observations and shutdown retires li
     assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.busy);
     await m.f.emit("turn_start", { turnIndex: 0 });
     await m.f.emit("before_provider_request", { payload: {} });
-    await m.f.emit("message_update", { message: { role: "assistant" }, assistantMessageEvent: { type: "text_delta", delta: "NOT_RETAINED" } });
-    await m.f.emit("message_end", { message: { role: "assistant", provider: "fixture", model: "requested", responseModel: "answered",
-      stopReason: "stop", usage: { output: 10, cost: { total: 0.01 } } } });
+    await m.f.emit("message_update", {
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "NOT_RETAINED" },
+    });
+    await m.f.emit("message_end", {
+      message: {
+        role: "assistant",
+        provider: "fixture",
+        model: "requested",
+        responseModel: "answered",
+        stopReason: "stop",
+        usage: { output: 10, cost: { total: 0.01 } },
+      },
+    });
     await m.f.emit("agent_settled");
-    m.click(); assert(m.pane());
+    m.click();
+    assert(m.pane());
     await m.f.emit("session_start");
     assert.equal(m.pane(), undefined);
     assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.idle);
-    assert.equal(m.f.listeners.get(FOOTER_INDICATOR_CLICK_EVENT).size, 1, "replacement never duplicates the toggle");
-    m.click(); assert(m.pane());
+    assert.equal(
+      m.f.listeners.get(FOOTER_INDICATOR_CLICK_EVENT).size,
+      1,
+      "replacement never duplicates the toggle",
+    );
+    m.click();
+    assert(m.pane());
     await m.f.emit("session_shutdown");
     assert.equal(m.pane(), undefined);
     assert.equal(m.statuses.has(HEALTH_INDICATOR), false);
@@ -2196,7 +3422,9 @@ test("Stats session replacement clears live observations and shutdown retires li
     m.f.pi.events.emit(FOOTER_INDICATOR_CLICK_EVENT, click);
     assert.equal(click.handled, false);
     assert.equal(m.pane(), undefined);
-  } finally { await m.close(); }
+  } finally {
+    await m.close();
+  }
 });
 
 test("regular Stats uses a non-modal summary and no-UI sessions mount nothing", async () => {
@@ -2206,9 +3434,15 @@ test("regular Stats uses a non-modal summary and no-UI sessions mount nothing", 
       await m.commands.get("stats").handler("", m.f.ctx);
       assert.equal(m.pane(), undefined);
       assert.equal(m.notices.length, hasUI ? 1 : 0);
-      if (hasUI) assert.match(m.notices[0].message, /main session \+ managed workers, since opening\n\nTime +Main +Workers\nBusy /);
+      if (hasUI)
+        assert.match(
+          m.notices[0].message,
+          /main session \+ managed workers, since opening\n\nTime +Main +Workers\nBusy /,
+        );
       else assert.equal(m.statuses.has(HEALTH_INDICATOR), false);
-    } finally { await m.close(); }
+    } finally {
+      await m.close();
+    }
   }
 });
 
@@ -2223,76 +3457,159 @@ test("Stats includes owned workers, retains released metrics and rejects foreign
     assert.equal(attach("another-owner", "agent-a"), undefined);
     const sink = attach("stats-root", "agent-a");
     assert(sink);
-    assert.equal(attach("stats-root", "agent-a"), sink, "duplicate attachment does not reset or duplicate a collector");
+    assert.equal(
+      attach("stats-root", "agent-a"),
+      sink,
+      "duplicate attachment does not reset or duplicate a collector",
+    );
     sink.beginRun();
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.busy, "a worker keeps health busy even while the parent is idle");
+    assert.equal(
+      m.statuses.get(HEALTH_INDICATOR),
+      DOT.busy,
+      "a worker keeps health busy even while the parent is idle",
+    );
     sink.startActivity();
     sink.requestStart("requested", "fixture");
     sink.delta("thinking_delta");
-    sink.messageEnd({ role: "assistant", provider: "fixture", model: "requested", responseModel: "worker-actual",
-      stopReason: "stop", usage: { output: 20, cost: { total: 0.03 } } });
-    sink.toolStart("call-a", "read"); sink.toolEnd("call-a", false);
+    sink.messageEnd({
+      role: "assistant",
+      provider: "fixture",
+      model: "requested",
+      responseModel: "worker-actual",
+      stopReason: "stop",
+      usage: { output: 20, cost: { total: 0.03 } },
+    });
+    sink.toolStart("call-a", "read");
+    sink.toolEnd("call-a", false);
     sink.endRun("success");
     assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.idle);
-    m.click(); m.pane().handleInput("2");
+    m.click();
+    m.pane().handleInput("2");
     assert.match(m.pane().render(140).join("\n"), /Workers[\s│]*fixture\/worker-actual +1 /);
-    sink.dispose(); sink.dispose();
+    sink.dispose();
+    sink.dispose();
     const saved = m.pane().render(140).join("\n");
-    assert.match(saved, /Workers[\s│]*fixture\/worker-actual +1 /, "release retains historical totals, not the SDK session");
-    sink.beginRun(); sink.requestStart("STALE_MODEL", "fixture");
-    sink.messageEnd({ role: "assistant", model: "STALE_MODEL", stopReason: "stop", usage: { output: 999 } });
+    assert.match(
+      saved,
+      /Workers[\s│]*fixture\/worker-actual +1 /,
+      "release retains historical totals, not the SDK session",
+    );
+    sink.beginRun();
+    sink.requestStart("STALE_MODEL", "fixture");
+    sink.messageEnd({
+      role: "assistant",
+      model: "STALE_MODEL",
+      stopReason: "stop",
+      usage: { output: 999 },
+    });
     assert.doesNotMatch(m.pane().render(140).join("\n"), /STALE_MODEL/);
-    const late = attach("stats-root", "agent-b"); late.beginRun();
+    const late = attach("stats-root", "agent-b");
+    late.beginRun();
     await m.f.emit("session_start");
-    late.requestStart("OLD_WINDOW", "fixture"); late.endRun("error"); late.dispose();
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.idle, "callbacks from the old window cannot revive worker health");
-    m.click(); m.pane().handleInput("2");
+    late.requestStart("OLD_WINDOW", "fixture");
+    late.endRun("error");
+    late.dispose();
+    assert.equal(
+      m.statuses.get(HEALTH_INDICATOR),
+      DOT.idle,
+      "callbacks from the old window cannot revive worker health",
+    );
+    m.click();
+    m.pane().handleInput("2");
     assert.doesNotMatch(m.pane().render(140).join("\n"), /worker-actual|OLD_WINDOW/);
-  } finally { await m.close(); }
+  } finally {
+    await m.close();
+  }
 });
 
 test("health transitions and streaming never build detail snapshots; tool errors stay in counters", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
-  const mainSnapshot = SessionStats.prototype.snapshot, workerSnapshot = WorkerStats.prototype.snapshot;
-  let mainReads = 0, workerReads = 0;
-  t.mock.method(SessionStats.prototype, "snapshot", function () { mainReads++; return mainSnapshot.call(this); });
-  t.mock.method(WorkerStats.prototype, "snapshot", function () { workerReads++; return workerSnapshot.call(this); });
+  const mainSnapshot = SessionStats.prototype.snapshot,
+    workerSnapshot = WorkerStats.prototype.snapshot;
+  let mainReads = 0,
+    workerReads = 0;
+  t.mock.method(SessionStats.prototype, "snapshot", function () {
+    mainReads++;
+    return mainSnapshot.call(this);
+  });
+  t.mock.method(WorkerStats.prototype, "snapshot", function () {
+    workerReads++;
+    return workerSnapshot.call(this);
+  });
   const m = await mountStats();
   try {
     const request = { parentId: "stats-root", workerId: "live-worker" };
     m.f.pi.events.emit(STATS_WORKER_ATTACH, request);
     const sink = request.sink;
-    sink.beginRun(); sink.startActivity(); sink.requestStart("worker", "fixture");
-    await m.f.emit("agent_start"); await m.f.emit("turn_start", { turnIndex: 0 });
+    sink.beginRun();
+    sink.startActivity();
+    sink.requestStart("worker", "fixture");
+    await m.f.emit("agent_start");
+    await m.f.emit("turn_start", { turnIndex: 0 });
     for (let index = 0; index < 1000; index++) {
-      await m.f.emit("message_update", { assistantMessageEvent: { type: "text_delta", delta: "observed" } });
+      await m.f.emit("message_update", {
+        assistantMessageEvent: { type: "text_delta", delta: "observed" },
+      });
       sink.delta("text_delta");
     }
     await m.f.emit("tool_execution_start", { toolCallId: "check", toolName: "bash" });
     await m.f.emit("tool_execution_end", { toolCallId: "check", isError: true });
-    sink.toolStart("worker-check", "bash"); sink.toolEnd("worker-check", true, 0);
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.busy, "neither tool error is a fatal health signal");
-    const failure = (model) => ({ role: "assistant", provider: "fixture", model, stopReason: "error" });
+    sink.toolStart("worker-check", "bash");
+    sink.toolEnd("worker-check", true, 0);
+    assert.equal(
+      m.statuses.get(HEALTH_INDICATOR),
+      DOT.busy,
+      "neither tool error is a fatal health signal",
+    );
+    const failure = (model) => ({
+      role: "assistant",
+      provider: "fixture",
+      model,
+      stopReason: "error",
+    });
     await m.f.emit("message_end", { message: failure("requested") });
     assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.error);
     m.f.pi.events.emit("permissions:ui_prompt", { requestId: "permission" });
     assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.waiting);
     m.f.pi.events.emit("permissions:decision", { requestId: "permission", decision: "deny" });
     assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.error);
-    await m.f.emit("agent_settled"); await m.f.emit("agent_start"); await m.f.emit("agent_settled");
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.busy, "worker is still running after parent recovery");
-    sink.messageEnd(failure("worker")); sink.endRun("error");
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.error, "actual worker failure is immediately visible");
+    await m.f.emit("agent_settled");
+    await m.f.emit("agent_start");
+    await m.f.emit("agent_settled");
+    assert.equal(
+      m.statuses.get(HEALTH_INDICATOR),
+      DOT.busy,
+      "worker is still running after parent recovery",
+    );
+    sink.messageEnd(failure("worker"));
+    sink.endRun("error");
+    assert.equal(
+      m.statuses.get(HEALTH_INDICATOR),
+      DOT.error,
+      "actual worker failure is immediately visible",
+    );
     t.mock.timers.tick(3000);
-    sink.beginRun(); assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.busy);
-    sink.endRun("success"); assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.idle);
-    assert.deepEqual([mainReads, workerReads], [0, 0], "streaming, transitions and refresh use only cheap health reads");
-    m.click(); m.pane().handleInput("3");
+    sink.beginRun();
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.busy);
+    sink.endRun("success");
+    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.idle);
+    assert.deepEqual(
+      [mainReads, workerReads],
+      [0, 0],
+      "streaming, transitions and refresh use only cheap health reads",
+    );
+    m.click();
+    m.pane().handleInput("3");
     const details = m.pane().render(140).join("\n");
-    assert.match(details, /Main[\s│]*bash +1 +1 /); assert.match(details, /Workers[\s│]*bash +1 +1 /,
-      "both tool error counts remain visible");
-    assert(mainReads > 0 && workerReads > 0, "full snapshots are requested when the details view actually paints");
-  } finally { await m.close(); }
+    assert.match(details, /Main[\s│]*bash +1 +1 /);
+    assert.match(details, /Workers[\s│]*bash +1 +1 /, "both tool error counts remain visible");
+    assert(
+      mainReads > 0 && workerReads > 0,
+      "full snapshots are requested when the details view actually paints",
+    );
+  } finally {
+    await m.close();
+  }
 });
 
 test("red health clears once something succeeds after it, and Stats says what failed", async () => {
@@ -2301,32 +3618,67 @@ test("red health clears once something succeeds after it, and Stats says what fa
     const request = { parentId: "stats-root", workerId: "a7" };
     m.f.pi.events.emit(STATS_WORKER_ATTACH, request);
     const sink = request.sink;
-    sink.beginRun(); sink.startActivity(); sink.requestStart("glm", "zai");
-    sink.messageEnd({ role: "assistant", provider: "zai", model: "glm", stopReason: "error", errorMessage: "429 rate limited" });
-    sink.settleActivity(); sink.endRun("error");
+    sink.beginRun();
+    sink.startActivity();
+    sink.requestStart("glm", "zai");
+    sink.messageEnd({
+      role: "assistant",
+      provider: "zai",
+      model: "glm",
+      stopReason: "error",
+      errorMessage: "429 rate limited",
+    });
+    sink.settleActivity();
+    sink.endRun("error");
     assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.error);
 
     // The parent's next run retries a failed response and then succeeds.
-    const response = (stopReason, errorMessage) => ({ message: { role: "assistant", provider: "fixture", model: "requested",
-      stopReason, ...(errorMessage ? { errorMessage } : {}), usage: { output: 1, cost: { total: 0 } } } });
+    const response = (stopReason, errorMessage) => ({
+      message: {
+        role: "assistant",
+        provider: "fixture",
+        model: "requested",
+        stopReason,
+        ...(errorMessage ? { errorMessage } : {}),
+        usage: { output: 1, cost: { total: 0 } },
+      },
+    });
     await m.f.emit("agent_start");
-    await m.f.emit("turn_start", { turnIndex: 0 }); await m.f.emit("message_end", response("error", "overloaded"));
-    await m.f.emit("turn_start", { turnIndex: 1 }); await m.f.emit("message_end", response("stop"));
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.error, "the idle worker's failure still stands mid-run");
-    m.click(); m.paint();
+    await m.f.emit("turn_start", { turnIndex: 0 });
+    await m.f.emit("message_end", response("error", "overloaded"));
+    await m.f.emit("turn_start", { turnIndex: 1 });
+    await m.f.emit("message_end", response("stop"));
+    assert.equal(
+      m.statuses.get(HEALTH_INDICATOR),
+      DOT.error,
+      "the idle worker's failure still stands mid-run",
+    );
+    m.click();
+    m.paint();
     const details = m.pane().render(140).join("\n");
     assert.match(details, /! a7 +\S.* +zai\/glm +429 rate limited/);
-    assert.match(details, /· main +\S.* +fixture\/requested +overloaded/, "the retried main failure is already cleared");
+    assert.match(
+      details,
+      /· main +\S.* +fixture\/requested +overloaded/,
+      "the retried main failure is already cleared",
+    );
     m.pane().handleInput("\u001b");
     await m.f.emit("agent_settled");
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.idle, "a successful parent run clears a worker that was never resumed");
+    assert.equal(
+      m.statuses.get(HEALTH_INDICATOR),
+      DOT.idle,
+      "a successful parent run clears a worker that was never resumed",
+    );
 
     // A run that ends failed stays red after it settles, until something succeeds.
     await m.f.emit("agent_start");
-    await m.f.emit("turn_start", { turnIndex: 0 }); await m.f.emit("message_end", response("error"));
+    await m.f.emit("turn_start", { turnIndex: 0 });
+    await m.f.emit("message_end", response("error"));
     await m.f.emit("agent_settled");
     assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.error);
-  } finally { await m.close(); }
+  } finally {
+    await m.close();
+  }
 });
 
 test("an aborted parent run keeps a worker failure red, even after its successful toolUse response", async () => {
@@ -2335,25 +3687,58 @@ test("an aborted parent run keeps a worker failure red, even after its successfu
     const request = { parentId: "stats-root", workerId: "a7" };
     m.f.pi.events.emit(STATS_WORKER_ATTACH, request);
     const sink = request.sink;
-    const response = (stopReason) => ({ message: { role: "assistant", provider: "fixture", model: "requested",
-      stopReason, usage: { output: 1, cost: { total: 0 } } } });
+    const response = (stopReason) => ({
+      message: {
+        role: "assistant",
+        provider: "fixture",
+        model: "requested",
+        stopReason,
+        usage: { output: 1, cost: { total: 0 } },
+      },
+    });
     await m.f.emit("agent_start");
-    await m.f.emit("turn_start", { turnIndex: 0 }); await m.f.emit("message_end", response("toolUse"));
-    await m.f.emit("tool_execution_start", { toolCallId: "wait", toolName: "agent_wait", args: {} });
-    sink.beginRun(); sink.startActivity(); sink.requestStart("glm", "zai");
-    sink.messageEnd({ role: "assistant", provider: "zai", model: "glm", stopReason: "error", errorMessage: "429 rate limited" });
-    sink.settleActivity(); sink.endRun("error");
+    await m.f.emit("turn_start", { turnIndex: 0 });
+    await m.f.emit("message_end", response("toolUse"));
+    await m.f.emit("tool_execution_start", {
+      toolCallId: "wait",
+      toolName: "agent_wait",
+      args: {},
+    });
+    sink.beginRun();
+    sink.startActivity();
+    sink.requestStart("glm", "zai");
+    sink.messageEnd({
+      role: "assistant",
+      provider: "zai",
+      model: "glm",
+      stopReason: "error",
+      errorMessage: "429 rate limited",
+    });
+    sink.settleActivity();
+    sink.endRun("error");
     // Esc: the wait ends aborted and the SDK reports the run outside any request.
-    await m.f.emit("tool_execution_end", { toolCallId: "wait", toolName: "agent_wait", result: {}, isError: true });
+    await m.f.emit("tool_execution_end", {
+      toolCallId: "wait",
+      toolName: "agent_wait",
+      result: {},
+      isError: true,
+    });
     await m.f.emit("message_end", response("aborted"));
     await m.f.emit("agent_settled");
-    assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.error, "nothing has seen the failure succeed or been answered");
+    assert.equal(
+      m.statuses.get(HEALTH_INDICATOR),
+      DOT.error,
+      "nothing has seen the failure succeed or been answered",
+    );
 
     await m.f.emit("agent_start");
-    await m.f.emit("turn_start", { turnIndex: 0 }); await m.f.emit("message_end", response("stop"));
+    await m.f.emit("turn_start", { turnIndex: 0 });
+    await m.f.emit("message_end", response("stop"));
     await m.f.emit("agent_settled");
     assert.equal(m.statuses.get(HEALTH_INDICATOR), DOT.idle, "the next run that answers clears it");
-  } finally { await m.close(); }
+  } finally {
+    await m.close();
+  }
 });
 
 test("removed task-list extension is neither deployed nor permitted", () => {

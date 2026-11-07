@@ -1,7 +1,18 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { POPOVER, POPOVER_CLOSE_COLUMNS, popoverCloseHit, popoverCloseTail, popoverRule, popoverSide }
-  from "../../../lib/popover-frame.mjs";
-export { POPOVER, isPopoverCloseClick, popoverCloseHit, popoverSide } from "../../../lib/popover-frame.mjs";
+import {
+  POPOVER,
+  POPOVER_CLOSE_COLUMNS,
+  popoverCloseHit,
+  popoverCloseTail,
+  popoverRule,
+  popoverSide,
+} from "../../../lib/popover-frame.mjs";
+export {
+  POPOVER,
+  isPopoverCloseClick,
+  popoverCloseHit,
+  popoverSide,
+} from "../../../lib/popover-frame.mjs";
 
 /**
  * Rounded chrome for every harness / status popover. Top and bottom edges are
@@ -23,18 +34,31 @@ export type PopoverTheme = {
 const outer = (theme: PopoverTheme, text: string): string => theme.fg("borderAccent", text);
 
 /** The top edge's right end: the close control when asked for and it fits. */
-const topTail = (theme: PopoverTheme, width: number, closable: boolean): { text: string; width: number } =>
+const topTail = (
+  theme: PopoverTheme,
+  width: number,
+  closable: boolean,
+): { text: string; width: number } =>
   closable && popoverCloseHit(width)
     ? { text: popoverCloseTail(theme), width: POPOVER_CLOSE_COLUMNS }
     : { text: outer(theme, POPOVER.tr), width: 1 };
 
 /** `╭─ Title ─────────╮`, or `╭─ Title ───── × ─╮` when closable. */
-export function popoverTitle(theme: PopoverTheme, width: number, title: string, closable = false): string {
+export function popoverTitle(
+  theme: PopoverTheme,
+  width: number,
+  title: string,
+  closable = false,
+): string {
   const tail = topTail(theme, width, closable);
   const room = Math.max(1, width - 1 - tail.width);
   const label = truncateToWidth(` ${title} `, Math.max(1, room - 1), "…");
-  return outer(theme, POPOVER.tl + POPOVER.h) + theme.fg("accent", theme.bold(label)) +
-    outer(theme, POPOVER.h.repeat(Math.max(0, room - visibleWidth(label) - 1))) + tail.text;
+  return (
+    outer(theme, POPOVER.tl + POPOVER.h) +
+    theme.fg("accent", theme.bold(label)) +
+    outer(theme, POPOVER.h.repeat(Math.max(0, room - visibleWidth(label) - 1))) +
+    tail.text
+  );
 }
 
 export function popoverBottom(theme: PopoverTheme, width: number): string {
@@ -55,7 +79,10 @@ const inlayClosable = (width: number, kind: "top" | "bottom", closable: boolean)
 
 /** Columns `popoverInlay` leaves for its inlay at this width. */
 export function popoverInlayWidth(width: number, kind: "top" | "bottom", closable = false): number {
-  return Math.max(0, width - (inlayClosable(width, kind, closable) ? 3 + POPOVER_CLOSE_COLUMNS : 6));
+  return Math.max(
+    0,
+    width - (inlayClosable(width, kind, closable) ? 3 + POPOVER_CLOSE_COLUMNS : 6),
+  );
 }
 
 /**
@@ -63,8 +90,13 @@ export function popoverInlayWidth(width: number, kind: "top" | "bottom", closabl
  * are rule, so the box cannot trail off into the conversation behind it. A
  * closable top edge ends in the close control instead of `─╮`.
  */
-export function popoverInlay(theme: PopoverTheme, width: number, inlay: string, kind: "top" | "bottom",
-  closable = false): string {
+export function popoverInlay(
+  theme: PopoverTheme,
+  width: number,
+  inlay: string,
+  kind: "top" | "bottom",
+  closable = false,
+): string {
   const chrome = popoverInlayWidth(width, kind, closable);
   const text = truncateToWidth(inlay, chrome);
   const remaining = Math.max(0, chrome - visibleWidth(text));
@@ -72,9 +104,18 @@ export function popoverInlay(theme: PopoverTheme, width: number, inlay: string, 
   if (inlayClosable(width, kind, closable)) {
     // The close tail already starts with a space. Separate a short title from
     // the rule, but don't add another pad when the inlay fills its whole width.
-    const fill = remaining >= 2 ? " " + outer(theme, POPOVER.h.repeat(remaining - 1)) :
-      outer(theme, POPOVER.h.repeat(remaining));
+    const fill =
+      remaining >= 2
+        ? " " + outer(theme, POPOVER.h.repeat(remaining - 1))
+        : outer(theme, POPOVER.h.repeat(remaining));
     return left + fill + popoverCloseTail(theme);
   }
-  return left + " " + outer(theme, POPOVER.h.repeat(remaining) + POPOVER.h + (kind === "top" ? POPOVER.tr : POPOVER.br));
+  return (
+    left +
+    " " +
+    outer(
+      theme,
+      POPOVER.h.repeat(remaining) + POPOVER.h + (kind === "top" ? POPOVER.tr : POPOVER.br),
+    )
+  );
 }

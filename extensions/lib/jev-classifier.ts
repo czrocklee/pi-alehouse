@@ -1,5 +1,10 @@
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import type { ClassifierContext, ClassifierModel, ClassifierResult, JsonObject } from "@earendil-works/pi-ai";
+import type {
+  ClassifierContext,
+  ClassifierModel,
+  ClassifierResult,
+  JsonObject,
+} from "@earendil-works/pi-ai";
 
 // This model belongs only to the permission reviewer. Do not register it in
 // the host catalog or resolve the host's (possibly different) TypeSafe auth.
@@ -32,7 +37,8 @@ function nativeClassifier() {
   return classify;
 }
 
-export type NativeFailure = "cancelled" | "timeout" | "http_error" | "network_error" | "invalid_model_response";
+export type NativeFailure =
+  "cancelled" | "timeout" | "http_error" | "network_error" | "invalid_model_response";
 export type NativeReview = {
   answers?: Record<string, { noul: number } | { score: number; confidence: number }>;
   failureCode?: NativeFailure;
@@ -44,28 +50,57 @@ type WireQuestion =
   | { type: "score"; instructions: string; criteria: readonly string[] };
 
 /** Native bool is the public form of wire noul; policy questions remain unchanged. */
-export function nativeQuestions(questions: Record<string, WireQuestion>): ClassifierContext["questions"] {
-  return Object.fromEntries(Object.entries(questions).map(([id, question]) => [
-    id, question.type === "noul" ? { ...question, type: "bool" } : { ...question, criteria: [...question.criteria] },
-  ])) as ClassifierContext["questions"];
+export function nativeQuestions(
+  questions: Record<string, WireQuestion>,
+): ClassifierContext["questions"] {
+  return Object.fromEntries(
+    Object.entries(questions).map(([id, question]) => [
+      id,
+      question.type === "noul"
+        ? { ...question, type: "bool" }
+        : { ...question, criteria: [...question.criteria] },
+    ]),
+  ) as ClassifierContext["questions"];
 }
 
 /** Reject wrong identity, missing/wrong-typed/invalid answers BEFORE policy composition. */
-export function normalizedAnswers(result: ClassifierResult, questions: ClassifierContext["questions"]): NativeReview["answers"] | undefined {
-  if (result.stopReason !== "stop" || result.provider !== JEV_MODEL.provider ||
-      result.model !== JEV_MODEL.id || result.api !== JEV_MODEL.api ||
-      !result.answers || typeof result.answers !== "object" || Array.isArray(result.answers)) return undefined;
+export function normalizedAnswers(
+  result: ClassifierResult,
+  questions: ClassifierContext["questions"],
+): NativeReview["answers"] | undefined {
+  if (
+    result.stopReason !== "stop" ||
+    result.provider !== JEV_MODEL.provider ||
+    result.model !== JEV_MODEL.id ||
+    result.api !== JEV_MODEL.api ||
+    !result.answers ||
+    typeof result.answers !== "object" ||
+    Array.isArray(result.answers)
+  )
+    return undefined;
   const answers: NonNullable<NativeReview["answers"]> = {};
   for (const [id, question] of Object.entries(questions)) {
     const answer = result.answers[id];
     if (question.type === "bool") {
-      if (answer?.type !== "bool" || !Number.isFinite(answer.probability) ||
-          answer.probability < 0 || answer.probability > 1) return undefined;
+      if (
+        answer?.type !== "bool" ||
+        !Number.isFinite(answer.probability) ||
+        answer.probability < 0 ||
+        answer.probability > 1
+      )
+        return undefined;
       answers[id] = { noul: answer.probability };
     } else if (question.type === "score") {
-      if (answer?.type !== "score" || !Number.isFinite(answer.score) ||
-          answer.score < 0 || answer.score > question.criteria.length - 1 ||
-          !Number.isFinite(answer.confidence) || answer.confidence < 0 || answer.confidence > 1) return undefined;
+      if (
+        answer?.type !== "score" ||
+        !Number.isFinite(answer.score) ||
+        answer.score < 0 ||
+        answer.score > question.criteria.length - 1 ||
+        !Number.isFinite(answer.confidence) ||
+        answer.confidence < 0 ||
+        answer.confidence > 1
+      )
+        return undefined;
       answers[id] = { score: answer.score, confidence: answer.confidence };
     } else return undefined;
   }
@@ -75,7 +110,9 @@ export function normalizedAnswers(result: ClassifierResult, questions: Classifie
 /** Internal transport: after dispatch, an aborted budget signal means timeout.
  * callJev separately maps its caller's withdrawal signal back to cancelled. */
 export async function reviewWithNativeJev(
-  packet: Record<string, unknown>, questions: Record<string, WireQuestion>, key: string,
+  packet: Record<string, unknown>,
+  questions: Record<string, WireQuestion>,
+  key: string,
   signal: AbortSignal,
 ): Promise<NativeReview> {
   if (signal.aborted) return { failureCode: "cancelled" };
@@ -86,7 +123,10 @@ export async function reviewWithNativeJev(
   // inherit another request's swapped fetch implementation.
   const requestFetch = globalThis.fetch;
   const guardedFetch: typeof fetch = async (input, init) => {
-    if (String(input) !== JEV_ENDPOINT || init?.redirect !== undefined && init.redirect !== "error") {
+    if (
+      String(input) !== JEV_ENDPOINT ||
+      (init?.redirect !== undefined && init.redirect !== "error")
+    ) {
       transportFailed = true;
       throw new Error("Jev request rejected by endpoint guard");
     }
@@ -102,21 +142,29 @@ export async function reviewWithNativeJev(
     }
   };
   try {
-    const result = await nativeClassifier()(JEV_MODEL, {
-      state: packet as JsonObject,
-      questions: nativeQuestions(questions),
-    }, { apiKey: key, signal, maxRetries: 0, fetch: guardedFetch });
+    const result = await nativeClassifier()(
+      JEV_MODEL,
+      {
+        state: packet as JsonObject,
+        questions: nativeQuestions(questions),
+      },
+      { apiKey: key, signal, maxRetries: 0, fetch: guardedFetch },
+    );
     // The SDK records usage before parsing answers: a malformed response may
     // still have been billed. Preserve that independent count even on defer,
     // without fabricating a parent cost or accepting the invalid answers.
     const input = result.usage?.input;
-    const usage = typeof input === "number" && Number.isFinite(input) && input >= 0
-      ? { inputTokens: input } : {};
+    const usage =
+      typeof input === "number" && Number.isFinite(input) && input >= 0
+        ? { inputTokens: input }
+        : {};
     if (signal.aborted) return { ...usage, failureCode: "timeout" };
-    if (status !== undefined && (status < 200 || status >= 300)) return { ...usage, failureCode: "http_error" };
+    if (status !== undefined && (status < 200 || status >= 300))
+      return { ...usage, failureCode: "http_error" };
     if (transportFailed) return { ...usage, failureCode: "network_error" };
     const answers = normalizedAnswers(result, nativeQuestions(questions));
-    if (!answers || status === undefined) return { ...usage, failureCode: "invalid_model_response" };
+    if (!answers || status === undefined)
+      return { ...usage, failureCode: "invalid_model_response" };
     return { ...usage, answers };
   } catch {
     return { failureCode: signal.aborted ? "timeout" : "network_error" };

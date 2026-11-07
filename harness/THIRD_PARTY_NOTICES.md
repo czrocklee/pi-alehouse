@@ -34,7 +34,7 @@ This is Pi Alehouse's internal opt-in local-worker harness, not a vendored/forke
   https://github.com/gotgenes/pi-packages/tree/b3b6159399f541fd0623f65818557dd3e707a34f/packages/pi-subagents
   Reference for create/register/bind/dispose ordering and compatibility event
   names. No manager, runner or tool implementation was copied. The main-screen
-  widget in `src/ui/agent-widget.ts` and `src/ui/format.ts` deliberately reproduces its *display vocabulary*
+  widget in `src/ui/agent-widget.ts` and `src/ui/format.ts` deliberately reproduces its _display vocabulary_
   so both backends read alike: the glyph set and the Braille spinner frames
   (upstream pi-subagents' `src/ui/glyphs.ts`), the heading/tree/activity-line layout,
   the twelve-line overflow collapse and the finished-agent linger, together with

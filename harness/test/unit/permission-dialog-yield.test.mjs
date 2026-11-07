@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
-import { ApprovalWatch, mountable, PaneRequest, PaneYield, paneYieldHandlers, PERMISSION_UI_PROMPT, PERMISSION_DECISION } from "../../dist/ui/permission-dialog-yield.js";
+import {
+  ApprovalWatch,
+  mountable,
+  PaneRequest,
+  PaneYield,
+  paneYieldHandlers,
+  PERMISSION_UI_PROMPT,
+  PERMISSION_DECISION,
+} from "../../dist/ui/permission-dialog-yield.js";
 
 /** A bus with the shape the SDK's EventBus has, and synchronous emit like it. */
 const bus = () => {
@@ -11,26 +19,55 @@ const bus = () => {
     on(channel, handler) {
       const list = handlers.get(channel) ?? [];
       handlers.set(channel, [...list, handler]);
-      return () => handlers.set(channel, (handlers.get(channel) ?? []).filter((h) => h !== handler));
+      return () =>
+        handlers.set(
+          channel,
+          (handlers.get(channel) ?? []).filter((h) => h !== handler),
+        );
     },
-    emit(channel, data) { for (const handler of [...(handlers.get(channel) ?? [])]) handler(data); },
+    emit(channel, data) {
+      for (const handler of [...(handlers.get(channel) ?? [])]) handler(data);
+    },
     count: (channel) => (handlers.get(channel) ?? []).length,
   };
 };
 const watcher = () => {
   const calls = { prompt: [], idle: 0 };
-  const watch = new ApprovalWatch({ onPrompt: (p) => calls.prompt.push(p), onIdle: () => { calls.idle++; } });
+  const watch = new ApprovalWatch({
+    onPrompt: (p) => calls.prompt.push(p),
+    onIdle: () => {
+      calls.idle++;
+    },
+  });
   return { watch, calls };
 };
-const ask = (requestId, rest = {}) => ({ requestId, source: "tool_call", forwarding: null, ...rest });
+const ask = (requestId, rest = {}) => ({
+  requestId,
+  source: "tool_call",
+  forwarding: null,
+  ...rest,
+});
 
 test("a dialog about to be shown yields once, and the pane returns only when the last one is decided", () => {
-  const b = bus(), { watch, calls } = watcher();
+  const b = bus(),
+    { watch, calls } = watcher();
   watch.bind(b);
-  b.emit(PERMISSION_UI_PROMPT, ask("r1", { surface: "bash", value: "rm -rf build",
-    forwarding: { requesterAgentName: "scout", requesterSessionId: "child-1" } }));
+  b.emit(
+    PERMISSION_UI_PROMPT,
+    ask("r1", {
+      surface: "bash",
+      value: "rm -rf build",
+      forwarding: { requesterAgentName: "scout", requesterSessionId: "child-1" },
+    }),
+  );
   assert.equal(calls.prompt.length, 1);
-  assert.deepEqual(calls.prompt[0], { requestId: "r1", sessionId: "child-1", agentName: "scout", surface: "bash", value: "rm -rf build" });
+  assert.deepEqual(calls.prompt[0], {
+    requestId: "r1",
+    sessionId: "child-1",
+    agentName: "scout",
+    surface: "bash",
+    value: "rm -rf build",
+  });
   assert.equal(watch.pending, 1);
   // A second ask arrives before the first is answered: still yielded, not idle.
   b.emit(PERMISSION_UI_PROMPT, ask("r2", { surface: "read", value: "/etc/shadow" }));
@@ -44,7 +81,8 @@ test("a dialog about to be shown yields once, and the pane returns only when the
 });
 
 test("expired dialogs release yield by their original ID without disturbing another ask", () => {
-  const b = bus(), { watch, calls } = watcher();
+  const b = bus(),
+    { watch, calls } = watcher();
   const off = watch.bind(b);
   const ended = "managed-permissions:ui_prompt_end:v1";
   b.emit(PERMISSION_UI_PROMPT, ask("local"));
@@ -65,11 +103,17 @@ test("expired dialogs release yield by their original ID without disturbing anot
 });
 
 test("decisions that never reached a dialog cannot bring the pane back", () => {
-  const b = bus(), { watch, calls } = watcher();
+  const b = bus(),
+    { watch, calls } = watcher();
   watch.bind(b);
   // Policy allows, session grants and authorizer links all decide without a
   // prompt; treating them as the end of a yield would reopen over a live dialog.
-  for (const resolution of ["policy_allow", "session_approved", "authorizer_allowed", "auto_approved"]) {
+  for (const resolution of [
+    "policy_allow",
+    "session_approved",
+    "authorizer_allowed",
+    "auto_approved",
+  ]) {
     b.emit(PERMISSION_DECISION, { requestId: `silent-${resolution}`, result: "allow", resolution });
   }
   assert.equal(calls.idle, 0);
@@ -80,7 +124,8 @@ test("decisions that never reached a dialog cannot bring the pane back", () => {
 });
 
 test("a repeated prompt for one request yields once, and an unknown id is inert", () => {
-  const b = bus(), { watch, calls } = watcher();
+  const b = bus(),
+    { watch, calls } = watcher();
   watch.bind(b);
   b.emit(PERMISSION_UI_PROMPT, ask("r1"));
   b.emit(PERMISSION_UI_PROMPT, ask("r1"));
@@ -93,23 +138,42 @@ test("a repeated prompt for one request yields once, and an unknown id is inert"
 });
 
 test("a malformed or drifted payload is ignored, never thrown back into the dialog", () => {
-  const b = bus(), { watch, calls } = watcher();
+  const b = bus(),
+    { watch, calls } = watcher();
   watch.bind(b);
-  for (const payload of [undefined, null, 42, "text", {}, { requestId: "" }, { requestId: 7 },
-    { requestId: "ok", forwarding: "not an object" }, { requestId: "ok2", forwarding: { requesterSessionId: 5 } }]) {
+  for (const payload of [
+    undefined,
+    null,
+    42,
+    "text",
+    {},
+    { requestId: "" },
+    { requestId: 7 },
+    { requestId: "ok", forwarding: "not an object" },
+    { requestId: "ok2", forwarding: { requesterSessionId: 5 } },
+  ]) {
     b.emit(PERMISSION_UI_PROMPT, payload);
     b.emit(PERMISSION_DECISION, payload);
   }
   // The two well-formed ids survived; the rest contributed nothing.
-  assert.deepEqual(calls.prompt.map((p) => p.requestId), ["ok", "ok2"]);
+  assert.deepEqual(
+    calls.prompt.map((p) => p.requestId),
+    ["ok", "ok2"],
+  );
   assert.equal(calls.prompt[0].sessionId, undefined);
   assert.equal(calls.prompt[1].sessionId, undefined);
 });
 
 test("a throwing observer cannot take the permission dialog down with it", () => {
   const b = bus();
-  const watch = new ApprovalWatch({ onPrompt: () => { throw new Error("pane exploded"); },
-    onIdle: () => { throw new Error("reopen exploded"); } });
+  const watch = new ApprovalWatch({
+    onPrompt: () => {
+      throw new Error("pane exploded");
+    },
+    onIdle: () => {
+      throw new Error("reopen exploded");
+    },
+  });
   watch.bind(b);
   // emit() is synchronous and runs inside LocalUserAuthorizer.authorize, so a
   // throw here would propagate into the ask instead of showing it.
@@ -119,16 +183,21 @@ test("a throwing observer cannot take the permission dialog down with it", () =>
 });
 
 test("the ask on screen can be attributed to the worker that raised it", () => {
-  const b = bus(), { watch } = watcher();
+  const b = bus(),
+    { watch } = watcher();
   watch.bind(b);
-  b.emit(PERMISSION_UI_PROMPT, ask("r1", { forwarding: { requesterAgentName: "scout", requesterSessionId: "child-1" } }));
+  b.emit(
+    PERMISSION_UI_PROMPT,
+    ask("r1", { forwarding: { requesterAgentName: "scout", requesterSessionId: "child-1" } }),
+  );
   assert.equal(watch.forSession("child-1").requestId, "r1");
   assert.equal(watch.forSession("child-2"), undefined);
   assert.equal(watch.forSession(undefined), undefined);
 });
 
 test("unbinding detaches both channels so a shut-down session stops yielding", () => {
-  const b = bus(), { watch, calls } = watcher();
+  const b = bus(),
+    { watch, calls } = watcher();
   const off = watch.bind(b);
   assert.equal(b.count(PERMISSION_UI_PROMPT), 1);
   off();
@@ -146,30 +215,48 @@ test("unbinding detaches both channels so a shut-down session stops yielding", (
  * defers it, which `flush` stands in for.
  */
 const wiring = (mode) => {
-  const log = [], deferred = [], yielding = new PaneYield();
+  const log = [],
+    deferred = [],
+    yielding = new PaneYield();
   let overlay, close;
   const mount = () => {
     log.push("open");
-    if (mode === "floating") overlay = { setHidden: (hidden) => log.push(hidden ? "hide" : "show") };
-    close = () => { log.push("close"); close = undefined; overlay = undefined; yielding.unmounted(); };
+    if (mode === "floating")
+      overlay = { setHidden: (hidden) => log.push(hidden ? "hide" : "show") };
+    close = () => {
+      log.push("close");
+      close = undefined;
+      overlay = undefined;
+      yielding.unmounted();
+    };
   };
   // The production handlers, not a second copy of them: the only thing stubbed
   // is what the pane is made of and when the deferred reopen runs.
-  const watch = new ApprovalWatch(paneYieldHandlers(yielding, {
-    open: () => !!close,
-    overlay: () => overlay,
-    close: () => close,
-    pending: () => watch.pending,
-    reopen: mount,
-    defer: (task) => deferred.push(task),
-  }));
+  const watch = new ApprovalWatch(
+    paneYieldHandlers(yielding, {
+      open: () => !!close,
+      overlay: () => overlay,
+      close: () => close,
+      pending: () => watch.pending,
+      reopen: mount,
+      defer: (task) => deferred.push(task),
+    }),
+  );
   mount();
-  return { watch, yielding, log, close: () => close?.(),
-    flush: () => { for (const task of deferred.splice(0)) task(); } };
+  return {
+    watch,
+    yielding,
+    log,
+    close: () => close?.(),
+    flush: () => {
+      for (const task of deferred.splice(0)) task();
+    },
+  };
 };
 
 test("a docked pane that closed to yield is rebuilt once the last ask is decided", () => {
-  const b = bus(), pane = wiring("docked");
+  const b = bus(),
+    pane = wiring("docked");
   pane.watch.bind(b);
   b.emit(PERMISSION_UI_PROMPT, ask("r1"));
   // The teardown runs long before the answer; the intent to reopen must outlive it.
@@ -187,20 +274,30 @@ test("a docked pane that closed to yield is rebuilt once the last ask is decided
 });
 
 test("a floating pane hides in place, and a close while hidden cancels its return", () => {
-  const b = bus(), pane = wiring("floating");
+  const b = bus(),
+    pane = wiring("floating");
   pane.watch.bind(b);
   b.emit(PERMISSION_UI_PROMPT, ask("r1"));
   b.emit(PERMISSION_DECISION, { requestId: "r1" });
   pane.flush();
-  assert.deepEqual(pane.log, ["open", "hide", "show"], "hiding keeps the mount, so nothing is rebuilt");
+  assert.deepEqual(
+    pane.log,
+    ["open", "hide", "show"],
+    "hiding keeps the mount, so nothing is rebuilt",
+  );
 
-  const b2 = bus(), other = wiring("floating");
+  const b2 = bus(),
+    other = wiring("floating");
   other.watch.bind(b2);
   b2.emit(PERMISSION_UI_PROMPT, ask("r2"));
   other.close();
   b2.emit(PERMISSION_DECISION, { requestId: "r2" });
   other.flush();
-  assert.deepEqual(other.log, ["open", "hide", "close"], "a pane the user closed while hidden stays closed");
+  assert.deepEqual(
+    other.log,
+    ["open", "hide", "close"],
+    "a pane the user closed while hidden stays closed",
+  );
 });
 
 /**
@@ -210,7 +307,8 @@ test("a floating pane hides in place, and a close while hidden cancels its retur
  * forwarding path turns the abandoned ask into a denial sent to the child.
  */
 test("the pane refuses to mount over an ask, or into the gap held open for one", () => {
-  const b = bus(), pane = wiring("docked");
+  const b = bus(),
+    pane = wiring("docked");
   pane.watch.bind(b);
   assert.equal(mountable(pane.yielding, pane.watch.pending), true, "nothing is in the way yet");
   b.emit(PERMISSION_UI_PROMPT, ask("r1"));
@@ -226,7 +324,8 @@ test("the pane refuses to mount over an ask, or into the gap held open for one",
   pane.flush();
   assert.deepEqual(pane.log, ["open", "close", "open"]);
   // An ask with no pane to displace still blocks a mount.
-  const b2 = bus(), bare = wiring("docked");
+  const b2 = bus(),
+    bare = wiring("docked");
   bare.watch.bind(b2);
   bare.close();
   b2.emit(PERMISSION_UI_PROMPT, ask("r2"));
@@ -234,7 +333,8 @@ test("the pane refuses to mount over an ask, or into the gap held open for one",
 });
 
 test("unbinding forgets the asks it can no longer hear decided", () => {
-  const b = bus(), pane = wiring("docked");
+  const b = bus(),
+    pane = wiring("docked");
   const unbind = pane.watch.bind(b);
   b.emit(PERMISSION_UI_PROMPT, ask("r1"));
   assert.equal(pane.watch.pending, 1);
@@ -246,45 +346,91 @@ test("unbinding forgets the asks it can no longer hear decided", () => {
 });
 
 // Load the actual launcher queue, not a synchronous substitute for ui.custom.
-const queueSource = readFileSync(new URL("../../../extensions/ui-prompt-queue.ts", import.meta.url), "utf8");
-const { default: promptQueue } = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(queueSource,
-  { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText).toString("base64")}`);
+const queueSource = readFileSync(
+  new URL("../../../extensions/ui-prompt-queue.ts", import.meta.url),
+  "utf8",
+);
+const { default: promptQueue } = await import(
+  `data:text/javascript;base64,${Buffer.from(
+    ts.transpileModule(queueSource, {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+    }).outputText,
+  ).toString("base64")}`
+);
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const queuedPane = (t) => {
   const queueKey = Symbol.for("nixos-config.pi.ui-prompt-queue.v1");
   delete globalThis[queueKey];
-  t.after(() => { delete globalThis[queueKey]; });
-  const b = bus(), yielding = new PaneYield(), deferred = [];
-  let request, releaseBlocker, answer, mounts = 0, permissionShown = false;
+  t.after(() => {
+    delete globalThis[queueKey];
+  });
+  const b = bus(),
+    yielding = new PaneYield(),
+    deferred = [];
+  let request,
+    releaseBlocker,
+    answer,
+    mounts = 0,
+    permissionShown = false;
   const ui = {
-    input: () => new Promise((resolve) => { releaseBlocker = resolve; }),
-    confirm: () => new Promise((resolve) => { permissionShown = true; answer = resolve; }),
-    select: async () => undefined, editor: async () => undefined,
-    custom: (factory) => new Promise((resolve) => { factory({}, {}, {}, resolve); }),
+    input: () =>
+      new Promise((resolve) => {
+        releaseBlocker = resolve;
+      }),
+    confirm: () =>
+      new Promise((resolve) => {
+        permissionShown = true;
+        answer = resolve;
+      }),
+    select: async () => undefined,
+    editor: async () => undefined,
+    custom: (factory) =>
+      new Promise((resolve) => {
+        factory({}, {}, {}, resolve);
+      }),
   };
   promptQueue({ on: (_event, handler) => handler({}, { mode: "tui", hasUI: true, ui }) });
   const handlers = paneYieldHandlers(yielding, {
-    open: () => !!request, close: () => request?.close, overlay: () => undefined,
-    pending: () => watch.pending, reopen: () => { void open(); }, defer: (task) => deferred.push(task),
+    open: () => !!request,
+    close: () => request?.close,
+    overlay: () => undefined,
+    pending: () => watch.pending,
+    reopen: () => {
+      void open();
+    },
+    defer: (task) => deferred.push(task),
   });
   const watch = new ApprovalWatch(handlers);
   watch.bind(b);
   const open = async () => {
     if (request || !mountable(yielding, watch.pending)) return;
-    const attempt = request = new PaneRequest();
+    const attempt = (request = new PaneRequest());
     try {
       await ui.custom((_tui, _theme, _kb, done) => {
         if (attempt.mount(done, yielding, watch.pending)) mounts++;
         return { render: () => [], invalidate() {} };
       });
     } finally {
-      request = undefined; yielding.unmounted();
+      request = undefined;
+      yielding.unmounted();
       if (!watch.pending) handlers.onIdle();
     }
   };
-  return { b, watch, yielding, open, ui, mounts: () => mounts, permissionShown: () => permissionShown,
-    releaseBlocker: () => releaseBlocker(), answer: () => answer(true), close: () => request?.close(),
-    flush: () => { for (const task of deferred.splice(0)) task(); } };
+  return {
+    b,
+    watch,
+    yielding,
+    open,
+    ui,
+    mounts: () => mounts,
+    permissionShown: () => permissionShown,
+    releaseBlocker: () => releaseBlocker(),
+    answer: () => answer(true),
+    close: () => request?.close(),
+    flush: () => {
+      for (const task of deferred.splice(0)) task();
+    },
+  };
 };
 
 test("a queued pane yields to an approval behind it in the real PromptQueue", async (t) => {
@@ -335,16 +481,21 @@ test("a decision before dequeue cannot consume the queued pane's reopen intent",
 });
 
 test("mount rechecks pending approvals even without a prior cancellation callback", () => {
-  const request = new PaneRequest(), yielding = new PaneYield();
+  const request = new PaneRequest(),
+    yielding = new PaneYield();
   let settled = 0;
-  assert.equal(request.mount(() => settled++, yielding, 1), false);
+  assert.equal(
+    request.mount(() => settled++, yielding, 1),
+    false,
+  );
   request.close();
   assert.equal(settled, 1);
   assert.equal(yielding.active, true);
 });
 
 test("an ask that lands during the rebuild re-arms instead of reopening over it", () => {
-  const b = bus(), pane = wiring("docked");
+  const b = bus(),
+    pane = wiring("docked");
   pane.watch.bind(b);
   b.emit(PERMISSION_UI_PROMPT, ask("r1"));
   b.emit(PERMISSION_DECISION, { requestId: "r1" });

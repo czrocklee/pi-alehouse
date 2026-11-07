@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,16 +52,38 @@ test("summary CLI writes only an explicitly completed validation summary", () =>
   const output = mkdtempSync(join(tmpdir(), "harness-release-summary-"));
   const summaryPath = join(output, "validation-summary.json");
   try {
-    const invalid = spawnSync(process.execPath, [helper, "--write-validation-summary", output, "narrow-lane"], { encoding: "utf8" });
-    assert.ifError(invalid.error); assert.notEqual(invalid.status, 0);
-    assert.equal(existsSync(summaryPath), false, "invalid invocation must not write a successful summary");
-    const whitespace = spawnSync(process.execPath, [helper, "--write-validation-summary", "--checks-passed", output, " \t "], { encoding: "utf8" });
-    assert.ifError(whitespace.error); assert.notEqual(whitespace.status, 0);
+    const invalid = spawnSync(
+      process.execPath,
+      [helper, "--write-validation-summary", output, "narrow-lane"],
+      { encoding: "utf8" },
+    );
+    assert.ifError(invalid.error);
+    assert.notEqual(invalid.status, 0);
+    assert.equal(
+      existsSync(summaryPath),
+      false,
+      "invalid invocation must not write a successful summary",
+    );
+    const whitespace = spawnSync(
+      process.execPath,
+      [helper, "--write-validation-summary", "--checks-passed", output, " \t "],
+      { encoding: "utf8" },
+    );
+    assert.ifError(whitespace.error);
+    assert.notEqual(whitespace.status, 0);
     assert.equal(existsSync(summaryPath), false, "blank scope must not write a successful summary");
 
-    const valid = spawnSync(process.execPath, [helper, "--write-validation-summary", "--checks-passed", output, "narrow-lane"], { encoding: "utf8" });
-    assert.ifError(valid.error); assert.equal(valid.status, 0, valid.stderr);
-    assert.deepEqual(JSON.parse(readFileSync(summaryPath, "utf8")), validationSummary("narrow-lane"));
+    const valid = spawnSync(
+      process.execPath,
+      [helper, "--write-validation-summary", "--checks-passed", output, "narrow-lane"],
+      { encoding: "utf8" },
+    );
+    assert.ifError(valid.error);
+    assert.equal(valid.status, 0, valid.stderr);
+    assert.deepEqual(
+      JSON.parse(readFileSync(summaryPath, "utf8")),
+      validationSummary("narrow-lane"),
+    );
   } finally {
     rmSync(output, { recursive: true, force: true });
   }
@@ -70,13 +100,26 @@ test("a revoked policy changes release metadata without changing completed evide
     copyFileSync(helper, copiedHelper);
     writeFileSync(join(output, "release-policy.json"), JSON.stringify(revoked));
 
-    const notice = spawnSync(process.execPath, [copiedHelper, "--print-release-notice"], { encoding: "utf8" });
-    assert.ifError(notice.error); assert.equal(notice.status, 0, notice.stderr);
+    const notice = spawnSync(process.execPath, [copiedHelper, "--print-release-notice"], {
+      encoding: "utf8",
+    });
+    assert.ifError(notice.error);
+    assert.equal(notice.status, 0, notice.stderr);
     assert(notice.stdout.startsWith(`RELEASE: NO-GO (${revoked.contract};`), notice.stdout);
 
-    const summary = spawnSync(process.execPath, [copiedHelper, "--write-validation-summary", "--checks-passed", output,
-      "core-and-jev-permissions"], { encoding: "utf8" });
-    assert.ifError(summary.error); assert.equal(summary.status, 0, summary.stderr);
+    const summary = spawnSync(
+      process.execPath,
+      [
+        copiedHelper,
+        "--write-validation-summary",
+        "--checks-passed",
+        output,
+        "core-and-jev-permissions",
+      ],
+      { encoding: "utf8" },
+    );
+    assert.ifError(summary.error);
+    assert.equal(summary.status, 0, summary.stderr);
     assert.deepEqual(JSON.parse(readFileSync(join(output, "validation-summary.json"), "utf8")), {
       checks: "passed",
       scope: "core-and-jev-permissions",

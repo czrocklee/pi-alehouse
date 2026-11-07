@@ -12,7 +12,8 @@ import { HarnessError } from "./ports.ts";
  */
 export type ObservationReason = CommunicationReason;
 export type CoreObservationReason = Exclude<ObservationReason, "snapshot" | "aborted" | "timeout">;
-export type ObservationPolicy = { readonly kind: "snapshot" } | { readonly kind: "waiting"; readonly wait_ms: number };
+export type ObservationPolicy =
+  { readonly kind: "snapshot" } | { readonly kind: "waiting"; readonly wait_ms: number };
 export interface ObservationPublication<Result, References> {
   /** Already serialized/final tool result; never processed after commit. */
   readonly result: Result;
@@ -64,8 +65,12 @@ interface PendingObservationState {
   check(): (() => void) | undefined;
   reject(error: HarnessError): void;
 }
-type PendingObservation = PendingObservationState & ({ readonly kind: "model" } | { readonly kind: "lifecycle" });
-interface ReadOnlyFrame { phase: "validation" | "publication"; violation: boolean }
+type PendingObservation = PendingObservationState &
+  ({ readonly kind: "model" } | { readonly kind: "lifecycle" });
+interface ReadOnlyFrame {
+  phase: "validation" | "publication";
+  violation: boolean;
+}
 const nativeClock: ObservationClock = {
   now: () => performance.now(),
   setTimeout: (callback, delay) => setTimeout(callback, delay),
@@ -74,13 +79,19 @@ const nativeClock: ObservationClock = {
 /** Internal trusted-port check, also used when a context reader is wrapped by
  * the Owner's admission reader. It must run inside the active readonly phase. */
 export const synchronousObservationPort = <T>(value: T): T => {
-  if (value !== null && (typeof value === "object" || typeof value === "function") &&
-      typeof (value as { then?: unknown }).then === "function") {
+  if (
+    value !== null &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof (value as { then?: unknown }).then === "function"
+  ) {
     // Reject now, never await. The intrinsic brand-checks native Promises
     // (including another realm) without invoking an arbitrary thenable's then.
     // Sink a mistaken async port's rejection rather than faulting the process.
-    try { Promise.prototype.then.call(value, undefined, () => undefined).catch(() => undefined); }
-    catch { /* A non-native thenable is still an interface error. */ }
+    try {
+      Promise.prototype.then.call(value, undefined, () => undefined).catch(() => undefined);
+    } catch {
+      /* A non-native thenable is still an interface error. */
+    }
     throw new HarnessError("ASYNC_OBSERVATION_PORT");
   }
   return value;
@@ -88,13 +99,20 @@ export const synchronousObservationPort = <T>(value: T): T => {
 /** Native timer range. Core lifecycle waits retain fractional durations and
  * optional unlimited waiting; model observations have their own tighter cap. */
 export function validateLifecycleWait(wait_ms: number | undefined): void {
-  if (wait_ms !== undefined && (!Number.isFinite(wait_ms) || wait_ms < 0 || wait_ms > 2_147_483_647)) {
+  if (
+    wait_ms !== undefined &&
+    (!Number.isFinite(wait_ms) || wait_ms < 0 || wait_ms > 2_147_483_647)
+  ) {
     throw new HarnessError("INVALID_OBSERVATION_WAIT");
   }
 }
 const observationError = (error: unknown): HarnessError => {
   // Avoid invoking untrusted diagnostic getters/stringification during wake.
-  try { if (error instanceof HarnessError) return error; } catch { /* revoked proxy */ }
+  try {
+    if (error instanceof HarnessError) return error;
+  } catch {
+    /* revoked proxy */
+  }
   return new HarnessError("OBSERVATION_FAILED", { cause: error });
 };
 
@@ -162,20 +180,26 @@ export class ObservationScheduler {
     const wait_ms = options.policy.kind === "waiting" ? options.policy.wait_ms : undefined;
     this.checkWait(wait_ms);
     return this.register<Result>("model", wait_ms, options.signal, (signals, resolve) => () => {
-      const reason = (): ObservationReason | undefined => signals.aborted ? "aborted" : policy === "snapshot" ? "snapshot" :
-        options.ready() ?? (signals.deadlineReached ? "timeout" : undefined);
+      const reason = (): ObservationReason | undefined =>
+        signals.aborted
+          ? "aborted"
+          : policy === "snapshot"
+            ? "snapshot"
+            : (options.ready() ?? (signals.deadlineReached ? "timeout" : undefined));
       // Do not touch guarded SDK getters on every wake while still waiting.
       if (reason() === undefined) return undefined;
       const validation = this.inPhase("validation", options.validate);
       const current = reason(); // Signals/readiness may have changed in validation.
       if (current === undefined) return undefined;
-      const prepare = (why: ObservationReason) => this.inPhase("publication", () => {
-        const snapshot = synchronousObservationPort(options.snapshot(why, validation));
-        const publication = synchronousObservationPort(options.publish(snapshot));
-        // Promise resolution must not assimilate a thenable after commit.
-        const result = synchronousObservationPort(publication.result), references = publication.references;
-        return { result, references };
-      });
+      const prepare = (why: ObservationReason) =>
+        this.inPhase("publication", () => {
+          const snapshot = synchronousObservationPort(options.snapshot(why, validation));
+          const publication = synchronousObservationPort(options.publish(snapshot));
+          // Promise resolution must not assimilate a thenable after commit.
+          const result = synchronousObservationPort(publication.result),
+            references = publication.references;
+          return { result, references };
+        });
       let finalReason = current;
       let publication = prepare(finalReason);
       // Abort is monotonic: at most one replacement projection. The discarded
@@ -198,11 +222,21 @@ export class ObservationScheduler {
   observeLifecycle(options: LifecycleObservation): Promise<LifecycleObservationResult> {
     this.assertEffectAllowed();
     validateLifecycleWait(options.wait_ms);
-    return this.register<LifecycleObservationResult>("lifecycle", options.wait_ms, options.signal, (signals, resolve) => () => {
-      const value: LifecycleObservationResult | undefined = signals.aborted ? "aborted" :
-        options.ready() ? "ready" : signals.deadlineReached ? "timeout" : undefined;
-      return value === undefined ? undefined : () => resolve(value);
-    });
+    return this.register<LifecycleObservationResult>(
+      "lifecycle",
+      options.wait_ms,
+      options.signal,
+      (signals, resolve) => () => {
+        const value: LifecycleObservationResult | undefined = signals.aborted
+          ? "aborted"
+          : options.ready()
+            ? "ready"
+            : signals.deadlineReached
+              ? "timeout"
+              : undefined;
+        return value === undefined ? undefined : () => resolve(value);
+      },
+    );
   }
 
   private checkWait(wait_ms: number | undefined): void {
@@ -211,15 +245,23 @@ export class ObservationScheduler {
     }
   }
 
-  private register<Result>(kind: PendingObservation["kind"], wait_ms: number | undefined,
+  private register<Result>(
+    kind: PendingObservation["kind"],
+    wait_ms: number | undefined,
     signal: AbortSignal | undefined,
     checker: (signals: Signals, resolve: (value: Result) => void) => PendingObservation["check"],
   ): Promise<Result> {
     const started = this.clock.now();
     return new Promise<Result>((resolve, reject) => {
       const signals = { aborted: signal?.aborted ?? false, deadlineReached: wait_ms === 0 };
-      const observation: PendingObservation = { kind, signals, started, wait_ms,
-        check: checker(signals, resolve), reject };
+      const observation: PendingObservation = {
+        kind,
+        signals,
+        started,
+        wait_ms,
+        check: checker(signals, resolve),
+        reject,
+      };
       this.observations.add(observation);
       try {
         if (signal && !signals.aborted) {
@@ -228,7 +270,9 @@ export class ObservationScheduler {
           signal.addEventListener("abort", onAbort, { once: true });
         }
         this.requestDrain();
-      } catch (error) { this.rejectAndDetach(observation, error); }
+      } catch (error) {
+        this.rejectAndDetach(observation, error);
+      }
     });
   }
 
@@ -242,10 +286,21 @@ export class ObservationScheduler {
   }
 
   private armTimer(observation: PendingObservation): void {
-    if (observation.wait_ms === undefined || observation.timer !== undefined || observation.signals.deadlineReached) return;
+    if (
+      observation.wait_ms === undefined ||
+      observation.timer !== undefined ||
+      observation.signals.deadlineReached
+    )
+      return;
     const delay = observation.wait_ms - (this.clock.now() - observation.started);
-    if (delay <= 0) { this.signal(observation, "deadlineReached"); return; }
-    observation.timer = this.clock.setTimeout(() => this.signal(observation, "deadlineReached"), delay);
+    if (delay <= 0) {
+      this.signal(observation, "deadlineReached");
+      return;
+    }
+    observation.timer = this.clock.setTimeout(
+      () => this.signal(observation, "deadlineReached"),
+      delay,
+    );
   }
 
   private detach(observation: PendingObservation): void {
@@ -253,8 +308,16 @@ export class ObservationScheduler {
     // Native teardown is nonthrowing. Even a faulty injected clock/listener
     // must not strand promises, escape child wake, or block peer observations.
     // A leftover native signal is harmless: it checks collection membership.
-    try { if (observation.timer !== undefined) this.clock.clearTimeout(observation.timer); } catch { /* detached */ }
-    try { observation.detachAbort?.(); } catch { /* detached */ }
+    try {
+      if (observation.timer !== undefined) this.clock.clearTimeout(observation.timer);
+    } catch {
+      /* detached */
+    }
+    try {
+      observation.detachAbort?.();
+    } catch {
+      /* detached */
+    }
   }
 
   private rejectAndDetach(observation: PendingObservation, error: unknown): void {
@@ -272,8 +335,10 @@ export class ObservationScheduler {
           if (!this.observations.has(observation)) continue;
           try {
             const complete = observation.check();
-            if (complete) { this.detach(observation); complete(); }
-            else this.armTimer(observation);
+            if (complete) {
+              this.detach(observation);
+              complete();
+            } else this.armTimer(observation);
           } catch (error) {
             // Observer failure never escapes wake/accepted child callbacks and
             // never faults execution tracking or the Owner cleanup latch.
@@ -281,6 +346,8 @@ export class ObservationScheduler {
           }
         }
       } while (this.wakeAgain);
-    } finally { this.draining = false; }
+    } finally {
+      this.draining = false;
+    }
   }
 }

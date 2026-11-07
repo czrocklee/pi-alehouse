@@ -1,8 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Container, matchesKey, stripTerminalSequences, TuiAltScreen, TuiMainScreen, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  Container,
+  matchesKey,
+  stripTerminalSequences,
+  TuiAltScreen,
+  TuiMainScreen,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { createEventBus, initTheme } from "@earendil-works/pi-coding-agent";
-import { PresetPicker, PresetPickerRequest, workerSlotDisplayOrder } from "../../dist/ui/preset-picker.js";
+import {
+  PresetPicker,
+  PresetPickerRequest,
+  workerSlotDisplayOrder,
+} from "../../dist/ui/preset-picker.js";
 import { PanelCoordinator } from "../../dist/ui/panel-coordinator.js";
 import { PreferencesControls } from "../../dist/ui/preferences-controls.js";
 import { createPresetModelSelector } from "../../dist/runtime/preset-model-selector.js";
@@ -11,13 +22,20 @@ import { PresetRouter, strengths, thinkingLevels } from "../../dist/routing.js";
 import { delegationGuideline } from "../../dist/delegation.js";
 import { starterPath } from "../support/preset-config.mjs";
 import { joinPopoverStack, stackedOverlayOptions } from "../../../lib/popover-stack.mjs";
-import { FOOTER_INDICATOR_CLICK_EVENT, WORKER_PRESET_INDICATOR, HIDE_TRANSIENT_OVERLAYS_EVENT }
-  from "../../../lib/overlay-protocol.mjs";
+import {
+  FOOTER_INDICATOR_CLICK_EVENT,
+  WORKER_PRESET_INDICATOR,
+  HIDE_TRANSIENT_OVERLAYS_EVENT,
+} from "../../../lib/overlay-protocol.mjs";
 
 // Exercise Pi's real ui.custom completion: overlays close their own handle,
 // while inline dialogs use the SDK's editor-slot stack.
-const { InteractiveMode } = await import(new URL("modes/interactive/interactive-mode.js",
-  import.meta.resolve("@earendil-works/pi-coding-agent")));
+const { InteractiveMode } = await import(
+  new URL(
+    "modes/interactive/interactive-mode.js",
+    import.meta.resolve("@earendil-works/pi-coding-agent"),
+  )
+);
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 const theme = {
@@ -30,34 +48,77 @@ const theme = {
 const keys = {
   matches(data, binding) {
     const map = {
-      "tui.select.up": "up", "tui.select.down": "down",
-      "tui.select.pageUp": "pageUp", "tui.select.pageDown": "pageDown",
-      "tui.select.confirm": "enter", "tui.select.cancel": ["escape", "ctrl+c"],
+      "tui.select.up": "up",
+      "tui.select.down": "down",
+      "tui.select.pageUp": "pageUp",
+      "tui.select.pageDown": "pageDown",
+      "tui.select.confirm": "enter",
+      "tui.select.cancel": ["escape", "ctrl+c"],
     };
     const expected = map[binding];
     return (Array.isArray(expected) ? expected : [expected]).some((key) => matchesKey(data, key));
   },
 };
 const preset = (name, version = "starter-v2", suffix = name) => ({
-  name, version, digest: "0".repeat(64), models: {
-    d1: `provider/${suffix}-light`, d2: `provider/${suffix}-d2`, d3: `provider/${suffix}-standard`,
-    d4: `provider/${suffix}-d4`, d5: `provider/${suffix}-strong`,
+  name,
+  version,
+  digest: "0".repeat(64),
+  models: {
+    d1: `provider/${suffix}-light`,
+    d2: `provider/${suffix}-d2`,
+    d3: `provider/${suffix}-standard`,
+    d4: `provider/${suffix}-d4`,
+    d5: `provider/${suffix}-strong`,
   },
 });
 const offPreset = () => ({ name: "off", version: "off-v1", digest: "f".repeat(64) });
-const fixture = ({ rows = 24, presets = [preset("alpha"), preset("beta"), preset("gamma")], activeName, theme: th = theme,
-  ...extra } = {}) => {
-  const result = [], applied = [], tui = { terminal: { columns: 120, rows }, renders: 0, requestRender() { this.renders++; } };
-  const active = activeName ?? (presets.find((item) => item.name === "beta")?.name ?? presets[0]?.name ?? "off");
-  const picker = new PresetPicker({ tui, theme: th, keybindings: keys, presets, activeName: active, done: (value) => result.push(value),
-    ...(extra.efforts ? { setEffort: (name, overrides) => {
-      const selected = presets.find((item) => item.name === name);
-      assert(selected && selected.name !== "off");
-      const snapshot = { ...structuredClone(selected), effort_overrides: { ...overrides },
-        effort: Object.fromEntries(strengths.map((slot) =>
-          [slot, overrides[slot] ?? selected.effort_defaults?.[slot] ?? "inherit"])) };
-      applied.push(snapshot); return snapshot;
-    } } : {}), ...extra });
+const fixture = ({
+  rows = 24,
+  presets = [preset("alpha"), preset("beta"), preset("gamma")],
+  activeName,
+  theme: th = theme,
+  ...extra
+} = {}) => {
+  const result = [],
+    applied = [],
+    tui = {
+      terminal: { columns: 120, rows },
+      renders: 0,
+      requestRender() {
+        this.renders++;
+      },
+    };
+  const active =
+    activeName ?? presets.find((item) => item.name === "beta")?.name ?? presets[0]?.name ?? "off";
+  const picker = new PresetPicker({
+    tui,
+    theme: th,
+    keybindings: keys,
+    presets,
+    activeName: active,
+    done: (value) => result.push(value),
+    ...(extra.efforts
+      ? {
+          setEffort: (name, overrides) => {
+            const selected = presets.find((item) => item.name === name);
+            assert(selected && selected.name !== "off");
+            const snapshot = {
+              ...structuredClone(selected),
+              effort_overrides: { ...overrides },
+              effort: Object.fromEntries(
+                strengths.map((slot) => [
+                  slot,
+                  overrides[slot] ?? selected.effort_defaults?.[slot] ?? "inherit",
+                ]),
+              ),
+            };
+            applied.push(snapshot);
+            return snapshot;
+          },
+        }
+      : {}),
+    ...extra,
+  });
   return { picker, tui, result, applied };
 };
 const mouse = (type, x, y, extra = {}) => ({ type, button: "left", x, y, ...extra });
@@ -68,27 +129,44 @@ const mouse = (type, x, y, extra = {}) => ({ type, button: "left", x, y, ...extr
 function emptyOwnerPanels(t, mode = "fullscreen", management, liveEffort = false) {
   initTheme(undefined, false);
   const terminal = { columns: 120, rows: 50, hideCursor() {} };
-  const tui = mode === "fullscreen" ? new TuiAltScreen(terminal, false, undefined, {}) : new TuiMainScreen(terminal, false);
+  const tui =
+    mode === "fullscreen"
+      ? new TuiAltScreen(terminal, false, undefined, {})
+      : new TuiMainScreen(terminal, false);
   tui.requestRender = () => {};
   const editor = { render: () => [], invalidate() {}, getText: () => "draft", setText() {} };
   tui.setFocus(editor);
-  const host = { ui: tui, editor, keybindings: keys, editorContainer: new Container(),
-    extensionWidgetsAbove: new Map(), extensionWidgetsBelow: new Map(),
-    widgetContainerAbove: new Container(), widgetContainerBelow: new Container(),
+  const host = {
+    ui: tui,
+    editor,
+    keybindings: keys,
+    editorContainer: new Container(),
+    extensionWidgetsAbove: new Map(),
+    extensionWidgetsBelow: new Map(),
+    widgetContainerAbove: new Container(),
+    widgetContainerBelow: new Container(),
     renderWidgets: InteractiveMode.prototype.renderWidgets,
     renderWidgetContainer: InteractiveMode.prototype.renderWidgetContainer,
     showExtensionSelector: InteractiveMode.prototype.showExtensionSelector,
-    extensionDialogs: [], disposeActiveSelector() {},
+    extensionDialogs: [],
+    disposeActiveSelector() {},
     pushExtensionDialog: InteractiveMode.prototype.pushExtensionDialog,
     removeExtensionDialog: InteractiveMode.prototype.removeExtensionDialog,
     showTopExtensionDialog: InteractiveMode.prototype.showTopExtensionDialog,
-    programStatus: { setBlocked() {} } };
+    programStatus: { setBlocked() {} },
+  };
   host.editorContainer.addChild(editor);
-  const bus = createEventBus(), shortcuts = new Map(), mounts = [], widgets = [], published = [];
+  const bus = createEventBus(),
+    shortcuts = new Map(),
+    mounts = [],
+    widgets = [],
+    published = [];
   const router = new PresetRouter(starterPath);
   router.select("off");
   const ui = {
-    notify() { assert.fail("unexpected UI notification"); },
+    notify() {
+      assert.fail("unexpected UI notification");
+    },
     setWidget(key, content, options) {
       widgets.push({ key, content });
       InteractiveMode.prototype.setExtensionWidget.call(host, key, content, options);
@@ -96,64 +174,152 @@ function emptyOwnerPanels(t, mode = "fullscreen", management, liveEffort = false
     custom(factory, options) {
       const mount = { options };
       mounts.push(mount);
-      return InteractiveMode.prototype.showExtensionCustom.call(host, (...args) => {
-        mount.component = factory(...args); return mount.component;
-      }, { ...options, onHandle(handle) { mount.handle = handle; options.onHandle?.(handle); } });
+      return InteractiveMode.prototype.showExtensionCustom.call(
+        host,
+        (...args) => {
+          mount.component = factory(...args);
+          return mount.component;
+        },
+        {
+          ...options,
+          onHandle(handle) {
+            mount.handle = handle;
+            options.onHandle?.(handle);
+          },
+        },
+      );
     },
   };
-  const widget = new HarnessWidget({ list: () => [], stats: () => ({ resident: 0, cleanup_uncertain: false }) }, 8);
-  widget.setUi(ui); widget.update();
+  const widget = new HarnessWidget(
+    { list: () => [], stats: () => ({ resident: 0, cleanup_uncertain: false }) },
+    8,
+  );
+  widget.setUi(ui);
+  widget.update();
   assert.equal(widget.tuiMode(), undefined);
   assert.equal(widgets.length, 0, "no Agent rows have ever mounted");
-  const panels = new PanelCoordinator({ pi: { events: bus, registerShortcut: (name, spec) => shortcuts.set(name, spec) },
-    widget, ready: () => true, router: () => router, publish: (candidate, name, _ctx, overrides) => {
+  const panels = new PanelCoordinator({
+    pi: { events: bus, registerShortcut: (name, spec) => shortcuts.set(name, spec) },
+    widget,
+    ready: () => true,
+    router: () => router,
+    publish: (candidate, name, _ctx, overrides) => {
       const selection = router.apply(candidate, name, () => {}, overrides);
       const publication = { selection, candidate: router.rebase(candidate) };
-      published.push(name); return publication;
+      published.push(name);
+      return publication;
     },
     ...(liveEffort ? { efforts: () => ({ levels: thinkingLevels, inherited: "high" }) } : {}),
-    showError: (error) => assert.fail(String(error)), ...(management ? { management } : {}) });
+    showError: (error) => assert.fail(String(error)),
+    ...(management ? { management } : {}),
+  });
   const ctx = { mode: "tui", ui };
-  t.after(() => { panels.dispose(); widget.dispose(); });
-  const paint = () => { for (let i = 0; i < 3; i++) tui.compositeOverlays(Array(terminal.rows).fill(""), terminal.columns, terminal.rows); };
+  t.after(() => {
+    panels.dispose();
+    widget.dispose();
+  });
+  const paint = () => {
+    for (let i = 0; i < 3; i++)
+      tui.compositeOverlays(Array(terminal.rows).fill(""), terminal.columns, terminal.rows);
+  };
   const click = () => {
     const event = { key: WORKER_PRESET_INDICATOR, handled: false };
-    bus.emit(FOOTER_INDICATOR_CLICK_EVENT, event); assert.equal(event.handled, true);
+    bus.emit(FOOTER_INDICATOR_CLICK_EVENT, event);
+    assert.equal(event.handled, true);
   };
-  return { panels, widget, host, ctx, tui, terminal, bus, shortcuts, mounts, widgets, published, paint, click, router };
+  return {
+    panels,
+    widget,
+    host,
+    ctx,
+    tui,
+    terminal,
+    bus,
+    shortcuts,
+    mounts,
+    widgets,
+    published,
+    paint,
+    click,
+    router,
+  };
 }
 
-for (const order of [["usage", "approval", "workers"], ["usage", "workers", "approval"],
-  ["approval", "usage", "workers"], ["approval", "workers", "usage"],
-  ["workers", "usage", "approval"], ["workers", "approval", "usage"]]) {
+for (const order of [
+  ["usage", "approval", "workers"],
+  ["usage", "workers", "approval"],
+  ["approval", "usage", "workers"],
+  ["approval", "workers", "usage"],
+  ["workers", "usage", "approval"],
+  ["workers", "approval", "usage"],
+]) {
   test(`fresh empty Owner stacks workers at shared width via actual SDK: ${order.join(" → ")}`, async (t) => {
-    const h = emptyOwnerPanels(t), others = new Map();
-    const clearOthers = () => { for (const { handle, member } of others.values()) { handle.hide(); member.leave(); } };
+    const h = emptyOwnerPanels(t),
+      others = new Map();
+    const clearOthers = () => {
+      for (const { handle, member } of others.values()) {
+        handle.hide();
+        member.leave();
+      }
+    };
     h.bus.on(HIDE_TRANSIENT_OVERLAYS_EVENT, clearOthers);
     t.after(clearOthers);
     h.panels.attachHost(h.ctx, h.bus);
     for (const name of order) {
-      if (name === "workers") { h.click(); await tick(); }
-      else {
-        const member = joinPopoverStack(h.tui), height = name === "usage" ? 5 : 7;
-        const component = { render(width) { member.measure(height); return Array(height).fill("x".repeat(width)); }, invalidate() {} };
-        const handle = h.tui.showOverlay(component, stackedOverlayOptions(member,
-          { width: name === "usage" ? 52 : 68, nonCapturing: true }));
+      if (name === "workers") {
+        h.click();
+        await tick();
+      } else {
+        const member = joinPopoverStack(h.tui),
+          height = name === "usage" ? 5 : 7;
+        const component = {
+          render(width) {
+            member.measure(height);
+            return Array(height).fill("x".repeat(width));
+          },
+          invalidate() {},
+        };
+        const handle = h.tui.showOverlay(
+          component,
+          stackedOverlayOptions(member, { width: name === "usage" ? 52 : 68, nonCapturing: true }),
+        );
         others.set(name, { handle, member });
       }
       h.paint();
     }
     const mount = h.mounts[0];
-    assert.equal(mount.options.overlay, true, "first open must float even though no Agent widget ever supplied a mode");
-    assert.equal(h.widget.tuiMode(), undefined, "opening routing must not manufacture an Agent row");
-    assert.deepEqual(h.widgets.map(({ key }) => key), ["harness-panel-host"]);
+    assert.equal(
+      mount.options.overlay,
+      true,
+      "first open must float even though no Agent widget ever supplied a mode",
+    );
+    assert.equal(
+      h.widget.tuiMode(),
+      undefined,
+      "opening routing must not manufacture an Agent row",
+    );
+    assert.deepEqual(
+      h.widgets.map(({ key }) => key),
+      ["harness-panel-host"],
+    );
     assert.deepEqual(h.host.extensionWidgetsAbove.get("harness-panel-host").render(120), []);
-    assert.equal(h.host.widgetContainerAbove.render(120).length, 1, "only the SDK's existing spacer, no extra visible row");
-    assert.equal(h.host.editorContainer.children[0], h.host.editor, "the picker must not replace the editor");
+    assert.equal(
+      h.host.widgetContainerAbove.render(120).length,
+      1,
+      "only the SDK's existing spacer, no extra visible row",
+    );
+    assert.equal(
+      h.host.editorContainer.children[0],
+      h.host.editor,
+      "the picker must not replace the editor",
+    );
     assert.equal(h.tui.getFocusedComponent(), mount.component);
     for (const columns of [120, 42, 160]) {
-      h.terminal.columns = columns; h.paint();
-      const bounds = order.map((name) => (name === "workers" ? mount : others.get(name)).handle.getBounds());
+      h.terminal.columns = columns;
+      h.paint();
+      const bounds = order.map((name) =>
+        (name === "workers" ? mount : others.get(name)).handle.getBounds(),
+      );
       let bottom = h.terminal.rows - 1;
       for (const box of bounds) {
         assert.equal(box.width, Math.min(76, columns));
@@ -163,79 +329,106 @@ for (const order of [["usage", "approval", "workers"], ["usage", "workers", "app
       }
     }
     for (const component of h.host.extensionWidgetsAbove.values()) component.invalidate();
-    h.click(); await tick();
+    h.click();
+    await tick();
     assert.equal(mount.handle.getBounds(), undefined);
     assert.deepEqual(h.published, [], "close must not select a preset");
-    const reopening = h.shortcuts.get("alt+s").handler(); await tick(); h.paint();
+    const reopening = h.shortcuts.get("alt+s").handler();
+    await tick();
+    h.paint();
     assert.equal(h.mounts[1].options.overlay, true, "idle reopen via keyboard still floats");
     assert.equal(h.mounts[1].handle.getBounds().width, 76);
-    h.panels.dispose(); await reopening;
+    h.panels.dispose();
+    await reopening;
     assert.equal(h.host.extensionWidgetsAbove.size, 0, "shutdown removes the invisible host too");
     assert.equal(h.widgets.filter(({ content }) => content === undefined).length, 1);
   });
 }
 
-for (const mode of ["regular", "unknown"]) test(`empty Owner keeps ${mode} renderer routing docked`, async (t) => {
-  const h = emptyOwnerPanels(t, "regular");
-  if (mode === "unknown") h.tui.mode = undefined;
-  h.panels.attachHost(h.ctx, h.bus);
-  const opening = h.shortcuts.get("alt+s").handler(); await tick();
-  const mount = h.mounts[0];
-  assert.equal(mount.options.overlay, false);
-  assert.equal(mount.handle, undefined);
-  assert.equal(h.host.editorContainer.children[0], mount.component);
-  assert.doesNotMatch(stripTerminalSequences(mount.component.render(120)[0]), /×/);
-  mount.component.handleInput("\u001b"); await opening;
-  assert.equal(h.host.editorContainer.children[0], h.host.editor);
-});
+for (const mode of ["regular", "unknown"])
+  test(`empty Owner keeps ${mode} renderer routing docked`, async (t) => {
+    const h = emptyOwnerPanels(t, "regular");
+    if (mode === "unknown") h.tui.mode = undefined;
+    h.panels.attachHost(h.ctx, h.bus);
+    const opening = h.shortcuts.get("alt+s").handler();
+    await tick();
+    const mount = h.mounts[0];
+    assert.equal(mount.options.overlay, false);
+    assert.equal(mount.handle, undefined);
+    assert.equal(h.host.editorContainer.children[0], mount.component);
+    assert.doesNotMatch(stripTerminalSequences(mount.component.render(120)[0]), /×/);
+    mount.component.handleInput("\u001b");
+    await opening;
+    assert.equal(h.host.editorContainer.children[0], h.host.editor);
+  });
 
-for (const fault of ["mount", "clear"]) test(`panel host cleanup survives a partially applied ${fault} failure`, (t) => {
-  const h = emptyOwnerPanels(t), notices = [];
-  const setWidget = h.ctx.ui.setWidget;
-  h.ctx.ui.notify = (message) => notices.push(message);
-  h.ctx.ui.setWidget = (...args) => {
-    setWidget(...args);
-    if ((fault === "mount") === (args[1] !== undefined)) throw new Error("HOST_WIDGET_FAILURE");
-  };
-  if (fault === "mount") assert.throws(() => h.panels.attachHost(h.ctx, h.bus), /HOST_WIDGET_FAILURE/);
-  else h.panels.attachHost(h.ctx, h.bus);
-  const lateFactory = h.widgets[0].content;
-  assert.doesNotThrow(() => h.panels.dispose());
-  assert.equal(h.host.extensionWidgetsAbove.size, 0);
-  const event = { key: WORKER_PRESET_INDICATOR, handled: false };
-  h.bus.emit(FOOTER_INDICATOR_CLICK_EVENT, event);
-  assert.equal(event.handled, false, "the retired coordinator no longer owns footer clicks");
-  assert.equal(notices.length, fault === "clear" ? 1 : 0);
-  // An old factory or repeated disposal must not reacquire the host or remove
-  // a widget that a later UI lifetime installed under the same key.
-  const replacement = { render: () => [], invalidate() {} };
-  setWidget("harness-panel-host", () => replacement);
-  lateFactory(h.tui, theme);
-  assert.equal(h.panels.tui, undefined);
-  h.panels.dispose();
-  assert.equal(h.host.extensionWidgetsAbove.get("harness-panel-host"), replacement);
-});
+for (const fault of ["mount", "clear"])
+  test(`panel host cleanup survives a partially applied ${fault} failure`, (t) => {
+    const h = emptyOwnerPanels(t),
+      notices = [];
+    const setWidget = h.ctx.ui.setWidget;
+    h.ctx.ui.notify = (message) => notices.push(message);
+    h.ctx.ui.setWidget = (...args) => {
+      setWidget(...args);
+      if ((fault === "mount") === (args[1] !== undefined)) throw new Error("HOST_WIDGET_FAILURE");
+    };
+    if (fault === "mount")
+      assert.throws(() => h.panels.attachHost(h.ctx, h.bus), /HOST_WIDGET_FAILURE/);
+    else h.panels.attachHost(h.ctx, h.bus);
+    const lateFactory = h.widgets[0].content;
+    assert.doesNotThrow(() => h.panels.dispose());
+    assert.equal(h.host.extensionWidgetsAbove.size, 0);
+    const event = { key: WORKER_PRESET_INDICATOR, handled: false };
+    h.bus.emit(FOOTER_INDICATOR_CLICK_EVENT, event);
+    assert.equal(event.handled, false, "the retired coordinator no longer owns footer clicks");
+    assert.equal(notices.length, fault === "clear" ? 1 : 0);
+    // An old factory or repeated disposal must not reacquire the host or remove
+    // a widget that a later UI lifetime installed under the same key.
+    const replacement = { render: () => [], invalidate() {} };
+    setWidget("harness-panel-host", () => replacement);
+    lateFactory(h.tui, theme);
+    assert.equal(h.panels.tui, undefined);
+    h.panels.dispose();
+    assert.equal(h.host.extensionWidgetsAbove.get("harness-panel-host"), replacement);
+  });
 
 test("a queued picker can be cancelled before mount and settles only once", () => {
   let beforeNotices = 0;
-  const before = new PresetPickerRequest(() => beforeNotices++), early = [];
+  const before = new PresetPickerRequest(() => beforeNotices++),
+    early = [];
   before.close();
-  assert.equal(before.mount((value) => early.push(value), false), false);
+  assert.equal(
+    before.mount((value) => early.push(value), false),
+    false,
+  );
   before.choose("alpha");
   assert.deepEqual(early, [null]);
-  assert.equal(beforeNotices, 2,
-    "deferred cancellation coordinates immediately and again before Pi closes the dequeued factory");
+  assert.equal(
+    beforeNotices,
+    2,
+    "deferred cancellation coordinates immediately and again before Pi closes the dequeued factory",
+  );
 
   let mountedNotices = 0;
-  const mounted = new PresetPickerRequest(() => mountedNotices++), values = [];
-  assert.equal(mounted.mount((value) => values.push(value), false), true);
-  mounted.choose("beta"); mounted.close(); mounted.choose("gamma");
+  const mounted = new PresetPickerRequest(() => mountedNotices++),
+    values = [];
+  assert.equal(
+    mounted.mount((value) => values.push(value), false),
+    true,
+  );
+  mounted.choose("beta");
+  mounted.close();
+  mounted.choose("gamma");
   assert.deepEqual(values, ["beta"]);
   assert.equal(mountedNotices, 1, "apply coordinates overlays once");
 
   let blockedNotices = 0;
-  const blocked = new PresetPickerRequest(() => blockedNotices++), denied = [];
-  assert.equal(blocked.mount((value) => denied.push(value), true), false);
+  const blocked = new PresetPickerRequest(() => blockedNotices++),
+    denied = [];
+  assert.equal(
+    blocked.mount((value) => denied.push(value), true),
+    false,
+  );
   assert.deepEqual(denied, [null]);
   assert.equal(blockedNotices, 1, "a blocked factory coordinates overlays once");
 });
@@ -244,10 +437,15 @@ for (const trigger of ["approval", "shutdown"]) {
   test(`a newer transient overlay cannot strand the picker during ${trigger}`, async () => {
     const layers = [];
     const editor = { getText: () => "draft", setText: () => {} };
-    let focus = editor, doneCalls = 0, transientHides = 0, commits = 0;
+    let focus = editor,
+      doneCalls = 0,
+      transientHides = 0,
+      commits = 0;
     const tui = {
       requestRender() {},
-      setFocus(component) { focus = component; },
+      setFocus(component) {
+        focus = component;
+      },
       showOverlay(component, options = {}) {
         const layer = { component, options };
         layers.push(layer);
@@ -267,7 +465,10 @@ for (const trigger of ["approval", "shutdown"]) {
       },
     };
     const host = {
-      editor, ui: tui, keybindings: {}, disposeActiveSelector() {},
+      editor,
+      ui: tui,
+      keybindings: {},
+      disposeActiveSelector() {},
       editorContainer: { clear() {}, addChild() {} },
     };
     let transient;
@@ -276,17 +477,32 @@ for (const trigger of ["approval", "shutdown"]) {
       transient?.hide();
     });
     const picker = { render: () => ["picker"], invalidate() {} };
-    const opening = InteractiveMode.prototype.showExtensionCustom.call(host,
+    const opening = InteractiveMode.prototype.showExtensionCustom.call(
+      host,
       (_tui, _theme, _keys, done) => {
-        assert.equal(request.mount((value) => { doneCalls++; done(value); }, false), true);
+        assert.equal(
+          request.mount((value) => {
+            doneCalls++;
+            done(value);
+          }, false),
+          true,
+        );
         return picker;
-      }, { overlay: true });
+      },
+      { overlay: true },
+    );
     await tick();
-    assert.deepEqual(layers.map(({ component }) => component), [picker]);
+    assert.deepEqual(
+      layers.map(({ component }) => component),
+      [picker],
+    );
 
     const footer = { render: () => ["footer"], invalidate() {} };
     transient = tui.showOverlay(footer, { nonCapturing: true });
-    assert.deepEqual(layers.map(({ component }) => component), [picker, footer]);
+    assert.deepEqual(
+      layers.map(({ component }) => component),
+      [picker, footer],
+    );
     assert.equal(focus, picker, "the noncapturing footer does not steal picker focus");
 
     request.close();
@@ -302,20 +518,31 @@ for (const trigger of ["approval", "shutdown"]) {
     if (trigger === "approval") {
       const approval = { render: () => ["approval"], invalidate() {} };
       tui.showOverlay(approval);
-      assert.deepEqual(layers.map(({ component }) => component), [approval]);
+      assert.deepEqual(
+        layers.map(({ component }) => component),
+        [approval],
+      );
       assert.equal(focus, approval, "the approval retains focus after picker cleanup");
     }
   });
 }
 
 test("preset dashboard fits narrow, normal and wide terminals without hiding slot identities", () => {
-  const long = preset("custom-preset-name-that-is-intentionally-long-for-a-small-terminal", "2026-10-01-release", "model-id-that-is-also-intentionally-long");
+  const long = preset(
+    "custom-preset-name-that-is-intentionally-long-for-a-small-terminal",
+    "2026-10-01-release",
+    "model-id-that-is-also-intentionally-long",
+  );
   for (const rows of [8, 12, 24]) {
     for (const width of [18, 34, 76, 120]) {
       const { picker } = fixture({ rows, presets: [long], activeName: long.name });
       const lines = picker.render(width);
-      assert.ok(lines.length <= Math.max(7, Math.floor(rows * 0.8)), `height ${rows}x${width}: ${lines.length}`);
-      for (const line of lines) assert.ok(visibleWidth(line) <= width, `${rows}x${width}: ${JSON.stringify(line)}`);
+      assert.ok(
+        lines.length <= Math.max(7, Math.floor(rows * 0.8)),
+        `height ${rows}x${width}: ${lines.length}`,
+      );
+      for (const line of lines)
+        assert.ok(visibleWidth(line) <= width, `${rows}x${width}: ${JSON.stringify(line)}`);
       const plain = stripTerminalSequences(lines.join("\n"));
       const seen = new Set();
       for (let index = 0; index < strengths.length; index++) {
@@ -332,8 +559,14 @@ test("preset dashboard fits narrow, normal and wide terminals without hiding slo
 test("the picker frame uses accent chrome and muted sides", () => {
   const colors = [];
   const recording = {
-    fg: (color, text) => { colors.push(color); return text; },
-    bg: (_color, text) => text, bold: (text) => text, italic: (text) => text, strikethrough: (text) => text,
+    fg: (color, text) => {
+      colors.push(color);
+      return text;
+    },
+    bg: (_color, text) => text,
+    bold: (text) => text,
+    italic: (text) => text,
+    strikethrough: (text) => text,
   };
   const { picker } = fixture({ theme: recording });
   const lines = picker.render(76);
@@ -343,17 +576,28 @@ test("the picker frame uses accent chrome and muted sides", () => {
   assert.ok(colors.includes("borderMuted"));
   assert.ok(colors.includes("accent"));
   assert.ok(!colors.includes("border"));
-  assert.ok(!colors.includes("dim") || colors.indexOf("borderAccent") < colors.indexOf("dim"),
-    "the outer frame is painted before any dim interior text");
+  assert.ok(
+    !colors.includes("dim") || colors.indexOf("borderAccent") < colors.indexOf("dim"),
+    "the outer frame is painted before any dim interior text",
+  );
 });
 
 test("list and detail versions align at the right border", () => {
   for (const width of [60, 76, 110]) {
     const { picker } = fixture();
-    const rows = picker.render(width).map(stripTerminalSequences).filter((line) => line.includes("starter-v2"));
+    const rows = picker
+      .render(width)
+      .map(stripTerminalSequences)
+      .filter((line) => line.includes("starter-v2"));
     assert.equal(rows.length, 4, "three list rows and the detail heading");
-    assert.equal(new Set(rows.map((line) => visibleWidth(line.slice(0, line.indexOf("starter-v2"))))).size, 1);
-    assert(rows.every((line) => line.endsWith("starter-v2│")), `versions reach the right border at width ${width}`);
+    assert.equal(
+      new Set(rows.map((line) => visibleWidth(line.slice(0, line.indexOf("starter-v2"))))).size,
+      1,
+    );
+    assert(
+      rows.every((line) => line.endsWith("starter-v2│")),
+      `versions reach the right border at width ${width}`,
+    );
   }
 });
 
@@ -389,7 +633,8 @@ test("off has no routing slots in full or compact layouts and selects by keyboar
 
   const compact = fixture({ pointer: true, rows: 10, presets: [off], activeName: "off" });
   const lines = compact.picker.render(60).map(stripTerminalSequences);
-  const compactText = lines.join("\n"), target = lines.findIndex((line) => line.includes("› off"));
+  const compactText = lines.join("\n"),
+    target = lines.findIndex((line) => line.includes("› off"));
   assert.match(compactText, /No new, resumed, or steered work\./);
   assert.match(compactText, /Accepted work continues\./);
   assert.doesNotMatch(compactText, /provider\//);
@@ -410,7 +655,9 @@ test("focused Alt+S closes the picker without applying or changing its selection
 });
 
 test("configured selection keys navigate, page, apply once and cancel without applying", () => {
-  const many = Array.from({ length: 18 }, (_, index) => preset(`team-${String(index).padStart(2, "0")}`));
+  const many = Array.from({ length: 18 }, (_, index) =>
+    preset(`team-${String(index).padStart(2, "0")}`),
+  );
   const applied = fixture({ presets: many, activeName: "team-00" });
   applied.picker.render(50);
   applied.picker.handleInput("\u001b[6~");
@@ -429,7 +676,11 @@ test("a floating picker closes from its × and applies a clicked preset like a m
   const closing = fixture({ pointer: true });
   let lines = closing.picker.render(76).map(stripTerminalSequences);
   assert.match(lines[0], /^╭─ Delegation ─+ × ─╮$/);
-  assert.equal(closing.picker.handleMouse(mouse("click", 73, 1)).handled, true, "the body swallows clicks");
+  assert.equal(
+    closing.picker.handleMouse(mouse("click", 73, 1)).handled,
+    true,
+    "the body swallows clicks",
+  );
   assert.deepEqual(closing.result, []);
   closing.picker.handleMouse(mouse("click", lines[0].indexOf("×"), 0));
   assert.deepEqual(closing.result, [null], "× cancels without applying");
@@ -459,7 +710,8 @@ test("the wheel moves the highlight; a docked picker leaves the pointer alone", 
   assert.equal(picker.selection(), "gamma", "one step per wheel event, clamped");
   picker.handleMouse(mouse("wheel", 5, 5, { wheelDelta: -1 }));
   assert.equal(picker.selection(), "beta");
-  assert.equal(tui.renders, 2); assert.deepEqual(result, []);
+  assert.equal(tui.renders, 2);
+  assert.deepEqual(result, []);
 
   const docked = fixture();
   const lines = docked.picker.render(76).map(stripTerminalSequences);
@@ -472,8 +724,18 @@ test("a stacked picker fits the rows left for it and reports what it painted", (
   const tui = { terminal: { columns: 120, rows: 40 }, requestRender() {} };
   const presets = Array.from({ length: 12 }, (_, index) => preset(`team-${index}`));
   const heights = [];
-  const make = (room) => new PresetPicker({ tui, theme, keybindings: keys, presets, activeName: "team-0", done() {},
-    pointer: true, rows: room === undefined ? undefined : () => room, onRender: (height) => heights.push(height) });
+  const make = (room) =>
+    new PresetPicker({
+      tui,
+      theme,
+      keybindings: keys,
+      presets,
+      activeName: "team-0",
+      done() {},
+      pointer: true,
+      rows: room === undefined ? undefined : () => room,
+      onRender: (height) => heights.push(height),
+    });
   const free = make().render(76).length;
   assert.equal(free, 24, "unconstrained, the five-slot detail decides");
   for (const room of [16, 11, 9]) {
@@ -485,25 +747,49 @@ test("a stacked picker fits the rows left for it and reports what it painted", (
 
 test("all configured presets show versions, including fixture names and overridden selections", () => {
   const builtIn = { ...preset("fixture-balanced", "fixture-v3"), effort_overrides: { d1: "high" } };
-  const { picker } = fixture({ presets: [builtIn, preset("fixture-light", "fixture-v1"),
-    { ...preset("mine", "v7"), effort_overrides: { d5: "low" } }], activeName: "fixture-balanced" });
+  const { picker } = fixture({
+    presets: [
+      builtIn,
+      preset("fixture-light", "fixture-v1"),
+      { ...preset("mine", "v7"), effort_overrides: { d5: "low" } },
+    ],
+    activeName: "fixture-balanced",
+  });
   const text = picker.render(76).map(stripTerminalSequences);
-  assert(text.some((line) => line.includes("fixture-v3")), text.join("\n"));
-  assert(text.some((line) => line.includes("fixture-v1")), text.join("\n"));
-  assert(text.some((line) => line.includes("fixture-balanced*")), text.join("\n"));
-  assert(text.some((line) => line.includes("mine*") && line.endsWith("v7│")), text.join("\n"));
+  assert(
+    text.some((line) => line.includes("fixture-v3")),
+    text.join("\n"),
+  );
+  assert(
+    text.some((line) => line.includes("fixture-v1")),
+    text.join("\n"),
+  );
+  assert(
+    text.some((line) => line.includes("fixture-balanced*")),
+    text.join("\n"),
+  );
+  assert(
+    text.some((line) => line.includes("mine*") && line.endsWith("v7│")),
+    text.join("\n"),
+  );
   const compact = fixture({ rows: 10, presets: [builtIn], activeName: "fixture-balanced" });
-  const row = compact.picker.render(60).map(stripTerminalSequences).find((line) => line.includes("› fixture-balanced*"));
+  const row = compact.picker
+    .render(60)
+    .map(stripTerminalSequences)
+    .find((line) => line.includes("› fixture-balanced*"));
   assert(row.endsWith("fixture-v3 · 1/1│"), row);
 });
 
-const effortPreset = (name = "alpha") => ({ ...preset(name),
+const effortPreset = (name = "alpha") => ({
+  ...preset(name),
   effort: { d1: "high", d2: "inherit", d3: "inherit", d4: "inherit", d5: "low" },
   effort_defaults: { d1: "high", d2: "inherit", d3: "inherit", d4: "inherit", d5: "low" },
   effort_overrides: { d1: "high" },
 });
-const effortCaps = (_preset, slot) => ({ levels: slot === "d5" ? ["off", "low", "high"] : ["off", "low", "medium", "high"],
-  inherited: slot === "d5" ? "low" : "medium" });
+const effortCaps = (_preset, slot) => ({
+  levels: slot === "d5" ? ["off", "low", "high"] : ["off", "low", "medium", "high"],
+  inherited: slot === "d5" ? "low" : "medium",
+});
 const painted = (picker, width = 76) => picker.render(width).map(stripTerminalSequences);
 const clickText = (picker, label, width = 76) => {
   const lines = painted(picker, width);
@@ -513,10 +799,11 @@ const clickText = (picker, label, width = 76) => {
 };
 
 const descendingSlots = ["d5", "d4", "d3", "d2", "d1"];
-const paintedSlots = (lines) => lines.flatMap((line) => {
-  const slot = line.match(/^│[ ›]?(d[1-5])(?:\s|:)/)?.[1] ?? line.match(/‹(d[1-5]):/)?.[1];
-  return slot ? [slot] : [];
-});
+const paintedSlots = (lines) =>
+  lines.flatMap((line) => {
+    const slot = line.match(/^│[ ›]?(d[1-5])(?:\s|:)/)?.[1] ?? line.match(/‹(d[1-5]):/)?.[1];
+    return slot ? [slot] : [];
+  });
 
 test("routing and effort rows paint hardest first without changing canonical or numeric slot identity", () => {
   assert.deepEqual(strengths, ["d1", "d2", "d3", "d4", "d5"]);
@@ -527,12 +814,18 @@ test("routing and effort rows paint hardest first without changing canonical or 
     assert.deepEqual(paintedSlots(painted(h.picker, width)), descendingSlots);
     h.picker.handleInput("e");
     assert.deepEqual(paintedSlots(painted(h.picker, width)), descendingSlots);
-    assert(painted(h.picker, width).some((line) => line.includes("›‹d5:default")), "effort starts at d5");
+    assert(
+      painted(h.picker, width).some((line) => line.includes("›‹d5:default")),
+      "effort starts at d5",
+    );
     h.picker.handleInput("\u001b[C");
     assert.deepEqual(h.applied.at(-1).effort_overrides, { d1: "high", d5: "inherit" });
     for (const slot of descendingSlots) {
       h.picker.handleInput(slot.slice(1));
-      assert(painted(h.picker, width).some((line) => line.includes(`›‹${slot}:`)), `${slot} key selects its identity`);
+      assert(
+        painted(h.picker, width).some((line) => line.includes(`›‹${slot}:`)),
+        `${slot} key selects its identity`,
+      );
     }
   }
   for (const slot of descendingSlots) {
@@ -542,9 +835,17 @@ test("routing and effort rows paint hardest first without changing canonical or 
     const y = lines.findIndex((line) => new RegExp(`^│ ${slot}\\s`).test(line));
     assert(y > 0, lines.join("\n"));
     h.picker.handleMouse(mouse("click", lines[y].indexOf("provider/"), y));
-    assert.deepEqual(h.result, [{ action: "edit-model", name: "beta", slot }], "mouse keeps painted slot identity");
+    assert.deepEqual(
+      h.result,
+      [{ action: "edit-model", name: "beta", slot }],
+      "mouse keeps painted slot identity",
+    );
   }
-  assert.deepEqual(strengths, ["d1", "d2", "d3", "d4", "d5"], "painting/editing never reverses the core tuple");
+  assert.deepEqual(
+    strengths,
+    ["d1", "d2", "d3", "d4", "d5"],
+    "painting/editing never reverses the core tuple",
+  );
 });
 
 test("seven-row slot windows follow descending Tab/arrows/wheel order and retain both endpoints on resize", () => {
@@ -559,16 +860,25 @@ test("seven-row slot windows follow descending Tab/arrows/wheel order and retain
     }
     assert.deepEqual(paintedSlots(painted(h.picker, width)), ["d3", "d2", "d1"]);
     h.picker.handleInput("\t");
-    assert(painted(h.picker, width).some((line) => line.includes("›d5")), "Tab wraps to hardest");
+    assert(
+      painted(h.picker, width).some((line) => line.includes("›d5")),
+      "Tab wraps to hardest",
+    );
     h.picker.handleInput("\u001b[Z");
-    assert(painted(h.picker, width).some((line) => line.includes("›d1")), "Shift+Tab wraps to easiest");
+    assert(
+      painted(h.picker, width).some((line) => line.includes("›d1")),
+      "Shift+Tab wraps to easiest",
+    );
     h.picker.handleInput("e");
     assert.deepEqual(paintedSlots(painted(h.picker, width)), ["d5", "d4", "d3"]);
     for (const slot of descendingSlots) {
       assert(painted(h.picker, width).some((line) => line.includes(`›‹${slot}:`)));
       h.picker.handleInput("\u001b[B");
     }
-    assert(painted(h.picker, width).some((line) => line.includes("›‹d1:")), "Down clamps at the bottom");
+    assert(
+      painted(h.picker, width).some((line) => line.includes("›‹d1:")),
+      "Down clamps at the bottom",
+    );
     assert.deepEqual(paintedSlots(painted(h.picker, width)), ["d3", "d2", "d1"]);
     h.picker.options.rows = () => 19;
     assert.deepEqual(paintedSlots(painted(h.picker, width)), descendingSlots);
@@ -581,8 +891,12 @@ test("seven-row slot windows follow descending Tab/arrows/wheel order and retain
     assert(painted(h.picker, width).some((line) => line.includes("›‹d2:")));
     h.picker.handleInput("\u001b[Z");
     assert(painted(h.picker, width).some((line) => line.includes("›‹d3:")));
-    h.picker.handleInput("5"); h.picker.handleInput("\u001b[A");
-    assert(painted(h.picker, width).some((line) => line.includes("›‹d5:")), "Up clamps at the top");
+    h.picker.handleInput("5");
+    h.picker.handleInput("\u001b[A");
+    assert(
+      painted(h.picker, width).some((line) => line.includes("›‹d5:")),
+      "Up clamps at the top",
+    );
     assert.deepEqual(h.applied, [], "selection and scrolling never edit effort");
   }
 });
@@ -596,8 +910,10 @@ test("legacy hosts remain read-only, while arrows immediately publish immutable 
     legacy.picker.handleInput("\r");
     assert.deepEqual(legacy.result, ["alpha"]);
   }
-  const original = structuredClone(selected), edit = fixture({ presets: [selected], efforts: effortCaps });
-  edit.picker.handleInput("e"); edit.picker.handleInput("1");
+  const original = structuredClone(selected),
+    edit = fixture({ presets: [selected], efforts: effortCaps });
+  edit.picker.handleInput("e");
+  edit.picker.handleInput("1");
   const text = painted(edit.picker).join("\n");
   assert.match(text, /New Agents only; main unchanged/);
   assert.match(text, /source: preset defaults \+ session overrides/);
@@ -610,7 +926,9 @@ test("legacy hosts remain read-only, while arrows immediately publish immutable 
   assert.match(painted(edit.picker).join("\n"), /d1:medium/);
   edit.picker.handleInput("\u001b"); // return, never undo
   assert.match(painted(edit.picker).join("\n"), /d1.*medium\*/);
-  edit.picker.handleInput("e"); edit.picker.handleInput("1"); edit.picker.handleInput("\u001b[D");
+  edit.picker.handleInput("e");
+  edit.picker.handleInput("1");
+  edit.picker.handleInput("\u001b[D");
   assert.deepEqual(edit.applied.at(-1).effort_overrides, { d1: "low" });
   edit.picker.handleInput("\r"); // Enter also returns, no extra publication
   assert.equal(edit.applied.length, 2);
@@ -620,14 +938,17 @@ test("legacy hosts remain read-only, while arrows immediately publish immutable 
 });
 
 test("pointer arrows and reset publish immediately; inactive editing is a confirm-only route", () => {
-  const selected = effortPreset(), h = fixture({ pointer: true, presets: [selected], efforts: effortCaps });
+  const selected = effortPreset(),
+    h = fixture({ pointer: true, presets: [selected], efforts: effortCaps });
   clickText(h.picker, "Edit effort");
-  let lines = painted(h.picker), y = lines.findIndex((line) => line.includes("‹d1:high›"));
+  let lines = painted(h.picker),
+    y = lines.findIndex((line) => line.includes("‹d1:high›"));
   h.picker.handleMouse(mouse("click", lines[y].indexOf("‹"), y));
   assert.deepEqual(h.applied.at(-1).effort_overrides, { d1: "medium" });
   clickText(h.picker, "R reset");
   assert.deepEqual(h.applied.at(-1).effort_overrides, {});
-  lines = painted(h.picker); y = lines.findIndex((line) => line.includes("‹d1:default›"));
+  lines = painted(h.picker);
+  y = lines.findIndex((line) => line.includes("‹d1:default›"));
   h.picker.handleMouse(mouse("click", lines[y].indexOf("default"), y));
   assert.equal(h.applied.length, 2, "value/label clicks only select the slot");
   h.picker.handleMouse(mouse("click", lines[y].indexOf("›", lines[y].indexOf("‹")), y));
@@ -638,19 +959,35 @@ test("pointer arrows and reset publish immediately; inactive editing is a confir
   assert.deepEqual(h.result, []);
   assert.match(painted(h.picker).join("\n"), /Delegation/);
   clickText(h.picker, "Edit effort");
-  const top = painted(h.picker)[0]; h.picker.handleMouse(mouse("click", top.indexOf("×"), 0));
+  const top = painted(h.picker)[0];
+  h.picker.handleMouse(mouse("click", top.indexOf("×"), 0));
   assert.deepEqual(h.result, [null]);
   assert.equal(h.applied.length, 4, "closing never rolls back or republishes");
   for (const pointer of [false, true]) {
-    const inactive = fixture({ pointer, presets: [selected], activeName: "off", efforts: effortCaps });
-    if (pointer) clickText(inactive.picker, "Edit effort"); else inactive.picker.handleInput("e");
+    const inactive = fixture({
+      pointer,
+      presets: [selected],
+      activeName: "off",
+      efforts: effortCaps,
+    });
+    if (pointer) clickText(inactive.picker, "Edit effort");
+    else inactive.picker.handleInput("e");
     assert.deepEqual(inactive.result, [{ action: "edit-effort", name: "alpha" }]);
-    assert.deepEqual(inactive.applied, [], "neither enable nor effort publication occurs before host consent");
+    assert.deepEqual(
+      inactive.applied,
+      [],
+      "neither enable nor effort publication occurs before host consent",
+    );
   }
 });
 
 test("effort row label, value, model and blank clicks select only; the painted arrows alone adjust", () => {
-  const { picker, result, applied } = fixture({ pointer: true, presets: [effortPreset()], activeName: "alpha", efforts: effortCaps });
+  const { picker, result, applied } = fixture({
+    pointer: true,
+    presets: [effortPreset()],
+    activeName: "alpha",
+    efforts: effortCaps,
+  });
   picker.handleInput("e");
   picker.handleInput("3"); // select d3, then select d1 by mouse
   for (const target of ["d1", "high", "provider/alpha-light"]) {
@@ -664,26 +1001,38 @@ test("effort row label, value, model and blank clicks select only; the painted a
   let y = lines.findIndex((line) => line.includes("‹d1:high›"));
   picker.handleMouse(mouse("click", 74, y)); // padding beyond the model
   assert.match(painted(picker)[y], /d1:high/);
-  lines = painted(picker); y = lines.findIndex((line) => line.includes("‹d1:high›"));
+  lines = painted(picker);
+  y = lines.findIndex((line) => line.includes("‹d1:high›"));
   picker.handleMouse(mouse("click", lines[y].indexOf("‹"), y));
   assert.match(painted(picker)[y], /d1:medium/);
-  lines = painted(picker); y = lines.findIndex((line) => line.includes("‹d1:medium›"));
+  lines = painted(picker);
+  y = lines.findIndex((line) => line.includes("‹d1:medium›"));
   picker.handleMouse(mouse("click", lines[y].indexOf("›", lines[y].indexOf("‹")), y));
   assert.match(painted(picker)[y], /d1:high/);
   picker.handleInput("\r");
   assert.deepEqual(result, []);
-  assert.deepEqual(applied.map((item) => item.effort_overrides), [{ d1: "medium" }, { d1: "high" }]);
+  assert.deepEqual(
+    applied.map((item) => item.effort_overrides),
+    [{ d1: "medium" }, { d1: "high" }],
+  );
 });
 
 test("clipped effort arrows never create invisible pointer controls at narrow widths", () => {
   for (const width of [8, 10, 12, 14, 18, 34]) {
-    const { picker } = fixture({ pointer: true, rows: 8, presets: [effortPreset()], efforts: effortCaps });
-    picker.handleInput("e"); picker.handleInput("1");
+    const { picker } = fixture({
+      pointer: true,
+      rows: 8,
+      presets: [effortPreset()],
+      efforts: effortCaps,
+    });
+    picker.handleInput("e");
+    picker.handleInput("1");
     picker.handleInput("\u001b[D"); // medium; next arrow should return to high if visible
     const lines = painted(picker, width);
     const y = lines.findIndex((line) => line.includes("›‹d1"));
     assert(y > 0, lines.join("\n"));
-    const prev = lines[y].indexOf("‹"), next = lines[y].indexOf("›", prev + 1);
+    const prev = lines[y].indexOf("‹"),
+      next = lines[y].indexOf("›", prev + 1);
     picker.handleMouse(mouse("click", width + 3, y)); // theoretical offscreen next arrow
     assert.match(painted(picker, 76).join("\n"), /‹d1:medium›/, `offscreen click at ${width}`);
     const narrow = painted(picker, width);
@@ -707,7 +1056,8 @@ test("Off has no effort editor; Alt+S closes without undoing live changes", () =
   assert.deepEqual(off.result, ["off"]);
 
   const cancelled = fixture({ presets: [effortPreset()], efforts: effortCaps });
-  cancelled.picker.handleInput("e"); cancelled.picker.handleInput("1");
+  cancelled.picker.handleInput("e");
+  cancelled.picker.handleInput("1");
   cancelled.picker.handleInput("\u001b[D");
   cancelled.picker.handleInput("\u001bs");
   assert.deepEqual(cancelled.result, [null]);
@@ -716,7 +1066,11 @@ test("Off has no effort editor; Alt+S closes without undoing live changes", () =
 
 test("default and explicit inherit remain distinct even when default is literal inherit", () => {
   const selected = effortPreset();
-  const { picker, result, applied } = fixture({ presets: [selected], activeName: "alpha", efforts: effortCaps });
+  const { picker, result, applied } = fixture({
+    presets: [selected],
+    activeName: "alpha",
+    efforts: effortCaps,
+  });
   picker.handleInput("e");
   picker.handleInput("3"); // d3 configured default inherit
   assert.match(painted(picker).join("\n"), /default: inherit · inherit → medium/);
@@ -730,13 +1084,19 @@ test("default and explicit inherit remain distinct even when default is literal 
 test("fixed validation rejects live proposals while inheritance warnings remain advisory", () => {
   const selected = { ...effortPreset(), effort_overrides: { d1: "max", d3: "inherit" } };
   let unavailable = false;
-  const caps = (_preset, slot) => slot === "d1" ? { levels: ["low", "high"], inherited: "low" } :
-    slot === "d3" ? { levels: ["off", "low", "high"], inheritError: "Parent thinking unavailable" } :
-      unavailable ? { levels: [], error: "Missing model" } : { levels: ["low", "high"], inherited: "low" };
+  const caps = (_preset, slot) =>
+    slot === "d1"
+      ? { levels: ["low", "high"], inherited: "low" }
+      : slot === "d3"
+        ? { levels: ["off", "low", "high"], inheritError: "Parent thinking unavailable" }
+        : unavailable
+          ? { levels: [], error: "Missing model" }
+          : { levels: ["low", "high"], inherited: "low" };
   const { picker, result, applied } = fixture({ presets: [selected], efforts: caps });
   picker.handleInput("e");
   assert.match(painted(picker).join("\n"), /Unsupported effort: max/);
-  picker.handleInput("1"); picker.handleInput("\u001b[D"); // invalid -> preset default high, immediately validated
+  picker.handleInput("1");
+  picker.handleInput("\u001b[D"); // invalid -> preset default high, immediately validated
   assert.deepEqual(applied.at(-1).effort_overrides, { d3: "inherit" });
   picker.handleInput("3");
   assert.match(painted(picker).join("\n"), /Parent thinking unavailable/);
@@ -759,10 +1119,17 @@ test("inherit warnings never block editing another slot, explicit inherit, or re
     { levels: [], error: "Missing model" },
     { levels: [], error: "Ambiguous model" },
   ]) {
-    const selected = { ...preset("alpha"), effort: { ...inherited }, effort_defaults: { ...inherited }, effort_overrides: {} };
-    const caps = (_preset, slot) => slot === "d1" ? { levels: ["high"], inherited: "high" } : warning;
+    const selected = {
+      ...preset("alpha"),
+      effort: { ...inherited },
+      effort_defaults: { ...inherited },
+      effort_overrides: {},
+    };
+    const caps = (_preset, slot) =>
+      slot === "d1" ? { levels: ["high"], inherited: "high" } : warning;
     const { picker, result, applied } = fixture({ presets: [selected], efforts: caps });
-    picker.handleInput("e"); picker.handleInput("1");
+    picker.handleInput("e");
+    picker.handleInput("1");
     picker.handleInput("\u001b[C"); // default -> explicit inherit
     picker.handleInput("\u001b[C"); // -> high
     const text = painted(picker, 120).join("\n");
@@ -772,7 +1139,10 @@ test("inherit warnings never block editing another slot, explicit inherit, or re
     picker.handleInput("\r");
     assert.deepEqual(result, []);
 
-    const reset = fixture({ presets: [{ ...selected, effort_overrides: { d3: "max" } }], efforts: caps });
+    const reset = fixture({
+      presets: [{ ...selected, effort_overrides: { d3: "max" } }],
+      efforts: caps,
+    });
     reset.picker.handleInput("e");
     reset.picker.handleInput("r");
     assert.deepEqual(reset.applied.at(-1).effort_overrides, {});
@@ -780,7 +1150,8 @@ test("inherit warnings never block editing another slot, explicit inherit, or re
     assert.deepEqual(reset.result, []);
 
     const explicit = fixture({ presets: [selected], efforts: caps });
-    explicit.picker.handleInput("e"); explicit.picker.handleInput("3");
+    explicit.picker.handleInput("e");
+    explicit.picker.handleInput("3");
     explicit.picker.handleInput("\u001b[C");
     assert.deepEqual(explicit.applied.at(-1).effort_overrides, { d3: "inherit" });
     explicit.picker.handleInput("\r");
@@ -788,44 +1159,64 @@ test("inherit warnings never block editing another slot, explicit inherit, or re
   }
 });
 
-for (const rejection of ["throw", "undefined"]) test(`a ${rejection} host rejection never paints an uncommitted effort`, () => {
-  const h = fixture({ presets: [effortPreset()], efforts: effortCaps, setEffort: () => {
-    if (rejection === "throw") throw new Error("AUDIT_REJECTED");
-    return undefined;
-  } });
-  h.picker.handleInput("e"); h.picker.handleInput("1");
-  assert.doesNotThrow(() => h.picker.handleInput("\u001b[D"));
-  const text = painted(h.picker).join("\n");
-  assert.match(text, /d1:high/);
-  assert.match(text, /Change not applied/);
-  h.picker.handleInput("\u001b");
-  assert.match(painted(h.picker).join("\n"), /d1.*high\*/);
-  assert.deepEqual(h.applied, []);
-});
+for (const rejection of ["throw", "undefined"])
+  test(`a ${rejection} host rejection never paints an uncommitted effort`, () => {
+    const h = fixture({
+      presets: [effortPreset()],
+      efforts: effortCaps,
+      setEffort: () => {
+        if (rejection === "throw") throw new Error("AUDIT_REJECTED");
+        return undefined;
+      },
+    });
+    h.picker.handleInput("e");
+    h.picker.handleInput("1");
+    assert.doesNotThrow(() => h.picker.handleInput("\u001b[D"));
+    const text = painted(h.picker).join("\n");
+    assert.match(text, /d1:high/);
+    assert.match(text, /Change not applied/);
+    h.picker.handleInput("\u001b");
+    assert.match(painted(h.picker).join("\n"), /d1.*high\*/);
+    assert.deepEqual(h.applied, []);
+  });
 
 test("compact effort click targets use the exact visible short or long label, including saving", () => {
   for (const width of [28, 30, 34, 40, 47, 76, 120]) {
     const h = fixture({ pointer: true, rows: 8, presets: [effortPreset()], efforts: effortCaps });
-    const lines = painted(h.picker, width), y = lines.length - 2;
+    const lines = painted(h.picker, width),
+      y = lines.length - 2;
     const label = width - 2 < 46 ? "E" : "Edit effort";
     const x = label === "E" ? lines[y].indexOf(" E") + 1 : lines[y].indexOf(label);
     assert(x > 0 && lines[y].slice(x, x + label.length) === label, lines.join("\n"));
     h.picker.handleMouse(mouse("click", x, y));
-    assert.match(painted(h.picker, width).join("\n"), /Effort/, `${width}: painted ${label} opens the editor`);
+    assert.match(
+      painted(h.picker, width).join("\n"),
+      /Effort/,
+      `${width}: painted ${label} opens the editor`,
+    );
     assert.deepEqual(h.result, []);
     assert.deepEqual(h.applied, []);
   }
   for (const width of [24, 26, 27]) {
     const h = fixture({ pointer: true, rows: 8, presets: [effortPreset()], efforts: effortCaps });
-    const lines = painted(h.picker, width), y = lines.length - 2;
+    const lines = painted(h.picker, width),
+      y = lines.length - 2;
     assert(!lines[y].includes(" E"), "the short E is wholly clipped");
     h.picker.handleMouse(mouse("click", 25, y)); // theoretical E column, not painted
     assert.match(painted(h.picker, width)[0], /Delegation/);
     assert.deepEqual(h.result, []);
   }
   for (const width of [18, 76, 120]) {
-    const h = fixture({ pointer: true, rows: 8, presets: [effortPreset()], efforts: effortCaps, management: savingOption() });
-    const lines = painted(h.picker, width), y = lines.length - 2, x = lines[y].indexOf(" · E") + 3;
+    const h = fixture({
+      pointer: true,
+      rows: 8,
+      presets: [effortPreset()],
+      efforts: effortCaps,
+      management: savingOption(),
+    });
+    const lines = painted(h.picker, width),
+      y = lines.length - 2,
+      x = lines[y].indexOf(" · E") + 3;
     assert(x > 0 && lines[y][x] === "E", lines.join("\n"));
     h.picker.handleMouse(mouse("click", x, y));
     assert.match(painted(h.picker, width).join("\n"), /Effort/);
@@ -834,79 +1225,120 @@ test("compact effort click targets use the exact visible short or long label, in
 });
 
 test("compact controls restore mode and eagerness hints where they fit without displacing Tab", () => {
-  for (const saving of [false, true]) for (const edit of [false, true]) for (const width of [76, 120]) {
-    const h = fixture({ rows: 8, presets: [effortPreset()], delegation: delegationState().option,
-      ...(edit ? { efforts: effortCaps } : {}), ...(saving ? { management: savingOption() } : {}) });
-    const lines = painted(h.picker, width), controls = lines.at(-2);
-    assert.equal(lines.length, 7);
-    assert(lines.every((line) => visibleWidth(line) <= width));
-    assert.match(controls, /Tab/);
-    assert.match(controls, /←→.*⇧←→/, `${width}, save=${saving}, edit=${edit}: ${controls}`);
-    if (width === 120) assert.match(controls, /mode.*eagerness/);
-    if (saving) assert(controls.includes("G") && controls.includes("W"));
-  }
+  for (const saving of [false, true])
+    for (const edit of [false, true])
+      for (const width of [76, 120]) {
+        const h = fixture({
+          rows: 8,
+          presets: [effortPreset()],
+          delegation: delegationState().option,
+          ...(edit ? { efforts: effortCaps } : {}),
+          ...(saving ? { management: savingOption() } : {}),
+        });
+        const lines = painted(h.picker, width),
+          controls = lines.at(-2);
+        assert.equal(lines.length, 7);
+        assert(lines.every((line) => visibleWidth(line) <= width));
+        assert.match(controls, /Tab/);
+        assert.match(controls, /←→.*⇧←→/, `${width}, save=${saving}, edit=${edit}: ${controls}`);
+        if (width === 120) assert.match(controls, /mode.*eagerness/);
+        if (saving) assert(controls.includes("G") && controls.includes("W"));
+      }
 });
 
 test("editor save controls preserve seven-row budgeting and hit only visible G/W labels", () => {
-  for (const rows of [8, 10, 12, 24]) for (const width of [8, 18, 34, 76, 120]) {
-    for (const [key, scope] of [["G", "global"], ["W", "workspace"]]) {
-      const h = fixture({ pointer: true, rows, presets: [effortPreset()], efforts: effortCaps, management: savingOption() });
-      h.picker.handleInput("e");
-      const lines = painted(h.picker, width), y = lines.findIndex((line) => line.includes("G") && line.includes("W"));
-      assert(lines.length <= Math.max(7, Math.floor(rows * 0.8)));
-      assert(lines.every((line) => visibleWidth(line) <= width));
-      assert(y >= 0);
-      h.picker.handleMouse(mouse("click", lines[y].indexOf(key), y));
-      assert.deepEqual(h.result, [{ action: "save-default", scope }]);
+  for (const rows of [8, 10, 12, 24])
+    for (const width of [8, 18, 34, 76, 120]) {
+      for (const [key, scope] of [
+        ["G", "global"],
+        ["W", "workspace"],
+      ]) {
+        const h = fixture({
+          pointer: true,
+          rows,
+          presets: [effortPreset()],
+          efforts: effortCaps,
+          management: savingOption(),
+        });
+        h.picker.handleInput("e");
+        const lines = painted(h.picker, width),
+          y = lines.findIndex((line) => line.includes("G") && line.includes("W"));
+        assert(lines.length <= Math.max(7, Math.floor(rows * 0.8)));
+        assert(lines.every((line) => visibleWidth(line) <= width));
+        assert(y >= 0);
+        h.picker.handleMouse(mouse("click", lines[y].indexOf(key), y));
+        assert.deepEqual(h.result, [{ action: "save-default", scope }]);
+      }
     }
-  }
 });
 
 test("minimum-height effort editor keeps hidden-slot navigation visible with and without saving", () => {
-  for (const save of [false, true]) for (const width of [18, 34]) {
-    const h = fixture({ rows: 7, presets: [effortPreset()], efforts: effortCaps,
-      ...(save ? { management: savingOption() } : {}) });
-    h.picker.handleInput("e");
-    for (const key of ["1", "5"]) {
-      h.picker.handleInput(key);
-      const lines = painted(h.picker, width), text = lines.join("\n");
-      assert.equal(lines.length, 7);
-      assert(lines.every((line) => visibleWidth(line) <= width));
-      assert.match(text, /↑↓\/1–5/, `saving=${save}, width=${width}: ${text}`);
-      assert.match(text, new RegExp(`‹d${key}:`));
-      assert.equal(lines.filter((line) => /‹d[1-5]:/.test(line)).length, 3);
-      if (save) assert(lines.some((line) => line.includes("G") && line.includes("W")));
+  for (const save of [false, true])
+    for (const width of [18, 34]) {
+      const h = fixture({
+        rows: 7,
+        presets: [effortPreset()],
+        efforts: effortCaps,
+        ...(save ? { management: savingOption() } : {}),
+      });
+      h.picker.handleInput("e");
+      for (const key of ["1", "5"]) {
+        h.picker.handleInput(key);
+        const lines = painted(h.picker, width),
+          text = lines.join("\n");
+        assert.equal(lines.length, 7);
+        assert(lines.every((line) => visibleWidth(line) <= width));
+        assert.match(text, /↑↓\/1–5/, `saving=${save}, width=${width}: ${text}`);
+        assert.match(text, new RegExp(`‹d${key}:`));
+        assert.equal(lines.filter((line) => /‹d[1-5]:/.test(line)).length, 3);
+        if (save) assert(lines.some((line) => line.includes("G") && line.includes("W")));
+      }
     }
-  }
 });
 
 test("compact/narrow editor keeps the selected slot editable, bounded paint and live controls", () => {
-  for (const rows of [8, 10, 12, 24]) for (const width of [18, 34, 76, 120]) {
-    const { picker, result, applied } = fixture({ pointer: true, rows, presets: [effortPreset()], activeName: "alpha",
-      efforts: effortCaps });
-    picker.handleInput("e"); picker.handleInput("1");
-    let lines = painted(picker, width);
-    assert(lines.length <= Math.max(7, Math.floor(rows * 0.8)), `${rows}x${width}`);
-    assert(lines.every((line) => visibleWidth(line) <= width), `${rows}x${width}: ${lines.join("\n")}`);
-    assert.match(lines.join("\n"), /d1:high/);
-    assert.doesNotMatch(lines.join("\n"), /Apply|unsaved/);
-    const value = lines.findIndex((line) => line.includes("‹d1:high›"));
-    assert(value > 0, lines.join("\n"));
-    picker.handleMouse(mouse("click", lines[value].indexOf("‹"), value));
-    lines = painted(picker, width);
-    assert.match(lines.join("\n"), /d1:medium/);
-    assert.deepEqual(applied.at(-1).effort_overrides, { d1: "medium" });
-    picker.handleInput("\u001b");
-    assert.deepEqual(result, []);
-  }
+  for (const rows of [8, 10, 12, 24])
+    for (const width of [18, 34, 76, 120]) {
+      const { picker, result, applied } = fixture({
+        pointer: true,
+        rows,
+        presets: [effortPreset()],
+        activeName: "alpha",
+        efforts: effortCaps,
+      });
+      picker.handleInput("e");
+      picker.handleInput("1");
+      let lines = painted(picker, width);
+      assert(lines.length <= Math.max(7, Math.floor(rows * 0.8)), `${rows}x${width}`);
+      assert(
+        lines.every((line) => visibleWidth(line) <= width),
+        `${rows}x${width}: ${lines.join("\n")}`,
+      );
+      assert.match(lines.join("\n"), /d1:high/);
+      assert.doesNotMatch(lines.join("\n"), /Apply|unsaved/);
+      const value = lines.findIndex((line) => line.includes("‹d1:high›"));
+      assert(value > 0, lines.join("\n"));
+      picker.handleMouse(mouse("click", lines[value].indexOf("‹"), value));
+      lines = painted(picker, width);
+      assert.match(lines.join("\n"), /d1:medium/);
+      assert.deepEqual(applied.at(-1).effort_overrides, { d1: "medium" });
+      picker.handleInput("\u001b");
+      assert.deepEqual(result, []);
+    }
 });
 
 // Delegation mode: a slider and an eagerness box above the model presets.
 // Unlike a preset, a mode change applies at once and keeps the panel open.
 const delegationState = (initial = { mode: "co-worker", eagerness: "balanced" }) => {
   const state = { current: { ...initial }, sets: [] };
-  state.option = { current: () => ({ ...state.current }), guideline: (setting) => delegationGuideline(setting),
-    set: (next) => { state.sets.push(next); state.current = { ...next }; } };
+  state.option = {
+    current: () => ({ ...state.current }),
+    guideline: (setting) => delegationGuideline(setting),
+    set: (next) => {
+      state.sets.push(next);
+      state.current = { ...next };
+    },
+  };
   return state;
 };
 const nodeColumn = (line, label) => line.indexOf(label);
@@ -920,14 +1352,30 @@ test("the mode slider paints four nodes, fits or clips the current guideline, an
   assert.match(lines[1], /^│ Mode +○ Manual ─+ ● Co-worker ─+ ○ Lead ─+ ○ Supervisor +│$/);
   assert.match(lines[2], /Eagerness +‹ balanced ›/);
   const divider = lines.findIndex((line, index) => index > 2 && line.startsWith("├"));
-  const guideline = lines.slice(3, divider).map((line) => line.slice(1, -1).trim()).join(" ");
-  assert.equal(guideline, delegationGuideline(state.current), "a wide panel shows the whole guideline");
-  assert(lines.some((line) => line.includes("Model preset")), "the preset list is titled Model preset");
+  const guideline = lines
+    .slice(3, divider)
+    .map((line) => line.slice(1, -1).trim())
+    .join(" ");
+  assert.equal(
+    guideline,
+    delegationGuideline(state.current),
+    "a wide panel shows the whole guideline",
+  );
+  assert(
+    lines.some((line) => line.includes("Model preset")),
+    "the preset list is titled Model preset",
+  );
   for (const line of lines) assert.equal(visibleWidth(line), width, line);
   const narrow = picker.render(76).map(stripTerminalSequences);
   const narrowDivider = narrow.findIndex((line, index) => index > 2 && line.startsWith("├"));
-  const clipped = narrow.slice(3, narrowDivider).map((line) => line.slice(1, -1).trim()).join(" ");
-  assert(clipped.endsWith("…"), "the longer web-routing guideline clips within the existing row budget");
+  const clipped = narrow
+    .slice(3, narrowDivider)
+    .map((line) => line.slice(1, -1).trim())
+    .join(" ");
+  assert(
+    clipped.endsWith("…"),
+    "the longer web-routing guideline clips within the existing row budget",
+  );
   assert(delegationGuideline(state.current).startsWith(clipped.slice(0, -1).trimEnd()));
   for (const line of narrow) assert.equal(visibleWidth(line), 76, line);
 
@@ -951,11 +1399,16 @@ test("pointer: hover does nothing; click a node; a drag previews and its release
   const state = delegationState();
   const { picker } = fixture({ delegation: state.option, pointer: true, rows: 40 });
   let lines = picker.render(76).map(stripTerminalSequences);
-  const lead = nodeColumn(lines[1], "○ Lead"), supervisor = nodeColumn(lines[1], "○ Supervisor");
+  const lead = nodeColumn(lines[1], "○ Lead"),
+    supervisor = nodeColumn(lines[1], "○ Supervisor");
   assert(lead > 0 && supervisor > lead);
 
   const before = picker.render(76).join("\n");
-  assert.equal(picker.handleMouse({ ...mouse("move", supervisor + 2, 1), button: "none" }), undefined, "hover is not handled");
+  assert.equal(
+    picker.handleMouse({ ...mouse("move", supervisor + 2, 1), button: "none" }),
+    undefined,
+    "hover is not handled",
+  );
   assert.equal(picker.render(76).join("\n"), before, "hover changes nothing on screen");
   assert.equal(state.sets.length, 0);
 
@@ -976,7 +1429,8 @@ test("pointer: hover does nothing; click a node; a drag previews and its release
   const eager = delegationState({ mode: "lead", eagerness: "balanced" });
   const box = fixture({ delegation: eager.option, pointer: true, rows: 40 });
   lines = box.picker.render(76).map(stripTerminalSequences);
-  const open = lines[2].indexOf("‹"), close = lines[2].indexOf("›");
+  const open = lines[2].indexOf("‹"),
+    close = lines[2].indexOf("›");
   box.picker.handleMouse(mouse("click", close, 2));
   assert.equal(eager.current.eagerness, "eager");
   box.picker.render(76);
@@ -998,12 +1452,23 @@ test("narrow or short panels keep a stepping mode row; Off dims the mode and say
 
   const short = fixture({ delegation: delegationState().option, rows: 12 });
   lines = short.picker.render(76).map(stripTerminalSequences);
-  assert(lines.some((line) => line.includes("Mode ‹ Co-worker › ‹ balanced ›")), lines.join("\n"));
+  assert(
+    lines.some((line) => line.includes("Mode ‹ Co-worker › ‹ balanced ›")),
+    lines.join("\n"),
+  );
   assert(lines.length <= Math.floor(12 * 0.8), "compact stays within its rows");
 
-  const off = fixture({ delegation: delegationState().option, rows: 40, presets: [offPreset(), preset("alpha")], activeName: "off" });
+  const off = fixture({
+    delegation: delegationState().option,
+    rows: 40,
+    presets: [offPreset(), preset("alpha")],
+    activeName: "off",
+  });
   lines = off.picker.render(76).map(stripTerminalSequences);
-  assert(lines.some((line) => line.includes("Off: no Agent work")), lines.join("\n"));
+  assert(
+    lines.some((line) => line.includes("Off: no Agent work")),
+    lines.join("\n"),
+  );
 });
 
 test("without a delegation option the picker is unchanged apart from its title", () => {
@@ -1016,7 +1481,12 @@ test("without a delegation option the picker is unchanged apart from its title",
 
 test("pointer gestures end with any key or page switch; arrows edit effort, not mode, in the editor", () => {
   const state = delegationState();
-  const { picker } = fixture({ delegation: state.option, pointer: true, rows: 40, efforts: () => ({ levels: ["low", "high"] }) });
+  const { picker } = fixture({
+    delegation: state.option,
+    pointer: true,
+    rows: 40,
+    efforts: () => ({ levels: ["low", "high"] }),
+  });
   let lines = picker.render(76).map(stripTerminalSequences);
   const supervisor = nodeColumn(lines[1], "○ Supervisor");
   picker.handleMouse(mouse("press", nodeColumn(lines[1], "○ Lead") + 1, 1));
@@ -1044,15 +1514,25 @@ test("clipped eagerness and compact arrows create no pointer targets", () => {
     const state = delegationState();
     const { picker } = fixture({ delegation: state.option, pointer: true, rows: 40 });
     const lines = picker.render(width).map(stripTerminalSequences);
-    for (let y = 0; y < lines.length; y++) for (let x = 0; x < width; x++) {
-      const before = { ...state.current };
-      picker.handleMouse(mouse("click", x, y));
-      if (state.current.eagerness !== before.eagerness || state.current.mode !== before.mode) {
-        assert.match(lines[y][x], /[‹›○●]|[A-Za-z]/, `width ${width}: click at ${x},${y} on ${JSON.stringify(lines[y][x])} changed the mode`);
-        if (lines[y][x] !== "‹" && lines[y][x] !== "›") assert(/[○●]/.test(lines[y]), `only slider nodes act without an arrow: ${lines[y]}`);
+    for (let y = 0; y < lines.length; y++)
+      for (let x = 0; x < width; x++) {
+        const before = { ...state.current };
+        picker.handleMouse(mouse("click", x, y));
+        if (state.current.eagerness !== before.eagerness || state.current.mode !== before.mode) {
+          assert.match(
+            lines[y][x],
+            /[‹›○●]|[A-Za-z]/,
+            `width ${width}: click at ${x},${y} on ${JSON.stringify(lines[y][x])} changed the mode`,
+          );
+          if (lines[y][x] !== "‹" && lines[y][x] !== "›")
+            assert(/[○●]/.test(lines[y]), `only slider nodes act without an arrow: ${lines[y]}`);
+        }
+        if (state.sets.length) {
+          state.current = { mode: "co-worker", eagerness: "balanced" };
+          state.sets.length = 0;
+          picker.render(width);
+        }
       }
-      if (state.sets.length) { state.current = { mode: "co-worker", eagerness: "balanced" }; state.sets.length = 0; picker.render(width); }
-    }
   }
 });
 
@@ -1061,19 +1541,38 @@ test("through pi-tui's dispatcher, a key during a held slider press cancels it: 
   const tui = new TuiAltScreen(terminal, false, undefined, {});
   tui.requestRender = () => {};
   const state = delegationState();
-  const picker = new PresetPicker({ tui, theme, keybindings: keys, presets: [preset("alpha"), preset("beta")], activeName: "beta",
-    done() {}, delegation: state.option, pointer: true });
+  const picker = new PresetPicker({
+    tui,
+    theme,
+    keybindings: keys,
+    presets: [preset("alpha"), preset("beta")],
+    activeName: "beta",
+    done() {},
+    delegation: state.option,
+    pointer: true,
+  });
   tui.showOverlay(picker, { anchor: "top-left", row: 0, col: 0, width: 80 });
   tui.compositeOverlays(Array(terminal.rows).fill(""), terminal.columns, terminal.rows);
   const lines = picker.render(80).map(stripTerminalSequences);
-  const x = nodeColumn(lines[1], "○ Supervisor") + 1, y = 1;
-  const sgr = (release) => tui.handleMouseEvent(tui.parseSgrMouseEvent(`\u001b[<0;${x + 1};${y + 1}${release ? "m" : "M"}`));
+  const x = nodeColumn(lines[1], "○ Supervisor") + 1,
+    y = 1;
+  const sgr = (release) =>
+    tui.handleMouseEvent(
+      tui.parseSgrMouseEvent(`\u001b[<0;${x + 1};${y + 1}${release ? "m" : "M"}`),
+    );
 
-  sgr(false); picker.handleInput("\u001b[D"); sgr(true);  // press Supervisor, Left (→ Manual), release unmoved
-  assert.deepEqual(state.current, { mode: "manual", eagerness: "balanced" }, "the keyboard choice stands");
+  sgr(false);
+  picker.handleInput("\u001b[D");
+  sgr(true); // press Supervisor, Left (→ Manual), release unmoved
+  assert.deepEqual(
+    state.current,
+    { mode: "manual", eagerness: "balanced" },
+    "the keyboard choice stands",
+  );
   assert.equal(state.sets.length, 1);
 
-  sgr(false); sgr(true); // a later plain click still works
+  sgr(false);
+  sgr(true); // a later plain click still works
   assert.equal(state.current.mode, "supervisor");
 });
 
@@ -1081,7 +1580,9 @@ test("through pi-tui's dispatcher, a key during a held slider press cancels it: 
 // dialogs. None of these choices applies or publishes a preset.
 const managementOption = (extra = {}) => ({
   summary: () => " presets: controlled fixture · pending: none",
-  settings: true, presets: true, ...extra,
+  settings: true,
+  presets: true,
+  ...extra,
 });
 
 test("management keys route on the list page only and never without the option", () => {
@@ -1103,14 +1604,18 @@ test("management keys route on the list page only and never without the option",
   // The effort editor keeps its own page and its own keys.
   const editing = fixture({ management: managementOption(), efforts: effortCaps });
   editing.picker.handleInput("e");
-  editing.picker.handleInput("p"); editing.picker.handleInput("n"); editing.picker.handleInput("c");
+  editing.picker.handleInput("p");
+  editing.picker.handleInput("n");
+  editing.picker.handleInput("c");
   assert.deepEqual(editing.result, []);
   assert.match(painted(editing.picker).join("\n"), /Effort · beta/);
 
   // Without the option the keys are inert, exactly as before it existed.
   const legacy = fixture();
   legacy.picker.render(76);
-  legacy.picker.handleInput("p"); legacy.picker.handleInput("n"); legacy.picker.handleInput("c");
+  legacy.picker.handleInput("p");
+  legacy.picker.handleInput("n");
+  legacy.picker.handleInput("c");
   assert.deepEqual(legacy.result, []);
   legacy.picker.handleInput("\r");
   assert.deepEqual(legacy.result, ["beta"]);
@@ -1118,14 +1623,19 @@ test("management keys route on the list page only and never without the option",
   // Only the routes the host actually enabled fire.
   const partial = fixture({ management: managementOption({ presets: false }) });
   partial.picker.render(76);
-  partial.picker.handleInput("n"); partial.picker.handleInput("c");
+  partial.picker.handleInput("n");
+  partial.picker.handleInput("c");
   assert.deepEqual(partial.result, []);
   partial.picker.handleInput("p");
   assert.deepEqual(partial.result, [{ action: "settings" }]);
 });
 
 test("off highlights keep Enter, but create works and edit-preset does not", () => {
-  const off = fixture({ management: managementOption(), presets: [offPreset(), preset("alpha")], activeName: "alpha" });
+  const off = fixture({
+    management: managementOption(),
+    presets: [offPreset(), preset("alpha")],
+    activeName: "alpha",
+  });
   off.picker.render(76);
   off.picker.handleInput("\u001b[A"); // highlight off
   assert.equal(off.picker.selection(), "off");
@@ -1134,12 +1644,21 @@ test("off highlights keep Enter, but create works and edit-preset does not", () 
   off.picker.handleInput("n");
   assert.deepEqual(off.result, [{ action: "create-preset" }]);
 
-  const applying = fixture({ management: managementOption(), presets: [offPreset(), preset("alpha")], activeName: "alpha" });
+  const applying = fixture({
+    management: managementOption(),
+    presets: [offPreset(), preset("alpha")],
+    activeName: "alpha",
+  });
   applying.picker.render(76);
-  applying.picker.handleInput("\u001b[A"); applying.picker.handleInput("\r");
+  applying.picker.handleInput("\u001b[A");
+  applying.picker.handleInput("\r");
   assert.deepEqual(applying.result, ["off"], "Enter keeps its meaning beside the new keys");
 
-  const cancelled = fixture({ management: managementOption(), presets: [offPreset(), preset("alpha")], activeName: "alpha" });
+  const cancelled = fixture({
+    management: managementOption(),
+    presets: [offPreset(), preset("alpha")],
+    activeName: "alpha",
+  });
   cancelled.picker.render(76);
   cancelled.picker.handleInput("\u001bs");
   assert.deepEqual(cancelled.result, [null], "Esc still cancels without routing");
@@ -1148,7 +1667,11 @@ test("off highlights keep Enter, but create works and edit-preset does not", () 
 test("management labels are clickable and scoped to the labels actually painted", () => {
   const wide = fixture({ pointer: true, management: managementOption() });
   let lines = painted(wide.picker, 100);
-  assert.match(lines.join("\n"), /P Settings · N New · C Edit/, "full labels when the row has room");
+  assert.match(
+    lines.join("\n"),
+    /P Settings · N New · C Edit/,
+    "full labels when the row has room",
+  );
   clickText(wide.picker, "P Settings", 100);
   assert.deepEqual(wide.result, [{ action: "settings" }]);
 
@@ -1165,7 +1688,10 @@ test("management labels are clickable and scoped to the labels actually painted"
   lines = painted(letters.picker, 76);
   const hint = lines.find((line) => line.includes("P N C"));
   assert(hint, lines.join("\n"));
-  assert(!lines.some((line) => line.includes("P Settings")), "clipped labels leave no partial paint");
+  assert(
+    !lines.some((line) => line.includes("P Settings")),
+    "clipped labels leave no partial paint",
+  );
   clickText(letters.picker, "P", 76);
   assert.deepEqual(letters.result, [{ action: "settings" }]);
   const letterCreate = fixture({ pointer: true, management: managementOption() });
@@ -1176,8 +1702,12 @@ test("management labels are clickable and scoped to the labels actually painted"
   assert.deepEqual(letterEdit.result, [{ action: "edit-preset", name: "beta" }]);
 
   // With off highlighted the edit route is neither hinted nor clickable.
-  const offLabels = fixture({ pointer: true, management: managementOption(),
-    presets: [offPreset(), preset("alpha")], activeName: "alpha" });
+  const offLabels = fixture({
+    pointer: true,
+    management: managementOption(),
+    presets: [offPreset(), preset("alpha")],
+    activeName: "alpha",
+  });
   offLabels.picker.handleInput("\u001b[A");
   lines = painted(offLabels.picker, 100);
   assert(!lines.some((line) => line.includes("C Edit")), lines.join("\n"));
@@ -1192,10 +1722,15 @@ test("management keeps keyboard routes and bounded paint at every size without n
       const lines = picker.render(width);
       const budget = Math.max(7, Math.floor(rows * 0.8));
       assert.ok(lines.length <= budget, `${rows}x${width}: ${lines.length} rows exceeds ${budget}`);
-      for (const line of lines) assert.ok(visibleWidth(line) <= width, `${rows}x${width}: ${JSON.stringify(line)}`);
+      for (const line of lines)
+        assert.ok(visibleWidth(line) <= width, `${rows}x${width}: ${JSON.stringify(line)}`);
       assert.match(stripTerminalSequences(lines.join("\n")), /Alt\+S/, `${rows}x${width}`);
       picker.handleInput("p");
-      assert.deepEqual(result, [{ action: "settings" }], `the key still routes at ${rows}x${width}`);
+      assert.deepEqual(
+        result,
+        [{ action: "settings" }],
+        `the key still routes at ${rows}x${width}`,
+      );
     }
   }
 });
@@ -1207,8 +1742,11 @@ test("the management summary paints where it fits and never raises the height", 
   const uncapped = fixture({ rows: 24, presets: many });
   const cappedText = painted(capped.picker, 76).join("\n");
   assert.match(cappedText, /controlled fixture · pending: none/);
-  assert.equal(cappedText.split("\n").length, painted(uncapped.picker, 76).length,
-    "a capped list spends a row on the summary instead of growing");
+  assert.equal(
+    cappedText.split("\n").length,
+    painted(uncapped.picker, 76).length,
+    "a capped list spends a row on the summary instead of growing",
+  );
 
   // At the full layout's minimum the summary is dropped, not squeezed in.
   const boundary = fixture({ rows: 17, management: managementOption() });
@@ -1218,7 +1756,10 @@ test("the management summary paints where it fits and never raises the height", 
   assert.doesNotMatch(painted(boundary.picker, 76).join("\n"), /No presets available/);
 
   // One row past the boundary the summary fits, and it follows the callback's text.
-  const fitted = fixture({ rows: 18, management: managementOption({ summary: () => " presets: scope session · pending: 2 edits" }) });
+  const fitted = fixture({
+    rows: 18,
+    management: managementOption({ summary: () => " presets: scope session · pending: 2 edits" }),
+  });
   assert.match(painted(fitted.picker, 76).join("\n"), /scope session · pending: 2 edits/);
 
   // Compact layouts show it only in a spare row, never above their minimum.
@@ -1231,18 +1772,34 @@ test("the management summary paints where it fits and never raises the height", 
   assert.doesNotMatch(painted(minimum.picker, 34).join("\n"), /controlled fixture/);
 
   // Empty or failing summaries cost nothing and never break a render.
-  const empty = fixture({ rows: 24, presets: many, management: managementOption({ summary: () => "  " }) });
+  const empty = fixture({
+    rows: 24,
+    presets: many,
+    management: managementOption({ summary: () => "  " }),
+  });
   assert.equal(painted(empty.picker, 76).length, painted(uncapped.picker, 76).length);
-  const broken = fixture({ rows: 24, management: managementOption({
-    summary() { throw new Error("SUMMARY_FAILED"); } }) });
+  const broken = fixture({
+    rows: 24,
+    management: managementOption({
+      summary() {
+        throw new Error("SUMMARY_FAILED");
+      },
+    }),
+  });
   assert.doesNotThrow(() => painted(broken.picker, 76));
   assert.doesNotMatch(painted(broken.picker, 76).join("\n"), /SUMMARY_FAILED/);
 });
 
-const savingOption = (trusted = true) => managementOption({ saveDefaults: true, canSaveWorkspace: () => trusted });
+const savingOption = (trusted = true) =>
+  managementOption({ saveDefaults: true, canSaveWorkspace: () => trusted });
 
 test("G/W save routes from either page carry only scope, never a highlighted preset", () => {
-  for (const [key, scope] of [["g", "global"], ["G", "global"], ["w", "workspace"], ["W", "workspace"]]) {
+  for (const [key, scope] of [
+    ["g", "global"],
+    ["G", "global"],
+    ["w", "workspace"],
+    ["W", "workspace"],
+  ]) {
     const h = fixture({ management: savingOption() });
     h.picker.handleInput("\u001b[B"); // inactive gamma is highlighted but never applied
     h.picker.handleInput(key);
@@ -1251,10 +1808,18 @@ test("G/W save routes from either page carry only scope, never a highlighted pre
   }
   const off = fixture({ management: savingOption(), presets: [offPreset()], activeName: "off" });
   off.picker.handleInput("g");
-  assert.deepEqual(off.result, [{ action: "save-default", scope: "global" }], "Off is also a savable live choice");
-  for (const [key, scope] of [["g", "global"], ["w", "workspace"]]) {
+  assert.deepEqual(
+    off.result,
+    [{ action: "save-default", scope: "global" }],
+    "Off is also a savable live choice",
+  );
+  for (const [key, scope] of [
+    ["g", "global"],
+    ["w", "workspace"],
+  ]) {
     const editing = fixture({ management: savingOption(), efforts: effortCaps });
-    editing.picker.handleInput("e"); editing.picker.handleInput("\u001b[C");
+    editing.picker.handleInput("e");
+    editing.picker.handleInput("\u001b[C");
     assert.deepEqual(editing.applied.at(-1).effort_overrides, { d5: "inherit" });
     assert.match(painted(editing.picker).join("\n"), /Save as .* default/);
     editing.picker.handleInput(key);
@@ -1264,8 +1829,11 @@ test("G/W save routes from either page carry only scope, never a highlighted pre
 });
 
 test("saving during a slider press cancels its preview without applying it", () => {
-  const state = delegationState(), h = fixture({ delegation: state.option, pointer: true, rows: 40, management: savingOption() });
-  const lines = painted(h.picker), y = lines.findIndex((line) => line.includes("Supervisor")), x = lines[y].indexOf("Supervisor");
+  const state = delegationState(),
+    h = fixture({ delegation: state.option, pointer: true, rows: 40, management: savingOption() });
+  const lines = painted(h.picker),
+    y = lines.findIndex((line) => line.includes("Supervisor")),
+    x = lines[y].indexOf("Supervisor");
   h.picker.handleMouse(mouse("press", x, y));
   assert.match(painted(h.picker).join("\n"), /preview/);
   h.picker.handleInput("g");
@@ -1275,62 +1843,112 @@ test("saving during a slider press cancels its preview without applying it", () 
 });
 
 test("global/project save labels remain painted, clickable and bounded at full, compact and minimum sizes", () => {
-  for (const rows of [8, 10, 12, 14, 15, 24, 40]) for (const width of [7, 8, 18, 34, 56, 76, 120]) {
-    for (const withMode of [false, true]) for (const trusted of [false, true]) {
-      const measured = [], h = fixture({ rows, pointer: true, management: savingOption(trusted),
-        ...(withMode ? { delegation: delegationState().option } : {}), onRender: (height) => measured.push(height) });
-      const lines = painted(h.picker, width);
-      assert.equal(measured.at(-1), lines.length);
-      assert(lines.length <= Math.max(7, Math.floor(rows * 0.8)), `${rows}x${width}: ${lines.length}`);
-      assert(lines.every((line) => visibleWidth(line) <= width));
-      if (width < 8) { assert.deepEqual(lines, []); continue; }
-      const y = lines.findIndex((line) => line.includes("G"));
-      assert(y >= 0, `${rows}x${width}: global save remains discoverable\n${lines.join("\n")}`);
-      h.picker.handleMouse(mouse("click", lines[y].indexOf("G"), y));
-      assert.deepEqual(h.result, [{ action: "save-default", scope: "global" }], `${rows}x${width}: painted G routes`);
-      const project = fixture({ rows, pointer: true, management: savingOption(trusted),
-        ...(withMode ? { delegation: delegationState().option } : {}) });
-      const projectLines = painted(project.picker, width), projectY = projectLines.findIndex((line) => line.includes("G") && line.includes("W"));
-      assert(projectY >= 0);
-      project.picker.handleMouse(mouse("click", projectLines[projectY].indexOf("W"), projectY));
-      assert.deepEqual(project.result, trusted ? [{ action: "save-default", scope: "workspace" }] : [],
-        `${rows}x${width}: painted W (mode=${withMode}, trusted=${trusted})`);
-      if (width >= 18 && Math.floor(rows * 0.8) >= 9 + (withMode ? 1 : 0))
-        for (const slot of strengths) assert(lines.some((line) => line.includes(slot)));
+  for (const rows of [8, 10, 12, 14, 15, 24, 40])
+    for (const width of [7, 8, 18, 34, 56, 76, 120]) {
+      for (const withMode of [false, true])
+        for (const trusted of [false, true]) {
+          const measured = [],
+            h = fixture({
+              rows,
+              pointer: true,
+              management: savingOption(trusted),
+              ...(withMode ? { delegation: delegationState().option } : {}),
+              onRender: (height) => measured.push(height),
+            });
+          const lines = painted(h.picker, width);
+          assert.equal(measured.at(-1), lines.length);
+          assert(
+            lines.length <= Math.max(7, Math.floor(rows * 0.8)),
+            `${rows}x${width}: ${lines.length}`,
+          );
+          assert(lines.every((line) => visibleWidth(line) <= width));
+          if (width < 8) {
+            assert.deepEqual(lines, []);
+            continue;
+          }
+          const y = lines.findIndex((line) => line.includes("G"));
+          assert(y >= 0, `${rows}x${width}: global save remains discoverable\n${lines.join("\n")}`);
+          h.picker.handleMouse(mouse("click", lines[y].indexOf("G"), y));
+          assert.deepEqual(
+            h.result,
+            [{ action: "save-default", scope: "global" }],
+            `${rows}x${width}: painted G routes`,
+          );
+          const project = fixture({
+            rows,
+            pointer: true,
+            management: savingOption(trusted),
+            ...(withMode ? { delegation: delegationState().option } : {}),
+          });
+          const projectLines = painted(project.picker, width),
+            projectY = projectLines.findIndex((line) => line.includes("G") && line.includes("W"));
+          assert(projectY >= 0);
+          project.picker.handleMouse(mouse("click", projectLines[projectY].indexOf("W"), projectY));
+          assert.deepEqual(
+            project.result,
+            trusted ? [{ action: "save-default", scope: "workspace" }] : [],
+            `${rows}x${width}: painted W (mode=${withMode}, trusted=${trusted})`,
+          );
+          if (width >= 18 && Math.floor(rows * 0.8) >= 9 + (withMode ? 1 : 0))
+            for (const slot of strengths) assert(lines.some((line) => line.includes(slot)));
+        }
     }
-  }
-  const normal = fixture({ rows: 24, management: savingOption(), delegation: delegationState().option });
-  assert.match(painted(normal.picker).join("\n"), /\[G\] Save as global default · \[W\] Save as project default \(on exit\)/);
+  const normal = fixture({
+    rows: 24,
+    management: savingOption(),
+    delegation: delegationState().option,
+  });
+  assert.match(
+    painted(normal.picker).join("\n"),
+    /\[G\] Save as global default · \[W\] Save as project default \(on exit\)/,
+  );
 });
 
 test("workspace save is inert without trust or its host capability, including a changed trust projection", () => {
   const denied = fixture({ pointer: true, rows: 40, management: savingOption(false) });
   assert.match(painted(denied.picker).join("\n"), /trust required/);
-  denied.picker.handleInput("w"); denied.picker.handleInput("W");
+  denied.picker.handleInput("w");
+  denied.picker.handleInput("W");
   assert.deepEqual(denied.result, []);
   let trusted = true;
-  const stale = fixture({ pointer: true, management: managementOption({ saveDefaults: true, canSaveWorkspace: () => trusted }) });
-  const lines = painted(stale.picker), y = lines.findIndex((line) => line.includes("[W]"));
+  const stale = fixture({
+    pointer: true,
+    management: managementOption({ saveDefaults: true, canSaveWorkspace: () => trusted }),
+  });
+  const lines = painted(stale.picker),
+    y = lines.findIndex((line) => line.includes("[W]"));
   trusted = false;
   stale.picker.handleMouse(mouse("click", lines[y].indexOf("[W]"), y));
   stale.picker.handleInput("w");
   assert.deepEqual(stale.result, [], "a painted button cannot reuse stale trust");
-  const legacy = fixture({ management: managementOption() }), plain = fixture({ management: managementOption() });
-  legacy.picker.handleInput("g"); legacy.picker.handleInput("w");
+  const legacy = fixture({ management: managementOption() }),
+    plain = fixture({ management: managementOption() });
+  legacy.picker.handleInput("g");
+  legacy.picker.handleInput("w");
   assert.deepEqual(legacy.result, []);
-  assert.deepEqual(painted(legacy.picker), painted(plain.picker), "hosts without save capability keep their layout");
+  assert.deepEqual(
+    painted(legacy.picker),
+    painted(plain.picker),
+    "hosts without save capability keep their layout",
+  );
   const unknown = fixture({ management: managementOption({ saveDefaults: true }) });
   unknown.picker.handleInput("w");
   assert.deepEqual(unknown.result, [], "workspace needs an explicit true projection");
 });
 
 test("hosts without saving keep customized G/W navigation and confirmation bindings", () => {
-  const customKeys = { matches(data, binding) {
-    if (binding === "tui.select.down" && data === "g") return true;
-    if (binding === "tui.select.confirm" && data === "w") return true;
-    return keys.matches(data, binding);
-  } };
-  for (const management of [undefined, managementOption(), managementOption({ saveDefaults: false })]) {
+  const customKeys = {
+    matches(data, binding) {
+      if (binding === "tui.select.down" && data === "g") return true;
+      if (binding === "tui.select.confirm" && data === "w") return true;
+      return keys.matches(data, binding);
+    },
+  };
+  for (const management of [
+    undefined,
+    managementOption(),
+    managementOption({ saveDefaults: false }),
+  ]) {
     const h = fixture({ keybindings: customKeys, management });
     h.picker.handleInput("g");
     assert.equal(h.picker.selection(), "gamma");
@@ -1339,113 +1957,187 @@ test("hosts without saving keep customized G/W navigation and confirmation bindi
   }
 });
 
-for (const mode of ["fullscreen", "regular"]) for (const accepted of [false, true]) {
-  test(`inactive effort enable settles custom before native confirm and reopens cleanly (${mode}, ${accepted})`, async (t) => {
-    const h = emptyOwnerPanels(t, mode, undefined, true);
-    h.ctx.ui.confirm = (title, text) => {
-      assert.equal(h.mounts[0].component.isOpen(), false);
-      assert.equal(h.mounts[0].handle?.getBounds(), undefined);
-      assert.equal(h.host.editorContainer.children[0], h.host.editor);
-      return InteractiveMode.prototype.showExtensionConfirm.call(h.host, title, text);
-    };
-    h.panels.attachHost(h.ctx, h.bus);
-    const opening = h.shortcuts.get("alt+s").handler(); await tick(); h.paint();
-    h.tui.getFocusedComponent().handleInput("\u001b[B"); h.tui.getFocusedComponent().handleInput("e"); await tick();
-    assert.equal(h.host.extensionDialogs.length, 1, "the real native confirmation is the only inline dialog");
-    assert.equal(h.tui.getFocusedComponent(), h.host.extensionDialogs[0].component,
-      "the real native confirmation owns focus");
-    assert.equal(h.router.current().name, "off");
-    h.tui.getFocusedComponent().handleInput(accepted ? "\r" : "\u001b"); await tick();
-    if (!accepted) {
-      await opening;
-      assert.deepEqual(h.published, []); assert.equal(h.mounts.length, 1);
-    } else {
-      assert.equal(h.mounts.length, 2);
-      assert.equal(h.host.extensionDialogs.length, mode === "regular" ? 1 : 0,
-        "the confirmation is gone; only a reopened docked picker can remain");
-      assert.equal(h.tui.getFocusedComponent(), h.mounts[1].component);
-      assert.match(h.mounts[1].component.render(76).map(stripTerminalSequences).join("\n"), /Effort · fixture-balanced/);
-      h.tui.getFocusedComponent().handleInput("\u001b[C");
-      assert.deepEqual(h.router.current().effort_overrides, { d5: "inherit" });
-      h.tui.getFocusedComponent().handleInput("\u001b"); // back, same component/focus
-      assert.equal(h.tui.getFocusedComponent(), h.mounts[1].component);
-      h.tui.getFocusedComponent().handleInput("\u001b"); await opening;
-      assert.deepEqual(h.published, ["fixture-balanced", "fixture-balanced"]);
-    }
-    assert.equal(h.tui.getFocusedComponent(), h.host.editor);
-    assert.equal(h.tui.hasOverlay(), false);
-  });
-}
+for (const mode of ["fullscreen", "regular"])
+  for (const accepted of [false, true]) {
+    test(`inactive effort enable settles custom before native confirm and reopens cleanly (${mode}, ${accepted})`, async (t) => {
+      const h = emptyOwnerPanels(t, mode, undefined, true);
+      h.ctx.ui.confirm = (title, text) => {
+        assert.equal(h.mounts[0].component.isOpen(), false);
+        assert.equal(h.mounts[0].handle?.getBounds(), undefined);
+        assert.equal(h.host.editorContainer.children[0], h.host.editor);
+        return InteractiveMode.prototype.showExtensionConfirm.call(h.host, title, text);
+      };
+      h.panels.attachHost(h.ctx, h.bus);
+      const opening = h.shortcuts.get("alt+s").handler();
+      await tick();
+      h.paint();
+      h.tui.getFocusedComponent().handleInput("\u001b[B");
+      h.tui.getFocusedComponent().handleInput("e");
+      await tick();
+      assert.equal(
+        h.host.extensionDialogs.length,
+        1,
+        "the real native confirmation is the only inline dialog",
+      );
+      assert.equal(
+        h.tui.getFocusedComponent(),
+        h.host.extensionDialogs[0].component,
+        "the real native confirmation owns focus",
+      );
+      assert.equal(h.router.current().name, "off");
+      h.tui.getFocusedComponent().handleInput(accepted ? "\r" : "\u001b");
+      await tick();
+      if (!accepted) {
+        await opening;
+        assert.deepEqual(h.published, []);
+        assert.equal(h.mounts.length, 1);
+      } else {
+        assert.equal(h.mounts.length, 2);
+        assert.equal(
+          h.host.extensionDialogs.length,
+          mode === "regular" ? 1 : 0,
+          "the confirmation is gone; only a reopened docked picker can remain",
+        );
+        assert.equal(h.tui.getFocusedComponent(), h.mounts[1].component);
+        assert.match(
+          h.mounts[1].component.render(76).map(stripTerminalSequences).join("\n"),
+          /Effort · fixture-balanced/,
+        );
+        h.tui.getFocusedComponent().handleInput("\u001b[C");
+        assert.deepEqual(h.router.current().effort_overrides, { d5: "inherit" });
+        h.tui.getFocusedComponent().handleInput("\u001b"); // back, same component/focus
+        assert.equal(h.tui.getFocusedComponent(), h.mounts[1].component);
+        h.tui.getFocusedComponent().handleInput("\u001b");
+        await opening;
+        assert.deepEqual(h.published, ["fixture-balanced", "fixture-balanced"]);
+      }
+      assert.equal(h.tui.getFocusedComponent(), h.host.editor);
+      assert.equal(h.tui.hasOverlay(), false);
+    });
+  }
 
-for (const mode of ["fullscreen", "regular"]) test(`G saving from the live effort page settles the actual SDK custom picker (${mode})`, async (t) => {
-  let h; const saved = [];
-  const management = { ...savingOption(), saveDefault: async (scope) => {
-    assert.equal(h.mounts[0].handle?.getBounds(), undefined);
-    assert.equal(h.host.editorContainer.children[0], h.host.editor);
-    saved.push({ scope, selection: h.router.current() });
-  } };
-  h = emptyOwnerPanels(t, mode, management, true); h.router.select("fixture-balanced");
-  h.panels.attachHost(h.ctx, h.bus);
-  const opening = h.shortcuts.get("alt+s").handler(); await tick();
-  h.tui.getFocusedComponent().handleInput("e"); h.tui.getFocusedComponent().handleInput("\u001b[C");
-  assert.deepEqual(h.router.current().effort_overrides, { d5: "inherit" });
-  h.tui.getFocusedComponent().handleInput("g"); await opening;
-  assert.equal(saved.length, 1); assert.equal(saved[0].scope, "global");
-  assert.deepEqual(saved[0].selection.effort_overrides, { d5: "inherit" });
-  assert.deepEqual(h.published, ["fixture-balanced"], "saving is not a second live publication");
-  assert.equal(h.tui.getFocusedComponent(), h.host.editor);
-});
+for (const mode of ["fullscreen", "regular"])
+  test(`G saving from the live effort page settles the actual SDK custom picker (${mode})`, async (t) => {
+    let h;
+    const saved = [];
+    const management = {
+      ...savingOption(),
+      saveDefault: async (scope) => {
+        assert.equal(h.mounts[0].handle?.getBounds(), undefined);
+        assert.equal(h.host.editorContainer.children[0], h.host.editor);
+        saved.push({ scope, selection: h.router.current() });
+      },
+    };
+    h = emptyOwnerPanels(t, mode, management, true);
+    h.router.select("fixture-balanced");
+    h.panels.attachHost(h.ctx, h.bus);
+    const opening = h.shortcuts.get("alt+s").handler();
+    await tick();
+    h.tui.getFocusedComponent().handleInput("e");
+    h.tui.getFocusedComponent().handleInput("\u001b[C");
+    assert.deepEqual(h.router.current().effort_overrides, { d5: "inherit" });
+    h.tui.getFocusedComponent().handleInput("g");
+    await opening;
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].scope, "global");
+    assert.deepEqual(saved[0].selection.effort_overrides, { d5: "inherit" });
+    assert.deepEqual(h.published, ["fixture-balanced"], "saving is not a second live publication");
+    assert.equal(h.tui.getFocusedComponent(), h.host.editor);
+  });
 
 test("real SDK G/W routes close the picker before saving, with no preset publication or automatic reopen", async (t) => {
-  for (const mode of ["fullscreen", "regular"]) for (const [key, scope] of [["g", "global"], ["w", "workspace"]]) {
-    const calls = [], h = emptyOwnerPanels(t, mode, { summary: () => "Save: session", settings: async () => {}, editPreset: async () => {},
-      canSaveWorkspace: () => true,
-      saveDefault: async (target) => {
-        if (mode === "fullscreen") assert.equal(h.mounts[0].handle.getBounds(), undefined, "the overlay is already closed");
-        else assert.equal(h.host.editorContainer.children[0], h.host.editor, "the native editor is restored");
-        calls.push(target);
-      } });
-    h.panels.attachHost(h.ctx, h.bus);
-    const opening = h.shortcuts.get("alt+s").handler(); await tick(); h.paint();
-    h.mounts[0].component.handleInput("\u001b[B"); // highlight an inactive model; live remains Off
-    h.mounts[0].component.handleInput(key);
-    await opening;
-    assert.deepEqual(calls, [scope]);
-    assert.equal(h.router.current().name, "off");
-    assert.deepEqual(h.published, []);
-    assert.equal(h.mounts.length, 1);
-    h.panels.dispose();
-  }
+  for (const mode of ["fullscreen", "regular"])
+    for (const [key, scope] of [
+      ["g", "global"],
+      ["w", "workspace"],
+    ]) {
+      const calls = [],
+        h = emptyOwnerPanels(t, mode, {
+          summary: () => "Save: session",
+          settings: async () => {},
+          editPreset: async () => {},
+          canSaveWorkspace: () => true,
+          saveDefault: async (target) => {
+            if (mode === "fullscreen")
+              assert.equal(
+                h.mounts[0].handle.getBounds(),
+                undefined,
+                "the overlay is already closed",
+              );
+            else
+              assert.equal(
+                h.host.editorContainer.children[0],
+                h.host.editor,
+                "the native editor is restored",
+              );
+            calls.push(target);
+          },
+        });
+      h.panels.attachHost(h.ctx, h.bus);
+      const opening = h.shortcuts.get("alt+s").handler();
+      await tick();
+      h.paint();
+      h.mounts[0].component.handleInput("\u001b[B"); // highlight an inactive model; live remains Off
+      h.mounts[0].component.handleInput(key);
+      await opening;
+      assert.deepEqual(calls, [scope]);
+      assert.equal(h.router.current().name, "off");
+      assert.deepEqual(h.published, []);
+      assert.equal(h.mounts.length, 1);
+      h.panels.dispose();
+    }
 });
 
 test("through the real SDK the management routes settle the picker before the host dialog runs", async (t) => {
   for (const mode of ["fullscreen", "regular"]) {
-    const calls = [], order = [];
+    const calls = [],
+      order = [];
     const h = emptyOwnerPanels(t, mode, {
       summary: () => " presets: controlled fixture · pending: none",
-      settings: async () => { order.push(`settings:${h.mounts.length}`); calls.push("settings"); },
-      editPreset: async (name) => { order.push(`edit:${name ?? "new"}:${h.mounts.length}`); calls.push(name); },
+      settings: async () => {
+        order.push(`settings:${h.mounts.length}`);
+        calls.push("settings");
+      },
+      editPreset: async (name) => {
+        order.push(`edit:${name ?? "new"}:${h.mounts.length}`);
+        calls.push(name);
+      },
       editModel: async (name, slot, position) => {
-        order.push(`model:${name}:${slot}:${position === undefined ? "center" : JSON.stringify(position)}:${h.mounts.length}`);
+        order.push(
+          `model:${name}:${slot}:${position === undefined ? "center" : JSON.stringify(position)}:${h.mounts.length}`,
+        );
         calls.push(`model:${name}:${slot}`);
       },
     });
     h.panels.attachHost(h.ctx, h.bus);
-    const opening = h.shortcuts.get("alt+s").handler(); await tick();
+    const opening = h.shortcuts.get("alt+s").handler();
+    await tick();
     const mount = h.mounts[0];
-    assert.equal(mount.options.overlay, mode === "fullscreen", `${mode}: the renderer rule is unchanged`);
-    assert.match(mount.component.render(76).map(stripTerminalSequences).join("\n"),
-      /controlled fixture · pending: none/, `${mode}: the summary reaches the real picker`);
+    assert.equal(
+      mount.options.overlay,
+      mode === "fullscreen",
+      `${mode}: the renderer rule is unchanged`,
+    );
+    assert.match(
+      mount.component.render(76).map(stripTerminalSequences).join("\n"),
+      /controlled fixture · pending: none/,
+      `${mode}: the summary reaches the real picker`,
+    );
 
     mount.component.handleInput("c"); // off is highlighted: no preset to edit
     assert.deepEqual(calls, [], `${mode}: off has no edit-preset route`);
     mount.component.handleInput("n");
     await opening;
     assert.deepEqual(calls, [undefined], `${mode}: create reaches editPreset(undefined)`);
-    assert.equal(order[0], "edit:new:1", `${mode}: the dialog runs after the custom component settled, with no reopen`);
+    assert.equal(
+      order[0],
+      "edit:new:1",
+      `${mode}: the dialog runs after the custom component settled, with no reopen`,
+    );
     assert.deepEqual(h.published, [], `${mode}: a management route never publishes`);
 
-    const cancel = h.shortcuts.get("alt+s").handler(); await tick();
+    const cancel = h.shortcuts.get("alt+s").handler();
+    await tick();
     h.mounts[1].component.handleInput("\u001bs");
     await cancel;
     assert.deepEqual(calls, [undefined], `${mode}: Esc still cancels without routing`);
@@ -1453,64 +2145,130 @@ test("through the real SDK the management routes settle the picker before the ho
 
     // A digit routes the highlighted preset's light slot through the real
     // SDK, with no position (the popover centers) and no panel reopen.
-    const routed = h.shortcuts.get("alt+s").handler(); await tick();
+    const routed = h.shortcuts.get("alt+s").handler();
+    await tick();
     h.mounts[2].component.handleInput("\u001b[B"); // highlight a model preset
     h.mounts[2].component.handleInput("1");
     await routed;
-    assert.equal(calls.filter((entry) => typeof entry === "string" && entry.startsWith("model:")).length, 1);
-    assert.match(order.at(-1), /^model:fixture-[a-z]+:d1:center:3$/, `${mode}: the slot route settled before its dialog`);
-    assert.equal(h.mounts.length, 3, `${mode}: the model dialog is an independent route, no panel reopen`);
+    assert.equal(
+      calls.filter((entry) => typeof entry === "string" && entry.startsWith("model:")).length,
+      1,
+    );
+    assert.match(
+      order.at(-1),
+      /^model:fixture-[a-z]+:d1:center:3$/,
+      `${mode}: the slot route settled before its dialog`,
+    );
+    assert.equal(
+      h.mounts.length,
+      3,
+      `${mode}: the model dialog is an independent route, no panel reopen`,
+    );
     assert.deepEqual(h.published, []);
     h.panels.dispose();
   }
 });
 
-test("direct preset editing owns the shared UI latch so a footer click cannot strand a newer picker", { timeout: 5000 }, async (t) => {
-  let controls;
-  const h = emptyOwnerPanels(t, "fullscreen", {
-    summary: () => "Save: session", settings: async () => controls.open(),
-    editPreset: async (name) => controls.editPreset(name),
-    cancelModelSelection: () => controls.cancelModelSelection(),
-  });
-  h.panels.attachHost(h.ctx, h.bus);
-  const model = { provider: "fixture", id: "worker", name: "Worker", api: "fixture", reasoning: false };
-  Object.assign(h.ctx, { hasUI: true, scopedModels: [], modelRegistry: { getAll: () => [model] } });
-  const runtime = { getAvailableSnapshot: () => [model], getModel: () => model, getError: () => undefined,
-    refresh: async () => ({ aborted: false, errors: new Map() }) };
-  controls = new PreferencesControls({ ctx: h.ctx, store: { scope: "session" }, ready: () => true,
-    beerMugs: { current: () => false, set() {} },
-    router: () => h.router, delegation: () => ({}),
-    createModelSelector: (options) => createPresetModelSelector({ ...options, runtime }),
-    modelPopover: () => h.panels.isFullscreen(), modelSelectionAllowed: () => h.panels.modelSelectionAllowed(),
-    beforeModelClose: () => h.bus.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {}),
-    publishDefinition() { assert.fail("cancelled editor must not publish"); } });
-  t.after(() => controls.dispose());
-  const editing = h.panels.withManagement(() => controls.editPreset("fixture-balanced"));
-  await tick(); h.paint();
-  assert.equal(h.mounts.length, 1);
-  const native = h.mounts[0];
-  h.click(); await tick();
-  await h.shortcuts.get("alt+a").handler();
-  assert.equal(h.mounts.length, 1, "neither preset nor detail panels can mount over the direct editor");
-  const bounds = native.handle.getBounds();
-  assert(bounds);
-  const x = bounds.col + bounds.width - 4, y = bounds.row;
-  for (const suffix of ["M", "m"])
-    h.tui.handleMouseEvent(h.tui.parseSgrMouseEvent(`\u001b[<0;${x + 1};${y + 1}${suffix}`));
-  await editing; await tick(); h.paint();
-  assert.equal(native.handle.getBounds(), undefined, "SDK done removes its own overlay, not a newer picker");
-  h.click(); await tick(); h.paint();
-  assert.equal(h.mounts.length, 2, "the latch and picker state released after cancellation");
-  let entered = false;
-  await h.panels.withManagement(async () => { entered = true; });
-  assert.equal(entered, false, "direct management cannot open over the already mounted picker either");
-  h.mounts[1].component.handleInput("\u001b"); await tick();
-  assert.deepEqual(h.published, []);
-});
+test(
+  "direct preset editing owns the shared UI latch so a footer click cannot strand a newer picker",
+  { timeout: 5000 },
+  async (t) => {
+    let controls;
+    const h = emptyOwnerPanels(t, "fullscreen", {
+      summary: () => "Save: session",
+      settings: async () => controls.open(),
+      editPreset: async (name) => controls.editPreset(name),
+      cancelModelSelection: () => controls.cancelModelSelection(),
+    });
+    h.panels.attachHost(h.ctx, h.bus);
+    const model = {
+      provider: "fixture",
+      id: "worker",
+      name: "Worker",
+      api: "fixture",
+      reasoning: false,
+    };
+    Object.assign(h.ctx, {
+      hasUI: true,
+      scopedModels: [],
+      modelRegistry: { getAll: () => [model] },
+    });
+    const runtime = {
+      getAvailableSnapshot: () => [model],
+      getModel: () => model,
+      getError: () => undefined,
+      refresh: async () => ({ aborted: false, errors: new Map() }),
+    };
+    controls = new PreferencesControls({
+      ctx: h.ctx,
+      store: { scope: "session" },
+      ready: () => true,
+      beerMugs: { current: () => false, set() {} },
+      router: () => h.router,
+      delegation: () => ({}),
+      createModelSelector: (options) => createPresetModelSelector({ ...options, runtime }),
+      modelPopover: () => h.panels.isFullscreen(),
+      modelSelectionAllowed: () => h.panels.modelSelectionAllowed(),
+      beforeModelClose: () => h.bus.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {}),
+      publishDefinition() {
+        assert.fail("cancelled editor must not publish");
+      },
+    });
+    t.after(() => controls.dispose());
+    const editing = h.panels.withManagement(() => controls.editPreset("fixture-balanced"));
+    await tick();
+    h.paint();
+    assert.equal(h.mounts.length, 1);
+    const native = h.mounts[0];
+    h.click();
+    await tick();
+    await h.shortcuts.get("alt+a").handler();
+    assert.equal(
+      h.mounts.length,
+      1,
+      "neither preset nor detail panels can mount over the direct editor",
+    );
+    const bounds = native.handle.getBounds();
+    assert(bounds);
+    const x = bounds.col + bounds.width - 4,
+      y = bounds.row;
+    for (const suffix of ["M", "m"])
+      h.tui.handleMouseEvent(h.tui.parseSgrMouseEvent(`\u001b[<0;${x + 1};${y + 1}${suffix}`));
+    await editing;
+    await tick();
+    h.paint();
+    assert.equal(
+      native.handle.getBounds(),
+      undefined,
+      "SDK done removes its own overlay, not a newer picker",
+    );
+    h.click();
+    await tick();
+    h.paint();
+    assert.equal(h.mounts.length, 2, "the latch and picker state released after cancellation");
+    let entered = false;
+    await h.panels.withManagement(async () => {
+      entered = true;
+    });
+    assert.equal(
+      entered,
+      false,
+      "direct management cannot open over the already mounted picker either",
+    );
+    h.mounts[1].component.handleInput("\u001b");
+    await tick();
+    assert.deepEqual(h.published, []);
+  },
+);
 
 for (const movement of ["keyboard", "wheel"]) {
   test(`model mouse targets keep their painted preset before a ${movement} repaint`, () => {
-    const h = fixture({ rows: 40, activeName: "alpha", pointer: true, management: managementOption({ models: true }) });
+    const h = fixture({
+      rows: 40,
+      activeName: "alpha",
+      pointer: true,
+      management: managementOption({ models: true }),
+    });
     const lines = painted(h.picker, 76);
     const y = lines.findIndex((line) => line.includes("provider/alpha-light"));
     assert(y > 0);
@@ -1524,16 +2282,25 @@ for (const movement of ["keyboard", "wheel"]) {
 }
 
 test("all five effort slots edit independently and Reset removes even the fifth override", () => {
-  const selected = { ...preset("alpha"), effort_defaults: Object.fromEntries(strengths.map((slot) => [slot, "inherit"])), effort_overrides: {} };
-  const h = fixture({ presets: [selected], efforts: () => ({ levels: ["off", "low"], inherited: "low" }) });
+  const selected = {
+    ...preset("alpha"),
+    effort_defaults: Object.fromEntries(strengths.map((slot) => [slot, "inherit"])),
+    effort_overrides: {},
+  };
+  const h = fixture({
+    presets: [selected],
+    efforts: () => ({ levels: ["off", "low"], inherited: "low" }),
+  });
   h.picker.handleInput("e");
   for (const [index, slot] of strengths.entries()) {
     h.picker.handleInput(String(index + 1));
     assert(painted(h.picker).some((line) => line.includes(`›‹${slot}:default›`)));
     h.picker.handleInput("\u001b[C"); // explicit inherit
     h.picker.handleInput("\u001b[C"); // fixed off, independently of same-model peers
-    assert.deepEqual(h.applied.at(-1).effort_overrides,
-      Object.fromEntries(strengths.slice(0, index + 1).map((key) => [key, "off"])));
+    assert.deepEqual(
+      h.applied.at(-1).effort_overrides,
+      Object.fromEntries(strengths.slice(0, index + 1).map((key) => [key, "off"])),
+    );
   }
   assert.equal(h.applied.length, 10);
   h.picker.handleInput("r");
@@ -1542,36 +2309,55 @@ test("all five effort slots edit independently and Reset removes even the fifth 
 });
 
 test("tiny slot windows follow the selection and resize without overflow or hidden mouse effects", () => {
-  for (const room of [7, 8, 9, 10, 12, 13, 16, 19]) for (const width of [8, 18, 34, 76, 120]) {
-    const h = fixture({ rows: 40, pointer: true, presets: [effortPreset()], efforts: effortCaps });
-    // The actual row allowance can shrink independently of the terminal share.
-    h.picker.options.rows = () => room;
-    h.picker.handleInput("e");
-    for (let index = 0; index < strengths.length; index++) {
-      h.picker.handleInput(String(index + 1));
-      const lines = painted(h.picker, width);
-      assert(lines.length <= room, `${room}x${width}: ${lines.length}`);
-      assert(lines.every((line) => visibleWidth(line) <= width));
-      assert(lines.some((line) => line.includes(`›‹${strengths[index]}`)), lines.join("\n"));
+  for (const room of [7, 8, 9, 10, 12, 13, 16, 19])
+    for (const width of [8, 18, 34, 76, 120]) {
+      const h = fixture({
+        rows: 40,
+        pointer: true,
+        presets: [effortPreset()],
+        efforts: effortCaps,
+      });
+      // The actual row allowance can shrink independently of the terminal share.
+      h.picker.options.rows = () => room;
+      h.picker.handleInput("e");
+      for (let index = 0; index < strengths.length; index++) {
+        h.picker.handleInput(String(index + 1));
+        const lines = painted(h.picker, width);
+        assert(lines.length <= room, `${room}x${width}: ${lines.length}`);
+        assert(lines.every((line) => visibleWidth(line) <= width));
+        assert(
+          lines.some((line) => line.includes(`›‹${strengths[index]}`)),
+          lines.join("\n"),
+        );
+      }
+      const lines = painted(h.picker, width),
+        y = lines.findIndex((line) => line.includes("›‹d5"));
+      h.picker.handleMouse(mouse("click", width + 1, y));
+      assert.deepEqual(h.applied, [], "unpainted arrow columns never publish");
+      if (width >= 18) {
+        const next = lines[y].indexOf("›", lines[y].indexOf("‹") + 1);
+        assert(next > 0, lines[y]);
+        h.picker.handleMouse(mouse("click", next, y));
+        assert.deepEqual(h.applied.at(-1).effort_overrides, { d1: "high", d5: "inherit" });
+      }
+      h.picker.options.rows = () => 7;
+      assert(
+        painted(h.picker, 18).some((line) => line.includes("›‹d5")),
+        "shrinking keeps the fifth selected slot visible",
+      );
+      h.picker.handleMouse(mouse("wheel", 4, 3, { wheelDelta: 1 }));
+      assert(
+        painted(h.picker, 18).some((line) => line.includes("›‹d4")),
+        "the editor wheel selects, not edits",
+      );
+      h.picker.handleInput("\u001b");
+      h.picker.handleInput("\u001b[Z");
+      assert(
+        painted(h.picker, 34).some((line) => line.includes("›d5")),
+        "Shift+Tab moves up to d5 after resize",
+      );
+      assert(painted(h.picker, 76).some((line) => line.includes("provider/alpha-strong")));
     }
-    const lines = painted(h.picker, width), y = lines.findIndex((line) => line.includes("›‹d5"));
-    h.picker.handleMouse(mouse("click", width + 1, y));
-    assert.deepEqual(h.applied, [], "unpainted arrow columns never publish");
-    if (width >= 18) {
-      const next = lines[y].indexOf("›", lines[y].indexOf("‹") + 1);
-      assert(next > 0, lines[y]);
-      h.picker.handleMouse(mouse("click", next, y));
-      assert.deepEqual(h.applied.at(-1).effort_overrides, { d1: "high", d5: "inherit" });
-    }
-    h.picker.options.rows = () => 7;
-    assert(painted(h.picker, 18).some((line) => line.includes("›‹d5")), "shrinking keeps the fifth selected slot visible");
-    h.picker.handleMouse(mouse("wheel", 4, 3, { wheelDelta: 1 }));
-    assert(painted(h.picker, 18).some((line) => line.includes("›‹d4")), "the editor wheel selects, not edits");
-    h.picker.handleInput("\u001b");
-    h.picker.handleInput("\u001b[Z");
-    assert(painted(h.picker, 34).some((line) => line.includes("›d5")), "Shift+Tab moves up to d5 after resize");
-    assert(painted(h.picker, 76).some((line) => line.includes("provider/alpha-strong")));
-  }
 });
 
 test("a subminimum viewport paints nothing and cannot edit or reset unseen effort", () => {
@@ -1580,7 +2366,9 @@ test("a subminimum viewport paints nothing and cannot edit or reset unseen effor
     h.picker.handleInput("e");
     h.picker.options.rows = () => room;
     assert.deepEqual(painted(h.picker), []);
-    h.picker.handleInput("5"); h.picker.handleInput("\u001b[C"); h.picker.handleInput("r");
+    h.picker.handleInput("5");
+    h.picker.handleInput("\u001b[C");
+    h.picker.handleInput("r");
     assert.deepEqual(h.applied, []);
     h.picker.handleInput("\u001bs");
     assert.deepEqual(h.result, [null], "cancellation always remains available");
@@ -1588,25 +2376,55 @@ test("a subminimum viewport paints nothing and cannot edit or reset unseen effor
 });
 
 test("terminal/width minima refuse invisible selection and effort but keep cancellation", () => {
-  for (const [rows, width] of [[4, 76], [6, 76], [24, 7]]) {
+  for (const [rows, width] of [
+    [4, 76],
+    [6, 76],
+    [24, 7],
+  ]) {
     const selecting = fixture({ rows, management: managementOption({ models: true }) });
     assert.deepEqual(painted(selecting.picker, width), []);
-    selecting.picker.handleInput("\r"); selecting.picker.handleInput("5");
+    selecting.picker.handleInput("\r");
+    selecting.picker.handleInput("5");
     assert.deepEqual(selecting.result, []);
     selecting.picker.handleInput("\u001b");
     assert.deepEqual(selecting.result, [null]);
     const editing = fixture({ rows, presets: [effortPreset()], efforts: effortCaps });
     editing.picker.handleInput("e");
     assert.deepEqual(painted(editing.picker, width), []);
-    editing.picker.handleInput("5"); editing.picker.handleInput("\u001b[C"); editing.picker.handleInput("r");
+    editing.picker.handleInput("5");
+    editing.picker.handleInput("\u001b[C");
+    editing.picker.handleInput("r");
     assert.deepEqual(editing.applied, []);
     editing.picker.handleInput("\u001bs");
     assert.deepEqual(editing.result, [null]);
   }
 });
 
-const invisibleKeys = ["g", "G", "w", "W", "p", "P", "n", "N", "c", "C", "e", "E", "1", "5", "r", "\t",
-  "\u001b[Z", "\u001b[A", "\u001b[B", "\u001b[C", "\u001b[D", "\u001b[1;2C", "\u001b[1;2D"];
+const invisibleKeys = [
+  "g",
+  "G",
+  "w",
+  "W",
+  "p",
+  "P",
+  "n",
+  "N",
+  "c",
+  "C",
+  "e",
+  "E",
+  "1",
+  "5",
+  "r",
+  "\t",
+  "\u001b[Z",
+  "\u001b[A",
+  "\u001b[B",
+  "\u001b[C",
+  "\u001b[D",
+  "\u001b[1;2C",
+  "\u001b[1;2D",
+];
 const hidePicker = (h, kind) => {
   if (kind === "terminal rows") h.tui.terminal.rows = 6;
   else if (kind === "terminal width") h.tui.terminal.columns = 7;
@@ -1614,19 +2432,40 @@ const hidePicker = (h, kind) => {
   else painted(h.picker, kind === "zero paint width" ? 0 : 7);
 };
 const restoreViewport = (h) => {
-  h.tui.terminal.rows = 40; h.tui.terminal.columns = 120; h.picker.options.rows = undefined;
+  h.tui.terminal.rows = 40;
+  h.tui.terminal.columns = 120;
+  h.picker.options.rows = undefined;
 };
 
 test("unusable list pickers gate all routes and changes before first paint and after resize", () => {
-  for (const kind of ["terminal rows", "terminal width", "allocation rows", "paint width", "zero paint width"]) {
+  for (const kind of [
+    "terminal rows",
+    "terminal width",
+    "allocation rows",
+    "paint width",
+    "zero paint width",
+  ]) {
     for (const previouslyPainted of [false, true]) {
-      const state = delegationState(), h = fixture({ rows: 40, pointer: true, presets: [effortPreset("alpha"), effortPreset("beta")],
-        activeName: "alpha", efforts: effortCaps, delegation: state.option, management: savingOption() });
+      const state = delegationState(),
+        h = fixture({
+          rows: 40,
+          pointer: true,
+          presets: [effortPreset("alpha"), effortPreset("beta")],
+          activeName: "alpha",
+          efforts: effortCaps,
+          delegation: state.option,
+          management: savingOption(),
+        });
       if (previouslyPainted) painted(h.picker);
       hidePicker(h, kind);
-      const selection = h.picker.selection(), slotIndex = h.picker.slotIndex;
+      const selection = h.picker.selection(),
+        slotIndex = h.picker.slotIndex;
       for (const key of [...invisibleKeys, "\r"]) h.picker.handleInput(key);
-      assert.deepEqual(h.result, [], `${kind}, prior paint=${previouslyPainted}: no invisible route`);
+      assert.deepEqual(
+        h.result,
+        [],
+        `${kind}, prior paint=${previouslyPainted}: no invisible route`,
+      );
       assert.deepEqual(h.applied, []);
       assert.deepEqual(state.sets, []);
       assert.equal(h.picker.selection(), selection);
@@ -1634,23 +2473,47 @@ test("unusable list pickers gate all routes and changes before first paint and a
       restoreViewport(h);
       assert.match(painted(h.picker)[0], /Delegation/, "E never opened an invisible page");
       h.picker.handleInput("g");
-      assert.deepEqual(h.result, [{ action: "save-default", scope: "global" }], "routes recover with a usable viewport");
+      assert.deepEqual(
+        h.result,
+        [{ action: "save-default", scope: "global" }],
+        "routes recover with a usable viewport",
+      );
     }
     for (const cancel of ["\u001bs", "\u0003", "\u001b"]) {
-      const h = fixture({ rows: 40, presets: [effortPreset()], efforts: effortCaps, management: savingOption() });
-      hidePicker(h, kind); h.picker.handleInput(cancel);
+      const h = fixture({
+        rows: 40,
+        presets: [effortPreset()],
+        efforts: effortCaps,
+        management: savingOption(),
+      });
+      hidePicker(h, kind);
+      h.picker.handleInput(cancel);
       assert.deepEqual(h.result, [null], `${kind}: cancellation is still usable`);
     }
   }
 });
 
 test("invisible effort pages retain live edits, allow back/cancel, and never save or route", () => {
-  for (const kind of ["terminal rows", "terminal width", "allocation rows", "paint width", "zero paint width"]) {
+  for (const kind of [
+    "terminal rows",
+    "terminal width",
+    "allocation rows",
+    "paint width",
+    "zero paint width",
+  ]) {
     for (const back of ["\u001b", "\r"]) {
-      const state = delegationState(), h = fixture({ rows: 40, presets: [effortPreset()], efforts: effortCaps,
-        delegation: state.option, management: savingOption() });
-      h.picker.handleInput("e"); h.picker.handleInput("\u001b[C");
-      const applied = structuredClone(h.applied), slotIndex = h.picker.slotIndex;
+      const state = delegationState(),
+        h = fixture({
+          rows: 40,
+          presets: [effortPreset()],
+          efforts: effortCaps,
+          delegation: state.option,
+          management: savingOption(),
+        });
+      h.picker.handleInput("e");
+      h.picker.handleInput("\u001b[C");
+      const applied = structuredClone(h.applied),
+        slotIndex = h.picker.slotIndex;
       hidePicker(h, kind);
       for (const key of invisibleKeys) h.picker.handleInput(key);
       assert.deepEqual(h.result, []);
@@ -1664,69 +2527,134 @@ test("invisible effort pages retain live edits, allow back/cancel, and never sav
       assert.match(painted(h.picker)[0], /Delegation/);
     }
     for (const cancel of ["\u001bs", "\u0003"]) {
-      const h = fixture({ rows: 40, presets: [effortPreset()], efforts: effortCaps, management: savingOption() });
-      h.picker.handleInput("e"); hidePicker(h, kind); h.picker.handleInput(cancel);
+      const h = fixture({
+        rows: 40,
+        presets: [effortPreset()],
+        efforts: effortCaps,
+        management: savingOption(),
+      });
+      h.picker.handleInput("e");
+      hidePicker(h, kind);
+      h.picker.handleInput(cancel);
       assert.deepEqual(h.result, [null]);
     }
   }
   for (const back of ["\u001b", "\r"]) {
-    const h = fixture({ rows: 6, startInEffort: true, presets: [effortPreset()], efforts: effortCaps, management: savingOption() });
-    assert.equal(h.picker.editing, true, "active startup continuation may initialize its passive page before paint");
+    const h = fixture({
+      rows: 6,
+      startInEffort: true,
+      presets: [effortPreset()],
+      efforts: effortCaps,
+      management: savingOption(),
+    });
+    assert.equal(
+      h.picker.editing,
+      true,
+      "active startup continuation may initialize its passive page before paint",
+    );
     for (const key of invisibleKeys) h.picker.handleInput(key);
-    assert.deepEqual(h.result, []); assert.deepEqual(h.applied, []);
-    h.picker.handleInput(back); restoreViewport(h);
+    assert.deepEqual(h.result, []);
+    assert.deepEqual(h.applied, []);
+    h.picker.handleInput(back);
+    restoreViewport(h);
     assert.match(painted(h.picker)[0], /Delegation/);
   }
-  const inactive = fixture({ rows: 6, startInEffort: true, activeName: "off", presets: [effortPreset()], efforts: effortCaps });
-  assert.deepEqual(inactive.result, [], "an invisible inactive startup cannot invoke a confirmation route");
+  const inactive = fixture({
+    rows: 6,
+    startInEffort: true,
+    activeName: "off",
+    presets: [effortPreset()],
+    efforts: effortCaps,
+  });
+  assert.deepEqual(
+    inactive.result,
+    [],
+    "an invisible inactive startup cannot invoke a confirmation route",
+  );
 });
 
 test("eight-column compact save controls keep Tab and exact G/W click targets with live trust gating", () => {
-  for (const rows of [7, 8, 10]) for (const trusted of [false, true]) for (const withMode of [false, true]) {
-    const make = (management = savingOption(trusted)) => fixture({ rows, pointer: true, presets: [effortPreset()],
-      efforts: effortCaps, management, ...(withMode ? { delegation: delegationState().option } : {}) });
-    const h = make();
-    let lines = painted(h.picker, 8), y = lines.findIndex((line) => line === "│GW Tab│");
-    assert(y > 0, `${rows}, trusted=${trusted}, mode=${withMode}: ${lines.join("\n")}`);
-    assert(lines.every((line) => visibleWidth(line) <= 8));
-    assert(lines.length <= Math.max(7, Math.floor(rows * 0.8)));
-    assert(lines.some((line) => line.includes("›d5")));
-    for (let index = 0; index < 4; index++) h.picker.handleInput("\t");
-    lines = painted(h.picker, 8); y = lines.findIndex((line) => line === "│GW Tab│");
-    assert(lines.some((line) => line.includes("›d1")), "Tab still reaches the easiest slot");
-    h.picker.handleMouse(mouse("click", lines[y].indexOf("Tab"), y));
-    h.picker.handleMouse(mouse("click", 0, y));
-    h.picker.handleMouse(mouse("click", 7, y));
-    assert.deepEqual(h.result, [], "navigation text and borders are not save targets");
-    h.picker.handleMouse(mouse("click", lines[y].indexOf("G"), y));
-    assert.deepEqual(h.result, [{ action: "save-default", scope: "global" }]);
+  for (const rows of [7, 8, 10])
+    for (const trusted of [false, true])
+      for (const withMode of [false, true]) {
+        const make = (management = savingOption(trusted)) =>
+          fixture({
+            rows,
+            pointer: true,
+            presets: [effortPreset()],
+            efforts: effortCaps,
+            management,
+            ...(withMode ? { delegation: delegationState().option } : {}),
+          });
+        const h = make();
+        let lines = painted(h.picker, 8),
+          y = lines.findIndex((line) => line === "│GW Tab│");
+        assert(y > 0, `${rows}, trusted=${trusted}, mode=${withMode}: ${lines.join("\n")}`);
+        assert(lines.every((line) => visibleWidth(line) <= 8));
+        assert(lines.length <= Math.max(7, Math.floor(rows * 0.8)));
+        assert(lines.some((line) => line.includes("›d5")));
+        for (let index = 0; index < 4; index++) h.picker.handleInput("\t");
+        lines = painted(h.picker, 8);
+        y = lines.findIndex((line) => line === "│GW Tab│");
+        assert(
+          lines.some((line) => line.includes("›d1")),
+          "Tab still reaches the easiest slot",
+        );
+        h.picker.handleMouse(mouse("click", lines[y].indexOf("Tab"), y));
+        h.picker.handleMouse(mouse("click", 0, y));
+        h.picker.handleMouse(mouse("click", 7, y));
+        assert.deepEqual(h.result, [], "navigation text and borders are not save targets");
+        h.picker.handleMouse(mouse("click", lines[y].indexOf("G"), y));
+        assert.deepEqual(h.result, [{ action: "save-default", scope: "global" }]);
 
-    const project = make(), projectLines = painted(project.picker, 8);
-    const projectY = projectLines.findIndex((line) => line === "│GW Tab│");
-    project.picker.handleMouse(mouse("click", projectLines[projectY].indexOf("W"), projectY));
-    assert.deepEqual(project.result, trusted ? [{ action: "save-default", scope: "workspace" }] : [],
-      "a painted locked W remains inert");
-    if (!trusted) {
-      project.picker.handleInput("w");
-      assert.deepEqual(project.result, []);
-      assert.equal(project.picker.isOpen(), true);
-    }
+        const project = make(),
+          projectLines = painted(project.picker, 8);
+        const projectY = projectLines.findIndex((line) => line === "│GW Tab│");
+        project.picker.handleMouse(mouse("click", projectLines[projectY].indexOf("W"), projectY));
+        assert.deepEqual(
+          project.result,
+          trusted ? [{ action: "save-default", scope: "workspace" }] : [],
+          "a painted locked W remains inert",
+        );
+        if (!trusted) {
+          project.picker.handleInput("w");
+          assert.deepEqual(project.result, []);
+          assert.equal(project.picker.isOpen(), true);
+        }
 
-    let liveTrust = true;
-    const stale = make(managementOption({ saveDefaults: true, canSaveWorkspace: () => liveTrust }));
-    const staleLines = painted(stale.picker, 8), staleY = staleLines.findIndex((line) => line === "│GW Tab│");
-    liveTrust = false;
-    stale.picker.handleMouse(mouse("click", staleLines[staleY].indexOf("W"), staleY));
-    assert.deepEqual(stale.result, [], "tight targets cannot reuse trust from the last paint");
-  }
+        let liveTrust = true;
+        const stale = make(
+          managementOption({ saveDefaults: true, canSaveWorkspace: () => liveTrust }),
+        );
+        const staleLines = painted(stale.picker, 8),
+          staleY = staleLines.findIndex((line) => line === "│GW Tab│");
+        liveTrust = false;
+        stale.picker.handleMouse(mouse("click", staleLines[staleY].indexOf("W"), staleY));
+        assert.deepEqual(stale.result, [], "tight targets cannot reuse trust from the last paint");
+      }
 });
 
 test("tiny compact and effort rows keep a visible slot-navigation hint", () => {
-  const list = fixture({ rows: 8, pointer: true, presets: [effortPreset()], efforts: effortCaps,
-    delegation: delegationState().option, management: savingOption() });
-  assert(painted(list.picker, 8).some((line) => line.includes("Tab")), painted(list.picker, 8).join("\n"));
-  const effort = fixture({ rows: 7, pointer: true, activeName: "alpha", presets: [effortPreset()],
-    efforts: effortCaps, management: savingOption() });
+  const list = fixture({
+    rows: 8,
+    pointer: true,
+    presets: [effortPreset()],
+    efforts: effortCaps,
+    delegation: delegationState().option,
+    management: savingOption(),
+  });
+  assert(
+    painted(list.picker, 8).some((line) => line.includes("Tab")),
+    painted(list.picker, 8).join("\n"),
+  );
+  const effort = fixture({
+    rows: 7,
+    pointer: true,
+    activeName: "alpha",
+    presets: [effortPreset()],
+    efforts: effortCaps,
+    management: savingOption(),
+  });
   effort.picker.handleInput("e");
   const effortLines = painted(effort.picker, 8).join("\n");
   assert(effortLines.includes("↑"), effortLines);
@@ -1734,28 +2662,48 @@ test("tiny compact and effort rows keep a visible slot-navigation hint", () => {
 });
 
 test("compact delegation/save layouts start at d5 and Tab reaches d1 through their slot window", () => {
-  for (const saving of [false, true]) for (const width of [18, 34, 76, 120]) {
-    const h = fixture({ rows: 8, pointer: true, presets: [effortPreset()], efforts: effortCaps,
-      delegation: delegationState().option, management: saving ? savingOption() : managementOption({ models: true }) });
-    let lines = painted(h.picker, width);
-    assert(lines.some((line) => line.includes("Tab")), `${width}: ${lines.join("\n")}`);
-    assert(lines.length <= 7);
-    assert(lines.some((line) => line.includes("›d5")), "hardest slot is selected first");
-    for (let index = 0; index < 4; index++) h.picker.handleInput("\t");
-    lines = painted(h.picker, width);
-    assert(lines.some((line) => line.includes("›d1")), "easiest slot is reachable without changing preset");
-    assert.equal(h.picker.selection(), "alpha");
-    if (!saving && width >= 34) {
-      const y = lines.findIndex((line) => line.includes("›d1") && line.includes("provider/"));
-      assert(y >= 0, lines.join("\n"));
-      h.picker.handleMouse(mouse("click", lines[y].indexOf("provider/"), y));
-      assert.deepEqual(h.result, [{ action: "edit-model", name: "alpha", slot: "d1" }]);
+  for (const saving of [false, true])
+    for (const width of [18, 34, 76, 120]) {
+      const h = fixture({
+        rows: 8,
+        pointer: true,
+        presets: [effortPreset()],
+        efforts: effortCaps,
+        delegation: delegationState().option,
+        management: saving ? savingOption() : managementOption({ models: true }),
+      });
+      let lines = painted(h.picker, width);
+      assert(
+        lines.some((line) => line.includes("Tab")),
+        `${width}: ${lines.join("\n")}`,
+      );
+      assert(lines.length <= 7);
+      assert(
+        lines.some((line) => line.includes("›d5")),
+        "hardest slot is selected first",
+      );
+      for (let index = 0; index < 4; index++) h.picker.handleInput("\t");
+      lines = painted(h.picker, width);
+      assert(
+        lines.some((line) => line.includes("›d1")),
+        "easiest slot is reachable without changing preset",
+      );
+      assert.equal(h.picker.selection(), "alpha");
+      if (!saving && width >= 34) {
+        const y = lines.findIndex((line) => line.includes("›d1") && line.includes("provider/"));
+        assert(y >= 0, lines.join("\n"));
+        h.picker.handleMouse(mouse("click", lines[y].indexOf("provider/"), y));
+        assert.deepEqual(h.result, [{ action: "edit-model", name: "alpha", slot: "d1" }]);
+      }
     }
-  }
 });
 
 test("slot rows show the auto-preview effective level and no config map", () => {
-  const resolved = fixture({ presets: [effortPreset("alpha")], activeName: "alpha", efforts: effortCaps });
+  const resolved = fixture({
+    presets: [effortPreset("alpha")],
+    activeName: "alpha",
+    efforts: effortCaps,
+  });
   const lines = painted(resolved.picker, 76);
   const light = lines.find((line) => line.includes("provider/alpha-light"));
   const standard = lines.find((line) => line.includes("provider/alpha-standard"));
@@ -1767,20 +2715,44 @@ test("slot rows show the auto-preview effective level and no config map", () => 
   assert(!lines.some((line) => line.includes("minimal")), "other levels never leak into the row");
 
   // A fixed level the live metadata does not support: raw value, marked, never clamped.
-  const unsupported = fixture({ presets: [effortPreset("alpha")], activeName: "alpha", efforts: (_preset, slot) =>
-    slot === "d1" ? { levels: ["off", "low", "medium"], inherited: "medium" } : effortCaps(_preset, slot) });
-  assert.match(painted(unsupported.picker, 76).find((line) => line.includes("provider/alpha-light")), /high!/);
+  const unsupported = fixture({
+    presets: [effortPreset("alpha")],
+    activeName: "alpha",
+    efforts: (_preset, slot) =>
+      slot === "d1"
+        ? { levels: ["off", "low", "medium"], inherited: "medium" }
+        : effortCaps(_preset, slot),
+  });
+  assert.match(
+    painted(unsupported.picker, 76).find((line) => line.includes("provider/alpha-light")),
+    /high!/,
+  );
 
   // An inherit that cannot resolve says unavailable; no level is invented.
-  const unavailable = fixture({ presets: [effortPreset("alpha")], activeName: "alpha", efforts: (_preset, slot) =>
-    slot === "d3" ? { levels: ["off", "low"], inheritError: "Parent thinking unavailable" } : effortCaps(_preset, slot) });
-  assert.match(painted(unavailable.picker, 76).find((line) => line.includes("provider/alpha-standard")), /unavailable/);
+  const unavailable = fixture({
+    presets: [effortPreset("alpha")],
+    activeName: "alpha",
+    efforts: (_preset, slot) =>
+      slot === "d3"
+        ? { levels: ["off", "low"], inheritError: "Parent thinking unavailable" }
+        : effortCaps(_preset, slot),
+  });
+  assert.match(
+    painted(unavailable.picker, 76).find((line) => line.includes("provider/alpha-standard")),
+    /unavailable/,
+  );
 
   // Legacy read-only hosts keep their configured policy instead of inventing a resolution.
   const legacy = fixture({ presets: [effortPreset("alpha")], activeName: "alpha" });
   const legacyLines = painted(legacy.picker, 76);
-  assert.match(legacyLines.find((line) => line.includes("provider/alpha-standard")), /inherit/);
-  assert.doesNotMatch(legacyLines.find((line) => line.includes("provider/alpha-light")), /!|unavailable/);
+  assert.match(
+    legacyLines.find((line) => line.includes("provider/alpha-standard")),
+    /inherit/,
+  );
+  assert.doesNotMatch(
+    legacyLines.find((line) => line.includes("provider/alpha-light")),
+    /!|unavailable/,
+  );
 });
 
 test("digits 1–5 route the highlighted preset's independent slot models on the list page only", () => {
@@ -1789,10 +2761,17 @@ test("digits 1–5 route the highlighted preset's independent slot models on the
     const routed = fixture({ management: managementOption({ models: true }) });
     routed.picker.render(76);
     routed.picker.handleInput(key);
-    assert.deepEqual(routed.result, [{ action: "edit-model", name: "beta", slot }], `${key} routes ${slot}`);
+    assert.deepEqual(
+      routed.result,
+      [{ action: "edit-model", name: "beta", slot }],
+      `${key} routes ${slot}`,
+    );
   }
-  const off = fixture({ management: managementOption({ models: true }),
-    presets: [offPreset(), preset("alpha")], activeName: "alpha" });
+  const off = fixture({
+    management: managementOption({ models: true }),
+    presets: [offPreset(), preset("alpha")],
+    activeName: "alpha",
+  });
   off.picker.render(76);
   off.picker.handleInput("\u001b[A"); // highlight off
   off.picker.handleInput("1");
@@ -1812,19 +2791,28 @@ test("painted model text is the only click target; labels, values and ellipses a
   let lines = painted(full.picker, 76);
   let y = lines.findIndex((line) => line.includes("provider/beta-light"));
   assert(y > 0, lines.join("\n"));
-  full.picker.handleMouse(mouse("click", lines[y].indexOf("provider/beta-light") - 1, y,
-    { screenX: 40, screenY: 12 })); // the space before the model: not a target
+  full.picker.handleMouse(
+    mouse("click", lines[y].indexOf("provider/beta-light") - 1, y, { screenX: 40, screenY: 12 }),
+  ); // the space before the model: not a target
   assert.deepEqual(full.result, []);
-  full.picker.handleMouse(mouse("click", lines[y].indexOf("provider/beta-light"), y, { screenX: 40, screenY: 12 }));
-  assert.deepEqual(full.result, [{ action: "edit-model", name: "beta", slot: "d1", position: { row: 12, col: 40 } }],
-    "a model click routes the slot with the pointer's absolute position");
+  full.picker.handleMouse(
+    mouse("click", lines[y].indexOf("provider/beta-light"), y, { screenX: 40, screenY: 12 }),
+  );
+  assert.deepEqual(
+    full.result,
+    [{ action: "edit-model", name: "beta", slot: "d1", position: { row: 12, col: 40 } }],
+    "a model click routes the slot with the pointer's absolute position",
+  );
 
   const noScreen = fixture({ pointer: true, management: managementOption({ models: true }) });
   lines = painted(noScreen.picker, 76);
   y = lines.findIndex((line) => line.includes("provider/beta-standard"));
   noScreen.picker.handleMouse(mouse("click", lines[y].indexOf("provider/beta-standard"), y));
-  assert.deepEqual(noScreen.result, [{ action: "edit-model", name: "beta", slot: "d3" }],
-    "without screen coordinates the route carries no position, so the host centers its popover");
+  assert.deepEqual(
+    noScreen.result,
+    [{ action: "edit-model", name: "beta", slot: "d3" }],
+    "without screen coordinates the route carries no position, so the host centers its popover",
+  );
 
   const value = fixture({ pointer: true, management: managementOption({ models: true }) });
   lines = painted(value.picker, 76);
@@ -1840,19 +2828,30 @@ test("painted model text is the only click target; labels, values and ellipses a
   assert(lines[y].includes("…"), "the model text is clipped at this width");
   const start = lines[y].indexOf("provider/");
   clipped.picker.handleMouse(mouse("click", start, y, { screenX: 7, screenY: 4 }));
-  assert.deepEqual(clipped.result, [{ action: "edit-model", name: "beta", slot: "d5", position: { row: 4, col: 7 } }],
-    "the painted prefix is a target");
+  assert.deepEqual(
+    clipped.result,
+    [{ action: "edit-model", name: "beta", slot: "d5", position: { row: 4, col: 7 } }],
+    "the painted prefix is a target",
+  );
   clipped.result.length = 0;
   clipped.picker.handleMouse(mouse("click", start + 9, y, { screenX: 20, screenY: 4 })); // the ellipsis column
   assert.deepEqual(clipped.result, [], "the ellipsis itself is not model text");
 
   // The compact layout's slot rows are the same targets.
-  const compact = fixture({ pointer: true, management: managementOption({ models: true }), rows: 10 });
+  const compact = fixture({
+    pointer: true,
+    management: managementOption({ models: true }),
+    rows: 10,
+  });
   lines = painted(compact.picker, 60);
   y = lines.findIndex((line) => line.includes("provider/beta-strong"));
   assert(y > 0, lines.join("\n"));
-  compact.picker.handleMouse(mouse("click", lines[y].indexOf("provider/beta-strong"), y, { screenX: 2, screenY: 30 }));
-  assert.deepEqual(compact.result, [{ action: "edit-model", name: "beta", slot: "d5", position: { row: 30, col: 2 } }]);
+  compact.picker.handleMouse(
+    mouse("click", lines[y].indexOf("provider/beta-strong"), y, { screenX: 2, screenY: 30 }),
+  );
+  assert.deepEqual(compact.result, [
+    { action: "edit-model", name: "beta", slot: "d5", position: { row: 30, col: 2 } },
+  ]);
 
   // Read-only hosts keep the old behavior: model text never routes.
   const readOnly = fixture({ pointer: true, management: managementOption() });
@@ -1865,27 +2864,61 @@ test("painted model text is the only click target; labels, values and ellipses a
   const minimum = fixture({ pointer: true, management: managementOption({ models: true }) });
   lines = painted(minimum.picker, 24);
   assert(!lines.join("\n").includes("provider/"), "no model text survives this width");
-  minimum.picker.handleMouse(mouse("click", 11, lines.findIndex((line) => line.includes("d1:"))));
+  minimum.picker.handleMouse(
+    mouse(
+      "click",
+      11,
+      lines.findIndex((line) => line.includes("d1:")),
+    ),
+  );
   assert.deepEqual(minimum.result, []);
 });
 
 test("the controls hint mentions the model digits only while the gate and the room allow it", () => {
   const wide = fixture({ management: managementOption({ models: true }) });
   assert.match(painted(wide.picker, 120).join("\n"), /1\/2\/3\/4\/5 model/);
-  assert.match(painted(wide.picker, 76).join("\n"), / · 12345/, "a shorter hint appears when the full one cannot fit");
+  assert.match(
+    painted(wide.picker, 76).join("\n"),
+    / · 12345/,
+    "a shorter hint appears when the full one cannot fit",
+  );
   const narrow = painted(fixture({ management: managementOption({ models: true }) }).picker, 26);
-  assert.doesNotMatch(narrow.join("\n"), /12345/, "no hint without room, but the keys stay reachable");
-  const off = fixture({ management: managementOption({ models: true }), presets: [offPreset(), preset("alpha")], activeName: "alpha" });
+  assert.doesNotMatch(
+    narrow.join("\n"),
+    /12345/,
+    "no hint without room, but the keys stay reachable",
+  );
+  const off = fixture({
+    management: managementOption({ models: true }),
+    presets: [offPreset(), preset("alpha")],
+    activeName: "alpha",
+  });
   off.picker.render(76);
   off.picker.handleInput("\u001b[A"); // highlight off
-  assert.doesNotMatch(painted(off.picker, 120).join("\n"), /1\/2\/3\/4\/5 model| · 12345/, "off highlights no model hint");
+  assert.doesNotMatch(
+    painted(off.picker, 120).join("\n"),
+    /1\/2\/3\/4\/5 model| · 12345/,
+    "off highlights no model hint",
+  );
   const legacy = fixture({ management: managementOption() });
-  assert.doesNotMatch(painted(legacy.picker, 120).join("\n"), /1\/2\/3\/4\/5 model| · 12345/, "no gate, no hint");
+  assert.doesNotMatch(
+    painted(legacy.picker, 120).join("\n"),
+    /1\/2\/3\/4\/5 model| · 12345/,
+    "no gate, no hint",
+  );
 });
 
 test("a CJK model clipped at a wide-character boundary never makes the ellipsis or padding clickable", () => {
-  const cjk = { ...preset("cjk"), models: { ...preset("cjk").models, d1: `fixture/${"中".repeat(10)}` } };
-  const clipped = fixture({ pointer: true, management: managementOption({ models: true }), presets: [cjk], activeName: "cjk" });
+  const cjk = {
+    ...preset("cjk"),
+    models: { ...preset("cjk").models, d1: `fixture/${"中".repeat(10)}` },
+  };
+  const clipped = fixture({
+    pointer: true,
+    management: managementOption({ models: true }),
+    presets: [cjk],
+    activeName: "cjk",
+  });
   const lines = painted(clipped.picker, 38);
   const y = lines.findIndex((line) => /d1\s+fixture\//.test(line));
   assert(y > 0, lines.join("\n"));
@@ -1893,13 +2926,19 @@ test("a CJK model clipped at a wide-character boundary never makes the ellipsis 
   assert(line.includes("…"), "the model is clipped at this width");
   const modelStart = line.indexOf("fixture/");
   const ellipsis = line.indexOf("…");
-  assert.equal(visibleWidth(line.slice(modelStart, ellipsis)), 16,
-    "four double-width characters fit; the fifth would cross the boundary");
+  assert.equal(
+    visibleWidth(line.slice(modelStart, ellipsis)),
+    16,
+    "four double-width characters fit; the fifth would cross the boundary",
+  );
   // The dropped wide character leaves the fitted row shorter than its room:
   // only real model columns may answer, not the ellipsis or the padding.
   clipped.picker.handleMouse(mouse("click", modelStart, y, { screenX: 0, screenY: 5 }));
-  assert.deepEqual(clipped.result, [{ action: "edit-model", name: "cjk", slot: "d1", position: { row: 5, col: 0 } }],
-    "a painted model character is a target");
+  assert.deepEqual(
+    clipped.result,
+    [{ action: "edit-model", name: "cjk", slot: "d1", position: { row: 5, col: 0 } }],
+    "a painted model character is a target",
+  );
   clipped.result.length = 0;
   clipped.picker.handleMouse(mouse("click", ellipsis, y));
   clipped.picker.handleMouse(mouse("click", ellipsis + 1, y));

@@ -11,10 +11,22 @@ import { flock } from "./flock.mjs";
 import { managedBlockToolNames } from "../../../lib/managed-block-tools.mjs";
 
 export const deferred = () => Promise.withResolvers();
-export const settings = { provider: "fixture", model: "controlled", thinking: "off", parent_thinking: "off",
-  thinking_resolution: "identity", profile: "editor",
-  difficulty: 3, strength: "d3", preset: "fixture", preset_version: "v1", selection_digest: "2".repeat(64),
-  cwd: "/tmp", tools: ["read"], definition_digest: "1".repeat(64) };
+export const settings = {
+  provider: "fixture",
+  model: "controlled",
+  thinking: "off",
+  parent_thinking: "off",
+  thinking_resolution: "identity",
+  profile: "editor",
+  difficulty: 3,
+  strength: "d3",
+  preset: "fixture",
+  preset_version: "v1",
+  selection_digest: "2".repeat(64),
+  cwd: "/tmp",
+  tools: ["read"],
+  definition_digest: "1".repeat(64),
+};
 export const task = (prompt, rest = {}) => ({ prompt, description: prompt, settings, ...rest });
 export const errorCode = (code) => (error) => error.code === code;
 export class FakePort {
@@ -26,55 +38,112 @@ export class FakePort {
   streaming = false;
   async run(prompt, callbacks, identity) {
     const done = deferred();
-    this.callbacks = callbacks; this.streaming = true;
+    this.callbacks = callbacks;
+    this.streaming = true;
     this.calls.push({ prompt, done, identity });
-    callbacks.inputEntered(); callbacks.turnStart();
-    try { return await done.promise; } finally { this.streaming = false; }
+    callbacks.inputEntered();
+    callbacks.turnStart();
+    try {
+      return await done.promise;
+    } finally {
+      this.streaming = false;
+    }
   }
-  canInput() { return this.streaming; }
+  canInput() {
+    return this.streaming;
+  }
   finish(text = "done", kind = "success", error, model_stop_reason) {
-    this.callbacks.output(boundedOutput(text, 1_048_576)); this.callbacks.turnEnd();
-    this.calls.at(-1).done.resolve({ kind, error, model_stop_reason, output: boundedOutput(text, 1_048_576) });
+    this.callbacks.output(boundedOutput(text, 1_048_576));
+    this.callbacks.turnEnd();
+    this.calls
+      .at(-1)
+      .done.resolve({ kind, error, model_stop_reason, output: boundedOutput(text, 1_048_576) });
   }
   async steer(message, valid) {
     await this.deliveryGate?.promise;
     if (!valid()) return false;
-    this.inputs.push(message); return true;
+    this.inputs.push(message);
+    return true;
   }
-  async stop() { this.stopped++; if (this.autoStop) this.finish("partial", "aborted"); }
-  clearInputs() { return this.inputs.splice(0); }
-  async dispose() { this.disposed++; return { shutdownExited: true, errors: [] }; }
+  async stop() {
+    this.stopped++;
+    if (this.autoStop) this.finish("partial", "aborted");
+  }
+  clearInputs() {
+    return this.inputs.splice(0);
+  }
+  async dispose() {
+    this.disposed++;
+    return { shutdownExited: true, errors: [] };
+  }
 }
 function cleanupFailure(errors) {
   if (errors.length === 1) return errors[0];
-  if (errors.length > 1) return new AggregateError(errors, errors.map((error) => error instanceof Error ? error.message : String(error)).join("; "));
+  if (errors.length > 1)
+    return new AggregateError(
+      errors,
+      errors.map((error) => (error instanceof Error ? error.message : String(error))).join("; "),
+    );
   return undefined;
 }
 // One teardown: node:test after hooks are FIFO, so a gate release registered
 // after fixture() runs too late and an init/history failure is reported as a
 // retained owner. beforeShutdown runs first, then the live invariant, and
 // shutdown still drains if either throws. Do not unlock a truly uncertain owner.
-async function releaseFixture({ controller, owner, directory, ports, beforeShutdown, cleanupUncertainExpected }) {
+async function releaseFixture({
+  controller,
+  owner,
+  directory,
+  ports,
+  beforeShutdown,
+  cleanupUncertainExpected,
+}) {
   const errors = [];
-  const capture = (error) => { errors.push(error); };
+  const capture = (error) => {
+    errors.push(error);
+  };
   try {
-    try { await beforeShutdown?.(); }
-    catch (error) { capture(error); }
-    try { assertOwnerInvariants(controller, "pre-shutdown"); }
-    catch (error) { capture(error); }
+    try {
+      await beforeShutdown?.();
+    } catch (error) {
+      capture(error);
+    }
+    try {
+      assertOwnerInvariants(controller, "pre-shutdown");
+    } catch (error) {
+      capture(error);
+    }
   } finally {
     try {
-      for (const port of ports) { port.deliveryGate?.resolve(); if (port.streaming) port.finish("test cleanup", "aborted"); }
-    } catch (error) { capture(error); }
+      for (const port of ports) {
+        port.deliveryGate?.resolve();
+        if (port.streaming) port.finish("test cleanup", "aborted");
+      }
+    } catch (error) {
+      capture(error);
+    }
     let report;
-    try { report = await controller.shutdown(1000); }
-    catch (error) { capture(error); }
-    try { assertOwnerInvariants(controller); }
-    catch (error) { capture(error); }
+    try {
+      report = await controller.shutdown(1000);
+    } catch (error) {
+      capture(error);
+    }
+    try {
+      assertOwnerInvariants(controller);
+    } catch (error) {
+      capture(error);
+    }
     let released = report?.closed === true;
     try {
       if (report && !report.closed) {
-        if (!cleanupUncertainExpected || !report.cleanup_uncertain || report.active || report.finalizing || report.cleaning || ports.some((port) => port.streaming)) {
+        if (
+          !cleanupUncertainExpected ||
+          !report.cleanup_uncertain ||
+          report.active ||
+          report.finalizing ||
+          report.cleaning ||
+          ports.some((port) => port.streaming)
+        ) {
           capture(new Error(`fixture retained owner: ${JSON.stringify(report)}`));
         } else {
           // Test-only cleanup of a simulated uncertain report, with no live child.
@@ -83,11 +152,16 @@ async function releaseFixture({ controller, owner, directory, ports, beforeShutd
           released = true;
         }
       }
-    } catch (error) { capture(error); }
+    } catch (error) {
+      capture(error);
+    }
     // Preserve lock inode identity if a real execution/cleanup remains owned.
     if (released) {
-      try { await rm(directory, { recursive: true, force: true }); }
-      catch (error) { capture(error); }
+      try {
+        await rm(directory, { recursive: true, force: true });
+      } catch (error) {
+        capture(error);
+      }
     }
   }
   const error = cleanupFailure(errors);
@@ -100,21 +174,46 @@ export async function fixture(t, options = {}) {
   const events = [];
   const owner = await FileOwnerLease.open({ directory, owner_id, flock });
   const pinned = options.omitLimits ? {} : { concurrency: 1, resident_limit: 8, queue_limit: 16 };
-  const controller = await OwnerController.open({ owner, ...pinned,
+  const controller = await OwnerController.open({
+    owner,
+    ...pinned,
     managedBlockTools: managedBlockToolNames,
     createSession: async () => {
-      const port = new FakePort(); ports.push(port);
-      if (options.history) port.history = {
-        begin: async (run) => { await options.history("begin", run); return { ...run, session_id: port.session_id, start_entry_id: "aaaaaaaa" }; },
-        finish: async (ref, record, output) => { await options.history("finish", record, output); return { ...ref, end_entry_id: "bbbbbbbb" }; },
-      };
+      const port = new FakePort();
+      ports.push(port);
+      if (options.history)
+        port.history = {
+          begin: async (run) => {
+            await options.history("begin", run);
+            return { ...run, session_id: port.session_id, start_entry_id: "aaaaaaaa" };
+          },
+          finish: async (ref, record, output) => {
+            await options.history("finish", record, output);
+            return { ...ref, end_entry_id: "bbbbbbbb" };
+          },
+        };
       return port;
     },
-    onContextChange: (event) => { events.push(event); }, ...options.controller });
-  t.after(() => releaseFixture({ controller, owner, directory, ports, beforeShutdown: options.beforeShutdown, cleanupUncertainExpected: options.cleanupUncertainExpected }));
+    onContextChange: (event) => {
+      events.push(event);
+    },
+    ...options.controller,
+  });
+  t.after(() =>
+    releaseFixture({
+      controller,
+      owner,
+      directory,
+      ports,
+      beforeShutdown: options.beforeShutdown,
+      cleanupUncertainExpected: options.cleanupUncertainExpected,
+    }),
+  );
   return { controller, owner, directory, owner_id, ports, events };
 }
-export async function tick() { await new Promise((resolve) => setImmediate(resolve)); }
+export async function tick() {
+  await new Promise((resolve) => setImmediate(resolve));
+}
 export async function until(predicate) {
   const deadline = performance.now() + 3000;
   while (!predicate()) {
@@ -124,6 +223,9 @@ export async function until(predicate) {
 }
 // Lifecycle assertion helper only: never publishes alerts, finished reminders or faults.
 export async function ended(controller, run) {
-  assert.equal(await controller.waitForRuns([run.run_id], { mode: "all", timeout_ms: 3000 }), "ready");
+  assert.equal(
+    await controller.waitForRuns([run.run_id], { mode: "all", timeout_ms: 3000 }),
+    "ready",
+  );
   return { snapshots: [controller.view(run.run_id)], results: [controller.getResult(run.run_id)] };
 }

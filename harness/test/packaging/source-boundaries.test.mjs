@@ -8,7 +8,8 @@ const files = (directory, suffix) => readdirSync(directory).filter((file) => fil
 const dependencies = (text) => {
   const parsed = ts.createSourceFile("boundary.ts", text, ts.ScriptTarget.Latest, true);
   assert.equal(parsed.parseDiagnostics.length, 0, "boundary inputs must parse");
-  return parsed.statements.filter((node) => ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
+  return parsed.statements
+    .filter((node) => ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
     .filter((node) => node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier))
     .map((node) => {
       const importing = ts.isImportDeclaration(node);
@@ -19,7 +20,11 @@ const dependencies = (text) => {
       const defaultImport = importing && !!clause?.name;
       return {
         specifier: node.moduleSpecifier.text,
-        typeOnly: !!clause?.isTypeOnly || (!defaultImport && elements.length > 0 && elements.every((binding) => binding.isTypeOnly)),
+        typeOnly:
+          !!clause?.isTypeOnly ||
+          (!defaultImport &&
+            elements.length > 0 &&
+            elements.every((binding) => binding.isTypeOnly)),
         // Namespace/default imports and star/namespace exports hide which SDK
         // members are being made available. Require explicit named SDK edges.
         broad: !!defaultImport || !named,
@@ -28,7 +33,13 @@ const dependencies = (text) => {
     });
 };
 const imports = (file) => dependencies(readFileSync(file, "utf8"));
-const sessionOwners = new Set(["AgentSession", "SessionManager", "createAgentSession", "DefaultResourceLoader", "default"]);
+const sessionOwners = new Set([
+  "AgentSession",
+  "SessionManager",
+  "createAgentSession",
+  "DefaultResourceLoader",
+  "default",
+]);
 const assertUiDependencies = (edges, name) => {
   for (const edge of edges) {
     if (edge.specifier.startsWith("../runtime/")) {
@@ -36,7 +47,8 @@ const assertUiDependencies = (edges, name) => {
     }
     if (edge.specifier === "@earendil-works/pi-coding-agent") {
       assert(!edge.broad, `${name}: SDK dependencies must name their members explicitly`);
-      for (const imported of edge.names) assert(!sessionOwners.has(imported), `${name} must not own ${imported}`);
+      for (const imported of edge.names)
+        assert(!sessionOwners.has(imported), `${name} must not own ${imported}`);
     }
   }
 };
@@ -47,8 +59,10 @@ test("core stays independent of SDK, adapters and UI", () => {
   assert(names.includes("owner-controller.ts"));
   for (const name of names) {
     for (const { specifier } of imports(new URL(name, core))) {
-      assert(specifier.startsWith("./") || ["node:crypto", "node:path"].includes(specifier),
-        `${name} must use core ports rather than import ${specifier}`);
+      assert(
+        specifier.startsWith("./") || ["node:crypto", "node:path"].includes(specifier),
+        `${name} must use core ports rather than import ${specifier}`,
+      );
     }
   }
 });
@@ -71,9 +85,13 @@ for (const declaration of [
   `import { type AgentSession } from ${sdk};`,
   `import { type ActivityObservationSource, ChildActivity } from ${runtime};`,
   `export * from ${runtime};`,
-]) test(`UI boundary rejects hidden or live ownership: ${declaration}`, () => {
-  assert.throws(() => assertUiDependencies(dependencies(declaration), "fixture"), assert.AssertionError);
-});
+])
+  test(`UI boundary rejects hidden or live ownership: ${declaration}`, () => {
+    assert.throws(
+      () => assertUiDependencies(dependencies(declaration), "fixture"),
+      assert.AssertionError,
+    );
+  });
 for (const declaration of [
   `import { getMarkdownTheme, type Theme } from ${sdk};`,
   `export { type Theme } from ${sdk};`,
@@ -81,9 +99,10 @@ for (const declaration of [
   `import { type ActivityObservationSource } from ${runtime};`,
   `export type { ActivityObservationSource } from ${runtime};`,
   `export { type ActivityObservationSource } from ${runtime};`,
-]) test(`UI boundary permits explicit presentation/type dependencies: ${declaration}`, () => {
-  assertUiDependencies(dependencies(declaration), "fixture");
-});
+])
+  test(`UI boundary permits explicit presentation/type dependencies: ${declaration}`, () => {
+    assertUiDependencies(dependencies(declaration), "fixture");
+  });
 
 test("neutral helpers and the ordinary footer have no harness dependency", () => {
   const shared = new URL("../../../lib/", import.meta.url);
@@ -92,8 +111,15 @@ test("neutral helpers and the ordinary footer have no harness dependency", () =>
     if (name === "settings-store.mjs") {
       // Shared persistent preferences are an SDK-free Node adapter, not a
       // harness dependency. Keep this exception restricted to its native IO.
-      assert.deepEqual(edges.map(({ specifier }) => specifier).sort(), ["node:crypto", "node:fs", "node:path"]);
-      assert(edges.every(({ broad }) => !broad), "storage must name its native dependencies");
+      assert.deepEqual(edges.map(({ specifier }) => specifier).sort(), [
+        "node:crypto",
+        "node:fs",
+        "node:path",
+      ]);
+      assert(
+        edges.every(({ broad }) => !broad),
+        "storage must name its native dependencies",
+      );
     } else assert.deepEqual(edges, [], `${name} must remain a dependency-free leaf`);
   }
   const footer = new URL("../../../extensions/status-footer.ts", import.meta.url);

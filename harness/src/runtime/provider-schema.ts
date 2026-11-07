@@ -21,7 +21,17 @@ const isRecord = (value: unknown): value is SchemaRecord =>
 
 const SCHEMA_MAPS = ["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"];
 const SCHEMA_LISTS = ["anyOf", "oneOf", "allOf", "prefixItems"];
-const SCHEMA_VALUES = ["items", "additionalItems", "contains", "not", "if", "then", "else", "propertyNames", "unevaluatedItems"];
+const SCHEMA_VALUES = [
+  "items",
+  "additionalItems",
+  "contains",
+  "not",
+  "if",
+  "then",
+  "else",
+  "propertyNames",
+  "unevaluatedItems",
+];
 
 /** Structural copy: only schema positions are visited, so a property that is
  * itself named `pattern` (grep's) is kept. */
@@ -31,7 +41,10 @@ export function orderFreeSchema(schema: unknown): unknown {
   delete out.pattern;
   for (const key of SCHEMA_MAPS) {
     const map = out[key];
-    if (isRecord(map)) out[key] = Object.fromEntries(Object.entries(map).map(([name, value]) => [name, orderFreeSchema(value)]));
+    if (isRecord(map))
+      out[key] = Object.fromEntries(
+        Object.entries(map).map(([name, value]) => [name, orderFreeSchema(value)]),
+      );
   }
   for (const key of SCHEMA_LISTS) {
     const list = out[key];
@@ -39,7 +52,8 @@ export function orderFreeSchema(schema: unknown): unknown {
   }
   for (const key of SCHEMA_VALUES) {
     const value = out[key];
-    if (value !== undefined) out[key] = Array.isArray(value) ? value.map(orderFreeSchema) : orderFreeSchema(value);
+    if (value !== undefined)
+      out[key] = Array.isArray(value) ? value.map(orderFreeSchema) : orderFreeSchema(value);
   }
   if (isRecord(out.properties)) {
     out.additionalProperties = true;
@@ -56,7 +70,8 @@ export function orderFreeToolPayload(payload: unknown): unknown {
   let changed = false;
   const tools = payload.tools.map((tool: unknown) => {
     const fn = isRecord(tool) ? tool.function : undefined;
-    if (!isRecord(tool) || !isRecord(fn) || fn.strict === true || !isRecord(fn.parameters)) return tool;
+    if (!isRecord(tool) || !isRecord(fn) || fn.strict === true || !isRecord(fn.parameters))
+      return tool;
     changed = true;
     return { ...tool, function: { ...fn, parameters: orderFreeSchema(fn.parameters) } };
   });
@@ -67,7 +82,9 @@ export function orderFreeToolPayload(payload: unknown): unknown {
 export function registerOrderFreeToolSchemas(pi: ExtensionAPI): void {
   pi.on("before_provider_request", (event, ctx) => {
     const api: unknown = ctx.model?.api;
-    return typeof api === "string" && ORDERED_DECODING_APIS.has(api) ? orderFreeToolPayload(event.payload) : undefined;
+    return typeof api === "string" && ORDERED_DECODING_APIS.has(api)
+      ? orderFreeToolPayload(event.payload)
+      : undefined;
   });
 }
 

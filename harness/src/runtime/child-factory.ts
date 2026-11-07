@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { createAgentSession, createEventBus, DefaultResourceLoader, SessionManager,
-  type CreateAgentSessionOptions, type EventBus, type ExtensionContext, type ModelRuntime,
-  type SettingsManager } from "@earendil-works/pi-coding-agent";
+import {
+  createAgentSession,
+  createEventBus,
+  DefaultResourceLoader,
+  SessionManager,
+  type CreateAgentSessionOptions,
+  type EventBus,
+  type ExtensionContext,
+  type ModelRuntime,
+  type SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import type { AdmittedAgentConfig, RunIdentity } from "../core/contracts.ts";
-import { SessionInitializationError, type AgentSessionPort, type RunCallbacks } from "../core/ports.ts";
+import {
+  SessionInitializationError,
+  type AgentSessionPort,
+  type RunCallbacks,
+} from "../core/ports.ts";
 import { PiRunJournal } from "../history/run-journal.ts";
 import type { ApprovalBindings } from "../permissions/approval-provenance.ts";
 import { requireReadiness } from "../permissions/readiness.ts";
@@ -45,11 +57,18 @@ export function createChildSessionFactory(options: {
   subscribeManagedBlocks?: ManagedBlockSubscription;
   /** Isolated pi-web-access instances; required only by web profiles. */
   web?: ChildWebModules;
-}): (agent: { agent_id: string; name: string; settings: AdmittedAgentConfig }) => Promise<AgentSessionPort> {
+}): (agent: {
+  agent_id: string;
+  name: string;
+  settings: AdmittedAgentConfig;
+}) => Promise<AgentSessionPort> {
   return async (agent): Promise<AgentSessionPort> => {
     assert(options.parentPermission(), "Parent permission service is missing");
     const profile = options.profiles[agent.settings.profile];
-    assert(profile && digest(profile.definition) === agent.settings.definition_digest, "Agent profile changed");
+    assert(
+      profile && digest(profile.definition) === agent.settings.definition_digest,
+      "Agent profile changed",
+    );
     assert.deepEqual(agent.settings.tools, profile.tools);
     const listed = options.runtime.getModel(agent.settings.provider, agent.settings.model);
     assert(listed, "Agent model is no longer available");
@@ -59,7 +78,10 @@ export function createChildSessionFactory(options: {
     assert(model, "Agent model is no longer physical");
     let web: WebLease | undefined;
     if (webProfileNames.includes(agent.settings.profile as AgentProfileName)) {
-      assert(options.web, "Scout web access is unavailable; start through the pi-alehouse launcher");
+      assert(
+        options.web,
+        "Scout web access is unavailable; start through the pi-alehouse launcher",
+      );
       web = await options.web.acquire();
     }
     try {
@@ -71,11 +93,16 @@ export function createChildSessionFactory(options: {
       throw error;
     }
   };
-  async function assemble(agent: { agent_id: string; name: string; settings: AdmittedAgentConfig }, profile: ChildProfile,
+  async function assemble(
+    agent: { agent_id: string; name: string; settings: AdmittedAgentConfig },
+    profile: ChildProfile,
     model: NonNullable<ReturnType<ModelRuntime["getModel"]>>,
-    web: WebLease | undefined): Promise<AgentSessionPort> {
+    web: WebLease | undefined,
+  ): Promise<AgentSessionPort> {
     const cwd = agent.settings.cwd;
-    const bus = createEventBus(), gate = new ChildRunGate(), childSettings = options.settings();
+    const bus = createEventBus(),
+      gate = new ChildRunGate(),
+      childSettings = options.settings();
     // Held, not re-fetched: this is the observer instance bound to the child.
     const activity = options.activities.track(agent.agent_id, cwd);
     // Attachment is lazy at first Run: failed assembly creates no parent-side
@@ -89,54 +116,118 @@ export function createChildSessionFactory(options: {
     const manager = SessionManager.create(cwd, options.ctx.sessionManager.getSessionDir(), {
       parentSession: options.ctx.sessionManager.getSessionFile(),
     });
-    const loader = new DefaultResourceLoader({ cwd, agentDir: options.agentDir,
-      settingsManager: childSettings, eventBus: bus,
-      noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true,
-      additionalExtensionPaths: [join(options.permissionRoot, "index.ts"),
-        join(options.policyRoot, "static-safety-guard.ts"), join(options.policyRoot, "policy-grep.ts")],
-      appendSystemPromptOverride: () => [profile.body, `<active_agent name="${agent.settings.profile}"/>`],
+    const loader = new DefaultResourceLoader({
+      cwd,
+      agentDir: options.agentDir,
+      settingsManager: childSettings,
+      eventBus: bus,
+      noExtensions: true,
+      noSkills: true,
+      noThemes: true,
+      noPromptTemplates: true,
+      additionalExtensionPaths: [
+        join(options.permissionRoot, "index.ts"),
+        join(options.policyRoot, "static-safety-guard.ts"),
+        join(options.policyRoot, "policy-grep.ts"),
+      ],
+      appendSystemPromptOverride: () => [
+        profile.body,
+        `<active_agent name="${agent.settings.profile}"/>`,
+      ],
       // The gate must stay LAST. Inline factories load after every path above,
       // and cache_warming_decision is last-writer-wins in the runner, so only
       // the final handler's stop is authoritative. The activity observer has no
       // decision handler today; preserve this order so the veto remains final
       // for any handlers added beside it later.
-      extensionFactories: [orderFreeToolSchemaExtension, ...(web ? [childWebExtension(web.factory)] : []), activity.extension,
-        options.approvalBindings.childExtension(manager.getSessionId()), stats.extension, gate.extension] });
+      extensionFactories: [
+        orderFreeToolSchemaExtension,
+        ...(web ? [childWebExtension(web.factory)] : []),
+        activity.extension,
+        options.approvalBindings.childExtension(manager.getSessionId()),
+        stats.extension,
+        gate.extension,
+      ],
+    });
     await loader.reload();
-    manager.appendCustomEntry("active_agent", { name: agent.settings.profile, routing: {
-      preset: agent.settings.preset, preset_version: agent.settings.preset_version,
-      selection_digest: agent.settings.selection_digest, difficulty: agent.settings.difficulty, strength: agent.settings.strength,
-      provider: agent.settings.provider, model: agent.settings.model, thinking: agent.settings.thinking,
-      ...(agent.settings.parent_thinking !== undefined ? { parent_thinking: agent.settings.parent_thinking } : {}),
-      thinking_resolution: agent.settings.thinking_resolution,
-      ...(agent.settings.effort_source !== undefined ? { effort_source: agent.settings.effort_source } : {}),
-    } });
-    const child = await assembleChildSession({ createSession: createAgentSession,
-      options: { cwd, agentDir: options.agentDir, resourceLoader: loader,
-        settingsManager: childSettings, sessionManager: manager,
-        modelRuntime: options.runtime, model,
+    manager.appendCustomEntry("active_agent", {
+      name: agent.settings.profile,
+      routing: {
+        preset: agent.settings.preset,
+        preset_version: agent.settings.preset_version,
+        selection_digest: agent.settings.selection_digest,
+        difficulty: agent.settings.difficulty,
+        strength: agent.settings.strength,
+        provider: agent.settings.provider,
+        model: agent.settings.model,
+        thinking: agent.settings.thinking,
+        ...(agent.settings.parent_thinking !== undefined
+          ? { parent_thinking: agent.settings.parent_thinking }
+          : {}),
+        thinking_resolution: agent.settings.thinking_resolution,
+        ...(agent.settings.effort_source !== undefined
+          ? { effort_source: agent.settings.effort_source }
+          : {}),
+      },
+    });
+    const child = await assembleChildSession({
+      createSession: createAgentSession,
+      options: {
+        cwd,
+        agentDir: options.agentDir,
+        resourceLoader: loader,
+        settingsManager: childSettings,
+        sessionManager: manager,
+        modelRuntime: options.runtime,
+        model,
         thinkingLevel: agent.settings.thinking as CreateAgentSessionOptions["thinkingLevel"],
-        tools: profile.tools, customTools },
-      parentBus: options.parentBus, childBus: bus, parentSessionId: options.parentId,
-      profile: agent.settings.profile, definitionDigest: agent.settings.definition_digest,
-      getPermissionsService: options.getPermissionsService });
+        tools: profile.tools,
+        customTools,
+      },
+      parentBus: options.parentBus,
+      childBus: bus,
+      parentSessionId: options.parentId,
+      profile: agent.settings.profile,
+      definitionDigest: agent.settings.definition_digest,
+      getPermissionsService: options.getPermissionsService,
+    });
     try {
-      assert.equal(child.session.sessionId, manager.getSessionId(), "Child session identity changed");
+      assert.equal(
+        child.session.sessionId,
+        manager.getSessionId(),
+        "Child session identity changed",
+      );
       assert.equal(child.session.thinkingLevel, agent.settings.thinking);
       assert.deepEqual(child.session.getActiveToolNames().sort(), [...profile.tools].sort());
       let approvalRun: RunIdentity | undefined;
-      const port = new PiAgentSessionAdapter({ session: child.session, parentBus: options.parentBus, gate,
+      const port = new PiAgentSessionAdapter({
+        session: child.session,
+        parentBus: options.parentBus,
+        gate,
         invalidateApproval: () => {
           if (approvalRun) options.approvalBindings.end(child.session.sessionId, approvalRun);
         },
         history: new PiRunJournal({ parent: options.parentHistory, session: manager }),
-        readiness: () => requireReadiness(bus, options.getPermissionsService, child.session.sessionId,
-          agent.settings.profile, agent.settings.definition_digest) });
-      return { session_id: port.session_id, history: port.history,
+        readiness: () =>
+          requireReadiness(
+            bus,
+            options.getPermissionsService,
+            child.session.sessionId,
+            agent.settings.profile,
+            agent.settings.definition_digest,
+          ),
+      });
+      return {
+        session_id: port.session_id,
+        history: port.history,
         // Reset at submission, before the child can report this Run's activity.
         run: async (prompt, cb, identity) => {
-          options.approvalBindings.begin(identity, { sessionId: port.session_id, cwd,
-            profile: agent.settings.profile, definitionDigest: agent.settings.definition_digest, prompt });
+          options.approvalBindings.begin(identity, {
+            sessionId: port.session_id,
+            cwd,
+            profile: agent.settings.profile,
+            definitionDigest: agent.settings.definition_digest,
+            prompt,
+          });
           approvalRun = identity;
           activity.begin();
           callbacks = cb;
@@ -150,40 +241,58 @@ export function createChildSessionFactory(options: {
           try {
             // A block fact only latches counters in the permission stack. This
             // SDK observation flushes after the real tool boundary returned.
-            try { unsubscribeBlocks = child.session.subscribe((event) => {
-              if (event.type === "tool_execution_end") blocks.flush();
-            }); } catch { blocks.end(); /* Optional feedback may be unavailable. */ }
+            try {
+              unsubscribeBlocks = child.session.subscribe((event) => {
+                if (event.type === "tool_execution_end") blocks.flush();
+              });
+            } catch {
+              blocks.end(); /* Optional feedback may be unavailable. */
+            }
             const facts = await port.run(prompt, cb);
             kind = facts.kind;
             return facts;
           } finally {
             blocks.end();
-            try { unsubscribeBlocks?.(); } catch { /* Optional telemetry is sealed. */ }
+            try {
+              unsubscribeBlocks?.();
+            } catch {
+              /* Optional telemetry is sealed. */
+            }
             stats.endRun(kind);
             callbacks = undefined;
             options.approvalBindings.end(port.session_id, identity);
             approvalRun = undefined;
           }
         },
-        canInput: () => port.canInput(), steer: (text, valid) => port.steer(text, valid), stop: () => {
+        canInput: () => port.canInput(),
+        steer: (text, valid) => port.steer(text, valid),
+        stop: () => {
           blocks.end();
           return port.stop();
         },
-        clearInputs: () => port.clearInputs(), dispose: async () => {
+        clearInputs: () => port.clearInputs(),
+        dispose: async () => {
           blocks.end();
           const report = await port.dispose();
           stats.dispose();
           if (report.shutdownExited) web?.release();
           return report;
-        } };
+        },
+      };
     } catch (error) {
       stats.dispose();
       // No prompt has started before handoff; disposal itself checks idle.
       try {
         const cleanup = await disposeChildSession(child.session, options.parentBus);
-        assert(cleanup.shutdownExited && !cleanup.errors.length && !options.getPermissionsService(child.session.sessionId),
-          "Child cleanup incomplete");
-      } catch (cleanup) { throw new SessionInitializationError(error, cleanup); }
+        assert(
+          cleanup.shutdownExited &&
+            !cleanup.errors.length &&
+            !options.getPermissionsService(child.session.sessionId),
+          "Child cleanup incomplete",
+        );
+      } catch (cleanup) {
+        throw new SessionInitializationError(error, cleanup);
+      }
       throw error;
     }
   }

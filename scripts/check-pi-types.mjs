@@ -31,12 +31,22 @@ assert(existsSync(tsc), `Run npm ci --prefix ${repo} first.`);
 // Consumers resolve .d.mts before .mjs. Independently check the shared JS
 // bodies and their declaration surface; compiling declarations alone is not
 // evidence that the separately bundled footer and harness implementations fit.
-const shared = spawnSync(process.execPath, [join(harness, "test/support/shared-library-types.mjs"),
-  join(repo, "lib")], { stdio: "inherit", timeout: 120_000 });
-assert.equal(shared.status, 0, `Shared library typecheck failed: ${shared.error?.message ?? shared.signal ?? "contract mismatch"}`);
+const shared = spawnSync(
+  process.execPath,
+  [join(harness, "test/support/shared-library-types.mjs"), join(repo, "lib")],
+  { stdio: "inherit", timeout: 120_000 },
+);
+assert.equal(
+  shared.status,
+  0,
+  `Shared library typecheck failed: ${shared.error?.message ?? shared.signal ?? "contract mismatch"}`,
+);
 const extensions = join(repo, "extensions");
 const permissionSystem = join(repo, "node_modules/@gotgenes/pi-permission-system");
-assert(existsSync(permissionSystem), `Missing pinned development dependency ${permissionSystem}; run npm ci.`);
+assert(
+  existsSync(permissionSystem),
+  `Missing pinned development dependency ${permissionSystem}; run npm ci.`,
+);
 
 /**
  * Errors that are accepted as they stand, keyed by file and TypeScript code
@@ -74,27 +84,44 @@ try {
   symlinkSync(extensions, join(scratch, "ext"), "dir");
   symlinkSync(join(repo, "lib"), join(scratch, "lib"), "dir");
   // Type the integrated composition against its actual local graph as well.
-  for (const name of ["bin", "runtime", "harness"]) symlinkSync(join(repo, name), join(scratch, name), "dir");
+  for (const name of ["bin", "runtime", "harness"])
+    symlinkSync(join(repo, name), join(scratch, name), "dir");
   symlinkSync(join(repo, "composition.ts"), join(scratch, "composition.ts"));
 
-  writeFileSync(join(scratch, "tsconfig.json"), `${JSON.stringify({
-    compilerOptions: {
-      target: "ES2023",
-      lib: ["ES2023", "DOM"],
-      module: "NodeNext",
-      moduleResolution: "NodeNext",
-      strict: true,
-      skipLibCheck: true,
-      noEmit: true,
-      // Extensions import siblings as "./x.ts"; Pi loads them through jiti.
-      allowImportingTsExtensions: true,
-      types: ["node"],
-    },
-    include: ["ext/*.ts", "ext/lib/*.ts", "lib/*.d.mts", "composition.ts", "runtime/permission-system/managed-resource-protection.ts"],
-  }, null, 2)}\n`);
+  writeFileSync(
+    join(scratch, "tsconfig.json"),
+    `${JSON.stringify(
+      {
+        compilerOptions: {
+          target: "ES2023",
+          lib: ["ES2023", "DOM"],
+          module: "NodeNext",
+          moduleResolution: "NodeNext",
+          strict: true,
+          skipLibCheck: true,
+          noEmit: true,
+          // Extensions import siblings as "./x.ts"; Pi loads them through jiti.
+          allowImportingTsExtensions: true,
+          types: ["node"],
+        },
+        include: [
+          "ext/*.ts",
+          "ext/lib/*.ts",
+          "lib/*.d.mts",
+          "composition.ts",
+          "runtime/permission-system/managed-resource-protection.ts",
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+  );
 
   const run = spawnSync(tsc, ["-p", "tsconfig.json", "--pretty", "false"], {
-    cwd: scratch, encoding: "utf8", timeout: 300_000, maxBuffer: 16 * 1024 * 1024,
+    cwd: scratch,
+    encoding: "utf8",
+    timeout: 300_000,
+    maxBuffer: 16 * 1024 * 1024,
   });
   assert(!run.error, `tsc failed to run: ${run.error?.message}`);
   assert.equal(run.signal, null, `tsc terminated by signal ${run.signal}`);
@@ -109,7 +136,10 @@ try {
   for (const output of [run.stdout, run.stderr]) {
     let current;
     for (const line of output.split("\n")) {
-      const match = /^\s*(?:(.+)\((\d+),(\d+)\):\s+)?(error|warning|suggestion|message)\s+(TS\d+):\s*(.*)$/.exec(line);
+      const match =
+        /^\s*(?:(.+)\((\d+),(\d+)\):\s+)?(error|warning|suggestion|message)\s+(TS\d+):\s*(.*)$/.exec(
+          line,
+        );
       if (match) {
         current = {
           file: match[1] ?? null,
@@ -135,7 +165,9 @@ try {
   // printed first. The baseline itself therefore does not require exit 0.
   const expectedStatus = diagnostics.length === 0 ? 0 : 2;
   if (run.status !== expectedStatus) {
-    failures.push(`tsc exited abnormally: expected ${expectedStatus} for ${diagnostics.length} diagnostic(s), got ${run.status}`);
+    failures.push(
+      `tsc exited abnormally: expected ${expectedStatus} for ${diagnostics.length} diagnostic(s), got ${run.status}`,
+    );
   }
 
   const found = new Map();
@@ -151,17 +183,22 @@ try {
       found.delete(key);
       continue;
     }
-    failures.push(actual === 0
-      ? `Baseline entry no longer occurs, remove it: ${entry.file} ${entry.code} (${entry.why})`
-      : `Baseline expects ${entry.count} x ${entry.code} in ${entry.file}, found ${actual}`);
+    failures.push(
+      actual === 0
+        ? `Baseline entry no longer occurs, remove it: ${entry.file} ${entry.code} (${entry.why})`
+        : `Baseline expects ${entry.count} x ${entry.code} in ${entry.file}, found ${actual}`,
+    );
     found.delete(key);
   }
   for (const diagnostics of found.values()) {
     for (const diagnostic of diagnostics) {
-      const location = diagnostic.file === null
-        ? "<global>"
-        : `${diagnostic.file}:${diagnostic.line}:${diagnostic.column}`;
-      failures.push(`${location}: ${diagnostic.category} ${diagnostic.code}: ${diagnostic.message.slice(0, 160)}`);
+      const location =
+        diagnostic.file === null
+          ? "<global>"
+          : `${diagnostic.file}:${diagnostic.line}:${diagnostic.column}`;
+      failures.push(
+        `${location}: ${diagnostic.category} ${diagnostic.code}: ${diagnostic.message.slice(0, 160)}`,
+      );
     }
   }
 
@@ -174,12 +211,16 @@ try {
     assert(!version.error, `tsc --version failed to run: ${version.error?.message}`);
     assert.equal(version.signal, null, `tsc --version terminated by signal ${version.signal}`);
     assert.equal(version.status, 0, `tsc --version exited abnormally (${version.status})`);
-    assert.equal(version.stderr, "", `tsc --version wrote unexpected stderr: ${version.stderr.trim()}`);
+    assert.equal(
+      version.stderr,
+      "",
+      `tsc --version wrote unexpected stderr: ${version.stderr.trim()}`,
+    );
     assert.match(version.stdout.trim(), /^Version \S+$/, "Unexpected tsc --version output");
     const baselined = BASELINE.reduce((total, entry) => total + entry.count, 0);
     console.log(
       `PASS: Pi extensions typecheck against the pinned SDK and permission system` +
-      ` (tsc ${version.stdout.trim()}, ${baselined} baselined)`,
+        ` (tsc ${version.stdout.trim()}, ${baselined} baselined)`,
     );
   }
 } finally {

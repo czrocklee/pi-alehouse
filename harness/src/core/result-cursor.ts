@@ -16,16 +16,28 @@ const PATTERN = /^r1_([A-Za-z0-9_-]{22})\.([0-9a-z]{11})$/;
 /** Uniform recovery guidance for syntax, identity, range and UTF-16 failures.
  * Explicit task starts that original task's first page, without a cursor. */
 export function invalidResultCursor(): HarnessError {
-  return new HarnessError("INVALID_CURSOR", { resolution:
-    "Copy agent and next_cursor from the same reply. Or omit cursor and use that Agent's task number to restart its first page." });
+  return new HarnessError("INVALID_CURSOR", {
+    resolution:
+      "Copy agent and next_cursor from the same reply. Or omit cursor and use that Agent's task number to restart its first page.",
+  });
 }
 
 /** First 128 SHA256 bits, with an independent domain from question identity.
  * This is a locator, not authority or a collision-free guarantee. */
 export function resultCursorKey(identity: ResultCursorIdentity): string {
-  return createHash("sha256").update(JSON.stringify([
-    "pi-alehouse/result-cursor/v1", identity.owner, identity.generation, identity.run, identity.version,
-  ])).digest().subarray(0, 16).toString("base64url");
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        "pi-alehouse/result-cursor/v1",
+        identity.owner,
+        identity.generation,
+        identity.run,
+        identity.version,
+      ]),
+    )
+    .digest()
+    .subarray(0, 16)
+    .toString("base64url");
 }
 
 /** Fixed width reserves every future offset before text packing. All emitted
@@ -36,11 +48,21 @@ export function encodeResultCursor(identity: ResultCursorIdentity, offset: numbe
 }
 
 export function decodeResultCursor(cursor: string): { key: string; offset: number } {
-  const match = typeof cursor === "string" && cursor.length === RESULT_CURSOR_LENGTH ? PATTERN.exec(cursor) : null;
+  const match =
+    typeof cursor === "string" && cursor.length === RESULT_CURSOR_LENGTH
+      ? PATTERN.exec(cursor)
+      : null;
   if (!match) throw invalidResultCursor();
-  const key = match[1]!, encoded = match[2]!, offset = Number.parseInt(encoded, 36);
+  const key = match[1]!,
+    encoded = match[2]!,
+    offset = Number.parseInt(encoded, 36);
   // Reject noncanonical base64 unused bits and unsafe/overflowed numeric offsets.
-  if (Buffer.from(key, "base64url").toString("base64url") !== key || !Number.isSafeInteger(offset) ||
-      offset < 0 || offset.toString(36).padStart(OFFSET_WIDTH, "0") !== encoded) throw invalidResultCursor();
+  if (
+    Buffer.from(key, "base64url").toString("base64url") !== key ||
+    !Number.isSafeInteger(offset) ||
+    offset < 0 ||
+    offset.toString(36).padStart(OFFSET_WIDTH, "0") !== encoded
+  )
+    throw invalidResultCursor();
   return { key, offset };
 }

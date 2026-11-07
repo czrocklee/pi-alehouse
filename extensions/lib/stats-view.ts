@@ -2,10 +2,21 @@ import { stripVTControlCharacters } from "node:util";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { POPOVER, isPopoverCloseClick, popoverCloseHit, popoverCloseTail, popoverRule, popoverSide }
-  from "../../lib/popover-frame.mjs";
+import {
+  POPOVER,
+  isPopoverCloseClick,
+  popoverCloseHit,
+  popoverCloseTail,
+  popoverRule,
+  popoverSide,
+} from "../../lib/popover-frame.mjs";
 import { formatTokenCount } from "../../lib/token-format.mjs";
-import type { SessionErrorStats, SessionModelStats, SessionStatsSnapshot, SessionToolStats } from "./session-stats.ts";
+import type {
+  SessionErrorStats,
+  SessionModelStats,
+  SessionStatsSnapshot,
+  SessionToolStats,
+} from "./session-stats.ts";
 import type { WorkerStatsSnapshot } from "./worker-stats.ts";
 
 /** Main wall time and cumulative worker time are deliberately separate. */
@@ -65,7 +76,9 @@ const nonNegative = (value: unknown): number | undefined => {
 const oneLine = (value: unknown): string =>
   typeof value === "string"
     ? stripVTControlCharacters(value)
-      .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/ +/g, " ").trim()
+        .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ")
+        .replace(/ +/g, " ")
+        .trim()
     : "";
 
 const formatCount = (value: unknown): string => {
@@ -117,13 +130,26 @@ const formatAge = (value: unknown): string => {
 };
 
 const healthColor = (health: SessionStatsSnapshot["health"]): ThemeColor =>
-  health === "busy" ? "accent" : health === "waiting" ? "warning" : health === "error" ? "error" : "dim";
+  health === "busy"
+    ? "accent"
+    : health === "waiting"
+      ? "warning"
+      : health === "error"
+        ? "error"
+        : "dim";
 
 /** The footer's dot, in the same color, with its state spelled out: activity
  * and attention, not a score. */
 const healthText = (health: SessionStatsSnapshot["health"]): string =>
-  health === "busy" ? "● busy" : health === "waiting" ? "● waiting" : health === "error" ? "● error"
-    : health === "idle" ? "● idle" : "● no activity yet";
+  health === "busy"
+    ? "● busy"
+    : health === "waiting"
+      ? "● waiting"
+      : health === "error"
+        ? "● error"
+        : health === "idle"
+          ? "● idle"
+          : "● no activity yet";
 
 /** A real zero recedes, so the rows that did fail stand out. */
 const errorTone = (value: unknown): ThemeColor | undefined => {
@@ -137,7 +163,8 @@ const padEnd = (text: string, size: number): string =>
 const padStart = (text: string, size: number): string =>
   " ".repeat(Math.max(0, size - visibleWidth(text))) + text;
 
-const list = <T>(value: readonly T[] | undefined): readonly T[] => Array.isArray(value) ? value : [];
+const list = <T>(value: readonly T[] | undefined): readonly T[] =>
+  Array.isArray(value) ? value : [];
 
 /** Notes read as prose: wrap on words, and leave a word too wide for the row to the row's clip. */
 function wrap(text: string, width: number): string[] {
@@ -178,12 +205,17 @@ function wrapLines(text: string, width: number, max: number): string[] {
   if (lines.length <= max) return lines;
   const kept = lines.slice(0, max);
   const last = kept[max - 1]!;
-  kept[max - 1] = (visibleWidth(last) >= width ? chunk(last, Math.max(1, width - 1))[0]! : last) + "…";
+  kept[max - 1] =
+    (visibleWidth(last) >= width ? chunk(last, Math.max(1, width - 1))[0]! : last) + "…";
   return kept;
 }
 
 /** A row name. Provider prefixes are the first thing a narrow table gives up. */
-interface RowKey { name: string; prefix?: string; partial?: boolean }
+interface RowKey {
+  name: string;
+  prefix?: string;
+  partial?: boolean;
+}
 
 interface Column<Row> {
   header: string;
@@ -221,8 +253,12 @@ function keyCell(theme: StatsTheme, key: RowKey, room: number, prefixed: boolean
   const prefix = prefixed && key.prefix ? truncateToWidth(key.prefix, space, "…") : "";
   const name = truncateToWidth(key.name, Math.max(0, space - visibleWidth(prefix)), "…");
   const used = visibleWidth(prefix) + visibleWidth(name) + mark.length;
-  return (prefix ? theme.fg("dim", prefix) : "") + theme.fg("text", name) +
-    (mark ? theme.fg("warning", mark) : "") + " ".repeat(Math.max(0, room - used));
+  return (
+    (prefix ? theme.fg("dim", prefix) : "") +
+    theme.fg("text", name) +
+    (mark ? theme.fg("warning", mark) : "") +
+    " ".repeat(Math.max(0, room - used))
+  );
 }
 
 /**
@@ -235,25 +271,44 @@ function grid<Row>(theme: StatsTheme, width: number, table: Grid<Row>): string[]
   const sections = table.sections.map((section) => ({
     section,
     indent: section.title ? INDENT : "",
-    rows: section.rows.map((row) => ({ row, key: table.key(row), cells: table.columns.map((column) => column.cell(row)) })),
+    rows: section.rows.map((row) => ({
+      row,
+      key: table.key(row),
+      cells: table.columns.map((column) => column.cell(row)),
+    })),
   }));
-  const entries = sections.flatMap(({ indent, rows }) => rows.map((entry) => ({ ...entry, indent })));
+  const entries = sections.flatMap(({ indent, rows }) =>
+    rows.map((entry) => ({ ...entry, indent })),
+  );
   const sizes = table.columns.map((column, index) =>
-    entries.reduce((max, { cells }) => Math.max(max, visibleWidth(cells[index]!)), visibleWidth(column.header)));
+    entries.reduce(
+      (max, { cells }) => Math.max(max, visibleWidth(cells[index]!)),
+      visibleWidth(column.header),
+    ),
+  );
   let shown = table.columns.map((_, index) => index);
   const figures = (): number => shown.reduce((sum, index) => sum + GAP + sizes[index]!, 0);
   // Only as wide as the longest name: figures sit next to what they describe
   // instead of drifting to the far edge of a wide terminal.
-  const wanted = (prefixed: boolean): number => entries.reduce((max, { key, indent }) =>
-    Math.max(max, indent.length + visibleWidth(keyLabel(key, prefixed))), visibleWidth(table.header));
+  const wanted = (prefixed: boolean): number =>
+    entries.reduce(
+      (max, { key, indent }) =>
+        Math.max(max, indent.length + visibleWidth(keyLabel(key, prefixed))),
+      visibleWidth(table.header),
+    );
   // All rows or none: a prefix on only the rows short enough for one would
   // read as a difference between them. Same names in one section are told
   // apart only by it, so then optional columns give way to it instead.
-  const ambiguous = sections.some(({ rows }) => new Set(rows.map(({ key }) => key.name)).size < rows.length);
+  const ambiguous = sections.some(
+    ({ rows }) => new Set(rows.map(({ key }) => key.name)).size < rows.length,
+  );
   const prefixed = ambiguous || wanted(true) + figures() <= width;
-  const prefixRoom = ambiguous ? entries.reduce((max, { key }) => Math.max(max, visibleWidth(key.prefix ?? "")), 0) : 0;
+  const prefixRoom = ambiguous
+    ? entries.reduce((max, { key }) => Math.max(max, visibleWidth(key.prefix ?? "")), 0)
+    : 0;
   while (Math.min(wanted(prefixed), MIN_KEY + prefixRoom) + figures() > width) {
-    const victim = shown.filter((index) => table.columns[index]!.drop > 0)
+    const victim = shown
+      .filter((index) => table.columns[index]!.drop > 0)
       .sort((a, b) => table.columns[a]!.drop - table.columns[b]!.drop)[0];
     if (victim === undefined) break;
     shown = shown.filter((index) => index !== victim);
@@ -262,17 +317,28 @@ function grid<Row>(theme: StatsTheme, width: number, table: Grid<Row>): string[]
   const gap = " ".repeat(GAP);
 
   const head = padEnd(truncateToWidth(table.header, keyWidth, "…"), keyWidth);
-  const lines = [(table.titled ? theme.fg("accent", theme.bold(head)) : theme.fg("muted", head)) +
-    theme.fg("muted", shown.map((index) => gap + padStart(table.columns[index]!.header, sizes[index]!)).join(""))];
+  const lines = [
+    (table.titled ? theme.fg("accent", theme.bold(head)) : theme.fg("muted", head)) +
+      theme.fg(
+        "muted",
+        shown.map((index) => gap + padStart(table.columns[index]!.header, sizes[index]!)).join(""),
+      ),
+  ];
   for (const { section, indent, rows } of sections) {
     if (section.title) lines.push(theme.fg("accent", theme.bold(section.title)));
     if (rows.length === 0 && section.empty) lines.push(indent + theme.fg("dim", section.empty));
     for (const { row, key, cells } of rows) {
-      lines.push(indent + keyCell(theme, key, keyWidth - indent.length, prefixed) + shown.map((index) => {
-        const text = cells[index]!;
-        const tone = text === "—" ? "dim" : table.columns[index]!.tone?.(row) ?? "text";
-        return gap + theme.fg(tone, padStart(text, sizes[index]!));
-      }).join(""));
+      lines.push(
+        indent +
+          keyCell(theme, key, keyWidth - indent.length, prefixed) +
+          shown
+            .map((index) => {
+              const text = cells[index]!;
+              const tone = text === "—" ? "dim" : (table.columns[index]!.tone?.(row) ?? "text");
+              return gap + theme.fg(tone, padStart(text, sizes[index]!));
+            })
+            .join(""),
+      );
     }
   }
   return lines;
@@ -282,14 +348,20 @@ function grid<Row>(theme: StatsTheme, width: number, table: Grid<Row>): string[]
 function beside(blocks: readonly string[][], width: number): string[] {
   const lines: string[] = [];
   let band: { block: string[]; width: number }[] = [];
-  const bandWidth = (): number => band.reduce((sum, { width }) => sum + width, Math.max(0, band.length - 1) * BLOCK_GAP);
+  const bandWidth = (): number =>
+    band.reduce((sum, { width }) => sum + width, Math.max(0, band.length - 1) * BLOCK_GAP);
   const flush = (): void => {
     if (band.length === 0) return;
     if (lines.length > 0) lines.push("");
     const height = Math.max(...band.map(({ block }) => block.length));
     for (let row = 0; row < height; row++) {
-      lines.push(band.map(({ block, width }, index) =>
-        index === band.length - 1 ? block[row] ?? "" : padEnd(block[row] ?? "", width)).join(" ".repeat(BLOCK_GAP)));
+      lines.push(
+        band
+          .map(({ block, width }, index) =>
+            index === band.length - 1 ? (block[row] ?? "") : padEnd(block[row] ?? "", width),
+          )
+          .join(" ".repeat(BLOCK_GAP)),
+      );
     }
     band = [];
   };
@@ -302,14 +374,22 @@ function beside(blocks: readonly string[][], width: number): string[] {
   return lines;
 }
 
-interface ErrorRow { where: string; error: SessionErrorStats }
+interface ErrorRow {
+  where: string;
+  error: SessionErrorStats;
+}
 
 /** Main and worker failures, newest first. */
 function recentErrors(snapshot: StatsDashboardSnapshot): ErrorRow[] {
   return [
     ...list(snapshot.recentErrors).map((error) => ({ where: "main", error })),
-    ...list(snapshot.workers?.recentErrors).map((error) => ({ where: oneLine(error.workerId) || "worker", error })),
-  ].sort((a, b) => (nonNegative(a.error.ageMs) ?? 0) - (nonNegative(b.error.ageMs) ?? 0)).slice(0, ERROR_ROWS);
+    ...list(snapshot.workers?.recentErrors).map((error) => ({
+      where: oneLine(error.workerId) || "worker",
+      error,
+    })),
+  ]
+    .sort((a, b) => (nonNegative(a.error.ageMs) ?? 0) - (nonNegative(b.error.ageMs) ?? 0))
+    .slice(0, ERROR_ROWS);
 }
 
 /**
@@ -320,83 +400,168 @@ function errorTable(theme: StatsTheme, width: number, rows: readonly ErrorRow[])
   const cells = rows.map(({ where, error }) => {
     const provider = oneLine(error.provider);
     const model = oneLine(error.model);
-    return { cleared: error.cleared === true, where, when: formatAge(error.ageMs),
+    return {
+      cleared: error.cleared === true,
+      where,
+      when: formatAge(error.ageMs),
       model: model ? `${provider ? `${provider}/` : ""}${model}` : "—",
-      message: oneLine(error.message) || "No error text reported." };
+      message: oneLine(error.message) || "No error text reported.",
+    };
   });
   const title = "Recent errors";
   // Indent, the mark and its space come before the name.
-  const keyWidth = Math.max(visibleWidth(title),
-    ...cells.map(({ where }) => INDENT.length + 2 + Math.min(ERROR_WHERE_MAX, visibleWidth(where))));
+  const keyWidth = Math.max(
+    visibleWidth(title),
+    ...cells.map(({ where }) => INDENT.length + 2 + Math.min(ERROR_WHERE_MAX, visibleWidth(where))),
+  );
   const whenWidth = Math.max(visibleWidth("When"), ...cells.map(({ when }) => visibleWidth(when)));
-  let modelWidth = Math.min(ERROR_MODEL_MAX, Math.max(visibleWidth("Model"), ...cells.map(({ model }) => visibleWidth(model))));
+  let modelWidth = Math.min(
+    ERROR_MODEL_MAX,
+    Math.max(visibleWidth("Model"), ...cells.map(({ model }) => visibleWidth(model))),
+  );
   const lead = (): number => keyWidth + GAP + whenWidth + (modelWidth ? GAP + modelWidth : 0) + GAP;
   if (width - lead() < ERROR_MESSAGE_MIN) modelWidth = 0;
   const messageWidth = Math.max(1, Math.min(ERROR_MESSAGE_MAX, width - lead()));
   const gap = " ".repeat(GAP);
   const nameWidth = keyWidth - INDENT.length - 2;
 
-  const lines = [theme.fg("accent", theme.bold(padEnd(title, keyWidth))) + theme.fg("muted",
-    gap + padStart("When", whenWidth) + (modelWidth ? gap + padEnd("Model", modelWidth) : "") + gap + "Message")];
+  const lines = [
+    theme.fg("accent", theme.bold(padEnd(title, keyWidth))) +
+      theme.fg(
+        "muted",
+        gap +
+          padStart("When", whenWidth) +
+          (modelWidth ? gap + padEnd("Model", modelWidth) : "") +
+          gap +
+          "Message",
+      ),
+  ];
   for (const cell of cells) {
     const tone = cell.cleared ? "dim" : "text";
     const [first = "", ...rest] = wrapLines(cell.message, messageWidth, ERROR_LINES);
-    lines.push(INDENT + theme.fg(cell.cleared ? "dim" : "error", cell.cleared ? "·" : "!") + " " +
-      theme.fg(tone, padEnd(truncateToWidth(cell.where, nameWidth, "…"), nameWidth)) +
-      gap + theme.fg(tone, padStart(cell.when, whenWidth)) +
-      (modelWidth ? gap + theme.fg(tone, padEnd(truncateToWidth(cell.model, modelWidth, "…"), modelWidth)) : "") +
-      gap + theme.fg(tone, first));
+    lines.push(
+      INDENT +
+        theme.fg(cell.cleared ? "dim" : "error", cell.cleared ? "·" : "!") +
+        " " +
+        theme.fg(tone, padEnd(truncateToWidth(cell.where, nameWidth, "…"), nameWidth)) +
+        gap +
+        theme.fg(tone, padStart(cell.when, whenWidth)) +
+        (modelWidth
+          ? gap + theme.fg(tone, padEnd(truncateToWidth(cell.model, modelWidth, "…"), modelWidth))
+          : "") +
+        gap +
+        theme.fg(tone, first),
+    );
     for (const line of rest) lines.push(" ".repeat(lead()) + theme.fg(tone, line));
   }
   return lines;
 }
 
 /** An empty cell is "does not apply", unlike "—", which was not reported. */
-interface OverviewRow { label: string; main: string; workers?: string }
+interface OverviewRow {
+  label: string;
+  main: string;
+  workers?: string;
+}
 
 function overviewGrids(snapshot: StatsDashboardSnapshot): Grid<OverviewRow>[] {
   const w = snapshot.workers;
-  const worker = (value: (workers: WorkerStatsSnapshot) => string): string => w ? value(w) : "—";
-  const table = (title: string, sides: readonly ("main" | "workers")[], rows: OverviewRow[]): Grid<OverviewRow> => ({
+  const worker = (value: (workers: WorkerStatsSnapshot) => string): string => (w ? value(w) : "—");
+  const table = (
+    title: string,
+    sides: readonly ("main" | "workers")[],
+    rows: OverviewRow[],
+  ): Grid<OverviewRow> => ({
     header: title,
     titled: true,
     key: (row) => ({ name: row.label }),
-    columns: sides.map((side) => ({ header: side === "main" ? "Main" : "Workers", drop: 0, cell: (row) => row[side] ?? "" })),
+    columns: sides.map((side) => ({
+      header: side === "main" ? "Main" : "Workers",
+      drop: 0,
+      cell: (row) => row[side] ?? "",
+    })),
     sections: [{ rows }],
   });
   return [
-    table("Time", ["main", "workers"], [
-      { label: "Busy", main: formatMs(snapshot.busyMs), workers: worker((w) => formatMs(w.busyMs)) },
-      { label: "Idle", main: formatMs(snapshot.idleMs) },
-      { label: "LLM Σ", main: formatMs(snapshot.llmMs), workers: worker((w) => formatMs(w.llmMs)) },
-      { label: "Tools Σ", main: formatMs(snapshot.toolMs), workers: worker((w) => formatMs(w.toolMs)) },
-      { label: "Approval wait", main: formatMs(snapshot.approvalMs) },
-    ]),
-    table("Now", ["main", "workers"], [
-      { label: "Agents running", main: "", workers: worker((w) => `${formatCount(w.running)} of ${formatCount(w.resident)}`) },
-      { label: "Requests", main: formatCount(snapshot.activeRequests), workers: worker((w) => formatCount(w.activeRequests)) },
-      { label: "Tool calls", main: formatCount(snapshot.activeTools), workers: worker((w) => formatCount(w.activeTools)) },
-      // Running calls are not in Tools Σ; their age includes the permission gate.
-      { label: "Oldest tool call", main: formatAge(snapshot.longestActiveToolMs),
-        workers: worker((w) => formatAge(w.longestActiveToolMs)) },
-      { label: "Approvals pending", main: formatCount(snapshot.pendingApprovals) },
-      { label: "Last event", main: formatAge(snapshot.lastActivityMs) },
-    ]),
-    table("Last main request", ["main"], [
-      { label: "TTFT", main: formatMs(snapshot.lastTtftMs) },
-      { label: "First text", main: formatMs(snapshot.lastTextMs) },
-      { label: "Output speed", main: formatTps(snapshot.lastTps) },
-    ]),
+    table(
+      "Time",
+      ["main", "workers"],
+      [
+        {
+          label: "Busy",
+          main: formatMs(snapshot.busyMs),
+          workers: worker((w) => formatMs(w.busyMs)),
+        },
+        { label: "Idle", main: formatMs(snapshot.idleMs) },
+        {
+          label: "LLM Σ",
+          main: formatMs(snapshot.llmMs),
+          workers: worker((w) => formatMs(w.llmMs)),
+        },
+        {
+          label: "Tools Σ",
+          main: formatMs(snapshot.toolMs),
+          workers: worker((w) => formatMs(w.toolMs)),
+        },
+        { label: "Approval wait", main: formatMs(snapshot.approvalMs) },
+      ],
+    ),
+    table(
+      "Now",
+      ["main", "workers"],
+      [
+        {
+          label: "Agents running",
+          main: "",
+          workers: worker((w) => `${formatCount(w.running)} of ${formatCount(w.resident)}`),
+        },
+        {
+          label: "Requests",
+          main: formatCount(snapshot.activeRequests),
+          workers: worker((w) => formatCount(w.activeRequests)),
+        },
+        {
+          label: "Tool calls",
+          main: formatCount(snapshot.activeTools),
+          workers: worker((w) => formatCount(w.activeTools)),
+        },
+        // Running calls are not in Tools Σ; their age includes the permission gate.
+        {
+          label: "Oldest tool call",
+          main: formatAge(snapshot.longestActiveToolMs),
+          workers: worker((w) => formatAge(w.longestActiveToolMs)),
+        },
+        { label: "Approvals pending", main: formatCount(snapshot.pendingApprovals) },
+        { label: "Last event", main: formatAge(snapshot.lastActivityMs) },
+      ],
+    ),
+    table(
+      "Last main request",
+      ["main"],
+      [
+        { label: "TTFT", main: formatMs(snapshot.lastTtftMs) },
+        { label: "First text", main: formatMs(snapshot.lastTextMs) },
+        { label: "Output speed", main: formatTps(snapshot.lastTps) },
+      ],
+    ),
   ];
 }
 
 const MODEL_COLUMNS: readonly Column<SessionModelStats>[] = [
   { header: "Req", drop: 4, cell: (entry) => formatCount(entry.requests) },
-  { header: "Err", drop: 3, cell: (entry) => formatCount(entry.errors), tone: (entry) => errorTone(entry.errors) },
+  {
+    header: "Err",
+    drop: 3,
+    cell: (entry) => formatCount(entry.errors),
+    tone: (entry) => errorTone(entry.errors),
+  },
   { header: "LLM Σ", drop: 5, cell: (entry) => formatMs(entry.llmMs) },
   // The collector already publishes the mean; without samples there is none.
-  { header: "TTFT", drop: 0,
-    cell: (entry) => (nonNegative(entry.ttftSamples) ?? 0) === 0 ? "—" : formatMs(entry.ttftMs) },
+  {
+    header: "TTFT",
+    drop: 0,
+    cell: (entry) => ((nonNegative(entry.ttftSamples) ?? 0) === 0 ? "—" : formatMs(entry.ttftMs)),
+  },
   { header: "tok/s", drop: 6, cell: (entry) => formatRate(entry.tps) },
   { header: "Out", drop: 1, cell: (entry) => formatCount(entry.outputTokens) },
   { header: "Cost", drop: 2, cell: (entry) => formatCost(entry.cost) },
@@ -404,28 +569,45 @@ const MODEL_COLUMNS: readonly Column<SessionModelStats>[] = [
 
 const TOOL_COLUMNS: readonly Column<SessionToolStats>[] = [
   { header: "Calls", drop: 4, cell: (entry) => formatCount(entry.calls) },
-  { header: "Err", drop: 2, cell: (entry) => formatCount(entry.errors), tone: (entry) => errorTone(entry.errors) },
+  {
+    header: "Err",
+    drop: 2,
+    cell: (entry) => formatCount(entry.errors),
+    tone: (entry) => errorTone(entry.errors),
+  },
   { header: "Σ time", drop: 0, cell: (entry) => formatMs(entry.totalMs) },
-  { header: "Avg", drop: 1, cell: (entry) => {
-    const calls = nonNegative(entry.calls);
-    const total = nonNegative(entry.totalMs);
-    return calls && total !== undefined ? formatMs(total / calls) : "—";
-  } },
+  {
+    header: "Avg",
+    drop: 1,
+    cell: (entry) => {
+      const calls = nonNegative(entry.calls);
+      const total = nonNegative(entry.totalMs);
+      return calls && total !== undefined ? formatMs(total / calls) : "—";
+    },
+  },
   { header: "Max", drop: 3, cell: (entry) => formatMs(entry.maxMs) },
 ];
 
 const observedWorkers = (workers: WorkerStatsSnapshot | undefined): string =>
-  !workers ? "no observed workers" : `${formatCount(workers.observed)} observed worker${workers.observed === 1 ? "" : "s"}`;
+  !workers
+    ? "no observed workers"
+    : `${formatCount(workers.observed)} observed worker${workers.observed === 1 ? "" : "s"}`;
 
 /**
  * The Overview's "Time" table alone, as plain text. Regular-mode Pi has no
  * overlay for the full view, so it gets this summary as a notice instead.
  */
 export function statsSummary(snapshot: StatsDashboardSnapshot): string[] {
-  const plain: StatsTheme = { fg: (_color, text) => text, bold: (text) => text, bg: (_color, text) => text };
+  const plain: StatsTheme = {
+    fg: (_color, text) => text,
+    bold: (text) => text,
+    bg: (_color, text) => text,
+  };
   const errors = recentErrors(snapshot);
-  return [...grid(plain, 60, overviewGrids(snapshot)[0]!),
-    ...(errors.length > 0 ? ["", ...errorTable(plain, 100, errors)] : [])].map((line) => line.trimEnd());
+  return [
+    ...grid(plain, 60, overviewGrids(snapshot)[0]!),
+    ...(errors.length > 0 ? ["", ...errorTable(plain, 100, errors)] : []),
+  ].map((line) => line.trimEnd());
 }
 
 /** A separate, keyboard-owning view for main and managed-worker observations. */
@@ -455,13 +637,20 @@ export class StatsView {
     const limit = Math.max(1, Math.floor(finite(max) ?? 1));
     if (this.disposed) return limit;
     const snapshot = this.readSnapshot();
-    const figures = ([0, 1, 2] as const).flatMap((tab) => this.content(snapshot, tab, Math.max(1, limit - 4)).figures);
-    const tabs = this.tabLabels(Number.MAX_SAFE_INTEGER).reduce((sum, label) => sum + visibleWidth(label) + 2, 0);
-    this.wanted = Math.max(this.wanted,
+    const figures = ([0, 1, 2] as const).flatMap(
+      (tab) => this.content(snapshot, tab, Math.max(1, limit - 4)).figures,
+    );
+    const tabs = this.tabLabels(Number.MAX_SAFE_INTEGER).reduce(
+      (sum, label) => sum + visibleWidth(label) + 2,
+      0,
+    );
+    this.wanted = Math.max(
+      this.wanted,
       4 + figures.reduce((widest, line) => Math.max(widest, visibleWidth(line)), 0),
       4 + tabs + (snapshot ? GAP + visibleWidth(this.status(snapshot)) : 0),
       // `╭─`, the padded title, one rule column and the ` × ─╮` close tail.
-      2 + visibleWidth(TITLE) + 2 + 1 + 5);
+      2 + visibleWidth(TITLE) + 2 + 1 + 5,
+    );
     return Math.min(limit, this.wanted);
   }
 
@@ -472,15 +661,18 @@ export class StatsView {
     if (matchesKey(data, "2")) return this.select(1);
     if (matchesKey(data, "3")) return this.select(2);
     if (matchesKey(data, "tab")) return this.select(((this.tab + 1) % TABS.length) as Tab);
-    if (matchesKey(data, "shift+tab")) return this.select(((this.tab + TABS.length - 1) % TABS.length) as Tab);
+    if (matchesKey(data, "shift+tab"))
+      return this.select(((this.tab + TABS.length - 1) % TABS.length) as Tab);
     if (this.paintedViewport === 0) return;
 
     if (matchesKey(data, "home")) return this.scrollTo(0);
     if (matchesKey(data, "end")) return this.scrollTo(this.paintedMaxScroll);
     if (matchesKey(data, "up")) return this.scrollBy(-1);
     if (matchesKey(data, "down")) return this.scrollBy(1);
-    if (matchesKey(data, "pageUp") || matchesKey(data, "shift+up")) return this.scrollBy(-this.paintedViewport);
-    if (matchesKey(data, "pageDown") || matchesKey(data, "shift+down")) return this.scrollBy(this.paintedViewport);
+    if (matchesKey(data, "pageUp") || matchesKey(data, "shift+up"))
+      return this.scrollBy(-this.paintedViewport);
+    if (matchesKey(data, "pageDown") || matchesKey(data, "shift+down"))
+      return this.scrollBy(this.paintedViewport);
   }
 
   handleMouse(event: TuiMouseEvent): { handled: boolean } | undefined {
@@ -525,15 +717,23 @@ export class StatsView {
       return [...figures, ...this.notes(notes, inner)];
     });
     const content = bodies[this.tab];
-    const viewport = Math.max(1, Math.min(budget - CHROME_ROWS, Math.max(...bodies.map((body) => body.length))));
+    const viewport = Math.max(
+      1,
+      Math.min(budget - CHROME_ROWS, Math.max(...bodies.map((body) => body.length))),
+    );
     const maxScroll = Math.max(0, content.length - viewport);
     const offset = Math.min(this.offsets[this.tab], maxScroll);
     this.offsets[this.tab] = offset;
     this.paintedViewport = viewport;
     this.paintedMaxScroll = maxScroll;
 
-    const lines = [this.top(columns), this.tabs(columns, snapshot), popoverRule(this.options.theme, columns, "divider")];
-    for (const line of content.slice(offset, offset + viewport)) lines.push(this.row(line, columns));
+    const lines = [
+      this.top(columns),
+      this.tabs(columns, snapshot),
+      popoverRule(this.options.theme, columns, "divider"),
+    ];
+    for (const line of content.slice(offset, offset + viewport))
+      lines.push(this.row(line, columns));
     while (lines.length < 3 + viewport) lines.push(this.row("", columns));
     lines.push(this.bottom(columns, content.length, offset, viewport));
     return lines.map((line) => this.fit(line, columns));
@@ -589,18 +789,31 @@ export class StatsView {
   }
 
   /** The tables, and the caveats that qualify them, to be shown quietly below. */
-  private content(snapshot: StatsDashboardSnapshot | undefined, tab: Tab, width: number): { figures: string[]; notes: string[] } {
+  private content(
+    snapshot: StatsDashboardSnapshot | undefined,
+    tab: Tab,
+    width: number,
+  ): { figures: string[]; notes: string[] } {
     const theme = this.options.theme;
-    if (!snapshot) return { figures: [theme.fg("error", "Statistics are unavailable.")], notes: [LEGEND] };
+    if (!snapshot)
+      return { figures: [theme.fg("error", "Statistics are unavailable.")], notes: [LEGEND] };
     if (tab === 0) {
       const errors = recentErrors(snapshot);
       return {
-        figures: [...beside(overviewGrids(snapshot).map((table) => grid(theme, width, table)), width),
-          ...(errors.length > 0 ? ["", ...errorTable(theme, width, errors)] : [])],
+        figures: [
+          ...beside(
+            overviewGrids(snapshot).map((table) => grid(theme, width, table)),
+            width,
+          ),
+          ...(errors.length > 0 ? ["", ...errorTable(theme, width, errors)] : []),
+        ],
         notes: [
           ...(errors.length > 0
-            ? ["Errors: ! still holds the indicator red, · no longer does. Red clears when a later response " +
-              "succeeds or the next run starts; a worker's also on release or when a parent run ends on an answer."] : []),
+            ? [
+                "Errors: ! still holds the indicator red, · no longer does. Red clears when a later response " +
+                  "succeeds or the next run starts; a worker's also on release or when a parent run ends on an answer.",
+              ]
+            : []),
           `Worker figures add up ${observedWorkers(snapshot.workers)}. ` +
             "LLM/tool sums overlap; they are not additive wall-time parts.",
           "Approval wait includes forwarded worker asks, counted once. " +
@@ -610,14 +823,15 @@ export class StatsView {
         ],
       };
     }
-    if (tab === 1) return {
-      figures: this.models(snapshot, width),
-      notes: [
-        "TTFT is the mean from SDK turn start (includes preflight). " +
-          "E2E tok/s = reported output / SDK turn time, not decoder speed.",
-        LEGEND,
-      ],
-    };
+    if (tab === 1)
+      return {
+        figures: this.models(snapshot, width),
+        notes: [
+          "TTFT is the mean from SDK turn start (includes preflight). " +
+            "E2E tok/s = reported output / SDK turn time, not decoder speed.",
+          LEGEND,
+        ],
+      };
     return {
       figures: this.tools(snapshot, width),
       notes: ["Σ adds parallel calls and can exceed wall time. Avg = Σ / calls.", LEGEND],
@@ -626,7 +840,12 @@ export class StatsView {
 
   /** Wrapped to the row, below a blank line, dim: present, but not competing with the figures. */
   private notes(notes: string[], width: number): string[] {
-    return ["", ...notes.flatMap((note) => wrap(note, width)).map((line) => this.options.theme.fg("dim", line))];
+    return [
+      "",
+      ...notes
+        .flatMap((note) => wrap(note, width))
+        .map((line) => this.options.theme.fg("dim", line)),
+    ];
   }
 
   private models(snapshot: StatsDashboardSnapshot, width: number): string[] {
@@ -636,14 +855,20 @@ export class StatsView {
       // with the same raw model id apart, and shows wherever there is room.
       key: (entry) => {
         const provider = oneLine(entry.provider);
-        return { name: oneLine(entry.model) || "unnamed model", ...(provider ? { prefix: `${provider}/` } : {}),
-          partial: entry.partial === true };
+        return {
+          name: oneLine(entry.model) || "unnamed model",
+          ...(provider ? { prefix: `${provider}/` } : {}),
+          partial: entry.partial === true,
+        };
       },
       columns: MODEL_COLUMNS,
       sections: [
         { title: "Main", rows: list(snapshot.models), empty: "No observed model requests yet." },
-        { title: "Workers", rows: list(snapshot.workers?.models),
-          empty: snapshot.workers ? "No observed worker requests yet." : "Workers not observed." },
+        {
+          title: "Workers",
+          rows: list(snapshot.workers?.models),
+          empty: snapshot.workers ? "No observed worker requests yet." : "Workers not observed.",
+        },
       ],
     });
   }
@@ -651,12 +876,18 @@ export class StatsView {
   private tools(snapshot: StatsDashboardSnapshot, width: number): string[] {
     return grid(this.options.theme, width, {
       header: "Tool",
-      key: (entry) => ({ name: oneLine(entry.tool) || "unnamed tool", partial: entry.partial === true }),
+      key: (entry) => ({
+        name: oneLine(entry.tool) || "unnamed tool",
+        partial: entry.partial === true,
+      }),
       columns: TOOL_COLUMNS,
       sections: [
         { title: "Main", rows: list(snapshot.tools), empty: "No observed tool calls yet." },
-        { title: "Workers", rows: list(snapshot.workers?.tools),
-          empty: snapshot.workers ? "No observed worker tool calls yet." : "Workers not observed." },
+        {
+          title: "Workers",
+          rows: list(snapshot.workers?.tools),
+          empty: snapshot.workers ? "No observed worker tool calls yet." : "Workers not observed.",
+        },
       ],
     });
   }
@@ -664,7 +895,10 @@ export class StatsView {
   private compact(width: number, budget: number): string[] {
     this.paintedViewport = 0;
     this.paintedMaxScroll = 0;
-    const middle = [this.tabs(width, undefined), this.row(this.options.theme.fg("dim", "Terminal too short for Stats"), width)];
+    const middle = [
+      this.tabs(width, undefined),
+      this.row(this.options.theme.fg("dim", "Terminal too short for Stats"), width),
+    ];
     const lines = [this.top(width), ...middle.slice(0, Math.max(0, budget - 2))];
     while (lines.length < budget - 1) lines.push(this.row("", width));
     if (budget > 1) lines.push(this.bottom(width, 0, 0, 0));
@@ -672,17 +906,24 @@ export class StatsView {
   }
 
   private top(width: number): string {
-    if (width < 3) return this.fit(this.options.theme.fg("borderAccent", POPOVER.h.repeat(width)), width);
+    if (width < 3)
+      return this.fit(this.options.theme.fg("borderAccent", POPOVER.h.repeat(width)), width);
     const closable = !!popoverCloseHit(width);
     const tailWidth = closable ? 5 : 1;
     const room = width - 2 - tailWidth;
     if (room < 1) return popoverRule(this.options.theme, width, "top");
     const label = truncateToWidth(` ${TITLE} `, room, "…");
     const fill = POPOVER.h.repeat(Math.max(0, room - visibleWidth(label)));
-    const head = this.options.theme.fg("borderAccent", POPOVER.tl + POPOVER.h) +
+    const head =
+      this.options.theme.fg("borderAccent", POPOVER.tl + POPOVER.h) +
       this.options.theme.fg("accent", this.options.theme.bold(label)) +
       this.options.theme.fg("borderAccent", fill);
-    return head + (closable ? popoverCloseTail(this.options.theme) : this.options.theme.fg("borderAccent", POPOVER.tr));
+    return (
+      head +
+      (closable
+        ? popoverCloseTail(this.options.theme)
+        : this.options.theme.fg("borderAccent", POPOVER.tr))
+    );
   }
 
   /** Tabs on the left; on the right, what the dock indicator said, and for how long. */
@@ -699,9 +940,11 @@ export class StatsView {
       const raw = tab === this.tab ? `›${label}‹` : ` ${label} `;
       const segmentWidth = visibleWidth(raw);
       if (used + segmentWidth > inner) break;
-      const styled = tab === this.tab
-        ? theme.bg?.("selectedBg", theme.fg("accent", theme.bold(raw))) ?? theme.fg("accent", theme.bold(raw))
-        : theme.fg("muted", raw);
+      const styled =
+        tab === this.tab
+          ? (theme.bg?.("selectedBg", theme.fg("accent", theme.bold(raw))) ??
+            theme.fg("accent", theme.bold(raw)))
+          : theme.fg("muted", raw);
       pieces.push(styled);
       // Content starts after the side border and its one-column pad.
       this.tabTargets.push({ start: 2 + used, end: 2 + used + segmentWidth, tab });
@@ -712,22 +955,28 @@ export class StatsView {
     const fits = (text: string): boolean => used + GAP + visibleWidth(text) <= inner;
     const full = this.status(snapshot);
     const right = fits(full) ? full : [this.status(snapshot, false)].find(fits);
-    return this.row(right ? left + " ".repeat(inner - used - visibleWidth(right)) + right : left, width);
+    return this.row(
+      right ? left + " ".repeat(inner - used - visibleWidth(right)) + right : left,
+      width,
+    );
   }
 
   /** What the dock indicator says, and for how long the window has been observing. */
   private status(snapshot: StatsDashboardSnapshot, elapsed = true): string {
     const theme = this.options.theme;
-    return theme.fg(healthColor(snapshot.health), healthText(snapshot.health)) +
+    return (
+      theme.fg(healthColor(snapshot.health), healthText(snapshot.health)) +
       (elapsed ? theme.fg("dim", ` · open ${formatMs(snapshot.elapsedMs)}`) : "") +
-      (snapshot.partial ? theme.fg("warning", " *") : "");
+      (snapshot.partial ? theme.fg("warning", " *") : "")
+    );
   }
 
   private tabLabels(inner: number): readonly string[] {
     const full = ["1 Overview", "2 Models", "3 Tools"] as const;
     const short = ["1 Ovr", "2 Mod", "3 Tool"] as const;
     const tiny = ["1", "2", "3"] as const;
-    const width = (labels: readonly string[]) => labels.reduce((sum, label) => sum + visibleWidth(label) + 2, 0);
+    const width = (labels: readonly string[]) =>
+      labels.reduce((sum, label) => sum + visibleWidth(label) + 2, 0);
     if (width(full) <= inner) return full;
     if (width(short) <= inner) return short;
     return tiny;
@@ -746,14 +995,20 @@ export class StatsView {
     // Room for the hint between `╰─` and `─╯`: its two pads and at least one rule column.
     const room = (): number => width - 4 - visibleWidth(right) - 3;
     if (right && room() < 3) right = "";
-    const hints = scrollable ? ["1-3/Tab view · ↑↓ PgUp/PgDn scroll · Esc close", "Tab · ↑↓ · Esc", "Esc"]
+    const hints = scrollable
+      ? ["1-3/Tab view · ↑↓ PgUp/PgDn scroll · Esc close", "Tab · ↑↓ · Esc", "Esc"]
       : ["1-3/Tab view · Esc close", "Tab · Esc", "Esc"];
     const hint = hints.find((text) => visibleWidth(text) <= room());
     const left = hint ? ` ${hint} ` : "";
     const fill = Math.max(0, width - 4 - visibleWidth(left) - visibleWidth(right));
     const edge = (text: string): string => theme.fg("borderAccent", text);
-    return edge(POPOVER.bl + POPOVER.h) + theme.fg("dim", left) + edge(POPOVER.h.repeat(fill)) +
-      theme.fg("dim", right) + edge(POPOVER.h + POPOVER.br);
+    return (
+      edge(POPOVER.bl + POPOVER.h) +
+      theme.fg("dim", left) +
+      edge(POPOVER.h.repeat(fill)) +
+      theme.fg("dim", right) +
+      edge(POPOVER.h + POPOVER.br)
+    );
   }
 
   private row(content: string, width: number): string {

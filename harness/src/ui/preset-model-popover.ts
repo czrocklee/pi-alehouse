@@ -1,31 +1,75 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text, stripTerminalSequences, truncateToWidth, visibleWidth, type Container, type Component, type Focusable,
-  type OverlayOptions, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+import {
+  Text,
+  stripTerminalSequences,
+  truncateToWidth,
+  visibleWidth,
+  type Container,
+  type Component,
+  type Focusable,
+  type OverlayOptions,
+  type TUI,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
+} from "@earendil-works/pi-tui";
 import type { ModelPickerPosition } from "./preset-picker.ts";
-import { isPopoverCloseClick, popoverInlay, popoverRow, popoverTitle, type PopoverTheme } from "./popover.ts";
+import {
+  isPopoverCloseClick,
+  popoverInlay,
+  popoverRow,
+  popoverTitle,
+  type PopoverTheme,
+} from "./popover.ts";
 
 type Model = ReturnType<ExtensionContext["modelRegistry"]["getAll"]>[number];
 type NativeSelector = Component & Focusable & { dispose(): void; children: Component[] };
 type Group = { size: number; target?: { provider: string; id: string } };
-type Row = { text: string; plain: string; model: boolean; selected: boolean; group?: Group; first?: boolean };
+type Row = {
+  text: string;
+  plain: string;
+  model: boolean;
+  selected: boolean;
+  group?: Group;
+  first?: boolean;
+};
 type Target = { start: number; end: number; provider: string; id: string };
-type SelectionProjection = { targets: Map<number, Target>; selectedVisible: boolean; structured: boolean;
-  ambiguousArrow: boolean; visibleModel: Group["target"] };
+type SelectionProjection = {
+  targets: Map<number, Target>;
+  selectedVisible: boolean;
+  structured: boolean;
+  ambiguousArrow: boolean;
+  visibleModel: Group["target"];
+};
 type SelectionIssue = "closed" | "not_visible" | "identity_unverified";
 // eslint-disable-next-line no-control-regex -- model metadata must not manufacture terminal rows
 const hasTerminalControls = (value: string): boolean => /[\u0000-\u001f\u007f-\u009f]/u.test(value);
 
 /** Only public terminal geometry. The host clamps row/col to the visible area
  * again after measuring the component, including on terminal resize. */
-export function modelPopoverOptions(tui: TUI | undefined, position?: ModelPickerPosition): OverlayOptions {
-  const columns = tui?.terminal.columns ?? 80, rows = tui?.terminal.rows ?? 24;
+export function modelPopoverOptions(
+  tui: TUI | undefined,
+  position?: ModelPickerPosition,
+): OverlayOptions {
+  const columns = tui?.terminal.columns ?? 80,
+    rows = tui?.terminal.rows ?? 24;
   const margin = columns > 4 && rows > 4 ? 1 : 0;
   const width = Math.max(1, Math.min(80, columns - 2 * margin));
-  const point = position && Number.isFinite(position.row) && Number.isFinite(position.col) &&
-    position.row >= 0 && position.row < rows && position.col >= 0 && position.col < columns;
-  return { anchor: point ? "top-left" : "center", width, minWidth: Math.min(32, width),
-    maxHeight: Math.max(1, rows - 2 * margin), margin,
-    ...(point ? { row: Math.floor(position.row) + 1, col: Math.floor(position.col) } : {}) };
+  const point =
+    position &&
+    Number.isFinite(position.row) &&
+    Number.isFinite(position.col) &&
+    position.row >= 0 &&
+    position.row < rows &&
+    position.col >= 0 &&
+    position.col < columns;
+  return {
+    anchor: point ? "top-left" : "center",
+    width,
+    minWidth: Math.min(32, width),
+    maxHeight: Math.max(1, rows - 2 * margin),
+    margin,
+    ...(point ? { row: Math.floor(position.row) + 1, col: Math.floor(position.col) } : {}),
+  };
 }
 
 /** A presentation adapter, not another model selector. Search, scope/Tab,
@@ -47,21 +91,29 @@ export class PresetModelPopover implements Component, Focusable {
   private ambiguousArrow = false;
   private visibleModel?: { provider: string; id: string };
 
-  constructor(private readonly options: {
-    native: NativeSelector;
-    theme: PopoverTheme;
-    title: string;
-    height(): number;
-    /** Current overlay width. Absent callers use the last rendered width. */
-    currentWidth?(): number;
-    models(): readonly Model[];
-    select(model: Model): void;
-    cancel(): void;
-  }) {}
+  constructor(
+    private readonly options: {
+      native: NativeSelector;
+      theme: PopoverTheme;
+      title: string;
+      height(): number;
+      /** Current overlay width. Absent callers use the last rendered width. */
+      currentWidth?(): number;
+      models(): readonly Model[];
+      select(model: Model): void;
+      cancel(): void;
+    },
+  ) {}
 
-  get focused(): boolean { return this.options.native.focused; }
-  set focused(value: boolean) { this.options.native.focused = value; }
-  get capturesViewportInput(): boolean { return this.options.native.capturesViewportInput === true; }
+  get focused(): boolean {
+    return this.options.native.focused;
+  }
+  set focused(value: boolean) {
+    this.options.native.focused = value;
+  }
+  get capturesViewportInput(): boolean {
+    return this.options.native.capturesViewportInput === true;
+  }
   /** Never expand a hit map before the host paints that wider layout. A wider
    * dry layout could unwrap prose and move a click to another row. */
   private selectionWidth(): number {
@@ -71,13 +123,24 @@ export class PresetModelPopover implements Component, Focusable {
    * host's last-painted hit map. Otherwise a rejected stale click could grant
    * a second click on an item the host has never painted. */
   private recheck(): SelectionProjection {
-    const painted = { width: this.width, targets: this.targets, selectedVisible: this.selectedVisible,
-      structured: this.structured, ambiguousArrow: this.ambiguousArrow, visibleModel: this.visibleModel };
+    const painted = {
+      width: this.width,
+      targets: this.targets,
+      selectedVisible: this.selectedVisible,
+      structured: this.structured,
+      ambiguousArrow: this.ambiguousArrow,
+      visibleModel: this.visibleModel,
+    };
     this.targets = new Map();
     try {
       this.render(this.selectionWidth());
-      return { targets: this.targets, selectedVisible: this.selectedVisible,
-        structured: this.structured, ambiguousArrow: this.ambiguousArrow, visibleModel: this.visibleModel };
+      return {
+        targets: this.targets,
+        selectedVisible: this.selectedVisible,
+        structured: this.structured,
+        ambiguousArrow: this.ambiguousArrow,
+        visibleModel: this.visibleModel,
+      };
     } finally {
       this.width = painted.width;
       this.targets = painted.targets;
@@ -98,13 +161,18 @@ export class PresetModelPopover implements Component, Focusable {
     // An unidentified tree defers to the native selection its lone arrow paints.
     if (!model || !current.structured) return undefined;
     return current.visibleModel?.provider === model.provider && current.visibleModel.id === model.id
-      ? undefined : "identity_unverified";
+      ? undefined
+      : "identity_unverified";
   }
   canSelect(model?: { provider: string; id: string }): boolean {
     return this.selectionIssue(model) === undefined;
   }
-  handleInput(data: string): void { if (!this.closed) this.options.native.handleInput?.(data); }
-  invalidate(): void { this.options.native.invalidate(); }
+  handleInput(data: string): void {
+    if (!this.closed) this.options.native.handleInput?.(data);
+  }
+  invalidate(): void {
+    this.options.native.invalidate();
+  }
   dispose(): void {
     this.closed = true;
     this.targets.clear();
@@ -125,33 +193,59 @@ export class PresetModelPopover implements Component, Focusable {
     if (width < 12 || height < 5) return [truncateToWidth("Too small · Esc to cancel", width)];
     const inner = width - 2;
     const models = this.options.models().filter((model) => model.api !== "pi-virtual");
-    const rows = this.nativeRows(inner, models).filter(({ plain }) => plain.trim() && !/^─+$/u.test(plain));
+    const rows = this.nativeRows(inner, models).filter(
+      ({ plain }) => plain.trim() && !/^─+$/u.test(plain),
+    );
     // Spacers and the native borders are redundant inside rounded chrome.
     // On short screens, reduce its ten-item window around the painted arrow.
-    const context = height >= 10 ? [this.options.theme.fg("muted", "New Agents only; main unchanged")] : [];
+    const context =
+      height >= 10 ? [this.options.theme.fg("muted", "New Agents only; main unchanged")] : [];
     const budget = height - 2 - context.length;
     const body = this.fit(rows, budget);
-    const complete = (group: Group): boolean => body.filter((row) => row.group === group).length === group.size;
-    const result = [popoverTitle(this.options.theme, width, this.options.title, true),
-      ...context.map((text) => popoverRow(this.options.theme, text, inner))];
+    const complete = (group: Group): boolean =>
+      body.filter((row) => row.group === group).length === group.size;
+    const result = [
+      popoverTitle(this.options.theme, width, this.options.title, true),
+      ...context.map((text) => popoverRow(this.options.theme, text, inner)),
+    ];
     for (const row of body) {
       const painted = popoverRow(this.options.theme, row.text, inner);
-      if (row.selected && (!row.group || complete(row.group)) && stripTerminalSequences(painted).startsWith("│→ ")) {
+      if (
+        row.selected &&
+        (!row.group || complete(row.group)) &&
+        stripTerminalSequences(painted).startsWith("│→ ")
+      ) {
         this.selectedVisible = true;
         if (row.group?.target) this.visibleModel = row.group.target;
       }
       if (row.group?.target && complete(row.group) && visibleWidth(row.plain) <= inner) {
-        this.targets.set(result.length, { start: row.first ? 5 : 1, end: 1 + visibleWidth(row.plain), ...row.group.target });
+        this.targets.set(result.length, {
+          start: row.first ? 5 : 1,
+          end: 1 + visibleWidth(row.plain),
+          ...row.group.target,
+        });
       }
       result.push(painted);
     }
-    result.push(popoverInlay(this.options.theme, width, this.options.theme.fg("muted", "↑↓ choose · Enter apply · Esc cancel"), "bottom"));
+    result.push(
+      popoverInlay(
+        this.options.theme,
+        width,
+        this.options.theme.fg("muted", "↑↓ choose · Enter apply · Esc cancel"),
+        "bottom",
+      ),
+    );
     return result;
   }
 
   private nativeRows(width: number, models: readonly Model[]): Row[] {
     const painted = this.options.native.render(width);
-    const row = (text: string): Row => ({ text, plain: stripTerminalSequences(text).trimEnd(), model: false, selected: false });
+    const row = (text: string): Row => ({
+      text,
+      plain: stripTerminalSequences(text).trimEnd(),
+      model: false,
+      selected: false,
+    });
     const tree: Row[] = [];
     const identityCounts = new Map<string, number>();
     for (const model of models) {
@@ -162,7 +256,10 @@ export class PresetModelPopover implements Component, Focusable {
       // The SDK may bundle TUI classes separately from its public TUI package.
       // Public structural capabilities, not instanceof, cross that module seam.
       const children = (child as Partial<Container>).children;
-      if (!Array.isArray(children)) { tree.push(...child.render(width).map(row)); continue; }
+      if (!Array.isArray(children)) {
+        tree.push(...child.render(width).map(row));
+        continue;
+      }
       // Native items are leading Text children of the list Container. A
       // spacer/indicator terminates that region, before name/error/status text.
       let items = true;
@@ -171,15 +268,24 @@ export class PresetModelPopover implements Component, Focusable {
         // Keep the native prefix even when wrapping leaves only the arrow
         // and spaces on this line; trimEnd() is only for label comparisons.
         const first = lines[0] ? stripTerminalSequences(lines[0].text) : "";
-        const item = items && typeof (leaf as Partial<Text>).setText === "function" && /^(?:→ | {2})(?:✓ | {2})/u.test(first);
+        const item =
+          items &&
+          typeof (leaf as Partial<Text>).setText === "function" &&
+          /^(?:→ | {2})(?:✓ | {2})/u.test(first);
         if (!item) items = false;
         if (item) {
-          const prefix = first.slice(0, 4), labelStart = first.slice(4).trimEnd();
+          const prefix = first.slice(0, 4),
+            labelStart = first.slice(4).trimEnd();
           // Render candidate labels with the same public Text wrapper. This
           // disambiguates spaces/wrapping without reading Text's private value.
           const matches = models.filter((model) => {
             const identity = `${model.provider}\0${model.id}`;
-            if (hasTerminalControls(model.id) || hasTerminalControls(model.provider) || identityCounts.get(identity) !== 1) return false;
+            if (
+              hasTerminalControls(model.id) ||
+              hasTerminalControls(model.provider) ||
+              identityCounts.get(identity) !== 1
+            )
+              return false;
             const labels = [`${model.id} [${model.provider}]`];
             // Pi 1.5 appends a distinct model name before the provider. Names
             // with controls can manufacture lookalike rows, so they cannot
@@ -190,13 +296,27 @@ export class PresetModelPopover implements Component, Focusable {
             }
             return labels.some((label) => {
               if (!label.startsWith(labelStart)) return false;
-              const expected = new Text(prefix + label, 0, 0).render(width).map((text) => stripTerminalSequences(text).trimEnd());
-              return expected.length === lines.length && expected.every((text, index) => text === lines[index]!.plain);
+              const expected = new Text(prefix + label, 0, 0)
+                .render(width)
+                .map((text) => stripTerminalSequences(text).trimEnd());
+              return (
+                expected.length === lines.length &&
+                expected.every((text, index) => text === lines[index]!.plain)
+              );
             });
           });
           const model = matches.length === 1 ? matches[0] : undefined;
-          const group: Group = { size: lines.length, ...(model ? { target: { provider: model.provider, id: model.id } } : {}) };
-          for (const [index, line] of lines.entries()) Object.assign(line, { model: true, selected: index === 0 && first.startsWith("→ "), group, first: index === 0 });
+          const group: Group = {
+            size: lines.length,
+            ...(model ? { target: { provider: model.provider, id: model.id } } : {}),
+          };
+          for (const [index, line] of lines.entries())
+            Object.assign(line, {
+              model: true,
+              selected: index === 0 && first.startsWith("→ "),
+              group,
+              first: index === 0,
+            });
         }
         tree.push(...lines);
       }
@@ -205,14 +325,21 @@ export class PresetModelPopover implements Component, Focusable {
     // In that case preserve native keyboard presentation, with no mouse hits.
     // Count arrows over the whole native paint, before any fitting crops it:
     // only a lone arrow is known to be the native selection Enter submits.
-    const modelRow = (text: string): boolean => /^(?:→ | {2})(?:✓ | {2})\S/u.test(stripTerminalSequences(text));
-    if (tree.length === painted.length && tree.every((line, index) => line.text === painted[index]) &&
-        (tree.some((line) => line.model) || !painted.some(modelRow))) {
+    const modelRow = (text: string): boolean =>
+      /^(?:→ | {2})(?:✓ | {2})\S/u.test(stripTerminalSequences(text));
+    if (
+      tree.length === painted.length &&
+      tree.every((line, index) => line.text === painted[index]) &&
+      (tree.some((line) => line.model) || !painted.some(modelRow))
+    ) {
       this.structured = true;
       return tree;
     }
-    const rows = painted.map((text) => ({ ...row(text), model: modelRow(text),
-      selected: stripTerminalSequences(text).startsWith("→ ") }));
+    const rows = painted.map((text) => ({
+      ...row(text),
+      model: modelRow(text),
+      selected: stripTerminalSequences(text).startsWith("→ "),
+    }));
     this.ambiguousArrow = rows.filter((line) => line.selected).length > 1;
     return rows;
   }
@@ -232,14 +359,20 @@ export class PresetModelPopover implements Component, Focusable {
     const remaining = Math.max(1, budget - head.length);
     const tail = rows.slice(last + 1, last + 1 + Math.min(2, Math.max(0, remaining - 3)));
     const count = Math.max(1, remaining - tail.length);
-    const selected = Math.max(0, list.findIndex((row) => row.selected));
+    const selected = Math.max(
+      0,
+      list.findIndex((row) => row.selected),
+    );
     const start = Math.max(0, Math.min(list.length - count, selected - Math.floor(count / 2)));
     return [...head, ...list.slice(start, start + count), ...tail];
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult {
     if (this.closed) return { handled: true };
-    if (isPopoverCloseClick(event, this.width)) { this.options.cancel(); return { handled: true }; }
+    if (isPopoverCloseClick(event, this.width)) {
+      this.options.cancel();
+      return { handled: true };
+    }
     if (event.type === "click" && event.button === "left") {
       const target = this.targets.get(event.y);
       if (target && event.x >= target.start && event.x < target.end) {
@@ -247,10 +380,20 @@ export class PresetModelPopover implements Component, Focusable {
         // keyboard arrow. Repaint at the current viewport and require the
         // same item under this click; stale rows must not choose replacements.
         const current = this.recheck().targets.get(event.y);
-        if (current?.provider === target.provider && current.id === target.id &&
-            event.x >= current.start && event.x < current.end) {
-          const models = this.options.models().filter((model) => model.api !== "pi-virtual" &&
-            model.provider === target.provider && model.id === target.id);
+        if (
+          current?.provider === target.provider &&
+          current.id === target.id &&
+          event.x >= current.start &&
+          event.x < current.end
+        ) {
+          const models = this.options
+            .models()
+            .filter(
+              (model) =>
+                model.api !== "pi-virtual" &&
+                model.provider === target.provider &&
+                model.id === target.id,
+            );
           if (models.length === 1) this.options.select(models[0]!);
         }
       }

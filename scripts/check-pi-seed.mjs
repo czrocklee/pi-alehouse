@@ -9,50 +9,148 @@ import { createJiti } from "jiti";
 const [repo, , resources] = process.argv.slice(2);
 assert(repo && resources && process.env.PI_MANAGED_PERMISSIONS_ROOT);
 const jiti = createJiti(import.meta.url);
-const load = (name) => jiti.import(join(process.env.PI_MANAGED_PERMISSIONS_ROOT, "src", `${name}.ts`));
-const [{ PermissionManager }, { PermissionResolver }, { PathNormalizer }, { posixPathFlavor }, { ToolCallGatePipeline }] = await Promise.all([
-  load("policy/permission-manager"), load("policy/permission-resolver"), load("path/path-normalizer"), load("path/path-flavor"), load("handlers/gates/tool-call-gate-pipeline"),
+const load = (name) =>
+  jiti.import(join(process.env.PI_MANAGED_PERMISSIONS_ROOT, "src", `${name}.ts`));
+const [
+  { PermissionManager },
+  { PermissionResolver },
+  { PathNormalizer },
+  { posixPathFlavor },
+  { ToolCallGatePipeline },
+] = await Promise.all([
+  load("policy/permission-manager"),
+  load("policy/permission-resolver"),
+  load("path/path-normalizer"),
+  load("path/path-flavor"),
+  load("handlers/gates/tool-call-gate-pipeline"),
 ]);
 const scratch = mkdtempSync(join(tmpdir(), "alehouse-seed-policy-"));
 try {
   writeFileSync(join(scratch, "ordinary.txt"), "synthetic\n");
   writeFileSync(join(scratch, ".env"), "SYNTHETIC_NOT_A_SECRET\n");
-  const manager = new PermissionManager({ globalConfigPath: join(repo, "resources/permissions.json"), agentsDir: join(resources, "agents"), mcpServerNames: [] });
+  const manager = new PermissionManager({
+    globalConfigPath: join(repo, "resources/permissions.json"),
+    agentsDir: join(resources, "agents"),
+    mcpServerNames: [],
+  });
   const resolver = new PermissionResolver(manager, { getRuleset: () => [] });
   const normalizer = new PathNormalizer(posixPathFlavor, scratch);
-  const pipeline = new ToolCallGatePipeline(resolver, { getActiveSkillEntries: () => [], getInfrastructureReadDirs: () => [], getToolPreviewLimits: () => ({}), getPathNormalizer: () => normalizer, getShellToolAliases: () => undefined });
+  const pipeline = new ToolCallGatePipeline(resolver, {
+    getActiveSkillEntries: () => [],
+    getInfrastructureReadDirs: () => [],
+    getToolPreviewLimits: () => ({}),
+    getPathNormalizer: () => normalizer,
+    getShellToolAliases: () => undefined,
+  });
   const gatesFor = async (toolName, input, agentName) => {
     const gates = [];
-    await pipeline.evaluate({ toolCallId: "seed-fixture", toolName, input, cwd: scratch, agentName }, { run: async (gate) => { if (gate) gates.push(gate); return { action: "allow" }; } });
+    await pipeline.evaluate(
+      { toolCallId: "seed-fixture", toolName, input, cwd: scratch, agentName },
+      {
+        run: async (gate) => {
+          if (gate) gates.push(gate);
+          return { action: "allow" };
+        },
+      },
+    );
     return gates;
   };
-  const management = ["agent_spawn", "agent_run", "agent_send", "agent_answer", "agent_wait", "agent_read", "agent_interrupt", "agent_kill", "agent_list"];
-  const childDenies = JSON.parse(readFileSync(join(repo, "resources/worker-policy.json"), "utf8")).childToolDenies;
+  const management = [
+    "agent_spawn",
+    "agent_run",
+    "agent_send",
+    "agent_answer",
+    "agent_wait",
+    "agent_read",
+    "agent_interrupt",
+    "agent_kill",
+    "agent_list",
+  ];
+  const childDenies = JSON.parse(
+    readFileSync(join(repo, "resources/worker-policy.json"), "utf8"),
+  ).childToolDenies;
   assert.equal(resolver.checkPermission("write", {}).state, "allow", "Seed global write baseline");
   let checks = 0;
   for (const agent of [undefined, "editor", "researcher"]) {
     assert.deepEqual(manager.getConfigIssues(agent), []);
-    for (const path of [".env", "~/.pi/agent/auth.json", "~/.ssh/id_ed25519", "/run/secrets/token"]) {
-      assert((await gatesFor("read", { path }, agent)).some((gate) => gate.preCheck?.state === "deny"), `${agent}: secret read ${path}`); checks++;
+    for (const path of [
+      ".env",
+      "~/.pi/agent/auth.json",
+      "~/.ssh/id_ed25519",
+      "/run/secrets/token",
+    ]) {
+      assert(
+        (await gatesFor("read", { path }, agent)).some((gate) => gate.preCheck?.state === "deny"),
+        `${agent}: secret read ${path}`,
+      );
+      checks++;
     }
     for (const path of [".git/config", "~/.pi/agent/settings.json", ".pi/extensions/policy.ts"]) {
-      assert((await gatesFor("write", { path, content: "synthetic" }, agent)).some((gate) => gate.preCheck?.state === "deny"), `${agent}: protected write ${path}`); checks++;
+      assert(
+        (await gatesFor("write", { path, content: "synthetic" }, agent)).some(
+          (gate) => gate.preCheck?.state === "deny",
+        ),
+        `${agent}: protected write ${path}`,
+      );
+      checks++;
     }
     for (const command of ["sudo true", "doas true", "su root", "rm -rf /"]) {
-      assert((await gatesFor("bash", { command }, agent)).some((gate) => gate.preCheck?.state === "deny"), `${agent}: privilege/destruction ${command}`); checks++;
+      assert(
+        (await gatesFor("bash", { command }, agent)).some(
+          (gate) => gate.preCheck?.state === "deny",
+        ),
+        `${agent}: privilege/destruction ${command}`,
+      );
+      checks++;
     }
-    for (const command of ["curl https://example.invalid", "node -e 'process.exit()'", "git show HEAD:.env"]) {
-      assert((await gatesFor("bash", { command }, agent)).some((gate) => ["ask", "deny"].includes(gate.preCheck?.state)), `${agent}: no automatic arbitrary execution ${command}`); checks++;
+    for (const command of [
+      "curl https://example.invalid",
+      "node -e 'process.exit()'",
+      "git show HEAD:.env",
+    ]) {
+      assert(
+        (await gatesFor("bash", { command }, agent)).some((gate) =>
+          ["ask", "deny"].includes(gate.preCheck?.state),
+        ),
+        `${agent}: no automatic arbitrary execution ${command}`,
+      );
+      checks++;
     }
     // Researcher denies editing; parent/editor keep ordinary write policy.
     for (const tool of ["write", "edit"]) {
       const expected = agent === undefined || agent === "editor" ? "allow" : "deny";
-      assert.equal(resolver.checkPermission(tool, {}, agent).state, expected, `${agent ?? "parent"}: ${tool} boundary`); checks++;
+      assert.equal(
+        resolver.checkPermission(tool, {}, agent).state,
+        expected,
+        `${agent ?? "parent"}: ${tool} boundary`,
+      );
+      checks++;
     }
-    for (const tool of ["alert_parent", "ask_parent"]) { assert.equal(resolver.checkPermission(tool, {}, agent).state, "allow"); checks++; }
-    for (const tool of management) { assert.equal(resolver.checkPermission(tool, {}, agent).state, agent ? "deny" : "allow", `${agent}: management boundary ${tool}`); checks++; }
-    assert.equal(resolver.checkPermission("notify_parent", {}, agent).state, "deny"); checks++;
-    if (agent) for (const tool of childDenies) { assert.equal(resolver.checkPermission(tool, {}, agent).state, "deny", `${agent}: child exclusion ${tool}`); checks++; }
+    for (const tool of ["alert_parent", "ask_parent"]) {
+      assert.equal(resolver.checkPermission(tool, {}, agent).state, "allow");
+      checks++;
+    }
+    for (const tool of management) {
+      assert.equal(
+        resolver.checkPermission(tool, {}, agent).state,
+        agent ? "deny" : "allow",
+        `${agent}: management boundary ${tool}`,
+      );
+      checks++;
+    }
+    assert.equal(resolver.checkPermission("notify_parent", {}, agent).state, "deny");
+    checks++;
+    if (agent)
+      for (const tool of childDenies) {
+        assert.equal(
+          resolver.checkPermission(tool, {}, agent).state,
+          "deny",
+          `${agent}: child exclusion ${tool}`,
+        );
+        checks++;
+      }
   }
   console.log(`PASS: ${checks} production seed real-parser/gate checks, no fallback policy`);
-} finally { rmSync(scratch, { recursive: true, force: true }); }
+} finally {
+  rmSync(scratch, { recursive: true, force: true });
+}

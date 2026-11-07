@@ -10,47 +10,115 @@ const tui = { requestRender() {}, terminal: { columns: 80, rows: 24 } };
 
 /** A pane over a fixed message list, read back as the text it would paint. */
 const paneOver = (messages, width = 80) => {
-  const content = new TranscriptContent({ tui, cwd: "/w", markdownTheme: getMarkdownTheme(),
-    source: { messages: () => messages, inFlight: () => undefined, toolDefinition: () => undefined } });
+  const content = new TranscriptContent({
+    tui,
+    cwd: "/w",
+    markdownTheme: getMarkdownTheme(),
+    source: {
+      messages: () => messages,
+      inFlight: () => undefined,
+      toolDefinition: () => undefined,
+    },
+  });
   return () => content.slice(width, 0, content.lineCount(width)).join("\n");
 };
 
 test("a branch rewrite before an unchanged last message replaces the consumed prefix", () => {
   const last = { role: "user", content: "UNCHANGED_LAST_MESSAGE", timestamp: 1 };
   let messages = [{ role: "user", content: "OLD_BRANCH_PREFIX", timestamp: 0 }, last];
-  const content = new TranscriptContent({ tui, cwd: "/w", markdownTheme: getMarkdownTheme(), source: {
-    messages: () => messages, inFlight: () => undefined, toolDefinition: () => undefined,
-  } });
+  const content = new TranscriptContent({
+    tui,
+    cwd: "/w",
+    markdownTheme: getMarkdownTheme(),
+    source: {
+      messages: () => messages,
+      inFlight: () => undefined,
+      toolDefinition: () => undefined,
+    },
+  });
   try {
     let frame = content.frame(120);
     assert.match(frame.slice(0, frame.lineCount).join("\n"), /OLD_BRANCH_PREFIX/);
     messages = [{ role: "user", content: "NEW_BRANCH_PREFIX", timestamp: 2 }, last];
     frame = content.frame(120);
     const text = frame.slice(0, frame.lineCount).join("\n");
-    assert.match(text, /NEW_BRANCH_PREFIX/); assert.match(text, /UNCHANGED_LAST_MESSAGE/);
+    assert.match(text, /NEW_BRANCH_PREFIX/);
+    assert.match(text, /UNCHANGED_LAST_MESSAGE/);
     assert.doesNotMatch(text, /OLD_BRANCH_PREFIX/);
-  } finally { content.dispose(); }
+  } finally {
+    content.dispose();
+  }
 });
 
-const call = (id, name = "bash") => ({ type: "toolCall", id, name, arguments: { command: "npm test" } });
-const assistant = (content, extra = {}) => ({ role: "assistant", content, stopReason: "toolUse", ...extra });
+const call = (id, name = "bash") => ({
+  type: "toolCall",
+  id,
+  name,
+  arguments: { command: "npm test" },
+});
+const assistant = (content, extra = {}) => ({
+  role: "assistant",
+  content,
+  stopReason: "toolUse",
+  ...extra,
+});
 
 test("historical notification/progress/send-answer data renders literally without mutation", () => {
   const messages = [
-    assistant([{ type: "toolCall", id: "old-notify", name: "notify_parent", arguments: { message: "OLD_NOTICE" } }]),
-    { role: "toolResult", toolCallId: "old-notify", toolName: "notify_parent",
-      content: [{ type: "text", text: "OLD_NOTICE_RECORDED" }], isError: false },
-    assistant([{ type: "toolCall", id: "old-send", name: "agent_send", arguments: { agent: "otter", message: "answer" } }]),
-    { role: "toolResult", toolCallId: "old-send", toolName: "agent_send", content: [{ type: "text",
-      text: JSON.stringify({ delivery: "answered", agent: "otter", status: "completed", progress: ["OLD_PROGRESS"] }) }], isError: false },
+    assistant([
+      {
+        type: "toolCall",
+        id: "old-notify",
+        name: "notify_parent",
+        arguments: { message: "OLD_NOTICE" },
+      },
+    ]),
+    {
+      role: "toolResult",
+      toolCallId: "old-notify",
+      toolName: "notify_parent",
+      content: [{ type: "text", text: "OLD_NOTICE_RECORDED" }],
+      isError: false,
+    },
+    assistant([
+      {
+        type: "toolCall",
+        id: "old-send",
+        name: "agent_send",
+        arguments: { agent: "otter", message: "answer" },
+      },
+    ]),
+    {
+      role: "toolResult",
+      toolCallId: "old-send",
+      toolName: "agent_send",
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            delivery: "answered",
+            agent: "otter",
+            status: "completed",
+            progress: ["OLD_PROGRESS"],
+          }),
+        },
+      ],
+      isError: false,
+    },
   ];
-  const before = structuredClone(messages), render = paneOver(messages, 160); // Keep literal markers clear of line wrapping.
+  const before = structuredClone(messages),
+    render = paneOver(messages, 160); // Keep literal markers clear of line wrapping.
   for (let paint = 0; paint < 2; paint++) {
     const text = render();
-    for (const literal of ["notify_parent", "OLD_NOTICE", "answered", "progress", "OLD_PROGRESS"]) assert.ok(text.includes(literal), text);
+    for (const literal of ["notify_parent", "OLD_NOTICE", "answered", "progress", "OLD_PROGRESS"])
+      assert.ok(text.includes(literal), text);
     assert.doesNotMatch(text, /alert_parent|question_id|alerts_pending/);
   }
-  assert.deepEqual(messages, before, "rendering does not rewrite historical records or hydrate live communication");
+  assert.deepEqual(
+    messages,
+    before,
+    "rendering does not rewrite historical records or hydrate live communication",
+  );
 });
 
 test("a tool call still waiting for its result keeps rendering as pending", () => {
@@ -68,7 +136,9 @@ test("a call interrupted mid-generation finalizes instead of spinning forever", 
   const aborted = paneOver([assistant([call("t1")], { stopReason: "aborted" })])();
   assert.match(aborted, /Operation aborted/, "the abort is reported on the card Pi defers to");
 
-  const failed = paneOver([assistant([call("t1")], { stopReason: "error", errorMessage: "overloaded_error" })])();
+  const failed = paneOver([
+    assistant([call("t1")], { stopReason: "error", errorMessage: "overloaded_error" }),
+  ])();
   assert.match(failed, /overloaded_error/, "a provider error reaches the card verbatim");
 
   const bare = paneOver([assistant([call("t1")], { stopReason: "error" })])();
@@ -78,7 +148,13 @@ test("a call interrupted mid-generation finalizes instead of spinning forever", 
 test("a result that does arrive still finalizes its own card and no other", () => {
   const text = paneOver([
     assistant([call("t1"), call("t2", "read")]),
-    { role: "toolResult", toolCallId: "t1", toolName: "bash", content: [{ type: "text", text: "TESTS_PASSED" }], isError: false },
+    {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "bash",
+      content: [{ type: "text", text: "TESTS_PASSED" }],
+      isError: false,
+    },
   ])();
   // Once, on one card: applying a result to every pending call would print it
   // twice and finalize a read that is still waiting for its own answer.

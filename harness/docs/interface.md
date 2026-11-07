@@ -37,7 +37,7 @@ through a background monitor. Fresh detail reads and command-time target checks
 do not use this display cache.
 Failed Runs remain inspectable for three parent turns
 after their Agent is released; this diagnostic retention neither holds a
-resident slot nor restores reusability.  Once it expires, released failures
+resident slot nor restores reusability. Once it expires, released failures
 leave the widget/detail roster and their child render state is dropped. Child
 session shutdown clears live activity but does not sever the retained transcript
 reference during this diagnostic window; the observation registry retires it.
@@ -73,7 +73,7 @@ identity and compact metrics retain priority; when no readable task fits, both
 its text and arrow are omitted. Row clicks still route by Agent ID, never by
 nickname or task text. `run warning` means recorded `cleanup_errors` (including input/output
 issues), not proof that resources remain held; exact diagnostics stay in the
-detail pane.  Owner-level cleanup uncertainty has its own blocking state.
+detail pane. Owner-level cleanup uncertainty has its own blocking state.
 
 The activity line (`⎿`) distinguishes tools, public thinking, and ordinary
 assistant prose without adding rows or bracket tags. Tools keep their action
@@ -130,7 +130,7 @@ dim completed `✓`, failed `✗`, cancelled `■`. In both compact and expanded
 the active rollup uses a static, dim `▹N` (small hollow triangle, text presentation); animation stays
 confined to active Agent/detail rows. Released failures can linger in the body
 but never inflate resident summary counts. `(full)` stays beside `Subagents`.
-A dim ` · ` separates this prefix from a nonempty summary, including in
+A dim `·` separates this prefix from a nonempty summary, including in
 regular mode; no summary means no separator. Narrow headings drop both together.
 The leading marker stays at column zero as counts and capacity change. The title retains the existing active,
 idle or Owner-error theme color; the explicit warning row carries the fault.
@@ -170,9 +170,9 @@ remain disabled.
 
 ## Agent detail and transcript
 
-`Alt+A` opens the Agent detail pane.  A row click opens it, selects a different
-Agent, or closes it when clicking the selected Agent.  `←`/`→` choose an Agent,
-`↑`/`↓` scroll, and **only** `Esc` closes it, restoring typed editor text.  The
+`Alt+A` opens the Agent detail pane. A row click opens it, selects a different
+Agent, or closes it when clicking the selected Agent. `←`/`→` choose an Agent,
+`↑`/`↓` scroll, and **only** `Esc` closes it, restoring typed editor text. The
 pane keeps focus: unbound printable input does not dismiss it.
 The dim **[S Stop]** is the rightmost action at the footer's bottom-right. **S** or a
 click arms confirmation in place: the footer shows
@@ -231,9 +231,9 @@ full streamed content remains in the native transcript. When the reader has
 scrolled into the transcript, fields appearing/disappearing preserve that
 transcript row within the same Run and width. Agent/Owner/Run changes and resizes
 do not reuse the old anchor. The pane also shows each stalling condition and every dispatch note (the parent model sees only
-`tree_shared`), and a child transcript.  Context occupancy is
+`tree_shared`), and a child transcript. Context occupancy is
 separate from cumulative billed usage (`≈231k/272k tokens · 84.9%`); unknown
-occupancy remains unknown.  Formatting shares rounded-unit carry rules with the
+occupancy remains unknown. Formatting shares rounded-unit carry rules with the
 footer: compact counts use whole k above 10k, detailed billed usage retains
 tenths, 999500 is `1.0M` compact or `999.5k` detailed, and 999950 never prints
 `1000k`/`1000.0k`.
@@ -244,21 +244,21 @@ compaction-aware branch it displays raw messages, including failed attempts
 omitted from model context by SDK retry; context edits do not rewrite this
 transcript. It follows
 the live tail until the reader scrolls away and resumes when returned to the
-end.  Pi does not export its built-in tool renderers and tool definitions do not
+end. Pi does not export its built-in tool renderers and tool definitions do not
 supply them, so native `read`, `bash`, and `edit` use a plain arguments/output
-fallback.  This is an upstream SDK/UI limitation, not a custom imitation.
+fallback. This is an upstream SDK/UI limitation, not a custom imitation.
 Transcript rows strip OSC 133 markers because repeated viewport emission must
-not manufacture terminal prompt boundaries.  Full tool output remains visible
+not manufacture terminal prompt boundaries. Full tool output remains visible
 in the detail transcript; tool arguments in the compact widget remain restricted
 to identifying fields. Preview simplification does not rewrite the native transcript.
 
 On Pi's alternate/fullscreen renderer the pane floats as a centered overlay; on
-the regular renderer it docks where the editor is.  This is a safety choice, not
+the regular renderer it docks where the editor is. This is a safety choice, not
 a preference: regular overlays are composited into the scrollback backing array
-and a later append can bake chrome into terminal history.  Unknown renderer mode
-docks.  Fullscreen mouse reporting enables row clicks; in regular mode `Alt+A`
-is the reliable entry.  Floating panes use shared rounded popover chrome,
-centered sizing, wheel handling, and no outside-click dismissal.  Like every
+and a later append can bake chrome into terminal history. Unknown renderer mode
+docks. Fullscreen mouse reporting enables row clicks; in regular mode `Alt+A`
+is the reliable entry. Floating panes use shared rounded popover chrome,
+centered sizing, wheel handling, and no outside-click dismissal. Like every
 floating popover, the pane closes from the `×` at the right end of its top edge
 (` × ─╮`, five columns, all of them the target); below 9 columns the control is
 omitted rather than painted unhittable.
@@ -283,15 +283,15 @@ Manual; with `off` active the section is dimmed and says the mode applies when a
 model preset is active. Narrow or short panels show `Mode ‹ Co-worker ›` with
 clickable arrows instead of the slider, and short ones drop the guideline.
 
-The **Model preset** list below it is the picker described next.  It uses the same fullscreen
+The **Model preset** list below it is the picker described next. It uses the same fullscreen
 floating / regular docked rule, is serialized to one picker per host, and cannot
 open beside a detail pane or active approval. A zero-row host widget captures the
 renderer independently of Agent activity, so the first open in an empty or Off
-session still floats and joins the shared column in fullscreen.  `↑`/`↓` and `PgUp`/`PgDn`
-navigate; `Enter` applies; `Esc` cancels.  Floating, it joins the bottom-right
+session still floats and joins the shared column in fullscreen. `↑`/`↓` and `PgUp`/`PgDn`
+navigate; `Enter` applies; `Esc` cancels. Floating, it joins the bottom-right
 popover column (below) and takes the pointer too: `×` cancels, a left click on
 a preset applies it as a menu would, and the wheel moves the highlight so a
-preset's slots can be read before choosing.  It displays the active
+preset's slots can be read before choosing. It displays the active
 marker, each configured preset's version, exact
 slot IDs in hardest-first order (`d5`, `d4`, `d3`, `d2`, `d1`), one per
 reasoning difficulty, and current effective thinking levels, plus new-Agent
@@ -520,8 +520,8 @@ Owner is open.
 ## Footer and usage popover
 
 The status footer remains an independently bundled sibling extension and works
-without the harness.  Its one clipped, never-wrapped row includes main-session
-usage plus worker totals delivered through normal Pi `usage`.  It groups model
+without the harness. Its one clipped, never-wrapped row includes main-session
+usage plus worker totals delivered through normal Pi `usage`. It groups model
 rows by `provider/model` that actually answered. For a Pi virtual parent
 selection the model label shows `selection → physical` after a successful
 response on the active branch; before that it shows only the selection.
@@ -548,10 +548,10 @@ to the dashboard. Credit snapshots stay local and require no billing request or
 credential reads. The quota-only dashboard POST,
 which names no account, stays limited to `openai-codex` and excludes credits.
 Harness-provided `usage.harnessModels` permits per-worker model rows; unattributed totals stay in
-the `tools` lump.  Main compaction/branch summary uses `main · compact/summaries`;
+the `tools` lump. Main compaction/branch summary uses `main · compact/summaries`;
 model-attributed child compaction displays `worker compact · model`, avoiding
-duplicate-looking rows.  The widget and detail pane use `≥` where they render a
-partial observed-cost floor.  Pi's footer/native totals ignore completeness
+duplicate-looking rows. The widget and detail pane use `≥` where they render a
+partial observed-cost floor. Pi's footer/native totals ignore completeness
 metadata and show reported amounts; they must not be read as a completeness
 claim or as free usage.
 
@@ -564,8 +564,8 @@ separate from popover chrome.
 
 A click on a status segment is first offered to the extension that owns it over
 `pi-footer:indicator-click` (`{ key, handled }`, shared in `lib/overlay-protocol`);
-the harness claims its `harness-preset` indicator synchronously.  Unclaimed
-clicks, and clicks elsewhere on the row, toggle the usage breakdown.  The corner
+the harness claims its `harness-preset` indicator synchronously. Unclaimed
+clicks, and clicks elsewhere on the row, toggle the usage breakdown. The corner
 keeps a fixed left-to-right order: usage, delegation, approval, then health
 at the right edge (`↑1.2M (95.2%) ↓61k $4.810 · co-worker/my-team · YOLO · ●`).
 Usage figures are told apart by their own `↑` / `↓` / `$` and sit a space apart;
@@ -754,25 +754,25 @@ See [limitations](limitations.md#ui-scope) for UI/Stats scope limitations.
 ## Bottom-right popover column
 
 The usage breakdown, Context inspector, approval selector and floating routing picker share one
-bottom-right column above the footer, through `lib/popover-stack`.  The first
+bottom-right column above the footer, through `lib/popover-stack`. The first
 opened rests on the footer and later ones stack directly on top; closing one
-drops everything above it into its place.  Every open popover uses the widest
+drops everything above it into its place. Every open popover uses the widest
 member's preferred/minimum width, clamped to the terminal, so both left and
-right edges align.  Content changes, opening/closing the widest member and
-terminal resizes update the entire column without reopening panels.  Temporarily
-stepping aside preserves both place and width.  Each popover is capped to the
+right edges align. Content changes, opening/closing the widest member and
+terminal resizes update the entire column without reopening panels. Temporarily
+stepping aside preserves both place and width. Each popover is capped to the
 rows left above those below it and waits off screen until its smallest usable
 layout fits (three rows by default, seven for the picker, every choice plus the
 yolo warning for the approval popover), so controls and the bottom edge are
-never clipped.  Pi focuses a capturing overlay only when it is shown on screen,
+never clipped. Pi focuses a capturing overlay only when it is shown on screen,
 so a picker or approval popover that appears later takes the keyboard itself --
-unless focus has moved since it opened, in which case that dialog keeps it.  The footer and harness are separate bundles, so the column lives in a
-process-wide registry keyed by the TUI both draw into.  During a mounted floating Delegation picker, the UI-only
+unless focus has moved since it opened, in which case that dialog keeps it. The footer and harness are separate bundles, so the column lives in a
+process-wide registry keyed by the TUI both draw into. During a mounted floating Delegation picker, the UI-only
 `pi-harness:pinned-popover-yield` token holds pinned footer panels aside until
 that request releases it; it grants no permission or Owner authority. At other
 custom-panel settlement boundaries, footer panels briefly step off the overlay
 stack and return on the next tick while retaining their members. This is
-presentation coordination, not a claim that current Pi closes the wrong overlay.  In regular TUI mode the
+presentation coordination, not a claim that current Pi closes the wrong overlay. In regular TUI mode the
 footer totals remain but the popover does not open; multiplexers commonly require
 click rather than hover motion.
 
@@ -790,7 +790,7 @@ paint; wheel events over the pending panel do not scroll the transcript below.
 The process-wide `ui-prompt-queue` serializes non-overlay `ui.custom` dialogs.
 A docked detail pane would otherwise occupy the queue head and delay a parent or
 forwarded child permission dialog until the queue's ten-minute stall handling,
-which can surface to a child as denial.  The harness observes synchronous
+which can surface to a child as denial. The harness observes synchronous
 `permissions:ui_prompt` before dialog construction and yields immediately:
 
 - a floating pane hides through its overlay handle and retains selection,
@@ -807,10 +807,10 @@ ID. Only completion of the last ask can reopen the prior pane after the queue
 is safe; neither event invents permission or clears unrelated worker asks.
 The terminal title and Stats wait use the same per-ID completion signal.
 Mounting always uses the wrapped session-start UI context, not the unwrapped
-shortcut context.  Payload parsing is defensive and observers swallow errors:
-they run inside an emit that protects the permission dialog.  Timeout/failure
+shortcut context. Payload parsing is defensive and observers swallow errors:
+they run inside an emit that protects the permission dialog. Timeout/failure
 handling closes the actual custom UI before the queue advances; late callbacks
-cannot close a later dialog.  Pane construction/disposal is idempotent, including
-an asynchronously handed-off component and its redraw timer.  Restart Pi after
+cannot close a later dialog. Pane construction/disposal is idempotent, including
+an asynchronously handed-off component and its redraw timer. Restart Pi after
 queue changes; `/reload` does not replace the already wrapped serializer and is
 unsupported with an open Owner.

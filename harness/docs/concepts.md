@@ -1,17 +1,17 @@
 # Concepts
 
-Pi Alehouse's harness uses four identities.  They are deliberately not interchangeable.
+Pi Alehouse's harness uses four identities. They are deliberately not interchangeable.
 
 ## Owner
 
 An **Owner** is one harness controller bound to one live parent Pi session and
-one owner generation.  It owns the FIFO scheduler, a per-provider execution cap and the resident-Agent
+one owner generation. It owns the FIFO scheduler, a per-provider execution cap and the resident-Agent
 limit, request-id idempotence, result memory, parent accounting handoff, and the local
-owner lease.  Parent tools capture this Owner and the actual parent extension
+owner lease. Parent tools capture this Owner and the actual parent extension
 context; there is no global registry, public service, or cross-owner lookup.
 
-An Owner is memory-local.  Restarting Pi does not restore live Agent or Run IDs,
-requests, reservations, or execution.  SDK journals may still be read through
+An Owner is memory-local. Restarting Pi does not restore live Agent or Run IDs,
+requests, reservations, or execution. SDK journals may still be read through
 `/harness-history`, but they do not rehydrate work. Switch/fork replacement
 requires confirmed closure, not merely an idle or empty-looking Owner. A never-used Owner closes automatically before replacement;
 once it has accepted any Run (including completed/released work), a real UI must
@@ -44,10 +44,10 @@ index and build outputs. Resource discovery and tools use that same cwd. The
 parent coordinates edits and Git workflow; the harness does not create or
 manage working copies. This is cooperative local execution, not OS isolation.
 
-An Agent can have only one current Run.  It is reusable only after execution,
-input drain, history boundary handling, and cleanup state allow it.  Cancelling
-is not sufficient.  An Agent lives until it is killed: an interrupted or
-dependency-failed first task leaves it in place.  Killing an Agent is permanent; uncertain cleanup
+An Agent can have only one current Run. It is reusable only after execution,
+input drain, history boundary handling, and cleanup state allow it. Cancelling
+is not sufficient. An Agent lives until it is killed: an interrupted or
+dependency-failed first task leaves it in place. Killing an Agent is permanent; uncertain cleanup
 leaves it reserved and is never force-released or automatically evicted.
 
 Through model tools, every Agent has a caller-chosen **name**
@@ -63,8 +63,8 @@ packing is not a generic-name conversion API.
 ## Run
 
 A **Run** is one queued or executing task on an Agent; parent tools call it a
-*task* and never expose its ID.  It has its own internal `run_id`, request identity/digest, prompt boundary, turn limit,
-outcome, result reference, telemetry, and optional SDK-history links.  A reused
+_task_ and never expose its ID. It has its own internal `run_id`, request identity/digest, prompt boundary, turn limit,
+outcome, result reference, telemetry, and optional SDK-history links. A reused
 Agent receives a new Run; it never changes the Agent's admitted routing or
 permission configuration. Model replies derive a 1-based `task` sequence within
 that Agent from enqueue order, without exposing the internal Run UUID. That
@@ -87,10 +87,10 @@ until true settlement. A terminal outcome is not necessarily a complete answer:
 - unknown, `pending`, and `deferred` SDK stop reasons fail closed.
 
 An `agent_send` `steered` report is only admission to the child-input path, not delivery.
-A cancellation request is only a request.  That provider's execution slot is freed only
+A cancellation request is only a request. That provider's execution slot is freed only
 after actual execution exit; the Agent reservation and Owner lease remain until
-finalization and required cleanup are confirmed.  Models of one admitted provider
-share its cap, and a saturated provider does not block another.  See
+finalization and required cleanup are confirmed. Models of one admitted provider
+share its cap, and a saturated provider does not block another. See
 [architecture](architecture.md#ownership-and-lifecycle).
 
 ## Dispatch, claims and validation observations
@@ -135,15 +135,15 @@ still blocks. See [task dispatch](task-dispatch.md) for the full contract.
 
 ## Session
 
-A **Session** is Pi SDK conversation state.  The parent session belongs to Pi;
-the child session belongs to its Agent.  The harness uses SDK session history as
-the only historical transcript source.  It does not maintain a duplicate result
+A **Session** is Pi SDK conversation state. The parent session belongs to Pi;
+the child session belongs to its Agent. The harness uses SDK session history as
+the only historical transcript source. It does not maintain a duplicate result
 store, history hydration layer, or durable notification queue.
 
 Raw child journals are not a durability receipt: Pi can buffer or reconstruct
 entries, native compaction does not shrink raw JSONL, and a session may fail
-between in-memory and on-disk transitions.  A Run drops its live session
-reference after input drain/history finalization.  Retained owner-memory results
+between in-memory and on-disk transitions. A Run drops its live session
+reference after input drain/history finalization. Retained owner-memory results
 do not keep an SDK execution environment alive.
 
 ## Task fields, not roles
@@ -161,18 +161,18 @@ joins/steers the task bound when called; it never starts a continuation.
 with optional wait_ms. It preserves the asking task's label, dispatch and Agent settings;
 run cannot bypass an unanswered question.
 
-- **`prompt`** is the execution instruction.  It may be up to 131072 UTF-16
+- **`prompt`** is the execution instruction. It may be up to 131072 UTF-16
   units at parent-tool admission, although permission provenance has stricter
-  review limits.  It is not a name, a policy profile, or a routing request.
+  review limits. It is not a name, a policy profile, or a routing request.
 - **`label`** is a short task label (up to 120 UTF-16 units) for summaries/roster/UI use,
   stored as the Run's description and defaulting to the instructions' first
-  nonblank line.  It is neither injected as a summary nor a
+  nonblank line. It is neither injected as a summary nor a
   substitute for the prompt.
-- **`agent`** names the Agent.  It does not alter profile, permissions,
+- **`agent`** names the Agent. It does not alter profile, permissions,
   routing, or identity.
 
 The former **core `role` field is removed** and the closed `agent_spawn` schema
-rejects it; put instructions in `prompt` and the label in `label`.  This does
+rejects it; put instructions in `prompt` and the label in `label`. This does
 **not** change Pi/SDK assistant messages:
 `assistant message.role` remains the upstream message field and must not be
 renamed or removed.
@@ -213,8 +213,8 @@ probes or second per-operation Git authorization matrix is involved; see
 [Git restrictions](git-read-proof.md). The public name `researcher` is not an
 alias. Neither profile is an OS sandbox.
 
-`inherit_context: true` copies a bounded (64 KiB) **text** snapshot only.  It is
-not an SDK history fork and carries neither tools nor routing settings.  It is
+`inherit_context: true` copies a bounded (64 KiB) **text** snapshot only. It is
+not an SDK history fork and carries neither tools nor routing settings. It is
 prefixed only on the Agent's first Run; reuse retains the original child
 conversation without adding it again.
 

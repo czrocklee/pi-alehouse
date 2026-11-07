@@ -1,10 +1,20 @@
 import { USAGE_COMPONENTS, type UsageComponent, type UsageLedger } from "../core/usage-ledger.ts";
 
-import { readUsageAttribution, type HostModelSpend, type HostUsage } from "../../../lib/usage-attribution.mjs";
+import {
+  readUsageAttribution,
+  type HostModelSpend,
+  type HostUsage,
+} from "../../../lib/usage-attribution.mjs";
 export type { HostModelSpend, HostUsage } from "../../../lib/usage-attribution.mjs";
 const spendOf = (child: UsageLedger): HostModelSpend[] =>
-  Object.entries(child.byModel).map(([model, t]) => ({ model, input: t.input, output: t.output,
-    cacheRead: t.cache_read, cacheWrite: t.cache_write, cost: t.cost }));
+  Object.entries(child.byModel).map(([model, t]) => ({
+    model,
+    input: t.input,
+    output: t.output,
+    cacheRead: t.cache_read,
+    cacheWrite: t.cache_write,
+    cost: t.cost,
+  }));
 
 /**
  * Projects settled child spend onto a tool result, so Pi's footer and cost
@@ -32,30 +42,58 @@ export function hostUsage(child: UsageLedger, prior?: HostUsage): HostUsage {
   // The reader intentionally strips completeness metadata for display. Preserve
   // conservative markers separately, even when a malformed share is rejected.
   const rawRows = Array.isArray(prior?.harnessModels) ? prior.harnessModels : [];
-  const has = (value: unknown, key: UsageComponent): boolean => Array.isArray(value) && value.includes(key);
-  const partial = USAGE_COMPONENTS.filter((key) => child.partial.includes(key) || has(prior?.harnessPartial, key) ||
-    rawRows.some((row) => has(row?.partial, key)));
+  const has = (value: unknown, key: UsageComponent): boolean =>
+    Array.isArray(value) && value.includes(key);
+  const partial = USAGE_COMPONENTS.filter(
+    (key) =>
+      child.partial.includes(key) ||
+      has(prior?.harnessPartial, key) ||
+      rawRows.some((row) => has(row?.partial, key)),
+  );
   const merged = new Map<string, HostModelSpend>();
   for (const row of [...priorRows, ...spendOf(child)]) {
     const seen = merged.get(row.model);
-    if (!seen) { merged.set(row.model, { ...row }); continue; }
-    seen.input += row.input; seen.output += row.output;
-    seen.cacheRead += row.cacheRead; seen.cacheWrite += row.cacheWrite; seen.cost += row.cost;
+    if (!seen) {
+      merged.set(row.model, { ...row });
+      continue;
+    }
+    seen.input += row.input;
+    seen.output += row.output;
+    seen.cacheRead += row.cacheRead;
+    seen.cacheWrite += row.cacheWrite;
+    seen.cost += row.cost;
   }
   // Biggest bill first, ties by name: the same ledger always serializes the same.
-  const rows = [...merged.values()].sort((a, b) => b.cost - a.cost || a.model.localeCompare(b.model))
-    .map(({ partial: _old, ...row }) => ({ ...row, ...(partial.length ? { partial: [...partial] } : {}) }));
-  const metadata = { ...(rows.length ? { harnessModels: rows } : {}), ...(partial.length ? { harnessPartial: partial } : {}) };
+  const rows = [...merged.values()]
+    .sort((a, b) => b.cost - a.cost || a.model.localeCompare(b.model))
+    .map(({ partial: _old, ...row }) => ({
+      ...row,
+      ...(partial.length ? { partial: [...partial] } : {}),
+    }));
+  const metadata = {
+    ...(rows.length ? { harnessModels: rows } : {}),
+    ...(partial.length ? { harnessPartial: partial } : {}),
+  };
   if (!prior) return { input, output, cacheRead, cacheWrite, totalTokens, cost, ...metadata };
   // Pi's own tool usage is always complete, but this merges onto whatever the
   // handlers before us left on the event. A throw here would be swallowed by
   // the runner, so read `prior` as the foreign object it may be.
-  const was = (value: unknown): number => typeof value === "number" && Number.isFinite(value) ? value : 0;
-  return { input: was(prior.input) + input, output: was(prior.output) + output,
-    cacheRead: was(prior.cacheRead) + cacheRead, cacheWrite: was(prior.cacheWrite) + cacheWrite,
+  const was = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return {
+    input: was(prior.input) + input,
+    output: was(prior.output) + output,
+    cacheRead: was(prior.cacheRead) + cacheRead,
+    cacheWrite: was(prior.cacheWrite) + cacheWrite,
     totalTokens: was(prior.totalTokens) + totalTokens,
-    cost: { ...cost, ...prior.cost, total: was(prior.cost?.total) + cost.total,
+    cost: {
+      ...cost,
+      ...prior.cost,
+      total: was(prior.cost?.total) + cost.total,
       // The child ledger retains amounts, not Pi 1.5's billing-source flag.
       // A provider-reported prior cannot certify the newly combined total.
-      ...(prior.cost?.totalFromProvider !== undefined ? { totalFromProvider: false } : {}) }, ...metadata };
+      ...(prior.cost?.totalFromProvider !== undefined ? { totalFromProvider: false } : {}),
+    },
+    ...metadata,
+  };
 }

@@ -1,7 +1,11 @@
 import { stripVTControlCharacters } from "node:util";
 import type { EventBus, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { STATS_WORKER_ATTACH } from "../../../lib/stats-protocol.mjs";
-import type { WorkerStatsAttachment, WorkerStatsMessage, WorkerStatsSink } from "../../../lib/stats-protocol.mjs";
+import type {
+  WorkerStatsAttachment,
+  WorkerStatsMessage,
+  WorkerStatsSink,
+} from "../../../lib/stats-protocol.mjs";
 
 type RunKind = "success" | "error" | "aborted";
 
@@ -41,10 +45,14 @@ function errorLine(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const clean = stripVTControlCharacters(value)
     // eslint-disable-next-line no-control-regex -- control characters become word breaks, never bus payload
-    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!clean) return undefined;
   const characters = Array.from(clean);
-  return characters.length <= MAX_ERROR_MESSAGE ? clean : `${characters.slice(0, MAX_ERROR_MESSAGE - 1).join("")}…`;
+  return characters.length <= MAX_ERROR_MESSAGE
+    ? clean
+    : `${characters.slice(0, MAX_ERROR_MESSAGE - 1).join("")}…`;
 }
 
 /** Construct a new metadata-only object; never give the parent an SDK message. */
@@ -71,9 +79,10 @@ function assistantMetadata(message: unknown): WorkerStatsMessage | undefined {
   const usage = usageSource as UntrustedUsage;
   const output = numberValue(usage.output);
   const costSource = usage.cost;
-  const total = typeof costSource === "object" && costSource !== null
-    ? numberValue((costSource as UntrustedCost).total)
-    : undefined;
+  const total =
+    typeof costSource === "object" && costSource !== null
+      ? numberValue((costSource as UntrustedCost).total)
+      : undefined;
   if (output !== undefined || total !== undefined) {
     result.usage = {
       ...(output !== undefined ? { output } : {}),
@@ -118,35 +127,63 @@ export class WorkerStatsObserver {
 
   readonly extension: ExtensionFactory = (pi) => {
     this.register(() => pi.on("agent_start", () => this.observe((sink) => sink.startActivity())));
-    this.register(() => pi.on("agent_settled", () => this.observe((sink) => sink.settleActivity())));
+    this.register(() =>
+      pi.on("agent_settled", () => this.observe((sink) => sink.settleActivity())),
+    );
     // turn_start is the SDK attempt boundary. before_provider_request also sees
     // cache warming, which is deliberately outside a worker Run.
-    this.register(() => pi.on("turn_start", (_event, ctx) => this.observe((sink) => {
-      const model = ctx.model;
-      const id = stringValue(model?.id);
-      if (id === undefined) return;
-      const provider = stringValue(model?.provider);
-      sink.requestStart(id, provider);
-    })));
-    this.register(() => pi.on("message_update", (event) => this.observe((sink) => {
-      const update = event.assistantMessageEvent;
-      if (update.type !== "text_delta" && update.type !== "thinking_delta" && update.type !== "toolcall_delta") return;
-      if (typeof update.delta === "string" && update.delta.length > 0) sink.delta(update.type);
-    })));
-    this.register(() => pi.on("message_end", (event) => this.observe((sink) => {
-      const message = assistantMetadata(event.message);
-      if (message) sink.messageEnd(message);
-    })));
-    this.register(() => pi.on("tool_execution_start", (event) => this.observe((sink) => {
-      const id = stringValue(event.toolCallId);
-      const name = stringValue(event.toolName);
-      if (id !== undefined && name !== undefined) sink.toolStart(id, name);
-    })));
+    this.register(() =>
+      pi.on("turn_start", (_event, ctx) =>
+        this.observe((sink) => {
+          const model = ctx.model;
+          const id = stringValue(model?.id);
+          if (id === undefined) return;
+          const provider = stringValue(model?.provider);
+          sink.requestStart(id, provider);
+        }),
+      ),
+    );
+    this.register(() =>
+      pi.on("message_update", (event) =>
+        this.observe((sink) => {
+          const update = event.assistantMessageEvent;
+          if (
+            update.type !== "text_delta" &&
+            update.type !== "thinking_delta" &&
+            update.type !== "toolcall_delta"
+          )
+            return;
+          if (typeof update.delta === "string" && update.delta.length > 0) sink.delta(update.type);
+        }),
+      ),
+    );
+    this.register(() =>
+      pi.on("message_end", (event) =>
+        this.observe((sink) => {
+          const message = assistantMetadata(event.message);
+          if (message) sink.messageEnd(message);
+        }),
+      ),
+    );
+    this.register(() =>
+      pi.on("tool_execution_start", (event) =>
+        this.observe((sink) => {
+          const id = stringValue(event.toolCallId);
+          const name = stringValue(event.toolName);
+          if (id !== undefined && name !== undefined) sink.toolStart(id, name);
+        }),
+      ),
+    );
     // Pi reports no duration only for a call it never executed.
-    this.register(() => pi.on("tool_execution_end", (event) => this.observe((sink) => {
-      const id = stringValue(event.toolCallId);
-      if (id !== undefined && typeof event.isError === "boolean") sink.toolEnd(id, event.isError, numberValue(event.durationMs) ?? 0);
-    })));
+    this.register(() =>
+      pi.on("tool_execution_end", (event) =>
+        this.observe((sink) => {
+          const id = stringValue(event.toolCallId);
+          if (id !== undefined && typeof event.isError === "boolean")
+            sink.toolEnd(id, event.isError, numberValue(event.durationMs) ?? 0);
+        }),
+      ),
+    );
     this.register(() => pi.on("session_shutdown", () => this.dispose()));
   };
 
@@ -154,7 +191,10 @@ export class WorkerStatsObserver {
     if (this.disposed) return;
     if (!this.attached) {
       this.attached = true;
-      const attachment: WorkerStatsAttachment = { parentId: this.parentId, workerId: this.workerId };
+      const attachment: WorkerStatsAttachment = {
+        parentId: this.parentId,
+        workerId: this.workerId,
+      };
       try {
         this.parentBus.emit(STATS_WORKER_ATTACH, attachment);
       } catch {

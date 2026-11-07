@@ -1,12 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { POPOVER, isPopoverCloseClick, popoverBottom, popoverCloseHit, popoverDivider, popoverInlay, popoverInlayWidth,
-  popoverRow, popoverSide, popoverTitle } from "../../dist/ui/popover.js";
+import {
+  POPOVER,
+  isPopoverCloseClick,
+  popoverBottom,
+  popoverCloseHit,
+  popoverDivider,
+  popoverInlay,
+  popoverInlayWidth,
+  popoverRow,
+  popoverSide,
+  popoverTitle,
+} from "../../dist/ui/popover.js";
 
 const record = () => {
   const colors = [];
-  const theme = { fg: (color, text) => { colors.push(color); return text; }, bold: (text) => text };
+  const theme = {
+    fg: (color, text) => {
+      colors.push(color);
+      return text;
+    },
+    bold: (text) => text,
+  };
   return { colors, theme };
 };
 
@@ -57,20 +73,31 @@ test("an inlaid edge keeps the same outer colors and never leaves the box open",
 test("a filled closable inlay keeps exactly one space before × without shifting its hit area", () => {
   const { theme } = record();
   const styled = { ...theme, fg: (_color, text) => `\u001b[36m${text}\u001b[39m` };
-  for (const th of [theme, styled]) for (const width of [9, 14, 24, 40, 80]) {
-    const room = popoverInlayWidth(width, "top", true);
-    for (const caption of [POPOVER.h.repeat(room), "x".repeat(Math.max(0, room - 1)), "x".repeat(room + 10), "标题".repeat(40), ""]) {
-      const top = popoverInlay(th, width, caption, "top", true);
-      const plain = stripTerminalSequences(top);
-      assert.equal(visibleWidth(top), width, plain);
-      assert.match(plain, / × ─╮$/);
-      assert.doesNotMatch(plain, / {2}×/, plain);
-      const closeColumn = visibleWidth(plain.slice(0, plain.indexOf(POPOVER.close)));
-      assert.equal(closeColumn, width - 4, plain);
-      assert.ok(isPopoverCloseClick({ type: "click", button: "left", x: width - 5, y: 0 }, width));
-      assert.ok(!isPopoverCloseClick({ type: "click", button: "left", x: width - 6, y: 0 }, width));
+  for (const th of [theme, styled])
+    for (const width of [9, 14, 24, 40, 80]) {
+      const room = popoverInlayWidth(width, "top", true);
+      for (const caption of [
+        POPOVER.h.repeat(room),
+        "x".repeat(Math.max(0, room - 1)),
+        "x".repeat(room + 10),
+        "标题".repeat(40),
+        "",
+      ]) {
+        const top = popoverInlay(th, width, caption, "top", true);
+        const plain = stripTerminalSequences(top);
+        assert.equal(visibleWidth(top), width, plain);
+        assert.match(plain, / × ─╮$/);
+        assert.doesNotMatch(plain, / {2}×/, plain);
+        const closeColumn = visibleWidth(plain.slice(0, plain.indexOf(POPOVER.close)));
+        assert.equal(closeColumn, width - 4, plain);
+        assert.ok(
+          isPopoverCloseClick({ type: "click", button: "left", x: width - 5, y: 0 }, width),
+        );
+        assert.ok(
+          !isPopoverCloseClick({ type: "click", button: "left", x: width - 6, y: 0 }, width),
+        );
+      }
     }
-  }
 });
 
 test("a closable edge ends in ` × ─╮` exactly where the shared hit test looks", () => {
@@ -86,13 +113,19 @@ test("a closable edge ends in ` × ─╮` exactly where the shared hit test loo
     }
     assert.equal(visibleWidth(popoverInlay(theme, width, "x".repeat(200), "top", true)), width);
   }
-  const click = (x, extra = {}) => isPopoverCloseClick({ type: "click", button: "left", x, y: 0, ...extra }, 24);
+  const click = (x, extra = {}) =>
+    isPopoverCloseClick({ type: "click", button: "left", x, y: 0, ...extra }, 24);
   assert.ok(click(19) && click(23), "the whole ` × ─╮` tail is the target");
   assert.ok(!click(18) && !click(24), "nothing outside the tail");
-  assert.ok(!click(21, { y: 1 }) && !click(21, { button: "right" }) && !click(21, { type: "move" }));
+  assert.ok(
+    !click(21, { y: 1 }) && !click(21, { button: "right" }) && !click(21, { type: "move" }),
+  );
   // Too narrow to carry the control: plain corner, and no invisible hit area.
   assert.equal(popoverCloseHit(8), undefined);
-  for (const top of [popoverTitle(theme, 8, "Worker routing", true), popoverInlay(theme, 8, "reviewer", "top", true)]) {
+  for (const top of [
+    popoverTitle(theme, 8, "Worker routing", true),
+    popoverInlay(theme, 8, "reviewer", "top", true),
+  ]) {
     assert.equal(visibleWidth(top), 8, top);
     assert.ok(top.endsWith(POPOVER.tr) && !top.includes(POPOVER.close), top);
   }

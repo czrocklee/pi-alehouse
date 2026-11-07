@@ -5,5 +5,10 @@ import { readSdkRun } from "../../dist/history/history-reader.js";
 
 const [piExecutable, parentFile, sessionDirectory, run_id] = process.argv.slice(2);
 const { sdk } = await loadHost(piExecutable);
-const result = await readSdkRun({ sessionManager: sdk.SessionManager, parentFile, sessionDirectory, run_id });
+const result = await readSdkRun({
+  sessionManager: sdk.SessionManager,
+  parentFile,
+  sessionDirectory,
+  run_id,
+});
 console.log(JSON.stringify(result));

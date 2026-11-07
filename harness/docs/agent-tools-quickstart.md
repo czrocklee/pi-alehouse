@@ -15,18 +15,18 @@ except the scout `return_to` example. The
 [task dispatch](task-dispatch.md) owns paths, claims and validation. [Security](security.md), [limitations](limitations.md)
 and [development](development.md) own authority, support and implementation/checks.
 
-| Need | Tool |
-| --- | --- |
-| New work or review, even on a related topic | `agent_spawn` (creates Agent + submits first task; may queue) |
-| Continue this Agent's own specific earlier work | `agent_run` (required `continues`; fixed settings/conversation) |
-| Correct an unfinished task | `agent_send` (delivery is not action) |
-| Answer a settled pending question | `agent_answer` |
+| Need                                                          | Tool                                                                     |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| New work or review, even on a related topic                   | `agent_spawn` (creates Agent + submits first task; may queue)            |
+| Continue this Agent's own specific earlier work               | `agent_run` (required `continues`; fixed settings/conversation)          |
+| Correct an unfinished task                                    | `agent_send` (delivery is not action)                                    |
+| Answer a settled pending question                             | `agent_answer`                                                           |
 | Answer a settled worker question using a new scout's findings | `agent_spawn` with scout `return_to`, or scout spawn then `agent_answer` |
-| Wait for events/end | `agent_wait` (`all`/`any`; prefer long waits) |
-| Read results, old task or next page | `agent_read` |
-| Request task stop, retain conversation | `agent_interrupt`, then wait/read for settlement |
-| Permanently end Agent | `agent_kill` (not deletion; exiting/cleanup_uncertain is not release) |
-| Inspect roster without consuming alerts/finished reminders | `agent_list` |
+| Wait for events/end                                           | `agent_wait` (`all`/`any`; prefer long waits)                            |
+| Read results, old task or next page                           | `agent_read`                                                             |
+| Request task stop, retain conversation                        | `agent_interrupt`, then wait/read for settlement                         |
+| Permanently end Agent                                         | `agent_kill` (not deletion; exiting/cleanup_uncertain is not release)    |
+| Inspect roster without consuming alerts/finished reminders    | `agent_list`                                                             |
 
 The JSON below lists **tool calls**, not tool returns or a batch API. Names and
 paths are illustrative; adapt them to the assigned task. Each section is a

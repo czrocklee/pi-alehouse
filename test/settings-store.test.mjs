@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import fs, {
-  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
-  readdirSync, rmSync, symlinkSync, writeFileSync,
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
@@ -9,7 +17,10 @@ import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import {
-  SettingsStore, registerSettingsStore, settingsStoreForSession, validateSettings,
+  SettingsStore,
+  registerSettingsStore,
+  settingsStoreForSession,
+  validateSettings,
 } from "../lib/settings-store.mjs";
 
 const definition = (version = "v1", model = "fixture/model") => ({
@@ -36,23 +47,31 @@ function fixture(t, projectTrusted = true) {
   return { root, options, paths, put, store: () => new SettingsStore(options) };
 }
 const read = (path) => JSON.parse(readFileSync(path, "utf8"));
-const ownArtifacts = (path) => readdirSync(dirname(path)).filter((name) => name.endsWith(".lock") || name.endsWith(".tmp"));
+const ownArtifacts = (path) =>
+  readdirSync(dirname(path)).filter((name) => name.endsWith(".lock") || name.endsWith(".tmp"));
 function intercept(method, implementation, run) {
   const original = fs[method];
   fs[method] = (...args) => implementation(original, args);
   syncBuiltinESMExports();
-  try { return run(); }
-  finally { fs[method] = original; syncBuiltinESMExports(); }
+  try {
+    return run();
+  } finally {
+    fs[method] = original;
+    syncBuiltinESMExports();
+  }
 }
 const isTempFd = (fd) => fs.readlinkSync(`/proc/self/fd/${fd}`).endsWith(".tmp");
 
 // Every fixture is synthetic and local. No SDK, credentials, provider, network,
 // human approval or packaging lane is exercised by this file.
 test("constructor and clean operations never create directories", (t) => {
-  const f = fixture(t), store = f.store();
+  const f = fixture(t),
+    store = f.store();
   assert.deepEqual(store.paths, f.paths);
   assert(Object.isFrozen(store.paths));
-  assert.throws(() => { store.paths.global = "other"; }, TypeError);
+  assert.throws(() => {
+    store.paths.global = "other";
+  }, TypeError);
   assert.equal(store.scope, "session");
   assert.equal(store.canWriteWorkspace(), true);
   assert.deepEqual(store.get("global"), { version: 2 });
@@ -72,10 +91,14 @@ test("untrusted workspace is never read or written, even when malformed", (t) =>
   const f = fixture(t, false);
   f.put("global", { version: 2, preset: "off", approval: "manual" });
   f.put("workspace", { version: "SECRET-invalid", approval: "yolo" });
-  const store = intercept("lstatSync", (original, [path, ...options]) => {
-    assert.notEqual(path, f.paths.workspace, "untrusted workspace must not even be inspected");
-    return original(path, ...options);
-  }, () => f.store());
+  const store = intercept(
+    "lstatSync",
+    (original, [path, ...options]) => {
+      assert.notEqual(path, f.paths.workspace, "untrusted workspace must not even be inspected");
+      return original(path, ...options);
+    },
+    () => f.store(),
+  );
   assert.equal(store.canWriteWorkspace(), false);
   assert.deepEqual(store.get("workspace"), { version: 2 });
   assert.equal(store.effective().approval, "manual");
@@ -89,24 +112,42 @@ test("untrusted workspace is never read or written, even when malformed", (t) =>
 test("global and trusted workspace merge by the contracted units", (t) => {
   const f = fixture(t);
   f.put("global", {
-    version: 2, preset: "base", approval: "judge", delegation: { mode: "lead", eagerness: "balanced" },
+    version: 2,
+    preset: "base",
+    approval: "judge",
+    delegation: { mode: "lead", eagerness: "balanced" },
     presets: { base: withSlot("d1", { effort: "low" }), other: definition("other-v1") },
-    effort: { base: { d1: "high", d2: "inherit", d3: "medium", d4: "minimal", d5: "low" }, other: { d5: "max" } },
+    effort: {
+      base: { d1: "high", d2: "inherit", d3: "medium", d4: "minimal", d5: "low" },
+      other: { d5: "max" },
+    },
   });
   f.put("workspace", {
-    version: 2, preset: "off", delegation: { eagerness: "eager" }, presets: { base: definition("v2") },
+    version: 2,
+    preset: "off",
+    delegation: { eagerness: "eager" },
+    presets: { base: definition("v2") },
     effort: { base: { d1: null, d3: "off", d4: null } },
   });
   const store = f.store();
   store.stage("workspace", ["approval"], "judge+sub");
   store.stage("global", ["delegation", "mode"], "supervisor");
   assert.deepEqual(store.effective(), {
-    version: 2, preset: "off", approval: "judge+sub", delegation: { mode: "supervisor", eagerness: "eager" },
+    version: 2,
+    preset: "off",
+    approval: "judge+sub",
+    delegation: { mode: "supervisor", eagerness: "eager" },
     presets: { base: definition("v2"), other: definition("other-v1") },
-    effort: { base: { d1: null, d2: "inherit", d3: "off", d4: null, d5: "low" }, other: { d5: "max" } },
+    effort: {
+      base: { d1: null, d2: "inherit", d3: "off", d4: null, d5: "low" },
+      other: { d5: "max" },
+    },
   });
   assert.deepEqual(store.effective().presets.base, definition("v2"));
-  assert(!Object.hasOwn(store.effective().presets.base.slots.d1, "effort"), "preset bodies do not merge");
+  assert(
+    !Object.hasOwn(store.effective().presets.base.slots.d1, "effort"),
+    "preset bodies do not merge",
+  );
 });
 
 test("ui schema is closed, optional and strictly boolean without defaulting or coercion", () => {
@@ -122,26 +163,55 @@ test("ui schema is closed, optional and strictly boolean without defaulting or c
   for (const ui of [undefined, null, [], true, "true", 1, { beerMugs: true, extra: false }])
     assert.throws(() => validateSettings({ version: 2, ui }), /Invalid settings/);
   for (const beerMugs of [undefined, null, "true", "false", 0, 1, NaN, [], {}, Object(false)])
-    assert.throws(() => validateSettings({ version: 2, ui: { beerMugs } }), /ui.beerMugs must be a boolean/);
+    assert.throws(
+      () => validateSettings({ version: 2, ui: { beerMugs } }),
+      /ui.beerMugs must be a boolean/,
+    );
 });
 
 test("ui rejects unsafe records and descriptors without executing them or changing staged patches", (t) => {
-  const f = fixture(t), store = f.store();
+  const f = fixture(t),
+    store = f.store();
   store.stage("global", ["approval"], "judge");
   let invoked = 0;
   const getter = {};
-  Object.defineProperty(getter, "beerMugs", { enumerable: true, get() { invoked++; return true; } });
+  Object.defineProperty(getter, "beerMugs", {
+    enumerable: true,
+    get() {
+      invoked++;
+      return true;
+    },
+  });
   const setter = {};
-  Object.defineProperty(setter, "beerMugs", { enumerable: true, set(_value) { invoked++; } });
+  Object.defineProperty(setter, "beerMugs", {
+    enumerable: true,
+    set(_value) {
+      invoked++;
+    },
+  });
   const hidden = {};
   Object.defineProperty(hidden, "beerMugs", { value: true });
   const root = { version: 2 };
-  Object.defineProperty(root, "ui", { enumerable: true, get() { invoked++; return {}; } });
+  Object.defineProperty(root, "ui", {
+    enumerable: true,
+    get() {
+      invoked++;
+      return {};
+    },
+  });
   assert.throws(() => validateSettings(root));
   for (const ui of [
-    getter, setter, hidden, { [Symbol("key")]: true },
+    getter,
+    setter,
+    hidden,
+    { [Symbol("key")]: true },
     Object.create({ beerMugs: true }),
-    { toJSON() { invoked++; return { beerMugs: true }; } },
+    {
+      toJSON() {
+        invoked++;
+        return { beerMugs: true };
+      },
+    },
     ...["__proto__", "constructor", "prototype"].map((key) => JSON.parse(`{"${key}":true}`)),
   ]) {
     assert.throws(() => validateSettings({ version: 2, ui }));
@@ -156,7 +226,8 @@ test("ui rejects unsafe records and descriptors without executing them or changi
 test("ui merges by leaves: empty or omitted workspace inherits and false masks true", (t) => {
   const f = fixture(t);
   for (const [globalUi, workspaceUi, expected] of [
-    [undefined, undefined, undefined], [undefined, {}, {}],
+    [undefined, undefined, undefined],
+    [undefined, {}, {}],
     [{ beerMugs: true }, undefined, { beerMugs: true }],
     [{ beerMugs: true }, {}, { beerMugs: true }],
     [{ beerMugs: true }, { beerMugs: false }, { beerMugs: false }],
@@ -182,10 +253,14 @@ test("untrusted workspace ui is not inspected, even if it enables mugs or is mal
   f.put("global", { version: 2, ui: { beerMugs: false } });
   for (const ui of [{ beerMugs: true }, { beerMugs: "SECRET-invalid" }]) {
     f.put("workspace", { version: 2, ui });
-    const store = intercept("lstatSync", (original, [path, ...options]) => {
-      assert.notEqual(path, f.paths.workspace);
-      return original(path, ...options);
-    }, () => f.store());
+    const store = intercept(
+      "lstatSync",
+      (original, [path, ...options]) => {
+        assert.notEqual(path, f.paths.workspace);
+        return original(path, ...options);
+      },
+      () => f.store(),
+    );
     assert.deepEqual(store.effective().ui, { beerMugs: false });
     assert.throws(() => store.stage("workspace", ["ui", "beerMugs"], true), /trust/);
     assert.deepEqual(store.flush(), []);
@@ -197,9 +272,14 @@ test("reading ui and saving unrelated preferences never seed, inherit or implici
   const f = fixture(t);
   f.put("global", { version: 2, ui: { beerMugs: true } });
   f.put("workspace", { version: 2 });
-  for (const path of Object.values(f.paths)) writeFileSync(path, `${JSON.stringify(read(path), null, 2)}\n`);
-  const before = Object.fromEntries(Object.entries(f.paths).map(([scope, path]) =>
-    [scope, { bytes: readFileSync(path), inode: lstatSync(path).ino }]));
+  for (const path of Object.values(f.paths))
+    writeFileSync(path, `${JSON.stringify(read(path), null, 2)}\n`);
+  const before = Object.fromEntries(
+    Object.entries(f.paths).map(([scope, path]) => [
+      scope,
+      { bytes: readFileSync(path), inode: lstatSync(path).ino },
+    ]),
+  );
   const store = f.store();
   assert.deepEqual(store.effective().ui, { beerMugs: true });
   assert.deepEqual(store.get("workspace"), { version: 2 });
@@ -216,15 +296,21 @@ test("reading ui and saving unrelated preferences never seed, inherit or implici
   explicit.stage("global", ["approval"], "manual");
   explicit.stage("workspace", ["approval"], "judge");
   assert.deepEqual(explicit.flush(), [
-    { scope: "global", path: f.paths.global }, { scope: "workspace", path: f.paths.workspace },
+    { scope: "global", path: f.paths.global },
+    { scope: "workspace", path: f.paths.workspace },
   ]);
-  assert.deepEqual(read(f.paths.global), { version: 2, ui: { beerMugs: true }, approval: "manual" });
+  assert.deepEqual(read(f.paths.global), {
+    version: 2,
+    ui: { beerMugs: true },
+    approval: "manual",
+  });
   assert.deepEqual(read(f.paths.workspace), { version: 2, approval: "judge" });
   assert.deepEqual(f.store().effective().ui, { beerMugs: true });
 });
 
 test("explicit ui leaves persist true and false exactly; deletion restores inheritance", (t) => {
-  const f = fixture(t), store = f.store();
+  const f = fixture(t),
+    store = f.store();
   store.stage("global", ["ui", "beerMugs"], true);
   store.stage("workspace", ["ui", "beerMugs"], false);
   assert.deepEqual(readdirSync(f.root), [], "staging alone does not create configuration");
@@ -233,7 +319,8 @@ test("explicit ui leaves persist true and false exactly; deletion restores inher
     { scope: "workspace", path: ["ui", "beerMugs"], value: false },
   ]);
   assert.deepEqual(store.flush(), [
-    { scope: "global", path: f.paths.global }, { scope: "workspace", path: f.paths.workspace },
+    { scope: "global", path: f.paths.global },
+    { scope: "workspace", path: f.paths.workspace },
   ]);
   assert.deepEqual(read(f.paths.global), { version: 2, ui: { beerMugs: true } });
   assert.deepEqual(read(f.paths.workspace), { version: 2, ui: { beerMugs: false } });
@@ -252,11 +339,14 @@ test("invalid stored ui is rejected without rewriting files or leaking rejected 
   const f = fixture(t);
   f.put("global", { version: 2, ui: { beerMugs: "SECRET-invalid" } });
   const before = readFileSync(f.paths.global);
-  assert.throws(() => f.store(), (error) => {
-    assert.match(error.message, /ui.beerMugs must be a boolean/);
-    assert(!error.message.includes("SECRET"));
-    return true;
-  });
+  assert.throws(
+    () => f.store(),
+    (error) => {
+      assert.match(error.message, /ui.beerMugs must be a boolean/);
+      assert(!error.message.includes("SECRET"));
+      return true;
+    },
+  );
   assert.deepEqual(readFileSync(f.paths.global), before);
   f.put("global", { version: 2 });
   const store = f.store();
@@ -269,16 +359,23 @@ test("invalid stored ui is rejected without rewriting files or leaking rejected 
 });
 
 test("individually bounded preference layers remain loadable when their merge exceeds one file cap", (t) => {
-  const f = fixture(t), store = f.store();
-  const presets = (prefix) => Object.fromEntries(Array.from({ length: 350 }, (_unused, index) =>
-    [`${prefix}${index}`, definition("v".repeat(64), `fixture/${"m".repeat(100)}`)]));
+  const f = fixture(t),
+    store = f.store();
+  const presets = (prefix) =>
+    Object.fromEntries(
+      Array.from({ length: 350 }, (_unused, index) => [
+        `${prefix}${index}`,
+        definition("v".repeat(64), `fixture/${"m".repeat(100)}`),
+      ]),
+    );
   store.stage("global", ["presets"], presets("global"));
   store.stage("workspace", ["presets"], presets("workspace"));
   const effective = store.effective();
   assert(Buffer.byteLength(JSON.stringify(effective)) > 256 * 1024);
   assert.equal(Object.keys(effective.presets).length, 700);
   assert.deepEqual(store.flush(), [
-    { scope: "global", path: f.paths.global }, { scope: "workspace", path: f.paths.workspace },
+    { scope: "global", path: f.paths.global },
+    { scope: "workspace", path: f.paths.workspace },
   ]);
   for (const path of Object.values(f.paths)) {
     assert(lstatSync(path).size < 256 * 1024);
@@ -286,8 +383,11 @@ test("individually bounded preference layers remain loadable when their merge ex
   }
   assert.deepEqual(f.store().effective(), effective, "successful saves must remain restorable");
   const pending = store.pending();
-  assert.throws(() => store.stage("global", ["presets"], effective.presets), /262144/,
-    "merging in memory never widens an individual file's write limit");
+  assert.throws(
+    () => store.stage("global", ["presets"], effective.presets),
+    /262144/,
+    "merging in memory never widens an individual file's write limit",
+  );
   assert.deepEqual(store.pending(), pending);
   for (const layers of [0, 4, Infinity, "2", null])
     assert.throws(() => validateSettings({ version: 2 }, layers), /validation layers/);
@@ -314,7 +414,9 @@ test("undefined removes a workspace key and exposes lower-layer effort, unlike n
 test("get, effective, pending and stage inputs are detached clones", (t) => {
   const f = fixture(t);
   f.put("global", { version: 2, presets: { base: definition() }, effort: { base: { d1: "low" } } });
-  const store = f.store(), body = definition("v2"), path = ["presets", "base"];
+  const store = f.store(),
+    body = definition("v2"),
+    path = ["presets", "base"];
   store.stage("global", path, body);
   body.slots.d1.model = "changed/model";
   path[1] = "changed";
@@ -340,12 +442,22 @@ test("only dirty paths are retained; reverted or absent deletes never perform IO
   store.stage("global", ["delegation"], { mode: "manual" });
   assert.deepEqual(store.pending(), []);
   writeFileSync(f.paths.global, "malformed-now");
-  intercept("lstatSync", () => { throw new Error("unexpected IO"); }, () => {
-    assert.deepEqual(store.get("global"), { version: 2, approval: "manual", delegation: { mode: "manual" } });
-    assert.equal(store.effective().approval, "manual");
-    assert.deepEqual(store.flush(), []);
-    store.discard();
-  });
+  intercept(
+    "lstatSync",
+    () => {
+      throw new Error("unexpected IO");
+    },
+    () => {
+      assert.deepEqual(store.get("global"), {
+        version: 2,
+        approval: "manual",
+        delegation: { mode: "manual" },
+      });
+      assert.equal(store.effective().approval, "manual");
+      assert.deepEqual(store.flush(), []);
+      store.discard();
+    },
+  );
 });
 
 test("stage coalesces overlapping patches and compares original, not pending, values", (t) => {
@@ -354,18 +466,23 @@ test("stage coalesces overlapping patches and compares original, not pending, va
   const store = f.store();
   store.stage("global", ["delegation"], { mode: "lead", eagerness: "eager" });
   store.stage("global", ["delegation", "mode"], "supervisor");
-  assert.deepEqual(store.pending(), [{ scope: "global", path: ["delegation"], value: { mode: "supervisor", eagerness: "eager" } }]);
+  assert.deepEqual(store.pending(), [
+    { scope: "global", path: ["delegation"], value: { mode: "supervisor", eagerness: "eager" } },
+  ]);
   store.stage("global", ["delegation", "mode"], "manual");
   store.stage("global", ["delegation", "eagerness"], "balanced");
   assert.deepEqual(store.pending(), []);
   store.stage("global", ["delegation", "mode"], "lead");
   store.stage("global", ["delegation", "eagerness"], "eager");
   store.stage("global", ["delegation"], { mode: "manual", eagerness: "reserved" });
-  assert.deepEqual(store.pending(), [{ scope: "global", path: ["delegation"], value: { mode: "manual", eagerness: "reserved" } }]);
+  assert.deepEqual(store.pending(), [
+    { scope: "global", path: ["delegation"], value: { mode: "manual", eagerness: "reserved" } },
+  ]);
 });
 
 test("discard can reset one scope or both, without writing", (t) => {
-  const f = fixture(t), store = f.store();
+  const f = fixture(t),
+    store = f.store();
   store.stage("global", ["approval"], "judge");
   store.stage("workspace", ["preset"], "off");
   store.discard("global");
@@ -378,12 +495,14 @@ test("discard can reset one scope or both, without writing", (t) => {
 });
 
 test("explicit flush creates private regular files and resets successful baselines", (t) => {
-  const f = fixture(t), store = f.store();
+  const f = fixture(t),
+    store = f.store();
   store.stage("global", ["approval"], "judge");
   store.stage("workspace", ["effort", "base", "d1"], null);
   assert.deepEqual(readdirSync(f.root), []);
   assert.deepEqual(store.flush(), [
-    { scope: "global", path: f.paths.global }, { scope: "workspace", path: f.paths.workspace },
+    { scope: "global", path: f.paths.global },
+    { scope: "workspace", path: f.paths.workspace },
   ]);
   assert.deepEqual(read(f.paths.global), { version: 2, approval: "judge" });
   assert.deepEqual(read(f.paths.workspace), { version: 2, effort: { base: { d1: null } } });
@@ -401,7 +520,12 @@ test("explicit flush creates private regular files and resets successful baselin
 
 test("new scopes persist explicit patches, not inherited effective values", (t) => {
   const f = fixture(t);
-  f.put("global", { version: 2, approval: "judge", presets: { base: definition() }, delegation: { mode: "lead" } });
+  f.put("global", {
+    version: 2,
+    approval: "judge",
+    presets: { base: definition() },
+    delegation: { mode: "lead" },
+  });
   const store = f.store();
   store.stage("workspace", ["delegation", "eagerness"], "eager");
   assert.deepEqual(store.flush(), [{ scope: "workspace", path: f.paths.workspace }]);
@@ -411,8 +535,14 @@ test("new scopes persist explicit patches, not inherited effective values", (t) 
 
 test("concurrent unrelated scalar and nested leaf edits survive and become the new baseline", (t) => {
   const f = fixture(t);
-  f.put("global", { version: 2, approval: "manual", delegation: { mode: "manual", eagerness: "balanced" }, effort: { base: { d1: "low" } } });
-  const first = f.store(), second = f.store();
+  f.put("global", {
+    version: 2,
+    approval: "manual",
+    delegation: { mode: "manual", eagerness: "balanced" },
+    effort: { base: { d1: "low" } },
+  });
+  const first = f.store(),
+    second = f.store();
   first.stage("global", ["delegation", "mode"], "lead");
   first.stage("global", ["effort", "base", "d1"], "high");
   second.stage("global", ["delegation", "eagerness"], "eager");
@@ -421,17 +551,23 @@ test("concurrent unrelated scalar and nested leaf edits survive and become the n
   assert(!second.flush()[0].error);
   assert(!first.flush()[0].error);
   assert.deepEqual(read(f.paths.global), {
-    version: 2, approval: "judge", delegation: { mode: "lead", eagerness: "eager" },
+    version: 2,
+    approval: "judge",
+    delegation: { mode: "lead", eagerness: "eager" },
     effort: { base: { d1: "high", d5: "max" } },
   });
   first.stage("global", ["approval"], "manual");
-  assert(!first.flush()[0].error, "successful commits adopt unrelated latest edits as the baseline");
+  assert(
+    !first.flush()[0].error,
+    "successful commits adopt unrelated latest edits as the baseline",
+  );
 });
 
 test("same-leaf concurrent edits reject the entire scope and retain all dirty patches", (t) => {
   const f = fixture(t);
   f.put("global", { version: 2, approval: "manual" });
-  const first = f.store(), second = f.store();
+  const first = f.store(),
+    second = f.store();
   first.stage("global", ["approval"], "judge");
   first.stage("global", ["preset"], "off");
   second.stage("global", ["approval"], "yolo");
@@ -441,11 +577,16 @@ test("same-leaf concurrent edits reject the entire scope and retain all dirty pa
   assert.equal(first.pending().length, 2);
   assert.deepEqual(read(f.paths.global), { version: 2, approval: "yolo" });
   assert.deepEqual(ownArtifacts(f.paths.global), []);
-  assert.match(first.flush()[0].error, /conflict/, "retry cannot silently rebase a failed dirty leaf");
+  assert.match(
+    first.flush()[0].error,
+    /conflict/,
+    "retry cannot silently rebase a failed dirty leaf",
+  );
 });
 
 test("missing-vs-null conflicts and identical desired external changes are not adopted", (t) => {
-  const f = fixture(t), store = f.store();
+  const f = fixture(t),
+    store = f.store();
   store.stage("global", ["effort", "base", "d1"], "high");
   f.put("global", { version: 2, effort: { base: { d1: null } } });
   assert.match(store.flush()[0].error, /conflict/);
@@ -485,16 +626,21 @@ test("existing malformed, wrong schema, invalid UTF-8 and oversized configs fail
   const secret = "SECRET-DO-NOT-REPORT";
   f.put("global", { version: 2 });
   for (const bytes of [
-    `{"approval":"${secret}"`, JSON.stringify({ version: 3, private: secret }),
-    Buffer.from([0xff, 0xfe]), " ".repeat(256 * 1024 + 1),
+    `{"approval":"${secret}"`,
+    JSON.stringify({ version: 3, private: secret }),
+    Buffer.from([0xff, 0xfe]),
+    " ".repeat(256 * 1024 + 1),
   ]) {
     writeFileSync(f.paths.global, bytes);
-    assert.throws(() => f.store(), (error) => {
-      assert(error.message.includes(f.paths.global));
-      assert.match(error.message, /repair/i);
-      assert(!error.message.includes(secret));
-      return true;
-    });
+    assert.throws(
+      () => f.store(),
+      (error) => {
+        assert(error.message.includes(f.paths.global));
+        assert.match(error.message, /repair/i);
+        assert(!error.message.includes(secret));
+        return true;
+      },
+    );
   }
 });
 
@@ -517,7 +663,8 @@ test("external malformed config never gets overwritten and failed patches surviv
 });
 
 test("read symlinks to regular configs are allowed but writes never replace them", (t) => {
-  const f = fixture(t), actual = join(f.root, "managed-config.json");
+  const f = fixture(t),
+    actual = join(f.root, "managed-config.json");
   writeFileSync(actual, JSON.stringify({ version: 2, approval: "manual" }));
   mkdirSync(dirname(f.paths.global), { recursive: true });
   symlinkSync(actual, f.paths.global);
@@ -531,9 +678,13 @@ test("read symlinks to regular configs are allowed but writes never replace them
 });
 
 test("symlink parents may be read but cannot be used for writes or directory creation", (t) => {
-  const f = fixture(t), actual = join(f.root, "actual-agent");
+  const f = fixture(t),
+    actual = join(f.root, "actual-agent");
   mkdirSync(join(actual, "extensions/pi-alehouse"), { recursive: true });
-  writeFileSync(join(actual, "extensions/pi-alehouse/config.json"), JSON.stringify({ version: 2, approval: "manual" }));
+  writeFileSync(
+    join(actual, "extensions/pi-alehouse/config.json"),
+    JSON.stringify({ version: 2, approval: "manual" }),
+  );
   symlinkSync(actual, f.options.agentDir);
   const store = f.store();
   assert.equal(store.get("global").approval, "manual");
@@ -575,7 +726,8 @@ test("readonly targets and directories are rejected even under a privileged user
 });
 
 test("a target made nonregular after construction is never replaced", (t) => {
-  const f = fixture(t), store = f.store();
+  const f = fixture(t),
+    store = f.store();
   store.stage("global", ["approval"], "judge");
   mkdirSync(f.paths.global, { recursive: true });
   assert.match(store.flush()[0].error, /regular file/);
@@ -586,11 +738,20 @@ test("a target made nonregular after construction is never replaced", (t) => {
 test("a separate process holding the lock blocks writes without automatic stale stealing", (t) => {
   const f = fixture(t);
   f.put("global", { version: 2, approval: "manual" });
-  const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
+  const child = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `
     import {openSync, writeFileSync, closeSync} from 'node:fs';
     const fd = openSync(process.argv[1], 'wx', 0o600);
     writeFileSync(fd, 'other-process-lock'); closeSync(fd);
-  `, `${f.paths.global}.lock`], { encoding: "utf8", timeout: 5000 });
+  `,
+      `${f.paths.global}.lock`,
+    ],
+    { encoding: "utf8", timeout: 5000 },
+  );
   assert.equal(child.status, 0, child.stderr);
   const store = f.store();
   store.stage("global", ["approval"], "judge");
@@ -608,14 +769,18 @@ test("temp write/fsync failures clean only owned artifacts and retain all dirty 
   f.put("global", { version: 2, approval: "manual" });
   const store = f.store();
   store.stage("global", ["approval"], "judge");
-  intercept("fsyncSync", (original, [fd]) => {
-    if (isTempFd(fd)) throw Object.assign(new Error("SECRET-failure"), { code: "EIO" });
-    return original(fd);
-  }, () => {
-    const result = store.flush()[0];
-    assert.match(result.error, /EIO/);
-    assert(!result.error.includes("SECRET"));
-  });
+  intercept(
+    "fsyncSync",
+    (original, [fd]) => {
+      if (isTempFd(fd)) throw Object.assign(new Error("SECRET-failure"), { code: "EIO" });
+      return original(fd);
+    },
+    () => {
+      const result = store.flush()[0];
+      assert.match(result.error, /EIO/);
+      assert(!result.error.includes("SECRET"));
+    },
+  );
   assert.deepEqual(ownArtifacts(f.paths.global), []);
   assert.equal(read(f.paths.global).approval, "manual");
   assert.equal(store.pending().length, 1);
@@ -627,28 +792,40 @@ test("final recheck rejects changed target identity before rename", (t) => {
   f.put("global", { version: 2, approval: "manual" });
   const store = f.store();
   store.stage("global", ["approval"], "judge");
-  intercept("fsyncSync", (original, [fd]) => {
-    if (isTempFd(fd)) {
-      fs.renameSync(f.paths.global, `${f.paths.global}.original`);
-      f.put("global", { version: 2, approval: "manual", preset: "off" });
-    }
-    return original(fd);
-  }, () => assert.match(store.flush()[0].error, /identity or contents changed/));
+  intercept(
+    "fsyncSync",
+    (original, [fd]) => {
+      if (isTempFd(fd)) {
+        fs.renameSync(f.paths.global, `${f.paths.global}.original`);
+        f.put("global", { version: 2, approval: "manual", preset: "off" });
+      }
+      return original(fd);
+    },
+    () => assert.match(store.flush()[0].error, /identity or contents changed/),
+  );
   assert.deepEqual(read(f.paths.global), { version: 2, approval: "manual", preset: "off" });
   assert.equal(store.pending().length, 1);
   assert.deepEqual(ownArtifacts(f.paths.global), []);
 });
 
 test("final recheck refuses a newly symlinked target and leaves its referent intact", (t) => {
-  const f = fixture(t), referent = join(f.root, "referent.json");
+  const f = fixture(t),
+    referent = join(f.root, "referent.json");
   f.put("global", { version: 2, approval: "manual" });
   writeFileSync(referent, JSON.stringify({ version: 2, approval: "yolo" }));
   const store = f.store();
   store.stage("global", ["approval"], "judge");
-  intercept("fsyncSync", (original, [fd]) => {
-    if (isTempFd(fd)) { fs.unlinkSync(f.paths.global); symlinkSync(referent, f.paths.global); }
-    return original(fd);
-  }, () => assert.match(store.flush()[0].error, /symlink/));
+  intercept(
+    "fsyncSync",
+    (original, [fd]) => {
+      if (isTempFd(fd)) {
+        fs.unlinkSync(f.paths.global);
+        symlinkSync(referent, f.paths.global);
+      }
+      return original(fd);
+    },
+    () => assert.match(store.flush()[0].error, /symlink/),
+  );
   assert(lstatSync(f.paths.global).isSymbolicLink());
   assert.equal(read(referent).approval, "yolo");
   assert.equal(store.pending().length, 1);
@@ -660,10 +837,17 @@ test("cleanup never removes a lock whose ownership changed", (t) => {
   f.put("global", { version: 2, approval: "manual" });
   const store = f.store();
   store.stage("global", ["approval"], "judge");
-  intercept("fsyncSync", (original, [fd]) => {
-    if (isTempFd(fd)) { fs.unlinkSync(`${f.paths.global}.lock`); writeFileSync(`${f.paths.global}.lock`, "foreign replacement"); }
-    return original(fd);
-  }, () => assert.match(store.flush()[0].error, /ownership changed/));
+  intercept(
+    "fsyncSync",
+    (original, [fd]) => {
+      if (isTempFd(fd)) {
+        fs.unlinkSync(`${f.paths.global}.lock`);
+        writeFileSync(`${f.paths.global}.lock`, "foreign replacement");
+      }
+      return original(fd);
+    },
+    () => assert.match(store.flush()[0].error, /ownership changed/),
+  );
   assert.equal(readFileSync(`${f.paths.global}.lock`, "utf8"), "foreign replacement");
   assert.equal(read(f.paths.global).approval, "manual");
   assert.equal(store.pending().length, 1);
@@ -677,9 +861,15 @@ test("rename uncertainty retains the lock and pending patches, without deleting 
   store.stage("global", ["approval"], "judge");
   const unrelatedTemp = join(dirname(f.paths.global), ".config.json.foreign.tmp");
   writeFileSync(unrelatedTemp, "other writer");
-  intercept("renameSync", () => { throw Object.assign(new Error("synthetic"), { code: "EIO" }); }, () => {
-    assert.match(store.flush()[0].error, /unconfirmed.*Lock retained/);
-  });
+  intercept(
+    "renameSync",
+    () => {
+      throw Object.assign(new Error("synthetic"), { code: "EIO" });
+    },
+    () => {
+      assert.match(store.flush()[0].error, /unconfirmed.*Lock retained/);
+    },
+  );
   assert.equal(read(f.paths.global).approval, "manual");
   assert.equal(store.pending().length, 1);
   assert.equal(readFileSync(unrelatedTemp, "utf8"), "other writer");
@@ -688,12 +878,18 @@ test("rename uncertainty retains the lock and pending patches, without deleting 
 });
 
 test("post-rename directory fsync uncertainty keeps the published file, lock and dirty patches", (t) => {
-  const f = fixture(t), store = f.store();
+  const f = fixture(t),
+    store = f.store();
   store.stage("global", ["approval"], "judge");
-  intercept("fsyncSync", (original, [fd]) => {
-    if (fs.fstatSync(fd).isDirectory()) throw Object.assign(new Error("synthetic"), { code: "EIO" });
-    return original(fd);
-  }, () => assert.match(store.flush()[0].error, /unconfirmed.*Lock retained/));
+  intercept(
+    "fsyncSync",
+    (original, [fd]) => {
+      if (fs.fstatSync(fd).isDirectory())
+        throw Object.assign(new Error("synthetic"), { code: "EIO" });
+      return original(fd);
+    },
+    () => assert.match(store.flush()[0].error, /unconfirmed.*Lock retained/),
+  );
   assert.equal(read(f.paths.global).approval, "judge");
   assert.equal(store.pending().length, 1);
   assert.deepEqual(ownArtifacts(f.paths.global), ["config.json.lock"]);
@@ -701,7 +897,8 @@ test("post-rename directory fsync uncertainty keeps the published file, lock and
 });
 
 test("seal blocks scope/stage mutations but allows flush, reads and discard", (t) => {
-  const f = fixture(t), store = f.store();
+  const f = fixture(t),
+    store = f.store();
   store.stage("global", ["approval"], "judge");
   store.seal();
   store.seal();
@@ -715,35 +912,55 @@ test("seal blocks scope/stage mutations but allows flush, reads and discard", (t
 
 test("full schema validates, including empty policy maps, nested model IDs and nullable override masks", () => {
   const value = {
-    version: 2, preset: "off", approval: "judge+sub", delegation: { mode: "co-worker", eagerness: "reserved" },
+    version: 2,
+    preset: "off",
+    approval: "judge+sub",
+    delegation: { mode: "co-worker", eagerness: "reserved" },
     effort: { "preset.Name-1": { d1: null, d2: "inherit", d3: "xhigh", d4: "max", d5: null } },
-    presets: { "preset.Name-1": {
-      ...definition("revision", "provider-name/org/model:revision"),
-      slots: {
-        ...definition("revision", "provider-name/org/model:revision").slots,
-        d1: { model: "provider-name/org/model:revision", effort: "off" },
-        d4: { model: "provider-name/org/model:revision" },
-        d5: { model: "provider-name/org/model:revision", effort: "max" },
+    presets: {
+      "preset.Name-1": {
+        ...definition("revision", "provider-name/org/model:revision"),
+        slots: {
+          ...definition("revision", "provider-name/org/model:revision").slots,
+          d1: { model: "provider-name/org/model:revision", effort: "off" },
+          d4: { model: "provider-name/org/model:revision" },
+          d5: { model: "provider-name/org/model:revision", effort: "max" },
+        },
       },
-    } },
+    },
   };
   assert.deepEqual(validateSettings(value), value);
   const result = validateSettings(value);
   result.presets["preset.Name-1"].slots.d1.model = "other/model";
   assert.equal(value.presets["preset.Name-1"].slots.d1.model, "provider-name/org/model:revision");
-  const plainNull = Object.assign(Object.create(null), { version: 2, delegation: Object.create(null) });
+  const plainNull = Object.assign(Object.create(null), {
+    version: 2,
+    delegation: Object.create(null),
+  });
   assert.deepEqual(validateSettings(plainNull), { version: 2, delegation: {} });
 });
 
 test("validator rejects unknown fields, bad enums, nonrecords and unbounded strings", () => {
   for (const value of [
-    null, [], 1, {}, { version: 3 }, { version: 2, unknown: true },
-    { version: 2, approval: undefined }, { version: 2, approval: "auto" },
-    { version: 2, preset: " space" }, { version: 2, preset: "a".repeat(65) }, { version: 2, preset: "reload" },
-    { version: 2, delegation: [] }, { version: 2, delegation: { mode: "auto" } },
-    { version: 2, delegation: { eagerness: "fast" } }, { version: 2, delegation: { extra: true } },
-    { version: 2, effort: [] }, { version: 2, effort: { base: { other: "low" } } },
-    { version: 2, effort: { base: { d1: NaN } } }, { version: 2, effort: { base: { d1: Infinity } } },
+    null,
+    [],
+    1,
+    {},
+    { version: 3 },
+    { version: 2, unknown: true },
+    { version: 2, approval: undefined },
+    { version: 2, approval: "auto" },
+    { version: 2, preset: " space" },
+    { version: 2, preset: "a".repeat(65) },
+    { version: 2, preset: "reload" },
+    { version: 2, delegation: [] },
+    { version: 2, delegation: { mode: "auto" } },
+    { version: 2, delegation: { eagerness: "fast" } },
+    { version: 2, delegation: { extra: true } },
+    { version: 2, effort: [] },
+    { version: 2, effort: { base: { other: "low" } } },
+    { version: 2, effort: { base: { d1: NaN } } },
+    { version: 2, effort: { base: { d1: Infinity } } },
     { version: 2, effort: { base: { d1: undefined } } },
     { version: 2, presets: { base: { ...definition(), version: "" } } },
     { version: 2, presets: { base: { ...definition(), version: "v".repeat(65) } } },
@@ -755,92 +972,186 @@ test("validator rejects unknown fields, bad enums, nonrecords and unbounded stri
     { version: 2, presets: { base: withSlot("d1", { thinking: {} }) } },
     { version: 2, presets: { base: withSlot("d1", { thinking: null }) } },
     { version: 2, presets: { base: withSlot("d1", { thinking: { low: "medium" } }) } },
-  ]) assert.throws(() => validateSettings(value), /Invalid settings/);
-  for (const model of ["model", "/model", "provider/", "provider/*", "provider/m?", " provider/model", "provider/model ", "provider/model\n", `provider/${"m".repeat(250)}`])
-    assert.throws(() => validateSettings({ version: 2, presets: { base: definition("v1", model) } }), /provider\/model/);
+  ])
+    assert.throws(() => validateSettings(value), /Invalid settings/);
+  for (const model of [
+    "model",
+    "/model",
+    "provider/",
+    "provider/*",
+    "provider/m?",
+    " provider/model",
+    "provider/model ",
+    "provider/model\n",
+    `provider/${"m".repeat(250)}`,
+  ])
+    assert.throws(
+      () => validateSettings({ version: 2, presets: { base: definition("v1", model) } }),
+      /provider\/model/,
+    );
 });
 
 test("reserved definition/effort names and prototype-unsafe keys are rejected at every map depth", () => {
   for (const name of ["off", "reload", "__proto__", "constructor", "prototype", "bad name"])
     for (const field of ["presets", "effort"])
-      assert.throws(() => validateSettings({ version: 2, [field]: { [name]: field === "presets" ? definition() : {} } }));
+      assert.throws(() =>
+        validateSettings({
+          version: 2,
+          [field]: { [name]: field === "presets" ? definition() : {} },
+        }),
+      );
   for (const value of [
-    '{"version":2,"__proto__":{}}', '{"version":2,"delegation":{"constructor":"manual"}}',
+    '{"version":2,"__proto__":{}}',
+    '{"version":2,"delegation":{"constructor":"manual"}}',
     '{"version":2,"effort":{"base":{"prototype":"low"}}}',
     '{"version":2,"presets":{"base":{"version":"v1","slots":{"__proto__":{"model":"p/m"}}}}}',
     '{"version":2,"presets":{"base":{"version":"v1","slots":{"d1":{"model":"p/m","constructor":"x"},"d2":{"model":"p/m"},"d3":{"model":"p/m"},"d4":{"model":"p/m"},"d5":{"model":"p/m"}}}}}',
-
-  ]) assert.throws(() => validateSettings(JSON.parse(value)), /unsafe/);
+  ])
+    assert.throws(() => validateSettings(JSON.parse(value)), /unsafe/);
   assert.equal({}.polluted, undefined);
 });
 
 test("plain-record validation rejects symbols, custom prototypes and accessors without invoking them", () => {
   let invoked = 0;
   const accessor = { version: 2 };
-  Object.defineProperty(accessor, "approval", { enumerable: true, get() { invoked++; return "manual"; } });
+  Object.defineProperty(accessor, "approval", {
+    enumerable: true,
+    get() {
+      invoked++;
+      return "manual";
+    },
+  });
   const nested = { version: 2, delegation: {} };
-  Object.defineProperty(nested.delegation, "mode", { enumerable: true, get() { invoked++; return "lead"; } });
+  Object.defineProperty(nested.delegation, "mode", {
+    enumerable: true,
+    get() {
+      invoked++;
+      return "lead";
+    },
+  });
   const hidden = { version: 2 };
   Object.defineProperty(hidden, "approval", { enumerable: false, value: "manual" });
   const slotAccessor = definition();
-  Object.defineProperty(slotAccessor.slots.d1, "model", { enumerable: true, get() { invoked++; return "fixture/model"; } });
+  Object.defineProperty(slotAccessor.slots.d1, "model", {
+    enumerable: true,
+    get() {
+      invoked++;
+      return "fixture/model";
+    },
+  });
   const thinkingAccessor = definition();
   const mapping = {};
-  Object.defineProperty(mapping, "low", { enumerable: true, get() { invoked++; return "medium"; } });
+  Object.defineProperty(mapping, "low", {
+    enumerable: true,
+    get() {
+      invoked++;
+      return "medium";
+    },
+  });
   thinkingAccessor.slots.d3 = { model: "fixture/model", thinking: mapping };
   const symbolSlot = definition();
   symbolSlot.slots.d2[Symbol("key")] = 1;
   const symbolMap = definition();
-  symbolMap.slots.d2 = { model: "fixture/model", thinking: { low: "medium", [Symbol("key")]: "high" } };
+  symbolMap.slots.d2 = {
+    model: "fixture/model",
+    thinking: { low: "medium", [Symbol("key")]: "high" },
+  };
   const protoSlot = definition();
-  protoSlot.slots.d1 = Object.assign(Object.create({ inherited: true }), { model: "fixture/model" });
+  protoSlot.slots.d1 = Object.assign(Object.create({ inherited: true }), {
+    model: "fixture/model",
+  });
   for (const value of [
-    accessor, nested, hidden, { version: 2, [Symbol("key")]: 1 }, new Date(),
+    accessor,
+    nested,
+    hidden,
+    { version: 2, [Symbol("key")]: 1 },
+    new Date(),
     Object.assign(Object.create({ inherited: true }), { version: 2 }),
     { version: 2, presets: { base: slotAccessor } },
     { version: 2, presets: { base: thinkingAccessor } },
     { version: 2, presets: { base: symbolSlot } },
     { version: 2, presets: { base: symbolMap } },
     { version: 2, presets: { base: protoSlot } },
-  ]) assert.throws(() => validateSettings(value));
+  ])
+    assert.throws(() => validateSettings(value));
   assert.equal(invoked, 0);
 });
 
 test("the 256 KiB cap accounts for serialized maps and escaping", () => {
   const presets = {};
-  for (let index = 0; index < 1500; index++) presets[`p${index}`] = definition("v".repeat(64), `provider/${"m".repeat(100)}`);
+  for (let index = 0; index < 1500; index++)
+    presets[`p${index}`] = definition("v".repeat(64), `provider/${"m".repeat(100)}`);
   assert.throws(() => validateSettings({ version: 2, presets }), /262144/);
 });
 
 test("invalid stages are atomic and unsafe/sparse/accessor paths do not execute data", (t) => {
-  const f = fixture(t), store = f.store();
+  const f = fixture(t),
+    store = f.store();
   store.stage("global", ["approval"], "judge");
   for (const [path, value] of [
-    [[], 1], [["__proto__", "polluted"], true], [["constructor"], {}], [["version"], 1],
-    [["unknown"], "manual"], [["presets", "base"], { version: "v1" }],
+    [[], 1],
+    [["__proto__", "polluted"], true],
+    [["constructor"], {}],
+    [["version"], 1],
+    [["unknown"], "manual"],
+    [["presets", "base"], { version: "v1" }],
     [["presets", "base", "slots", "d1", "effort", "tooDeep"], "low"],
     [["presets", "base", "slots", "d1", "__proto__"], "off"],
-    [["approval", "nested"], "judge"], [new Array(1), "manual"], [new Array(6), "low"],
-  ]) assert.throws(() => store.stage("global", path, value));
+    [["approval", "nested"], "judge"],
+    [new Array(1), "manual"],
+    [new Array(6), "low"],
+  ])
+    assert.throws(() => store.stage("global", path, value));
   let invoked = 0;
   const path = [];
-  Object.defineProperty(path, "0", { get() { invoked++; return "approval"; } });
+  Object.defineProperty(path, "0", {
+    get() {
+      invoked++;
+      return "approval";
+    },
+  });
   assert.throws(() => store.stage("global", path, "manual"));
   const value = {};
-  Object.defineProperty(value, "mode", { enumerable: true, get() { invoked++; return "lead"; } });
+  Object.defineProperty(value, "mode", {
+    enumerable: true,
+    get() {
+      invoked++;
+      return "lead";
+    },
+  });
   assert.throws(() => store.stage("global", ["delegation"], value));
   const slot = { model: "fixture/model" };
-  Object.defineProperty(slot, "effort", { enumerable: true, get() { invoked++; return "low"; } });
+  Object.defineProperty(slot, "effort", {
+    enumerable: true,
+    get() {
+      invoked++;
+      return "low";
+    },
+  });
   const badPreset = definition();
   badPreset.slots.d1 = slot;
   assert.throws(() => store.stage("global", ["presets", "base"], badPreset));
   const thinking = {};
-  Object.defineProperty(thinking, "minimal", { enumerable: true, get() { invoked++; return "high"; } });
-  assert.throws(() => store.stage("global", ["presets", "base", "slots", "d1", "thinking"], thinking));
+  Object.defineProperty(thinking, "minimal", {
+    enumerable: true,
+    get() {
+      invoked++;
+      return "high";
+    },
+  });
+  assert.throws(() =>
+    store.stage("global", ["presets", "base", "slots", "d1", "thinking"], thinking),
+  );
   const accessorPath = [];
   for (const key of ["presets", "base", "slots", "d1", "effort"]) {
     const index = accessorPath.length;
-    Object.defineProperty(accessorPath, String(index), { enumerable: true, get() { invoked++; return key; } });
+    Object.defineProperty(accessorPath, String(index), {
+      enumerable: true,
+      get() {
+        invoked++;
+        return key;
+      },
+    });
   }
   assert.throws(() => store.stage("global", accessorPath, "low"), /1 to 5/);
   assert.equal(invoked, 0);
@@ -854,10 +1165,16 @@ test("invalid stages are atomic and unsafe/sparse/accessor paths do not execute 
 
 test("version 1 settings are rejected even with five-slot bodies; no read or flush migrates files", (t) => {
   for (const document of [
-    { version: 1 }, { version: 1, preset: "off", approval: "manual" },
-    { version: 1, approval: "judge" }, { version: 1, delegation: { mode: "manual" } },
+    { version: 1 },
+    { version: 1, preset: "off", approval: "manual" },
+    { version: 1, approval: "judge" },
+    { version: 1, delegation: { mode: "manual" } },
     { version: 1, presets: { base: definition() }, effort: { base: { d5: null } } },
-  ]) assert.throws(() => validateSettings(document), /version 1 is unsupported.*including approval\/delegation-only or empty documents.*manually provide a version 2.*no automatic migration/);
+  ])
+    assert.throws(
+      () => validateSettings(document),
+      /version 1 is unsupported.*including approval\/delegation-only or empty documents.*manually provide a version 2.*no automatic migration/,
+    );
   const f = fixture(t);
   for (const scope of ["global", "workspace"]) {
     f.put(scope, { version: 1, presets: { base: definition() } });
@@ -879,17 +1196,36 @@ test("version 1 settings are rejected even with five-slot bodies; no read or flu
 
 test("legacy slot keys are rejected in every slot map, including mixed five-slot maps", (t) => {
   const legacy = {
-    light: { model: "fixture/model" }, standard: { model: "fixture/model" }, strong: { model: "fixture/model" },
+    light: { model: "fixture/model" },
+    standard: { model: "fixture/model" },
+    strong: { model: "fixture/model" },
   };
   for (const key of ["light", "standard", "strong"]) {
-    assert.throws(() => validateSettings({ version: 2, presets: { base: {
-      version: "v1", slots: { ...definition().slots, [key]: { model: "fixture/model" } },
-    } } }), /legacy slots.*d1, d2, d3, d4, d5/);
+    assert.throws(
+      () =>
+        validateSettings({
+          version: 2,
+          presets: {
+            base: {
+              version: "v1",
+              slots: { ...definition().slots, [key]: { model: "fixture/model" } },
+            },
+          },
+        }),
+      /legacy slots.*d1, d2, d3, d4, d5/,
+    );
     for (const level of ["high", null])
-      assert.throws(() => validateSettings({ version: 2, effort: { base: { d1: null, [key]: level } } }), /legacy slots/);
+      assert.throws(
+        () => validateSettings({ version: 2, effort: { base: { d1: null, [key]: level } } }),
+        /legacy slots/,
+      );
   }
-  assert.throws(() => validateSettings({ version: 2, presets: { base: { version: "v1", slots: legacy } } }), /legacy slots/);
-  const f = fixture(t), store = f.store();
+  assert.throws(
+    () => validateSettings({ version: 2, presets: { base: { version: "v1", slots: legacy } } }),
+    /legacy slots/,
+  );
+  const f = fixture(t),
+    store = f.store();
   for (const key of Object.keys(legacy)) {
     assert.throws(() => store.stage("global", ["effort", "base", key], null), /legacy slots/);
     assert.deepEqual(store.pending(), []);
@@ -914,15 +1250,33 @@ test("all five slots are required independently; repeated models and partial eff
     },
   };
   assert.deepEqual(validateSettings({ version: 2, presets: { base: body } }).presets.base, body);
-  assert.equal(validateSettings({ version: 2, presets: { base: body } }).presets.base.slots.d1.effort, undefined);
-  assert.equal(validateSettings({ version: 2, presets: { base: body } }).presets.base.slots.d1.thinking, undefined);
-  assert.deepEqual(validateSettings({ version: 2, presets: { same: definition() } }).presets.same, definition());
+  assert.equal(
+    validateSettings({ version: 2, presets: { base: body } }).presets.base.slots.d1.effort,
+    undefined,
+  );
+  assert.equal(
+    validateSettings({ version: 2, presets: { base: body } }).presets.base.slots.d1.thinking,
+    undefined,
+  );
+  assert.deepEqual(
+    validateSettings({ version: 2, presets: { same: definition() } }).presets.same,
+    definition(),
+  );
   for (const slot of Object.keys(models)) {
     const missing = { ...body.slots };
     delete missing[slot];
-    assert.throws(() => validateSettings({ version: 2, presets: { base: { ...body, slots: missing } } }), /all five slots/);
-    const invalidModel = { ...body.slots, [slot]: { ...body.slots[slot], model: "not-a-provider-model" } };
-    assert.throws(() => validateSettings({ version: 2, presets: { base: { ...body, slots: invalidModel } } }), /provider\/model/);
+    assert.throws(
+      () => validateSettings({ version: 2, presets: { base: { ...body, slots: missing } } }),
+      /all five slots/,
+    );
+    const invalidModel = {
+      ...body.slots,
+      [slot]: { ...body.slots[slot], model: "not-a-provider-model" },
+    };
+    assert.throws(
+      () => validateSettings({ version: 2, presets: { base: { ...body, slots: invalidModel } } }),
+      /provider\/model/,
+    );
   }
 });
 
@@ -943,7 +1297,8 @@ test("five effort leaves retain independent null, absence and conflict behavior 
   assert(!store.flush()[0].error);
   const allNulls = { d1: null, d2: null, d3: null, d4: null, d5: null };
   assert.deepEqual(f.store().effective().effort.base, allNulls);
-  const first = f.store(), second = f.store();
+  const first = f.store(),
+    second = f.store();
   first.stage("workspace", ["effort", "base", "d4"], undefined);
   second.stage("workspace", ["effort", "base", "d5"], "inherit");
   assert(!second.flush()[0].error);
@@ -953,29 +1308,50 @@ test("five effort leaves retain independent null, absence and conflict behavior 
 
 test("empty and slot-free version-2 preferences remain valid", () => {
   assert.deepEqual(validateSettings({ version: 2 }), { version: 2 });
-  assert.deepEqual(validateSettings({ version: 2, preset: "off", approval: "manual", delegation: { mode: "manual" } }), {
-    version: 2, preset: "off", approval: "manual", delegation: { mode: "manual" },
-  });
+  assert.deepEqual(
+    validateSettings({
+      version: 2,
+      preset: "off",
+      approval: "manual",
+      delegation: { mode: "manual" },
+    }),
+    {
+      version: 2,
+      preset: "off",
+      approval: "manual",
+      delegation: { mode: "manual" },
+    },
+  );
   assert.deepEqual(validateSettings({ version: 2, effort: { base: {} }, presets: {} }), {
-    version: 2, effort: { base: {} }, presets: {},
+    version: 2,
+    effort: { base: {} },
+    presets: {},
   });
 });
 
 test("retired flat, mixed, string, null, partial and extra slot shapes are rejected without migration", (t) => {
   const flat = {
     version: "v1",
-    models: { d1: "fixture/model", d2: "fixture/model", d3: "fixture/model", d4: "fixture/model", d5: "fixture/model" },
+    models: {
+      d1: "fixture/model",
+      d2: "fixture/model",
+      d3: "fixture/model",
+      d4: "fixture/model",
+      d5: "fixture/model",
+    },
     effort: { d1: "low" },
     thinking: { d3: { low: "medium" } },
   };
-  const retired = /retired flat models\/effort\/thinking fields.*no automatic migration or mixed format/;
+  const retired =
+    /retired flat models\/effort\/thinking fields.*no automatic migration or mixed format/;
   for (const body of [
     flat,
     { version: "v1", models: flat.models },
     { ...definition(), models: flat.models },
     { ...definition(), effort: { d1: "low" } },
     { ...definition(), thinking: { d3: { low: "medium" } } },
-  ]) assert.throws(() => validateSettings({ version: 2, presets: { base: body } }), retired);
+  ])
+    assert.throws(() => validateSettings({ version: 2, presets: { base: body } }), retired);
   const slots = definition().slots;
   for (const body of [
     { version: "v1", slots: "d1" },
@@ -983,24 +1359,68 @@ test("retired flat, mixed, string, null, partial and extra slot shapes are rejec
     { version: "v1", slots: { ...slots, d1: "fixture/model" } },
     { version: "v1", slots: { ...slots, d1: null } },
     { version: "v1", slots: { ...slots, d3: ["fixture/model"] } },
-  ]) assert.throws(() => validateSettings({ version: 2, presets: { base: body } }), /plain record/);
+  ])
+    assert.throws(() => validateSettings({ version: 2, presets: { base: body } }), /plain record/);
   const partial = { ...slots };
   delete partial.d5;
-  assert.throws(() => validateSettings({ version: 2, presets: { base: { version: "v1", slots: partial } } }), /all five slots/);
-  assert.throws(() => validateSettings({ version: 2, presets: { base: { version: "v1" } } }), /preset slots are required/);
-  assert.throws(() => validateSettings({ version: 2, presets: { base: {
-    version: "v1", slots: { ...slots, d6: { model: "fixture/model" } },
-  } } }), /unsupported field/);
-  assert.throws(() => validateSettings({ version: 2, presets: { base: withSlot("d1", { id: "extra" }) } }), /unsupported field/);
-  assert.throws(() => validateSettings({ version: 2, presets: { base: {
-    version: "v1", slots: { ...slots, d1: { effort: "low" } },
-  } } }), /model is required/);
+  assert.throws(
+    () => validateSettings({ version: 2, presets: { base: { version: "v1", slots: partial } } }),
+    /all five slots/,
+  );
+  assert.throws(
+    () => validateSettings({ version: 2, presets: { base: { version: "v1" } } }),
+    /preset slots are required/,
+  );
+  assert.throws(
+    () =>
+      validateSettings({
+        version: 2,
+        presets: {
+          base: {
+            version: "v1",
+            slots: { ...slots, d6: { model: "fixture/model" } },
+          },
+        },
+      }),
+    /unsupported field/,
+  );
+  assert.throws(
+    () => validateSettings({ version: 2, presets: { base: withSlot("d1", { id: "extra" }) } }),
+    /unsupported field/,
+  );
+  assert.throws(
+    () =>
+      validateSettings({
+        version: 2,
+        presets: {
+          base: {
+            version: "v1",
+            slots: { ...slots, d1: { effort: "low" } },
+          },
+        },
+      }),
+    /model is required/,
+  );
   for (const slot of [
-    { model: null }, { model: "fixture/model", effort: null }, { model: "fixture/model", effort: { d1: "low" } },
-    { model: "fixture/model", thinking: null }, { model: "fixture/model", thinking: "low" },
-  ]) assert.throws(() => validateSettings({ version: 2, presets: { base: {
-    version: "v1", slots: { ...slots, d1: slot },
-  } } }), /Invalid settings/);
+    { model: null },
+    { model: "fixture/model", effort: null },
+    { model: "fixture/model", effort: { d1: "low" } },
+    { model: "fixture/model", thinking: null },
+    { model: "fixture/model", thinking: "low" },
+  ])
+    assert.throws(
+      () =>
+        validateSettings({
+          version: 2,
+          presets: {
+            base: {
+              version: "v1",
+              slots: { ...slots, d1: slot },
+            },
+          },
+        }),
+      /Invalid settings/,
+    );
   const f = fixture(t);
   f.put("global", { version: 2, presets: { base: flat } });
   const before = readFileSync(f.paths.global);
@@ -1023,20 +1443,49 @@ test("retired flat, mixed, string, null, partial and extra slot shapes are rejec
 test("slot thinking is rejected without migration or rewrite", (t) => {
   const message = /thinking is not configurable.*no automatic migration/;
   const slots = definition().slots;
-  for (const thinking of [{}, null, { low: "medium", off: "off" }, { off: "high" }, "low", { minimal: "low", max: "xhigh" }])
-    assert.throws(() => validateSettings({ version: 2, presets: { base: {
-      version: "v1", slots: { ...slots, d3: { model: "fixture/model", effort: "inherit", thinking } },
-    } } }), message);
+  for (const thinking of [
+    {},
+    null,
+    { low: "medium", off: "off" },
+    { off: "high" },
+    "low",
+    { minimal: "low", max: "xhigh" },
+  ])
+    assert.throws(
+      () =>
+        validateSettings({
+          version: 2,
+          presets: {
+            base: {
+              version: "v1",
+              slots: { ...slots, d3: { model: "fixture/model", effort: "inherit", thinking } },
+            },
+          },
+        }),
+      message,
+    );
   let invoked = 0;
   const slot = { model: "fixture/model" };
-  Object.defineProperty(slot, "thinking", { enumerable: true, get() { invoked++; return { low: "medium" }; } });
+  Object.defineProperty(slot, "thinking", {
+    enumerable: true,
+    get() {
+      invoked++;
+      return { low: "medium" };
+    },
+  });
   const accessorBody = definition();
   accessorBody.slots.d1 = slot;
   assert.throws(() => validateSettings({ version: 2, presets: { base: accessorBody } }));
   assert.equal(invoked, 0);
-  const stored = { version: 2, presets: { base: {
-    version: "v1", slots: { ...slots, d3: { model: "fixture/model", thinking: { low: "medium" } } },
-  } } };
+  const stored = {
+    version: 2,
+    presets: {
+      base: {
+        version: "v1",
+        slots: { ...slots, d3: { model: "fixture/model", thinking: { low: "medium" } } },
+      },
+    },
+  };
   const f = fixture(t);
   f.put("global", stored);
   const before = readFileSync(f.paths.global);
@@ -1079,32 +1528,70 @@ test("five-segment slot effort publishes; six-segment, unsafe and accessor paths
   const store = f.store();
   store.stage("global", ["presets", "base", "slots", "d1", "effort"], "low");
   assert.equal(store.pending()[0].path.length, 5);
-  assert.deepEqual(store.pending(), [{
-    scope: "global", path: ["presets", "base", "slots", "d1", "effort"], value: "low",
-  }]);
+  assert.deepEqual(store.pending(), [
+    {
+      scope: "global",
+      path: ["presets", "base", "slots", "d1", "effort"],
+      value: "low",
+    },
+  ]);
   assert.equal(store.get("global").presets.base.slots.d1.effort, "low");
   assert.equal(store.get("global").presets.base.slots.d2.effort, undefined);
   assert(!store.flush()[0].error);
-  assert.deepEqual(read(f.paths.global).presets.base.slots.d1, { model: "fixture/model", effort: "low" });
-  assert.deepEqual(f.store().get("global").presets.base.slots.d1, { model: "fixture/model", effort: "low" });
+  assert.deepEqual(read(f.paths.global).presets.base.slots.d1, {
+    model: "fixture/model",
+    effort: "low",
+  });
+  assert.deepEqual(f.store().get("global").presets.base.slots.d1, {
+    model: "fixture/model",
+    effort: "low",
+  });
 
   const again = f.store();
-  assert.throws(() => again.stage("global", ["presets", "base", "slots", "d1", "effort", "extra"], "high"), /1 to 5/);
-  assert.throws(() => again.stage("global", ["presets", "base", "slots", "d1", "thinking", "minimal"], "low"), /1 to 5/);
-  assert.throws(() => again.stage("global", ["presets", "base", "slots", "d1", "thinking"], {}), /thinking is not configurable/);
-  assert.throws(() => again.stage("global", ["presets", "base", "slots", "d1", "thinking"], null), /thinking is not configurable/);
-  assert.throws(() => again.stage("global", ["presets", "base", "slots", "d1", "__proto__"], "off"), /safe, bounded/);
-  assert.throws(() => again.stage("global", ["presets", "base", "slots", "__proto__", "effort"], "low"), /safe, bounded/);
+  assert.throws(
+    () => again.stage("global", ["presets", "base", "slots", "d1", "effort", "extra"], "high"),
+    /1 to 5/,
+  );
+  assert.throws(
+    () => again.stage("global", ["presets", "base", "slots", "d1", "thinking", "minimal"], "low"),
+    /1 to 5/,
+  );
+  assert.throws(
+    () => again.stage("global", ["presets", "base", "slots", "d1", "thinking"], {}),
+    /thinking is not configurable/,
+  );
+  assert.throws(
+    () => again.stage("global", ["presets", "base", "slots", "d1", "thinking"], null),
+    /thinking is not configurable/,
+  );
+  assert.throws(
+    () => again.stage("global", ["presets", "base", "slots", "d1", "__proto__"], "off"),
+    /safe, bounded/,
+  );
+  assert.throws(
+    () => again.stage("global", ["presets", "base", "slots", "__proto__", "effort"], "low"),
+    /safe, bounded/,
+  );
   let invoked = 0;
   const accessorPath = [];
   for (const key of ["presets", "base", "slots", "d1", "effort"]) {
     Object.defineProperty(accessorPath, String(accessorPath.length), {
-      enumerable: true, get() { invoked++; return key; },
+      enumerable: true,
+      get() {
+        invoked++;
+        return key;
+      },
     });
   }
   assert.throws(() => again.stage("global", accessorPath, "high"));
   const slot = { model: "fixture/model" };
-  Object.defineProperty(slot, "effort", { enumerable: true, get() { invoked++; return "high"; } });
+  Object.defineProperty(slot, "effort", {
+    enumerable: true,
+    get() {
+      invoked++;
+      return "high";
+    },
+  });
   assert.throws(() => again.stage("global", ["presets", "base", "slots", "d1"], slot));
   assert.equal(invoked, 0);
   assert.equal({}.polluted, undefined);
@@ -1125,7 +1612,10 @@ test("nested slot patches persist, reload and conflict on the same leaf", (t) =>
   store.stage("global", ["presets", "base", "slots", "d5", "model"], "fixture/other");
   store.stage("global", ["presets", "base", "slots", "d2", "effort"], "high");
   assert.equal(store.pending().length, 3);
-  assert.equal(store.pending().every((patch) => patch.path.length <= 5), true);
+  assert.equal(
+    store.pending().every((patch) => patch.path.length <= 5),
+    true,
+  );
   assert(!store.flush()[0].error);
   const saved = read(f.paths.global);
   assert.equal(saved.presets.base.slots.d1.effort, "medium");
@@ -1137,7 +1627,8 @@ test("nested slot patches persist, reload and conflict on the same leaf", (t) =>
   assert.equal(saved.presets.base.slots.d1.thinking, undefined);
   assert.deepEqual(f.store().get("global"), saved);
 
-  const unrelatedA = f.store(), unrelatedB = f.store();
+  const unrelatedA = f.store(),
+    unrelatedB = f.store();
   unrelatedA.stage("global", ["presets", "base", "slots", "d1", "model"], "fixture/changed");
   unrelatedB.stage("global", ["presets", "base", "slots", "d5", "effort"], "max");
   assert(!unrelatedB.flush()[0].error);
@@ -1148,7 +1639,8 @@ test("nested slot patches persist, reload and conflict on the same leaf", (t) =>
   assert.equal(reloaded.slots.d5.effort, "max");
   assert.equal(reloaded.slots.d5.model, "fixture/other");
 
-  const conflicted = f.store(), winner = f.store();
+  const conflicted = f.store(),
+    winner = f.store();
   conflicted.stage("global", ["presets", "base", "slots", "d1", "effort"], "max");
   conflicted.stage("global", ["presets", "base", "slots", "d4", "effort"], "low");
   winner.stage("global", ["presets", "base", "slots", "d1", "effort"], "off");
@@ -1158,13 +1650,21 @@ test("nested slot patches persist, reload and conflict on the same leaf", (t) =>
   assert.equal(read(f.paths.global).presets.base.slots.d1.effort, "off");
   assert.equal(read(f.paths.global).presets.base.slots.d4.effort, undefined);
   assert.deepEqual(ownArtifacts(f.paths.global), []);
-  assert.match(conflicted.flush()[0].error, /conflict/, "retry cannot silently rebase a failed dirty leaf");
+  assert.match(
+    conflicted.flush()[0].error,
+    /conflict/,
+    "retry cannot silently rebase a failed dirty leaf",
+  );
 });
 
 test("cross-bundle session registry cleanup is identity checked", async (t) => {
-  const f = fixture(t), first = f.store(), second = f.store();
+  const f = fixture(t),
+    first = f.store(),
+    second = f.store();
   const id = `settings-test-${f.root}`;
-  const otherBundle = await import(`../lib/settings-store.mjs?registry-test=${encodeURIComponent(id)}`);
+  const otherBundle = await import(
+    `../lib/settings-store.mjs?registry-test=${encodeURIComponent(id)}`
+  );
   assert.equal(settingsStoreForSession(id), undefined);
   const cleanFirst = registerSettingsStore(id, first);
   assert.equal(otherBundle.settingsStoreForSession(id), first);

@@ -11,44 +11,87 @@ export const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), ".."
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 // Generated worker profiles installed into the agent directory, plus disabled
 // built-ins. Keep in step with nix/hm-module.nix and the harness profile names.
-export const managedAgentNames = Object.freeze(["editor", "researcher", "Explore", "Plan", "general-purpose"]);
+export const managedAgentNames = Object.freeze([
+  "editor",
+  "researcher",
+  "Explore",
+  "Plan",
+  "general-purpose",
+]);
 export function agentDirectory(env = process.env) {
   const path = env.PI_CODING_AGENT_DIR;
-  return resolve(path ? path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path : join(homedir(), ".pi/agent"));
+  return resolve(
+    path
+      ? path === "~"
+        ? homedir()
+        : path.startsWith("~/")
+          ? join(homedir(), path.slice(2))
+          : path
+      : join(homedir(), ".pi/agent"),
+  );
 }
 export function executable(name, override, env = process.env) {
-  if (override) assert(isAbsolute(override), `${name} override must be an absolute executable path`);
-  const paths = override ? [override] : (env.PATH ?? "").split(":").filter(Boolean).map((p) => resolve(p, name));
+  if (override)
+    assert(isAbsolute(override), `${name} override must be an absolute executable path`);
+  const paths = override
+    ? [override]
+    : (env.PATH ?? "")
+        .split(":")
+        .filter(Boolean)
+        .map((p) => resolve(p, name));
   for (const path of paths) {
-    try { accessSync(path, constants.X_OK); if (statSync(path).isFile()) return path; } catch { /* next PATH entry */ }
+    try {
+      accessSync(path, constants.X_OK);
+      if (statSync(path).isFile()) return path;
+    } catch {
+      /* next PATH entry */
+    }
   }
   throw new Error(`${name} executable unavailable${override ? `: ${override}` : " on PATH"}`);
 }
 export function resolveFlock(env = process.env) {
-  assert.equal(process.platform, "linux", "Alehouse requires Linux util-linux flock; no weaker lock fallback");
-  const candidates = env.PI_HARNESS_FLOCK ? [env.PI_HARNESS_FLOCK] :
-    ["/usr/bin/flock", "/bin/flock", "/run/current-system/sw/bin/flock"];
+  assert.equal(
+    process.platform,
+    "linux",
+    "Alehouse requires Linux util-linux flock; no weaker lock fallback",
+  );
+  const candidates = env.PI_HARNESS_FLOCK
+    ? [env.PI_HARNESS_FLOCK]
+    : ["/usr/bin/flock", "/bin/flock", "/run/current-system/sw/bin/flock"];
   for (const candidate of candidates) {
     assert(isAbsolute(candidate), "flock override must be an absolute executable path");
     try {
       const path = executable("flock", candidate, env);
       const result = spawnSync(path, ["--version"], { encoding: "utf8", timeout: 5000 });
-      assert(result.status === 0 && /flock from util-linux\b/.test(result.stdout ?? ""), `Expected util-linux flock: ${path}`);
+      assert(
+        result.status === 0 && /flock from util-linux\b/.test(result.stdout ?? ""),
+        `Expected util-linux flock: ${path}`,
+      );
       return path;
-    } catch (error) { if (env.PI_HARNESS_FLOCK) throw error; }
+    } catch (error) {
+      if (env.PI_HARNESS_FLOCK) throw error;
+    }
   }
-  throw new Error("Linux util-linux flock unavailable; set an explicit absolute PI_HARNESS_FLOCK (PATH is not trusted)");
+  throw new Error(
+    "Linux util-linux flock unavailable; set an explicit absolute PI_HARNESS_FLOCK (PATH is not trusted)",
+  );
 }
 // Optional observation dependency, never found through a project's PATH. A
 // missing/unsupported Git only makes checks' source_state unknown at runtime.
 export function resolveGit(env = process.env) {
-  const candidates = env.PI_HARNESS_GIT ? [env.PI_HARNESS_GIT] :
-    ["/usr/bin/git", "/bin/git", "/run/current-system/sw/bin/git"];
+  const candidates = env.PI_HARNESS_GIT
+    ? [env.PI_HARNESS_GIT]
+    : ["/usr/bin/git", "/bin/git", "/run/current-system/sw/bin/git"];
   /** @type {NodeJS.ProcessEnv} */
   const clean = {};
   for (const [key, value] of Object.entries(env)) {
-    if (/^(?:GIT_|LD_|DYLD_|_RLD|LDR_|BASH_FUNC_)/i.test(key) ||
-        /^(?:LIBPATH|SHLIB_PATH|GCONV_PATH|GLIBC_TUNABLES|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|CDPATH|SHELLOPTS|BASHOPTS|PATH)$/i.test(key)) continue;
+    if (
+      /^(?:GIT_|LD_|DYLD_|_RLD|LDR_|BASH_FUNC_)/i.test(key) ||
+      /^(?:LIBPATH|SHLIB_PATH|GCONV_PATH|GLIBC_TUNABLES|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|CDPATH|SHELLOPTS|BASHOPTS|PATH)$/i.test(
+        key,
+      )
+    )
+      continue;
     clean[key] = value;
   }
   // /dev/null is an ENOTDIR search sentinel, NOT a system executable directory.
@@ -65,10 +108,22 @@ export function resolveGit(env = process.env) {
     if (!isAbsolute(candidate)) continue;
     try {
       const path = realpathSync(executable("git", candidate, env));
-      const result = spawnSync(path, ["--version"], { env: clean, encoding: "utf8", timeout: 2000,
-        maxBuffer: 64 * 1024, killSignal: "SIGKILL" });
-      if (!result.error && result.status === 0 && /^git version [0-9]+\.[0-9]+\.[0-9]+[^\r\n]*\n?$/.test(result.stdout ?? "")) return path;
-    } catch { /* Optional; do not fall back to PATH, including bad overrides. */ }
+      const result = spawnSync(path, ["--version"], {
+        env: clean,
+        encoding: "utf8",
+        timeout: 2000,
+        maxBuffer: 64 * 1024,
+        killSignal: "SIGKILL",
+      });
+      if (
+        !result.error &&
+        result.status === 0 &&
+        /^git version [0-9]+\.[0-9]+\.[0-9]+[^\r\n]*\n?$/.test(result.stdout ?? "")
+      )
+        return path;
+    } catch {
+      /* Optional; do not fall back to PATH, including bad overrides. */
+    }
   }
   return undefined;
 }
@@ -83,11 +138,22 @@ export function webEntry(root = packageRoot) {
   let installed = false;
   for (let ancestor = resolve(root); ; ancestor = dirname(ancestor)) {
     try {
-      if (realpathSync(join(ancestor, "node_modules/pi-web-access/package.json")) === realpathSync(manifest)) { installed = true; break; }
-    } catch { /* Dependency may be hoisted farther up. */ }
+      if (
+        realpathSync(join(ancestor, "node_modules/pi-web-access/package.json")) ===
+        realpathSync(manifest)
+      ) {
+        installed = true;
+        break;
+      }
+    } catch {
+      /* Dependency may be hoisted farther up. */
+    }
     if (dirname(ancestor) === ancestor) break;
   }
-  assert(installed, "pi-web-access must belong to this install, not NODE_PATH or an ambient global package");
+  assert(
+    installed,
+    "pi-web-access must belong to this install, not NODE_PATH or an ambient global package",
+  );
   const pkg = JSON.parse(regular(manifest));
   assert.equal(pkg.version, "0.47.0", "Package-local pi-web-access must be pinned to 0.47.0");
   assert.deepEqual(pkg.pi.extensions, ["./dist"], "Pinned web extension manifest drift");
@@ -102,12 +168,25 @@ export function verifyRuntime(root = packageRoot) {
   assert.equal(manifest.version, 1, "Runtime manifest version mismatch; rebuild Alehouse");
   for (const [path, expected] of Object.entries(manifest.files)) {
     const target = resolve(runtime, path);
-    assert(!relative(runtime, target).startsWith("..") && !isAbsolute(path), "Invalid runtime manifest path");
-    assert.equal(digest(regular(target)), expected, `Runtime resource mismatch: ${path}; rebuild Alehouse`);
+    assert(
+      !relative(runtime, target).startsWith("..") && !isAbsolute(path),
+      "Invalid runtime manifest path",
+    );
+    assert.equal(
+      digest(regular(target)),
+      expected,
+      `Runtime resource mismatch: ${path}; rebuild Alehouse`,
+    );
   }
-  for (const required of ["worker-policy.json", "permission-system/index.ts", "permission-system/vendor/package.json",
-    "policy/jev-auto-approval.ts", "policy/static-safety-guard.ts", "policy/policy-grep.ts",
-    ...managedAgentNames.map(name => `agents/${name}.md`)]) {
+  for (const required of [
+    "worker-policy.json",
+    "permission-system/index.ts",
+    "permission-system/vendor/package.json",
+    "policy/jev-auto-approval.ts",
+    "policy/static-safety-guard.ts",
+    "policy/policy-grep.ts",
+    ...managedAgentNames.map((name) => `agents/${name}.md`),
+  ]) {
     assert(Object.hasOwn(manifest.files, required), `Incomplete runtime manifest: ${required}`);
   }
   return runtime;
@@ -116,22 +195,49 @@ export function verifyAgentResources(agentDir = agentDirectory(), root = package
   const runtime = join(root, "runtime");
   for (const name of managedAgentNames) {
     const path = join(agentDir, "agents", `${name}.md`);
-    try { statSync(path); } catch (error) {
-      if (error.code === "ENOENT") throw new Error(`Missing managed profile: ${path}. Run \`pi-alehouse init\` to create missing resources.`, { cause: error });
+    try {
+      statSync(path);
+    } catch (error) {
+      if (error.code === "ENOENT")
+        throw new Error(
+          `Missing managed profile: ${path}. Run \`pi-alehouse init\` to create missing resources.`,
+          { cause: error },
+        );
       throw error;
     }
-    assert.equal(digest(regular(path)), digest(regular(join(runtime, "agents", `${name}.md`))),
-      `Managed profile mismatch: ${path}. Preserve your file; reconcile it manually before launching.`);
+    assert.equal(
+      digest(regular(path)),
+      digest(regular(join(runtime, "agents", `${name}.md`))),
+      `Managed profile mismatch: ${path}. Preserve your file; reconcile it manually before launching.`,
+    );
   }
   // Existing Nix/user policy and catalogues remain authoritative, not replaced
   // with seed defaults. Upstream and harness perform full semantic validation.
   const presets = JSON.parse(regular(join(agentDir, "harness-presets.json")));
-  assert(presets?.version === 3 && typeof presets.defaultPreset === "string" && presets.presets && typeof presets.presets === "object" && !Array.isArray(presets.presets),
-    "Invalid harness-presets.json: catalogue version 3 is required, including empty Off catalogues. Preserve your file and update it manually; any configured preset needs all five slots d1–d5. Older configurations are not converted, and init never replaces existing files.");
-  const permissions = JSON.parse(regular(join(agentDir, "extensions/pi-permission-system/config.json")));
-  assert(permissions && permissions.permission && typeof permissions.permission === "object" && !Array.isArray(permissions.permission), "Invalid permission config.json");
+  assert(
+    presets?.version === 3 &&
+      typeof presets.defaultPreset === "string" &&
+      presets.presets &&
+      typeof presets.presets === "object" &&
+      !Array.isArray(presets.presets),
+    "Invalid harness-presets.json: catalogue version 3 is required, including empty Off catalogues. Preserve your file and update it manually; any configured preset needs all five slots d1–d5. Older configurations are not converted, and init never replaces existing files.",
+  );
+  const permissions = JSON.parse(
+    regular(join(agentDir, "extensions/pi-permission-system/config.json")),
+  );
+  assert(
+    permissions &&
+      permissions.permission &&
+      typeof permissions.permission === "object" &&
+      !Array.isArray(permissions.permission),
+    "Invalid permission config.json",
+  );
 }
-export function preflight({ root = packageRoot, env = process.env, agentDir = agentDirectory(env) } = {}) {
+export function preflight({
+  root = packageRoot,
+  env = process.env,
+  agentDir = agentDirectory(env),
+} = {}) {
   const runtime = verifyRuntime(root);
   verifyAgentResources(agentDir, root);
   const flock = resolveFlock(env);
@@ -141,12 +247,27 @@ export function preflight({ root = packageRoot, env = process.env, agentDir = ag
   // Old environment names remain the internal contract, not an unchecked
   // authority-selection escape hatch. Aliases of this verified generation are
   // accepted; another mutable deployment must use its own launcher/package.
-  for (const [key, expected] of [["PI_HARNESS_PERMISSION_ROOT", permissionRoot], ["PI_HARNESS_POLICY_ROOT", policyRoot]]) {
+  for (const [key, expected] of [
+    ["PI_HARNESS_PERMISSION_ROOT", permissionRoot],
+    ["PI_HARNESS_POLICY_ROOT", policyRoot],
+  ]) {
     if (!env[key]) continue;
     assert(isAbsolute(env[key]), `${key} must be absolute`);
-    assert.equal(realpathSync(env[key]), expected, `${key} does not identify this verified runtime generation; unset the override`);
+    assert.equal(
+      realpathSync(env[key]),
+      expected,
+      `${key} does not identify this verified runtime generation; unset the override`,
+    );
   }
-  return { runtime, permissionRoot, policyRoot, flock, ...(git ? { git } : {}), web: webEntry(root), agentDir };
+  return {
+    runtime,
+    permissionRoot,
+    policyRoot,
+    flock,
+    ...(git ? { git } : {}),
+    web: webEntry(root),
+    agentDir,
+  };
 }
 // Resolve executable dependency code using this installation's module graph,
 // including npm hoisting and canonical targets of package-manager symlinks.
@@ -172,50 +293,89 @@ function dependencyCodeRoots(root) {
         roots.add(tree);
         found = true;
         break;
-      } catch (error) { if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error; }
+      } catch (error) {
+        if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
+      }
     }
     assert(found, `Dependency is outside this installation or missing: ${name}`);
   }
   return [...roots];
 }
 function absoluteUserPath(path) {
-  return resolve(path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path);
+  return resolve(
+    path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path,
+  );
 }
 export function protectionResources(paths = {}, env = process.env, root = packageRoot, hostRoot) {
   const agentDir = paths.agentDir ?? agentDirectory(env);
   const auditArchives = join(agentDir, "logs/jev-auto-approval.jsonl.archives");
   try {
     const info = lstatSync(auditArchives);
-    assert(info.isDirectory() && !info.isSymbolicLink(),
-      "Jev audit archives must be a real directory; reconcile existing artifacts offline before restarting Pi");
-  } catch (error) { if (error.code !== "ENOENT") throw error; }
+    assert(
+      info.isDirectory() && !info.isSymbolicLink(),
+      "Jev audit archives must be a real directory; reconcile existing artifacts offline before restarting Pi",
+    );
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
   const retained = globalThis[Symbol.for("@rocklee/jev-auto-approval:api-key-file")];
   const keyFile = env.PI_JEV_API_KEY_FILE || (typeof retained === "string" ? retained : undefined);
-  const readFiles = [join(agentDir, "auth.json"), join(agentDir, "web-search.json"),
-    join(homedir(), ".pi/agent/auth.json"), join(homedir(), ".pi/agent/web-search.json"), join(homedir(), ".pi/web-search.json")];
-  if (env.XDG_CONFIG_HOME) readFiles.push(join(absoluteUserPath(env.XDG_CONFIG_HOME), "pi/web-search.json"));
+  const readFiles = [
+    join(agentDir, "auth.json"),
+    join(agentDir, "web-search.json"),
+    join(homedir(), ".pi/agent/auth.json"),
+    join(homedir(), ".pi/agent/web-search.json"),
+    join(homedir(), ".pi/web-search.json"),
+  ];
+  if (env.XDG_CONFIG_HOME)
+    readFiles.push(join(absoluteUserPath(env.XDG_CONFIG_HOME), "pi/web-search.json"));
   if (keyFile) readFiles.push(absoluteUserPath(keyFile));
   // Pin individual trust-input aliases as well as their directory. A nested
   // config/profile symlink can target an otherwise writable output directory.
-  const writeFiles = ["extensions/pi-permission-system/config.json", "extensions/pi-alehouse/config.json",
-    "harness-presets.json", "managed-permissions.json", "settings.json", "models.json", "trust.json",
-    ...managedAgentNames.map(name => `agents/${name}.md`),
+  const writeFiles = [
+    "extensions/pi-permission-system/config.json",
+    "extensions/pi-alehouse/config.json",
+    "harness-presets.json",
+    "managed-permissions.json",
+    "settings.json",
+    "models.json",
+    "trust.json",
+    ...managedAgentNames.map((name) => `agents/${name}.md`),
     // Pin audit artifacts separately: logs may be a user-selected symlink to a
     // shared directory. Do not make unrelated extensions' logs read-only.
-    "logs/jev-auto-approval.jsonl", "logs/.jev-auto-approval.jsonl.lock",
-  ].map(path => join(agentDir, path));
-  return { writeRoots: [...new Set([resolve(root), agentDir,
-    auditArchives,
-    paths.permissionRoot ?? join(root, "runtime/permission-system"), paths.policyRoot ?? join(root, "runtime/policy"),
-    ...dependencyCodeRoots(root), ...(hostRoot ? [hostRoot, ...dependencyCodeRoots(hostRoot)] : [])])],
-    readFiles: [...new Set(readFiles)], writeFiles };
+    "logs/jev-auto-approval.jsonl",
+    "logs/.jev-auto-approval.jsonl.lock",
+  ].map((path) => join(agentDir, path));
+  return {
+    writeRoots: [
+      ...new Set([
+        resolve(root),
+        agentDir,
+        auditArchives,
+        paths.permissionRoot ?? join(root, "runtime/permission-system"),
+        paths.policyRoot ?? join(root, "runtime/policy"),
+        ...dependencyCodeRoots(root),
+        ...(hostRoot ? [hostRoot, ...dependencyCodeRoots(hostRoot)] : []),
+      ]),
+    ],
+    readFiles: [...new Set(readFiles)],
+    writeFiles,
+  };
 }
 export function runtimeEnvironment(paths, env = process.env) {
-  const result = { ...env, PI_CODING_AGENT_DIR: paths.agentDir,
-    PI_HARNESS_PERMISSION_ROOT: paths.permissionRoot, PI_HARNESS_POLICY_ROOT: paths.policyRoot,
-    PI_HARNESS_FLOCK: paths.flock, PI_HARNESS_GIT: paths.git, PI_HARNESS_WEB_ENTRY: paths.web,
-    ...(env.PI_JEV_API_KEY_FILE ? { PI_JEV_API_KEY_FILE: absoluteUserPath(env.PI_JEV_API_KEY_FILE) } : {}),
-    PI_JEV_APPROVAL_MODE: env.PI_JEV_APPROVAL_MODE || "enforce-subagents" };
+  const result = {
+    ...env,
+    PI_CODING_AGENT_DIR: paths.agentDir,
+    PI_HARNESS_PERMISSION_ROOT: paths.permissionRoot,
+    PI_HARNESS_POLICY_ROOT: paths.policyRoot,
+    PI_HARNESS_FLOCK: paths.flock,
+    PI_HARNESS_GIT: paths.git,
+    PI_HARNESS_WEB_ENTRY: paths.web,
+    ...(env.PI_JEV_API_KEY_FILE
+      ? { PI_JEV_API_KEY_FILE: absoluteUserPath(env.PI_JEV_API_KEY_FILE) }
+      : {}),
+    PI_JEV_APPROVAL_MODE: env.PI_JEV_APPROVAL_MODE || "enforce-subagents",
+  };
   // Git is optional. execve rejects undefined values, and a stale inherited
   // selection must not survive when no trusted Git was verified.
   if (!paths.git) delete result.PI_HARNESS_GIT;

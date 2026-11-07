@@ -21,6 +21,8 @@ export function restoreFaultedLogs(files, closed) {
       rmdirSync(file);
       renameSync(file + ".before-fault", file);
       return { file, restored: true };
-    } catch (error) { return { file, restored: false, error: String(error) }; }
+    } catch (error) {
+      return { file, restored: false, error: String(error) };
+    }
   });
 }

@@ -26,23 +26,43 @@ process.exit(fixture.status ?? 2);
 function runGate(t, overrides = {}) {
   const root = mkdtempSync(join(tmpdir(), "pi-type-gate-regression-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const repo = join(root, "repo"), agent = join(root, "agent"), scratch = join(root, "scratch");
+  const repo = join(root, "repo"),
+    agent = join(root, "agent"),
+    scratch = join(root, "scratch");
   const harness = join(repo, "harness");
   for (const directory of [
-    "scripts", "extensions", "lib", "harness/test/support", "node_modules/.bin",
-    "node_modules/@earendil-works", "node_modules/@types", "node_modules/typebox",
+    "scripts",
+    "extensions",
+    "lib",
+    "harness/test/support",
+    "node_modules/.bin",
+    "node_modules/@earendil-works",
+    "node_modules/@types",
+    "node_modules/typebox",
     "node_modules/@gotgenes/pi-permission-system",
-  ]) mkdirSync(join(repo, directory), { recursive: true });
+  ])
+    mkdirSync(join(repo, directory), { recursive: true });
   mkdirSync(join(agent, "npm/node_modules/@gotgenes/pi-permission-system"), { recursive: true });
   mkdirSync(scratch);
   writeFileSync(join(repo, "package.json"), "{}\n");
-  writeFileSync(join(harness, "test/support/shared-library-types.mjs"), "// unrelated shared checker fixture\n");
+  writeFileSync(
+    join(harness, "test/support/shared-library-types.mjs"),
+    "// unrelated shared checker fixture\n",
+  );
   const compiler = join(repo, "node_modules/.bin/tsc");
-  writeFileSync(compiler, overrides.startFailure ? "#!/nonexistent/pi-typegate-interpreter\n" : fakeTsc);
+  writeFileSync(
+    compiler,
+    overrides.startFailure ? "#!/nonexistent/pi-typegate-interpreter\n" : fakeTsc,
+  );
   chmodSync(compiler, 0o755);
   const result = spawnSync(process.execPath, [typeGate, repo, agent], {
-    encoding: "utf8", timeout: 30_000,
-    env: { ...process.env, TMPDIR: scratch, PI_TYPEGATE_FIXTURE: JSON.stringify({ stdout: `${baseline}\n`, ...overrides }) },
+    encoding: "utf8",
+    timeout: 30_000,
+    env: {
+      ...process.env,
+      TMPDIR: scratch,
+      PI_TYPEGATE_FIXTURE: JSON.stringify({ stdout: `${baseline}\n`, ...overrides }),
+    },
   });
   assert(!result.error, result.error?.message);
   assert.equal(result.signal, null);
@@ -51,39 +71,73 @@ function runGate(t, overrides = {}) {
 }
 
 test("extension type gate accepts the single known file/code baseline and its continuation", (t) => {
-  const result = runGate(t, { stdout: `${baseline}\n  Continuation of the accepted diagnostic.\n` });
+  const result = runGate(t, {
+    stdout: `${baseline}\n  Continuation of the accepted diagnostic.\n`,
+  });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /PASS: Pi extensions typecheck.*fixture-5\.9\.3, 1 baselined/);
 });
 
 for (const [name, diagnostic, expected] of [
-  ["extension", "ext/other.ts(2,3): error TS2339: extra extension failure", /ext\/other\.ts:2:3: error TS2339/],
-  ["relative dependency", "node_modules/package/index.ts(1,1): error TS2345: dependency failure", /node_modules\/package\/index\.ts:1:1/],
-  ["absolute dependency", "/tmp/project (fixture)/node_modules/package/index.ts(1,1): error TS2345: external failure", /\/tmp\/project \(fixture\)\/node_modules/],
+  [
+    "extension",
+    "ext/other.ts(2,3): error TS2339: extra extension failure",
+    /ext\/other\.ts:2:3: error TS2339/,
+  ],
+  [
+    "relative dependency",
+    "node_modules/package/index.ts(1,1): error TS2345: dependency failure",
+    /node_modules\/package\/index\.ts:1:1/,
+  ],
+  [
+    "absolute dependency",
+    "/tmp/project (fixture)/node_modules/package/index.ts(1,1): error TS2345: external failure",
+    /\/tmp\/project \(fixture\)\/node_modules/,
+  ],
   ["global", "error TS2688: missing synthetic type definition", /<global>: error TS2688/],
   ["warning", "ext/policy-grep.ts(1,1): warning TS2322: not an accepted error", /warning TS2322/],
-]) test(`extension type gate rejects an additional ${name} diagnostic`, (t) => {
-  const result = runGate(t, { stdout: `${baseline}\n${diagnostic}\n` });
-  assert.equal(result.status, 1); assert.match(result.stderr, expected);
-  assert.doesNotMatch(result.stdout, /PASS: Pi extensions/);
-});
+])
+  test(`extension type gate rejects an additional ${name} diagnostic`, (t) => {
+    const result = runGate(t, { stdout: `${baseline}\n${diagnostic}\n` });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, expected);
+    assert.doesNotMatch(result.stdout, /PASS: Pi extensions/);
+  });
 
 for (const [name, overrides, expected] of [
   ["missing baseline", { stdout: "", status: 0 }, /Baseline entry no longer occurs/],
-  ["duplicate baseline", { stdout: `${baseline}\n${baseline}\n` }, /Baseline expects 1 x TS2322.*found 2/],
+  [
+    "duplicate baseline",
+    { stdout: `${baseline}\n${baseline}\n` },
+    /Baseline expects 1 x TS2322.*found 2/,
+  ],
   ["signal", { signal: true }, /tsc terminated by signal SIGTERM/],
   ["compiler exception", { crash: true }, /synthetic compiler exception/],
   ["unexpected status", { status: 17 }, /tsc exited abnormally: expected 2.*got 17/],
   ["zero status with error", { status: 0 }, /tsc exited abnormally: expected 2.*got 0/],
   ["compiler launch failure", { startFailure: true }, /tsc failed to run/],
-  ["unrecognized output", { stdout: `${baseline}\nunknown compiler failure\n` }, /Unrecognized tsc output/],
-  ["stderr without stdout newline", { stdout: baseline, stderr: "error TS2688: separate error\n" }, /<global>: error TS2688/],
+  [
+    "unrecognized output",
+    { stdout: `${baseline}\nunknown compiler failure\n` },
+    /Unrecognized tsc output/,
+  ],
+  [
+    "stderr without stdout newline",
+    { stdout: baseline, stderr: "error TS2688: separate error\n" },
+    /<global>: error TS2688/,
+  ],
   ["indented stderr", { stderr: "  unexpected stderr failure\n" }, /Unrecognized tsc output/],
   ["version failure", { versionStatus: 17 }, /tsc --version exited abnormally/],
-  ["version stderr", { versionError: "unexpected warning\n" }, /tsc --version wrote unexpected stderr/],
+  [
+    "version stderr",
+    { versionError: "unexpected warning\n" },
+    /tsc --version wrote unexpected stderr/,
+  ],
   ["version format", { version: "unknown version\n" }, /Unexpected tsc --version output/],
-]) test(`extension type gate rejects ${name}`, (t) => {
-  const result = runGate(t, overrides);
-  assert.equal(result.status, 1); assert.match(result.stderr, expected);
-  assert.doesNotMatch(result.stdout, /PASS: Pi extensions/);
-});
+])
+  test(`extension type gate rejects ${name}`, (t) => {
+    const result = runGate(t, overrides);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, expected);
+    assert.doesNotMatch(result.stdout, /PASS: Pi extensions/);
+  });

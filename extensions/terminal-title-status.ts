@@ -63,12 +63,11 @@ function spotlightTitle(title: string, frameIndex: number): string {
     .map((character, index) => {
       const bottomDistance = distanceFromCenter(index);
       const topDistance = distanceFromCenter(perimeter - index - 1);
-      const bottom = bottomDistance <= radius
-        ? highlightCharacter(character, bottomDistance === 0, false)
-        : character;
-      return topDistance <= radius
-        ? highlightCharacter(bottom, topDistance === 0, true)
-        : bottom;
+      const bottom =
+        bottomDistance <= radius
+          ? highlightCharacter(character, bottomDistance === 0, false)
+          : character;
+      return topDistance <= radius ? highlightCharacter(bottom, topDistance === 0, true) : bottom;
     })
     .join("");
 }
@@ -156,25 +155,26 @@ export default function (pi: ExtensionAPI) {
     setTitle();
   }
 
-  const unsubscribePermissionPrompt = pi.events.on(
-    "permissions:ui_prompt",
-    (value) => {
-      const requestId = requestIdFrom(value);
-      if (!requestId) return;
-      pendingPermissionRequests.add(requestId);
-      syncTitle();
-    },
-  );
+  const unsubscribePermissionPrompt = pi.events.on("permissions:ui_prompt", (value) => {
+    const requestId = requestIdFrom(value);
+    if (!requestId) return;
+    pendingPermissionRequests.add(requestId);
+    syncTitle();
+  });
 
   // A failed/expired dialog may never receive a decision with its original ID:
   // upstream's fail-closed boundary mints a new one. Observe UI settlement too,
   // without inventing a verdict or clearing other (possibly worker) asks.
-  const unsubscribePermissionEnds = ["permissions:decision", "managed-permissions:ui_prompt_end:v1"]
-    .map((channel) => pi.events.on(channel, (value) => {
+  const unsubscribePermissionEnds = [
+    "permissions:decision",
+    "managed-permissions:ui_prompt_end:v1",
+  ].map((channel) =>
+    pi.events.on(channel, (value) => {
       const requestId = requestIdFrom(value);
       if (!requestId || !pendingPermissionRequests.delete(requestId)) return;
       syncTitle();
-    }));
+    }),
+  );
 
   pi.on("session_start", (_event, ctx) => {
     context = ctx;

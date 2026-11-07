@@ -9,13 +9,25 @@ export const sharedLibraryDirectory = fileURLToPath(new URL("../../../lib/", imp
 
 export function readLibraryPairs(directory = sharedLibraryDirectory) {
   const names = readdirSync(directory);
-  const implementations = names.filter((name) => name.endsWith(".mjs")).map((name) => name.slice(0, -4)).sort();
-  const declarations = names.filter((name) => name.endsWith(".d.mts")).map((name) => name.slice(0, -6)).sort();
+  const implementations = names
+    .filter((name) => name.endsWith(".mjs"))
+    .map((name) => name.slice(0, -4))
+    .sort();
+  const declarations = names
+    .filter((name) => name.endsWith(".d.mts"))
+    .map((name) => name.slice(0, -6))
+    .sort();
   assert(implementations.length > 0, "No shared JavaScript implementations found");
-  assert.deepEqual(declarations, implementations, "Every shared implementation needs exactly one paired declaration");
-  return implementations.map((name) => ({ name,
+  assert.deepEqual(
+    declarations,
+    implementations,
+    "Every shared implementation needs exactly one paired declaration",
+  );
+  return implementations.map((name) => ({
+    name,
     implementation: readFileSync(join(directory, `${name}.mjs`), "utf8"),
-    declaration: readFileSync(join(directory, `${name}.d.mts`), "utf8") }));
+    declaration: readFileSync(join(directory, `${name}.d.mts`), "utf8"),
+  }));
 }
 
 // Normalize the current leaf API's functions, objects and arrays so equivalent
@@ -37,46 +49,69 @@ export function checkLibraryPairs(pairs) {
   assert(pairs.length > 0, "No shared library pairs to check");
   const scratch = mkdtempSync(join(tmpdir(), "pi-shared-types-"));
   try {
-    const implementation = join(scratch, "implementation"), declaration = join(scratch, "declaration");
-    mkdirSync(implementation); mkdirSync(declaration);
-    const roots = [], checks = [assertions];
+    const implementation = join(scratch, "implementation"),
+      declaration = join(scratch, "declaration");
+    mkdirSync(implementation);
+    mkdirSync(declaration);
+    const roots = [],
+      checks = [assertions];
     for (const [index, pair] of pairs.entries()) {
       assert(/^[\w-]+$/.test(pair.name), "Expected a simple shared module name");
       const file = join(implementation, `${pair.name}.mjs`);
       // Never put a .d.mts beside the implementation: NodeNext would silently
       // prefer it and turn an implementation check into declaration self-check.
-      writeFileSync(file, pair.implementation); roots.push(file);
+      writeFileSync(file, pair.implementation);
+      roots.push(file);
       writeFileSync(join(declaration, `${pair.name}.d.mts`), pair.declaration);
-      checks.push(`type Check${index} = Assert<Equal<typeof import("./implementation/${pair.name}.mjs"), typeof import("./declaration/${pair.name}.mjs")>>;`);
+      checks.push(
+        `type Check${index} = Assert<Equal<typeof import("./implementation/${pair.name}.mjs"), typeof import("./declaration/${pair.name}.mjs")>>;`,
+      );
     }
     const check = join(scratch, "contracts.mts");
-    writeFileSync(check, checks.join("\n")); roots.push(check);
+    writeFileSync(check, checks.join("\n"));
+    roots.push(check);
     const program = ts.createProgram(roots, {
       // Shared storage is SDK-free but uses Node's filesystem/crypto APIs.
       // Resolve the pinned development types from this checkout, not /tmp.
-      target: ts.ScriptTarget.ES2023, lib: ["lib.es2023.d.ts"], types: ["node"],
+      target: ts.ScriptTarget.ES2023,
+      lib: ["lib.es2023.d.ts"],
+      types: ["node"],
       typeRoots: [resolve(sharedLibraryDirectory, "../node_modules/@types")],
-      module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext,
-      allowJs: true, checkJs: true, strict: true, noUncheckedIndexedAccess: true,
-      noEmit: true, skipLibCheck: false,
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+      allowJs: true,
+      checkJs: true,
+      strict: true,
+      noUncheckedIndexedAccess: true,
+      noEmit: true,
+      skipLibCheck: false,
     });
     return ts.getPreEmitDiagnostics(program).map((diagnostic) => {
       const message = ts.formatDiagnostic(diagnostic, {
-        getCurrentDirectory: () => scratch, getCanonicalFileName: (file) => file, getNewLine: () => "\n",
+        getCurrentDirectory: () => scratch,
+        getCanonicalFileName: (file) => file,
+        getNewLine: () => "\n",
       });
       if (diagnostic.file?.fileName !== check || diagnostic.start === undefined) return message;
       const { line } = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
       // Keep the module name visible after the temporary tree is removed.
       return `${message}  ${diagnostic.file.text.split("\n")[line]}\n`;
     });
-  } finally { rmSync(scratch, { recursive: true, force: true }); }
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const pairs = readLibraryPairs(process.argv[2] ?? sharedLibraryDirectory);
   const failures = checkLibraryPairs(pairs);
   if (failures.length) {
-    console.error(`FAIL: shared JavaScript implementation/declaration contract\n${failures.join("")}`);
+    console.error(
+      `FAIL: shared JavaScript implementation/declaration contract\n${failures.join("")}`,
+    );
     process.exitCode = 1;
-  } else console.log(`PASS: ${pairs.length} shared JS implementations checked independently against paired declarations`);
+  } else
+    console.log(
+      `PASS: ${pairs.length} shared JS implementations checked independently against paired declarations`,
+    );
 }

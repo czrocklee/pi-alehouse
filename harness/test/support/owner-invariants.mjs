@@ -23,11 +23,13 @@ export function assertOwnerInvariants(controller, where = "teardown") {
     if (!run || run.record.request_id !== requestId) bad(`requests entry ${requestId}`);
   }
   // I8: admission sequence covers exactly 1..sequence; runs are never evicted.
-  if (runs.size !== controller.sequence) bad(`sequence ${controller.sequence} != runs ${runs.size}`);
+  if (runs.size !== controller.sequence)
+    bad(`sequence ${controller.sequence} != runs ${runs.size}`);
   const sequences = new Set();
   for (const run of runs.values()) {
     const seq = run.record.enqueue_sequence;
-    if (!Number.isInteger(seq) || seq < 1 || seq > controller.sequence || sequences.has(seq)) bad(`enqueue_sequence ${seq}`);
+    if (!Number.isInteger(seq) || seq < 1 || seq > controller.sequence || sequences.has(seq))
+      bad(`enqueue_sequence ${seq}`);
     sequences.add(seq);
   }
 
@@ -36,22 +38,26 @@ export function assertOwnerInvariants(controller, where = "teardown") {
   for (const agent of agents.values()) {
     if (agent.resident) resident++;
     if (agent.inbox.length > INBOX_LIMIT) bad(`inbox count ${agent.id}`);
-    if (agent.inbox.reduce((sum, text) => sum + text.length, 0) > INBOX_CHARS) bad(`inbox chars ${agent.id}`);
+    if (agent.inbox.reduce((sum, text) => sum + text.length, 0) > INBOX_CHARS)
+      bad(`inbox chars ${agent.id}`);
     if (agent.current) {
       const current = runs.get(agent.current);
-      if (!current || current.record.agent_id !== agent.id || terminal(current.record.status)) bad(`agent.current ${agent.id}`);
+      if (!current || current.record.agent_id !== agent.id || terminal(current.record.status))
+        bad(`agent.current ${agent.id}`);
     }
     // Weak form only: the reserving run may itself be stopping, and the
     // question's own run is terminal while an answer is queued or running.
     if (agent.question) {
       if (!runs.has(agent.question.run_id)) bad(`question run ${agent.id}`);
-      if (agent.question.reserved_by !== undefined && agent.question.reserved_by !== agent.current) bad(`reserved_by ${agent.id}`);
+      if (agent.question.reserved_by !== undefined && agent.question.reserved_by !== agent.current)
+        bad(`reserved_by ${agent.id}`);
     }
   }
   if (resident > limits.resident) bad(`resident ${resident} > ${limits.resident}`);
 
   // I4/I5: output accounting — the one cross-structure scalar-vs-fold pair.
-  let reservedCount = 0, retainedSum = 0;
+  let reservedCount = 0,
+    retainedSum = 0;
   for (const run of runs.values()) {
     if (run.outputReserved) reservedCount++;
     else retainedSum += run.output.text.length;
@@ -59,7 +65,8 @@ export function assertOwnerInvariants(controller, where = "teardown") {
   if (controller.reservedOutputChars !== reservedCount * limits.output) {
     bad(`reserved ${controller.reservedOutputChars} != ${reservedCount}x${limits.output}`);
   }
-  if (controller.retainedOutputChars !== retainedSum) bad(`retained ${controller.retainedOutputChars} != ${retainedSum}`);
+  if (controller.retainedOutputChars !== retainedSum)
+    bad(`retained ${controller.retainedOutputChars} != ${retainedSum}`);
 
   // I6: active counter pairs with flags. Legal scheduled occupancy is an
   // active running or cancelling Run, including initializing and unconfirmed
@@ -70,17 +77,23 @@ export function assertOwnerInvariants(controller, where = "teardown") {
   for (const run of runs.values()) {
     if (run.active) {
       activeCount++;
-      if (run.record.execution_exited || !["running", "cancelling"].includes(run.record.status)) bad(`active ${run.record.run_id}`);
+      if (run.record.execution_exited || !["running", "cancelling"].includes(run.record.status))
+        bad(`active ${run.record.run_id}`);
       const provider = run.record.settings.provider;
       activeByProvider.set(provider, (activeByProvider.get(provider) ?? 0) + 1);
     }
-    if (["running", "cancelling"].includes(run.record.status) && !run.active && !run.record.execution_exited) {
+    if (
+      ["running", "cancelling"].includes(run.record.status) &&
+      !run.active &&
+      !run.record.execution_exited
+    ) {
       bad(`unslotted ${run.record.status} ${run.record.run_id}`);
     }
   }
   if (controller.active !== activeCount) bad(`active ${controller.active} != ${activeCount}`);
   for (const [provider, count] of activeByProvider) {
-    if (count > limits.concurrency) bad(`provider ${provider} active ${count} > ${limits.concurrency}`);
+    if (count > limits.concurrency)
+      bad(`provider ${provider} active ${count} > ${limits.concurrency}`);
   }
 
   // I7: queue membership iff queued and not yet exited; no duplicates.
@@ -90,10 +103,15 @@ export function assertOwnerInvariants(controller, where = "teardown") {
   if (queue.length > limits.queue) bad(`queue ${queue.length} > ${limits.queue}`);
   for (const id of queue) {
     const run = runs.get(id);
-    if (!run || run.record.status !== "queued" || run.record.execution_exited) bad(`queue entry ${id}`);
+    if (!run || run.record.status !== "queued" || run.record.execution_exited)
+      bad(`queue entry ${id}`);
   }
   for (const run of runs.values()) {
-    if (run.record.status === "queued" && !run.record.execution_exited && !inQueue.has(run.record.run_id)) {
+    if (
+      run.record.status === "queued" &&
+      !run.record.execution_exited &&
+      !inQueue.has(run.record.run_id)
+    ) {
       bad(`queued not in queue ${run.record.run_id}`);
     }
   }
@@ -101,20 +119,30 @@ export function assertOwnerInvariants(controller, where = "teardown") {
   // admitted provider still has capacity. Active cancelling holds that slot
   // (I6). Only the fault flags that actually suspend pump skip this check;
   // closing is one of them, so it is observed before shutdown, not weakened.
-  if (!controller.closing && !controller.closed && !controller.parentError && !controller.internalError && !controller.cleanupUncertain) {
+  if (
+    !controller.closing &&
+    !controller.closed &&
+    !controller.parentError &&
+    !controller.internalError &&
+    !controller.cleanupUncertain
+  ) {
     for (const id of queue) {
       const run = runs.get(id);
       if (!run) continue;
-      const blocked = (run.record.after ?? []).some((dep) => !terminal(runs.get(dep)?.record.status));
+      const blocked = (run.record.after ?? []).some(
+        (dep) => !terminal(runs.get(dep)?.record.status),
+      );
       if (blocked) continue;
       const provider = run.record.settings.provider;
-      if ((activeByProvider.get(provider) ?? 0) < limits.concurrency) bad(`ready ${id} queued under ${provider} with capacity`);
+      if ((activeByProvider.get(provider) ?? 0) < limits.concurrency)
+        bad(`ready ${id} queued under ${provider} with capacity`);
     }
   }
 
   // I9: bounded delivery log whose entries name live runs.
   if (deliveries.size > DELIVERY_LOG_LIMIT) bad(`delivery log ${deliveries.size}`);
-  for (const entry of deliveries.values()) if (!runs.has(entry.run_id)) bad("delivery names a dead run");
+  for (const entry of deliveries.values())
+    if (!runs.has(entry.run_id)) bad("delivery names a dead run");
 
   // I10: settlement sequence lives on each original Run, without a second log.
   const settledSequences = [];
@@ -122,12 +150,15 @@ export function assertOwnerInvariants(controller, where = "teardown") {
     const settled = terminal(run.record.status);
     if (typeof run.finished_presented !== "boolean") bad(`finished bit ${run.record.run_id}`);
     if (run.finished_presented && !settled) bad(`presented unsettled ${run.record.run_id}`);
-    if (settled !== (run.settled_seq !== undefined)) bad(`settled sequence presence ${run.record.run_id}`);
+    if (settled !== (run.settled_seq !== undefined))
+      bad(`settled sequence presence ${run.record.run_id}`);
     if (run.settled_seq !== undefined) settledSequences.push(run.settled_seq);
   }
   settledSequences.sort((a, b) => a - b);
-  if (settledSequences.some((seq, index) => seq !== index + 1)) bad("settlement sequence gaps or duplicates");
-  if (controller.settledSeq !== settledSequences.length) bad(`settledSeq ${controller.settledSeq} != ${settledSequences.length}`);
+  if (settledSequences.some((seq, index) => seq !== index + 1))
+    bad("settlement sequence gaps or duplicates");
+  if (controller.settledSeq !== settledSequences.length)
+    bad(`settledSeq ${controller.settledSeq} != ${settledSequences.length}`);
 
   // Pending alerts retain original Run identity; quotas are derived from the FIFO.
   if (controller.alerts.length > 64) bad("Owner alert quota");
@@ -135,7 +166,8 @@ export function assertOwnerInvariants(controller, where = "teardown") {
     if (runs.get(alert.run.record.run_id) !== alert.run) bad("alert names a dead Run");
   }
   for (const agent of agents.values()) {
-    if (controller.alerts.filter((alert) => alert.run.record.agent_id === agent.id).length > 16) bad(`Agent alert quota ${agent.id}`);
+    if (controller.alerts.filter((alert) => alert.run.record.agent_id === agent.id).length > 16)
+      bad(`Agent alert quota ${agent.id}`);
   }
 
   // I13/I14: release bookkeeping and closed implications.
@@ -144,7 +176,8 @@ export function assertOwnerInvariants(controller, where = "teardown") {
     if (!controller.closing) bad("closed without closing");
     if (queue.length) bad("closed with queued work");
     if (controller.active !== 0) bad("closed with active work");
-    for (const run of runs.values()) if (!terminal(run.record.status)) bad(`closed with unsettled ${run.record.run_id}`);
+    for (const run of runs.values())
+      if (!terminal(run.record.status)) bad(`closed with unsettled ${run.record.run_id}`);
   }
   assert.deepEqual(violations, [], `owner invariants (${where}): ${violations.join("; ")}`);
 }

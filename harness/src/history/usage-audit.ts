@@ -9,12 +9,27 @@ const checkpoints = new WeakMap<OwnerController, { key: string; notified: boolea
  * Repeated close/shutdown snapshots must not be added together. Parent totals
  * cannot be completed through the extension API without a later tool result.
  */
-export function reportUnreportedUsage(pi: Pick<ExtensionAPI, "appendEntry">, ctx: Pick<ExtensionContext, "ui">,
-  controller: OwnerController): void {
-  const state = controller.stats(), usage = state.unreported_usage;
-  if (!usage) { checkpoints.delete(controller); return; }
-  const snapshot = { ...controller.identity, closed: state.closed, usage: { ...usage,
-    byModel: Object.fromEntries(Object.entries(usage.byModel).sort(([a], [b]) => a.localeCompare(b))) } };
+export function reportUnreportedUsage(
+  pi: Pick<ExtensionAPI, "appendEntry">,
+  ctx: Pick<ExtensionContext, "ui">,
+  controller: OwnerController,
+): void {
+  const state = controller.stats(),
+    usage = state.unreported_usage;
+  if (!usage) {
+    checkpoints.delete(controller);
+    return;
+  }
+  const snapshot = {
+    ...controller.identity,
+    closed: state.closed,
+    usage: {
+      ...usage,
+      byModel: Object.fromEntries(
+        Object.entries(usage.byModel).sort(([a], [b]) => a.localeCompare(b)),
+      ),
+    },
+  };
   const key = JSON.stringify(snapshot); // Exclude timestamp; include partial/model splits and closed state.
   let checkpoint = checkpoints.get(controller);
   if (checkpoint?.key === key && checkpoint.notified) return;
@@ -22,10 +37,19 @@ export function reportUnreportedUsage(pi: Pick<ExtensionAPI, "appendEntry">, ctx
   if (!recorded) {
     try {
       pi.appendEntry(residueType, { ...snapshot, recorded_at: Date.now() });
-      checkpoint = { key, notified: false }; checkpoints.set(controller, checkpoint); recorded = true;
-    } catch { /* Keep the prior successful checkpoint; retry this state next time. */ }
+      checkpoint = { key, notified: false };
+      checkpoints.set(controller, checkpoint);
+      recorded = true;
+    } catch {
+      /* Keep the prior successful checkpoint; retry this state next time. */
+    }
   }
-  ctx.ui.notify(`Child usage not merged into Pi totals: ${JSON.stringify(usage.total)}${usage.partial.length ? ` (incomplete: ${usage.partial.join(", ")})` : ""}. ` +
-    (recorded ? "Audit snapshot recorded; /harness-history shows the latest checkpoint." : "Audit snapshot could not be recorded; preserve this notice."), "warning");
+  ctx.ui.notify(
+    `Child usage not merged into Pi totals: ${JSON.stringify(usage.total)}${usage.partial.length ? ` (incomplete: ${usage.partial.join(", ")})` : ""}. ` +
+      (recorded
+        ? "Audit snapshot recorded; /harness-history shows the latest checkpoint."
+        : "Audit snapshot could not be recorded; preserve this notice."),
+    "warning",
+  );
   if (recorded && checkpoint) checkpoint.notified = true;
 }

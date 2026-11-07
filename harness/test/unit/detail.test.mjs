@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { DetailPane, renderDetailFields, renderDetailTitle, transcriptRule, wrapText }
-  from "../../dist/ui/agent-detail.js";
+import {
+  DetailPane,
+  renderDetailFields,
+  renderDetailTitle,
+  transcriptRule,
+  wrapText,
+} from "../../dist/ui/agent-detail.js";
 import { paneRow } from "../../dist/ui/format.js";
 import { plainText, singleLineText } from "../../dist/ui/text.js";
 import { renderWidget } from "../../dist/ui/agent-widget.js";
@@ -14,27 +19,58 @@ const spend = (input, output, cache_read, cache_write, cost, model = "anthropic/
 const theme = { fg: (_color, text) => text, bold: (text) => text };
 const cwd = "/workspace/project";
 const view = (overrides = {}) => ({
-  owner_id: "o", generation: "g", agent_id: "a-19b7", run_id: "r-8f3a", name: "reviewer",
+  owner_id: "o",
+  generation: "g",
+  agent_id: "a-19b7",
+  run_id: "r-8f3a",
+  name: "reviewer",
   description: "审查 controller.ts 的生命周期合同",
-  effective_settings: { provider: "anthropic", model: "claude-opus-5", thinking: "medium", parent_thinking: "medium",
-    thinking_resolution: "identity", profile: "researcher",
-    difficulty: 5, strength: "d5", preset: "team", preset_version: "v2", selection_digest: "1".repeat(64),
-    cwd, tools: ["read", "grep", "find", "ls"], definition_digest: "0".repeat(64), context_mode: "none" },
-  status: "running", phase: "executing", execution_exited: false, finalization_pending: false, resumable: true,
-  owner_blocked: false, pending_messages: 0,
-  elapsed_ms: 93000, turn_elapsed_ms: 1100, turns: 3, max_turns: 256, execution_elapsed_ms: 93000,
+  effective_settings: {
+    provider: "anthropic",
+    model: "claude-opus-5",
+    thinking: "medium",
+    parent_thinking: "medium",
+    thinking_resolution: "identity",
+    profile: "researcher",
+    difficulty: 5,
+    strength: "d5",
+    preset: "team",
+    preset_version: "v2",
+    selection_digest: "1".repeat(64),
+    cwd,
+    tools: ["read", "grep", "find", "ls"],
+    definition_digest: "0".repeat(64),
+    context_mode: "none",
+  },
+  status: "running",
+  phase: "executing",
+  execution_exited: false,
+  finalization_pending: false,
+  resumable: true,
+  owner_blocked: false,
+  pending_messages: 0,
+  elapsed_ms: 93000,
+  turn_elapsed_ms: 1100,
+  turns: 3,
+  max_turns: 256,
+  execution_elapsed_ms: 93000,
   usage: spend(61200, 3100, 19900, 0, null),
-  cleanup_errors: [], discarded_inputs: [], ...overrides,
+  cleanup_errors: [],
+  discarded_inputs: [],
+  ...overrides,
 });
 const live = (overrides = {}) => ({ active_tools: [], tool_uses: 12, preview: "", ...overrides });
-const body = (v = {}, l = {}, width = 90) => renderDetailFields({ view: view(v), live: live(l) }, theme, width);
+const body = (v = {}, l = {}, width = 90) =>
+  renderDetailFields({ view: view(v), live: live(l) }, theme, width);
 const joined = (...args) => body(...args).join("\n");
 
 test("wrapText never exceeds its budget, counting CJK by the columns it occupies", () => {
-  const text = "turnStarted 在 turnEnd 里被清掉，所以两个 turn 之间 turn_elapsed_ms 会变成 undefined";
+  const text =
+    "turnStarted 在 turnEnd 里被清掉，所以两个 turn 之间 turn_elapsed_ms 会变成 undefined";
   for (const columns of [12, 20, 33, 48]) {
     const lines = wrapText(text, columns);
-    for (const line of lines) assert.ok(visibleWidth(line) <= columns, `${columns}: ${JSON.stringify(line)}`);
+    for (const line of lines)
+      assert.ok(visibleWidth(line) <= columns, `${columns}: ${JSON.stringify(line)}`);
     // Wrapping is reversible: no character is invented or dropped.
     assert.equal(lines.join("").replace(/\s+/g, ""), text.replace(/\s+/g, ""));
   }
@@ -51,7 +87,11 @@ test("plain metadata normalizes whitespace and escapes controls without destroyi
   assert.equal(singleLineText(" one\ttwo\r\nthree "), "one two three");
   assert.equal(plainText("\u001b[31mred\u001b[0m"), "red");
   assert.equal(plainText("a\u0000b\u0007c\u202ed\u2066e"), "a\\x00b\\x07c\\u202ed\\u2066e");
-  assert.equal(plainText(joiners), joiners, "ZWJ, ZWNJ and variation selectors are not bidi controls");
+  assert.equal(
+    plainText(joiners),
+    joiners,
+    "ZWJ, ZWNJ and variation selectors are not bidi controls",
+  );
 });
 
 test("shared wrapping keeps grapheme clusters whole and bounds emoji display width", () => {
@@ -61,17 +101,23 @@ test("shared wrapping keeps grapheme clusters whole and bounds emoji display wid
     const lines = wrapText(cluster.repeat(3), width);
     assert.deepEqual(lines, [cluster, cluster, cluster]);
     assert(lines.every((line) => visibleWidth(line) <= width));
-    if (width > 1) assert.deepEqual(wrapText(cluster, 1), ["…"], "an oversized cluster is not split");
+    if (width > 1)
+      assert.deepEqual(wrapText(cluster, 1), ["…"], "an oversized cluster is not split");
   }
 });
 
 test("ordinary detail metadata cannot inject terminal or bidi controls", () => {
   const raw = "before\tword\nnext\u001b[31mred\u001b[0m\u0007\u202e👩‍💻";
-  const v = view({ name: raw, description: raw,
+  const v = view({
+    name: raw,
+    description: raw,
     effective_settings: { ...view().effective_settings, model: raw, cwd: raw },
-    outcome: { error: raw } });
+    outcome: { error: raw },
+  });
   const before = structuredClone(v);
-  const fields = renderDetailFields({ view: v, live: live({ preview: raw }) }, theme, 120).join("\n");
+  const fields = renderDetailFields({ view: v, live: live({ preview: raw }) }, theme, 120).join(
+    "\n",
+  );
   assert.doesNotMatch(fields.replaceAll("\n", ""), /[\p{Cc}\p{Bidi_Control}]/u);
   assert.match(fields, /\\x07/);
   assert.match(fields, /\\u202e/);
@@ -108,14 +154,23 @@ test("the title reserves task and Run reuse cue before optional identity text", 
 });
 
 test("detail profile labels say worker and scout without renaming nicknames or historical settings", () => {
-  for (const [profile, displayed] of [["editor", "worker"], ["reader", "reader"], ["researcher", "scout"]]) {
+  for (const [profile, displayed] of [
+    ["editor", "worker"],
+    ["reader", "reader"],
+    ["researcher", "scout"],
+  ]) {
     for (const name of ["", "editor"]) {
       const v = view({ name, effective_settings: { ...view().effective_settings, profile } });
       const before = structuredClone(v);
       const title = renderDetailTitle({ view: v, live: live() }, 0, theme, 100);
       assert.ok(title.includes(name ? `${name} (${displayed})` : displayed), title);
-      if (!name) assert.equal(title.split(displayed).length - 1, 1, "unnamed profile appears only once");
-      assert.deepEqual(v, before, "profile labels are a display projection, not a settings migration");
+      if (!name)
+        assert.equal(title.split(displayed).length - 1, 1, "unnamed profile appears only once");
+      assert.deepEqual(
+        v,
+        before,
+        "profile labels are a display projection, not a settings migration",
+      );
     }
   }
 });
@@ -131,11 +186,12 @@ test("narrow detail preserves the full inherited cwd without clipping", () => {
   const cwd = `/parent/${"工作目录/".repeat(12)}project`;
   for (const width of [40, 62, 100]) {
     const lines = body({ effective_settings: { ...view().effective_settings, cwd } }, {}, width);
-    assert(lines.every(line => visibleWidth(line) <= width));
-    const at = lines.findIndex(line => /^ {2}cwd\s/.test(line));
+    assert(lines.every((line) => visibleWidth(line) <= width));
+    const at = lines.findIndex((line) => /^ {2}cwd\s/.test(line));
     assert(at >= 0);
     let restored = lines[at].slice(12);
-    for (let i = at + 1; i < lines.length && lines[i].startsWith(" ".repeat(12)); i++) restored += lines[i].slice(12);
+    for (let i = at + 1; i < lines.length && lines[i].startsWith(" ".repeat(12)); i++)
+      restored += lines[i].slice(12);
     assert.equal(restored, cwd);
   }
 });
@@ -152,13 +208,19 @@ test("the body carries the identity, configuration and lifecycle the widget line
   assert.match(text, /cwd\s+\/workspace\/project/);
   assert.match(text, /tools\s+read grep find ls/);
   assert.match(text, /phase\s+executing · resumable/);
-  assert.ok(!text.includes("transcript"), "the transcript is a collaborator, not part of the field block");
+  assert.ok(
+    !text.includes("transcript"),
+    "the transcript is a collaborator, not part of the field block",
+  );
 });
 
 test("detail fields preserve the model id and show context totals separately from billed tokens", () => {
   const settings = { ...view().effective_settings, provider: "openai-codex", model: "gpt-5.6-sol" };
-  const context = (tokens) => joined({ effective_settings: settings,
-    runtime: { activity: "generating", context: { tokens, context_window: 272000 } } });
+  const context = (tokens) =>
+    joined({
+      effective_settings: settings,
+      runtime: { activity: "generating", context: { tokens, context_window: 272000 } },
+    });
   assert.match(context(231000), /model\s+gpt-5\.6-sol/);
   assert.doesNotMatch(context(231000), /openai-codex/);
   assert.match(context(231000), /context\s+≈231k\/272k tokens · 84\.9%/);
@@ -169,16 +231,35 @@ test("detail fields preserve the model id and show context totals separately fro
 });
 
 test("detail context and all billed-token components promote their rounded unit without touching the ledger", () => {
-  for (const [value, billed, context] of [[1000, "1.0k", "1k"], [999499, "999.5k", "999k"],
-    [999500, "999.5k", "1.0M"], [999949, "999.9k", "1.0M"], [999950, "1.0M", "1.0M"],
-    [999999, "1.0M", "1.0M"], [1000000, "1.0M", "1.0M"]]) {
+  for (const [value, billed, context] of [
+    [1000, "1.0k", "1k"],
+    [999499, "999.5k", "999k"],
+    [999500, "999.5k", "1.0M"],
+    [999949, "999.9k", "1.0M"],
+    [999950, "1.0M", "1.0M"],
+    [999999, "1.0M", "1.0M"],
+    [1000000, "1.0M", "1.0M"],
+  ]) {
     const usage = spend(value, value, value, value, 0.0042);
     const before = structuredClone(usage);
-    const lines = body({ usage, runtime: { activity: "generating", context: { tokens: value, context_window: 2000000 } } }, {}, 200);
-    const tokens = lines.find(line => /^ {2}tokens\s/.test(line));
-    assert.ok(tokens?.endsWith(`in ${billed} · out ${billed} · cache r ${billed} · w ${billed}`), tokens);
-    assert.ok(lines.some(line => line.includes(`≈${context}/2.0M tokens`)), String(value));
-    assert.ok(lines.some(line => /cost\s+\$0\.004/.test(line)));
+    const lines = body(
+      {
+        usage,
+        runtime: { activity: "generating", context: { tokens: value, context_window: 2000000 } },
+      },
+      {},
+      200,
+    );
+    const tokens = lines.find((line) => /^ {2}tokens\s/.test(line));
+    assert.ok(
+      tokens?.endsWith(`in ${billed} · out ${billed} · cache r ${billed} · w ${billed}`),
+      tokens,
+    );
+    assert.ok(
+      lines.some((line) => line.includes(`≈${context}/2.0M tokens`)),
+      String(value),
+    );
+    assert.ok(lines.some((line) => /cost\s+\$0\.004/.test(line)));
     assert.doesNotMatch(lines.join("\n"), /1000(?:\.0)?k/);
     assert.deepEqual(usage, before, "formatting cannot round the ledger itself");
   }
@@ -197,10 +278,18 @@ test("detail routing shows each matching admitted difficulty slot once without c
 });
 
 test("historical detail renders its recorded old slot without converting immutable settings", () => {
-  for (const [difficulty, strength] of [[1, "light"], [2, "light"], [3, "standard"], [4, "strong"], [5, "strong"]]) {
+  for (const [difficulty, strength] of [
+    [1, "light"],
+    [2, "light"],
+    [3, "standard"],
+    [4, "strong"],
+    [5, "strong"],
+  ]) {
     const settings = { ...view().effective_settings, difficulty, strength };
     const before = structuredClone(settings);
-    assert.ok(joined({ effective_settings: settings }).includes(`team@v2 · d${difficulty}→${strength}`));
+    assert.ok(
+      joined({ effective_settings: settings }).includes(`team@v2 · d${difficulty}→${strength}`),
+    );
     assert.deepEqual(settings, before, "history is display-only, not a configuration migration");
   }
 });
@@ -211,27 +300,60 @@ test("historical detail without an available difficulty shows only its recorded 
       const settings = { ...view().effective_settings, difficulty, strength };
       if (difficulty === undefined) delete settings.difficulty;
       const before = structuredClone(settings);
-      const routing = joined({ effective_settings: settings }).split("\n").find((line) => /^ {2}routing\s/.test(line));
+      const routing = joined({ effective_settings: settings })
+        .split("\n")
+        .find((line) => /^ {2}routing\s/.test(line));
       assert.ok(routing.endsWith(`team@v2 · ${strength}`), routing);
       assert.doesNotMatch(routing, /→|undefined|NaN/);
-      assert.deepEqual(settings, before, "display must not infer or restore an unavailable historical rating");
+      assert.deepEqual(
+        settings,
+        before,
+        "display must not infer or restore an unavailable historical rating",
+      );
     }
   }
 });
 
 test("detail effort distinguishes inherited identity, mapped override and fixed preset effort", () => {
   const settings = view().effective_settings;
-  assert.match(joined({ effective_settings: { ...settings, effort_source: "preset" } }),
-    /effort\s+medium · parent identity · source: preset · fixed at creation/);
-  const mapped = joined({ effective_settings: { ...settings, parent_thinking: "low", thinking: "high",
-    thinking_resolution: "preset_mapping", effort_source: "user_override" } });
-  assert.match(mapped, /effort\s+high · low→high \(preset map\) · source: user override · fixed at creation/);
-  const automatic = joined({ effective_settings: { ...settings, parent_thinking: "low", thinking: "high",
-    thinking_resolution: "automatic_mapping", effort_source: "preset" } });
-  assert.match(automatic, /effort\s+high · low→high \(auto map\) · source: preset · fixed at creation/);
+  assert.match(
+    joined({ effective_settings: { ...settings, effort_source: "preset" } }),
+    /effort\s+medium · parent identity · source: preset · fixed at creation/,
+  );
+  const mapped = joined({
+    effective_settings: {
+      ...settings,
+      parent_thinking: "low",
+      thinking: "high",
+      thinking_resolution: "preset_mapping",
+      effort_source: "user_override",
+    },
+  });
+  assert.match(
+    mapped,
+    /effort\s+high · low→high \(preset map\) · source: user override · fixed at creation/,
+  );
+  const automatic = joined({
+    effective_settings: {
+      ...settings,
+      parent_thinking: "low",
+      thinking: "high",
+      thinking_resolution: "automatic_mapping",
+      effort_source: "preset",
+    },
+  });
+  assert.match(
+    automatic,
+    /effort\s+high · low→high \(auto map\) · source: preset · fixed at creation/,
+  );
   assert.doesNotMatch(automatic, /preset map/);
   for (const parent of [undefined, "off"]) {
-    const fixed = { ...settings, thinking: "high", thinking_resolution: "preset_fixed", effort_source: "preset" };
+    const fixed = {
+      ...settings,
+      thinking: "high",
+      thinking_resolution: "preset_fixed",
+      effort_source: "preset",
+    };
     if (parent === undefined) delete fixed.parent_thinking;
     else fixed.parent_thinking = parent;
     const text = joined({ effective_settings: fixed });
@@ -241,34 +363,59 @@ test("detail effort distinguishes inherited identity, mapped override and fixed 
 });
 
 test("effort provenance wraps on narrow panes without clipping or inventing a source", () => {
-  for (const [resolution, label] of [["preset_mapping", "preset map"], ["automatic_mapping", "auto map"]]) {
-    const settings = { ...view().effective_settings, thinking: "high", parent_thinking: "low",
-      thinking_resolution: resolution, effort_source: "user_override" };
+  for (const [resolution, label] of [
+    ["preset_mapping", "preset map"],
+    ["automatic_mapping", "auto map"],
+  ]) {
+    const settings = {
+      ...view().effective_settings,
+      thinking: "high",
+      parent_thinking: "low",
+      thinking_resolution: resolution,
+      effort_source: "user_override",
+    };
     for (const width of [32, 40, 62]) {
       const lines = body({ effective_settings: settings }, {}, width);
-      assert.ok(lines.every((line) => visibleWidth(line) <= width), `${resolution} ${width}: ${JSON.stringify(lines)}`);
+      assert.ok(
+        lines.every((line) => visibleWidth(line) <= width),
+        `${resolution} ${width}: ${JSON.stringify(lines)}`,
+      );
       const effortAt = lines.findIndex((line) => /^ {2}effort\s/.test(line));
       assert.ok(effortAt >= 0);
-      const following = lines.slice(effortAt, lines.findIndex((line, i) => i > effortAt && /^ {2}model\s/.test(line)));
+      const following = lines.slice(
+        effortAt,
+        lines.findIndex((line, i) => i > effortAt && /^ {2}model\s/.test(line)),
+      );
       assert.match(following.join(" "), new RegExp(label.replace(" ", "\\s+")));
       assert.match(following.join(" "), /user\s+override/);
       assert.match(following.join(" "), /fixed\s+at\s+creation/);
       const oldSettings = { ...settings };
       delete oldSettings.effort_source;
-      assert.doesNotMatch(body({ effective_settings: oldSettings }, {}, width).join(" "), /source:/);
+      assert.doesNotMatch(
+        body({ effective_settings: oldSettings }, {}, width).join(" "),
+        /source:/,
+      );
     }
   }
 });
 
 test("execution display distinguishes unstarted Runs from zero elapsed without a task deadline", () => {
   for (const status of ["queued", "cancelled"]) {
-    const text = joined({ status, phase: status === "queued" ? "queued" : "settled", execution_exited: status === "cancelled",
-      execution_elapsed_ms: undefined });
+    const text = joined({
+      status,
+      phase: status === "queued" ? "queued" : "settled",
+      execution_exited: status === "cancelled",
+      execution_elapsed_ms: undefined,
+    });
     assert.match(text, /execution\s+not started/);
     assert.doesNotMatch(text, /deadline|execution limit|requests stop/);
   }
   assert.match(joined({ execution_elapsed_ms: 0 }), /execution\s+0\.0s/);
-  const finished = joined({ execution_elapsed_ms: 1000, status: "completed", execution_exited: true });
+  const finished = joined({
+    execution_elapsed_ms: 1000,
+    status: "completed",
+    execution_exited: true,
+  });
   assert.match(finished, /execution\s+1\.0s/);
   assert.doesNotMatch(finished, /deadline|execution limit|requests stop/);
 });
@@ -290,23 +437,32 @@ test("both clocks and the full usage split are spelled out", () => {
  * nothing where money had actually been spent.
  */
 test("a figure some response left out is shown as a floor, not as nothing", () => {
-  const priced = addToLedger(spend(1000, 100, 0, 0, 2.5), { input: 500, output: 50, cache_read: 0, cache_write: 0, cost: null },
-    "anthropic/claude-opus-5");
+  const priced = addToLedger(
+    spend(1000, 100, 0, 0, 2.5),
+    { input: 500, output: 50, cache_read: 0, cache_write: 0, cost: null },
+    "anthropic/claude-opus-5",
+  );
   const text = joined({ usage: priced });
   assert.match(text, /cost\s+≥ /, text);
   assert.match(text, /\$2\.5/, text);
   // Tokens every response did report carry no floor marker.
   assert.match(text, /tokens\s+in 1\.5k · out 150 /, text);
   // Nothing reported at all is still "?", which is not the same as a floor.
-  const unpriced = addToLedger(undefined, { input: null, output: 10, cache_read: null, cache_write: null, cost: null },
-    "anthropic/claude-opus-5");
+  const unpriced = addToLedger(
+    undefined,
+    { input: null, output: 10, cache_read: null, cache_write: null, cost: null },
+    "anthropic/claude-opus-5",
+  );
   assert.match(joined({ usage: unpriced }), /tokens\s+in \? · out 10 · cache r \? · w \?/);
   assert.match(joined({ usage: unpriced }), /cost\s+not reported/);
 });
 
 test("every active tool is named with its argument, not just the first two", () => {
-  const tools = [{ name: "read", detail: "src/core/controller.ts" }, { name: "grep", detail: '"turnStarted" in src/core' },
-    { name: "ls", detail: "src/pi" }];
+  const tools = [
+    { name: "read", detail: "src/core/controller.ts" },
+    { name: "grep", detail: '"turnStarted" in src/core' },
+    { name: "ls", detail: "src/pi" },
+  ];
   const text = joined({}, { active_tools: tools });
   assert.match(text, /active\s+read src\/core\/controller\.ts/);
   assert.match(text, /grep "turnStarted" in src\/core/);
@@ -317,16 +473,30 @@ test("every active tool is named with its argument, not just the first two", () 
 test("warnings the operator must not miss are all listed, never summarised away", () => {
   const text = joined({
     outcome: { status: "needs_input", question: "用哪个分支？", limit_reached: true },
-    unavailable_reason: "SESSION_UNAVAILABLE", owner_error: "flock lost", history_error: "disk full",
-    pending_messages: 2, cleanup_errors: ["child did not exit"], discarded_inputs: ["stale steer"],
+    unavailable_reason: "SESSION_UNAVAILABLE",
+    owner_error: "flock lost",
+    history_error: "disk full",
+    pending_messages: 2,
+    cleanup_errors: ["child did not exit"],
+    discarded_inputs: ["stale steer"],
     // The parent model sees only tree_shared; the operator sees every note.
     dispatch_notes: ["tree_shared", "tree_lock_unknown", "source_state_unknown", "future_note"],
   });
-  for (const expected of [/asked\s+用哪个分支？/, /limit\s+stopped at the turn limit/, /session\s+SESSION_UNAVAILABLE/,
-    /dispatch\s+another session holds this build tree/, /dispatch\s+build-tree lock could not be confirmed/,
-    /dispatch\s+source state for the declared checks was not captured/, /dispatch\s+future_note/,
-    /owner\s+flock lost/, /history\s+disk full/, /pending\s+2 alert\(s\) from this Run awaiting local presentation/,
-    /cleanup\s+child did not exit/, /discarded\s+stale steer/]) assert.match(text, expected);
+  for (const expected of [
+    /asked\s+用哪个分支？/,
+    /limit\s+stopped at the turn limit/,
+    /session\s+SESSION_UNAVAILABLE/,
+    /dispatch\s+another session holds this build tree/,
+    /dispatch\s+build-tree lock could not be confirmed/,
+    /dispatch\s+source state for the declared checks was not captured/,
+    /dispatch\s+future_note/,
+    /owner\s+flock lost/,
+    /history\s+disk full/,
+    /pending\s+2 alert\(s\) from this Run awaiting local presentation/,
+    /cleanup\s+child did not exit/,
+    /discarded\s+stale steer/,
+  ])
+    assert.match(text, expected);
   assert.doesNotMatch(text, /dropped|never reached/);
   // A label as wide as its own column must still leave a gap before the value.
   assert.ok(!/discardedstale/.test(text));
@@ -339,39 +509,98 @@ test("warnings the operator must not miss are all listed, never summarised away"
 
 test("every field line fits the width, counting CJK by the columns it occupies", () => {
   for (const width of [40, 62, 100]) {
-    const lines = [...body({}, { active_tools: [{ name: "read", detail: "src/core/controller.ts" }],
-      preview: "turnStarted 在 turnEnd 里被清掉，所以两个 turn 之间会闪" }, width),
-      transcriptRule(theme, width)];
-    for (const line of lines) assert.ok(visibleWidth(line) <= width, `${width}: ${JSON.stringify(line)}`);
+    const lines = [
+      ...body(
+        {},
+        {
+          active_tools: [{ name: "read", detail: "src/core/controller.ts" }],
+          preview: "turnStarted 在 turnEnd 里被清掉，所以两个 turn 之间会闪",
+        },
+        width,
+      ),
+      transcriptRule(theme, width),
+    ];
+    for (const line of lines)
+      assert.ok(visibleWidth(line) <= width, `${width}: ${JSON.stringify(line)}`);
   }
 });
 
 test("a click on an Agent row resolves to that Agent, and chrome rows resolve to none", () => {
-  const base = { turns: 3, max_turns: 256, elapsed_ms: 1, tool_uses: 0, active_tools: [], preview: "",
-    question: false, limit_reached: false, pending_messages: 0, has_run_warnings: false,
-    finishing: false, resident: true, name: "", profile: "editor", description: "Task" };
+  const base = {
+    turns: 3,
+    max_turns: 256,
+    elapsed_ms: 1,
+    tool_uses: 0,
+    active_tools: [],
+    preview: "",
+    question: false,
+    limit_reached: false,
+    pending_messages: 0,
+    has_run_warnings: false,
+    finishing: false,
+    resident: true,
+    name: "",
+    profile: "editor",
+    description: "Task",
+  };
   const run = (id, overrides) => ({ ...base, agent_id: id, run_id: `${id}-run`, ...overrides });
   const { lines, hits } = renderWidget({
-    runs: [run("q", { status: "queued" }), run("r", { status: "running" }), run("f", { status: "completed" })],
-    owner: { blocked: false, resident: 2, resident_limit: 8 }, spinnerFrame: 0, width: 120, theme,
+    runs: [
+      run("q", { status: "queued" }),
+      run("r", { status: "running" }),
+      run("f", { status: "completed" }),
+    ],
+    owner: { blocked: false, resident: 2, resident_limit: 8 },
+    spinnerFrame: 0,
+    width: 120,
+    theme,
     shouldShowFinished: () => true,
   });
   assert.equal(lines.length, hits.length, "every painted line must answer who it belongs to");
   assert.equal(hits[0], undefined, "the heading belongs to no Agent");
   assert.equal(hits[1], "f");
   assert.equal(hits[2], "r", "the Agent header row");
-  assert.equal(hits[3], "r", "and its ⎿ activity row, so clicking the tool line opens the Agent running it");
+  assert.equal(
+    hits[3],
+    "r",
+    "and its ⎿ activity row, so clicking the tool line opens the Agent running it",
+  );
   assert.match(lines[3], /⎿/);
   assert.equal(hits[4], undefined, "the aggregate queued row names no single Agent");
 });
 
 test("an overflowing widget still answers correctly for the rows it did paint", () => {
-  const base = { turns: 1, max_turns: 256, elapsed_ms: 1, tool_uses: 0, active_tools: [], preview: "",
-    question: false, limit_reached: false, pending_messages: 0, has_run_warnings: false,
-    finishing: false, resident: true, name: "", profile: "editor", description: "Task", status: "running" };
-  const runs = Array.from({ length: 8 }, (_, i) => ({ ...base, agent_id: `a${i}`, run_id: `a${i}-run` }));
-  const { lines, hits } = renderWidget({ runs, owner: { blocked: false, resident: 8, resident_limit: 8 },
-    spinnerFrame: 0, width: 120, theme, shouldShowFinished: () => true });
+  const base = {
+    turns: 1,
+    max_turns: 256,
+    elapsed_ms: 1,
+    tool_uses: 0,
+    active_tools: [],
+    preview: "",
+    question: false,
+    limit_reached: false,
+    pending_messages: 0,
+    has_run_warnings: false,
+    finishing: false,
+    resident: true,
+    name: "",
+    profile: "editor",
+    description: "Task",
+    status: "running",
+  };
+  const runs = Array.from({ length: 8 }, (_, i) => ({
+    ...base,
+    agent_id: `a${i}`,
+    run_id: `a${i}-run`,
+  }));
+  const { lines, hits } = renderWidget({
+    runs,
+    owner: { blocked: false, resident: 8, resident_limit: 8 },
+    spinnerFrame: 0,
+    width: 120,
+    theme,
+    shouldShowFinished: () => true,
+  });
   assert.equal(lines.length, hits.length);
   assert.equal(hits.at(-1), undefined, "the +N more row is a count, not an Agent");
   assert(lines.length <= 6, "unknown-height callers use the safe six-line widget budget");
@@ -387,10 +616,18 @@ test("an overflowing widget still answers correctly for the rows it did paint", 
  * tail apart from merely landing on the last row of a static one. */
 const fakeRows = (count) => ({
   count,
-  grow(by) { this.count += by; return this; },
-  lineCount() { return this.count; },
+  grow(by) {
+    this.count += by;
+    return this;
+  },
+  lineCount() {
+    return this.count;
+  },
   slice(_width, start, take) {
-    return Array.from({ length: Math.max(0, Math.min(take, this.count - start)) }, (_, i) => `T${start + i}`);
+    return Array.from(
+      { length: Math.max(0, Math.min(take, this.count - start)) },
+      (_, i) => `T${start + i}`,
+    );
   },
   invalidate() {},
 });
@@ -400,9 +637,15 @@ const growable = (count) => {
 };
 const pane = (transcriptLines, rows = 20, extra = {}) => {
   const tui = { terminal: { columns: 80, rows }, requestRender: () => {} };
-  const p = new DetailPane({ tui, theme, initial: "a", done: () => {},
+  const p = new DetailPane({
+    tui,
+    theme,
+    initial: "a",
+    done: () => {},
     snapshot: () => [{ agent_id: "a", input: { view: view(), live: live() } }],
-    transcript: () => fakeRows(transcriptLines), ...extra });
+    transcript: () => fakeRows(transcriptLines),
+    ...extra,
+  });
   return p;
 };
 const strip = (lines) => lines.slice(1, -1);
@@ -413,8 +656,8 @@ test("the pane paints the fields, then the rule, then the transcript, with no ro
   const p = pane(40, 60);
   t.after(() => p.dispose());
   const fields = renderDetailFields({ view: view(), live: live() }, theme, 80);
-  p.render(80);                // lay out once, so the keys have geometry
-  p.handleInput("\u001b[H");    // home: pin to the top and stop following
+  p.render(80); // lay out once, so the keys have geometry
+  p.handleInput("\u001b[H"); // home: pin to the top and stop following
   const top = strip(p.render(80));
   assert.equal(top[0], fields[0], "the first body row is the first field");
   assert.equal(top.filter((line) => line.includes("transcript")).length, 1, "exactly one rule");
@@ -437,20 +680,29 @@ test("the pane follows the live tail by default, as the main conversation does",
   assert.equal(strip(p.render(80)).at(-1), "T259", "following carries the view to the new tail");
 });
 
-for (const input of ["keyboard", "wheel"]) test(`an empty pane ignores ${input} scrolling against its previous geometry`, (t) => {
-  let available = true;
-  const { rows, extra } = growable(200);
-  const p = pane(200, 20, { ...extra,
-    snapshot: () => available ? [{ agent_id: "a", input: { view: view(), live: live() } }] : [] });
-  t.after(() => p.dispose());
-  assert.equal(strip(p.render(80)).at(-1), "T199");
-  available = false;
-  assert.match(p.render(80).join("\n"), /No agents/);
-  if (input === "keyboard") p.handleInput("\u001b[H"); // Home must not pin an invisible body.
-  else assert.equal(p.handleMouse({ type: "wheel", wheelDelta: -1 }), undefined);
-  available = true; rows.grow(60);
-  assert.equal(strip(p.render(80)).at(-1), "T259", "the same Agent returns without losing tail-follow intent");
-});
+for (const input of ["keyboard", "wheel"])
+  test(`an empty pane ignores ${input} scrolling against its previous geometry`, (t) => {
+    let available = true;
+    const { rows, extra } = growable(200);
+    const p = pane(200, 20, {
+      ...extra,
+      snapshot: () => (available ? [{ agent_id: "a", input: { view: view(), live: live() } }] : []),
+    });
+    t.after(() => p.dispose());
+    assert.equal(strip(p.render(80)).at(-1), "T199");
+    available = false;
+    assert.match(p.render(80).join("\n"), /No agents/);
+    if (input === "keyboard")
+      p.handleInput("\u001b[H"); // Home must not pin an invisible body.
+    else assert.equal(p.handleMouse({ type: "wheel", wheelDelta: -1 }), undefined);
+    available = true;
+    rows.grow(60);
+    assert.equal(
+      strip(p.render(80)).at(-1),
+      "T259",
+      "the same Agent returns without losing tail-follow intent",
+    );
+  });
 
 test("scrolling up stops the follow, and reaching the end again resumes it", (t) => {
   const { rows, extra } = growable(200);
@@ -463,7 +715,11 @@ test("scrolling up stops the follow, and reaching the end again resumes it", (t)
   assert.equal(strip(p.render(80)).at(-1), "T198", "and does not drift on the next frame");
   // Growth must not move a reader who scrolled away, however far the tail runs.
   rows.grow(60);
-  assert.equal(strip(p.render(80)).at(-1), "T198", "a stopped follow stays stopped as the tail grows");
+  assert.equal(
+    strip(p.render(80)).at(-1),
+    "T198",
+    "a stopped follow stays stopped as the tail grows",
+  );
   p.handleInput("\u001b[F"); // end
   assert.equal(strip(p.render(80)).at(-1), "T259", "End goes to the tail as it is now");
   rows.grow(20);
@@ -471,11 +727,20 @@ test("scrolling up stops the follow, and reaching the end again resumes it", (t)
 });
 
 test("when the selected assistant exits, the pane adopts a row rather than drifting onto one", (t) => {
-  let agents = ["a", "b", "c"], chosen;
+  let agents = ["a", "b", "c"],
+    chosen;
   const tui = { terminal: { columns: 80, rows: 24 }, requestRender: () => {} };
-  const p = new DetailPane({ tui, theme, initial: "b", done: () => {}, onSelect: (id) => { chosen = id; },
+  const p = new DetailPane({
+    tui,
+    theme,
+    initial: "b",
+    done: () => {},
+    onSelect: (id) => {
+      chosen = id;
+    },
     snapshot: () => agents.map((agent_id) => ({ agent_id, input: { view: view(), live: live() } })),
-    transcript: () => fakeRows(40) });
+    transcript: () => fakeRows(40),
+  });
   t.after(() => p.dispose());
   const footer = () => p.render(80).at(-1);
   assert.match(footer(), /2\/3/, "the pane opens on the agent it was given");
@@ -490,12 +755,29 @@ test("when the selected assistant exits, the pane adopts a row rather than drift
 });
 
 test("widget activation selects another assistant and toggles the selected one closed", (t) => {
-  let chosen, closes = 0, renders = 0;
-  const tui = { terminal: { columns: 80, rows: 24 }, requestRender: () => { renders++; } };
-  const p = new DetailPane({ tui, theme, initial: "a", done: () => { closes++; },
-    onSelect: (id) => { chosen = id; },
-    snapshot: () => ["a", "b"].map((agent_id) => ({ agent_id, input: { view: view(), live: live() } })),
-    transcript: () => fakeRows(40) });
+  let chosen,
+    closes = 0,
+    renders = 0;
+  const tui = {
+    terminal: { columns: 80, rows: 24 },
+    requestRender: () => {
+      renders++;
+    },
+  };
+  const p = new DetailPane({
+    tui,
+    theme,
+    initial: "a",
+    done: () => {
+      closes++;
+    },
+    onSelect: (id) => {
+      chosen = id;
+    },
+    snapshot: () =>
+      ["a", "b"].map((agent_id) => ({ agent_id, input: { view: view(), live: live() } })),
+    transcript: () => fakeRows(40),
+  });
   t.after(() => p.dispose());
   p.activate("b");
   assert.equal(chosen, "b");
@@ -545,55 +827,93 @@ test("a short body is not padded into a tall pane, and a tall one is capped", (t
   assert.ok(short.render(80).length < tall.render(80).length, "content-sized, not a fixed share");
 });
 
-for (const frame of [false, true]) test(`live status stays at the lower left with shared lifecycle glyphs/colors (frame=${frame})`, (t) => {
-  let current = view(); const colors = [];
-  const recording = { ...theme, fg: (color, text) => { colors.push([color, text]); return text; } };
-  const p = pane(40, 30, { frame, theme: recording,
-    snapshot: () => [{ agent_id: "a", input: { view: current, live: live() } }] });
-  t.after(() => p.dispose());
-  for (const [status, pending, icon, label, color] of [
-    ["queued", false, "◦", "queued", "muted"], ["running", false, "⠋", "running", "accent"],
-    ["running", true, "⠋", "finishing", "dim"], ["cancelling", false, "⠋", "cancelling", "warning"],
-    ["completed", false, "✓", "completed", "success"], ["needs_input", false, "?", "needs_input", "warning"],
-    ["failed", false, "✗", "failed", "error"], ["cancelled", false, "■", "cancelled", "dim"],
-  ]) {
-    current = view({ status, finalization_pending: pending }); colors.length = 0;
-    const lines = p.render(80), badge = `${icon} ${label}`;
-    assert(lines.at(-1).startsWith(`${frame ? "╰─ " : ""}${badge} · 1/1 agents`), lines.at(-1));
-    assert(!lines[0].includes(badge), lines[0]);
-    assert.match(lines.at(-1), /←→ agent · ↑↓ scroll · Esc close/);
-    assert(colors.some(([used, text]) => used === color && text === icon));
-    assert(colors.some(([used, text]) => used === color && text === label));
-  }
-});
-
-for (const frame of [false, true]) test(`narrow chrome prioritizes lower-left status without adding rows (frame=${frame})`, (t) => {
-  const p = pane(40, 30, { frame,
-    snapshot: () => [{ agent_id: "a", input: { view: view({ status: "needs_input" }), live: live() } }] });
-  t.after(() => p.dispose());
-  const height = p.render(80).length;
-  for (const width of [80, 61, 40, 24, 14]) {
-    const lines = p.render(width);
-    assert.equal(lines.length, height);
-    assert(lines.every((line) => visibleWidth(line) <= width));
-    assert(lines.at(-1).startsWith(`${frame ? "╰─ " : ""}? ${frame && width === 14 ? "input" : "needs_input"}`), lines.at(-1));
-    assert(!lines[0].includes("needs_input"));
-    if (frame && width === 24) {
-      assert.doesNotMatch(lines.at(-1), /agents|lines|\d\/|…/, "omit counters rather than clipping mid-value");
-      assert.match(lines.at(-1), /Esc/, "spare room still shows the close hint");
+for (const frame of [false, true])
+  test(`live status stays at the lower left with shared lifecycle glyphs/colors (frame=${frame})`, (t) => {
+    let current = view();
+    const colors = [];
+    const recording = {
+      ...theme,
+      fg: (color, text) => {
+        colors.push([color, text]);
+        return text;
+      },
+    };
+    const p = pane(40, 30, {
+      frame,
+      theme: recording,
+      snapshot: () => [{ agent_id: "a", input: { view: current, live: live() } }],
+    });
+    t.after(() => p.dispose());
+    for (const [status, pending, icon, label, color] of [
+      ["queued", false, "◦", "queued", "muted"],
+      ["running", false, "⠋", "running", "accent"],
+      ["running", true, "⠋", "finishing", "dim"],
+      ["cancelling", false, "⠋", "cancelling", "warning"],
+      ["completed", false, "✓", "completed", "success"],
+      ["needs_input", false, "?", "needs_input", "warning"],
+      ["failed", false, "✗", "failed", "error"],
+      ["cancelled", false, "■", "cancelled", "dim"],
+    ]) {
+      current = view({ status, finalization_pending: pending });
+      colors.length = 0;
+      const lines = p.render(80),
+        badge = `${icon} ${label}`;
+      assert(lines.at(-1).startsWith(`${frame ? "╰─ " : ""}${badge} · 1/1 agents`), lines.at(-1));
+      assert(!lines[0].includes(badge), lines[0]);
+      assert.match(lines.at(-1), /←→ agent · ↑↓ scroll · Esc close/);
+      assert(colors.some(([used, text]) => used === color && text === icon));
+      assert(colors.some(([used, text]) => used === color && text === label));
     }
-  }
-});
+  });
+
+for (const frame of [false, true])
+  test(`narrow chrome prioritizes lower-left status without adding rows (frame=${frame})`, (t) => {
+    const p = pane(40, 30, {
+      frame,
+      snapshot: () => [
+        { agent_id: "a", input: { view: view({ status: "needs_input" }), live: live() } },
+      ],
+    });
+    t.after(() => p.dispose());
+    const height = p.render(80).length;
+    for (const width of [80, 61, 40, 24, 14]) {
+      const lines = p.render(width);
+      assert.equal(lines.length, height);
+      assert(lines.every((line) => visibleWidth(line) <= width));
+      assert(
+        lines
+          .at(-1)
+          .startsWith(`${frame ? "╰─ " : ""}? ${frame && width === 14 ? "input" : "needs_input"}`),
+        lines.at(-1),
+      );
+      assert(!lines[0].includes("needs_input"));
+      if (frame && width === 24) {
+        assert.doesNotMatch(
+          lines.at(-1),
+          /agents|lines|\d\/|…/,
+          "omit counters rather than clipping mid-value",
+        );
+        assert.match(lines.at(-1), /Esc/, "spare room still shows the close hint");
+      }
+    }
+  });
 
 test("minimum-width framed footers keep every status readable without crowding it with counts", (t) => {
   let current = view();
-  const p = pane(40, 30, { frame: true,
-    snapshot: () => [{ agent_id: "a", input: { view: current, live: live() } }] });
+  const p = pane(40, 30, {
+    frame: true,
+    snapshot: () => [{ agent_id: "a", input: { view: current, live: live() } }],
+  });
   t.after(() => p.dispose());
   for (const [status, pending, badge] of [
-    ["queued", false, "◦ queued"], ["running", false, "⠋ run"], ["running", true, "⠋ finish"],
-    ["cancelling", false, "⠋ cancel"], ["completed", false, "✓ done"], ["needs_input", false, "? input"],
-    ["failed", false, "✗ failed"], ["cancelled", false, "■ cancel"],
+    ["queued", false, "◦ queued"],
+    ["running", false, "⠋ run"],
+    ["running", true, "⠋ finish"],
+    ["cancelling", false, "⠋ cancel"],
+    ["completed", false, "✓ done"],
+    ["needs_input", false, "? input"],
+    ["failed", false, "✗ failed"],
+    ["cancelled", false, "■ cancel"],
   ]) {
     current = view({ status, finalization_pending: pending });
     const bottom = p.render(14).at(-1);
@@ -605,8 +925,13 @@ test("minimum-width framed footers keep every status readable without crowding i
 
 test("an empty roster never retains the previous Agent's footer status", (t) => {
   let available = true;
-  const p = pane(40, 30, { frame: true,
-    snapshot: () => available ? [{ agent_id: "a", input: { view: view({ status: "needs_input" }), live: live() } }] : [] });
+  const p = pane(40, 30, {
+    frame: true,
+    snapshot: () =>
+      available
+        ? [{ agent_id: "a", input: { view: view({ status: "needs_input" }), live: live() } }]
+        : [],
+  });
   t.after(() => p.dispose());
   assert.match(p.render(80).at(-1), /\? needs_input/);
   available = false;
@@ -624,23 +949,32 @@ test("the footer counts the whole body, fields and transcript together", (t) => 
 });
 
 test("a pane row drops the terminal's turn markers but keeps hyperlinks and colour", () => {
-  const A = "\u001b]133;A\u0007", B = "\u001b]133;B\u0007", C = "\u001b]133;C\u0007";
+  const A = "\u001b]133;A\u0007",
+    B = "\u001b]133;B\u0007",
+    C = "\u001b]133;C\u0007";
   // Pi marks conversation turns for the terminal's "jump to previous prompt".
   // A scrolling pane re-emits its rows constantly, so those marks would be lies.
   assert.equal(paneRow(`${A}hello${B}${C}`, 40), "hello");
-  assert.equal(paneRow(`${A}\u001b[31mred\u001b[39m`, 40), "\u001b[31mred\u001b[39m", "colour is untouched");
+  assert.equal(
+    paneRow(`${A}\u001b[31mred\u001b[39m`, 40),
+    "\u001b[31mred\u001b[39m",
+    "colour is untouched",
+  );
   const link = "\u001b]8;;https://example.com\u0007text\u001b]8;;\u0007";
   assert.equal(paneRow(link, 40), link, "OSC 8 hyperlinks are content, not chrome");
   // The escape terminator may be ST rather than BEL.
   assert.equal(paneRow("\u001b]133;A\u001b\\keep", 40), "keep");
-  assert.ok(visibleWidth(paneRow(`${A}这是一行中文${B}`, 8)) <= 8, "still clipped by display columns");
+  assert.ok(
+    visibleWidth(paneRow(`${A}这是一行中文${B}`, 8)) <= 8,
+    "still clipped by display columns",
+  );
 });
 
 test("the wheel scrolls the pane itself and stops the event from reaching the page behind", (t) => {
   const p = pane(60, 24);
   t.after(() => p.dispose());
   p.render(80);
-  p.handleInput("\u001b[H");              // home: top of the body, following off
+  p.handleInput("\u001b[H"); // home: top of the body, following off
   const before = strip(p.render(80));
   // A wheel event the pane does not own must pass through, or clicks and drags
   // over the pane would be swallowed instead of reaching whatever wants them.
@@ -671,7 +1005,11 @@ test("the wheel clamps at both ends and hands the live tail back at the bottom",
   const bottom = strip(p.render(80));
   assert.equal(bottom.at(-1), "T59");
   rows.grow(20);
-  assert.equal(strip(p.render(80)).at(-1), "T79", "the wheel reaching the end resumes following, not just lands");
+  assert.equal(
+    strip(p.render(80)).at(-1),
+    "T79",
+    "the wheel reaching the end resumes following, not just lands",
+  );
 });
 
 test("a wheel before the first paint has no geometry to move and is left alone", (t) => {
@@ -682,7 +1020,13 @@ test("a wheel before the first paint has no geometry to move and is left alone",
 
 test("a floating pane uses the worker-picker popover chrome", (t) => {
   const colors = [];
-  const recording = { fg: (color, text) => { colors.push(color); return text; }, bold: (text) => text };
+  const recording = {
+    fg: (color, text) => {
+      colors.push(color);
+      return text;
+    },
+    bold: (text) => text,
+  };
   const p = pane(4, 30, { frame: true, theme: recording });
   t.after(() => p.dispose());
   const lines = p.render(80);
@@ -700,8 +1044,12 @@ test("a floating pane uses the worker-picker popover chrome", (t) => {
 test("the floating pane draws a frame that costs columns but never rows", (t) => {
   const docked = pane(40, 30);
   const floating = pane(40, 30, { frame: true });
-  t.after(() => { docked.dispose(); floating.dispose(); });
-  const a = docked.render(80), b = floating.render(80);
+  t.after(() => {
+    docked.dispose();
+    floating.dispose();
+  });
+  const a = docked.render(80),
+    b = floating.render(80);
   assert.equal(a.length, b.length, "a frame must not eat a row of transcript");
   for (const line of b) assert.equal(visibleWidth(line), 80, JSON.stringify(line));
   assert.match(b[0], /^.*\u256d/, "top border");
@@ -734,7 +1082,11 @@ test("an Agent with no Runs still closes its frame", (t) => {
 
 test("Esc closes the pane; a printable key the footer never offered does not", (t) => {
   let closed = 0;
-  const p = pane(4, 20, { done: () => { closed++; } });
+  const p = pane(4, 20, {
+    done: () => {
+      closed++;
+    },
+  });
   t.after(() => p.dispose());
   p.render(80);
   p.handleInput("q");
@@ -748,25 +1100,41 @@ test("a framed pane keeps CJK aligned and narrows gracefully", (t) => {
   t.after(() => p.dispose());
   for (const width of [80, 61, 40, 24, 14, 12, 11]) {
     const lines = p.render(width);
-    for (const line of lines) assert.equal(visibleWidth(line), width, `width ${width}: ${JSON.stringify(line)}`);
+    for (const line of lines)
+      assert.equal(visibleWidth(line), width, `width ${width}: ${JSON.stringify(line)}`);
   }
   assert.deepEqual(p.render(9), [], "too narrow to frame at all");
 });
 
 test("a floating pane closes from the × in its top edge; a docked pane has none", (t) => {
   let closed = 0;
-  const p = pane(4, 30, { frame: true, done: () => { closed++; } });
+  const p = pane(4, 30, {
+    frame: true,
+    done: () => {
+      closed++;
+    },
+  });
   t.after(() => p.dispose());
   const lines = p.render(60);
   assert.match(lines[0], / × ─╮$/);
-  assert.equal(p.handleMouse({ type: "click", button: "left", x: 50, y: 0 }), undefined, "the title is not the control");
+  assert.equal(
+    p.handleMouse({ type: "click", button: "left", x: 50, y: 0 }),
+    undefined,
+    "the title is not the control",
+  );
   assert.equal(p.handleMouse({ type: "click", button: "right", x: 57, y: 0 }), undefined);
-  assert.deepEqual(p.handleMouse({ type: "click", button: "left", x: 57, y: 0 }), { handled: true });
+  assert.deepEqual(p.handleMouse({ type: "click", button: "left", x: 57, y: 0 }), {
+    handled: true,
+  });
   assert.equal(closed, 1);
   p.handleMouse({ type: "click", button: "left", x: 57, y: 0 });
   assert.equal(closed, 1, "closing is once");
 
-  const docked = pane(4, 30, { done: () => { closed++; } });
+  const docked = pane(4, 30, {
+    done: () => {
+      closed++;
+    },
+  });
   t.after(() => docked.dispose());
   assert(!docked.render(60)[0].includes("×"));
   assert.equal(docked.handleMouse({ type: "click", button: "left", x: 57, y: 0 }), undefined);

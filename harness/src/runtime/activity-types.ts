@@ -1,5 +1,8 @@
 /** Plain identifying metadata for a tool that has actually started execution. */
-export interface ActiveTool { name: string; detail?: string }
+export interface ActiveTool {
+  name: string;
+  detail?: string;
+}
 
 /** Ephemeral, provider-public output for human activity projections only. */
 export interface GenerationPreview {

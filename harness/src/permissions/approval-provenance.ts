@@ -9,7 +9,8 @@ import type { RunExecutionIdentity, RunIdentity } from "../core/contracts.ts";
  * The protocol is checked by the rendered-Jev/real-child integration test. */
 const runtimeKey = Symbol.for("@rocklee/jev-auto-approval:child-runtime-facts");
 const observersKey = Symbol.for("@rocklee/managed-permissions:forwarded-ask-observers");
-const promptDigest = (text: string) => createHash("sha256").update(JSON.stringify(text)).digest("hex");
+const promptDigest = (text: string) =>
+  createHash("sha256").update(JSON.stringify(text)).digest("hex");
 export interface HarnessApprovalFacts {
   parentSessionId: string;
   cwd: string;
@@ -36,30 +37,46 @@ function registry(): Map<string, HarnessApprovalFacts> {
 }
 
 function sameRun(left: RunIdentity, right: RunIdentity): boolean {
-  return (["owner_id", "generation", "agent_id", "run_id"] as const).every((key) => left[key] === right[key]);
+  return (["owner_id", "generation", "agent_id", "run_id"] as const).every(
+    (key) => left[key] === right[key],
+  );
 }
 
 export class ApprovalBindings {
   private readonly sessions = new Map<string, RunIdentity>();
   private readonly observedInput = new Set<string>();
-  constructor(private readonly bus: EventBus, private readonly owner: Pick<RunIdentity, "owner_id" | "generation">) {}
+  constructor(
+    private readonly bus: EventBus,
+    private readonly owner: Pick<RunIdentity, "owner_id" | "generation">,
+  ) {}
 
   /** Synchronous and before dispatch: a queued steer/cancel must invalidate an
    * in-flight verdict even if the SDK has not consumed the new input yet. */
   readonly contextChanged = (event: ContextChange): undefined => {
-    if (event.owner_id !== this.owner.owner_id || event.generation !== this.owner.generation) throw new Error("APPROVAL_OWNER_MISMATCH");
+    if (event.owner_id !== this.owner.owner_id || event.generation !== this.owner.generation)
+      throw new Error("APPROVAL_OWNER_MISMATCH");
     for (const sessionId of this.sessions.keys()) {
       const facts = this.facts(sessionId);
       if (facts?.harness.agent_id === event.agent_id) this.invalidate(sessionId);
     }
-    if (event.kind === "submit" || event.kind === "resume") this.bus.emit("pi-harness:approval:admitted", event);
+    if (event.kind === "submit" || event.kind === "resume")
+      this.bus.emit("pi-harness:approval:admitted", event);
     else this.bus.emit("pi-harness:approval:invalidated", event);
     return undefined;
   };
 
   /** A leftover witness disables auto-approval for this Run, not execution.
    * Retire only locally owned state. Never overwrite another owner's witness. */
-  begin(run: RunExecutionIdentity, input: { sessionId: string; cwd: string; profile: string; definitionDigest: string; prompt: string }): boolean {
+  begin(
+    run: RunExecutionIdentity,
+    input: {
+      sessionId: string;
+      cwd: string;
+      profile: string;
+      definitionDigest: string;
+      prompt: string;
+    },
+  ): boolean {
     if (run.owner_id !== this.owner.owner_id || run.generation !== this.owner.generation) {
       throw new Error("APPROVAL_RUN_MISMATCH");
     }
@@ -70,16 +87,25 @@ export class ApprovalBindings {
     this.sessions.set(input.sessionId, { ...run });
     this.observedInput.delete(input.sessionId);
     registry().set(input.sessionId, {
-      parentSessionId: run.owner_id, cwd: input.cwd, contextChanged: collision,
+      parentSessionId: run.owner_id,
+      cwd: input.cwd,
+      contextChanged: collision,
       toolCalls: Object.create(null) as HarnessApprovalFacts["toolCalls"],
       requestTools: Object.create(null) as HarnessApprovalFacts["requestTools"],
-      harness: { ...run, protocol: 1, profile: input.profile, definitionDigest: input.definitionDigest, prompt: input.prompt },
+      harness: {
+        ...run,
+        protocol: 1,
+        profile: input.profile,
+        definitionDigest: input.definitionDigest,
+        prompt: input.prompt,
+      },
     });
     return !collision;
   }
 
   private facts(sessionId: string): HarnessApprovalFacts | undefined {
-    const owned = this.sessions.get(sessionId), facts = registry().get(sessionId);
+    const owned = this.sessions.get(sessionId),
+      facts = registry().get(sessionId);
     return owned && facts && sameRun(owned, facts.harness) ? facts : undefined;
   }
 
@@ -96,10 +122,19 @@ export class ApprovalBindings {
       const global = globalThis as Record<symbol, unknown>;
       const observe = (event: { requestId?: unknown; toolCallId?: unknown }) => {
         const facts = this.facts(sessionId);
-        if (!facts || facts.contextChanged ||
-            typeof event.requestId !== "string" || typeof event.toolCallId !== "string" ||
-            !facts.toolCalls[event.toolCallId] || Object.keys(facts.requestTools).length >= 256) return;
-        if (facts.requestTools[event.requestId]) { this.invalidate(sessionId); return; }
+        if (
+          !facts ||
+          facts.contextChanged ||
+          typeof event.requestId !== "string" ||
+          typeof event.toolCallId !== "string" ||
+          !facts.toolCalls[event.toolCallId] ||
+          Object.keys(facts.requestTools).length >= 256
+        )
+          return;
+        if (facts.requestTools[event.requestId]) {
+          this.invalidate(sessionId);
+          return;
+        }
         facts.requestTools[event.requestId] = event.toolCallId;
       };
       pi.on("session_start", () => {
@@ -111,12 +146,20 @@ export class ApprovalBindings {
         if (!facts) return;
         // A run started by a custom message is never the harness prompt. Pi
         // before 1.2 sends no messageType; a missing prompt still fails closed.
-        if (event.messageType === "custom" || facts.contextChanged || facts.initialPromptDigest || event.prompt !== facts.harness.prompt) {
+        if (
+          event.messageType === "custom" ||
+          facts.contextChanged ||
+          facts.initialPromptDigest ||
+          event.prompt !== facts.harness.prompt
+        ) {
           this.invalidate(sessionId);
           return;
         }
-        registry().set(sessionId, { ...facts, initialPromptDigest: promptDigest(event.prompt),
-          harness: { ...facts.harness, systemPrompt: event.systemPrompt } });
+        registry().set(sessionId, {
+          ...facts,
+          initialPromptDigest: promptDigest(event.prompt),
+          harness: { ...facts.harness, systemPrompt: event.systemPrompt },
+        });
         this.bus.emit("pi-harness:approval:started", { sessionId });
       });
       pi.on("message_start", (event) => {
@@ -124,8 +167,18 @@ export class ApprovalBindings {
         const facts = this.facts(sessionId);
         if (!facts) return;
         const content = event.message.content;
-        const text = typeof content === "string" ? content : content.length === 1 && content[0]?.type === "text" ? content[0].text : undefined;
-        if (this.observedInput.has(sessionId) || text === undefined || promptDigest(text) !== facts.initialPromptDigest) this.invalidate(sessionId);
+        const text =
+          typeof content === "string"
+            ? content
+            : content.length === 1 && content[0]?.type === "text"
+              ? content[0].text
+              : undefined;
+        if (
+          this.observedInput.has(sessionId) ||
+          text === undefined ||
+          promptDigest(text) !== facts.initialPromptDigest
+        )
+          this.invalidate(sessionId);
         this.observedInput.add(sessionId);
       });
       // This event precedes permission-system's tool_call handler. A tool_call
@@ -134,13 +187,23 @@ export class ApprovalBindings {
         const facts = this.facts(sessionId);
         if (!facts || facts.contextChanged) return;
         try {
-          if (Object.keys(facts.toolCalls).length >= 256 || facts.toolCalls[event.toolCallId] ||
-              !event.args || typeof event.args !== "object" || Array.isArray(event.args) ||
-              !([Object.prototype, null] as readonly unknown[]).includes(Object.getPrototypeOf(event.args))) {
+          if (
+            Object.keys(facts.toolCalls).length >= 256 ||
+            facts.toolCalls[event.toolCallId] ||
+            !event.args ||
+            typeof event.args !== "object" ||
+            Array.isArray(event.args) ||
+            !([Object.prototype, null] as readonly unknown[]).includes(
+              Object.getPrototypeOf(event.args),
+            )
+          ) {
             this.invalidate(sessionId);
             return;
           }
-          facts.toolCalls[event.toolCallId] = { name: event.toolName, arguments: structuredClone(event.args) as Record<string, unknown> };
+          facts.toolCalls[event.toolCallId] = {
+            name: event.toolName,
+            arguments: structuredClone(event.args) as Record<string, unknown>,
+          };
         } catch {
           // Optional observation must never fail the tool batch. Uncloneable
           // or malformed arguments revoke this Run's model-approval witness.
@@ -167,13 +230,24 @@ export class ApprovalBindings {
 
   end(sessionId: string, run: RunIdentity): void {
     const owned = this.sessions.get(sessionId);
-    if (!owned || !sameRun(owned, run) || run.owner_id !== this.owner.owner_id || run.generation !== this.owner.generation) return;
+    if (
+      !owned ||
+      !sameRun(owned, run) ||
+      run.owner_id !== this.owner.owner_id ||
+      run.generation !== this.owner.generation
+    )
+      return;
     // Even if the public registry entry vanished, retire our local identity and
     // notify Jev. A foreign/replacement entry must survive this cleanup.
     if (this.facts(sessionId)) registry().delete(sessionId);
     this.sessions.delete(sessionId);
     this.observedInput.delete(sessionId);
-    this.bus.emit("pi-harness:approval:finished", { sessionId, owner_id: run.owner_id,
-      generation: run.generation, agent_id: run.agent_id, run_id: run.run_id });
+    this.bus.emit("pi-harness:approval:finished", {
+      sessionId,
+      owner_id: run.owner_id,
+      generation: run.generation,
+      agent_id: run.agent_id,
+      run_id: run.run_id,
+    });
   }
 }

@@ -8,13 +8,18 @@ export function guardSingleAuthority(pi: ExtensionAPI): void {
   let expected: unknown;
   let conflict = false;
   const service = () => {
-    const registry = (globalThis as Record<symbol, unknown>)[Symbol.for("@gotgenes/pi-permission-system:session-services")];
+    const registry = (globalThis as Record<symbol, unknown>)[
+      Symbol.for("@gotgenes/pi-permission-system:session-services")
+    ];
     return sessionId && registry instanceof Map ? registry.get(sessionId) : undefined;
   };
   const unsubscribe = pi.events.on("permissions:ready", (event: unknown) => {
     if ((event as { sessionId?: unknown })?.sessionId !== sessionId || !sessionId) return;
     const current = service();
-    if (!current) { conflict = true; return; }
+    if (!current) {
+      conflict = true;
+      return;
+    }
     if (expected === undefined && !conflict) expected = current;
     else if (expected !== current) conflict = true;
   });
@@ -26,7 +31,11 @@ export function guardSingleAuthority(pi: ExtensionAPI): void {
   });
   pi.on("tool_call", () => {
     if (conflict || expected === undefined || service() !== expected) {
-      return { block: true, reason: "Managed permission authority is missing or duplicated. Disable other permission-system extensions in project settings/CLI and start a new session; no authority was silently selected." };
+      return {
+        block: true,
+        reason:
+          "Managed permission authority is missing or duplicated. Disable other permission-system extensions in project settings/CLI and start a new session; no authority was silently selected.",
+      };
     }
   });
   pi.on("session_shutdown", () => {

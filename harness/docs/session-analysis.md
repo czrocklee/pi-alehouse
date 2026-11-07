@@ -39,12 +39,12 @@ proves nothing about work or spend outside the inputs/window.
 
 ## Accounting
 
-| Report | Meaning |
-| --- | --- |
-| `raw_usage` | Assistant, compaction, standalone usage and branch-summary observations, added once per entry identity. Source/model groups remain separate. |
-| `parent` | Compatibility view: assistant usage from parent **and unknown** sessions, excluding identified children. |
-| `child_cost_attached` | Compatibility view of **all** tool-result attached usage, not just harness children. |
-| `non_additive` | Attached usage and Run-end/unreported-usage projections may overlap raw child/nested calls and each other; never add them together. |
+| Report                | Meaning                                                                                                                                      |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `raw_usage`           | Assistant, compaction, standalone usage and branch-summary observations, added once per entry identity. Source/model groups remain separate. |
+| `parent`              | Compatibility view: assistant usage from parent **and unknown** sessions, excluding identified children.                                     |
+| `child_cost_attached` | Compatibility view of **all** tool-result attached usage, not just harness children.                                                         |
+| `non_additive`        | Attached usage and Run-end/unreported-usage projections may overlap raw child/nested calls and each other; never add them together.          |
 
 Assistant attribution uses `responseModel ?? model`; summary metadata may name
 the requested rather than responding model. Attached usage may cover absent

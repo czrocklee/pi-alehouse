@@ -5,74 +5,125 @@ import type { ActiveTool, GenerationPreview } from "../runtime/activity-types.ts
 import { clipPlainText, previewText, singleLineText } from "./text.ts";
 
 export const GLYPHS = {
-  turns: "↻", success: "✓", failure: "✗", stopped: "■", question: "?",
-  subLine: "⎿", toolCall: "▸", running: "▹", queued: "◦", agentsActive: "●", agentsIdle: "○",
+  turns: "↻",
+  success: "✓",
+  failure: "✗",
+  stopped: "■",
+  question: "?",
+  subLine: "⎿",
+  toolCall: "▸",
+  running: "▹",
+  queued: "◦",
+  agentsActive: "●",
+  agentsIdle: "○",
 } as const;
 export const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 export type Theme = { fg(color: string, text: string): string; bold(text: string): string };
 
 const TOOL_ACTION: Record<string, { verb: string; noun?: string; joiner?: string }> = {
-  read: { verb: "reading", noun: "files" }, bash: { verb: "running", noun: "commands" },
-  edit: { verb: "editing", noun: "files" }, write: { verb: "writing", noun: "files" },
-  grep: { verb: "searching", noun: "patterns" }, find: { verb: "finding", noun: "patterns" },
+  read: { verb: "reading", noun: "files" },
+  bash: { verb: "running", noun: "commands" },
+  edit: { verb: "editing", noun: "files" },
+  write: { verb: "writing", noun: "files" },
+  grep: { verb: "searching", noun: "patterns" },
+  find: { verb: "finding", noun: "patterns" },
   ls: { verb: "listing", noun: "directories" },
-  ask_parent: { verb: "asking you", joiner: ": " }, alert_parent: { verb: "alerting you", joiner: ": " },
+  ask_parent: { verb: "asking you", joiner: ": " },
+  alert_parent: { verb: "alerting you", joiner: ": " },
   // Historical journals only: display the retired name without registering it.
   notify_parent: { verb: "notifying you", joiner: ": " },
 };
 export function shortPath(value: string, cwd: string, columns: number): string {
-  const path = singleLineText(value), base = singleLineText(cwd);
+  const path = singleLineText(value),
+    base = singleLineText(cwd);
   const relative = base && path.startsWith(`${base}/`) ? path.slice(base.length + 1) : path;
   if (visibleWidth(relative) <= columns) return relative;
   const parts = relative.split("/");
   let tail = parts.pop() ?? relative;
-  while (parts.length && visibleWidth(`…/${parts[parts.length - 1]}/${tail}`) <= columns) tail = `${parts.pop()}/${tail}`;
+  while (parts.length && visibleWidth(`…/${parts[parts.length - 1]}/${tail}`) <= columns)
+    tail = `${parts.pop()}/${tail}`;
   return clipPlainText(parts.length ? `…/${tail}` : tail, columns);
 }
 
-export function describeToolArgs(name: string, args: unknown, cwd: string, columns: number): string | undefined {
+export function describeToolArgs(
+  name: string,
+  args: unknown,
+  cwd: string,
+  columns: number,
+): string | undefined {
   if (!args || typeof args !== "object") return undefined;
   const input = args as Record<string, unknown>;
-  const str = (key: string): string | undefined => typeof input[key] === "string" ? input[key] : undefined;
+  const str = (key: string): string | undefined =>
+    typeof input[key] === "string" ? input[key] : undefined;
   const path = (key: string): string | undefined => {
     const value = str(key);
     return value ? shortPath(value, cwd, columns) : undefined;
   };
   const bounded = (text: string): string => clipPlainText(singleLineText(text), columns);
   switch (singleLineText(name)) {
-    case "read": case "edit": case "write": return path("path");
-    case "ls": return path("path") ?? ".";
-    case "bash": { const command = str("command"); return command ? bounded(command) : undefined; }
-    case "grep": case "find": {
+    case "read":
+    case "edit":
+    case "write":
+      return path("path");
+    case "ls":
+      return path("path") ?? ".";
+    case "bash": {
+      const command = str("command");
+      return command ? bounded(command) : undefined;
+    }
+    case "grep":
+    case "find": {
       const pattern = str("pattern");
       if (!pattern) return undefined;
       const where = path("path") ?? str("glob");
       return bounded(`"${pattern}"${where ? ` in ${where}` : ""}`);
     }
-    case "ask_parent": { const question = str("question"); return question ? bounded(question) : undefined; }
-    case "alert_parent": case "notify_parent": { const message = str("message"); return message ? bounded(message) : undefined; }
-    default: return undefined;
+    case "ask_parent": {
+      const question = str("question");
+      return question ? bounded(question) : undefined;
+    }
+    case "alert_parent":
+    case "notify_parent": {
+      const message = str("message");
+      return message ? bounded(message) : undefined;
+    }
+    default:
+      return undefined;
   }
 }
-interface ActivityPart { action: string; detail?: string; path?: boolean }
+interface ActivityPart {
+  action: string;
+  detail?: string;
+  path?: boolean;
+}
 
 /** Compact prose only. Simplify leading Markdown, never inline code, globs or
  * arithmetic. Removing an unfinished leading ** also keeps its left edge steady
  * when the matching closing marker arrives. */
 export function generationLine(text: string): string {
-  const line = previewText(text).split("\n").findLast((part) => part.trim())?.trim() ?? "";
-  return line.replace(/^(?:#{1,6}\s+|[-+*]\s+|\d{1,3}[.)]\s+)/, "")
+  const line =
+    previewText(text)
+      .split("\n")
+      .findLast((part) => part.trim())
+      ?.trim() ?? "";
+  return line
+    .replace(/^(?:#{1,6}\s+|[-+*]\s+|\d{1,3}[.)]\s+)/, "")
     .replace(/^\*\*((?=[\p{L}\p{N}])\S(?:[^*]*\S)?)\*\*/u, "$1")
     .replace(/^\*\*(?=[\p{L}\p{N}])/u, "");
 }
 
 function activityParts(tools: readonly ActiveTool[], live: GenerationPreview): ActivityPart[] {
-  if (tools.length <= 2 && tools.length > 0) return tools.map((tool) => {
-    const name = singleLineText(tool.name), detail = tool.detail ? singleLineText(tool.detail) : "";
-    const action = TOOL_ACTION[name];
-    return { action: `${action?.verb ?? name}${detail ? action?.joiner ?? " " : "…"}`, detail,
-      path: ["read", "edit", "write", "ls"].includes(name) };
-  });
+  if (tools.length <= 2 && tools.length > 0)
+    return tools.map((tool) => {
+      const name = singleLineText(tool.name),
+        detail = tool.detail ? singleLineText(tool.detail) : "";
+      const action = TOOL_ACTION[name];
+      return {
+        action: `${action?.verb ?? name}${detail ? (action?.joiner ?? " ") : "…"}`,
+        detail,
+        path: ["read", "edit", "write", "ls"].includes(name),
+      };
+    });
   if (tools.length > 2) {
     const groups = new Map<string, number>();
     for (const tool of tools) {
@@ -81,17 +132,22 @@ function activityParts(tools: readonly ActiveTool[], live: GenerationPreview): A
     }
     const parts = [...groups].map(([name, count]): ActivityPart => {
       const action = TOOL_ACTION[name];
-      return { action: action?.verb ?? name, detail: count > 1 && action?.noun ? ` ${count} ${action.noun}` : "" };
+      return {
+        action: action?.verb ?? name,
+        detail: count > 1 && action?.noun ? ` ${count} ${action.noun}` : "",
+      };
     });
     parts[parts.length - 1]!.detail += "…";
     return parts;
   }
-  if (live.preparing_tool !== undefined) return [{ action: "preparing ", detail: `${singleLineText(live.preparing_tool) || "tool"}…` }];
+  if (live.preparing_tool !== undefined)
+    return [{ action: "preparing ", detail: `${singleLineText(live.preparing_tool) || "tool"}…` }];
   if (!live.channel) return [{ action: "thinking…" }];
   const thinking = live.channel === "thinking";
-  const line = generationLine(thinking ? live.thinking ?? "" : live.preview);
-  return line ? [{ action: thinking ? "thinking: " : "replying: ", detail: line }] :
-    [{ action: thinking ? "thinking…" : "replying…" }];
+  const line = generationLine(thinking ? (live.thinking ?? "") : live.preview);
+  return line
+    ? [{ action: thinking ? "thinking: " : "replying: ", detail: line }]
+    : [{ action: thinking ? "thinking…" : "replying…" }];
 }
 
 /** Small calls get their natural width; the remaining columns go to long calls
@@ -101,7 +157,8 @@ function activityWidths(parts: readonly ActivityPart[], columns: number): number
   const widths = parts.map((part) => visibleWidth(part.action + (part.detail ?? "")));
   if (widths.reduce((sum, width) => sum + width, 0) <= available) return widths;
   const result = new Array<number>(parts.length).fill(0);
-  let remaining = available, count = parts.length;
+  let remaining = available,
+    count = parts.length;
   for (const index of widths.map((_, index) => index).sort((a, b) => widths[a]! - widths[b]!)) {
     const room = Math.min(widths[index]!, Math.floor(remaining / count));
     result[index] = room;
@@ -112,25 +169,40 @@ function activityWidths(parts: readonly ActivityPart[], columns: number): number
 }
 
 function activityText(parts: readonly ActivityPart[], columns: number, theme: Theme): string {
-  if (columns < (parts.length - 1) * 2) return theme.fg("dim", clipPlainText(
-    parts.map((part) => part.action + (part.detail ?? "")).join(", "), columns));
+  if (columns < (parts.length - 1) * 2)
+    return theme.fg(
+      "dim",
+      clipPlainText(parts.map((part) => part.action + (part.detail ?? "")).join(", "), columns),
+    );
   const widths = activityWidths(parts, columns);
-  return parts.map((part, index) => {
-    const room = widths[index]!;
-    const detailRoom = Math.max(0, room - visibleWidth(part.action));
-    const detail = part.path && part.detail ? shortPath(part.detail, "", detailRoom) : part.detail ?? "";
-    const clipped = clipPlainText(part.action + detail, room);
-    const action = clipped.startsWith(part.action) ? part.action : clipped;
-    // Clip plain strings first, then color every visible cell, including ….
-    return theme.fg("dim", action) + (clipped.length > action.length ? theme.fg("muted", clipped.slice(action.length)) : "");
-  }).join(theme.fg("dim", ", "));
+  return parts
+    .map((part, index) => {
+      const room = widths[index]!;
+      const detailRoom = Math.max(0, room - visibleWidth(part.action));
+      const detail =
+        part.path && part.detail ? shortPath(part.detail, "", detailRoom) : (part.detail ?? "");
+      const clipped = clipPlainText(part.action + detail, room);
+      const action = clipped.startsWith(part.action) ? part.action : clipped;
+      // Clip plain strings first, then color every visible cell, including ….
+      return (
+        theme.fg("dim", action) +
+        (clipped.length > action.length ? theme.fg("muted", clipped.slice(action.length)) : "")
+      );
+    })
+    .join(theme.fg("dim", ", "));
 }
 
 export const formatTokens = (count: number, unit = " token"): string =>
   formatTokenCount(count, { precision: "detailed" }) + unit;
 export function formatContextPercent(context: NonNullable<RunView["runtime"]>["context"]): string {
-  if (context?.tokens == null || !Number.isSafeInteger(context.tokens) || context.tokens < 0 ||
-      !Number.isSafeInteger(context.context_window) || context.context_window <= 0) return "?";
+  if (
+    context?.tokens == null ||
+    !Number.isSafeInteger(context.tokens) ||
+    context.tokens < 0 ||
+    !Number.isSafeInteger(context.context_window) ||
+    context.context_window <= 0
+  )
+    return "?";
   return `${((context.tokens / context.context_window) * 100).toFixed(1)}%`;
 }
 export const formatContextTokens = (count: number): string =>
@@ -147,8 +219,18 @@ export const formatTurns = (turns: number, max: number): string => `${GLYPHS.tur
 
 /** The sole activity rendering path, shared by production and regression tests.
  * Snapshots contain plain observations; styling and width decisions happen here. */
-export function renderActivity(tools: readonly ActiveTool[], live: GenerationPreview, theme: Theme, columns: number): string {
-  const width = columns === Infinity ? Infinity : Number.isFinite(columns) ? Math.max(0, Math.floor(columns)) : 0;
+export function renderActivity(
+  tools: readonly ActiveTool[],
+  live: GenerationPreview,
+  theme: Theme,
+  columns: number,
+): string {
+  const width =
+    columns === Infinity
+      ? Infinity
+      : Number.isFinite(columns)
+        ? Math.max(0, Math.floor(columns))
+        : 0;
   return activityText(activityParts(tools, live), width, theme);
 }
 

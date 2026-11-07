@@ -10,8 +10,16 @@ type Linked = TSNode & { readonly parent?: TSNode | null };
 const parentOf = (node: TSNode): TSNode | null | undefined => (node as Linked).parent;
 const REDIRECT_TYPES = new Set(["file_redirect", "heredoc_redirect", "herestring_redirect"]);
 const SEQUENCE_TYPES = new Set(["list", "pipeline", "redirected_statement"]);
-const TAIL_TYPES = new Set([...ARG_NODE_TYPES, "simple_expansion", "expansion", "command_substitution", "process_substitution", "number"]);
-const same = (a: TSNode, b: TSNode): boolean => a.type === b.type && a.startIndex === b.startIndex && a.endIndex === b.endIndex;
+const TAIL_TYPES = new Set([
+  ...ARG_NODE_TYPES,
+  "simple_expansion",
+  "expansion",
+  "command_substitution",
+  "process_substitution",
+  "number",
+]);
+const same = (a: TSNode, b: TSNode): boolean =>
+  a.type === b.type && a.startIndex === b.startIndex && a.endIndex === b.endIndex;
 
 /** Words after the destination (all of them after a close), or after a heredoc delimiter. */
 export function redirectTail(redirect: TSNode): TSNode[] {
@@ -19,7 +27,10 @@ export function redirectTail(redirect: TSNode): TSNode[] {
   let close = false;
   for (let i = 0; i < redirect.childCount; i++) {
     const child = redirect.child(i)!;
-    if (!child.isNamed) { if (/^[<>]&-$/.test(child.type)) close = true; continue; }
+    if (!child.isNamed) {
+      if (/^[<>]&-$/.test(child.type)) close = true;
+      continue;
+    }
     if (redirect.type === "heredoc_redirect") {
       if (child.type === "heredoc_start" || child.type === "file_descriptor") continue;
       // A recovered heredoc line is not evidence of what the command receives.
@@ -41,7 +52,8 @@ export function redirectTailOwner(redirect: TSNode): TSNode | undefined {
     for (let i = 0; i < node.childCount; i++) {
       const child = node.child(i)!;
       if (child.startIndex >= redirect.startIndex) break;
-      if (child.isNamed && child.type !== "comment" && !REDIRECT_TYPES.has(child.type)) last = child;
+      if (child.isNamed && child.type !== "comment" && !REDIRECT_TYPES.has(child.type))
+        last = child;
     }
     if (last?.type === "command") return last;
     node = last && SEQUENCE_TYPES.has(last.type) ? last : undefined;
@@ -52,7 +64,11 @@ export function redirectTailOwner(redirect: TSNode): TSNode | undefined {
 /** Tails this command owns, in source order. */
 export function ownedRedirectTails(command: TSNode): TSNode[] {
   const tails: TSNode[] = [];
-  for (let node = parentOf(command), depth = 0; node && SEQUENCE_TYPES.has(node.type) && depth < 128; node = parentOf(node), depth++) {
+  for (
+    let node = parentOf(command), depth = 0;
+    node && SEQUENCE_TYPES.has(node.type) && depth < 128;
+    node = parentOf(node), depth++
+  ) {
     if (node.type !== "redirected_statement") continue;
     for (let i = 0; i < node.childCount; i++) {
       const redirect = node.child(i)!;
@@ -73,9 +89,14 @@ export function completedCommandView(command: TSNode): TSNode | undefined {
   for (let i = 0; i < command.childCount; i++) children.push(command.child(i)!);
   children.push(...tails);
   return {
-    type: command.type, text: [command.text, ...tails.map(tail => tail.text)].join(" "),
-    startIndex: command.startIndex, endIndex: command.endIndex, childCount: children.length,
-    isNamed: command.isNamed, hasError: command.hasError, previousSibling: command.previousSibling,
-    child: index => children[index] ?? null,
+    type: command.type,
+    text: [command.text, ...tails.map((tail) => tail.text)].join(" "),
+    startIndex: command.startIndex,
+    endIndex: command.endIndex,
+    childCount: children.length,
+    isNamed: command.isNamed,
+    hasError: command.hasError,
+    previousSibling: command.previousSibling,
+    child: (index) => children[index] ?? null,
   };
 }

@@ -8,23 +8,36 @@ interface Snapshot {
 }
 const MAX_SAMPLES = 4096;
 const MAX_KEY_CHARS = 8192;
-interface SharedScope { current: Snapshot | undefined }
+interface SharedScope {
+  current: Snapshot | undefined;
+}
 // Jiti moduleCache:false can evaluate this file in independent import graphs.
 // Share only the synchronous stack slot, not persistent samples or decisions.
 const scopeKey = Symbol.for("pi-alehouse:permission-sampling-scope:v1");
 const globals = globalThis as unknown as Record<symbol, unknown>;
-if (globals[scopeKey] === undefined) Object.defineProperty(globals, scopeKey, {
-  value: Object.freeze({ version: 1, scope: Object.seal({ current: undefined }) }),
-  configurable: false, writable: false, enumerable: false,
-});
+if (globals[scopeKey] === undefined)
+  Object.defineProperty(globals, scopeKey, {
+    value: Object.freeze({ version: 1, scope: Object.seal({ current: undefined }) }),
+    configurable: false,
+    writable: false,
+    enumerable: false,
+  });
 const shared = globals[scopeKey];
-if (!shared || typeof shared !== "object" || !Object.isFrozen(shared) ||
-    Object.getOwnPropertyDescriptor(shared, "version")?.value !== 1) {
+if (
+  !shared ||
+  typeof shared !== "object" ||
+  !Object.isFrozen(shared) ||
+  Object.getOwnPropertyDescriptor(shared, "version")?.value !== 1
+) {
   throw new Error("Permission sampling scope is unavailable");
 }
 const sharedScope: unknown = Object.getOwnPropertyDescriptor(shared, "scope")?.value;
-if (!sharedScope || typeof sharedScope !== "object" || !Object.isSealed(sharedScope) ||
-    Object.getOwnPropertyDescriptor(sharedScope, "current")?.writable !== true) {
+if (
+  !sharedScope ||
+  typeof sharedScope !== "object" ||
+  !Object.isSealed(sharedScope) ||
+  Object.getOwnPropertyDescriptor(sharedScope, "current")?.writable !== true
+) {
   throw new Error("Permission sampling scope is unavailable");
 }
 const scope = sharedScope as SharedScope;
@@ -39,14 +52,21 @@ const owner = import.meta.url;
 export function withSynchronousPermissionSnapshot<T>(read: () => T): T {
   const previous = scope.current;
   scope.current = { owner, spaces: new Map(), entries: 0 };
-  try { return read(); }
-  finally { scope.current = previous; }
+  try {
+    return read();
+  } finally {
+    scope.current = previous;
+  }
 }
 
 /** Separate spaces keep file stamps and path flavors distinct.
  * Path callers must supply an already-absolute lexical key; flavor objects
  * separate canonicalization algorithms. Exceptions are never memoized. */
-export function synchronousPermissionSample(space: SampleSpace, key: string, read: () => string): string {
+export function synchronousPermissionSample(
+  space: SampleSpace,
+  key: string,
+  read: () => string,
+): string {
   const snapshot = scope.current;
   if (!snapshot || snapshot.owner !== owner || key.length > MAX_KEY_CHARS) return read();
   let values = snapshot.spaces.get(space);
@@ -54,7 +74,10 @@ export function synchronousPermissionSample(space: SampleSpace, key: string, rea
   if (cached !== undefined) return cached;
   const value = read();
   if (snapshot.entries < MAX_SAMPLES) {
-    if (!values) { values = new Map(); snapshot.spaces.set(space, values); }
+    if (!values) {
+      values = new Map();
+      snapshot.spaces.set(space, values);
+    }
     values.set(key, value);
     snapshot.entries += 1;
   }

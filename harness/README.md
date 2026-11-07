@@ -24,17 +24,17 @@ The parent retains normal footer/title, approval queue, health/Stats, and pinned
 
 ## Contract references
 
-| Concern | Reference |
-| --- | --- |
-| Ownership, lifecycle, SDK adapters, history and accounting | [Architecture](docs/architecture.md) |
-| Owner / Agent / Run / Session vocabulary | [Concepts](docs/concepts.md) |
-| Nine parent tools and two child tools | [Tool contract](docs/tool-contract.md) |
-| Slots, effort, Off, version-3 configuration | [Routing](docs/routing.md) |
-| Widget, panels, footer and Stats | [Interface](docs/interface.md) |
-| Permission, provenance, leases and data handling | [Security](docs/security.md) |
-| Layout and quality gates | [Development](docs/development.md) |
-| Supported/unsupported behavior | [Limitations](docs/limitations.md) |
-| Test scope and evidence gaps | [Validation evidence](docs/validation-evidence.md) |
-| Package ownership rationale | [Organization decision](docs/decisions/001-organization-boundaries.md) |
+| Concern                                                    | Reference                                                              |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Ownership, lifecycle, SDK adapters, history and accounting | [Architecture](docs/architecture.md)                                   |
+| Owner / Agent / Run / Session vocabulary                   | [Concepts](docs/concepts.md)                                           |
+| Nine parent tools and two child tools                      | [Tool contract](docs/tool-contract.md)                                 |
+| Slots, effort, Off, version-3 configuration                | [Routing](docs/routing.md)                                             |
+| Widget, panels, footer and Stats                           | [Interface](docs/interface.md)                                         |
+| Permission, provenance, leases and data handling           | [Security](docs/security.md)                                           |
+| Layout and quality gates                                   | [Development](docs/development.md)                                     |
+| Supported/unsupported behavior                             | [Limitations](docs/limitations.md)                                     |
+| Test scope and evidence gaps                               | [Validation evidence](docs/validation-evidence.md)                     |
+| Package ownership rationale                                | [Organization decision](docs/decisions/001-organization-boundaries.md) |
 
 Child tool names, profile IDs, config path, `harness:*` records, event names and cross-extension symbols remain compatibility surface, not a second public product. See [notices](THIRD_PARTY_NOTICES.md) and [root notices](../THIRD_PARTY_NOTICES.md).

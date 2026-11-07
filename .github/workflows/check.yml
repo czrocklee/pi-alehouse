@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ['22', '24']
+        node: ["22", "24"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,10 +28,10 @@ jobs:
       - run: npm run build
       - run: npm run check
         env:
-          PI_OFFLINE: '1'
-          PI_TELEMETRY: '0'
+          PI_OFFLINE: "1"
+          PI_TELEMETRY: "0"
           PI_JEV_APPROVAL_MODE: shadow
-          PI_ALEHOUSE_GROK_BILLING: '0'
+          PI_ALEHOUSE_GROK_BILLING: "0"
 
 # Controlled host integration needs a separately reviewed fixture runner and
 # matched generated authority; do not accidentally run legacy private collectors

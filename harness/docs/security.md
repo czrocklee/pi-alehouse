@@ -3,7 +3,7 @@
 Pi Alehouse's harness composes authority; it does not replace it. The patched
 permission-system 32.0.3 runtime, generated worker definitions, static safety
 guard, search policy, and optional Jev review policy remain outside the internal
-harness and are loaded by the trusted `pi-alehouse` launcher.  A task prompt, profile name, model choice,
+harness and are loaded by the trusted `pi-alehouse` launcher. A task prompt, profile name, model choice,
 or UI state cannot grant a new permission or weaken a path/tool restriction.
 
 ## Explicit process and tool boundary
@@ -43,10 +43,10 @@ legacy profile aliases or capabilities are supported. Both profiles use the
 parent's working directory. Reasoning difficulty is independent of profile;
 scout is not a cheaper, shallower or quicker tier.
 
-| Public profile | Internal ID | Capability | Meaning |
-| --- | --- | --- | --- |
-| `worker` | `editor` | local read/edit/write/Bash/Git/builds; no web tools | local diagnosis, code review, design, implementation and verification under normal permission; no web is not network isolation, and review-only is not a readonly promise |
-| `scout` | `researcher` | read, grep, find, ls and the four web tools; no model-facing Bash/edit/write | gather, compare and summarize information from local files and web sources, including local-only tasks; return cited findings; web material is untrusted |
+| Public profile | Internal ID  | Capability                                                                   | Meaning                                                                                                                                                                   |
+| -------------- | ------------ | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `worker`       | `editor`     | local read/edit/write/Bash/Git/builds; no web tools                          | local diagnosis, code review, design, implementation and verification under normal permission; no web is not network isolation, and review-only is not a readonly promise |
+| `scout`        | `researcher` | read, grep, find, ls and the four web tools; no model-facing Bash/edit/write | gather, compare and summarize information from local files and web sources, including local-only tasks; return cited findings; web material is untrusted                  |
 
 Worker has no extra child-only blanket Git mutation ban and no automatic Git
 allow. Review-only work is a task instruction. User-configured command/path denies and base credential/resource/high-risk
@@ -170,7 +170,7 @@ keep the normal secret-path denies and external-directory asks.
 pi-web-access itself limits fetches to `http(s)`, blocks loopback, private,
 link-local (including cloud metadata), CGNAT and multicast targets after DNS
 resolution, revalidates every redirect, restricts `auth` to configured
-per-host profiles, and replaces inline `data:` payloads in fetched text.  It
+per-host profiles, and replaces inline `data:` payloads in fetched text. It
 does not inspect what a URL or query carries.
 
 The residual risk is deliberate: a scout reads both project files and
@@ -193,14 +193,14 @@ The harness enforces the rest:
   retains separate module instances as a conservative isolation boundary.
   Instances are reused only after a confirmed child shutdown.
 - A native import bypasses the host's extension loader, and production installs
-  omit the Pi SDK.  The entry's own imports of the Pi SDK and TypeBox therefore
+  omit the Pi SDK. The entry's own imports of the Pi SDK and TypeBox therefore
   resolve, through a process-wide Node module hook, to the modules the host
   supplied to the harness (the same export values, re-exported); any other host
-  module fails the import.  The
+  module fails the import. The
   hook only acts on imports from an entry the harness tagged (its URL carries
   `alehouse-host=<generation>`); it stays installed for the process.
 - `fetch_content` has no `auth` (browser-cookie) parameter and accepts only
-  absolute `http(s)` URLs.  Upstream accepts local video paths (by extension,
+  absolute `http(s)` URLs. Upstream accepts local video paths (by extension,
   default 50 MB) and uploads them for analysis or extracts frames, outside the
   path permission gates; a scout cannot. Its adapted fetch description and
   URL/timestamp/frame parameter descriptions do not promise local-video access.
@@ -208,7 +208,7 @@ The harness enforces the rest:
   rewrite; URL/schema and execution checks enforce the input boundary separately.
 - `web_search`, `source_check` and `fetch_content` have no `proxy` parameter.
   Upstream checks only its scheme, not its host, so a model-chosen proxy could
-  reach loopback or private services, or bypass the configured proxy.  A proxy
+  reach loopback or private services, or bypass the configured proxy. A proxy
   configured in `web-search.json` still applies.
 - These three schemas are closed (`get_search_content` is left as upstream
   registers it): violations fail validation before any permission prompt, and
@@ -220,18 +220,18 @@ The harness enforces the rest:
   disabled web tools fail researcher assembly.
 - Curator review has no UI in a child and resolves to no curator.
 
-One approved call can still do more than fetch a page.  These are upstream
+One approved call can still do more than fetch a page. These are upstream
 pi-web-access behaviors the harness does not restrict; the approval prompt
 shows only the tool input:
 
 - A `github.com` repository URL is cloned (by default when the repository is
   small, always with `forceClone`) with `gh repo clone`, using the user's
   stored `gh` credentials, or `git clone`, into `/tmp/pi-github-repos`; issue
-  and pull-request URLs are read with `gh`.  A private repository the user can
+  and pull-request URLs are read with `gh`. A private repository the user can
   access is therefore readable, and outside the path permission gates.
   `githubClone.enabled: false` in `web-search.json` turns cloning off for the
   parent and every scout. The internal profile ID remains `researcher`.
-- YouTube URLs run `yt-dlp`/`ffmpeg`.  If `allowBrowserCookies` (or
+- YouTube URLs run `yt-dlp`/`ffmpeg`. If `allowBrowserCookies` (or
   `PI_ALLOW_BROWSER_COOKIES=1`) is set, the Gemini Web path reads local Chrome
   cookies for Google origins; removing `auth` does not remove this path.
 - `mode: "answer"` with `answerModel`, video/YouTube analysis, and summary
@@ -360,12 +360,12 @@ approval and defer, but defer does not turn an existing configured allow into as
 See [limitations](limitations.md) for what the permission chain does not cover.
 
 Separately, the harness records an optional Run approval witness at admission
-and at the child SDK's real prompt boundary.  The child loads only that small
-observer; it never loads a second reviewer.  The witness is invalidated by
+and at the child SDK's real prompt boundary. The child loads only that small
+observer; it never loads a second reviewer. The witness is invalidated by
 cancellation, steering, budget input, extra child input, Run exit, or a later
-direct user message.  Resume needs a fresh binding.  It is in memory and audit
-records avoid prompt text.  Asynchronous review is revalidated after the
-verdict.  Missing/stale provenance, invalid tool observation, or a leftover
+direct user message. Resume needs a fresh binding. It is in memory and audit
+records avoid prompt text. Asynchronous review is revalidated after the
+verdict. Missing/stale provenance, invalid tool observation, or a leftover
 witness disables automatic approval for that Run while preserving normal human
 forwarding through the existing authority.
 
@@ -425,7 +425,7 @@ a worker may issue parallel tool calls. Raising worker capacity does not widen
 this automated-review budget. Native boolean answers
 are validated and converted to the existing policy verdict inputs; native
 transport does not confer approval authority.
-Opt in only after evaluating that data handling.  Never reinterpret the harness profile or
+Opt in only after evaluating that data handling. Never reinterpret the harness profile or
 Run identity as the retired subagents authorization protocol to obtain a grant.
 
 `PI_JEV_APPROVAL_MODE` is only each session's launch mode. The footer's
@@ -476,9 +476,9 @@ enforces explicit denies, the static guard and fail-closed floor.
 
 Session yolo lives in the managed permission authority, not in a judge: for
 the session and its ancestors in the in-process permission subagent registry,
-asks become allows without reaching Jev or a human.  Explicit denies, the static
+asks become allows without reaching Jev or a human. Explicit denies, the static
 safety guard and the fail-closed floor (allows clamped to ask by an invalid
-config scope, which this build keeps as asks under any yolo) still hold.  A
+config scope, which this build keeps as asks under any yolo) still hold. A
 child not in that registry is not covered and keeps asking.
 
 ## Scoped settings and trust
@@ -645,21 +645,21 @@ session root, use no-follow read-only access, and enforce explicit file caps.
 They cannot browse arbitrary files, repair records, or turn historical data into
 execution. Results and live state are Owner-local. Cold history is scoped to
 the current parent's recorded links, including older generations; it grants no
-live-Owner authority.  Parent and child journals can contain sensitive model
+live-Owner authority. Parent and child journals can contain sensitive model
 content, including thinking, and private transcripts must not be published as
-evidence.  Controlled fixtures intentionally save synthetic logs/reports with
+evidence. Controlled fixtures intentionally save synthetic logs/reports with
 their scope and provenance instead.
 
-The harness reuses the host model runtime and existing authentication.  It does
+The harness reuses the host model runtime and existing authentication. It does
 not copy credentials into child configuration, prompt snapshots, event payloads,
-or logs.  A real host SDK call can refresh the selected Pi auth file; real-provider
+or logs. A real host SDK call can refresh the selected Pi auth file; real-provider
 trials therefore require separate authorization. The footer's ordinary quota
 header display/accounting does not require a network publishing opt-in.
 Quota-dashboard HTTP POST requires explicit `AGENT_DASHBOARD_URL` (no implicit
 localhost endpoint). Grok billing network/auth reads require
 `PI_ALEHOUSE_GROK_BILLING=1`; the optional `GROK_CLI_CHAT_PROXY_BASE_URL`
 selects its external billing proxy, otherwise the built-in endpoint is used
-*only when billing is enabled*. The billing integration reads `auth.json` under
+_only when billing is enabled_. The billing integration reads `auth.json` under
 Pi's actual `getAgentDir()` location, not an assumed HOME path. Neither opt-in
 changes ordinary quota-header display/accounting. Only enable these integrations
 deliberately.
@@ -673,8 +673,8 @@ has no retry or force release. Internal faults and unavailable parent history
 writers likewise require telling the user, not retrying or diagnosing a model.
 
 A private local `FileOwnerLease` plus absolute util-linux `flock` serializes an
-Owner for its parent session.  It is not an OS sandbox, distributed lock, or
-proof that child/provider activity stopped.  Lock files are intentionally kept
+Owner for its parent session. It is not an OS sandbox, distributed lock, or
+proof that child/provider activity stopped. Lock files are intentionally kept
 for inode identity; manual removal while a process may hold one is unsafe.
 
 Rendering is read-only with respect to Owner lifecycle. Explicit human input may
@@ -686,7 +686,7 @@ redirect the intent. First-accepted human provenance is an observation, not an
 approval credential or a durable notification guarantee.
 
 Cancellation, turn-limit stop, and explicit shutdown seal the harness gate and
-request the existing SDK stop path.  They do not roll back file or provider
+request the existing SDK stop path. They do not roll back file or provider
 effects. Switch/fork guards require confirmed closure: an unused Owner starts
 shutdown before its first await, while a used Owner requires literal `true` from a
 live UI confirmation before shutdown starts. Refusal, unavailable/throwing UI,
@@ -699,7 +699,7 @@ session in place, so it never auto-closes and retains the explicit
 `/harness-close` gate. A child that crosses a guard boundary is quarantined and
 not reused. The execution slot is freed after actual execution exit, while the Agent reservation and Owner lease remain through finalization
 and confirmed cleanup; uncertain cleanup blocks closure/reuse rather than being
-force-unlocked.  The host SDK has known input-admission/reload gaps, so do not
+force-unlocked. The host SDK has known input-admission/reload gaps, so do not
 claim atomic cancellation or reload safety; see [limitations](limitations.md)
 and the controlled observations in [validation evidence](validation-evidence.md).
 

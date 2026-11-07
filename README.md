@@ -18,11 +18,11 @@ The same panel sets how much your main agent hands off: **Manual**, **Co-worker*
 
 ![Historical three-slot routing panel, captured before delegation mode and five-slot routing](harness/docs/assets/routing-panel.svg)
 
-*Historical capture of the author's three-slot setup, not the current UI or a suggested default.*
+_Historical capture of the author's three-slot setup, not the current UI or a suggested default._
 
 ![Five-slot thinking effort editor, rendered with illustrative models](harness/docs/assets/effort-panel.svg)
 
-*Current UI renderer with example models, not a live-provider capture. Slots display d5→d1; reasoning difficulty still increases from 1 to 5.*
+_Current UI renderer with example models, not a live-provider capture. Slots display d5→d1; reasoning difficulty still increases from 1 to 5._
 
 ## Keep the teammate, not just the answer
 
@@ -48,21 +48,21 @@ The agent panel puts names, current tasks, live tool activity, context usage and
 
 ![Historical agent panel capture reviewing this README](harness/docs/assets/agent-panel.svg)
 
-*Historical capture, not the current profile contract. Only its identifiers and private path are hidden.*
+_Historical capture, not the current profile contract. Only its identifiers and private path are hidden._
 
 The rest of the interface follows the same idea:
 
-| Panel | What it puts in your hands |
-| --- | --- |
-| **Agents** | Who's working, what they're doing, and who needs an answer. |
-| **Delegation & effort** | How much your main agent hands off, your worker lineup and how much thinking each kind of task gets. |
-| **Usage** | Reported usage across the main conversation and worker models. |
-| **Stats** | Activity, waiting, model timings and tool activity—not just a token counter. |
-| **Approvals** | Permission choices in the same workspace; inspection panes step aside when a decision needs your attention. |
+| Panel                   | What it puts in your hands                                                                                  |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **Agents**              | Who's working, what they're doing, and who needs an answer.                                                 |
+| **Delegation & effort** | How much your main agent hands off, your worker lineup and how much thinking each kind of task gets.        |
+| **Usage**               | Reported usage across the main conversation and worker models.                                              |
+| **Stats**               | Activity, waiting, model timings and tool activity—not just a token counter.                                |
+| **Approvals**           | Permission choices in the same workspace; inspection panes step aside when a decision needs your attention. |
 
 ![Model activity across the main conversation and its workers](harness/docs/assets/stats-panel.svg)
 
-*Reported activity from the same working session.*
+_Reported activity from the same working session._
 
 These aren't separate dashboards to babysit. They belong to the conversation you're already in.
 

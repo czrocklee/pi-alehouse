@@ -263,7 +263,7 @@ not automatically captured facts. They are consumed through trusted bounded
 history and offline audit, **not automatically injected into the parent model**
 and not through a new model tool or arbitrary journal path. A receipt neither
 authorizes work nor skips a gate or rerun. Same checks/tree means repeated
-*declarations*, not proved redundant verification.
+_declarations_, not proved redundant verification.
 
 Settled-reason statistics derive from retained settled Runs and need not vanish
 on Owner close. `scripts/analyze-pi-harness-journal.mjs` is the offline journal

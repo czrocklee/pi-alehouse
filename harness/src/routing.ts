@@ -1,8 +1,18 @@
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { HarnessError, workersDisabled } from "./core/ports.ts";
-import { difficultySlots, validDifficulty, type Difficulty, type WorkerSlot } from "./core/contracts.ts";
-import { defaultDelegation, delegationModes, eagernessLevels, type DelegationSetting } from "./delegation.ts";
+import {
+  difficultySlots,
+  validDifficulty,
+  type Difficulty,
+  type WorkerSlot,
+} from "./core/contracts.ts";
+import {
+  defaultDelegation,
+  delegationModes,
+  eagernessLevels,
+  type DelegationSetting,
+} from "./delegation.ts";
 import { validateSettings, type PresetDefinition } from "../../lib/settings-store.mjs";
 
 // Task ratings and configured slots have one fixed, one-to-one correspondence.
@@ -25,8 +35,11 @@ export function validEffortOverrides(value: unknown): value is EffortOverrides {
     const member = Object.getOwnPropertyDescriptor(value, key);
     // Accessors can return one valid value during validation and a different
     // one when copied into an audited selection; overrides must be data only.
-    return member?.enumerable === true && Object.hasOwn(member, "value") &&
-      (member.value === "inherit" || thinkingLevels.includes(member.value as ThinkingLevel));
+    return (
+      member?.enumerable === true &&
+      Object.hasOwn(member, "value") &&
+      (member.value === "inherit" || thinkingLevels.includes(member.value as ThinkingLevel))
+    );
   });
 }
 const CONFIG_VERSION = 3;
@@ -75,19 +88,35 @@ export interface PresetPublication {
 }
 
 type PresetBody = PresetDefinition;
-type PresetConfig = { defaultPreset: string; presets: Record<string, PresetBody>; delegation: DelegationSetting };
-type CandidateData = { owner: object; presets: Map<string, PresetSnapshot>; definitions: Record<string, PresetDefinition> };
+type PresetConfig = {
+  defaultPreset: string;
+  presets: Record<string, PresetBody>;
+  delegation: DelegationSetting;
+};
+type CandidateData = {
+  owner: object;
+  presets: Map<string, PresetSnapshot>;
+  definitions: Record<string, PresetDefinition>;
+};
 const candidateData = new WeakMap<PresetCandidate, CandidateData>();
 
 /** Every model route comes from configuration; its version makes reloads
  * visible without special-casing any operator-chosen preset name. */
-export function presetLabel(preset: { name: string; version: string; effort_overrides?: EffortOverrides }): string {
+export function presetLabel(preset: {
+  name: string;
+  version: string;
+  effort_overrides?: EffortOverrides;
+}): string {
   const label = preset.name === "off" ? preset.name : `${preset.name}@${preset.version}`;
-  return label + (preset.effort_overrides && Object.keys(preset.effort_overrides).length ? "*" : "");
+  return (
+    label + (preset.effort_overrides && Object.keys(preset.effort_overrides).length ? "*" : "")
+  );
 }
 
 const bounded = (value: unknown): string => String(value).slice(0, 512);
-const fail = (message: string): never => { throw new HarnessError("INVALID_PRESET_CONFIG", { error: bounded(message) }); };
+const fail = (message: string): never => {
+  throw new HarnessError("INVALID_PRESET_CONFIG", { error: bounded(message) });
+};
 const validName = (value: unknown): boolean =>
   typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value);
 const validVersion = (value: unknown): value is string =>
@@ -97,27 +126,54 @@ const validModel = (value: unknown): value is string => {
   const slash = value.indexOf("/");
   return slash > 0 && slash < value.length - 1;
 };
-const exactKeys = (value: Record<string, unknown>, allowed: readonly string[], at: string): void => {
+const exactKeys = (
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  at: string,
+): void => {
   const extra = Object.keys(value).find((key) => !allowed.includes(key));
   if (extra !== undefined) fail(`${at} has unsupported field: ${extra}`);
 };
 const canonical = (name: string, body: PresetBody): PresetSnapshot => {
   // Normalize slot definitions into the internal runtime projection. Only the
   // nested `slots` shape is accepted on disk or in persisted definitions.
-  const models = Object.fromEntries(strengths.map((strength) => [strength, body.slots[strength].model])) as Record<Strength, string>;
-  const effort_defaults = Object.fromEntries(strengths.map((strength) =>
-    [strength, body.slots[strength].effort ?? "inherit"])) as Record<Strength, Effort>;
+  const models = Object.fromEntries(
+    strengths.map((strength) => [strength, body.slots[strength].model]),
+  ) as Record<Strength, string>;
+  const effort_defaults = Object.fromEntries(
+    strengths.map((strength) => [strength, body.slots[strength].effort ?? "inherit"]),
+  ) as Record<Strength, Effort>;
   return withOverrides({ name, version: body.version, models, effort_defaults }, {});
 };
-const withOverrides = (base: Omit<PresetSnapshot, "effort" | "effort_overrides" | "digest">,
-  overrides: EffortOverrides): PresetSnapshot => {
-  const effort_overrides = Object.fromEntries(strengths.filter((strength) => Object.hasOwn(overrides, strength))
-    .map((strength) => [strength, overrides[strength]])) as EffortOverrides;
-  const effort = Object.fromEntries(strengths.map((strength) =>
-    [strength, effort_overrides[strength] ?? base.effort_defaults[strength]])) as Record<Strength, Effort>;
-  const selection = { name: base.name, version: base.version, models: base.models,
-    effort_defaults: base.effort_defaults, effort, effort_overrides };
-  return { ...selection, digest: createHash("sha256").update(JSON.stringify({ ...selection, difficultySlots, inheritedThinkingPolicy })).digest("hex") };
+const withOverrides = (
+  base: Omit<PresetSnapshot, "effort" | "effort_overrides" | "digest">,
+  overrides: EffortOverrides,
+): PresetSnapshot => {
+  const effort_overrides = Object.fromEntries(
+    strengths
+      .filter((strength) => Object.hasOwn(overrides, strength))
+      .map((strength) => [strength, overrides[strength]]),
+  ) as EffortOverrides;
+  const effort = Object.fromEntries(
+    strengths.map((strength) => [
+      strength,
+      effort_overrides[strength] ?? base.effort_defaults[strength],
+    ]),
+  ) as Record<Strength, Effort>;
+  const selection = {
+    name: base.name,
+    version: base.version,
+    models: base.models,
+    effort_defaults: base.effort_defaults,
+    effort,
+    effort_overrides,
+  };
+  return {
+    ...selection,
+    digest: createHash("sha256")
+      .update(JSON.stringify({ ...selection, difficultySlots, inheritedThinkingPolicy }))
+      .digest("hex"),
+  };
 };
 const snapshotFor = (base: PresetSnapshot, overrides: EffortOverrides = {}): PresetSnapshot =>
   withOverrides(base, overrides);
@@ -130,18 +186,30 @@ const frozenSnapshot = (snapshot: PresetSnapshot): PresetSnapshot => {
 };
 const catalogue = (presets: Record<string, PresetBody>): Map<string, PresetSnapshot> =>
   new Map(Object.entries(presets).map(([name, body]) => [name, canonical(name, body)]));
-const offSelection: OffPresetSnapshot = Object.freeze({ name: "off" as const, version: "off-v1" as const,
-  digest: createHash("sha256").update(JSON.stringify({ name: "off", version: "off-v1" })).digest("hex") });
-const orderedNames = (presets: ReadonlyMap<string, PresetSnapshot>): string[] => ["off", ...[...presets.keys()].sort()];
-const missing = (name: string, names: readonly string[]): HarnessError => new HarnessError("PRESET_NOT_FOUND", {
-  requested: bounded(name), allowed: names.slice(0, 32), ...(names.length > 32 ? { allowed_omitted: names.length - 32 } : {}),
+const offSelection: OffPresetSnapshot = Object.freeze({
+  name: "off" as const,
+  version: "off-v1" as const,
+  digest: createHash("sha256")
+    .update(JSON.stringify({ name: "off", version: "off-v1" }))
+    .digest("hex"),
 });
+const orderedNames = (presets: ReadonlyMap<string, PresetSnapshot>): string[] => [
+  "off",
+  ...[...presets.keys()].sort(),
+];
+const missing = (name: string, names: readonly string[]): HarnessError =>
+  new HarnessError("PRESET_NOT_FOUND", {
+    requested: bounded(name),
+    allowed: names.slice(0, 32),
+    ...(names.length > 32 ? { allowed_omitted: names.length - 32 } : {}),
+  });
 
 function parsePresetConfig(path: string): PresetConfig {
   let raw: unknown;
   try {
     const stat = statSync(path);
-    if (!stat.isFile() || stat.size > MAX_CONFIG_BYTES) fail(`Config must be a regular file no larger than ${MAX_CONFIG_BYTES} bytes`);
+    if (!stat.isFile() || stat.size > MAX_CONFIG_BYTES)
+      fail(`Config must be a regular file no larger than ${MAX_CONFIG_BYTES} bytes`);
     raw = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     if (error instanceof HarnessError) throw error;
@@ -149,25 +217,37 @@ function parsePresetConfig(path: string): PresetConfig {
   }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) fail("Top level must be an object");
   const root = raw as Record<string, unknown>;
-  exactKeys(root, ["version", "defaultPreset", "presets", "defaultMode", "defaultEagerness"], "Top level");
-  if (root.version !== CONFIG_VERSION) fail(`version must be ${CONFIG_VERSION}; configure all five slots d1–d5 and defaultPreset. Older routing configurations are not supported or converted.`);
-  if (!root.presets || typeof root.presets !== "object" || Array.isArray(root.presets)) fail("presets must be an object");
+  exactKeys(
+    root,
+    ["version", "defaultPreset", "presets", "defaultMode", "defaultEagerness"],
+    "Top level",
+  );
+  if (root.version !== CONFIG_VERSION)
+    fail(
+      `version must be ${CONFIG_VERSION}; configure all five slots d1–d5 and defaultPreset. Older routing configurations are not supported or converted.`,
+    );
+  if (!root.presets || typeof root.presets !== "object" || Array.isArray(root.presets))
+    fail("presets must be an object");
   const parsed: Record<string, PresetBody> = {};
   for (const [name, value] of Object.entries(root.presets as Record<string, unknown>)) {
     if (!validName(name)) fail(`Invalid preset name: ${name}`);
     if (RESERVED_NAMES.has(name)) fail(`Preset name is reserved: ${name}`);
-    if (!value || typeof value !== "object" || Array.isArray(value)) fail(`Preset ${name} must be an object`);
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      fail(`Preset ${name} must be an object`);
     const body = value as Record<string, unknown>;
     exactKeys(body, ["version", "slots"], `Preset ${name}`);
-    if (!validVersion(body.version)) fail(`Preset ${name}.version must be a non-empty string of at most 64 characters`);
-    if (!body.slots || typeof body.slots !== "object" || Array.isArray(body.slots)) fail(`Preset ${name}.slots must be an object`);
+    if (!validVersion(body.version))
+      fail(`Preset ${name}.version must be a non-empty string of at most 64 characters`);
+    if (!body.slots || typeof body.slots !== "object" || Array.isArray(body.slots))
+      fail(`Preset ${name}.slots must be an object`);
     const slots = body.slots as Record<string, unknown>;
     exactKeys(slots, strengths, `Preset ${name}.slots`);
     const definitions = {} as PresetDefinition["slots"];
     for (const strength of strengths) {
       const value = slots[strength];
       const at = `Preset ${name}.slots.${strength}`;
-      if (!value || typeof value !== "object" || Array.isArray(value)) fail(`${at} must be an object`);
+      if (!value || typeof value !== "object" || Array.isArray(value))
+        fail(`${at} must be an object`);
       const slot = value as Record<string, unknown>;
       exactKeys(slot, ["model", "effort"], at);
       if (!validModel(slot.model)) fail(`${at}.model must be an exact provider/model ID`);
@@ -177,20 +257,35 @@ function parsePresetConfig(path: string): PresetConfig {
           fail(`${at}.effort must be a Pi thinking level or inherit`);
         effort = slot.effort as Effort;
       }
-      definitions[strength] = { model: slot.model as string, ...(effort === undefined ? {} : { effort }) };
+      definitions[strength] = {
+        model: slot.model as string,
+        ...(effort === undefined ? {} : { effort }),
+      };
     }
     parsed[name] = { version: body.version as string, slots: definitions };
   }
-  if (typeof root.defaultPreset !== "string" || !validName(root.defaultPreset) ||
-    (root.defaultPreset !== "off" && !Object.hasOwn(parsed, root.defaultPreset)))
+  if (
+    typeof root.defaultPreset !== "string" ||
+    !validName(root.defaultPreset) ||
+    (root.defaultPreset !== "off" && !Object.hasOwn(parsed, root.defaultPreset))
+  )
     return fail("defaultPreset must be 'off' or the name of a configured preset");
   // Optional fresh-session delegation defaults; a session's saved choice wins.
-  if (root.defaultMode !== undefined && !(delegationModes as readonly unknown[]).includes(root.defaultMode))
+  if (
+    root.defaultMode !== undefined &&
+    !(delegationModes as readonly unknown[]).includes(root.defaultMode)
+  )
     fail(`defaultMode must be one of ${delegationModes.join(", ")}`);
-  if (root.defaultEagerness !== undefined && !(eagernessLevels as readonly unknown[]).includes(root.defaultEagerness))
+  if (
+    root.defaultEagerness !== undefined &&
+    !(eagernessLevels as readonly unknown[]).includes(root.defaultEagerness)
+  )
     fail(`defaultEagerness must be one of ${eagernessLevels.join(", ")}`);
-  const delegation = { mode: (root.defaultMode ?? defaultDelegation.mode) as DelegationSetting["mode"],
-    eagerness: (root.defaultEagerness ?? defaultDelegation.eagerness) as DelegationSetting["eagerness"] };
+  const delegation = {
+    mode: (root.defaultMode ?? defaultDelegation.mode) as DelegationSetting["mode"],
+    eagerness: (root.defaultEagerness ??
+      defaultDelegation.eagerness) as DelegationSetting["eagerness"],
+  };
   return { defaultPreset: root.defaultPreset, presets: parsed, delegation };
 }
 
@@ -210,8 +305,11 @@ export class PresetRouter {
   /** The configured fresh-session delegation, read once at startup. */
   readonly defaultDelegation: Readonly<DelegationSetting>;
 
-  constructor(readonly configPath: string, overrides: ReadonlyMap<string, EffortOverrides> = new Map(),
-    definitions: Readonly<Record<string, PresetDefinition>> = {}) {
+  constructor(
+    readonly configPath: string,
+    overrides: ReadonlyMap<string, EffortOverrides> = new Map(),
+    definitions: Readonly<Record<string, PresetDefinition>> = {},
+  ) {
     const config = parsePresetConfig(configPath);
     // Two scoped preference layers plus explicit session-only definitions.
     // Stored files and session records keep their independent one-layer caps.
@@ -227,23 +325,37 @@ export class PresetRouter {
     }
   }
 
-  prepare(definitions: Readonly<Record<string, PresetDefinition>> = this.definitions): PresetCandidate {
+  prepare(
+    definitions: Readonly<Record<string, PresetDefinition>> = this.definitions,
+  ): PresetCandidate {
     const checked = validateSettings({ version: 2, presets: definitions }, 3).presets ?? {};
     const presets = catalogue({ ...parsePresetConfig(this.configPath).presets, ...checked });
-    const candidate: PresetCandidate = Object.freeze({ revision: this.revision, activeName: this.activeName,
-      names: Object.freeze(orderedNames(presets)) });
+    const candidate: PresetCandidate = Object.freeze({
+      revision: this.revision,
+      activeName: this.activeName,
+      names: Object.freeze(orderedNames(presets)),
+    });
     candidateData.set(candidate, { owner: this, presets, definitions: checked });
     return candidate;
   }
 
   /** User-defined model presets, never worker permission profiles. */
-  customPresets(): Record<string, PresetDefinition> { return structuredClone(this.definitions); }
+  customPresets(): Record<string, PresetDefinition> {
+    return structuredClone(this.definitions);
+  }
 
   definition(name: string): PresetDefinition {
     const preset = this.presets.get(name);
     if (!preset) throw missing(name, this.names());
-    return structuredClone({ version: preset.version, slots: Object.fromEntries(strengths.map((slot) =>
-      [slot, { model: preset.models[slot], effort: preset.effort_defaults[slot] }])) as PresetDefinition["slots"] });
+    return structuredClone({
+      version: preset.version,
+      slots: Object.fromEntries(
+        strengths.map((slot) => [
+          slot,
+          { model: preset.models[slot], effort: preset.effort_defaults[slot] },
+        ]),
+      ) as PresetDefinition["slots"],
+    });
   }
 
   /** Read-only snapshots for a prepared catalogue. Inspecting never publishes
@@ -251,12 +363,14 @@ export class PresetRouter {
   inspect(candidate: PresetCandidate): readonly PresetSelection[] {
     const data = candidateData.get(candidate);
     if (!data || data.owner !== this) throw new HarnessError("INVALID_PRESET_CANDIDATE");
-    return Object.freeze(candidate.names.map((name) => {
-      if (name === "off") return offSelection;
-      const snapshot = data.presets.get(name);
-      if (!snapshot) throw new HarnessError("INVALID_PRESET_CANDIDATE");
-      return frozenSnapshot(snapshotFor(structuredClone(snapshot), this.overrides.get(name)));
-    }));
+    return Object.freeze(
+      candidate.names.map((name) => {
+        if (name === "off") return offSelection;
+        const snapshot = data.presets.get(name);
+        if (!snapshot) throw new HarnessError("INVALID_PRESET_CANDIDATE");
+        return frozenSnapshot(snapshotFor(structuredClone(snapshot), this.overrides.get(name)));
+      }),
+    );
   }
 
   /** Validate the candidate and selection, synchronously run the caller's audit,
@@ -264,27 +378,45 @@ export class PresetRouter {
    * from re-entering with another selection between validation and publish.
    * An audit throw leaves this router unchanged; the caller owns the shared
    * parent failure policy because SDK append failure can be ambiguous. */
-  apply(candidate: PresetCandidate, name: string, audit: (snapshot: PresetSelection) => void,
-    overrides?: EffortOverrides): PresetSelection {
-    if (this.applying) throw new HarnessError("PRESET_SELECTION_IN_PROGRESS", {
-      resolution: "Wait for the current preset selection to finish, then retry.",
-    });
+  apply(
+    candidate: PresetCandidate,
+    name: string,
+    audit: (snapshot: PresetSelection) => void,
+    overrides?: EffortOverrides,
+  ): PresetSelection {
+    if (this.applying)
+      throw new HarnessError("PRESET_SELECTION_IN_PROGRESS", {
+        resolution: "Wait for the current preset selection to finish, then retry.",
+      });
     const data = candidateData.get(candidate);
     if (!data || data.owner !== this) throw new HarnessError("INVALID_PRESET_CANDIDATE");
-    if (candidate.revision !== this.revision) throw new HarnessError("STALE_PRESET_SELECTION", {
-      active: this.activeName, resolution: "Retry the command against the current preset catalogue.",
-    });
-    if (!validName(name) || (name !== "off" && !data.presets.has(name))) throw missing(name, candidate.names);
+    if (candidate.revision !== this.revision)
+      throw new HarnessError("STALE_PRESET_SELECTION", {
+        active: this.activeName,
+        resolution: "Retry the command against the current preset catalogue.",
+      });
+    if (!validName(name) || (name !== "off" && !data.presets.has(name)))
+      throw missing(name, candidate.names);
     if (overrides !== undefined && (name === "off" || !validEffortOverrides(overrides)))
-      fail(name === "off" ? "Off cannot have effort overrides" : `Invalid effort overrides for preset ${bounded(name)}`);
+      fail(
+        name === "off"
+          ? "Off cannot have effort overrides"
+          : `Invalid effort overrides for preset ${bounded(name)}`,
+      );
     // Clone before invoking user code: neither a mutated input nor an audit
     // snapshot may change the candidate's eventual published selection.
-    const selectedOverrides = overrides === undefined ? this.overrides.get(name) ?? {} : { ...overrides };
-    const snapshot: PresetSelection = name === "off" ? offSelection :
-      frozenSnapshot(snapshotFor(structuredClone(data.presets.get(name)!), selectedOverrides));
+    const selectedOverrides =
+      overrides === undefined ? (this.overrides.get(name) ?? {}) : { ...overrides };
+    const snapshot: PresetSelection =
+      name === "off"
+        ? offSelection
+        : frozenSnapshot(snapshotFor(structuredClone(data.presets.get(name)!), selectedOverrides));
     this.applying = true;
-    try { audit(isOffPreset(snapshot) ? snapshot : structuredClone(snapshot)); }
-    finally { this.applying = false; }
+    try {
+      audit(isOffPreset(snapshot) ? snapshot : structuredClone(snapshot));
+    } finally {
+      this.applying = false;
+    }
     const wasEnabled = this.activeName !== "off";
     this.presets = data.presets;
     this.definitions = data.definitions;
@@ -306,11 +438,21 @@ export class PresetRouter {
   rebase(candidate: PresetCandidate): PresetCandidate {
     const data = candidateData.get(candidate);
     if (!data || data.owner !== this) throw new HarnessError("INVALID_PRESET_CANDIDATE");
-    if (this.appliedCandidate !== candidate || this.revision !== candidate.revision + 1 ||
-        this.presets !== data.presets || this.definitions !== data.definitions) {
-      throw new HarnessError("STALE_PRESET_SELECTION", { resolution: "Reopen the panel against the current selection." });
+    if (
+      this.appliedCandidate !== candidate ||
+      this.revision !== candidate.revision + 1 ||
+      this.presets !== data.presets ||
+      this.definitions !== data.definitions
+    ) {
+      throw new HarnessError("STALE_PRESET_SELECTION", {
+        resolution: "Reopen the panel against the current selection.",
+      });
     }
-    const continuation: PresetCandidate = Object.freeze({ revision: this.revision, activeName: this.activeName, names: candidate.names });
+    const continuation: PresetCandidate = Object.freeze({
+      revision: this.revision,
+      activeName: this.activeName,
+      names: candidate.names,
+    });
     candidateData.set(continuation, data);
     return continuation;
   }
@@ -321,15 +463,20 @@ export class PresetRouter {
     return this.apply(candidate, name, () => {});
   }
 
-  names(): string[] { return orderedNames(this.presets); }
-  activePresetName(): string { return this.activeName; }
+  names(): string[] {
+    return orderedNames(this.presets);
+  }
+  activePresetName(): string {
+    return this.activeName;
+  }
   admissionState(): { enabled: boolean; revision: number } {
     return { enabled: this.activeName !== "off", revision: this.disableRevision };
   }
   select(name: string): PresetSelection {
-    if (this.applying) throw new HarnessError("PRESET_SELECTION_IN_PROGRESS", {
-      resolution: "Wait for the current preset selection to finish, then retry.",
-    });
+    if (this.applying)
+      throw new HarnessError("PRESET_SELECTION_IN_PROGRESS", {
+        resolution: "Wait for the current preset selection to finish, then retry.",
+      });
     const names = this.names();
     if (!validName(name) || (name !== "off" && !this.presets.has(name))) throw missing(name, names);
     const wasEnabled = this.activeName !== "off";
@@ -343,7 +490,9 @@ export class PresetRouter {
     if (this.activeName === "off") return offSelection;
     const preset = this.presets.get(this.activeName);
     if (!preset) throw missing(this.activeName, this.names());
-    return frozenSnapshot(snapshotFor(structuredClone(preset), this.overrides.get(this.activeName)));
+    return frozenSnapshot(
+      snapshotFor(structuredClone(preset), this.overrides.get(this.activeName)),
+    );
   }
 }
 
@@ -364,8 +513,10 @@ export interface ResolvedRoute {
 }
 
 const VIRTUAL_WORKER_API = "pi-virtual";
-const unavailableResolution = "Ask the user to check the worker preset and model configuration. Do not change reasoning_difficulty to bypass configuration errors.";
-const virtualWorkerResolution = "Ask the user to configure a physical model for this worker preset slot. Virtual models route each request and cannot be pinned to an Agent. Do not change reasoning_difficulty to bypass configuration errors.";
+const unavailableResolution =
+  "Ask the user to check the worker preset and model configuration. Do not change reasoning_difficulty to bypass configuration errors.";
+const virtualWorkerResolution =
+  "Ask the user to configure a physical model for this worker preset slot. Virtual models route each request and cannot be pinned to an Agent. Do not change reasoning_difficulty to bypass configuration errors.";
 
 /** Chat-catalogue identity only. Classifier and image catalogues are not workers. */
 export type WorkerModelRef = { provider: string; id: string; api?: string };
@@ -375,17 +526,25 @@ export type WorkerModelRef = { provider: string; id: string; api?: string };
  * would otherwise match: Pi routes it per request. Missing and ambiguous matches
  * keep the existing unavailable error and are not reclassified as virtual. */
 export function selectPhysicalWorkerModel<M extends WorkerModelRef>(
-  models: readonly M[], exact: string, preset: { name: string; version: string },
+  models: readonly M[],
+  exact: string,
+  preset: { name: string; version: string },
 ): M {
   const matches = models.filter((model) => `${model.provider}/${model.id}` === exact);
-  if (matches.length !== 1) throw new HarnessError("PRESET_MODEL_UNAVAILABLE", {
-    preset: preset.name, preset_version: preset.version, resolution: unavailableResolution,
-  });
+  if (matches.length !== 1)
+    throw new HarnessError("PRESET_MODEL_UNAVAILABLE", {
+      preset: preset.name,
+      preset_version: preset.version,
+      resolution: unavailableResolution,
+    });
   const model = matches[0]!;
   if (model.api !== VIRTUAL_WORKER_API) return model;
   throw new HarnessError("PRESET_MODEL_UNAVAILABLE", {
-    reason: "virtual_model", model_kind: "virtual",
-    preset: preset.name, preset_version: preset.version, resolution: virtualWorkerResolution,
+    reason: "virtual_model",
+    model_kind: "virtual",
+    preset: preset.name,
+    preset_version: preset.version,
+    resolution: virtualWorkerResolution,
   });
 }
 
@@ -402,13 +561,21 @@ export function resolveRoute<M extends WorkerModelRef>(
 ): ResolvedRoute {
   if (isOffPreset(input.preset)) throw workersDisabled();
   if (!validDifficulty(input.difficulty))
-    throw new HarnessError("INVALID_DIFFICULTY", { key: "difficulty",
-      resolution: invalidDifficultyResolution });
+    throw new HarnessError("INVALID_DIFFICULTY", {
+      key: "difficulty",
+      resolution: invalidDifficultyResolution,
+    });
   const difficulty = input.difficulty;
   try {
-    return { ...resolveSlotRoute({ ...input, strength: difficultySlots[difficulty - 1]! }), difficulty };
+    return {
+      ...resolveSlotRoute({ ...input, strength: difficultySlots[difficulty - 1]! }),
+      difficulty,
+    };
   } catch (error) {
-    if (error instanceof HarnessError && ["PRESET_MODEL_UNAVAILABLE", "THINKING_INCOMPATIBLE"].includes(error.code))
+    if (
+      error instanceof HarnessError &&
+      ["PRESET_MODEL_UNAVAILABLE", "THINKING_INCOMPATIBLE"].includes(error.code)
+    )
       throw new HarnessError(error.code, { ...error.details, difficulty });
     throw error;
   }
@@ -423,12 +590,14 @@ export function resolveSlotRoute<M extends WorkerModelRef>(
   if (isOffPreset(input.preset)) throw workersDisabled();
   const strength = input.strength;
   const effort = input.preset.effort[strength];
-  const parentValid = typeof input.parentThinking === "string" &&
+  const parentValid =
+    typeof input.parentThinking === "string" &&
     thinkingLevels.includes(input.parentThinking as ThinkingLevel);
   if (effort === "inherit" && !parentValid)
     throw new HarnessError("PARENT_THINKING_UNAVAILABLE", {
       error: "Pi did not provide a valid parent thinking level.",
-      resolution: "Ask the user to check Pi's thinking setting or restart Pi. Do not change reasoning_difficulty to bypass configuration errors.",
+      resolution:
+        "Ask the user to check Pi's thinking setting or restart Pi. Do not change reasoning_difficulty to bypass configuration errors.",
     });
   const exact = input.preset.models[strength];
   // Physical check is shared with operator previews. Thinking support is not
@@ -436,27 +605,44 @@ export function resolveSlotRoute<M extends WorkerModelRef>(
   const model = selectPhysicalWorkerModel(input.models, exact, input.preset);
   const supported = [...input.supportedThinking(model)];
   const incompatible = (reason: string): never => {
-    const resolution = reason === "no_supported_thinking_level" && supported.includes("off")
-      ? "Ask the user to set this worker preset slot's fixed effort to \"off\", or change the parent Pi thinking level or worker preset."
-      : "Ask the user to change the parent Pi thinking level or worker preset.";
-    throw new HarnessError("THINKING_INCOMPATIBLE", { key: "parent_thinking", reason,
-      preset: input.preset.name, preset_version: input.preset.version,
+    const resolution =
+      reason === "no_supported_thinking_level" && supported.includes("off")
+        ? 'Ask the user to set this worker preset slot\'s fixed effort to "off", or change the parent Pi thinking level or worker preset.'
+        : "Ask the user to change the parent Pi thinking level or worker preset.";
+    throw new HarnessError("THINKING_INCOMPATIBLE", {
+      key: "parent_thinking",
+      reason,
+      preset: input.preset.name,
+      preset_version: input.preset.version,
       parent_thinking: bounded(input.parentThinking),
       resolution: `${resolution} Do not change reasoning_difficulty to bypass configuration errors.`,
     });
   };
-  const parent = parentValid ? input.parentThinking as ThinkingLevel : undefined;
-  const effort_source = Object.hasOwn(input.preset.effort_overrides, strength) ? "user_override" : "preset";
+  const parent = parentValid ? (input.parentThinking as ThinkingLevel) : undefined;
+  const effort_source = Object.hasOwn(input.preset.effort_overrides, strength)
+    ? "user_override"
+    : "preset";
   if (effort !== "inherit") {
-    if (!supported.includes(effort)) throw new HarnessError("THINKING_INCOMPATIBLE", {
-      reason: "fixed_effort_unsupported",
-      preset: input.preset.name, preset_version: input.preset.version,
-      resolution: "Ask the user to change the worker preset effort configuration to a level supported by its model. Do not change reasoning_difficulty to bypass configuration errors.",
-    });
-    return { provider: model.provider, model: model.id, thinking: effort,
-      ...(parent === undefined ? {} : { parent_thinking: parent }), thinking_resolution: "preset_fixed", effort_source,
-      preset: input.preset.name, preset_version: input.preset.version,
-      selection_digest: input.preset.digest, strength };
+    if (!supported.includes(effort))
+      throw new HarnessError("THINKING_INCOMPATIBLE", {
+        reason: "fixed_effort_unsupported",
+        preset: input.preset.name,
+        preset_version: input.preset.version,
+        resolution:
+          "Ask the user to change the worker preset effort configuration to a level supported by its model. Do not change reasoning_difficulty to bypass configuration errors.",
+      });
+    return {
+      provider: model.provider,
+      model: model.id,
+      thinking: effort,
+      ...(parent === undefined ? {} : { parent_thinking: parent }),
+      thinking_resolution: "preset_fixed",
+      effort_source,
+      preset: input.preset.name,
+      preset_version: input.preset.version,
+      selection_digest: input.preset.digest,
+      strength,
+    };
   }
   // Preserve exact support first. Otherwise round enabled thinking upward,
   // capped at the model's highest positive level. SDK order/duplicates/unknown
@@ -471,10 +657,21 @@ export function resolveSlotRoute<M extends WorkerModelRef>(
     const enabled = thinkingLevels.filter((level) => level !== "off" && supported.includes(level));
     const highest = enabled.at(-1);
     if (highest === undefined) return incompatible("no_supported_thinking_level");
-    thinking = enabled.find((level) => thinkingLevels.indexOf(level) > thinkingLevels.indexOf(inherited)) ?? highest;
+    thinking =
+      enabled.find((level) => thinkingLevels.indexOf(level) > thinkingLevels.indexOf(inherited)) ??
+      highest;
     thinking_resolution = "automatic_mapping";
   }
-  return { provider: model.provider, model: model.id, thinking, parent_thinking: inherited, thinking_resolution, effort_source,
-    preset: input.preset.name, preset_version: input.preset.version,
-    selection_digest: input.preset.digest, strength };
+  return {
+    provider: model.provider,
+    model: model.id,
+    thinking,
+    parent_thinking: inherited,
+    thinking_resolution,
+    effort_source,
+    preset: input.preset.name,
+    preset_version: input.preset.version,
+    selection_digest: input.preset.digest,
+    strength,
+  };
 }

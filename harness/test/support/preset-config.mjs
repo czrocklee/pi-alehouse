@@ -15,4 +15,5 @@ export const presetConfig = (presets = {}, rest = {}) => {
   const starter = starterConfig();
   return { ...starter, presets: { ...starter.presets, ...presets }, ...rest };
 };
-export const writePresetConfig = (path, config = starterConfig()) => writeFile(path, JSON.stringify(config));
+export const writePresetConfig = (path, config = starterConfig()) =>
+  writeFile(path, JSON.stringify(config));

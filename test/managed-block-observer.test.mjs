@@ -10,13 +10,26 @@ import { managedBlockToolNames } from "../lib/managed-block-tools.mjs";
 import { renderWorkers } from "../scripts/generate-workers.mjs";
 
 const source = resolve(import.meta.dirname, "../permission-system/managed-block-observer.ts");
-const jiti = createJiti(import.meta.url, { interopDefault: false, moduleCache: false, fsCache: false });
+const jiti = createJiti(import.meta.url, {
+  interopDefault: false,
+  moduleCache: false,
+  fsCache: false,
+});
 const { createManagedBlockObserver } = await jiti.import(source);
 const registryKey = Symbol.for("pi-alehouse:managed-block-observer:v1");
 const block = Object.freeze({ block: true, reason: "synthetic private reason" });
-const event = (toolCallId = "opaque-call", toolName = "bash") => ({ type: "tool_call", toolName, toolCallId });
+const event = (toolCallId = "opaque-call", toolName = "bash") => ({
+  type: "tool_call",
+  toolName,
+  toolCallId,
+});
 function sdkContext(sessionId) {
-  const sessionManager = { getSessionId() { assert.equal(this, sessionManager); return sessionId; } };
+  const sessionManager = {
+    getSessionId() {
+      assert.equal(this, sessionManager);
+      return sessionId;
+    },
+  };
   return { sessionManager };
 }
 function fixture(getter) {
@@ -24,22 +37,46 @@ function fixture(getter) {
   const service = Object.freeze({});
   const services = new Map([[sessionId, service]]);
   const queries = [];
-  const api = createManagedBlockObserver(getter ?? ((id) => { queries.push(id); return services.get(id); }));
+  const api = createManagedBlockObserver(
+    getter ??
+      ((id) => {
+        queries.push(id);
+        return services.get(id);
+      }),
+  );
   const registrations = [];
   const releaseHandler = () => {};
   const pi = {
     marker: "original",
-    get events() { throw new Error("the event bus must never be accessed"); },
-    on(name, handler) { registrations.push({ name, handler, receiver: this }); return releaseHandler; },
-    appendEntry() { return this.marker; },
+    get events() {
+      throw new Error("the event bus must never be accessed");
+    },
+    on(name, handler) {
+      registrations.push({ name, handler, receiver: this });
+      return releaseHandler;
+    },
+    appendEntry() {
+      return this.marker;
+    },
   };
   const wrapped = api.wrapManagedBlocks(pi);
   const register = (handler) => {
     assert.equal(wrapped.on("tool_call", handler), releaseHandler);
     return registrations.at(-1).handler;
   };
-  return { sessionId, service, services, queries, api, pi, wrapped, registrations, releaseHandler,
-    register, ctx: sdkContext(sessionId) };
+  return {
+    sessionId,
+    service,
+    services,
+    queries,
+    api,
+    pi,
+    wrapped,
+    registrations,
+    releaseHandler,
+    register,
+    ctx: sdkContext(sessionId),
+  };
 }
 function subscribe(t, f, onBlock, sessionId = f.sessionId) {
   const release = f.api.subscribeManagedBlocks(sessionId, onBlock);
@@ -48,7 +85,10 @@ function subscribe(t, f, onBlock, sessionId = f.sessionId) {
 }
 function deferred() {
   let resolvePromise, rejectPromise;
-  const promise = new Promise((resolve, reject) => { resolvePromise = resolve; rejectPromise = reject; });
+  const promise = new Promise((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
   return { promise, resolve: resolvePromise, reject: rejectPromise };
 }
 
@@ -65,7 +105,10 @@ test("registration facade wraps only on/tool_call; order, receiver, return and l
   f.register(gate);
   assert.notEqual(f.registrations[1].handler, gate);
   f.wrapped.on("session_shutdown", nonTool);
-  assert.deepEqual(f.registrations.map(({ name }) => name), ["session_start", "tool_call", "session_shutdown"]);
+  assert.deepEqual(
+    f.registrations.map(({ name }) => name),
+    ["session_start", "tool_call", "session_shutdown"],
+  );
   assert.equal(f.registrations[2].handler, nonTool);
   const borrowedReceiver = {};
   f.wrapped.on.call(borrowedReceiver, "input", nonTool);
@@ -75,13 +118,17 @@ test("registration facade wraps only on/tool_call; order, receiver, return and l
   const symbol = Symbol("non-tool API");
   f.pi[symbol] = nonTool;
   assert.equal(f.wrapped[symbol], nonTool);
-  const nextOn = function (name, handler) { assert.equal(this, f.pi); return { name, handler }; };
+  const nextOn = function (name, handler) {
+    assert.equal(this, f.pi);
+    return { name, handler };
+  };
   f.pi.on = nextOn;
   assert.deepEqual(f.wrapped.on("input", nonTool), { name: "input", handler: nonTool });
 });
 
 test("a frozen host API registers managed blocks without mutation or Proxy invariant errors", (t) => {
-  const f = fixture(), facts = [];
+  const f = fixture(),
+    facts = [];
   subscribe(t, f, (fact) => facts.push(fact));
   const originalOn = f.pi.on;
   Object.freeze(f.pi);
@@ -104,15 +151,28 @@ test("telemetry vocabulary matches generated supported-profile tools plus fixed 
   }
   assert.equal(Object.isFrozen(managedBlockToolNames), true);
   assert.equal(new Set(managedBlockToolNames).size, managedBlockToolNames.length);
-  assert.deepEqual([...managedBlockToolNames].sort(), [...declared].sort(),
-    "profile tool additions/removals must explicitly reconcile the telemetry vocabulary");
+  assert.deepEqual(
+    [...managedBlockToolNames].sort(),
+    [...declared].sort(),
+    "profile tool additions/removals must explicitly reconcile the telemetry vocabulary",
+  );
 });
 
 test("all synchronous allow returns and handler this/arguments preserve identity", (t) => {
-  const f = fixture(), facts = [];
+  const f = fixture(),
+    facts = [];
   subscribe(t, f, (fact) => facts.push(fact));
   const receiver = {};
-  for (const value of [undefined, null, false, 0, {}, { block: false }, { block: "true" }, { isError: true }]) {
+  for (const value of [
+    undefined,
+    null,
+    false,
+    0,
+    {},
+    { block: false },
+    { block: "true" },
+    { isError: true },
+  ]) {
     const call = event();
     const extra = {};
     const handler = f.register(function (actualEvent, actualCtx, actualExtra) {
@@ -128,7 +188,9 @@ test("all synchronous allow returns and handler this/arguments preserve identity
 });
 
 test("async allow keeps the original promise and resolved object", async (t) => {
-  const f = fixture(), facts = [], allowed = { block: false };
+  const f = fixture(),
+    facts = [],
+    allowed = { block: false };
   subscribe(t, f, (fact) => facts.push(fact));
   const promise = Promise.resolve(allowed);
   const handler = f.register(() => promise);
@@ -138,10 +200,17 @@ test("async allow keeps the original promise and resolved object", async (t) => 
 });
 
 test("synchronous throw and asynchronous rejection escape with original identity and no fact", async (t) => {
-  const f = fixture(), facts = [], failure = Object.freeze({ synthetic: "original thrown value" });
+  const f = fixture(),
+    facts = [],
+    failure = Object.freeze({ synthetic: "original thrown value" });
   subscribe(t, f, (fact) => facts.push(fact));
-  const throwing = f.register(() => { throw failure; });
-  assert.throws(() => throwing(event(), f.ctx), (error) => error === failure);
+  const throwing = f.register(() => {
+    throw failure;
+  });
+  assert.throws(
+    () => throwing(event(), f.ctx),
+    (error) => error === failure,
+  );
   const pending = deferred();
   const rejecting = f.register(() => pending.promise);
   assert.equal(rejecting(event(), f.ctx), pending.promise);
@@ -151,9 +220,12 @@ test("synchronous throw and asynchronous rejection escape with original identity
 });
 
 test("sync block emits only a frozen metadata snapshot, without event bus or raw-field reads", (t) => {
-  const f = fixture(), facts = [];
+  const f = fixture(),
+    facts = [];
   subscribe(t, f, (fact) => facts.push(fact));
-  const poison = () => { throw new Error("private data must not be read"); };
+  const poison = () => {
+    throw new Error("private data must not be read");
+  };
   const call = event("opaque / provider-looking id", "read");
   for (const field of ["input", "arguments", "reason", "result", "error", "provider", "name"])
     Object.defineProperty(call, field, { get: poison });
@@ -165,13 +237,21 @@ test("sync block emits only a frozen metadata snapshot, without event bus or raw
   assert.deepEqual(facts, [{ toolName: "read", toolCallId: "opaque / provider-looking id" }]);
   assert.equal(Object.isFrozen(facts[0]), true);
   assert.deepEqual(Reflect.ownKeys(facts[0]), ["toolName", "toolCallId"]);
-  assert.throws(() => { facts[0].toolCallId = "changed"; }, TypeError);
+  assert.throws(() => {
+    facts[0].toolCallId = "changed";
+  }, TypeError);
 });
 
 test("async block emits after settlement and preserves exact promise/block object", async (t) => {
-  const f = fixture(), facts = [], pending = deferred(), receiver = {};
+  const f = fixture(),
+    facts = [],
+    pending = deferred(),
+    receiver = {};
   subscribe(t, f, (fact) => facts.push(fact));
-  const handler = f.register(function () { assert.equal(this, receiver); return pending.promise; });
+  const handler = f.register(function () {
+    assert.equal(this, receiver);
+    return pending.promise;
+  });
   assert.equal(handler.call(receiver, event("async"), f.ctx), pending.promise);
   assert.deepEqual(facts, []);
   pending.resolve(block);
@@ -180,16 +260,24 @@ test("async block emits after settlement and preserves exact promise/block objec
 });
 
 test("snapshot is captured before a handler mutates its event", (t) => {
-  const f = fixture(), facts = [];
+  const f = fixture(),
+    facts = [];
   subscribe(t, f, (fact) => facts.push(fact));
   const call = event("original", "bash");
-  const handler = f.register(() => { call.toolName = "read"; call.toolCallId = "changed"; return block; });
+  const handler = f.register(() => {
+    call.toolName = "read";
+    call.toolCallId = "changed";
+    return block;
+  });
   assert.equal(handler(call, f.ctx), block);
   assert.deepEqual(facts, [{ toolName: "bash", toolCallId: "original" }]);
 });
 
 test("actual SDK session and injected service identity select the listener, never event claims", (t) => {
-  const f = fixture(), a = [], b = [], otherSession = randomUUID();
+  const f = fixture(),
+    a = [],
+    b = [],
+    otherSession = randomUUID();
   f.services.set(otherSession, Object.freeze({}));
   subscribe(t, f, (fact) => a.push(fact));
   const handler = f.register(() => block);
@@ -212,13 +300,16 @@ test("actual SDK session and injected service identity select the listener, neve
 
 test("missing, unavailable, conflicting and throwing service lookups silently drop observations", async (t) => {
   for (const replacement of [undefined, null, false, {}, "not a service"]) {
-    const f = fixture(), facts = [];
+    const f = fixture(),
+      facts = [];
     subscribe(t, f, (fact) => facts.push(fact));
     f.services.set(f.sessionId, replacement);
     assert.equal(f.register(() => block)(event(), f.ctx), block);
     assert.deepEqual(facts, []);
   }
-  const f = fixture(), facts = [], pending = deferred();
+  const f = fixture(),
+    facts = [],
+    pending = deferred();
   subscribe(t, f, (fact) => facts.push(fact));
   const handler = f.register(() => pending.promise);
   handler(event(), f.ctx);
@@ -228,7 +319,10 @@ test("missing, unavailable, conflicting and throwing service lookups silently dr
   assert.deepEqual(facts, []);
   let broken = false;
   const service = {};
-  const throwing = fixture(() => { if (broken) throw new Error("getter failure"); return service; });
+  const throwing = fixture(() => {
+    if (broken) throw new Error("getter failure");
+    return service;
+  });
   subscribe(t, throwing, (fact) => facts.push(fact));
   broken = true;
   assert.equal(throwing.register(() => block)(event(), throwing.ctx), block);
@@ -236,9 +330,14 @@ test("missing, unavailable, conflicting and throwing service lookups silently dr
 });
 
 test("current service identity is checked, not an inferred service revision history", async (t) => {
-  const f = fixture(), facts = [], pending = deferred();
+  const f = fixture(),
+    facts = [],
+    pending = deferred();
   subscribe(t, f, (fact) => facts.push(fact));
-  assert.equal(f.register(() => pending.promise)(event("restored-service"), f.ctx), pending.promise);
+  assert.equal(
+    f.register(() => pending.promise)(event("restored-service"), f.ctx),
+    pending.promise,
+  );
   f.services.set(f.sessionId, {});
   f.services.set(f.sessionId, f.service);
   pending.resolve(block);
@@ -248,11 +347,17 @@ test("current service identity is checked, not an inferred service revision hist
 
 test("session changes during await and service disappearance at completion are unobserved", async (t) => {
   for (const change of ["session", "service", "throwing session"]) {
-    const f = fixture(), facts = [], pending = deferred();
+    const f = fixture(),
+      facts = [],
+      pending = deferred();
     subscribe(t, f, (fact) => facts.push(fact));
     assert.equal(f.register(() => pending.promise)(event(), f.ctx), pending.promise);
     if (change === "service") f.services.delete(f.sessionId);
-    else f.ctx.sessionManager.getSessionId = () => { if (change === "throwing session") throw new Error("missing context"); return randomUUID(); };
+    else
+      f.ctx.sessionManager.getSessionId = () => {
+        if (change === "throwing session") throw new Error("missing context");
+        return randomUUID();
+      };
     pending.resolve(block);
     assert.equal(await pending.promise, block);
     assert.deepEqual(facts, []);
@@ -260,54 +365,128 @@ test("session changes during await and service disappearance at completion are u
 });
 
 test("invalid/missing metadata never falls back or affects the block", (t) => {
-  const f = fixture(), facts = [];
+  const f = fixture(),
+    facts = [];
   subscribe(t, f, (fact) => facts.push(fact));
   const handler = f.register(() => block);
-  for (const call of [null, undefined, {}, { name: "bash", id: "fallback" },
-    event("", "bash"), event("x".repeat(257)), event(3), event(null), event(undefined, "unknown_tool"),
-    event("id", "Bash"), event("id", "powershell"), event("id", "notify_parent"),
-    { toolName: "bash" }, { toolCallId: "id" }, { get toolName() { throw new Error("bad name"); } },
-    { toolName: "bash", get toolCallId() { throw new Error("bad id"); } }]) {
+  for (const call of [
+    null,
+    undefined,
+    {},
+    { name: "bash", id: "fallback" },
+    event("", "bash"),
+    event("x".repeat(257)),
+    event(3),
+    event(null),
+    event(undefined, "unknown_tool"),
+    event("id", "Bash"),
+    event("id", "powershell"),
+    event("id", "notify_parent"),
+    { toolName: "bash" },
+    { toolCallId: "id" },
+    {
+      get toolName() {
+        throw new Error("bad name");
+      },
+    },
+    {
+      toolName: "bash",
+      get toolCallId() {
+        throw new Error("bad id");
+      },
+    },
+  ]) {
     assert.equal(handler(call, f.ctx), block);
   }
-  for (const ctx of [null, undefined, {}, { sessionManager: {} }, sdkContext(""), sdkContext("x".repeat(257)),
-    sdkContext(undefined), sdkContext(3), { sessionManager: { getSessionId() { throw new Error("bad session"); } } }]) {
+  for (const ctx of [
+    null,
+    undefined,
+    {},
+    { sessionManager: {} },
+    sdkContext(""),
+    sdkContext("x".repeat(257)),
+    sdkContext(undefined),
+    sdkContext(3),
+    {
+      sessionManager: {
+        getSessionId() {
+          throw new Error("bad session");
+        },
+      },
+    },
+  ]) {
     assert.equal(handler(event(), ctx), block);
   }
-  const unreadable = { get block() { throw new Error("unreadable result"); } };
+  const unreadable = {
+    get block() {
+      throw new Error("unreadable result");
+    },
+  };
   assert.equal(f.register(() => unreadable)(event(), f.ctx), unreadable);
   assert.deepEqual(facts, []);
 });
 
 test("all exact admitted tool names and opaque 256-character IDs are accepted without normalization", (t) => {
-  const f = fixture(), facts = [], id = " \n/" + "x".repeat(252) + " ";
+  const f = fixture(),
+    facts = [],
+    id = " \n/" + "x".repeat(252) + " ";
   assert.equal(id.length, 256);
   subscribe(t, f, (fact) => facts.push(fact));
   const handler = f.register(() => block);
-  const tools = ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search",
-    "source_check", "fetch_content", "get_search_content", "alert_parent", "ask_parent"];
+  const tools = [
+    "read",
+    "bash",
+    "edit",
+    "write",
+    "grep",
+    "find",
+    "ls",
+    "web_search",
+    "source_check",
+    "fetch_content",
+    "get_search_content",
+    "alert_parent",
+    "ask_parent",
+  ];
   for (const name of tools) assert.equal(handler(event(id, name), f.ctx), block);
-  assert.deepEqual(facts, tools.map((toolName) => ({ toolName, toolCallId: id })));
+  assert.deepEqual(
+    facts,
+    tools.map((toolName) => ({ toolName, toolCallId: id })),
+  );
 });
 
 test("subscription requires valid identity, actual service, callback and a single live lease", (t) => {
   const f = fixture();
   for (const id of ["", "x".repeat(257), undefined, 42])
-    assert.throws(() => f.api.subscribeManagedBlocks(id, () => {}), /Invalid managed block subscription/);
-  assert.throws(() => f.api.subscribeManagedBlocks(f.sessionId, undefined), /Invalid managed block subscription/);
+    assert.throws(
+      () => f.api.subscribeManagedBlocks(id, () => {}),
+      /Invalid managed block subscription/,
+    );
+  assert.throws(
+    () => f.api.subscribeManagedBlocks(f.sessionId, undefined),
+    /Invalid managed block subscription/,
+  );
   for (const service of [undefined, null, false, 1, "service", () => {}]) {
     f.services.set(f.sessionId, service);
-    assert.throws(() => f.api.subscribeManagedBlocks(f.sessionId, () => {}), /service is unavailable/);
+    assert.throws(
+      () => f.api.subscribeManagedBlocks(f.sessionId, () => {}),
+      /service is unavailable/,
+    );
   }
   f.services.set(f.sessionId, f.service);
   const listener = () => {};
   subscribe(t, f, listener);
   assert.throws(() => f.api.subscribeManagedBlocks(f.sessionId, listener), /already active/);
-  assert.throws(() => createManagedBlockObserver(() => ({})).subscribeManagedBlocks(f.sessionId, () => {}), /already active/);
+  assert.throws(
+    () => createManagedBlockObserver(() => ({})).subscribeManagedBlocks(f.sessionId, () => {}),
+    /already active/,
+  );
 });
 
 test("release is idempotent; a previous release cannot delete a replacement; registry retains no history", (t) => {
-  const f = fixture(), oldFacts = [], nextFacts = [];
+  const f = fixture(),
+    oldFacts = [],
+    nextFacts = [];
   const release = subscribe(t, f, (fact) => oldFacts.push(fact));
   const handler = f.register(() => block);
   const registry = globalThis[registryKey];
@@ -318,7 +497,8 @@ test("release is idempotent; a previous release cannot delete a replacement; reg
   assert.equal(descriptor.enumerable, false);
   assert.deepEqual(Object.keys(registry).sort(), ["entries", "version"]);
   handler(event("old"), f.ctx);
-  release(); release();
+  release();
+  release();
   assert.equal(registry.entries.has(f.sessionId), false);
   const releaseNext = subscribe(t, f, (fact) => nextFacts.push(fact));
   release();
@@ -330,7 +510,10 @@ test("release is idempotent; a previous release cannot delete a replacement; reg
 });
 
 test("old awaited handler cannot bind to a replacement Run subscription", async (t) => {
-  const f = fixture(), oldFacts = [], nextFacts = [], pending = deferred();
+  const f = fixture(),
+    oldFacts = [],
+    nextFacts = [],
+    pending = deferred();
   const release = subscribe(t, f, (fact) => oldFacts.push(fact));
   let result = pending.promise;
   const handler = f.register(() => result);
@@ -349,14 +532,19 @@ test("old awaited handler cannot bind to a replacement Run subscription", async 
 test("service getter reentry cannot attach captured work to a replacement lease", (t) => {
   for (const phase of ["capture", "publish"]) {
     let reenter, release;
-    const oldFacts = [], nextFacts = [];
+    const oldFacts = [],
+      nextFacts = [];
     const f = fixture((id) => {
-      const action = reenter; reenter = undefined;
+      const action = reenter;
+      reenter = undefined;
       action?.();
       return f.services.get(id);
     });
     release = subscribe(t, f, (fact) => oldFacts.push(fact));
-    const replace = () => { release(); subscribe(t, f, (fact) => nextFacts.push(fact)); };
+    const replace = () => {
+      release();
+      subscribe(t, f, (fact) => nextFacts.push(fact));
+    };
     const handler = f.register(() => {
       if (phase === "publish") reenter = replace;
       return block;
@@ -371,16 +559,24 @@ test("service getter reentry cannot attach captured work to a replacement lease"
 });
 
 test("a subscription installed during a handler cannot observe that handler", async (t) => {
-  const f = fixture(), facts = [], pending = deferred();
+  const f = fixture(),
+    facts = [],
+    pending = deferred();
   const handler = f.register(() => pending.promise);
   handler(event("no-lease-at-entry"), f.ctx);
   subscribe(t, f, (fact) => facts.push(fact));
   pending.resolve(block);
   assert.equal(await pending.promise, block);
   assert.deepEqual(facts, []);
-  const g = fixture(), oldFacts = [], nextFacts = [];
+  const g = fixture(),
+    oldFacts = [],
+    nextFacts = [];
   const release = subscribe(t, g, (fact) => oldFacts.push(fact));
-  const synchronous = g.register(() => { release(); subscribe(t, g, (fact) => nextFacts.push(fact)); return block; });
+  const synchronous = g.register(() => {
+    release();
+    subscribe(t, g, (fact) => nextFacts.push(fact));
+    return block;
+  });
   assert.equal(synchronous(event(), g.ctx), block);
   assert.deepEqual(oldFacts, []);
   assert.deepEqual(nextFacts, []);
@@ -389,7 +585,10 @@ test("a subscription installed during a handler cannot observe that handler", as
 test("subscriber throws cannot alter sync or async block object/return", async (t) => {
   const f = fixture();
   let calls = 0;
-  subscribe(t, f, () => { calls++; throw new Error("subscriber failure"); });
+  subscribe(t, f, () => {
+    calls++;
+    throw new Error("subscriber failure");
+  });
   assert.equal(f.register(() => block)(event("sync"), f.ctx), block);
   const promise = Promise.resolve(block);
   assert.equal(f.register(() => promise)(event("async"), f.ctx), promise);
@@ -398,10 +597,15 @@ test("subscriber throws cannot alter sync or async block object/return", async (
 });
 
 test("independent jiti copies share live leases, reject overlaps and deliver only for the same service", async (t) => {
-  const secondJiti = createJiti(import.meta.url, { interopDefault: false, moduleCache: false, fsCache: false });
+  const secondJiti = createJiti(import.meta.url, {
+    interopDefault: false,
+    moduleCache: false,
+    fsCache: false,
+  });
   const copy = await secondJiti.import(source);
   assert.notEqual(copy.createManagedBlockObserver, createManagedBlockObserver);
-  const f = fixture(), facts = [];
+  const f = fixture(),
+    facts = [];
   const other = copy.createManagedBlockObserver((id) => f.services.get(id));
   const release = other.subscribeManagedBlocks(f.sessionId, (fact) => facts.push(fact));
   t.after(release);
@@ -413,28 +617,57 @@ test("independent jiti copies share live leases, reject overlaps and deliver onl
 });
 
 test("generator copies helper, binds actual getter, exports subscription and wraps managed registration in order", () => {
-  const generator = readFileSync(resolve(import.meta.dirname, "../scripts/prepare-authority.mjs"), "utf8");
-  assert.match(generator, /cpSync\(join\(root, "permission-system\/managed-block-observer\.ts"\), join\(output, "managed-block-observer\.ts"\)\)/);
-  assert.match(generator, /import \{ createManagedBlockObserver \} from "\.\/managed-block-observer\.ts"/);
+  const generator = readFileSync(
+    resolve(import.meta.dirname, "../scripts/prepare-authority.mjs"),
+    "utf8",
+  );
+  assert.match(
+    generator,
+    /cpSync\(join\(root, "permission-system\/managed-block-observer\.ts"\), join\(output, "managed-block-observer\.ts"\)\)/,
+  );
+  assert.match(
+    generator,
+    /import \{ createManagedBlockObserver \} from "\.\/managed-block-observer\.ts"/,
+  );
   assert.match(generator, /import \{ getPermissionsService \} from "\.\/vendor\/src\/service\.ts"/);
-  assert.match(generator, /const \{ subscribeManagedBlocks, wrapManagedBlocks \} = createManagedBlockObserver\(getPermissionsService\)/);
+  assert.match(
+    generator,
+    /const \{ subscribeManagedBlocks, wrapManagedBlocks \} = createManagedBlockObserver\(getPermissionsService\)/,
+  );
   assert.match(generator, /export \{ subscribeManagedBlocks \}/);
   assert.doesNotMatch(generator, /export type[^\n]*from "\.\/managed-block-observer\.ts"/);
   const helper = readFileSync(source, "utf8");
-  for (const name of ["ManagedBlockFact", "ManagedBlockListener", "ManagedBlockSubscription", "ManagedBlockObserver"]) {
+  for (const name of [
+    "ManagedBlockFact",
+    "ManagedBlockListener",
+    "ManagedBlockSubscription",
+    "ManagedBlockObserver",
+  ]) {
     assert.match(helper, new RegExp(`(?:interface|type) ${name}\\b`));
     assert.doesNotMatch(helper, new RegExp(`export (?:interface|type) ${name}\\b`));
   }
   assert.match(generator, /export \{ getPermissionsService \}/);
-  assert.match(generator, /export \{ initializeManagedResourceProtection, getManagedResourceProtection \}/);
-  const ordered = ["const managedPi = wrapManagedBlocks(pi)", "guardSingleAuthority(managedPi)",
-    'managedPi.on("tool_call"', "originalBashDeny(event.input.command, ctx)", "await hardenGitInput(event.input, ctx.cwd)",
-    "installManagedScratch(managedPi, hardenStaticFileInput)", "permissions(managedPi)"];
+  assert.match(
+    generator,
+    /export \{ initializeManagedResourceProtection, getManagedResourceProtection \}/,
+  );
+  const ordered = [
+    "const managedPi = wrapManagedBlocks(pi)",
+    "guardSingleAuthority(managedPi)",
+    'managedPi.on("tool_call"',
+    "originalBashDeny(event.input.command, ctx)",
+    "await hardenGitInput(event.input, ctx.cwd)",
+    "installManagedScratch(managedPi, hardenStaticFileInput)",
+    "permissions(managedPi)",
+  ];
   let previous = -1;
   for (const snippet of ordered) {
     const index = generator.indexOf(snippet);
     assert(index > previous, `missing/out-of-order managed registration: ${snippet}`);
     previous = index;
   }
-  assert.doesNotMatch(generator, /guardSingleAuthority\(pi\)|installManagedScratch\(pi,|permissions\(pi\)|\n  pi\.on\(/);
+  assert.doesNotMatch(
+    generator,
+    /guardSingleAuthority\(pi\)|installManagedScratch\(pi,|permissions\(pi\)|\n  pi\.on\(/,
+  );
 });

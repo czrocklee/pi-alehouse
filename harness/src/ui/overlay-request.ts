@@ -29,7 +29,10 @@ export class OverlayRequest<T> {
   private finish?: (value: T) => void;
   private component?: { dispose(): void };
 
-  constructor(private readonly beforeSettle: () => void, private readonly cancelValue: T) {}
+  constructor(
+    private readonly beforeSettle: () => void,
+    private readonly cancelValue: T,
+  ) {}
 
   readonly close = (): void => {
     this.cancelled = true;
@@ -39,7 +42,9 @@ export class OverlayRequest<T> {
         this.cancellationNotified = true;
         this.beforeSettle();
       }
-    } finally { this.dispose(); }
+    } finally {
+      this.dispose();
+    }
   };
 
   /** A settlement the mounted component asked for. Cancellation always wins:

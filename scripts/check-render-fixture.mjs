@@ -21,19 +21,39 @@ export function renderFixture(repo, target, output, lane = "readonly") {
     }
   }
   mkdirSync(join(target, "extensions/pi-permission-system"), { recursive: true });
-  writeFileSync(join(target, "extensions/pi-permission-system/config.json"), JSON.stringify(config));
+  writeFileSync(
+    join(target, "extensions/pi-permission-system/config.json"),
+    JSON.stringify(config),
+  );
   cpSync(join(repo, "resources/harness-presets.json"), join(target, "harness-presets.json"));
 }
 export function resourceJson(repo) {
-  const readTree = (directory, prefix = "") => Object.fromEntries(readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const name = join(prefix, entry.name), path = join(directory, entry.name);
-    return entry.isDirectory() ? Object.entries(readTree(path, name)) : [[name, readFileSync(path, "utf8")]];
-  }));
-  return { agents: Object.fromEntries(Object.entries(readTree(join(repo, "runtime/agents"))).map(([name, text]) => [name.replace(/\.md$/, ""), text])),
-    extensions: readTree(join(repo, "runtime/policy")) };
+  const readTree = (directory, prefix = "") =>
+    Object.fromEntries(
+      readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+        const name = join(prefix, entry.name),
+          path = join(directory, entry.name);
+        return entry.isDirectory()
+          ? Object.entries(readTree(path, name))
+          : [[name, readFileSync(path, "utf8")]];
+      }),
+    );
+  return {
+    agents: Object.fromEntries(
+      Object.entries(readTree(join(repo, "runtime/agents"))).map(([name, text]) => [
+        name.replace(/\.md$/, ""),
+        text,
+      ]),
+    ),
+    extensions: readTree(join(repo, "runtime/policy")),
+  };
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [repo, target, output, lane] = process.argv.slice(2);
   if (target === "--json") process.stdout.write(JSON.stringify(resourceJson(repo)));
-  else { assert(repo && target && output, "REPO TARGET OUTPUT [LANE]"); mkdirSync(dirname(target), { recursive: true }); renderFixture(repo, target, output, lane); }
+  else {
+    assert(repo && target && output, "REPO TARGET OUTPUT [LANE]");
+    mkdirSync(dirname(target), { recursive: true });
+    renderFixture(repo, target, output, lane);
+  }
 }

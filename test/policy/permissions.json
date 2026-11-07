@@ -58,13 +58,28 @@
       "*/.git/*": "deny",
       "~/.gitconfig": "deny",
       "~/.config/git/*": "deny",
-      ".pi/extensions/*": {"action": "deny", "reason": "Project-scoped permission policy overrides global policy. Edit it outside the agent."},
-      "*/.pi/extensions/*": {"action": "deny", "reason": "Project-scoped permission policy overrides global policy. Edit it outside the agent."},
-      ".pi/agents/*": {"action": "deny", "reason": "Agent frontmatter overrides both permission scopes. Edit it outside the agent."},
-      "*/.pi/agents/*": {"action": "deny", "reason": "Agent frontmatter overrides both permission scopes. Edit it outside the agent."},
+      ".pi/extensions/*": {
+        "action": "deny",
+        "reason": "Project-scoped permission policy overrides global policy. Edit it outside the agent."
+      },
+      "*/.pi/extensions/*": {
+        "action": "deny",
+        "reason": "Project-scoped permission policy overrides global policy. Edit it outside the agent."
+      },
+      ".pi/agents/*": {
+        "action": "deny",
+        "reason": "Agent frontmatter overrides both permission scopes. Edit it outside the agent."
+      },
+      "*/.pi/agents/*": {
+        "action": "deny",
+        "reason": "Agent frontmatter overrides both permission scopes. Edit it outside the agent."
+      },
       ".pi/agent/*": "deny",
       "*/.pi/agent/*": "deny",
-      "~/.pi/*": {"action": "deny", "reason": "Pi configuration and credentials must be edited outside the agent."}
+      "~/.pi/*": {
+        "action": "deny",
+        "reason": "Pi configuration and credentials must be edited outside the agent."
+      }
     },
     "read": "allow",
     "write": "allow",
@@ -96,9 +111,15 @@
       "ls *": "allow",
       "stat *": "allow",
       "cd *": "allow",
-      "sudo *": {"action": "deny", "reason": "Run privileged commands manually outside the agent."},
-      "doas *": {"action": "deny", "reason": "Run privileged commands manually outside the agent."},
-      "su *": {"action": "deny", "reason": "Privilege escalation is not allowed for the agent."},
+      "sudo *": {
+        "action": "deny",
+        "reason": "Run privileged commands manually outside the agent."
+      },
+      "doas *": {
+        "action": "deny",
+        "reason": "Run privileged commands manually outside the agent."
+      },
+      "su *": { "action": "deny", "reason": "Privilege escalation is not allowed for the agent." },
       "shutdown *": "deny",
       "reboot *": "deny",
       "poweroff *": "deny",
@@ -106,7 +127,10 @@
       "mkfs *": "deny",
       "fdisk *": "deny",
       "parted *": "deny",
-      "rm -rf /": {"action": "deny", "reason": "Refusing to recursively remove the filesystem root."}
+      "rm -rf /": {
+        "action": "deny",
+        "reason": "Refusing to recursively remove the filesystem root."
+      }
     },
     "web_search": "ask",
     "source_check": "ask",
@@ -124,9 +148,15 @@
     "alert_parent": "allow",
     "ask_parent": "allow",
     "notify_parent": "deny",
-    "mcp": {"*": "ask", "mcp_status": "allow", "mcp_list": "allow", "mcp_search": "allow", "mcp_describe": "allow"},
-    "skill": {"*": "allow"},
-    "external_directory": {"*": "ask", "/tmp": "allow", "/tmp/*": "allow"},
-    "external_directory_read": {"/proc/meminfo": "allow", "/proc/self/mountinfo": "allow"}
+    "mcp": {
+      "*": "ask",
+      "mcp_status": "allow",
+      "mcp_list": "allow",
+      "mcp_search": "allow",
+      "mcp_describe": "allow"
+    },
+    "skill": { "*": "allow" },
+    "external_directory": { "*": "ask", "/tmp": "allow", "/tmp/*": "allow" },
+    "external_directory_read": { "/proc/meminfo": "allow", "/proc/self/mountinfo": "allow" }
   }
 }

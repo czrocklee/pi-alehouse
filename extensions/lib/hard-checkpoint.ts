@@ -438,12 +438,7 @@ interface ShellSegment {
   start: number;
 }
 
-function pushSegment(
-  segments: ShellSegment[],
-  command: string,
-  from: number,
-  to: number,
-): void {
+function pushSegment(segments: ShellSegment[], command: string, from: number, to: number): void {
   const raw = command.slice(from, to);
   const text = raw.trim();
   if (text === "") return;

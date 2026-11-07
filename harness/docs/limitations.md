@@ -63,12 +63,12 @@ model interruption, but optional metadata may yield under packing pressure and
 message queuing is not model acknowledgement. Cancellation, turn-limit stop, and
 explicit close use best-effort stop paths and quarantine uncertain sessions;
 they do not roll back filesystem/provider effects, prove zero further provider
-activity, prove child exit, or restore an old input safely.  An execution slot
+activity, prove child exit, or restore an old input safely. An execution slot
 is freed only after actual execution exit; it can then run a queued peer before
-history finalization completes.  That slot is per admitted provider
+history finalization completes. That slot is per admitted provider
 (`concurrency`, default 4; models share it), Owner-local and not a
 cross-process or account rate limiter: separate provider IDs sharing an account
-still receive separate slots. Resident capacity is 12 Owner-wide.  The Agent reservation and Owner lease remain
+still receive separate slots. Resident capacity is 12 Owner-wide. The Agent reservation and Owner lease remain
 until finalization and cleanup confirm release. Runs have no wall-clock
 execution deadline or timed wrap-up message; `max_duration_ms` is retired.
 Turn limits cannot stop a single long-running tool or prove that it is hung.
@@ -93,15 +93,15 @@ converting a local wait into a timeout would either assume completion or
 latch the whole Owner over one Agent's fault.
 
 Pi 0.87.1 retains the post-input-hook enqueue race and can continue original prompting
-after pre-prompt compaction abort.  The harness final gate re-aborts and
-quarantines crossings, but cannot make provider admission atomic.  Controlled
+after pre-prompt compaction abort. The harness final gate re-aborts and
+quarantines crossings, but cannot make provider admission atomic. Controlled
 probes observed SDK user-message/queue acceptance after gate closure in selected
 schedules; absence of a provider call in those tests is not a universal proof.
 Natural-finish steering has SDK-version-specific scheduling behavior and a
 quarantined new-prompt fallback. These are known limitations under the documented cooperative contract, not
 newly fixed SDK behavior or public acceptance.
 
-`/reload` with an open Owner is unsupported.  Pi offers no pre-teardown reload
+`/reload` with an open Owner is unsupported. Pi offers no pre-teardown reload
 veto; an extension `session_shutdown` cancel/throw cannot provide one.
 Switch/fork guards pass only after the Owner is confirmed closed. A never-used
 Owner starts shutdown synchronously before the first guard await and may proceed
@@ -127,9 +127,9 @@ guard. Do not promise atomic cancellation, reload safety, or input admission
 safety.
 
 Live IDs, resident reservations, idempotence memory, and pending alerts do
-not survive a Pi restart.  There is no force release, force unlock, cleanup retry
+not survive a Pi restart. There is no force release, force unlock, cleanup retry
 endpoint, restart hydration, automatic expiry, or reliable notification delivery
-service.  A Linux local `flock` lease is not distributed coordination or proof
+service. A Linux local `flock` lease is not distributed coordination or proof
 that detached children have stopped.
 
 Request idempotence keys on the tool-call ID, which Pi passes through from the
@@ -147,10 +147,10 @@ tool execution, including parallel calls, which has not been verified.
 
 ## Host SDK and runtime scope
 
-Development API checks target Pi/AI/TUI 1.5.0 and TypeBox 1.3.27.  The launcher
+Development API checks target Pi/AI/TUI 1.5.0 and TypeBox 1.3.27. The launcher
 uses the installed host SDK, not a bundled second SDK or a runtime version lock.
 There is no version allowlist, compatibility fallback, or historical support
-matrix.  Required APIs fail closed when absent/changed.  In particular, the
+matrix. Required APIs fail closed when absent/changed. In particular, the
 current host bridge must use `ModelRegistry.runtime` because the SDK exposes no
 public canonical model-runtime getter; it validates required methods and relies
 on actual-host smoke coverage. This is an observed bridge, not a stable upstream
@@ -189,12 +189,12 @@ virtual-to-Mistral workaround remains unvalidated. Worker virtual slots are
 rejected rather than relying on per-request dispatch. Only the wire copy changes: Pi validates arguments against the
 registered schemas, and strict tools are sent unchanged.
 
-Native compaction/retry remains SDK behavior inside a Run.  The SDK does not
+Native compaction/retry remains SDK behavior inside a Run. The SDK does not
 expose all failed/cancelled/retried summary attempts or the actual routed model
 for successful summaries; successful summary usage is instead keyed as
-`compaction/<provider>/<requested-model>`.  The ledger retains observed floors
-and partial flags; it cannot prove complete provider billing.  Child
-cache-warming is stopped, but parent warming behavior is unchanged.  Since
+`compaction/<provider>/<requested-model>`. The ledger retains observed floors
+and partial flags; it cannot prove complete provider billing. Child
+cache-warming is stopped, but parent warming behavior is unchanged. Since
 Pi 1.4, a compaction summary may use the model's output limit, reduced to fit
 the context; `reserveTokens` controls when compaction starts, not summary
 length, so summaries can add output, latency and observed cost.
@@ -363,21 +363,21 @@ never rewritten or hydrated as new pending work. Handed-off text is another chil
 final output, bounded and framed as reference; it is not verified.
 
 SDK journals are the only historical transcript source, but are not immediate
-durability or power-loss proof.  Raw JSONL can be large after compaction; cold
+durability or power-loss proof. Raw JSONL can be large after compaction; cold
 reads have a file cap rather than an RAM cap and can fail on malformed, changed,
-or incomplete boundaries.  History cannot resume work, repair records, browse
+or incomplete boundaries. History cannot resume work, repair records, browse
 arbitrary paths, or bypass permissions.
 
-Pi's public extension context lacks a parent usage writer.  `UsageLedger.total`
+Pi's public extension context lacks a parent usage writer. `UsageLedger.total`
 is derived from its `byModel` shares; live runtime observations and final facts
-merge as a non-regressing observed-floor envelope.  That observation state is
+merge as a non-regressing observed-floor envelope. That observation state is
 distinct from parent handoff: child spend can be merged only into a later parent
 tool result. This usage hook may append accounting without modifying the
 already-published communication body; it is not a message ACK. Spend settling
 after the last such result remains
 `unreported_usage` and gets a non-billable audit snapshot when possible; abrupt
-process loss may prevent even that.  Partial usage means incomplete observation,
-not zero price; unreported residue is a separate gap.  Neither is repaired by a
+process loss may prevent even that. Partial usage means incomplete observation,
+not zero price; unreported residue is a separate gap. Neither is repaired by a
 footer or audit entry. Pi 1.5's `usage.cost.totalFromProvider` distinguishes
 provider-billed totals from catalog estimates. The harness ledger retains the
 SDK-observed amounts, not this source distinction; its totals are not proof of
@@ -465,10 +465,10 @@ coalesce. Parallel tool calls can exceed this even with fewer workers, so twelve
 resident Agents do not promise twelve simultaneous automatic approvals.
 
 Automated review requires its external policy, key, complete current provenance,
-and supported context.  It can defer and leave a human ask; it is not calibrated
-model-quality evidence or a new grant authority.  Context snapshots are bounded
+and supported context. It can defer and leave a human ask; it is not calibrated
+model-quality evidence or a new grant authority. Context snapshots are bounded
 text, not history forks, and history/diagnostics may contain sensitive model
-content.  The harness does not copy credentials, although authorized real SDK
+content. The harness does not copy credentials, although authorized real SDK
 use can refresh an auth file.
 
 ## Task dispatch and validation scope
@@ -554,11 +554,11 @@ stay visible while cooperative cancellation/drain is pending; this observation
 is not proof of execution exit, and detailed drain diagnostics remain separate.
 
 Fullscreen alternate-screen rendering is required for floating worker panels and
-click input.  Regular mode deliberately docks the detail/picker to avoid
+click input. Regular mode deliberately docks the detail/picker to avoid
 scrollback contamination; its footer retains totals but does not open the usage
-popover.  Multiplexers can further limit mouse motion.  Pi's unexported native
+popover. Multiplexers can further limit mouse motion. Pi's unexported native
 tool renderers mean child transcripts fall back to plain tool argument/output
-blocks for built-in tools.  PTY/UI fixtures and scripted permission RPC are not
+blocks for built-in tools. PTY/UI fixtures and scripted permission RPC are not
 human-TUI acceptance. Expanded Agent inspection is paginated within a widget
 budget (at most thirteen lines and one third of terminal height, with a further
 reserve for normal SDK input chrome and transcript space), not an unbounded
@@ -665,7 +665,7 @@ confirmation. These records and preferences do not bypass the permission
 authority. Saving scoped settings does not make live-Owner `/reload`
 supported; normal `session_shutdown` flushing is not a reload-safety guarantee.
 
-These constraints define support.  If an operation needs a guarantee not listed
+These constraints define support. If an operation needs a guarantee not listed
 here—especially default-entrypoint replacement, atomic stop/reload, durable recovery,
 complete cost accounting, automated approval, or human TUI acceptance—it is out
 of scope until explicitly reviewed and accepted.

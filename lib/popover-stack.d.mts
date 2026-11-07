@@ -28,8 +28,18 @@ export interface StackedOverlayOptions {
 export function joinPopoverStack(host: StackHost): StackMember;
 export function focusedComponent(host: object): unknown;
 export function focusOrigin(host: object): unknown[] | undefined;
-export function focusRevealed(host: object,
-  handle: { isHidden(): boolean; isFocused(): boolean; focus(): void }, origin: unknown[] | undefined): void;
-export function stackedOverlayOptions(member: StackMember,
-  layout: { width: number | (() => number); minWidth?: number; minRows?: number; nonCapturing?: boolean;
-    onReveal?: () => void }): StackedOverlayOptions;
+export function focusRevealed(
+  host: object,
+  handle: { isHidden(): boolean; isFocused(): boolean; focus(): void },
+  origin: unknown[] | undefined,
+): void;
+export function stackedOverlayOptions(
+  member: StackMember,
+  layout: {
+    width: number | (() => number);
+    minWidth?: number;
+    minRows?: number;
+    nonCapturing?: boolean;
+    onReveal?: () => void;
+  },
+): StackedOverlayOptions;

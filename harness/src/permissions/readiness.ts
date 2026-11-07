@@ -23,9 +23,15 @@ export function requireReadiness(
   let acknowledgement: GuardReady | undefined;
   const unsubscribe = bus.on("pi-agent-harness:static-guard:ready", (data: unknown) => {
     const value = data as Partial<GuardReady> | undefined;
-    if (value?.protocol === 1 && value.sessionId === sessionId && value.nonce === nonce &&
-        value.profile === profile && value.definitionDigest === definitionDigest &&
-        typeof value.instanceId === "string" && value.instanceId.length > 0) {
+    if (
+      value?.protocol === 1 &&
+      value.sessionId === sessionId &&
+      value.nonce === nonce &&
+      value.profile === profile &&
+      value.definitionDigest === definitionDigest &&
+      typeof value.instanceId === "string" &&
+      value.instanceId.length > 0
+    ) {
       acknowledgement = value as GuardReady;
     }
   });

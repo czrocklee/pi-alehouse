@@ -22,14 +22,24 @@ export const COMMUNICATION_LIMITS = Object.freeze({
 export const MODEL_AGENT_NAME_PATTERN = "^[a-z][a-z0-9-]{0,23}$";
 const modelAgentName = new RegExp(MODEL_AGENT_NAME_PATTERN);
 /** Shared model projection/admission rule, not the generic core name contract. */
-export const isModelAgentName = (value: unknown): value is string => typeof value === "string" &&
-  value.length <= COMMUNICATION_LIMITS.agent_name_units && modelAgentName.exec(value)?.[0] === value;
+export const isModelAgentName = (value: unknown): value is string =>
+  typeof value === "string" &&
+  value.length <= COMMUNICATION_LIMITS.agent_name_units &&
+  modelAgentName.exec(value)?.[0] === value;
 /** A taken name is often the caller's own repeated spawn: check before spawning
  * the same work twice. Otherwise it still wants a NEW Agent; never redirect it to reuse. */
-export const AGENT_EXISTS_RESOLUTION = "This name is taken; check agent_list, it may be your own earlier spawn of this task. Names are never reused, even after agent_kill: for a new Agent, choose another name.";
+export const AGENT_EXISTS_RESOLUTION =
+  "This name is taken; check agent_list, it may be your own earlier spawn of this task. Names are never reused, even after agent_kill: for a new Agent, choose another name.";
 
-export type TaskStatus = "queued" | "running" | "interrupting" | "finishing" |
-  "completed" | "needs_input" | "failed" | "interrupted";
+export type TaskStatus =
+  | "queued"
+  | "running"
+  | "interrupting"
+  | "finishing"
+  | "completed"
+  | "needs_input"
+  | "failed"
+  | "interrupted";
 /** Why a queued task has not started. Not a provider id, model, or queue depth. */
 export type QueueWait = "dependencies" | "capacity";
 export const isQueueWait = (value: unknown): value is QueueWait =>
@@ -38,10 +48,20 @@ export const isQueueWait = (value: unknown): value is QueueWait =>
  * projections add `finishing` separately, based on confirmed execution exit. */
 export const modelTaskStatus = (status: RunStatus): Exclude<TaskStatus, "finishing"> =>
   status === "cancelled" ? "interrupted" : status === "cancelling" ? "interrupting" : status;
-export type CommunicationReason = "snapshot" | "aborted" | "owner_blocked" | "question" |
-  "task_issue" | "done" | "alert" | "nothing_pending" | "timeout";
+export type CommunicationReason =
+  | "snapshot"
+  | "aborted"
+  | "owner_blocked"
+  | "question"
+  | "task_issue"
+  | "done"
+  | "alert"
+  | "nothing_pending"
+  | "timeout";
 /** Ordinary snapshots/completion need no trigger annotation in public replies. */
-export const visibleCommunicationReason = (reason: CommunicationReason): Exclude<CommunicationReason, "snapshot" | "done"> | undefined =>
+export const visibleCommunicationReason = (
+  reason: CommunicationReason,
+): Exclude<CommunicationReason, "snapshot" | "done"> | undefined =>
   reason === "snapshot" || reason === "done" ? undefined : reason;
 
 /** Dispatch notes the parent can act on: tree_shared means another session
@@ -87,16 +107,18 @@ export interface TaskEntry extends ThinTaskEntry, Partial<TaskMetadata> {
   readonly unavailable_reason?: string;
 }
 
-export type CommunicationAction = {
-  readonly type: "agent_spawn" | "agent_run" | "agent_answer";
-  readonly agent: string;
-  readonly task: number;
-} | {
-  readonly type: "agent_send";
-  readonly agent: string;
-  readonly task: number;
-  readonly delivery: "joined" | "steered" | "not_delivered";
-};
+export type CommunicationAction =
+  | {
+      readonly type: "agent_spawn" | "agent_run" | "agent_answer";
+      readonly agent: string;
+      readonly task: number;
+    }
+  | {
+      readonly type: "agent_send";
+      readonly agent: string;
+      readonly task: number;
+      readonly delivery: "joined" | "steered" | "not_delivered";
+    };
 
 export interface AlertEntry {
   readonly agent: string;
@@ -136,14 +158,19 @@ export interface CommunicationEnvelope extends RetainedEnvelope {
  * failures propagate, so a caller must check before any publication commit. */
 export function communicationEnvelopeBytes(value: unknown): number {
   const text = JSON.stringify(value);
-  if (text === undefined) throw new TypeError("Communication envelope must have a JSON representation");
+  if (text === undefined)
+    throw new TypeError("Communication envelope must have a JSON representation");
   return Buffer.byteLength(JSON.stringify({ content: [{ type: "text", text }] }), "utf8");
 }
 
 /** Only question, result and alert.message spend the body budget. */
 export function communicationTextUnits(value: CommunicationEnvelope): number {
-  return value.agents.reduce((sum, row) => sum + (row.question?.length ?? 0) + (row.result?.length ?? 0), 0) +
-    (value.alerts ?? []).reduce((sum, alert) => sum + alert.message.length, 0);
+  return (
+    value.agents.reduce(
+      (sum, row) => sum + (row.question?.length ?? 0) + (row.result?.length ?? 0),
+      0,
+    ) + (value.alerts ?? []).reduce((sum, alert) => sum + alert.message.length, 0)
+  );
 }
 
 export interface CommunicationBudget {
@@ -158,11 +185,16 @@ export interface CommunicationBudget {
 export function communicationBudget(value: CommunicationEnvelope): CommunicationBudget {
   const text_units = communicationTextUnits(value);
   const envelope_bytes = communicationEnvelopeBytes(value);
-  return { text_units, envelope_bytes,
-    fits: text_units <= COMMUNICATION_LIMITS.text_units && envelope_bytes <= COMMUNICATION_LIMITS.envelope_bytes &&
+  return {
+    text_units,
+    envelope_bytes,
+    fits:
+      text_units <= COMMUNICATION_LIMITS.text_units &&
+      envelope_bytes <= COMMUNICATION_LIMITS.envelope_bytes &&
       value.agents.length <= COMMUNICATION_LIMITS.agents &&
       (value.finished?.length ?? 0) <= COMMUNICATION_LIMITS.finished &&
-      (value.alerts?.length ?? 0) <= COMMUNICATION_LIMITS.pending_alerts };
+      (value.alerts?.length ?? 0) <= COMMUNICATION_LIMITS.pending_alerts,
+  };
 }
 
 /** Intentionally impossible action combines the longest verb with delivery.
@@ -175,7 +207,11 @@ export interface RetainedEnvelopeBound extends Omit<RetainedEnvelope, "action" |
     readonly task: number;
     readonly delivery: "not_delivered";
   };
-  readonly agents: readonly (ThinTaskEntry & { readonly question_id?: QuestionId; readonly question?: string; readonly next_cursor?: string })[];
+  readonly agents: readonly (ThinTaskEntry & {
+    readonly question_id?: QuestionId;
+    readonly question?: string;
+    readonly next_cursor?: string;
+  })[];
 }
 
 /** Fresh pure proof data, with one complete alert and every bounded control
@@ -188,22 +224,47 @@ export interface RetainedEnvelopeBound extends Omit<RetainedEnvelope, "action" |
  * all question IDs/cursors/empty question fields and an 8192-NUL alert costs
  * 65006 double-JSON bytes (530 spare).
  * The proof depends on these exact keys and bounds, not arbitrary JSON data. */
-export function retainedEnvelopeFixture(message: string, withQuestionIds = false, withResultCursors = false): RetainedEnvelopeBound {
+export function retainedEnvelopeFixture(
+  message: string,
+  withQuestionIds = false,
+  withResultCursors = false,
+): RetainedEnvelopeBound {
   const name = "a".repeat(COMMUNICATION_LIMITS.agent_name_units);
   const max = Number.MAX_SAFE_INTEGER;
   return {
     reason: "nothing_pending",
     action: { type: "agent_answer", agent: name, task: max, delivery: "not_delivered" },
     agents: Array.from({ length: COMMUNICATION_LIMITS.agents }, () => ({
-      agent: name, task: max, status: "interrupting",
+      agent: name,
+      task: max,
+      status: "interrupting",
       wait: "dependencies",
-      has_question: true, limit_reached: true, unavailable: true,
-      question_truncated: true, result_omitted: true, result_truncated: true,
+      has_question: true,
+      limit_reached: true,
+      unavailable: true,
+      question_truncated: true,
+      result_omitted: true,
+      result_truncated: true,
       ...(withQuestionIds ? { question_id: `q_${"f".repeat(32)}` } : {}),
-      ...(withResultCursors ? { next_cursor: encodeResultCursor({ owner: "owner", generation: "generation", run: "run", version: "version" }, max),
-        ...(withQuestionIds ? { question: "" } : {}) } : {}),
+      ...(withResultCursors
+        ? {
+            next_cursor: encodeResultCursor(
+              { owner: "owner", generation: "generation", run: "run", version: "version" },
+              max,
+            ),
+            ...(withQuestionIds ? { question: "" } : {}),
+          }
+        : {}),
     })),
-    alerts: [{ agent: name, task: max, label: "\u0000".repeat(COMMUNICATION_LIMITS.label_units), message, source: "harness" }],
+    alerts: [
+      {
+        agent: name,
+        task: max,
+        label: "\u0000".repeat(COMMUNICATION_LIMITS.label_units),
+        message,
+        source: "harness",
+      },
+    ],
     workers_disabled: true,
     alerts_pending: max,
     finished_pending: max,
@@ -220,7 +281,13 @@ export function retainedEnvelopeFixture(message: string, withQuestionIds = false
 export function alertAdmissionBudget(message: string): CommunicationBudget {
   const text_units = message.length;
   const envelope_bytes = communicationEnvelopeBytes(retainedEnvelopeFixture(message, true, true));
-  return { text_units, envelope_bytes,
-    fits: text_units >= 1 && text_units <= COMMUNICATION_LIMITS.child_text_units &&
-      text_units <= COMMUNICATION_LIMITS.text_units && envelope_bytes <= COMMUNICATION_LIMITS.envelope_bytes };
+  return {
+    text_units,
+    envelope_bytes,
+    fits:
+      text_units >= 1 &&
+      text_units <= COMMUNICATION_LIMITS.child_text_units &&
+      text_units <= COMMUNICATION_LIMITS.text_units &&
+      envelope_bytes <= COMMUNICATION_LIMITS.envelope_bytes,
+  };
 }

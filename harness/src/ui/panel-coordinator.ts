@@ -1,21 +1,57 @@
 import type { PersistentScope } from "../../../lib/settings-store.mjs";
-import { buildContextEntries, sessionEntryToContextMessages, getMarkdownTheme, type EventBus, type ExtensionAPI, type ExtensionContext,
-  type SessionEntry } from "@earendil-works/pi-coding-agent";
+import {
+  buildContextEntries,
+  sessionEntryToContextMessages,
+  getMarkdownTheme,
+  type EventBus,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type SessionEntry,
+} from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
-import { FOOTER_INDICATOR_CLICK_EVENT, PINNED_POPOVER_YIELD_EVENT, WORKER_PRESET_INDICATOR, type FooterIndicatorClick,
-  type PinnedPopoverYield }
-  from "../../../lib/overlay-protocol.mjs";
-import { focusOrigin, focusRevealed, joinPopoverStack, stackedOverlayOptions, type StackMember } from "../../../lib/popover-stack.mjs";
+import {
+  FOOTER_INDICATOR_CLICK_EVENT,
+  PINNED_POPOVER_YIELD_EVENT,
+  WORKER_PRESET_INDICATOR,
+  type FooterIndicatorClick,
+  type PinnedPopoverYield,
+} from "../../../lib/overlay-protocol.mjs";
+import {
+  focusOrigin,
+  focusRevealed,
+  joinPopoverStack,
+  stackedOverlayOptions,
+  type StackMember,
+} from "../../../lib/popover-stack.mjs";
 import type { ActivityHistoryState } from "../runtime/activity-observer.ts";
 import type { DelegationSetting } from "../delegation.ts";
 import { HarnessError } from "../core/ports.ts";
-import type { EffortOverrides, PresetCandidate, PresetPublication, PresetRouter, PresetSnapshot, Strength } from "../routing.ts";
+import type {
+  EffortOverrides,
+  PresetCandidate,
+  PresetPublication,
+  PresetRouter,
+  PresetSnapshot,
+  Strength,
+} from "../routing.ts";
 import { DetailPane, type DetailInput } from "./agent-detail.ts";
 import { HarnessWidget, type AgentDetail } from "./agent-widget.ts";
 import { HIDE_TRANSIENT_OVERLAYS_EVENT } from "./overlay-request.ts";
-import { ApprovalWatch, mountable, PaneRequest, PaneYield, paneYieldHandlers } from "./permission-dialog-yield.ts";
-import { PRESET_PICKER_MIN_ROWS, PresetPicker, PresetPickerRequest,
-  type EffortCapabilities, type ModelPickerPosition, type PresetChoice } from "./preset-picker.ts";
+import {
+  ApprovalWatch,
+  mountable,
+  PaneRequest,
+  PaneYield,
+  paneYieldHandlers,
+} from "./permission-dialog-yield.ts";
+import {
+  PRESET_PICKER_MIN_ROWS,
+  PresetPicker,
+  PresetPickerRequest,
+  type EffortCapabilities,
+  type ModelPickerPosition,
+  type PresetChoice,
+} from "./preset-picker.ts";
 import { TranscriptContent } from "./transcript.ts";
 
 export interface HumanStopResult {
@@ -29,7 +65,12 @@ export interface PanelCoordinatorOptions {
   widget: HarnessWidget;
   ready(): boolean;
   router(): PresetRouter;
-  publish(candidate: PresetCandidate, name: string, ctx: Pick<ExtensionContext, "ui">, overrides?: EffortOverrides): PresetPublication;
+  publish(
+    candidate: PresetCandidate,
+    name: string,
+    ctx: Pick<ExtensionContext, "ui">,
+    overrides?: EffortOverrides,
+  ): PresetPublication;
   showError(error: unknown, ctx: Pick<ExtensionContext, "ui">): void;
   /** Host core command only. Display refresh is a separate best-effort effect. */
   stopRun?: (run_id: string) => HumanStopResult;
@@ -108,7 +149,11 @@ export class PanelCoordinator {
         if (this.yieldTimer) clearTimeout(this.yieldTimer);
         this.yieldTimer = setTimeout(() => {
           this.yieldTimer = undefined;
-          try { task(); } catch (error) { this.observeDetailError(error); }
+          try {
+            task();
+          } catch (error) {
+            this.observeDetailError(error);
+          }
         }, 0);
       },
     });
@@ -118,8 +163,11 @@ export class PanelCoordinator {
         // An ask for permission must reach the human: cancel any open model
         // selection first, but never let that best-effort cleanup block the
         // ordinary close/yield or the ask's own registration.
-        try { this.options.management?.cancelModelSelection?.(); }
-        catch (error) { this.observeDetailError(error); }
+        try {
+          this.options.management?.cancelModelSelection?.();
+        } catch (error) {
+          this.observeDetailError(error);
+        }
         this.closePreset?.();
         this.yieldHandlers.onPrompt(pending);
       },
@@ -142,7 +190,10 @@ export class PanelCoordinator {
 
   /** Alt+S and the footer's worker indicator are the same toggle. */
   private togglePreset(): Promise<void> | undefined {
-    if (this.pickerOpen) { this.closePreset?.(); return; }
+    if (this.pickerOpen) {
+      this.closePreset?.();
+      return;
+    }
     // A management dialog owns the interaction until it settles; the picker
     // must not open over it.
     if (this.managementOpen) return;
@@ -158,7 +209,9 @@ export class PanelCoordinator {
     this.options.widget.onOpen((agent_id) => {
       this.activateFromWidget(agent_id).catch((error: unknown) => this.observeDetailError(error));
     });
-    this.options.widget.onRosterUpdate?.((count) => { if (!count) this.closeEmptyDetail(); });
+    this.options.widget.onRosterUpdate?.((count) => {
+      if (!count) this.closeEmptyDetail();
+    });
     // The footer paints our status; a click on it is ours to answer, and
     // claiming it synchronously keeps the footer from opening its own panel.
     this.unwatchIndicator = bus.on(FOOTER_INDICATOR_CLICK_EVENT, (data) => {
@@ -173,7 +226,13 @@ export class PanelCoordinator {
         const unsubscribe = bus.on(channel, handler);
         // The watch must reach every unsubscriber and clear its pending asks,
         // even when a host callback fails partway through unbinding.
-        return () => { try { unsubscribe(); } catch (error) { this.observeDetailError(error, ctx); } };
+        return () => {
+          try {
+            unsubscribe();
+          } catch (error) {
+            this.observeDetailError(error, ctx);
+          }
+        };
       },
     });
     // The Agent roster mounts only when there is activity. It cannot tell us
@@ -197,12 +256,21 @@ export class PanelCoordinator {
 
   /** Readonly renderer projection for other controls (a model popover is
    * fullscreen-only, so regular scrollback is never polluted). */
-  isFullscreen(): boolean { return this.floating(); }
+  isFullscreen(): boolean {
+    return this.floating();
+  }
 
   dispose(): void {
     const ctx = this.host;
-    const cleanups = [this.unwatchIndicator, this.unwatchApprovals, this.closePreset, this.closePane,
-      () => this.options.widget.onOpen(undefined), () => this.options.widget.onRosterUpdate?.(undefined), this.clearHostWidget];
+    const cleanups = [
+      this.unwatchIndicator,
+      this.unwatchApprovals,
+      this.closePreset,
+      this.closePane,
+      () => this.options.widget.onOpen(undefined),
+      () => this.options.widget.onRosterUpdate?.(undefined),
+      this.clearHostWidget,
+    ];
     // Detach first: failed host cleanup and already-queued callbacks cannot
     // reopen a panel or keep the old UI binding alive through this coordinator.
     this.host = undefined;
@@ -219,24 +287,42 @@ export class PanelCoordinator {
     this.pickerOpen = false;
     this.managementOpen = false;
     this.yielding.end();
-    if (this.yieldTimer) { clearTimeout(this.yieldTimer); this.yieldTimer = undefined; }
+    if (this.yieldTimer) {
+      clearTimeout(this.yieldTimer);
+      this.yieldTimer = undefined;
+    }
     for (const cleanup of cleanups) {
       // This synchronous teardown owns the captured host, even after detaching
       // callbacks. Report its cleanup failure without reviving retired input.
-      try { cleanup?.(); } catch (error) { this.reportDetailError(error, ctx); }
+      try {
+        cleanup?.();
+      } catch (error) {
+        this.reportDetailError(error, ctx);
+      }
     }
   }
 
   async selectPreset(requested: string, ctx: Pick<ExtensionContext, "ui" | "mode">): Promise<void> {
     try {
-      const router = this.options.router(), candidate = router.prepare();
-      if (requested) this.options.publish(candidate, requested === "reload" ? candidate.activeName : requested, ctx);
+      const router = this.options.router(),
+        candidate = router.prepare();
+      if (requested)
+        this.options.publish(
+          candidate,
+          requested === "reload" ? candidate.activeName : requested,
+          ctx,
+        );
       else await this.pickPreset({ router, candidate }, ctx);
-    } catch (error) { this.options.showError(error, ctx); }
+    } catch (error) {
+      this.options.showError(error, ctx);
+    }
   }
 
-  private async pickPreset(state: PickerState, ctx: Pick<ExtensionContext, "ui" | "mode">,
-    startInEffort = false): Promise<void> {
+  private async pickPreset(
+    state: PickerState,
+    ctx: Pick<ExtensionContext, "ui" | "mode">,
+    startInEffort = false,
+  ): Promise<void> {
     const host = this.host;
     const selected = await this.choosePreset(state, ctx, startInEffort);
     if (!selected || this.host !== host || !this.options.ready()) return;
@@ -252,32 +338,48 @@ export class PanelCoordinator {
     }
   }
 
-  private async enableEffortEditor(name: string, state: PickerState,
-    host: Pick<ExtensionContext, "ui" | "mode"> | undefined, ctx: Pick<ExtensionContext, "ui" | "mode">): Promise<void> {
+  private async enableEffortEditor(
+    name: string,
+    state: PickerState,
+    host: Pick<ExtensionContext, "ui" | "mode"> | undefined,
+    ctx: Pick<ExtensionContext, "ui" | "mode">,
+  ): Promise<void> {
     if (!host || this.host !== host || !this.options.ready()) return;
     let enabled = false;
     await this.withManagement(async () => {
-      if (this.options.router() !== state.router || !state.router.isCurrent(state.candidate)) throw new HarnessError("STALE_PRESET_SELECTION");
-      const accepted = await host.ui.confirm(`Enable ${name} to edit effort?`,
+      if (this.options.router() !== state.router || !state.router.isCurrent(state.candidate))
+        throw new HarnessError("STALE_PRESET_SELECTION");
+      const accepted = await host.ui.confirm(
+        `Enable ${name} to edit effort?`,
         `This replaces the active preset (${state.candidate.activeName}) and enables new worker work.\n` +
-        "Effort changes then apply immediately. Existing Agents and the main model are unchanged.");
+          "Effort changes then apply immediately. Existing Agents and the main model are unchanged.",
+      );
       if (accepted !== true || this.host !== host || !this.modelSelectionAllowed()) return;
-      if (this.options.router() !== state.router || !state.router.isCurrent(state.candidate)) throw new HarnessError("STALE_PRESET_SELECTION");
+      if (this.options.router() !== state.router || !state.router.isCurrent(state.candidate))
+        throw new HarnessError("STALE_PRESET_SELECTION");
       const publication = this.options.publish(state.candidate, name, ctx);
       state.candidate = publication.candidate;
       enabled = true;
     });
     // Release management ownership before re-entering the custom queue. Keep
     // the same audited catalogue; reopening must not reread or adopt new files.
-    if (enabled && this.host === host && this.options.router() === state.router && state.router.isCurrent(state.candidate) && this.modelSelectionAllowed())
+    if (
+      enabled &&
+      this.host === host &&
+      this.options.router() === state.router &&
+      state.router.isCurrent(state.candidate) &&
+      this.modelSelectionAllowed()
+    )
       await this.pickPreset(state, ctx, true);
   }
 
   /** One settings/preset management route: dialog sequences never overlap,
    * the latch releases in finally, a disposed or replaced host drops the
    * request, and errors surface through showError rather than a publish. */
-  private async runManagement(action: Exclude<Extract<PresetChoice, { action: string }>, { action: "edit-effort" }>,
-    host: Pick<ExtensionContext, "ui" | "mode"> | undefined): Promise<void> {
+  private async runManagement(
+    action: Exclude<Extract<PresetChoice, { action: string }>, { action: "edit-effort" }>,
+    host: Pick<ExtensionContext, "ui" | "mode"> | undefined,
+  ): Promise<void> {
     const management = this.options.management;
     if (!management || this.host !== host || !this.options.ready()) return;
     await this.withManagement(async () => {
@@ -285,9 +387,11 @@ export class PanelCoordinator {
         if (typeof management.settings === "function") await management.settings();
       } else if (action.action === "save-default") {
         if (action.scope === "workspace" && management.canSaveWorkspace?.() !== true) return;
-        if (typeof management.saveDefault === "function") await management.saveDefault(action.scope);
+        if (typeof management.saveDefault === "function")
+          await management.saveDefault(action.scope);
       } else if (action.action === "edit-model") {
-        if (typeof management.editModel === "function") await management.editModel(action.name, action.slot, action.position);
+        if (typeof management.editModel === "function")
+          await management.editModel(action.name, action.slot, action.position);
       } else if (typeof management.editPreset === "function") {
         await management.editPreset(action.action === "edit-preset" ? action.name : undefined);
       }
@@ -298,14 +402,24 @@ export class PanelCoordinator {
    * any await so footer/widget clicks cannot stack another harness custom UI. */
   async withManagement(action: () => Promise<void>): Promise<void> {
     const host = this.host;
-    if (!host || !this.options.ready() || this.managementOpen || this.pickerOpen || this.paneOpen ||
-        !this.modelSelectionAllowed()) return;
+    if (
+      !host ||
+      !this.options.ready() ||
+      this.managementOpen ||
+      this.pickerOpen ||
+      this.paneOpen ||
+      !this.modelSelectionAllowed()
+    )
+      return;
     this.managementOpen = true;
-    try { await action(); }
-    catch (error) {
+    try {
+      await action();
+    } catch (error) {
       if (this.host !== host) return; // No callbacks through a retired host.
       throw error;
-    } finally { this.managementOpen = false; }
+    } finally {
+      this.managementOpen = false;
+    }
   }
 
   /** A management sequence may span several dialogs. Recheck the permission
@@ -324,28 +438,48 @@ export class PanelCoordinator {
     // raw, compaction-aware path; model context edits never hide attempts here.
     if (cache.state?.session !== state?.session) cache.projected = new WeakMap();
     try {
-      const messages = buildContextEntries(entries as SessionEntry[], state?.leaf).flatMap((entry) => {
-        let projected = cache.projected.get(entry);
-        if (!projected) { projected = sessionEntryToContextMessages(entry); cache.projected.set(entry, projected); }
-        return projected;
-      });
-      cache.state = state; cache.messages = messages;
+      const messages = buildContextEntries(entries as SessionEntry[], state?.leaf).flatMap(
+        (entry) => {
+          let projected = cache.projected.get(entry);
+          if (!projected) {
+            projected = sessionEntryToContextMessages(entry);
+            cache.projected.set(entry, projected);
+          }
+          return projected;
+        },
+      );
+      cache.state = state;
+      cache.messages = messages;
       return messages;
-    } catch { return []; }
+    } catch {
+      return [];
+    }
   }
 
   private async openDetail(agent_id?: string): Promise<void> {
-    if (this.paneOpen || this.pickerOpen || this.managementOpen || !this.options.ready() || !this.host) return;
+    if (
+      this.paneOpen ||
+      this.pickerOpen ||
+      this.managementOpen ||
+      !this.options.ready() ||
+      !this.host
+    )
+      return;
     const ctx = this.host;
     if (!mountable(this.yielding, this.approvals.pending)) return;
     const agents = this.options.widget.agents();
-    if (!agents.length) { ctx.ui.notify("No agents are available to inspect.", "info"); return; }
+    if (!agents.length) {
+      ctx.ui.notify("No agents are available to inspect.", "info");
+      return;
+    }
     if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
       ctx.ui.notify("The agent detail pane needs the interactive TUI.", "warning");
       return;
     }
     this.paneOpen = true;
-    const request = new PaneRequest(() => this.options.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {}));
+    const request = new PaneRequest(() =>
+      this.options.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {}),
+    );
     this.closePane = request.close;
     const mounted = new Map<string, TranscriptContent>();
     const cwds = new Map<string, string>();
@@ -354,107 +488,192 @@ export class PanelCoordinator {
       const floating = this.floating();
       let markdownTheme = getMarkdownTheme();
       this.paneAgent = agent_id ?? agents[0]!.agent_id;
-      await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
-        if (!request.mount(() => done(undefined), this.yielding, this.approvals.pending)) {
-          return { render: () => [], invalidate() {} };
-        }
-        // The SDK's public colors getter returns a frozen palette generation,
-        // replaced on theme/terminal-color changes even though its Theme Proxy
-        // is stable. Structural hosts without that capability stay conservative.
-        const paletteGeneration = () => {
-          const colors = theme.colors;
-          return colors && typeof colors === "object" && Object.isFrozen(colors) ? colors : undefined;
-        };
-        let palette = paletteGeneration();
-        const pane = new DetailPane({
-          tui, theme, done: request.close,
-          initial: this.paneAgent!,
-          snapshot: () => {
-            const agents = this.options.widget.presentationAgents?.() ?? this.options.widget.agents();
-            currentAgents = new Map(agents.map((agent) => [agent.agent_id, agent]));
-            for (const [id, content] of mounted) if (!currentAgents.has(id)) {
-              content.dispose(); mounted.delete(id); cwds.delete(id);
-            }
-            return agents.map((agent) => ({ agent_id: agent.agent_id,
-              input: { view: agent.view, live: agent.live } satisfies DetailInput }));
-          },
-          freshSnapshot: () => this.options.widget.agents().map((agent) => ({ agent_id: agent.agent_id,
-            input: { view: agent.view, live: agent.live } satisfies DetailInput })),
-          revision: () => this.options.widget.presentationVersion?.(),
-          visible: () => mountable(this.yielding, this.approvals.pending),
-          invalidate: () => {
-            const next = paletteGeneration();
-            if (!next || next !== palette) {
-              // Native components also retain literal ANSI/default-style prefixes;
-              // dynamic Markdown callbacks alone cannot repair a palette change.
-              markdownTheme = getMarkdownTheme();
-              for (const content of mounted.values()) content.setTheme(markdownTheme);
-            } else {
-              for (const content of mounted.values()) content.invalidateLayout();
-            }
-            palette = next;
-          },
-          transcript: (id) => {
-            const agent = currentAgents.get(id);
-            if (!agent) return undefined;
-            let content = mounted.get(id);
-            if (content && cwds.get(id) !== agent.cwd) { content.dispose(); mounted.delete(id); content = undefined; }
-            if (!content) {
-              const cache: HistoryCache = { projected: new WeakMap() };
-              cwds.set(id, agent.cwd);
-              content = new TranscriptContent({ tui, cwd: agent.cwd, markdownTheme, source: {
-                messages: () => { const current = currentAgents.get(id); return current ? this.messagesOf(current, cache) : []; },
-                inFlight: () => currentAgents.get(id)?.inFlight(),
-                toolDefinition: () => undefined,
-              } });
-              mounted.set(id, content);
-            }
-            return content;
-          },
-          onSelect: (id) => { this.paneAgent = id; },
-          ...(this.options.stopRun ? { onStop: (run_id: string) => {
-            // Retired callbacks are inert, including their notifications. A
-            // current but blocked action instead explains why it did nothing.
-            if (this.host !== ctx || this.closePane !== request.close || this.detailPane !== pane || !pane.isOpen()) return;
-            try {
-              if (!this.options.ready()) {
-                this.detailNotice("Cancellation unavailable: harness is not ready.", "warning", ctx);
-                return;
+      await ctx.ui.custom<void>(
+        (tui, theme, _keybindings, done) => {
+          if (!request.mount(() => done(undefined), this.yielding, this.approvals.pending)) {
+            return { render: () => [], invalidate() {} };
+          }
+          // The SDK's public colors getter returns a frozen palette generation,
+          // replaced on theme/terminal-color changes even though its Theme Proxy
+          // is stable. Structural hosts without that capability stay conservative.
+          const paletteGeneration = () => {
+            const colors = theme.colors;
+            return colors && typeof colors === "object" && Object.isFrozen(colors)
+              ? colors
+              : undefined;
+          };
+          let palette = paletteGeneration();
+          const pane = new DetailPane({
+            tui,
+            theme,
+            done: request.close,
+            initial: this.paneAgent!,
+            snapshot: () => {
+              const agents =
+                this.options.widget.presentationAgents?.() ?? this.options.widget.agents();
+              currentAgents = new Map(agents.map((agent) => [agent.agent_id, agent]));
+              for (const [id, content] of mounted)
+                if (!currentAgents.has(id)) {
+                  content.dispose();
+                  mounted.delete(id);
+                  cwds.delete(id);
+                }
+              return agents.map((agent) => ({
+                agent_id: agent.agent_id,
+                input: { view: agent.view, live: agent.live } satisfies DetailInput,
+              }));
+            },
+            freshSnapshot: () =>
+              this.options.widget.agents().map((agent) => ({
+                agent_id: agent.agent_id,
+                input: { view: agent.view, live: agent.live } satisfies DetailInput,
+              })),
+            revision: () => this.options.widget.presentationVersion?.(),
+            visible: () => mountable(this.yielding, this.approvals.pending),
+            invalidate: () => {
+              const next = paletteGeneration();
+              if (!next || next !== palette) {
+                // Native components also retain literal ANSI/default-style prefixes;
+                // dynamic Markdown callbacks alone cannot repair a palette change.
+                markdownTheme = getMarkdownTheme();
+                for (const content of mounted.values()) content.setTheme(markdownTheme);
+              } else {
+                for (const content of mounted.values()) content.invalidateLayout();
               }
-              if (!mountable(this.yielding, this.approvals.pending)) {
-                this.detailNotice("Cancellation unavailable while a permission dialog is active.", "warning", ctx);
-                return;
+              palette = next;
+            },
+            transcript: (id) => {
+              const agent = currentAgents.get(id);
+              if (!agent) return undefined;
+              let content = mounted.get(id);
+              if (content && cwds.get(id) !== agent.cwd) {
+                content.dispose();
+                mounted.delete(id);
+                content = undefined;
               }
-              let result: HumanStopResult;
-              try { result = this.options.stopRun!(run_id); }
-              catch (error) {
-                this.detailNotice(`Cancellation request failed: ${String(error)}`, "error", ctx);
-                return;
+              if (!content) {
+                const cache: HistoryCache = { projected: new WeakMap() };
+                cwds.set(id, agent.cwd);
+                content = new TranscriptContent({
+                  tui,
+                  cwd: agent.cwd,
+                  markdownTheme,
+                  source: {
+                    messages: () => {
+                      const current = currentAgents.get(id);
+                      return current ? this.messagesOf(current, cache) : [];
+                    },
+                    inFlight: () => currentAgents.get(id)?.inFlight(),
+                    toolDefinition: () => undefined,
+                  },
+                });
+                mounted.set(id, content);
               }
-              // Acceptance cannot be undone or retried by a display failure.
-              if (this.host !== ctx || this.closePane !== request.close) return;
-              let refreshFailed = false;
-              try { this.options.widget.wake(); } catch { refreshFailed = true; }
-              const message = result.result === "already_terminal" ? "Task already finished; no cancellation needed" :
-                result.result === "already_exited" ? "Task execution already exited; no cancellation needed" :
-                result.already_stopping ? "Cancellation already requested; still stopping" : "Cancellation requested";
-              const warnings = result.warnings?.length ? `; ${result.warnings.join("; ")}` : "";
-              this.detailNotice(`${message}${refreshFailed ? "; display refresh failed" : ""}${warnings}`,
-                refreshFailed || result.warnings?.length ? "warning" : "info", ctx);
-            } catch (error) { this.observeDetailError(error, ctx); }
-          } } : {}),
-          frame: floating,
-        });
-        this.detailPane = pane;
-        return request.own(pane);
-      }, floating
-        ? { overlay: true,
-            overlayOptions: () => ({ anchor: "center", width: "80%", maxHeight: "70%", minWidth: 40 }),
-            onHandle: (handle) => { this.paneOverlay = handle; } }
-        : { overlay: false });
+              return content;
+            },
+            onSelect: (id) => {
+              this.paneAgent = id;
+            },
+            ...(this.options.stopRun
+              ? {
+                  onStop: (run_id: string) => {
+                    // Retired callbacks are inert, including their notifications. A
+                    // current but blocked action instead explains why it did nothing.
+                    if (
+                      this.host !== ctx ||
+                      this.closePane !== request.close ||
+                      this.detailPane !== pane ||
+                      !pane.isOpen()
+                    )
+                      return;
+                    try {
+                      if (!this.options.ready()) {
+                        this.detailNotice(
+                          "Cancellation unavailable: harness is not ready.",
+                          "warning",
+                          ctx,
+                        );
+                        return;
+                      }
+                      if (!mountable(this.yielding, this.approvals.pending)) {
+                        this.detailNotice(
+                          "Cancellation unavailable while a permission dialog is active.",
+                          "warning",
+                          ctx,
+                        );
+                        return;
+                      }
+                      let result: HumanStopResult;
+                      try {
+                        result = this.options.stopRun!(run_id);
+                      } catch (error) {
+                        this.detailNotice(
+                          `Cancellation request failed: ${String(error)}`,
+                          "error",
+                          ctx,
+                        );
+                        return;
+                      }
+                      // Acceptance cannot be undone or retried by a display failure.
+                      if (this.host !== ctx || this.closePane !== request.close) return;
+                      let refreshFailed = false;
+                      try {
+                        this.options.widget.wake();
+                      } catch {
+                        refreshFailed = true;
+                      }
+                      const message =
+                        result.result === "already_terminal"
+                          ? "Task already finished; no cancellation needed"
+                          : result.result === "already_exited"
+                            ? "Task execution already exited; no cancellation needed"
+                            : result.already_stopping
+                              ? "Cancellation already requested; still stopping"
+                              : "Cancellation requested";
+                      const warnings = result.warnings?.length
+                        ? `; ${result.warnings.join("; ")}`
+                        : "";
+                      this.detailNotice(
+                        `${message}${refreshFailed ? "; display refresh failed" : ""}${warnings}`,
+                        refreshFailed || result.warnings?.length ? "warning" : "info",
+                        ctx,
+                      );
+                    } catch (error) {
+                      this.observeDetailError(error, ctx);
+                    }
+                  },
+                }
+              : {}),
+            frame: floating,
+          });
+          this.detailPane = pane;
+          return request.own(pane);
+        },
+        floating
+          ? {
+              overlay: true,
+              overlayOptions: () => ({
+                anchor: "center",
+                width: "80%",
+                maxHeight: "70%",
+                minWidth: 40,
+              }),
+              onHandle: (handle) => {
+                this.paneOverlay = handle;
+              },
+            }
+          : { overlay: false },
+      );
     } finally {
-      for (const cleanup of [() => request.dispose(), ...[...mounted.values()].map((content) => () => content.dispose())]) {
-        try { cleanup(); } catch (error) { this.observeDetailError(error, ctx); }
+      for (const cleanup of [
+        () => request.dispose(),
+        ...[...mounted.values()].map((content) => () => content.dispose()),
+      ]) {
+        try {
+          cleanup();
+        } catch (error) {
+          this.observeDetailError(error, ctx);
+        }
       }
       mounted.clear();
       this.paneOpen = false;
@@ -471,8 +690,11 @@ export class PanelCoordinator {
    * its idle notification retries an empty pane that was hidden in place. */
   private closeEmptyDetail(): void {
     if (!this.host || !this.paneOpen || this.approvals.pending) return;
-    try { if (!this.options.widget.agents().length) this.closePane?.(); }
-    catch (error) { this.observeDetailError(error); }
+    try {
+      if (!this.options.widget.agents().length) this.closePane?.();
+    } catch (error) {
+      this.observeDetailError(error);
+    }
   }
 
   private mount(agent_id?: string): Promise<void> {
@@ -486,8 +708,11 @@ export class PanelCoordinator {
    * Formatting and notification are both fallible; nothing may escape here. */
   private detailNotice(message: string, kind: "info" | "warning" | "error", ctx = this.host): void {
     if (ctx !== this.host) return;
-    try { ctx?.ui.notify(message, kind); }
-    catch { /* notification failure cannot change command acceptance */ }
+    try {
+      ctx?.ui.notify(message, kind);
+    } catch {
+      /* notification failure cannot change command acceptance */
+    }
   }
 
   private observeDetailError(error: unknown, ctx = this.host): void {
@@ -496,8 +721,11 @@ export class PanelCoordinator {
   }
 
   private reportDetailError(error: unknown, ctx = this.host): void {
-    try { ctx?.ui.notify(`Harness panel UI failed: ${String(error)}`, "error"); }
-    catch { /* even error reporting is best-effort at a void host boundary */ }
+    try {
+      ctx?.ui.notify(`Harness panel UI failed: ${String(error)}`, "error");
+    } catch {
+      /* even error reporting is best-effort at a void host boundary */
+    }
   }
 
   private async activateFromWidget(agent_id: string): Promise<void> {
@@ -510,32 +738,55 @@ export class PanelCoordinator {
     await this.mount(agent_id);
   }
 
-  private async choosePreset(state: PickerState,
-    ctx: Pick<ExtensionContext, "ui" | "mode">, startInEffort: boolean): Promise<PresetChoice | null> {
-    const live = state.router, candidate = state.candidate;
+  private async choosePreset(
+    state: PickerState,
+    ctx: Pick<ExtensionContext, "ui" | "mode">,
+    startInEffort: boolean,
+  ): Promise<PresetChoice | null> {
+    const live = state.router,
+      candidate = state.candidate;
     if (this.pickerOpen) {
       ctx.ui.notify("The delegation panel is already open.", "warning");
       return null;
     }
     if (this.managementOpen) {
-      ctx.ui.notify("The delegation panel is unavailable while a settings or preset dialog is open.", "warning");
+      ctx.ui.notify(
+        "The delegation panel is unavailable while a settings or preset dialog is open.",
+        "warning",
+      );
       return null;
     }
     if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
       this.pickerOpen = true;
       try {
-        const selected = await ctx.ui.select("Model preset (off disables new work)", candidate.names.map((item) =>
-          item === candidate.activeName ? `${item} (active)` : item));
+        const selected = await ctx.ui.select(
+          "Model preset (off disables new work)",
+          candidate.names.map((item) =>
+            item === candidate.activeName ? `${item} (active)` : item,
+          ),
+        );
         return selected?.replace(/ \(active\)$/, "") ?? null;
-      } finally { this.pickerOpen = false; }
+      } finally {
+        this.pickerOpen = false;
+      }
     }
-    if (!this.host || !this.options.ready() || this.paneOpen || !mountable(this.yielding, this.approvals.pending)) {
-      ctx.ui.notify("The delegation panel is unavailable while another harness panel or approval is active.", "warning");
+    if (
+      !this.host ||
+      !this.options.ready() ||
+      this.paneOpen ||
+      !mountable(this.yielding, this.approvals.pending)
+    ) {
+      ctx.ui.notify(
+        "The delegation panel is unavailable while another harness panel or approval is active.",
+        "warning",
+      );
       return null;
     }
     const presets = live.inspect(candidate);
     this.pickerOpen = true;
-    const request = new PresetPickerRequest(() => this.options.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {}));
+    const request = new PresetPickerRequest(() =>
+      this.options.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {}),
+    );
     this.closePreset = request.close;
     // Floating, the picker joins the bottom-right popover column above the
     // footer indicator that opens it, beside whatever is already pinned there.
@@ -547,71 +798,166 @@ export class PanelCoordinator {
     let releasePinned: (() => void) | undefined;
     try {
       const floating = this.floating();
-      return await this.host.ui.custom<PresetChoice | null>((tui, theme, keybindings, done) => {
-        if (!request.mount(done, this.host !== host || this.options.router() !== live || !live.isCurrent(state.candidate) ||
-            this.paneOpen || !this.options.ready() || !mountable(this.yielding, this.approvals.pending)))
-          return { render: () => [], invalidate() {} };
-        if (floating) {
-          const token = {};
-          // Own the release before publishing: even a partially delivered,
-          // throwing start must be paired. This is presentation, not authority.
-          releasePinned = () => {
-            releasePinned = undefined;
-            this.options.pi.events.emit(PINNED_POPOVER_YIELD_EVENT, { token, active: false } satisfies PinnedPopoverYield);
+      return await this.host.ui.custom<PresetChoice | null>(
+        (tui, theme, keybindings, done) => {
+          if (
+            !request.mount(
+              done,
+              this.host !== host ||
+                this.options.router() !== live ||
+                !live.isCurrent(state.candidate) ||
+                this.paneOpen ||
+                !this.options.ready() ||
+                !mountable(this.yielding, this.approvals.pending),
+            )
+          )
+            return { render: () => [], invalidate() {} };
+          if (floating) {
+            const token = {};
+            // Own the release before publishing: even a partially delivered,
+            // throwing start must be paired. This is presentation, not authority.
+            releasePinned = () => {
+              releasePinned = undefined;
+              this.options.pi.events.emit(PINNED_POPOVER_YIELD_EVENT, {
+                token,
+                active: false,
+              } satisfies PinnedPopoverYield);
+            };
+            this.options.pi.events.emit(PINNED_POPOVER_YIELD_EVENT, {
+              token,
+              active: true,
+            } satisfies PinnedPopoverYield);
+          }
+          const stacked = floating ? (place = joinPopoverStack(tui)) : undefined;
+          // Opened behind taller popovers, it waits off screen; when room
+          // appears it takes the keyboard it would have had, unless a dialog
+          // has taken it since.
+          const openedFrom = focusOrigin(tui);
+          reveal = () => {
+            if (handle) focusRevealed(tui, handle, openedFrom);
           };
-          this.options.pi.events.emit(PINNED_POPOVER_YIELD_EVENT, { token, active: true } satisfies PinnedPopoverYield);
-        }
-        const stacked = floating ? (place = joinPopoverStack(tui)) : undefined;
-        // Opened behind taller popovers, it waits off screen; when room
-        // appears it takes the keyboard it would have had, unless a dialog
-        // has taken it since.
-        const openedFrom = focusOrigin(tui);
-        reveal = () => { if (handle) focusRevealed(tui, handle, openedFrom); };
-        const delegation = this.options.delegation;
-        const management = this.options.management;
-        return request.own(picker = new PresetPicker({ tui, theme, keybindings, presets,
-          activeName: candidate.activeName, done: request.choose, pointer: floating, efforts: this.options.efforts, startInEffort,
-          ...(this.options.efforts ? { setEffort: (name: string, overrides: EffortOverrides) => {
-            if (!picker?.isOpen() || this.host !== host || this.closePreset !== request.close || !this.modelSelectionAllowed()) return undefined;
-            try {
-              if (this.options.router() !== live || !live.isCurrent(state.candidate) || name !== state.candidate.activeName) throw new HarnessError("STALE_PRESET_SELECTION");
-              const publication = this.options.publish(state.candidate, name, ctx, overrides);
-              state.candidate = publication.candidate;
-              return publication.selection;
-            } catch (error) {
-              try { this.options.showError(error, ctx); } catch { /* notification cannot escape a pointer/key callback */ }
-              return undefined;
+          const delegation = this.options.delegation;
+          const management = this.options.management;
+          return request.own(
+            (picker = new PresetPicker({
+              tui,
+              theme,
+              keybindings,
+              presets,
+              activeName: candidate.activeName,
+              done: request.choose,
+              pointer: floating,
+              efforts: this.options.efforts,
+              startInEffort,
+              ...(this.options.efforts
+                ? {
+                    setEffort: (name: string, overrides: EffortOverrides) => {
+                      if (
+                        !picker?.isOpen() ||
+                        this.host !== host ||
+                        this.closePreset !== request.close ||
+                        !this.modelSelectionAllowed()
+                      )
+                        return undefined;
+                      try {
+                        if (
+                          this.options.router() !== live ||
+                          !live.isCurrent(state.candidate) ||
+                          name !== state.candidate.activeName
+                        )
+                          throw new HarnessError("STALE_PRESET_SELECTION");
+                        const publication = this.options.publish(
+                          state.candidate,
+                          name,
+                          ctx,
+                          overrides,
+                        );
+                        state.candidate = publication.candidate;
+                        return publication.selection;
+                      } catch (error) {
+                        try {
+                          this.options.showError(error, ctx);
+                        } catch {
+                          /* notification cannot escape a pointer/key callback */
+                        }
+                        return undefined;
+                      }
+                    },
+                  }
+                : {}),
+              ...(management
+                ? {
+                    management: {
+                      summary: () => management.summary(),
+                      settings: typeof management.settings === "function",
+                      presets: typeof management.editPreset === "function",
+                      models: typeof management.editModel === "function",
+                      saveDefaults: typeof management.saveDefault === "function",
+                      canSaveWorkspace: () => management.canSaveWorkspace?.() === true,
+                    },
+                  }
+                : {}),
+              ...(delegation
+                ? {
+                    delegation: {
+                      current: () => delegation.current(),
+                      guideline: (setting: DelegationSetting) => delegation.guideline(setting),
+                      set: (next: DelegationSetting) => {
+                        // A pointer or key handler: nothing may escape into pi-tui's dispatch.
+                        try {
+                          delegation.set(next, ctx);
+                        } catch (error) {
+                          try {
+                            this.options.showError(error, ctx);
+                          } catch {
+                            /* notification is fallible too */
+                          }
+                        }
+                      },
+                    },
+                  }
+                : {}),
+              ...(stacked
+                ? {
+                    rows: () => stacked.available(),
+                    onRender: (height: number) => stacked.measure(height),
+                  }
+                : {}),
+            })),
+          );
+        },
+        floating
+          ? {
+              overlay: true,
+              onHandle: (mounted) => {
+                handle = mounted;
+              },
+              overlayOptions: () =>
+                place
+                  ? stackedOverlayOptions(place, {
+                      width: 76,
+                      minWidth: 34,
+                      minRows: PRESET_PICKER_MIN_ROWS,
+                      onReveal: () => reveal?.(),
+                    })
+                  : { anchor: "center", width: 76, minWidth: 34, maxHeight: "80%", margin: 1 },
             }
-          } } : {}),
-          ...(management ? { management: {
-            summary: () => management.summary(),
-            settings: typeof management.settings === "function",
-            presets: typeof management.editPreset === "function",
-            models: typeof management.editModel === "function",
-            saveDefaults: typeof management.saveDefault === "function",
-            canSaveWorkspace: () => management.canSaveWorkspace?.() === true,
-          } } : {}),
-          ...(delegation ? { delegation: { current: () => delegation.current(), guideline: (setting: DelegationSetting) => delegation.guideline(setting),
-            set: (next: DelegationSetting) => {
-              // A pointer or key handler: nothing may escape into pi-tui's dispatch.
-              try { delegation.set(next, ctx); }
-              catch (error) { try { this.options.showError(error, ctx); } catch { /* notification is fallible too */ } }
-            } } } : {}),
-          ...(stacked ? { rows: () => stacked.available(), onRender: (height: number) => stacked.measure(height) } : {}) }));
-      }, floating
-        ? { overlay: true, onHandle: (mounted) => { handle = mounted; }, overlayOptions: () => place
-          ? stackedOverlayOptions(place, { width: 76, minWidth: 34, minRows: PRESET_PICKER_MIN_ROWS,
-            onReveal: () => reveal?.() })
-          : { anchor: "center", width: 76, minWidth: 34, maxHeight: "80%", margin: 1 } }
-        : { overlay: false });
+          : { overlay: false },
+      );
     } finally {
-      try { request.dispose(); }
-      finally {
+      try {
+        request.dispose();
+      } finally {
         reveal = undefined;
-        try { place?.leave(); }
-        finally {
-          try { releasePinned?.(); }
-          finally { this.closePreset = undefined; this.pickerOpen = false; }
+        try {
+          place?.leave();
+        } finally {
+          try {
+            releasePinned?.();
+          } finally {
+            this.closePreset = undefined;
+            this.pickerOpen = false;
+          }
         }
       }
     }

@@ -32,13 +32,18 @@ test("token surfaces share carry logic while keeping explicit display precision"
 test("neither precision prints 1000k anywhere around its carry boundary", () => {
   for (let value = 999400; value <= 1000100; value++) {
     for (const precision of ["compact", "detailed"]) {
-      assert.doesNotMatch(formatTokenCount(value, { precision }), /^1000(?:\.0)?k$/, `${value}/${precision}`);
+      assert.doesNotMatch(
+        formatTokenCount(value, { precision }),
+        /^1000(?:\.0)?k$/,
+        `${value}/${precision}`,
+      );
     }
   }
 });
 
 test("unreported and invalid counts remain unknown, not invented zeros", () => {
   for (const value of [undefined, null, NaN, Infinity, -Infinity, -1]) {
-    for (const precision of ["compact", "detailed"]) assert.equal(formatTokenCount(value, { precision }), "?");
+    for (const precision of ["compact", "detailed"])
+      assert.equal(formatTokenCount(value, { precision }), "?");
   }
 });

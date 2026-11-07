@@ -1,12 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { HIDE_TRANSIENT_OVERLAYS_EVENT, PINNED_INDICATORS } from "../../../lib/overlay-protocol.mjs";
+import {
+  HIDE_TRANSIENT_OVERLAYS_EVENT,
+  PINNED_INDICATORS,
+} from "../../../lib/overlay-protocol.mjs";
 import { POPOVER, popoverRule, popoverSide } from "../../../lib/popover-frame.mjs";
 import { usageTotals, readUsageAttribution } from "../../../lib/usage-attribution.mjs";
 
 const spend = (cost = 0) => ({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost });
 const attributed = (overrides = {}) => ({
-  ...spend(), cost: { total: 0.5 },
+  ...spend(),
+  cost: { total: 0.5 },
   harnessModels: [{ ...spend(0.5), model: "provider/model" }],
   ...overrides,
 });
@@ -33,8 +37,13 @@ test("attribution reader rejects malformed or overclaimed session-file shares", 
   assert.deepEqual(usageTotals(attributed()), spend(0.5));
   assert.deepEqual(readUsageAttribution(attributed()), attributed().harnessModels);
   for (const invalid of [
-    undefined, null, [], {}, attributed({ harnessModels: [] }),
-    attributed({ harnessModels: [null] }), attributed({ harnessModels: {} }),
+    undefined,
+    null,
+    [],
+    {},
+    attributed({ harnessModels: [] }),
+    attributed({ harnessModels: [null] }),
+    attributed({ harnessModels: {} }),
     attributed({ harnessModels: [{ ...spend(0.5), model: "provider/model", input: 2 }] }),
     attributed({ harnessModels: [{ ...spend(0.5), model: "provider/model", cacheRead: 4 }] }),
     attributed({ harnessModels: [...attributed().harnessModels, ...attributed().harnessModels] }),
@@ -43,7 +52,8 @@ test("attribution reader rejects malformed or overclaimed session-file shares", 
     attributed({ harnessModels: [{ ...spend(0.5), model: "provider/model", input: -1 }] }),
     attributed({ harnessModels: [{ ...spend(Infinity), model: "provider/model" }] }),
     attributed({ harnessModels: [{ ...spend(0.5), model: "provider/model", output: "2" }] }),
-  ]) assert.deepEqual(readUsageAttribution(invalid), []);
+  ])
+    assert.deepEqual(readUsageAttribution(invalid), []);
 });
 
 test("attribution preserves partial shares, floating tolerance and foreign model labels", () => {
@@ -52,11 +62,19 @@ test("attribution preserves partial shares, floating tolerance and foreign model
     { ...zero, cost: 0.1, model: "compaction/provider/model" },
     { ...zero, cost: 0.2, model: "opaque" },
   ];
-  assert.deepEqual(readUsageAttribution({ ...zero, cost: { total: 0.3 }, harnessModels: parts }), parts);
+  assert.deepEqual(
+    readUsageAttribution({ ...zero, cost: { total: 0.3 }, harnessModels: parts }),
+    parts,
+  );
   // Attribution need not exhaust flat totals; the remainder stays tool spend.
-  assert.deepEqual(readUsageAttribution({ ...zero, cost: { total: 0.9 }, harnessModels: parts }), parts);
-  assert.deepEqual(usageTotals({ input: Infinity, output: 2, cost: { total: NaN } }),
-    { ...zero, output: 2 });
+  assert.deepEqual(
+    readUsageAttribution({ ...zero, cost: { total: 0.9 }, harnessModels: parts }),
+    parts,
+  );
+  assert.deepEqual(usageTotals({ input: Infinity, output: 2, cost: { total: NaN } }), {
+    ...zero,
+    output: 2,
+  });
   assert.deepEqual(usageTotals(null), zero);
   assert.deepEqual(usageTotals(undefined), zero);
 });

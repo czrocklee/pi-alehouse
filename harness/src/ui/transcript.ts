@@ -10,10 +10,25 @@
  * remain literal journal data. Rendering never hydrates alerts or questions.
  */
 
-import { AssistantMessageComponent, BashExecutionComponent, BranchSummaryMessageComponent,
-  CompactionSummaryMessageComponent, parseSkillBlock, SkillInvocationMessageComponent,
-  ToolExecutionComponent, UserMessageComponent, type sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
-import { Box, Container, Spacer, type Component, type MarkdownTheme, type TUI } from "@earendil-works/pi-tui";
+import {
+  AssistantMessageComponent,
+  BashExecutionComponent,
+  BranchSummaryMessageComponent,
+  CompactionSummaryMessageComponent,
+  parseSkillBlock,
+  SkillInvocationMessageComponent,
+  ToolExecutionComponent,
+  UserMessageComponent,
+  type sessionEntryToContextMessages,
+} from "@earendil-works/pi-coding-agent";
+import {
+  Box,
+  Container,
+  Spacer,
+  type Component,
+  type MarkdownTheme,
+  type TUI,
+} from "@earendil-works/pi-tui";
 import { paneRow, type TranscriptFrame, type TranscriptRows } from "./format.ts";
 
 /** Where a child's messages come from. Structural, so the pane never holds a session. */
@@ -33,9 +48,15 @@ export interface TranscriptOptions {
 }
 
 /** One settled message's components plus its rows at the current width. */
-interface Block { readonly container: Container; rows: readonly string[] | undefined }
+interface Block {
+  readonly container: Container;
+  rows: readonly string[] | undefined;
+}
 /** A tool call awaiting its result, and the block whose rows it will invalidate. */
-interface Pending { readonly component: ToolExecutionComponent; readonly block: Block }
+interface Pending {
+  readonly component: ToolExecutionComponent;
+  readonly block: Block;
+}
 
 // Keep the source opaque; only project the role-specific public SDK shape at
 // the rendering boundary. Malformed settled entries still use consume()'s
@@ -73,12 +94,18 @@ export class TranscriptContent implements TranscriptRows {
   constructor(private readonly options: TranscriptOptions) {}
 
   frame(width: number): TranscriptFrame {
-    const settled = width > 0 ? this.settled(width) : [], tail = width > 0 ? this.tail(width) : [];
-    return { lineCount: settled.length + tail.length, slice: (start, count) => {
-      const end = start + count, out = settled.slice(start, Math.min(end, settled.length));
-      if (end > settled.length) out.push(...tail.slice(Math.max(0, start - settled.length), end - settled.length));
-      return out;
-    } };
+    const settled = width > 0 ? this.settled(width) : [],
+      tail = width > 0 ? this.tail(width) : [];
+    return {
+      lineCount: settled.length + tail.length,
+      slice: (start, count) => {
+        const end = start + count,
+          out = settled.slice(start, Math.min(end, settled.length));
+        if (end > settled.length)
+          out.push(...tail.slice(Math.max(0, start - settled.length), end - settled.length));
+        return out;
+      },
+    };
   }
 
   /** Explicit MarkdownTheme/palette replacement rebuilds captured components,
@@ -119,7 +146,10 @@ export class TranscriptContent implements TranscriptRows {
         for (const child of component.children) invalidate(child);
       } else component.invalidate();
     };
-    for (const block of this.blocks) { invalidate(block.container); block.rows = undefined; }
+    for (const block of this.blocks) {
+      invalidate(block.container);
+      block.rows = undefined;
+    }
     this.rows = undefined;
     if (this.inFlight) invalidate(this.inFlight);
     this.inFlightRows = undefined;
@@ -128,7 +158,10 @@ export class TranscriptContent implements TranscriptRows {
   /** Ordinary external invalidation retains its native-component semantics.
    * Palette replacement should use setTheme() to refresh captured ANSI too. */
   invalidate(): void {
-    for (const block of this.blocks) { block.container.invalidate(); block.rows = undefined; }
+    for (const block of this.blocks) {
+      block.container.invalidate();
+      block.rows = undefined;
+    }
     this.rows = undefined;
     this.inFlight?.invalidate();
     this.inFlightRows = undefined;
@@ -176,7 +209,10 @@ export class TranscriptContent implements TranscriptRows {
     // streaming transform catches up.
     this.inFlight ??= new AssistantMessageComponent(undefined, false, this.options.markdownTheme);
     this.inFlight.updateContent(streaming as MessageOf<"assistant">, true);
-    if (this.inFlightWidth !== width) { this.inFlightWidth = width; this.inFlightRows = undefined; }
+    if (this.inFlightWidth !== width) {
+      this.inFlightWidth = width;
+      this.inFlightRows = undefined;
+    }
     // Streaming changes every frame, so its rows are never worth caching across
     // one; the width check exists only to keep the two caches in step.
     this.inFlightRows = this.inFlight.render(width).map((line) => paneRow(line, width));
@@ -203,7 +239,8 @@ export class TranscriptContent implements TranscriptRows {
     if (messages === this.messagesIdentity && messages.length === this.consumed) return;
     // Only inspect prefixes when the source history actually changed. A branch
     // can replace an earlier entry while retaining the same last message.
-    const rewritten = messages.length < this.consumed ||
+    const rewritten =
+      messages.length < this.consumed ||
       this.consumedMessages.some((message, i) => i < this.consumed && messages[i] !== message);
     if (rewritten) this.reset();
     this.messagesIdentity = messages;
@@ -216,7 +253,11 @@ export class TranscriptContent implements TranscriptRows {
       // that cannot be rendered is skipped rather than allowed to take down the
       // parent's UI. It is skipped permanently: `consumed` advances either way,
       // or the same throw would return on every frame.
-      try { this.consumeOne(messages[i]); } catch { /* one block short, not one pane */ }
+      try {
+        this.consumeOne(messages[i]);
+      } catch {
+        /* one block short, not one pane */
+      }
     }
     this.consumed = messages.length;
     this.rows = undefined;
@@ -226,15 +267,26 @@ export class TranscriptContent implements TranscriptRows {
     const theme = this.options.markdownTheme;
     const msg = message as Msg;
     switch (role(message)) {
-      case "assistant": return this.consumeAssistant(msg as MessageOf<"assistant">);
-      case "toolResult": return this.consumeToolResult(msg as MessageOf<"toolResult">);
-      case "user": return this.consumeUser(msg as MessageOf<"user">);
-      case "bashExecution": return this.consumeBash(msg as MessageOf<"bashExecution">);
-      case "compactionSummary": return this.consumeSummary(new CompactionSummaryMessageComponent(msg as MessageOf<"compactionSummary">, theme));
-      case "branchSummary": return this.consumeSummary(new BranchSummaryMessageComponent(msg as MessageOf<"branchSummary">, theme));
+      case "assistant":
+        return this.consumeAssistant(msg as MessageOf<"assistant">);
+      case "toolResult":
+        return this.consumeToolResult(msg as MessageOf<"toolResult">);
+      case "user":
+        return this.consumeUser(msg as MessageOf<"user">);
+      case "bashExecution":
+        return this.consumeBash(msg as MessageOf<"bashExecution">);
+      case "compactionSummary":
+        return this.consumeSummary(
+          new CompactionSummaryMessageComponent(msg as MessageOf<"compactionSummary">, theme),
+        );
+      case "branchSummary":
+        return this.consumeSummary(
+          new BranchSummaryMessageComponent(msg as MessageOf<"branchSummary">, theme),
+        );
       // A `custom` message needs the child's message-renderer registry, which
       // this pane does not hold, so it contributes no block rather than a guess.
-      default: return;
+      default:
+        return;
     }
   }
 
@@ -249,17 +301,30 @@ export class TranscriptContent implements TranscriptRows {
   private static failureText(message: MessageOf<"assistant">): string | undefined {
     if (message.stopReason === "aborted") return "Operation aborted";
     if (message.stopReason !== "error") return undefined;
-    return typeof message.errorMessage === "string" && message.errorMessage ? message.errorMessage : "Error";
+    return typeof message.errorMessage === "string" && message.errorMessage
+      ? message.errorMessage
+      : "Error";
   }
 
   private consumeAssistant(message: MessageOf<"assistant">): void {
     const block = this.append();
-    block.container.addChild(new AssistantMessageComponent(message, false, this.options.markdownTheme));
+    block.container.addChild(
+      new AssistantMessageComponent(message, false, this.options.markdownTheme),
+    );
     const failure = TranscriptContent.failureText(message);
     for (const content of Array.isArray(message.content) ? message.content : []) {
       if (content?.type !== "toolCall") continue;
-      const tool = new ToolExecutionComponent(content.name, content.id, content.arguments, { showImages: false },
-        this.options.source.toolDefinition(content.name) as ConstructorParameters<typeof ToolExecutionComponent>[4], this.options.tui, this.options.cwd);
+      const tool = new ToolExecutionComponent(
+        content.name,
+        content.id,
+        content.arguments,
+        { showImages: false },
+        this.options.source.toolDefinition(content.name) as ConstructorParameters<
+          typeof ToolExecutionComponent
+        >[4],
+        this.options.tui,
+        this.options.cwd,
+      );
       tool.setExpanded(true);
       block.container.addChild(tool);
       // Only a call that can still be answered stays pending; the rest are done.
@@ -281,9 +346,13 @@ export class TranscriptContent implements TranscriptRows {
 
   private consumeUser(message: MessageOf<"user">): void {
     const content = message.content;
-    const text = typeof content === "string" ? content :
-      (Array.isArray(content) ? content : []).filter((part) => part?.type === "text")
-        .map((part) => part.text ?? "").join("");
+    const text =
+      typeof content === "string"
+        ? content
+        : (Array.isArray(content) ? content : [])
+            .filter((part) => part?.type === "text")
+            .map((part) => part.text ?? "")
+            .join("");
     if (!text) return;
     const block = this.append();
     // Whether a leading spacer is needed is a whole-transcript property, so it
@@ -298,7 +367,9 @@ export class TranscriptContent implements TranscriptRows {
       block.container.addChild(invocation);
       if (skill.userMessage) {
         block.container.addChild(new Spacer(1));
-        block.container.addChild(new UserMessageComponent(skill.userMessage, this.options.markdownTheme));
+        block.container.addChild(
+          new UserMessageComponent(skill.userMessage, this.options.markdownTheme),
+        );
       }
     }
     this.visible = true;
@@ -306,14 +377,20 @@ export class TranscriptContent implements TranscriptRows {
 
   private consumeBash(message: MessageOf<"bashExecution">): void {
     const block = this.append();
-    const bash = new BashExecutionComponent(message.command, this.options.tui, message.excludeFromContext);
+    const bash = new BashExecutionComponent(
+      message.command,
+      this.options.tui,
+      message.excludeFromContext,
+    );
     if (message.output) bash.appendOutput(message.output);
     bash.setComplete(message.exitCode, message.cancelled, undefined, message.fullOutputPath);
     block.container.addChild(bash);
     this.visible = true;
   }
 
-  private consumeSummary(summary: CompactionSummaryMessageComponent | BranchSummaryMessageComponent): void {
+  private consumeSummary(
+    summary: CompactionSummaryMessageComponent | BranchSummaryMessageComponent,
+  ): void {
     const block = this.append();
     block.container.addChild(new Spacer(1));
     summary.setExpanded(true);

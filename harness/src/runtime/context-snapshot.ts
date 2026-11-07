@@ -10,8 +10,13 @@ export function textSnapshot(messages: readonly AgentMessage[], maxBytes = 64 * 
   const lines: string[] = [];
   for (const message of messages) {
     if (message.role === "user" || message.role === "assistant") {
-      const text = typeof message.content === "string" ? message.content :
-        message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+      const text =
+        typeof message.content === "string"
+          ? message.content
+          : message.content
+              .filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join("\n");
       if (text) lines.push(`[${message.role}]\n${text}`);
     } else if (message.role === "compactionSummary" || message.role === "branchSummary") {
       lines.push(`[${message.role}]\n${message.summary}`);
@@ -23,7 +28,10 @@ export function textSnapshot(messages: readonly AgentMessage[], maxBytes = 64 * 
   return snapshot;
 }
 
-export function contextSources(files: readonly { path: string; content: string }[], agentDir: string) {
+export function contextSources(
+  files: readonly { path: string; content: string }[],
+  agentDir: string,
+) {
   const seen = new Map<string, string>();
   return files.flatMap((file) => {
     const path = resolve(file.path);
@@ -33,6 +41,12 @@ export function contextSources(files: readonly { path: string; content: string }
       return [];
     }
     seen.set(path, hash);
-    return [{ path, digest: hash, origin: path === resolve(agentDir, "AGENTS.md") ? "operator" : "child-cwd" }];
+    return [
+      {
+        path,
+        digest: hash,
+        origin: path === resolve(agentDir, "AGENTS.md") ? "operator" : "child-cwd",
+      },
+    ];
   });
 }

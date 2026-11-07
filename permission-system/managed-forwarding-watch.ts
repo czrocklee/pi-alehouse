@@ -11,7 +11,11 @@ export interface PermissionDirectoryWatch {
   refresh(): void;
   close(): void;
 }
-interface DirectoryIdentity { path: string; dev: number; ino: number }
+interface DirectoryIdentity {
+  path: string;
+  dev: number;
+  ino: number;
+}
 const RETRY_INITIAL_MS = 1000;
 const RETRY_MAX_MS = 30_000;
 const IDENTITY_PROBE_MS = 1000;
@@ -20,8 +24,13 @@ function failureKind(error: unknown): PermissionWatchFailure {
   const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
   if (code === "ENOENT" || code === "ENOTDIR") return "missing";
   if (code === "ENOSPC" || code === "EMFILE" || code === "ENFILE") return "resource";
-  if (code === "ENOSYS" || code === "ENOTSUP" || code === "EOPNOTSUPP" ||
-      code === "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM") return "unsupported";
+  if (
+    code === "ENOSYS" ||
+    code === "ENOTSUP" ||
+    code === "EOPNOTSUPP" ||
+    code === "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"
+  )
+    return "unsupported";
   return "other";
 }
 function identity(path: string): DirectoryIdentity | undefined {
@@ -33,7 +42,10 @@ function identity(path: string): DirectoryIdentity | undefined {
     return undefined;
   }
 }
-function sameDirectory(a: DirectoryIdentity | undefined, b: DirectoryIdentity | undefined): boolean {
+function sameDirectory(
+  a: DirectoryIdentity | undefined,
+  b: DirectoryIdentity | undefined,
+): boolean {
   return a?.path === b?.path && a?.dev === b?.dev && a?.ino === b?.ino;
 }
 
@@ -43,7 +55,11 @@ function sameDirectory(a: DirectoryIdentity | undefined, b: DirectoryIdentity | 
  * rather than repeating the same failing registration at every ancestor.
  * Retry deadlines are monotonic and poll-driven: no extra retry timers survive
  * close, and inactive observers must be retained by their callers. */
-export function watchPermissionDirectory(directory: string, changed: () => void, boundary = directory): PermissionDirectoryWatch {
+export function watchPermissionDirectory(
+  directory: string,
+  changed: () => void,
+  boundary = directory,
+): PermissionDirectoryWatch {
   let watcher: FSWatcher | undefined;
   let active = false;
   let closed = false;
@@ -63,7 +79,8 @@ export function watchPermissionDirectory(directory: string, changed: () => void,
     while (path !== root && candidates.length < 16) {
       const parent = dirname(path);
       if (parent === path) break;
-      candidates.push(parent); path = parent;
+      candidates.push(parent);
+      path = parent;
     }
   }
   const locate = () => {
@@ -77,13 +94,26 @@ export function watchPermissionDirectory(directory: string, changed: () => void,
     active = false;
     const previous = watcher;
     watcher = undefined;
-    try { previous?.close(); } catch { /* Polling is independent. */ }
+    try {
+      previous?.close();
+    } catch {
+      /* Polling is independent. */
+    }
   };
-  const reset = () => { failures = 0; retryAt = 0; nextProbeAt = 0; probe = undefined; failure = undefined; };
+  const reset = () => {
+    failures = 0;
+    retryAt = 0;
+    nextProbeAt = 0;
+    probe = undefined;
+    failure = undefined;
+  };
   const defer = (error: unknown, observed: DirectoryIdentity | undefined) => {
     failure = failureKind(error);
     failures = Math.min(failures + 1, 6);
-    const delay = failure === "unsupported" ? RETRY_MAX_MS : Math.min(RETRY_INITIAL_MS * 2 ** (failures - 1), RETRY_MAX_MS);
+    const delay =
+      failure === "unsupported"
+        ? RETRY_MAX_MS
+        : Math.min(RETRY_INITIAL_MS * 2 ** (failures - 1), RETRY_MAX_MS);
     const now = performance.now();
     retryAt = now + delay;
     nextProbeAt = now + IDENTITY_PROBE_MS;
@@ -94,33 +124,50 @@ export function watchPermissionDirectory(directory: string, changed: () => void,
     let observed: DirectoryIdentity | undefined;
     try {
       observed = locate();
-      if (!observed) { defer({ code: "ENOENT" }, undefined); return; }
+      if (!observed) {
+        defer({ code: "ENOENT" }, undefined);
+        return;
+      }
       const selected = observed;
       const installed = watch(selected.path, { persistent: false }, () => {
         if (watcher !== installed || closed) return;
         try {
           if (!sameDirectory(locate(), selected)) {
-            detach(); reset(); attach();
+            detach();
+            reset();
+            attach();
           }
-        } catch (error) { detach(); defer(error, selected); }
+        } catch (error) {
+          detach();
+          defer(error, selected);
+        }
         changed();
       });
-      watcher = installed; active = true; installedAt = performance.now();
-      failure = undefined; retryAt = 0; nextProbeAt = installedAt + IDENTITY_PROBE_MS;
+      watcher = installed;
+      active = true;
+      installedAt = performance.now();
+      failure = undefined;
+      retryAt = 0;
+      nextProbeAt = installedAt + IDENTITY_PROBE_MS;
       probe = { path: selected.path, identity: selected };
       // Do not reset consecutive failures on registration alone: a watcher
       // that emits ENOSPC immediately must also reach the bounded backoff.
-      installed.on("error", error => {
+      installed.on("error", (error) => {
         if (watcher !== installed) return;
         if (performance.now() - installedAt >= RETRY_MAX_MS) failures = 0;
-        detach(); defer(error, selected);
+        detach();
+        defer(error, selected);
       });
       installed.on("close", () => {
         if (watcher !== installed) return;
-        watcher = undefined; active = false;
+        watcher = undefined;
+        active = false;
         defer(undefined, selected);
       });
-    } catch (error) { detach(); defer(error, observed); }
+    } catch (error) {
+      detach();
+      defer(error, observed);
+    }
   };
   const refresh = () => {
     if (closed) return;
@@ -132,43 +179,76 @@ export function watchPermissionDirectory(directory: string, changed: () => void,
         try {
           // Recover from a missed rename/creation event without rebuilding an
           // unchanged active subscription. This still stays within candidates.
-          if (!sameDirectory(locate(), probe?.identity)) { detach(); reset(); attach(); }
-        } catch { /* A failed probe must not retire an otherwise live watch. */ }
+          if (!sameDirectory(locate(), probe?.identity)) {
+            detach();
+            reset();
+            attach();
+          }
+        } catch {
+          /* A failed probe must not retire an otherwise live watch. */
+        }
       }
       return;
     }
-    if (now >= retryAt) { attach(); return; }
+    if (now >= retryAt) {
+      attach();
+      return;
+    }
     // Bounded identity probes permit missing-parent creation and inode
     // replacement to recover sooner, without a watch() storm on a fixed path.
     if (probe && now >= nextProbeAt) {
       nextProbeAt = now + IDENTITY_PROBE_MS;
       try {
-        if (!sameDirectory(identity(probe.path), probe.identity)) { reset(); attach(); }
-      } catch { /* Keep the registration deadline on an unreadable probe. */ }
+        if (!sameDirectory(identity(probe.path), probe.identity)) {
+          reset();
+          attach();
+        }
+      } catch {
+        /* Keep the registration deadline on an unreadable probe. */
+      }
     }
   };
   attach();
   return {
-    get active() { return active; }, get failure() { return failure; }, refresh,
-    close() { closed = true; reset(); detach(); },
+    get active() {
+      return active;
+    },
+    get failure() {
+      return failure;
+    },
+    refresh,
+    close() {
+      closed = true;
+      reset();
+      detach();
+    },
   };
 }
 
 /** A latched wake cannot be lost between checking a response and waiting.
  * Every wait still has the original bounded poll timer. One exchange owns this
  * watcher and timer; finally must close it on success, abandonment or error. */
-export function permissionResponseWake(directory: string): { wait(ms: number): Promise<void>; close(): void } {
+export function permissionResponseWake(directory: string): {
+  wait(ms: number): Promise<void>;
+  close(): void;
+} {
   let pending = false;
   let closed = false;
   let finish: (() => void) | undefined;
-  const changed = () => { pending = true; finish?.(); };
+  const changed = () => {
+    pending = true;
+    finish?.();
+  };
   const observer = watchPermissionDirectory(directory, changed);
   return {
     wait(ms) {
       if (closed) return Promise.resolve();
       observer.refresh();
-      if (pending) { pending = false; return Promise.resolve(); }
-      return new Promise<void>(resolve => {
+      if (pending) {
+        pending = false;
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => {
         const timer = setTimeout(done, ms);
         function done() {
           clearTimeout(timer);
@@ -179,6 +259,10 @@ export function permissionResponseWake(directory: string): { wait(ms: number): P
         finish = done;
       });
     },
-    close() { closed = true; observer.close(); finish?.(); },
+    close() {
+      closed = true;
+      observer.close();
+      finish?.();
+    },
   };
 }

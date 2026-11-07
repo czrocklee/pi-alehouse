@@ -1,4 +1,8 @@
-import type { ExtensionAPI, ExtensionUIContext, ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionUIContext,
+  ExtensionUIDialogOptions,
+} from "@earendil-works/pi-coding-agent";
 
 /**
  * Serialize extension-owned inline prompts.
@@ -77,35 +81,48 @@ class PromptQueue implements PromptSerializer {
     // Claimed synchronously, so queue order is call order.
     this.tail = slot;
 
-    const run = (): Promise<T> => new Promise<T>((resolve, reject) => {
-      let settled = false;
-      const settle = (finish: () => void): void => {
-        if (settled) return;
-        // Claim the outcome BEFORE cancelling: custom's done() resolves the
-        // underlying operation, but a timeout must still reject its caller.
-        settled = true;
-        clearTimeout(timer);
-        try { finish(); } finally { release(); }
-      };
-      const fail = (error: unknown): void => settle(() => {
-        // Close the actual UI while we still own the slot. A close in the
-        // caller's finally would be too late: it could clear the NEXT dialog.
-        try { cancel?.(); }
-        catch (cleanup) {
-          error = new AggregateError([error, cleanup], `${String(error)}; prompt cleanup: ${String(cleanup)}`, { cause: error });
+    const run = (): Promise<T> =>
+      new Promise<T>((resolve, reject) => {
+        let settled = false;
+        const settle = (finish: () => void): void => {
+          if (settled) return;
+          // Claim the outcome BEFORE cancelling: custom's done() resolves the
+          // underlying operation, but a timeout must still reject its caller.
+          settled = true;
+          clearTimeout(timer);
+          try {
+            finish();
+          } finally {
+            release();
+          }
+        };
+        const fail = (error: unknown): void =>
+          settle(() => {
+            // Close the actual UI while we still own the slot. A close in the
+            // caller's finally would be too late: it could clear the NEXT dialog.
+            try {
+              cancel?.();
+            } catch (cleanup) {
+              error = new AggregateError(
+                [error, cleanup],
+                `${String(error)}; prompt cleanup: ${String(cleanup)}`,
+                { cause: error },
+              );
+            }
+            reject(error);
+          });
+        // The stall budget starts at display, never during a predecessor's wait.
+        const timer = setTimeout(() => fail(stallError()), STALL_TIMEOUT_MS);
+        // Never hold the process open for a prompt nobody is waiting on.
+        (timer as unknown as { unref?: () => void }).unref?.();
+        try {
+          // Both handlers stay attached after expiry, so a late resolve/reject
+          // cannot change the outcome or surface as an unhandled rejection.
+          operation().then((value) => settle(() => resolve(value)), fail);
+        } catch (error) {
+          fail(error);
         }
-        reject(error);
       });
-      // The stall budget starts at display, never during a predecessor's wait.
-      const timer = setTimeout(() => fail(stallError()), STALL_TIMEOUT_MS);
-      // Never hold the process open for a prompt nobody is waiting on.
-      (timer as unknown as { unref?: () => void }).unref?.();
-      try {
-        // Both handlers stay attached after expiry, so a late resolve/reject
-        // cannot change the outcome or surface as an unhandled rejection.
-        operation().then((value) => settle(() => resolve(value)), fail);
-      } catch (error) { fail(error); }
-    });
 
     // A slot resolves and never rejects; the second handler only guards against
     // a future change to that invariant.
@@ -169,29 +186,32 @@ function queuedDialog<A extends [string, (string | string[])?, ExtensionUIDialog
   return markWrapped((...args: A) => {
     const controller = new AbortController();
     let detach = (): void => {};
-    return queue.enqueue(() => {
-      const options = args[2];
-      const signal = options?.signal;
-      const onAbort = (): void => controller.abort(signal?.reason);
-      // Subscribe only when this slot starts. An abort while queued is latched
-      // by the caller's signal, so Pi receives an already-aborted signal and
-      // never displays that dialog. Preserve Pi's undefined/false cancellation.
-      if (signal?.aborted) onAbort();
-      else if (signal) {
-        signal.addEventListener("abort", onAbort, { once: true });
-        detach = () => signal.removeEventListener("abort", onAbort);
-      }
-      // Keep the caller's timeout/countdown and options object intact. The
-      // queue owns dismissal too: Pi 1.4 would otherwise restore a stalled
-      // native dialog when a later stacked dialog closes.
-      args[2] = { ...options, signal: controller.signal };
-      return call(...args).finally(() => detach());
-    }, () => {
-      detach();
-      // PromptQueue has claimed rejection; abort synchronously retires Pi's
-      // exact dialog BEFORE releasing the slot, without aborting the caller.
-      controller.abort();
-    });
+    return queue.enqueue(
+      () => {
+        const options = args[2];
+        const signal = options?.signal;
+        const onAbort = (): void => controller.abort(signal?.reason);
+        // Subscribe only when this slot starts. An abort while queued is latched
+        // by the caller's signal, so Pi receives an already-aborted signal and
+        // never displays that dialog. Preserve Pi's undefined/false cancellation.
+        if (signal?.aborted) onAbort();
+        else if (signal) {
+          signal.addEventListener("abort", onAbort, { once: true });
+          detach = () => signal.removeEventListener("abort", onAbort);
+        }
+        // Keep the caller's timeout/countdown and options object intact. The
+        // queue owns dismissal too: Pi 1.4 would otherwise restore a stalled
+        // native dialog when a later stacked dialog closes.
+        args[2] = { ...options, signal: controller.signal };
+        return call(...args).finally(() => detach());
+      },
+      () => {
+        detach();
+        // PromptQueue has claimed rejection; abort synchronously retires Pi's
+        // exact dialog BEFORE releasing the slot, without aborting the caller.
+        controller.abort();
+      },
+    );
   });
 }
 
@@ -222,7 +242,10 @@ function installPromptQueue(ui: ExtensionUIContext): void {
         cancel = () => finish(undefined as never);
         return factory(tui, theme, keybindings, finish);
       };
-      return queue.enqueue(() => custom(guardedFactory, options), () => cancel?.());
+      return queue.enqueue(
+        () => custom(guardedFactory, options),
+        () => cancel?.(),
+      );
     };
     ui.custom = markWrapped(queuedCustom);
   }

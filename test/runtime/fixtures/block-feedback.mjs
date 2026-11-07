@@ -5,65 +5,152 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as ai from "@earendil-works/pi-ai";
-import { createAgentSession, DefaultResourceLoader, initTheme, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  initTheme,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { initialize } from "../../../scripts/init.mjs";
 import { packageRoot } from "../../../bin/runtime-support.mjs";
 import { controlledProvider } from "../../../harness/test/support/host.mjs";
 
-const home = process.env.HOME, agentDir = process.env.PI_CODING_AGENT_DIR;
+const home = process.env.HOME,
+  agentDir = process.env.PI_CODING_AGENT_DIR;
 assert(home && agentDir === join(home, "agent"), "use the disposable child-process wrapper");
 assert.equal(process.env.PI_OFFLINE, "1");
 const network = [];
-globalThis.fetch = (url) => { network.push(String(url)); throw new Error("Unexpected network request in offline block-feedback fixture"); };
+globalThis.fetch = (url) => {
+  network.push(String(url));
+  throw new Error("Unexpected network request in offline block-feedback fixture");
+};
 // Explicit absent-only initialization of this disposable fixture, using the
 // verified, matched generated workers and authority; never installed user data.
 initialize({ agentDir });
-writeFileSync(join(agentDir, "harness-presets.json"), JSON.stringify({ version: 3, defaultPreset: "fixture",
-  presets: { fixture: { version: "v1", slots: Object.fromEntries(["d1", "d2", "d3", "d4", "d5"]
-    .map((slot) => [slot, { model: "harness-fixture/controlled" }])) } } }));
+writeFileSync(
+  join(agentDir, "harness-presets.json"),
+  JSON.stringify({
+    version: 3,
+    defaultPreset: "fixture",
+    presets: {
+      fixture: {
+        version: "v1",
+        slots: Object.fromEntries(
+          ["d1", "d2", "d3", "d4", "d5"].map((slot) => [
+            slot,
+            { model: "harness-fixture/controlled" },
+          ]),
+        ),
+      },
+    },
+  }),
+);
 initTheme(undefined, false);
-const runtime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json"), allowModelNetwork: false });
+const runtime = await ModelRuntime.create({
+  authPath: join(agentDir, "auth.json"),
+  modelsPath: join(agentDir, "models.json"),
+  allowModelNetwork: false,
+});
 const provider = controlledProvider(ai);
 runtime.registerProvider("harness-fixture", provider.config);
 const model = runtime.getModel("harness-fixture", "controlled");
 assert(model);
-const cwd = join(home, "project"), sessions = join(home, "sessions");
-mkdirSync(cwd); mkdirSync(sessions);
+const cwd = join(home, "project"),
+  sessions = join(home, "sessions");
+mkdirSync(cwd);
+mkdirSync(sessions);
 // Add a deny only to this disposable fixture's synthetic config. The worker
 // otherwise keeps ordinary write access; no shipped or live user rule changes.
 const denyReason = "SYNTHETIC_BLOCK_FEEDBACK_PATH_DENY";
 const syntheticPermissions = join(agentDir, "extensions/pi-permission-system/config.json");
 const seeded = JSON.parse(readFileSync(syntheticPermissions, "utf8"));
-seeded.permission.path_write[join(cwd, "private-project-target-*.txt")] = { action: "deny", reason: denyReason };
+seeded.permission.path_write[join(cwd, "private-project-target-*.txt")] = {
+  action: "deny",
+  reason: denyReason,
+};
 writeFileSync(syntheticPermissions, JSON.stringify(seeded, null, 2) + "\n");
-const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false }, cacheWarming: "off" });
-const lifecycle = [], permissionPrompts = [];
-const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager,
-  noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true,
+const settingsManager = SettingsManager.inMemory({
+  compaction: { enabled: false },
+  retry: { enabled: false },
+  cacheWarming: "off",
+});
+const lifecycle = [],
+  permissionPrompts = [];
+const loader = new DefaultResourceLoader({
+  cwd,
+  agentDir,
+  settingsManager,
+  noExtensions: true,
+  noSkills: true,
+  noThemes: true,
+  noPromptTemplates: true,
   additionalExtensionPaths: [join(packageRoot, "composition.ts")],
-  extensionFactories: [(pi) => {
-    for (const kind of ["session-created", "bound", "disposed"]) pi.events.on(`subagents:child:${kind}`, (event) => lifecycle.push({ kind, ...event }));
-    pi.events.on("permissions:ui_prompt", (event) => permissionPrompts.push(event));
-  }] });
+  extensionFactories: [
+    (pi) => {
+      for (const kind of ["session-created", "bound", "disposed"])
+        pi.events.on(`subagents:child:${kind}`, (event) => lifecycle.push({ kind, ...event }));
+      pi.events.on("permissions:ui_prompt", (event) => permissionPrompts.push(event));
+    },
+  ],
+});
 await loader.reload();
 assert.deepEqual(loader.getExtensions().errors, []);
 
-const management = ["agent_spawn", "agent_run", "agent_send", "agent_answer", "agent_wait", "agent_read", "agent_interrupt", "agent_kill", "agent_list"];
-const { session } = await createAgentSession({ cwd, agentDir, resourceLoader: loader, modelRuntime: runtime,
-  model, thinkingLevel: "off", settingsManager, sessionManager: SessionManager.create(cwd, sessions), tools: ["read", ...management] });
-const text = (message) => typeof message?.content === "string" ? message.content
-  : (message?.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join("\n");
-const summary = "Managed authority blocked 'write' on two distinct calls. Reasons and operation equivalence are unknown; coverage is partial. Parent: assess whether to steer this task or report the limit.";
+const management = [
+  "agent_spawn",
+  "agent_run",
+  "agent_send",
+  "agent_answer",
+  "agent_wait",
+  "agent_read",
+  "agent_interrupt",
+  "agent_kill",
+  "agent_list",
+];
+const { session } = await createAgentSession({
+  cwd,
+  agentDir,
+  resourceLoader: loader,
+  modelRuntime: runtime,
+  model,
+  thinkingLevel: "off",
+  settingsManager,
+  sessionManager: SessionManager.create(cwd, sessions),
+  tools: ["read", ...management],
+});
+const text = (message) =>
+  typeof message?.content === "string"
+    ? message.content
+    : (message?.content ?? [])
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n");
+const summary =
+  "Managed authority blocked 'write' on two distinct calls. Reasons and operation equivalence are unknown; coverage is partial. Parent: assess whether to steer this task or report the limit.";
 const agent = "pike";
-const tasks = [1, 2].map((task) => ({ task, key: `BLOCK_TASK_${task}`, step: 0, alerts: [],
+const tasks = [1, 2].map((task) => ({
+  task,
+  key: `BLOCK_TASK_${task}`,
+  step: 0,
+  alerts: [],
   attempts: Array.from({ length: task === 1 ? 3 : 2 }, (_, index) => ({
     id: `opaque-denied-call-${task}-${index + 1}`,
     path: join(cwd, `private-project-target-${task}-${index + 1}.txt`),
     content: `PRIVATE_WRITE_PAYLOAD_${task}_${index + 1}\n`,
-  })) }));
+  })),
+}));
 const allAttempts = tasks.flatMap((task) => task.attempts);
-const childResults = new Map(), modelCalls = [], commands = [], observations = [];
-let expectedCommand, parentPhase = "start", currentTask = 1, oldCursor, scriptFailure;
+const childResults = new Map(),
+  modelCalls = [],
+  commands = [],
+  observations = [];
+let expectedCommand,
+  parentPhase = "start",
+  currentTask = 1,
+  oldCursor,
+  scriptFailure;
 const emit = (name, args) => {
   assert(management.includes(name));
   const id = `parent-management-${commands.length + 1}`;
@@ -71,9 +158,14 @@ const emit = (name, args) => {
   commands.push(expectedCommand);
   return { tools: [{ type: "toolCall", id, name, arguments: args }] };
 };
-const writeCalls = (attempts) => ({ tools: attempts.map(({ id, path, content }) => ({
-  type: "toolCall", id, name: "write", arguments: { path, content },
-})) });
+const writeCalls = (attempts) => ({
+  tools: attempts.map(({ id, path, content }) => ({
+    type: "toolCall",
+    id,
+    name: "write",
+    arguments: { path, content },
+  })),
+});
 function observe(last, task, historical = false) {
   assert(expectedCommand, "no unsolicited parent model turn");
   assert.equal(last?.role, "toolResult");
@@ -90,22 +182,44 @@ function observe(last, task, historical = false) {
   assert.equal(reply.agents.length, 1);
   assert.equal(reply.agents[0].agent, agent);
   assert.equal(reply.agents[0].task, task);
-  assert(["queued", "running", "finishing", "completed"].includes(reply.agents[0].status), text(last));
+  assert(
+    ["queued", "running", "finishing", "completed"].includes(reply.agents[0].status),
+    text(last),
+  );
   for (const alert of reply.alerts ?? []) {
     assert(!historical, "a consumed old-Run summary must not reappear");
     assert.deepEqual(Object.keys(alert).sort(), ["agent", "label", "message", "source", "task"]);
-    assert.equal(alert.source, "harness", "only trusted managed-block feedback carries harness provenance");
+    assert.equal(
+      alert.source,
+      "harness",
+      "only trusted managed-block feedback carries harness provenance",
+    );
     assert.equal(alert.agent, agent);
     assert.equal(alert.task, task, "inline new-task feedback cannot contain the old task's alert");
     assert.equal(alert.label, tasks[task - 1].key);
     // Fixed generic text, not a denial class/reason or a paraphrase of inputs.
     assert.equal(alert.message, summary);
-    assert.match(alert.message, /Reasons and operation equivalence are unknown; coverage is partial/);
-    for (const secret of [cwd, agentDir, ...allAttempts.flatMap(({ id, path, content }) => [id, path, content.trim()]),
-      denyReason, "own scratch directory", "toolCallId", "path_write"]) assert(!alert.message.includes(secret), secret);
+    assert.match(
+      alert.message,
+      /Reasons and operation equivalence are unknown; coverage is partial/,
+    );
+    for (const secret of [
+      cwd,
+      agentDir,
+      ...allAttempts.flatMap(({ id, path, content }) => [id, path, content.trim()]),
+      denyReason,
+      "own scratch directory",
+      "toolCallId",
+      "path_write",
+    ])
+      assert(!alert.message.includes(secret), secret);
     tasks[task - 1].alerts.push(alert);
   }
-  assert.equal(Object.hasOwn(reply, "alerts_pending"), false, "the accepted summary is consumed; no zero count is emitted");
+  assert.equal(
+    Object.hasOwn(reply, "alerts_pending"),
+    false,
+    "the accepted summary is consumed; no zero count is emitted",
+  );
   expectedCommand = undefined;
   return reply.agents[0];
 }
@@ -115,11 +229,25 @@ function parentResponse(request) {
     assert.equal(last?.role, "user");
     assert.equal(text(last), "START_BLOCK_FEEDBACK");
     parentPhase = "settle";
-    return emit("agent_spawn", { agent, profile: "worker", reasoning_difficulty: 1,
-      label: tasks[0].key, prompt: `Execute ${tasks[0].key} scripted denied-write probes.`, wait_ms: 60000 });
+    return emit("agent_spawn", {
+      agent,
+      profile: "worker",
+      reasoning_difficulty: 1,
+      label: tasks[0].key,
+      prompt: `Execute ${tasks[0].key} scripted denied-write probes.`,
+      wait_ms: 60000,
+    });
   }
-  assert.notEqual(parentPhase, "done", "no extra parent provider call after scripted management flow");
-  const row = observe(last, parentPhase === "old-read" ? 1 : currentTask, parentPhase === "old-read");
+  assert.notEqual(
+    parentPhase,
+    "done",
+    "no extra parent provider call after scripted management flow",
+  );
+  const row = observe(
+    last,
+    parentPhase === "old-read" ? 1 : currentTask,
+    parentPhase === "old-read",
+  );
   if (parentPhase === "settle") {
     // A normal alert can wake the inline command before completion. Do not
     // assume spawn/run waited for the final child response, or assert timing.
@@ -129,7 +257,11 @@ function parentResponse(request) {
   }
   assert.equal(row.status, "completed");
   if (parentPhase === "read") {
-    assert.equal(tasks[currentTask - 1].alerts.length, 1, "exactly one summary per Run, including after the third denial");
+    assert.equal(
+      tasks[currentTask - 1].alerts.length,
+      1,
+      "exactly one summary per Run, including after the third denial",
+    );
     if (currentTask === 1) {
       const reply = observations.at(-1).reply;
       assert.equal(row.result, "B");
@@ -137,8 +269,14 @@ function parentResponse(request) {
       assert.equal(typeof oldCursor, "string", JSON.stringify(reply));
       currentTask = 2;
       parentPhase = "settle";
-      return emit("agent_run", { agent, continues: "Continue the same worker's first configured denied-write boundary check with fresh calls.",
-        label: tasks[1].key, prompt: `Execute ${tasks[1].key} scripted denied-write probes.`, wait_ms: 60000 });
+      return emit("agent_run", {
+        agent,
+        continues:
+          "Continue the same worker's first configured denied-write boundary check with fresh calls.",
+        label: tasks[1].key,
+        prompt: `Execute ${tasks[1].key} scripted denied-write probes.`,
+        wait_ms: 60000,
+      });
     }
     assert.equal(row.result, "BLOCK_TASK_2_DONE");
     parentPhase = "old-read";
@@ -146,27 +284,51 @@ function parentResponse(request) {
   }
   assert.equal(parentPhase, "old-read");
   assert.equal(row.result, "LOCK_TASK_1_DONE");
-  assert.equal(observations.at(-1).reply.alerts, undefined, "old task stays drained after worker reuse");
+  assert.equal(
+    observations.at(-1).reply.alerts,
+    undefined,
+    "old task stays drained after worker reuse",
+  );
   parentPhase = "done";
   return { text: "PARENT_BLOCK_FEEDBACK_DONE" };
 }
 function childResponse(request) {
-  assert.match(request.context.systemPrompt, /<active_agent name="editor"\/>/, "worker keeps its internal profile identity");
-  const user = request.context.messages.findLast((message) => message.role === "user" && /BLOCK_TASK_[12]/.test(text(message)));
+  assert.match(
+    request.context.systemPrompt,
+    /<active_agent name="editor"\/>/,
+    "worker keeps its internal profile identity",
+  );
+  const user = request.context.messages.findLast(
+    (message) => message.role === "user" && /BLOCK_TASK_[12]/.test(text(message)),
+  );
   const key = /BLOCK_TASK_[12]/.exec(text(user))?.[0];
   const task = tasks.find((item) => item.key === key);
   assert(task, "unscripted child task");
-  assert.doesNotMatch(request.context.systemPrompt, /^Scratch directory:/m, "worker has no scratch-directory capability");
+  assert.doesNotMatch(
+    request.context.systemPrompt,
+    /^Scratch directory:/m,
+    "worker has no scratch-directory capability",
+  );
   assert(request.context.tools.some((tool) => tool.name === "write"));
   assert(!request.context.tools.some((tool) => management.includes(tool.name)));
   if (task.step++ === 0) return writeCalls(task.attempts.slice(0, 2));
-  const results = request.context.messages.filter((message) => message.role === "toolResult" && task.attempts.some(({ id }) => id === message.toolCallId));
+  const results = request.context.messages.filter(
+    (message) =>
+      message.role === "toolResult" && task.attempts.some(({ id }) => id === message.toolCallId),
+  );
   assert.equal(results.length, task.step === 2 ? 2 : 3);
   for (const result of results) {
     assert.equal(result.toolName, "write");
     assert.equal(result.isError, true, text(result));
-    assert.match(text(result), /Denied by policy/, "actual configured policy block, not validation or another guard");
-    assert(text(result).includes(denyReason), "the block names this fixture's explicit path-write deny");
+    assert.match(
+      text(result),
+      /Denied by policy/,
+      "actual configured policy block, not validation or another guard",
+    );
+    assert(
+      text(result).includes(denyReason),
+      "the block names this fixture's explicit path-write deny",
+    );
     childResults.set(result.toolCallId, text(result));
   }
   if (task.task === 1 && task.step === 2) return writeCalls(task.attempts.slice(2));
@@ -176,9 +338,15 @@ function childResponse(request) {
 provider.respond(async (request) => {
   try {
     const profile = /<active_agent name="(\w+)"\/>/.exec(request.context.systemPrompt ?? "")?.[1];
-    modelCalls.push({ profile: profile ?? "parent", lastRole: request.context.messages.at(-1)?.role });
+    modelCalls.push({
+      profile: profile ?? "parent",
+      lastRole: request.context.messages.at(-1)?.role,
+    });
     return profile ? childResponse(request) : parentResponse(request);
-  } catch (error) { scriptFailure ??= error; throw error; }
+  } catch (error) {
+    scriptFailure ??= error;
+    throw error;
+  }
 });
 const errors = [];
 try {
@@ -193,26 +361,62 @@ try {
   assert.equal(parentPhase, "done");
   assert.equal(expectedCommand, undefined);
   assert.equal(childResults.size, 5, "all five distinct built-in write calls were blocked");
-  assert.deepEqual(tasks.map(({ alerts }) => alerts.length), [1, 1]);
-  assert.deepEqual(tasks.map(({ step }) => step), [3, 2]);
-  assert.equal(modelCalls.filter(({ profile }) => profile === "parent").length, commands.length + 1,
-    "only scripted management replies cause parent calls; alerts do not start a model turn");
+  assert.deepEqual(
+    tasks.map(({ alerts }) => alerts.length),
+    [1, 1],
+  );
+  assert.deepEqual(
+    tasks.map(({ step }) => step),
+    [3, 2],
+  );
+  assert.equal(
+    modelCalls.filter(({ profile }) => profile === "parent").length,
+    commands.length + 1,
+    "only scripted management replies cause parent calls; alerts do not start a model turn",
+  );
   assert.equal(modelCalls.filter(({ profile }) => profile === "editor").length, 5);
-  assert.equal(provider.requests.length, modelCalls.length, "every model call was recorded and checked");
-  assert.deepEqual(permissionPrompts, [], "explicit configured denies never ask a human or a reviewer");
+  assert.equal(
+    provider.requests.length,
+    modelCalls.length,
+    "every model call was recorded and checked",
+  );
+  assert.deepEqual(
+    permissionPrompts,
+    [],
+    "explicit configured denies never ask a human or a reviewer",
+  );
   assert.deepEqual(errors, []);
-  const links = session.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "harness:run-link:v1");
+  const links = session.sessionManager
+    .getBranch()
+    .filter((entry) => entry.type === "custom" && entry.customType === "harness:run-link:v1");
   assert.equal(links.length, 2);
   assert.notEqual(links[0].data.ref.run_id, links[1].data.ref.run_id, "task2 is a new Run");
-  assert.equal(links[0].data.ref.session_id, links[1].data.ref.session_id, "same actual SDK child identity");
-  const opaqueIds = links.flatMap(({ data: { ref } }) => [ref.owner_id, ref.generation, ref.agent_id, ref.run_id, ref.session_id]);
-  for (const { alerts } of tasks) for (const alert of alerts) {
-    for (const id of opaqueIds) assert(!alert.message.includes(id), "generic feedback contains no opaque lifecycle IDs");
-    for (const reason of childResults.values()) assert(!alert.message.includes(reason), "no raw block reason");
-  }
+  assert.equal(
+    links[0].data.ref.session_id,
+    links[1].data.ref.session_id,
+    "same actual SDK child identity",
+  );
+  const opaqueIds = links.flatMap(({ data: { ref } }) => [
+    ref.owner_id,
+    ref.generation,
+    ref.agent_id,
+    ref.run_id,
+    ref.session_id,
+  ]);
+  for (const { alerts } of tasks)
+    for (const alert of alerts) {
+      for (const id of opaqueIds)
+        assert(!alert.message.includes(id), "generic feedback contains no opaque lifecycle IDs");
+      for (const reason of childResults.values())
+        assert(!alert.message.includes(reason), "no raw block reason");
+    }
   assert.equal(lifecycle.filter(({ kind }) => kind === "session-created").length, 1);
   assert.equal(lifecycle.filter(({ kind }) => kind === "bound").length, 1);
-  assert.equal(lifecycle.filter(({ kind }) => kind === "disposed").length, 0, "worker stays resident until shutdown");
+  assert.equal(
+    lifecycle.filter(({ kind }) => kind === "disposed").length,
+    0,
+    "worker stays resident until shutdown",
+  );
 } finally {
   await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
   session.dispose();
@@ -221,8 +425,14 @@ const created = lifecycle.filter(({ kind }) => kind === "session-created");
 const disposed = lifecycle.filter(({ kind }) => kind === "disposed");
 assert.equal(disposed.length, 1);
 assert.equal(disposed[0].sessionId, created[0].sessionId);
-assert.deepEqual(disposed[0].cleanup, { shutdownExited: true, disposed: true, resumable: false, errors: [] },
-  "real SDK shutdown/idle/cleanup, not merely a cancellation request");
-for (const { path } of allAttempts) assert(!existsSync(path), "blocked writes cannot reach project files");
+assert.deepEqual(
+  disposed[0].cleanup,
+  { shutdownExited: true, disposed: true, resumable: false, errors: [] },
+  "real SDK shutdown/idle/cleanup, not merely a cancellation request",
+);
+for (const { path } of allAttempts)
+  assert(!existsSync(path), "blocked writes cannot reach project files");
 assert.deepEqual(network, []);
-console.log("PASS: real composition managed blocks produce exactly one harness-sourced alert per worker task; no writes, extra parent turns or network; child shutdown confirmed");
+console.log(
+  "PASS: real composition managed blocks produce exactly one harness-sourced alert per worker task; no writes, extra parent turns or network; child shutdown confirmed",
+);

@@ -6,16 +6,36 @@ import { WorkerStatsObserver } from "../../dist/runtime/worker-stats.js";
 function recordingSink() {
   const calls = [];
   const sink = {
-    beginRun() { calls.push(["beginRun"]); },
-    startActivity() { calls.push(["startActivity"]); },
-    settleActivity() { calls.push(["settleActivity"]); },
-    requestStart(model, provider) { calls.push(["requestStart", model, provider]); },
-    delta(kind) { calls.push(["delta", kind]); },
-    messageEnd(message) { calls.push(["messageEnd", message]); },
-    toolStart(id, name) { calls.push(["toolStart", id, name]); },
-    toolEnd(id, isError, durationMs) { calls.push(["toolEnd", id, isError, durationMs]); },
-    endRun(kind) { calls.push(["endRun", kind]); },
-    dispose() { calls.push(["dispose"]); },
+    beginRun() {
+      calls.push(["beginRun"]);
+    },
+    startActivity() {
+      calls.push(["startActivity"]);
+    },
+    settleActivity() {
+      calls.push(["settleActivity"]);
+    },
+    requestStart(model, provider) {
+      calls.push(["requestStart", model, provider]);
+    },
+    delta(kind) {
+      calls.push(["delta", kind]);
+    },
+    messageEnd(message) {
+      calls.push(["messageEnd", message]);
+    },
+    toolStart(id, name) {
+      calls.push(["toolStart", id, name]);
+    },
+    toolEnd(id, isError, durationMs) {
+      calls.push(["toolEnd", id, isError, durationMs]);
+    },
+    endRun(kind) {
+      calls.push(["endRun", kind]);
+    },
+    dispose() {
+      calls.push(["dispose"]);
+    },
   };
   return { sink, calls };
 }
@@ -42,12 +62,18 @@ test("worker observer lazily attaches and forwards literal metadata only", () =>
       attachments.push(payload);
       payload.sink = sink;
     },
-    on() { throw new Error("the observer never subscribes on the parent bus"); },
+    on() {
+      throw new Error("the observer never subscribes on the parent bus");
+    },
   });
 
   assert.equal(attachments.length, 0, "the extension factory does not attach");
   assert.equal(handlers.has("before_provider_request"), false, "cache warming is never observed");
-  assert.equal(handlers.has("permissions:ui_prompt"), false, "parent permission observation is not duplicated");
+  assert.equal(
+    handlers.has("permissions:ui_prompt"),
+    false,
+    "parent permission observation is not duplicated",
+  );
   observer.beginRun();
   assert.deepEqual(attachments, [{ parentId: "parent", workerId: "worker", sink }]);
 
@@ -55,25 +81,49 @@ test("worker observer lazily attaches and forwards literal metadata only", () =>
   emit("turn_start", {}, { model: { id: "requested", provider: "provider" } });
   // These stream frames can carry content, but neither a hidden block nor an
   // empty effective delta becomes a telemetry event.
-  emit("message_update", { assistantMessageEvent: { type: "thinking_start", partial: { content: "hidden thought" } } });
+  emit("message_update", {
+    assistantMessageEvent: { type: "thinking_start", partial: { content: "hidden thought" } },
+  });
   emit("message_update", { assistantMessageEvent: { type: "text_delta", delta: "" } });
   emit("message_update", { assistantMessageEvent: { type: "thinking_delta", delta: "" } });
   emit("message_update", { assistantMessageEvent: { type: "toolcall_delta", delta: "" } });
   emit("message_update", { assistantMessageEvent: { type: "text_delta", delta: "answer text" } });
-  emit("message_update", { assistantMessageEvent: { type: "thinking_delta", delta: "private reasoning" } });
-  emit("message_update", { assistantMessageEvent: { type: "toolcall_delta", delta: "{\"secret\":true}" } });
+  emit("message_update", {
+    assistantMessageEvent: { type: "thinking_delta", delta: "private reasoning" },
+  });
+  emit("message_update", {
+    assistantMessageEvent: { type: "toolcall_delta", delta: '{"secret":true}' },
+  });
   const assistant = {
-    role: "assistant", provider: "provider", model: "requested", responseModel: "actual", stopReason: "stop",
-    usage: { input: 99, output: 7, cost: { input: 1, total: 0.25 } }, errorMessage: "secret error", headers: { authorization: "secret" },
+    role: "assistant",
+    provider: "provider",
+    model: "requested",
+    responseModel: "actual",
+    stopReason: "stop",
+    usage: { input: 99, output: 7, cost: { input: 1, total: 0.25 } },
+    errorMessage: "secret error",
+    headers: { authorization: "secret" },
   };
-  Object.defineProperty(assistant, "content", { get() { throw new Error("content must not be read"); } });
+  Object.defineProperty(assistant, "content", {
+    get() {
+      throw new Error("content must not be read");
+    },
+  });
   emit("message_end", { message: assistant });
   emit("message_end", { message: { role: "toolResult", content: "not an assistant" } });
   const toolStart = { toolCallId: "call-1", toolName: "bash" };
-  Object.defineProperty(toolStart, "args", { get() { throw new Error("tool args must not be read"); } });
+  Object.defineProperty(toolStart, "args", {
+    get() {
+      throw new Error("tool args must not be read");
+    },
+  });
   emit("tool_execution_start", toolStart);
   const toolEnd = { toolCallId: "call-1", isError: true, durationMs: 42 };
-  Object.defineProperty(toolEnd, "result", { get() { throw new Error("tool output must not be read"); } });
+  Object.defineProperty(toolEnd, "result", {
+    get() {
+      throw new Error("tool output must not be read");
+    },
+  });
   emit("tool_execution_end", toolEnd);
   // Pi reports no duration for a call it never ran, such as a denied one.
   emit("tool_execution_start", { toolCallId: "call-2", toolName: "bash" });
@@ -82,40 +132,88 @@ test("worker observer lazily attaches and forwards literal metadata only", () =>
   observer.endRun("success");
 
   assert.deepEqual(calls, [
-    ["beginRun"], ["startActivity"], ["requestStart", "requested", "provider"],
-    ["delta", "text_delta"], ["delta", "thinking_delta"], ["delta", "toolcall_delta"],
-    ["messageEnd", {
-      role: "assistant", provider: "provider", model: "requested", responseModel: "actual", stopReason: "stop",
-      usage: { output: 7, cost: { total: 0.25 } },
-    }],
-    ["toolStart", "call-1", "bash"], ["toolEnd", "call-1", true, 42],
-    ["toolStart", "call-2", "bash"], ["toolEnd", "call-2", true, 0], ["settleActivity"], ["endRun", "success"],
+    ["beginRun"],
+    ["startActivity"],
+    ["requestStart", "requested", "provider"],
+    ["delta", "text_delta"],
+    ["delta", "thinking_delta"],
+    ["delta", "toolcall_delta"],
+    [
+      "messageEnd",
+      {
+        role: "assistant",
+        provider: "provider",
+        model: "requested",
+        responseModel: "actual",
+        stopReason: "stop",
+        usage: { output: 7, cost: { total: 0.25 } },
+      },
+    ],
+    ["toolStart", "call-1", "bash"],
+    ["toolEnd", "call-1", true, 42],
+    ["toolStart", "call-2", "bash"],
+    ["toolEnd", "call-2", true, 0],
+    ["settleActivity"],
+    ["endRun", "success"],
   ]);
 });
 
 test("only a failed response forwards provider error text, as one bounded line", () => {
   const { sink, calls } = recordingSink();
-  const { observer, emit } = boundObserver({ emit(_name, payload) { payload.sink = sink; } });
+  const { observer, emit } = boundObserver({
+    emit(_name, payload) {
+      payload.sink = sink;
+    },
+  });
   observer.beginRun();
-  const failed = (errorMessage) => ({ role: "assistant", provider: "p", model: "m", stopReason: "error", errorMessage });
+  const failed = (errorMessage) => ({
+    role: "assistant",
+    provider: "p",
+    model: "m",
+    stopReason: "error",
+    errorMessage,
+  });
   emit("message_end", { message: failed(`429 rate\nlimited\x1b[31m ${"x".repeat(400)}`) });
-  emit("message_end", { message: failed({ toString() { throw new Error("not a string"); } }) });
+  emit("message_end", {
+    message: failed({
+      toString() {
+        throw new Error("not a string");
+      },
+    }),
+  });
   emit("message_end", { message: failed(" \n\t ") });
-  const forwarded = calls.filter(([name]) => name === "messageEnd").map(([, message]) => message.errorMessage);
+  const forwarded = calls
+    .filter(([name]) => name === "messageEnd")
+    .map(([, message]) => message.errorMessage);
   assert.equal(forwarded.length, 3);
-  assert.match(forwarded[0], /^429 rate limited x+…$/, "line breaks separate words; escape sequences do not cross");
+  assert.match(
+    forwarded[0],
+    /^429 rate limited x+…$/,
+    "line breaks separate words; escape sequences do not cross",
+  );
   assert.equal(Array.from(forwarded[0]).length, 240);
-  assert.deepEqual(forwarded.slice(1), [undefined, undefined], "non-text or blank errors carry nothing");
+  assert.deepEqual(
+    forwarded.slice(1),
+    [undefined, undefined],
+    "non-text or blank errors carry nothing",
+  );
 });
 
 test("a worker observer is a no-op when the parent has no Stats listener", () => {
   const emitted = [];
-  const { observer, emit } = boundObserver({ emit(name, payload) { emitted.push([name, payload]); }, on() {} });
+  const { observer, emit } = boundObserver({
+    emit(name, payload) {
+      emitted.push([name, payload]);
+    },
+    on() {},
+  });
   assert.doesNotThrow(() => {
     observer.beginRun();
     emit("agent_start");
     emit("turn_start", {}, { model: { id: "model", provider: "provider" } });
-    emit("message_update", { assistantMessageEvent: { type: "text_delta", delta: "not retained" } });
+    emit("message_update", {
+      assistantMessageEvent: { type: "text_delta", delta: "not retained" },
+    });
     emit("message_end", { message: { role: "assistant", content: "not retained" } });
     emit("tool_execution_start", { toolCallId: "id", toolName: "read", args: { path: "/secret" } });
     emit("tool_execution_end", { toolCallId: "id", isError: false, result: "secret" });
@@ -131,7 +229,11 @@ test("async finalization and resume reuse one attachment", async () => {
   const { sink, calls } = recordingSink();
   let attaches = 0;
   const { observer } = boundObserver({
-    emit(name, payload) { assert.equal(name, STATS_WORKER_ATTACH); attaches++; payload.sink = sink; },
+    emit(name, payload) {
+      assert.equal(name, STATS_WORKER_ATTACH);
+      attaches++;
+      payload.sink = sink;
+    },
     on() {},
   });
   const run = async (kind) => {
@@ -142,52 +244,150 @@ test("async finalization and resume reuse one attachment", async () => {
   await run("success");
   await run("aborted");
   assert.equal(attaches, 1);
-  assert.deepEqual(calls, [["beginRun"], ["endRun", "success"], ["beginRun"], ["endRun", "aborted"]]);
+  assert.deepEqual(calls, [
+    ["beginRun"],
+    ["endRun", "success"],
+    ["beginRun"],
+    ["endRun", "aborted"],
+  ]);
 });
 
 test("telemetry failures and hostile getters cannot affect worker events", () => {
-  const throwingSink = Object.fromEntries(["beginRun", "startActivity", "settleActivity", "requestStart", "delta", "messageEnd", "toolStart", "toolEnd", "endRun", "dispose"]
-    .map((name) => [name, () => { throw new Error(name); }]));
-  const { observer, emit } = boundObserver({ emit(_name, payload) { payload.sink = throwingSink; }, on() {} });
+  const throwingSink = Object.fromEntries(
+    [
+      "beginRun",
+      "startActivity",
+      "settleActivity",
+      "requestStart",
+      "delta",
+      "messageEnd",
+      "toolStart",
+      "toolEnd",
+      "endRun",
+      "dispose",
+    ].map((name) => [
+      name,
+      () => {
+        throw new Error(name);
+      },
+    ]),
+  );
+  const { observer, emit } = boundObserver({
+    emit(_name, payload) {
+      payload.sink = throwingSink;
+    },
+    on() {},
+  });
   assert.doesNotThrow(() => {
     observer.beginRun();
     emit("agent_start");
     emit("agent_settled");
-    emit("turn_start", {}, { get model() { throw new Error("hostile model"); } });
-    emit("message_update", { get assistantMessageEvent() { throw new Error("hostile update"); } });
-    emit("message_end", { get message() { throw new Error("hostile message"); } });
-    emit("tool_execution_start", { get toolCallId() { throw new Error("hostile id"); } });
-    emit("tool_execution_end", { get toolCallId() { throw new Error("hostile id"); } });
+    emit(
+      "turn_start",
+      {},
+      {
+        get model() {
+          throw new Error("hostile model");
+        },
+      },
+    );
+    emit("message_update", {
+      get assistantMessageEvent() {
+        throw new Error("hostile update");
+      },
+    });
+    emit("message_end", {
+      get message() {
+        throw new Error("hostile message");
+      },
+    });
+    emit("tool_execution_start", {
+      get toolCallId() {
+        throw new Error("hostile id");
+      },
+    });
+    emit("tool_execution_end", {
+      get toolCallId() {
+        throw new Error("hostile id");
+      },
+    });
     observer.endRun("error");
     observer.dispose();
   });
 
-  const failedBus = boundObserver({ emit() { throw new Error("missing parent Stats"); }, on() {} }).observer;
-  assert.doesNotThrow(() => { failedBus.beginRun(); failedBus.endRun("error"); failedBus.dispose(); });
+  const failedBus = boundObserver({
+    emit() {
+      throw new Error("missing parent Stats");
+    },
+    on() {},
+  }).observer;
+  assert.doesNotThrow(() => {
+    failedBus.beginRun();
+    failedBus.endRun("error");
+    failedBus.dispose();
+  });
 });
 
 test("session shutdown and late callbacks retire the observer exactly once", () => {
   const { sink, calls } = recordingSink();
-  const { observer, emit } = boundObserver({ emit(_name, payload) { payload.sink = sink; }, on() {} });
+  const { observer, emit } = boundObserver({
+    emit(_name, payload) {
+      payload.sink = sink;
+    },
+    on() {},
+  });
   observer.beginRun();
   emit("session_shutdown");
-  assert.deepEqual(calls, [["beginRun"], ["dispose"]], "shutdown itself must retire the sink before any explicit dispose");
+  assert.deepEqual(
+    calls,
+    [["beginRun"], ["dispose"]],
+    "shutdown itself must retire the sink before any explicit dispose",
+  );
   emit("session_shutdown");
   assert.deepEqual(calls, [["beginRun"], ["dispose"]], "repeated shutdown is already inert");
   const before = calls.length;
   assert.doesNotThrow(() => {
     emit("agent_start");
     emit("agent_settled");
-    emit("turn_start", {}, { get model() { throw new Error("late callback read"); } });
-    emit("message_update", { get assistantMessageEvent() { throw new Error("late callback read"); } });
-    emit("message_end", { get message() { throw new Error("late callback read"); } });
-    emit("tool_execution_start", { get toolCallId() { throw new Error("late callback read"); } });
-    emit("tool_execution_end", { get toolCallId() { throw new Error("late callback read"); } });
+    emit(
+      "turn_start",
+      {},
+      {
+        get model() {
+          throw new Error("late callback read");
+        },
+      },
+    );
+    emit("message_update", {
+      get assistantMessageEvent() {
+        throw new Error("late callback read");
+      },
+    });
+    emit("message_end", {
+      get message() {
+        throw new Error("late callback read");
+      },
+    });
+    emit("tool_execution_start", {
+      get toolCallId() {
+        throw new Error("late callback read");
+      },
+    });
+    emit("tool_execution_end", {
+      get toolCallId() {
+        throw new Error("late callback read");
+      },
+    });
     observer.beginRun();
     observer.endRun("success");
   });
   assert.deepEqual(calls, [["beginRun"], ["dispose"]]);
   assert.equal(calls.length, before, "shutdown alone makes late events inert");
-  observer.dispose(); observer.dispose();
-  assert.deepEqual(calls, [["beginRun"], ["dispose"]], "explicit dispose after shutdown is only an idempotence check");
+  observer.dispose();
+  observer.dispose();
+  assert.deepEqual(
+    calls,
+    [["beginRun"], ["dispose"]],
+    "explicit dispose after shutdown is only an idempotence check",
+  );
 });

@@ -13,7 +13,8 @@ const { createJiti } = require("jiti");
 const jiti = createJiti(import.meta.url, {
   alias: {
     "@earendil-works/pi-coding-agent": join(
-      harness, "node_modules/@earendil-works/pi-coding-agent/dist/index.js",
+      harness,
+      "node_modules/@earendil-works/pi-coding-agent/dist/index.js",
     ),
   },
 });
@@ -25,8 +26,12 @@ function clock(initial = 0) {
   let value = initial;
   return {
     now: () => value,
-    set: (next) => { value = next; },
-    advance: (delta) => { value += delta; },
+    set: (next) => {
+      value = next;
+    },
+    advance: (delta) => {
+      value += delta;
+    },
   };
 }
 
@@ -41,8 +46,16 @@ function usage(output, cost = 0) {
   };
 }
 
-function assistant({ provider = "provider", model = "requested", responseModel, output = 0,
-  cost = 0, stopReason = "stop", withUsage = true, errorMessage } = {}) {
+function assistant({
+  provider = "provider",
+  model = "requested",
+  responseModel,
+  output = 0,
+  cost = 0,
+  stopReason = "stop",
+  withUsage = true,
+  errorMessage,
+} = {}) {
   return {
     role: "assistant",
     provider,
@@ -78,13 +91,28 @@ test("unknown health becomes busy then evidenced idle; busy is a foreground unio
       "LLM time starts at turn_start, includes SDK preflight, and is not transport-only latency.",
       "TPS is reported output tokens divided by end-to-end request time, not decoding speed.",
     ],
-    elapsedMs: 0, busyMs: 0, idleMs: 0, llmMs: 0, toolMs: 0, approvalMs: 0,
-    activeRequests: 0, activeTools: 0, pendingApprovals: 0,
-    health: "unknown", observedActivity: false, partial: false, models: [], tools: [], recentErrors: [],
+    elapsedMs: 0,
+    busyMs: 0,
+    idleMs: 0,
+    llmMs: 0,
+    toolMs: 0,
+    approvalMs: 0,
+    activeRequests: 0,
+    activeTools: 0,
+    pendingApprovals: 0,
+    health: "unknown",
+    observedActivity: false,
+    partial: false,
+    models: [],
+    tools: [],
+    recentErrors: [],
   });
-  c.set(110); stats.startActivity();
-  c.set(150); stats.startActivity(); // duplicate lifecycle notification does not double-count
-  c.set(180); stats.settleActivity();
+  c.set(110);
+  stats.startActivity();
+  c.set(150);
+  stats.startActivity(); // duplicate lifecycle notification does not double-count
+  c.set(180);
+  stats.settleActivity();
   c.set(200);
   const first = stats.snapshot();
   assert.equal(first.busyMs, 70);
@@ -93,7 +121,8 @@ test("unknown health becomes busy then evidenced idle; busy is a foreground unio
   assert.equal(first.observedActivity, true);
   assert.equal(first.lastActivityMs, 20);
 
-  c.set(220); stats.startActivity();
+  c.set(220);
+  stats.startActivity();
   c.set(250);
   const live = stats.snapshot();
   assert.equal(live.busyMs, 100);
@@ -103,31 +132,54 @@ test("unknown health becomes busy then evidenced idle; busy is a foreground unio
 
 test("parallel tools are cumulative rather than a wall-time partition", () => {
   const { c, stats } = started();
-  c.set(10); stats.toolStart("private-tool-id-a", "bash");
-  c.set(20); stats.toolStart("private-tool-id-b", "read");
-  c.set(40); stats.toolEnd("private-tool-id-a", false, 30);
-  c.set(60); stats.toolEnd("private-tool-id-b", true, 40);
-  c.set(70); stats.settleActivity();
+  c.set(10);
+  stats.toolStart("private-tool-id-a", "bash");
+  c.set(20);
+  stats.toolStart("private-tool-id-b", "read");
+  c.set(40);
+  stats.toolEnd("private-tool-id-a", false, 30);
+  c.set(60);
+  stats.toolEnd("private-tool-id-b", true, 40);
+  c.set(70);
+  stats.settleActivity();
   const snapshot = stats.snapshot();
   assert.equal(snapshot.elapsedMs, 70);
   assert.equal(snapshot.busyMs, 70);
   assert.equal(snapshot.toolMs, 70, "30ms + 40ms is cumulative despite overlap");
   assert.deepEqual(tool(snapshot, "bash"), {
-    tool: "bash", calls: 1, errors: 0, totalMs: 30, maxMs: 30, partial: false,
+    tool: "bash",
+    calls: 1,
+    errors: 0,
+    totalMs: 30,
+    maxMs: 30,
+    partial: false,
   });
   assert.deepEqual(tool(snapshot, "read"), {
-    tool: "read", calls: 1, errors: 1, totalMs: 40, maxMs: 40, partial: false,
+    tool: "read",
+    calls: 1,
+    errors: 1,
+    totalMs: 40,
+    maxMs: 40,
+    partial: false,
   });
   assert.equal(snapshot.health, "idle", "tool failure counts do not poison settled health");
 });
 
 test("ordinary tool failures remain counters, not a fatal session health state", () => {
   const { c, stats } = started();
-  for (const [id, name] of [["grep-exit-1", "bash"], ["permission-denied", "read"], ["fixed-build", "bash"]]) {
-    stats.toolStart(id, name); c.advance(10); stats.toolEnd(id, true);
+  for (const [id, name] of [
+    ["grep-exit-1", "bash"],
+    ["permission-denied", "read"],
+    ["fixed-build", "bash"],
+  ]) {
+    stats.toolStart(id, name);
+    c.advance(10);
+    stats.toolEnd(id, true);
     assert.equal(stats.snapshot().health, "busy", `${id} must not turn the footer red`);
   }
-  stats.toolStart("build-retry", "bash"); c.advance(10); stats.toolEnd("build-retry", false);
+  stats.toolStart("build-retry", "bash");
+  c.advance(10);
+  stats.toolEnd("build-retry", false);
   stats.settleActivity();
   assert.equal(stats.snapshot().health, "idle");
   assert.equal(tool(stats.snapshot(), "bash").errors, 2);
@@ -136,63 +188,105 @@ test("ordinary tool failures remain counters, not a fatal session health state",
 
 test("running tools stay out of execution totals; the oldest call's age is separate", () => {
   const { c, stats } = started();
-  c.set(5); stats.toolStart("done", "bash");
-  c.set(8); stats.toolEnd("done", false, 2);
-  c.set(10); stats.toolStart("a", "bash");
-  c.set(20); stats.toolStart("b", "bash");
+  c.set(5);
+  stats.toolStart("done", "bash");
+  c.set(8);
+  stats.toolEnd("done", false, 2);
+  c.set(10);
+  stats.toolStart("a", "bash");
+  c.set(20);
+  stats.toolStart("b", "bash");
   c.set(50);
   const one = stats.snapshot();
   assert.equal(one.activeTools, 2);
   assert.equal(one.longestActiveToolMs, 40, "age since the call began, permission gate included");
   assert.equal(one.toolMs, 2, "a running call, perhaps awaiting approval, adds no tool time");
   assert.deepEqual(tool(one, "bash"), {
-    tool: "bash", calls: 1, errors: 0, totalMs: 2, maxMs: 2, partial: false,
+    tool: "bash",
+    calls: 1,
+    errors: 0,
+    totalMs: 2,
+    maxMs: 2,
+    partial: false,
   });
   assert.equal(one.partial, true);
   assert.deepEqual(stats.snapshot(), one, "snapshot is an idempotent read at a fixed clock");
-  c.set(60); stats.toolEnd("a", false, 30); stats.toolEnd("b", true, 0);
+  c.set(60);
+  stats.toolEnd("a", false, 30);
+  stats.toolEnd("b", true, 0);
   const two = stats.snapshot();
   assert.equal(two.toolMs, 32);
   assert.equal(two.longestActiveToolMs, undefined);
   assert.deepEqual(tool(two, "bash"), {
-    tool: "bash", calls: 3, errors: 1, totalMs: 32, maxMs: 30, partial: false,
+    tool: "bash",
+    calls: 3,
+    errors: 1,
+    totalMs: 32,
+    maxMs: 30,
+    partial: false,
   });
 });
 
 test("reported execution time is the only tool time; a missing or invalid one adds none", () => {
   const { c, stats } = started();
-  c.set(10); stats.toolStart("approved", "bash");
-  c.set(40); stats.toolEnd("approved", false, 12);
-  c.set(50); stats.toolStart("denied", "bash");
-  c.set(80); stats.toolEnd("denied", true, 0);
-  c.set(90); stats.toolStart("unreported", "read");
-  c.set(95); stats.toolEnd("unreported", false);
-  c.set(100); stats.toolStart("invalid", "read");
-  c.set(104); stats.toolEnd("invalid", false, -1);
+  c.set(10);
+  stats.toolStart("approved", "bash");
+  c.set(40);
+  stats.toolEnd("approved", false, 12);
+  c.set(50);
+  stats.toolStart("denied", "bash");
+  c.set(80);
+  stats.toolEnd("denied", true, 0);
+  c.set(90);
+  stats.toolStart("unreported", "read");
+  c.set(95);
+  stats.toolEnd("unreported", false);
+  c.set(100);
+  stats.toolStart("invalid", "read");
+  c.set(104);
+  stats.toolEnd("invalid", false, -1);
   stats.settleActivity();
   const snapshot = stats.snapshot();
   assert.equal(snapshot.toolMs, 12);
   assert.deepEqual(tool(snapshot, "bash"), {
-    tool: "bash", calls: 2, errors: 1, totalMs: 12, maxMs: 12, partial: false,
+    tool: "bash",
+    calls: 2,
+    errors: 1,
+    totalMs: 12,
+    maxMs: 12,
+    partial: false,
   });
   assert.deepEqual(tool(snapshot, "read"), {
-    tool: "read", calls: 2, errors: 0, totalMs: 0, maxMs: 0, partial: true,
+    tool: "read",
+    calls: 2,
+    errors: 0,
+    totalMs: 0,
+    maxMs: 0,
+    partial: true,
   });
   assert.equal(snapshot.partial, true);
 });
 
 test("overlapping approvals accrue union time and waiting takes precedence over provider errors", () => {
   const { c, stats } = started();
-  c.set(5); stats.requestStart("m", "p");
-  c.set(8); stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "error" }));
-  c.set(10); stats.approvalStart("private-approval-a");
-  c.set(20); stats.approvalStart("private-approval-b");
-  c.set(30); stats.toolStart("tool", "bash");
-  c.set(35); stats.toolEnd("tool", true);
+  c.set(5);
+  stats.requestStart("m", "p");
+  c.set(8);
+  stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "error" }));
+  c.set(10);
+  stats.approvalStart("private-approval-a");
+  c.set(20);
+  stats.approvalStart("private-approval-b");
+  c.set(30);
+  stats.toolStart("tool", "bash");
+  c.set(35);
+  stats.toolEnd("tool", true);
   assert.equal(stats.snapshot().health, "waiting");
-  c.set(40); stats.approvalEnd("private-approval-a");
+  c.set(40);
+  stats.approvalEnd("private-approval-a");
   assert.equal(stats.snapshot().pendingApprovals, 1);
-  c.set(50); stats.approvalEnd("private-approval-b");
+  c.set(50);
+  stats.approvalEnd("private-approval-b");
   const snapshot = stats.snapshot();
   assert.equal(snapshot.approvalMs, 40);
   assert.equal(snapshot.pendingApprovals, 0);
@@ -201,13 +295,20 @@ test("overlapping approvals accrue union time and waiting takes precedence over 
 
 test("first effective output ignores starts and empty deltas; first text is separate", () => {
   const { c, stats } = started();
-  c.set(10); stats.requestStart("alias", "router");
-  c.set(15); stats.delta("text_start", "not-an-effective-kind");
-  c.set(20); stats.delta("thinking_delta", "");
-  c.set(25); stats.delta("thinking_delta", "reasoning");
-  c.set(30); stats.delta("text_delta", "");
-  c.set(35); stats.delta("text_delta", "answer");
-  c.set(60); stats.messageEnd(assistant({ provider: "router", model: "alias", output: 6 }));
+  c.set(10);
+  stats.requestStart("alias", "router");
+  c.set(15);
+  stats.delta("text_start", "not-an-effective-kind");
+  c.set(20);
+  stats.delta("thinking_delta", "");
+  c.set(25);
+  stats.delta("thinking_delta", "reasoning");
+  c.set(30);
+  stats.delta("text_delta", "");
+  c.set(35);
+  stats.delta("text_delta", "answer");
+  c.set(60);
+  stats.messageEnd(assistant({ provider: "router", model: "alias", output: 6 }));
   const snapshot = stats.snapshot();
   assert.equal(snapshot.lastTtftMs, 15);
   assert.equal(snapshot.lastTextMs, 25);
@@ -217,11 +318,16 @@ test("first effective output ignores starts and empty deltas; first text is sepa
 
 test("tool-call output is effective output while provider message_start is not request start", () => {
   const { c, stats } = started();
-  c.set(10); stats.requestStart("m", "p");
-  c.set(14); stats.delta("start", "start");
-  c.set(17); stats.delta("toolcall_start", "{");
-  c.set(20); stats.delta("toolcall_delta", "{\"x\":1}");
-  c.set(30); stats.messageEnd(assistant({ provider: "p", model: "m", output: 1 }));
+  c.set(10);
+  stats.requestStart("m", "p");
+  c.set(14);
+  stats.delta("start", "start");
+  c.set(17);
+  stats.delta("toolcall_start", "{");
+  c.set(20);
+  stats.delta("toolcall_delta", '{"x":1}');
+  c.set(30);
+  stats.messageEnd(assistant({ provider: "p", model: "m", output: 1 }));
   const snapshot = stats.snapshot();
   assert.equal(snapshot.lastTtftMs, 10);
   assert.equal(snapshot.lastTextMs, undefined);
@@ -229,27 +335,50 @@ test("tool-call output is effective output while provider message_start is not r
 
 test("actual response model and provider own usage instead of the requested alias", () => {
   const { c, stats } = started();
-  c.set(10); stats.requestStart("auto", "router");
-  c.set(110); stats.delta("text_delta", "x");
-  c.set(210); stats.messageEnd(assistant({
-    provider: "actual-provider", model: "auto", responseModel: "actual-model", output: 20, cost: 0.25,
-  }));
+  c.set(10);
+  stats.requestStart("auto", "router");
+  c.set(110);
+  stats.delta("text_delta", "x");
+  c.set(210);
+  stats.messageEnd(
+    assistant({
+      provider: "actual-provider",
+      model: "auto",
+      responseModel: "actual-model",
+      output: 20,
+      cost: 0.25,
+    }),
+  );
   const snapshot = stats.snapshot();
   assert.equal(model(snapshot, "auto"), undefined);
   assert.deepEqual(model(snapshot, "actual-model"), {
-    provider: "actual-provider", model: "actual-model", requests: 1, errors: 0,
-    outputTokens: 20, cost: 0.25, llmMs: 200, ttftMs: 100, ttftSamples: 1,
-    timedOutputTokens: 20, timedOutputMs: 200, tps: 100, partial: false,
+    provider: "actual-provider",
+    model: "actual-model",
+    requests: 1,
+    errors: 0,
+    outputTokens: 20,
+    cost: 0.25,
+    llmMs: 200,
+    ttftMs: 100,
+    ttftSamples: 1,
+    timedOutputTokens: 20,
+    timedOutputMs: 200,
+    tps: 100,
+    partial: false,
   });
   assert.equal(snapshot.lastTps, 100);
 });
 
 test("missing provider usage remains unknown while explicit zero remains zero", () => {
   const { c, stats } = started();
-  c.set(10); stats.requestStart("missing", "p");
-  c.set(20); stats.messageEnd(assistant({ provider: "p", model: "missing", withUsage: false }));
-  c.set(30); stats.requestStart("zero", "p");
-  c.set(40); stats.messageEnd(assistant({ provider: "p", model: "zero", output: 0, cost: 0 }));
+  c.set(10);
+  stats.requestStart("missing", "p");
+  c.set(20);
+  stats.messageEnd(assistant({ provider: "p", model: "missing", withUsage: false }));
+  c.set(30);
+  stats.requestStart("zero", "p");
+  c.set(40);
+  stats.messageEnd(assistant({ provider: "p", model: "zero", output: 0, cost: 0 }));
   const snapshot = stats.snapshot();
   const missing = model(snapshot, "missing");
   assert.equal(missing.outputTokens, undefined);
@@ -265,24 +394,33 @@ test("missing provider usage remains unknown while explicit zero remains zero", 
 
 test("TPS is a weighted reported-token rate, never an average of request ratios", () => {
   const { c, stats } = started();
-  c.set(10); stats.requestStart("m", "p");
-  c.set(110); stats.messageEnd(assistant({ provider: "p", model: "m", output: 10 })); // 100 tok/s
-  c.set(200); stats.requestStart("m", "p");
-  c.set(1_100); stats.messageEnd(assistant({ provider: "p", model: "m", output: 10 })); // 11.11 tok/s
+  c.set(10);
+  stats.requestStart("m", "p");
+  c.set(110);
+  stats.messageEnd(assistant({ provider: "p", model: "m", output: 10 })); // 100 tok/s
+  c.set(200);
+  stats.requestStart("m", "p");
+  c.set(1_100);
+  stats.messageEnd(assistant({ provider: "p", model: "m", output: 10 })); // 11.11 tok/s
   const row = model(stats.snapshot(), "m");
   assert.equal(row.outputTokens, 20);
   assert.equal(row.llmMs, 1_000);
   assert.equal(row.tps, 20, "20 tokens / 1.0 corresponding seconds");
-  assert(Math.abs(stats.snapshot().lastTps - (10 / 0.9)) < 1e-12);
+  assert(Math.abs(stats.snapshot().lastTps - 10 / 0.9) < 1e-12);
 });
 
 test("TTFT means only observed samples, not zero-filled silent responses", () => {
   const { c, stats } = started();
-  c.set(10); stats.requestStart("m", "p");
-  c.set(60); stats.delta("text_delta", "first");
-  c.set(100); stats.messageEnd(assistant({ provider: "p", model: "m", output: 1 }));
-  c.set(110); stats.requestStart("m", "p");
-  c.set(200); stats.messageEnd(assistant({ provider: "p", model: "m", output: 0 }));
+  c.set(10);
+  stats.requestStart("m", "p");
+  c.set(60);
+  stats.delta("text_delta", "first");
+  c.set(100);
+  stats.messageEnd(assistant({ provider: "p", model: "m", output: 1 }));
+  c.set(110);
+  stats.requestStart("m", "p");
+  c.set(200);
+  stats.messageEnd(assistant({ provider: "p", model: "m", output: 0 }));
   const row = model(stats.snapshot(), "m");
   assert.equal(row.ttftSamples, 1);
   assert.equal(row.ttftMs, 50);
@@ -291,44 +429,81 @@ test("TTFT means only observed samples, not zero-filled silent responses", () =>
 
 test("a failed attempt stays counted and partial; a later success clears its red health", () => {
   const { c, stats } = started();
-  c.set(10); stats.requestStart("m", "p");
-  c.set(30); stats.messageEnd(assistant({ provider: "p", model: "m", output: 0, stopReason: "error",
-    errorMessage: "529\n{\"type\":\"overloaded_error\"}\x1b[31m" }));
+  c.set(10);
+  stats.requestStart("m", "p");
+  c.set(30);
+  stats.messageEnd(
+    assistant({
+      provider: "p",
+      model: "m",
+      output: 0,
+      stopReason: "error",
+      errorMessage: '529\n{"type":"overloaded_error"}\x1b[31m',
+    }),
+  );
   let snapshot = stats.snapshot();
   assert.equal(snapshot.health, "error", "the failure is visible while the SDK backs off");
   assert.equal(stats.lastResponseSucceeded, false);
-  assert.deepEqual(snapshot.recentErrors, [{ ageMs: 0, provider: "p", model: "m",
-    message: "529 {\"type\":\"overloaded_error\"}", cleared: false }], "one line, no control sequences");
+  assert.deepEqual(
+    snapshot.recentErrors,
+    [
+      {
+        ageMs: 0,
+        provider: "p",
+        model: "m",
+        message: '529 {"type":"overloaded_error"}',
+        cleared: false,
+      },
+    ],
+    "one line, no control sequences",
+  );
 
-  c.set(40); stats.requestStart("m", "p");
-  c.set(70); stats.messageEnd(assistant({ provider: "p", model: "m", output: 3 }));
+  c.set(40);
+  stats.requestStart("m", "p");
+  c.set(70);
+  stats.messageEnd(assistant({ provider: "p", model: "m", output: 3 }));
   assert.equal(stats.health, "busy", "the SDK auto-retry succeeded, so nothing is still failing");
   assert.equal(stats.lastResponseSucceeded, true);
-  c.set(80); stats.settleActivity();
+  c.set(80);
+  stats.settleActivity();
   snapshot = stats.snapshot();
   assert.equal(snapshot.health, "idle");
   assert.equal(model(snapshot, "m").requests, 2);
   assert.equal(model(snapshot, "m").errors, 1, "the counter keeps the failed attempt");
   assert.equal(model(snapshot, "m").partial, true);
-  assert.deepEqual(snapshot.recentErrors.map(({ ageMs, cleared }) => [ageMs, cleared]), [[50, true]],
-    "the history keeps it, cleared");
+  assert.deepEqual(
+    snapshot.recentErrors.map(({ ageMs, cleared }) => [ageMs, cleared]),
+    [[50, true]],
+    "the history keeps it, cleared",
+  );
   assert.match(snapshot.limitations.join(" "), /internal retries are not observable/i);
 });
 
 test("a run that ends failed stays red until the next run; aborts and tools neither clear nor latch", () => {
   const { c, stats } = started();
-  c.set(10); stats.requestStart("m", "p");
-  c.set(20); stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "error" }));
-  stats.toolStart("t", "bash"); stats.toolEnd("t", false);
-  c.set(30); stats.requestStart("m", "p");
-  c.set(40); stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "aborted" }));
-  c.set(50); stats.settleActivity();
+  c.set(10);
+  stats.requestStart("m", "p");
+  c.set(20);
+  stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "error" }));
+  stats.toolStart("t", "bash");
+  stats.toolEnd("t", false);
+  c.set(30);
+  stats.requestStart("m", "p");
+  c.set(40);
+  stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "aborted" }));
+  c.set(50);
+  stats.settleActivity();
   let snapshot = stats.snapshot();
-  assert.equal(snapshot.health, "error", "neither a successful tool nor an abort is a success after the failure");
+  assert.equal(
+    snapshot.health,
+    "error",
+    "neither a successful tool nor an abort is a success after the failure",
+  );
   assert.equal(stats.lastResponseSucceeded, false);
   assert.equal(snapshot.recentErrors[0].message, undefined, "no reported text is not invented");
 
-  c.set(60); stats.startActivity();
+  c.set(60);
+  stats.startActivity();
   snapshot = stats.snapshot();
   assert.equal(snapshot.health, "busy", "the next foreground run starts from a clean slate");
   assert.equal(snapshot.recentErrors[0].cleared, true);
@@ -337,59 +512,125 @@ test("a run that ends failed stays red until the next run; aborts and tools neit
 test("a run succeeds only by ending on an answer, not on an earlier successful toolUse", () => {
   const ended = (steps) => {
     const { c, stats } = started();
-    c.set(10); stats.requestStart("m", "p");
-    c.set(20); stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "toolUse" }));
+    c.set(10);
+    stats.requestStart("m", "p");
+    c.set(20);
+    stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "toolUse" }));
     steps(stats, c);
-    c.set(90); stats.settleActivity();
+    c.set(90);
+    stats.settleActivity();
     return stats;
   };
   const answered = ended((stats, c) => {
-    c.set(30); stats.toolStart("t", "agent_wait"); stats.toolEnd("t", false);
-    c.set(40); stats.requestStart("m", "p");
-    c.set(50); stats.messageEnd(assistant({ provider: "p", model: "m" }));
+    c.set(30);
+    stats.toolStart("t", "agent_wait");
+    stats.toolEnd("t", false);
+    c.set(40);
+    stats.requestStart("m", "p");
+    c.set(50);
+    stats.messageEnd(assistant({ provider: "p", model: "m" }));
   });
   assert.equal(answered.lastRunSucceeded, true);
   for (const [why, steps] of [
-    ["aborted while a tool ran", (stats, c) => { c.set(30); stats.toolStart("t", "agent_wait"); }],
-    ["aborted between turns: the SDK reports it outside any request", (stats, c) => {
-      c.set(30); stats.toolStart("t", "agent_wait"); stats.toolEnd("t", true);
-      stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "aborted" }));
-    }],
-    ["aborted in the next request", (stats, c) => {
-      c.set(30); stats.toolStart("t", "agent_wait"); stats.toolEnd("t", true);
-      c.set(40); stats.requestStart("m", "p");
-      c.set(50); stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "aborted" }));
-    }],
-    ["ended without another turn", (stats, c) => { c.set(30); stats.toolStart("t", "agent_wait"); stats.toolEnd("t", false); }],
-    ["the next request never ended", (stats, c) => { c.set(40); stats.requestStart("m", "p"); }],
+    [
+      "aborted while a tool ran",
+      (stats, c) => {
+        c.set(30);
+        stats.toolStart("t", "agent_wait");
+      },
+    ],
+    [
+      "aborted between turns: the SDK reports it outside any request",
+      (stats, c) => {
+        c.set(30);
+        stats.toolStart("t", "agent_wait");
+        stats.toolEnd("t", true);
+        stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "aborted" }));
+      },
+    ],
+    [
+      "aborted in the next request",
+      (stats, c) => {
+        c.set(30);
+        stats.toolStart("t", "agent_wait");
+        stats.toolEnd("t", true);
+        c.set(40);
+        stats.requestStart("m", "p");
+        c.set(50);
+        stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "aborted" }));
+      },
+    ],
+    [
+      "ended without another turn",
+      (stats, c) => {
+        c.set(30);
+        stats.toolStart("t", "agent_wait");
+        stats.toolEnd("t", false);
+      },
+    ],
+    [
+      "the next request never ended",
+      (stats, c) => {
+        c.set(40);
+        stats.requestStart("m", "p");
+      },
+    ],
   ]) {
     assert.equal(ended(steps).lastRunSucceeded, false, why);
   }
-  assert.equal(ended((stats, c) => { c.set(30); stats.toolStart("t", "agent_wait"); }).lastResponseSucceeded, true,
-    "the latest response did succeed, which is why it is no evidence for the run");
+  assert.equal(
+    ended((stats, c) => {
+      c.set(30);
+      stats.toolStart("t", "agent_wait");
+    }).lastResponseSucceeded,
+    true,
+    "the latest response did succeed, which is why it is no evidence for the run",
+  );
   const { stats } = started();
   assert.equal(stats.lastRunSucceeded, false, "a run that has not settled has not succeeded");
 });
 
 test("a run that throws between turns is red and listed; an abort there only ends the run", () => {
   const { c, stats } = started();
-  c.set(10); stats.requestStart("m", "p");
-  c.set(20); stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "toolUse", output: 1 }));
-  c.set(30); stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "error",
-    errorMessage: "compaction failed:\n\x1b[31mcontext too large\x1b[0m" }));
+  c.set(10);
+  stats.requestStart("m", "p");
+  c.set(20);
+  stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "toolUse", output: 1 }));
+  c.set(30);
+  stats.messageEnd(
+    assistant({
+      provider: "p",
+      model: "m",
+      stopReason: "error",
+      errorMessage: "compaction failed:\n\x1b[31mcontext too large\x1b[0m",
+    }),
+  );
   assert.equal(stats.health, "error");
-  c.set(40); stats.settleActivity();
+  c.set(40);
+  stats.settleActivity();
   let snapshot = stats.snapshot();
   assert.equal(snapshot.health, "error", "it stays red after the run settles");
   assert.equal(stats.lastRunSucceeded, false);
-  assert.deepEqual(snapshot.recentErrors, [{ ageMs: 10, provider: "p", model: "m",
-    message: "compaction failed: context too large", cleared: false }]);
+  assert.deepEqual(snapshot.recentErrors, [
+    {
+      ageMs: 10,
+      provider: "p",
+      model: "m",
+      message: "compaction failed: context too large",
+      cleared: false,
+    },
+  ]);
   assert.equal(model(snapshot, "m").requests, 1, "no request was made, so no model counters");
   assert.equal(model(snapshot, "m").errors, 0);
 
-  c.set(50); stats.startActivity();
-  c.set(60); stats.messageEnd(assistant({ provider: "p", model: "m", stopReason: "aborted", errorMessage: "aborted" }));
-  c.set(70); stats.settleActivity();
+  c.set(50);
+  stats.startActivity();
+  c.set(60);
+  stats.messageEnd(
+    assistant({ provider: "p", model: "m", stopReason: "aborted", errorMessage: "aborted" }),
+  );
+  c.set(70);
+  stats.settleActivity();
   snapshot = stats.snapshot();
   assert.equal(snapshot.health, "idle", "an abort is no failure");
   assert.equal(snapshot.recentErrors.length, 1);
@@ -403,20 +644,34 @@ test("a run that throws between turns is red and listed; an abort there only end
 test("recent errors are bounded, newest first, with long provider text cut to one bounded line", () => {
   const { c, stats } = started();
   for (let index = 0; index < 8; index++) {
-    c.set(index * 10); stats.requestStart(`m${index}`, "p");
-    stats.messageEnd(assistant({ provider: "p", model: `m${index}`, stopReason: "error", errorMessage: "x".repeat(1000) }));
+    c.set(index * 10);
+    stats.requestStart(`m${index}`, "p");
+    stats.messageEnd(
+      assistant({
+        provider: "p",
+        model: `m${index}`,
+        stopReason: "error",
+        errorMessage: "x".repeat(1000),
+      }),
+    );
   }
   const { recentErrors } = stats.snapshot();
-  assert.deepEqual(recentErrors.map(({ model }) => model), ["m7", "m6", "m5", "m4", "m3"]);
+  assert.deepEqual(
+    recentErrors.map(({ model }) => model),
+    ["m7", "m6", "m5", "m4", "m3"],
+  );
   assert.equal(Array.from(recentErrors[0].message).length, 240);
   assert(recentErrors[0].message.endsWith("…"));
 });
 
 test("aborted and superseded requests are retained as incomplete observations", () => {
   const { c, stats } = started();
-  c.set(10); stats.requestStart("first", "p");
-  c.set(20); stats.requestStart("second", "p"); // no request id: close the observed first attempt conservatively
-  c.set(30); stats.messageEnd(assistant({ provider: "p", model: "second", output: 0, stopReason: "aborted" }));
+  c.set(10);
+  stats.requestStart("first", "p");
+  c.set(20);
+  stats.requestStart("second", "p"); // no request id: close the observed first attempt conservatively
+  c.set(30);
+  stats.messageEnd(assistant({ provider: "p", model: "second", output: 0, stopReason: "aborted" }));
   const snapshot = stats.snapshot();
   assert.equal(model(snapshot, "first").requests, 1);
   assert.equal(model(snapshot, "first").partial, true);
@@ -426,9 +681,12 @@ test("aborted and superseded requests are retained as incomplete observations", 
 
 test("unsettled work is live and settlement closes it conservatively", () => {
   const { c, stats } = started();
-  c.set(10); stats.requestStart("m", "p");
-  c.set(20); stats.toolStart("id", "bash");
-  c.set(30); stats.approvalStart("approval");
+  c.set(10);
+  stats.requestStart("m", "p");
+  c.set(20);
+  stats.toolStart("id", "bash");
+  c.set(30);
+  stats.approvalStart("approval");
   c.set(50);
   let snapshot = stats.snapshot();
   assert.equal(snapshot.activeRequests, 1);
@@ -447,11 +705,21 @@ test("unsettled work is live and settlement closes it conservatively", () => {
   assert.equal(snapshot.pendingApprovals, 1, "agent settlement does not settle a parent UI prompt");
   assert.equal(snapshot.health, "waiting");
   assert.equal(model(snapshot, "m").partial, true);
-  assert.deepEqual(tool(snapshot, "bash"), {
-    tool: "bash", calls: 1, errors: 0, totalMs: 0, maxMs: 0, partial: true,
-  }, "a call cut short has no known execution time");
+  assert.deepEqual(
+    tool(snapshot, "bash"),
+    {
+      tool: "bash",
+      calls: 1,
+      errors: 0,
+      totalMs: 0,
+      maxMs: 0,
+      partial: true,
+    },
+    "a call cut short has no known execution time",
+  );
   assert.equal(snapshot.longestActiveToolMs, undefined);
-  c.set(60); stats.approvalEnd("approval");
+  c.set(60);
+  stats.approvalEnd("approval");
   assert.equal(stats.snapshot().approvalMs, 30);
 });
 
@@ -462,31 +730,50 @@ test("monotonic clamping survives backwards, non-finite, and throwing clock samp
     return value;
   });
   stats.startActivity();
-  value = 150; assert.equal(stats.snapshot().busyMs, 50);
-  value = 120; assert.equal(stats.snapshot().busyMs, 50);
-  value = Number.POSITIVE_INFINITY; assert.equal(stats.snapshot().busyMs, 50);
-  value = "throw"; assert.equal(stats.snapshot().busyMs, 50);
-  value = 250; stats.settleActivity();
+  value = 150;
+  assert.equal(stats.snapshot().busyMs, 50);
+  value = 120;
+  assert.equal(stats.snapshot().busyMs, 50);
+  value = Number.POSITIVE_INFINITY;
+  assert.equal(stats.snapshot().busyMs, 50);
+  value = "throw";
+  assert.equal(stats.snapshot().busyMs, 50);
+  value = 250;
+  stats.settleActivity();
   assert.equal(stats.snapshot().busyMs, 150);
 });
 
 test("model and tool aggregation are bounded with explicit overflow buckets", () => {
   const { c, stats } = started();
   for (let index = 0; index < 80; index++) {
-    c.advance(1); stats.requestStart(`model-${index}`, `provider-${index}`);
-    c.advance(1); stats.messageEnd(assistant({
-      provider: `provider-${index}`, model: `model-${index}`, output: index,
-    }));
-    c.advance(1); stats.toolStart(`id-${index}`, `tool-${index}`);
-    c.advance(1); stats.toolEnd(`id-${index}`, false);
+    c.advance(1);
+    stats.requestStart(`model-${index}`, `provider-${index}`);
+    c.advance(1);
+    stats.messageEnd(
+      assistant({
+        provider: `provider-${index}`,
+        model: `model-${index}`,
+        output: index,
+      }),
+    );
+    c.advance(1);
+    stats.toolStart(`id-${index}`, `tool-${index}`);
+    c.advance(1);
+    stats.toolEnd(`id-${index}`, false);
   }
   const snapshot = stats.snapshot();
   assert.equal(snapshot.models.length, 32);
   assert.equal(snapshot.tools.length, 32);
   assert(model(snapshot, "(other)"));
   assert(tool(snapshot, "(other)"));
-  assert.equal(snapshot.models.reduce((sum, row) => sum + row.requests, 0), 80);
-  assert.equal(snapshot.tools.reduce((sum, row) => sum + row.calls, 0), 80);
+  assert.equal(
+    snapshot.models.reduce((sum, row) => sum + row.requests, 0),
+    80,
+  );
+  assert.equal(
+    snapshot.tools.reduce((sum, row) => sum + row.calls, 0),
+    80,
+  );
   assert.equal(snapshot.partial, true);
 });
 
@@ -497,14 +784,20 @@ function eventFixture() {
   const pi = {
     on(name, handler) {
       const bucket = handlers.get(name) ?? new Set();
-      bucket.add(handler); handlers.set(name, bucket);
-      return () => { if (bucket.delete(handler)) offCalls++; };
+      bucket.add(handler);
+      handlers.set(name, bucket);
+      return () => {
+        if (bucket.delete(handler)) offCalls++;
+      };
     },
     events: {
       on(name, handler) {
         const bucket = listeners.get(name) ?? new Set();
-        bucket.add(handler); listeners.set(name, bucket);
-        return () => { if (bucket.delete(handler)) offCalls++; };
+        bucket.add(handler);
+        listeners.set(name, bucket);
+        return () => {
+          if (bucket.delete(handler)) offCalls++;
+        };
       },
     },
   };
@@ -527,7 +820,13 @@ test("event binding uses foreground turns and ignores uncorrelated provider/cach
   const stats = new SessionStats(c.now);
   const f = eventFixture();
   let changes = 0;
-  const dispose = bindStatsEvents(f.pi, () => stats, () => { changes++; });
+  const dispose = bindStatsEvents(
+    f.pi,
+    () => stats,
+    () => {
+      changes++;
+    },
+  );
   const ctx = { model: { id: "main", provider: "p" } };
 
   f.emit("before_provider_request", { payload: { secret: "CACHE_WARM_SECRET" } }, ctx);
@@ -535,12 +834,20 @@ test("event binding uses foreground turns and ignores uncorrelated provider/cach
   assert.equal(stats.snapshot().activeRequests, 0, "idle cache warming is outside the window");
 
   f.emit("agent_start");
-  c.set(10); f.emit("turn_start", { turnIndex: 0, timestamp: Date.now() }, ctx);
-  c.set(15); f.emit("before_provider_request", { payload: { secret: "CONCURRENT_WARM_SECRET" } }, ctx);
-  c.set(20); f.emit("after_provider_response", { status: 200, headers: {} }, ctx);
-  assert.equal(stats.snapshot().activeRequests, 1, "provider/cache hooks neither supersede nor end the turn");
+  c.set(10);
+  f.emit("turn_start", { turnIndex: 0, timestamp: Date.now() }, ctx);
+  c.set(15);
+  f.emit("before_provider_request", { payload: { secret: "CONCURRENT_WARM_SECRET" } }, ctx);
+  c.set(20);
+  f.emit("after_provider_response", { status: 200, headers: {} }, ctx);
+  assert.equal(
+    stats.snapshot().activeRequests,
+    1,
+    "provider/cache hooks neither supersede nor end the turn",
+  );
   assert.equal(stats.snapshot().llmMs, 10, "duration starts at the SDK turn, including preflight");
-  c.set(30); f.emit("message_end", { message: assistant({ provider: "p", model: "main", output: 2 }) });
+  c.set(30);
+  f.emit("message_end", { message: assistant({ provider: "p", model: "main", output: 2 }) });
   f.emit("agent_end");
   c.set(40);
   assert.equal(stats.snapshot().health, "busy", "agent_end is not the settlement boundary");
@@ -551,11 +858,23 @@ test("event binding uses foreground turns and ignores uncorrelated provider/cach
 });
 
 test("streaming observes every delta but notifies only on cheap health transitions", () => {
-  const c = clock(), stats = new SessionStats(c.now), f = eventFixture();
-  let changes = 0, snapshots = 0;
+  const c = clock(),
+    stats = new SessionStats(c.now),
+    f = eventFixture();
+  let changes = 0,
+    snapshots = 0;
   const snapshot = stats.snapshot.bind(stats);
-  stats.snapshot = () => { snapshots++; return snapshot(); };
-  bindStatsEvents(f.pi, () => stats, () => { changes++; });
+  stats.snapshot = () => {
+    snapshots++;
+    return snapshot();
+  };
+  bindStatsEvents(
+    f.pi,
+    () => stats,
+    () => {
+      changes++;
+    },
+  );
   f.emit("agent_start");
   f.emit("turn_start", {}, { model: { id: "m", provider: "p" } });
   for (let index = 0; index < 2000; index++) {
@@ -566,34 +885,64 @@ test("streaming observes every delta but notifies only on cheap health transitio
   }
   assert.equal(changes, 1, "only unknown → busy should request a health repaint");
   assert.equal(snapshots, 0, "notification gating never constructs a model/tool snapshot");
-  f.bus("permissions:ui_prompt", { requestId: "one" }); assert.equal(changes, 2);
-  f.bus("permissions:ui_prompt", { requestId: "two" }); assert.equal(changes, 2);
-  f.bus("permissions:decision", { requestId: "one" }); assert.equal(changes, 2);
-  f.bus("permissions:decision", { requestId: "two" }); assert.equal(changes, 3);
-  f.emit("message_end", { message: assistant({ model: "m", provider: "p", output: 20, stopReason: "error" }) });
+  f.bus("permissions:ui_prompt", { requestId: "one" });
+  assert.equal(changes, 2);
+  f.bus("permissions:ui_prompt", { requestId: "two" });
+  assert.equal(changes, 2);
+  f.bus("permissions:decision", { requestId: "one" });
+  assert.equal(changes, 2);
+  f.bus("permissions:decision", { requestId: "two" });
+  assert.equal(changes, 3);
+  f.emit("message_end", {
+    message: assistant({ model: "m", provider: "p", output: 20, stopReason: "error" }),
+  });
   assert.equal(changes, 4, "provider failure repaints immediately");
-  f.emit("agent_settled"); assert.equal(changes, 4, "error remains visible after settlement");
-  f.emit("agent_start"); assert.equal(changes, 5);
-  f.emit("agent_settled"); assert.equal(changes, 6);
+  f.emit("agent_settled");
+  assert.equal(changes, 4, "error remains visible after settlement");
+  f.emit("agent_start");
+  assert.equal(changes, 5);
+  f.emit("agent_settled");
+  assert.equal(changes, 6);
   assert.equal(snapshots, 0);
   const observed = snapshot();
   assert.equal(observed.lastTtftMs, 1);
   assert.equal(observed.llmMs, 2000);
-  assert.equal(observed.models[0].outputTokens, 20, "suppressing redraws does not suppress observations");
+  assert.equal(
+    observed.models[0].outputTokens,
+    20,
+    "suppressing redraws does not suppress observations",
+  );
 });
 
 test("binding forwards only non-empty effective deltas and aggregates actual model identity", () => {
   const c = clock();
   const stats = new SessionStats(c.now);
   const f = eventFixture();
-  bindStatsEvents(f.pi, () => stats, () => {});
+  bindStatsEvents(
+    f.pi,
+    () => stats,
+    () => {},
+  );
   f.emit("agent_start");
-  c.set(5); f.emit("turn_start", { turnIndex: 0, timestamp: 0 }, { model: { id: "auto", provider: "router" } });
-  c.set(10); f.emit("message_update", { assistantMessageEvent: { type: "text_delta", delta: "" } });
-  c.set(15); f.emit("message_update", { assistantMessageEvent: { type: "thinking_delta", delta: "ok" } });
-  c.set(25); f.emit("message_end", { message: assistant({
-    provider: "served", model: "auto", responseModel: "real", output: 4,
-  }) });
+  c.set(5);
+  f.emit(
+    "turn_start",
+    { turnIndex: 0, timestamp: 0 },
+    { model: { id: "auto", provider: "router" } },
+  );
+  c.set(10);
+  f.emit("message_update", { assistantMessageEvent: { type: "text_delta", delta: "" } });
+  c.set(15);
+  f.emit("message_update", { assistantMessageEvent: { type: "thinking_delta", delta: "ok" } });
+  c.set(25);
+  f.emit("message_end", {
+    message: assistant({
+      provider: "served",
+      model: "auto",
+      responseModel: "real",
+      output: 4,
+    }),
+  });
   const snapshot = stats.snapshot();
   assert.equal(snapshot.lastTtftMs, 10);
   assert.equal(model(snapshot, "real").provider, "served");
@@ -603,67 +952,131 @@ test("binding measures idle/overlapping permission asks without exposing IDs or 
   const c = clock();
   const stats = new SessionStats(c.now);
   const f = eventFixture();
-  bindStatsEvents(f.pi, () => stats, () => {});
-  c.set(5); f.bus("permissions:ui_prompt", { requestId: "SECRET_APPROVAL_A", prompt: "SECRET_PROMPT" });
-  assert.equal(stats.snapshot().health, "waiting", "parent UI waits are observed before agent_start");
+  bindStatsEvents(
+    f.pi,
+    () => stats,
+    () => {},
+  );
+  c.set(5);
+  f.bus("permissions:ui_prompt", { requestId: "SECRET_APPROVAL_A", prompt: "SECRET_PROMPT" });
+  assert.equal(
+    stats.snapshot().health,
+    "waiting",
+    "parent UI waits are observed before agent_start",
+  );
   f.emit("agent_start");
-  c.set(10); f.bus("permissions:ui_prompt", { requestId: "SECRET_APPROVAL_B", toolArgs: "SECRET_ARGS" });
-  c.set(15); f.emit("tool_execution_start", {
-    toolCallId: "SECRET_TOOL_ID", toolName: "bash", args: { command: "SECRET_COMMAND" },
+  c.set(10);
+  f.bus("permissions:ui_prompt", { requestId: "SECRET_APPROVAL_B", toolArgs: "SECRET_ARGS" });
+  c.set(15);
+  f.emit("tool_execution_start", {
+    toolCallId: "SECRET_TOOL_ID",
+    toolName: "bash",
+    args: { command: "SECRET_COMMAND" },
   });
-  c.set(20); f.bus("permissions:decision", { requestId: "SECRET_APPROVAL_A", decision: "allow" });
-  c.set(25); f.emit("tool_execution_end", {
-    toolCallId: "SECRET_TOOL_ID", toolName: "bash", result: "SECRET_RESULT", isError: false,
+  c.set(20);
+  f.bus("permissions:decision", { requestId: "SECRET_APPROVAL_A", decision: "allow" });
+  c.set(25);
+  f.emit("tool_execution_end", {
+    toolCallId: "SECRET_TOOL_ID",
+    toolName: "bash",
+    result: "SECRET_RESULT",
+    isError: false,
   });
-  c.set(30); f.bus("permissions:decision", { requestId: "SECRET_APPROVAL_B", decision: "deny" });
+  c.set(30);
+  f.bus("permissions:decision", { requestId: "SECRET_APPROVAL_B", decision: "deny" });
   const serialized = JSON.stringify(stats.snapshot());
-  for (const secret of ["SECRET_APPROVAL", "SECRET_PROMPT", "SECRET_ARGS", "SECRET_TOOL_ID",
-    "SECRET_COMMAND", "SECRET_RESULT"]) {
+  for (const secret of [
+    "SECRET_APPROVAL",
+    "SECRET_PROMPT",
+    "SECRET_ARGS",
+    "SECRET_TOOL_ID",
+    "SECRET_COMMAND",
+    "SECRET_RESULT",
+  ]) {
     assert(!serialized.includes(secret), `snapshot retained ${secret}`);
   }
   assert.equal(stats.snapshot().approvalMs, 25);
 });
 
 test("binding takes Pi's execution time, so a gated wait is approval time, not tool time", () => {
-  const c = clock(), stats = new SessionStats(c.now), f = eventFixture();
-  bindStatsEvents(f.pi, () => stats, () => {});
+  const c = clock(),
+    stats = new SessionStats(c.now),
+    f = eventFixture();
+  bindStatsEvents(
+    f.pi,
+    () => stats,
+    () => {},
+  );
   f.emit("agent_start");
-  c.set(10); f.emit("tool_execution_start", { toolCallId: "approved", toolName: "bash" });
-  c.set(15); f.bus("permissions:ui_prompt", { requestId: "ask" });
+  c.set(10);
+  f.emit("tool_execution_start", { toolCallId: "approved", toolName: "bash" });
+  c.set(15);
+  f.bus("permissions:ui_prompt", { requestId: "ask" });
   c.set(40);
   assert.equal(stats.snapshot().toolMs, 0, "awaiting approval is not tool time");
   assert.equal(stats.snapshot().longestActiveToolMs, 30);
-  c.set(45); f.bus("permissions:decision", { requestId: "ask", decision: "allow" });
-  c.set(52); f.emit("tool_execution_end", { toolCallId: "approved", toolName: "bash", isError: false, durationMs: 7 });
+  c.set(45);
+  f.bus("permissions:decision", { requestId: "ask", decision: "allow" });
+  c.set(52);
+  f.emit("tool_execution_end", {
+    toolCallId: "approved",
+    toolName: "bash",
+    isError: false,
+    durationMs: 7,
+  });
   // Pi reports no duration for a call it never executed.
-  c.set(60); f.emit("tool_execution_start", { toolCallId: "denied", toolName: "bash" });
-  c.set(90); f.emit("tool_execution_end", { toolCallId: "denied", toolName: "bash", isError: true });
+  c.set(60);
+  f.emit("tool_execution_start", { toolCallId: "denied", toolName: "bash" });
+  c.set(90);
+  f.emit("tool_execution_end", { toolCallId: "denied", toolName: "bash", isError: true });
   const snapshot = stats.snapshot();
   assert.equal(snapshot.approvalMs, 30);
   assert.equal(snapshot.toolMs, 7);
   assert.deepEqual(tool(snapshot, "bash"), {
-    tool: "bash", calls: 2, errors: 1, totalMs: 7, maxMs: 7, partial: false,
+    tool: "bash",
+    calls: 2,
+    errors: 1,
+    totalMs: 7,
+    maxMs: 7,
+    partial: false,
   });
 });
 
 test("prompt settlement ends only its own approval wait even without a matching decision", () => {
-  const c = clock(), stats = new SessionStats(c.now), f = eventFixture();
+  const c = clock(),
+    stats = new SessionStats(c.now),
+    f = eventFixture();
   let changes = 0;
-  const dispose = bindStatsEvents(f.pi, () => stats, () => { changes++; });
+  const dispose = bindStatsEvents(
+    f.pi,
+    () => stats,
+    () => {
+      changes++;
+    },
+  );
   f.emit("agent_start");
-  c.set(5); f.bus("permissions:ui_prompt", { requestId: "local" });
-  c.set(10); f.bus("permissions:ui_prompt", { requestId: "worker" });
+  c.set(5);
+  f.bus("permissions:ui_prompt", { requestId: "local" });
+  c.set(10);
+  f.bus("permissions:ui_prompt", { requestId: "worker" });
   f.emit("agent_settled");
-  c.set(15); f.bus("permissions:decision", { requestId: "different-error-id", resolution: "gate_error" });
+  c.set(15);
+  f.bus("permissions:decision", { requestId: "different-error-id", resolution: "gate_error" });
   f.bus("managed-permissions:ui_prompt_end:v1", { requestId: "local" });
   f.bus("managed-permissions:ui_prompt_end:v1", { requestId: "local" });
   assert.equal(stats.snapshot().pendingApprovals, 1);
   assert.equal(stats.health, "waiting");
-  c.set(30); f.bus("managed-permissions:ui_prompt_end:v1", { requestId: "worker" });
+  c.set(30);
+  f.bus("managed-permissions:ui_prompt_end:v1", { requestId: "worker" });
   assert.equal(stats.health, "idle");
-  assert.equal(stats.snapshot().approvalMs, 25, "overlapping waits end at actual UI settlement, not parent idle");
+  assert.equal(
+    stats.snapshot().approvalMs,
+    25,
+    "overlapping waits end at actual UI settlement, not parent idle",
+  );
   const notified = changes;
-  c.set(50); f.bus("permissions:decision", { requestId: "worker" });
+  c.set(50);
+  f.bus("permissions:decision", { requestId: "worker" });
   assert.equal(changes, notified);
   assert.equal(stats.snapshot().approvalMs, 25);
   dispose();
@@ -675,15 +1088,27 @@ test("prompt settlement ends only its own approval wait even without a matching 
 test("event observers and redraws are fail-open; unsubscribe is idempotent", () => {
   const f = eventFixture();
   let statsCalls = 0;
-  const dispose = bindStatsEvents(f.pi, () => ({
-    startActivity() { statsCalls++; throw new Error("telemetry failure"); },
-  }), () => { throw new Error("render failure"); });
+  const dispose = bindStatsEvents(
+    f.pi,
+    () => ({
+      startActivity() {
+        statsCalls++;
+        throw new Error("telemetry failure");
+      },
+    }),
+    () => {
+      throw new Error("render failure");
+    },
+  );
   assert.doesNotThrow(() => f.emit("agent_start"));
   assert.equal(statsCalls, 1);
 
   const expectedSubscriptions = 10;
-  assert.equal([...f.handlers.values()].reduce((sum, set) => sum + set.size, 0)
-    + [...f.listeners.values()].reduce((sum, set) => sum + set.size, 0), expectedSubscriptions);
+  assert.equal(
+    [...f.handlers.values()].reduce((sum, set) => sum + set.size, 0) +
+      [...f.listeners.values()].reduce((sum, set) => sum + set.size, 0),
+    expectedSubscriptions,
+  );
   assert.doesNotThrow(dispose);
   assert.doesNotThrow(dispose);
   assert.equal(f.offCalls(), expectedSubscriptions);
@@ -696,15 +1121,28 @@ test("malformed bus and message objects cannot escape observers", () => {
   const c = clock();
   const stats = new SessionStats(c.now);
   const f = eventFixture();
-  bindStatsEvents(f.pi, () => stats, () => {});
+  bindStatsEvents(
+    f.pi,
+    () => stats,
+    () => {},
+  );
   f.emit("agent_start");
-  c.set(1); f.emit("turn_start", { turnIndex: 0, timestamp: 0 }, { model: { id: "m", provider: "p" } });
+  c.set(1);
+  f.emit("turn_start", { turnIndex: 0, timestamp: 0 }, { model: { id: "m", provider: "p" } });
   const poison = {};
-  Object.defineProperty(poison, "requestId", { get() { throw new Error("poison bus"); } });
+  Object.defineProperty(poison, "requestId", {
+    get() {
+      throw new Error("poison bus");
+    },
+  });
   assert.doesNotThrow(() => f.bus("permissions:ui_prompt", poison));
   assert.doesNotThrow(() => f.bus("managed-permissions:ui_prompt_end:v1", poison));
   const badMessage = {};
-  Object.defineProperty(badMessage, "role", { get() { throw new Error("poison message"); } });
+  Object.defineProperty(badMessage, "role", {
+    get() {
+      throw new Error("poison message");
+    },
+  });
   assert.doesNotThrow(() => f.emit("message_end", { message: badMessage }));
   assert.equal(stats.snapshot().activeRequests, 1);
 });

@@ -1,8 +1,18 @@
 import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
 import { graphemes, previewText } from "../ui/text.ts";
 
-type PreviewEvent = Extract<AssistantMessageEvent, { type:
-  "thinking_start" | "thinking_delta" | "thinking_end" | "text_start" | "text_delta" | "text_end" }>;
+type PreviewEvent = Extract<
+  AssistantMessageEvent,
+  {
+    type:
+      | "thinking_start"
+      | "thinking_delta"
+      | "thinking_end"
+      | "text_start"
+      | "text_delta"
+      | "text_end";
+  }
+>;
 
 /** Bound storage independently from terminal width, without splitting clusters. */
 export function boundedPreview(text: string, limit: number): string {
@@ -43,7 +53,10 @@ export class LinePreview {
     const current = (lines.pop() ?? "").trimStart();
     this.current = boundedPreview(current, PREVIEW_LIMIT);
     this.capped = this.current !== current;
-    this.previous = boundedPreview(lines.findLast((line) => line.trim())?.trimStart() ?? "", PREVIEW_LIMIT);
+    this.previous = boundedPreview(
+      lines.findLast((line) => line.trim())?.trimStart() ?? "",
+      PREVIEW_LIMIT,
+    );
   }
 
   append(delta: string, cumulative?: string): void {
@@ -53,7 +66,10 @@ export class LinePreview {
     this.needsCumulative ||= PROTOCOL_INTRODUCER.test(delta);
     if (this.needsCumulative) {
       if (cumulative !== undefined) this.replace(cumulative);
-      else { this.current = ""; this.previous = ""; }
+      else {
+        this.current = "";
+        this.previous = "";
+      }
       return;
     }
     for (const [index, line] of previewText(delta).split("\n").entries()) {
@@ -71,15 +87,27 @@ export class LinePreview {
   }
 
   update(event: PreviewEvent): void {
-    if (this.contentIndex !== event.contentIndex || event.type === "thinking_start" || event.type === "text_start") {
+    if (
+      this.contentIndex !== event.contentIndex ||
+      event.type === "thinking_start" ||
+      event.type === "text_start"
+    ) {
       this.clear();
       this.contentIndex = event.contentIndex;
     }
     const block = event.partial.content[event.contentIndex];
-    if (block?.type === "thinking" && block.redacted) { this.clear(); return; }
+    if (block?.type === "thinking" && block.redacted) {
+      this.clear();
+      return;
+    }
     if (event.type === "thinking_end" || event.type === "text_end") this.replace(event.content);
     else if (event.type === "thinking_delta" || event.type === "text_delta") {
-      const cumulative = block?.type === "thinking" ? block.thinking : block?.type === "text" ? block.text : undefined;
+      const cumulative =
+        block?.type === "thinking"
+          ? block.thinking
+          : block?.type === "text"
+            ? block.text
+            : undefined;
       this.append(event.delta, cumulative);
     }
   }

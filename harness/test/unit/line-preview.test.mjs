@@ -4,10 +4,18 @@ import { boundedPreview, LinePreview } from "../../dist/runtime/line-preview.js"
 
 // Only the public content block is relevant to this projection seam.
 const partial = (content) => ({ content });
-const text = (type, contentIndex, value, extra = {}) => ({ type, contentIndex,
-  partial: partial(Array.from({ length: contentIndex + 1 }, () => ({ type: "text", text: value }))), ...extra });
-const thought = (type, value, extra = {}) => ({ type, contentIndex: 0,
-  partial: partial([{ type: "thinking", thinking: value }]), ...extra });
+const text = (type, contentIndex, value, extra = {}) => ({
+  type,
+  contentIndex,
+  partial: partial(Array.from({ length: contentIndex + 1 }, () => ({ type: "text", text: value }))),
+  ...extra,
+});
+const thought = (type, value, extra = {}) => ({
+  type,
+  contentIndex: 0,
+  partial: partial([{ type: "thinking", thinking: value }]),
+  ...extra,
+});
 
 test("logical-line prefixes keep the left edge and the last nonblank line across empty tails", () => {
   const preview = new LinePreview();
@@ -81,19 +89,37 @@ test("redacted thinking is absent at start, delta and authoritative end", () => 
   const preview = new LinePreview();
   preview.update(thought("thinking_delta", "public", { delta: "public" }));
   for (const type of ["thinking_start", "thinking_delta", "thinking_end"]) {
-    preview.update({ type, contentIndex: 0, delta: "opaque", content: "opaque",
-      partial: partial([{ type: "thinking", redacted: true,
-        get thinking() { throw new Error("redacted content must not be read"); },
-        get thinkingSignature() { throw new Error("opaque signatures must not be read"); } }]) });
+    preview.update({
+      type,
+      contentIndex: 0,
+      delta: "opaque",
+      content: "opaque",
+      partial: partial([
+        {
+          type: "thinking",
+          redacted: true,
+          get thinking() {
+            throw new Error("redacted content must not be read");
+          },
+          get thinkingSignature() {
+            throw new Error("opaque signatures must not be read");
+          },
+        },
+      ]),
+    });
     assert.equal(preview.value(), "");
   }
   preview.update(thought("thinking_delta", "public again", { delta: "public again" }));
   assert.equal(preview.value(), "public again");
 });
 
-for (const [name, open, close] of [["OSC BEL", "\x1b]0;", "\x07"],
-  ["OSC ST", "\x1b]0;", "\x1b\\"], ["APC ST", "\x1b_", "\x1b\\"],
-  ["C1 OSC ST", "\x9d0;", "\x9c"], ["C1 APC ST", "\x9f", "\x9c"]]) {
+for (const [name, open, close] of [
+  ["OSC BEL", "\x1b]0;", "\x07"],
+  ["OSC ST", "\x1b]0;", "\x1b\\"],
+  ["APC ST", "\x1b_", "\x1b\\"],
+  ["C1 OSC ST", "\x9d0;", "\x9c"],
+  ["C1 APC ST", "\x9f", "\x9c"],
+]) {
   test(`${name} multiline payload is suppressed before and after its terminator`, () => {
     const preview = new LinePreview();
     preview.replace(`visible\n${open}hidden\nsecret-payload`);
@@ -105,7 +131,15 @@ for (const [name, open, close] of [["OSC BEL", "\x1b]0;", "\x07"],
   test(`${name} split across chunks uses cumulative public content, not payload lines`, () => {
     const preview = new LinePreview();
     let cumulative = "";
-    for (const delta of ["visible\n", open[0], open.slice(1), "hidden\n", "secret-payload", close, "\npublic"]) {
+    for (const delta of [
+      "visible\n",
+      open[0],
+      open.slice(1),
+      "hidden\n",
+      "secret-payload",
+      close,
+      "\npublic",
+    ]) {
       cumulative += delta;
       preview.append(delta, cumulative);
       assert.doesNotMatch(preview.value(), /hidden|secret-payload/);
@@ -130,8 +164,12 @@ test("an ESC without cumulative content fails closed until a safe cumulative blo
 
 test("normal prose uses deltas rather than reprocessing the growing public block", () => {
   const preview = new LinePreview();
-  preview.update(text("text_delta", 0, "unrelated cumulative content".repeat(10000), { delta: "first" }));
-  preview.update(text("text_delta", 0, "unrelated cumulative content".repeat(10000), { delta: " second" }));
+  preview.update(
+    text("text_delta", 0, "unrelated cumulative content".repeat(10000), { delta: "first" }),
+  );
+  preview.update(
+    text("text_delta", 0, "unrelated cumulative content".repeat(10000), { delta: " second" }),
+  );
   assert.equal(preview.value(), "first second");
 });
 

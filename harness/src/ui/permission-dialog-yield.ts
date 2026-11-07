@@ -51,8 +51,12 @@ const str = (value: unknown): string | undefined =>
 export class PaneYield {
   private state: "hidden" | "closed" | undefined;
   /** True while the pane is out of the way, however it got there. */
-  get active(): boolean { return this.state !== undefined; }
-  get closing(): boolean { return this.state === "closed"; }
+  get active(): boolean {
+    return this.state !== undefined;
+  }
+  get closing(): boolean {
+    return this.state === "closed";
+  }
   /** Claim the yield. False when the pane has already stepped aside, so the
    * second ask of a batch does not hide or close anything twice. */
   begin(how: "hidden" | "closed"): boolean {
@@ -69,7 +73,9 @@ export class PaneYield {
   /** The mount is gone. A pane that hid in place has nothing left to restore --
    * including one the user closed while it was hidden -- but a pane that closed
    * IN ORDER to yield keeps its intent, which is this type's whole reason to be. */
-  unmounted(): void { if (this.state === "hidden") this.state = undefined; }
+  unmounted(): void {
+    if (this.state === "hidden") this.state = undefined;
+  }
 }
 
 /**
@@ -102,18 +108,22 @@ export interface YieldHost {
  * closed to step aside but before the decision lands, where nothing is on
  * screen yet and the dialog is still coming.
  */
-export const mountable = (yielding: PaneYield, pending: number): boolean => !yielding.active && !pending;
+export const mountable = (yielding: PaneYield, pending: number): boolean =>
+  !yielding.active && !pending;
 
 /** One ui.custom attempt for the detail pane. See `OverlayRequest` for the
  * settlement and overlay-coordination contract both harness panels share. */
 export class PaneRequest extends OverlayRequest<void> {
-  constructor(beforeSettle: () => void = () => {}) { super(beforeSettle, undefined); }
+  constructor(beforeSettle: () => void = () => {}) {
+    super(beforeSettle, undefined);
+  }
 
   mount(done: () => void, yielding: PaneYield, pending: number): boolean {
     // An ask that landed while this attempt was queued must find the prompt
     // queue free, so re-arm the yield before settling empty-handed.
-    return this.attach(done, !mountable(yielding, pending),
-      () => { if (pending) yielding.begin("closed"); });
+    return this.attach(done, !mountable(yielding, pending), () => {
+      if (pending) yielding.begin("closed");
+    });
   }
 }
 
@@ -129,7 +139,10 @@ export class PaneRequest extends OverlayRequest<void> {
 export const paneYieldHandlers = (yielding: PaneYield, host: YieldHost): ApprovalHandlers => ({
   onPrompt: () => {
     const overlay = host.overlay();
-    if (overlay) { if (yielding.begin("hidden")) overlay.setHidden(true); return; }
+    if (overlay) {
+      if (yielding.begin("hidden")) overlay.setHidden(true);
+      return;
+    }
     const close = host.close();
     if (close && yielding.begin("closed")) close();
   },
@@ -139,9 +152,15 @@ export const paneYieldHandlers = (yielding: PaneYield, host: YieldHost): Approva
     if (yielding.closing && host.open()) return;
     const how = yielding.end();
     if (!how) return;
-    if (how === "hidden") { host.overlay()?.setHidden(false); return; }
+    if (how === "hidden") {
+      host.overlay()?.setHidden(false);
+      return;
+    }
     host.defer(() => {
-      if (!mountable(yielding, host.pending())) { yielding.begin("closed"); return; }
+      if (!mountable(yielding, host.pending())) {
+        yielding.begin("closed");
+        return;
+      }
       host.reopen();
     });
   },
@@ -151,7 +170,9 @@ export class ApprovalWatch {
   /** Asks whose dialog/decision has not settled, by request id. */
   private readonly shown = new Map<string, PendingApproval>();
   constructor(private readonly handlers: ApprovalHandlers) {}
-  get pending(): number { return this.shown.size; }
+  get pending(): number {
+    return this.shown.size;
+  }
   /** Ask on screen for a child session, if that child is the one being asked about. */
   forSession(sessionId: string | undefined): PendingApproval | undefined {
     if (!sessionId) return undefined;
@@ -160,36 +181,54 @@ export class ApprovalWatch {
   }
   /** Subscribe to the PARENT bus, which is where a forwarded ask is adjudicated. */
   bind(bus: EventBus): () => void {
-    const off = [bus.on(PERMISSION_UI_PROMPT, (data) => this.prompt(data)),
+    const off = [
+      bus.on(PERMISSION_UI_PROMPT, (data) => this.prompt(data)),
       bus.on(PERMISSION_DECISION, (data) => this.complete(data)),
       // A UI exception/timeout need not produce a matching decision. This is
       // observation only: no permission verdict is inferred from settlement.
-      bus.on("managed-permissions:ui_prompt_end:v1", (data) => this.complete(data))];
+      bus.on("managed-permissions:ui_prompt_end:v1", (data) => this.complete(data)),
+    ];
     // Forgetting the asks too: unbound, no decision can ever arrive to clear
     // them, and a watch that still reports `pending` would refuse every mount
     // for the rest of the process.
-    return () => { for (const unsubscribe of off) unsubscribe(); this.shown.clear(); };
+    return () => {
+      for (const unsubscribe of off) unsubscribe();
+      this.shown.clear();
+    };
   }
   private prompt(data: unknown): void {
     const event = data as Record<string, unknown> | undefined;
     const requestId = str(event?.requestId);
     if (!requestId || this.shown.has(requestId)) return;
     const forwarding = event?.forwarding as Record<string, unknown> | null | undefined;
-    const pending: PendingApproval = { requestId,
-      ...(str(forwarding?.requesterSessionId) ? { sessionId: str(forwarding?.requesterSessionId)! } : {}),
-      ...(str(forwarding?.requesterAgentName) ?? str(event?.agentName)
-        ? { agentName: (str(forwarding?.requesterAgentName) ?? str(event?.agentName))! } : {}),
+    const pending: PendingApproval = {
+      requestId,
+      ...(str(forwarding?.requesterSessionId)
+        ? { sessionId: str(forwarding?.requesterSessionId)! }
+        : {}),
+      ...((str(forwarding?.requesterAgentName) ?? str(event?.agentName))
+        ? { agentName: (str(forwarding?.requesterAgentName) ?? str(event?.agentName))! }
+        : {}),
       ...(str(event?.surface) ? { surface: str(event?.surface)! } : {}),
-      ...(str(event?.value) ? { value: str(event?.value)! } : {}) };
+      ...(str(event?.value) ? { value: str(event?.value)! } : {}),
+    };
     this.shown.set(requestId, pending);
     // A throwing observer must not take the dialog down with it.
-    try { this.handlers.onPrompt(pending); } catch { /* the dialog still shows */ }
+    try {
+      this.handlers.onPrompt(pending);
+    } catch {
+      /* the dialog still shows */
+    }
   }
   private complete(data: unknown): void {
     const requestId = str((data as Record<string, unknown> | undefined)?.requestId);
     // Most decisions never reach a dialog (policy allow/deny, session grants,
     // authorizer links). Only the ones we saw prompt can end a yield.
     if (!requestId || !this.shown.delete(requestId) || this.shown.size > 0) return;
-    try { this.handlers.onIdle(); } catch { /* nothing left to release */ }
+    try {
+      this.handlers.onIdle();
+    } catch {
+      /* nothing left to release */
+    }
   }
 }

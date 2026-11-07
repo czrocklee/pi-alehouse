@@ -1,4 +1,10 @@
-import type { CommunicationAction, CommunicationEnvelope, CommunicationReason, TaskEntry, ThinTaskEntry } from "./communication-envelope.ts";
+import type {
+  CommunicationAction,
+  CommunicationEnvelope,
+  CommunicationReason,
+  TaskEntry,
+  ThinTaskEntry,
+} from "./communication-envelope.ts";
 import type { CancellationSource } from "./contracts.ts";
 import type { QuestionId } from "./question-id.ts";
 import type { ResultCursorIdentity } from "./result-cursor.ts";

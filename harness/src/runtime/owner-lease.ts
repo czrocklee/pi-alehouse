@@ -1,6 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, constants, fchmodSync, fstatSync, lstatSync, openSync, realpathSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fchmodSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  realpathSync,
+} from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { mkdir } from "node:fs/promises";
 import { isId } from "../core/result-text.ts";
@@ -19,7 +27,9 @@ export class FileLeaseLock {
     // Trusted host input, never a model parameter. Deployment must supply the
     // Nix-pinned executable; do not resolve a command from a project's PATH.
     if (!isAbsolute(flock)) throw new Error("FLOCK_ABSOLUTE_PATH_REQUIRED");
-    try { flock = realpathSync(flock); } catch (cause) {
+    try {
+      flock = realpathSync(flock);
+    } catch (cause) {
       throw new Error("LOCK_HANDSHAKE_FAILED", { cause });
     }
     const dir = lstatSync(directory);
@@ -27,7 +37,11 @@ export class FileLeaseLock {
       throw new Error("OWNER_DIRECTORY_MUST_BE_PRIVATE");
     }
     this.path = join(directory, "owner.lock");
-    this.fd = openSync(this.path, constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW, 0o600);
+    this.fd = openSync(
+      this.path,
+      constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW,
+      0o600,
+    );
     try {
       const file = fstatSync(this.fd);
       if (!file.isFile() || file.nlink !== 1 || file.uid !== process.getuid?.()) {
@@ -50,9 +64,15 @@ export class FileLeaseLock {
       // A no-op/broken wrapper returning zero is not proof of a held lock.
       // Reopen independently (without passing our fd): the trusted flock must
       // report contention. This diagnoses accidents, not malicious binaries.
-      const contender = spawnSync(flock, ["--exclusive", "--nonblock", this.path, process.execPath, "-e", ""], {
-        stdio: ["ignore", "ignore", "pipe"], timeout: timeoutMs, killSignal: "SIGKILL",
-      });
+      const contender = spawnSync(
+        flock,
+        ["--exclusive", "--nonblock", this.path, process.execPath, "-e", ""],
+        {
+          stdio: ["ignore", "ignore", "pipe"],
+          timeout: timeoutMs,
+          killSignal: "SIGKILL",
+        },
+      );
       if (contender.error || contender.status !== 1) throw new Error("LOCK_NOT_CONFIRMED");
       this.assertHeld();
     } catch (error) {
@@ -66,7 +86,12 @@ export class FileLeaseLock {
     if (this.fd === undefined) throw new Error("OWNER_LOCK_CLOSED");
     const actual = fstatSync(this.fd);
     const named = lstatSync(this.path);
-    if (!named.isFile() || actual.dev !== named.dev || actual.ino !== named.ino || actual.nlink !== 1) {
+    if (
+      !named.isFile() ||
+      actual.dev !== named.dev ||
+      actual.ino !== named.ino ||
+      actual.nlink !== 1
+    ) {
       throw new Error("LOCK_INODE_CHANGED");
     }
   }
@@ -77,8 +102,9 @@ export class FileLeaseLock {
     if (this.fd === undefined) return;
     const fd = this.fd;
     this.fd = undefined;
-    try { closeSync(fd); }
-    catch (cause) {
+    try {
+      closeSync(fd);
+    } catch (cause) {
       this.closeFailure = new Error("LOCK_CLEANUP_UNCERTAIN", { cause });
       throw this.closeFailure;
     }
@@ -90,8 +116,18 @@ export class FileLeaseLock {
  * Deriving the directory from owner_id replaces the old owner.json binding.
  */
 export class FileOwnerLease extends FileLeaseLock implements OwnerLease {
-  private constructor(directory: string, readonly owner_id: string, flock: string) { super(directory, flock); }
-  static async open(options: { directory: string; owner_id: string; flock: string }): Promise<FileOwnerLease> {
+  private constructor(
+    directory: string,
+    readonly owner_id: string,
+    flock: string,
+  ) {
+    super(directory, flock);
+  }
+  static async open(options: {
+    directory: string;
+    owner_id: string;
+    flock: string;
+  }): Promise<FileOwnerLease> {
     if (!isId(options.owner_id)) throw new HarnessError("INVALID_OWNER_ID");
     const directory = join(options.directory, options.owner_id);
     await mkdir(directory, { recursive: true, mode: 0o700 });

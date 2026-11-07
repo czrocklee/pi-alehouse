@@ -2,8 +2,12 @@
  * probe, permission decision, lifecycle authority or provider request of its own. */
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
-import { FOOTER_INDICATOR_CLICK_EVENT, HEALTH_INDICATOR, HIDE_TRANSIENT_OVERLAYS_EVENT,
-  type FooterIndicatorClick } from "../lib/overlay-protocol.mjs";
+import {
+  FOOTER_INDICATOR_CLICK_EVENT,
+  HEALTH_INDICATOR,
+  HIDE_TRANSIENT_OVERLAYS_EVENT,
+  type FooterIndicatorClick,
+} from "../lib/overlay-protocol.mjs";
 import { bindStatsEvents, SessionStats, type SessionHealth } from "./lib/session-stats.ts";
 import { WorkerStats } from "./lib/worker-stats.ts";
 import { STATS_WORKER_ATTACH, type WorkerStatsAttachment } from "../lib/stats-protocol.mjs";
@@ -15,11 +19,15 @@ const WIDGET_KEY = "stats-host";
  * health score or latency threshold. The Stats view spells the state out. */
 export function healthStatus(theme: Pick<Theme, "fg">, health: SessionHealth): string {
   switch (health) {
-    case "busy": return theme.fg("accent", "●");
-    case "waiting": return theme.fg("warning", "●");
-    case "error": return theme.fg("error", "●");
+    case "busy":
+      return theme.fg("accent", "●");
+    case "waiting":
+      return theme.fg("warning", "●");
+    case "error":
+      return theme.fg("error", "●");
     // Nothing running: idle, or nothing observed yet.
-    default: return theme.fg("dim", "●");
+    default:
+      return theme.fg("dim", "●");
   }
 }
 
@@ -47,7 +55,11 @@ export default function statsExtension(pi: ExtensionAPI): void {
     const previous = open;
     open = undefined;
     if (!previous) return;
-    try { previous.handle.hide(); } finally { previous.view.dispose(); }
+    try {
+      previous.handle.hide();
+    } finally {
+      previous.view.dispose();
+    }
   };
   const snapshot = (main: SessionStats, group: WorkerStats | undefined): StatsDashboardSnapshot => {
     const s = main.snapshot();
@@ -55,7 +67,12 @@ export default function statsExtension(pi: ExtensionAPI): void {
     // Parent permission dialogs already include forwarded child asks. Do not
     // count those waits again in each worker, or mistake sums for wall time.
     const health = combinedHealth(s.health, w?.health);
-    return { ...s, health, partial: s.partial || w?.partial === true, ...(w ? { workers: w } : {}) };
+    return {
+      ...s,
+      health,
+      partial: s.partial || w?.partial === true,
+      ...(w ? { workers: w } : {}),
+    };
   };
   const paint = (): void => {
     if (!ctx?.hasUI || !stats) return;
@@ -67,7 +84,9 @@ export default function statsExtension(pi: ExtensionAPI): void {
         ctx.ui.setStatus(HEALTH_INDICATOR, status);
         lastStatus = status;
       }
-    } catch { /* Observations must not affect the work they describe. */ }
+    } catch {
+      /* Observations must not affect the work they describe. */
+    }
   };
   const cleanup = (): void => {
     if (timer) clearInterval(timer);
@@ -80,13 +99,24 @@ export default function statsExtension(pi: ExtensionAPI): void {
     tui = undefined;
     prompts = 0;
     lastStatus = undefined;
-    const cleanups = [close, unbind, ...off, () => retiredWorkers?.dispose(),
+    const cleanups = [
+      close,
+      unbind,
+      ...off,
+      () => retiredWorkers?.dispose(),
       () => context?.ui.setStatus(HEALTH_INDICATOR, undefined),
-      () => { if (context?.mode === "tui") context.ui.setWidget(WIDGET_KEY, undefined); }];
+      () => {
+        if (context?.mode === "tui") context.ui.setWidget(WIDGET_KEY, undefined);
+      },
+    ];
     unbind = undefined;
     off = [];
     for (const cleanup of cleanups) {
-      try { cleanup?.(); } catch { /* Reach every cleanup even if the UI is gone. */ }
+      try {
+        cleanup?.();
+      } catch {
+        /* Reach every cleanup even if the UI is gone. */
+      }
     }
   };
   const toggle = (): void => {
@@ -97,37 +127,67 @@ export default function statsExtension(pi: ExtensionAPI): void {
       // Regular-mode overlays get baked into terminal scrollback. A non-modal
       // summary is safer than occupying the shared approval prompt queue.
       const s = snapshot(stats, workers);
-      ctx.ui.notify(["Stats · main session + managed workers, since opening", "", ...statsSummary(s), "",
-        "LLM/tool sums overlap and are not wall time. Models and tools are in the fullscreen Stats view.",
-        "Compaction, cache warming and historical timing are not observed."].join("\n"), "info");
+      ctx.ui.notify(
+        [
+          "Stats · main session + managed workers, since opening",
+          "",
+          ...statsSummary(s),
+          "",
+          "LLM/tool sums overlap and are not wall time. Models and tools are in the fullscreen Stats view.",
+          "Compaction, cache warming and historical timing are not observed.",
+        ].join("\n"),
+        "info",
+      );
       return;
     }
     const context = ctx;
     const observed = stats;
     const group = workers;
     const host = tui;
-    const view = new StatsView({ tui: host, get theme() { return context.ui.theme; },
-      snapshot: () => snapshot(observed, group), close });
+    const view = new StatsView({
+      tui: host,
+      get theme() {
+        return context.ui.theme;
+      },
+      snapshot: () => snapshot(observed, group),
+      close,
+    });
     try {
       // A separate, readable details surface. It is deliberately NOT another
       // member of the small bottom-right popover column. Pi reads the width on
       // every layout, so the box follows its tables and terminal resizes.
-      const handle = host.showOverlay(view, { anchor: "center", maxHeight: "75%", minWidth: 40,
-        get width() { return view.preferredWidth(Math.floor(host.terminal.columns * 0.85)); } });
+      const handle = host.showOverlay(view, {
+        anchor: "center",
+        maxHeight: "75%",
+        minWidth: 40,
+        get width() {
+          return view.preferredWidth(Math.floor(host.terminal.columns * 0.85));
+        },
+      });
       open = { view, handle };
       host.requestRender();
-    } catch (error) { view.dispose(); throw error; }
+    } catch (error) {
+      view.dispose();
+      throw error;
+    }
   };
   const toggleSafely = (): void => {
-    try { toggle(); }
-    catch (error) {
-      try { ctx?.ui.notify(`Stats view could not open: ${String(error)}`, "error"); } catch { /* best effort */ }
+    try {
+      toggle();
+    } catch (error) {
+      try {
+        ctx?.ui.notify(`Stats view could not open: ${String(error)}`, "error");
+      } catch {
+        /* best effort */
+      }
     }
   };
 
   pi.registerCommand("stats", {
     description: "Main and worker performance: elapsed time, request latency, throughput and tools",
-    handler: async () => { toggleSafely(); },
+    handler: async () => {
+      toggleSafely();
+    },
   });
   pi.on("session_start", (_event, context) => {
     cleanup();
@@ -138,18 +198,23 @@ export default function statsExtension(pi: ExtensionAPI): void {
     workers = group;
     const parentId = context.sessionManager.getSessionId();
     const current = (): boolean => stats === observed;
-    unbind = bindStatsEvents(pi, () => current() ? observed : undefined, paint);
-    const closeCurrent = (): void => { if (current()) close(); };
+    unbind = bindStatsEvents(pi, () => (current() ? observed : undefined), paint);
+    const closeCurrent = (): void => {
+      if (current()) close();
+    };
     off = [
       pi.events.on(STATS_WORKER_ATTACH, (raw) => {
         // An old/different owner cannot attach observations to this window.
         // Only small metadata methods cross this optional handshake.
         try {
           const request = raw as WorkerStatsAttachment | undefined;
-          if (!current() || !request || request.parentId !== parentId || request.sink !== undefined) return;
+          if (!current() || !request || request.parentId !== parentId || request.sink !== undefined)
+            return;
           request.sink = group.attach(request.workerId);
           paint();
-        } catch { /* A broken telemetry consumer must not prevent child creation. */ }
+        } catch {
+          /* A broken telemetry consumer must not prevent child creation. */
+        }
       }),
       pi.events.on(FOOTER_INDICATOR_CLICK_EVENT, (raw) => {
         const click = raw as FooterIndicatorClick | undefined;
@@ -161,22 +226,40 @@ export default function statsExtension(pi: ExtensionAPI): void {
       // coordination; current Pi's ui.custom completion removes its own entry.
       pi.events.on(HIDE_TRANSIENT_OVERLAYS_EVENT, closeCurrent),
       pi.events.on("permissions:ui_prompt", closeCurrent),
-      pi.on("ui_prompt_start", () => { if (current()) { prompts++; close(); } }),
+      pi.on("ui_prompt_start", () => {
+        if (current()) {
+          prompts++;
+          close();
+        }
+      }),
       // Registered after bindStatsEvents, so the main collector has settled.
       // A parent run that ends on an answer has seen its workers' failures; an
       // idle worker that is never resumed must not hold the indicator red. An
       // aborted run has seen nothing, even after a successful toolUse response.
-      pi.on("agent_settled", () => { if (current() && observed.lastRunSucceeded) group.clearSettledFailures(); }),
-      pi.on("ui_prompt_end", () => { if (current()) prompts = Math.max(0, prompts - 1); }),
+      pi.on("agent_settled", () => {
+        if (current() && observed.lastRunSucceeded) group.clearSettledFailures();
+      }),
+      pi.on("ui_prompt_end", () => {
+        if (current()) prompts = Math.max(0, prompts - 1);
+      }),
     ];
     if (context.mode === "tui" && context.hasUI) {
       context.ui.setWidget(WIDGET_KEY, (host) => {
         if (current()) tui = host;
-        return { render: () => [], invalidate: () => { if (current()) paint(); } };
+        return {
+          render: () => [],
+          invalidate: () => {
+            if (current()) paint();
+          },
+        };
       });
       timer = setInterval(() => {
         paint();
-        try { if (open) tui?.requestRender(); } catch { /* TUI may be shutting down. */ }
+        try {
+          if (open) tui?.requestRender();
+        } catch {
+          /* TUI may be shutting down. */
+        }
       }, 1000);
       timer.unref?.();
     }

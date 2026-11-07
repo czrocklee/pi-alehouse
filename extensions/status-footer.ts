@@ -1,24 +1,61 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { getAgentDir, type ContextUsage, type ExtensionAPI, type ExtensionContext, type SessionEntry, type Theme } from "@earendil-works/pi-coding-agent";
+import {
+  getAgentDir,
+  type ContextUsage,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type SessionEntry,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import type { OverlayHandle, TuiMouseEvent } from "@earendil-works/pi-tui";
 import { isKeyRelease, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatTokenCount } from "../lib/token-format.mjs";
-import { collectContextSnapshot, type ContextModelIdentity, type ContextSnapshot } from "./lib/context-stats.ts";
+import {
+  collectContextSnapshot,
+  type ContextModelIdentity,
+  type ContextSnapshot,
+} from "./lib/context-stats.ts";
 import { ContextView } from "./lib/context-view.ts";
 import { CompactionProgress } from "./lib/compaction-progress.ts";
-import { APPROVAL_INDICATOR, FOOTER_INDICATOR_CLICK_EVENT, HEALTH_INDICATOR, HIDE_TRANSIENT_OVERLAYS_EVENT, PINNED_INDICATORS,
+import {
+  APPROVAL_INDICATOR,
+  FOOTER_INDICATOR_CLICK_EVENT,
+  HEALTH_INDICATOR,
+  HIDE_TRANSIENT_OVERLAYS_EVENT,
+  PINNED_INDICATORS,
   PINNED_POPOVER_YIELD_EVENT,
-  WORKER_PRESET_INDICATOR, type FooterIndicatorClick } from "../lib/overlay-protocol.mjs";
-import { POPOVER as BOX, POPOVER_CLOSE_COLUMNS, isPopoverCloseClick, popoverCloseHit, popoverCloseTail,
-  popoverRule, popoverSide } from "../lib/popover-frame.mjs";
+  WORKER_PRESET_INDICATOR,
+  type FooterIndicatorClick,
+} from "../lib/overlay-protocol.mjs";
+import {
+  POPOVER as BOX,
+  POPOVER_CLOSE_COLUMNS,
+  isPopoverCloseClick,
+  popoverCloseHit,
+  popoverCloseTail,
+  popoverRule,
+  popoverSide,
+} from "../lib/popover-frame.mjs";
 // render() returns one clipped line, never a wrapping component: exactly the
 // POPOVER_DOCK_ROWS the bottom-right popover column rests on.
-import { POPOVER_DOCK_ROWS, focusOrigin, focusRevealed, joinPopoverStack, stackedOverlayOptions, type StackMember } from "../lib/popover-stack.mjs";
-import { SPEND_FIELDS, usageTotals, readUsageAttribution as attribution,
-  type UsageTotals, type HostModelSpend as SpendAttribution } from "../lib/usage-attribution.mjs";
+import {
+  POPOVER_DOCK_ROWS,
+  focusOrigin,
+  focusRevealed,
+  joinPopoverStack,
+  stackedOverlayOptions,
+  type StackMember,
+} from "../lib/popover-stack.mjs";
+import {
+  SPEND_FIELDS,
+  usageTotals,
+  readUsageAttribution as attribution,
+  type UsageTotals,
+  type HostModelSpend as SpendAttribution,
+} from "../lib/usage-attribution.mjs";
 
 // Pi assigns this API id to virtual catalog entries. It is not a package export;
 // any other API is a physical model, and a missing API is not treated as virtual.
@@ -134,7 +171,10 @@ function quotaSnapshot(headers: Record<string, string>): CodexQuotaSnapshot {
   return snapshot;
 }
 
-function quotaSnapshotFromStream(value: unknown, previous: CodexQuotaSnapshot | undefined): CodexQuotaSnapshot | undefined {
+function quotaSnapshotFromStream(
+  value: unknown,
+  previous: CodexQuotaSnapshot | undefined,
+): CodexQuotaSnapshot | undefined {
   const limits = asRecord(value);
   if (!limits) return undefined;
   const snapshot = { ...previous };
@@ -143,7 +183,10 @@ function quotaSnapshotFromStream(value: unknown, previous: CodexQuotaSnapshot | 
     const data = asRecord(limits[bucket]);
     const prior = previous?.[bucket];
     const resetAt = data?.reset_at;
-    if (resetAt != null && (typeof resetAt !== "number" || !Number.isInteger(resetAt) || resetAt < 0)) {
+    if (
+      resetAt != null &&
+      (typeof resetAt !== "number" || !Number.isInteger(resetAt) || resetAt < 0)
+    ) {
       // Bad supplied metadata must not turn an expired window into reset=0.
       delete snapshot[bucket];
       continue;
@@ -156,7 +199,8 @@ function quotaSnapshotFromStream(value: unknown, previous: CodexQuotaSnapshot | 
       [data?.window_minutes ?? prior?.windowMinutes, "window-minutes"],
       [data?.reset_at ?? prior?.resetsAt, "reset-at"],
     ] as const) {
-      if (typeof number === "number" && Number.isFinite(number)) headers[`x-codex-${bucket}-${suffix}`] = String(number);
+      if (typeof number === "number" && Number.isFinite(number))
+        headers[`x-codex-${bucket}-${suffix}`] = String(number);
     }
     const next = quotaSnapshot(headers)[bucket];
     if (next) snapshot[bucket] = next;
@@ -165,7 +209,10 @@ function quotaSnapshotFromStream(value: unknown, previous: CodexQuotaSnapshot | 
   return snapshot;
 }
 
-function quotaSnapshotsEqual(left: CodexQuotaSnapshot | undefined, right: CodexQuotaSnapshot): boolean {
+function quotaSnapshotsEqual(
+  left: CodexQuotaSnapshot | undefined,
+  right: CodexQuotaSnapshot,
+): boolean {
   if (!left) return false;
   return QUOTA_BUCKET_NAMES.every((bucket) => {
     const leftBucket = left[bucket];
@@ -193,7 +240,10 @@ function codexQuota(snapshot: CodexQuotaSnapshot): CodexQuota | undefined {
     resetsAt: bucket.resetsAt,
     windowMinutes: bucket.windowMinutes,
   });
-  return { ...(short ? { short: window(short) } : {}), ...(weekly ? { weekly: window(weekly) } : {}) };
+  return {
+    ...(short ? { short: window(short) } : {}),
+    ...(weekly ? { weekly: window(weekly) } : {}),
+  };
 }
 
 /** `5h` for a 300-minute window; minutes when it is not whole hours. */
@@ -208,7 +258,10 @@ function isCodexQuotaSource(model: { api?: string } | undefined): boolean {
   return model?.api === "openai-codex-responses";
 }
 
-function windowQuotasEqual(left: CodexWindowQuota | undefined, right: CodexWindowQuota | undefined): boolean {
+function windowQuotasEqual(
+  left: CodexWindowQuota | undefined,
+  right: CodexWindowQuota | undefined,
+): boolean {
   if (!left || !right) return left === right;
   return (
     left.remainingPercent === right.remainingPercent &&
@@ -233,20 +286,33 @@ function quotaHeaders(headers: Record<string, string>): Record<string, string> {
 
 function codexCredits(value: unknown): CodexCredits | undefined {
   const data = asRecord(value);
-  if (typeof data?.has_credits !== "boolean" || typeof data.unlimited !== "boolean") return undefined;
+  if (typeof data?.has_credits !== "boolean" || typeof data.unlimited !== "boolean")
+    return undefined;
   const raw = typeof data.balance === "string" ? data.balance.trim() : "";
   // Validate before putting untrusted provider text on the terminal. Preserve
   // decimals (including tiny balances) without Number's rounding/precision loss.
-  const balance = /^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(raw) && Number.isFinite(Number(raw))
-    ? raw : undefined;
-  return { hasCredits: data.has_credits, unlimited: data.unlimited, ...(balance !== undefined ? { balance } : {}) };
+  const balance =
+    /^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(raw) && Number.isFinite(Number(raw))
+      ? raw
+      : undefined;
+  return {
+    hasCredits: data.has_credits,
+    unlimited: data.unlimited,
+    ...(balance !== undefined ? { balance } : {}),
+  };
 }
 
 function codexCreditsFromHeaders(headers: Record<string, string>): CodexCredits | undefined {
-  const normalized = Object.fromEntries(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]));
+  const normalized = Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]),
+  );
   const boolean = (name: string): boolean | undefined => {
     const value = normalized[name]?.trim().toLowerCase();
-    return value === "true" || value === "1" ? true : value === "false" || value === "0" ? false : undefined;
+    return value === "true" || value === "1"
+      ? true
+      : value === "false" || value === "0"
+        ? false
+        : undefined;
   };
   return codexCredits({
     has_credits: boolean("x-codex-credits-has-credits"),
@@ -256,7 +322,11 @@ function codexCreditsFromHeaders(headers: Record<string, string>): CodexCredits 
 }
 
 function codexCreditsEqual(left: CodexCredits | undefined, right: CodexCredits): boolean {
-  return left?.hasCredits === right.hasCredits && left.unlimited === right.unlimited && left.balance === right.balance;
+  return (
+    left?.hasCredits === right.hasCredits &&
+    left.unlimited === right.unlimited &&
+    left.balance === right.balance
+  );
 }
 
 /** Render whole credits for the footer; the exact reported balance stays cached.
@@ -290,7 +360,10 @@ async function publishQuota(headers: Record<string, string>): Promise<boolean> {
   }
 }
 
-function grokQuotasEqual(left: GrokWeeklyQuota | undefined, right: GrokWeeklyQuota | undefined): boolean {
+function grokQuotasEqual(
+  left: GrokWeeklyQuota | undefined,
+  right: GrokWeeklyQuota | undefined,
+): boolean {
   if (!left || !right) return left === right;
   return (
     left.remainingPercent === right.remainingPercent &&
@@ -436,7 +509,10 @@ async function injectGrokQuota(payload: Record<string, unknown>): Promise<void> 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         config: asRecord(payload.config) ?? payload,
-        subscriptionTier: payload.subscriptionTier ?? payload.subscription_tier ?? payload.subscription_tier_display,
+        subscriptionTier:
+          payload.subscriptionTier ??
+          payload.subscription_tier ??
+          payload.subscription_tier_display,
       }),
       signal: controller.signal,
     });
@@ -501,10 +577,7 @@ function addSpend(byKey: Map<string, UsageTotals>, entries: readonly SessionEntr
       const message = entry.message;
       const model = message.responseModel ?? message.model;
       addUsage(bucket(`${message.provider}/${model}`), message.usage);
-    } else if (
-      entry.type === "message" &&
-      entry.message.role === "toolResult"
-    ) {
+    } else if (entry.type === "message" && entry.message.role === "toolResult") {
       const usage = entry.message.usage;
       const claims = attribution(usage);
       // Whatever the workers claimed goes to their own models; whatever is left
@@ -525,7 +598,9 @@ function spendRows(byKey: Map<string, UsageTotals>): ModelSpend[] {
   return [...byKey]
     .map(([key, totals]) => ({ key, ...totals }))
     .filter((row) => row.cost > 0 || spendTokens(row) > 0)
-    .sort((a, b) => b.cost - a.cost || spendTokens(b) - spendTokens(a) || a.key.localeCompare(b.key));
+    .sort(
+      (a, b) => b.cost - a.cost || spendTokens(b) - spendTokens(a) || a.key.localeCompare(b.key),
+    );
 }
 
 type SessionStamp = { id: string; leaf: string | null; count?: number };
@@ -541,9 +616,16 @@ function sessionStamp(manager: ExtensionContext["sessionManager"]): SessionStamp
     // Public on SessionManager, but optional/not in every host's read-only
     // extension view. Never reach into fileEntries/byId to synthesize it.
     const count = (manager as typeof manager & { getEntryCount?: () => number }).getEntryCount?.();
-    if (typeof id !== "string" || !id || !(leaf === null || typeof leaf === "string")) return undefined;
-    return { id, leaf, ...(typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? { count } : {}) };
-  } catch { return undefined; }
+    if (typeof id !== "string" || !id || !(leaf === null || typeof leaf === "string"))
+      return undefined;
+    return {
+      id,
+      leaf,
+      ...(typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? { count } : {}),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function sessionSource(ctx: ExtensionContext): SessionSource {
@@ -563,7 +645,9 @@ function presentationMemo<T>() {
       cached = { manager: source.manager, key, value };
       return value;
     },
-    clear() { cached = undefined; },
+    clear() {
+      cached = undefined;
+    },
   };
 }
 
@@ -583,7 +667,8 @@ function spendReader(): (source: SessionSource) => ModelSpend[] {
     const sameSession = manager === source.manager && identity === stamp?.id;
     // Without a reliable full-journal revision, A → unobserved paid B → A
     // cannot be detected from the leaf. Read all spend freshly in that case.
-    if (sameSession && stamp?.count !== undefined && stamp.count === count && stamp.leaf === leaf) return rows;
+    if (sameSession && stamp?.count !== undefined && stamp.count === count && stamp.leaf === leaf)
+      return rows;
     let added: SessionEntry[] | undefined;
     if (sameSession && stamp?.count !== undefined && count !== undefined && stamp.count >= count) {
       const delta = stamp.count - count;
@@ -604,18 +689,23 @@ function spendReader(): (source: SessionSource) => ModelSpend[] {
           if (pending.length === delta && (id === null || (id !== undefined && seen.has(id)))) {
             added = pending.reverse();
           }
-        } catch { /* Unknown traversal: use the complete public entry list. */ }
+        } catch {
+          /* Unknown traversal: use the complete public entry list. */
+        }
       }
     }
     if (!added) {
       added = source.manager.getEntries();
-      byKey.clear(); seen.clear();
+      byKey.clear();
+      seen.clear();
     }
     addSpend(byKey, added);
     for (const entry of added) seen.add(entry.id);
     rows = spendRows(byKey);
-    manager = source.manager; identity = stamp?.id;
-    count = stamp?.count; leaf = stamp?.leaf;
+    manager = source.manager;
+    identity = stamp?.id;
+    count = stamp?.count;
+    leaf = stamp?.leaf;
     return rows;
   };
 }
@@ -699,7 +789,8 @@ function assistantMessage(entry: SessionEntry): AssistantMessage | undefined {
 function branchOmits(branch: readonly SessionEntry[], id: string): boolean {
   let omitted = false;
   for (const entry of branch) {
-    if (entry.type === "context_edit" && entry.targetId === id) omitted = entry.replacement === null;
+    if (entry.type === "context_edit" && entry.targetId === id)
+      omitted = entry.replacement === null;
   }
   return omitted;
 }
@@ -732,7 +823,11 @@ function physicalRoute(ctx: ExtensionContext): { id: string; thinkingLevel?: str
     const message = assistantMessage(entry);
     if (!message) continue;
     if (branchOmits(branch, entry.id)) return undefined;
-    if (message.api === VIRTUAL_MODEL_API || !SETTLED_ROUTE_STOPS.has(message.stopReason) || !message.model) {
+    if (
+      message.api === VIRTUAL_MODEL_API ||
+      !SETTLED_ROUTE_STOPS.has(message.stopReason) ||
+      !message.model
+    ) {
       return undefined;
     }
     return {
@@ -755,7 +850,11 @@ function subscriptionSuffix(ctx: ExtensionContext): string {
   if (provider === "kimi-coding") return " sub";
   const model = ctx.model;
   const registry = ctx.modelRegistry;
-  if (!model || typeof registry?.isUsingOAuth !== "function" || typeof registry.getProvider !== "function") {
+  if (
+    !model ||
+    typeof registry?.isUsingOAuth !== "function" ||
+    typeof registry.getProvider !== "function"
+  ) {
     return "";
   }
   try {
@@ -766,7 +865,11 @@ function subscriptionSuffix(ctx: ExtensionContext): string {
   }
 }
 
-function modelLabel(ctx: ExtensionContext, theme: Theme, route: ReturnType<typeof physicalRoute>): string {
+function modelLabel(
+  ctx: ExtensionContext,
+  theme: Theme,
+  route: ReturnType<typeof physicalRoute>,
+): string {
   const selected = ctx.model?.id ?? "no-model";
   const thinking = ctx.model?.reasoning ? ` (${ctx.thinkingLevel ?? "off"})` : "";
   const selection = `${theme.fg("accent", selected)}${thinking ? theme.fg("muted", thinking) : ""}`;
@@ -797,7 +900,12 @@ const BREAKDOWN_COLUMNS: readonly BreakdownColumn[] = [
   { label: "R", drop: 2, color: "accent", value: (t) => formatTokens(t.cacheRead) },
   // Outlives the raw cache-read count it summarizes: the rate is what says
   // whether a model is being re-prompted at full price.
-  { label: "CH", drop: 3, color: (t) => hitRateColor(cacheHitRate(t)), value: (t) => formatHitRate(cacheHitRate(t)) },
+  {
+    label: "CH",
+    drop: 3,
+    color: (t) => hitRateColor(cacheHitRate(t)),
+    value: (t) => formatHitRate(cacheHitRate(t)),
+  },
   { label: "↓", drop: 5, color: "text", value: (t) => formatTokens(t.output) },
   { label: "$", drop: 0, color: "warning", value: (t) => t.cost.toFixed(3) },
 ];
@@ -816,7 +924,9 @@ function breakdownTable(rows: ModelSpend[], maxRows: number): BreakdownTable {
   const body: BreakdownRow[] = shown.map((row) => ({
     key: row.key.startsWith(WORKER_COMPACTION_PREFIX)
       ? `worker compact · ${spendModelName(row.key.slice(WORKER_COMPACTION_PREFIX.length))}`
-      : row.key === TOOL_SPEND_KEY || row.key === SUMMARY_SPEND_KEY ? row.key : spendModelName(row.key),
+      : row.key === TOOL_SPEND_KEY || row.key === SUMMARY_SPEND_KEY
+        ? row.key
+        : spendModelName(row.key),
     usage: row,
     kind: row.key === TOOL_SPEND_KEY || row.key === SUMMARY_SPEND_KEY ? "bucket" : "model",
   }));
@@ -826,15 +936,24 @@ function breakdownTable(rows: ModelSpend[], maxRows: number): BreakdownTable {
 }
 
 const columnWidth = (column: BreakdownColumn, body: BreakdownRow[]): number =>
-  body.reduce((max, row) => Math.max(max, visibleWidth(column.value(row.usage))), visibleWidth(column.label));
+  body.reduce(
+    (max, row) => Math.max(max, visibleWidth(column.value(row.usage))),
+    visibleWidth(column.label),
+  );
 
 const columnsWidth = (columns: readonly BreakdownColumn[], body: BreakdownRow[]): number =>
   columns.reduce((sum, column) => sum + BREAKDOWN_GAP + columnWidth(column, body), 0);
 
 /** The width the table wants. The caller still clamps it to the terminal. */
 function breakdownWidth(table: BreakdownTable): number {
-  const key = table.body.reduce((max, row) => Math.max(max, visibleWidth(row.key)), visibleWidth("model"));
-  return Math.max(key + columnsWidth(BREAKDOWN_COLUMNS, table.body), visibleWidth(BREAKDOWN_TITLE) + 2) + 4;
+  const key = table.body.reduce(
+    (max, row) => Math.max(max, visibleWidth(row.key)),
+    visibleWidth("model"),
+  );
+  return (
+    Math.max(key + columnsWidth(BREAKDOWN_COLUMNS, table.body), visibleWidth(BREAKDOWN_TITLE) + 2) +
+    4
+  );
 }
 
 function breakdownFrame(table: BreakdownTable, theme: Theme, width: number): string[] {
@@ -863,35 +982,60 @@ function breakdownFrame(table: BreakdownTable, theme: Theme, width: number): str
   // too narrow for it, the edge is a plain rule and only the footer closes.
   const closable = !!popoverCloseHit(width);
   // Painted after the edge it ends, like every other part of the frame.
-  const tail = (): string => closable ? popoverCloseTail(theme) : outer(BOX.tr);
+  const tail = (): string => (closable ? popoverCloseTail(theme) : outer(BOX.tr));
   const tailWidth = closable ? POPOVER_CLOSE_COLUMNS : 1;
   const titleRoom = width - 4 - tailWidth - visibleWidth(BREAKDOWN_TITLE);
   const lines: string[] = [
     titleRoom >= 0
-      ? outer(BOX.tl + BOX.h) + theme.fg("accent", theme.bold(` ${BREAKDOWN_TITLE} `)) +
-        outer(BOX.h.repeat(titleRoom)) + tail()
-      : closable ? outer(BOX.tl + BOX.h.repeat(width - 1 - tailWidth)) + tail() : rule("top"),
+      ? outer(BOX.tl + BOX.h) +
+        theme.fg("accent", theme.bold(` ${BREAKDOWN_TITLE} `)) +
+        outer(BOX.h.repeat(titleRoom)) +
+        tail()
+      : closable
+        ? outer(BOX.tl + BOX.h.repeat(width - 1 - tailWidth)) + tail()
+        : rule("top"),
   ];
   if (table.body.length === 0) {
     lines.push(row([theme.fg("dim", padEnd("no usage recorded yet", inner))], inner));
   } else {
     const used = keyWidth + numeric;
-    lines.push(row([
-      theme.fg("dim", padEnd(truncateToWidth("model", keyWidth, "…"), keyWidth)),
-      ...sized.map(({ column, size }) =>
-        theme.fg("dim", " ".repeat(BREAKDOWN_GAP) + padStart(column.label, size))),
-    ], used));
+    lines.push(
+      row(
+        [
+          theme.fg("dim", padEnd(truncateToWidth("model", keyWidth, "…"), keyWidth)),
+          ...sized.map(({ column, size }) =>
+            theme.fg("dim", " ".repeat(BREAKDOWN_GAP) + padStart(column.label, size)),
+          ),
+        ],
+        used,
+      ),
+    );
     for (const entry of table.body) {
       if (entry.kind === "total") lines.push(rule("divider"));
-      const emphasize = (text: string): string => (entry.kind === "total" ? theme.bold(text) : text);
+      const emphasize = (text: string): string =>
+        entry.kind === "total" ? theme.bold(text) : text;
       const key = padEnd(truncateToWidth(entry.key, keyWidth, "…"), keyWidth);
-      lines.push(row([
-        emphasize(theme.fg(entry.kind === "model" ? "accent" : entry.kind === "total" ? "text" : "muted", key)),
-        ...sized.map(({ column, size }) => emphasize(theme.fg(
-          columnColor(column, entry.usage),
-          " ".repeat(BREAKDOWN_GAP) + padStart(column.value(entry.usage), size),
-        ))),
-      ], used));
+      lines.push(
+        row(
+          [
+            emphasize(
+              theme.fg(
+                entry.kind === "model" ? "accent" : entry.kind === "total" ? "text" : "muted",
+                key,
+              ),
+            ),
+            ...sized.map(({ column, size }) =>
+              emphasize(
+                theme.fg(
+                  columnColor(column, entry.usage),
+                  " ".repeat(BREAKDOWN_GAP) + padStart(column.value(entry.usage), size),
+                ),
+              ),
+            ),
+          ],
+          used,
+        ),
+      );
     }
     if (table.hidden > 0) {
       lines.push(row([theme.fg("dim", padEnd(`+${table.hidden} more`, used))], used));
@@ -907,8 +1051,11 @@ const pinned = (key: string): number => (PINNED_INDICATORS as readonly string[])
 /** The popover titles provide the labels; the dock only needs their values.
  * Keep status keys and value styling intact, including YOLO's red/bold warning. */
 const indicatorValue = (key: string, text: string): string =>
-  key === APPROVAL_INDICATOR ? text.replace(/^approval: /, "") :
-    key === WORKER_PRESET_INDICATOR ? text.replace(/^(?:delegation|workers): /, "") : text;
+  key === APPROVAL_INDICATOR
+    ? text.replace(/^approval: /, "")
+    : key === WORKER_PRESET_INDICATOR
+      ? text.replace(/^(?:delegation|workers): /, "")
+      : text;
 
 /** A usage figure or a status. Usage figures are told apart by their own
  * `↑`/`↓`/`$`, so a space separates them; a dot separates everything else. */
@@ -918,10 +1065,17 @@ const USAGE_SEPARATOR = " ";
 
 /** What precedes `segments[index]` on the row. */
 const joint = (segments: readonly FooterSegment[], index: number): string =>
-  index === 0 ? "" : segments[index - 1]!.usage && segments[index]!.usage ? USAGE_SEPARATOR : FOOTER_SEPARATOR;
+  index === 0
+    ? ""
+    : segments[index - 1]!.usage && segments[index]!.usage
+      ? USAGE_SEPARATOR
+      : FOOTER_SEPARATOR;
 
 const footerWidth = (segments: readonly FooterSegment[]): number =>
-  segments.reduce((sum, segment, index) => sum + joint(segments, index).length + visibleWidth(segment.text), 0);
+  segments.reduce(
+    (sum, segment, index) => sum + joint(segments, index).length + visibleWidth(segment.text),
+    0,
+  );
 
 /** Fit whole controls before deriving click geometry. Never clip the right edge
  * or a permission mode into a misleading fragment. Published values stay intact. */
@@ -932,7 +1086,8 @@ function fitFooterSegments(segments: FooterSegment[], width: number): FooterSegm
   if (used() <= width) return selected;
 
   // Shed the hit rate first, keeping honest, complete token/cost figures.
-  for (const segment of selected) if (segment.key === undefined && segment.compact) segment.text = segment.compact;
+  for (const segment of selected)
+    if (segment.key === undefined && segment.compact) segment.text = segment.compact;
   if (used() <= width) return selected;
   const worker = selected.find((segment) => segment.key === WORKER_PRESET_INDICATOR);
   const full = worker?.text;
@@ -971,30 +1126,52 @@ function contextUsage(ctx: ExtensionContext): ContextUsage {
   try {
     const usage = ctx.getContextUsage();
     if (usage) return { ...usage };
-  } catch { /* A presentation failure must not affect the session. */ }
+  } catch {
+    /* A presentation failure must not affect the session. */
+  }
   return { tokens: null, contextWindow: 0, percent: null };
 }
 
 function contextSummary(snapshot: ContextSnapshot, reason: string): string {
-  return ["Context · main session", `${formatTokens(snapshot.usage.tokens)}/${formatTokens(snapshot.usage.contextWindow || null)}`,
-    ...snapshot.categories.filter((row) => row.rawTokens > 0 || row.count > 0)
-      .map((row) => `${row.label}: ≈${formatTokens(row.tokens)}`), snapshot.note, reason].join("\n");
+  return [
+    "Context · main session",
+    `${formatTokens(snapshot.usage.tokens)}/${formatTokens(snapshot.usage.contextWindow || null)}`,
+    ...snapshot.categories
+      .filter((row) => row.rawTokens > 0 || row.count > 0)
+      .map((row) => `${row.label}: ≈${formatTokens(row.tokens)}`),
+    snapshot.note,
+    reason,
+  ].join("\n");
 }
 
-function contextControl(usage: ContextUsage, theme: Theme, width: number, progress?: string): string {
+function contextControl(
+  usage: ContextUsage,
+  theme: Theme,
+  width: number,
+  progress?: string,
+): string {
   const fraction = `${formatTokens(usage.tokens)}/${formatTokens(usage.contextWindow > 0 ? usage.contextWindow : null)}`;
   const percent = usage.percent == null ? "?" : `${usage.percent.toFixed(1)}%`;
   const bar = formatContextBar(usage.percent);
-  const tone = usage.percent == null ? "dim" : usage.percent > 90 ? "error" : usage.percent > 70 ? "warning" : "success";
-  const candidates = progress ? [
-    `${theme.fg("muted", `${fraction} ${bar}`)} ${theme.fg("accent", progress)}`,
-    `${theme.fg("muted", fraction)} ${theme.fg("accent", progress)}`,
-    theme.fg("accent", progress),
-  ] : [
-    theme.fg(tone, `${fraction} ${bar} ${percent}`),
-    theme.fg(tone, `${fraction} ${percent}`),
-    theme.fg(tone, fraction),
-  ];
+  const tone =
+    usage.percent == null
+      ? "dim"
+      : usage.percent > 90
+        ? "error"
+        : usage.percent > 70
+          ? "warning"
+          : "success";
+  const candidates = progress
+    ? [
+        `${theme.fg("muted", `${fraction} ${bar}`)} ${theme.fg("accent", progress)}`,
+        `${theme.fg("muted", fraction)} ${theme.fg("accent", progress)}`,
+        theme.fg("accent", progress),
+      ]
+    : [
+        theme.fg(tone, `${fraction} ${bar} ${percent}`),
+        theme.fg(tone, `${fraction} ${percent}`),
+        theme.fg(tone, fraction),
+      ];
   return candidates.find((text) => visibleWidth(text) <= width) ?? "";
 }
 
@@ -1008,7 +1185,8 @@ export default function (pi: ExtensionAPI) {
   let requestFooterRender: (() => void) | undefined;
   let grokPublishInFlight = false;
   let grokForcePending = false;
-  let grokActivity = 0, grokAttempted = 0;
+  let grokActivity = 0,
+    grokAttempted = 0;
   let grokRunActive = false;
   let grokContext: ExtensionContext | undefined;
   let lastGrokFetchAt: number | undefined;
@@ -1032,19 +1210,38 @@ export default function (pi: ExtensionAPI) {
   // Capture once per synchronous footer paint. Independently painted panels
   // capture their own current source, never a stale previous footer frame.
   const captureSource = (ctx: ExtensionContext): ContextSource => {
-    const source = sessionSource(ctx), model = ctx.model;
-    return { ...source, key: source.stamp && JSON.stringify([source.stamp, contextRevision,
-      model?.provider, model?.id, model?.api, model?.contextWindow, ctx.thinkingLevel, observedReplayModel, replaySource]) };
+    const source = sessionSource(ctx),
+      model = ctx.model;
+    return {
+      ...source,
+      key:
+        source.stamp &&
+        JSON.stringify([
+          source.stamp,
+          contextRevision,
+          model?.provider,
+          model?.id,
+          model?.api,
+          model?.contextWindow,
+          ctx.thinkingLevel,
+          observedReplayModel,
+          replaySource,
+        ]),
+    };
   };
   const currentUsage = (ctx: ExtensionContext, source: ContextSource): ContextUsage =>
     usageMemo.read(source, () => contextUsage(ctx));
-  const currentRoute = (ctx: ExtensionContext, source: ContextSource): ReturnType<typeof physicalRoute> =>
-    routeMemo.read(source, () => physicalRoute(ctx));
+  const currentRoute = (
+    ctx: ExtensionContext,
+    source: ContextSource,
+  ): ReturnType<typeof physicalRoute> => routeMemo.read(source, () => physicalRoute(ctx));
   let inspectContext: ((focus: boolean) => void) | undefined;
   let retireContextUI: (() => void) | undefined;
   const clearContext = () => {
     contextRevision++;
-    usageMemo.clear(); routeMemo.clear(); snapshotMemo.clear();
+    usageMemo.clear();
+    routeMemo.clear();
+    snapshotMemo.clear();
   };
   const stopCompactionTimer = () => {
     if (compactionTimer) clearInterval(compactionTimer);
@@ -1063,43 +1260,88 @@ export default function (pi: ExtensionAPI) {
     inspectContext = undefined;
   };
   const rememberPrompt = (ctx: ExtensionContext) => {
-    try { effectivePrompt = ctx.getSystemPrompt(); } catch { /* A failed new-run capture remains unknown. */ }
+    try {
+      effectivePrompt = ctx.getSystemPrompt();
+    } catch {
+      /* A failed new-run capture remains unknown. */
+    }
     clearContext();
   };
-  const contextSnapshot = (ctx: ExtensionContext, usage?: ContextUsage, source = captureSource(ctx)): ContextSnapshot => {
+  const contextSnapshot = (
+    ctx: ExtensionContext,
+    usage?: ContextUsage,
+    source = captureSource(ctx),
+  ): ContextSnapshot => {
     if (compactionUsage && frozenContext) return frozenContext;
     const total = usage ?? compactionUsage ?? currentUsage(ctx, source);
-    const key = source.key && JSON.stringify([source.key, total.tokens, total.contextWindow, total.percent]);
-    return snapshotMemo.read(source, () => collectContextSnapshot(ctx, { usage: total, effectiveSystemPrompt: effectivePrompt,
-      replayModel: observedReplayModel ?? (ctx.model?.api === VIRTUAL_MODEL_API ? null : undefined), replaySource }), key);
+    const key =
+      source.key && JSON.stringify([source.key, total.tokens, total.contextWindow, total.percent]);
+    return snapshotMemo.read(
+      source,
+      () =>
+        collectContextSnapshot(ctx, {
+          usage: total,
+          effectiveSystemPrompt: effectivePrompt,
+          replayModel:
+            observedReplayModel ?? (ctx.model?.api === VIRTUAL_MODEL_API ? null : undefined),
+          replaySource,
+        }),
+      key,
+    );
   };
-  const invalidateContext = () => { clearContext(); requestFooterRender?.(); };
+  const invalidateContext = () => {
+    clearContext();
+    requestFooterRender?.();
+  };
   const observeReplay = (value: unknown, completed: boolean) => {
     const message = asRecord(value);
     if (message?.role !== "assistant") return;
-    observedReplayModel = typeof message.provider === "string" && typeof message.api === "string"
-      && typeof message.model === "string" && message.api !== VIRTUAL_MODEL_API
-      && (!completed || SETTLED_ROUTE_STOPS.has(String(message.stopReason)))
-      ? { provider: message.provider, api: message.api, id: message.model } : undefined;
+    observedReplayModel =
+      typeof message.provider === "string" &&
+      typeof message.api === "string" &&
+      typeof message.model === "string" &&
+      message.api !== VIRTUAL_MODEL_API &&
+      (!completed || SETTLED_ROUTE_STOPS.has(String(message.stopReason)))
+        ? { provider: message.provider, api: message.api, id: message.model }
+        : undefined;
     replaySource = completed ? "last-observed-request" : "active-request";
   };
   pi.on("before_agent_start", (_event, ctx) => {
-    effectivePrompt = undefined; observedReplayModel = undefined; rememberPrompt(ctx);
+    effectivePrompt = undefined;
+    observedReplayModel = undefined;
+    rememberPrompt(ctx);
   });
-  pi.on("turn_start", () => { observedReplayModel = undefined; invalidateContext(); });
+  pi.on("turn_start", () => {
+    observedReplayModel = undefined;
+    invalidateContext();
+  });
   pi.on("turn_end", invalidateContext);
   // Virtual routing can change the limits model before an assistant is stored.
   // Observe the public dispatch boundary, never resolve model credentials.
-  pi.on("before_provider_request", () => { invalidateContext(); });
-  pi.on("context_with_system", (_event, ctx) => { rememberPrompt(ctx); });
-  pi.on("message_start", (event) => { observeReplay(event.message, false); invalidateContext(); });
-  pi.on("message_end", (event) => { observeReplay(event.message, true); invalidateContext(); });
+  pi.on("before_provider_request", () => {
+    invalidateContext();
+  });
+  pi.on("context_with_system", (_event, ctx) => {
+    rememberPrompt(ctx);
+  });
+  pi.on("message_start", (event) => {
+    observeReplay(event.message, false);
+    invalidateContext();
+  });
+  pi.on("message_end", (event) => {
+    observeReplay(event.message, true);
+    invalidateContext();
+  });
   pi.on("tool_execution_end", invalidateContext);
   pi.on("agent_settled", () => {
     if (replaySource === "active-request") observedReplayModel = undefined;
     invalidateContext();
   });
-  const resetContextSource = () => { effectivePrompt = undefined; observedReplayModel = undefined; invalidateContext(); };
+  const resetContextSource = () => {
+    effectivePrompt = undefined;
+    observedReplayModel = undefined;
+    invalidateContext();
+  };
   pi.on("session_tree", resetContextSource);
   pi.on("model_select", resetContextSource);
   pi.on("session_before_compact", (event, ctx) => {
@@ -1110,7 +1352,10 @@ export default function (pi: ExtensionAPI) {
     // Capture the complete pre-compaction composition now, not on a later paint.
     frozenContext = contextSnapshot(ctx, compactionUsage, source);
     compaction.start({
-      modelKey: ctx.model && ctx.model.api !== VIRTUAL_MODEL_API ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
+      modelKey:
+        ctx.model && ctx.model.api !== VIRTUAL_MODEL_API
+          ? `${ctx.model.provider}/${ctx.model.id}`
+          : undefined,
       tokensBefore: event.preparation.tokensBefore,
     });
     stopCompactionTimer();
@@ -1133,11 +1378,18 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_compact_failed", () => finishCompaction(false));
   pi.on("session_shutdown", resetContext);
   pi.registerCommand?.("context", {
-    description: "Inspect current context composition (estimated); fullscreen panels can stay pinned",
+    description:
+      "Inspect current context composition (estimated); fullscreen panels can stay pinned",
     handler: async (_args, ctx) => {
-      if (ctx.mode === "tui" && inspectContext) { inspectContext(true); return; }
+      if (ctx.mode === "tui" && inspectContext) {
+        inspectContext(true);
+        return;
+      }
       if (!ctx.hasUI) return;
-      ctx.ui.notify(contextSummary(contextSnapshot(ctx), "The pinned context panel requires fullscreen Pi."), "info");
+      ctx.ui.notify(
+        contextSummary(contextSnapshot(ctx), "The pinned context panel requires fullscreen Pi."),
+        "info",
+      );
     },
   });
   const clearGrokTimer = () => {
@@ -1145,18 +1397,34 @@ export default function (pi: ExtensionAPI) {
     grokPublishTimer = undefined;
   };
   const grokApplicable = () => {
-    try { return !grokPublishStopped && grokContext?.model?.provider === "xai"; }
-    catch { return false; } // A retired SDK context cannot authorize a refresh.
+    try {
+      return !grokPublishStopped && grokContext?.model?.provider === "xai";
+    } catch {
+      return false;
+    } // A retired SDK context cannot authorize a refresh.
   };
   const repaintBilling = () => {
-    try { requestFooterRender?.(); } catch { /* Display failure cannot strand an in-flight billing request. */ }
+    try {
+      requestFooterRender?.();
+    } catch {
+      /* Display failure cannot strand an in-flight billing request. */
+    }
   };
   const scheduleGrokPublish = () => {
-    if (!GROK_BILLING_ENABLED || !grokApplicable() || grokActivity <= grokAttempted || grokPublishInFlight) return;
+    if (
+      !GROK_BILLING_ENABLED ||
+      !grokApplicable() ||
+      grokActivity <= grokAttempted ||
+      grokPublishInFlight
+    )
+      return;
     clearGrokTimer();
-    const interval = grokForcePending ? GROK_BILLING_FORCE_MIN_INTERVAL_MS : GROK_BILLING_MIN_INTERVAL_MS;
+    const interval = grokForcePending
+      ? GROK_BILLING_FORCE_MIN_INTERVAL_MS
+      : GROK_BILLING_MIN_INTERVAL_MS;
     const now = performance.now();
-    const delay = lastGrokFetchAt === undefined ? 0 : Math.max(0, interval - (now - lastGrokFetchAt));
+    const delay =
+      lastGrokFetchAt === undefined ? 0 : Math.max(0, interval - (now - lastGrokFetchAt));
     if (delay > 0) {
       grokPublishTimer = setTimeout(() => {
         grokPublishTimer = undefined;
@@ -1197,7 +1465,8 @@ export default function (pi: ExtensionAPI) {
   };
   pi.on("before_agent_start", (_event, ctx) => {
     if (!GROK_BILLING_ENABLED || ctx.model?.provider !== "xai") return;
-    grokContext = ctx; grokRunActive = true;
+    grokContext = ctx;
+    grokRunActive = true;
   });
   pi.on("model_select", (_event, ctx) => {
     if (!GROK_BILLING_ENABLED) return;
@@ -1219,8 +1488,10 @@ export default function (pi: ExtensionAPI) {
     grokPublishStopped = true;
     grokPublishGeneration++;
     clearGrokTimer();
-    grokContext = undefined; grokRunActive = false;
-    grokActivity = grokAttempted = 0; grokForcePending = false;
+    grokContext = undefined;
+    grokRunActive = false;
+    grokActivity = grokAttempted = 0;
+    grokForcePending = false;
   });
 
   const rememberCodexQuota = (provider: string, snapshot: CodexQuotaSnapshot) => {
@@ -1268,24 +1539,38 @@ export default function (pi: ExtensionAPI) {
     const data = asRecord(event.data);
     if (data?.type !== "codex.rate_limits") return;
     const limit = data.metered_limit_name ?? data.limit_name ?? "codex";
-    if (typeof limit !== "string" || limit.trim().toLowerCase().replace(/-/g, "_") !== "codex") return;
+    if (typeof limit !== "string" || limit.trim().toLowerCase().replace(/-/g, "_") !== "codex")
+      return;
     // Successful Codex WebSocket calls have no HTTP response hook. These raw
     // events carry windows, top-level credits and the physical request identity.
     // Keep stream updates local, like credits; they never publish to a dashboard.
-    const snapshot = quotaSnapshotFromStream(data.rate_limits, codexQuotaSnapshots.get(event.provider));
+    const snapshot = quotaSnapshotFromStream(
+      data.rate_limits,
+      codexQuotaSnapshots.get(event.provider),
+    );
     if (snapshot) rememberCodexQuota(event.provider, snapshot);
     rememberCodexCredits(event.provider, codexCredits(data.credits));
   });
 
   pi.on("after_provider_response", (_event, ctx) => {
     if (!GROK_BILLING_ENABLED || grokPublishStopped || ctx.model?.provider !== "xai") return;
-    grokContext = ctx; grokRunActive = true; grokActivity++;
+    grokContext = ctx;
+    grokRunActive = true;
+    grokActivity++;
     scheduleGrokPublish();
   });
 
   pi.on("agent_settled", (_event, ctx) => {
-    if (!GROK_BILLING_ENABLED || grokPublishStopped || ctx.model?.provider !== "xai" || !grokRunActive) return;
-    grokContext = ctx; grokRunActive = false; grokActivity++;
+    if (
+      !GROK_BILLING_ENABLED ||
+      grokPublishStopped ||
+      ctx.model?.provider !== "xai" ||
+      !grokRunActive
+    )
+      return;
+    grokContext = ctx;
+    grokRunActive = false;
+    grokActivity++;
     // Headers can precede the stream's final billable work. One final dirty
     // revision must be sampled, but duplicate idle notifications add no work.
     grokForcePending = true;
@@ -1296,8 +1581,10 @@ export default function (pi: ExtensionAPI) {
     grokPublishGeneration++;
     grokPublishStopped = false;
     clearGrokTimer();
-    grokContext = ctx; grokRunActive = false;
-    grokActivity = grokAttempted = 0; grokForcePending = false;
+    grokContext = ctx;
+    grokRunActive = false;
+    grokActivity = grokAttempted = 0;
+    grokForcePending = false;
     resetContext();
     ctx.ui.setFooter((tui, theme, footerData) => {
       // Pi's component tree is top-aligned and has no flex spacer before the
@@ -1313,8 +1600,13 @@ export default function (pi: ExtensionAPI) {
         const frame: { row?: string } = {};
         renderFrame = frame;
         let rendered: string[];
-        try { rendered = originalRender(width); } finally { renderFrame = previous; }
-        if (tui.mode === "fullscreen" || frame.row === undefined || rendered.at(-1) !== frame.row) return rendered;
+        try {
+          rendered = originalRender(width);
+        } finally {
+          renderFrame = previous;
+        }
+        if (tui.mode === "fullscreen" || frame.row === undefined || rendered.at(-1) !== frame.row)
+          return rendered;
         const padding = Math.max(0, tui.terminal.rows - rendered.length);
         if (padding === 0) return rendered;
         // Only a short viewport is copied, never the history-sized buffer. The
@@ -1385,12 +1677,15 @@ export default function (pi: ExtensionAPI) {
       };
       const mountBreakdown = (place: StackMember) => {
         if (panelsHeld() || requestFooterRender !== renderFooter) return;
-        overlay = tui.showOverlay(breakdown, stackedOverlayOptions(place, {
-          // Grows with new usage and follows resizes without remounting.
-          width: () => breakdownWidth(breakdownTable(spend(), maxBreakdownRows())),
-          // The editor keeps the keyboard: this is a lightweight panel, not a dialog.
-          nonCapturing: true,
-        }));
+        overlay = tui.showOverlay(
+          breakdown,
+          stackedOverlayOptions(place, {
+            // Grows with new usage and follows resizes without remounting.
+            width: () => breakdownWidth(breakdownTable(spend(), maxBreakdownRows())),
+            // The editor keeps the keyboard: this is a lightweight panel, not a dialog.
+            nonCapturing: true,
+          }),
+        );
         tui.requestRender();
       };
       const showBreakdown = () => {
@@ -1412,12 +1707,14 @@ export default function (pi: ExtensionAPI) {
       const stepAside = () => {
         if (!overlay) return;
         pauseBreakdown();
-        if (!panelsHeld()) restoreTimer = setTimeout(() => {
-          restoreTimer = undefined;
-          if (member && !overlay && tui.mode === "fullscreen") mountBreakdown(member);
-        }, 0);
+        if (!panelsHeld())
+          restoreTimer = setTimeout(() => {
+            restoreTimer = undefined;
+            if (member && !overlay && tui.mode === "fullscreen") mountBreakdown(member);
+          }, 0);
       };
-      let contextPanel: { member: StackMember; view: ContextView; handle?: OverlayHandle } | undefined;
+      let contextPanel:
+        { member: StackMember; view: ContextView; handle?: OverlayHandle } | undefined;
       let contextRestore: ReturnType<typeof setTimeout> | undefined;
       let pendingContextFocus: { view: ContextView; origin: unknown[] | undefined } | undefined;
       let unsubscribeContextInput: (() => void) | undefined;
@@ -1428,8 +1725,16 @@ export default function (pi: ExtensionAPI) {
       };
       const currentFooter = () => requestFooterRender === renderFooter;
       const revealContext = () => {
-        const pending = pendingContextFocus, panel = contextPanel;
-        if (!pending || !panel?.handle || pending.view !== panel.view || !currentFooter() || panelsHeld()) return;
+        const pending = pendingContextFocus,
+          panel = contextPanel;
+        if (
+          !pending ||
+          !panel?.handle ||
+          pending.view !== panel.view ||
+          !currentFooter() ||
+          panelsHeld()
+        )
+          return;
         if (panel.member.available() < 6) return;
         focusRevealed(tui, panel.handle, pending.origin);
         // A different focus owner wins permanently, not merely until resize.
@@ -1442,27 +1747,51 @@ export default function (pi: ExtensionAPI) {
         const previous = contextPanel;
         contextPanel = undefined;
         if (!previous) return;
-        try { previous.handle?.hide(); } finally {
-          try { previous.view.dispose(); } finally { previous.member.leave(); }
+        try {
+          previous.handle?.hide();
+        } finally {
+          try {
+            previous.view.dispose();
+          } finally {
+            previous.member.leave();
+          }
         }
         tui.requestRender();
       };
       const mountContext = () => {
-        if (!currentFooter() || !contextPanel || contextPanel.handle || panelsHeld() || tui.mode !== "fullscreen") return;
+        if (
+          !currentFooter() ||
+          !contextPanel ||
+          contextPanel.handle ||
+          panelsHeld() ||
+          tui.mode !== "fullscreen"
+        )
+          return;
         const panel = contextPanel;
-        panel.handle = tui.showOverlay(panel.view, stackedOverlayOptions(panel.member, {
-          width: () => panel.view.preferredWidth(Math.max(1, tui.terminal.columns - 4)),
-          minRows: 6,
-          nonCapturing: true,
-          onReveal: () => { if (contextPanel === panel) revealContext(); },
-        }));
+        panel.handle = tui.showOverlay(
+          panel.view,
+          stackedOverlayOptions(panel.member, {
+            width: () => panel.view.preferredWidth(Math.max(1, tui.terminal.columns - 4)),
+            minRows: 6,
+            nonCapturing: true,
+            onReveal: () => {
+              if (contextPanel === panel) revealContext();
+            },
+          }),
+        );
         tui.requestRender();
       };
       const showContext = (focus: boolean) => {
         if (!currentFooter() || tui.mode !== "fullscreen") return;
         if (panelsHeld()) {
-          if (focus && ctx.hasUI) ctx.ui.notify(contextSummary(contextSnapshot(ctx),
-            "Context is unavailable while another dialog owns the UI; retry /context after it closes."), "info");
+          if (focus && ctx.hasUI)
+            ctx.ui.notify(
+              contextSummary(
+                contextSnapshot(ctx),
+                "Context is unavailable while another dialog owns the UI; retry /context after it closes.",
+              ),
+              "info",
+            );
           return;
         }
         if (!contextPanel) {
@@ -1471,7 +1800,9 @@ export default function (pi: ExtensionAPI) {
             theme,
             snapshot: () => contextSnapshot(ctx),
             availableRows: () => place.available(),
-            requestRender: () => { if (currentFooter()) tui.requestRender(); },
+            requestRender: () => {
+              if (currentFooter()) tui.requestRender();
+            },
             close: hideContext,
             isFocused: () => contextPanel?.handle?.isFocused() === true,
             onRender: (height) => place.measure(height),
@@ -1495,15 +1826,27 @@ export default function (pi: ExtensionAPI) {
               return undefined;
             });
             if (!unsubscribeContextInput) cancelPendingContextFocus();
-            if (ctx.hasUI) ctx.ui.notify(contextSummary(contextSnapshot(ctx),
-              "Context is pinned but needs at least 6 free rows. Close another popover or enlarge the terminal; later input cancels delayed keyboard focus."), "info");
+            if (ctx.hasUI)
+              ctx.ui.notify(
+                contextSummary(
+                  contextSnapshot(ctx),
+                  "Context is pinned but needs at least 6 free rows. Close another popover or enlarge the terminal; later input cancels delayed keyboard focus.",
+                ),
+                "info",
+              );
           }
         }
       };
       const inspect = (focus: boolean) => {
         if (tui.mode === "fullscreen") showContext(focus);
         else if (ctx.hasUI) {
-          ctx.ui.notify(contextSummary(contextSnapshot(ctx), "The pinned context panel requires fullscreen Pi."), "info");
+          ctx.ui.notify(
+            contextSummary(
+              contextSnapshot(ctx),
+              "The pinned context panel requires fullscreen Pi.",
+            ),
+            "info",
+          );
         }
       };
       inspectContext = inspect;
@@ -1521,7 +1864,11 @@ export default function (pi: ExtensionAPI) {
       const stepContextAside = () => {
         if (!contextPanel?.handle) return;
         pauseContext();
-        if (!panelsHeld()) contextRestore = setTimeout(() => { contextRestore = undefined; mountContext(); }, 0);
+        if (!panelsHeld())
+          contextRestore = setTimeout(() => {
+            contextRestore = undefined;
+            mountContext();
+          }, 0);
       };
       const resumePinned = () => {
         if (!currentFooter() || panelsHeld()) return;
@@ -1530,18 +1877,21 @@ export default function (pi: ExtensionAPI) {
       };
       const unsubscribePinnedYield = pi.events.on(PINNED_POPOVER_YIELD_EVENT, (value) => {
         if (!currentFooter()) return;
-        const data = asRecord(value), token = data?.token;
+        const data = asRecord(value),
+          token = data?.token;
         if (!token || typeof token !== "object" || typeof data?.active !== "boolean") return;
         if (data.active) {
           if (pinnedHolds.has(token)) return;
           pinnedHolds.add(token);
-          pauseBreakdown(); pauseContext();
+          pauseBreakdown();
+          pauseContext();
         } else if (pinnedHolds.delete(token)) resumePinned();
       });
       const unsubscribePromptStart = pi.on("ui_prompt_start", () => {
         if (!currentFooter()) return;
         promptDepth++;
-        pauseBreakdown(); pauseContext();
+        pauseBreakdown();
+        pauseContext();
       });
       const unsubscribePromptEnd = pi.on("ui_prompt_end", () => {
         if (!currentFooter()) return;
@@ -1623,26 +1973,51 @@ export default function (pi: ExtensionAPI) {
           const statuses = [...footerData.getExtensionStatuses()]
             // Subagent status belongs in its own widget, not in this footer.
             .filter(([key]) => key !== "subagents")
-            .map(([key, text]) => ({ key, text: indicatorValue(key, oneLine(text).replace(/ +/g, " ").trim()) }))
+            .map(([key, text]) => ({
+              key,
+              text: indicatorValue(key, oneLine(text).replace(/ +/g, " ").trim()),
+            }))
             .filter(({ text }) => text)
             // Fixed worker → approval → health order, not attention-based sorting.
             .sort((a, b) => pinned(a.key) - pinned(b.key));
-          const segments = fitFooterSegments([
-            { text: `${theme.fg("accent", "↑")}${input}`,
-              compact: `${theme.fg("accent", "↑")}${value(formatTokens(totalInput))}`, usage: true },
-            { text: `${theme.fg("accent", "↓")}${value(formatTokens(totals.output))}`, usage: true },
-            { text: cost, usage: true },
-            ...statuses,
-          ], width);
-          const right = segments.map((segment, index) => joint(segments, index) + segment.text).join("");
+          const segments = fitFooterSegments(
+            [
+              {
+                text: `${theme.fg("accent", "↑")}${input}`,
+                compact: `${theme.fg("accent", "↑")}${value(formatTokens(totalInput))}`,
+                usage: true,
+              },
+              {
+                text: `${theme.fg("accent", "↓")}${value(formatTokens(totals.output))}`,
+                usage: true,
+              },
+              { text: cost, usage: true },
+              ...statuses,
+            ],
+            width,
+          );
+          const right = segments
+            .map((segment, index) => joint(segments, index) + segment.text)
+            .join("");
           const leftRoom = Math.max(0, rightStart(right, width) - 1);
-          const contextDisplay = contextControl(context, theme, leftRoom, compaction.snapshot()?.text);
-          const prefixRoom = Math.max(0, leftRoom - visibleWidth(contextDisplay) -
-            (contextDisplay ? FOOTER_SEPARATOR.length : 0));
+          const contextDisplay = contextControl(
+            context,
+            theme,
+            leftRoom,
+            compaction.snapshot()?.text,
+          );
+          const prefixRoom = Math.max(
+            0,
+            leftRoom -
+              visibleWidth(contextDisplay) -
+              (contextDisplay ? FOOTER_SEPARATOR.length : 0),
+          );
 
           // A window whose reset has passed shows nothing until the next response.
           const current = <T extends { resetsAt: number }>(quota: T | undefined) =>
-            quota && (quota.resetsAt === 0 || quota.resetsAt > Date.now() / 1_000) ? quota : undefined;
+            quota && (quota.resetsAt === 0 || quota.resetsAt > Date.now() / 1_000)
+              ? quota
+              : undefined;
           const remaining = (window: string, remainingPercent: number) => {
             const percent = Math.round(remainingPercent);
             const quotaColor = percent <= 10 ? "error" : percent <= 25 ? "warning" : "success";
@@ -1652,19 +2027,32 @@ export default function (pi: ExtensionAPI) {
             provider && isCodexQuotaSource(ctx.model) ? codexQuotas.get(provider) : undefined;
           const codexShort = current(codex?.short);
           const codexWeekly = current(codex?.weekly);
-          const credits = provider && isCodexQuotaSource(ctx.model) ? codexCreditsByProvider.get(provider) : undefined;
+          const credits =
+            provider && isCodexQuotaSource(ctx.model)
+              ? codexCreditsByProvider.get(provider)
+              : undefined;
           const creditBalance = credits?.unlimited ? "∞" : credits?.balance;
-          const wholeBalance = creditBalance === undefined ? undefined : wholeCreditBalance(creditBalance);
-          const subscriptionExhausted = codexShort?.exhausted === true || codexWeekly?.exhausted === true;
-          const creditDisplay = !subscriptionExhausted || wholeBalance === undefined ? undefined
-            : `${label("Cr")} ${theme.fg(wholeBalance === "0" ? "error" : "text", wholeBalance)}`;
+          const wholeBalance =
+            creditBalance === undefined ? undefined : wholeCreditBalance(creditBalance);
+          const subscriptionExhausted =
+            codexShort?.exhausted === true || codexWeekly?.exhausted === true;
+          const creditDisplay =
+            !subscriptionExhausted || wholeBalance === undefined
+              ? undefined
+              : `${label("Cr")} ${theme.fg(wholeBalance === "0" ? "error" : "text", wholeBalance)}`;
           const grokWeekly = provider === "xai" ? current(grokWeeklyQuota) : undefined;
           const codexParts = [
-            ...(codexShort ? [remaining(quotaWindowLabel(codexShort.windowMinutes), codexShort.remainingPercent)] : []),
+            ...(codexShort
+              ? [remaining(quotaWindowLabel(codexShort.windowMinutes), codexShort.remainingPercent)]
+              : []),
             ...(codexWeekly ? [remaining("W", codexWeekly.remainingPercent)] : []),
           ];
           if (creditDisplay) {
-            const throughCredits = [location, modelDisplay, [...codexParts, creditDisplay].join(" ")].join(" · ");
+            const throughCredits = [
+              location,
+              modelDisplay,
+              [...codexParts, creditDisplay].join(" "),
+            ].join(" · ");
             // Never clip a credit balance into a different whole-credit value.
             if (visibleWidth(oneLine(throughCredits)) <= prefixRoom) codexParts.push(creditDisplay);
           }
@@ -1672,12 +2060,25 @@ export default function (pi: ExtensionAPI) {
           let grokDisplay: string | undefined;
           if (provider === "xai" && GROK_BILLING_ENABLED) {
             const pending = grokPublishInFlight || grokActivity > grokAttempted;
-            const age = lastGrokSuccessAt === undefined ? undefined : Math.max(0, Math.floor((performance.now() - lastGrokSuccessAt) / 1000));
-            const stale = grokFetchFailed || !grokWeekly || (age !== undefined && age * 1000 >= GROK_BILLING_MIN_INTERVAL_MS);
+            const age =
+              lastGrokSuccessAt === undefined
+                ? undefined
+                : Math.max(0, Math.floor((performance.now() - lastGrokSuccessAt) / 1000));
+            const stale =
+              grokFetchFailed ||
+              !grokWeekly ||
+              (age !== undefined && age * 1000 >= GROK_BILLING_MIN_INTERVAL_MS);
             const state = pending ? "pending" : stale ? "stale" : "";
-            const freshness = age === undefined ? (pending ? "pending" : grokFetchFailed ? "unavailable" : "not checked")
-              : `${state ? `${state}; ` : ""}updated ${age}s ago`;
-            grokDisplay = `${grokWeekly ? remaining("W", grokWeekly.remainingPercent) : label("billing")} ` +
+            const freshness =
+              age === undefined
+                ? pending
+                  ? "pending"
+                  : grokFetchFailed
+                    ? "unavailable"
+                    : "not checked"
+                : `${state ? `${state}; ` : ""}updated ${age}s ago`;
+            grokDisplay =
+              `${grokWeekly ? remaining("W", grokWeekly.remainingPercent) : label("billing")} ` +
               theme.fg(state || age === undefined ? "warning" : "dim", `[${freshness}]`);
           }
           const quotaDisplay = codexDisplay || grokDisplay;
@@ -1687,18 +2088,32 @@ export default function (pi: ExtensionAPI) {
           const quotaParts = codexDisplay ? codexParts : quotaDisplay ? [quotaDisplay] : [];
           const fittedQuota: string[] = [];
           for (const part of quotaParts) {
-            if (visibleWidth([...fittedQuota, part].join(" ")) <= prefixRoom) fittedQuota.push(part);
+            if (visibleWidth([...fittedQuota, part].join(" ")) <= prefixRoom)
+              fittedQuota.push(part);
           }
           const quotaText = fittedQuota.join(" ");
-          const chrome = truncateToWidth(oneLine([location, modelDisplay].join(FOOTER_SEPARATOR)),
-            Math.max(0, prefixRoom - visibleWidth(quotaText) - (quotaText ? FOOTER_SEPARATOR.length : 0)), "…");
-          const prefix = chrome && quotaText ? `${chrome}${FOOTER_SEPARATOR}${quotaText}` : chrome || quotaText;
-          const contextX = prefix && contextDisplay ? visibleWidth(prefix) + FOOTER_SEPARATOR.length : 0;
-          const left = prefix && contextDisplay ? `${prefix}${FOOTER_SEPARATOR}${contextDisplay}` : prefix || contextDisplay;
+          const chrome = truncateToWidth(
+            oneLine([location, modelDisplay].join(FOOTER_SEPARATOR)),
+            Math.max(
+              0,
+              prefixRoom - visibleWidth(quotaText) - (quotaText ? FOOTER_SEPARATOR.length : 0),
+            ),
+            "…",
+          );
+          const prefix =
+            chrome && quotaText ? `${chrome}${FOOTER_SEPARATOR}${quotaText}` : chrome || quotaText;
+          const contextX =
+            prefix && contextDisplay ? visibleWidth(prefix) + FOOTER_SEPARATOR.length : 0;
+          const left =
+            prefix && contextDisplay
+              ? `${prefix}${FOOTER_SEPARATOR}${contextDisplay}`
+              : prefix || contextDisplay;
           // Geometry comes only from this fitted paint, including shortened
           // worker values. Hidden controls and separators have no indicator hit.
           let x = rightStart(right, width);
-          footerHits = contextDisplay ? [{ x: contextX, width: visibleWidth(contextDisplay), context: true }] : [];
+          footerHits = contextDisplay
+            ? [{ x: contextX, width: visibleWidth(contextDisplay), context: true }]
+            : [];
           segments.forEach((segment, index) => {
             x += joint(segments, index).length;
             const span = visibleWidth(segment.text);

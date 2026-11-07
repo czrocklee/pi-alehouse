@@ -32,14 +32,44 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, OverlayHandle, TUI, TuiMouseEvent } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { APPROVAL_INDICATOR, FOOTER_INDICATOR_CLICK_EVENT, HIDE_TRANSIENT_OVERLAYS_EVENT,
-  type FooterIndicatorClick } from "../lib/overlay-protocol.mjs";
-import { POPOVER, POPOVER_CLOSE_COLUMNS, isPopoverCloseClick, popoverCloseHit, popoverCloseTail,
-  popoverRule, popoverSide } from "../lib/popover-frame.mjs";
-import { focusOrigin, focusRevealed, joinPopoverStack, stackedOverlayOptions, type StackMember } from "../lib/popover-stack.mjs";
-import { settingsStoreForSession, type ApprovalPreference, type PersistentScope, type SettingsStore } from "../lib/settings-store.mjs";
-import { APPROVAL_JUDGE_STATE_EVENT, APPROVAL_SET_JUDGE_EVENT, judgeModeRank, sessionYoloSet, type JudgeMode,
-  type JudgeName, type JudgeState, type SetJudgeMode } from "./lib/approval-protocol.ts";
+import {
+  APPROVAL_INDICATOR,
+  FOOTER_INDICATOR_CLICK_EVENT,
+  HIDE_TRANSIENT_OVERLAYS_EVENT,
+  type FooterIndicatorClick,
+} from "../lib/overlay-protocol.mjs";
+import {
+  POPOVER,
+  POPOVER_CLOSE_COLUMNS,
+  isPopoverCloseClick,
+  popoverCloseHit,
+  popoverCloseTail,
+  popoverRule,
+  popoverSide,
+} from "../lib/popover-frame.mjs";
+import {
+  focusOrigin,
+  focusRevealed,
+  joinPopoverStack,
+  stackedOverlayOptions,
+  type StackMember,
+} from "../lib/popover-stack.mjs";
+import {
+  settingsStoreForSession,
+  type ApprovalPreference,
+  type PersistentScope,
+  type SettingsStore,
+} from "../lib/settings-store.mjs";
+import {
+  APPROVAL_JUDGE_STATE_EVENT,
+  APPROVAL_SET_JUDGE_EVENT,
+  judgeModeRank,
+  sessionYoloSet,
+  type JudgeMode,
+  type JudgeName,
+  type JudgeState,
+  type SetJudgeMode,
+} from "./lib/approval-protocol.ts";
 
 /** Session record of each approval change; the last one on the branch wins. */
 export const APPROVAL_ENTRY = "approval-mode:choice:v1";
@@ -74,17 +104,27 @@ export const CONFIRM_ROWS = 3;
  * The warning a choice must be confirmed with, or undefined when it does not
  * widen what is approved without asking (narrowing, or already current).
  */
-export function confirmationFor(id: ChoiceId, judge: JudgeName | undefined, current: ChoiceId): string[] | undefined {
+export function confirmationFor(
+  id: ChoiceId,
+  judge: JudgeName | undefined,
+  current: ChoiceId,
+): string[] | undefined {
   if (CHOICE_RANK[id] <= CHOICE_RANK[current]) return undefined;
   if (id === "yolo") {
-    return [" Yolo auto-allows Bash/Git asks, destructive writes too.",
+    return [
+      " Yolo auto-allows Bash/Git asks, destructive writes too.",
       " It bypasses Jev and hard checkpoints; denies, the floor",
-      " and static guard stay. Choose yolo again to turn it on."];
+      " and static guard stay. Choose yolo again to turn it on.",
+    ];
   }
   const name = judge ?? "the judge";
-  return [id === "judge+sub" ? ` ${name} may decide asks here and from subagents.` : ` ${name} may approve or deny this session's asks.`,
+  return [
+    id === "judge+sub"
+      ? ` ${name} may decide asks here and from subagents.`
+      : ` ${name} may approve or deny this session's asks.`,
     " Denies hold; checkpoints keep eligible asks human.",
-    ` Choose ${id === "judge+sub" ? `${name} + sub` : name} again to turn it on.`];
+    ` Choose ${id === "judge+sub" ? `${name} + sub` : name} again to turn it on.`,
+  ];
 }
 
 export function currentChoice(judge: JudgeMode | undefined, yolo: boolean): ChoiceId {
@@ -94,15 +134,23 @@ export function currentChoice(judge: JudgeMode | undefined, yolo: boolean): Choi
 }
 
 const judgeModeFor = (id: Exclude<ChoiceId, "yolo">): JudgeMode =>
-  id === "manual" ? { mode: "shadow", includeSubagents: false }
+  id === "manual"
+    ? { mode: "shadow", includeSubagents: false }
     : { mode: "enforce", includeSubagents: id === "judge+sub" };
 
 /** The indicator's text; yolo is loud on purpose. */
-export function approvalStatus(theme: Pick<Theme, "fg" | "bold">, judge: JudgeState | undefined, yolo: boolean): string {
+export function approvalStatus(
+  theme: Pick<Theme, "fg" | "bold">,
+  judge: JudgeState | undefined,
+  yolo: boolean,
+): string {
   const id = currentChoice(judge, yolo);
-  const label = id === "yolo" ? theme.fg("error", theme.bold("YOLO"))
-    : id === "manual" ? "manual"
-      : `${judge!.judge}${id === "judge+sub" ? "+sub" : ""}`;
+  const label =
+    id === "yolo"
+      ? theme.fg("error", theme.bold("YOLO"))
+      : id === "manual"
+        ? "manual"
+        : `${judge!.judge}${id === "judge+sub" ? "+sub" : ""}`;
   return `approval: ${label}`;
 }
 
@@ -141,7 +189,9 @@ export class ApprovalPopover implements Component {
     this.selected = Math.max(0, index);
   }
 
-  isArmed(): boolean { return this.armed !== undefined; }
+  isArmed(): boolean {
+    return this.armed !== undefined;
+  }
 
   handleInput(data: string): void {
     const count = this.options.choices().length;
@@ -195,7 +245,8 @@ export class ApprovalPopover implements Component {
   }
 
   private saveDefault(scope: PersistentScope): void {
-    if (!this.options.save || (scope === "workspace" && this.options.canSaveWorkspace?.() !== true)) return;
+    if (!this.options.save || (scope === "workspace" && this.options.canSaveWorkspace?.() !== true))
+      return;
     this.armed = undefined;
     this.options.save(scope);
   }
@@ -225,9 +276,13 @@ export class ApprovalPopover implements Component {
     choices.forEach((choice, index) => {
       const selected = index === this.selected;
       const marker = selected ? theme.fg("accent", "›") : " ";
-      const live = choice.id === current ? theme.fg(choice.id === "yolo" ? "error" : "success", "●") : theme.fg("dim", "○");
+      const live =
+        choice.id === current
+          ? theme.fg(choice.id === "yolo" ? "error" : "success", "●")
+          : theme.fg("dim", "○");
       const name = padTo(choice.label, labelWidth);
-      const label = choice.id === "yolo" ? theme.fg("error", name) : selected ? theme.bold(name) : name;
+      const label =
+        choice.id === "yolo" ? theme.fg("error", name) : selected ? theme.bold(name) : name;
       const content = padTo(`${marker} ${live} ${label}  ${theme.fg("dim", choice.detail)}`, inner);
       this.rowTargets.set(lines.length, index);
       lines.push(row(selected ? theme.bg("selectedBg", content) : content));
@@ -235,28 +290,51 @@ export class ApprovalPopover implements Component {
     lines.push(popoverRule(theme, width, "divider"));
     if (this.options.save) {
       const scope = this.options.saveScope?.() ?? "session";
-      lines.push(row(theme.fg("dim", scope === "session" ? " Mode changes: this session only"
-        : ` Mode changes: saved for ${scope} on exit`)));
+      lines.push(
+        row(
+          theme.fg(
+            "dim",
+            scope === "session"
+              ? " Mode changes: this session only"
+              : ` Mode changes: saved for ${scope} on exit`,
+          ),
+        ),
+      );
       this.rowTargets.set(lines.length, "global");
       lines.push(row(theme.fg("accent", " [G] Save as global default (on exit)")));
       this.rowTargets.set(lines.length, "workspace");
       const trusted = this.options.canSaveWorkspace?.() === true;
-      lines.push(row(theme.fg(trusted ? "accent" : "dim", " [W] Save as project default" +
-        (trusted ? " (on exit)" : " (trust required)"))));
+      lines.push(
+        row(
+          theme.fg(
+            trusted ? "accent" : "dim",
+            " [W] Save as project default" + (trusted ? " (on exit)" : " (trust required)"),
+          ),
+        ),
+      );
       lines.push(popoverRule(theme, width, "divider"));
     }
-    const warning = this.armed === undefined ? undefined : this.options.warning(choices[this.armed]!.id);
+    const warning =
+      this.armed === undefined ? undefined : this.options.warning(choices[this.armed]!.id);
     if (warning) {
       for (const line of warning.slice(0, CONFIRM_ROWS)) lines.push(row(theme.fg("warning", line)));
     } else {
-      lines.push(row(theme.fg("dim", (this.options.save ? " ● active ·" : "") + " ↑↓ choose · Enter apply · Esc close")));
+      lines.push(
+        row(
+          theme.fg(
+            "dim",
+            (this.options.save ? " ● active ·" : "") + " ↑↓ choose · Enter apply · Esc close",
+          ),
+        ),
+      );
     }
     lines.push(popoverRule(theme, width, "bottom"));
     return lines;
   }
 }
 
-const padTo = (text: string, width: number): string => text + " ".repeat(Math.max(0, width - visibleWidth(text)));
+const padTo = (text: string, width: number): string =>
+  text + " ".repeat(Math.max(0, width - visibleWidth(text)));
 
 /** `╭─ Title ───── × ─╮`, the close control at the right end like every popover. */
 function titleEdge(theme: PopoverTheme, width: number, title: string): string {
@@ -265,8 +343,12 @@ function titleEdge(theme: PopoverTheme, width: number, title: string): string {
   const label = ` ${title} `;
   const room = width - 2 - tailWidth - visibleWidth(label);
   if (room < 0) return popoverRule(theme, width, "top");
-  return theme.fg("borderAccent", POPOVER.tl + POPOVER.h) + theme.fg("accent", theme.bold(label)) +
-    theme.fg("borderAccent", POPOVER.h.repeat(room)) + (closable ? popoverCloseTail(theme) : theme.fg("borderAccent", POPOVER.tr));
+  return (
+    theme.fg("borderAccent", POPOVER.tl + POPOVER.h) +
+    theme.fg("accent", theme.bold(label)) +
+    theme.fg("borderAccent", POPOVER.h.repeat(room)) +
+    (closable ? popoverCloseTail(theme) : theme.fg("borderAccent", POPOVER.tr))
+  );
 }
 
 /** What a session records about its approval choice. */
@@ -281,9 +363,12 @@ const sameJudge = (a: JudgeMode | undefined, b: JudgeMode | undefined): boolean 
 
 const readJudge = (value: unknown): JudgeMode | undefined => {
   const mode = value as Partial<JudgeMode> | undefined;
-  if (!mode || typeof mode !== "object" || typeof mode.includeSubagents !== "boolean") return undefined;
+  if (!mode || typeof mode !== "object" || typeof mode.includeSubagents !== "boolean")
+    return undefined;
   if (mode.mode === "shadow") return { mode: "shadow", includeSubagents: false };
-  return mode.mode === "enforce" ? { mode: "enforce", includeSubagents: mode.includeSubagents } : undefined;
+  return mode.mode === "enforce"
+    ? { mode: "enforce", includeSubagents: mode.includeSubagents }
+    : undefined;
 };
 
 /**
@@ -295,12 +380,17 @@ const readJudge = (value: unknown): JudgeMode | undefined => {
  * confirmation and restores a judge mode no wider than the launch default,
  * so a record planted in the session file can at most ask or narrow.
  */
-export function restoredChoice(entries: readonly { type: string; customType?: string; data?: unknown }[],
-  sessionId: string | undefined): RecordedChoice | undefined {
+export function restoredChoice(
+  entries: readonly { type: string; customType?: string; data?: unknown }[],
+  sessionId: string | undefined,
+): RecordedChoice | undefined {
   if (!sessionId) return undefined;
-  const last = entries.filter((entry) => entry.type === "custom" && entry.customType === APPROVAL_ENTRY).at(-1);
+  const last = entries
+    .filter((entry) => entry.type === "custom" && entry.customType === APPROVAL_ENTRY)
+    .at(-1);
   const record = last?.data as { sessionId?: unknown; yolo?: unknown; judge?: unknown } | undefined;
-  if (!record || record.sessionId !== sessionId || typeof record.yolo !== "boolean") return undefined;
+  if (!record || record.sessionId !== sessionId || typeof record.yolo !== "boolean")
+    return undefined;
   const judge = readJudge(record.judge);
   return judge ? { yolo: record.yolo, judge } : { yolo: record.yolo };
 }
@@ -310,7 +400,8 @@ export function narrowerJudge(a: JudgeMode, b: JudgeMode): JudgeMode {
   return judgeModeRank(a) <= judgeModeRank(b) ? a : b;
 }
 
-const YOLO_WARNING = "Approval: YOLO. Eligible permission asks in this session and its in-process subagents are allowed " +
+const YOLO_WARNING =
+  "Approval: YOLO. Eligible permission asks in this session and its in-process subagents are allowed " +
   "without review, worker Bash commands included. Normal Git mutations are auto-allowed the same way: a subagent may " +
   "commit, push (force included) or reset --hard, and a yolo allow is not re-reviewed by Jev or held at a hard " +
   "checkpoint. Existing configured allows also bypass those checkpoints; explicit denies, the fail-closed " +
@@ -318,20 +409,29 @@ const YOLO_WARNING = "Approval: YOLO. Eligible permission asks in this session a
   "still write files internally. Subagents outside this process keep asking.";
 
 /** The confirmation Pi's dialog shows before a widening change. */
-function confirmDialog(id: ChoiceId, judge: JudgeName | undefined): { title: string; text: string } {
+function confirmDialog(
+  id: ChoiceId,
+  judge: JudgeName | undefined,
+): { title: string; text: string } {
   if (id === "yolo") return { title: "Turn on yolo for this session?", text: YOLO_WARNING };
   const name = judge ?? "the judge";
   return id === "judge+sub"
-    ? { title: `Let ${name} approve asks here and from subagents?`,
-      text: `${name} may allow or deny eligible permission asks from this session and its registered in-process ` +
-        "subagents without asking you. Explicit denies hold, and checkpoints keep eligible asks human (an allow your " +
-        "config already grants, or yolo, never asks, so no checkpoint sees it). " +
-        "This lasts for the current session." }
-    : { title: `Let ${name} approve this session's asks?`,
-      text: `${name} may allow or deny eligible permission asks from this session without asking you; subagent asks ` +
-        `are not decided by ${name}. Explicit denies hold, and checkpoints keep eligible asks human (an allow your ` +
-        "config already grants, or yolo, never asks, so no checkpoint sees it). " +
-        "This lasts for the current session." };
+    ? {
+        title: `Let ${name} approve asks here and from subagents?`,
+        text:
+          `${name} may allow or deny eligible permission asks from this session and its registered in-process ` +
+          "subagents without asking you. Explicit denies hold, and checkpoints keep eligible asks human (an allow your " +
+          "config already grants, or yolo, never asks, so no checkpoint sees it). " +
+          "This lasts for the current session.",
+      }
+    : {
+        title: `Let ${name} approve this session's asks?`,
+        text:
+          `${name} may allow or deny eligible permission asks from this session without asking you; subagent asks ` +
+          `are not decided by ${name}. Explicit denies hold, and checkpoints keep eligible asks human (an allow your ` +
+          "config already grants, or yolo, never asks, so no checkpoint sees it). " +
+          "This lasts for the current session.",
+      };
 }
 
 export default function approvalMode(pi: ExtensionAPI): void {
@@ -345,8 +445,17 @@ export default function approvalMode(pi: ExtensionAPI): void {
   /** A newer deliberate choice also retires deferred startup work/dialogs. */
   let choiceRevision = 0;
   let requestingJudge = false;
-  let startup: { at: number; revision: number; context: ExtensionContext; recorded?: RecordedChoice;
-    preference?: ChoiceId; judgeDone: boolean; bindingPending: boolean } | undefined;
+  let startup:
+    | {
+        at: number;
+        revision: number;
+        context: ExtensionContext;
+        recorded?: RecordedChoice;
+        preference?: ChoiceId;
+        judgeDone: boolean;
+        bindingPending: boolean;
+      }
+    | undefined;
   let yolo = false;
   let tui: TUI | undefined;
   let theme: Theme | undefined;
@@ -369,29 +478,58 @@ export default function approvalMode(pi: ExtensionAPI): void {
 
   const paint = (): void => {
     if (!ctx?.hasUI) return;
-    try { ctx.ui.setStatus(APPROVAL_INDICATOR, approvalStatus(ctx.ui.theme, liveJudge() ? judge : undefined, yolo)); }
-    catch { /* The indicator is presentation; approval state is unaffected. */ }
-    try { tui?.requestRender(); } catch { /* Rendering cannot interrupt a live state change. */ }
+    try {
+      ctx.ui.setStatus(
+        APPROVAL_INDICATOR,
+        approvalStatus(ctx.ui.theme, liveJudge() ? judge : undefined, yolo),
+      );
+    } catch {
+      /* The indicator is presentation; approval state is unaffected. */
+    }
+    try {
+      tui?.requestRender();
+    } catch {
+      /* Rendering cannot interrupt a live state change. */
+    }
   };
 
-  const liveJudge = (): JudgeMode | undefined => judge && judge.sessionId === sessionId
-    ? { mode: judge.mode, includeSubagents: judge.includeSubagents } : undefined;
+  const liveJudge = (): JudgeMode | undefined =>
+    judge && judge.sessionId === sessionId
+      ? { mode: judge.mode, includeSubagents: judge.includeSubagents }
+      : undefined;
   const actualChoice = (): ChoiceId => currentChoice(liveJudge(), yolo);
-  const boundJudgeName = (): JudgeName | undefined => liveJudge() ? judge?.judge : undefined;
+  const boundJudgeName = (): JudgeName | undefined => (liveJudge() ? judge?.judge : undefined);
   const currentContext = (at: number, context: ExtensionContext): boolean =>
     at === epoch && !!sessionId && context.sessionManager.getSessionId() === sessionId;
-  const notify = (context: ExtensionContext | undefined, message: string, level: "info" | "warning" | "error"): void => {
-    try { context?.ui.notify(message, level); } catch { /* Presentation cannot interrupt authorization or staging. */ }
+  const notify = (
+    context: ExtensionContext | undefined,
+    message: string,
+    level: "info" | "warning" | "error",
+  ): void => {
+    try {
+      context?.ui.notify(message, level);
+    } catch {
+      /* Presentation cannot interrupt authorization or staging. */
+    }
   };
-  const sharedStore = (): SettingsStore | undefined => sessionId ? settingsStoreForSession(sessionId) : undefined;
+  const sharedStore = (): SettingsStore | undefined =>
+    sessionId ? settingsStoreForSession(sessionId) : undefined;
 
   /** Stage only an explicit user choice, independently of live authorization. */
   const stageChoice = (store: SettingsStore, scope: PersistentScope, choice: ChoiceId): void => {
     try {
       store.stage(scope, ["approval"], choice);
-      notify(ctx, `Approval: ${choice} will be the ${scope === "global" ? "global" : "project"} default after normal exit.`, "info");
+      notify(
+        ctx,
+        `Approval: ${choice} will be the ${scope === "global" ? "global" : "project"} default after normal exit.`,
+        "info",
+      );
     } catch (error) {
-      notify(ctx, `Approval: the live mode is unchanged by this save failure; the preference could not be staged (${String(error)}).`, "warning");
+      notify(
+        ctx,
+        `Approval: the live mode is unchanged by this save failure; the preference could not be staged (${String(error)}).`,
+        "warning",
+      );
     }
   };
 
@@ -409,11 +547,22 @@ export default function approvalMode(pi: ExtensionAPI): void {
     try {
       const existing = restoredChoice(ctx.sessionManager.getBranch(), sessionId);
       const recorded = existing ?? { yolo: false, judge: baseline };
-      if ((!explicit || existing) && recorded.yolo === live.yolo && sameJudge(recorded.judge, live.judge)) return;
+      if (
+        (!explicit || existing) &&
+        recorded.yolo === live.yolo &&
+        sameJudge(recorded.judge, live.judge)
+      )
+        return;
       pi.appendEntry(APPROVAL_ENTRY, { sessionId, ...live });
     } catch (error) {
-      try { ctx.ui.notify(`Approval: this change is live but could not be recorded in the session (${String(error)}).`, "warning"); }
-      catch { /* best effort */ }
+      try {
+        ctx.ui.notify(
+          `Approval: this change is live but could not be recorded in the session (${String(error)}).`,
+          "warning",
+        );
+      } catch {
+        /* best effort */
+      }
     }
   };
 
@@ -431,8 +580,11 @@ export default function approvalMode(pi: ExtensionAPI): void {
   const requestJudge = (mode: JudgeMode): boolean => {
     const request: SetJudgeMode = { ...mode, applied: false };
     requestingJudge = true;
-    try { pi.events.emit(APPROVAL_SET_JUDGE_EVENT, request); }
-    finally { requestingJudge = false; }
+    try {
+      pi.events.emit(APPROVAL_SET_JUDGE_EVENT, request);
+    } finally {
+      requestingJudge = false;
+    }
     return request.applied;
   };
 
@@ -446,7 +598,8 @@ export default function approvalMode(pi: ExtensionAPI): void {
       const wasYolo = yolo;
       setYolo(false);
       if (liveJudge()) {
-        if (!requestJudge(judgeModeFor(id))) notify(ctx, `The ${judge!.judge} judge did not take the change.`, "warning");
+        if (!requestJudge(judgeModeFor(id)))
+          notify(ctx, `The ${judge!.judge} judge did not take the change.`, "warning");
       }
       if (wasYolo) notify(ctx, `Approval: yolo is off; ${actualChoice()}.`, "info");
     }
@@ -460,18 +613,31 @@ export default function approvalMode(pi: ExtensionAPI): void {
       const store = sharedStore();
       if (store && store.scope !== "session") stageChoice(store, store.scope, actualChoice());
     } catch (error) {
-      notify(ctx, `Approval is live, but its preference could not be staged (${String(error)}).`, "warning");
+      notify(
+        ctx,
+        `Approval is live, but its preference could not be staged (${String(error)}).`,
+        "warning",
+      );
     }
   };
 
   const close = (): void => {
     if (restoreTimer) clearTimeout(restoreTimer);
     restoreTimer = undefined;
-    const closing = open, host = tui;
+    const closing = open,
+      host = tui;
     open = undefined; // Retained components/callbacks lose ownership even if hide fails.
     if (!closing) return;
-    for (const cleanup of [() => closing.handle?.hide(), () => closing.member.leave(), () => host?.requestRender()]) {
-      try { cleanup(); } catch { /* Attempt every presentation cleanup independently. */ }
+    for (const cleanup of [
+      () => closing.handle?.hide(),
+      () => closing.member.leave(),
+      () => host?.requestRender(),
+    ]) {
+      try {
+        cleanup();
+      } catch {
+        /* Attempt every presentation cleanup independently. */
+      }
     }
   };
 
@@ -480,42 +646,67 @@ export default function approvalMode(pi: ExtensionAPI): void {
     const host = tui;
     const mounted = open;
     const openedFrom = focusOrigin(host);
-    mounted.handle = host.showOverlay(mounted.component, stackedOverlayOptions(mounted.member, {
-      width: POPOVER_WIDTH, minWidth: 36,
-      // Every choice plus the frame and a confirmation warning: the popover
-      // waits off screen rather than be clipped with an armed row clickable.
-      minRows: approvalChoices(boundJudgeName()).length + 3 + CONFIRM_ROWS + (sharedStore() ? 4 : 0),
-      onReveal: () => { if (open === mounted && mounted.handle) focusRevealed(host, mounted.handle, openedFrom); },
-    }));
+    mounted.handle = host.showOverlay(
+      mounted.component,
+      stackedOverlayOptions(mounted.member, {
+        width: POPOVER_WIDTH,
+        minWidth: 36,
+        // Every choice plus the frame and a confirmation warning: the popover
+        // waits off screen rather than be clipped with an armed row clickable.
+        minRows:
+          approvalChoices(boundJudgeName()).length + 3 + CONFIRM_ROWS + (sharedStore() ? 4 : 0),
+        onReveal: () => {
+          if (open === mounted && mounted.handle) focusRevealed(host, mounted.handle, openedFrom);
+        },
+      }),
+    );
     host.requestRender();
   };
 
   const openPopover = (): void => {
     if (open || savingDefault?.at === epoch || !tui || !theme || tui.mode !== "fullscreen") return;
     const member = joinPopoverStack(tui);
-    const host = tui, at = epoch;
+    const host = tui,
+      at = epoch;
     const live = (): boolean => at === epoch && open?.member === member;
     const component = new ApprovalPopover({
-      theme, choices: () => approvalChoices(boundJudgeName()), current: actualChoice,
+      theme,
+      choices: () => approvalChoices(boundJudgeName()),
+      current: actualChoice,
       warning: (id) => confirmationFor(id, boundJudgeName(), actualChoice()),
       // A failed hide can leave an armed old component on the renderer. It
       // must neither approve for a new session nor close that session's UI.
-      choose: (id) => { if (live()) choose(id, !!sharedStore()); },
-      ...(sharedStore() ? {
-        save: (scope: PersistentScope) => {
-          if (!live() || !ctx) return;
-          const context = ctx;
-          close(); // Hide this raw overlay before the standard Pi confirmation.
-          void saveDefault(context, scope).catch((error: unknown) => {
-            if (currentContext(at, context)) notify(context, `Approval preference could not be saved (${String(error)}).`, "warning");
-          });
-        },
-        canSaveWorkspace: () => sharedStore()?.canWriteWorkspace() === true,
-        saveScope: () => sharedStore()?.scope ?? "session",
-      } : {}),
-      close: () => { if (live()) close(); },
-      requestRender: () => { if (live()) host.requestRender(); },
-      onRender: (height) => { if (live()) member.measure(height); },
+      choose: (id) => {
+        if (live()) choose(id, !!sharedStore());
+      },
+      ...(sharedStore()
+        ? {
+            save: (scope: PersistentScope) => {
+              if (!live() || !ctx) return;
+              const context = ctx;
+              close(); // Hide this raw overlay before the standard Pi confirmation.
+              void saveDefault(context, scope).catch((error: unknown) => {
+                if (currentContext(at, context))
+                  notify(
+                    context,
+                    `Approval preference could not be saved (${String(error)}).`,
+                    "warning",
+                  );
+              });
+            },
+            canSaveWorkspace: () => sharedStore()?.canWriteWorkspace() === true,
+            saveScope: () => sharedStore()?.scope ?? "session",
+          }
+        : {}),
+      close: () => {
+        if (live()) close();
+      },
+      requestRender: () => {
+        if (live()) host.requestRender();
+      },
+      onRender: (height) => {
+        if (live()) member.measure(height);
+      },
     });
     open = { component, member };
     mount();
@@ -526,7 +717,7 @@ export default function approvalMode(pi: ExtensionAPI): void {
     if (!confirmationFor(id, boundJudgeName(), actualChoice())) return true;
     if (!context.hasUI) return false;
     const dialog = confirmDialog(id, boundJudgeName());
-    return await context.ui.confirm(dialog.title, dialog.text) === true;
+    return (await context.ui.confirm(dialog.title, dialog.text)) === true;
   };
 
   /**
@@ -534,27 +725,44 @@ export default function approvalMode(pi: ExtensionAPI): void {
    * were opened for is still the live one. An answer that outlives a session
    * switch or shutdown must not grant anything to either session.
    */
-  const chooseAfter = async (at: number, context: ExtensionContext, id: ChoiceId): Promise<void> => {
+  const chooseAfter = async (
+    at: number,
+    context: ExtensionContext,
+    id: ChoiceId,
+  ): Promise<void> => {
     const revision = choiceRevision;
     if (!currentContext(at, context)) return;
     const neededConfirmation = !!confirmationFor(id, boundJudgeName(), actualChoice());
-    if (!await confirmed(context, id) || !currentContext(at, context) || revision !== choiceRevision) return;
+    if (
+      !(await confirmed(context, id)) ||
+      !currentContext(at, context) ||
+      revision !== choiceRevision
+    )
+      return;
     // A queued startup narrowing may have run during the await, turning an
     // initially equal/narrowing pick into a widening one. It now needs consent.
     if (!neededConfirmation && confirmationFor(id, boundJudgeName(), actualChoice())) {
-      if (!await confirmed(context, id) || !currentContext(at, context) || revision !== choiceRevision) return;
+      if (
+        !(await confirmed(context, id)) ||
+        !currentContext(at, context) ||
+        revision !== choiceRevision
+      )
+        return;
     }
     choose(id);
   };
 
   /** Regular renderer, or the command without the popover: Pi's own dialogs. */
   const chooseWithDialogs = async (context: ExtensionContext): Promise<void> => {
-    const at = epoch, revision = choiceRevision;
+    const at = epoch,
+      revision = choiceRevision;
     if (!context.hasUI || !currentContext(at, context)) return;
     const choices = approvalChoices(boundJudgeName());
     const current = actualChoice();
-    const picked = await context.ui.select(`Approval (now ${current})`,
-      choices.map((choice) => `${choice.label} — ${choice.detail}`));
+    const picked = await context.ui.select(
+      `Approval (now ${current})`,
+      choices.map((choice) => `${choice.label} — ${choice.detail}`),
+    );
     if (!currentContext(at, context) || revision !== choiceRevision) return;
     const choice = choices.find((candidate) => picked?.startsWith(`${candidate.label} — `));
     if (choice) await chooseAfter(at, context, choice.id);
@@ -567,23 +775,45 @@ export default function approvalMode(pi: ExtensionAPI): void {
     if (ctx?.hasUI) {
       const context = ctx;
       chooseWithDialogs(context).catch((error: unknown) => {
-        try { context.ui.notify(`Approval selection failed: ${String(error)}`, "error"); } catch { /* best effort */ }
+        try {
+          context.ui.notify(`Approval selection failed: ${String(error)}`, "error");
+        } catch {
+          /* best effort */
+        }
       });
     }
   };
 
   const startupIsCurrent = (restore: NonNullable<typeof startup>): boolean =>
-    startup === restore && currentContext(restore.at, restore.context) && restore.revision === choiceRevision;
+    startup === restore &&
+    currentContext(restore.at, restore.context) &&
+    restore.revision === choiceRevision;
 
   /** Branch records retain the launch cap. A shared preference wider than the
    * launch is only a request for a deliberate, session-local confirmation. */
-  const restoreJudge = async (restore: NonNullable<typeof startup>, allowDialog = true): Promise<void> => {
-    if (!startupIsCurrent(restore) || restore.bindingPending || restore.judgeDone || !baseline || !liveJudge()) return;
+  const restoreJudge = async (
+    restore: NonNullable<typeof startup>,
+    allowDialog = true,
+  ): Promise<void> => {
+    if (
+      !startupIsCurrent(restore) ||
+      restore.bindingPending ||
+      restore.judgeDone ||
+      !baseline ||
+      !liveJudge()
+    )
+      return;
     // Binding may narrow synchronously, but consent dialogs wait until startup
     // has finished mounting the UI. Do not consume their one-shot intent yet.
     const preference = restore.preference;
-    if (!restore.recorded?.judge && preference && preference !== "yolo" &&
-        judgeModeRank(judgeModeFor(preference)) > judgeModeRank(baseline) && !allowDialog) return;
+    if (
+      !restore.recorded?.judge &&
+      preference &&
+      preference !== "yolo" &&
+      judgeModeRank(judgeModeFor(preference)) > judgeModeRank(baseline) &&
+      !allowDialog
+    )
+      return;
     restore.judgeDone = true; // Repeated publications cannot open another dialog.
     if (restore.recorded?.judge) {
       const target = narrowerJudge(restore.recorded.judge, baseline);
@@ -593,10 +823,14 @@ export default function approvalMode(pi: ExtensionAPI): void {
     if (!preference || preference === "yolo") return;
     const target = judgeModeFor(preference);
     if (judgeModeRank(target) > judgeModeRank(baseline)) {
-      if (!await confirmed(restore.context, preference) || !startupIsCurrent(restore)) return;
+      if (!(await confirmed(restore.context, preference)) || !startupIsCurrent(restore)) return;
     }
     if (startupIsCurrent(restore) && !sameJudge(target, liveJudge()) && !requestJudge(target)) {
-      notify(restore.context, `Approval: the ${boundJudgeName()} judge did not take the saved preference.`, "warning");
+      notify(
+        restore.context,
+        `Approval: the ${boundJudgeName()} judge did not take the saved preference.`,
+        "warning",
+      );
     }
   };
 
@@ -605,8 +839,10 @@ export default function approvalMode(pi: ExtensionAPI): void {
     const context = restore.context;
     if (!startupIsCurrent(restore) || !context.hasUI) return;
     const resumed = restore.recorded?.yolo === true;
-    const accepted = await context.ui.confirm(resumed ? "Resume yolo for this session?" : "Turn on yolo for this session?",
-      `${resumed ? "Yolo was on when this session was last used." : "Your saved preference requests yolo; a new session needs your explicit confirmation."} ${YOLO_WARNING}`);
+    const accepted = await context.ui.confirm(
+      resumed ? "Resume yolo for this session?" : "Turn on yolo for this session?",
+      `${resumed ? "Yolo was on when this session was last used." : "Your saved preference requests yolo; a new session needs your explicit confirmation."} ${YOLO_WARNING}`,
+    );
     if (!startupIsCurrent(restore) || yolo) return;
     if (accepted === true && setYolo(true)) notify(context, YOLO_WARNING, "warning");
     record();
@@ -617,34 +853,65 @@ export default function approvalMode(pi: ExtensionAPI): void {
   const saveCurrentDefault = async (context: ExtensionContext, wanted: string): Promise<void> => {
     const at = epoch;
     if (!currentContext(at, context)) return;
-    if (!context.hasUI) { notify(context, "Saving approval defaults requires a UI confirmation.", "warning"); return; }
+    if (!context.hasUI) {
+      notify(context, "Saving approval defaults requires a UI confirmation.", "warning");
+      return;
+    }
     const store = sharedStore();
-    if (!store) { notify(context, "Approval preferences are available only in an Alehouse session.", "warning"); return; }
+    if (!store) {
+      notify(context, "Approval preferences are available only in an Alehouse session.", "warning");
+      return;
+    }
     let scope = wanted;
     if (!scope) {
-      const selected = await context.ui.select("Save approval default for", ["All projects", "This project"]);
-      scope = selected === "All projects" ? "global" : selected === "This project" ? "workspace" : selected ?? "";
+      const selected = await context.ui.select("Save approval default for", [
+        "All projects",
+        "This project",
+      ]);
+      scope =
+        selected === "All projects"
+          ? "global"
+          : selected === "This project"
+            ? "workspace"
+            : (selected ?? "");
       if (!currentContext(at, context) || sharedStore() !== store) return;
       if (!scope) return;
     }
     if (scope !== "global" && scope !== "workspace") {
-      notify(context, "Use /approval save global|workspace.", "error"); return;
+      notify(context, "Use /approval save global|workspace.", "error");
+      return;
     }
     if (scope === "workspace" && !store.canWriteWorkspace()) {
-      notify(context, "Approval preferences cannot be saved to an untrusted workspace.", "warning"); return;
+      notify(context, "Approval preferences cannot be saved to an untrusted workspace.", "warning");
+      return;
     }
-    const path = store.paths[scope], choice = actualChoice(), revision = choiceRevision;
-    const accepted = await context.ui.confirm(`Save ${choice} as ${scope === "global" ? "global" : "project"} approval default?`,
+    const path = store.paths[scope],
+      choice = actualChoice(),
+      revision = choiceRevision;
+    const accepted = await context.ui.confirm(
+      `Save ${choice} as ${scope === "global" ? "global" : "project"} approval default?`,
       `approval: ${choice}\nFile: ${path}\nSaved on normal exit.\n\n` +
-      "New sessions use this default; existing sessions keep their recorded choices. Other settings stay unchanged.\n" +
-      "This saves a preference, not permission. Wider judge modes need confirmation at startup; " +
-      "yolo always needs a new explicit confirmation in every session.\n" +
-      (scope === "workspace" ? "Saving may create a project config file visible to Git and cause a project-trust prompt in a future Pi session. " +
-        "Saving a preference does not grant project trust." : "Project defaults can still override this here."));
+        "New sessions use this default; existing sessions keep their recorded choices. Other settings stay unchanged.\n" +
+        "This saves a preference, not permission. Wider judge modes need confirmation at startup; " +
+        "yolo always needs a new explicit confirmation in every session.\n" +
+        (scope === "workspace"
+          ? "Saving may create a project config file visible to Git and cause a project-trust prompt in a future Pi session. " +
+            "Saving a preference does not grant project trust."
+          : "Project defaults can still override this here."),
+    );
     if (!currentContext(at, context) || sharedStore() !== store || accepted !== true) return;
-    if (revision !== choiceRevision || choice !== actualChoice() || path !== store.paths[scope] ||
-        (scope === "workspace" && !store.canWriteWorkspace())) {
-      notify(context, "Approval or its save destination changed while confirming; nothing was staged. Try again.", "warning"); return;
+    if (
+      revision !== choiceRevision ||
+      choice !== actualChoice() ||
+      path !== store.paths[scope] ||
+      (scope === "workspace" && !store.canWriteWorkspace())
+    ) {
+      notify(
+        context,
+        "Approval or its save destination changed while confirming; nothing was staged. Try again.",
+        "warning",
+      );
+      return;
     }
     stageChoice(store, scope, actualChoice());
   };
@@ -658,18 +925,27 @@ export default function approvalMode(pi: ExtensionAPI): void {
     close(); // The command and menu paths both yield before opening a dialog.
     const pending = { at: epoch };
     savingDefault = pending;
-    try { await saveCurrentDefault(context, wanted); }
-    finally { if (savingDefault === pending) savingDefault = undefined; }
+    try {
+      await saveCurrentDefault(context, wanted);
+    } finally {
+      if (savingDefault === pending) savingDefault = undefined;
+    }
   };
 
   pi.events.on(APPROVAL_JUDGE_STATE_EVENT, (data) => {
     const state = data as JudgeState | undefined;
-    if (!state || state.judge !== "jev" ||
-        (state.mode !== "shadow" && state.mode !== "enforce")) return;
+    if (!state || state.judge !== "jev" || (state.mode !== "shadow" && state.mode !== "enforce"))
+      return;
     state.shown = true;
-    const previous = liveJudge(), previousName = boundJudgeName();
-    judge = { judge: state.judge, mode: state.mode, includeSubagents: state.mode === "enforce" && state.includeSubagents === true,
-      ...(typeof state.sessionId === "string" ? { sessionId: state.sessionId } : {}), shown: true };
+    const previous = liveJudge(),
+      previousName = boundJudgeName();
+    judge = {
+      judge: state.judge,
+      mode: state.mode,
+      includeSubagents: state.mode === "enforce" && state.includeSubagents === true,
+      ...(typeof state.sessionId === "string" ? { sessionId: state.sessionId } : {}),
+      shown: true,
+    };
     if (sessionId && judge.sessionId === sessionId) {
       const restore = startup;
       if (!baseline || (restore?.bindingPending && !requestingJudge)) {
@@ -678,12 +954,18 @@ export default function approvalMode(pi: ExtensionAPI): void {
         // Only this first publication is launch; later changes retire dialogs.
         if (restore) restore.bindingPending = false;
         baseline = liveJudge();
-        if (restore) void restoreJudge(restore, false).catch((error: unknown) => {
-          if (startupIsCurrent(restore)) notify(restore.context, `Approval restore failed: ${String(error)}`, "warning");
-        });
+        if (restore)
+          void restoreJudge(restore, false).catch((error: unknown) => {
+            if (startupIsCurrent(restore))
+              notify(restore.context, `Approval restore failed: ${String(error)}`, "warning");
+          });
       } else {
         // External user changes also invalidate a pending preference dialog.
-        if (!requestingJudge && (!sameJudge(previous, liveJudge()) || previousName !== boundJudgeName())) choiceRevision++;
+        if (
+          !requestingJudge &&
+          (!sameJudge(previous, liveJudge()) || previousName !== boundJudgeName())
+        )
+          choiceRevision++;
         // A provisional startup clamp is not session evidence. The final
         // restoration/user change is recorded, but never stages preferences.
         if (!requestingJudge || !restore?.bindingPending) record();
@@ -716,25 +998,37 @@ export default function approvalMode(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("approval", {
-    description: "Choose approval; /approval save global|workspace saves the current default on normal exit",
+    description:
+      "Choose approval; /approval save global|workspace saves the current default on normal exit",
     handler: async (args, context) => {
       const wanted = args.trim().toLowerCase();
       const action = wanted.split(/\s+/, 1)[0];
       if (action === "save") {
-        try { await saveDefault(context, wanted.slice(action.length).trim()); }
-        catch (error) { notify(context, `Approval default could not be saved (${String(error)}).`, "warning"); }
+        try {
+          await saveDefault(context, wanted.slice(action.length).trim());
+        } catch (error) {
+          notify(context, `Approval default could not be saved (${String(error)}).`, "warning");
+        }
         return;
       }
       if (!wanted) {
-        if (tui?.mode === "fullscreen") { toggle(); return; }
+        if (tui?.mode === "fullscreen") {
+          toggle();
+          return;
+        }
         await chooseWithDialogs(context);
         return;
       }
       const choices = approvalChoices(boundJudgeName());
-      const choice = choices.find((candidate) => candidate.id === wanted ||
-        candidate.label.replace(/ /g, "") === wanted.replace(/ /g, ""));
+      const choice = choices.find(
+        (candidate) =>
+          candidate.id === wanted || candidate.label.replace(/ /g, "") === wanted.replace(/ /g, ""),
+      );
       if (!choice) {
-        context.ui.notify(`Unknown approval mode "${wanted}". Choose one of: ${choices.map((c) => c.label.replace(/ /g, "")).join(", ")}.`, "error");
+        context.ui.notify(
+          `Unknown approval mode "${wanted}". Choose one of: ${choices.map((c) => c.label.replace(/ /g, "")).join(", ")}.`,
+          "error",
+        );
         return;
       }
       await chooseAfter(epoch, context, choice.id);
@@ -765,7 +1059,15 @@ export default function approvalMode(pi: ExtensionAPI): void {
       // A failed branch read must not fall through to a potentially wider preference.
       notify(context, `Approval preference could not be restored (${String(error)}).`, "warning");
     }
-    const restore = { at, revision: choiceRevision, context, recorded, preference, judgeDone: false, bindingPending: true };
+    const restore = {
+      at,
+      revision: choiceRevision,
+      context,
+      recorded,
+      preference,
+      judgeDone: false,
+      bindingPending: true,
+    };
     startup = restore;
     // A cached same-ID state may be either the fresh launch of a judge loaded
     // first or stale state from the previous start. Do not restore from it in
@@ -773,7 +1075,9 @@ export default function approvalMode(pi: ExtensionAPI): void {
     // Use the first fresh publication, or this cache after the startup window.
     if (sessionId && judge?.sessionId === sessionId) {
       baseline = liveJudge();
-      const desired = recorded?.judge ?? (preference && preference !== "yolo" ? judgeModeFor(preference) : undefined);
+      const desired =
+        recorded?.judge ??
+        (preference && preference !== "yolo" ? judgeModeFor(preference) : undefined);
       // Cache may be a fresh judge-first launch or stale same-ID state. Clamp
       // to manual before exposing the session, without treating this cache as
       // the final launch cap. A fresh judge-second publication still binds it.
@@ -791,15 +1095,23 @@ export default function approvalMode(pi: ExtensionAPI): void {
         // Judge-first has no later publication. Its cached launch is now usable;
         // branch restoration is synchronous before any yolo confirmation opens.
         restoreJudge(restore).catch((error: unknown) => {
-          if (startupIsCurrent(restore)) notify(context, `Approval restore failed: ${String(error)}`, "warning");
+          if (startupIsCurrent(restore))
+            notify(context, `Approval restore failed: ${String(error)}`, "warning");
         });
       }
       if (preference && preference !== "yolo" && !baseline) {
         restore.judgeDone = true;
-        if (preference !== "manual") notify(context, `Approval preference ${preference} was not applied: no judge is available.`, "warning");
+        if (preference !== "manual")
+          notify(
+            context,
+            `Approval preference ${preference} was not applied: no judge is available.`,
+            "warning",
+          );
       }
       if (recorded?.yolo || preference === "yolo") {
-        offerYolo(restore).catch(() => { /* declined by failure: yolo stays off */ });
+        offerYolo(restore).catch(() => {
+          /* declined by failure: yolo stays off */
+        });
       }
     }, 0);
     if (context.mode === "tui" && context.hasUI) {
@@ -807,10 +1119,15 @@ export default function approvalMode(pi: ExtensionAPI): void {
       // TUI, to mount its popover as a plain overlay it can remove exactly.
       try {
         context.ui.setWidget(WIDGET_KEY, (host, hostTheme) => {
-          if (at === epoch && ctx === context) { tui = host; theme = hostTheme; }
+          if (at === epoch && ctx === context) {
+            tui = host;
+            theme = hostTheme;
+          }
           return { render: () => [], invalidate() {} };
         });
-      } catch { /* A missing widget must not prevent authority initialization. */ }
+      } catch {
+        /* A missing widget must not prevent authority initialization. */
+      }
     }
     paint();
   });
@@ -828,7 +1145,15 @@ export default function approvalMode(pi: ExtensionAPI): void {
     close();
     tui = undefined;
     theme = undefined;
-    try { context.ui.setStatus(APPROVAL_INDICATOR, undefined); } catch { /* The TUI may already be gone. */ }
-    try { if (context.mode === "tui") context.ui.setWidget(WIDGET_KEY, undefined); } catch { /* Independent best effort. */ }
+    try {
+      context.ui.setStatus(APPROVAL_INDICATOR, undefined);
+    } catch {
+      /* The TUI may already be gone. */
+    }
+    try {
+      if (context.mode === "tui") context.ui.setWidget(WIDGET_KEY, undefined);
+    } catch {
+      /* Independent best effort. */
+    }
   });
 }

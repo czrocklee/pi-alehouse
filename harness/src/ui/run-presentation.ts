@@ -11,15 +11,33 @@ export interface ActivityState {
 
 /** Shared by widget and details: lifecycle/maintenance hides only generated
  * previews. Actual active tools remain observable, including during Stop/drain. */
-export function activityPresentation(state: ActivityState): { showGeneration: boolean; system?: string } {
-  const system = state.finishing ? "finishing…" : state.drain ? formatDrain(state.drain) :
-    state.status === "cancelling" ? "cancelling…" :
-    state.runtime?.activity === "compacting" ? "compacting context…" :
-    state.runtime?.activity === "retrying" ? "retrying provider request…" : undefined;
-  return { showGeneration: state.status === "running" && !state.execution_exited && system === undefined, system };
+export function activityPresentation(state: ActivityState): {
+  showGeneration: boolean;
+  system?: string;
+} {
+  const system = state.finishing
+    ? "finishing…"
+    : state.drain
+      ? formatDrain(state.drain)
+      : state.status === "cancelling"
+        ? "cancelling…"
+        : state.runtime?.activity === "compacting"
+          ? "compacting context…"
+          : state.runtime?.activity === "retrying"
+            ? "retrying provider request…"
+            : undefined;
+  return {
+    showGeneration: state.status === "running" && !state.execution_exited && system === undefined,
+    system,
+  };
 }
 
-interface RunPresentation { glyph: string; color: string; label: string; compact: string }
+interface RunPresentation {
+  glyph: string;
+  color: string;
+  label: string;
+  compact: string;
+}
 type State = RunView["status"] | "finishing";
 /** Shared lifecycle defaults; surfaces may choose different wording/tints, but
  * an Agent's glyph must not change merely because a different pane shows it. */
@@ -34,8 +52,14 @@ const STATES: Record<State, Omit<RunPresentation, "glyph"> & { glyph?: string }>
   finishing: { color: "dim", label: "finishing", compact: "finish" },
 };
 
-export function runPresentation(status: RunView["status"], spinnerFrame = 0, finishing = false): RunPresentation {
+export function runPresentation(
+  status: RunView["status"],
+  spinnerFrame = 0,
+  finishing = false,
+): RunPresentation {
   const state = STATES[status === "running" && finishing ? "finishing" : status];
-  const frame = Number.isFinite(spinnerFrame) ? Math.max(0, Math.floor(spinnerFrame)) % SPINNER.length : 0;
+  const frame = Number.isFinite(spinnerFrame)
+    ? Math.max(0, Math.floor(spinnerFrame)) % SPINNER.length
+    : 0;
   return { ...state, glyph: state.glyph ?? SPINNER[frame]! };
 }

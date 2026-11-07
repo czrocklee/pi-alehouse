@@ -83,10 +83,8 @@ const finiteNonNegative = (value: unknown): number | undefined =>
     : undefined;
 
 const amount = (value: unknown): number => finiteNonNegative(value) ?? 0;
-const addBounded = (left: number, right: number): number =>
-  Math.min(MAX_NUMBER, left + right);
-const multiplyBounded = (left: number, right: number): number =>
-  Math.min(MAX_NUMBER, left * right);
+const addBounded = (left: number, right: number): number => Math.min(MAX_NUMBER, left + right);
+const multiplyBounded = (left: number, right: number): number => Math.min(MAX_NUMBER, left * right);
 
 function validWorkerId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= MAX_ID_LENGTH;
@@ -244,13 +242,16 @@ export class WorkerStats {
   #disposed = false;
   #notifiedHealth: SessionHealth = "unknown";
   /** Failures outlive their worker's retirement here, but only as cleared history. */
-  readonly #recentErrors: { at: number; workerId: string; provider?: string; model?: string; message?: string;
-    cleared: boolean }[] = [];
+  readonly #recentErrors: {
+    at: number;
+    workerId: string;
+    provider?: string;
+    model?: string;
+    message?: string;
+    cleared: boolean;
+  }[] = [];
 
-  constructor(
-    now: () => number = () => performance.now(),
-    changed: () => void = () => {},
-  ) {
+  constructor(now: () => number = () => performance.now(), changed: () => void = () => {}) {
     this.#clock = now;
     this.#changed = changed;
   }
@@ -369,7 +370,10 @@ export class WorkerStats {
     for (const error of this.#recentErrors) if (error.workerId === record.id) error.cleared = true;
   }
 
-  #recordError(record: WorkerRecord, error: { provider?: string; model?: string; message?: string }): void {
+  #recordError(
+    record: WorkerRecord,
+    error: { provider?: string; model?: string; message?: string },
+  ): void {
     record.failed = true;
     this.#recentErrors.unshift({ at: this.#now(), workerId: record.id, ...error, cleared: false });
     this.#recentErrors.length = Math.min(this.#recentErrors.length, MAX_RECENT_ERRORS);
@@ -385,7 +389,10 @@ export class WorkerStats {
 
   #publicErrors(): WorkerErrorStats[] {
     const now = this.#now();
-    return this.#recentErrors.map(({ at, ...error }) => ({ ageMs: Math.max(0, now - at), ...error }));
+    return this.#recentErrors.map(({ at, ...error }) => ({
+      ageMs: Math.max(0, now - at),
+      ...error,
+    }));
   }
 
   #observe(record: WorkerRecord, operation: (stats: SessionStats) => void): void {
@@ -406,8 +413,11 @@ export class WorkerStats {
         const provider = label(message.provider, "");
         const model = label(message.responseModel ?? message.model, "");
         const text = label(message.errorMessage, "", MAX_ERROR_LENGTH);
-        this.#recordError(record, { ...(provider ? { provider } : {}), ...(model ? { model } : {}),
-          ...(text ? { message: text } : {}) });
+        this.#recordError(record, {
+          ...(provider ? { provider } : {}),
+          ...(model ? { model } : {}),
+          ...(text ? { message: text } : {}),
+        });
       } else if (record.stats.lastResponseSucceeded) {
         // The child's SDK auto-retry recovered the failed request.
         this.#clear(record);
@@ -434,7 +444,8 @@ export class WorkerStats {
     try {
       if (kind !== "success") record.partial = true;
       // A Run can fail without any failed response, e.g. at admission.
-      if (kind === "error" && !record.failed) this.#recordError(record, { message: "Run failed without a provider error" });
+      if (kind === "error" && !record.failed)
+        this.#recordError(record, { message: "Run failed without a provider error" });
       if (kind === "success") this.#clear(record);
       if (kind !== "success" && kind !== "error" && kind !== "aborted") record.partial = true;
       // This is deliberately independent of a possibly missing SDK settlement.
@@ -494,12 +505,8 @@ export class WorkerStats {
     let longestActiveToolMs: number | undefined;
     let running = 0;
     let partial = this.#partial;
-    const models = new Map(
-      [...this.#models].map(([key, value]) => [key, { ...value }]),
-    );
-    const tools = new Map(
-      [...this.#tools].map(([key, value]) => [key, { ...value }]),
-    );
+    const models = new Map([...this.#models].map(([key, value]) => [key, { ...value }]));
+    const tools = new Map([...this.#tools].map(([key, value]) => [key, { ...value }]));
 
     for (const record of this.#workers.values()) {
       const snapshot = record.stats.snapshot();

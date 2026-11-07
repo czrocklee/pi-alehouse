@@ -26,17 +26,17 @@ never as a command target. Labels are auxiliary (at most 120 UTF-16 units),
 never a substitute for task identity.
 Routing, models, Owner IDs, generation and SDK session IDs stay internal.
 
-| Tool | Intent |
-| --- | --- |
-| `agent_spawn` | Create a named Agent and give it its first task. Optional scout `return_to` also admits one worker continuation. |
-| `agent_run` | Give an idle Agent a follow-up task; cannot bypass an unanswered question. |
-| `agent_send` | Join/steer the task bound at the call; never create a continuation. |
-| `agent_answer` | Answer one explicit pending question and create a continuation Run. |
-| `agent_wait` | Wait for bound tasks, a question, a task issue or scoped alerts. |
-| `agent_read` | Read a selected task's result/question page and Agent alerts. |
-| `agent_interrupt` | Request a stop; confirm settlement through wait or read. |
-| `agent_kill` | Permanently end an Agent. |
-| `agent_list` | Read the roster without consuming communication. |
+| Tool              | Intent                                                                                                           |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `agent_spawn`     | Create a named Agent and give it its first task. Optional scout `return_to` also admits one worker continuation. |
+| `agent_run`       | Give an idle Agent a follow-up task; cannot bypass an unanswered question.                                       |
+| `agent_send`      | Join/steer the task bound at the call; never create a continuation.                                              |
+| `agent_answer`    | Answer one explicit pending question and create a continuation Run.                                              |
+| `agent_wait`      | Wait for bound tasks, a question, a task issue or scoped alerts.                                                 |
+| `agent_read`      | Read a selected task's result/question page and Agent alerts.                                                    |
+| `agent_interrupt` | Request a stop; confirm settlement through wait or read.                                                         |
+| `agent_kill`      | Permanently end an Agent.                                                                                        |
+| `agent_list`      | Read the roster without consuming communication.                                                                 |
 
 Retired management names (`delegate`, `wait_agents`, `read_result`,
 `message_agents`, `cancel_task`, `release_agent`, `list_agents`, `spawn_agent`,
@@ -459,14 +459,14 @@ Tasks bind once at invocation; preset changes do not rebind an existing wait.
 Task condition selection and typed alert scope (`Owner / Agents / Run`) are
 separate:
 
-| Entry | Bound tasks | Alert scope |
-| --- | --- | --- |
-| Explicit wait, at most 16 names | Each addressed task at invocation | All Runs of those Agents, including old tasks |
-| Default wait | Nonterminal tasks; when initially On, also healthy/reusable settled pending questions | Owner-wide, including historical/killed sources and newly arriving alerts |
-| Result read, default / task / cursor | Addressed task / selected ordinal / original cursor Run | All Runs of the named Agent |
-| Spawn/run/send/answer, zero or positive wait | Accepted/delivered fact's one Run | That Run only; no global drain |
-| Spawn with `return_to`, zero or positive wait | Shows source scout and worker continuation; readiness from the continuation only | Exactly those two Runs, not older Runs of either Agent |
-| List/UI/interrupt/kill | Independent roster/lifecycle replies | No consumption |
+| Entry                                         | Bound tasks                                                                           | Alert scope                                                               |
+| --------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Explicit wait, at most 16 names               | Each addressed task at invocation                                                     | All Runs of those Agents, including old tasks                             |
+| Default wait                                  | Nonterminal tasks; when initially On, also healthy/reusable settled pending questions | Owner-wide, including historical/killed sources and newly arriving alerts |
+| Result read, default / task / cursor          | Addressed task / selected ordinal / original cursor Run                               | All Runs of the named Agent                                               |
+| Spawn/run/send/answer, zero or positive wait  | Accepted/delivered fact's one Run                                                     | That Run only; no global drain                                            |
+| Spawn with `return_to`, zero or positive wait | Shows source scout and worker continuation; readiness from the continuation only      | Exactly those two Runs, not older Runs of either Agent                    |
+| List/UI/interrupt/kill                        | Independent roster/lifecycle replies                                                  | No consumption                                                            |
 
 Default selection contributes at most one task per Agent (current before
 pending question). Off excludes already-terminal questions only at initial

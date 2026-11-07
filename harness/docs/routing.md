@@ -9,12 +9,12 @@ new Agents run on (model presets, the rest of this page).
 The mode is a slider of four positions, ordered by how much the main model
 hands off:
 
-| Mode | Main model |
-| --- | --- |
-| Manual | starts Agent work only when the user asks; may suggest it |
-| Co-worker (default) | works alongside Agents; each takes parts of the task |
-| Lead | keeps the critical path and key decisions; Agents take the rest |
-| Supervisor | plans, answers Agents, reviews and integrates; Agents do the tasks |
+| Mode                | Main model                                                         |
+| ------------------- | ------------------------------------------------------------------ |
+| Manual              | starts Agent work only when the user asks; may suggest it          |
+| Co-worker (default) | works alongside Agents; each takes parts of the task               |
+| Lead                | keeps the critical path and key decisions; Agents take the rest    |
+| Supervisor          | plans, answers Agents, reviews and integrates; Agents do the tasks |
 
 Eagerness sets how small a piece is still worth handing off: reserved hands off
 only substantial, clearly separable work; balanced (the default) hands off
@@ -480,16 +480,16 @@ reread the file while retaining the active name, or bare `/harness-preset` /
 `Alt+S` (or a click on the footer's delegation indicator) for the panel. Model
 routes affect new Agents only; Off disables new tasks, answers and steering but
 leaves accepted work unchanged. Neither selection changes the main model. `Alt+S` leaves Pi's `Ctrl+S` save actions
-alone.  If a terminal, multiplexer, or reserved global binding intercepts it,
+alone. If a terminal, multiplexer, or reserved global binding intercepts it,
 the command remains the fallback.
 
-Disk reading produces an uncommitted candidate.  Parse errors, typos, picker
+Disk reading produces an uncommitted candidate. Parse errors, typos, picker
 cancellation, a removed active preset, or stale overlapping pickers leave the
-live catalogue and selection unchanged.  A valid candidate calls the synchronous
+live catalogue and selection unchanged. A valid candidate calls the synchronous
 parent SDK audit once and only then publishes catalogue, selected snapshot, and
-revision in memory.  This ordering is not a filesystem transaction, fsync
+revision in memory. This ordering is not a filesystem transaction, fsync
 receipt, rollback, or guarantee that the parent branch did not change before an
-SDK throw.  An ambiguous audit failure latches parent unavailability, retains
+SDK throw. An ambiguous audit failure latches parent unavailability, retains
 the old live router, blocks future execution and preset selection, and requires
 a Pi restart; read, cancellation, release, drain, and shutdown remain usable.
 A footer-paint or active-tool update failure after successful audit does not

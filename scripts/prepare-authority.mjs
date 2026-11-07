@@ -7,34 +7,55 @@ import { fileURLToPath } from "node:url";
 import { packageRoot } from "./generate-workers.mjs";
 import { normalizeVendorImports, removeGlobalNpmProbe } from "./normalize-runtime-imports.mjs";
 
-export function prepareAuthority(output = join(packageRoot, "runtime/permission-system"), root = packageRoot) {
+export function prepareAuthority(
+  output = join(packageRoot, "runtime/permission-system"),
+  root = packageRoot,
+) {
   // A direct dependency, never the ambient/global Pi installation. Keep its
   // package boundary (#src imports), source and parser WASM assets intact.
-  const upstream = resolve(dirname(createRequire(join(root, "package.json")).resolve("@gotgenes/pi-permission-system")), "..");
+  const upstream = resolve(
+    dirname(createRequire(join(root, "package.json")).resolve("@gotgenes/pi-permission-system")),
+    "..",
+  );
   const pkg = JSON.parse(readFileSync(join(upstream, "package.json"), "utf8"));
   assert.equal(pkg.version, "32.0.3", "Permission authority must be pinned to 32.0.3");
   mkdirSync(output, { recursive: true });
   const vendor = join(output, "vendor");
   rmSync(vendor, { recursive: true, force: true });
-  cpSync(upstream, vendor, { recursive: true, dereference: true,
+  cpSync(upstream, vendor, {
+    recursive: true,
+    dereference: true,
     filter: (path) => {
       const parts = relative(upstream, path).split(/[\\/]/);
       // Non-executable upstream documentation need not be shipped/hashed on
       // every launch. Retain LICENSE, package imports, schemas and WASM assets.
-      return !parts.includes("node_modules") && !["docs", "README.md", "CHANGELOG.md"].includes(parts[0]);
-    } });
-  execFileSync(process.execPath, [join(root, "permission-system/apply-patch.mjs"), vendor], { stdio: "inherit" });
+      return (
+        !parts.includes("node_modules") && !["docs", "README.md", "CHANGELOG.md"].includes(parts[0])
+      );
+    },
+  });
+  execFileSync(process.execPath, [join(root, "permission-system/apply-patch.mjs"), vendor], {
+    stdio: "inherit",
+  });
   const discovery = join(vendor, "src/path/node-modules-discovery.ts");
   writeFileSync(discovery, removeGlobalNpmProbe(readFileSync(discovery, "utf8"), discovery));
   normalizeVendorImports(vendor);
   cpSync(join(root, "permission-system/authority-guard.ts"), join(output, "authority-guard.ts"));
-  cpSync(join(root, "permission-system/managed-block-observer.ts"), join(output, "managed-block-observer.ts"));
+  cpSync(
+    join(root, "permission-system/managed-block-observer.ts"),
+    join(output, "managed-block-observer.ts"),
+  );
   const scratch = readFileSync(join(root, "permission-system/managed-scratch.ts"), "utf8");
   const oldRoot = '"./node_modules/@gotgenes/pi-permission-system/';
   assert.equal(scratch.split(oldRoot).length, 3, "Managed scratch import-layout drift");
   writeFileSync(join(output, "managed-scratch.ts"), scratch.replaceAll(oldRoot, '"./vendor/'));
-  writeFileSync(join(output, "package.json"), JSON.stringify({ private: true, type: "module" }) + "\n");
-  writeFileSync(join(output, "index.ts"), `// Generated private authority; every consumer imports this same entry.
+  writeFileSync(
+    join(output, "package.json"),
+    JSON.stringify({ private: true, type: "module" }) + "\n",
+  );
+  writeFileSync(
+    join(output, "index.ts"),
+    `// Generated private authority; every consumer imports this same entry.
 import { getPackageDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { packageRoot, protectionResources } from "../../bin/runtime-support.mjs";
 import { initializeManagedResourceProtection, getManagedResourceProtection } from "./vendor/src/policy/managed-resource-protection.ts";
@@ -67,7 +88,9 @@ export default function (pi: ExtensionAPI) {
   installManagedScratch(managedPi, hardenStaticFileInput);
   permissions(managedPi);
 }
-`);
+`,
+  );
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) prepareAuthority();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  prepareAuthority();

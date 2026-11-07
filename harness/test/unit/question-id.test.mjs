@@ -45,17 +45,37 @@ test("JSON escaping and UTF-8 encoding cover controls, Unicode, and lone surroga
   // Independently computed with Python hashlib; literal UTF-8 Unicode, escaped
   // NUL/quote/backslash and well-formed JSON's escaped lone high surrogate.
   // Full digest: 4b4559a8199c7579849b6694566144e2eb4449527eaa03c6ba5ae8c856c50865
-  assert.equal(questionId("主人😀", "generation\u0000\"\\", "run\ud800"),
-    "q_4b4559a8199c7579849b6694566144e2");
-  assert.notEqual(questionId("owner", "generation", "run\ud800"), questionId("owner", "generation", "run\udfff"));
+  assert.equal(
+    questionId("主人😀", 'generation\u0000"\\', "run\ud800"),
+    "q_4b4559a8199c7579849b6694566144e2",
+  );
+  assert.notEqual(
+    questionId("owner", "generation", "run\ud800"),
+    questionId("owner", "generation", "run\udfff"),
+  );
 });
 
 test("question token predicate accepts only the exact lowercase 34-character syntax", () => {
   for (const invalid of [
-    undefined, null, 42, {}, [], "", "q_", "q_" + "a".repeat(31), "q_" + "a".repeat(33),
-    "q_" + "A".repeat(32), "q_" + "g".repeat(32), "Q_" + "a".repeat(32),
-    " " + KNOWN_ID, KNOWN_ID + " ", KNOWN_ID + "\n", KNOWN_ID + "\r\n", "q_" + "a".repeat(64),
-  ]) assert.equal(isQuestionId(invalid), false, String(invalid));
+    undefined,
+    null,
+    42,
+    {},
+    [],
+    "",
+    "q_",
+    "q_" + "a".repeat(31),
+    "q_" + "a".repeat(33),
+    "q_" + "A".repeat(32),
+    "q_" + "g".repeat(32),
+    "Q_" + "a".repeat(32),
+    " " + KNOWN_ID,
+    KNOWN_ID + " ",
+    KNOWN_ID + "\n",
+    KNOWN_ID + "\r\n",
+    "q_" + "a".repeat(64),
+  ])
+    assert.equal(isQuestionId(invalid), false, String(invalid));
   assert(isQuestionId("q_" + "0".repeat(32)));
   assert(isQuestionId("q_" + "f".repeat(32)));
 });

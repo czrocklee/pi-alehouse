@@ -55,8 +55,13 @@ export function publishJudgeState(
   mode: JudgeMode,
   sessionId: string | undefined,
 ): boolean {
-  const state: JudgeState = { judge, mode: mode.mode, includeSubagents: mode.includeSubagents,
-    ...(sessionId ? { sessionId } : {}), shown: false };
+  const state: JudgeState = {
+    judge,
+    mode: mode.mode,
+    includeSubagents: mode.includeSubagents,
+    ...(sessionId ? { sessionId } : {}),
+    shown: false,
+  };
   events.emit(APPROVAL_JUDGE_STATE_EVENT, state);
   return state.shown;
 }

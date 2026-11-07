@@ -42,29 +42,45 @@ export class CompactionProgress {
   constructor(private readonly now: () => number = () => performance.now()) {}
 
   start(options: CompactionProgressStart): void {
-    const modelKey = typeof options.modelKey === "string" && options.modelKey.length > 0
-      ? options.modelKey : undefined;
+    const modelKey =
+      typeof options.modelKey === "string" && options.modelKey.length > 0
+        ? options.modelKey
+        : undefined;
     const tokens = options.tokensBefore;
-    const comparable = modelKey && Number.isFinite(tokens) && tokens > 0
-      ? this.samples.filter((sample) => sample.modelKey === modelKey
-        && sample.tokens / tokens >= 0.5 && sample.tokens / tokens <= 2)
-        .map((sample) => sample.durationMs).sort((a, b) => a - b)
-      : [];
+    const comparable =
+      modelKey && Number.isFinite(tokens) && tokens > 0
+        ? this.samples
+            .filter(
+              (sample) =>
+                sample.modelKey === modelKey &&
+                sample.tokens / tokens >= 0.5 &&
+                sample.tokens / tokens <= 2,
+            )
+            .map((sample) => sample.durationMs)
+            .sort((a, b) => a - b)
+        : [];
     const low = comparable[0];
     const upper = comparable[comparable.length - 1];
     // Require three comparable successes and a deliberately conservative spread.
-    const reliable = comparable.length >= 3 && low !== undefined && upper !== undefined
-      && upper / low <= 1.5;
+    const reliable =
+      comparable.length >= 3 && low !== undefined && upper !== undefined && upper / low <= 1.5;
     const middle = Math.floor(comparable.length / 2);
     const estimate = reliable
-      ? (comparable.length % 2 === 0
+      ? comparable.length % 2 === 0
         ? ((comparable[middle - 1] ?? 0) + (comparable[middle] ?? 0)) / 2
-        : comparable[middle])
+        : comparable[middle]
       : undefined;
     const startedAt = this.readClock();
     // Repeated starts discard, rather than train on, the unfinished observation.
-    this.active = { modelKey, tokens, startedAt, elapsedMs: 0,
-      clockReliable: startedAt !== undefined, estimateMs: estimate, upperMs: upper };
+    this.active = {
+      modelKey,
+      tokens,
+      startedAt,
+      elapsedMs: 0,
+      clockReliable: startedAt !== undefined,
+      estimateMs: estimate,
+      upperMs: upper,
+    };
   }
 
   finish(success: boolean): void {
@@ -72,14 +88,25 @@ export class CompactionProgress {
     if (!active) return;
     this.measure(active);
     this.active = undefined;
-    if (!success || !active.clockReliable || !active.modelKey
-      || !Number.isFinite(active.tokens) || active.tokens <= 0 || active.elapsedMs <= 0) return;
+    if (
+      !success ||
+      !active.clockReliable ||
+      !active.modelKey ||
+      !Number.isFinite(active.tokens) ||
+      active.tokens <= 0 ||
+      active.elapsedMs <= 0
+    )
+      return;
     const sameKey = this.samples.filter((sample) => sample.modelKey === active.modelKey);
     if (sameKey.length >= 8) {
       const oldest = this.samples.findIndex((sample) => sample.modelKey === active.modelKey);
       this.samples.splice(oldest, 1);
     }
-    this.samples.push({ modelKey: active.modelKey, tokens: active.tokens, durationMs: active.elapsedMs });
+    this.samples.push({
+      modelKey: active.modelKey,
+      tokens: active.tokens,
+      durationMs: active.elapsedMs,
+    });
     if (this.samples.length > 64) this.samples.shift();
   }
 
@@ -89,7 +116,7 @@ export class CompactionProgress {
     const elapsedMs = this.measure(active);
     let percent: number | undefined;
     if (active.estimateMs !== undefined && active.upperMs !== undefined) {
-      const estimatedPercent = Math.floor(elapsedMs / active.estimateMs * 100);
+      const estimatedPercent = Math.floor((elapsedMs / active.estimateMs) * 100);
       // Never park at 95%, and never resurrect an expired estimate.
       if (elapsedMs >= active.upperMs || estimatedPercent >= 95 || !active.clockReliable) {
         active.estimateMs = undefined;
@@ -98,8 +125,11 @@ export class CompactionProgress {
       }
     }
     const frame = FRAMES[Math.floor(elapsedMs / 100) % FRAMES.length] ?? FRAMES[0];
-    return { text: `${frame} ${percent === undefined ? "" : `≈${percent}% `}${duration(elapsedMs)}`,
-      elapsedMs, percent };
+    return {
+      text: `${frame} ${percent === undefined ? "" : `≈${percent}% `}${duration(elapsedMs)}`,
+      elapsedMs,
+      percent,
+    };
   }
 
   reset(): void {
@@ -118,8 +148,8 @@ export class CompactionProgress {
 
   private measure(active: Active): number {
     const current = this.readClock();
-    const elapsed = current !== undefined && active.startedAt !== undefined
-      ? current - active.startedAt : NaN;
+    const elapsed =
+      current !== undefined && active.startedAt !== undefined ? current - active.startedAt : NaN;
     if (!Number.isFinite(elapsed) || elapsed < active.elapsedMs) {
       active.clockReliable = false;
     } else {

@@ -52,9 +52,10 @@ regression, and it blocks moving the authority pin until a port passes it. The
 all consumers must use that identity. Root dependencies include the parser
 runtime and pinned `pi-web-access` 0.47.0; do not resolve an ambient globally
 installed web extension. That pin pulls `@modelcontextprotocol/sdk` 1.32.1,
-which fixes its earlier OAuth-client advisory GHSA-6qxp-vccf-f47h. No dependency
-override is applied; recheck `npm audit` whenever the lockfile changes rather
-than assuming the whole dependency tree is advisory-free. Generated resources and CLI must match the source
+which fixes its earlier OAuth-client advisory GHSA-6qxp-vccf-f47h. The lint toolchain
+has scoped development-only minimatch overrides; see [static quality gate](#static-quality-gate).
+Recheck `npm audit` whenever the lockfile changes rather than assuming the whole
+dependency tree is advisory-free. Generated resources and CLI must match the source
 revision. `pi-alehouse init` seeds only absent files into Pi's agent directory
 (five agent definitions, a version-3 Off routing catalogue and a permission
 config: seven files total), never changes settings/auth or replaces existing policies/catalogues. Old
@@ -433,14 +434,14 @@ one migration unit:
 
 ## Tests and scope
 
-| Directory | Scope |
-| --- | --- |
-| `harness/test/unit` | helpers, in-process mocks, isolated local lease tests |
-| `harness/test/sdk` | real pinned development SDK with controlled IO |
-| `harness/test/host` | controlled installed-host SDK runs; **not** default package tests |
+| Directory                                | Scope                                                                                                                                                             |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `harness/test/unit`                      | helpers, in-process mocks, isolated local lease tests                                                                                                             |
+| `harness/test/sdk`                       | real pinned development SDK with controlled IO                                                                                                                    |
+| `harness/test/host`                      | controlled installed-host SDK runs; **not** default package tests                                                                                                 |
 | `harness/test/packaging`, `test/runtime` | package/resource/CLI and legacy wrapper contracts; offline real-composition Agent spawns (child factory, researcher web, forwarded asks) with a scripted provider |
-| `harness/test/tui` | explicitly invoked PTY/terminal interaction |
-| `harness/test/support` | synthetic providers and fixtures |
+| `harness/test/tui`                       | explicitly invoked PTY/terminal interaction                                                                                                                       |
+| `harness/test/support`                   | synthetic providers and fixtures                                                                                                                                  |
 
 Node package tests should keep per-file process isolation and sequential cases
 for fixtures that mutate environment/timers/listeners. `harness/test/host/jev-approval.mjs`
@@ -514,20 +515,97 @@ This static analysis does not prove accounting arithmetic, permission semantics
 or provider behavior. Preserve explicit Promise ownership and fail-closed error
 paths. Node 22.19+ (or 24+) is needed by ESLint 10.
 
+### Lint dependency security
+
+GHSA-g3hv-75wg-m249 affects minimatch versions `>=7.0.0 <11.0.1`. The pinned
+ESLint and typescript-eslint toolchain still requests 10.x, so `package.json`
+overrides only the minimatch dependency of `eslint`, `@eslint/config-array` and
+`@typescript-eslint/typescript-estree` to exact `11.0.3`. This is a deliberate
+cross-major compatibility exception for development tools, not a global override,
+production dependency migration or permission-policy change. Keep the existing
+lint rules and file coverage intact. Regression tests check actual consumer
+resolution, the lockfile's advisory floor and bounded matching behavior; the
+existing typed lint probes exercise the real toolchain.
+
+Remove these overrides only when all three upstream consumers admit a safe
+version and fresh full/development and production audits pass. The source
+upgrader intentionally refuses automatic apply while overrides exist; review
+and perform dependency changes manually rather than weakening that safeguard.
+Audit counts are observations, not a guarantee that all security issues are known.
+
+## Formatting
+
+Prettier is a pinned development-only dependency, separate from ESLint. From the
+repository root:
+
+```sh
+npm run format:check                       # Check supported source files; no writes.
+npm run format                            # Format all non-ignored supported files.
+```
+
+For normal edits, prefer an explicit file list to avoid unrelated formatting:
+
+```sh
+npm exec -- prettier --write harness/src/core/result-text.ts lib/token-format.mjs
+npm exec -- prettier --check harness/src/core/result-text.ts lib/token-format.mjs
+```
+
+The root `.prettierrc.json` selects two-space indentation, double quotes,
+semicolons, trailing commas and a 100-column target. Markdown prose wrapping is
+preserved and embedded-language formatting is disabled so snippets are not
+independently reformatted. `.prettierignore` excludes generated runtime/build
+output, local state/evidence/credentials, package-manager lockfiles, optional Nix
+packaging, literal resource prompts/seeds, captured assets and license notices.
+The CLI also reads the root `.gitignore`. No formatter plugins are installed;
+this does not replace Nix, shell or Python formatting tools.
+
+Supported source files use the repository-wide Prettier baseline. Run
+`format:check` to verify it without rewriting files; formatting checks remain
+separate from `npm run check` and CI. Review formatter diffs like any other
+source change; after formatting build inputs, regenerate matched output with
+`npm run build` and run the appropriate checks. Never format generated output
+directly.
+
+## Local commit checks
+
+The executable `.githooks/pre-commit` runs `npm run lint` followed by
+`npm run format:check`. Either failure stops the commit; it never autofixes or
+stages files. It checks the working tree, not an isolated staged snapshot, so
+review partial staging separately. This local convenience is not a substitute
+for the portable gate or CI.
+
+Hook activation is explicit and repository-local. Check for an existing
+`core.hooksPath` and the default pre-commit hook before enabling it; if either is
+already in use, integrate the two checks with that setup rather than replacing
+it:
+
+```sh
+git config --show-origin --get core.hooksPath  # Exit 1 with no output means unset.
+git rev-parse --git-path hooks/pre-commit    # Inspect this path for an existing hook.
+git config --local core.hooksPath .githooks  # Enable only after the checks above.
+```
+
+Each new clone must opt in separately. Neither `npm ci --ignore-scripts` nor the
+production package installs or enables Git hooks, and no hook manager dependency
+or npm install lifecycle script is required. Install the locked development
+dependencies before committing. If a check fails, fix it explicitly (for example,
+format the affected source files) and retry the commit.
+
 ## Commands (repository root)
 
-| Purpose | Command | Scope |
-| --- | --- | --- |
-| Install locked development deps | `npm ci --ignore-scripts` | Includes pinned Pi SDK for development; no install scripts/model calls. |
-| Generate matching runtime | `npm run build` | Offline build; not a release. |
-| Check portable package + policy | `npm run check` | Lint, type, package tests, policy. |
-| Lint / types | `npm run lint`; `npm run typecheck` | Static only. |
-| Package lanes | `npm test`; `npm run test:unit`; `npm run test:sdk`; `npm run test:packaging` | Controlled local tests. |
-| Portable policy separately | `npm run test:policy` | Synthetic policy/authority checks. |
-| Controlled host collector | `npm run test:integration` | Separately authorized controlled full/readonly suite; not a release gate. |
-| Focused host fixtures | `harness/test/host/session-integration.mjs`, `run-lifecycle.mjs` | Invoke through the isolated collector with required host/fixture paths; never run bare npm scripts as proof. |
-| Init absent resources | `node bin/pi-alehouse.mjs init` | Explicit seven-file seed, no overwrite; inspect conflicts. |
-| Orchestration metrics | `node scripts/analyze-pi-session.mjs [--json] [--since ISO] [--until ISO] JOURNAL.jsonl ...` | [Offline session analysis](session-analysis.md): explicit journals, inclusive entry-time window, deduplicated counts and observed usage; no transcript text. |
+| Purpose                         | Command                                                                                      | Scope                                                                                                                                                        |
+| ------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Install locked development deps | `npm ci --ignore-scripts`                                                                    | Includes pinned Pi SDK for development; no install scripts/model calls.                                                                                      |
+| Generate matching runtime       | `npm run build`                                                                              | Offline build; not a release.                                                                                                                                |
+| Check portable package + policy | `npm run check`                                                                              | Lint, type, package tests, policy.                                                                                                                           |
+| Lint / types                    | `npm run lint`; `npm run typecheck`                                                          | Static only.                                                                                                                                                 |
+| Format / check formatting       | `npm run format`; `npm run format:check`                                                     | Prettier for supported source files; formatting checks are separate from the portable gate.                                                                  |
+| Package lanes                   | `npm test`; `npm run test:unit`; `npm run test:sdk`; `npm run test:packaging`                | Controlled local tests.                                                                                                                                      |
+| Portable policy separately      | `npm run test:policy`                                                                        | Synthetic policy/authority checks.                                                                                                                           |
+| Controlled host collector       | `npm run test:integration`                                                                   | Separately authorized controlled full/readonly suite; not a release gate.                                                                                    |
+| Focused host fixtures           | `harness/test/host/session-integration.mjs`, `run-lifecycle.mjs`                             | Invoke through the isolated collector with required host/fixture paths; never run bare npm scripts as proof.                                                 |
+| Init absent resources           | `node bin/pi-alehouse.mjs init`                                                              | Explicit seven-file seed, no overwrite; inspect conflicts.                                                                                                   |
+| Orchestration metrics           | `node scripts/analyze-pi-session.mjs [--json] [--since ISO] [--until ISO] JOURNAL.jsonl ...` | [Offline session analysis](session-analysis.md): explicit journals, inclusive entry-time window, deduplicated counts and observed usage; no transcript text. |
 
 After building/checking, `npm pack` produces a tarball with the generated
 private authority, source composition and runtime assets; verify its contents,
