@@ -6,9 +6,9 @@ import {
   POPOVER,
   isPopoverCloseClick,
   popoverCloseHit,
-  popoverCloseTail,
   popoverRule,
   popoverSide,
+  popoverTitleRow,
 } from "../../lib/popover-frame.mjs";
 import { formatTokenCount } from "../../lib/token-format.mjs";
 import type {
@@ -912,17 +912,12 @@ export class StatsView {
     const tailWidth = closable ? 5 : 1;
     const room = width - 2 - tailWidth;
     if (room < 1) return popoverRule(this.options.theme, width, "top");
-    const label = truncateToWidth(` ${TITLE} `, room, "…");
-    const fill = POPOVER.h.repeat(Math.max(0, room - visibleWidth(label)));
-    const head =
-      this.options.theme.fg("borderAccent", POPOVER.tl + POPOVER.h) +
-      this.options.theme.fg("accent", this.options.theme.bold(label)) +
-      this.options.theme.fg("borderAccent", fill);
-    return (
-      head +
-      (closable
-        ? popoverCloseTail(this.options.theme)
-        : this.options.theme.fg("borderAccent", POPOVER.tr))
+    return popoverTitleRow(
+      this.options.theme,
+      width,
+      TITLE,
+      { clip: (text, columns) => truncateToWidth(text, columns, "…"), width: visibleWidth },
+      closable,
     );
   }
 

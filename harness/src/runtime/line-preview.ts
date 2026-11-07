@@ -1,5 +1,5 @@
 import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
-import { graphemes, previewText } from "../ui/text.ts";
+import { graphemes, previewText } from "../presentation/plain-text.ts";
 
 type PreviewEvent = Extract<
   AssistantMessageEvent,

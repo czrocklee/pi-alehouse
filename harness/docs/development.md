@@ -27,6 +27,7 @@ harness/src/tools/                       fixed parent/child schemas and replies
 harness/src/permissions/                 readiness and Run-bound provenance
 harness/src/history/                     SDK journal links, bounded cold reads, audits
 harness/src/ui/                          widget, panels, footer coordination
+harness/src/presentation/                shared observation text, no UI/lifecycle ownership
 harness/test/{unit,sdk,host,packaging,tui,support}/
 extensions/  lib/  permission-system/       internal integrations and authority patches
 ```
@@ -514,6 +515,35 @@ diagnostic baseline but rejects other diagnostics or abnormal termination.
 This static analysis does not prove accounting arithmetic, permission semantics
 or provider behavior. Preserve explicit Promise ownership and fail-closed error
 paths. Node 22.19+ (or 24+) is needed by ESLint 10.
+
+### Refactoring and test discovery
+
+Source boundary checks recursively inspect core, runtime, UI and shared harness
+presentation modules. Presentation leaves may use the SDK terminal-sequence
+stripper, but cannot own sessions or depend on UI/runtime implementations.
+Runtime observations use these leaves rather than importing painted UI helpers.
+The independent footer continues to share only root `lib/` primitives.
+
+Package-test globs remain deliberately one directory deep. Split large tests
+into sibling `*.test.mjs` files; reusable fixtures belong in `harness/test/support/` and
+must not register tests at import time. Moving tests into a new subdirectory
+requires an explicit discovery update. Preserve sequential cases and per-file
+process isolation where fixtures mutate environment, timers or listeners.
+Policy checker entrypoints retain their existing names and one initialization
+per process; their internal modules do not create additional gates or authorize
+live/replay/corpus workflows. `npm run typecheck` is the sole aggregate type
+entrypoint, including the self-contained shared-library/extension checker once.
+
+The built npm tarball excludes regression suites and maintainer-only check
+scripts, including the static-guard self-test in `scripts/checks/`; the
+production guard neither ships nor loads it, and `PI_STATIC_SAFETY_SELFTEST`
+has no effect. Source self-tests use the normal default entry with an isolated
+fixture directory; no alternate registrar or policy accessor is exported.
+Packaging tests check actual `npm pack` members and the
+generated runtime manifest, not only the `files` allowlist. Source checkouts retain every test lane; the tarball retains the CLI's
+`init` helper and deterministic build inputs, matched runtime, documentation and
+license notices. Run development checks from a source checkout, not from a
+production install with omitted development dependencies.
 
 ### Lint dependency security
 

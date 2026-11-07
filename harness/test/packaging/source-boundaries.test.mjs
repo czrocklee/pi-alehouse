@@ -1,10 +1,32 @@
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, posix } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import ts from "typescript";
 
 const source = new URL("../../src/", import.meta.url);
-const files = (directory, suffix) => readdirSync(directory).filter((file) => file.endsWith(suffix));
+const files = (directory, suffix) =>
+  readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.isDirectory())
+      return files(new URL(`${entry.name}/`, directory), suffix).map(
+        (name) => `${entry.name}/${name}`,
+      );
+    return entry.isFile() && entry.name.endsWith(suffix) ? [entry.name] : [];
+  });
+const localTarget = (area, name, specifier) =>
+  specifier.startsWith(".")
+    ? posix.normalize(posix.join(area, posix.dirname(name), specifier))
+    : undefined;
 const dependencies = (text) => {
   const parsed = ts.createSourceFile("boundary.ts", text, ts.ScriptTarget.Latest, true);
   assert.equal(parsed.parseDiagnostics.length, 0, "boundary inputs must parse");
@@ -42,7 +64,7 @@ const sessionOwners = new Set([
 ]);
 const assertUiDependencies = (edges, name) => {
   for (const edge of edges) {
-    if (edge.specifier.startsWith("../runtime/")) {
+    if (localTarget("ui", name, edge.specifier)?.startsWith("runtime/")) {
       assert(edge.typeOnly, `${name}: runtime observations must be a type-only dependency`);
     }
     if (edge.specifier === "@earendil-works/pi-coding-agent") {
@@ -53,18 +75,69 @@ const assertUiDependencies = (edges, name) => {
   }
 };
 
+const assertCoreDependencies = (edges, name) => {
+  for (const { specifier } of edges)
+    assert(
+      localTarget("core", name, specifier)?.startsWith("core/") ||
+        ["node:crypto", "node:path"].includes(specifier),
+      `${name} must use core ports rather than import ${specifier}`,
+    );
+};
+const assertPresentationDependencies = (edges, name) => {
+  for (const edge of edges) {
+    if (localTarget("presentation", name, edge.specifier)?.startsWith("presentation/")) continue;
+    assert.equal(edge.specifier, "@earendil-works/pi-tui", `${name}: unexpected dependency`);
+    assert(!edge.broad, `${name}: presentation must name its TUI dependency`);
+    assert.deepEqual(edge.names, ["stripTerminalSequences"]);
+  }
+};
+
+test("source discovery includes nested files without following directory symlinks", () => {
+  const directory = mkdtempSync(join(tmpdir(), "alehouse-boundaries-"));
+  try {
+    mkdirSync(join(directory, "nested"));
+    symlinkSync("nested", join(directory, "linked"), "dir");
+    writeFileSync(join(directory, "nested", "leaf.ts"), "export {};\n");
+    writeFileSync(join(directory, "ignored.mjs"), "export {};\n");
+    assert.deepEqual(files(pathToFileURL(`${directory}/`), ".ts"), ["nested/leaf.ts"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("nested source paths cannot hide cross-layer dependencies", () => {
+  assert.throws(() =>
+    assertCoreDependencies(dependencies('import "../../runtime/agent-session.ts";'), "nested/a.ts"),
+  );
+  assert.throws(() =>
+    assertUiDependencies(dependencies('import "../../runtime/agent-session.ts";'), "nested/a.ts"),
+  );
+  assert.throws(() =>
+    assertPresentationDependencies(dependencies('import "../ui/text.ts";'), "a.ts"),
+  );
+});
+
 test("core stays independent of SDK, adapters and UI", () => {
   const core = new URL("core/", source);
   const names = files(core, ".ts");
   assert(names.includes("owner-controller.ts"));
-  for (const name of names) {
-    for (const { specifier } of imports(new URL(name, core))) {
+  for (const name of names) assertCoreDependencies(imports(new URL(name, core)), name);
+});
+
+test("runtime does not depend on UI modules, even for types", () => {
+  const runtime = new URL("runtime/", source);
+  for (const name of files(runtime, ".ts"))
+    for (const edge of imports(new URL(name, runtime)))
       assert(
-        specifier.startsWith("./") || ["node:crypto", "node:path"].includes(specifier),
-        `${name} must use core ports rather than import ${specifier}`,
+        !localTarget("runtime", name, edge.specifier)?.startsWith("ui/"),
+        `${name}: runtime must not import UI modules; shared contracts belong in routing or presentation`,
       );
-    }
-  }
+});
+
+test("shared harness presentation leaves cannot acquire lifecycle or UI ownership", () => {
+  const presentation = new URL("presentation/", source);
+  for (const name of files(presentation, ".ts"))
+    assertPresentationDependencies(imports(new URL(name, presentation)), name);
 });
 
 test("UI reads runtime observations without constructing SDK sessions or runtime owners", () => {
@@ -122,9 +195,17 @@ test("neutral helpers and the ordinary footer have no harness dependency", () =>
       );
     } else assert.deepEqual(edges, [], `${name} must remain a dependency-free leaf`);
   }
-  const footer = new URL("../../../extensions/status-footer.ts", import.meta.url);
-  const edges = imports(footer).map(({ specifier }) => specifier);
-  assert(edges.includes("../lib/usage-attribution.mjs"));
-  assert(edges.includes("../lib/overlay-protocol.mjs"));
-  assert(!edges.some((specifier) => specifier.includes("harness")));
+  const visited = new Set();
+  const visit = (file) => {
+    if (visited.has(file.href)) return;
+    assert(!file.pathname.includes("/harness/"), `footer must not depend on ${file.pathname}`);
+    visited.add(file.href);
+    for (const { specifier } of imports(file)) {
+      assert(!specifier.includes("harness"), `footer must not depend on ${specifier}`);
+      if (specifier.startsWith(".")) visit(new URL(specifier, file));
+    }
+  };
+  visit(new URL("../../../extensions/status-footer.ts", import.meta.url));
+  for (const name of ["usage-attribution.mjs", "overlay-protocol.mjs"])
+    assert(visited.has(new URL(name, shared).href), `footer must use shared ${name}`);
 });

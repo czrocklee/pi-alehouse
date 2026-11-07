@@ -82,11 +82,8 @@ fi
 # Isolate before ALL npm / Node entrypoints, not only SDK probes.
 export HOME="$scratch/home" PI_CODING_AGENT_DIR="$RESOURCE_DIR" PI_OFFLINE=1 PI_TELEMETRY=0
 npm run lint --prefix "$ROOT_DIR"
+# The canonical type gate includes harness, shared JS/declarations and extensions.
 npm run typecheck --prefix "$ROOT_DIR"
-# The harness typecheck above covers src/ only. The extensions live outside it
-# and are loaded through jiti everywhere else, which strips types without
-# checking them, so this is the only gate that sees them.
-node "$ROOT_DIR/scripts/check-pi-types.mjs" "$ROOT_DIR"
 npm test --prefix "$ROOT_DIR"
 render_resources() {
     local target="$1" stage_output="$2" permissions_only="$3" jev_only="$4"

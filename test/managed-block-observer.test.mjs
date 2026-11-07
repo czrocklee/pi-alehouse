@@ -623,7 +623,7 @@ test("generator copies helper, binds actual getter, exports subscription and wra
   );
   assert.match(
     generator,
-    /cpSync\(join\(root, "permission-system\/managed-block-observer\.ts"\), join\(output, "managed-block-observer\.ts"\)\)/,
+    /cpSync\(\s*join\(root, "permission-system\/managed-block-observer\.ts"\),\s*join\(output, "managed-block-observer\.ts"\),?\s*\)/,
   );
   assert.match(
     generator,

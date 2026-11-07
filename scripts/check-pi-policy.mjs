@@ -670,8 +670,111 @@ try {
   const { hardCheckpointReason } = await jiti.import(
     join(resources, "extensions/lib/hard-checkpoint.ts"),
   );
-  const { inspectGitCommands } = await jiti.import(
-    join(resources, "extensions/static-safety-guard.ts"),
+  const guardModule = await jiti.import(join(resources, "extensions/static-safety-guard.ts"));
+  const { default: staticSafetyGuard, inspectGitCommands } = guardModule;
+  for (const name of ["WORKER_POLICY", "registerGuard", "workerProfiles"])
+    assert.equal(Object.hasOwn(guardModule, name), false, `${name} stays module-private`);
+  const profiles = Object.keys(
+    JSON.parse(readFileSync(join(root, "runtime/worker-policy.json"), "utf8")),
+  );
+  assert(profiles.length > 0, "Generated worker profiles");
+  assert.equal(
+    staticSafetyGuard.constructor.name,
+    "Function",
+    "Guard default must stay synchronous",
+  );
+  const sourceGuard = readFileSync(join(root, "extensions/static-safety-guard.ts"), "utf8");
+  assert.equal(sourceGuard.split("/* @worker-policy@ */ {}").length, 2, "Worker policy marker");
+  // Production entry carries no self-test hook or loader.
+  assert.doesNotMatch(
+    sourceGuard,
+    /test-support|static-safety-selftest|PI_STATIC_SAFETY_SELFTEST|createRequire/,
+  );
+  assert.doesNotMatch(
+    readFileSync(join(root, "extensions/lib/hard-checkpoint.ts"), "utf8"),
+    /static-safety-guard/,
+  );
+  assert.match(
+    readFileSync(join(root, "extensions/lib/hard-checkpoint.ts"), "utf8"),
+    /\.\/shell-literal\.ts/,
+  );
+  assert.equal(
+    existsSync(join(resources, "extensions/lib/shell-literal.ts")),
+    true,
+    "Generated policy copy must include the lexical leaf; rebuild before this gate",
+  );
+  assert.equal(
+    existsSync(join(resources, "extensions/test-support")),
+    false,
+    "Generated policy copy must not carry test support",
+  );
+  const { inspectGitCommands: leafInspect } = await jiti.import(
+    join(resources, "extensions/lib/shell-literal.ts"),
+  );
+  assert.equal(leafInspect, inspectGitCommands, "Guard re-exports the lexical leaf");
+  const { safetySelfTest } = await jiti.import(
+    join(root, "scripts/checks/static-safety-selftest.ts"),
+  );
+  const selfTestLogs = [];
+  const originalPolicy = readFileSync(configPath, "utf8");
+  const originalLog = console.log;
+  const savedSelfTest = process.env.PI_STATIC_SAFETY_SELFTEST;
+  delete process.env.PI_STATIC_SAFETY_SELFTEST;
+  console.log = (...args) => {
+    selfTestLogs.push(args.map(String).join(" "));
+  };
+  try {
+    const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+    safetySelfTest(resources, {
+      guard: staticSafetyGuard,
+      workerProfiles: profiles,
+      inspectGitCommands,
+    });
+    assert.equal(
+      process.env.PI_CODING_AGENT_DIR,
+      originalAgentDir,
+      "Self-test restores the configured agent directory",
+    );
+    assert.ok(
+      selfTestLogs.some((line) =>
+        line.includes("static-safety-guard loaded literal-denies-and-policy-grep"),
+      ),
+      "Explicit self-test did not report the compatibility line",
+    );
+    selfTestLogs.length = 0;
+    staticSafetyGuard({
+      on: () => {},
+      registerTool: () => {},
+      events: { on: () => () => {}, emit: () => {} },
+    });
+    assert.equal(
+      selfTestLogs.some((line) => line.includes("literal-denies-and-policy-grep")),
+      false,
+      "Normal guard load ran the self-test",
+    );
+    process.env.PI_STATIC_SAFETY_SELFTEST = resources;
+    staticSafetyGuard({
+      on: () => {},
+      registerTool: () => {},
+      events: { on: () => () => {}, emit: () => {} },
+    });
+    assert.equal(
+      selfTestLogs.some((line) => line.includes("literal-denies-and-policy-grep")),
+      false,
+      "Production guard must ignore PI_STATIC_SAFETY_SELFTEST",
+    );
+  } finally {
+    console.log = originalLog;
+    if (savedSelfTest === undefined) delete process.env.PI_STATIC_SAFETY_SELFTEST;
+    else process.env.PI_STATIC_SAFETY_SELFTEST = savedSelfTest;
+  }
+  assert.equal(
+    readFileSync(configPath, "utf8"),
+    originalPolicy,
+    "Self-test changed supplied policy",
+  );
+  console.log(
+    "PASS: static safety self-test from the source lane; production guard ignores PI_STATIC_SAFETY_SELFTEST and keeps its policy private",
   );
   const { SessionRules } = await load("session/session-rules");
   for (const command of [...uncheckedGit, "env git show HEAD", "env git show HEAD:.env"]) {

@@ -1,7 +1,4 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text, type TUI } from "@earendil-works/pi-tui";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import type { createPresetModelSelector } from "../runtime/preset-model-selector.ts";
 import {
   type PersistentScope,
   type PresetDefinition,
@@ -23,20 +20,9 @@ import {
   type Strength,
 } from "../routing.ts";
 import { workerSlotDisplayOrder, type ModelPickerPosition } from "./preset-picker.ts";
-import { modelPopoverOptions, PresetModelPopover } from "./preset-model-popover.ts";
+import { ModelSelectionSession, type ModelSelectionOptions } from "./model-selection-session.ts";
 
-export interface PreferencesControlsOptions {
-  ctx: ExtensionContext;
-  /** Runtime adaptation stays in the composition; UI only owns its component. */
-  createModelSelector?: (
-    options: Omit<Parameters<typeof createPresetModelSelector>[0], "runtime">,
-  ) => ReturnType<typeof createPresetModelSelector>;
-  /** Readonly renderer projection; regular TUI keeps the docked selector. */
-  modelPopover?: () => boolean;
-  /** Read-only permission-yield gate, checked again for every queued factory. */
-  modelSelectionAllowed?: () => boolean;
-  /** Step cooperating overlays aside before SDK custom completion pops top. */
-  beforeModelClose?: () => void;
+export interface PreferencesControlsOptions extends ModelSelectionOptions {
   store: SettingsStore;
   beerMugs: { current(): boolean; set(enabled: boolean): void };
   ready(): boolean;
@@ -46,14 +32,15 @@ export interface PreferencesControlsOptions {
 }
 
 const scopes = ["global", "workspace"] as const;
-type RegistryModel = ReturnType<ExtensionContext["modelRegistry"]["getAll"]>[number];
 /** Operator dialogs only. No model tool and no permission-profile editing.
  * The picker has settled before these standard dialogs enter the UI queue. */
 export class PreferencesControls {
   private alive = true;
   private busy = false;
-  private cancelModelPicker: (() => void) | undefined;
-  constructor(private readonly options: PreferencesControlsOptions) {}
+  private readonly models: ModelSelectionSession;
+  constructor(private readonly options: PreferencesControlsOptions) {
+    this.models = new ModelSelectionSession(options, () => this.assertLive());
+  }
 
   dispose(): void {
     this.alive = false;
@@ -62,9 +49,7 @@ export class PreferencesControls {
   /** Yield only our model dialog to a permission prompt, without disposing
    * these session controls. Also marks a queued factory as cancelled. */
   cancelModelSelection(): void {
-    const cancel = this.cancelModelPicker;
-    this.cancelModelPicker = undefined;
-    cancel?.();
+    this.models.cancel();
   }
   private live(): boolean {
     return this.alive && this.options.ready();
@@ -375,163 +360,6 @@ export class PreferencesControls {
       );
   }
 
-  private async selectModel(
-    target: string,
-    slot: Strength,
-    previous: string,
-    models: RegistryModel[],
-    position?: ModelPickerPosition,
-  ): Promise<string | undefined> {
-    const { ctx } = this.options;
-    if (ctx.mode !== "tui") {
-      // RPC cannot render terminal components; retain the supported list dialog.
-      const choices = [...new Set(models.map((model) => `${model.provider}/${model.id}`))].sort();
-      const keep = previous && choices.includes(previous) ? `Keep ${previous}` : undefined;
-      const picked = await ctx.ui.select(`${target}: ${slot} model (new Agents only)`, [
-        ...(keep ? [keep] : []),
-        ...choices,
-      ]);
-      this.assertLive();
-      return picked === keep ? previous || undefined : picked;
-    }
-    if (this.options.modelSelectionAllowed?.() === false) return undefined;
-    const createSelector = this.options.createModelSelector;
-    if (!createSelector) throw new HarnessError("MODEL_SELECTOR_UNAVAILABLE");
-    const floating = this.options.modelPopover?.() === true;
-    let picker: ReturnType<typeof createPresetModelSelector> | undefined, terminal: TUI | undefined;
-    let view: PresetModelPopover | undefined,
-      finishRequest: (() => void) | undefined,
-      cancelled = false;
-    // Own cancellation before enqueueing, not only after a factory mounts.
-    const ownedCancel = (): void => {
-      cancelled = true;
-      finishRequest?.();
-    };
-    this.cancelModelPicker = ownedCancel;
-    try {
-      const selected = await ctx.ui.custom<RegistryModel | undefined>(
-        (tui, theme, _keybindings, done) => {
-          this.assertLive(); // A queued old-session factory must never mount.
-          if (this.options.modelSelectionAllowed?.() === false) cancelled = true;
-          if (cancelled) throw new HarnessError("MODEL_SELECTION_CANCELLED");
-          terminal = tui;
-          const scopedModels = ctx.scopedModels;
-          if (cancelled) throw new HarnessError("MODEL_SELECTION_CANCELLED");
-          let settled = false;
-          const finish = (model?: RegistryModel): void => {
-            if (settled) return;
-            settled = true;
-            if (this.cancelModelPicker === ownedCancel) this.cancelModelPicker = undefined;
-            try {
-              this.options.beforeModelClose?.();
-            } catch {
-              /* UI cleanup must not block a permission ask. */
-            }
-            try {
-              picker?.dispose();
-            } finally {
-              done(model);
-            }
-          };
-          const select = (model: RegistryModel): void => {
-            if (settled) return;
-            if (!floating) return finish(model);
-            const issue = view ? view.selectionIssue(model) : "not_visible";
-            if (issue === undefined) return finish(model);
-            if (issue === "closed") return;
-            if (issue === "identity_unverified") {
-              // Native Enter disposes its selector before calling us. A failed
-              // identity check must settle the draft, not strand a dead refresh.
-              try {
-                ctx.ui.notify(
-                  "The selected model could not be verified against Pi's current registry and visible item. Nothing changed; reopen the model selector to refresh it.",
-                  "warning",
-                );
-              } finally {
-                finish();
-              }
-            } else {
-              ctx.ui.notify(
-                "The selected model is not fully visible. Enlarge the terminal or press Esc to cancel; nothing changed.",
-                "warning",
-              );
-              tui.requestRender();
-            }
-          };
-          picker = createSelector({
-            tui,
-            scopedModels,
-            current: models.find((model) => `${model.provider}/${model.id}` === previous),
-            select,
-            cancel: ownedCancel,
-          });
-          this.assertLive();
-          if (cancelled) throw new HarnessError("MODEL_SELECTION_CANCELLED");
-          finishRequest = () => finish();
-          const native = picker;
-          if (floating) {
-            view = new PresetModelPopover({
-              native,
-              theme,
-              title: `${target}: ${slot} model`,
-              height: () => Number(modelPopoverOptions(terminal, position).maxHeight),
-              currentWidth: () => Number(modelPopoverOptions(terminal, position).width),
-              // The view revalidates pointer targets itself. Only native
-              // keyboard submission must match its current selected arrow.
-              models: () => ctx.modelRegistry.getAll(),
-              select: finish,
-              cancel: ownedCancel,
-            });
-            return view;
-          }
-          const title = new Text(
-            theme.fg("accent", `${target}: ${slot} model · new Agents only; main unchanged`),
-            0,
-            0,
-          );
-          return {
-            get focused(): boolean {
-              return native.focused;
-            },
-            set focused(value: boolean) {
-              native.focused = value;
-            },
-            get capturesViewportInput(): boolean {
-              return native.capturesViewportInput === true;
-            },
-            render: (width: number) => [...title.render(width), ...native.render(width)],
-            handleInput: (data: string) => native.handleInput(data),
-            invalidate: () => {
-              title.invalidate();
-              native.invalidate();
-            },
-            dispose: () => native.dispose(),
-          };
-        },
-        floating
-          ? { overlay: true, overlayOptions: () => modelPopoverOptions(terminal, position) }
-          : undefined,
-      );
-      this.assertLive();
-      if (!selected) return undefined;
-      if (selected.api === "pi-virtual") throw new HarnessError("PRESET_MODEL_UNAVAILABLE");
-      return `${selected.provider}/${selected.id}`;
-    } catch (error) {
-      if (
-        cancelled &&
-        error instanceof HarnessError &&
-        error.code === "MODEL_SELECTION_CANCELLED"
-      ) {
-        this.assertLive();
-        return undefined;
-      }
-      throw error;
-    } finally {
-      if (this.cancelModelPicker === ownedCancel) this.cancelModelPicker = undefined;
-      picker?.dispose();
-    }
-  }
-
   /** Edit just the clicked model. Selecting in the native picker is the
    * explicit Apply for an active preset; enabling another needs confirmation. */
   async editModel(name: string, slot: Strength, position?: ModelPickerPosition): Promise<void> {
@@ -545,7 +373,7 @@ export class PreferencesControls {
       const models = ctx.modelRegistry.getAll().filter((model) => model.api !== "pi-virtual");
       if (!models.length) throw new HarnessError("PRESET_MODEL_UNAVAILABLE");
       const previous = existing.slots[slot].model;
-      const selected = await this.selectModel(name, slot, previous, models, position);
+      const selected = await this.models.select(name, slot, previous, models, position);
       this.assertLive();
       if (!selected || selected === previous) return;
       const matches = ctx.modelRegistry
@@ -624,7 +452,7 @@ export class PreferencesControls {
           };
       for (const slot of workerSlotDisplayOrder) {
         const previous = body.slots[slot].model;
-        const selected = await this.selectModel(target, slot, previous, models);
+        const selected = await this.models.select(target, slot, previous, models);
         this.assertLive();
         if (!selected) return;
         body.slots[slot].model = selected;

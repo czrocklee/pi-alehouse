@@ -31,17 +31,10 @@ import {
   isOffPreset,
   presetLabel,
   PresetRouter,
-  resolveSlotRoute,
-  selectPhysicalWorkerModel,
-  strengths,
-  thinkingLevels,
-  validEffortOverrides,
   type EffortOverrides,
   type PresetCandidate,
   type PresetPublication,
   type PresetSelection,
-  type PresetSnapshot,
-  type Strength,
 } from "./routing.ts";
 import { ChildActivityRegistry } from "./runtime/activity-observer.ts";
 import { createChildSessionFactory } from "./runtime/child-factory.ts";
@@ -53,6 +46,13 @@ import { researcherHostModules } from "./runtime/host-modules.ts";
 import { requestHumanStop } from "./runtime/human-stop.ts";
 import { FileOwnerLease } from "./runtime/owner-lease.ts";
 import { ownerSessionReplacementGuard } from "./runtime/owner-lifecycle.ts";
+import {
+  auditDelegationSelection,
+  commitPresetSelection,
+  validateWorkerEfforts,
+  workerEffortCapabilities,
+} from "./runtime/preset-publication.ts";
+import { restorePresetDefinitions, restorePresetRouter } from "./runtime/preset-restoration.ts";
 import { registerOrderFreeToolSchemas } from "./runtime/provider-schema.ts";
 import { createPresetModelSelector } from "./runtime/preset-model-selector.ts";
 import { hostUsage } from "./runtime/tool-usage.ts";
@@ -68,207 +68,25 @@ import {
 import { HarnessWidget } from "./ui/agent-widget.ts";
 import { PanelCoordinator } from "./ui/panel-coordinator.ts";
 import { HIDE_TRANSIENT_OVERLAYS_EVENT } from "./ui/overlay-request.ts";
-import type { EffortCapabilities } from "./ui/preset-picker.ts";
 import { PreferencesControls, stageWorkerSelection } from "./ui/preferences-controls.ts";
 import {
   SettingsStore,
   registerSettingsStore,
-  validateSettings,
   type PresetDefinition,
   type SettingsDocument,
 } from "../../lib/settings-store.mjs";
 import { managedBlockToolNames } from "../../lib/managed-block-tools.mjs";
+
+export {
+  applyAuditedPreset,
+  validateWorkerEfforts,
+  workerEffortCapabilities,
+} from "./runtime/preset-publication.ts";
+export { restorePresetDefinitions, restorePresetRouter } from "./runtime/preset-restoration.ts";
+
 const localTools = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
-
-export function applyAuditedPreset(input: {
-  controller: OwnerController;
-  router: PresetRouter;
-  candidate: PresetCandidate;
-  name: string;
-  audit: (snapshot: PresetSelection) => void;
-  effort_overrides?: EffortOverrides;
-  validate?: (snapshot: PresetSelection) => void;
-}): PresetSelection {
-  input.controller.assertOwnerAvailable();
-  let auditAttempted = false;
-  try {
-    return input.router.apply(
-      input.candidate,
-      input.name,
-      (snapshot) => {
-        // Validation can fail after the picker opened, before any audit IO. It is
-        // not an ambiguous parent-history failure and must not poison the Owner.
-        input.validate?.(snapshot);
-        auditAttempted = true;
-        input.audit(snapshot);
-      },
-      input.effort_overrides,
-    );
-  } catch (error) {
-    // Candidate/name/staleness failures happen before the callback and are not
-    // parent-history failures. Once append was called, however, the SDK may
-    // have changed memory or disk before throwing; latch rather than guessing.
-    if (!auditAttempted) throw error;
-    input.controller.latchParentHistoryFailure(error);
-    throw new HarnessError("PRESET_AUDIT_FAILED", {
-      error: String(error).slice(0, 512),
-      resolution:
-        "The synchronous parent-session audit call failed or had an ambiguous outcome. The live worker preset was not published. Inspect the parent session and restart Pi before more delegation or preset changes.",
-    });
-  }
-}
-
-const savedPresetResolution =
-  "The saved harness:preset-selection:v1 branch record failed worker configuration validation. Effort overrides require a named non-Off preset and valid policies; custom definitions require valid preset versions and all five nested slots d1, d2, d3, d4, d5 with model and optional effort under version-2 settings rules; any per-slot thinking field is unsupported, including editor-generated empty thinking: {}. Correct configuration files explicitly, then start a fresh session or fork from before the invalid harness:preset-selection:v1 record and restart Pi. Do not rewrite historical journal records.";
-
-/** Reconstruct only the active branch's per-preset overrides. Older selection
- * entries have no override field; they retain their original name-only meaning.
- * The caller must pass getBranch(), never the entire session tree. */
-export function restorePresetDefinitions(
-  selections: readonly unknown[],
-): Record<string, PresetDefinition> {
-  let definitions: Record<string, PresetDefinition> = {};
-  for (const entry of selections) {
-    if (
-      !entry ||
-      typeof entry !== "object" ||
-      !("custom_presets" in entry) ||
-      !Object.hasOwn(entry, "custom_presets")
-    )
-      continue;
-    try {
-      definitions = validateSettings({ version: 2, presets: entry.custom_presets }).presets ?? {};
-    } catch {
-      throw new HarnessError("INVALID_SAVED_PRESETS", {
-        record: "harness:preset-selection:v1",
-        resolution: savedPresetResolution,
-      });
-    }
-  }
-  return definitions;
-}
-
-export function restorePresetRouter(
-  path: string,
-  selections: readonly unknown[],
-  preferences?: SettingsDocument,
-): PresetRouter {
-  const overrides = new Map<string, EffortOverrides>();
-  for (const [name, slots] of Object.entries(preferences?.effort ?? {})) {
-    overrides.set(
-      name,
-      Object.fromEntries(Object.entries(slots).filter(([, value]) => value !== null)),
-    );
-  }
-  const historical = new Set<string>();
-  let selected: string | undefined;
-  for (const entry of selections) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const data = entry as Record<string, unknown>;
-    if (typeof data.name === "string") {
-      selected = data.name;
-      // Preferences seed fresh choices only. A historical name-only record
-      // keeps its original catalogue-default meaning, not today's global pins.
-      if (!historical.has(data.name)) {
-        overrides.delete(data.name);
-        historical.add(data.name);
-      }
-    }
-    if (!Object.hasOwn(data, "effort_overrides")) continue;
-    if (
-      typeof data.name !== "string" ||
-      data.name === "off" ||
-      !validEffortOverrides(data.effort_overrides)
-    )
-      throw new HarnessError("INVALID_SAVED_EFFORT", {
-        record: "harness:preset-selection:v1",
-        resolution: savedPresetResolution,
-      });
-    overrides.set(data.name, structuredClone(data.effort_overrides));
-  }
-  const router = new PresetRouter(path, overrides, {
-    ...preferences?.presets,
-    ...restorePresetDefinitions(selections),
-  });
-  // Fresh sessions use explicitly saved preferences, then catalogue defaults.
-  // A removed saved preset is still an error, never a default fallback.
-  const name = selected ?? preferences?.preset;
-  if (name !== undefined) router.select(name);
-  return router;
-}
-
-type EffortModels<M extends { provider: string; id: string; api?: string }> = {
-  models: readonly M[];
-  parentThinking: string | undefined;
-  supportedThinking: (model: M) => readonly string[];
-};
-/** Operator feedback must not suggest changing model-facing tool arguments. */
-function effortIssue(error: unknown): string {
-  if (error instanceof HarnessError) {
-    if (error.code === "PARENT_THINKING_UNAVAILABLE") return "Parent thinking is unavailable.";
-    if (error.code === "PRESET_MODEL_UNAVAILABLE")
-      return error.details.reason === "virtual_model"
-        ? "Choose a physical worker model; virtual models route each request."
-        : "Worker model is unavailable or ambiguous in Pi's registry.";
-    if (error.code === "THINKING_INCOMPATIBLE")
-      return error.details.reason === "fixed_effort_unsupported"
-        ? "The worker model does not support this fixed effort."
-        : "Current parent thinking has no supported inherited level under the automatic rule.";
-  }
-  return "Worker effort could not be checked.";
-}
-
-/** UI capability data comes from the host registry, not another model catalogue.
- * Inherited effort is advisory only; admission resolves it at spawn time. */
-export function workerEffortCapabilities<M extends { provider: string; id: string; api?: string }>(
-  preset: PresetSnapshot,
-  slot: Strength,
-  input: EffortModels<M>,
-): EffortCapabilities {
-  let model: M;
-  try {
-    model = selectPhysicalWorkerModel(input.models, preset.models[slot], preset);
-  } catch (error) {
-    if (!(error instanceof HarnessError)) throw error;
-    return { levels: [], error: effortIssue(error) };
-  }
-  const supported = input.supportedThinking(model);
-  const levels = thinkingLevels.filter((level) => supported.includes(level));
-  try {
-    const inherited = resolveSlotRoute({
-      ...input,
-      strength: slot,
-      preset: { ...preset, effort: { ...preset.effort, [slot]: "inherit" } },
-    }).thinking;
-    return { levels, inherited };
-  } catch (error) {
-    return { levels, inheritError: effortIssue(error) };
-  }
-}
-
-/** Validate saved fixed policies, not transient parent thinking. Inherit is
- * checked only when admitting an Agent, even if its model is missing now. */
-export function validateWorkerEfforts<M extends { provider: string; id: string }>(
-  preset: PresetSelection,
-  input: EffortModels<M>,
-): void {
-  if (isOffPreset(preset)) throw new HarnessError("WORKERS_DISABLED");
-  for (const strength of strengths) {
-    if (preset.effort[strength] === "inherit") continue;
-    try {
-      resolveSlotRoute({ ...input, preset, strength });
-    } catch (error) {
-      if (!(error instanceof HarnessError)) throw error;
-      throw new HarnessError(error.code, {
-        preset: preset.name,
-        slot: strength,
-        error: effortIssue(error),
-        resolution:
-          "Choose a supported fixed level or inherit, or update the worker model configuration.",
-      });
-    }
-  }
-}
+const presetEntry = "harness:preset-selection:v1";
+const delegationEntry = "harness:delegation-mode:v1";
 
 /** The already-loaded matched authority, supplied by the guarded composition.
  * Resolve session services per use; never cache an authority service here. */
@@ -309,6 +127,244 @@ export function hideParentWebDeclarations(
   });
 }
 
+function branchCustom(ctx: ExtensionContext, customType: string): unknown[] {
+  return ctx.sessionManager
+    .getBranch()
+    .flatMap((entry) =>
+      entry.type === "custom" && entry.customType === customType ? [entry.data] : [],
+    );
+}
+
+function settingsLoadFailure(error: unknown, agentDir: string, cwd: string): HarnessError {
+  return new HarnessError("SETTINGS_LOAD_FAILED", {
+    error: String(error).slice(0, 1024),
+    config_paths: [
+      join(agentDir, "extensions/pi-alehouse/config.json"),
+      join(cwd, ".pi/extensions/pi-alehouse/config.json"),
+    ],
+    resolution:
+      "Repair the named preferences file; no existing configuration was overwritten. Restart Pi afterward.",
+  });
+}
+
+function presetRestoreFailure(error: unknown, presetPath: string): HarnessError {
+  const savedRecord =
+    error instanceof HarnessError &&
+    (error.code === "INVALID_SAVED_PRESETS" || error.code === "INVALID_SAVED_EFFORT");
+  return new HarnessError(error instanceof HarnessError ? error.code : "PRESET_ERROR", {
+    ...(error instanceof HarnessError ? error.details : { error: String(error).slice(0, 512) }),
+    ...(savedRecord ? {} : { config_path: presetPath }),
+    resolution:
+      error instanceof HarnessError && typeof error.details.resolution === "string"
+        ? error.details.resolution
+        : "Fix the preset configuration or restore the saved preset, then restart Pi. The harness is not initialized.",
+  });
+}
+
+function delegationRestoreFailure(error: unknown): HarnessError {
+  return new HarnessError(error instanceof HarnessError ? error.code : "INVALID_SAVED_DELEGATION", {
+    record: delegationEntry,
+    resolution: `A saved ${delegationEntry} entry on this branch is invalid. Restore or fork the session from before it, then restart Pi. The harness is not initialized.`,
+  });
+}
+
+function requireLauncherPaths(): { permissionRoot: string; policyRoot: string; flock: string } {
+  const permissionRoot = process.env.PI_HARNESS_PERMISSION_ROOT,
+    policyRoot = process.env.PI_HARNESS_POLICY_ROOT;
+  const flock = process.env.PI_HARNESS_FLOCK;
+  assert(
+    permissionRoot &&
+      isAbsolute(permissionRoot) &&
+      policyRoot &&
+      isAbsolute(policyRoot) &&
+      flock &&
+      isAbsolute(flock),
+    "Use the pi-alehouse launcher",
+  );
+  return { permissionRoot, policyRoot, flock };
+}
+
+function requireStartupPermission(
+  startup: HarnessStartup | undefined,
+): HarnessStartup["permission"] {
+  const permission = startup?.permission;
+  assert(
+    permission && typeof permission.getPermissionsService === "function",
+    "Use the pi-alehouse composition with its matched permission interface; no SDK or authority fallback is supported",
+  );
+  assert(
+    typeof permission.subscribeManagedBlocks === "function",
+    "Managed block observations are unavailable; restart with a matched pi-alehouse runtime",
+  );
+  assert(
+    typeof startup?.parentWebTools === "function",
+    "Use the pi-alehouse composition: the parent web tool registry is unavailable",
+  );
+  return permission;
+}
+
+function requireHostModelRuntime(ctx: ExtensionContext): ModelRuntime {
+  // No public canonical-runtime getter: reuse the parent's runtime, not copied auth.
+  const runtime = (ctx.modelRegistry as unknown as { runtime: ModelRuntime }).runtime;
+  assert(
+    runtime &&
+      typeof runtime.getModel === "function" &&
+      typeof runtime.getPhysicalModel === "function" &&
+      typeof runtime.streamSimple === "function",
+    "SDK ModelRegistry.runtime physical-model capabilities are unavailable",
+  );
+  return runtime;
+}
+
+function loadAdmittedProfiles(
+  agentDir: string,
+): Record<
+  (typeof agentProfileNames)[number],
+  { definition: string; body: string; tools: string[] }
+> {
+  return Object.fromEntries(
+    agentProfileNames.map((name) => {
+      const definition = readFileSync(join(agentDir, "agents", `${name}.md`), "utf8");
+      const parsed = parseFrontmatter<{ tools: string[] }>(definition);
+      assert(Array.isArray(parsed.frontmatter.tools), `Invalid tools in ${name}`);
+      // Declared definitions may list web tools; only web profiles receive
+      // them, and those must have every web tool and no Bash or direct edits.
+      const web = webProfileNames.includes(name);
+      const tools = parsed.frontmatter.tools.filter(
+        (tool) => localTools.has(tool) || (web && webToolNames.includes(tool)),
+      );
+      if (web) {
+        assert(
+          webToolNames.every((tool) => tools.includes(tool)) &&
+            !["bash", "edit", "write"].some((tool) => tools.includes(tool)),
+          `Invalid tools in ${name}`,
+        );
+      }
+      return [
+        name,
+        { definition, body: parsed.body, tools: [...tools, "alert_parent", "ask_parent"] },
+      ];
+    }),
+  ) as Record<
+    (typeof agentProfileNames)[number],
+    { definition: string; body: string; tools: string[] }
+  >;
+}
+
+function openResearcherWeb(): ChildWebModules | undefined {
+  // The launcher's verified pi-web-access entry; a researcher spawn fails
+  // closed without it. Each researcher session loads its own instance, which
+  // imports the Pi SDK modules this extension received from the host.
+  const webEntry = process.env.PI_HARNESS_WEB_ENTRY;
+  return webEntry && isAbsolute(webEntry)
+    ? new ChildWebModules(webEntry, nativeWebLoader(researcherHostModules))
+    : undefined;
+}
+
+function stageSettings(action: () => void, ctx: Pick<ExtensionContext, "ui">): void {
+  try {
+    action();
+  } catch (error) {
+    try {
+      ctx.ui.notify(
+        `The session change is live, but defaults were not queued: ${String(error).slice(0, 512)}`,
+        "warning",
+      );
+    } catch {
+      /* persistence feedback cannot undo a live audited choice */
+    }
+  }
+}
+
+/** Best-effort paint after a committed preset. Failures do not roll back. */
+function presentPresetSelection(input: {
+  snapshot: PresetSelection;
+  delegation: DelegationSetting;
+  syncTools: () => void;
+  setStatus: () => void;
+  notify: (message: string, level: "info" | "warning") => void;
+}): void {
+  const issues: string[] = [];
+  const failed = (part: string, error: unknown): void => {
+    let detail = "unprintable error";
+    try {
+      detail = String(error).slice(0, 256);
+    } catch {
+      /* diagnostics cannot undo selection */
+    }
+    issues.push(`${part} could not update: ${detail}`);
+  };
+  try {
+    input.syncTools();
+  } catch (error) {
+    failed("tool visibility", error);
+  }
+  try {
+    input.setStatus();
+  } catch (error) {
+    failed("the footer", error);
+  }
+  try {
+    input.notify(
+      issues.length
+        ? `Model preset ${presetLabel(input.snapshot)} selected; existing agents are unchanged, but ${issues.join("; ")}`
+        : input.snapshot.name === "off"
+          ? "Delegation off: new tasks, answers and steering are disabled; accepted work continues and results remain available."
+          : `Model preset ${presetLabel(input.snapshot)} selected; existing agents are unchanged.`,
+      issues.length ? "warning" : "info",
+    );
+  } catch {
+    /* best-effort UI after a successful selection */
+  }
+}
+
+function retryPublishedGuideline(input: {
+  syncGuideline: () => void;
+  notify: (message: string, level: "warning") => void;
+}): void {
+  try {
+    input.syncGuideline();
+  } catch (error) {
+    try {
+      input.notify(
+        `The model-facing guideline could not update: ${String(error).slice(0, 256)}`,
+        "warning",
+      );
+    } catch {
+      /* best-effort UI */
+    }
+  }
+}
+
+function presentDelegationChange(input: {
+  setting: DelegationSetting;
+  syncGuideline: () => void;
+  setStatus: () => void;
+  notify: (message: string, level: "warning") => void;
+}): void {
+  const issues: string[] = [];
+  try {
+    input.syncGuideline();
+  } catch (error) {
+    issues.push(`the model-facing guideline could not update: ${String(error).slice(0, 256)}`);
+  }
+  try {
+    input.setStatus();
+  } catch (error) {
+    issues.push(`the footer could not update: ${String(error).slice(0, 256)}`);
+  }
+  if (issues.length) {
+    try {
+      input.notify(
+        `Delegation ${delegationLabel(input.setting)} selected, but ${issues.join("; ")}`,
+        "warning",
+      );
+    } catch {
+      /* best-effort UI after a successful selection */
+    }
+  }
+}
+
 /** Explicit launcher only: no global discovery, settings migration or old-backend fallback. */
 export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStartup) {
   let controller: OwnerController | undefined,
@@ -318,20 +374,6 @@ export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStar
   let settingsStore: SettingsStore | undefined, settingsUi: PreferencesControls | undefined;
   let unregisterSettings: (() => void) | undefined;
   let sessionDefinitions: Record<string, PresetDefinition> = {};
-  const stageSettings = (action: () => void, ctx: Pick<ExtensionContext, "ui">): void => {
-    try {
-      action();
-    } catch (error) {
-      try {
-        ctx.ui.notify(
-          `The session change is live, but defaults were not queued: ${String(error).slice(0, 512)}`,
-          "warning",
-        );
-      } catch {
-        /* persistence feedback cannot undo a live audited choice */
-      }
-    }
-  };
   const effortInputs = () => {
     if (!ready || !routingContext) throw new HarnessError("HARNESS_NOT_READY");
     return {
@@ -344,8 +386,6 @@ export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStar
   const residentLimit = DEFAULT_OWNER_LIMITS.resident;
   registerOrderFreeToolSchemas(pi);
   historicalRunsCommand(pi);
-  const presetEntry = "harness:preset-selection:v1";
-  const delegationEntry = "harness:delegation-mode:v1";
   let delegation: DelegationSetting = { ...defaultDelegation };
   /** Autonomous modes route web research to scouts; Off and Manual keep the
    * parent's web tools regardless of whether any Agents are working. */
@@ -406,43 +446,18 @@ export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStar
     definition?: PresetDefinition,
   ): PresetPublication => {
     if (!ready || !controller || !router) throw new HarnessError("HARNESS_NOT_READY");
-    const previous = router.current();
-    const targetBefore = router.inspect(candidate).find((preset) => preset.name === name);
-    const nextDefinitions = definition
-      ? (validateSettings({ version: 2, presets: { ...sessionDefinitions, [name]: definition } })
-          .presets ?? {})
-      : sessionDefinitions;
-    const snapshot = applyAuditedPreset({
+    const committed = commitPresetSelection({
       controller,
       router,
       candidate,
       name,
       effort_overrides,
-      ...(effort_overrides === undefined && !definition
-        ? {}
-        : {
-            validate: (selected: PresetSelection) => {
-              if (definition && !isOffPreset(selected))
-                for (const slot of strengths) {
-                  selectPhysicalWorkerModel(effortInputs().models, selected.models[slot], selected);
-                }
-              validateWorkerEfforts(selected, effortInputs());
-            },
-          }),
-      // Full immutable slot selection is user audit metadata, never model context.
-      // Success means this synchronous SDK call returned; it is not an fsync or
-      // a rollback guarantee if the SDK itself throws after changing state.
-      audit: (selected) =>
-        pi.appendEntry(presetEntry, {
-          ...selected,
-          selected_at: Date.now(),
-          ...(Object.keys(nextDefinitions).length
-            ? { custom_presets: structuredClone(nextDefinitions) }
-            : {}),
-        }),
+      definition,
+      sessionDefinitions,
+      effortInputs,
+      appendAudit: (record) => pi.appendEntry(presetEntry, record),
     });
-    const publication = { selection: snapshot, candidate: router.rebase(candidate) };
-    sessionDefinitions = nextDefinitions;
+    sessionDefinitions = committed.nextDefinitions;
     if (settingsStore)
       stageSettings(() => {
         const store = settingsStore!;
@@ -456,50 +471,26 @@ export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStar
           store.stage(store.scope, ["presets", name], rememberedDefinition);
         stageWorkerSelection(
           store,
-          snapshot,
-          previous,
+          committed.publication.selection,
+          committed.previous,
           effort_overrides !== undefined,
-          targetBefore && !isOffPreset(targetBefore) ? targetBefore.effort_overrides : {},
+          committed.previousEfforts,
         );
       }, ctx);
     // Tool exposure is not the execution gate. A stale SDK tool handle still
     // reaches the Controller's current selection/disable-revision checks.
-    const issues: string[] = [];
-    const failed = (part: string, error: unknown): void => {
-      let detail = "unprintable error";
-      try {
-        detail = String(error).slice(0, 256);
-      } catch {
-        /* diagnostics cannot undo selection */
-      }
-      issues.push(`${part} could not update: ${detail}`);
-    };
-    try {
-      syncWorkerTools();
-    } catch (error) {
-      failed("tool visibility", error);
-    }
-    try {
-      ctx.ui.setStatus("harness-preset", delegationStatus(snapshot, delegation));
-    } catch (error) {
-      failed("the footer", error);
-    }
-    // Audit and live selection already succeeded. Report either presentation
-    // failure without pretending the selection rolled back; preflight retries
-    // tool reconciliation, while core admission remains authoritative now.
-    try {
-      ctx.ui.notify(
-        issues.length
-          ? `Model preset ${presetLabel(snapshot)} selected; existing agents are unchanged, but ${issues.join("; ")}`
-          : snapshot.name === "off"
-            ? "Delegation off: new tasks, answers and steering are disabled; accepted work continues and results remain available."
-            : `Model preset ${presetLabel(snapshot)} selected; existing agents are unchanged.`,
-        issues.length ? "warning" : "info",
-      );
-    } catch {
-      /* best-effort UI after a successful selection */
-    }
-    return publication;
+    presentPresetSelection({
+      snapshot: committed.publication.selection,
+      delegation,
+      syncTools: syncWorkerTools,
+      setStatus: () =>
+        ctx.ui.setStatus(
+          "harness-preset",
+          delegationStatus(committed.publication.selection, delegation),
+        ),
+      notify: (message, level) => ctx.ui.notify(message, level),
+    });
+    return committed.publication;
   };
   /** Audit, then re-register agent_spawn with the new guideline (one
    * prompt-cache miss). Pi applies it from the next run; a run already in
@@ -518,32 +509,15 @@ export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStar
     const setting: DelegationSetting = { mode: next.mode, eagerness: next.eagerness };
     if (setting.mode === delegation.mode && setting.eagerness === delegation.eagerness) {
       // Unchanged, but repair an earlier failed re-registration.
-      try {
-        syncGuideline();
-      } catch (error) {
-        try {
-          ctx.ui.notify(
-            `The model-facing guideline could not update: ${String(error).slice(0, 256)}`,
-            "warning",
-          );
-        } catch {
-          /* best-effort UI */
-        }
-      }
+      retryPublishedGuideline({
+        syncGuideline,
+        notify: (message, level) => ctx.ui.notify(message, level),
+      });
       return false;
     }
-    controller.assertOwnerAvailable();
-    try {
-      pi.appendEntry(delegationEntry, { ...setting, selected_at: Date.now() });
-    } catch (error) {
-      // As with presets: the SDK may have changed memory or disk before throwing.
-      controller.latchParentHistoryFailure(error);
-      throw new HarnessError("DELEGATION_AUDIT_FAILED", {
-        error: String(error).slice(0, 512),
-        resolution:
-          "The parent-session audit call failed or had an ambiguous outcome. The delegation mode was not changed. Inspect the parent session and restart Pi before more delegation or mode changes.",
-      });
-    }
+    auditDelegationSelection(controller, () =>
+      pi.appendEntry(delegationEntry, { ...setting, selected_at: Date.now() }),
+    );
     const previous = delegation;
     delegation = setting;
     if (settingsStore && settingsStore.scope !== "session")
@@ -555,28 +529,14 @@ export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStar
         if (previous.eagerness !== setting.eagerness)
           store.stage(store.scope, ["delegation", "eagerness"], setting.eagerness);
       }, ctx);
-    const issues: string[] = [];
     // A failure here is retried on the next reselect and before each run.
-    try {
-      syncGuideline();
-    } catch (error) {
-      issues.push(`the model-facing guideline could not update: ${String(error).slice(0, 256)}`);
-    }
-    try {
-      ctx.ui.setStatus("harness-preset", delegationStatus(router.current(), setting));
-    } catch (error) {
-      issues.push(`the footer could not update: ${String(error).slice(0, 256)}`);
-    }
-    if (issues.length) {
-      try {
-        ctx.ui.notify(
-          `Delegation ${delegationLabel(setting)} selected, but ${issues.join("; ")}`,
-          "warning",
-        );
-      } catch {
-        /* best-effort UI after a successful selection */
-      }
-    }
+    presentDelegationChange({
+      setting,
+      syncGuideline,
+      setStatus: () =>
+        ctx.ui.setStatus("harness-preset", delegationStatus(router!.current(), setting)),
+      notify: (message, level) => ctx.ui.notify(message, level),
+    });
     return true;
   };
   /** The only readiness gate preset work has: the catalogue is meaningless
@@ -863,143 +823,39 @@ export default function harnessExtension(pi: ExtensionAPI, startup?: HarnessStar
       });
       preferences = settingsStore.effective();
     } catch (error) {
-      showPresetError(
-        new HarnessError("SETTINGS_LOAD_FAILED", {
-          error: String(error).slice(0, 1024),
-          config_paths: [
-            join(agentDir, "extensions/pi-alehouse/config.json"),
-            join(ctx.cwd, ".pi/extensions/pi-alehouse/config.json"),
-          ],
-          resolution:
-            "Repair the named preferences file; no existing configuration was overwritten. Restart Pi afterward.",
-        }),
-        ctx,
-      );
+      showPresetError(settingsLoadFailure(error, agentDir, ctx.cwd), ctx);
       return;
     }
     try {
-      const selections = ctx.sessionManager
-        .getBranch()
-        .flatMap((entry) =>
-          entry.type === "custom" && entry.customType === presetEntry ? [entry.data] : [],
-        );
+      const selections = branchCustom(ctx, presetEntry);
       sessionDefinitions = restorePresetDefinitions(selections);
       router = restorePresetRouter(presetPath, selections, preferences);
     } catch (error) {
       // A bad branch record is not a defect in the base catalogue. Attaching
       // that file's path sends the operator to the wrong place to repair it.
-      const savedRecord =
-        error instanceof HarnessError &&
-        (error.code === "INVALID_SAVED_PRESETS" || error.code === "INVALID_SAVED_EFFORT");
-      showPresetError(
-        new HarnessError(error instanceof HarnessError ? error.code : "PRESET_ERROR", {
-          ...(error instanceof HarnessError
-            ? error.details
-            : { error: String(error).slice(0, 512) }),
-          ...(savedRecord ? {} : { config_path: presetPath }),
-          resolution:
-            error instanceof HarnessError && typeof error.details.resolution === "string"
-              ? error.details.resolution
-              : "Fix the preset configuration or restore the saved preset, then restart Pi. The harness is not initialized.",
-        }),
-        ctx,
-      );
+      showPresetError(presetRestoreFailure(error, presetPath), ctx);
       return;
     }
     try {
-      delegation = restoreDelegation(
-        ctx.sessionManager
-          .getBranch()
-          .flatMap((entry) =>
-            entry.type === "custom" && entry.customType === delegationEntry ? [entry.data] : [],
-          ),
-        { ...router.defaultDelegation, ...preferences.delegation },
-      );
+      delegation = restoreDelegation(branchCustom(ctx, delegationEntry), {
+        ...router.defaultDelegation,
+        ...preferences.delegation,
+      });
     } catch (error) {
       // A session record, not the preset file: say which.
       router = undefined;
-      showPresetError(
-        new HarnessError(error instanceof HarnessError ? error.code : "INVALID_SAVED_DELEGATION", {
-          record: delegationEntry,
-          resolution: `A saved ${delegationEntry} entry on this branch is invalid. Restore or fork the session from before it, then restart Pi. The harness is not initialized.`,
-        }),
-        ctx,
-      );
+      showPresetError(delegationRestoreFailure(error), ctx);
       return;
     }
-    const permissionRoot = process.env.PI_HARNESS_PERMISSION_ROOT,
-      policyRoot = process.env.PI_HARNESS_POLICY_ROOT;
-    const flock = process.env.PI_HARNESS_FLOCK;
-    assert(
-      permissionRoot &&
-        isAbsolute(permissionRoot) &&
-        policyRoot &&
-        isAbsolute(policyRoot) &&
-        flock &&
-        isAbsolute(flock),
-      "Use the pi-alehouse launcher",
-    );
-    const permission = startup?.permission;
-    assert(
-      permission && typeof permission.getPermissionsService === "function",
-      "Use the pi-alehouse composition with its matched permission interface; no SDK or authority fallback is supported",
-    );
-    assert(
-      typeof permission.subscribeManagedBlocks === "function",
-      "Managed block observations are unavailable; restart with a matched pi-alehouse runtime",
-    );
-    assert(
-      typeof startup?.parentWebTools === "function",
-      "Use the pi-alehouse composition: the parent web tool registry is unavailable",
-    );
+    const { permissionRoot, policyRoot, flock } = requireLauncherPaths();
+    const permission = requireStartupPermission(startup);
     // The launcher loads us first so shutdown drains children BEFORE tearing
     // down the parent authority. Permission session_start runs after ours;
     // tool admission and child creation check its readiness, not this hook.
     parentPermission = () => permission.getPermissionsService(parentId);
-    // No public canonical-runtime getter: reuse the parent's runtime, not copied auth.
-    const runtime = (ctx.modelRegistry as unknown as { runtime: ModelRuntime }).runtime;
-    assert(
-      runtime &&
-        typeof runtime.getModel === "function" &&
-        typeof runtime.getPhysicalModel === "function" &&
-        typeof runtime.streamSimple === "function",
-      "SDK ModelRegistry.runtime physical-model capabilities are unavailable",
-    );
-    const profiles = Object.fromEntries(
-      agentProfileNames.map((name) => {
-        const definition = readFileSync(join(agentDir, "agents", `${name}.md`), "utf8");
-        const parsed = parseFrontmatter<{ tools: string[] }>(definition);
-        assert(Array.isArray(parsed.frontmatter.tools), `Invalid tools in ${name}`);
-        // Declared definitions may list web tools; only web profiles receive
-        // them, and those must have every web tool and no Bash or direct edits.
-        const web = webProfileNames.includes(name);
-        const tools = parsed.frontmatter.tools.filter(
-          (tool) => localTools.has(tool) || (web && webToolNames.includes(tool)),
-        );
-        if (web) {
-          assert(
-            webToolNames.every((tool) => tools.includes(tool)) &&
-              !["bash", "edit", "write"].some((tool) => tools.includes(tool)),
-            `Invalid tools in ${name}`,
-          );
-        }
-        return [
-          name,
-          { definition, body: parsed.body, tools: [...tools, "alert_parent", "ask_parent"] },
-        ];
-      }),
-    ) as Record<
-      (typeof agentProfileNames)[number],
-      { definition: string; body: string; tools: string[] }
-    >;
-    // The launcher's verified pi-web-access entry; a researcher spawn fails
-    // closed without it. Each researcher session loads its own instance, which
-    // imports the Pi SDK modules this extension received from the host.
-    const webEntry = process.env.PI_HARNESS_WEB_ENTRY;
-    const web =
-      webEntry && isAbsolute(webEntry)
-        ? new ChildWebModules(webEntry, nativeWebLoader(researcherHostModules))
-        : undefined;
+    const runtime = requireHostModelRuntime(ctx);
+    const profiles = loadAdmittedProfiles(agentDir);
+    const web = openResearcherWeb();
     const settings = () => {
       const manager = SettingsManager.create(ctx.cwd, agentDir, {
         projectTrusted: ctx.isProjectTrusted(),

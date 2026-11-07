@@ -2,6 +2,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { RunView } from "../core/contracts.ts";
 import { formatTokenCount } from "../../../lib/token-format.mjs";
 import type { ActiveTool, GenerationPreview } from "../runtime/activity-types.ts";
+import { identifyingToolArgs, relativeToolPath } from "../presentation/tool-identity.ts";
 import { clipPlainText, previewText, singleLineText } from "./text.ts";
 
 export const GLYPHS = {
@@ -34,9 +35,7 @@ const TOOL_ACTION: Record<string, { verb: string; noun?: string; joiner?: string
   notify_parent: { verb: "notifying you", joiner: ": " },
 };
 export function shortPath(value: string, cwd: string, columns: number): string {
-  const path = singleLineText(value),
-    base = singleLineText(cwd);
-  const relative = base && path.startsWith(`${base}/`) ? path.slice(base.length + 1) : path;
+  const relative = relativeToolPath(value, cwd);
   if (visibleWidth(relative) <= columns) return relative;
   const parts = relative.split("/");
   let tail = parts.pop() ?? relative;
@@ -51,45 +50,10 @@ export function describeToolArgs(
   cwd: string,
   columns: number,
 ): string | undefined {
-  if (!args || typeof args !== "object") return undefined;
-  const input = args as Record<string, unknown>;
-  const str = (key: string): string | undefined =>
-    typeof input[key] === "string" ? input[key] : undefined;
-  const path = (key: string): string | undefined => {
-    const value = str(key);
-    return value ? shortPath(value, cwd, columns) : undefined;
-  };
-  const bounded = (text: string): string => clipPlainText(singleLineText(text), columns);
-  switch (singleLineText(name)) {
-    case "read":
-    case "edit":
-    case "write":
-      return path("path");
-    case "ls":
-      return path("path") ?? ".";
-    case "bash": {
-      const command = str("command");
-      return command ? bounded(command) : undefined;
-    }
-    case "grep":
-    case "find": {
-      const pattern = str("pattern");
-      if (!pattern) return undefined;
-      const where = path("path") ?? str("glob");
-      return bounded(`"${pattern}"${where ? ` in ${where}` : ""}`);
-    }
-    case "ask_parent": {
-      const question = str("question");
-      return question ? bounded(question) : undefined;
-    }
-    case "alert_parent":
-    case "notify_parent": {
-      const message = str("message");
-      return message ? bounded(message) : undefined;
-    }
-    default:
-      return undefined;
-  }
+  return identifyingToolArgs(name, args, cwd, {
+    path: (value) => shortPath(value, cwd, columns),
+    text: (text) => clipPlainText(singleLineText(text), columns),
+  });
 }
 interface ActivityPart {
   action: string;

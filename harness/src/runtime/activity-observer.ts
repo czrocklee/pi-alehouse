@@ -1,6 +1,6 @@
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { describeToolArgs } from "../ui/format.ts";
-import { singleLineText } from "../ui/text.ts";
+import { identifyingToolArgs } from "../presentation/tool-identity.ts";
+import { singleLineText } from "../presentation/plain-text.ts";
 import type { ActiveTool, GenerationPreview } from "./activity-types.ts";
 import { boundedPreview, LinePreview } from "./line-preview.ts";
 
@@ -84,7 +84,7 @@ export class ChildActivity implements ChildActivityObservation {
     });
     pi.on("tool_execution_start", (event) => {
       this.revision++;
-      const detail = describeToolArgs(event.toolName, event.args, this.cwd, Infinity);
+      const detail = identifyingToolArgs(event.toolName, event.args, this.cwd);
       this.preparingTool = undefined;
       this.running.set(event.toolCallId, {
         name: observedToolName(event.toolName),

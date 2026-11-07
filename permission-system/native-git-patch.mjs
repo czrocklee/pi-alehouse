@@ -56,12 +56,6 @@ export interface BashCommand {
   ]);
   patch("src/access-intent/bash/program.ts", [
     [
-      `      // Indirection is admitted only for the exact env Git unit marked by a
-      // COMPLETE program proof. No other wrapper inherits this exception.`,
-      `      // The native Git lane is source-bound per command. Legacy non-Git
-      // proof does not confer scope or wrapper eligibility on other units.`,
-    ],
-    [
       "import { managedGitInnerCommand,",
       "import { gitLiteralWords, literalWords as legacyLiteralWords, managedGitInnerCommand,",
     ],
@@ -83,14 +77,14 @@ export interface BashCommand {
       "      const { externalAccesses, ruleCandidates } = new BashPathResolver(",
       "      const nativeGit = analyzeGitCommands(tree.rootNode, normalizer, options?.workdir);\n      const { externalAccesses, ruleCandidates } = new BashPathResolver(",
     ],
+    // Preserve native source-bound units in mixed-program effect analysis.
+    // Automatic eligibility still comes ONLY from queryAuto below, never from
+    // a program mark or a legacy wrapper fallback (Git marks are always false).
     [
-      `          (!cmd.wrapperKind || (cmd.wrapperKind === "indirection" &&
-            readCandidate.marked[index] && readCandidate.gitWrappers[index] !== undefined &&
-            managedGitInnerCommand(cmd.text) === readCandidate.gitWrappers[index]))) ? readCandidate : undefined;`,
-      `          (!cmd.wrapperKind || (cmd.wrapperKind === "indirection" &&
-            (nativeGit.units.has(managedCommandStart(cmd) ?? -1) ||
-              (readCandidate.marked[index] && readCandidate.gitWrappers[index] !== undefined &&
-                managedGitInnerCommand(cmd.text) === readCandidate.gitWrappers[index]))))) ? readCandidate : undefined;`,
+      "        commands.every(cmd => !cmd.wrapperKind && !cmd.parseUnresolved && !cmd.context) ? readCandidate : undefined;",
+      `        commands.every(cmd => !cmd.parseUnresolved && !cmd.context &&
+          (!cmd.wrapperKind || (cmd.wrapperKind === "indirection" &&
+            nativeGit.units.has(managedCommandStart(cmd) ?? -1)))) ? readCandidate : undefined;`,
     ],
     [
       `          const diagnostic = diagnostics?.[index] ?? (proof ? undefined : managedGitSyntaxDiagnostic(cmd.text));`,
@@ -112,8 +106,12 @@ export interface BashCommand {
       "          ...(originals ? { managedOriginal: originals[index] } :\n            nativeRequest && originalSource !== undefined && originalSource !== cmd.text ? { managedOriginal: originalSource } : {}),",
     ],
     [
-      '          ...(readProof?.marked[index] && cmd.wrapperKind === "indirection" ? {',
-      '          ...(nativeRequest && managedGitInnerCommand(cmd.text) !== undefined && cmd.wrapperKind === "indirection" ? {\n            managedGitInner: managedGitInnerCommand(cmd.text),\n            ...(originals ? { managedGitOriginalInner: managedGitInnerCommand(originals[index]!) } : {}),\n          } : readProof?.marked[index] && cmd.wrapperKind === "indirection" ? {',
+      "          ...(diagnostic ? { managedGitDiagnostic: diagnostic } : {}),",
+      `          ...(nativeRequest && managedGitInnerCommand(cmd.text) !== undefined && cmd.wrapperKind === "indirection" ? {
+            managedGitInner: managedGitInnerCommand(cmd.text),
+            ...(originals ? { managedGitOriginalInner: managedGitInnerCommand(originals[index]!) } : {}),
+          } : {}),
+          ...(diagnostic ? { managedGitDiagnostic: diagnostic } : {}),`,
     ],
     [
       `          ...(fileProof?.marked[index] ? { managedStaticFileEffects: true as const } :

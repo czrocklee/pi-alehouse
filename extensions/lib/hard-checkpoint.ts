@@ -7,8 +7,8 @@
  */
 
 import type { PromptPermissionDetails } from "@gotgenes/pi-permission-system";
-import { inspectGitCommands } from "../static-safety-guard.ts";
 import { gitInvocationNeedsHuman, GIT_GLOBAL_OPTIONS_PATTERN } from "./git-invocation.ts";
+import { inspectGitCommands } from "./shell-literal.ts";
 
 /** The parts of the live tool call a checkpoint reads. */
 type CheckpointToolCall = { name: string; arguments: Record<string, unknown> };

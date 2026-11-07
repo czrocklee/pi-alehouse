@@ -63,5 +63,6 @@ extension shims, installed preset schema, host-only SDK and the store launcher.
 It loads the installed extension entries in host Pi (RPC mode, no model calls),
 then runs `scripts/check-pi-permission-bootstrap.mjs`, which exercises legacy →
 managed → rollback → re-upgrade, session switch/reload, broken or partial
-bootstraps and duplicate authorities in a scratch agent directory. Both scripts
-also ship in the built package.
+bootstraps and duplicate authorities in a scratch agent directory. Both are
+maintainer tools: run them from a source checkout; the built package does not
+ship them.

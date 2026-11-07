@@ -30,23 +30,13 @@
  * it never supplies a live grant. User choices can be staged there until exit.
  */
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, OverlayHandle, TUI, TuiMouseEvent } from "@earendil-works/pi-tui";
-import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import {
   APPROVAL_INDICATOR,
   FOOTER_INDICATOR_CLICK_EVENT,
   HIDE_TRANSIENT_OVERLAYS_EVENT,
   type FooterIndicatorClick,
 } from "../lib/overlay-protocol.mjs";
-import {
-  POPOVER,
-  POPOVER_CLOSE_COLUMNS,
-  isPopoverCloseClick,
-  popoverCloseHit,
-  popoverCloseTail,
-  popoverRule,
-  popoverSide,
-} from "../lib/popover-frame.mjs";
 import {
   focusOrigin,
   focusRevealed,
@@ -56,7 +46,6 @@ import {
 } from "../lib/popover-stack.mjs";
 import {
   settingsStoreForSession,
-  type ApprovalPreference,
   type PersistentScope,
   type SettingsStore,
 } from "../lib/settings-store.mjs";
@@ -71,368 +60,45 @@ import {
   type SetJudgeMode,
 } from "./lib/approval-protocol.ts";
 
-/** Session record of each approval change; the last one on the branch wins. */
-export const APPROVAL_ENTRY = "approval-mode:choice:v1";
+import {
+  APPROVAL_ENTRY,
+  CHOICE_RANK,
+  CONFIRM_ROWS,
+  YOLO_WARNING,
+  approvalChoices,
+  confirmationFor,
+  confirmDialog,
+  currentChoice,
+  judgeModeFor,
+  narrowerJudge,
+  restoredChoice,
+  sameJudge,
+  type ChoiceId,
+  type RecordedChoice,
+} from "./lib/approval-selection.ts";
+import { ApprovalPopover, approvalStatus } from "./lib/approval-view.ts";
+
+export {
+  APPROVAL_ENTRY,
+  CONFIRM_ROWS,
+  approvalChoices,
+  confirmationFor,
+  currentChoice,
+  narrowerJudge,
+  restoredChoice,
+  type Choice,
+  type ChoiceId,
+  type RecordedChoice,
+} from "./lib/approval-selection.ts";
+export {
+  ApprovalPopover,
+  approvalStatus,
+  type ApprovalPopoverOptions,
+} from "./lib/approval-view.ts";
+
 const WIDGET_KEY = "approval-mode";
 const PERMISSION_UI_PROMPT = "permissions:ui_prompt";
 const POPOVER_WIDTH = 60;
-
-export type ChoiceId = ApprovalPreference;
-export type Choice = { id: ChoiceId; label: string; detail: string };
-
-/** What the popover offers: the judge's three modes when one is loaded, and yolo. */
-export function approvalChoices(judge: JudgeName | undefined): Choice[] {
-  if (!judge) {
-    return [
-      { id: "manual", label: "manual", detail: "every ask comes to you" },
-      { id: "yolo", label: "yolo", detail: "allow eligible asks, in-process subagents too" },
-    ];
-  }
-  return [
-    { id: "manual", label: "manual", detail: `${judge} observes; every ask comes to you` },
-    { id: "judge", label: judge, detail: `${judge} decides main-session asks` },
-    { id: "judge+sub", label: `${judge} + sub`, detail: "...and asks subagents forward" },
-    { id: "yolo", label: "yolo", detail: "allow eligible asks, in-process subagents too" },
-  ];
-}
-
-const CHOICE_RANK: Record<ChoiceId, number> = { manual: 0, judge: 1, "judge+sub": 2, yolo: 3 };
-/** Rows a confirmation warning takes in the popover. */
-export const CONFIRM_ROWS = 3;
-
-/**
- * The warning a choice must be confirmed with, or undefined when it does not
- * widen what is approved without asking (narrowing, or already current).
- */
-export function confirmationFor(
-  id: ChoiceId,
-  judge: JudgeName | undefined,
-  current: ChoiceId,
-): string[] | undefined {
-  if (CHOICE_RANK[id] <= CHOICE_RANK[current]) return undefined;
-  if (id === "yolo") {
-    return [
-      " Yolo auto-allows Bash/Git asks, destructive writes too.",
-      " It bypasses Jev and hard checkpoints; denies, the floor",
-      " and static guard stay. Choose yolo again to turn it on.",
-    ];
-  }
-  const name = judge ?? "the judge";
-  return [
-    id === "judge+sub"
-      ? ` ${name} may decide asks here and from subagents.`
-      : ` ${name} may approve or deny this session's asks.`,
-    " Denies hold; checkpoints keep eligible asks human.",
-    ` Choose ${id === "judge+sub" ? `${name} + sub` : name} again to turn it on.`,
-  ];
-}
-
-export function currentChoice(judge: JudgeMode | undefined, yolo: boolean): ChoiceId {
-  if (yolo) return "yolo";
-  if (!judge || judge.mode === "shadow") return "manual";
-  return judge.includeSubagents ? "judge+sub" : "judge";
-}
-
-const judgeModeFor = (id: Exclude<ChoiceId, "yolo">): JudgeMode =>
-  id === "manual"
-    ? { mode: "shadow", includeSubagents: false }
-    : { mode: "enforce", includeSubagents: id === "judge+sub" };
-
-/** The indicator's text; yolo is loud on purpose. */
-export function approvalStatus(
-  theme: Pick<Theme, "fg" | "bold">,
-  judge: JudgeState | undefined,
-  yolo: boolean,
-): string {
-  const id = currentChoice(judge, yolo);
-  const label =
-    id === "yolo"
-      ? theme.fg("error", theme.bold("YOLO"))
-      : id === "manual"
-        ? "manual"
-        : `${judge!.judge}${id === "judge+sub" ? "+sub" : ""}`;
-  return `approval: ${label}`;
-}
-
-type PopoverTheme = Pick<Theme, "fg" | "bold" | "bg">;
-
-export interface ApprovalPopoverOptions {
-  theme: PopoverTheme;
-  choices: () => Choice[];
-  current: () => ChoiceId;
-  /** Lines to confirm a choice with; undefined applies it at once. */
-  warning: (id: ChoiceId) => string[] | undefined;
-  choose: (id: ChoiceId) => void;
-  /** Alehouse-only actions: save the live mode, never an armed draft. */
-  save?: (scope: PersistentScope) => void;
-  canSaveWorkspace?: () => boolean;
-  saveScope?: () => "session" | PersistentScope;
-  close: () => void;
-  requestRender: () => void;
-  /** Rows this paint produced, for the bottom-right column. */
-  onRender?: (height: number) => void;
-}
-
-/**
- * The popover body. Enter or a click applies a mode, like a menu; a choice
- * that widens approval needs the same choice twice, and the first one says
- * what it is about to allow.
- */
-export class ApprovalPopover implements Component {
-  private selected: number;
-  private armed: number | undefined;
-  private paintedWidth = 0;
-  private readonly rowTargets = new Map<number, number | PersistentScope>();
-
-  constructor(private readonly options: ApprovalPopoverOptions) {
-    const index = options.choices().findIndex((choice) => choice.id === options.current());
-    this.selected = Math.max(0, index);
-  }
-
-  isArmed(): boolean {
-    return this.armed !== undefined;
-  }
-
-  handleInput(data: string): void {
-    const count = this.options.choices().length;
-    if (matchesKey(data, "escape")) return this.options.close();
-    if (matchesKey(data, "g") || matchesKey(data, "shift+g")) return this.saveDefault("global");
-    if (matchesKey(data, "w") || matchesKey(data, "shift+w")) return this.saveDefault("workspace");
-    if (matchesKey(data, "enter")) return this.activate(this.selected);
-    let next = this.selected;
-    if (matchesKey(data, "up")) next--;
-    else if (matchesKey(data, "down")) next++;
-    else if (matchesKey(data, "home")) next = 0;
-    else if (matchesKey(data, "end")) next = count - 1;
-    else return;
-    this.move(next);
-  }
-
-  handleMouse(event: TuiMouseEvent): { handled: boolean } | undefined {
-    if (isPopoverCloseClick(event, this.paintedWidth)) {
-      this.options.close();
-      return { handled: true };
-    }
-    if (event.type === "wheel" && event.wheelDelta) {
-      this.move(this.selected + Math.sign(event.wheelDelta));
-      return { handled: true };
-    }
-    if (event.type !== "click" || event.button !== "left") return undefined;
-    const target = this.rowTargets.get(event.y);
-    if (typeof target === "string") this.saveDefault(target);
-    else if (target !== undefined) this.activate(target);
-    return { handled: true };
-  }
-
-  render(width: number): string[] {
-    this.rowTargets.clear();
-    this.paintedWidth = width;
-    const lines = width < 12 ? [] : this.layout(width);
-    this.options.onRender?.(lines.length);
-    return lines;
-  }
-
-  invalidate(): void {}
-
-  private move(index: number): void {
-    const count = this.options.choices().length;
-    const next = Math.max(0, Math.min(count - 1, index));
-    if (next === this.selected) return;
-    this.selected = next;
-    // Arming is for the row it was given on; moving away disarms.
-    this.armed = undefined;
-    this.options.requestRender();
-  }
-
-  private saveDefault(scope: PersistentScope): void {
-    if (!this.options.save || (scope === "workspace" && this.options.canSaveWorkspace?.() !== true))
-      return;
-    this.armed = undefined;
-    this.options.save(scope);
-  }
-
-  private activate(index: number): void {
-    const choice = this.options.choices()[index];
-    if (!choice) return;
-    this.selected = index;
-    if (this.options.warning(choice.id) && this.armed !== index) {
-      this.armed = index;
-      this.options.requestRender();
-      return;
-    }
-    this.armed = undefined;
-    this.options.choose(choice.id);
-  }
-
-  private layout(width: number): string[] {
-    const { theme } = this.options;
-    const inner = width - 2;
-    const row = (content: string): string =>
-      popoverSide(theme) + padTo(truncateToWidth(content, inner, "…"), inner) + popoverSide(theme);
-    const choices = this.options.choices();
-    const current = this.options.current();
-    const labelWidth = Math.max(...choices.map((choice) => visibleWidth(choice.label)));
-    const lines = [titleEdge(theme, width, "Approval")];
-    choices.forEach((choice, index) => {
-      const selected = index === this.selected;
-      const marker = selected ? theme.fg("accent", "›") : " ";
-      const live =
-        choice.id === current
-          ? theme.fg(choice.id === "yolo" ? "error" : "success", "●")
-          : theme.fg("dim", "○");
-      const name = padTo(choice.label, labelWidth);
-      const label =
-        choice.id === "yolo" ? theme.fg("error", name) : selected ? theme.bold(name) : name;
-      const content = padTo(`${marker} ${live} ${label}  ${theme.fg("dim", choice.detail)}`, inner);
-      this.rowTargets.set(lines.length, index);
-      lines.push(row(selected ? theme.bg("selectedBg", content) : content));
-    });
-    lines.push(popoverRule(theme, width, "divider"));
-    if (this.options.save) {
-      const scope = this.options.saveScope?.() ?? "session";
-      lines.push(
-        row(
-          theme.fg(
-            "dim",
-            scope === "session"
-              ? " Mode changes: this session only"
-              : ` Mode changes: saved for ${scope} on exit`,
-          ),
-        ),
-      );
-      this.rowTargets.set(lines.length, "global");
-      lines.push(row(theme.fg("accent", " [G] Save as global default (on exit)")));
-      this.rowTargets.set(lines.length, "workspace");
-      const trusted = this.options.canSaveWorkspace?.() === true;
-      lines.push(
-        row(
-          theme.fg(
-            trusted ? "accent" : "dim",
-            " [W] Save as project default" + (trusted ? " (on exit)" : " (trust required)"),
-          ),
-        ),
-      );
-      lines.push(popoverRule(theme, width, "divider"));
-    }
-    const warning =
-      this.armed === undefined ? undefined : this.options.warning(choices[this.armed]!.id);
-    if (warning) {
-      for (const line of warning.slice(0, CONFIRM_ROWS)) lines.push(row(theme.fg("warning", line)));
-    } else {
-      lines.push(
-        row(
-          theme.fg(
-            "dim",
-            (this.options.save ? " ● active ·" : "") + " ↑↓ choose · Enter apply · Esc close",
-          ),
-        ),
-      );
-    }
-    lines.push(popoverRule(theme, width, "bottom"));
-    return lines;
-  }
-}
-
-const padTo = (text: string, width: number): string =>
-  text + " ".repeat(Math.max(0, width - visibleWidth(text)));
-
-/** `╭─ Title ───── × ─╮`, the close control at the right end like every popover. */
-function titleEdge(theme: PopoverTheme, width: number, title: string): string {
-  const closable = !!popoverCloseHit(width);
-  const tailWidth = closable ? POPOVER_CLOSE_COLUMNS : 1;
-  const label = ` ${title} `;
-  const room = width - 2 - tailWidth - visibleWidth(label);
-  if (room < 0) return popoverRule(theme, width, "top");
-  return (
-    theme.fg("borderAccent", POPOVER.tl + POPOVER.h) +
-    theme.fg("accent", theme.bold(label)) +
-    theme.fg("borderAccent", POPOVER.h.repeat(room)) +
-    (closable ? popoverCloseTail(theme) : theme.fg("borderAccent", POPOVER.tr))
-  );
-}
-
-/** What a session records about its approval choice. */
-export interface RecordedChoice {
-  yolo: boolean;
-  /** The judge's mode, when a judge was loaded. */
-  judge?: JudgeMode;
-}
-
-const sameJudge = (a: JudgeMode | undefined, b: JudgeMode | undefined): boolean =>
-  a === b || (!!a && !!b && a.mode === b.mode && a.includeSubagents === b.includeSubagents);
-
-const readJudge = (value: unknown): JudgeMode | undefined => {
-  const mode = value as Partial<JudgeMode> | undefined;
-  if (!mode || typeof mode !== "object" || typeof mode.includeSubagents !== "boolean")
-    return undefined;
-  if (mode.mode === "shadow") return { mode: "shadow", includeSubagents: false };
-  return mode.mode === "enforce"
-    ? { mode: "enforce", includeSubagents: mode.includeSubagents }
-    : undefined;
-};
-
-/**
- * The last choice this session recorded on this branch. Only a record naming
- * this very session counts: one copied by a fork or clone from another
- * session id, or a malformed one, means nothing was recorded.
- *
- * A record is a request, never authority: resuming offers yolo back behind a
- * confirmation and restores a judge mode no wider than the launch default,
- * so a record planted in the session file can at most ask or narrow.
- */
-export function restoredChoice(
-  entries: readonly { type: string; customType?: string; data?: unknown }[],
-  sessionId: string | undefined,
-): RecordedChoice | undefined {
-  if (!sessionId) return undefined;
-  const last = entries
-    .filter((entry) => entry.type === "custom" && entry.customType === APPROVAL_ENTRY)
-    .at(-1);
-  const record = last?.data as { sessionId?: unknown; yolo?: unknown; judge?: unknown } | undefined;
-  if (!record || record.sessionId !== sessionId || typeof record.yolo !== "boolean")
-    return undefined;
-  const judge = readJudge(record.judge);
-  return judge ? { yolo: record.yolo, judge } : { yolo: record.yolo };
-}
-
-/** The narrower of two judge modes. */
-export function narrowerJudge(a: JudgeMode, b: JudgeMode): JudgeMode {
-  return judgeModeRank(a) <= judgeModeRank(b) ? a : b;
-}
-
-const YOLO_WARNING =
-  "Approval: YOLO. Eligible permission asks in this session and its in-process subagents are allowed " +
-  "without review, worker Bash commands included. Normal Git mutations are auto-allowed the same way: a subagent may " +
-  "commit, push (force included) or reset --hard, and a yolo allow is not re-reviewed by Jev or held at a hard " +
-  "checkpoint. Existing configured allows also bypass those checkpoints; explicit denies, the fail-closed " +
-  "floor and the static safety guard still apply. Opaque programs can " +
-  "still write files internally. Subagents outside this process keep asking.";
-
-/** The confirmation Pi's dialog shows before a widening change. */
-function confirmDialog(
-  id: ChoiceId,
-  judge: JudgeName | undefined,
-): { title: string; text: string } {
-  if (id === "yolo") return { title: "Turn on yolo for this session?", text: YOLO_WARNING };
-  const name = judge ?? "the judge";
-  return id === "judge+sub"
-    ? {
-        title: `Let ${name} approve asks here and from subagents?`,
-        text:
-          `${name} may allow or deny eligible permission asks from this session and its registered in-process ` +
-          "subagents without asking you. Explicit denies hold, and checkpoints keep eligible asks human (an allow your " +
-          "config already grants, or yolo, never asks, so no checkpoint sees it). " +
-          "This lasts for the current session.",
-      }
-    : {
-        title: `Let ${name} approve this session's asks?`,
-        text:
-          `${name} may allow or deny eligible permission asks from this session without asking you; subagent asks ` +
-          `are not decided by ${name}. Explicit denies hold, and checkpoints keep eligible asks human (an allow your ` +
-          "config already grants, or yolo, never asks, so no checkpoint sees it). " +
-          "This lasts for the current session.",
-      };
-}
 
 export default function approvalMode(pi: ExtensionAPI): void {
   let ctx: ExtensionContext | undefined;

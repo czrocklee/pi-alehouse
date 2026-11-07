@@ -1,12 +1,9 @@
 import type { PersistentScope } from "../../../lib/settings-store.mjs";
 import {
-  buildContextEntries,
-  sessionEntryToContextMessages,
   getMarkdownTheme,
   type EventBus,
   type ExtensionAPI,
   type ExtensionContext,
-  type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import {
@@ -14,16 +11,7 @@ import {
   PINNED_POPOVER_YIELD_EVENT,
   WORKER_PRESET_INDICATOR,
   type FooterIndicatorClick,
-  type PinnedPopoverYield,
 } from "../../../lib/overlay-protocol.mjs";
-import {
-  focusOrigin,
-  focusRevealed,
-  joinPopoverStack,
-  stackedOverlayOptions,
-  type StackMember,
-} from "../../../lib/popover-stack.mjs";
-import type { ActivityHistoryState } from "../runtime/activity-observer.ts";
 import type { DelegationSetting } from "../delegation.ts";
 import { HarnessError } from "../core/ports.ts";
 import type {
@@ -45,13 +33,14 @@ import {
   paneYieldHandlers,
 } from "./permission-dialog-yield.ts";
 import {
-  PRESET_PICKER_MIN_ROWS,
   PresetPicker,
   PresetPickerRequest,
   type EffortCapabilities,
   type ModelPickerPosition,
   type PresetChoice,
 } from "./preset-picker.ts";
+import { createTranscriptMessageCache, createTranscriptMounts } from "./detail-transcript-cache.ts";
+import { createPresetOverlayHost } from "./preset-overlay-host.ts";
 import { TranscriptContent } from "./transcript.ts";
 
 export interface HumanStopResult {
@@ -103,11 +92,6 @@ export interface PanelCoordinatorOptions {
 }
 
 type PickerState = { router: PresetRouter; candidate: PresetCandidate };
-interface HistoryCache {
-  state?: ActivityHistoryState;
-  messages?: readonly unknown[];
-  projected: WeakMap<SessionEntry, readonly unknown[]>;
-}
 
 /** Owns only parent UI mounting, selection and approval-yield state. */
 export class PanelCoordinator {
@@ -428,34 +412,6 @@ export class PanelCoordinator {
     return !!this.host && this.options.ready() && mountable(this.yielding, this.approvals.pending);
   }
 
-  private messagesOf(agent: AgentDetail, cache: HistoryCache): readonly unknown[] {
-    const state = agent.historyState?.();
-    if (state && cache.state === state && cache.messages) return cache.messages;
-    const entries = agent.entries();
-    if (!entries) return [];
-    // Preserve source-entry identity even for summaries/custom messages whose
-    // SDK projection creates new objects. A branch change still rebuilds its
-    // raw, compaction-aware path; model context edits never hide attempts here.
-    if (cache.state?.session !== state?.session) cache.projected = new WeakMap();
-    try {
-      const messages = buildContextEntries(entries as SessionEntry[], state?.leaf).flatMap(
-        (entry) => {
-          let projected = cache.projected.get(entry);
-          if (!projected) {
-            projected = sessionEntryToContextMessages(entry);
-            cache.projected.set(entry, projected);
-          }
-          return projected;
-        },
-      );
-      cache.state = state;
-      cache.messages = messages;
-      return messages;
-    } catch {
-      return [];
-    }
-  }
-
   private async openDetail(agent_id?: string): Promise<void> {
     if (
       this.paneOpen ||
@@ -481,8 +437,7 @@ export class PanelCoordinator {
       this.options.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {}),
     );
     this.closePane = request.close;
-    const mounted = new Map<string, TranscriptContent>();
-    const cwds = new Map<string, string>();
+    const mounts = createTranscriptMounts<TranscriptContent>();
     let currentAgents = new Map<string, AgentDetail>();
     try {
       const floating = this.floating();
@@ -512,12 +467,7 @@ export class PanelCoordinator {
               const agents =
                 this.options.widget.presentationAgents?.() ?? this.options.widget.agents();
               currentAgents = new Map(agents.map((agent) => [agent.agent_id, agent]));
-              for (const [id, content] of mounted)
-                if (!currentAgents.has(id)) {
-                  content.dispose();
-                  mounted.delete(id);
-                  cwds.delete(id);
-                }
+              mounts.dropAbsent(new Set(currentAgents.keys()));
               return agents.map((agent) => ({
                 agent_id: agent.agent_id,
                 input: { view: agent.view, live: agent.live } satisfies DetailInput,
@@ -536,39 +486,30 @@ export class PanelCoordinator {
                 // Native components also retain literal ANSI/default-style prefixes;
                 // dynamic Markdown callbacks alone cannot repair a palette change.
                 markdownTheme = getMarkdownTheme();
-                for (const content of mounted.values()) content.setTheme(markdownTheme);
+                mounts.each((content) => content.setTheme(markdownTheme));
               } else {
-                for (const content of mounted.values()) content.invalidateLayout();
+                mounts.each((content) => content.invalidateLayout());
               }
               palette = next;
             },
             transcript: (id) => {
               const agent = currentAgents.get(id);
               if (!agent) return undefined;
-              let content = mounted.get(id);
-              if (content && cwds.get(id) !== agent.cwd) {
-                content.dispose();
-                mounted.delete(id);
-                content = undefined;
-              }
-              if (!content) {
-                const cache: HistoryCache = { projected: new WeakMap() };
-                cwds.set(id, agent.cwd);
-                content = new TranscriptContent({
-                  tui,
-                  cwd: agent.cwd,
-                  markdownTheme,
-                  source: {
-                    messages: () => {
-                      const current = currentAgents.get(id);
-                      return current ? this.messagesOf(current, cache) : [];
-                    },
-                    inFlight: () => currentAgents.get(id)?.inFlight(),
-                    toolDefinition: () => undefined,
-                  },
-                });
-                mounted.set(id, content);
-              }
+              const existing = mounts.current(id, agent.cwd);
+              if (existing) return existing;
+              const cache = createTranscriptMessageCache();
+              mounts.noteCwd(id, agent.cwd);
+              const content = new TranscriptContent({
+                tui,
+                cwd: agent.cwd,
+                markdownTheme,
+                source: {
+                  messages: () => cache.messages(currentAgents.get(id)),
+                  inFlight: () => currentAgents.get(id)?.inFlight(),
+                  toolDefinition: () => undefined,
+                },
+              });
+              mounts.remember(id, content);
               return content;
             },
             onSelect: (id) => {
@@ -665,17 +606,12 @@ export class PanelCoordinator {
           : { overlay: false },
       );
     } finally {
-      for (const cleanup of [
-        () => request.dispose(),
-        ...[...mounted.values()].map((content) => () => content.dispose()),
-      ]) {
-        try {
-          cleanup();
-        } catch (error) {
-          this.observeDetailError(error, ctx);
-        }
+      try {
+        request.dispose();
+      } catch (error) {
+        this.observeDetailError(error, ctx);
       }
-      mounted.clear();
+      mounts.disposeEach((error) => this.observeDetailError(error, ctx));
       this.paneOpen = false;
       this.closePane = undefined;
       this.detailPane = undefined;
@@ -792,172 +728,131 @@ export class PanelCoordinator {
     // footer indicator that opens it, beside whatever is already pinned there.
     const host = this.host;
     let picker: PresetPicker | undefined;
-    let place: StackMember | undefined;
-    let handle: OverlayHandle | undefined;
-    let reveal: (() => void) | undefined;
-    let releasePinned: (() => void) | undefined;
+    let overlay: ReturnType<typeof createPresetOverlayHost> | undefined;
     try {
       const floating = this.floating();
-      return await this.host.ui.custom<PresetChoice | null>(
-        (tui, theme, keybindings, done) => {
-          if (
-            !request.mount(
-              done,
-              this.host !== host ||
-                this.options.router() !== live ||
-                !live.isCurrent(state.candidate) ||
-                this.paneOpen ||
-                !this.options.ready() ||
-                !mountable(this.yielding, this.approvals.pending),
-            )
+      const presetOverlay = (overlay = createPresetOverlayHost({
+        floating,
+        emitPinned: (data) => {
+          this.options.pi.events.emit(PINNED_POPOVER_YIELD_EVENT, data);
+        },
+      }));
+      return await this.host.ui.custom<PresetChoice | null>((tui, theme, keybindings, done) => {
+        if (
+          !request.mount(
+            done,
+            this.host !== host ||
+              this.options.router() !== live ||
+              !live.isCurrent(state.candidate) ||
+              this.paneOpen ||
+              !this.options.ready() ||
+              !mountable(this.yielding, this.approvals.pending),
           )
-            return { render: () => [], invalidate() {} };
-          if (floating) {
-            const token = {};
-            // Own the release before publishing: even a partially delivered,
-            // throwing start must be paired. This is presentation, not authority.
-            releasePinned = () => {
-              releasePinned = undefined;
-              this.options.pi.events.emit(PINNED_POPOVER_YIELD_EVENT, {
-                token,
-                active: false,
-              } satisfies PinnedPopoverYield);
-            };
-            this.options.pi.events.emit(PINNED_POPOVER_YIELD_EVENT, {
-              token,
-              active: true,
-            } satisfies PinnedPopoverYield);
-          }
-          const stacked = floating ? (place = joinPopoverStack(tui)) : undefined;
-          // Opened behind taller popovers, it waits off screen; when room
-          // appears it takes the keyboard it would have had, unless a dialog
-          // has taken it since.
-          const openedFrom = focusOrigin(tui);
-          reveal = () => {
-            if (handle) focusRevealed(tui, handle, openedFrom);
-          };
-          const delegation = this.options.delegation;
-          const management = this.options.management;
-          return request.own(
-            (picker = new PresetPicker({
-              tui,
-              theme,
-              keybindings,
-              presets,
-              activeName: candidate.activeName,
-              done: request.choose,
-              pointer: floating,
-              efforts: this.options.efforts,
-              startInEffort,
-              ...(this.options.efforts
-                ? {
-                    setEffort: (name: string, overrides: EffortOverrides) => {
+        )
+          return { render: () => [], invalidate() {} };
+        // Opened behind taller popovers, it waits off screen; when room
+        // appears it takes the keyboard it would have had, unless a dialog
+        // has taken it since.
+        const stacked = presetOverlay.attach(tui);
+        const delegation = this.options.delegation;
+        const management = this.options.management;
+        return request.own(
+          (picker = new PresetPicker({
+            tui,
+            theme,
+            keybindings,
+            presets,
+            activeName: candidate.activeName,
+            done: request.choose,
+            pointer: floating,
+            efforts: this.options.efforts,
+            startInEffort,
+            ...(this.options.efforts
+              ? {
+                  setEffort: (name: string, overrides: EffortOverrides) => {
+                    if (
+                      !picker?.isOpen() ||
+                      this.host !== host ||
+                      this.closePreset !== request.close ||
+                      !this.modelSelectionAllowed()
+                    )
+                      return undefined;
+                    try {
                       if (
-                        !picker?.isOpen() ||
-                        this.host !== host ||
-                        this.closePreset !== request.close ||
-                        !this.modelSelectionAllowed()
+                        this.options.router() !== live ||
+                        !live.isCurrent(state.candidate) ||
+                        name !== state.candidate.activeName
                       )
-                        return undefined;
+                        throw new HarnessError("STALE_PRESET_SELECTION");
+                      const publication = this.options.publish(
+                        state.candidate,
+                        name,
+                        ctx,
+                        overrides,
+                      );
+                      state.candidate = publication.candidate;
+                      return publication.selection;
+                    } catch (error) {
                       try {
-                        if (
-                          this.options.router() !== live ||
-                          !live.isCurrent(state.candidate) ||
-                          name !== state.candidate.activeName
-                        )
-                          throw new HarnessError("STALE_PRESET_SELECTION");
-                        const publication = this.options.publish(
-                          state.candidate,
-                          name,
-                          ctx,
-                          overrides,
-                        );
-                        state.candidate = publication.candidate;
-                        return publication.selection;
+                        this.options.showError(error, ctx);
+                      } catch {
+                        /* notification cannot escape a pointer/key callback */
+                      }
+                      return undefined;
+                    }
+                  },
+                }
+              : {}),
+            ...(management
+              ? {
+                  management: {
+                    summary: () => management.summary(),
+                    settings: typeof management.settings === "function",
+                    presets: typeof management.editPreset === "function",
+                    models: typeof management.editModel === "function",
+                    saveDefaults: typeof management.saveDefault === "function",
+                    canSaveWorkspace: () => management.canSaveWorkspace?.() === true,
+                  },
+                }
+              : {}),
+            ...(delegation
+              ? {
+                  delegation: {
+                    current: () => delegation.current(),
+                    guideline: (setting: DelegationSetting) => delegation.guideline(setting),
+                    set: (next: DelegationSetting) => {
+                      // A pointer or key handler: nothing may escape into pi-tui's dispatch.
+                      try {
+                        delegation.set(next, ctx);
                       } catch (error) {
                         try {
                           this.options.showError(error, ctx);
                         } catch {
-                          /* notification cannot escape a pointer/key callback */
+                          /* notification is fallible too */
                         }
-                        return undefined;
                       }
                     },
-                  }
-                : {}),
-              ...(management
-                ? {
-                    management: {
-                      summary: () => management.summary(),
-                      settings: typeof management.settings === "function",
-                      presets: typeof management.editPreset === "function",
-                      models: typeof management.editModel === "function",
-                      saveDefaults: typeof management.saveDefault === "function",
-                      canSaveWorkspace: () => management.canSaveWorkspace?.() === true,
-                    },
-                  }
-                : {}),
-              ...(delegation
-                ? {
-                    delegation: {
-                      current: () => delegation.current(),
-                      guideline: (setting: DelegationSetting) => delegation.guideline(setting),
-                      set: (next: DelegationSetting) => {
-                        // A pointer or key handler: nothing may escape into pi-tui's dispatch.
-                        try {
-                          delegation.set(next, ctx);
-                        } catch (error) {
-                          try {
-                            this.options.showError(error, ctx);
-                          } catch {
-                            /* notification is fallible too */
-                          }
-                        }
-                      },
-                    },
-                  }
-                : {}),
-              ...(stacked
-                ? {
-                    rows: () => stacked.available(),
-                    onRender: (height: number) => stacked.measure(height),
-                  }
-                : {}),
-            })),
-          );
-        },
-        floating
-          ? {
-              overlay: true,
-              onHandle: (mounted) => {
-                handle = mounted;
-              },
-              overlayOptions: () =>
-                place
-                  ? stackedOverlayOptions(place, {
-                      width: 76,
-                      minWidth: 34,
-                      minRows: PRESET_PICKER_MIN_ROWS,
-                      onReveal: () => reveal?.(),
-                    })
-                  : { anchor: "center", width: 76, minWidth: 34, maxHeight: "80%", margin: 1 },
-            }
-          : { overlay: false },
-      );
+                  },
+                }
+              : {}),
+            ...(stacked
+              ? {
+                  rows: () => stacked.rows(),
+                  onRender: (height: number) => stacked.measure(height),
+                }
+              : {}),
+          })),
+        );
+      }, presetOverlay.customOptions());
     } finally {
       try {
         request.dispose();
       } finally {
-        reveal = undefined;
         try {
-          place?.leave();
+          overlay?.release();
         } finally {
-          try {
-            releasePinned?.();
-          } finally {
-            this.closePreset = undefined;
-            this.pickerOpen = false;
-          }
+          this.closePreset = undefined;
+          this.pickerOpen = false;
         }
       }
     }

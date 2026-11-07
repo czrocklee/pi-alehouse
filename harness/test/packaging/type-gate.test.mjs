@@ -16,6 +16,7 @@ if (process.argv.includes("--version")) {
   process.exit(fixture.versionStatus ?? 0);
 }
 if (!process.argv.includes("--pretty") || !process.argv.includes("false")) throw new Error("expected plain diagnostics");
+if (JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).type !== "module") throw new Error("type gate must preserve the source ESM boundary");
 process.stdout.write(fixture.stdout);
 process.stderr.write(fixture.stderr ?? "");
 if (fixture.signal) process.kill(process.pid, "SIGTERM");

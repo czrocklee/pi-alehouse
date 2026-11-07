@@ -6,6 +6,7 @@ import {
   popoverCloseTail,
   popoverRule,
   popoverSide,
+  popoverTitleRow,
 } from "../../../lib/popover-frame.mjs";
 export {
   POPOVER,
@@ -33,16 +34,6 @@ export type PopoverTheme = {
 
 const outer = (theme: PopoverTheme, text: string): string => theme.fg("borderAccent", text);
 
-/** The top edge's right end: the close control when asked for and it fits. */
-const topTail = (
-  theme: PopoverTheme,
-  width: number,
-  closable: boolean,
-): { text: string; width: number } =>
-  closable && popoverCloseHit(width)
-    ? { text: popoverCloseTail(theme), width: POPOVER_CLOSE_COLUMNS }
-    : { text: outer(theme, POPOVER.tr), width: 1 };
-
 /** `╭─ Title ─────────╮`, or `╭─ Title ───── × ─╮` when closable. */
 export function popoverTitle(
   theme: PopoverTheme,
@@ -50,14 +41,12 @@ export function popoverTitle(
   title: string,
   closable = false,
 ): string {
-  const tail = topTail(theme, width, closable);
-  const room = Math.max(1, width - 1 - tail.width);
-  const label = truncateToWidth(` ${title} `, Math.max(1, room - 1), "…");
-  return (
-    outer(theme, POPOVER.tl + POPOVER.h) +
-    theme.fg("accent", theme.bold(label)) +
-    outer(theme, POPOVER.h.repeat(Math.max(0, room - visibleWidth(label) - 1))) +
-    tail.text
+  return popoverTitleRow(
+    theme,
+    width,
+    title,
+    { clip: (text, columns) => truncateToWidth(text, columns, "…"), width: visibleWidth },
+    closable,
   );
 }
 

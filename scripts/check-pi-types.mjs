@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Typecheck the Pi extensions against the real SDK and permission-system types.
 //
-// `collect-pi-harness-evidence.sh` runs `npm run typecheck` over the harness's own
-// src/. This additional gate checks extensions/ and composition.ts, where
+// `npm run typecheck` checks the harness's own src/ and then invokes this gate
+// once for shared helpers, extensions/ and composition.ts, where
 // the permission judges live, and that gap is not theoretical: a judge shipped
 // with a failure code missing from its own union and a narrowing hole in the
 // branch that reads a child's bound authorization, both invisible to every
@@ -83,11 +83,16 @@ try {
   link(permissionSystem, "@gotgenes/pi-permission-system");
   symlinkSync(extensions, join(scratch, "ext"), "dir");
   symlinkSync(join(repo, "lib"), join(scratch, "lib"), "dir");
+  // Source-lane TypeScript checks (never shipped) are typed with the extensions.
+  symlinkSync(join(repo, "scripts/checks"), join(scratch, "checks"), "dir");
   // Type the integrated composition against its actual local graph as well.
   for (const name of ["bin", "runtime", "harness"])
     symlinkSync(join(repo, name), join(scratch, name), "dir");
   symlinkSync(join(repo, "composition.ts"), join(scratch, "composition.ts"));
 
+  // Match the source package's ESM boundary, including import.meta. A symlinked
+  // .ts root otherwise inherits this temporary directory's CommonJS default.
+  writeFileSync(join(scratch, "package.json"), JSON.stringify({ private: true, type: "module" }));
   writeFileSync(
     join(scratch, "tsconfig.json"),
     `${JSON.stringify(
@@ -105,8 +110,8 @@ try {
           types: ["node"],
         },
         include: [
-          "ext/*.ts",
-          "ext/lib/*.ts",
+          "ext/**/*.ts",
+          "checks/*.ts",
           "lib/*.d.mts",
           "composition.ts",
           "runtime/permission-system/managed-resource-protection.ts",

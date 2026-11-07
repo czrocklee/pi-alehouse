@@ -243,11 +243,18 @@ printf '%s\\n' "$*" >> "$HARNESS_ENV_PROBE_LOG"
     if (collector) {
       const lint = calls.findIndex((call) => call.startsWith("npm run lint --prefix "));
       const types = calls.findIndex((call) => call.startsWith("npm run typecheck --prefix "));
-      const extensions = calls.findIndex((call) => call.includes("/scripts/check-pi-types.mjs "));
       const tests = calls.findIndex((call) => call.startsWith("npm test --prefix "));
       assert.equal(calls.filter((call) => call.startsWith("npm run lint --prefix ")).length, 1);
+      assert.equal(
+        calls.filter((call) => call.startsWith("npm run typecheck --prefix ")).length,
+        1,
+      );
       assert(
-        lint >= 0 && types > lint && extensions > types && tests > extensions,
+        !calls.some((call) => call.includes("/scripts/check-pi-types.mjs ")),
+        "the canonical typecheck already includes extensions and must not be repeated",
+      );
+      assert(
+        lint >= 0 && types > lint && tests > types,
         "collector must preserve local gate ordering",
       );
       const policyHelper = fileURLToPath(new URL("../support/release-policy.mjs", import.meta.url));

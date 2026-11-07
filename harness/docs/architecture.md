@@ -16,7 +16,7 @@ the public contract.
 | Area        | Files                                                                                                                                                                                      | Responsibility                                                                                                                                            |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Composition | `src/extension.ts`, `src/routing.ts`                                                                                                                                                       | explicit host registration; trusted preset catalogue and resolution                                                                                       |
-| Core        | `core/{owner-controller,contracts,ports,usage-ledger,result-text}`                                                                                                                         | SDK-free Owner state, FIFO, identity/idempotence, limits, result paging, port contracts, conservative ledgers                                             |
+| Core        | `core/{owner-controller,owner-helpers,owner-projection,result-window,contracts,ports,usage-ledger,result-text}`                                                                            | SDK-free Owner state, FIFO, identity/idempotence, limits, result paging, port contracts, conservative ledgers                                             |
 | Runtime     | `runtime/{agent-session,child-session,child-factory,child-web,host-module-bridge,host-modules,owner-lifecycle,owner-lease,activity-observer,execution-policy,context-snapshot,tool-usage}` | host SDK adapter, child assembly/disposal, researcher web instances, lease/lifecycle, observable activity, native compaction/retry policy, text snapshots |
 | Tools       | `tools/{parent-tools,child-tools,tool-names,replies}`                                                                                                                                      | fixed parent/child schemas and bounded model-facing projections                                                                                           |
 | Permissions | `permissions/{readiness,approval-provenance}`                                                                                                                                              | readiness and Run-bound approval witness only                                                                                                             |
@@ -37,12 +37,26 @@ message or display failures cannot undo an accepted cancellation. Cached widget
 projections are presentation-only; independent inspection and command validation
 still read fresh Owner state.
 
+Owner-only helpers and projections are pure leaves: the controller resolves
+original Runs, health, clocks, queue occupancy and leases before projecting.
+They hold no second state store and cannot admit, schedule, commit or release
+work. Shared UTF-16 page slicing does not merge core and model cursor protocols.
+
+Within the harness, `presentation/` owns width-independent text sanitation and
+identifying tool arguments. Runtime observations and UI share those leaves;
+terminal layout stays in UI. Runtime must not load UI implementations. Widget
+rendering, detail fields and transcript caches are separate from the components
+that own paint-bound input, Stop confirmation and overlay single-flight locks.
+
 Shared pure presentation/accounting helpers live at the sibling
 repository-root `lib/` boundary:
 `token-format.mjs`, `popover-frame.mjs`, `overlay-protocol.mjs`, and
 `usage-attribution.mjs`, with declaration files. They have no harness runtime
 dependency so the independently bundled footer continues to work without the
-harness.
+harness. The footer's quota parsing, optional billing, journal spend, layout and
+pinned panels live in separate `extensions/lib/` modules. Its layout returns the
+painted row and hit regions together; billing opt-in and stale-generation checks
+remain independent of rendering.
 
 ## Ownership and lifecycle
 

@@ -106,7 +106,7 @@ test("unused lint suppressions fail rather than accumulating exceptions", async 
 
 test("JS fixtures and shared leaves use real lint rules, not a silently ignored path", async () => {
   for (const filePath of [
-    join(harness, "test/unit/tools.test.mjs"),
+    join(harness, "test/unit/tools-schema.test.mjs"),
     join(resources, "lib/usage-attribution.mjs"),
   ]) {
     assert.equal(await eslint.isPathIgnored(filePath), false);

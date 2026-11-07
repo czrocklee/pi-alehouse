@@ -22,6 +22,14 @@ export const invalidDifficultyResolution = "Use an integer from 1 to 5 for reaso
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
 export type Effort = ThinkingLevel | "inherit";
+/** Reasoning levels a worker slot's selected model accepts. Runtime computes
+ * it; the picker only paints it. */
+export interface EffortCapabilities {
+  levels: readonly ThinkingLevel[];
+  inherited?: ThinkingLevel;
+  inheritError?: string;
+  error?: string;
+}
 /** Versioned deterministic policy, included in preset selection identity. */
 export const inheritedThinkingPolicy = "ceiling-v1";
 export type EffortOverrides = Partial<Record<Strength, Effort>>;

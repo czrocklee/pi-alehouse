@@ -1,67 +1,13 @@
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { graphemes, plainText } from "../presentation/plain-text.ts";
 
-/** Untrusted display text, never a row that already contains trusted theme ANSI.
- * Strip SDK-recognized protocols first, then neutralize every remaining control
- * introducer (including unsupported/incomplete sequences). Paragraphs stay
- * readable; bidi controls are explicit without destroying script/emoji joiners. */
-export function plainText(text: string): string {
-  return stripTerminalSequences(text)
-    .replace(/\r\n?|[\u0085\u2028\u2029]/g, "\n")
-    .replace(/[\t\v\f\p{Zs}]/gu, " ")
-    .replace(/\p{Cc}/gu, (char) =>
-      char === "\n" ? char : `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
-    )
-    .replace(
-      /\p{Bidi_Control}/gu,
-      (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
-    );
-}
-
-/** Generation previews must not expose a protocol payload merely because its
- * terminator has not arrived yet. Ordinary metadata keeps plainText's explicit
- * escaping contract; previews conservatively omit complete OR unfinished string
- * protocols, including multiline OSC/APC and their C1 spellings. */
-export function previewText(text: string): string {
-  let out = "",
-    from = 0,
-    index = 0;
-  while (index < text.length) {
-    const code = text.charCodeAt(index);
-    const escape = code === 0x1b && "]_PX^".includes(text[index + 1] ?? "\0");
-    const c1 = code === 0x90 || code === 0x98 || code === 0x9d || code === 0x9e || code === 0x9f;
-    if (!escape && !c1) {
-      index++;
-      continue;
-    }
-    out += text.slice(from, index);
-    const osc = escape ? text[index + 1] === "]" : code === 0x9d;
-    index += escape ? 2 : 1;
-    // BEL terminates OSC only. In APC/DCS/SOS/PM it is still payload; accepting
-    // it as a terminator would expose the remainder of an unfinished protocol.
-    while (
-      index < text.length &&
-      !(osc && text.charCodeAt(index) === 0x07) &&
-      text.charCodeAt(index) !== 0x9c &&
-      !(text.charCodeAt(index) === 0x1b && text[index + 1] === "\\")
-    )
-      index++;
-    if (index >= text.length) return plainText(out);
-    index += text.charCodeAt(index) === 0x1b ? 2 : 1;
-    from = index;
-  }
-  return plainText(out + text.slice(from));
-}
-
-/** A raw field on a single-line surface, before measuring or applying styling. */
-export const singleLineText = (text: string): string => plainText(text).replace(/\s+/g, " ").trim();
+// Keep existing UI imports stable; observations use the presentation leaf directly.
+export { graphemes, plainText, previewText, singleLineText } from "../presentation/plain-text.ts";
 
 /** Clip already-sanitized plain text before styling. Pi's truncator can emit
  * resets even for plain input; do not let them reset the ellipsis's own color. */
 export const clipPlainText = (text: string, columns: number): string =>
   stripTerminalSequences(truncateToWidth(text, columns, "…"));
-
-/** Shared by plain-text wrapping and bounded streaming observations. */
-export const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** Wrap plain paragraphs without splitting emoji, combining marks or joiners.
  * Sum grapheme (not code-point) widths, verifying whole rows at boundaries.
