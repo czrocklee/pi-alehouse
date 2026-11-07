@@ -226,11 +226,26 @@ pin the original Run, even after Agent reuse. Optional positive safe-integer
 `task` restarts that named Agent's retained task from page one, including after
 kill in the same Owner. Task and cursor are mutually exclusive; with neither,
 read selects current, pending-question or latest. No command gains a task target.
-Each selected terminal result with unread retained text reserves a fixed-width cursor before optional text packing;
-a wholly omitted page keeps its starting offset. Text never retained
+Each selected terminal window of real retained result pages with unread text
+reserves a fixed-width cursor before optional text packing; a packing-omitted
+page keeps its starting offset. Text never retained
 (omitted_chars) cannot be recovered; text omitted only by packing can be fetched
 on a later page. Keep returned cursors to continue a page; use the task selector
 to restart it. See [result cursor identity](tool-contract.md#result-cursors).
+
+For scouts admitted with `return_to`, all parent-model result observations
+(including spawn/send/wait and explicit `agent_read` by name/task/cursor) instead
+show a short harness-authored handoff notice identifying the source and exact
+original worker continuation name/task. It says pending until that continuation's
+`input_entered`, delivered only after it, or not delivered if it ended before
+input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted characters. Later failure/kill does not undo observed delivery. The exact link remains
+sticky after either Agent's reuse/kill or Off. Notices pack whole as normal result
+strings or yield with `response_limit_reached`, without raw paging/omission flags
+or source cursors; `max_chars` applies to raw pages, not bounded notices. Ordinary
+scouts retain normal output/paging. Internal `getResult`, dependency handoff,
+human UI and history retain true raw source text unchanged. Alerts, questions
+and labels remain visible, so this is not zero information flow or an OS sandbox.
+No new model-visible flag, read mode or permission is added.
 
 Whole optional labels may yield with response_limit_reached under the
 65536-byte cap. There is no metadata-only view or new details flag.

@@ -353,18 +353,20 @@ any shortfall rejects before admission. The final lease probe before install is
 read-only, so a reentrant lease adapter cannot change what was planned. An
 accepted pair still runs if delegation is later turned Off.
 
-From birth, non-read parent-model observations omit the source result body,
-including live result previews and explicit or default waits. Suppression uses
-only the existing `result_omitted`, `result_truncated` and cursor controls.
-No new result flag or read mode is added. A non-read
-observation does not include that body. Omission is an admission-time fact of
-the source Run, not derived from the link or the continuation's state:
-continuation failure, cancellation or kill never restores the body to non-read
-observations. Explicit `agent_read` reads the retained
-body normally. UI inspection and internal result reads still return it. Alerts,
-questions and labels are not omitted and may reach the parent. This is not an
-OS sandbox or zero information flow. Publishing a terminal source row still
-follows the finished-bit rule.
+From admission, all parent-model result observations of the source, including
+spawn/send/wait and explicit `agent_read` by name, task or cursor, replace its
+raw body with a short harness-authored human-readable handoff notice. The notice
+identifies the source and the exact original worker continuation by Agent name
+and task. It says pending until that continuation's `input_entered`, delivered
+only after that boundary, or not delivered if it ended before input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted characters. Later worker
+failure or kill does not undo observed input delivery. The sticky exact link
+survives reuse or kill of either Agent and delegation Off; it never retargets.
+No raw source paging/omission flags or source result cursors are exposed. No new
+model-visible flag, read mode or permission is added. Scouts without `return_to`
+retain normal output and paging. Internal `getResult`, dependency handoff, human
+UI and history retain the true raw source text unchanged. Alerts, questions and
+labels remain visible, so this is not an OS sandbox or zero-information-flow
+guarantee. Publishing a terminal source row still follows the finished-bit rule.
 
 Source failure, `needs_input` or interruption fails the pending continuation and
 reopens the original question if the worker is healthy and the continuation has
@@ -392,8 +394,8 @@ before its own notification returns, even if a consumer reenters and pumps. A
 notification failure does not uninstall either record; that Run is at once
 quarantined `context_change_failed` and dequeued, so nothing can start it, and
 is finished as an error only after both notifications. `return_to_run_id` is the sticky exact internal link: live Owner
-metadata for the current Owner only. It and the source's `result_visibility`
-fact are never serialized into model tool output and are not journal fields. `PiRunJournal` still writes its
+metadata for the current Owner only. It is never serialized into model tool
+output and is not a journal field. `PiRunJournal` still writes its
 explicit identity, routing, outcome and result fields, not the RunRecord or this
 link. Existing journal names and data stay literal. Restart does not hydrate the
 pair. The prepare-time allow
@@ -555,15 +557,17 @@ Live Run context, usage and elapsed time remain UI observations; legacy timed
 warning attempts remain history-only facts. Task descriptions stay on their original Runs.
 There is no separate touched-path/earlier-label summary or generic model-recovery
 hint. Question fields are `question_id`, `question`, `question_truncated`;
-historical text need not have a token. Results use `result`, `next_cursor`, `result_omitted`,
+historical text need not have a token. Real retained result pages use `result`, `next_cursor`, `result_omitted`,
 `result_truncated` and `omitted_chars`. Truncation/omission control flags are
 never silently removed by compact fallback. Omitted_chars means text never
 retained, not packing loss. Live previews shortened by packing explicitly mark
 result_truncated. Terminal cursors point to the actual displayed page end.
-Every bound terminal window with remaining retained text reserves a cursor before
-body packing, including wholly omitted pages (unchanged offset). Thus reuse of
-that Agent during a bound wait cannot make the omitted original result
-unaddressable. Keep returned cursors to continue the original page.
+Every bound terminal window of real retained result pages with remaining text
+reserves a cursor before body packing, including packing-omitted pages (unchanged
+offset). Thus reuse of that Agent during a bound wait cannot make the
+packing-omitted original page unaddressable. Keep returned cursors to continue
+that page. A `return_to` source instead carries its whole handoff notice as
+`result`, without a raw result window, paging/omission flags or source cursor.
 
 `agent_read({agent, task?, cursor?, max_chars?})` reads a result/question page.
 There is no `view` argument.
@@ -573,7 +577,8 @@ mutually exclusive. Unknown ordinals fail `TASK_NOT_FOUND`; they are not targets
 for send/answer/interrupt/kill/run. With neither selector, read chooses current,
 else pending-question, else latest task. No new tool or registry is introduced.
 
-Read requests a page (`max_chars` 1--16384, default 16384); a cursor
+For raw result pages, read requests `max_chars` (1--16384, default 16384); it
+does not shorten a bounded handoff notice. A cursor
 pins its original task even after reuse and fails `INVALID_CURSOR` on another
 Agent. A page may exceed its request by one unit to avoid a split surrogate.
 Read prioritizes the entire recorded question; alerts may stay pending when
@@ -618,8 +623,11 @@ fields, queue-wait reasons, result cursors, question IDs, empty question fields
 and a complete worst-case tagged alert. It excludes the removed pending-name
 array and depends on these exact fields and bounds.
 
-Result text yields before its reserved cursor; wholly omitted pages keep their
-original offset, partial pages advance by shown units, and EOF needs no cursor.
+Real result page text yields before its reserved cursor; packing-omitted pages
+keep their original offset, partial pages advance by shown units, and EOF needs
+no cursor. A handoff notice packs whole as a normal `result` string or yields
+under budget pressure with `response_limit_reached`; it is not a fake page and
+never advertises a raw source cursor.
 Packing retains thin controls and, for reason=alert, a complete first scoped
 FIFO alert. Questions are marked if truncated. Further alerts form a complete
 FIFO prefix: packing stops at the first alert that cannot fit, never skipping

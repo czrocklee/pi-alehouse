@@ -59,7 +59,7 @@ const returnToField = optional(Type.Object({
     description: "Exact pending question_id returned by wait/read for that worker." }),
   answer: text(16384, "Your instruction for continuing the worker's task; scout findings are attached separately as untrusted reference material."),
 }, { additionalProperties: false,
-  description: "Scout only: answer a worker's pending question with this scout's findings. Needs agent_answer allowed for you without a prompt. The worker resumes automatically once the scout completes, findings attached; you do not read or relay them. Replies omit the scout's result (agent_read if needed); wait_ms waits for the worker. Kill the scout when done." }));
+  description: "Scout only: answer a worker's pending question with this scout's findings. Needs agent_answer allowed for you without a prompt. The worker resumes automatically once the scout completes, findings attached; you do not read or relay them. wait_ms waits for the worker. Kill the scout when done." }));
 const spawnSchema = Type.Object({
   agent: agentName("Unique short nickname from one theme, not a task name; stays taken after kill."),
   prompt: text(131072, "Task instructions: deliverable, scope, stopping conditions, needed context, cwd-relative or absolute paths; source/version/date constraints and output format as relevant."),

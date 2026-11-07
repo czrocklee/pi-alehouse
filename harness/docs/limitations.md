@@ -281,9 +281,18 @@ abort/timeout cancels the observation only. Stopping the worker does not stop
 the scout; the scout remains resident until explicit kill. Source failure can
 fail the pending continuation and reopen the original question only while that
 continuation is pre-input and the worker is healthy. After input entry, nothing
-here restores the question. Non-read observations may omit the source result
-body; alerts, questions and labels may still reach the parent. That is not an OS
-sandbox. Same-request replay returns the source Run and its linked continuation;
+here restores the question. All parent-model result observations of the source,
+including spawn/send/wait and explicit `agent_read` by name/task/cursor, replace
+raw source text with a short harness-authored notice identifying the source and
+exact original worker continuation name/task. It reports pending until that
+continuation's `input_entered`, delivered only after it, or not delivered if it
+ended before input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted characters. Later failure/kill does not undo observed delivery. The exact
+link stays sticky after either Agent's reuse/kill or Off. No raw paging/omission
+flags or source result cursors accompany the notice. Ordinary scouts without
+`return_to` retain normal output/paging. Internal `getResult`, dependency handoff,
+human UI and history retain true raw source text unchanged. Alerts, questions
+and labels remain visible; this is not an OS sandbox or zero-information-flow
+guarantee, and adds no model-visible flag, read mode or permission. Same-request replay returns the source Run and its linked continuation;
 a different `return_to` conflicts and does not start another pair. The parent
 authority's `checkToolCallPermission("agent_answer", ctx)` decision used by
 compound prepare is made under the principal its own tool gate binds and
@@ -311,8 +320,11 @@ model-representable snapshots; it is not generic identity conversion. A refused
 binding preserves pending alerts but does not make their bodies model-readable;
 `getResult` reads retained result text, not the alert FIFO. No accepted facts are
 silently filtered or renamed. Increasing adapter bounds needs a new packing
-proof, not silent truncation. Fixed-width recovery cursors are reserved for bound terminal
-windows with remaining text, including wholly omitted pages after Agent reuse;
+proof, not silent truncation. Handoff notices pack whole as normal result strings
+or yield with `response_limit_reached`, never as fake pages; `max_chars` applies
+to raw pages, not bounded notices. Fixed-width recovery cursors are reserved for
+bound terminal windows of real retained result pages with remaining text,
+including packing-omitted pages after Agent reuse;
 the conservative retained-envelope fixture stays under the 65536-byte cap,
 excluding the retired pending-name array. Whole optional labels can yield with
 response_limit_reached; there is no metadata-only view. Keep

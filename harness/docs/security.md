@@ -552,9 +552,19 @@ installed. The helper does not prompt and does not record a grant. Deny means
 report the denial and do not bypass it. Any other rejection uses ordinary
 separate `agent_spawn` and `agent_answer` under their normal gates. Child
 output, handoff text and `return_to` grant no path, tool or profile authority.
-Omitting the source result from non-read model observations does not omit
-alerts, questions or labels, and is not an OS sandbox or a zero-information
-boundary. `return_to_run_id` is live Owner metadata for the current Owner only.
+All parent-model result observations of that source, including spawn/send/wait
+and explicit `agent_read` by name/task/cursor, replace raw source text with a
+short harness-authored notice naming the source and exact original worker
+continuation name/task, without raw paging/omission flags or source cursors.
+The notice says pending before that continuation's `input_entered`, delivered
+only after it, or not delivered if it ended before input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted characters. Later failure/kill
+does not undo observed delivery; the exact link stays sticky after either
+Agent's reuse/kill or Off. Ordinary scouts without `return_to` retain normal
+output/paging. Internal `getResult`, dependency handoff, human UI and history
+retain true raw source text unchanged. Alerts, questions and labels remain
+visible: this is not an OS sandbox or zero-information-flow guarantee, and adds
+no model-visible flag, read mode or permission.
+`return_to_run_id` is live Owner metadata for the current Owner only.
 It is not a persisted or recoverable journal field. Existing journal names and
 data stay literal; restart does not hydrate a compound pair or restore
 answerability.

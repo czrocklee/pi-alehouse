@@ -3,7 +3,7 @@ import test from "node:test";
 import { resolve } from "node:path";
 import { boundedOutput } from "../../dist/core/result-text.js";
 import { questionId } from "../../dist/core/question-id.js";
-import { decodeResultCursor } from "../../dist/core/result-cursor.js";
+import { encodeResultCursor } from "../../dist/core/result-cursor.js";
 import { HarnessError } from "../../dist/core/ports.js";
 import { FakePort, deferred, ended, errorCode, fixture, settings, task, tick, until } from "../support/controller-fixture.mjs";
 
@@ -53,12 +53,20 @@ async function finishPair(f, source, text = "SCOUT_PRIVATE_RESULT") {
   worker.finish("worker final answer"); await ended(f.controller, continuation);
   return { scout, continuation, worker };
 }
-function suppressed(row, { stable = false, omitted = 0 } = {}) {
-  assert.equal(row.result, undefined);
-  assert.equal(row.result_omitted, true);
-  if (stable) { assert.equal(row.next_cursor.length, 37); assert.equal(decodeResultCursor(row.next_cursor).offset, 0); }
-  else { assert.equal(row.next_cursor, undefined); assert.equal(row.result_truncated, true); }
-  if (omitted) assert.equal(row.omitted_chars, omitted);
+const notices = {
+  pending: "Result from pine is assigned to cedar (task 2); handoff is pending.",
+  delivered: "Result from pine has been returned to cedar (task 2).",
+  not_delivered: "Result from pine was not returned to cedar (task 2): the worker continuation ended before receiving input; agent_read pine task 1 shows the result.",
+};
+function notice(row, state = "delivered") {
+  assert.equal(row.result, notices[state]);
+  for (const field of ["result_notice", "result_omitted", "result_truncated", "next_cursor", "omitted_chars"])
+    assert(!Object.hasOwn(row, field), `${field} must not describe a notice`);
+}
+// An explicit read of an undelivered handoff returns the real retained page.
+function retained(row, text) {
+  assert.equal(row.result, text);
+  assert.notEqual(row.result, notices.not_delivered);
 }
 
 test("compound acceptance installs two exact Runs; only the worker completes it; handoff is outside approval witness", async t => {
@@ -76,7 +84,8 @@ test("compound acceptance installs two exact Runs; only the worker completes it;
   const snapshot = await action(c, source);
   assert.deepEqual(snapshot.action, { type: "agent_spawn", agent: "pine", task: 1 });
   assert.deepEqual(snapshot.agents.map(row => [row.agent, row.task]), [["pine", 1], ["cedar", 2]]);
-  suppressed(snapshot.agents[0]);
+  notice(snapshot.agents[0], "pending");
+  assert.doesNotMatch(JSON.stringify(snapshot), /SCOUT_PRIVATE_RESULT/);
   let returned = false;
   const pending = action(c, source, 3000).then(result => { returned = true; return result; });
   scout.finish("SCOUT_PRIVATE_RESULT"); await ended(c, source);
@@ -89,9 +98,11 @@ test("compound acceptance installs two exact Runs; only the worker completes it;
   worker.finish("worker used evidence"); await ended(c, continuation);
   const result = await pending;
   assert.equal(result.reason, undefined); assert.equal(result.agents[1].result, "worker used evidence");
-  suppressed(result.agents[0], { stable: true });
+  notice(result.agents[0]);
   assert.equal(c.getResult(source.run_id).text, "SCOUT_PRIVATE_RESULT");
-  assert.equal((await read(c, source)).agents[0].result, "SCOUT_PRIVATE_RESULT");
+  notice((await wait(c, [source.agent_id])).agents[0]);
+  const explicit = await read(c, source, { max_chars: 1 });
+  notice(explicit.agents[0]); assert.doesNotMatch(JSON.stringify(explicit), /SCOUT_PRIVATE_RESULT/);
   assert.equal(c.runs.get(source.run_id).finished_presented, true);
   assert.equal(c.runs.get(continuation.run_id).finished_presented, true);
 });
@@ -257,8 +268,14 @@ for (const failure of ["failed", "needs_input", "interrupted"]) test(`scout ${fa
   assert.equal(result.agents[1].status, "failed"); assert.match(result.agents[1].error, /^DEPENDENCY_NOT_COMPLETED: pine \(/);
   assert.equal(c.view(continuation.run_id).outcome.reason, "dependency_not_completed"); assert.equal(q.port.calls.length, 1);
   assert.equal(c.view(q.run.run_id).question_id, q.token);
-  suppressed(result.agents[0], { stable: true });
-  if (failure === "needs_input") { assert.equal(result.agents[0].question, "Need a source decision?"); assert.match(result.agents[0].question_id, /^q_/); }
+  notice(result.agents[0], "not_delivered");
+  const explicit = (await read(c, source, { max_chars: 1 })).agents[0];
+  retained(explicit, "p"); assert.equal(typeof explicit.next_cursor, "string");
+  assert.equal(c.getResult(source.run_id).text, "partial untrusted research");
+  if (failure === "needs_input") {
+    assert.equal(result.agents[0].question, "Need a source decision?"); assert.match(result.agents[0].question_id, /^q_/);
+    assert.equal(explicit.question, result.agents[0].question); assert.equal(explicit.question_id, result.agents[0].question_id);
+  }
 });
 
 test("a turn-limited but completed scout hands off and does not end the compound wait early", async t => {
@@ -273,34 +290,212 @@ test("a turn-limited but completed scout hands off and does not end the compound
   worker.finish("worker done"); await ended(c, continuation);
   const result = await pending;
   assert.equal(result.reason, undefined); assert.equal(result.agents[1].status, "completed");
-  assert.equal(result.agents[0].limit_reached, true); suppressed(result.agents[0], { stable: true });
+  assert.equal(result.agents[0].limit_reached, true); notice(result.agents[0]);
 });
 
-test("worker cancellation is independent; source suppression survives worker kill and all waits", async t => {
+test("worker pre-input cancellation and kill leave a sticky not-delivered notice; only an explicit read returns the source result", async t => {
   const f = await fixture(t, { controller: { output_chars: 8, history_output_chars: 1024 } }), c = f.controller, q = await asking(f);
   const source = await admit(f, q), continuation = c.view(source.return_to_run_id), scout = await portFor(f, source);
-  assert.equal(c.runs.get(source.run_id).record.result_visibility, "explicit_read");
+  assert.equal(source.return_to_run_id, continuation.run_id);
   c.cancel(continuation.run_id); await ended(c, continuation);
   assert.equal(c.view(q.run.run_id).question_id, q.token); assert.equal(scout.stopped, 0); assert.equal(scout.streaming, true);
   await c.kill(q.run.agent_id, 1000);
   scout.finish("abcdefghNEVER_RETAINED"); await ended(c, source);
-  for (const result of [await action(c, source), await wait(c, [source.agent_id]), await wait(c, [source.agent_id], { mode: "any" })])
-    suppressed(result.agents.find(row => row.agent === "pine"), { stable: true, omitted: 14 });
-  // A default waiter binds live work before it settles, not historical completed tasks.
-  const body = await read(c, source); assert.equal(body.agents[0].result, "abcdefgh"); assert.equal(body.agents[0].omitted_chars, 14);
-  assert.equal(c.getResult(source.run_id).text, "abcdefgh"); assert.equal(c.view(source.run_id).return_to_run_id, continuation.run_id);
+  const sent = await c.send("source-send", source.agent_id, "parent follow-up");
+  const sendReply = await observe(c, { kind: "action", run_id: sent.view.run_id,
+    action: { type: "agent_send", delivery: sent.delivery }, wait_ms: 0 });
+  for (const result of [await action(c, source), await wait(c, [source.agent_id]),
+    await wait(c, [source.agent_id], { mode: "any" }), sendReply]) {
+    notice(result.agents.find(row => row.agent === "pine"), "not_delivered");
+    assert.doesNotMatch(JSON.stringify(result), /abcdefgh|NEVER_RETAINED/);
+  }
+  const explicit = await read(c, source, { task: source.task, max_chars: 1 });
+  retained(explicit.agents[0], "a"); assert.doesNotMatch(JSON.stringify(explicit), /NEVER_RETAINED/);
+  assert.equal(c.getResult(source.run_id).text, "abcdefgh");
+  const raw = c.getResult(source.run_id);
+  assert.equal(raw.total_chars - raw.retained_chars, 14);
+  assert.equal(c.view(source.run_id).return_to_run_id, continuation.run_id);
 });
 
-test("default and explicit waits suppress live/final scout bodies but explicit read remains normal", async t => {
+test("default and explicit waits, actions, sends and reads replace live and final source bodies with notices", async t => {
   const f = await fixture(t), c = f.controller, q = await asking(f), source = await admit(f, q), scout = await portFor(f, source);
   scout.callbacks.output(boundedOutput("private live preview", 100));
-  for (const result of [await wait(c), await wait(c, [source.agent_id]), await action(c, source)]) suppressed(result.agents.find(row => row.agent === "pine"));
-  assert.equal((await read(c, source)).agents[0].result, "private live preview");
+  const sent = await c.send("live-send", source.agent_id, "continue collecting");
+  const sendReply = await observe(c, { kind: "action", run_id: sent.view.run_id,
+    action: { type: "agent_send", delivery: sent.delivery }, wait_ms: 0 });
+  for (const result of [await wait(c), await wait(c, [source.agent_id]), await action(c, source),
+    await read(c, source), await read(c, source, { task: source.task, max_chars: 1 }), sendReply]) {
+    notice(result.agents.find(row => row.agent === "pine"), "pending");
+    assert.doesNotMatch(JSON.stringify(result), /private live preview/);
+  }
   const bound = wait(c, undefined, { wait_ms: 3000 });
   scout.finish("private live preview"); await ended(c, source);
   const continuation = c.view(source.return_to_run_id), worker = await portFor(f, continuation);
   worker.finish("done"); await ended(c, continuation);
-  suppressed((await bound).agents.find(row => row.agent === "pine"), { stable: true });
+  notice((await bound).agents.find(row => row.agent === "pine"));
+  notice((await read(c, source, { max_chars: 1 })).agents[0]);
+});
+
+test("a delivered handoff that omitted retained text says so; only an explicit read pages the full result", async t => {
+  const f = await fixture(t), c = f.controller, q = await asking(f), source = await admit(f, q);
+  const tail = "CRITICAL_TAIL_CITATION", text = "x".repeat(16384) + tail;
+  (await portFor(f, source)).finish(text); await ended(c, source);
+  const continuation = c.view(source.return_to_run_id), worker = await portFor(f, continuation);
+  const prompt = worker.calls.at(-1).prompt;
+  assert.match(prompt, new RegExp(`\\[${tail.length} characters omitted\\]`)); assert.doesNotMatch(prompt, new RegExp(tail));
+  worker.finish("worker done"); await ended(c, continuation);
+  assert.equal(c.runs.get(continuation.run_id).record.input_entered, true);
+  const partial = `Result from pine has been returned to cedar (task 2), but the handoff omitted its last ${tail.length} retained characters; agent_read pine task 1 shows the full result.`;
+  for (const result of [await action(c, source), await wait(c, [source.agent_id])]) {
+    assert.equal(result.agents.find(row => row.agent === "pine").result, partial);
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(tail));
+  }
+  await c.kill(source.agent_id, 1000);
+  let row = (await read(c, source, { task: 1 })).agents[0], paged = row.result, pages = 1;
+  while (row.next_cursor && pages < 20) {
+    row = (await read(c, source, { cursor: row.next_cursor })).agents[0]; paged += row.result; pages++;
+  }
+  assert(pages > 1, "the full result needs a cursor page"); assert.equal(paged, text);
+  assert.equal(c.view(source.return_to_run_id).run_id, continuation.run_id, "the sticky link is unchanged");
+});
+
+test("a fully attached handoff stays a notice even for explicit and cursor reads", async t => {
+  const f = await fixture(t), c = f.controller, q = await asking(f), source = await admit(f, q);
+  const text = "x".repeat(16384);
+  await finishPair(f, source, text);
+  notice((await read(c, source, { task: 1 })).agents[0]);
+  const cursor = c.getResult(source.run_id, { limit: 1 }).next_cursor;
+  notice((await read(c, source, { cursor, max_chars: 1 })).agents[0]);
+});
+
+test("notice cursor reads retain raw identity, version, range and surrogate checks without consuming alerts on rejection", async t => {
+  const f = await fixture(t), c = f.controller, q = await asking(f), source = await admit(f, q);
+  const scout = await portFor(f, source), text = "a😀z_PRIVATE_SOURCE";
+  scout.callbacks.alert("source alert remains ordinary communication");
+  const { continuation } = await finishPair(f, source, text);
+  const identity = { owner: c.identity.owner_id, generation: c.identity.generation, run: source.run_id,
+    version: c.view(source.run_id).result_ref.digest };
+  const legacy = c.getResult(source.run_id, { limit: 1 }).next_cursor;
+  assert(legacy);
+  const old = JSON.parse(Buffer.from(legacy, "base64url").toString());
+  const legacyAt = rest => Buffer.from(JSON.stringify({ ...old, ...rest })).toString("base64url");
+  const invalid = ["not-a-cursor", ...["owner", "generation", "run", "version"].map(field =>
+    encodeResultCursor({ ...identity, [field]: "different" }, 0)),
+    encodeResultCursor(identity, text.length + 1), encodeResultCursor(identity, 2),
+    legacyAt({ version: "different" }), legacyAt({ offset: text.length + 1 }), legacyAt({ offset: 2 })];
+  for (const cursor of invalid) {
+    const alerts = [...c.alerts];
+    await assert.rejects(read(c, source, { cursor, max_chars: 1 }), errorCode("INVALID_CURSOR"));
+    assert.deepEqual(c.alerts, alerts);
+    assert.equal(c.runs.get(source.run_id).finished_presented, false);
+    assert.equal(c.runs.get(continuation.run_id).finished_presented, false);
+    assert.equal(c.stats().internal_error, undefined);
+  }
+  await assert.rejects(read(c, continuation, { cursor: encodeResultCursor(identity, 0) }), errorCode("INVALID_CURSOR"));
+  assert.equal(c.alerts.length, 1);
+  for (const cursor of [encodeResultCursor(identity, 0), encodeResultCursor(identity, 1),
+    encodeResultCursor(identity, 3), encodeResultCursor(identity, text.length), legacy]) {
+    const result = await read(c, source, { cursor, max_chars: 1 });
+    assert.equal(result.agents[0].task, 1); notice(result.agents[0]);
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE_SOURCE/);
+    if (cursor === encodeResultCursor(identity, 0))
+      assert.deepEqual(result.alerts.map(row => row.message), ["source alert remains ordinary communication"]);
+  }
+  assert.equal(c.alerts.length, 0);
+  assert.equal(c.getResult(source.run_id, { cursor: encodeResultCursor(identity, 1), limit: 1 }).text, "😀");
+});
+
+test("handoff stays pending through source finalization, worker capacity and worker initialization; journal and prompt stay raw", async t => {
+  const sourceHistory = deferred(), initialization = deferred(), marker = "RAW_JOURNAL_AND_WORKER_INPUT";
+  let continuationId, initializing = false, journalText;
+  const f = await fixture(t, { beforeShutdown: () => { sourceHistory.resolve(); initialization.resolve(); },
+    history: async (kind, record, output) => {
+      if (kind === "finish" && output.text === marker) { journalText = output.text; await sourceHistory.promise; }
+      if (kind === "begin" && record.run_id === continuationId) { initializing = true; await initialization.promise; }
+    } });
+  const c = f.controller, q = await asking(f), source = await admit(f, q), scout = await portFor(f, source);
+  continuationId = source.return_to_run_id;
+  const blocker = await c.submit("capacity-blocker", task("occupy the freed slot", { name: "oak" }));
+  scout.finish(marker);
+  const blockerPort = await portFor(f, blocker);
+  await until(() => journalText === marker);
+  assert.equal(c.view(source.run_id).finalization_pending, true);
+  assert.equal(c.view(continuationId).queued_for, "dependencies");
+  notice((await read(c, source, { max_chars: 1 })).agents[0], "pending");
+  sourceHistory.resolve(); await ended(c, source);
+  assert.equal(c.view(continuationId).queued_for, "capacity");
+  notice((await action(c, source)).agents[0], "pending");
+  blockerPort.finish("blocker done"); await ended(c, blocker);
+  await until(() => initializing);
+  assert.equal(c.runs.get(continuationId).record.input_entered, false);
+  notice((await wait(c, [source.agent_id])).agents[0], "pending");
+  notice((await read(c, source, { task: 1, max_chars: 1 })).agents[0], "pending");
+  initialization.resolve();
+  const continuation = c.view(continuationId), worker = await portFor(f, continuation);
+  assert.equal(c.runs.get(continuationId).record.input_entered, true);
+  assert.match(worker.calls.at(-1).prompt, new RegExp(marker));
+  notice((await read(c, source, { max_chars: 1 })).agents[0]);
+  worker.finish("normal worker output"); await ended(c, continuation);
+  assert.equal((await read(c, continuation)).agents[0].result, "normal worker output");
+  assert.equal(journalText, marker); assert.equal(c.getResult(source.run_id).text, marker);
+});
+
+test("execution-exited finalizing continuation without observed input is already not-delivered", async t => {
+  const finalization = deferred();
+  const f = await fixture(t, { beforeShutdown: () => finalization.resolve(), history: async (kind, _record, output) => {
+    if (kind === "finish" && output.text === "pre-input worker failure") await finalization.promise;
+  } });
+  const c = f.controller, q = await asking(f), source = await admit(f, q);
+  const originalRun = q.port.run.bind(q.port);
+  q.port.run = (prompt, callbacks, identity) => originalRun(prompt, { ...callbacks, inputEntered() {} }, identity);
+  (await portFor(f, source)).finish("raw source stays private"); await ended(c, source);
+  const continuation = c.view(source.return_to_run_id), worker = await portFor(f, continuation);
+  notice((await read(c, source)).agents[0], "pending");
+  worker.finish("pre-input worker failure", "error", "synthetic pre-input error");
+  await until(() => c.view(continuation.run_id).finalization_pending);
+  assert.equal(c.runs.get(continuation.run_id).record.input_entered, false);
+  assert.equal(c.view(continuation.run_id).execution_exited, true);
+  retained((await read(c, source, { max_chars: 1 })).agents[0], "r");
+  notice((await action(c, source)).agents[0], "not_delivered");
+  finalization.resolve(); await ended(c, continuation);
+  retained((await read(c, source)).agents[0], "raw source stays private");
+});
+
+for (const outcome of ["failed", "interrupted", "killed"]) test(`observed worker input stays delivered after worker ${outcome} and Off`, async t => {
+  let admission = { enabled: true, revision: 0 };
+  const f = await fixture(t, { controller: { admission: () => admission } }), c = f.controller, q = await asking(f);
+  const source = await admit(f, q);
+  (await portFor(f, source)).finish("raw source evidence"); await ended(c, source);
+  const continuation = c.view(source.return_to_run_id), worker = await portFor(f, continuation);
+  assert.equal(c.runs.get(continuation.run_id).record.input_entered, true);
+  notice((await read(c, source)).agents[0]);
+  if (outcome === "killed") { worker.autoStop = true; await c.kill(continuation.agent_id, 1000); }
+  else {
+    if (outcome === "interrupted") c.cancel(continuation.run_id);
+    worker.finish("worker partial", outcome === "failed" ? "error" : "aborted", "synthetic ending");
+  }
+  await ended(c, continuation);
+  admission = { enabled: false, revision: 1 };
+  const result = await action(c, source);
+  assert.equal(result.workers_disabled, true); notice(result.agents[0]);
+  notice((await read(c, source, { task: 1, max_chars: 1 })).agents[0]);
+  assert.equal(c.getResult(source.run_id).text, "raw source evidence");
+});
+
+test("a later observed answer cannot turn the original cancelled continuation into a delivered handoff", async t => {
+  const f = await fixture(t), c = f.controller, q = await asking(f), source = await admit(f, q);
+  const continuation = c.view(source.return_to_run_id);
+  c.cancel(continuation.run_id); await ended(c, continuation);
+  (await portFor(f, source)).finish("raw source evidence"); await ended(c, source);
+  const later = await c.answer("later-worker-answer", q.run.agent_id, q.token, "finish a different continuation");
+  const worker = await portFor(f, later);
+  assert.equal(later.task, 3); assert.equal(c.runs.get(later.run_id).record.input_entered, true);
+  notice((await action(c, source)).agents[0], "not_delivered");
+  retained((await read(c, source, { task: 1, max_chars: 1 })).agents[0], "r");
+  worker.finish("later worker result"); await ended(c, later);
+  const replay = await admit(f, q);
+  assert.equal(replay.return_to_run_id, continuation.run_id);
+  notice((await action(c, replay)).agents[0], "not_delivered");
 });
 
 test("Off rejects before admission but never cancels an accepted pair", async t => {
@@ -312,6 +507,7 @@ test("Off rejects before admission but never cancels an accepted pair", async t 
   admission = { enabled: false, revision: 3 };
   await finishPair(f, source);
   const result = await action(c, source); assert.equal(result.workers_disabled, true); assert.equal(result.agents[1].status, "completed");
+  notice(result.agents[0]); notice((await read(c, source, { max_chars: 1 })).agents[0]);
   assert.equal((await admit(f, q)).run_id, source.run_id, "replay remains before Off and stale eligibility");
 });
 
@@ -329,10 +525,24 @@ test("replay/conflict bind the same original pair after both Agents are reused; 
   const result = await action(c, replay);
   assert.deepEqual(result.agents.map(row => [row.agent, row.task]), [["pine", 1], ["cedar", 2]]);
   assert.equal(result.agents[1].result, "worker final answer"); assert.equal(result.alerts, undefined);
-  const firstPage = await read(c, source, { cursor: result.agents[0].next_cursor, max_chars: 5 });
-  assert.equal(firstPage.agents[0].task, 1); assert.equal(firstPage.agents[0].result, "SCOUT");
-  // Explicit read spans Agent alerts, unlike the preceding compound action.
+  notice(result.agents[0]);
+  const identity = { owner: c.identity.owner_id, generation: c.identity.generation, run: source.run_id,
+    version: c.view(source.run_id).result_ref.digest };
+  const raw = c.getResult(source.run_id, { limit: 5 });
+  assert.equal(raw.text, "SCOUT"); assert(raw.next_cursor);
+  for (const extra of [{ task: source.task, max_chars: 1 },
+    { cursor: encodeResultCursor(identity, 5), max_chars: 1 }, { cursor: raw.next_cursor, max_chars: 1 }]) {
+    const historical = await read(c, source, extra);
+    assert.equal(historical.agents[0].task, 1); notice(historical.agents[0]);
+    assert.doesNotMatch(JSON.stringify(historical), /SCOUT_PRIVATE_RESULT/);
+  }
+  assert.equal(c.getResult(source.run_id, { cursor: encodeResultCursor(identity, 5) }).text, "_PRIVATE_RESULT");
+  const latestSource = await read(c, source);
+  assert.equal(latestSource.agents[0].task, 2); assert.equal(latestSource.agents[0].result, "later scout body");
+  // Explicit source read spans its Agent's alerts, unlike the compound action.
   assert.equal(c.alerts.length, 1); assert.equal(c.alerts[0].message, "later worker alert");
+  assert.equal((await read(c, continuation, { task: 2 })).agents[0].result, "worker final answer");
+  assert.equal(c.alerts.length, 0);
   assert.equal(c.view(laterSource.run_id).return_to_run_id, undefined);
   await assert.rejects(c.submit("compound", sourceTask(q, { return_to: { ...input.return_to, answer: "different" } })), errorCode("REQUEST_CONFLICT"));
   const secondary = c.runs.get(continuation.run_id).record;

@@ -273,6 +273,89 @@ test("stable result cursor advances to the actual shown endpoint and EOF removes
   assert.equal(eof.result, "last"); assert.equal(eof.next_cursor, undefined); assert.equal(eof.omitted_chars, 5);
 });
 
+const handoffNotice = "Result from pine has been returned to cedar (task 2).";
+function noticeOnly(entry, expected) {
+  assert.equal(entry.result, expected);
+  for (const field of ["result_notice", "result_omitted", "result_truncated", "next_cursor", "omitted_chars"])
+    assert(!Object.hasOwn(entry, field), `${field} is not a notice projection`);
+}
+
+test("private whole notices use ordinary result priority without changing ordinary stable paging", () => {
+  const text = "ordinary result ".repeat(1400), ordinaryIdentity = { ...cursorIdentity, run: "ordinary-run" };
+  const input = snapshot({ tasks: [task(row("pine", 1, "completed"), { result_notice: handoffNotice }),
+    task(row("otter", 1, "completed"), { result: window(text, { cursor: ordinaryIdentity }) })] });
+  const { envelope, result } = pack(input), ordinary = envelope.agents[1];
+  noticeOnly(envelope.agents[0], handoffNotice);
+  assert.doesNotMatch(result.content[0].text, /result_notice|ordinary-run/);
+  const endpoint = 16384 - handoffNotice.length;
+  assert.equal(ordinary.result, text.slice(0, endpoint));
+  assert.equal(decodeCursor(ordinary.next_cursor, ordinaryIdentity), endpoint);
+  assert.equal(ordinary.result_omitted, undefined); assert.equal(ordinary.result_truncated, undefined);
+  assert.equal(ordinary.omitted_chars, undefined); assert.equal(envelope.response_limit_reached, true);
+  const next = pack(snapshot({ tasks: [task(row("otter", 1, "completed"), {
+    result: window(text.slice(endpoint), { offset: endpoint, retained_chars: text.length,
+      total_chars: text.length, cursor: ordinaryIdentity }),
+  })] })).envelope;
+  assert.equal(next.agents[0].result, text.slice(endpoint));
+  assert.equal(next.agents[0].next_cursor, undefined); assert.equal(next.response_limit_reached, undefined);
+  for (const status of ["queued", "running", "finishing", "completed", "failed", "interrupted", "needs_input"]) {
+    const only = pack(snapshot({ tasks: [task(row("pine", 1, status), { result_notice: handoffNotice })] })).envelope;
+    noticeOnly(only.agents[0], handoffNotice);
+    assert.equal(only.response_limit_reached, undefined);
+  }
+  const bounded = pack(snapshot({ tasks: [task(row(), { result_notice: "n".repeat(512) })] })).envelope;
+  noticeOnly(bounded.agents[0], "n".repeat(512));
+  assert.equal(bounded.response_limit_reached, undefined);
+});
+
+test("notice yields whole, never a prefix or cursor, under text and serialized-byte pressure", () => {
+  // Earlier ordinary results retain priority; even one missing unit drops the whole notice.
+  for (const remaining of [0, handoffNotice.length - 1, handoffNotice.length]) {
+    const text = "r".repeat(16384 - remaining);
+    const packed = pack(snapshot({ tasks: [task(row("otter", 1, "completed"), {
+      result: window(text, { cursor: cursorIdentity }),
+    }), task(row("pine", 1, "completed"), { result_notice: handoffNotice })] })).envelope;
+    assert.equal(packed.agents[0].result, text);
+    noticeOnly(packed.agents[1], remaining === handoffNotice.length ? handoffNotice : undefined);
+    assert.equal(packed.response_limit_reached, remaining === handoffNotice.length ? undefined : true);
+  }
+  // Questions and alerts precede both result kinds, rather than notices reserving body space.
+  const crowded = pack(snapshot({ tasks: [task(row("pine", 1, "needs_input", { has_question: true }), {
+    question_id: questionId(), question: "q".repeat(8192), result_notice: handoffNotice,
+  })], alerts: [alert("a".repeat(8192))] })).envelope;
+  assert.equal(crowded.agents[0].question.length, 8192); assert.equal(crowded.alerts[0].message.length, 8192);
+  noticeOnly(crowded.agents[0], undefined); assert.equal(crowded.response_limit_reached, true);
+  const { input } = byteSaturatedSnapshot(), baseline = structuredClone(input);
+  delete baseline.tasks[1].row.result_omitted; delete baseline.tasks[1].row.result_truncated;
+  const seed = pack(structuredClone(baseline)).envelope;
+  baseline.tasks[0].question += "q".repeat(65536 - bytes({ ...seed, response_limit_reached: true }));
+  const complete = pack(baseline), pressured = structuredClone(baseline);
+  pressured.tasks[1].result_notice = handoffNotice;
+  const omitted = pack(pressured);
+  assert.deepEqual(omitted.envelope.agents, complete.envelope.agents);
+  noticeOnly(omitted.envelope.agents[1], undefined);
+  assert.equal(omitted.envelope.response_limit_reached, true); assert.equal(bytes(omitted.envelope), 65536);
+});
+
+test("invalid private notice shapes, mixed result windows and result flags reject without publication", () => {
+  const invalid = [
+    ...[null, false, 1, {}, [], "", " \n\t", "n".repeat(513)].map(result_notice =>
+      snapshot({ tasks: [task(row(), { result_notice })] })),
+    snapshot({ tasks: [task(row(), { result_notice: handoffNotice, result: window("") })] }),
+    snapshot({ tasks: [task(row("pine", 1, "completed"), {
+      result_notice: handoffNotice, result: window("raw", { cursor: cursorIdentity }),
+    })] }),
+    ...["result_omitted", "result_truncated"].map(flag =>
+      snapshot({ tasks: [task(row("pine", 1, "completed", { [flag]: true }), { result_notice: handoffNotice })] })),
+    snapshot({ tasks: [task(row("pine", 1, "completed", { result_notice: handoffNotice }))] }),
+  ];
+  for (const input of invalid) {
+    const before = structuredClone(input); deepFreeze(input); let published;
+    assert.throws(() => { published = packCommunication(input); }, { code: "INVALID_COMMUNICATION_SNAPSHOT" });
+    assert.equal(published, undefined); assert.deepEqual(input, before);
+  }
+});
+
 test("empty result windows omit result scaffolding but retain controls and real unshown-text cursors", () => {
   for (const status of ["running", "completed", "failed", "interrupted", "needs_input"]) {
     const settled = status !== "running", input = snapshot({ tasks: [task(row("otter", 1, status), {

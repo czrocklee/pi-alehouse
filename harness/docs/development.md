@@ -324,12 +324,24 @@ spawn/answer coverage, including pre-effect rejection. Do not add reserved
 capacity, recursion, a child management tool, a lifecycle deadline or external
 storage. `return_to_run_id` is the sticky exact internal link: live Owner
 metadata for the current Owner only, never a model address, never serialized
-into model tool output, and never a journal field. Non-read observations omit
-the source body through the existing `result_omitted`, `result_truncated` and
-cursor controls, driven by the source's admission-time
-`result_visibility: "explicit_read"` record fact, which `communicationWindow`
-applies before slicing. No new result flag or read mode is added. Explicit
-`agent_read` reads that body normally. `PiRunJournal` keeps serializing
+into model tool output, and never a journal field. Derive the source's handoff
+notice from this link, without a redundant RunRecord visibility fact. All
+parent-model observations, including spawn/send/wait and explicit `agent_read`
+by name/task/cursor, replace the raw source body with that short harness-authored
+notice identifying the source and exact original worker continuation name/task.
+Report pending before the continuation's `input_entered`, delivered only after
+it, or not delivered if it ended before input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted characters. Later failure/kill does not undo
+observed delivery. The link stays sticky after either Agent's reuse/kill or Off.
+Private `TaskSnapshot.result_notice` is separate from a real `ResultWindow`:
+pack it whole as a normal `result` string or yield with `response_limit_reached`
+under budget pressure. Do not fabricate a page, raw paging/omission flags or
+source cursor; `max_chars` applies to raw pages, not the bounded notice. Keep
+normal cursor primitives and invariants unchanged for real pageable windows.
+No new model-visible flag, read mode or permission is added. Ordinary scouts
+without `return_to` retain normal output/paging; internal `getResult`, dependency
+handoff, human UI and history retain true raw source text unchanged. Alerts,
+questions and labels remain visible, not a zero-information-flow guarantee.
+`PiRunJournal` keeps serializing
 explicit identity, routing, outcome and result fields; it does not write the
 RunRecord or this link, and no history adapter change is planned. Do not rewrite
 existing journal names or data, and do not hydrate the pair on restart. Stable
@@ -348,12 +360,13 @@ Capture reportedBlockAtStart at registration, including undefined. Fault commit
 validates currentBlocked against snapshot.blocked, not another waiter's updated
 reported marker; concurrent pre-edge waiters may report idempotently. Invalid
 references reject with zero presentation changes and no automatic retry.
-Settled result snapshots carry cursor identity even when their captured page
-reaches EOF; live previews never do. Only the final packed page reaching EOF
-omits next_cursor. Promise/thenable observation ports are interface errors, not
-awaitable work. A fixed-width
-37-character stateless cursor is reserved for every bound terminal window with
-unshown retained text, even if the whole page is displaced after Agent reuse.
+Settled real result-page snapshots carry cursor identity even when their captured
+page reaches EOF; live previews never do. For pageable results, only the final
+packed page reaching EOF omits next_cursor. Handoff notices are not result windows.
+Promise/thenable observation ports are interface errors, not awaitable work.
+A fixed-width 37-character stateless cursor is reserved for every bound terminal
+window of real retained result pages with unshown text, even if the whole page
+is displaced after Agent reuse.
 Whole optional labels yield with response_limit_reached; there is no separate
 metadata-retrieval mode.
 Finished labels can yield without delaying or resetting that original's finished

@@ -203,6 +203,8 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
       row.question = "";
       row.question_truncated = true;
     }
+    if (task.result_notice !== undefined && (!nonblank(task.result_notice) || task.result_notice.length > 512 ||
+        task.result !== undefined || row.result_omitted || row.result_truncated)) invalid("Invalid bounded result notice");
     if (task.result !== undefined) {
       validateWindow(task.result);
       if ((task.result.cursor !== undefined) !== task.settled) invalid("Stable results require cursor identity; live previews cannot carry it");
@@ -316,8 +318,15 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
   // A stable cursor describes the actual shown endpoint, not the captured
   // window's endpoint. Even wholly omitted terminal pages retain the reserved
   // original-Run cursor at the unchanged offset; no cursorless recovery guess.
+  // Handoff notices are whole status text, not pages of the retained result.
   for (let index = 0; index < snapshot.tasks.length; index++) {
     const task = snapshot.tasks[index]!;
+    if (task.result_notice !== undefined) {
+      const candidate = replaceRow(envelope, index, { ...envelope.agents[index]!, result: task.result_notice });
+      if (communicationBudget(candidate).fits) envelope = candidate;
+      else limited = true;
+      continue;
+    }
     const window = task.result;
     if (!window) continue;
     const base = envelope.agents[index]!;

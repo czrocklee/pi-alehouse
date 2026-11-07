@@ -123,15 +123,25 @@ invent an id or send a placeholder. One spawn admits the scout and the worker
 continuation, or neither. `answer` is the worker's next instruction, not a
 message to the scout. Do not put `return_to` on `agent_run`, and do not wait for
 a future question. The spawn reply's action is `agent_spawn` for the scout; its
-rows are the scout and the continuation, and the scout result body is omitted
-there. The reply's wait ends with the continuation: a scout failure, question
-or interruption arrives as the continuation's `task_issue`, with the scout row
-showing its status and any question. `agent_read` pages that retained output normally. A later wait on
+rows are the scout and the continuation. All parent-model result observations
+of the source, including spawn/send/wait and explicit `agent_read` by name/task/cursor,
+show a short harness-authored handoff notice instead of raw source text, raw
+paging/omission flags or source cursors. It identifies the source and exact
+original worker continuation name/task: pending until its `input_entered`,
+delivered only afterward, or not delivered if it ended before input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted characters. Later worker
+failure/kill does not undo observed delivery. The exact link stays sticky after
+either Agent's reuse/kill or Off. Scouts without `return_to` keep normal output
+and paging. Internal `getResult`, dependency handoff, human UI and history retain
+true raw source text unchanged. Alerts, questions and labels remain visible;
+this is not zero information flow or an OS sandbox, and adds no model-visible
+flag, read mode or permission. The reply's wait ends with the continuation: a
+scout failure, question or interruption arrives as the continuation's `task_issue`,
+with the scout row showing its status and any question. A later wait on
 the worker observes the continuation, not a second admission; but if the
 continuation failed before input, the original question is reopened and that
 wait reports it with the same `question_id`. If prepare is not your effective
-`agent_answer` allow, spawn the scout and call `agent_answer` separately. Stopping the worker does not stop the scout; kill the scout
-explicitly when finished. This illustration is not feature-test evidence.
+`agent_answer` allow, spawn the scout and call `agent_answer` separately. Stopping the worker does not stop the scout;
+the scout remains resident until explicitly killed. This illustration is not feature-test evidence.
 
 ```ts
 const questionId = /* exact question_id from agent_wait or agent_read */;
@@ -167,6 +177,7 @@ await agent_spawn({
   separate finalization/cleanup boundaries. Interrupting/exiting is not confirmed
   release. For cleanup uncertainty or Owner fault, tell the user; no force release,
   automatic retry or difficulty change repairs authority.
-- Optional labels can yield under the reply cap. Results use real cursor paging;
-  there is no metadata-only/details mode. Alerts are queued, not acknowledged by
+- Optional labels can yield under the reply cap. Real retained result pages use
+  cursor paging; handoff notices pack whole or yield with `response_limit_reached`.
+  `max_chars` applies to raw pages, not bounded notices. There is no metadata-only/details mode. Alerts are queued, not acknowledged by
   the model.

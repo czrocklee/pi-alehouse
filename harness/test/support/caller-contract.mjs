@@ -52,7 +52,7 @@ export function assertCallerTools(tools) {
   assert.equal(fields.return_to.properties.question_id.pattern, "^q_[0-9a-f]{32}$");
   assert.equal(fields.return_to.properties.answer.maxLength, 16384);
   for (const fact of [/Scout only/, /worker's pending question/, /Needs agent_answer allowed for you without a prompt/, /resumes automatically/, /do not read or relay/,
-    /Replies omit the scout's result/, /agent_read/, /wait_ms waits for the worker/, /Kill the scout/])
+    /wait_ms waits for the worker/, /Kill the scout when done/])
     assert.match(fields.return_to.description, fact);
   assert(!spawn.parameters.required.includes("return_to"));
   assert.equal(Object.hasOwn(fields, "workspace"), false);

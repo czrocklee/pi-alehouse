@@ -25,6 +25,9 @@ export interface TaskSnapshot extends Partial<TaskMetadata> {
   readonly question_id?: QuestionId;
   readonly question?: string;
   readonly result?: ResultWindow;
+  /** Bounded harness-authored handoff status instead of a retained result page.
+   * Mutually exclusive with result; packed whole, without result paging flags. */
+  readonly result_notice?: string;
   readonly diagnostics?: Pick<TaskEntry, "error" | "owner_error" | "unavailable_reason">;
   /** Optional bounded attribution, outside the required thin control row. */
   readonly cancellation_source?: CancellationSource;

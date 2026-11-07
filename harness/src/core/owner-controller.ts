@@ -36,9 +36,6 @@ interface RunRecord {
   answer_to_run_id?: string;
   /** Sticky from installation; never retargeted when either Agent is reused. */
   return_to_run_id?: string;
-  /** Admission-time fact: automatic observations omit this Run's result text;
-   * only an explicit result read returns it. Never relaxed afterwards. */
-  result_visibility?: "explicit_read";
   input_entered: boolean;
   status: RunStatus;
   phase: Phase;
@@ -602,7 +599,6 @@ export class OwnerController {
       const target = this.planAdmission(secondaryId, sha256(stable({ type: "return_to", source_request_digest: request_digest,
         source_run_id: source.run.record.run_id, original_run_id: original.record.run_id, answer: returnTo.answer })), continuation, [source]);
       source.run.record.return_to_run_id = target.run.record.run_id;
-      source.run.record.result_visibility = "explicit_read";
       plans = [source, target];
     }
     // Ports/clocks may change external authority while planning; no install yet.
@@ -1400,10 +1396,16 @@ export class OwnerController {
     run.settled_seq = ++this.settledSeq;
     this.wake(); this.pump();
   }
+  /** Per-source character budget of a Run's handoff; shared with notices so
+   * they report exactly what handoffText attached. */
+  private handoffBudget(record: RunRecord): number {
+    const ids = record.after ?? [];
+    return ids.length ? Math.floor(HANDOFF_CHARS / ids.length) : 0;
+  }
   private handoffText(record: RunRecord): string {
     const ids = record.after ?? [];
     if (!ids.length) return "";
-    const budget = Math.floor(HANDOFF_CHARS / ids.length);
+    const budget = this.handoffBudget(record);
     const parts = ids.map((id) => {
       const source = this.requireRun(id), text = boundedOutput(source.output.text, budget).text;
       const omitted = source.output.total_chars - text.length;
@@ -1848,7 +1850,7 @@ export class OwnerController {
         const finished = finishedCandidates(all);
         const healthy = this.communicationHealthy() && leaseHeld, providers = this.projectionActivity(targets);
         const data: CommunicationSnapshot = { reason, ...(action ? { action } : {}), ...(!enabled ? { workers_disabled: true } : {}),
-          tasks: targets.map((run) => this.communicationTask(run, ordinals.get(run)!, healthy, providers, limit, cursor,
+          tasks: targets.map((run) => this.communicationTask(run, ordinals, healthy, providers, limit, cursor,
             request.kind === "read")),
           alerts: alerts.map(({ run, message, source }) => ({ agent: run.record.name, task: ordinals.get(run)!,
             label: boundedOutput(run.record.description, COMMUNICATION_LIMITS.label_units).text, message, ...(source === undefined ? {} : { source }) })),
@@ -1890,10 +1892,17 @@ export class OwnerController {
       ...(agent.question?.run_id === record.run_id ? { has_question: true } : {}),
       ...(record.limit_reached ? { limit_reached: true } : {}), ...(unavailable ? { unavailable: true } : {}) };
   }
-  private communicationTask(run: ManagedRun, task: number, healthy: boolean, providers: ProviderActivity,
+  private communicationTask(run: ManagedRun, ordinals: ReadonlyMap<ManagedRun, number>, healthy: boolean, providers: ProviderActivity,
     limit: number, cursor: string | undefined, historical: boolean): TaskSnapshot {
-    const agent = this.requireAgent(run.record.agent_id);
+    const agent = this.requireAgent(run.record.agent_id), task = ordinals.get(run)!;
     const question_id = actionableQuestionId(agent, run, healthy);
+    const handoff = this.returnToNotice(run, ordinals);
+    // Only an explicit read returns the retained result, and only where the
+    // handoff did not carry all of it: otherwise that text would be unreachable.
+    const result_notice = handoff === undefined || (historical && handoff.readable) ? undefined : handoff.text;
+    // Selection locators still validate against the real retained result, even
+    // when this model observation returns only the handoff notice.
+    if (result_notice !== undefined && cursor !== undefined) this.resultOffset(run, cursor);
     // Keep host diagnostics in the private capture; the final packer owns the
     // model-visible allowlist before notes can spend any reply budget.
     const dispatch_notes = run.record.dispatch_notes?.slice();
@@ -1901,11 +1910,33 @@ export class OwnerController {
       ...taskMetadata(run.record),
       ...(question_id ? { question_id } : {}),
       ...(run.question !== undefined && (historical || isCommunicationSettled(run)) ? { question: run.question } : {}),
-      result: this.communicationWindow(run, limit, cursor, historical),
+      ...(result_notice === undefined ? { result: this.communicationWindow(run, limit, cursor) } : { result_notice }),
       ...(dispatch_notes ? { dispatch_notes } : {}),
       ...(run.record.cancellation_source ? { cancellation_source: run.record.cancellation_source } : {}),
       diagnostics: { error: run.record.outcome?.error, owner_error: this.parentError ?? this.internalError,
         unavailable_reason: !healthy ? "owner_unavailable" : agent.unavailable ?? (agent.exiting ? "exiting" : run.quarantine) } };
+  }
+  /** Model-visible status follows the exact original continuation, never an
+   * Agent's latest task. Actual retained output stays available to handoff/UI. */
+  /** readable: an explicit read returns the retained result, because the
+   * worker never received it or the bounded handoff omitted retained text. */
+  private returnToNotice(run: ManagedRun, ordinals: ReadonlyMap<ManagedRun, number>):
+    { text: string; readable: boolean } | undefined {
+    const id = run.record.return_to_run_id;
+    if (id === undefined) return undefined;
+    const continuation = this.requireRun(id), target = continuation.record.name, task = ordinals.get(continuation)!;
+    const source = run.record.name, destination = `${target} (task ${task})`, read = `agent_read ${source} task ${ordinals.get(run)!}`;
+    if (continuation.record.input_entered) {
+      // The source settled before its continuation started, so this is the
+      // exact prefix that was attached.
+      const omitted = run.output.text.length - boundedOutput(run.output.text, this.handoffBudget(continuation.record)).text.length;
+      return omitted > 0
+        ? { readable: true, text: `Result from ${source} has been returned to ${destination}, but the handoff omitted its last ${omitted} retained characters; ${read} shows the full result.` }
+        : { readable: false, text: `Result from ${source} has been returned to ${destination}.` };
+    }
+    if (continuation.record.execution_exited || terminal(continuation.record.status))
+      return { readable: true, text: `Result from ${source} was not returned to ${destination}: the worker continuation ended before receiving input; ${read} shows the result.` };
+    return { readable: false, text: `Result from ${source} is assigned to ${destination}; handoff is pending.` };
   }
   private resultIdentity(run: ManagedRun): ResultCursorIdentity {
     const record = run.record;
@@ -1955,14 +1986,12 @@ export class OwnerController {
       return offset;
     } catch { throw invalidResultCursor(); }
   }
-  /** Only an explicit read returns text of an explicit_read Run; other
-   * observations keep its true window bounds and cursor but never slice it. */
-  private communicationWindow(run: ManagedRun, limit: number, cursor: string | undefined, explicitRead: boolean): ResultWindow {
+  /** Retained result pages only; routed scout results use a separate notice. */
+  private communicationWindow(run: ManagedRun, limit: number, cursor: string | undefined): ResultWindow {
     const stable = isCommunicationSettled(run);
     const offset = cursor === undefined ? 0 : this.resultOffset(run, cursor);
     const bounds = { offset, retained_chars: run.output.text.length, total_chars: run.output.total_chars,
       ...(stable ? { cursor: this.resultIdentity(run) } : {}) };
-    if (!explicitRead && run.record.result_visibility === "explicit_read") return { text: "", ...bounds };
     let end = Math.min(run.output.text.length, offset + limit);
     if (/[\uD800-\uDBFF]/.test(run.output.text[end - 1] ?? "") && /[\uDC00-\uDFFF]/.test(run.output.text[end] ?? "")) end++;
     return { text: run.output.text.slice(offset, end), ...bounds };

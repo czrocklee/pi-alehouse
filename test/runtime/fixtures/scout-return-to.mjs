@@ -162,8 +162,9 @@ function parentResponse(request) {
     const [source, continuation] = reply.agents;
     assert.deepEqual({ agent: source.agent, task: source.task, status: source.status, label: source.label },
       { agent: scout, task: 1, status: "completed", label: scoutLabel });
-    assert.equal(source.result, undefined, "automatic source row hides the body");
-    assert.equal(source.result_omitted, true, "hidden source text stays retained for the continuation, not dropped");
+    assert.equal(source.result, `Result from ${scout} has been returned to ${worker} (task 2).`, "source row explains the completed handoff");
+    for (const field of ["result_notice", "result_omitted", "result_truncated", "next_cursor", "omitted_chars"])
+      assert.equal(Object.hasOwn(source, field), false, `${field} does not describe a handoff notice`);
     assert.deepEqual({ agent: continuation.agent, task: continuation.task, status: continuation.status, label: continuation.label, result: continuation.result },
       { agent: worker, task: 2, status: "completed", label: workerLabel, result: workerFinal });
     assert.equal(reply.alerts, undefined);
