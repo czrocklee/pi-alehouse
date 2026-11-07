@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { allowAnswers, hashJson, mockResponse } from "./jev-wire.mjs";
 export async function runJevBackpressure(
   check,
-  registeredHarness,
+  registeredFixture,
   offlineAgentDir,
   defaultSystemPrompt,
 ) {
@@ -14,7 +14,7 @@ export async function runJevBackpressure(
   // overflow, this capacity block recovers when a pending decision settles, not
   // merely when new direct input clears the authorization epoch.
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Inspect many independent status targets.");
     let fetchCalls = 0;
     globalThis.fetch = async () => {
@@ -57,7 +57,7 @@ export async function runJevBackpressure(
   // transports are synthetic — no network and no live judge. Do not satisfy this
   // by raising MAX_CONCURRENT_REVIEWS.
   {
-    const h = registeredHarness({ mode: "enforce-subagents" });
+    const h = registeredFixture({ mode: "enforce-subagents" });
     h.live("Inspect repository status with the worker.");
     const factsKey = Symbol.for("@rocklee/jev-auto-approval:child-runtime-facts");
     const previousFacts = globalThis[factsKey];
@@ -83,7 +83,7 @@ export async function runJevBackpressure(
           cwd: h.ctx.cwd,
           contextChanged: false,
           initialPromptDigest: hashJson(taskPrompt),
-          harness: {
+          delegation: {
             ...identity,
             protocol: 1,
             profile,
@@ -97,8 +97,8 @@ export async function runJevBackpressure(
         },
       ],
     ]);
-    h.bus.get("pi-harness:approval:admitted")(identity);
-    h.bus.get("pi-harness:approval:started")({ sessionId: childSessionId });
+    h.bus.get("pi-alehouse:approval:admitted")(identity);
+    h.bus.get("pi-alehouse:approval:started")({ sessionId: childSessionId });
 
     const held = [];
     const inflight = [];
@@ -429,7 +429,7 @@ export async function runJevBackpressure(
   }
 
   {
-    const h = registeredHarness({ hasUI: false });
+    const h = registeredFixture({ hasUI: false });
     globalThis.fetch = async () => {
       throw new Error("Headless asks must not invoke the reviewer");
     };

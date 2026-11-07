@@ -4,12 +4,12 @@ Optional Nix packaging for a host Pi installation. The npm package builds
 without it, and nothing here is an npm build input.
 
 - `package.nix` builds the npm package from this repository with lifecycle
-  scripts disabled and wraps the `pi-alehouse` launcher. `npmDepsHash` must be
-  updated together with `package-lock.json`; `nix build .#pi-alehouse` reports
-  the expected value. Since Pi 1.0.1 the published package ships no
+  scripts disabled, wraps the `pi-alehouse` launcher and also installs it as
+  `alehouse`. `npmDepsHash` must be updated together with `package-lock.json`;
+  `nix build .#alehouse` reports the expected value. Since Pi 1.0.1 the published package ships no
   shrinkwrap, so every root lockfile entry carries its own registry integrity
   and npm cache prefetching stays reproducible.
-- `hm-module.nix` is `homeManagerModules.default` (`programs.pi-alehouse`).
+- `hm-module.nix` is `homeManagerModules.default` (`programs.alehouse`).
 - `permission-bootstrap/` holds the persistent bootstrap and settings
   migration used for ordinary Pi.
 
@@ -17,7 +17,7 @@ without it, and nothing here is an npm build input.
 
 The module installs the launcher and the generated worker profiles. The optional
 `permissions` and `presets` paths become `extensions/pi-permission-system/config.json`
-(restored on activation if the settings UI rewrote it) and `harness-presets.json`.
+(restored on activation if the settings UI rewrote it) and `alehouse-presets.json`.
 When left null those files stay user-owned. `jevApiKeyFile` passes only a
 credential path. `dashboardUrl` and `grokBilling` enable the footer's personal
 integrations for both launchers.
@@ -26,7 +26,7 @@ With `ordinaryPi.enable` (default), plain `pi` also loads the policy/UI
 extensions and the managed permission authority from the same generated runtime.
 Extensions are installed as one-line shims, not symlinks: Pi resolves an entry's
 relative imports from its `~/.pi` path, so a symlinked entry cannot reach
-`runtime/lib`.
+`generated/shared`.
 
 ## Bootstrap and rollback
 
@@ -57,11 +57,11 @@ normally); no commit is required for a local build. Missing modules followed by
 TypeScript inference errors can indicate an incomplete flake source, not a need
 to disable `npmBuildScript` or loosen the type checks.
 
-`scripts/check-nix-deployment.sh HM_GENERATION [PI]` inspects an already-built
+`scripts/checks/check-nix-deployment.sh HM_GENERATION [PI]` inspects an already-built
 generation without activating it: selector and bootstrap, worker links and
 extension shims, installed preset schema, host-only SDK and the store launcher.
 It loads the installed extension entries in host Pi (RPC mode, no model calls),
-then runs `scripts/check-pi-permission-bootstrap.mjs`, which exercises legacy →
+then runs `scripts/checks/check-pi-permission-bootstrap.mjs`, which exercises legacy →
 managed → rollback → re-upgrade, session switch/reload, broken or partial
 bootstraps and duplicate authorities in a scratch agent directory. Both are
 maintainer tools: run them from a source checkout; the built package does not

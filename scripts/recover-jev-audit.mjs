@@ -187,7 +187,7 @@ function run() {
         "Stop ALL Pi writers sharing this agentDir before upgrade, rollback or recovery, including the original unlocked appendFileSync writer. Shutdown is an operator assertion, not PID/TTL proof. Recovery is not atomic; a failed apply may retain lock/archive artifacts. It does not repair missing audit records or grant approval.",
     };
     if (!apply) return report;
-    const requested = values["--flock"] ?? process.env.PI_HARNESS_FLOCK;
+    const requested = values["--flock"] ?? process.env.PI_ALEHOUSE_FLOCK;
     if (!requested || !isAbsolute(requested)) reject("verified_absolute_flock_required");
     const flock = realpathSync(requested);
     // The intermediate mkdir protocol shares this path; the original HEAD

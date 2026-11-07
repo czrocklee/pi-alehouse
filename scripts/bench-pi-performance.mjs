@@ -5,13 +5,13 @@
 import assert from "node:assert/strict";
 import { cpus } from "node:os";
 import { performance } from "node:perf_hooks";
-import { OutputBuffer, boundedOutput } from "../harness/dist/core/result-text.js";
-import { wrapPlainText } from "../harness/dist/ui/text.js";
+import { OutputBuffer } from "../dist/orchestration/core/result-text.js";
+import { wrapPlainText } from "../dist/orchestration/ui/text.js";
 
 const flags = new Set(process.argv.slice(2));
 assert(
-  [...flags].every((flag) => ["--legacy", "--core-only"].includes(flag)),
-  "Usage: node scripts/bench-pi-performance.mjs [--legacy] [--core-only]",
+  [...flags].every((flag) => flag === "--core-only"),
+  "Usage: node scripts/bench-pi-performance.mjs [--core-only]",
 );
 const results = [];
 function measure(name, facts, run, count = 7) {
@@ -44,31 +44,6 @@ for (const chars of [16_384, 65_536, 262_144, 1_048_576]) {
       assert.equal(final.total_chars, chars);
       assert.equal(final.truncated, false);
     });
-  }
-}
-if (flags.has("--legacy")) {
-  for (const chars of [16_384, 32_768, 65_536]) {
-    measure(
-      "legacy_cumulative_protocol_equivalent",
-      { chars, delta_chars: 4 },
-      () => {
-        let output = { text: "", total_chars: 0, truncated: false };
-        let retained = output;
-        let pendingHigh = "";
-        for (let i = 0; i < chars; i += 4) {
-          const growing = output.text + pendingHigh + "xxxx";
-          pendingHigh = /[\uD800-\uDBFF]$/.test(growing) ? growing.slice(-1) : "";
-          output = {
-            ...boundedOutput(growing.slice(0, growing.length - pendingHigh.length), chars),
-            total_chars: i + 4,
-          };
-          assert(output.text.startsWith(retained.text));
-          retained = { ...boundedOutput(output.text, chars), total_chars: output.total_chars };
-        }
-        assert.equal(retained.text.length, chars);
-      },
-      3,
-    );
   }
 }
 

@@ -569,7 +569,7 @@ export function registerApprovalTests(
     }
   });
 
-  test("the approval popover joins the bottom-right column and steps aside for harness panels", async () => {
+  test("the approval popover joins the bottom-right column and steps aside for agent panels", async () => {
     const m = await mountApproval();
     try {
       const below = joinPopoverStack(m.tui);
@@ -592,7 +592,7 @@ export function registerApprovalTests(
       assert.equal(entry.bounds.col + entry.bounds.width, m.tui.terminal.columns);
       assert.equal(entry.options.nonCapturing, false, "it takes the keyboard for ↑↓ Enter Esc");
       m.f.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {});
-      assert.equal(m.popover(), undefined, "off the overlay stack while a harness panel closes");
+      assert.equal(m.popover(), undefined, "off the overlay stack while an agent panel closes");
       await nextTick();
       assert(m.popover(), "back on the next tick");
       // A column too short for every row plus a warning keeps it off screen,

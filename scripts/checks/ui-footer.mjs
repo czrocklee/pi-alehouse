@@ -239,7 +239,7 @@ export function createFooterTests(
    * and anything they leave over is the tool's own work. */
   const delegated = (flat, rows) => ({
     type: "message",
-    message: { role: "toolResult", toolName: "bash", usage: { ...flat, harnessModels: rows } },
+    message: { role: "toolResult", toolName: "bash", usage: { ...flat, alehouseModels: rows } },
   });
   const workerRow = (model, input, cost) => ({
     model,
@@ -427,7 +427,7 @@ export function createFooterTests(
         content: [],
         isError: false,
         timestamp: 2,
-        usage: { ...usage(50, 6, 7, 8, 2), harnessModels: [workerRow("p/shared-model", 25, 1)] },
+        usage: { ...usage(50, 6, 7, 8, 2), alehouseModels: [workerRow("p/shared-model", 25, 1)] },
       });
       manager.appendCompaction(
         "fixture summary",
@@ -1104,7 +1104,7 @@ export function createFooterTests(
                 output: 0,
                 cacheRead: 0,
                 cacheWrite: 0,
-                harnessModels: [workerRow("openai-codex/gpt-5.6-sol", 180, 2)],
+                alehouseModels: [workerRow("openai-codex/gpt-5.6-sol", 180, 2)],
               },
             },
           },
@@ -1167,7 +1167,7 @@ export function createFooterTests(
       assert.equal(mounted.inputHandlers.size, 0);
     });
 
-    test("the pinned panel steps aside while a harness panel closes, then returns to its place", async () => {
+    test("the pinned panel steps aside while an agent panel closes, then returns to its place", async () => {
       const mounted = await mountFooter({ mode: "fullscreen", entries: spendEntries });
       try {
         mounted.clickFooter();
@@ -1177,7 +1177,7 @@ export function createFooterTests(
         assert.deepEqual(
           mounted.visible(),
           [],
-          "cooperatively steps aside during harness settlement",
+          "cooperatively steps aside during agent panel settlement",
         );
         // Keep the member's ordinal/width, not a ghost reservation of hidden rows.
         const above = joinPopoverStack(mounted.tui);
@@ -1189,7 +1189,7 @@ export function createFooterTests(
           );
           above.measure(2);
           await nextTick();
-          assert.equal(mounted.visible().length, 1, "back once the harness close has run");
+          assert.equal(mounted.visible().length, 1, "back once the agent panel close has run");
           mounted.paintOverlay();
           assert.deepEqual(mounted.bounds(), place);
           assert.equal(
@@ -1218,12 +1218,12 @@ export function createFooterTests(
       }
     });
 
-    test("the usage panel and a harness popover share one bottom-right column", async () => {
+    test("the usage panel and an agent popover share one bottom-right column", async () => {
       const mounted = await mountFooter({ mode: "fullscreen", entries: spendEntries });
       const { tui } = mounted;
       try {
         mounted.clickFooter();
-        // A harness popover joining from its own bundle, exactly as the picker does.
+        // An agent popover joining from its own bundle, exactly as the picker does.
         const member = joinPopoverStack(tui);
         const picker = {
           render: (width) => {
@@ -1236,25 +1236,25 @@ export function createFooterTests(
         const handle = tui.showOverlay(picker, stackedOverlayOptions(member, { width: 50 }));
         mounted.paintOverlay();
         mounted.paintOverlay();
-        const [usagePanel, harness] = mounted.visible().map((entry) => entry.handle.getBounds());
+        const [usagePanel, agentPanel] = mounted.visible().map((entry) => entry.handle.getBounds());
         assert.equal(
           usagePanel.row + usagePanel.height,
           tui.terminal.rows - FOOTER_HEIGHT,
           "the older panel keeps the footer",
         );
         assert.equal(
-          harness.row + harness.height,
+          agentPanel.row + agentPanel.height,
           usagePanel.row,
           "the newer popover rests directly on it",
         );
-        for (const bounds of [usagePanel, harness])
+        for (const bounds of [usagePanel, agentPanel])
           assert.equal(bounds.col + bounds.width, tui.terminal.columns);
         assert.equal(
           usagePanel.width,
-          harness.width,
+          agentPanel.width,
           "both independently bundled panels use the column width",
         );
-        assert.equal(usagePanel.col, harness.col);
+        assert.equal(usagePanel.col, agentPanel.col);
 
         // Closing the lower one drops the upper one onto the footer.
         mounted.clickFooter();
@@ -1409,7 +1409,7 @@ export function createFooterTests(
         }
       });
 
-    test("the worker indicator sits in the corner and hands its clicks to the harness", async () => {
+    test("the worker indicator sits in the corner and hands its clicks to the agent panel", async () => {
       const statuses = new Map([
         [WORKER_PRESET_INDICATOR, "delegation: lead/fixture-balanced"],
         ["other-extension", "OTHER"],
@@ -1460,7 +1460,7 @@ export function createFooterTests(
         assert.equal(
           mounted.visible().length,
           1,
-          "with no harness to claim it, the corner still opens usage",
+          "with no agent panel to claim it, the corner still opens usage",
         );
         // Narrowing shortens the worker control rather than clipping it; its last
         // drawn cell still belongs to the indicator, not an off-screen hit region.
@@ -1710,7 +1710,7 @@ export function createFooterTests(
   function registerCorner() {
     test("approval sits to the right of worker routing in the footer's corner", async () => {
       const statuses = new Map([
-        ["harness-preset", "workers: fixture-balanced"],
+        ["alehouse-preset", "workers: fixture-balanced"],
         ["approval", "approval: jev+sub"],
         ["other-extension", "OTHER"],
       ]);

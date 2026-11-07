@@ -12,19 +12,20 @@
   root = ../.;
   # Build inputs only: local dependencies/outputs and Nix packaging never enter
   # the npm source, so Nix-only edits do not rebuild the package.
-  # Mirrors .gitignore; `runtime` is anchored because test/runtime is source.
-  excludedNames = ["node_modules" "coverage" "artifacts" ".cache" ".git"];
-  excludedPaths = ["runtime" "harness/dist" "nix" "flake.nix" "flake.lock" "result"];
+  # Generated runtime and compiler output are anchored to the package root.
+  excludedNames = ["node_modules" "coverage" "artifacts" ".cache" ".git" ".pi" ".claude" ".evidence"];
+  excludedPaths = ["generated" "dist" "nix" "flake.nix" "flake.lock" "result"];
   src = lib.cleanSourceWith {
     src = root;
     name = "pi-alehouse-source";
     filter = path: _type:
       !(lib.elem (baseNameOf path) excludedNames)
+      && !(lib.hasPrefix ".generated-build-" (baseNameOf path))
       && !(lib.elem (lib.removePrefix (toString root + "/") (toString path)) excludedPaths);
   };
 in
   buildNpmPackage {
-    pname = "pi-alehouse";
+    pname = "alehouse";
     version = (lib.importJSON ../package.json).version;
     inherit src;
     # Update with package-lock.json (nix build reports the expected hash).
@@ -52,11 +53,11 @@ in
         find "$root/node_modules/.bin" -xtype l -delete
       fi
 
-      # One installed root keeps Jiti-realpathed policy/lib/vendor imports siblings.
-      test -f "$root/runtime/permission-system/index.ts"
-      test -f "$root/runtime/permission-system/vendor/package.json"
-      test -f "$root/runtime/policy/status-footer.ts"
-      test -f "$root/runtime/worker-policy.json"
+      # One installed root keeps generated extension/shared/vendor imports siblings.
+      test -f "$root/generated/authority/index.ts"
+      test -f "$root/generated/authority/vendor/package.json"
+      test -f "$root/generated/extensions/status-footer.ts"
+      test -f "$root/generated/worker-policy.json"
       node --input-type=module - "$root" <<'EOF'
       import assert from "node:assert/strict";
       import { readFileSync } from "node:fs";
@@ -71,10 +72,10 @@ in
       EOF
 
       wrapProgram "$out/bin/pi-alehouse" \
-        --set PI_HARNESS_PERMISSION_ROOT "$root/runtime/permission-system" \
-        --set PI_HARNESS_POLICY_ROOT "$root/runtime/policy" \
-        --set PI_HARNESS_FLOCK ${util-linux}/bin/flock \
-        --set PI_HARNESS_GIT ${gitMinimal}/bin/git \
+        --set PI_ALEHOUSE_PERMISSION_ROOT "$root/generated/authority" \
+        --set PI_ALEHOUSE_POLICY_ROOT "$root/generated/extensions" \
+        --set PI_ALEHOUSE_FLOCK ${util-linux}/bin/flock \
+        --set PI_ALEHOUSE_GIT ${gitMinimal}/bin/git \
         --set-default PI_JEV_APPROVAL_MODE enforce-subagents \
         ${lib.concatStringsSep " " (lib.mapAttrsToList (name: value: "--set-default ${lib.escapeShellArg name} ${lib.escapeShellArg value}") environment)} \
         ${
@@ -82,8 +83,7 @@ in
         then "--unset PI_JEV_API_KEY_FILE"
         else "--set PI_JEV_API_KEY_FILE ${lib.escapeShellArg jevApiKeyFile}"
       }
-      # Transitional command alias; both names enter the exact same composition.
-      ln -s pi-alehouse "$out/bin/pi-harness"
+      ln -s pi-alehouse "$out/bin/alehouse"
     '';
 
     meta = {
@@ -91,6 +91,6 @@ in
       homepage = "https://github.com/czrocklee/pi-alehouse";
       license = lib.licenses.mit;
       platforms = lib.platforms.linux;
-      mainProgram = "pi-alehouse";
+      mainProgram = "alehouse";
     };
   }

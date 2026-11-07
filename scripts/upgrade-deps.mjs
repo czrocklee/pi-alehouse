@@ -240,10 +240,10 @@ function webReferences(root, old, latest) {
         ],
       ],
     ],
-    ["scripts/build.mjs", [[`web access ${old}`, `web access ${latest}`]]],
-    ["harness/README.md", [[`\`pi-web-access\` ${old}`, `\`pi-web-access\` ${latest}`]]],
-    ["harness/docs/development.md", [[`\`pi-web-access\` ${old}`, `\`pi-web-access\` ${latest}`]]],
-    ["harness/docs/security.md", [[`\`pi-web-access\`\n${old}`, `\`pi-web-access\`\n${latest}`]]],
+    ["scripts/build/index.mjs", [[`web access ${old}`, `web access ${latest}`]]],
+    ["docs/orchestration.md", [[`\`pi-web-access\` ${old}`, `\`pi-web-access\` ${latest}`]]],
+    ["docs/development.md", [[`\`pi-web-access\` ${old}`, `\`pi-web-access\` ${latest}`]]],
+    ["docs/security.md", [[`\`pi-web-access\`\n${old}`, `\`pi-web-access\`\n${latest}`]]],
     [
       "THIRD_PARTY_NOTICES.md",
       [
@@ -252,7 +252,7 @@ function webReferences(root, old, latest) {
       ],
     ],
     [
-      "test/runtime/runtime.test.mjs",
+      "test/integration/runtime.test.mjs",
       [
         [`"pi-web-access":"${old}"`, `"pi-web-access":"${latest}"`],
         [

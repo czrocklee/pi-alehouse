@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 export const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 // Generated worker profiles installed into the agent directory, plus disabled
-// built-ins. Keep in step with nix/hm-module.nix and the harness profile names.
+// built-ins. Keep in step with nix/hm-module.nix and orchestration profile names.
 export const managedAgentNames = Object.freeze([
   "editor",
   "researcher",
@@ -55,8 +55,8 @@ export function resolveFlock(env = process.env) {
     "linux",
     "Alehouse requires Linux util-linux flock; no weaker lock fallback",
   );
-  const candidates = env.PI_HARNESS_FLOCK
-    ? [env.PI_HARNESS_FLOCK]
+  const candidates = env.PI_ALEHOUSE_FLOCK
+    ? [env.PI_ALEHOUSE_FLOCK]
     : ["/usr/bin/flock", "/bin/flock", "/run/current-system/sw/bin/flock"];
   for (const candidate of candidates) {
     assert(isAbsolute(candidate), "flock override must be an absolute executable path");
@@ -69,18 +69,18 @@ export function resolveFlock(env = process.env) {
       );
       return path;
     } catch (error) {
-      if (env.PI_HARNESS_FLOCK) throw error;
+      if (env.PI_ALEHOUSE_FLOCK) throw error;
     }
   }
   throw new Error(
-    "Linux util-linux flock unavailable; set an explicit absolute PI_HARNESS_FLOCK (PATH is not trusted)",
+    "Linux util-linux flock unavailable; set an explicit absolute PI_ALEHOUSE_FLOCK (PATH is not trusted)",
   );
 }
 // Optional observation dependency, never found through a project's PATH. A
 // missing/unsupported Git only makes checks' source_state unknown at runtime.
 export function resolveGit(env = process.env) {
-  const candidates = env.PI_HARNESS_GIT
-    ? [env.PI_HARNESS_GIT]
+  const candidates = env.PI_ALEHOUSE_GIT
+    ? [env.PI_ALEHOUSE_GIT]
     : ["/usr/bin/git", "/bin/git", "/run/current-system/sw/bin/git"];
   /** @type {NodeJS.ProcessEnv} */
   const clean = {};
@@ -162,8 +162,8 @@ export function webEntry(root = packageRoot) {
   return entry;
 }
 export function verifyRuntime(root = packageRoot) {
-  regular(join(root, "composition.ts"));
-  const runtime = join(root, "runtime");
+  regular(join(root, "src/composition.ts"));
+  const runtime = join(root, "generated");
   const manifest = JSON.parse(regular(join(runtime, "manifest.json")));
   assert.equal(manifest.version, 1, "Runtime manifest version mismatch; rebuild Alehouse");
   for (const [path, expected] of Object.entries(manifest.files)) {
@@ -180,11 +180,11 @@ export function verifyRuntime(root = packageRoot) {
   }
   for (const required of [
     "worker-policy.json",
-    "permission-system/index.ts",
-    "permission-system/vendor/package.json",
-    "policy/jev-auto-approval.ts",
-    "policy/static-safety-guard.ts",
-    "policy/policy-grep.ts",
+    "authority/index.ts",
+    "authority/vendor/package.json",
+    "extensions/jev-auto-approval.ts",
+    "extensions/static-safety-guard.ts",
+    "extensions/policy-grep.ts",
     ...managedAgentNames.map((name) => `agents/${name}.md`),
   ]) {
     assert(Object.hasOwn(manifest.files, required), `Incomplete runtime manifest: ${required}`);
@@ -192,7 +192,7 @@ export function verifyRuntime(root = packageRoot) {
   return runtime;
 }
 export function verifyAgentResources(agentDir = agentDirectory(), root = packageRoot) {
-  const runtime = join(root, "runtime");
+  const runtime = join(root, "generated");
   for (const name of managedAgentNames) {
     const path = join(agentDir, "agents", `${name}.md`);
     try {
@@ -212,15 +212,15 @@ export function verifyAgentResources(agentDir = agentDirectory(), root = package
     );
   }
   // Existing Nix/user policy and catalogues remain authoritative, not replaced
-  // with seed defaults. Upstream and harness perform full semantic validation.
-  const presets = JSON.parse(regular(join(agentDir, "harness-presets.json")));
+  // with seed defaults. Upstream and orchestration perform full semantic validation.
+  const presets = JSON.parse(regular(join(agentDir, "alehouse-presets.json")));
   assert(
     presets?.version === 3 &&
       typeof presets.defaultPreset === "string" &&
       presets.presets &&
       typeof presets.presets === "object" &&
       !Array.isArray(presets.presets),
-    "Invalid harness-presets.json: catalogue version 3 is required, including empty Off catalogues. Preserve your file and update it manually; any configured preset needs all five slots d1–d5. Older configurations are not converted, and init never replaces existing files.",
+    "Invalid alehouse-presets.json: catalogue version 3 is required, including empty Off catalogues. Preserve your file and update it manually; any configured preset needs all five slots d1–d5. Older configurations are not converted, and init never replaces existing files.",
   );
   const permissions = JSON.parse(
     regular(join(agentDir, "extensions/pi-permission-system/config.json")),
@@ -242,14 +242,14 @@ export function preflight({
   verifyAgentResources(agentDir, root);
   const flock = resolveFlock(env);
   const git = resolveGit(env);
-  const permissionRoot = realpathSync(join(runtime, "permission-system"));
-  const policyRoot = realpathSync(join(runtime, "policy"));
-  // Old environment names remain the internal contract, not an unchecked
+  const permissionRoot = realpathSync(join(runtime, "authority"));
+  const policyRoot = realpathSync(join(runtime, "extensions"));
+  // Runtime path overrides are an internal contract, not an unchecked
   // authority-selection escape hatch. Aliases of this verified generation are
   // accepted; another mutable deployment must use its own launcher/package.
   for (const [key, expected] of [
-    ["PI_HARNESS_PERMISSION_ROOT", permissionRoot],
-    ["PI_HARNESS_POLICY_ROOT", policyRoot],
+    ["PI_ALEHOUSE_PERMISSION_ROOT", permissionRoot],
+    ["PI_ALEHOUSE_POLICY_ROOT", policyRoot],
   ]) {
     if (!env[key]) continue;
     assert(isAbsolute(env[key]), `${key} must be absolute`);
@@ -335,7 +335,7 @@ export function protectionResources(paths = {}, env = process.env, root = packag
   const writeFiles = [
     "extensions/pi-permission-system/config.json",
     "extensions/pi-alehouse/config.json",
-    "harness-presets.json",
+    "alehouse-presets.json",
     "managed-permissions.json",
     "settings.json",
     "models.json",
@@ -352,8 +352,8 @@ export function protectionResources(paths = {}, env = process.env, root = packag
         resolve(root),
         agentDir,
         auditArchives,
-        paths.permissionRoot ?? join(root, "runtime/permission-system"),
-        paths.policyRoot ?? join(root, "runtime/policy"),
+        paths.permissionRoot ?? join(root, "generated/authority"),
+        paths.policyRoot ?? join(root, "generated/extensions"),
         ...dependencyCodeRoots(root),
         ...(hostRoot ? [hostRoot, ...dependencyCodeRoots(hostRoot)] : []),
       ]),
@@ -366,11 +366,11 @@ export function runtimeEnvironment(paths, env = process.env) {
   const result = {
     ...env,
     PI_CODING_AGENT_DIR: paths.agentDir,
-    PI_HARNESS_PERMISSION_ROOT: paths.permissionRoot,
-    PI_HARNESS_POLICY_ROOT: paths.policyRoot,
-    PI_HARNESS_FLOCK: paths.flock,
-    PI_HARNESS_GIT: paths.git,
-    PI_HARNESS_WEB_ENTRY: paths.web,
+    PI_ALEHOUSE_PERMISSION_ROOT: paths.permissionRoot,
+    PI_ALEHOUSE_POLICY_ROOT: paths.policyRoot,
+    PI_ALEHOUSE_FLOCK: paths.flock,
+    PI_ALEHOUSE_GIT: paths.git,
+    PI_ALEHOUSE_WEB_ENTRY: paths.web,
     ...(env.PI_JEV_API_KEY_FILE
       ? { PI_JEV_API_KEY_FILE: absoluteUserPath(env.PI_JEV_API_KEY_FILE) }
       : {}),
@@ -378,6 +378,6 @@ export function runtimeEnvironment(paths, env = process.env) {
   };
   // Git is optional. execve rejects undefined values, and a stale inherited
   // selection must not survive when no trusted Git was verified.
-  if (!paths.git) delete result.PI_HARNESS_GIT;
+  if (!paths.git) delete result.PI_ALEHOUSE_GIT;
   return result;
 }

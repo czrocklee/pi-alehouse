@@ -21,7 +21,7 @@ export async function runParserMatrix(
   configPath,
   repo,
 ) {
-  const { hardenGitInput, originalGitCommands } = await load(
+  const { hardenNonGitInput, originalGitCommands } = await load(
     "access-intent/bash/managed-read-policy",
   );
   const fixedRequested = [
@@ -41,7 +41,7 @@ export async function runParserMatrix(
   const fixedPositive = [];
   for (const command of fixedRequested) {
     const input = { command };
-    assert(await hardenGitInput(input), `Fixed query must be hardened: ${command}`);
+    assert(await hardenNonGitInput(input), `Fixed query must be hardened: ${command}`);
     assert.deepEqual(originalGitCommands(input), [command]);
     fixedPositive.push(input.command);
   }
@@ -77,7 +77,7 @@ export async function runParserMatrix(
   for (const command of gitRequested) {
     const input = { command };
     assert.equal(
-      await hardenGitInput(input, cwd),
+      await hardenNonGitInput(input, cwd),
       undefined,
       `Git input is not rewritten: ${command}`,
     );
@@ -240,7 +240,7 @@ export async function runParserMatrix(
     for (const target of ["ordinary.txt", ".git/config"]) {
       const command = `${diff} > ${target}`,
         input = { command };
-      assert.equal(await hardenGitInput(input, cwd), undefined);
+      assert.equal(await hardenNonGitInput(input, cwd), undefined);
       assert.equal(input.command, command);
       const result = await check(input.command, agent);
       assert.equal(result.program.commandText(), command);
@@ -347,7 +347,7 @@ export async function runParserMatrix(
     "fake sensitive fixture",
   );
   const scopedCheck = { command: "git diff --check" };
-  await hardenGitInput(scopedCheck);
+  await hardenNonGitInput(scopedCheck);
   assert.equal(
     (await check(scopedCheck.command)).path,
     null,
@@ -364,7 +364,7 @@ export async function runParserMatrix(
     ["bash -n /var/lib/pi-fixture/external.sh", "ask", "external"],
   ]) {
     const input = { command: requested };
-    await hardenGitInput(input);
+    await hardenNonGitInput(input);
     const result = await check(input.command);
     assert.equal(
       result[gate].preCheck.state,
@@ -383,7 +383,7 @@ export async function runParserMatrix(
     "--name-only --unified=1",
   ]) {
     const mixed = { command: `git diff ${suffix}` };
-    await hardenGitInput(mixed);
+    await hardenNonGitInput(mixed);
     assert.equal(
       (await check(mixed.command)).path,
       null,
@@ -400,7 +400,7 @@ export async function runParserMatrix(
     "--name-status",
   ]) {
     const metadata = { command: `git diff ${format}` };
-    await hardenGitInput(metadata);
+    await hardenNonGitInput(metadata);
     assert.equal(
       (await check(metadata.command)).path,
       null,
@@ -480,7 +480,7 @@ export async function runParserMatrix(
     ...weeklyRequested.filter((command) => !command.includes("|")),
   ].entries()) {
     const input = { command: requested };
-    await hardenGitInput(input);
+    await hardenNonGitInput(input);
     for (const [surface, pattern] of [
       ["original", requested],
       ["hardened", input.command],
@@ -523,7 +523,7 @@ export async function runParserMatrix(
   );
   for (const requested of [...fixedRequested, ...weeklyRequested]) {
     const input = { command: requested };
-    await hardenGitInput(input);
+    await hardenNonGitInput(input);
     const program = await BashProgram.parse(input.command, normalizer, {
       originalCommands: originalGitCommands(input),
     });
@@ -547,7 +547,7 @@ export async function runParserMatrix(
     );
   }
   const sessionInput = { command: "git log -7 --oneline" };
-  await hardenGitInput(sessionInput);
+  await hardenNonGitInput(sessionInput);
   const sessionProgram = await BashProgram.parse(sessionInput.command, normalizer, {
     originalCommands: originalGitCommands(sessionInput),
   });
@@ -601,7 +601,7 @@ export async function runParserMatrix(
     "allow",
   );
   const brokenFixed = { command: "bash -n syntax.sh" };
-  await hardenGitInput(brokenFixed);
+  await hardenNonGitInput(brokenFixed);
   const brokenFixedProgram = await BashProgram.parse(brokenFixed.command, normalizer, {
     originalCommands: originalGitCommands(brokenFixed),
   });
@@ -689,7 +689,7 @@ export async function runParserMatrix(
   assert.equal((await check(`${diff} HEAD~1 HEAD --no-renames -- src/code.ts`)).path, null);
   for (const flags of ["--unified=0", "--stat --unified=1"]) {
     const historical = { command: `git diff ${flags} HEAD~1 HEAD` };
-    assert.equal(await hardenGitInput(historical, cwd), undefined);
+    assert.equal(await hardenNonGitInput(historical, cwd), undefined);
     assert.equal(historical.command, `git diff ${flags} HEAD~1 HEAD`);
     assert.equal(
       (await check(historical.command)).path,
@@ -709,7 +709,7 @@ export async function runParserMatrix(
   // No promisor/helper trial: the literal classifier never starts Git at all.
   // Partial clones, helpers and configured content sources are normal review,
   // not a repository proof or an isolation promise for approved execution.
-  const querySource = readFileSync(join(repo, "permission-system/managed-git-query.ts"), "utf8");
+  const querySource = readFileSync(join(repo, "src/authority/managed-git-query.ts"), "utf8");
   assert.doesNotMatch(
     querySource,
     /node:child_process|execFileSync|spawnSync|managed-git-unattributed|find-object=/,
@@ -725,7 +725,7 @@ export async function runParserMatrix(
   mkdirSync(outsideCd, { recursive: true });
   for (const path of [localCd, outsideCd]) execFileSync("git", ["init", "-q"], { cwd: path });
   const cdInput = { command: "cd nested && git rev-parse --show-toplevel" };
-  assert.equal(await hardenGitInput(cdInput), undefined);
+  assert.equal(await hardenNonGitInput(cdInput), undefined);
   assert.equal(
     cdInput.command,
     "cd nested && git rev-parse --show-toplevel",
@@ -743,7 +743,7 @@ export async function runParserMatrix(
     delete process.env.CDPATH;
   }
   const implicitPath = { command: "git log --oneline src/code.ts" };
-  assert.equal(await hardenGitInput(implicitPath), undefined);
+  assert.equal(await hardenNonGitInput(implicitPath), undefined);
   assert.equal(
     implicitPath.command,
     "git log --oneline src/code.ts",
@@ -769,7 +769,7 @@ export async function runParserMatrix(
     mode: 0o755,
   });
   const commandProbe = { command: "command -v pi" };
-  await hardenGitInput(commandProbe);
+  await hardenNonGitInput(commandProbe);
   const commandOutput = spawnSync("bash", ["-c", commandProbe.command], {
     cwd,
     encoding: "utf8",
@@ -788,10 +788,10 @@ export async function runParserMatrix(
   const bashEnv = join(scratch, "bash-env.sh");
   writeFileSync(bashEnv, 'printf startup > "$BASH_ENV_CANARY"\n');
   const syntaxProbe = { command: "bash -n syntax.sh" };
-  await hardenGitInput(syntaxProbe);
+  await hardenNonGitInput(syntaxProbe);
   assert.match(syntaxProbe.command, /^bash --noprofile --norc -p -n -- /);
   // Invoke the hardened child directly: an outer `bash -c` would itself read
-  // BASH_ENV before it could launch the child and would test the harness shell,
+  // BASH_ENV before it could launch the child and would test the wrapper shell,
   // not the syntax-check Bash this normalization hardens.
   const syntaxEnv = {
     ...process.env,
@@ -847,7 +847,7 @@ export async function runParserMatrix(
     ["printenv BUILD_DIR AOBUS_BUILD_ROOT", ["fixture-build", "fixture-root"]],
   ]) {
     const input = { command: requested };
-    await hardenGitInput(input);
+    await hardenNonGitInput(input);
     const output = spawnSync("bash", ["-c", input.command], {
       cwd,
       encoding: "utf8",
@@ -879,8 +879,8 @@ export async function runParserMatrix(
   for (const count of [0, 3, 80]) {
     const long = { command: `git diff --unified=${count} -- ordinary.txt` };
     const short = { command: `git diff -U${count} -- ordinary.txt` };
-    assert.equal(await hardenGitInput(long, cwd), undefined);
-    assert.equal(await hardenGitInput(short, cwd), undefined);
+    assert.equal(await hardenNonGitInput(long, cwd), undefined);
+    assert.equal(await hardenNonGitInput(short, cwd), undefined);
     assert.equal(long.command, `git diff --unified=${count} -- ordinary.txt`);
     assert.equal(short.command, `git diff -U${count} -- ordinary.txt`);
   }

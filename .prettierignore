@@ -1,9 +1,9 @@
 # Generated output and temporary build/evidence trees are not source.
 /node_modules/
-/runtime/
-/.runtime-build-*/
-/harness/dist/
-/harness/.evidence/
+/generated/
+/.generated-build-*/
+/dist/
+/.evidence/
 /artifacts/
 /coverage/
 
@@ -29,7 +29,7 @@ web-search.json
 
 # Preserve literal prompts/seeds, captured assets and license notices.
 /resources/
-/harness/docs/assets/
+/docs/assets/
 /LICENSE
 /THIRD_PARTY_NOTICES.md
 *.svg

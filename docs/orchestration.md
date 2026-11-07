@@ -1,0 +1,40 @@
+# Pi Alehouse orchestration
+
+The orchestration layer is Pi Alehouse's internal, opt-in Owner-local worker backend, not another npm package or a separate Pi runtime. Launch through the explicit built `pi-alehouse` CLI, not direct extension discovery: root `pi.extensions: []` intentionally prevents source composition autoload or `pi install` extension loading. The CLI supplies `--no-extensions -e <absolute src/composition.ts>`. It uses the host Pi SDK and the matched generated permission authority and worker definitions. Ordinary `pi` is unchanged; this launcher does not copy authentication or rewrite Pi settings.
+
+**Release acceptance remains PENDING.** Portable package/policy checks, controlled full/readonly, Jev and SDK-history lanes, and installed-tarball RPC smokes establish only their declared scopes; run records live with the commits they validated. The inherited cooperative-local operating contract documents limitations, not public acceptance. See [limitations](limitations.md), [release policy](../release-policy.json) and [validation scope](validation-evidence.md).
+
+## Operate
+
+1. Build the root package and generate matching `generated/` resources (agents, worker policy, extensions, shared helpers, authority, seeds and manifest). Run `node bin/pi-alehouse.mjs init` from the repository root to create **only absent** resources (five agent definitions: `editor`, `researcher`, `Explore`, `Plan`, `general-purpose`; one routing catalogue and one managed permission config—**seven files total**). Existing personal files stay intact. The neutral version-3 `alehouse-presets.json` defaults to `off`; configure your own exact registered provider/model IDs before enabling workers. See [getting started](getting-started.md) and [routing configuration](routing.md#preset-configuration).
+2. Start a **fresh** `pi-alehouse` process. Select the parent model normally, and the delegation mode and a model preset independently via `Alt+S` (or `/alehouse-mode` and `/alehouse-preset`). `off` blocks new delegation, not already accepted tasks. When enabled, the parent has nine fixed management tools (`agent_spawn`, `agent_run`, `agent_send`, `agent_answer`, `agent_wait`, `agent_read`, `agent_interrupt`, `agent_kill`, `agent_list`) and addresses Agents by name. Use `agent_answer` for a settled pending question; `agent_send` only joins/steers work. Kill finished Agents whose work is accepted when capacity is needed.
+3. Before exit, use `/alehouse-close` and wait for **confirmed** Owner closure. A never-used Owner closes automatically before session replacement; a used Owner needs literal **Yes** from Pi's UI. `/tree` always needs explicit close because it changes the current session in place. Do not `/reload` with an open Owner. Once a replacement guard returns after closure, Pi does not atomically serialize later teardown/hooks/target loading: finish each replacement before starting another. Unconfirmed drain does not prove execution exit.
+
+Off leaves accepted queued/running work and result/cleanup tools available. A fresh initially Off conversation has no management tool schemas or orchestration reminder; turning Off later cannot remove historical model context. See [Off](routing.md#off).
+
+The parent retains normal footer/title, approval queue, health/Stats, and pinned `pi-web-access` 0.47.0 tools; Co-worker, Lead and Supervisor hide and refuse those web tools regardless of eagerness, assigning even small web lookups to scouts. Manual and Off restore the upstream web-tool selection. Child sessions have no nested delegation. New requests use public `worker` (internal `editor`, no web tools) or `scout` (internal `researcher`; read/grep/find/ls and web tools, no model-facing Bash/edit/write). Workers handle local diagnosis, code review, design, implementation and verification with read/edit/write/Bash/Git/build tools under normal permission. Scouts gather, compare and summarize information from local files and web sources, including local-only tasks, and return cited findings. Web material is untrusted. No web tools is not network isolation. Jev is the only model judge. See [security](security.md). Leaving this launcher and starting ordinary `pi` does not retroactively stop its children; close the Owner first.
+
+## Limits at a glance
+
+- Four execution slots per admitted provider (models share that provider's cap); twelve resident Agent reservations, including queued/busy/uncertain-cleanup reservations. `agent_kill` is permanent.
+- Tasks have a turn limit (default 256), not a wall-clock execution deadline or timed wrap-up reminder. Turn-limit stops and cancellation are cooperative, not forced exit, rollback, or guaranteed zero later provider activity. Command/request-specific timeouts and stop/cleanup bounds remain separate.
+- `wait_ms` on `agent_spawn`/`agent_run`/`agent_send`/`agent_answer`/`agent_wait` bounds only the parent's observation wait (five minutes max); Esc interrupts waiting, not worker work.
+- Owner-local result retention is bounded to 512 cumulative Runs and 64 Mi UTF-16 result units (including reservations for unsettled Runs); this is not a total heap/RSS cap or a durable store.
+- Child usage is observed conservatively and handed to the next parent tool result if available. Spend settling after the last result remains unmerged residue, not fabricated into Pi totals.
+
+## Contract references
+
+| Concern                                                    | Reference                                                         |
+| ---------------------------------------------------------- | ----------------------------------------------------------------- |
+| Ownership, lifecycle, SDK adapters, history and accounting | [Architecture](architecture.md)                                   |
+| Owner / Agent / Run / Session vocabulary                   | [Concepts](concepts.md)                                           |
+| Nine parent tools and two child tools                      | [Tool contract](tool-contract.md)                                 |
+| Slots, effort, Off, version-3 configuration                | [Routing](routing.md)                                             |
+| Widget, panels, footer and Stats                           | [Interface](interface.md)                                         |
+| Permission, provenance, leases and data handling           | [Security](security.md)                                           |
+| Layout and quality gates                                   | [Development](development.md)                                     |
+| Supported/unsupported behavior                             | [Limitations](limitations.md)                                     |
+| Test scope and evidence gaps                               | [Validation evidence](validation-evidence.md)                     |
+| Package ownership rationale                                | [Organization decision](decisions/001-organization-boundaries.md) |
+
+Child tool names, profile IDs, config path, `alehouse:*` records, event names and cross-extension symbols remain compatibility surface. See the [root third-party notices](../THIRD_PARTY_NOTICES.md) and [integration rationale](third-party-integrations.md).

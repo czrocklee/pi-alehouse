@@ -16,11 +16,7 @@ Set up your lineups once; select a preset and tune its thinking effort from the 
 
 The same panel sets how much your main agent hands off: **Manual**, **Co-worker**, **Lead** or **Supervisor**, and how eagerly. Each position is one short line in the main agent's prompt, and the panel shows it. In Co-worker, Lead and Supervisor the main agent's own web tools are hidden: scouts handle all web research, even small lookups, regardless of eagerness. Their cited findings are intended to reduce direct exposure to untrusted pages, not make the results trusted. Manual and Off restore the web tools' upstream selection.
 
-![Historical three-slot routing panel, captured before delegation mode and five-slot routing](harness/docs/assets/routing-panel.svg)
-
-_Historical capture of the author's three-slot setup, not the current UI or a suggested default._
-
-![Five-slot thinking effort editor, rendered with illustrative models](harness/docs/assets/effort-panel.svg)
+![Five-slot thinking effort editor, rendered with illustrative models](docs/assets/effort-panel.svg)
 
 _Current UI renderer with example models, not a live-provider capture. Slots display d5→d1; reasoning difficulty still increases from 1 to 5._
 
@@ -36,7 +32,7 @@ In one session, each admitted provider runs at most four workers at once. Models
 
 Choose a **worker** for local diagnosis, code review, design, implementation and verification: local read/edit/write, Bash/Git and builds; no web tools. No web tools is not network isolation. Choose a **scout** to gather, compare and summarize information from local files and web sources, including local-only tasks; it returns cited findings for the main agent to decide on. Scout keeps read, grep, find, ls and the four web tools, and has no Bash, edit or write. Web material is untrusted.
 
-Worker maps to the stable internal `editor` profile; scout maps to internal `researcher`. Review-only is a task instruction, not a strict readonly worker mode. Neither profile is an OS sandbox. See [security](harness/docs/security.md).
+Worker maps to the stable internal `editor` profile; scout maps to internal `researcher`. Review-only is a task instruction, not a strict readonly worker mode. Neither profile is an OS sandbox. See [security](docs/security.md).
 
 Agents use the parent's working directory, including pending local changes. The main agent coordinates edits and Git workflow; Alehouse does not create or manage worktrees.
 
@@ -45,10 +41,6 @@ Agents use the parent's working directory, including pending local changes. The 
 Parallel work shouldn't disappear behind a spinner.
 
 The agent panel puts names, current tasks, live tool activity, context usage and reported cost together. Open an agent to follow its actual conversation: thinking, tool calls, output and streaming replies. Read back without losing the live tail, then return to the main conversation without losing what you were typing.
-
-![Historical agent panel capture reviewing this README](harness/docs/assets/agent-panel.svg)
-
-_Historical capture, not the current profile contract. Only its identifiers and private path are hidden._
 
 The rest of the interface follows the same idea:
 
@@ -60,7 +52,7 @@ The rest of the interface follows the same idea:
 | **Stats**               | Activity, waiting, model timings and tool activity—not just a token counter.                                |
 | **Approvals**           | Permission choices in the same workspace; inspection panes step aside when a decision needs your attention. |
 
-![Model activity across the main conversation and its workers](harness/docs/assets/stats-panel.svg)
+![Model activity across the main conversation and its workers](docs/assets/stats-panel.svg)
 
 _Reported activity from the same working session._
 
@@ -72,9 +64,9 @@ Alehouse uses your existing Pi installation and provider setup. Start it with `p
 
 **Early preview · Linux · MIT.** Available from source; not yet published to npm. Fresh setups start with workers off: configure a lineup, then select its preset to bring them in.
 
-**[Get started](harness/docs/getting-started.md)** · [Agent tools quickstart](harness/docs/agent-tools-quickstart.md) · [Panel guide](harness/docs/interface.md) · [Configure your crew](harness/docs/routing.md) · [Support & limits](harness/docs/limitations.md)
+**[Get started](docs/getting-started.md)** · [Agent tools quickstart](docs/agent-tools-quickstart.md) · [Panel guide](docs/interface.md) · [Configure your crew](docs/routing.md) · [Support & limits](docs/limitations.md)
 
-For contributors: [development](harness/docs/development.md), [architecture](harness/docs/architecture.md), [security](harness/docs/security.md), and [validation](harness/docs/validation-evidence.md).
+For contributors: [development](docs/development.md), [architecture](docs/architecture.md), [security](docs/security.md), and [validation](docs/validation-evidence.md).
 
 ---
 

@@ -61,7 +61,7 @@ export async function runManagedSdk(
     grantWhole = false;
   const errors = [];
   const { getPermissionsService } = await load("service");
-  // Registry-only probes, never executable Harness tools or runtime aliases.
+  // Registry-only probes, never executable orchestration tools or runtime aliases.
   // The SDK rejects unknown names before permissions; registering even retired
   // names here proves their explicit deny, not merely that they are absent.
   const communicationProbe = join(scratch, "communication-permission-probe.ts");
@@ -1136,7 +1136,7 @@ export async function runManagedSdk(
   // root, and it only turns asks into allows -- explicit denies still hold.
   const yoloKey = Symbol.for("@rocklee/managed-permissions:session-yolo");
   assert(
-    readFileSync(join(repo, "extensions/lib/approval-protocol.ts"), "utf8").includes(
+    readFileSync(join(repo, "src/extensions/lib/approval-protocol.ts"), "utf8").includes(
       'Symbol.for("@rocklee/managed-permissions:session-yolo")',
     ),
     "Indicator and authority share the yolo key",
@@ -1144,7 +1144,7 @@ export async function runManagedSdk(
   const yoloChild = sessions.find((node) => node.parent === root);
   assert(yoloChild, "a child of the root session exists");
   const otherRoot = await make();
-  // Direct emitToolCall dispatch intentionally bypasses harness tool exposure:
+  // Direct emitToolCall dispatch intentionally bypasses orchestration tool exposure:
   // researcher has no Bash tool there. The fixture's global `printf *` allow
   // lets the path_write ceiling decide redirects; `printenv HOME` instead
   // exercises the explicit Bash deny. Neither command is executed here.

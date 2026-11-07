@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { allowAnswers, mockResponse } from "./jev-wire.mjs";
 export async function runJevAuditFreshness(
   check,
-  registeredHarness,
+  registeredFixture,
   offlineRuntime,
   offlineAgentDir,
   withAuditIo,
@@ -19,7 +19,7 @@ export async function runJevAuditFreshness(
     "current-action",
     "script-body",
   ]) {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Inspect the synthetic local project.");
     const scriptPath = join(offlineRuntime, "jev-freshness-script.sh");
     writeFileSync(scriptPath, "#!/bin/sh\nprintf 'before\\n'\n", { mode: 0o600 });
@@ -61,7 +61,7 @@ export async function runJevAuditFreshness(
   }
 
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Inspect synthetic repository status.");
     globalThis.fetch = async () => mockResponse(allowAnswers());
     const before = { ...h.reads };
@@ -82,7 +82,7 @@ export async function runJevAuditFreshness(
   // A crash-left/contended audit-specific lock must never become an unlogged
   // allow. This lock is unrelated to the Owner lease; production never steals it.
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Inspect synthetic repository status.");
     const lock = join(offlineAgentDir, "logs/.jev-auto-approval.jsonl.lock");
     const savedLock = join(offlineRuntime, "stopped-fixture-kernel-lock");
@@ -139,7 +139,7 @@ export async function runJevAuditFreshness(
   }
 
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Inspect synthetic repository status.");
     globalThis.fetch = async () => mockResponse(allowAnswers());
     await withAuditIo(
@@ -181,7 +181,7 @@ export async function runJevAuditFreshness(
   // user_denied pauses the same complete action across new IDs. Queued/extension
   // messages alter the broad input revision but cannot mint fresh authorization.
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Inspect repository status.");
     let fetchCalls = 0;
     globalThis.fetch = async () =>
@@ -215,7 +215,7 @@ export async function runJevAuditFreshness(
   // bound to the action and the user's instruction, not to the mode it was
   // given under, so bouncing through manual or adding subagents keeps it.
   {
-    const h = registeredHarness({ mode: "enforce" });
+    const h = registeredFixture({ mode: "enforce" });
     h.live("Inspect repository status.");
     let fetchCalls = 0;
     globalThis.fetch = async () =>
@@ -256,7 +256,7 @@ export async function runJevAuditFreshness(
     ["root ask, subagents added before the No", ["enforce", false], ["enforce", true]],
     ["manual ask, enforce chosen before the No", ["shadow", false], ["enforce", false]],
   ]) {
-    const h = registeredHarness({ mode: "enforce" });
+    const h = registeredFixture({ mode: "enforce" });
     h.setMode(...start);
     h.live("Inspect repository status.");
     let fetchCalls = 0;
@@ -278,7 +278,7 @@ export async function runJevAuditFreshness(
 
   // Complete arguments, not just the shell command, are part of retry identity.
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Inspect repository status.");
     let fetchCalls = 0;
     globalThis.fetch = async () =>
@@ -297,7 +297,7 @@ export async function runJevAuditFreshness(
   // A tool invocation can trip a different gate on retry. Gate projection is not
   // action identity: the same full name/arguments remains paused.
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Inspect repository status.");
     let fetchCalls = 0;
     globalThis.fetch = async () =>
@@ -325,7 +325,7 @@ export async function runJevAuditFreshness(
   // A denial may arrive while another review of the same complete action is in
   // flight. The completed allow is stale once refusal memory is visible.
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Inspect repository status.");
     let fetchCalls = 0;
     let releaseSecond;
@@ -369,11 +369,11 @@ export async function runJevAuditFreshness(
   }
 }
 
-export async function runJevAuditRefusal(check, registeredHarness, defaultSystemPrompt) {
+export async function runJevAuditRefusal(check, registeredFixture, defaultSystemPrompt) {
   // Even a defer before model dispatch is an approval attempt when its complete
   // root action is known; a later user_denied must pause the same action.
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.setSystemPrompt(
       `<project_context><project_instructions path="broken">Never modify x.</project_context>`,
     );
@@ -398,7 +398,7 @@ export async function runJevAuditRefusal(check, registeredHarness, defaultSystem
   // Missing complete-action evidence must not lose a human No when that evidence
   // becomes available later in the same authorization window.
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Inspect repository status.");
     let fetchCalls = 0;
     globalThis.fetch = async () => {
@@ -426,7 +426,7 @@ export async function runJevAuditRefusal(check, registeredHarness, defaultSystem
   // Refusal memory is also bounded without eviction. Filling it trips a global
   // fuse for the authorization epoch rather than forgetting an old denial.
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Inspect many independent status targets.");
     let fetchCalls = 0;
     globalThis.fetch = async () => {
@@ -458,13 +458,15 @@ export async function runJevAuditRefusal(check, registeredHarness, defaultSystem
     check("cleared refusal fuse reaches reviewer again", fetchCalls, 258);
   }
 
-  // Pi 1.2 also starts runs from custom messages (sendMessage with triggerTurn).
-  // Such a run is not new direct input, so it cannot reopen the denial fuse. A
-  // pre-1.2 start without messageType is a prompt and still reopens it.
-  for (const legacy of [false, true]) {
-    const h = registeredHarness(),
-      lane = legacy ? "pre-1.2 " : "";
-    h.live("Inspect three independent status targets.", { legacy });
+  // Pi labels every before_agent_start with a messageType. A custom-message run
+  // (sendMessage with triggerTurn) is not new direct input, and neither is an
+  // unrecognized event shape: a start without a messageType is not downgraded to
+  // a user prompt. Both keep the denial fuse; only a well-formed user start
+  // reopens it.
+  for (const unknownShape of [false, true]) {
+    const h = registeredFixture(),
+      lane = unknownShape ? "unknown-shape " : "";
+    h.live("Inspect three independent status targets.");
     let fetchCalls = 0;
     globalThis.fetch = async () => {
       fetchCalls++;
@@ -482,7 +484,7 @@ export async function runJevAuditRefusal(check, registeredHarness, defaultSystem
       (await h.authorize(h.call("fused-open", "git status -- fused-open"))).kind,
       "deny",
     );
-    if (!legacy) {
+    if (!unknownShape) {
       h.hooks.get("before_agent_start")({
         messageType: "custom",
         message: { role: "custom", customType: "fixture-ready", content: "ready" },
@@ -492,13 +494,20 @@ export async function runJevAuditRefusal(check, registeredHarness, defaultSystem
         (await h.authorize(h.call("fused-custom", "git status -- fused-custom"))).kind,
         "deny",
       );
+    } else {
+      h.live("Authorize a fresh inspection now.", { unknownShape: true });
+      check(
+        "an unknown-shape start keeps the fuse",
+        (await h.authorize(h.call("fused-unknown", "git status -- fused-unknown"))).kind,
+        "deny",
+      );
     }
     check(`${lane}no fused request called the model`, fetchCalls, 3);
     globalThis.fetch = async () => {
       fetchCalls++;
       return mockResponse(allowAnswers());
     };
-    h.live("Authorize a fresh inspection after the refusals.", { legacy });
+    h.live("Authorize a fresh inspection after the refusals.");
     check(
       `${lane}new direct input reopens the fuse`,
       await h.authorize(h.call("fused-reopened", "git status -- reopened")),

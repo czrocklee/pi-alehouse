@@ -241,7 +241,7 @@ function addUsage(target, usage, errorOrAborted = false) {
   if (errorOrAborted) target.error_or_aborted_records++;
   // HostUsage rows are attribution claims against the flat total, not more
   // spend. Preserve recognized partial markers even on otherwise invalid rows.
-  const rows = Array.isArray(usage?.harnessModels) ? usage.harnessModels : [];
+  const rows = Array.isArray(usage?.alehouseModels) ? usage.alehouseModels : [];
   const hasPartial = (markers, metric, alias) =>
     Array.isArray(markers) && (markers.includes(metric) || markers.includes(alias));
   for (const metric of metrics) {
@@ -260,7 +260,7 @@ function addUsage(target, usage, errorOrAborted = false) {
     }
     if (
       hasPartial(usage?.partial, metric, alias) ||
-      hasPartial(usage?.harnessPartial, metric, alias) ||
+      hasPartial(usage?.alehousePartial, metric, alias) ||
       rows.some((row) => hasPartial(row?.partial, metric, alias))
     )
       target.declared_partial[metric]++;
@@ -359,16 +359,19 @@ export async function analyzeSessions(files, { since, until } = {}) {
       seen.set(key, { hash, file, line });
       if (entry.type === "custom") {
         const data = entry.data;
-        if (["harness:run-start:v1", "harness:run-end:v1"].includes(entry.customType)) {
+        if (["alehouse:run-start:v1", "alehouse:run-end:v1"].includes(entry.customType)) {
           const owner = data?.owner_id ?? data?.ref?.owner_id;
           if (identity(owner)) {
             evidence(owner, "parent");
             evidence(session, owner === session ? "parent" : "child");
           }
-        } else if (entry.customType === "harness:run-link:v1" && data?.ref?.owner_id === session) {
+        } else if (entry.customType === "alehouse:run-link:v1" && data?.ref?.owner_id === session) {
           evidence(session, "parent");
           evidence(data.ref.session_id, "child");
-        } else if (entry.customType === "harness:unreported-usage:v1" && data?.owner_id === session)
+        } else if (
+          entry.customType === "alehouse:unreported-usage:v1" &&
+          data?.owner_id === session
+        )
           evidence(session, "parent");
       }
       if (entry.type !== "message" || entry.message.role !== "assistant") continue;
@@ -411,7 +414,7 @@ export async function analyzeSessions(files, { since, until } = {}) {
     tools = new Map();
   const turnKinds = { parent: 0, child: 0, unknown: 0 },
     userKinds = { parent: 0, child: 0, unknown: 0 };
-  const harness = {
+  const orchestration = {
     spawn: { ok: 0, with_wait_ms: 0, after_agents: 0, args_unknown: 0 },
     run: { ok: 0, with_wait_ms: 0, after_agents: 0, args_unknown: 0 },
     answer: { ok: 0, with_wait_ms: 0, args_unknown: 0 },
@@ -420,18 +423,16 @@ export async function analyzeSessions(files, { since, until } = {}) {
       joined: 0,
       not_delivered: 0,
       unknown: 0,
-      invalid_modern_delivery: 0,
+      invalid_delivery: 0,
       with_wait_ms: 0,
       args_unknown: 0,
-      modern: { steered: 0, joined: 0, not_delivered: 0, unknown: 0 },
-      legacy: { steered: 0, joined: 0, answered: 0, not_delivered: 0, unknown: 0 },
     },
     errors: {},
     wait: {
       calls: 0,
       calls_including_errors: 0,
       short_wait_le_1s: 0,
-      short_timeout: 0,
+      short_timeout_le_1s: 0,
       args_unknown: 0,
       reasons: {},
     },
@@ -446,10 +447,10 @@ export async function analyzeSessions(files, { since, until } = {}) {
   const projections = {
     tool_result_attached: null,
     tool_results_without_attached_usage: 0,
-    harness_run_end_records: 0,
-    harness_unreported_usage_records: 0,
+    run_end_records: 0,
+    unreported_usage_records: 0,
     additive: false,
-    scope: "all toolResult usage, not necessarily harness children",
+    scope: "all toolResult usage, not necessarily delegated children",
   };
   const errors = { assistant_error_stops: 0, management_tool_results: 0 };
   const secondBudget = { bytes: 0 },
@@ -480,9 +481,9 @@ export async function analyzeSessions(files, { since, until } = {}) {
       selected++;
       const kind = kindOf(session);
       if (entry.type === "custom") {
-        if (entry.customType === "harness:run-end:v1") projections.harness_run_end_records++;
-        if (entry.customType === "harness:unreported-usage:v1")
-          projections.harness_unreported_usage_records++;
+        if (entry.customType === "alehouse:run-end:v1") projections.run_end_records++;
+        if (entry.customType === "alehouse:unreported-usage:v1")
+          projections.unreported_usage_records++;
       }
       if (entry.type === "compaction") compactions++;
       const message = entry.type === "message" ? entry.message : undefined;
@@ -546,19 +547,20 @@ export async function analyzeSessions(files, { since, until } = {}) {
       const name = message.toolName ?? call?.name;
       if (!management.has(name)) continue;
       const reply = replyOf(message);
-      if (!reply) harness.unparsed_replies++;
-      if (Array.isArray(reply?.finished)) harness.finished_seen += reply.finished.length;
+      if (!reply) orchestration.unparsed_replies++;
+      if (Array.isArray(reply?.finished)) orchestration.finished_seen += reply.finished.length;
       const args = status === "matched" ? call : undefined;
       if (name === "agent_wait") {
-        harness.wait.calls_including_errors++;
-        if (args && finite(args.wait_ms) && args.wait_ms <= 1000) harness.wait.short_wait_le_1s++;
+        orchestration.wait.calls_including_errors++;
+        if (args && finite(args.wait_ms) && args.wait_ms <= 1000)
+          orchestration.wait.short_wait_le_1s++;
       }
       if (message.isError) {
         errors.management_tool_results++;
         const code = /^[A-Z][A-Z0-9_]{0,63}$/.test(reply?.error?.code)
           ? reply.error.code
           : "unknown";
-        bump(harness.errors, `${name}:${code}`);
+        bump(orchestration.errors, `${name}:${code}`);
         continue;
       }
       switch (name) {
@@ -566,7 +568,9 @@ export async function analyzeSessions(files, { since, until } = {}) {
         case "agent_run":
         case "agent_answer": {
           const record =
-            harness[name === "agent_spawn" ? "spawn" : name === "agent_run" ? "run" : "answer"];
+            orchestration[
+              name === "agent_spawn" ? "spawn" : name === "agent_run" ? "run" : "answer"
+            ];
           record.ok++;
           if (!args) record.args_unknown++;
           else {
@@ -576,32 +580,28 @@ export async function analyzeSessions(files, { since, until } = {}) {
           break;
         }
         case "agent_send": {
-          // Presence of an action marks the modern shape: never fall back to a
-          // historical top-level "answered" (or manufacture a modern answer).
-          const modern = reply !== undefined && Object.hasOwn(reply, "action");
-          const delivery = modern ? reply.action?.delivery : reply?.delivery;
-          const allowed = modern
-            ? ["steered", "joined", "not_delivered"]
-            : ["steered", "joined", "not_delivered", "answered"];
-          const value = allowed.includes(delivery) ? delivery : "unknown";
-          bump(modern ? harness.send.modern : harness.send.legacy, value);
-          if (modern && delivery !== undefined && value === "unknown")
-            harness.send.invalid_modern_delivery++;
-          if (value !== "answered") bump(harness.send, value);
-          if (!args) harness.send.args_unknown++;
-          else if (finite(args.wait_ms) && args.wait_ms > 0) harness.send.with_wait_ms++;
+          // Only the current action envelope carries delivery observations.
+          // Unrecognized result shapes remain unknown, never inferred answers.
+          const delivery = reply?.action?.delivery;
+          const value = ["steered", "joined", "not_delivered"].includes(delivery)
+            ? delivery
+            : "unknown";
+          if (delivery !== undefined && value === "unknown") orchestration.send.invalid_delivery++;
+          bump(orchestration.send, value);
+          if (!args) orchestration.send.args_unknown++;
+          else if (finite(args.wait_ms) && args.wait_ms > 0) orchestration.send.with_wait_ms++;
           break;
         }
         case "agent_wait":
-          harness.wait.calls++;
-          if (!args) harness.wait.args_unknown++;
-          bump(harness.wait.reasons, reasons.has(reply?.reason) ? reply.reason : "unknown");
+          orchestration.wait.calls++;
+          if (!args) orchestration.wait.args_unknown++;
+          bump(orchestration.wait.reasons, reasons.has(reply?.reason) ? reply.reason : "unknown");
           if (reply?.reason === "timeout" && args && finite(args.wait_ms) && args.wait_ms <= 1000) {
-            harness.wait.short_timeout++;
+            orchestration.wait.short_timeout_le_1s++;
           }
           break;
         default:
-          harness[name]++;
+          orchestration[name]++;
       }
     }
   }
@@ -641,7 +641,7 @@ export async function analyzeSessions(files, { since, until } = {}) {
     },
     raw_usage: {
       scope:
-        "selected raw sources in supplied files/window only; not complete parent+all-child spend; no harness projections added",
+        "selected raw sources in supplied files/window only; not complete parent+all-child spend; no orchestration projections added",
       total: usageReport(totalUsage),
       ...Object.fromEntries(
         Object.entries(sourceUsage).map(([source, usage]) => [source, usageReport(usage)]),
@@ -652,7 +652,6 @@ export async function analyzeSessions(files, { since, until } = {}) {
         )
         .map((group) => ({ ...group, usage: usageReport(group.usage) })),
     },
-    child_cost_attached: projections.tool_result_attached.cost,
     non_additive: projections,
     tool_turns: toolTurns,
     management_only_turns: turnKinds.parent + turnKinds.unknown,
@@ -660,50 +659,47 @@ export async function analyzeSessions(files, { since, until } = {}) {
     tools: Object.fromEntries([...tools].sort(([a], [b]) => a.localeCompare(b))),
     argument_correlation: correlation,
     errors,
-    harness: {
-      ...harness,
-      wait: { ...harness.wait, short_timeout_le_1s: harness.wait.short_timeout },
-    },
+    orchestration,
     limits_of_inference: [
       "Only explicitly supplied files are read, twice; parentSession, session_file and run-link paths are never followed. Stat/change checks are freshness checks, not fsync or atomic snapshot proof.",
       "Deduplication is SDK session+entry identity only. Fork/clone histories with different session IDs can repeat provider operations; there is no cross-session billing deduplication.",
-      "Classification uses harness owner/session identity across all supplied records, including outside the window. Header ancestry alone may be a fork, not a child; absent/conflicting evidence is unknown.",
+      "Classification uses delegationOwner/session identity across all supplied records, including outside the window. Header ancestry alone may be a fork, not a child; absent/conflicting evidence is unknown.",
       "User-role records in identified parent sessions are human-request candidates, not verified human requests; child task prompts and unknown sessions are separate.",
       "Usage sources: assistant message.usage; compaction/usage/branch_summary entry.usage (fallback details.usage). Assistant attribution prefers responseModel over model; summary model metadata may be requested, not actual. Other shapes/failed summary attempts may be absent.",
       "error_or_aborted_records counts assistant error/aborted stops whose provider usage frame is uncertain. Numeric floors and actual record counts are preserved, but all components are partial; this is separate from missing figures or declared partial markers.",
-      "Null metrics mean no numeric observation; partial/missing/invalid metrics are gaps, not zero prices. Recognized partial components are unioned from partial, harnessPartial and harnessModels[].partial, including on malformed attribution rows; row amounts are never added again. Numeric sums are observed values only, not complete provider billing.",
-      "ToolResult attached usage (compatibility field child_cost_attached) is all tool-result usage: it may overlap supplied child raw usage or include other nested model calls absent from raw records. It and harness run-end/unreported-usage projections are non-additive, never blindly added to raw usage or to one another.",
+      "Null metrics mean no numeric observation; partial/missing/invalid metrics are gaps, not zero prices. Recognized partial components are unioned from partial, alehousePartial and alehouseModels[].partial, including on malformed attribution rows; row amounts are never added again. Numeric sums are observed values only, not complete provider billing.",
+      "ToolResult attached usage is all tool-result usage: it may overlap supplied child raw usage or include other nested model calls absent from raw records. It and the run_end_records/unreported_usage_records projections are non-additive, never blindly added to raw usage or to one another.",
       "Assistant error stops and management isError results are separate from timeout/question observations; neither necessarily denotes a provider API failure.",
       "Reused tool-call IDs within a session are ambiguous; argument-dependent counts exclude them and expose args_unknown, not assumed zero. Distinct entry IDs are retained.",
       "Management-only turns include unknown sessions but exclude identified children. ok counts non-error tool results, finished_seen counts rows presented; neither is a task-quality or success rate.",
-      "Wait metrics use selected toolResult timestamps. calls excludes isError results; calls_including_errors and short_wait_le_1s include them. short_wait_le_1s requires correlated explicit wait_ms <= 1000; legacy field short_timeout now counts only non-error timeout replies at that threshold (also short_timeout_le_1s). Tool errors and needs-input/question observations remain separate.",
+      "Wait metrics use selected toolResult timestamps. calls excludes isError results; calls_including_errors and short_wait_le_1s include them. short_wait_le_1s requires correlated explicit wait_ms <= 1000; short_timeout_le_1s counts only non-error timeout replies at that threshold. Tool errors and needs-input/question observations remain separate.",
     ],
   };
 }
 
 function textReport(report) {
   const {
-    harness,
+    orchestration,
     raw_usage: { total },
     argument_correlation: correlation,
     errors,
   } = report;
-  const wait = harness.wait;
+  const wait = orchestration.wait;
   return [
     `sessions           ${report.inputs.sessions} (classification ${JSON.stringify(report.session_classification)})`,
     `entries            ${report.inputs.selected_entries} selected; ${report.inputs.duplicate_entries} duplicates excluded`,
     `user records       ${report.user_messages} (not verified human requests)`,
     `parent/unknown LLM ${report.parent.calls} calls; observed cost ${report.parent.cost ?? "unknown"}`,
     `raw usage          ${total.records} records; observed cost ${total.cost ?? "unknown"}; partial components: ${total.partial.join(", ") || "none"}`,
-    `tool usage attached ${report.child_cost_attached ?? "unknown"} (NON-ADDITIVE; not necessarily child Agents)`,
+    `tool usage attached ${report.non_additive.tool_result_attached.cost ?? "unknown"} (NON-ADDITIVE; not necessarily child Agents)`,
     `tool turns         ${report.tool_turns}; non-child management-only ${report.management_only_turns}`,
-    `management results spawn ${harness.spawn.ok}; run ${harness.run.ok}; answer ${harness.answer.ok} (non-error)`,
-    `send delivery      steered ${harness.send.steered}; joined ${harness.send.joined}; not delivered ${harness.send.not_delivered}; unknown ${harness.send.unknown}; legacy answered ${harness.send.legacy.answered}`,
+    `management results spawn ${orchestration.spawn.ok}; run ${orchestration.run.ok}; answer ${orchestration.answer.ok} (non-error)`,
+    `send delivery      steered ${orchestration.send.steered}; joined ${orchestration.send.joined}; not delivered ${orchestration.send.not_delivered}; unknown ${orchestration.send.unknown}`,
     `wait results       ${wait.calls_including_errors} including errors; ${wait.calls} non-error; explicit <=1s ${wait.short_wait_le_1s}; short timeouts ${wait.short_timeout_le_1s}`,
-    `management other   list ${harness.agent_list}; read ${harness.agent_read}; interrupt ${harness.agent_interrupt}; kill ${harness.agent_kill}; finished rows ${harness.finished_seen}`,
+    `management other   list ${orchestration.agent_list}; read ${orchestration.agent_read}; interrupt ${orchestration.agent_interrupt}; kill ${orchestration.agent_kill}; finished rows ${orchestration.finished_seen}`,
     `tools              ${JSON.stringify(report.tools)}`,
     `argument matching  matched ${correlation.matched}; missing ${correlation.missing}; ambiguous ${correlation.ambiguous}; name mismatch ${correlation.name_mismatch}`,
-    `error observations assistant stops ${errors.assistant_error_stops}; management results ${errors.management_tool_results}; unparsed replies ${harness.unparsed_replies}`,
+    `error observations assistant stops ${errors.assistant_error_stops}; management results ${errors.management_tool_results}; unparsed replies ${orchestration.unparsed_replies}`,
     "warning: observed usage is not complete billing; missing/partial components are unknown, not zero. --json for full scopes/counters.",
     "warning: session+entry dedup only; fork/clone histories may repeat provider operations. Explicit files/window only.",
     "warning: non-error results/finished rows are not task quality or success; errors are separate from timeout/question observations.",

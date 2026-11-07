@@ -7,7 +7,7 @@ const args = process.argv.slice(2);
 try {
   if (args.length === 1 && ["--help", "-h"].includes(args[0])) {
     console.log(
-      "Usage: pi-alehouse init | [Pi options] [--] [prompt]\n\nInit creates absent worker profiles, an Off preset catalogue, and a conservative\npermission policy in PI_CODING_AGENT_DIR (default ~/.pi/agent). It never overwrites\nexisting resources, settings or credentials. Launch uses one guarded composition\nwith discovered extensions disabled. Additional -e/--extension paths and live\nreload are unsupported. Use plain pi --help for host options.\n\nRequires an installed host pi and Linux util-linux flock. Optional overrides:\nPI_ALEHOUSE_PI (absolute executable), PI_HARNESS_FLOCK (absolute util-linux flock).\nNo automatic installs, network setup, or credential copying.",
+      "Usage: pi-alehouse init | [Pi options] [--] [prompt]\n\nInit creates absent worker profiles, an Off preset catalogue, and a conservative\npermission policy in PI_CODING_AGENT_DIR (default ~/.pi/agent). It never overwrites\nexisting resources, settings or credentials. Launch uses one guarded composition\nwith discovered extensions disabled. Additional -e/--extension paths and live\nreload are unsupported. Use plain pi --help for host options.\n\nRequires an installed host pi and Linux util-linux flock. Optional overrides:\nPI_ALEHOUSE_PI (absolute executable), PI_ALEHOUSE_FLOCK (absolute util-linux flock).\nNo automatic installs, network setup, or credential copying.",
     );
   } else if (args.length === 1 && ["--version", "-v"].includes(args[0])) {
     console.log(
@@ -46,7 +46,7 @@ try {
       );
     process.execve(
       pi,
-      [pi, "--no-extensions", "-e", join(packageRoot, "composition.ts"), ...args],
+      [pi, "--no-extensions", "-e", join(packageRoot, "src/composition.ts"), ...args],
       runtimeEnvironment(paths),
     );
   }

@@ -6,7 +6,7 @@ import { join, relative } from "node:path";
 import {
   globalInstructionFixture,
   projectInstructionFixture,
-} from "../../harness/test/support/project-instructions.mjs";
+} from "../../test/support/project-instructions.mjs";
 import { allowAnswers, mockResponse } from "./jev-wire.mjs";
 export async function runJevPacket(
   check,
@@ -92,7 +92,7 @@ export async function runJevPacket(
     calls: [{ profile: "editor", promptDigest }],
     runId: "run",
     childSystemPrompt: "",
-    harnessDigest: hashJson(
+    delegationDigest: hashJson(
       Object.fromEntries(
         Object.keys(witness)
           .sort()
@@ -104,7 +104,7 @@ export async function runJevPacket(
     parentSessionId: "parent",
     cwd: "/work",
     initialPromptDigest: promptDigest,
-    harness: witness,
+    delegation: witness,
   };
   check(
     "initial child Run remains bound",
@@ -211,14 +211,14 @@ export async function runJevPacket(
 
 export async function runJevPacketInstructions(
   check,
-  registeredHarness,
+  registeredFixture,
   offlineRuntime,
   buildProjectRestrictions,
 ) {
   // Synthetic repository-sized instructions plus global policy must fit without
   // weakening the cue or dropping lines. This used to exceed the 700-token cap.
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.setSystemPrompt(`<project_context>Project-specific instructions and guidelines:
 <project_instructions path="/fixture/global/AGENTS.md">${globalInstructionFixture}</project_instructions>
 <project_instructions path="/fixture/repo/AGENTS.md">${projectInstructionFixture}</project_instructions>
@@ -256,7 +256,7 @@ export async function runJevPacketInstructions(
   // Project restrictions come from the loaded system prompt. Lines are preserved
   // whole; malformed envelopes and known budget loss defer before fetch.
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     const fullLine = `${"Background. ".repeat(40)}Never inspect private-notes.`;
     h.setSystemPrompt(`<project_context><project_instructions path="/loaded/AGENTS.md">
 # Guardrails
@@ -286,7 +286,7 @@ ${fullLine}
   }
 
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.setSystemPrompt(`<project_context><project_instructions path="/ancestor/AGENTS.md">Only inspect src/public.
 只能在 src/public 中进行检查。
 You mustn't publish internal files.
@@ -357,7 +357,7 @@ Never push to main.</project_context>`,
       "context_oversize",
     ],
   ]) {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.setSystemPrompt(prompt);
     h.live("Inspect repository status.");
     let fetchCalls = 0;

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Convert ONE captured terminal panel to an SVG. Never commit --screen or --colors.
 // node scripts/render-readme.mjs --screen /tmp/capture.ansi --colors /tmp/kitty-colors.txt \
-//   --title 'Delegation' --output routing-panel.svg
+//   --title 'Panel' --output panel.svg
 // For a private Agent pane, add --redact-field run --redact-field cwd and a --caption.
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -273,8 +273,8 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${
 <g font-family="DejaVu Sans Mono, ui-monospace, monospace" font-size="18">${contents}</g>
 <text x="${width - left}" y="${height - 25}" text-anchor="end" fill="${palette.color8}" font-family="sans-serif" font-size="12">${escapeXml(options["--caption"] ?? "Real terminal capture · panel only")}</text>
 </svg>\n`;
-const out = new URL(`../harness/docs/assets/${options["--output"]}`, import.meta.url);
-await mkdir(fileURLToPath(new URL("../harness/docs/assets/", import.meta.url)), {
+const out = new URL(`../docs/assets/${options["--output"]}`, import.meta.url);
+await mkdir(fileURLToPath(new URL("../docs/assets/", import.meta.url)), {
   recursive: true,
 });
 await writeFile(out, svg);

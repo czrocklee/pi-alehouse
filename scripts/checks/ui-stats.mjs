@@ -169,7 +169,7 @@ export function registerStatsTests(
       m.click();
       assert(m.pane());
       m.f.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {});
-      assert.equal(m.pane(), undefined, "cooperatively closes during harness settlement");
+      assert.equal(m.pane(), undefined, "cooperatively closes during agent panel settlement");
     } finally {
       await m.close();
     }
@@ -545,7 +545,7 @@ export function registerStatsTests(
 
   test("removed task-list extension is neither deployed nor permitted", () => {
     assert(!existsSync(join(extensions, "todo.ts")));
-    const composition = readFileSync(join(root, "composition.ts"), "utf8");
+    const composition = readFileSync(join(root, "src/composition.ts"), "utf8");
     assert(!composition.includes("extensions/todo.ts"));
     const config = JSON.parse(readFileSync(join(root, "resources/permissions.json"), "utf8"));
     assert(!Object.hasOwn(config.permission, "todo"));

@@ -4,7 +4,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { nextHarnessSerial } from "./jev-harness.mjs";
+import { nextFixtureSerial } from "./jev-fixture.mjs";
 export async function runJevTransport(
   check,
   reviewWithNativeJev,
@@ -181,7 +181,7 @@ export async function runJevTransport(
 
 export async function runJevForwarding(
   check,
-  registeredHarness,
+  registeredFixture,
   offlineAgentDir,
   offlineRuntime,
   piRoot,
@@ -278,7 +278,7 @@ export async function runJevForwarding(
     "git diff --output=fixture.txt",
     "git --unknown status",
   ]) {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Perform the requested synthetic local Git action.");
     let fetchCalls = 0;
     globalThis.fetch = async () => {
@@ -361,7 +361,7 @@ export async function runJevForwarding(
     "git tag -- -d",
     "git stash list",
   ]) {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Perform the requested synthetic local Git action.");
     let fetchCalls = 0;
     globalThis.fetch = async () => {
@@ -394,7 +394,7 @@ export async function runJevForwarding(
     "current-ask-rebound",
     "current-run-changed",
   ]) {
-    const h = registeredHarness({ mode: "enforce-subagents" });
+    const h = registeredFixture({ mode: "enforce-subagents" });
     h.live("Inspect repository status with the worker.");
     const profile = "editor",
       profilePath = join(offlineAgentDir, "agents", `${profile}.md`);
@@ -426,7 +426,7 @@ export async function runJevForwarding(
           cwd: variant === "wrong-cwd" ? join(h.ctx.cwd, "other") : h.ctx.cwd,
           contextChanged: false,
           initialPromptDigest: hashJson(taskPrompt),
-          harness: {
+          delegation: {
             ...identity,
             protocol: 1,
             profile,
@@ -470,8 +470,8 @@ export async function runJevForwarding(
       if (variant === "changed-profile")
         writeFileSync(profilePath, `${originalProfile}\nChanged fixture definition.\n`);
       if (variant === "missing-profile") rmSync(profilePath);
-      h.bus.get("pi-harness:approval:admitted")(identity);
-      h.bus.get("pi-harness:approval:started")({ sessionId });
+      h.bus.get("pi-alehouse:approval:admitted")(identity);
+      h.bus.get("pi-alehouse:approval:started")({ sessionId });
       const stale = variant.startsWith("current-");
       const eligible = [
         "intact",
@@ -499,7 +499,7 @@ export async function runJevForwarding(
   // A completed model answer is only a suggestion when any authority-bearing
   // snapshot changed. The stale audit must retain model use, latency and verdict.
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Inspect repository status.");
     const details = h.call("stale-input");
     let release;
@@ -529,13 +529,13 @@ export async function runJevForwarding(
 
   // An actual indicator and actual Jev handler must agree even if Jev's toast
   // fails. Pi's SDK event bus catches an event-handler throw asynchronously, so
-  // the direct Map bus in registeredHarness cannot detect a swallowed publish.
+  // the direct Map bus in registeredFixture cannot detect a swallowed publish.
   // Use the real approval extension (its lifecycle is covered by check-pi-ui) and
   // Pi's safe-dispatch bus, with only terminal callbacks and storage isolated.
   {
     const { createEventBus } = await import(pathToFileURL(join(piRoot, "dist/core/event-bus.js")));
     const { default: approvalMode, APPROVAL_ENTRY } = await jiti.import(
-      join(repo, "extensions/approval-mode.ts"),
+      join(repo, "src/extensions/approval-mode.ts"),
     );
     const bus = createEventBus();
     const hooks = new Map(),
@@ -546,7 +546,7 @@ export async function runJevForwarding(
       requests = [],
       confirmations = [],
       toasts = [];
-    const sessionId = `jev-indicator-${nextHarnessSerial()}`;
+    const sessionId = `jev-indicator-${nextFixtureSerial()}`;
     const theme = { fg: (_color, text) => text, bold: (text) => text };
     const ctx = {
       cwd: offlineRuntime,
@@ -682,7 +682,7 @@ export async function runJevForwarding(
   // publishes every mode, keeps its own status only while nobody renders it, and
   // a change mid-review cannot commit a verdict under the previous mode.
   {
-    const h = registeredHarness({ mode: "enforce" });
+    const h = registeredFixture({ mode: "enforce" });
     check("session start publishes the launch mode", h.published.at(-1), {
       name: "approval:judge-state",
       data: {
@@ -745,7 +745,7 @@ export async function runJevForwarding(
   }
 
   {
-    const h = registeredHarness({ mode: "enforce" });
+    const h = registeredFixture({ mode: "enforce" });
     h.bus.set("approval:judge-state", (state) => {
       state.shown = true;
     });
@@ -780,7 +780,7 @@ export async function runJevForwarding(
   }
 
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Inspect repository status.");
     const details = h.call("stale-policy");
     let release;
@@ -809,7 +809,7 @@ export async function runJevForwarding(
   }
 
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Inspect repository status.");
     const details = h.call("stale-signal");
     let release;
@@ -837,7 +837,7 @@ export async function runJevForwarding(
   }
 
   {
-    const h = registeredHarness({ withSignal: false });
+    const h = registeredFixture({ withSignal: false });
     h.live("Inspect repository status.");
     let fetchCalls = 0;
     globalThis.fetch = async () => {
@@ -858,7 +858,7 @@ export async function runJevForwarding(
   }
 
   {
-    const h = registeredHarness();
+    const h = registeredFixture();
     h.live("Inspect repository status.");
     const details = h.call("stale-project");
     let release;

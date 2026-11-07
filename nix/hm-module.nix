@@ -4,7 +4,7 @@
   pkgs,
   ...
 }: let
-  cfg = config.programs.pi-alehouse;
+  cfg = config.programs.alehouse;
   agentDir = ".pi/agent";
 
   environment =
@@ -14,13 +14,13 @@
     inherit (cfg) jevApiKeyFile;
     inherit environment;
   };
-  runtime = "${package}/lib/node_modules/pi-alehouse/runtime";
-  bootstrap = pkgs.callPackage ./permission-bootstrap {pi-alehouse = package;};
+  generated = "${package}/lib/node_modules/pi-alehouse/generated";
+  bootstrap = pkgs.callPackage ./permission-bootstrap {alehouse = package;};
 
   # Generated worker profiles; the launcher preflight requires exact copies.
   agents = ["editor" "researcher" "Explore" "Plan" "general-purpose"];
   # Policy/UI extensions that ordinary Pi autoloads from its extensions dir.
-  policyExtensions = [
+  autoloadExtensions = [
     "status-footer"
     "approval-mode"
     "stats"
@@ -30,7 +30,7 @@
     "policy-grep"
   ];
 in {
-  options.programs.pi-alehouse = {
+  options.programs.alehouse = {
     enable = lib.mkEnableOption "Pi Alehouse for a host Pi installation";
 
     package = lib.mkOption {
@@ -49,7 +49,7 @@ in {
       description = ''
         Permission policy installed as `extensions/pi-permission-system/config.json`.
         Activation restores it if the settings UI rewrote the file. When null,
-        the file stays user-owned (see `pi-alehouse init`).
+        the file stays user-owned (see `alehouse init`).
       '';
     };
 
@@ -57,8 +57,8 @@ in {
       type = lib.types.nullOr lib.types.path;
       default = null;
       description = ''
-        Worker preset catalogue installed as `harness-presets.json`. When null,
-        the file stays user-owned (see `pi-alehouse init`).
+        Worker preset catalogue installed as `alehouse-presets.json`. When null,
+        the file stays user-owned (see `alehouse init`).
       '';
     };
 
@@ -104,10 +104,10 @@ in {
 
       home.file = lib.mkMerge [
         (lib.listToAttrs (map (name:
-          lib.nameValuePair "${agentDir}/agents/${name}.md" {source = "${runtime}/agents/${name}.md";})
+          lib.nameValuePair "${agentDir}/agents/${name}.md" {source = "${generated}/agents/${name}.md";})
         agents))
         (lib.mkIf (cfg.presets != null) {
-          "${agentDir}/harness-presets.json".source = cfg.presets;
+          "${agentDir}/alehouse-presets.json".source = cfg.presets;
         })
         # The permission settings UI rewrites this path atomically; force
         # restores the declarative policy on activation.
@@ -123,22 +123,22 @@ in {
     (lib.mkIf cfg.ordinaryPi.enable {
       home.file = lib.mkMerge [
         # Pi resolves an entry's relative imports from its ~/.pi path, not the
-        # store target, so a symlinked entry cannot reach runtime/lib. A shim
+        # store target, so a symlinked entry cannot reach generated/shared. A shim
         # makes the store file the entry and keeps every import inside it.
         (lib.listToAttrs (map (name:
           lib.nameValuePair "${agentDir}/extensions/${name}.ts" {
             text = ''
-              export { default } from "${runtime}/policy/${name}.ts";
+              export { default } from "${generated}/extensions/${name}.ts";
             '';
           })
-        policyExtensions))
+        autoloadExtensions))
         {
           # HM owns the selector, NOT the persistent bootstrap. An older
           # generation removes this selector; the bootstrap then loads the
           # public authority instead of leaving tools without permission checks.
           "${agentDir}/managed-permissions.json".text = builtins.toJSON {
             version = 1;
-            entryPoint = "${runtime}/permission-system/index.ts";
+            entryPoint = "${generated}/authority/index.ts";
           };
         }
       ];

@@ -35,7 +35,7 @@ export function initialize({ agentDir = agentDirectory(), root = packageRoot } =
   const files = new Map();
   for (const name of managedAgentNames)
     files.set(`agents/${name}.md`, readFileSync(join(runtime, "agents", `${name}.md`)));
-  files.set("harness-presets.json", readFileSync(join(runtime, "seeds/harness-presets.json")));
+  files.set("alehouse-presets.json", readFileSync(join(runtime, "seeds/alehouse-presets.json")));
   const policy = JSON.parse(readFileSync(join(runtime, "seeds/permissions.json"), "utf8"));
   // Visible seed rules mirror the immutable authority floor. Existing config
   // files remain untouched; the runtime floor also covers those deployments.

@@ -1,0 +1,3342 @@
+import { randomUUID } from "node:crypto";
+import { isAbsolute, resolve } from "node:path";
+import {
+  normalizeFacts,
+  normalizeRuntime,
+  terminal,
+  validSettings,
+  type AdmittedAgentConfig,
+  type ExecutionFacts,
+  type CancellationSource,
+  type HistoryRef,
+  type ModelStopReason,
+  type Outcome,
+  type Output,
+  type OutputDelta,
+  type Phase,
+  type ResultPage,
+  type ResultRef,
+  type ReturnTo,
+  type RunStatus,
+  type RunTelemetry,
+  type RunView,
+  type StopReason,
+  type SubmitRequest,
+} from "./contracts.ts";
+import {
+  OrchestrationError,
+  ParentHistoryError,
+  SessionInitializationError,
+  SessionUnavailableError,
+  workersDisabled,
+  type AgentSessionPort,
+  type OwnerLease,
+  type RunCallbacks,
+} from "./ports.ts";
+import { boundedOutput, describeResult, OutputBuffer, sha256, validOutput } from "./result-text.ts";
+import { emptyLedger, mergeLedgers, USAGE_COMPONENTS, type UsageLedger } from "./usage-ledger.ts";
+import {
+  ObservationScheduler,
+  synchronousObservationPort,
+  validateLifecycleWait,
+  type LifecycleObservationResult,
+} from "./observation-scheduler.ts";
+import {
+  actionableQuestionId,
+  applyCommunicationCommit,
+  canAnswerQuestion,
+  communicationReadiness,
+  defaultObservationTargets,
+  enqueueAlert,
+  enqueueManagedBlock,
+  finishedCandidates,
+  isCommunicationSettled,
+  recordFirstQuestion,
+  scopedAlerts,
+  snapshotManagedBlockTools,
+  taskOrdinal,
+  taskOrdinals,
+  validateCommunicationCommit,
+  type AlertScope,
+  type CommunicationCommitPlan,
+  type CommunicationCommitSnapshot,
+  type PendingAlert,
+} from "./communication-state.ts";
+import { packCommunication } from "./communication-packer.ts";
+import {
+  AGENT_EXISTS_RESOLUTION,
+  COMMUNICATION_LIMITS,
+  isModelAgentName,
+  modelTaskStatus,
+  type CommunicationAction,
+  type CommunicationEnvelope,
+  type ThinTaskEntry,
+} from "./communication-envelope.ts";
+import type {
+  CommunicationSnapshot,
+  CommunicationToolResult,
+  ResultWindow,
+  TaskSnapshot,
+} from "./communication-snapshot.ts";
+import {
+  cancellationSource,
+  cumulativeUsage,
+  errorText,
+  handoffOmittedChars,
+  handoffText,
+  settingsView,
+  stable,
+  updatesText,
+} from "./owner-helpers.ts";
+import {
+  communicationRow,
+  communicationTask,
+  projectRun,
+  returnToNotice,
+} from "./owner-projection.ts";
+import { sliceResultWindow, splitsSurrogatePair } from "./result-window.ts";
+import { isQuestionId } from "./question-id.ts";
+import {
+  decodeResultCursor,
+  encodeResultCursor,
+  invalidResultCursor,
+  resultCursorKey,
+  type ResultCursorIdentity,
+} from "./result-cursor.ts";
+import {
+  dispatchText,
+  pathsOverlap,
+  validateDispatch,
+  validSourceState,
+  type Dispatch,
+  type DispatchLease,
+  type DispatchPort,
+  type PreparedDispatch,
+  type SourceState,
+  type ValidationReceipt,
+} from "./dispatch.ts";
+
+interface RunRecord {
+  owner_id: string;
+  generation: string;
+  run_id: string;
+  agent_id: string;
+  request_id: string;
+  request_digest: string;
+  enqueue_sequence: number;
+  name: string;
+  settings: AdmittedAgentConfig;
+  prompt: string;
+  description: string;
+  max_turns: number;
+  answer_to_run_id?: string;
+  /** Sticky from installation; never retargeted when either Agent is reused. */
+  return_to_run_id?: string;
+  input_entered: boolean;
+  status: RunStatus;
+  phase: Phase;
+  execution_exited: boolean;
+  history_ref?: HistoryRef;
+  history_error?: string;
+  submitted_at: number;
+  started_at?: number;
+  exited_at?: number;
+  finished_at?: number;
+  elapsed_ms?: number;
+  execution_elapsed_ms?: number;
+  turns: number;
+  limit_reached: boolean;
+  stop_reason?: StopReason;
+  cancellation_source?: CancellationSource;
+  model_stop_reason?: ModelStopReason;
+  outcome?: Outcome;
+  result?: ResultRef;
+  usage?: ExecutionFacts["usage"];
+  cleanup_errors: string[];
+  discarded_inputs: string[];
+  after?: string[];
+  delivered_updates?: number;
+  dispatch?: Dispatch;
+  dispatch_notes?: string[];
+  source_state?: SourceState;
+}
+type ProviderActivity = ReadonlyMap<string, { readonly active: number }>;
+interface ResourceClaim {
+  run_id: string;
+  agent_id: string;
+  prepared: PreparedDispatch;
+  lease?: DispatchLease;
+  releaseFailed?: true;
+}
+interface Agent {
+  id: string;
+  name: string;
+  settings: AdmittedAgentConfig;
+  resident: boolean;
+  effectiveSettings: RunView["effective_settings"];
+  current?: string;
+  session?: AgentSessionPort;
+  unavailable?: string;
+  release?: Promise<void>;
+  /** Confirmed disposal; the reservation can still await current Run finalization. */
+  cleanupComplete?: true;
+  question?: { run_id: string; reserved_by?: string };
+  /** Parent messages for the next prompt this Agent composes; memory only. */
+  inbox: string[];
+  /** Per-task turn limit chosen at creation; each task uses it. */
+  limits: { max_turns?: number };
+  /** kill() on a busy Agent: release once its task settles. */
+  exiting?: true;
+  /** A prompt has been composed; the inherited context snapshot went with it. */
+  prompted?: true;
+}
+interface ManagedRun {
+  record: RunRecord;
+  output: Output;
+  stream?: OutputBuffer;
+  submittedMono: number;
+  effectiveSettings: RunView["effective_settings"];
+  executionStartedMono?: number;
+  prepared?: PreparedDispatch;
+  claim?: ResourceClaim;
+  turnStarted?: number;
+  inputOpen: boolean;
+  active: boolean;
+  outputReserved: boolean;
+  inputs: Set<Promise<void>>;
+  inputCount: number;
+  question?: string;
+  finished_presented: boolean;
+  settled_seq?: number;
+  runtime?: RunTelemetry;
+  session?: AgentSessionPort;
+  hadSession: boolean;
+  quarantine?: string;
+  cleanup?: Promise<void>;
+  /** Installed but its own submit/resume notification has not returned. The
+   * scheduler never starts or dependency-fails it: no Run acts before it is announced. */
+  announcing?: true;
+  drain?: { waiting_for: NonNullable<RunView["drain"]>["waiting_for"]; startedMono: number };
+  /** Diagnostics only: which settle-path await this Run is parked on. Never
+   * gates release — a stuck wait keeps ownership exactly as before. */
+  finalizeWait?: { wait: "inputs" | "release" | "history"; startedMono: number };
+  /** Diagnostics only: when the stop was requested, for stats().stopping. */
+  stopRequestedMono?: number;
+  /** The first prompt has taken the Agent inbox; later updates need steering. */
+  promptComposed?: true;
+  /** A prestart rejection must not retire an otherwise reusable Agent. */
+  prestartFailure?: {
+    reason: "dependency_not_completed" | "dependency_input_missing" | "dispatch_preflight_failed";
+    error: string;
+  };
+}
+interface AdmissionPlan {
+  agent: Agent;
+  run: ManagedRun;
+  reuse: boolean;
+}
+/** Reserved namespace: ordinary submissions/deliveries cannot impersonate a secondary fact. */
+const RETURN_TO_REQUEST_PREFIX = "\u0000pi-alehouse/return-to/v1:";
+export interface ContextChange {
+  event_id: string;
+  owner_id: string;
+  generation: string;
+  agent_id: string;
+  run_id: string;
+  session_id?: string;
+  kind: "submit" | "resume" | "steer" | "soft_budget" | "cancel" | "hard_budget";
+}
+export interface OwnerControllerOptions {
+  owner: OwnerLease;
+  createSession: (agent: {
+    agent_id: string;
+    name: string;
+    settings: AdmittedAgentConfig;
+  }) => Promise<AgentSessionPort>;
+  /** Optional host filesystem/permission/observation adapter. No SDK IO in core. */
+  dispatch?: DispatchPort;
+  /** Optional exact telemetry vocabulary, copied at open: at most 32 unique
+   * lowercase ASCII identifiers of 1..64 units. Missing/empty disables managed
+   * feedback only; child-authored alert behavior is unchanged. */
+  managedBlockTools?: readonly string[];
+  /** Synchronous post-accept/pre-dispatch effect, not an admission transaction.
+   * Must return undefined; failure prevents dispatch, never rolls back a Run ID. */
+  onContextChange?: (event: ContextChange) => undefined;
+  /** Maximum executing Runs per admitted provider, including initialization and
+   * stop/drain until actual execution exit. Default 4; Owner-local, not a rate
+   * limiter. Resident and queue limits remain Owner-wide. */
+  concurrency?: number;
+  resident_limit?: number;
+  queue_limit?: number;
+  grace_turns?: number;
+  output_chars?: number;
+  /** Cumulative Run count, not a byte/RSS quota; no eviction is performed. */
+  history_run_limit?: number;
+  /** Retained/reserved RESULT text only, in UTF-16 code units; must fit output_chars.
+   * Excludes prompts, settings/context snapshots, other metadata and SDK heap. */
+  history_output_chars?: number;
+  /** Real-time bound, default 10 s, for a new admission blocked only by an
+   * Agent whose explicit kill/release is already under way. 0 disables it. */
+  release_wait_ms?: number;
+  /** Timestamp/elapsed observation only. Observation and cleanup timeouts use
+   * real event-loop timers; execution has no wall-clock deadline. */
+  clock?: { wall(): number; mono(): number };
+  /** Read-only host admission state. Omission retains always-enabled behavior.
+   * Broken readers fail command admission closed but reject observations without
+   * publishing; only a valid enabled=false snapshot represents delegation Off. */
+  admission?: () => { enabled: boolean; revision: number };
+}
+export type Delivery = "joined" | "steered" | "not_delivered";
+export interface SettleOptions {
+  agent_id: string;
+  ms?: number;
+  signal?: AbortSignal;
+}
+export type OwnerObservationRequest =
+  | { kind: "wait"; agent_ids?: string[]; mode?: "all" | "any"; wait_ms?: number }
+  | { kind: "read"; agent_id: string; task?: number; cursor?: string; max_chars?: number }
+  | {
+      kind: "action";
+      run_id: string;
+      wait_ms?: number;
+      action:
+        | { type: "agent_spawn" | "agent_run" | "agent_answer" }
+        | { type: "agent_send"; delivery: Delivery };
+    };
+const emptyOutput = (): Output => ({ text: "", total_chars: 0, truncated: false });
+const positive = (value: number): boolean => Number.isSafeInteger(value) && value > 0;
+/** Single source for shipped capacity and retention defaults, also used by UI assembly. */
+export const DEFAULT_OWNER_LIMITS = Object.freeze({
+  concurrency: 4,
+  resident: 12,
+  queue: 16,
+  grace: 5,
+  output: 1_048_576,
+  historyRuns: 512,
+  historyOutput: 64 * 1024 * 1024,
+  releaseWait: 10_000,
+});
+/** Bounds for parent-declared Run ordering and result handoff. */
+export const DEPENDENCY_LIMIT = 4;
+export const HANDOFF_CHARS = 16384;
+export const INBOX_LIMIT = 8;
+export const INBOX_CHARS = 32768;
+/** Bounded replay window for send deliveries; like `messages`, the oldest
+ * entries fall out instead of growing for the Owner's whole life. */
+export const DELIVERY_LOG_LIMIT = 512;
+export const softBudgetMessage =
+  "Turn limit reached. Finish with supported results and unfinished work. Do not start new work.";
+
+/** Owner-local live state, NOT a Pi extension or production service handle.
+ * Submission/idempotence are memory-only. SDK journals retain optional history;
+ * no manifests, result copies, save retries or reconstruction of live Runs.
+ * Execution, dispatch and cleanup still own the lease until confirmed finished.
+ */
+export class OwnerController {
+  private readonly agents = new Map<string, Agent>();
+  private readonly runs = new Map<string, ManagedRun>();
+  private readonly requests = new Map<string, string>();
+  /** send() identity: a retried call replays its delivery, never re-steers. */
+  private readonly deliveries = new Map<
+    string,
+    { request_digest: string; run_id: string; delivery: Delivery }
+  >();
+  private readonly queue: string[] = [];
+  /** Includes queued/finalizing work and settled answerable questions. */
+  private readonly claims = new Set<ResourceClaim>();
+  private readonly tasks = new Set<Promise<void>>();
+  private readonly observations = new ObservationScheduler();
+  /** The sole Owner FIFO. Origin and quota identity derive from original Runs. */
+  private readonly alerts: PendingAlert<ManagedRun>[] = [];
+  private settledSeq = 0;
+  private presentationVersion = 0;
+  private reportedBlock?: string;
+  /** Explicit lifetime adapter binding, never inferred from display equality. */
+  private modelCommunication = false;
+  private submitTail: Promise<unknown> = Promise.resolve();
+  private active = 0;
+  /** Transient occupancy for one non-reentrant pump, never retained authority.
+   * Active transitions update it even when execution exits synchronously. */
+  private pumping?: Map<string, number>;
+  /** Settled child spend the host has not taken yet. See `drainUsage`. */
+  private unreported: UsageLedger | undefined;
+  private sequence = 0;
+  private retainedOutputChars = 0;
+  private reservedOutputChars = 0;
+  private closing = false;
+  private closed = false;
+  private cleanupUncertain = false;
+  private cleaning = 0;
+  private parentError?: string;
+  private internalError?: string;
+  private readonly limits;
+  private readonly clock;
+  private readonly options: Omit<OwnerControllerOptions, "managedBlockTools">;
+  private readonly managedBlockTools: ReadonlySet<string>;
+
+  private constructor(options: OwnerControllerOptions) {
+    const { managedBlockTools, ...ownerOptions } = options;
+    this.options = ownerOptions; // Do not retain the caller's vocabulary array.
+    this.managedBlockTools = snapshotManagedBlockTools(managedBlockTools);
+    this.limits = {
+      concurrency: options.concurrency ?? DEFAULT_OWNER_LIMITS.concurrency,
+      resident: options.resident_limit ?? DEFAULT_OWNER_LIMITS.resident,
+      queue: options.queue_limit ?? DEFAULT_OWNER_LIMITS.queue,
+      grace: options.grace_turns ?? DEFAULT_OWNER_LIMITS.grace,
+      output: options.output_chars ?? DEFAULT_OWNER_LIMITS.output,
+      historyRuns: options.history_run_limit ?? DEFAULT_OWNER_LIMITS.historyRuns,
+      historyOutput: options.history_output_chars ?? DEFAULT_OWNER_LIMITS.historyOutput,
+      releaseWait: options.release_wait_ms ?? DEFAULT_OWNER_LIMITS.releaseWait,
+    };
+    if (
+      ![
+        this.limits.concurrency,
+        this.limits.resident,
+        this.limits.queue,
+        this.limits.output,
+        this.limits.historyRuns,
+        this.limits.historyOutput,
+      ].every(positive) ||
+      !Number.isSafeInteger(this.limits.grace) ||
+      this.limits.grace < 0 ||
+      !Number.isSafeInteger(this.limits.releaseWait) ||
+      this.limits.releaseWait < 0 ||
+      this.limits.releaseWait > 2147483647 ||
+      this.limits.historyOutput < this.limits.output
+    )
+      throw new OrchestrationError("INVALID_LIMIT");
+    this.clock = options.clock ?? { wall: Date.now, mono: () => performance.now() };
+  }
+
+  static async open(options: OwnerControllerOptions): Promise<OwnerController> {
+    try {
+      options.owner.assertHeld();
+      return new OwnerController(options); // Deliberately never hydrates/replays history.
+    } catch (error) {
+      options.owner.close();
+      throw error;
+    }
+  }
+
+  /** Opt into the existing name-addressed model protocol, after adapter setup
+   * validates its own context/configuration. Generic core Owners keep optional,
+   * arbitrary/repeated display names. Binding never renames or filters history. */
+  bindModelCommunication(): void {
+    this.assertEffectAllowed();
+    if (this.modelCommunication) return;
+    if (this.limits.resident > COMMUNICATION_LIMITS.agents)
+      throw new OrchestrationError("UNSUPPORTED_MODEL_RESIDENT_LIMIT", {
+        resident_limit: this.limits.resident,
+        limit: COMMUNICATION_LIMITS.agents,
+        resolution:
+          "The model tool adapter supports at most 16 resident Agents. Lower the host's resident limit before assembling tools.",
+      });
+    const names = new Set<string>();
+    for (const agent of this.agents.values()) {
+      if (!isModelAgentName(agent.name) || names.has(agent.name))
+        throw new OrchestrationError("UNSUPPORTED_MODEL_AGENT_IDENTITY", {
+          reason: isModelAgentName(agent.name) ? "duplicate_name" : "invalid_name",
+          resolution:
+            "This Owner's retained Agents cannot be addressed by the model protocol. Keep its generic ID-based inspection/cleanup APIs; use a fresh Owner for model tools. No retained facts were renamed or consumed.",
+        });
+      names.add(agent.name);
+    }
+    this.modelCommunication = true;
+  }
+
+  private requireRun(id: string): ManagedRun {
+    const run = this.runs.get(id);
+    if (!run)
+      throw new OrchestrationError("RUN_NOT_FOUND", {
+        run_id: id,
+        owner_id: this.options.owner.owner_id,
+      });
+    return run;
+  }
+  private requireAgent(id: string): Agent {
+    const agent = this.agents.get(id);
+    if (!agent)
+      throw new OrchestrationError("AGENT_NOT_FOUND", {
+        agent_id: id,
+        owner_id: this.options.owner.owner_id,
+      });
+    return agent;
+  }
+  private current(run: ManagedRun): boolean {
+    return (
+      !this.closed &&
+      run.record.generation === this.options.owner.generation &&
+      this.runs.get(run.record.run_id) === run &&
+      this.agents.get(run.record.agent_id)?.current === run.record.run_id
+    );
+  }
+  private changed(kind: ContextChange["kind"], run: ManagedRun): string {
+    this.presentationVersion++;
+    const event_id = randomUUID();
+    try {
+      const result: unknown = this.options.onContextChange?.({
+        event_id,
+        kind,
+        owner_id: this.options.owner.owner_id,
+        generation: this.options.owner.generation,
+        agent_id: run.record.agent_id,
+        run_id: run.record.run_id,
+        session_id: run.session?.session_id,
+      });
+      if (result !== undefined) {
+        // Reject async consumers without leaking their rejected promises. This
+        // cannot undo side effects or cancel work they started before returning.
+        void Promise.resolve(result).catch(() => {});
+        throw new Error("onContextChange must synchronously return undefined");
+      }
+    } catch (error) {
+      throw new OrchestrationError("CONTEXT_CHANGE_FAILED", { error: errorText(error) });
+    }
+    return event_id;
+  }
+  private wake(): void {
+    this.presentationVersion++;
+    this.observations.requestDrain();
+  }
+  assertEffectAllowed(): void {
+    this.observations.assertEffectAllowed();
+  }
+  validateObservationEntry<T>(read: () => T): T {
+    return this.observations.validateEntry(read);
+  }
+  private historyFailed(run: ManagedRun, error: unknown): string {
+    this.assertEffectAllowed();
+    run.quarantine = "history_error";
+    this.presentationVersion++;
+    // A child writer is local. Only a failed SHARED parent SDK write blocks the owner.
+    if (error instanceof ParentHistoryError) this.latchParentHistoryFailure(error);
+    return (run.record.history_error ??= errorText(error));
+  }
+  private track(promise: Promise<void>): void {
+    this.assertEffectAllowed();
+    const tracked = promise.catch((error: unknown) => {
+      this.cleanupUncertain = true;
+      this.internalError = errorText(error);
+      this.wake();
+    });
+    this.tasks.add(tracked);
+    // Classification above owns failures; this observer only forgets settled
+    // work, including rejection while notifying a watcher. Do not fork an
+    // unobserved rejecting promise with finally().
+    void tracked.then(
+      () => {
+        this.tasks.delete(tracked);
+      },
+      () => {
+        this.tasks.delete(tracked);
+      },
+    );
+  }
+
+  private validate(request: SubmitRequest, staged: readonly AdmissionPlan[] = []): void {
+    const reuse = "resume" in request;
+    const allowed = reuse
+      ? ["resume", "prompt", "description", "max_turns", "answer_to_run_id", "after", "dispatch"]
+      : [
+          "prompt",
+          "description",
+          "max_turns",
+          "name",
+          "settings",
+          "after",
+          "dispatch",
+          "return_to",
+        ];
+    for (const key of Object.keys(request)) {
+      if (allowed.includes(key)) continue;
+      if (
+        reuse &&
+        [
+          "settings",
+          "model",
+          "provider",
+          "thinking",
+          "effort",
+          "effort_source",
+          "effort_overrides",
+          "difficulty",
+          "strength",
+          "preset",
+          "subagent_type",
+          "profile",
+          "inherit_context",
+          "cwd",
+          "tools",
+          "name",
+        ].includes(key)
+      ) {
+        throw new OrchestrationError("IMMUTABLE_SETTING", {
+          key,
+          effective_settings: structuredClone(this.requireAgent(request.resume).effectiveSettings),
+        });
+      }
+      throw new OrchestrationError("UNSUPPORTED_PARAMETER", { key, allowed });
+    }
+    for (const [key, value, required, max] of [
+      ["prompt", request.prompt, true, 131072],
+      ["description", request.description, !reuse, 4096],
+      ...(!reuse ? [["name", request.name, false, 256]] : []),
+    ] as Array<[string, unknown, boolean, number]>) {
+      if (
+        (required || value !== undefined) &&
+        (typeof value !== "string" || !value.trim() || value.length > max)
+      ) {
+        throw new OrchestrationError("INVALID_PARAMETER", { key });
+      }
+    }
+    if (
+      request.max_turns !== undefined &&
+      (!positive(request.max_turns) || request.max_turns > 10000)
+    )
+      throw new OrchestrationError("INVALID_PARAMETER", { key: "max_turns" });
+    if (!reuse && !validSettings(request.settings))
+      throw new OrchestrationError("INVALID_EFFECTIVE_SETTINGS");
+    if (request.dispatch !== undefined) validateDispatch(request.dispatch);
+    const ids = request.after;
+    if (ids !== undefined) {
+      if (
+        !Array.isArray(ids) ||
+        !ids.length ||
+        ids.length > DEPENDENCY_LIMIT ||
+        new Set(ids).size !== ids.length ||
+        ids.some((id) => typeof id !== "string" || !id)
+      )
+        throw new OrchestrationError("INVALID_PARAMETER", { key: "after" });
+      for (const id of ids) this.plannedRun(id, staged);
+    }
+  }
+  /** Settled Runs this one waits for, in declaration order. */
+  private dependencies(record: RunRecord): string[] {
+    return record.after ?? [];
+  }
+  private blockedBy(run: ManagedRun): string[] {
+    return run.record.status === "queued"
+      ? this.dependencies(run.record).filter((id) => !terminal(this.requireRun(id).record.status))
+      : [];
+  }
+
+  get identity() {
+    return { owner_id: this.options.owner.owner_id, generation: this.options.owner.generation };
+  }
+  /** Monotonic acceptance fact for tool exposure/replacement confirmation.
+   * Run records are never evicted; this is not proof of Owner closure. */
+  get hasAcceptedRuns(): boolean {
+    return this.runs.size > 0;
+  }
+
+  /** Conservative UI invalidation hint only. No clock/lease/admission sampling;
+   * never reuse it as command authority or a retained task ordinal cache. */
+  get presentationRevision(): number {
+    return this.presentationVersion;
+  }
+
+  /** A synchronous SDK append to the shared parent threw. The SDK may already
+   * have changed memory or disk, so this is a sticky safety latch, not rollback. */
+  latchParentHistoryFailure(error: unknown): void {
+    this.assertEffectAllowed();
+    const failure = error instanceof ParentHistoryError ? error : new ParentHistoryError(error);
+    this.parentError ??= errorText(failure);
+    this.wake();
+  }
+
+  /** Shared gate for anything that must not begin once any peer has observed
+   * owner loss: parent-session writes outside Run history (the preset audit)
+   * and every asynchronous boundary inside execute(). Sticky by design, so
+   * apparent recovery cannot admit later work. Inspection, cancellation,
+   * release, result reads and drain all remain available. */
+  assertOwnerAvailable(): void {
+    this.assertEffectAllowed();
+    const fault = this.ownerFault(true);
+    if (fault) throw fault;
+    try {
+      this.assertLeaseHeld();
+    } catch (error) {
+      this.internalError ??= errorText(error);
+      this.wake();
+      throw error;
+    }
+  }
+  /** The lease is a host port probed between decisions and their commits. It
+   * runs read-only: an adapter that reenters an Owner effect is refused there
+   * and fails the probe, so no decision is committed on changed state. Inside
+   * an existing read-only frame the probe shares that frame. */
+  private assertLeaseHeld(lease: { assertHeld(): void } = this.options.owner): void {
+    this.observations.guardRead(() => {
+      lease.assertHeld();
+    });
+  }
+
+  private admissionState(): { enabled: boolean; revision: number } | undefined {
+    // Commands retain fail-closed admission/replay semantics. Catch INSIDE the
+    // phase so a swallowed nested effect still fails the outer readonly guard.
+    return this.validateObservationEntry(() => {
+      try {
+        return this.readAdmissionState();
+      } catch {
+        return undefined;
+      }
+    });
+  }
+  /** Observation validation is strict: a broken reader is not an Off choice
+   * and cannot authorize a successful alert/finished/fault publication. */
+  private readAdmissionState(): { enabled: boolean; revision: number } {
+    const reader = this.options.admission;
+    if (reader === undefined) return { enabled: true, revision: 0 };
+    if (typeof reader !== "function") throw new OrchestrationError("INVALID_ADMISSION_STATE");
+    const state: unknown = synchronousObservationPort(reader());
+    if (!state || typeof state !== "object" || Array.isArray(state))
+      throw new OrchestrationError("INVALID_ADMISSION_STATE");
+    const { enabled, revision } = state as { enabled?: unknown; revision?: unknown };
+    if (
+      typeof enabled !== "boolean" ||
+      typeof revision !== "number" ||
+      !Number.isSafeInteger(revision) ||
+      revision < 0
+    )
+      throw new OrchestrationError("INVALID_ADMISSION_STATE");
+    return { enabled, revision };
+  }
+  private assertNewWorkAdmission(
+    captured: { enabled: boolean; revision: number } | undefined,
+  ): void {
+    const current = this.admissionState();
+    if (!captured?.enabled || !current?.enabled || current.revision !== captured.revision)
+      throw workersDisabled();
+  }
+  private assertExternalSteerAdmission(): void {
+    if (!this.admissionState()?.enabled) throw workersDisabled();
+  }
+
+  submit(request_id: string, input: SubmitRequest): Promise<RunView> {
+    return this.submitPrepared(request_id, input, (request) => request);
+  }
+
+  /** Trusted synchronous preparation, not another queue or request cache.
+   * Identity is the caller's explicit input; defaults must be captured by the
+   * host before this call. Accepted replay never prepares again; a release-wait
+   * retry rechecks preparation and admission. No SDK types in core. */
+  submitPrepared<T extends object>(
+    request_id: string,
+    input: T,
+    prepare: (identity: T) => SubmitRequest,
+    options: { settle?: SettleOptions; signal?: AbortSignal } = {},
+  ): Promise<RunView> {
+    this.assertEffectAllowed();
+    if (
+      typeof request_id !== "string" ||
+      !request_id ||
+      request_id.length > 256 ||
+      request_id.startsWith(RETURN_TO_REQUEST_PREFIX)
+    )
+      return Promise.reject(new OrchestrationError("INVALID_REQUEST_ID"));
+    // Capture before awaiting another admission; caller mutation cannot drift it.
+    let captured: { request: T; request_digest: string };
+    try {
+      if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error();
+      const encoded = stable(structuredClone(input));
+      // Prepare the SAME normalized value whose identity was hashed, so it
+      // cannot distinguish omitted/undefined properties or shared references.
+      const request = JSON.parse(encoded) as T;
+      captured = { request, request_digest: sha256(encoded) };
+    } catch {
+      return Promise.reject(new OrchestrationError("INVALID_SUBMIT"));
+    }
+    const { request_digest } = captured;
+    // A request cannot wait behind another admission and cross an Off -> On
+    // transition. Existing request identity still wins before this gate.
+    const admission = this.admissionState();
+    // A new request for a busy Agent first waits out its ending task, outside
+    // the submit tail so other admissions proceed. Identity replays skip it.
+    const gate = this.requests.has(request_id)
+      ? undefined
+      : this.settleGate(options.settle, admission);
+    const releaseDeadline = performance.now() + this.limits.releaseWait;
+    const enqueue = (): Promise<RunView> => {
+      // Captured when admission rejects: a release may finish before the catch below runs.
+      let releasing: Agent[] = [];
+      const submission = this.submitTail.then(async () => {
+        const old = this.requests.get(request_id);
+        if (old) {
+          if (this.requireRun(old).record.request_digest !== request_digest)
+            throw new OrchestrationError("REQUEST_CONFLICT");
+          return this.view(old); // Owner-local idempotence precedes busy/capacity/error gates.
+        }
+        this.assertNewWorkAdmission(admission);
+        const prepared = prepare(structuredClone(captured.request));
+        if (
+          prepared &&
+          (typeof prepared === "object" || typeof prepared === "function") &&
+          "then" in prepared
+        ) {
+          void Promise.resolve(prepared).catch(() => {});
+          throw new OrchestrationError("ASYNC_PREPARE");
+        }
+        if (!prepared || typeof prepared !== "object" || Array.isArray(prepared))
+          throw new OrchestrationError("INVALID_SUBMIT");
+        const request = structuredClone(prepared);
+        // A trusted preparer can synchronously reenter the host and change the
+        // selected preset. Do not allocate a Run after that transition.
+        this.assertNewWorkAdmission(admission);
+        try {
+          return this.admit(request_id, request_digest, request, admission);
+        } catch (error) {
+          releasing = this.releasingBlockers(error);
+          throw error;
+        }
+      });
+      this.submitTail = submission.catch(() => {});
+      // A blocker that an explicit kill/release is already freeing (often from an
+      // earlier call in the same parallel tool batch) is waited for, bounded and
+      // outside the submit tail, then the whole admission reruns. Any other
+      // blocker, uncertain cleanup or the deadline returns the latest rejection.
+      return submission.catch(async (error: unknown) => {
+        const remaining = releaseDeadline - performance.now();
+        if (!releasing.length || remaining <= 0) throw error;
+        const signal = options.signal ?? options.settle?.signal;
+        const outcome = await this.observations.observeLifecycle({
+          wait_ms: Math.ceil(remaining),
+          signal,
+          ready: () => releasing.some((agent) => !this.releasing(agent)),
+        });
+        if (outcome === "aborted") throw new OrchestrationError("TOOL_INTERRUPTED");
+        // Retry keeps replay precedence. New work rechecks admission above and
+        // effect/Owner availability in admit(), including closure during the wait.
+        return enqueue();
+      });
+    };
+    return gate ? gate.then(enqueue) : enqueue();
+  }
+  /** An explicit kill/release under way that may still free its reservation
+   * and claims. Uncertain cleanup keeps both, so it is never waited for. */
+  private releasing(agent: Agent): boolean {
+    return (
+      agent.resident &&
+      agent.unavailable !== "cleanup_uncertain" &&
+      !this.uncertainClaim(agent) &&
+      (!!agent.exiting || agent.unavailable === "explicitly_released")
+    );
+  }
+  /** Agents being released that hold what a rejected admission needed. */
+  private releasingBlockers(error: unknown): Agent[] {
+    if (!(error instanceof OrchestrationError)) return [];
+    if (error.code === "RESIDENT_LIMIT")
+      return [...this.agents.values()].filter((agent) => this.releasing(agent));
+    if (error.code !== "RESOURCE_OWNED" && error.code !== "BUILD_TREE_BUSY") return [];
+    const blocker =
+      typeof error.details.agent_id === "string"
+        ? this.agents.get(error.details.agent_id)
+        : undefined;
+    return blocker && this.releasing(blocker) ? [blocker] : [];
+  }
+
+  /** Wait (bounded) for an Agent's ending task to settle before a request
+   * that needs the Agent idle. Off fails fast rather than waiting. */
+  private settleGate(
+    settle: SettleOptions | undefined,
+    admission: { enabled: boolean } | undefined,
+  ): Promise<void> | undefined {
+    if (!settle) return undefined;
+    const agent = this.agents.get(settle.agent_id),
+      run = agent?.current ? this.runs.get(agent.current) : undefined;
+    if (
+      !run ||
+      terminal(run.record.status) ||
+      !(run.record.execution_exited || run.record.stop_reason)
+    )
+      return undefined;
+    if (!admission?.enabled) return Promise.reject(workersDisabled());
+    return this.waitForRuns([run.record.run_id], {
+      mode: "all",
+      timeout_ms: settle.ms ?? 30000,
+      signal: settle.signal,
+    }).then(() => {
+      if (settle.signal?.aborted) throw new OrchestrationError("TOOL_INTERRUPTED");
+    });
+  }
+
+  /** Plan every record without effects, then install the entire acceptance
+   * without callbacks. Only after both facts exist can notifications dispatch. */
+  private admit(
+    request_id: string,
+    request_digest: string,
+    request: SubmitRequest,
+    admission: { enabled: boolean; revision: number } | undefined,
+  ): RunView {
+    this.assertEffectAllowed();
+    this.assertOwnerAvailable();
+    this.validate(request);
+    const returnTo = "resume" in request ? undefined : request.return_to;
+    let plans: AdmissionPlan[];
+    if (returnTo === undefined || "resume" in request)
+      plans = [this.planAdmission(request_id, request_digest, request)];
+    else {
+      // Every return_to-specific refusal precedes shared capacity, so a wrong
+      // target or stale token is never misreported as a full queue/history.
+      const original = this.returnToQuestion(request, returnTo);
+      const source = this.planAdmission(request_id, request_digest, request, [], 2);
+      const continuation: SubmitRequest = {
+        resume: original.record.agent_id,
+        prompt: returnTo.answer,
+        description: original.record.description,
+        answer_to_run_id: original.record.run_id,
+        after: [source.run.record.run_id],
+      };
+      this.validate(continuation, [source]);
+      const secondaryId = RETURN_TO_REQUEST_PREFIX + sha256(stable([this.identity, request_id]));
+      const target = this.planAdmission(
+        secondaryId,
+        sha256(
+          stable({
+            type: "return_to",
+            source_request_digest: request_digest,
+            source_run_id: source.run.record.run_id,
+            original_run_id: original.record.run_id,
+            answer: returnTo.answer,
+          }),
+        ),
+        continuation,
+        [source],
+      );
+      source.run.record.return_to_run_id = target.run.record.run_id;
+      plans = [source, target];
+    }
+    // Ports/clocks may change external authority while planning; no install yet.
+    this.assertNewWorkAdmission(admission);
+    this.assertOwnerAvailable();
+    this.installAdmissions(plans);
+    // Notify every accepted Run before any failure settles. A consumer may
+    // reenter (e.g. cancel) and pump synchronously: an unannounced Run never
+    // starts, and a failed one is isolated at once so nothing can start it.
+    const failed: Array<{ run: ManagedRun; error: unknown }> = [];
+    for (const { run, reuse } of plans) {
+      try {
+        this.changed(reuse ? "resume" : "submit", run);
+      } catch (error) {
+        run.quarantine = "context_change_failed";
+        this.removeQueued(run.record.run_id);
+        failed.push({ run, error });
+      } finally {
+        run.announcing = undefined;
+      }
+    }
+    // Settle failures only after every notice: settling one must not fail its peer for the wrong reason.
+    for (const { run, error } of failed)
+      this.track(
+        this.finish(run, { kind: "error", error: errorText(error), output: emptyOutput() }),
+      );
+    if (this.closing) for (const { run } of plans) this.cancel(run.record.run_id);
+    this.pump();
+    this.wake();
+    return this.view(plans[0]!.run.record.run_id);
+  }
+
+  /** Validated before shared capacity; the source request itself is already validated. */
+  private returnToQuestion(
+    request: Extract<SubmitRequest, { settings: unknown }>,
+    returnTo: ReturnTo,
+  ): ManagedRun {
+    if (
+      !returnTo ||
+      typeof returnTo !== "object" ||
+      Array.isArray(returnTo) ||
+      Object.keys(returnTo).some((key) => !["agent_id", "question_id", "answer"].includes(key)) ||
+      typeof returnTo.agent_id !== "string" ||
+      !returnTo.agent_id
+    )
+      throw new OrchestrationError("INVALID_RETURN_TO", {
+        key: "return_to",
+        resolution:
+          "return_to takes exactly agent, question_id and answer for one worker's pending question.",
+      });
+    if (request.settings.profile !== "researcher")
+      throw new OrchestrationError("INVALID_RETURN_TO_PROFILE", {
+        key: "profile",
+        resolution:
+          "Only a scout spawn can carry return_to. Spawn the scout without return_to, or answer the worker with agent_answer.",
+      });
+    this.validAnswer(returnTo.question_id, returnTo.answer, "return_to");
+    if (!this.agents.has(returnTo.agent_id))
+      throw new OrchestrationError("AGENT_NOT_FOUND", {
+        agent_id: returnTo.agent_id,
+        key: "return_to.agent",
+        resolution: "return_to.agent must name an existing worker with a pending question.",
+      });
+    const target = this.requireAgent(returnTo.agent_id);
+    if (target.settings.profile !== "editor")
+      throw new OrchestrationError("INVALID_RETURN_TO_PROFILE", {
+        key: "return_to",
+        agent_id: target.id,
+        resolution:
+          "return_to.agent must be a worker with a pending question. Answer other Agents' questions with agent_answer.",
+      });
+    const original = this.pendingQuestion(target.id, returnTo.question_id, "return_to");
+    // A compound cannot knowingly admit an already-doomed scout.
+    for (const id of request.after ?? []) {
+      const dependency = this.requireRun(id).record;
+      if (terminal(dependency.status) && dependency.status !== "completed")
+        throw new OrchestrationError("DEPENDENCY_NOT_COMPLETED", {
+          agent: dependency.name,
+          key: "after",
+          reason: modelTaskStatus(dependency.status),
+          resolution: `${dependency.name}'s latest task ended ${modelTaskStatus(dependency.status)}, so it cannot complete. Omit it from after.`,
+        });
+    }
+    return original;
+  }
+  /** Shared by agent_answer and return_to so their eligibility cannot drift. */
+  private validAnswer(question_id: unknown, answer: unknown, prefix?: string): void {
+    const key = (name: string, resolution: string) =>
+      prefix === undefined ? {} : { key: `${prefix}.${name}`, resolution };
+    if (!isQuestionId(question_id))
+      throw new OrchestrationError(
+        "INVALID_QUESTION_ID",
+        key("question_id", "Copy the worker's pending question_id exactly from wait/read."),
+      );
+    if (typeof answer !== "string" || !answer.trim() || answer.length > 16384)
+      throw new OrchestrationError(
+        "INVALID_ANSWER",
+        key(
+          "answer",
+          "Give the worker's next instruction as non-blank text of at most 16384 characters.",
+        ),
+      );
+  }
+  private pendingQuestion(agent_id: string, question_id: string, key?: string): ManagedRun {
+    const agent = this.requireAgent(agent_id),
+      original = agent.question ? this.requireRun(agent.question.run_id) : undefined;
+    if (
+      !original ||
+      actionableQuestionId(agent, original, this.communicationHealthy()) !== question_id
+    )
+      throw new OrchestrationError("STALE_ANSWER", {
+        agent_id,
+        ...(key === undefined ? {} : { key }),
+        resolution:
+          "Read this Agent's current pending question; answer only its exact question_id. Do not redirect an old answer.",
+      });
+    return original;
+  }
+
+  private checkAdmissionBudget(count: number): void {
+    if (
+      this.runs.size + count > this.limits.historyRuns ||
+      count * this.limits.output >
+        this.limits.historyOutput - this.retainedOutputChars - this.reservedOutputChars
+    ) {
+      throw new OrchestrationError("OWNER_HISTORY_LIMIT", {
+        agents: this.agents.size,
+        runs: this.runs.size,
+        requests: this.requests.size,
+        run_limit: this.limits.historyRuns,
+        retained_output_chars: this.retainedOutputChars,
+        reserved_output_chars: this.reservedOutputChars,
+        output_char_limit: this.limits.historyOutput,
+        resolution:
+          "This session's retained task history is full and never evicted. Tell the user to close this delegation Owner and start a fresh Pi session; do not submit more tasks.",
+      });
+    }
+    if (this.queue.length + count > this.limits.queue)
+      throw new OrchestrationError("QUEUE_FULL", {
+        queued: this.queue.length,
+        queue_limit: this.limits.queue,
+        resolution:
+          count > 1
+            ? `return_to queues two tasks (scout and worker continuation) and only ${Math.max(0, this.limits.queue - this.queue.length)} queue entries are free. Use agent_wait on running tasks and retry once enough settle.`
+            : "Too many tasks are already waiting. Use agent_wait on running tasks and retry once one settles.",
+      });
+  }
+
+  private plannedRun(id: string, staged: readonly AdmissionPlan[]): ManagedRun {
+    return staged.find((plan) => plan.run.record.run_id === id)?.run ?? this.requireRun(id);
+  }
+  /** Callers validate the request first; staged plans are visible as accepted. */
+  private planAdmission(
+    request_id: string,
+    request_digest: string,
+    request: SubmitRequest,
+    staged: readonly AdmissionPlan[] = [],
+    count = 1,
+  ): AdmissionPlan {
+    // Final admission also covers direct core callers and requests queued before
+    // adapter binding. Accepted-request replay happens before this new-work path.
+    if (this.modelCommunication && !("resume" in request)) {
+      if (!isModelAgentName(request.name))
+        throw new OrchestrationError("INVALID_MODEL_AGENT_NAME", {
+          key: "name",
+          resolution:
+            "This Owner is bound to model tools. Use a unique lowercase ASCII nickname of 1–24 characters (letters, digits and hyphens, starting with a letter).",
+        });
+      if ([...this.agents.values()].some((agent) => agent.name === request.name))
+        throw new OrchestrationError("AGENT_EXISTS", {
+          agent: request.name,
+          key: "agent",
+          resolution: AGENT_EXISTS_RESOLUTION,
+        });
+    }
+    if (!staged.length) this.checkAdmissionBudget(count);
+    const reuse = "resume" in request;
+    // A generic unbound Owner keeps the caller's display name (including none);
+    // only explicitly bound model integrations require name-addressable Agents.
+    const agent: Agent = reuse
+      ? this.requireAgent(request.resume)
+      : {
+          id: randomUUID(),
+          name: request.name ?? "",
+          settings: structuredClone(request.settings),
+          resident: true,
+          effectiveSettings: settingsView(request.settings),
+          inbox: [],
+          limits: { max_turns: request.max_turns },
+        };
+    if (agent.current) throw new OrchestrationError("AGENT_BUSY", { run_id: agent.current });
+    // An Agent lives until kill. One whose first task never started has no
+    // session yet; its next task creates it.
+    if (reuse && (agent.unavailable || agent.release || agent.exiting)) {
+      throw new OrchestrationError("AGENT_UNAVAILABLE", {
+        agent_id: agent.id,
+        reason: agent.unavailable ?? (agent.exiting ? "exiting" : undefined),
+      });
+    }
+    if (agent.question) {
+      if (!reuse || !request.answer_to_run_id)
+        throw new OrchestrationError("PENDING_QUESTION", { run_id: agent.question.run_id });
+      if (
+        request.answer_to_run_id !== agent.question.run_id ||
+        !canAnswerQuestion(
+          agent,
+          this.requireRun(agent.question.run_id),
+          this.communicationHealthy(),
+        )
+      )
+        throw new OrchestrationError("STALE_ANSWER");
+    } else if (reuse && request.answer_to_run_id) throw new OrchestrationError("STALE_ANSWER");
+    const original =
+      reuse && request.answer_to_run_id ? this.requireRun(request.answer_to_run_id) : undefined;
+    if (original && request.dispatch !== undefined)
+      throw new OrchestrationError("IMMUTABLE_DISPATCH");
+    const declaration = original ? original.record.dispatch : request.dispatch;
+    const prepared =
+      declaration === undefined
+        ? undefined
+        : this.prepareDispatch(declaration, agent, !!request.after?.length);
+    const inheritedClaim = original?.claim;
+    if (inheritedClaim && !this.claims.has(inheritedClaim))
+      throw new OrchestrationError("DISPATCH_CLAIM_LOST");
+    if (prepared) {
+      if (inheritedClaim && !this.sameResources(prepared, inheritedClaim.prepared))
+        throw new OrchestrationError("DISPATCH_RESOURCE_CHANGED");
+      this.checkClaims(
+        prepared,
+        inheritedClaim,
+        this.predecessors(request.after ?? [], staged),
+        undefined,
+        staged,
+      );
+    }
+    // Capacity after request-specific conflicts: a release under way can free a
+    // slot, but waiting for one must not hide a conflict no release resolves.
+    if (
+      !reuse &&
+      [...this.agents.values()].filter((a) => a.resident).length >= this.limits.resident
+    ) {
+      throw new OrchestrationError("RESIDENT_LIMIT", {
+        resident_limit: this.limits.resident,
+        resolution:
+          "All Agent slots are in use, including by Agents whose tasks are still queued. Kill a finished Agent you no longer need (agent_kill), or agent_wait for one to finish, then retry this agent_spawn. A kill already under way is waited for briefly; an Agent still stopping keeps its slot until agent_kill reports killed.",
+      });
+    }
+    const now = this.validateObservationEntry(() => ({
+      wall: this.clock.wall(),
+      mono: this.clock.mono(),
+    }));
+    const record: RunRecord = {
+      owner_id: this.options.owner.owner_id,
+      generation: this.options.owner.generation,
+      run_id: randomUUID(),
+      agent_id: agent.id,
+      request_id,
+      request_digest,
+      enqueue_sequence: this.sequence + staged.length + 1,
+      name: agent.name,
+      settings: structuredClone(agent.settings),
+      prompt: request.prompt,
+      description: request.description ?? "Follow-up task",
+      max_turns: request.max_turns ?? agent.limits.max_turns ?? 256,
+      ...(reuse && request.answer_to_run_id ? { answer_to_run_id: request.answer_to_run_id } : {}),
+      ...(request.after ? { after: [...request.after] } : {}),
+      ...(declaration === undefined ? {} : { dispatch: structuredClone(declaration) }),
+      input_entered: false,
+      status: "queued",
+      phase: "queued",
+      execution_exited: false,
+      submitted_at: now.wall,
+      turns: 0,
+      limit_reached: false,
+      cleanup_errors: [],
+      discarded_inputs: [],
+    };
+    const run: ManagedRun = {
+      record,
+      output: emptyOutput(),
+      effectiveSettings: agent.effectiveSettings,
+      submittedMono: now.mono,
+      inputOpen: false,
+      active: false,
+      outputReserved: true,
+      inputs: new Set(),
+      inputCount: 0,
+      finished_presented: false,
+      hadSession: !!agent.session,
+      session: agent.session,
+      prepared,
+    };
+    if (prepared && (prepared.ownership.length || prepared.tree))
+      run.claim = inheritedClaim ?? { run_id: record.run_id, agent_id: agent.id, prepared };
+    return { agent, run, reuse };
+  }
+  /** Callback-free commit: every fallible clone/preflight/clock read is done. */
+  private installAdmissions(plans: readonly AdmissionPlan[]): void {
+    for (const { agent, run } of plans) {
+      const record = run.record;
+      if (run.claim) {
+        run.claim.run_id = record.run_id;
+        this.claims.add(run.claim);
+      }
+      agent.current = record.run_id;
+      run.announcing = true;
+      if (agent.question) agent.question.reserved_by = record.run_id;
+      this.agents.set(agent.id, agent);
+      this.reservedOutputChars += this.limits.output;
+      this.runs.set(record.run_id, run);
+      this.requests.set(record.request_id, record.run_id);
+      this.queue.push(record.run_id);
+      this.sequence = record.enqueue_sequence;
+    }
+  }
+
+  private prepareDispatch(
+    declaration: Dispatch,
+    agent: Agent,
+    deferInputs: boolean,
+  ): PreparedDispatch {
+    validateDispatch(declaration);
+    const port = this.options.dispatch;
+    if (!port) throw new OrchestrationError("DISPATCH_UNAVAILABLE");
+    const { cwd, profile } = agent.settings;
+    const prepared = this.validateObservationEntry(() =>
+      structuredClone(
+        synchronousObservationPort(
+          port.prepare(structuredClone(declaration), { cwd, profile, deferInputs }),
+        ),
+      ),
+    );
+    const path = (item: unknown, requested: string | undefined): boolean => {
+      if (!item || typeof item !== "object" || requested === undefined) return false;
+      const value = item as Record<string, unknown>;
+      return (
+        value.path === resolve(cwd, requested) &&
+        Object.keys(value).every((key) => ["path", "canonical"].includes(key)) &&
+        ["path", "canonical"].every((key) => {
+          const text = value[key];
+          return (
+            typeof text === "string" &&
+            text.length <= 4096 &&
+            isAbsolute(text) &&
+            // eslint-disable-next-line no-control-regex -- reject unsupported control-bearing filesystem paths
+            !/[\x00-\x1f\x7f]/.test(text)
+          );
+        })
+      );
+    };
+    if (
+      !prepared ||
+      !Array.isArray(prepared.inputs) ||
+      !Array.isArray(prepared.ownership) ||
+      prepared.inputs.length !== (declaration.inputs?.length ?? 0) ||
+      prepared.ownership.length !== (declaration.ownership?.length ?? 0) ||
+      !Array.from(prepared.inputs).every((item, i) => path(item, declaration.inputs?.[i])) ||
+      !Array.from(prepared.ownership).every((item, i) => path(item, declaration.ownership?.[i])) ||
+      (prepared.tree !== undefined) !== (declaration.tree !== undefined) ||
+      (prepared.tree && !path(prepared.tree, declaration.tree))
+    )
+      throw new OrchestrationError("INVALID_PREPARED_DISPATCH");
+    prepared.declaration = structuredClone(declaration);
+    return prepared;
+  }
+  private predecessors(ids: readonly string[], staged: readonly AdmissionPlan[] = []): Set<string> {
+    const result = new Set<string>(),
+      pending = [...ids];
+    while (pending.length) {
+      const id = pending.pop()!;
+      if (result.has(id)) continue;
+      result.add(id);
+      pending.push(...this.dependencies(this.plannedRun(id, staged).record));
+    }
+    return result;
+  }
+  private sameResources(left: PreparedDispatch, right: PreparedDispatch): boolean {
+    return (
+      stable({ ownership: left.ownership, tree: left.tree }) ===
+      stable({ ownership: right.ownership, tree: right.tree })
+    );
+  }
+  private dispatchFailure(run: ManagedRun, error: unknown): void {
+    const code = error instanceof OrchestrationError ? error.code : undefined;
+    let detail = errorText(error);
+    if (error instanceof OrchestrationError) {
+      const { path, agent, surface } = error.details;
+      const where = typeof path === "string" ? ` (${JSON.stringify(path)})` : "";
+      if (code === "DISPATCH_INPUT_MISSING")
+        detail = `${code}: Declared input is missing${where}. Verify the input or its producing task.`;
+      else if (code === "PREFLIGHT_DENIED")
+        detail =
+          `${code}: ` +
+          (typeof error.details.reason === "string"
+            ? error.details.reason
+            : `Permission policy denied this declaration${where}` +
+              (typeof surface === "string" ? ` on ${surface}` : "")) +
+          "; this is not a missing-file or model-execution failure. Report the restriction; do not bypass it.";
+      else if (code === "DISPATCH_TREE_TYPE" || code === "DISPATCH_INPUT_TYPE")
+        detail = `${code}: Declared ${code === "DISPATCH_TREE_TYPE" ? "tree must be a directory" : "input must be a file or directory"}${where}.`;
+      else if (code === "RESOURCE_OWNED" || code === "BUILD_TREE_BUSY")
+        detail =
+          `${code}: The resolved resource${where} conflicts with another unfinished task` +
+          (typeof agent === "string" ? ` on Agent ${JSON.stringify(agent)}` : "") +
+          ". Inspect its task; resolve a pending question or wait for confirmed release before submitting a follow-up.";
+    }
+    run.prestartFailure = {
+      reason:
+        code === "DISPATCH_INPUT_MISSING"
+          ? "dependency_input_missing"
+          : "dispatch_preflight_failed",
+      error: detail.slice(0, 2048),
+    };
+  }
+  private checkClaims(
+    prepared: PreparedDispatch,
+    own?: ResourceClaim,
+    predecessors = new Set<string>(),
+    futureOf?: string,
+    staged: readonly AdmissionPlan[] = [],
+  ): void {
+    const entries = (p: PreparedDispatch) => [
+      ...p.ownership.map((path, i) => ({
+        path,
+        tree: false,
+        requested: p.declaration.ownership?.[i],
+      })),
+      ...(p.tree ? [{ path: p.tree, tree: true, requested: p.declaration.tree }] : []),
+    ];
+    let conflict:
+      | {
+          claim: ResourceClaim;
+          other: ManagedRun;
+          tree: boolean;
+          key: "tree" | "ownership";
+          requested?: string;
+          path: string;
+        }
+      | undefined;
+    // Only a compound admission has staged claims; never copy the live set otherwise.
+    const claims: Iterable<ResourceClaim> = staged.some((plan) => plan.run.claim)
+      ? [...this.claims, ...staged.flatMap((plan) => (plan.run.claim ? [plan.run.claim] : []))]
+      : this.claims;
+    claims: for (const claim of claims) {
+      if (claim === own || predecessors.has(claim.run_id)) continue;
+      const other = this.plannedRun(claim.run_id, staged);
+      const ancestors = this.predecessors(this.dependencies(other.record), staged);
+      // A fixed failed/questioned ancestor cannot later become completed. Pump
+      // fails such a doomed queued successor without a slot, but its claim stays
+      // installed until that settlement finishes; meanwhile it cannot block an
+      // answer or new owner. Never rebind its after.
+      if (
+        other.record.status === "queued" &&
+        [...ancestors].some((id) => {
+          const status = this.plannedRun(id, staged).record.status;
+          return terminal(status) && status !== "completed";
+        })
+      )
+        continue;
+      // Accepted successors reserve their place, not a concurrent execution.
+      if (futureOf && other.record.status === "queued" && ancestors.has(futureOf)) continue;
+      for (const wanted of entries(prepared))
+        for (const held of entries(claim.prepared)) {
+          if (!pathsOverlap(wanted.path, held.path)) continue;
+          // Report a holder that is not being released over one that is: no
+          // release wait can resolve the admission while such a holder remains.
+          const agent = this.agents.get(claim.agent_id),
+            notReleasing = !agent || !this.releasing(agent);
+          if (!conflict || notReleasing)
+            conflict = {
+              claim,
+              other,
+              tree: wanted.tree && held.tree,
+              key: wanted.tree ? "tree" : "ownership",
+              requested: wanted.requested,
+              path: wanted.path.path,
+            };
+          if (notReleasing) break claims;
+          continue claims;
+        }
+    }
+    if (!conflict) return;
+    const { claim, other, tree, key, requested, path } = conflict;
+    // agent_id stays internal: it lets admission wait out a release already under way.
+    throw new OrchestrationError(tree ? "BUILD_TREE_BUSY" : "RESOURCE_OWNED", {
+      agent: other.record.name,
+      agent_id: claim.agent_id,
+      key,
+      requested,
+      path,
+      resolution:
+        other.record.status === "needs_input"
+          ? "Read the pending question and use agent_answer; or explicitly abandon the task with agent_kill and wait for confirmed release. Naming that question's task in after is rejected."
+          : "Wait for this resource's owner, or declare an after dependency. Ownership declarations do not grant permissions.",
+    });
+  }
+  private dispatchNote(run: ManagedRun, note: string): void {
+    const notes = (run.record.dispatch_notes ??= []);
+    const bounded = note.slice(0, 120);
+    if (bounded.trim() && notes.length < 2 && !notes.includes(bounded)) {
+      notes.push(bounded);
+      this.presentationVersion++;
+    }
+  }
+  private async observeDispatch(run: ManagedRun): Promise<void> {
+    const prepared = run.prepared!;
+    const capture = !!prepared.declaration.checks?.length;
+    const claim = run.claim;
+    try {
+      if (claim?.lease) {
+        try {
+          this.assertLeaseHeld(claim.lease);
+        } catch {
+          this.dispatchNote(run, "tree_lock_unknown");
+        }
+      }
+      const result = await this.options.dispatch?.start?.(structuredClone(prepared), {
+        cwd: run.record.settings.cwd,
+        profile: run.record.settings.profile,
+        acquireTree: !!prepared.tree && !claim?.lease,
+      });
+      // This await is owned by execute: stop cannot settle or close the Owner
+      // until late observations/handles have been classified and released.
+      if (result?.lease) {
+        if (claim && !claim.lease) claim.lease = result.lease;
+        else result.lease.close();
+      }
+      if (capture)
+        run.record.source_state = validSourceState(result?.source_state)
+          ? structuredClone(result.source_state)
+          : { state: "unknown", reason: "capture_unavailable" };
+      if (Array.isArray(result?.notes))
+        for (const note of result.notes.slice(0, 2))
+          if (typeof note === "string") this.dispatchNote(run, note);
+      if (prepared.tree && !claim?.lease && !run.record.dispatch_notes?.length)
+        this.dispatchNote(run, "tree_lock_unknown");
+    } catch {
+      // Note what the failed observation left unconfirmed, not a guess at why:
+      // a lease already held stays held, and undeclared checks capture nothing.
+      if (prepared.tree && !claim?.lease) this.dispatchNote(run, "tree_lock_unknown");
+      if (capture) {
+        run.record.source_state = { state: "unknown", reason: "capture_failed" };
+        this.dispatchNote(run, "source_state_unknown");
+      }
+    }
+  }
+  private releaseClaimsIfIdle(agent: Agent): void {
+    if (
+      agent.current ||
+      agent.question ||
+      ((agent.unavailable || agent.exiting || agent.release) && !agent.cleanupComplete)
+    )
+      return;
+    for (const claim of this.claims) {
+      if (claim.agent_id !== agent.id || claim.releaseFailed) continue;
+      try {
+        claim.lease?.close();
+        claim.lease = undefined;
+        this.claims.delete(claim);
+      } catch (error) {
+        // A failed close is sticky uncertainty. A later no-op close or successful
+        // SDK disposal cannot prove that this separate resource was released.
+        claim.releaseFailed = true;
+        this.cleanupUncertain = true;
+        agent.unavailable = "cleanup_uncertain";
+        agent.resident = true;
+        this.requireRun(claim.run_id).record.cleanup_errors.push(
+          `TREE_RELEASE_FAILED: ${errorText(error)}`,
+        );
+      }
+    }
+  }
+  private uncertainClaim(agent: Agent): boolean {
+    return [...this.claims].some((claim) => claim.agent_id === agent.id && claim.releaseFailed);
+  }
+  private validationReceipt(run: ManagedRun, outcome: Outcome): ValidationReceipt | undefined {
+    const checks = run.record.dispatch?.checks;
+    if (!checks?.length) return;
+    return {
+      version: 1,
+      checks: [...checks],
+      cwd: run.record.settings.cwd,
+      ...(run.prepared?.tree ? { tree: run.prepared.tree.canonical } : {}),
+      source_state: run.record.source_state ?? { state: "unknown", reason: "not_captured" },
+      outcome: { status: outcome.status, ...(outcome.reason ? { reason: outcome.reason } : {}) },
+    };
+  }
+
+  private removeQueued(id: string): void {
+    this.assertEffectAllowed();
+    const index = this.queue.indexOf(id);
+    if (index >= 0) this.queue.splice(index, 1);
+  }
+  /** A queued Run whose fixed dependency settled without completing can never
+   * start, so fail it now: neither its other dependencies nor a free execution
+   * slot can change that. Its own settlement pumps again, failing successors. */
+  private failDoomed(): void {
+    for (const id of [...this.queue]) {
+      const run = this.requireRun(id);
+      if (run.record.status !== "queued" || run.announcing || !this.queue.includes(id)) continue;
+      const unmet = this.dependencies(run.record)
+        .map((dep) => this.requireRun(dep).record)
+        .find((dep) => terminal(dep.status) && dep.status !== "completed");
+      if (!unmet) continue;
+      try {
+        this.assertLeaseHeld();
+      } catch (error) {
+        this.internalError = errorText(error);
+        this.wake();
+        return;
+      }
+      this.removeQueued(id);
+      this.failDependency(run, unmet);
+    }
+  }
+  private failDependency(run: ManagedRun, dependency: RunRecord): void {
+    // Model-visible through the task's error: name the Agent and its status in
+    // the parent's vocabulary, never a Run ID.
+    const status = modelTaskStatus(dependency.status);
+    run.prestartFailure = {
+      reason: "dependency_not_completed",
+      error: `DEPENDENCY_NOT_COMPLETED: ${dependency.name || dependency.settings.profile} (${status})`,
+    };
+    this.track(
+      this.finish(run, { kind: "error", error: run.prestartFailure.error, output: run.output }),
+    );
+  }
+  /** Shared production projection; tests independently fold active Run flags. */
+  private providerActivity() {
+    const providers = new Map<
+      string,
+      { provider: string; active: number; queued: number; limit: number }
+    >();
+    const rowFor = (run: ManagedRun) => {
+      const provider = run.record.settings.provider;
+      let row = providers.get(provider);
+      if (!row) {
+        row = { provider, active: 0, queued: 0, limit: this.limits.concurrency };
+        providers.set(provider, row);
+      }
+      return row;
+    };
+    for (const run of this.runs.values()) if (run.active) rowFor(run).active++;
+    // A prestart failure may still be finalizing with status queued after it
+    // left the scheduling queue; count membership, not that transient status.
+    for (const id of this.queue) rowFor(this.requireRun(id)).queued++;
+    return providers;
+  }
+  /** Per-projection snapshot, only needed when a row could have a queue wait. */
+  private projectionActivity(runs: Iterable<ManagedRun>): ProviderActivity {
+    for (const run of runs)
+      if (run.record.status === "queued" && !run.record.execution_exited)
+        return this.providerActivity();
+    return new Map();
+  }
+  private queuedFor(
+    run: ManagedRun,
+    healthy: boolean,
+    providers: ProviderActivity,
+  ): RunView["queued_for"] {
+    if (!healthy || run.record.status !== "queued" || run.record.execution_exited) return undefined;
+    const dependencies = this.dependencies(run.record).map((id) => this.requireRun(id).record);
+    // A doomed Run needs neither its other dependencies nor a provider slot.
+    if (dependencies.some((dep) => terminal(dep.status) && dep.status !== "completed"))
+      return undefined;
+    if (dependencies.some((dep) => !terminal(dep.status))) return "dependencies";
+    return (providers.get(run.record.settings.provider)?.active ?? 0) >= this.limits.concurrency
+      ? "capacity"
+      : undefined;
+  }
+  private pump(): void {
+    this.assertEffectAllowed();
+    // Closing cancels queued work through shutdown, not dependency failure.
+    // Owner faults likewise suspend ordinary scheduling, including failDoomed.
+    if (
+      this.pumping ||
+      !this.queue.length ||
+      this.closing ||
+      this.closed ||
+      this.parentError ||
+      this.internalError ||
+      this.cleanupUncertain
+    )
+      return;
+    // Scan retained Runs once, not once per queue slot. Synchronous exits update
+    // this transient map and recursive pump calls leave scheduling to this pass.
+    const activeByProvider = new Map(
+      [...this.providerActivity()].map(([provider, row]) => [provider, row.active]),
+    );
+    this.pumping = activeByProvider;
+    try {
+      this.failDoomed();
+      while (this.queue.length) {
+        if (
+          this.closing ||
+          this.closed ||
+          this.parentError ||
+          this.internalError ||
+          this.cleanupUncertain
+        )
+          return;
+        // FIFO among dependency-ready Runs with room in their admitted provider.
+        // A saturated provider must not block another provider's ready work.
+        // Skipped Runs keep their queue place and hold no execution slot.
+        const index = this.queue.findIndex((id) => {
+          const run = this.requireRun(id);
+          return (
+            !run.announcing &&
+            (activeByProvider.get(run.record.settings.provider) ?? 0) < this.limits.concurrency &&
+            !this.blockedBy(run).length
+          );
+        });
+        if (index < 0) return;
+        // Read-only probe: a reentrant lease adapter cannot move the queue under this index.
+        try {
+          this.assertLeaseHeld();
+        } catch (error) {
+          this.internalError = errorText(error);
+          this.wake();
+          return;
+        }
+        const run = this.requireRun(this.queue.splice(index, 1)[0]!);
+        if (run.record.status !== "queued") continue;
+        // Defensive: failDoomed already removed Runs with an unmet settled dependency.
+        const unmet = this.dependencies(run.record)
+          .map((id) => this.requireRun(id).record)
+          .find((dep) => dep.status !== "completed");
+        if (unmet) {
+          this.failDependency(run, unmet);
+          continue;
+        }
+        if (run.record.dispatch) {
+          try {
+            const prepared = this.prepareDispatch(
+              run.record.dispatch,
+              this.requireAgent(run.record.agent_id),
+              false,
+            );
+            if (run.prepared && !this.sameResources(prepared, run.prepared))
+              throw new OrchestrationError("DISPATCH_RESOURCE_CHANGED");
+            // Predecessor exemption permits queuing, never unsafe early handoff.
+            this.checkClaims(prepared, run.claim, new Set(), run.record.run_id);
+            run.prepared = prepared;
+            if (run.claim) run.claim.prepared = prepared;
+          } catch (error) {
+            this.dispatchFailure(run, error);
+            this.track(
+              this.finish(run, {
+                kind: "error",
+                error: run.prestartFailure!.error,
+                output: run.output,
+              }),
+            );
+            continue;
+          }
+        }
+        run.active = true;
+        this.active++;
+        const provider = run.record.settings.provider;
+        activeByProvider.set(provider, (activeByProvider.get(provider) ?? 0) + 1);
+        run.executionStartedMono = this.clock.mono();
+        run.record.status = "running";
+        run.record.phase = "initializing";
+        run.record.started_at = this.clock.wall();
+        this.presentationVersion++;
+        this.track(this.execute(run));
+      }
+    } finally {
+      this.pumping = undefined;
+    }
+  }
+  private output(run: ManagedRun, value: Output): boolean {
+    this.assertEffectAllowed();
+    if (!validOutput(value)) {
+      run.quarantine = "invalid_execution_facts";
+      run.record.cleanup_errors.push("INVALID_OUTPUT");
+      this.presentationVersion++;
+      return false;
+    }
+    const revision = value.revision ?? 0,
+      previous = run.output.revision ?? 0;
+    if (revision < previous) return false;
+    if (
+      revision === previous &&
+      (value.total_chars < run.output.total_chars || !value.text.startsWith(run.output.text))
+    )
+      return false;
+    const bounded = boundedOutput(value.text, this.limits.output);
+    run.output = {
+      ...bounded,
+      total_chars: value.total_chars,
+      truncated: value.truncated || bounded.truncated,
+      revision,
+    };
+    run.stream = undefined;
+    this.presentationVersion++;
+    return true;
+  }
+  private outputDelta(run: ManagedRun, value: OutputDelta): void {
+    // Effect guard is deliberately before inspecting any adapter-owned fields.
+    this.assertEffectAllowed();
+    try {
+      if (!value || typeof value !== "object") throw new OrchestrationError("INVALID_OUTPUT_DELTA");
+      const { type, revision } = value;
+      if (
+        !Number.isSafeInteger(revision) ||
+        revision < 0 ||
+        Object.keys(value).some(
+          (key) =>
+            !["type", "revision", ...(type === "append" ? ["text"] : ["max_chars"])].includes(key),
+        )
+      )
+        throw new OrchestrationError("INVALID_OUTPUT_DELTA");
+      if (type === "reset") {
+        const cap = value.max_chars === undefined ? this.limits.output : value.max_chars;
+        if (revision <= (run.output.revision ?? 0) || !Number.isSafeInteger(cap) || cap < 0)
+          throw new OrchestrationError("INVALID_OUTPUT_DELTA");
+        run.output = run.stream = new OutputBuffer(Math.min(this.limits.output, cap), revision);
+        this.presentationVersion++;
+      } else if (
+        type === "append" &&
+        run.stream &&
+        run.stream.revision === revision &&
+        typeof value.text === "string"
+      ) {
+        run.stream.append(value.text);
+        if (value.text.length) this.presentationVersion++;
+      } else throw new OrchestrationError("INVALID_OUTPUT_DELTA");
+    } catch (error) {
+      run.quarantine = "invalid_execution_facts";
+      run.record.cleanup_errors.push("INVALID_OUTPUT_DELTA");
+      this.presentationVersion++;
+      throw error;
+    }
+  }
+  private wrapUp(run: ManagedRun): void {
+    this.assertEffectAllowed();
+    if (run.record.limit_reached || run.record.stop_reason || run.record.execution_exited) return;
+    run.record.limit_reached = true;
+    try {
+      this.dispatchInput(run, softBudgetMessage, "soft_budget");
+    } catch (error) {
+      run.record.cleanup_errors.push(`SOFT_BUDGET_MESSAGE_REJECTED: ${errorText(error)}`);
+    }
+  }
+  private execute(run: ManagedRun): Promise<void> {
+    this.assertEffectAllowed();
+    return this.executeRun(run);
+  }
+  private async executeRun(run: ManagedRun): Promise<void> {
+    const agent = this.requireAgent(run.record.agent_id);
+    let facts: ExecutionFacts;
+    try {
+      if (run.prepared && (run.prepared.tree || run.prepared.declaration.checks?.length)) {
+        await this.observeDispatch(run);
+        if (run.record.execution_exited) return;
+        this.assertOwnerAvailable();
+        if (run.record.stop_reason) {
+          await this.finish(run, { kind: "aborted", output: run.output });
+          return;
+        }
+      }
+      const existing = agent.session;
+      const port =
+        existing ??
+        (await this.options.createSession({
+          agent_id: agent.id,
+          name: agent.name,
+          settings: structuredClone(agent.settings),
+        }));
+      // Settled while the factory was pending: never run a settled Run, and a
+      // session created for it belongs to no Agent, so dispose it here.
+      if (run.record.execution_exited) {
+        if (port !== existing) await this.disposeOrphan(run, port);
+        return;
+      }
+      agent.session = run.session = port;
+      // Session creation can await arbitrary SDK initialization. Recheck even
+      // without a journal, and keep owner loss out of child-history diagnosis.
+      this.assertOwnerAvailable();
+      if (!run.record.stop_reason && port.history) {
+        try {
+          run.record.history_ref = await port.history.begin(
+            {
+              owner_id: run.record.owner_id,
+              generation: run.record.generation,
+              agent_id: agent.id,
+              run_id: run.record.run_id,
+            },
+            run.record.settings,
+          );
+        } catch (error) {
+          // A rejected begin is still an async boundary. Prefer a sticky/shared
+          // owner loss over misclassifying this Run as a damaged child writer.
+          this.assertOwnerAvailable();
+          this.historyFailed(run, error);
+          throw error;
+        }
+        // begin() is another async boundary. A peer may have latched owner loss
+        // while this writer was awaiting it; no prompt may be admitted after.
+        this.assertOwnerAvailable();
+      }
+      if (run.record.stop_reason) {
+        facts = { kind: "aborted", output: emptyOutput() };
+      } else {
+        this.assertOwnerAvailable();
+        if (run.record.execution_exited) return; // Settled during begin(); its cleanup owns the session.
+        run.record.phase = "executing";
+        run.inputOpen = true;
+        this.presentationVersion++;
+        const callbacks: RunCallbacks = {
+          inputEntered: () => {
+            this.assertEffectAllowed();
+            if (!this.current(run) || run.record.execution_exited) return;
+            run.record.input_entered = true;
+            this.presentationVersion++;
+            if (agent.question?.reserved_by === run.record.run_id) agent.question = undefined;
+          },
+          output: (value) => {
+            this.assertEffectAllowed();
+            if (this.current(run) && !run.record.execution_exited) this.output(run, value);
+          },
+          outputDelta: (value) => {
+            this.assertEffectAllowed();
+            if (this.current(run) && !run.record.execution_exited) this.outputDelta(run, value);
+          },
+          runtime: (value) => {
+            this.assertEffectAllowed();
+            if (!this.current(run) || run.record.execution_exited) return;
+            let next: RunTelemetry | undefined;
+            try {
+              next = normalizeRuntime(structuredClone(value));
+            } catch {
+              return;
+            }
+            if (!next) return;
+            const previous = run.runtime;
+            run.runtime = {
+              activity: next.activity,
+              context: next.context ?? previous?.context,
+              usage: next.usage ? cumulativeUsage(previous?.usage, next.usage) : previous?.usage,
+            };
+            this.presentationVersion++;
+          },
+          drain: (waiting_for) => {
+            this.assertEffectAllowed();
+            if (
+              !this.current(run) ||
+              run.record.execution_exited ||
+              !["deliveries", "sdk_idle"].includes(waiting_for)
+            )
+              return;
+            run.drain = { waiting_for, startedMono: run.drain?.startedMono ?? this.clock.mono() };
+            this.presentationVersion++;
+          },
+          turnStart: () => {
+            this.assertEffectAllowed();
+            if (!this.current(run) || run.record.execution_exited) return;
+            run.record.turns++;
+            run.turnStarted = this.clock.mono();
+            this.presentationVersion++;
+            if (run.record.turns > run.record.max_turns + this.limits.grace) {
+              run.record.limit_reached = true;
+              this.stop(run, "hard_budget");
+            } else if (run.record.turns > run.record.max_turns) this.wrapUp(run);
+          },
+          turnEnd: (continuing) => {
+            this.assertEffectAllowed();
+            if (!this.current(run)) return;
+            // Kept until the next turn starts or execution exits, so the UI reads
+            // "time since the last turn began" instead of blinking out between turns.
+            if (continuing && run.record.turns >= run.record.max_turns) this.wrapUp(run);
+          },
+          question: (text) => {
+            this.assertCommunicationOpen(run);
+            const result = recordFirstQuestion(run, text);
+            if (result === "recorded") this.presentationVersion++;
+            return result;
+          },
+          alert: (text) => {
+            this.assertCommunicationOpen(run);
+            enqueueAlert(this.alerts, run, text);
+            this.wake(); // Observer errors cannot undo an accepted child alert.
+          },
+          managedBlock: (fact) => {
+            this.assertCommunicationOpen(run); // Guard before any metadata inspection.
+            if (enqueueManagedBlock(this.alerts, run, fact, this.managedBlockTools)) this.wake();
+          },
+        };
+        // Queued updates are the parent's own instructions, so the approval
+        // witness's task_prompt carries them. Handed-off text is another
+        // child's output: framed as reference material and never part of it.
+        const updates = agent.inbox.splice(0);
+        run.promptComposed = true;
+        const first = !agent.prompted;
+        agent.prompted = true;
+        if (updates.length) run.record.delivered_updates = updates.length;
+        const declaration = dispatchText(run.record.dispatch, run.record.settings.cwd);
+        const instructions = [updatesText(updates), declaration, run.record.prompt]
+          .filter(Boolean)
+          .join("\n\n");
+        const task = [
+          updatesText(updates),
+          handoffText(
+            this.dependencies(run.record).map((id) => this.requireRun(id)),
+            HANDOFF_CHARS,
+          ),
+          declaration,
+          run.record.prompt,
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+        const prompt =
+          first && run.record.settings.context_snapshot
+            ? `${run.record.settings.context_snapshot}\n\n${task}`
+            : task;
+        facts = await port.run(prompt, callbacks, {
+          owner_id: run.record.owner_id,
+          generation: run.record.generation,
+          agent_id: run.record.agent_id,
+          run_id: run.record.run_id,
+          task_prompt: instructions,
+        });
+      }
+    } catch (error) {
+      if (error instanceof SessionUnavailableError) run.quarantine = error.reason;
+      // Record the affected writer's uncertainty without poisoning healthy peers.
+      if (run.session?.history?.error) this.historyFailed(run, run.session.history.error);
+      if (error instanceof SessionInitializationError) {
+        this.cleanupUncertain = true;
+        run.quarantine = "cleanup_uncertain";
+        run.record.cleanup_errors.push(errorText(error));
+      }
+      facts = {
+        kind: "error",
+        error: run.prestartFailure?.error ?? errorText(error),
+        output: run.output,
+        // A quarantined session may still have billed for what it did stream.
+        ...(error instanceof SessionUnavailableError && error.usage ? { usage: error.usage } : {}),
+      };
+    }
+    await this.finish(run, facts);
+  }
+
+  /** A session no Agent owns. Unconfirmed shutdown keeps the Owner fail-closed. */
+  private async disposeOrphan(run: ManagedRun, port: AgentSessionPort): Promise<void> {
+    let errors: unknown[];
+    try {
+      const report = await port.dispose();
+      errors = [
+        ...report.errors.slice(0, 16),
+        ...(report.shutdownExited ? [] : ["shutdown_not_exited"]),
+      ];
+    } catch (error) {
+      errors = [error];
+    }
+    if (!errors.length) return;
+    run.record.cleanup_errors.push(...errors.map(errorText));
+    this.cleanupUncertain = true;
+    this.presentationVersion++;
+    this.wake();
+  }
+  private finish(run: ManagedRun, facts: ExecutionFacts): Promise<void> {
+    this.assertEffectAllowed();
+    return this.finishRun(run, facts);
+  }
+  private async finishRun(run: ManagedRun, facts: ExecutionFacts): Promise<void> {
+    if (!this.current(run) || run.record.execution_exited) return;
+    run.inputOpen = false;
+    run.record.execution_exited = true;
+    run.record.exited_at = this.clock.wall();
+    run.record.phase = "finalizing";
+    run.turnStarted = undefined;
+    run.record.execution_elapsed_ms =
+      run.executionStartedMono === undefined
+        ? undefined
+        : Math.max(0, this.clock.mono() - run.executionStartedMono);
+    if (run.active) {
+      run.active = false;
+      this.active--;
+      const provider = run.record.settings.provider;
+      if (this.pumping) this.pumping.set(provider, (this.pumping.get(provider) ?? 0) - 1);
+    }
+    let agent: Agent;
+    const stopped = run.record.stop_reason;
+    let accrued = false;
+    try {
+      // Seal the private append buffer BEFORE touching possibly hostile final
+      // facts. Even the finalization-error/history path must carry plain Output.
+      if (run.output instanceof OutputBuffer) run.output = run.output.snapshot();
+      run.stream = undefined;
+      const normalized = normalizeFacts(facts, run.output);
+      facts = normalized.facts;
+      if (normalized.invalid) run.quarantine = "invalid_execution_facts";
+      // A port may preserve a new SDK stop reason before this controller knows
+      // its semantics. Only Pi's explicit normal terminal reasons can support a
+      // successful outcome; absence remains compatible with non-SDK ports.
+      if (
+        facts.kind === "success" &&
+        facts.model_stop_reason &&
+        !["stop", "toolUse"].includes(facts.model_stop_reason)
+      )
+        facts = {
+          ...facts,
+          kind: "error",
+          error:
+            facts.error ??
+            (facts.model_stop_reason === "length"
+              ? "MODEL_OUTPUT_LIMIT"
+              : `UNEXPECTED_MODEL_STOP_REASON: ${facts.model_stop_reason}`),
+        };
+      if (!this.output(run, facts.output)) {
+        // Different messages may replace each other; a final report may not erase
+        // the last observed prefix within the SAME message revision.
+        run.output = {
+          text: run.output.text,
+          total_chars: run.output.total_chars,
+          revision: run.output.revision,
+          truncated: true,
+        };
+        run.stream = undefined;
+        run.quarantine = "output_uncertain";
+        run.record.cleanup_errors.push("EXECUTION_OUTPUT_REGRESSED");
+        if (facts.kind === "success")
+          facts = { ...facts, kind: "error", error: "EXECUTION_OUTPUT_REGRESSED" };
+      }
+      if (run.quarantine === "invalid_execution_facts")
+        facts = { ...facts, kind: "error", error: "INVALID_EXECUTION_FACTS" };
+      run.record.usage = facts.usage
+        ? cumulativeUsage(run.runtime?.usage, facts.usage)
+        : run.runtime?.usage;
+      run.record.model_stop_reason = facts.model_stop_reason;
+      // Settling is the one moment a Run's spend becomes final, so accruing here
+      // reports every Run exactly once — including the cancelled and failed ones,
+      // which cost real money, and the ones whose result the model never fetches.
+      // Already split by responding model: the port sees each response, this
+      // only rolls settled Runs together. Attributing here would bill a router
+      // alias instead of whatever answered behind it.
+      this.unreported = mergeLedgers(this.unreported, run.record.usage);
+      accrued = true;
+      agent = this.requireAgent(run.record.agent_id);
+      if (agent.question?.reserved_by === run.record.run_id && !run.record.input_entered)
+        agent.question.reserved_by = undefined;
+      run.record.outcome = {
+        status:
+          stopped === "user_cancel"
+            ? "cancelled"
+            : stopped === "hard_budget" || facts.kind !== "success"
+              ? "failed"
+              : run.question
+                ? "needs_input"
+                : "completed",
+        model_stop_reason: facts.model_stop_reason,
+        reason:
+          stopped === "hard_budget"
+            ? "turn_limit"
+            : stopped
+              ? undefined
+              : facts.model_stop_reason === "length"
+                ? "output_limit"
+                : run.quarantine === "context_change_failed"
+                  ? "context_change_failed"
+                  : run.prestartFailure
+                    ? run.prestartFailure.reason
+                    : facts.kind === "aborted"
+                      ? "unexpected_abort"
+                      : facts.kind === "error"
+                        ? "execution_error"
+                        : undefined,
+        error: facts.error?.slice(0, 2048),
+        question: run.question,
+        limit_reached: run.record.limit_reached,
+        ...(run.record.cancellation_source
+          ? { cancellation_source: run.record.cancellation_source }
+          : {}),
+      };
+    } catch (error) {
+      // A synchronous finalization fault (internal bug or a hostile getter in
+      // the port's facts) must not wedge this Run in "finalizing" with its
+      // output reservation held forever. Execution exit is already confirmed,
+      // so settle it failed: quarantine the Agent so the tail releases it.
+      // Never touch `facts` again: they may be what threw.
+      run.quarantine = "finalization_failed";
+      run.record.cleanup_errors.push(`FINALIZATION_FAILED: ${errorText(error)}`);
+      if (!accrued) {
+        // The final report is unknown: keep the observed floor, marked partial
+        // in every component, and still report it once. Unknown spend is never
+        // zero-filled, in this Run or in the parent's roll-up.
+        run.record.usage = {
+          ...structuredClone(run.runtime?.usage ?? emptyLedger()),
+          partial: [...USAGE_COMPONENTS],
+        };
+        try {
+          this.unreported = mergeLedgers(this.unreported, run.record.usage);
+        } catch {
+          this.unreported = {
+            ...(this.unreported ?? emptyLedger()),
+            partial: [...USAGE_COMPONENTS],
+          };
+        }
+      }
+      agent = this.requireAgent(run.record.agent_id);
+      run.record.outcome = {
+        status: stopped === "user_cancel" ? "cancelled" : "failed",
+        model_stop_reason: run.record.model_stop_reason,
+        reason: "finalization_failed",
+        error: `FINALIZATION_FAILED: ${errorText(error)}`.slice(0, 2048),
+        question: run.question,
+        limit_reached: run.record.limit_reached,
+        ...(run.record.cancellation_source
+          ? { cancellation_source: run.record.cancellation_source }
+          : {}),
+      };
+    }
+    // A freed execution slot belongs to healthy peers, even while this Run's
+    // input/finalization/isolated session cleanup drains. Its own Agent stays busy.
+    this.wake();
+    this.pump();
+    // No new input can be accepted now. Already accepted async deliveries must
+    // settle before SDK queue clearing or reuse. A hung delivery keeps ownership.
+    // Each settle-path await is observable (stats().finalizing_waits) so a
+    // wedged finalization is diagnosable without weakening its fail-closed hold.
+    run.finalizeWait = { wait: "inputs", startedMono: this.clock.mono() };
+    this.presentationVersion++;
+    try {
+      await Promise.all([...run.inputs]);
+    } finally {
+      run.finalizeWait = undefined;
+      this.presentationVersion++;
+    }
+    if (run.session) {
+      try {
+        run.record.discarded_inputs.push(...run.session.clearInputs());
+      } catch (error) {
+        run.quarantine =
+          error instanceof SessionUnavailableError ? error.reason : "input_cleanup_uncertain";
+        run.record.cleanup_errors.push(errorText(error));
+      }
+    }
+    if (facts.kind === "success" && !run.record.input_entered) {
+      run.quarantine = "input_not_observed";
+      if (!stopped)
+        run.record.outcome = {
+          ...run.record.outcome,
+          status: "failed",
+          reason: "input_not_observed",
+        };
+    }
+    // Messages joined to a task that never composed its prompt belonged to it.
+    if (!run.promptComposed) run.record.discarded_inputs.push(...agent.inbox.splice(0));
+    // A task stopped or failed by its dependencies before taking input leaves
+    // the Agent in place; only a failed initialization or quarantine ends it.
+    if (
+      run.quarantine ||
+      (!run.hadSession &&
+        !run.record.input_entered &&
+        !run.record.stop_reason &&
+        !run.prestartFailure)
+    ) {
+      run.cleanup = this.releaseAgent(agent, run.quarantine ?? "initialization_failed", run);
+      run.finalizeWait = { wait: "release", startedMono: this.clock.mono() };
+      this.presentationVersion++;
+      try {
+        await run.cleanup;
+      } finally {
+        run.finalizeWait = undefined;
+        this.presentationVersion++;
+      } // Known cleanup facts precede optional history metadata.
+    }
+    const finished: RunRecord = {
+      ...run.record,
+      status: run.record.outcome.status,
+      phase: "settled",
+      finished_at: this.clock.wall(),
+      result: describeResult(run.record.run_id, run.output),
+      elapsed_ms: Math.max(0, this.clock.mono() - run.submittedMono),
+    };
+    if (finished.history_ref && run.session?.history) {
+      try {
+        // An earlier loss is sticky even if the lock path later looks healthy.
+        if (this.internalError)
+          throw new OrchestrationError("OWNER_INTERNAL_ERROR", { error: this.internalError });
+        try {
+          this.assertLeaseHeld();
+        } catch (error) {
+          // Loss of shared authority blocks the entire owner, not only this
+          // child writer. Skip the write, but still settle proven-exited work
+          // and its output reservation; never leave it stuck in finalizing.
+          this.internalError ??= errorText(error);
+          throw error;
+        }
+        run.finalizeWait = { wait: "history", startedMono: this.clock.mono() };
+        this.presentationVersion++;
+        try {
+          finished.history_ref = await run.session.history.finish(
+            finished.history_ref,
+            { ...finished.outcome! },
+            {
+              text: run.output.text,
+              total_chars: run.output.total_chars,
+              truncated: run.output.truncated,
+              revision: run.output.revision,
+            },
+            finished.usage,
+            this.validationReceipt(run, finished.outcome!),
+            () => {
+              this.assertEffectAllowed();
+              if (
+                run.finalizeWait?.wait === "history" &&
+                !run.record.cleanup_errors.includes("VALIDATION_RECEIPT_INVALID")
+              )
+                run.record.cleanup_errors.push("VALIDATION_RECEIPT_INVALID");
+            },
+          );
+        } finally {
+          run.finalizeWait = undefined;
+          this.presentationVersion++;
+        }
+      } catch (error) {
+        finished.history_error = this.historyFailed(run, error);
+      }
+    }
+    // Input drain and history no longer need this per-Run reference. The Agent
+    // or an in-flight release owns the port, never the retained result record.
+    run.session = undefined;
+    if (run.outputReserved) {
+      this.reservedOutputChars -= this.limits.output;
+      this.retainedOutputChars += run.output.text.length;
+      run.outputReserved = false;
+    }
+    run.record = finished; // Completion is live state, NOT a durability promise.
+    if (run.quarantine && !agent.release) {
+      run.cleanup = this.releaseAgent(agent, run.quarantine, run);
+      this.track(run.cleanup); // Volatile results may be observed while cleanup drains.
+    }
+    if (
+      run.record.status === "needs_input" &&
+      agent.session &&
+      !agent.unavailable &&
+      !agent.exiting
+    )
+      agent.question = { run_id: run.record.run_id };
+    agent.current = undefined;
+    if (agent.question && run.claim) run.claim.run_id = agent.question.run_id;
+    this.releaseClaimsIfIdle(agent);
+    if (agent.exiting && !agent.release)
+      this.track(this.releaseAgent(agent, "explicitly_released"));
+    if (agent.cleanupComplete && !this.uncertainClaim(agent)) agent.resident = false;
+    run.settled_seq = ++this.settledSeq;
+    this.wake();
+    this.pump();
+  }
+  /** Existing child work keeps communication through Off, but never after its
+   * own gate closes. Unlike ordinary telemetry, a rejected call cannot succeed. */
+  private assertCommunicationOpen(run: ManagedRun): void {
+    this.assertEffectAllowed();
+    if (
+      !this.current(run) ||
+      !run.inputOpen ||
+      run.record.execution_exited ||
+      run.record.stop_reason ||
+      run.record.status !== "running"
+    )
+      throw new OrchestrationError("RUN_INPUT_CLOSED");
+  }
+
+  /** Explicit question continuation. Bind eligibility at invocation, never wait
+   * for a currently running task to become a future question. Request replay
+   * still wins, but a different request must reserve the exact same reference. */
+  answer(
+    request_id: string,
+    agent_id: string,
+    question_id: string,
+    answer: string,
+    options: { prepare?: () => void; signal?: AbortSignal } = {},
+  ): Promise<RunView> {
+    this.assertEffectAllowed();
+    return this.answerQuestion(request_id, agent_id, question_id, answer, options);
+  }
+  private async answerQuestion(
+    request_id: string,
+    agent_id: string,
+    question_id: string,
+    answer: string,
+    options: { prepare?: () => void; signal?: AbortSignal },
+  ): Promise<RunView> {
+    this.validAnswer(question_id, answer);
+    const pending = () => this.pendingQuestion(agent_id, question_id);
+    if (!this.requests.has(request_id)) {
+      this.assertNewWorkAdmission(this.admissionState());
+      this.assertOwnerAvailable(); // New commands must remember observed authority loss.
+      pending();
+    }
+    return this.submitPrepared(
+      request_id,
+      { agent_id, question_id, answer },
+      () => {
+        synchronousObservationPort(options.prepare?.());
+        if (options.signal?.aborted) throw new OrchestrationError("TOOL_INTERRUPTED");
+        this.assertOwnerAvailable(); // Preparation may cross another authority boundary.
+        const original = pending();
+        return {
+          resume: agent_id,
+          prompt: answer,
+          description: original.record.description,
+          answer_to_run_id: original.record.run_id,
+        };
+      },
+      { signal: options.signal },
+    );
+  }
+
+  private acceptsInput(run: ManagedRun): boolean {
+    return (
+      this.current(run) &&
+      run.inputOpen &&
+      !run.record.execution_exited &&
+      run.record.status === "running" &&
+      !run.record.stop_reason &&
+      !!run.session?.canInput()
+    );
+  }
+  steer(run_id: string, message: string): { accepted: true; event_id: string } {
+    return this.dispatchInput(this.requireRun(run_id), message, "steer");
+  }
+  /** Parent input to the task that is current (or latest) when this call is
+   * made; the target never drifts to a later task. A task whose prompt is not
+   * composed yet takes it with its prompt (joined), an accepting task is
+   * steered. Ended/asking tasks are not delivered to; only answer() creates a
+   * question continuation. An
+   * ending target is waited out first, outside the submit tail. `prepare` runs
+   * under the tail before any side effect. Retrying a request ID replays. */
+  send(
+    request_id: string,
+    agent_id: string,
+    message: string,
+    options: { settle_ms?: number; signal?: AbortSignal; prepare?: () => void } = {},
+  ): Promise<{ delivery: Delivery; view: RunView }> {
+    this.assertEffectAllowed();
+    return this.sendMessage(request_id, agent_id, message, options);
+  }
+  private async sendMessage(
+    request_id: string,
+    agent_id: string,
+    message: string,
+    options: { settle_ms?: number; signal?: AbortSignal; prepare?: () => void },
+  ): Promise<{ delivery: Delivery; view: RunView }> {
+    if (
+      typeof request_id !== "string" ||
+      !request_id ||
+      request_id.length > 256 ||
+      request_id.startsWith(RETURN_TO_REQUEST_PREFIX)
+    )
+      throw new OrchestrationError("INVALID_REQUEST_ID");
+    if (typeof message !== "string" || !message.trim() || message.length > 16384)
+      throw new OrchestrationError("INVALID_MESSAGE");
+    const request_digest = sha256(stable({ agent_id, message }));
+    const replay = () => {
+      const old = this.deliveries.get(request_id);
+      if (!old) return undefined;
+      if (old.request_digest !== request_digest) throw new OrchestrationError("REQUEST_CONFLICT");
+      return { delivery: old.delivery, view: this.view(old.run_id) };
+    };
+    const early = replay();
+    if (early) return early;
+    // Captured before any await: a call made while Off never delivers because
+    // the preset was re-enabled while it waited.
+    const admission = this.admissionState();
+    this.assertNewWorkAdmission(admission);
+    const agent = this.requireAgent(agent_id);
+    const target = this.addressable(agent);
+    if (!target) throw new OrchestrationError("AGENT_UNAVAILABLE", { agent_id });
+    const bound = this.requireRun(target);
+    await this.settleGate({ agent_id, ms: options.settle_ms, signal: options.signal }, admission);
+    const submission = this.submitTail.then(() => {
+      const again = replay();
+      if (again) return again;
+      synchronousObservationPort(options.prepare?.());
+      if (options.signal?.aborted) throw new OrchestrationError("TOOL_INTERRUPTED");
+      this.assertNewWorkAdmission(admission);
+      this.assertOwnerAvailable();
+      if (!agent.resident || agent.release || agent.unavailable || agent.exiting) {
+        throw new OrchestrationError("AGENT_UNAVAILABLE", {
+          agent_id,
+          reason: agent.unavailable ?? (agent.exiting ? "exiting" : "released"),
+        });
+      }
+      const done = (delivery: Delivery, run_id: string) => {
+        this.deliveries.set(request_id, { request_digest, run_id, delivery });
+        if (this.deliveries.size > DELIVERY_LOG_LIMIT)
+          this.deliveries.delete(this.deliveries.keys().next().value!);
+        return { delivery, view: this.view(run_id) };
+      };
+      const record = bound.record;
+      if (agent.current === target && !terminal(record.status)) {
+        if (bound.quarantine)
+          throw new OrchestrationError("AGENT_UNAVAILABLE", { agent_id, reason: "releasing" });
+        if (!bound.promptComposed && !record.stop_reason && !record.execution_exited) {
+          if (
+            agent.inbox.length >= INBOX_LIMIT ||
+            agent.inbox.reduce((sum, text) => sum + text.length, message.length) > INBOX_CHARS
+          ) {
+            throw new OrchestrationError("UPDATE_LIMIT", {
+              agent_id,
+              resolution: "Wait for this task to start, then send one combined message.",
+            });
+          }
+          agent.inbox.push(message);
+          this.presentationVersion++;
+          return done("joined", target);
+        }
+        if (this.acceptsInput(bound)) {
+          this.dispatchInput(bound, message, "steer");
+          return done("steered", target);
+        }
+        if (record.status === "running" && !record.stop_reason && !record.execution_exited) {
+          throw new OrchestrationError("RUN_INPUT_NOT_READY", {
+            agent_id,
+            resolution: "The task is starting; retry shortly.",
+          });
+        }
+        return done("not_delivered", target); // Still ending after the settle wait.
+      }
+      return done("not_delivered", target);
+    });
+    this.submitTail = submission.catch(() => {});
+    return submission;
+  }
+  private ownerFault(includeClosed: boolean): OrchestrationError | undefined {
+    if (includeClosed && (this.closed || this.closing))
+      return new OrchestrationError("OWNER_CLOSED", {
+        resolution:
+          "This delegation Owner is closed. Tell the user; start a fresh Pi session only after confirmed closure.",
+      });
+    if (this.cleanupUncertain)
+      return new OrchestrationError("OWNER_CLEANUP_UNCERTAIN", {
+        resolution: "Cleanup is unconfirmed. Tell the user; there is no retry or force release.",
+      });
+    if (this.internalError)
+      return new OrchestrationError("OWNER_INTERNAL_ERROR", {
+        error: this.internalError,
+        resolution:
+          "Agent delegation stopped after an internal fault. Tell the user; do not retry.",
+      });
+    if (this.parentError)
+      return new OrchestrationError("OWNER_PARENT_UNAVAILABLE", {
+        error: this.parentError,
+        resolution: "The session history writer is unavailable. Tell the user; do not retry.",
+      });
+    return undefined;
+  }
+  private assertInputOpen(run: ManagedRun): void {
+    const fault = this.ownerFault(false);
+    if (fault) throw fault;
+    if (!this.acceptsInput(run)) throw new OrchestrationError("RUN_INPUT_CLOSED");
+  }
+  private dispatchInput(
+    run: ManagedRun,
+    message: string,
+    kind: "steer" | "soft_budget",
+  ): { accepted: true; event_id: string } {
+    this.assertEffectAllowed();
+    this.assertInputOpen(run);
+    // Resolve unknown/closed input first, preserving terminal-result replies even
+    // through cached tools while Off. Only new external input needs admission;
+    // internal finish-budget input remains allowed for already accepted work.
+    if (kind === "steer") {
+      this.assertExternalSteerAdmission();
+      // The trusted admission callback may reenter; retain the original post-
+      // callback Owner/input guards before recording or scheduling delivery.
+      this.assertInputOpen(run);
+    }
+    if (typeof message !== "string" || !message.trim() || message.length > 16384)
+      throw new OrchestrationError("INVALID_MESSAGE");
+    if (kind === "steer" && run.inputCount >= 64) throw new OrchestrationError("INPUT_LIMIT");
+    const event_id = this.changed(kind, run);
+    if (kind === "steer") run.inputCount++;
+    // Schedule after recording the reservation, so synchronous port exceptions
+    // and very fast exits are handled exactly like asynchronous preparation.
+    const delivery = Promise.resolve()
+      .then(() => run.session!.steer(message, () => this.acceptsInput(run)))
+      .then((queued) => {
+        if (!queued) {
+          run.record.discarded_inputs.push(message);
+          this.presentationVersion++;
+        }
+      })
+      .catch((error: unknown) => {
+        run.record.cleanup_errors.push(errorText(error));
+        run.quarantine = "input_delivery_uncertain";
+        this.presentationVersion++;
+      });
+    run.inputs.add(delivery);
+    // Delivery failure was classified above; cleanup observes both outcomes.
+    void delivery.then(
+      () => run.inputs.delete(delivery),
+      () => run.inputs.delete(delivery),
+    );
+    return { accepted: true, event_id };
+  }
+  private stop(run: ManagedRun, reason: StopReason, source?: CancellationSource): void {
+    this.assertEffectAllowed();
+    if (run.record.execution_exited || terminal(run.record.status) || run.record.stop_reason)
+      return;
+    // Freeze reason AND attribution before a consumer can throw/reenter cancel().
+    run.record.stop_reason = reason;
+    if (source !== undefined) run.record.cancellation_source = source;
+    run.inputOpen = false;
+    run.stopRequestedMono = this.clock.mono();
+    try {
+      this.changed(reason === "user_cancel" ? "cancel" : reason, run);
+    } catch (error) {
+      run.quarantine = "context_change_failed";
+      run.record.cleanup_errors.push(errorText(error));
+    }
+    const queued = run.record.status === "queued";
+    run.record.status = "cancelling";
+    if (queued) {
+      this.removeQueued(run.record.run_id);
+      this.track(this.finish(run, { kind: "aborted", output: run.output }));
+    } else if (run.session) {
+      // stop() may hang; only run() completion is execution-exit evidence.
+      const stopping = Promise.resolve()
+        .then(() => run.session!.stop())
+        .catch((error: unknown) => {
+          run.quarantine = "stop_uncertain";
+          run.record.cleanup_errors.push(errorText(error));
+          this.presentationVersion++;
+        });
+      run.inputs.add(stopping);
+      // Stop failure was classified above; cleanup is not another stop owner.
+      void stopping.then(
+        () => run.inputs.delete(stopping),
+        () => run.inputs.delete(stopping),
+      );
+    }
+    this.wake();
+  }
+  /** Only explicit human Stop passes source; model interrupt/kill and shutdown
+   * omit it. Neither repeated stops nor late inspection can add attribution. */
+  cancel(run_id: string, options?: { source: "human" }) {
+    this.assertEffectAllowed();
+    const source =
+      options === undefined
+        ? undefined
+        : this.validateObservationEntry(() => cancellationSource(options));
+    const run = this.requireRun(run_id);
+    const result: "already_terminal" | "already_exited" | "cancel_requested" = terminal(
+      run.record.status,
+    )
+      ? "already_terminal"
+      : run.record.execution_exited
+        ? "already_exited"
+        : "cancel_requested";
+    const already_stopping = !!run.record.stop_reason;
+    if (result === "cancel_requested") this.stop(run, "user_cancel", source);
+    const snapshot = this.view(run_id);
+    return {
+      result,
+      already_stopping,
+      execution_exited: snapshot.execution_exited,
+      finalization_pending: snapshot.finalization_pending,
+      stop_reason: snapshot.stop_reason,
+      snapshot,
+    };
+  }
+
+  private drainView(run: ManagedRun): RunView["drain"] {
+    return run.record.execution_exited || !run.drain
+      ? undefined
+      : {
+          waiting_for: run.drain.waiting_for,
+          elapsed_ms: Math.max(0, this.clock.mono() - run.drain.startedMono),
+        };
+  }
+
+  view(run_id: string): RunView {
+    const run = this.requireRun(run_id);
+    return this.projectRun(
+      run,
+      this.observationLeaseHeld(),
+      taskOrdinal(run, [...this.runs.values()]),
+      this.projectionActivity([run]),
+    );
+  }
+  private projectRun(
+    run: ManagedRun,
+    leaseHeld: boolean,
+    task: number,
+    providers: ProviderActivity,
+  ): RunView {
+    const record = run.record,
+      run_id = record.run_id,
+      agent = this.requireAgent(record.agent_id);
+    const queued_for = this.queuedFor(run, this.communicationHealthy() && leaseHeld, providers);
+    const unavailable =
+      this.closed || this.closing
+        ? "owner_closed"
+        : this.cleanupUncertain
+          ? "owner_cleanup_uncertain"
+          : this.internalError
+            ? "owner_internal_error"
+            : this.parentError
+              ? "owner_parent_unavailable"
+              : !leaseHeld
+                ? "owner_lease_lost"
+                : (agent.unavailable ??
+                  (agent.exiting ? "exiting" : agent.current ? "agent_busy" : undefined));
+    return projectRun(run, {
+      drain: this.drainView(run),
+      resident: agent.resident,
+      unavailable_reason: unavailable,
+      owner_error: this.parentError ?? this.internalError,
+      owner_blocked: !!this.parentError || !!this.internalError || this.cleanupUncertain,
+      elapsed_ms: record.elapsed_ms ?? Math.max(0, this.clock.mono() - run.submittedMono),
+      turn_elapsed_ms:
+        run.turnStarted === undefined
+          ? undefined
+          : Math.max(0, this.clock.mono() - run.turnStarted),
+      execution_elapsed_ms:
+        record.execution_elapsed_ms ??
+        (run.executionStartedMono === undefined
+          ? undefined
+          : Math.max(0, this.clock.mono() - run.executionStartedMono)),
+      task,
+      has_question: agent.question?.run_id === run_id,
+      question_id: actionableQuestionId(agent, run, this.communicationHealthy() && leaseHeld),
+      pending_messages: this.alerts.filter((alert) => alert.run === run).length,
+      ...(this.blockedBy(run).length ? { blocked_by: this.blockedBy(run) } : {}),
+      ...(queued_for ? { queued_for } : {}),
+    });
+  }
+  /** Agent lookup by its label, for hosts that address Agents by name. */
+  /** The task an Agent is addressed by: its current task, else the task whose
+   * question is still unanswered (an answer that never started reopens it),
+   * else its latest task. */
+  private addressable(agent: Agent): string | undefined {
+    return (
+      agent.current ??
+      (agent.question && !agent.question.reserved_by ? agent.question.run_id : undefined) ??
+      [...this.runs.values()].findLast((run) => run.record.agent_id === agent.id)?.record.run_id
+    );
+  }
+  findAgent(name: string): { agent_id: string; run_id: string } | undefined {
+    for (const agent of this.agents.values()) {
+      if (agent.name !== name) continue;
+      const run_id = this.addressable(agent);
+      if (run_id) return { agent_id: agent.id, run_id };
+    }
+    return undefined;
+  }
+  agentName(agent_id: string): string {
+    return this.requireAgent(agent_id).name;
+  }
+  /**
+   * Child spend observed since the last drain, for the host to attribute to its
+   * own accounting. Draining clears it, so the caller must actually report what
+   * it takes; nothing is accrued twice and nothing is replayed.
+   *
+   * Residue after the parent's last tool result is not merged into Pi totals.
+   * stats().unreported_usage exposes it without draining; the Pi adapter records
+   * non-additive close/shutdown audit snapshots, and Run END metadata retains
+   * observed usage independently. These records do not bill Pi's footer and
+   * abrupt process loss can still prevent final checkpoints. See README,
+   * "Remaining parent-total gap".
+   */
+  drainUsage(): UsageLedger | undefined {
+    this.assertEffectAllowed();
+    const pending = this.unreported;
+    this.unreported = undefined;
+    if (pending) this.presentationVersion++;
+    return pending;
+  }
+  /** Puts a drained ledger back, for a caller that could not deliver it. The
+   * drain is destructive by design, so the only way a failed handover is not a
+   * silent loss is for the caller to hand the money back. */
+  returnUsage(ledger: UsageLedger | undefined): void {
+    this.assertEffectAllowed();
+    this.unreported = mergeLedgers(this.unreported, ledger);
+    if (ledger) this.presentationVersion++;
+  }
+  list(options: { include_released?: boolean } = {}): RunView[] {
+    const latest = new Map<string, ManagedRun>(),
+      ordinals = new Map<string, number>();
+    // Runs enter this map in enqueue order and are never evicted. Derive the
+    // latest ordinal per Agent in this projection only, including its history.
+    for (const run of this.runs.values()) {
+      const id = run.record.agent_id;
+      ordinals.set(id, (ordinals.get(id) ?? 0) + 1);
+      if (options.include_released === false && !this.requireAgent(id).resident) continue;
+      latest.set(id, run);
+    }
+    if (!latest.size) return [];
+    // Occupancy belongs to this projection only, just like lease health and
+    // ordinals. Do not rescan retained Runs for each queued row or cache it
+    // across independent views/commands.
+    const leaseHeld = this.observationLeaseHeld(),
+      providers = this.projectionActivity(latest.values());
+    return [...latest.values()].map((run) =>
+      this.projectRun(run, leaseHeld, ordinals.get(run.record.agent_id)!, providers),
+    );
+  }
+  stats() {
+    const draining: Array<{ run_id: string; agent_id: string } & NonNullable<RunView["drain"]>> =
+      [];
+    const finalizingWaits: Array<{
+      run_id: string;
+      agent_id: string;
+      wait: "inputs" | "release" | "history";
+      elapsed_ms: number;
+    }> = [];
+    const stopping: Array<{
+      run_id: string;
+      agent_id: string;
+      stop_reason: StopReason;
+      elapsed_ms: number | undefined;
+    }> = [];
+    const settled_reasons: Record<string, number> = {};
+    let finalizing = 0;
+    // Derive diagnostics together, without maintaining another lifecycle ledger.
+    for (const run of this.runs.values()) {
+      const record = run.record,
+        identity = { run_id: record.run_id, agent_id: record.agent_id };
+      const drain = this.drainView(run);
+      if (drain) draining.push({ ...identity, ...drain });
+      if (run.finalizeWait)
+        finalizingWaits.push({
+          ...identity,
+          wait: run.finalizeWait.wait,
+          elapsed_ms: Math.max(0, this.clock.mono() - run.finalizeWait.startedMono),
+        });
+      if (record.stop_reason && !record.execution_exited)
+        stopping.push({
+          ...identity,
+          stop_reason: record.stop_reason,
+          elapsed_ms:
+            run.stopRequestedMono === undefined
+              ? undefined
+              : Math.max(0, this.clock.mono() - run.stopRequestedMono),
+        });
+      if (terminal(record.status)) {
+        const key = `${record.status}/${record.outcome?.reason ?? "none"}`;
+        settled_reasons[key] = (settled_reasons[key] ?? 0) + 1;
+      } else if (record.execution_exited) finalizing++;
+    }
+    return {
+      active: this.active,
+      queued: this.queue.length,
+      concurrency_scope: "provider" as const,
+      providers: [...this.providerActivity().values()],
+      ...(draining.length ? { draining } : {}),
+      ...(Object.keys(settled_reasons).length ? { settled_reasons } : {}),
+      ...(finalizingWaits.length ? { finalizing_waits: finalizingWaits } : {}),
+      ...(stopping.length ? { stopping } : {}),
+      resident: [...this.agents.values()].filter((a) => a.resident).length,
+      agents: this.agents.size,
+      runs: this.runs.size,
+      requests: this.requests.size,
+      /** Effective limits: concurrency is per provider; active above is summed
+       * across providers. Resident and queue capacities remain Owner-wide. */
+      limits: { ...this.limits },
+      retained_output_chars: this.retainedOutputChars,
+      reserved_output_chars: this.reservedOutputChars,
+      unreported_usage: this.unreported ? structuredClone(this.unreported) : undefined,
+      finalizing,
+      parent_error: this.parentError,
+      internal_error: this.internalError,
+      cleanup_uncertain: this.cleanupUncertain,
+      cleaning: this.cleaning,
+      closed: this.closed,
+    };
+  }
+
+  getResult(run_id: string, options: { cursor?: string; limit?: number } = {}): ResultPage {
+    const run = this.requireRun(run_id),
+      limit = options.limit ?? 4096;
+    if (!positive(limit) || limit > 16384) throw new OrchestrationError("INVALID_LIMIT");
+    let offset = 0;
+    if (options.cursor !== undefined) {
+      if (typeof options.cursor !== "string" || options.cursor.length > 1024)
+        throw invalidResultCursor();
+      if (!terminal(run.record.status)) throw new OrchestrationError("RESULT_NOT_FINAL");
+      try {
+        offset = this.resultOffset(run, options.cursor);
+      } catch {
+        throw invalidResultCursor();
+      }
+    }
+    const { text, end } = sliceResultWindow(run.output.text, offset, limit);
+    const truncated = end < run.output.text.length || run.output.truncated;
+    const final = terminal(run.record.status);
+    return {
+      snapshot: this.view(run_id),
+      text,
+      complete: final && !truncated,
+      truncated,
+      retained_chars: run.output.text.length,
+      total_chars: run.output.total_chars,
+      result_ref: run.record.result,
+      ...(final && end < run.output.text.length
+        ? {
+            next_cursor: encodeResultCursor(this.resultIdentity(run), end),
+          }
+        : {}),
+    };
+  }
+
+  /** Lifecycle-only state wait: never validates parent SDK context or publishes
+   * communication. Actual execution/cleanup promises still prove shutdown. */
+  waitForRuns(
+    run_ids: string[],
+    options: { mode: "any" | "all"; timeout_ms?: number; signal?: AbortSignal },
+  ): Promise<LifecycleObservationResult> {
+    this.assertEffectAllowed();
+    if (!run_ids.length || !["any", "all"].includes(options.mode))
+      throw new OrchestrationError("INVALID_WAIT");
+    const runs = [...new Set(run_ids)].map((id) => this.requireRun(id));
+    return this.observations.observeLifecycle({
+      wait_ms: options.timeout_ms,
+      signal: options.signal,
+      ready: () =>
+        options.mode === "any"
+          ? runs.some(isCommunicationSettled)
+          : runs.every(isCommunicationSettled),
+    });
+  }
+
+  /** Low-level bounded model-packing seam, not generic identity conversion.
+   * Production adapters bindModelCommunication before exposing their tools.
+   * Direct callers own snapshot representability; use view/list/getResult for
+   * generic ID-based inspection. No caller may reshape/check/consume a
+   * successful serialized ToolResult after this returns. */
+  observe(
+    request: OwnerObservationRequest,
+    options: { validate: () => void; signal?: AbortSignal },
+  ): Promise<CommunicationToolResult> {
+    this.assertEffectAllowed();
+    const initial = this.validateObservationEntry(() => {
+      synchronousObservationPort(options.validate());
+      return { enabled: this.readAdmissionState().enabled, leaseHeld: this.observationLeaseHeld() };
+    });
+    let leaseHeld = initial.leaseHeld;
+    let targets: ManagedRun[], scope: AlertScope<ManagedRun>;
+    let conditionTargets: ManagedRun[] | undefined;
+    let action: CommunicationAction | undefined;
+    let cursor: string | undefined;
+    const mode = request.kind === "wait" ? (request.mode ?? "all") : "all";
+    if (!["all", "any"].includes(mode)) throw new OrchestrationError("INVALID_WAIT");
+    if (request.kind === "wait") {
+      if (request.agent_ids !== undefined) {
+        const agents = [...new Set(request.agent_ids)].map((id) => this.requireAgent(id));
+        if (!agents.length) throw new OrchestrationError("INVALID_WAIT");
+        targets = agents.map((agent) => this.requireRun(this.addressable(agent)!));
+        scope = { kind: "agents", agent_ids: agents.map((agent) => agent.id) };
+      } else {
+        targets = defaultObservationTargets(
+          [...this.agents.values()],
+          [...this.runs.values()],
+          initial.enabled,
+          this.communicationHealthy() && leaseHeld,
+        );
+        scope = { kind: "owner" };
+      }
+    } else if (request.kind === "read") {
+      const agent = this.requireAgent(request.agent_id);
+      if (request.task !== undefined && (!positive(request.task) || request.cursor !== undefined))
+        throw new OrchestrationError("INVALID_PARAMETERS", {
+          key: "task",
+          resolution:
+            "Use a positive safe task number to start its first page, or a cursor to continue its original task; do not supply both.",
+        });
+      const run =
+        request.cursor !== undefined
+          ? this.resultRun(agent.id, request.cursor)
+          : request.task === undefined
+            ? this.requireRun(this.addressable(agent)!)
+            : this.ordinalRun(agent.id, request.task);
+      if (run.record.agent_id !== agent.id) throw invalidResultCursor();
+      targets = [run];
+      scope = { kind: "agents", agent_ids: [agent.id] };
+      cursor = request.cursor;
+    } else {
+      const run = this.requireRun(request.run_id);
+      if (run.record.return_to_run_id && request.action.type === "agent_spawn") {
+        // Both exact Runs are shown and scoped for alerts, but only the worker
+        // continuation decides readiness: any non-completed scout already fails
+        // it, so the scout never needs (or may race) a separate earlier trigger.
+        const continuation = this.requireRun(run.record.return_to_run_id);
+        targets = [run, continuation];
+        conditionTargets = [continuation];
+        scope = { kind: "runs", runs: targets };
+      } else {
+        targets = [run];
+        scope = { kind: "run", run };
+      }
+      action = {
+        ...request.action,
+        agent: run.record.name,
+        task: taskOrdinal(run, [...this.runs.values()]),
+      };
+    }
+    const wait_ms =
+      request.kind === "read" ? 0 : (request.wait_ms ?? (request.kind === "wait" ? 300000 : 0));
+    if (!Number.isInteger(wait_ms) || wait_ms < 0 || wait_ms > 300000)
+      throw new OrchestrationError("INVALID_WAIT");
+    const limit = request.kind === "read" ? (request.max_chars ?? 16384) : 16384;
+    if (!positive(limit) || limit > 16384) throw new OrchestrationError("INVALID_LIMIT");
+    const reportedBlockAtStart = this.reportedBlock;
+    let snapshot: CommunicationCommitSnapshot<ManagedRun>,
+      envelope: CommunicationEnvelope,
+      plan: CommunicationCommitPlan<ManagedRun>;
+    return this.observations.observe({
+      policy:
+        request.kind === "read" || (request.kind === "action" && wait_ms === 0)
+          ? { kind: "snapshot" }
+          : { kind: "waiting", wait_ms },
+      signal: options.signal,
+      ready: () =>
+        communicationReadiness({
+          targets: conditionTargets ?? targets,
+          agents: [...this.agents.values()],
+          mode,
+          ownerHealthy: this.communicationHealthy() && leaseHeld,
+          currentBlocked: this.communicationBlock(),
+          reportedBlockAtStart,
+          pending: this.alerts,
+          scope,
+        }),
+      validate: () => {
+        synchronousObservationPort(options.validate());
+        leaseHeld = this.observationLeaseHeld();
+        return this.readAdmissionState().enabled;
+      },
+      snapshot: (reason, enabled) => {
+        const all = [...this.runs.values()],
+          alerts = scopedAlerts(this.alerts, scope);
+        const ordinals = taskOrdinals(all),
+          targetIndices = new Map(targets.map((run, index) => [run, index]));
+        const finished = finishedCandidates(all);
+        const healthy = this.communicationHealthy() && leaseHeld,
+          providers = this.projectionActivity(targets);
+        const data: CommunicationSnapshot = {
+          reason,
+          ...(action ? { action } : {}),
+          ...(!enabled ? { workers_disabled: true } : {}),
+          tasks: targets.map((run) =>
+            this.communicationTask(
+              run,
+              ordinals,
+              healthy,
+              providers,
+              limit,
+              cursor,
+              request.kind === "read",
+            ),
+          ),
+          alerts: alerts.map(({ run, message, source }) => ({
+            agent: run.record.name,
+            task: ordinals.get(run)!,
+            label: boundedOutput(run.record.description, COMMUNICATION_LIMITS.label_units).text,
+            message,
+            ...(source === undefined ? {} : { source }),
+          })),
+          finished: finished.map((run) => ({
+            row: this.communicationRow(run, ordinals.get(run)!, healthy, providers),
+            label: boundedOutput(run.record.description, COMMUNICATION_LIMITS.label_units).text,
+            ...(run.record.cancellation_source
+              ? { cancellation_source: run.record.cancellation_source }
+              : {}),
+            ...(targetIndices.has(run) ? { task_index: targetIndices.get(run)! } : {}),
+          })),
+          blocked: this.communicationBlock(),
+        };
+        snapshot = { data, targets, alerts, finished, reportedBlockAtStart };
+        return data;
+      },
+      publish: (data) => {
+        const packed = packCommunication(data);
+        envelope = packed.envelope;
+        return { result: packed.result, references: packed.references };
+      },
+      validateCommit: (references) => {
+        plan = validateCommunicationCommit({
+          runs: [...this.runs.values()],
+          pending: this.alerts,
+          scope,
+          snapshot,
+          references,
+          envelope,
+          currentBlocked: this.communicationBlock(),
+        });
+      },
+      commit: () => {
+        applyCommunicationCommit(this.alerts, plan);
+        if (plan.alert_indices.length || plan.finished.length || plan.blocked !== undefined)
+          this.presentationVersion++;
+        if (plan.blocked !== undefined) this.reportedBlock = plan.blocked;
+      },
+    });
+  }
+
+  private communicationBlock(): string | undefined {
+    return this.cleanupUncertain ? "cleanup_uncertain" : (this.internalError ?? this.parentError);
+  }
+  private communicationHealthy(): boolean {
+    return !this.closed && !this.closing && this.communicationBlock() === undefined;
+  }
+  /** Observation-only lease check: never calls the effecting availability gate
+   * or latches an observer failure as an execution/cleanup fault. */
+  private observationLeaseHeld(): boolean {
+    try {
+      this.assertLeaseHeld();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  private communicationRow(
+    run: ManagedRun,
+    task: number,
+    healthy: boolean,
+    providers: ProviderActivity,
+  ): ThinTaskEntry {
+    const agent = this.requireAgent(run.record.agent_id);
+    return communicationRow(run, agent, task, healthy, this.queuedFor(run, healthy, providers));
+  }
+  private communicationTask(
+    run: ManagedRun,
+    ordinals: ReadonlyMap<ManagedRun, number>,
+    healthy: boolean,
+    providers: ProviderActivity,
+    limit: number,
+    cursor: string | undefined,
+    historical: boolean,
+  ): TaskSnapshot {
+    const agent = this.requireAgent(run.record.agent_id),
+      task = ordinals.get(run)!;
+    const question_id = actionableQuestionId(agent, run, healthy);
+    const handoff = this.returnToNotice(run, ordinals);
+    // Only an explicit read returns the retained result, and only where the
+    // handoff did not carry all of it: otherwise that text would be unreachable.
+    const result_notice =
+      handoff === undefined || (historical && handoff.readable) ? undefined : handoff.text;
+    // Selection locators still validate against the real retained result, even
+    // when this model observation returns only the handoff notice.
+    if (result_notice !== undefined && cursor !== undefined) this.resultOffset(run, cursor);
+    return communicationTask(run, historical, {
+      row: this.communicationRow(run, task, healthy, providers),
+      question_id,
+      ...(result_notice === undefined
+        ? { result: this.communicationWindow(run, limit, cursor) }
+        : { result_notice }),
+      diagnostics: {
+        error: run.record.outcome?.error,
+        owner_error: this.parentError ?? this.internalError,
+        unavailable_reason: !healthy
+          ? "owner_unavailable"
+          : (agent.unavailable ?? (agent.exiting ? "exiting" : run.quarantine)),
+      },
+    });
+  }
+  /** Model-visible status follows the exact original continuation, never an
+   * Agent's latest task. Actual retained output stays available to handoff/UI. */
+  private returnToNotice(
+    run: ManagedRun,
+    ordinals: ReadonlyMap<ManagedRun, number>,
+  ): ReturnType<typeof returnToNotice> | undefined {
+    const id = run.record.return_to_run_id;
+    if (id === undefined) return undefined;
+    const continuation = this.requireRun(id);
+    // The source settled before its continuation started, so this is exactly
+    // the prefix handoffText attached.
+    const omitted = continuation.record.input_entered
+      ? handoffOmittedChars(
+          run.output.text,
+          this.dependencies(continuation.record).length,
+          HANDOFF_CHARS,
+        )
+      : 0;
+    return returnToNotice(
+      run.record.name,
+      continuation.record,
+      ordinals.get(continuation)!,
+      ordinals.get(run)!,
+      omitted,
+    );
+  }
+  private resultIdentity(run: ManagedRun): ResultCursorIdentity {
+    const record = run.record;
+    return {
+      owner: record.owner_id,
+      generation: record.generation,
+      run: record.run_id,
+      version: record.result?.digest ?? sha256(run.output.text),
+    };
+  }
+  /** Read-only ordinal selector: commands never target tasks by ordinal. */
+  private ordinalRun(agent_id: string, task: number): ManagedRun {
+    let ordinal = 0;
+    for (const run of this.runs.values())
+      if (run.record.agent_id === agent_id && ++ordinal === task) return run;
+    throw new OrchestrationError("TASK_NOT_FOUND", {
+      agent_id,
+      key: "task",
+      resolution:
+        "Use a task number previously returned for this Agent, or omit task and cursor to read its current, pending-question, or latest task.",
+    });
+  }
+  /** Scan original retained Runs, not a second cursor registry. Scope and
+   * ambiguous digest matches fail closed. */
+  private resultRun(agent_id: string, cursor: string): ManagedRun {
+    if (typeof cursor !== "string" || cursor.length > 1024) throw invalidResultCursor();
+    const { key } = decodeResultCursor(cursor);
+    const matches = [...this.runs.values()].filter(
+      (run) => isCommunicationSettled(run) && resultCursorKey(this.resultIdentity(run)) === key,
+    );
+    if (matches.length !== 1 || matches[0]!.record.agent_id !== agent_id)
+      throw invalidResultCursor();
+    return matches[0]!;
+  }
+  /** Core and model reads share the same cursor identity and retained-text
+   * offset checks, including surrogate boundaries. */
+  private resultOffset(run: ManagedRun, cursor: string): number {
+    if (typeof cursor !== "string" || cursor.length > 1024 || !isCommunicationSettled(run))
+      throw invalidResultCursor();
+    try {
+      const parsed = decodeResultCursor(cursor);
+      if (parsed.key !== resultCursorKey(this.resultIdentity(run))) throw new Error();
+      const offset = parsed.offset;
+      if (
+        !Number.isSafeInteger(offset) ||
+        offset < 0 ||
+        offset > run.output.text.length ||
+        splitsSurrogatePair(run.output.text, offset)
+      )
+        throw new Error();
+      return offset;
+    } catch {
+      throw invalidResultCursor();
+    }
+  }
+  /** Retained result pages only; routed scout results use a separate notice. */
+  private communicationWindow(
+    run: ManagedRun,
+    limit: number,
+    cursor: string | undefined,
+  ): ResultWindow {
+    const stable = isCommunicationSettled(run);
+    const offset = cursor === undefined ? 0 : this.resultOffset(run, cursor);
+    const bounds = {
+      offset,
+      retained_chars: run.output.text.length,
+      total_chars: run.output.total_chars,
+      ...(stable ? { cursor: this.resultIdentity(run) } : {}),
+    };
+    return { text: sliceResultWindow(run.output.text, offset, limit).text, ...bounds };
+  }
+
+  private releaseAgent(agent: Agent, reason: string, run?: ManagedRun): Promise<void> {
+    this.assertEffectAllowed();
+    if (agent.release) return agent.release;
+    if (agent.current && !(run?.record.execution_exited && agent.current === run.record.run_id))
+      throw new OrchestrationError("AGENT_BUSY");
+    agent.unavailable = reason;
+    agent.question = undefined;
+    const port = agent.session;
+    agent.session = undefined;
+    // Explicit release / idle shutdown happen after END. Keep their diagnostics
+    // on the latest Run's live view without rewriting its task outcome/history.
+    const diagnosticRun =
+      run ??
+      [...this.runs.values()].findLast((candidate) => candidate.record.agent_id === agent.id);
+    // Queued updates can no longer reach a prompt; report them like undelivered steers.
+    diagnosticRun?.record.discarded_inputs.push(...agent.inbox.splice(0));
+    const recordErrors = (errors: readonly unknown[]): void => {
+      const shown = errors.slice(0, 16).map(errorText);
+      if (errors.length > 16) shown.push(`CLEANUP_ERRORS_OMITTED: ${errors.length - 16}`);
+      diagnosticRun?.record.cleanup_errors.push(...shown);
+    };
+    this.cleaning++;
+    this.presentationVersion++;
+    const releasing = Promise.resolve().then(async () => {
+      let clean = reason !== "cleanup_uncertain";
+      try {
+        if (port) {
+          const report = await port.dispose();
+          if (!report.shutdownExited || report.errors.length) {
+            clean = false;
+            recordErrors(report.errors);
+            if (!report.shutdownExited)
+              diagnosticRun?.record.cleanup_errors.push("shutdown_not_exited");
+          }
+        }
+      } catch (error) {
+        clean = false;
+        recordErrors([error]);
+      } finally {
+        if (clean) {
+          agent.cleanupComplete = true;
+          this.releaseClaimsIfIdle(agent);
+          if (this.uncertainClaim(agent)) {
+            agent.unavailable = "cleanup_uncertain";
+            agent.resident = true;
+          } else if (!agent.current) agent.resident = false;
+        } else {
+          this.cleanupUncertain = true;
+          agent.unavailable = "cleanup_uncertain";
+        }
+        // Unknown shutdown retains its reservation AND the owner lock, regardless
+        // of whether history is available. There is no retry/force-unlock API.
+        this.cleaning--;
+        this.wake();
+        this.pump();
+      }
+    });
+    agent.release = releasing; // Publish before port.dispose() can synchronously reenter.
+    return releasing;
+  }
+  /** Explicit parent-host release. The reply describes the actual reservation,
+   * not just completion of a cleanup attempt. Never automatic TTL/LRU eviction. */
+  release(agent_id: string) {
+    this.assertEffectAllowed();
+    return this.releaseIdleAgent(agent_id);
+  }
+  private async releaseIdleAgent(agent_id: string) {
+    const agent = this.requireAgent(agent_id);
+    if (agent.current) throw new OrchestrationError("AGENT_BUSY", { run_id: agent.current });
+    const task = this.releaseAgent(agent, "explicitly_released");
+    this.track(task);
+    await task;
+    return {
+      agent_id,
+      released: !agent.resident,
+      ...(agent.resident ? { reason: "cleanup_uncertain" } : {}),
+    };
+  }
+
+  /** Permanent end of an Agent. A busy Agent's task is cancelled and the Agent
+   * is released once that task settles. One deadline covers stopping and
+   * cleanup; past it the reply says exiting while tracked cleanup continues
+   * and unconfirmed resources stay reserved. */
+  kill(
+    agent_id: string,
+    settle_ms = 10000,
+  ): Promise<{ agent_id: string; state: "released" | "exiting" | "cleanup_uncertain" }> {
+    this.assertEffectAllowed();
+    return this.killAgent(agent_id, settle_ms);
+  }
+  private async killAgent(
+    agent_id: string,
+    settle_ms: number,
+  ): Promise<{ agent_id: string; state: "released" | "exiting" | "cleanup_uncertain" }> {
+    // Validate before even released/idle branches: an invalid duration must not
+    // cancel work, close questions, mark exiting, or begin disposal.
+    validateLifecycleWait(settle_ms);
+    // Real time, like lifecycle waits: an injected run clock never fires deadlines.
+    const agent = this.requireAgent(agent_id),
+      deadline = performance.now() + settle_ms;
+    const state = () => ({
+      agent_id,
+      state: !agent.resident
+        ? ("released" as const)
+        : agent.unavailable === "cleanup_uncertain"
+          ? ("cleanup_uncertain" as const)
+          : ("exiting" as const),
+    });
+    if (agent.current) {
+      const run_id = agent.current;
+      agent.exiting = true;
+      agent.question = undefined;
+      this.cancel(run_id);
+      await this.waitForRuns([run_id], { mode: "all", timeout_ms: settle_ms });
+    } else if (!agent.release) this.track(this.releaseAgent(agent, "explicitly_released"));
+    const release = agent.release;
+    const remaining = deadline - performance.now();
+    if (release && !agent.current && remaining > 0) {
+      await this.observations.observeLifecycle({
+        wait_ms: Math.ceil(remaining),
+        ready: () => !agent.resident || agent.unavailable === "cleanup_uncertain",
+      });
+    }
+    return state();
+  }
+
+  shutdown(timeout_ms = 2000) {
+    this.assertEffectAllowed();
+    return this.shutdownOwner(timeout_ms);
+  }
+  private async shutdownOwner(timeout_ms: number) {
+    if (!Number.isFinite(timeout_ms) || timeout_ms < 0)
+      throw new OrchestrationError("INVALID_LIMIT");
+    if (this.closed) return this.stats();
+    this.closing = true;
+    this.presentationVersion++;
+    for (const run of this.runs.values()) this.cancel(run.record.run_id);
+    const settle = (async () => {
+      await this.submitTail;
+      while (this.tasks.size) await Promise.all([...this.tasks]);
+      for (const agent of this.agents.values()) {
+        if (!agent.resident) continue;
+        try {
+          await this.releaseAgent(agent, "owner_closed");
+        } catch (error) {
+          // A settle throw must not leave closing=true, closed=false with the
+          // lease still held and no driver. Like track(), latch BOTH flags:
+          // cleanupUncertain is what the close gate below actually checks.
+          this.cleanupUncertain = true;
+          this.internalError = errorText(error);
+          this.wake();
+        }
+      }
+    })();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const done = await Promise.race([
+      settle.then(() => true),
+      new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeout_ms);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (
+      done &&
+      !this.tasks.size &&
+      !this.cleaning &&
+      !this.cleanupUncertain &&
+      !this.active &&
+      !this.stats().finalizing
+    ) {
+      // Unsaved history may be lost. It does not require keeping a fully drained
+      // owner alive; uncertain execution/cleanup still absolutely does.
+      this.options.owner.close();
+      this.closed = true;
+      this.presentationVersion++;
+    }
+    return this.stats(); // Timeout never unlocks a still-owned execution/finalization.
+  }
+}

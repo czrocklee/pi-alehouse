@@ -172,19 +172,19 @@ export function registerTitleTests(titleExtension, fixture, visibleWidth) {
     const animated = f.titles.at(-1);
     f.terminal.setTitle("π - project");
     assert.equal(f.titles.at(-1), animated);
-    f.rename("新任务");
-    f.terminal.setTitle("π - 新任务 - project");
+    f.rename("new");
+    f.terminal.setTitle("π - new - project");
     await f.emit("session_info_changed");
-    assert.equal(plainTitle(f.titles.at(-1)), "π - 新任务");
+    assert.equal(plainTitle(f.titles.at(-1)), "π - new");
     assert.match(f.titles.at(-1), /[\u0305\u033f]/, "renamed short label is on the upper sweep");
     f.pi.events.emit("permissions:ui_prompt", { requestId: "a" });
     f.pi.events.emit("permissions:ui_prompt", { requestId: "b" });
-    assert.equal(f.titles.at(-1), "! - 新任务");
+    assert.equal(f.titles.at(-1), "! - new");
     const pausedCount = f.titles.length;
     t.mock.timers.tick(330);
     assert.equal(f.titles.length, pausedCount, "approval pauses animation");
     f.pi.events.emit("permissions:decision", { requestId: "a" });
-    assert.equal(f.titles.at(-1), "! - 新任务");
+    assert.equal(f.titles.at(-1), "! - new");
     f.pi.events.emit("permissions:decision", { requestId: "b" });
     t.mock.timers.tick(33 * 18);
     assert.match(
@@ -193,7 +193,7 @@ export function registerTitleTests(titleExtension, fixture, visibleWidth) {
       "working title resumes its upper sweep after approval",
     );
     await f.emit("agent_settled");
-    assert.equal(f.titles.at(-1), "✓ - 新任务");
+    assert.equal(f.titles.at(-1), "✓ - new");
     const settledCount = f.titles.length;
     t.mock.timers.tick(330);
     assert.equal(f.titles.length, settledCount, "settlement stops animation");
@@ -225,27 +225,27 @@ export function registerTitleTests(titleExtension, fixture, visibleWidth) {
       );
       f.terminal.setTitle("core rewrite");
       assert.equal(f.titles.at(-1), "✓ - project", "core cannot erase the marker");
-      f.rename("a long completed task 项目配置");
+      f.rename("a long completed task configuration");
       await f.emit("session_info_changed");
-      assert.equal(f.titles.at(-1), "✓ - a long completed task 项目配置");
+      assert.equal(f.titles.at(-1), "✓ - a long completed task configuration");
       for (const channel of ["permissions:decision", "managed-permissions:ui_prompt_end:v1"]) {
         f.pi.events.emit("permissions:ui_prompt", { requestId: channel });
-        assert.equal(f.titles.at(-1), "! - a long completed task 项目配置");
+        assert.equal(f.titles.at(-1), "! - a long completed task configuration");
         f.pi.events.emit(channel, { requestId: channel });
         assert.equal(
           f.titles.at(-1),
-          "✓ - a long completed task 项目配置",
+          "✓ - a long completed task configuration",
           "approval restores the settled marker",
         );
       }
       await f.emit("agent_start");
-      assert.equal(plainTitle(f.titles.at(-1)), "π - a long completed task 项目配置");
+      assert.equal(plainTitle(f.titles.at(-1)), "π - a long completed task configuration");
       assert.match(f.titles.at(-1), TITLE_MARKS, "the next run restarts animation");
       await f.emit("agent_settled");
       await f.emit("session_start");
       assert.equal(
         f.titles.at(-1),
-        "π - a long completed task 项目配置",
+        "π - a long completed task configuration",
         "a new session clears settlement",
       );
       await f.emit("agent_start");
@@ -253,7 +253,7 @@ export function registerTitleTests(titleExtension, fixture, visibleWidth) {
       await f.emit("session_shutdown");
       assert.equal(
         f.titles.at(-1),
-        "π - a long completed task 项目配置",
+        "π - a long completed task configuration",
         "shutdown clears the managed marker",
       );
       assert.equal(f.terminal.setTitle, f.originalSetTitle);
@@ -363,19 +363,19 @@ export function registerTitleTests(titleExtension, fixture, visibleWidth) {
     t.mock.timers.enable({ apis: ["setInterval"] });
     const f = fixture();
     titleExtension(f.pi);
-    f.rename("  abcdefghijklmnop\n\x07  项目配置  ");
+    f.rename("  abcdefghijklmnop\n\x07  project configuration  ");
     await f.emit("session_start");
-    assert.equal(f.titles.at(-1), "π - abcdefghijklmnop 项目配置");
+    assert.equal(f.titles.at(-1), "π - abcdefghijklmnop project configuration");
     await f.emit("agent_start");
     t.mock.timers.tick(330);
     f.pi.events.emit("permissions:ui_prompt", { requestId: "long-title" });
     assert.equal(
       f.titles.at(-1),
-      "! - abcdefghijklmnop 项目配置",
+      "! - abcdefghijklmnop project configuration",
       "approval also preserves the full label",
     );
     await f.emit("session_shutdown");
-    assert.equal(f.titles.at(-1), "π - abcdefghijklmnop 项目配置");
+    assert.equal(f.titles.at(-1), "π - abcdefghijklmnop project configuration");
     const count = f.titles.length;
     t.mock.timers.tick(330);
     f.pi.events.emit("permissions:ui_prompt", { requestId: "late" });

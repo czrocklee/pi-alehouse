@@ -12,14 +12,14 @@
     forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
   in {
     packages = forAllSystems (pkgs: rec {
-      pi-alehouse = pkgs.callPackage ./nix/package.nix {};
-      permission-bootstrap = pkgs.callPackage ./nix/permission-bootstrap {inherit pi-alehouse;};
-      default = pi-alehouse;
+      alehouse = pkgs.callPackage ./nix/package.nix {};
+      permission-bootstrap = pkgs.callPackage ./nix/permission-bootstrap {inherit alehouse;};
+      default = alehouse;
     });
 
     # Builds with the consumer's pkgs; host Pi stays separately installed.
     homeManagerModules.default = ./nix/hm-module.nix;
-    homeManagerModules.pi-alehouse = self.homeManagerModules.default;
+    homeManagerModules.alehouse = self.homeManagerModules.default;
 
     formatter = forAllSystems (pkgs: pkgs.alejandra);
   };
