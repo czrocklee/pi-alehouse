@@ -61,8 +61,9 @@ parent and worker; only bounded literal version queries can qualify for the
 automatic fixed-query lane. Existing broad user allows keep their ordinary
 scope, so an allowed pattern never reaches Jev or its hard checkpoints.
 Session yolo satisfies ordinary asks — including worker Git mutations — and
-skips Jev review and its checkpoints; the deny-only static guard, selected
-configured denies and fail-closed floors still apply. Selected
+skips Jev review and its checkpoints; the deny-only static guard
+([hard denies only](#static-guard-static-allow-exclusion-and-redirect-targets)),
+selected configured denies and fail-closed floors still apply. Selected
 PATH/loader/helper prefixes requested by the model retain a deny-only guard:
 the inventory includes EDITOR, VISUAL and GIT_PROXY_COMMAND as well as
 Git-specific editor, pager and transport helpers, and examines requested
@@ -88,6 +89,52 @@ objects, most refs and configuration. No zero-write, automatic retry, safe lock
 removal or freedom-from-conflicts claim is made. Ordinary Git is not
 reauthorized through a second per-operation effect matrix.
 
+### Configured privilege-command denies
+
+The authority adds a narrow deny-only floor for literal `sudo`, `doas` and `su`
+executions. It evaluates the complete ordered **global Bash rules** before
+project/profile/session composition and yolo; a selected deny retains its
+configured pattern and reason. A higher-scope catch-all or allow, a session
+grant, yolo, and an authorizer cannot override that selected privilege deny.
+The floor is not a new blanket command ban: absent a selected global Bash deny,
+normal permission applies, and same-global-scope rule ordering and exceptions
+remain intact in the authority. The separate static guard retains its own
+literal declarative-deny checks.
+
+Detection uses actual parsed command nodes, including command substitutions in
+expanding heredocs, backquotes, subshells and process substitutions. Literal
+quoted, concatenated, escaped and path-qualified executable names are recognized,
+as are bounded, understood executable wrappers such as `env`, `command`, `exec`
+and `timeout`. The pinned parser omits some heredoc backquote execution nodes.
+AST-confirmed expanding heredoc substitutions are reparsed under their actual
+quoting context before shared command and path enumeration; a nested `$()`
+inside a backquote's single-quoted argument is data, not a separate execution.
+Delimiter-quoted bodies and escaped substitution delimiters are not expanded.
+Recovery is bounded: an incomplete shared heredoc inventory produces a
+fail-closed ask that yolo cannot satisfy, even without a privilege deny rule;
+a serving parent rejects it before authorizer escalation or session recording.
+This is an inspection failure, not an invented command-specific deny.
+Wrapper display metadata is not permission evidence. Heredoc prose, quoted
+heredoc bodies, comments, ordinary arguments and quoted interpreter
+source are not treated as shell commands merely because they contain `sudo`.
+
+A serving parent parses the complete requested command and applies its own
+privilege floor before granting a forwarded Bash request. If that inspection
+requires a missing full source or an unavailable parser, the parent refuses the
+request before authorizer escalation or session recording; it does not infer a
+safe whole program from a child-selected fragment. Advisory permission
+queries keep their synchronous API: after parser warm-up they use the same
+parsed-unit checks; while the parser or complete source is unavailable and a
+privilege floor needs inspection, they cannot report an automatic grant. The
+conservative result is a fail-closed ask, which yolo cannot satisfy, unless a
+literal privilege invocation already proves the configured deny.
+
+This fixes the known expanding-heredoc plus session-grant/yolo bypass without
+changing ordinary non-privilege scope precedence or making every configured
+Bash deny globally monotonic. It is not executable attestation, an OS sandbox,
+or inspection of arbitrary scripts, opaque shell payloads, generated executable
+names or unknown wrapper grammars. Those retain the normal permission boundary.
+
 ### Shared working directory
 
 Children use the parent's admitted cwd for tools and resource discovery,
@@ -111,6 +158,114 @@ grant permission or globally relabel unknown commands as reads. The speculative
 login-home `cd ~` stability inference is retired. Dynamic `cd` targets leave
 relative paths at an unknown base: an ordinary external ask,
 which yolo can satisfy. This is deliberately not an arbitrary-shell guarantee.
+
+### Static guard, static-allow exclusion and redirect targets
+
+The deny-only static guard keeps only hard denies, which session approvals,
+yolo and the model authorizer cannot override: an unverifiable tool-call
+principal, `file:` URLs on path tools, unbound permission-aware grep, `cd -`
+and `cd` option forms, requested PATH/loader/helper-execution prefixes on Git,
+declarative Bash denies after literal normalization (including the original
+command before managed hardening), and an unavailable or undeterminable deny
+policy. Its refusals say they are final and never suggest rephrasing or
+wrapping the command; the model stops and reports to the user (a subagent uses
+`ask_parent`).
+
+Shapes a static Bash allow cannot prove safe are not guard refusals. Dynamic
+operands of file readers (`$X`, globs, braces, `~`), dynamic redirect targets
+of an allowed command, indirect file lists (`sha256sum -c`,
+`wc --files0-from`), printf/sha256sum outside their literal form, ripgrep
+outside its literal non-recursive form, expanding heredocs feeding an allowed
+command, and inline environment assignments before an allowed command make up
+the **static-allow exclusion**. For such a program no allow rule may cover the
+Bash command gate: every configured scope (global, project, agent) and every
+session grant is set aside before the yolo rewrite. Setting allows aside
+changes control flow (a wrapper's inner rules are consulted only while the
+wrapper itself resolves to allow), so the program is resolved twice, with
+allows set aside and in full, and the stricter answer wins (deny, then ask,
+then allow; ties keep the allow-free answer). Every restriction the full policy
+finds therefore survives: with `cat *: deny`, `FOO=1 env cat README` is still
+denied, with or without yolo. The result is the remaining policy, normally the
+catch-all ask, so Jev or a human approves it, and yolo satisfies it as it
+would any ordinary ask (including the synthesized default ask). A deny default
+with an allowlist (`"*": "deny"` plus `"cat *": "allow"`) resolves an excluded
+program to deny, not ask: that is the remaining policy, kept deliberately
+conservative. Deny rules and the invalid-config fail-closed floor still hold.
+The managed read and file-effect lanes are not allow rules and are unaffected.
+
+The decision uses the complete requested command, captured in private
+provenance at the authority entry before the first managed hardener (and before
+the original-command deny), never a model-suppliable input field. Upstream
+command units strip leading assignments, so this text is the only place
+`LD_PRELOAD=…` remains visible. The capture binds to the input's own `command`
+byte for byte, not to the trimmed shell projection, so trailing newlines and
+spaces are not drift. A capture that no longer binds to the execution text
+(neither the requested text nor the exact text a managed hardener recorded for
+the same input), or a requested command over 1 MiB, counts as an exclusion
+(`unverified-original`). Only text is retained; no decision is cached.
+
+An excluded ask offers a one-time approval only: no session suggestion, no
+"for this session"/both-directions option in the dialog or the inline prompt
+(`s`/`b` select nothing), and neither node records a grant. The next identical
+call asks again. The prompt evidence names the trigger (`static allow not
+applied`). Advisory Bash queries through the permission service answer the
+same way, including yolo.
+
+A worker cannot see its parent's allows or session grants, so every forwarded
+Bash ask carries the complete requested command (`requestedCommand`) and, when
+the worker excluded it, the exclusion fact. The serving parent evaluates the
+exclusion again against its own allows and session grants: a parent-only
+`python3 *` grant does not cover `LD_PRELOAD=./x.so python3 --version`, and a
+parent-only `echo *` allow does not cover `echo hi > $OUT`. An excluded request
+resolves with no allow rule (its own config and session grants alike), then
+the parent applies its own effective yolo exactly as its gate runner would; a
+parent deny stays automatic and the fail-closed floor is never satisfied by
+yolo. The parent's approval is one-time: it offers no session option, a wider
+choice is reduced to a plain approval, and neither node records a grant. The
+requested command is used for that evaluation only and is not projected to
+the parent's authorizer facts. A parent-computed exclusion adds the same bounded
+trigger evidence as a local exclusion, without duplicating evidence already
+sent by the child. Every forwarded request must carry well-formed current
+access facts: a missing, null or otherwise malformed intent is refused before
+policy resolution, authorizer escalation or session-grant recording. A Bash
+intent carrying neither fact, a malformed fact or command, or either one on a
+non-Bash surface is likewise refused rather than dropped. A Bash tool's path
+and external-directory requests retain their actual path surfaces; those
+requests do not need a Bash requested-command field. Requester and serving
+authority are the same build (the existing new-process contract); there is no
+older wire shape to tolerate.
+
+This tightens three things relative to the former guard: project/agent-scope
+allows and session grants are now covered; without yolo every excluded call
+needs its own approval; and the redirect fix below can turn a former allow
+into an ask or deny.
+
+Literal file-redirect targets (`>`, `>>`, `>|`, `&>`, `&>>`, `<`, `<>`, and
+`>&file`) reach both path projections by syntax: no generic argument-shape
+filter and no existence probe decides whether they are paths. A new bare
+target, an option- or assignment-shaped target (`-d/x`, `NAME=d/x`) and a new
+`./x` after a literal `cd` outside the working directory are path-checked like
+any other write; after a dynamic `cd` a relative target is conservatively
+external. A literal target is decoded as the shell would open it: Unicode,
+`!`, backslash escapes (`new\ name.env` is `new name.env`; backslash-newline
+is a continuation), single quotes and double quotes (where only `\$`,
+`` \` ``, `\"`, `\\` and backslash-newline are escapes). Once decoded, a
+filename is a filesystem literal, not another tool-input spelling: leading or
+trailing whitespace, quotes, `@`, and literal `~`/`$HOME` are preserved, not
+trimmed, stripped or expanded again. Known bases retain absolute, cwd-relative
+and canonical aliases for policy and immutable-resource checks; unknown relative
+bases retain only literal values and conservative external-directory handling.
+Ordinary path-tool input normalization is unchanged. A target with an
+unescaped `$`, backquote, glob or brace character, parentheses, or a leading
+`~` is not literal. A number names a descriptor only after `>&` or `<&`:
+`>123`, `<123` and `&>1` open files called `123` and `1`, both for the path
+projections and for the wrapper-floor write check. Effects stay as the
+operator proved them. A recovered `<>` parse checks only its first word, as
+both read and write; later words stay ordinary argv (the unparsed redirect
+still asks). Descriptor duplication and closing (`2>&1`, `>&2`, `>&-`),
+here-strings, heredoc bodies and non-literal targets keep upstream handling;
+a dynamic target before an allowed command is a static-allow exclusion. Main
+sessions and workers are covered identically.
 
 ### Parent web access
 
@@ -384,8 +539,9 @@ These readiness checks do not reread managed definition files or freeze the
 whole live permission configuration. Removing/changing a definition after
 startup is not an orchestration fail-stop condition. Trusted project overrides and
 human session grants retain the normal permission chain, but cannot widen the
-separate immutable resource floor or a profile's whole-surface write ceiling;
-otherwise they need not monotonically restrict the global definition.
+separate immutable resource floor, the selected global privilege-command deny
+floor, or a profile's whole-surface write ceiling; otherwise they need not
+monotonically restrict the global definition.
 Jev can disqualify changed definitions/overrides from automatic
 approval and defer, but defer does not turn an existing configured allow into ask.
 See [limitations](limitations.md) for what the permission chain does not cover.

@@ -26,7 +26,10 @@ policy is overwritten by building this package.
 
 Dangerous model-requested PATH/loader/helper environment prefixes remain a
 deny-only guard concern, including requested EDITOR, VISUAL and GIT_PROXY_COMMAND
-prefixes, never the operator's inherited environment. Other assignment-bearing
+prefixes, never the operator's inherited environment. Inline assignments before
+an allowed non-Git command are not guard refusals but a
+[static-allow exclusion](security.md#static-guard-static-allow-exclusion-and-redirect-targets):
+the allow is set aside and the call takes ordinary approval. Other assignment-bearing
 Git asks and selected high-impact Git asks defer to human approval instead of
 model-only Jev review. The checkpoint inventory covers push, hard/merge reset,
 forced or interactive clean, path-discarding checkout/restore, forced switch,

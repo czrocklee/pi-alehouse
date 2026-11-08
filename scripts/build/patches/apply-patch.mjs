@@ -22,6 +22,9 @@ import { applyProfileDisplayPatch } from "./profile-display-patch.mjs";
 import { applyNativeGitPatch } from "./native-git-patch.mjs";
 import { applyRedirectArgvPatch } from "./redirect-argv-patch.mjs";
 import { applyPermissionPerformancePatch } from "./performance-patch.mjs";
+import { applyStaticAllowExclusionPatch } from "./static-allow-exclusion-patch.mjs";
+import { applyRedirectTargetPatch } from "./redirect-target-patch.mjs";
+import { applyPrivilegeCommandPatch } from "./privilege-command-patch.mjs";
 
 const root = process.argv[2];
 assert(root, "Usage: node apply-patch.mjs PACKAGE_ROOT");
@@ -54,8 +57,14 @@ applyNativeGitPatch(root, patch);
 applyRedirectArgvPatch(root, patch);
 applyProfileDisplayPatch(root, patch);
 applyPermissionPerformancePatch(root);
+// Static-allow exclusion refines the final manager/gate/forwarding shapes.
+applyStaticAllowExclusionPatch(root);
+// Literal redirect targets reach both path projections by syntax.
+applyRedirectTargetPatch(root);
+// Existing global privilege denies survive wrappers, profile rules and grants.
+applyPrivilegeCommandPatch(root);
 // Dynamic cd (including ~) stays upstream unknown-base handling; no speculative
 // HOME-stability fold. Scratch provenance remains an active independent lane.
 console.log(
-  "Applied managed permission/provenance/profile/yolo, tool-call principal query, hidden-declaration tool list, original-command Git scope, redirect-buried argv and immutable resource-floor patches to pi-permission-system 32.0.3",
+  "Applied managed permission/provenance/profile/yolo, tool-call principal query, hidden-declaration tool list, original-command Git scope, redirect-buried argv, immutable resource-floor, static-allow exclusion, literal redirect-target and privilege-command deny patches to pi-permission-system 32.0.3",
 );

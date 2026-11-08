@@ -179,6 +179,39 @@ const originals = new WeakMap<
   object,
   { command: string; units: string[]; fileScope?: ManagedStaticFileScope }
 >();
+// The complete requested command, captured by the authority entry before its
+// first hardener (and before the original-command deny). Private to this
+// module: a field on the input object could be supplied by the model.
+const requestedCommands = new WeakMap<object, string>();
+
+/** Capture the requested command; called once per call, before any hardening. */
+export function captureRequestedBashCommand(input: Record<string, unknown>): void {
+  if (typeof input.command === "string") requestedCommands.set(input, input.command);
+  else requestedCommands.delete(input);
+}
+
+/**
+ * The requested (pre-hardening) command behind this input's execution text, or
+ * undefined when it cannot be verified. The execution text is the input's own
+ * `command` byte-for-byte, never a trimmed or parsed projection; `fallback` is
+ * used only by a shell tool that keeps its command under another key (no
+ * capture or hardener ever touches it). A capture binds only while the
+ * execution text is the requested text or the one a managed hardener recorded
+ * for this same input. Without any capture layer (direct gate use), an input
+ * no hardener touched is its own original. Only text is retained.
+ */
+export function requestedBashCommand(
+  input: Record<string, unknown>,
+  fallback?: string,
+): string | undefined {
+  const executed = typeof input.command === "string" ? input.command : undefined;
+  const requested = requestedCommands.get(input);
+  const hardened = originals.get(input);
+  if (requested === undefined) return hardened ? undefined : (executed ?? fallback);
+  if (executed === requested) return requested;
+  return executed !== undefined && hardened?.command === executed ? requested : undefined;
+}
+
 // Provenance requires the same input object and unchanged hardened command.
 export function originalGitCommands(input: Record<string, unknown>): string[] | undefined {
   const original = originals.get(input);

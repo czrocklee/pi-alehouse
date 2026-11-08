@@ -678,15 +678,16 @@ test("lexical event reuse preserves dangerous substitutions, heredocs and redire
   });
   hooks.get("session_start")({}, ctx);
   const call = (command) => hooks.get("tool_call")({ toolName: "bash", input: { command } }, ctx);
+  for (const command of ["PATH=$(pwd) git status"]) {
+    assert.equal(call(command)?.block, true, command);
+  }
+  // Static-allow exclusions are decided by the authority, not refused here:
+  // the expanding heredoc's `sudo` unit is denied by the authority's own
+  // `sudo *` rule (static-allow-exclusion.test.mjs covers the decisions).
   for (const command of [
     "wc -l <<EOF\n$(sudo true)\nEOF",
     "printf '%n' PATH",
     "printf ok > $OUTPUT",
-    "PATH=$(pwd) git status",
-  ]) {
-    assert.equal(call(command)?.block, true, command);
-  }
-  for (const command of [
     "wc -l <<'EOF'\n$(sudo true)\nEOF",
     "printf '%s' 'sudo true'",
     "printf ok 2>&1",

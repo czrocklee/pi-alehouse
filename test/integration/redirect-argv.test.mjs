@@ -263,6 +263,7 @@ test("completed npm/kubectl argv keeps specific scoped denies/asks without flatt
             surface: "bash",
             matchValues: [plain],
             boundaryValue: null,
+            requestedCommand: redirected,
           });
           assert.deepEqual(prompt.payload.evidence, [
             { label: "full command", text: redirected, detail: null },
@@ -322,6 +323,7 @@ test("redirect-completed Git ask and synthetic session approval name the full co
     surface: "bash",
     matchValues: [completed],
     boundaryValue: null,
+    requestedCommand: command,
   });
   assert.equal(prompt.command, completed);
   assert.deepEqual(prompt.payload.evidence, [
@@ -372,6 +374,7 @@ test("fd duplication and a bare redirected ls preserve specific asks and exact c
       surface: "bash",
       matchValues: [plain],
       boundaryValue: null,
+      requestedCommand: redirected,
     });
     assert.deepEqual(result.prompts[0].sessionApproval, control.prompts[0].sessionApproval);
     assert.deepEqual(result.approvals, []);
@@ -515,6 +518,99 @@ test("redirect-buried and heredoc-line operands keep the owning command's roles"
       config: withBash({ "cat *": "allow" }),
     }),
     "allow",
+  );
+});
+
+test("recovered <> consumes only its destination; quoted/numeric tails keep argv reads", async () => {
+  const cwd = workspace();
+  writeFileSync(join(cwd, "456"), "fixture\n");
+  for (const [redirect, destination, argument = "notes.txt"] of [
+    ['<> "rw.txt"', "rw.txt"],
+    ['<> "rw.txt"', "rw.txt", "456"],
+    ["<> 'rw.txt'", "rw.txt"],
+    ["<>123", "123"],
+    ["2<>123", "123"],
+    ["<> rw.txt", "rw.txt"],
+    ["<> ./rw.txt", "./rw.txt"],
+  ]) {
+    const command = `cat ${redirect} ${argument}`;
+    assert.deepEqual(
+      new Map(await effects(cwd, command)),
+      new Map([
+        [argument, "read"],
+        [destination, "unproven"],
+      ]),
+      command,
+    );
+    for (const agent of [null, "editor"])
+      for (const yolo of [false, true]) {
+        const config = withBash({ "cat *": "allow" });
+        config.permission.path_write = {
+          ...config.permission.path_write,
+          [join(cwd, argument)]: "deny",
+        };
+        assert.equal(
+          await runHandler(cwd, command, { agent, yolo, config }),
+          yolo ? "allow" : "ask",
+          `${command}: later argv is not a write, but unresolved syntax still asks`,
+        );
+        for (const surface of ["path_read", "path_write"]) {
+          const destinationConfig = withBash({ "cat *": "allow" });
+          destinationConfig.permission[surface] = {
+            ...destinationConfig.permission[surface],
+            [join(cwd, destination)]: "deny",
+          };
+          assert.equal(
+            await runHandler(cwd, command, { agent, yolo, config: destinationConfig }),
+            "deny path",
+            `${command}: ${surface} destination deny survives the unproven family fold`,
+          );
+        }
+        const readConfig = withBash({ "cat *": "allow" });
+        readConfig.permission.path_read = {
+          ...readConfig.permission.path_read,
+          [join(cwd, argument)]: "deny",
+        };
+        assert.equal(
+          await runHandler(cwd, command, { agent, yolo, config: readConfig }),
+          "deny path_read",
+          `${command}: later argv read deny survives`,
+        );
+      }
+  }
+  assert.deepEqual(
+    new Map(await effects(cwd, 'grep <> "rw.txt" fixture notes.txt')),
+    new Map([
+      ["notes.txt", "read"],
+      ["rw.txt", "unproven"],
+    ]),
+    "recovered argv keeps pattern-first command roles, not generic redirect roles",
+  );
+  assert.deepEqual(
+    new Map(await effects(cwd, 'grep <> "rw.txt" 42 notes.txt')),
+    new Map([
+      ["notes.txt", "read"],
+      ["rw.txt", "unproven"],
+    ]),
+    "numeric argv spends the pattern slot without hiding the real file operand",
+  );
+  assert.deepEqual(
+    await effects(cwd, 'cat <> "rw.txt" $(cat .env)'),
+    [
+      [".env", "read"],
+      ["rw.txt", "unproven"],
+    ],
+    "nested execution retains its own read effect",
+  );
+  const restriction = withBash({ cat: "allow", "cat *": "allow", "cat notes.txt": "deny" });
+  assert.equal(
+    await runHandler(cwd, 'cat <> "rw.txt" notes.txt', {
+      agent: null,
+      config: restriction,
+      yolo: true,
+    }),
+    "deny bash",
+    "completed argv restores restrictions without granting a truncated allow",
   );
 });
 

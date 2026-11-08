@@ -45,6 +45,7 @@ const [
   { ToolCallGatePipeline },
   { resolveToolPreviewLimits },
   { GateRunner },
+  { BashProgram },
 ] = await Promise.all([
   jiti.import(join(packageRoot, "generated/extensions/static-safety-guard.ts")),
   jiti.import(join(packageRoot, "generated/extensions/lib/hard-checkpoint.ts")),
@@ -58,6 +59,7 @@ const [
   load("handlers/gates/tool-call-gate-pipeline"),
   load("tool-input/tool-preview-formatter"),
   load("handlers/gates/runner"),
+  load("access-intent/bash/program"),
 ]);
 const root = mkdtempSync(join(tmpdir(), "alehouse-git-checkpoints-"));
 const cwd = join(root, "workspace");
@@ -453,9 +455,9 @@ test("benign assignments keep their facts and eligible-ask checkpoint without st
   );
   const nonGit = guardOrchestration(withBash({ "node --version": "allow" }));
   assert.equal(
-    nonGit.guard("PATH=./fixture-bin node --version")?.block,
-    true,
-    "existing non-Git inline-whitelist guard remains independent",
+    nonGit.guard("PATH=./fixture-bin node --version"),
+    undefined,
+    "non-Git inline environment before an allow is the authority's static-allow exclusion (normal approval), not a guard respelling",
   );
   assert.equal(
     nonGit.guard("env PATH=./fixture-bin opaque-tool"),
@@ -774,7 +776,7 @@ test("destructive checkpoints apply only to eligible asks, not existing allows o
     }
 });
 
-test("worker bare redirect remains conservative after cd even if the initial cwd filename exists", () => {
+test("bare redirect targets reach the authority path gate instead of a guard respelling", async () => {
   const h = guardOrchestration();
   assert.equal(existsSync(join(cwd, "existing.txt")), true);
   assert.equal(existsSync(join(cwd, "docs")), true, "cd names an existing directory");
@@ -783,22 +785,20 @@ test("worker bare redirect remains conservative after cd even if the initial cwd
     false,
     "bare target is new after the valid cd",
   );
-  assert.equal(
-    h.guard("echo ok >existing.txt"),
-    undefined,
-    "unmutated cwd with an existing target is the negative control",
-  );
-  assert.equal(h.guard("echo ok >missing.txt")?.block, true, "new bare filename remains refused");
-  assert.equal(
-    h.guard("cd docs && echo ok >existing.txt")?.block,
-    true,
-    "changesCwd must defeat the initial-cwd exists shortcut",
-  );
-  assert.equal(
-    h.guard("cd docs && echo ok >./existing.txt"),
-    undefined,
-    "explicit spelling retains the ordinary path gate",
-  );
+  const targets = async (command) =>
+    (await BashProgram.parse(command, new PathNormalizer(posixPathFlavor, cwd)))
+      .pathRuleCandidates()
+      .filter((candidate) => candidate.effect.effect !== "read")
+      .map((candidate) => candidate.path.value());
+  for (const [command, target] of [
+    ["echo ok >existing.txt", join(cwd, "existing.txt")],
+    ["echo ok >missing.txt", join(cwd, "missing.txt")],
+    ["cd docs && echo ok >existing.txt", join(cwd, "docs/existing.txt")],
+    ["cd docs && echo ok >./existing.txt", join(cwd, "docs/existing.txt")],
+  ]) {
+    assert.equal(h.guard(command, "editor"), undefined, `no respelling demanded: ${command}`);
+    assert.deepEqual(await targets(command), [target], `write target is path-checked: ${command}`);
+  }
   assert.equal(
     readFileSync(join(cwd, "existing.txt"), "utf8"),
     "synthetic fixture\n",

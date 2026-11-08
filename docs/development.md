@@ -108,7 +108,12 @@ allow. Do not add a second per-operation Git authorization matrix. Raw configure
 denies/specific asks, explicit literal file/output facts, actual redirects,
 external-directory checks and credential/resource/high-risk protection remain.
 A selected deny survives session grants/yolo; normal yolo applies to ordinary
-asks, not invalid-config fail-closed asks.
+asks, not invalid-config fail-closed asks. The separate configured privilege
+floor preserves selected raw-global Bash denies for actual literal `sudo`,
+`doas` and `su` executions before project/profile/session composition. Keep its
+AST execution inventory shared by local gates, advisory queries and serving
+parents; never substitute wrapper display metadata or a text search through
+interpreter/heredoc data, and do not generalize it to all Bash scope rules.
 
 There are no Git subprocess provenance probes, history/object walks or
 unattributed-sentinel workflow in this command classifier. Literal historical

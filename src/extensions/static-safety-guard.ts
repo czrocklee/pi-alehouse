@@ -1,20 +1,25 @@
 /**
- * Deny-only tool-entry guard. Session approvals and the model authorizer cannot
- * override it. This closes literal spelling variants of our declarative Bash
- * denies; it is not a sandbox for interpreters, scripts, or dynamic shell code.
+ * Deny-only tool-entry guard for hard denies. Session approvals, yolo and the
+ * model authorizer cannot override it. It closes literal spelling variants of
+ * our declarative Bash denies and a few unprovable principal/path shapes; it is
+ * not a sandbox for interpreters, scripts, or dynamic shell code.
+ *
+ * It never asks the model to respell a command. Shapes a static allow cannot
+ * prove safe (dynamic operands, indirect file lists, inline environment, ...)
+ * are the authority's static-allow exclusion instead: they fall back to normal
+ * approval (lib/static-allow-exclusion.ts).
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PermissionsService } from "@gotgenes/pi-permission-system";
-import { hasDangerousGitEnvironmentPrefix, parseGitInvocation } from "./lib/git-invocation.ts";
+import { hasDangerousGitEnvironmentPrefix } from "./lib/git-invocation.ts";
 import {
   analyzeLiteralCommands,
   canonicalCommands,
-  canonicalWords,
   inspectGitCommands,
   literalCommands,
   type LiteralInput,
@@ -38,7 +43,6 @@ const WORKER_POLICY = freezePolicy(/* @worker-policy@ */ {});
 
 type Denies = {
   global: string[];
-  staticAllows: string[];
   agents: Map<string, readonly string[]>;
 };
 
@@ -149,10 +153,7 @@ function loadDenies(root: string): Denies {
   const agents = new Map(
     Object.entries(WORKER_POLICY).map(([name, policy]) => [name, policy.bashDenies]),
   );
-  const staticAllows = Object.entries(config.permission.bash as Record<string, unknown>)
-    .filter(([, rule]) => rule === "allow" || (rule as { action?: string })?.action === "allow")
-    .map(([pattern]) => pattern);
-  const denies = { global, staticAllows, agents };
+  const denies = { global, agents };
   if (raw.length <= 1024 * 1024) parsedDenies = { raw, denies };
   return denies;
 }
@@ -177,276 +178,24 @@ export function originalBashDeny(
 ): string | undefined {
   try {
     if (bashDenied(command, activeAgent(ctx), loadDenies(root)))
-      return "A declarative Bash deny applies to the original command before managed hardening; session approvals cannot override it.";
+      return hardDeny(
+        "The original command matches a declarative Bash deny (checked before managed hardening).",
+      );
   } catch {
-    return "Cannot verify the original command against the static Bash deny policy.";
+    return hardDeny("The original command cannot be verified against the static Bash deny policy.");
   }
 }
 
-function inlineEnvironmentOverridesWhitelist(command: LiteralInput, denies: Denies): boolean {
-  return (literalCommands(command) ?? []).some((original) => {
-    const words = [...original];
-    while (["if", "then", "else", "elif", "while", "until", "do", "!", "{"].includes(words[0]))
-      words.shift();
-    if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")) return false;
-    // Git keeps ordinary approval for benign assignments, with a hard human
-    // checkpoint on eligible asks. Selected dangerous prefixes are refused
-    // separately, including env wrappers, regardless of any permission grant.
-    if (parseGitInvocation(original)) return false;
-    // Upstream strips these assignments before matching non-Git static allows.
-    // Unknown variables are not evidence that an exact allowance stays safe.
-    // Work on decoded words, without reparsing quoted interpreter source.
-    return canonicalWords(words).some(
-      (value) =>
-        /^git (?:status|diff|log|show|ls-files)(?: |$)/.test(value) ||
-        denies.staticAllows.some((pattern) => matchesDeny(value, pattern)),
-    );
-  });
+// Hard denies are final: rephrasing or wrapping the command must not be the
+// suggested way forward. Only an alternative that changes what runs is named.
+function hardDeny(reason: string, alternative = ""): string {
+  return `${reason} This is a hard deny: session approvals and yolo cannot override it. Do not rephrase or wrap the command to get around it.${alternative ? ` ${alternative}` : ""} Otherwise stop and report this to the user (a subagent uses ask_parent).`;
 }
 
-function expandingHeredocFeedsWhitelist(command: LiteralInput, denies: Denies): boolean {
-  let found = false;
-  literalCommands(command, (owner) => {
-    if (
-      canonicalWords(owner).some((value) =>
-        denies.staticAllows.some((pattern) => matchesDeny(value, pattern)),
-      )
-    ) {
-      found = true;
-    }
-  });
-  return found;
-}
-
-function indirectReaderInput(command: LiteralInput, denies: Denies): boolean {
-  const reader = (words: string[]) =>
-    canonicalWords(words).some((value) =>
-      /^(head|wc|cat|tail|cut|nl|sha256sum|readlink)( |$)/.test(value),
-    );
-  // The upstream path gate sees lexical paths, not shell-expanded filenames.
-  // Conservative even for quoted metacharacters: enumerate literal paths or
-  // use an explicit env wrapper to request normal approval for these forms.
-  const dynamic = (word: string) => /[$*?\[\]{}~`]/.test(word.replace(/^~\//, ""));
-  let blocked = false;
-  const commands = literalCommands(command, undefined, (word, owner) => {
-    if (
-      canonicalWords(owner).some((value) =>
-        denies.staticAllows.some((pattern) => matchesDeny(value, pattern)),
-      ) &&
-      dynamic(word)
-    )
-      blocked = true;
-  });
-  for (const words of commands ?? []) {
-    if (!reader(words)) continue;
-    if (words.some(dynamic)) blocked = true;
-    // wc follows every filename in this file (or stdin), bypassing the path
-    // gate. GNU getopt also accepts unambiguous prefixes such as --f=names.
-    if (
-      canonicalWords(words).some((value) => value.startsWith("wc ")) &&
-      words.some((word) => {
-        const option = word.split("=", 1)[0];
-        return option.startsWith("--") && option.length > 2 && "--files0-from".startsWith(option);
-      })
-    )
-      blocked = true;
-  }
-  return blocked;
-}
-
-// Keep printf away from shell-variable assignment (-v / %n), and checksums
-// away from indirect filename lists (--check, including getopt abbreviations).
-// Unsupported forms can use env to enter normal approval.
-function unsafeOutputUtility(command: LiteralInput): boolean {
-  let blocked = false;
-  literalCommands(command, undefined, undefined, (words, expansions) => {
-    const values = canonicalWords(words);
-    const name = ["printf", "sha256sum"].find((name) =>
-      values.some((value) => value === name || value.startsWith(`${name} `)),
-    );
-    if (!name) return;
-    const start = words.findIndex((word) => basename(word) === name);
-    const args = words.slice(start + 1);
-    const expanded = expansions.slice(start + 1);
-    if (name === "printf") {
-      const index = args[0] === "--" ? 1 : 0;
-      const format = args[index];
-      if (
-        format === undefined ||
-        expanded[index] ||
-        (index === 0 && format.startsWith("-")) ||
-        format.replace(/%(?:s|%)/g, "").includes("%")
-      )
-        blocked = true;
-      return;
-    }
-    let operands = false;
-    for (const arg of args) {
-      if (operands || arg === "-" || !arg.startsWith("-")) continue;
-      if (arg === "--") {
-        operands = true;
-        continue;
-      }
-      if (
-        ["--binary", "--text", "--tag", "--zero", "--help", "--version"].includes(arg) ||
-        /^-[btz]+$/.test(arg)
-      )
-        continue;
-      blocked = true;
-    }
-  });
-  return blocked;
-}
-
-// The static rg form deliberately uses an option terminator. This keeps its
-// pattern/path boundary explicit without implementing ripgrep's entire CLI.
-// Existing shell word decoding supplies expansion metadata; quoted regex
-// metacharacters are data, whereas expanded operands evade upstream path gates.
-function unsafeRipgrep(command: LiteralInput): boolean {
-  let blocked = false;
-  literalCommands(
-    command,
-    undefined,
-    (word, owner) => {
-      if (basename(owner[0] ?? "") === "rg" && /[$*?\[\]{}~`]/.test(word.replace(/^~\//, "")))
-        blocked = true;
-    },
-    (words, expansions) => {
-      if (!canonicalWords(words).some((value) => value.startsWith("rg --no-config "))) return;
-      words = words.slice(words.findIndex((word) => basename(word) === "rg"));
-      if (expansions.some(Boolean)) {
-        blocked = true;
-        return;
-      }
-      const flags = new Set([
-        "-n",
-        "--line-number",
-        "-i",
-        "--ignore-case",
-        "-s",
-        "--case-sensitive",
-        "-S",
-        "--smart-case",
-        "-F",
-        "--fixed-strings",
-        "-w",
-        "--word-regexp",
-        "-x",
-        "--line-regexp",
-        "-v",
-        "--invert-match",
-        "-l",
-        "--files-with-matches",
-        "-c",
-        "--count",
-        "--count-matches",
-        "-o",
-        "--only-matching",
-        "-q",
-        "--quiet",
-        "-H",
-        "--with-filename",
-        "-h",
-        "--no-filename",
-        "--hidden",
-        "--no-heading",
-        "--heading",
-        "--null",
-        "-0",
-      ]);
-      let files = false;
-      let depthZero = false;
-      let i = 2;
-      while (i < words.length && words[i] !== "--") {
-        const flag = words[i++];
-        if (flag === "--files") {
-          files = true;
-          continue;
-        }
-        if (["-d", "--max-depth"].includes(flag) && words[i] === "0") {
-          depthZero = true;
-          i += 1;
-          continue;
-        }
-        if (flags.has(flag)) continue;
-        if (
-          ["-g", "--glob", "--iglob", "-t", "--type", "-T", "--type-not"].includes(flag) &&
-          i < words.length
-        ) {
-          i += 1;
-          continue;
-        }
-        if (
-          [
-            "-m",
-            "--max-count",
-            "-A",
-            "--after-context",
-            "-B",
-            "--before-context",
-            "-C",
-            "--context",
-          ].includes(flag) &&
-          /^\d+$/.test(words[i] ?? "")
-        ) {
-          i += 1;
-          continue;
-        }
-        blocked = true;
-        return;
-      }
-      if (words[i++] !== "--") {
-        blocked = true;
-        return;
-      }
-      if (!files && words[i++] === undefined) {
-        blocked = true;
-        return;
-      }
-      const paths = words.slice(i);
-      // Upstream treats the first --files operand as a regex and misses its
-      // external-directory gate. Keep listing rooted at the current directory.
-      if (files) {
-        if (paths.length > 1 || (paths.length === 1 && paths[0] !== ".")) blocked = true;
-        return;
-      }
-      if (
-        !paths.length ||
-        paths.some((path) => !path || /[$*?\[\]{}~`]/.test(path.replace(/^~\//, "")))
-      ) {
-        blocked = true;
-        return;
-      }
-      // Depth zero prevents reading directory descendants even after cd, or if
-      // a file changes into a directory between validation and execution.
-      if (!depthZero && paths.some((path) => path !== "-")) blocked = true;
-    },
-  );
-  return blocked;
-}
-
-// Upstream misses a new bare output filename when classifying worker writes.
-// Keep the action on the normal path gate by requiring its explicit ./ spelling.
-function missedWorkerRedirect(
-  command: LiteralInput,
-  ctx: ExtensionContext,
-  agent: string | undefined,
-): boolean {
-  if (agent === undefined || !Object.hasOwn(WORKER_POLICY, agent)) return false;
-  const bareTargets: string[] = [];
-  const commands = literalCommands(command, undefined, (word, _owner, operator) => {
-    if (
-      ![">", ">>", ">|", "<>", ">&"].includes(operator) ||
-      (operator === ">&" && /^(?:[0-9]+-?|-)$/.test(word))
-    )
-      return;
-    if (word && !word.includes("/")) bareTargets.push(word);
-  });
-  const changesCwd = commands?.some((words) =>
-    canonicalWords(words).some((value) => value === "cd" || value.startsWith("cd ")),
-  );
-  return bareTargets.some((word) => changesCwd || !existsSync(resolve(ctx.cwd, word)));
-}
+const segment = (words: readonly string[]): string => {
+  const text = words.join(" ");
+  return text.length > 120 ? `${text.slice(0, 119)}…` : text;
+};
 
 function registerGuard(
   pi: ExtensionAPI,
@@ -610,76 +359,44 @@ function registerGuard(
     if (event.toolName !== "bash") return;
     reload();
     if (!denies || typeof event.input.command !== "string") {
-      return { block: true, reason: "Static Bash deny policy is unavailable." };
+      return {
+        block: true,
+        reason: hardDeny("The static Bash deny policy is unavailable."),
+      };
     }
     try {
       const command = analyzeLiteralCommands(event.input.command);
       if (canonicalCommands(command).some((value) => /^cd -/.test(value))) {
         return {
           block: true,
-          reason:
-            "Use an explicit directory operand for cd. OLDPWD and cd option forms do not have a proven working-directory scope.",
+          reason: hardDeny(
+            "`cd -` and cd option forms have no provable working directory.",
+            "An explicit directory operand for cd is checked normally.",
+          ),
         };
       }
-      // Use the principal checked at entry, never a toolCallId cache or prompt.
-      if (missedWorkerRedirect(command, ctx, agent)) {
+      const dangerous = (literalCommands(command) ?? []).find(hasDangerousGitEnvironmentPrefix);
+      if (dangerous) {
         return {
           block: true,
-          reason:
-            "The upstream parser misses worker writes to new bare filenames. Spell the output as ./filename so path_write approval is applied.",
-        };
-      }
-      if (unsafeOutputUtility(command)) {
-        return {
-          block: true,
-          reason:
-            "Static printf requires a literal text/%s/%% format; sha256sum requires direct input and supported output flags. Use an env wrapper for normal approval of other forms.",
-        };
-      }
-      if (unsafeRipgrep(command)) {
-        return {
-          block: true,
-          reason:
-            "Static rg requires --no-config, safe flags, -d 0, then -- and a pattern plus literal paths (or stdin - without -d 0); --files lists only the current directory. Use an env wrapper for normal approval of other forms.",
-        };
-      }
-      if (indirectReaderInput(command, denies)) {
-        return {
-          block: true,
-          reason:
-            "Static file-read allowance requires literal paths and direct input; expand filenames explicitly or use an env wrapper for normal approval.",
-        };
-      }
-      if (expandingHeredocFeedsWhitelist(command, denies)) {
-        return {
-          block: true,
-          reason:
-            "Command substitutions in an expanding heredoc are outside the static whitelist; use an explicit env wrapper for normal approval.",
-        };
-      }
-      if ((literalCommands(command) ?? []).some(hasDangerousGitEnvironmentPrefix)) {
-        return {
-          block: true,
-          reason:
-            "Requested PATH, loader, or helper-execution environment overrides on recognized Git invocations are statically denied; session approvals cannot override this guard.",
-        };
-      }
-      if (inlineEnvironmentOverridesWhitelist(command, denies)) {
-        return {
-          block: true,
-          reason:
-            "Inline environment overrides are outside the static whitelist; use an explicit env wrapper for normal approval.",
+          reason: hardDeny(
+            `Git with a PATH, loader or helper-execution environment override (\`${segment(dangerous)}\`) is refused.`,
+          ),
         };
       }
       if (bashDenied(command, agent, denies)) {
         return {
           block: true,
-          reason:
-            "A declarative Bash deny applies to this command after literal normalization; session approvals cannot override it.",
+          reason: hardDeny(
+            "The command matches a declarative Bash deny after literal normalization.",
+          ),
         };
       }
     } catch {
-      return { block: true, reason: "Cannot determine the active Bash deny policy." };
+      return {
+        block: true,
+        reason: hardDeny("The active Bash deny policy cannot be determined."),
+      };
     }
   });
 }

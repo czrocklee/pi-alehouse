@@ -23,17 +23,39 @@ try {
   webEntry(packageRoot);
   generateWorkers(stage);
   prepareAuthority(join(stage, "authority"));
-  const grammarDigest = digest(
-    readFileSync(join(packageRoot, "src/extensions/lib/git-read-grammar.ts")),
-  );
-  for (const copy of [
-    "extensions/lib/git-read-grammar.ts",
-    "authority/vendor/src/access-intent/bash/git-read-grammar.ts",
+  // The guard and the authority must read the same lexical leaf and grammar:
+  // the authority's static-allow exclusion reuses the guard's former predicates.
+  for (const name of [
+    "git-read-grammar.ts",
+    "shell-literal.ts",
+    "git-invocation.ts",
+    "static-allow-exclusion.ts",
+  ]) {
+    const sourceDigest = digest(readFileSync(join(packageRoot, "src/extensions/lib", name)));
+    for (const copy of [
+      `extensions/lib/${name}`,
+      `authority/vendor/src/access-intent/bash/${name}`,
+    ]) {
+      assert.equal(
+        digest(readFileSync(join(stage, copy))),
+        sourceDigest,
+        `Shared lexical/grammar drift: ${copy}`,
+      );
+    }
+  }
+  // Source-owned authority helpers must survive copying/import normalization
+  // unchanged, for both literal-path identity and privilege-command detection.
+  for (const [source, copy] of [
+    ["managed-literal-path.ts", "access-intent/managed-literal-path.ts"],
+    ["managed-redirect-target.ts", "access-intent/bash/managed-redirect-target.ts"],
+    ["managed-privilege-command.ts", "access-intent/bash/managed-privilege-command.ts"],
+    ["managed-privilege-inspection.ts", "access-intent/bash/managed-privilege-inspection.ts"],
+    ["managed-heredoc-execution.ts", "access-intent/bash/managed-heredoc-execution.ts"],
   ]) {
     assert.equal(
-      digest(readFileSync(join(stage, copy))),
-      grammarDigest,
-      `Git grammar drift: ${copy}`,
+      digest(readFileSync(join(stage, "authority/vendor/src", copy))),
+      digest(readFileSync(join(packageRoot, "src/authority", source))),
+      `Authority helper drift: ${copy}`,
     );
   }
   mkdirSync(join(stage, "seeds"));

@@ -63,7 +63,7 @@ import permissions from "./vendor/src/index.ts";
 import { guardSingleAuthority } from "./authority-guard.ts";
 import { createManagedBlockObserver } from "./managed-block-observer.ts";
 import { installManagedScratch } from "./managed-scratch.ts";
-import { hardenNonGitInput, hardenStaticFileInput } from "./vendor/src/access-intent/bash/managed-read-policy.ts";
+import { captureRequestedBashCommand, hardenNonGitInput, hardenStaticFileInput } from "./vendor/src/access-intent/bash/managed-read-policy.ts";
 import { originalBashDeny } from "../extensions/static-safety-guard.ts";
 import { getPermissionsService } from "./vendor/src/service.ts";
 export { getPermissionsService };
@@ -78,6 +78,9 @@ export default function (pi: ExtensionAPI) {
   guardSingleAuthority(managedPi);
   managedPi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "bash") return;
+    // Before the original deny and every hardener: the gate judges static
+    // allows on this private requested text, never a model-supplied field.
+    captureRequestedBashCommand(event.input);
     if (typeof event.input.command === "string") {
       const reason = originalBashDeny(event.input.command, ctx);
       if (reason) return { block: true, reason };

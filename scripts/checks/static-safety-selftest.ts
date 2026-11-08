@@ -26,17 +26,14 @@ export type StaticSafetySelfTestDeps = {
 export function safetySelfTest(root: string, deps: StaticSafetySelfTestDeps): void {
   const scratch = mkdtempSync(join(tmpdir(), "pi-guard-test-"));
   try {
-    // Dynamic redirects and non-Git environment prefixes exercise the
-    // static-allow defense, not blanket command denies. These four allowances
-    // are deliberately absent from the shipped policy.
+    // The guard reads only declarative denies; static-allow exclusions belong
+    // to the authority (check-pi-policy.mjs asserts those decisions).
     // Use a private, data-only guard fixture: never edit the supplied policy or
     // load this fixture into the permission authority. Existing rules survive.
     const config = JSON.parse(
       readFileSync(join(root, "extensions/pi-permission-system/config.json"), "utf8"),
     ) as { permission: { bash: Record<string, unknown> } };
     const bash = { ...config.permission.bash };
-    for (const pattern of ["sort *", "uniq *", "node --version", "python3 --version"])
-      if (!Object.hasOwn(bash, pattern)) bash[pattern] = "allow";
     const policyRoot = join(scratch, "policy");
     const policyDirectory = join(policyRoot, "extensions/pi-permission-system");
     mkdirSync(policyDirectory, { recursive: true });
@@ -120,22 +117,14 @@ export function safetySelfTest(root: string, deps: StaticSafetySelfTestDeps): vo
       if (call("bash", { command })?.block)
         throw new Error(`Git approval route statically refused: ${command}`);
     }
-    // The grep override exercises descendant permissions in check-pi-policy.mjs.
-    const denied = [
-      ["unlisted-worker", "git status --short"],
+    // Static-allow exclusions and bare redirect targets are NOT guard refusals:
+    // the authority resolves them without allow rules or path-checks the target
+    // (check-pi-policy.mjs). The guard must never make the model respell them.
+    const approvalRoute: Array<[string | undefined, string]> = [
       ["editor", "pwd >> new-output"],
       ["editor", "cd docs && echo ok >normal.txt"],
-      ...[
-        "PATH=./fixture-bin git status --short",
-        'PATH="`pwd`" git status --short',
-        "PATH=$(pwd) git status --short",
-        'PATH="$(pwd)" git status --short',
-        "PATH=`pwd` git status --short",
-        "LD_PRELOAD=./fixture.so git status",
-        "GIT_EXTERNAL_DIFF=./fixture git diff",
-        "env PATH=./fixture-bin git status --short",
-        "/usr/bin/env GIT_EDITOR=./fixture /usr/bin/git status",
-      ].map((command) => [undefined, command]),
+      ["editor", "echo ok >new.env"],
+      ["editor", "cat <> new.env"],
       ...[
         "nl *.txt",
         "nl $INPUT",
@@ -163,8 +152,7 @@ export function safetySelfTest(root: string, deps: StaticSafetySelfTestDeps): vo
         "PATH=/fixture printf ok",
         "echo ok <<EOF\n$(touch fixture)\nEOF",
         "printf ok <<EOF\n$(touch fixture)\nEOF",
-      ].map((command) => [undefined, command]),
-      [undefined, 'wc -l <<< "$(PATH=/fixture git status --short)"'],
+      ].map((command): [undefined, string] => [undefined, command]),
       [undefined, "cat *"],
       [undefined, "tail ${INPUT}"],
       [undefined, "cut -f 1 *.txt"],
@@ -209,6 +197,26 @@ export function safetySelfTest(root: string, deps: StaticSafetySelfTestDeps): vo
       [undefined, "wc -l <<-EOF\n\t`PATH=/fixture git status --short`\n\tEOF"],
       [undefined, "PATH=./fixture-bin node --version"],
       [undefined, "LD_PRELOAD=./fixture.so python3 --version"],
+    ];
+    for (const [agent, command] of approvalRoute) {
+      if (call("bash", { command }, agent)?.block)
+        throw new Error(`Approval route statically refused: ${agent}: ${command}`);
+    }
+    // The grep override exercises descendant permissions in check-pi-policy.mjs.
+    const denied = [
+      ["unlisted-worker", "git status --short"],
+      ...[
+        "PATH=./fixture-bin git status --short",
+        'PATH="`pwd`" git status --short',
+        "PATH=$(pwd) git status --short",
+        'PATH="$(pwd)" git status --short',
+        "PATH=`pwd` git status --short",
+        "LD_PRELOAD=./fixture.so git status",
+        "GIT_EXTERNAL_DIFF=./fixture git diff",
+        "env PATH=./fixture-bin git status --short",
+        "/usr/bin/env GIT_EDITOR=./fixture /usr/bin/git status",
+      ].map((command) => [undefined, command]),
+      [undefined, 'wc -l <<< "$(PATH=/fixture git status --short)"'],
       [undefined, "sudo true"],
       [undefined, "/run/wrappers/bin/sudo true"],
       [undefined, "sudo\ttrue"],

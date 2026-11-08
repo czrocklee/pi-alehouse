@@ -425,6 +425,38 @@ body; completed spellings add restrictions, never ALLOW. Dynamic `cd` targets
 keep an unknown, yolo-satisfiable base; the speculative HOME-stability fold is
 retired. See [redirect-buried argv](security.md#redirect-buried-argv-and-home-cd).
 
+The static guard refuses only hard denies. Shapes a static Bash allow cannot
+prove safe (dynamic reader operands, indirect file lists, inline environment,
+expanding heredocs, non-literal printf/sha256sum/rg forms) fall back to
+ordinary approval instead: the authority sets every allow aside for that
+program, including project/agent-scope allows and session grants, while the
+full policy's restrictions still apply (a deny default with an allowlist
+therefore denies an excluded program). Under yolo they run like any other ask,
+so their dynamic paths stay invisible to path rules; the exclusion decides who
+approves, not what the shell expands. There is no session grant for an
+excluded ask in this version: without yolo each call is approved once. A
+worker forwards the requested command, and the serving parent evaluates the
+exclusion again against its own allows, so the parent must be the same build
+as the child (the existing new-process contract; no older wire shape is
+accepted). Missing or malformed forwarded access facts are rejected before
+approval; a Bash tool's path gates still use their own path surfaces. Literal
+redirect targets are path-checked by syntax, preserving decoded filename bytes
+through cwd and canonical-path resolution rather than applying tool-input
+cleanup a second time. Non-literal targets and arbitrary programs' internal IO
+remain outside the classifier. Ordinary agent frontmatter still outranks global
+rules, so a worker profile's `bash: "*": ask` can turn a global specific
+non-privilege Bash deny into an ask that yolo satisfies unless the separate
+static guard refuses its literal form. The narrow exception is the authority's
+[configured privilege-command deny floor](security.md#configured-privilege-command-denies):
+a selected ordered global Bash deny for an actual literal `sudo`, `doas` or `su`
+execution survives profile/project rules, session grants and yolo, including
+recognized wrappers and substitutions inside expanding heredocs. This is not a
+claim to detect privilege execution inside opaque scripts, generated command
+names or unsupported wrapper syntax. A synchronous advisory query without the
+parser/source needed for this floor cannot report an automatic grant; it returns
+a fail-closed ask instead. Other scope precedence is unchanged. See
+[static-allow exclusion](security.md#static-guard-static-allow-exclusion-and-redirect-targets).
+
 Nested delegation is excluded for every child. Only scout (internal `researcher`) has web tools;
 worker has no web tool table. Scout fetch schemas and capability wording
 allow only absolute HTTP(S) URLs, never local-video paths. Scout file reads

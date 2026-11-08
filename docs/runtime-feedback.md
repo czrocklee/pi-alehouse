@@ -7,7 +7,8 @@ switch, resource release or new parent model turn.
 
 The generated authority observes `block === true` returns from its own registered
 `tool_call` handlers: single-authority guard, original Bash deny/hardening
-and vendor permissions. It preserves registration order and the
+(preceded by the private, non-blocking capture of the requested command) and
+vendor permissions. It preserves registration order and the
 original return/throw.
 
 Registration uses a separate facade overriding only `on`, not a Proxy of the

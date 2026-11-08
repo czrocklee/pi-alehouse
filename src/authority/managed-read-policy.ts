@@ -20,6 +20,7 @@ import {
 // Keep the existing entry identity for generation, managed scratch and callers.
 // Re-export the same functions, never duplicate the private provenance store.
 export {
+  captureRequestedBashCommand,
   gitLiteralWords,
   hardenNonGitInput,
   literalProgram,
@@ -27,6 +28,7 @@ export {
   managedInspectionEffect,
   managedStaticFileScope,
   originalGitCommands,
+  requestedBashCommand,
   type ManagedStaticFileScope,
 } from "./managed-inspection";
 export {
