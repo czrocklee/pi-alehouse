@@ -1,3 +1,4 @@
+import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   Text,
@@ -15,6 +16,7 @@ import {
 import type { ModelPickerPosition } from "./preset-picker.ts";
 import {
   isPopoverCloseClick,
+  popoverCloseHit,
   popoverInlay,
   popoverRow,
   popoverTitle,
@@ -80,7 +82,9 @@ export function modelPopoverOptions(
  * selection/list fields or duplicated search/selection logic. */
 export class PresetModelPopover implements Component, Focusable {
   private width = 0;
+  private closePainted = false;
   private closed = false;
+  private readonly closeHover: ReturnType<typeof createPopoverCloseHover>;
   private targets = new Map<number, Target>();
   private selectedVisible = false;
   /** False when the public tree could not be identified; keyboard then remains
@@ -94,6 +98,8 @@ export class PresetModelPopover implements Component, Focusable {
   constructor(
     private readonly options: {
       native: NativeSelector;
+      /** Actual TUI host; structural test callers may omit it. */
+      tui?: Pick<TUI, "requestRender">;
       theme: PopoverTheme;
       title: string;
       height(): number;
@@ -103,7 +109,13 @@ export class PresetModelPopover implements Component, Focusable {
       select(model: Model): void;
       cancel(): void;
     },
-  ) {}
+  ) {
+    this.closeHover = createPopoverCloseHover({
+      closeHit: popoverCloseHit,
+      host: options.tui,
+      requestRender: () => options.tui?.requestRender(),
+    });
+  }
 
   get focused(): boolean {
     return this.options.native.focused;
@@ -133,7 +145,7 @@ export class PresetModelPopover implements Component, Focusable {
     };
     this.targets = new Map();
     try {
-      this.render(this.selectionWidth());
+      this.layout(this.selectionWidth(), false);
       return {
         targets: this.targets,
         selectedVisible: this.selectedVisible,
@@ -171,10 +183,13 @@ export class PresetModelPopover implements Component, Focusable {
     if (!this.closed) this.options.native.handleInput?.(data);
   }
   invalidate(): void {
+    this.closeHover.reset();
     this.options.native.invalidate();
   }
   dispose(): void {
+    if (this.closed) return;
     this.closed = true;
+    this.closeHover.dispose();
     this.targets.clear();
     this.selectedVisible = false;
     this.visibleModel = undefined;
@@ -182,6 +197,10 @@ export class PresetModelPopover implements Component, Focusable {
   }
 
   render(width: number): string[] {
+    return this.layout(width, true);
+  }
+
+  private layout(width: number, paintClose: boolean): string[] {
     this.width = width;
     this.targets.clear();
     this.selectedVisible = false;
@@ -190,7 +209,12 @@ export class PresetModelPopover implements Component, Focusable {
     this.visibleModel = undefined;
     if (this.closed) return [];
     const height = Math.max(1, this.options.height());
-    if (width < 12 || height < 5) return [truncateToWidth("Too small · Esc to cancel", width)];
+    const closable = Number.isFinite(width) && width >= 12 && height >= 5;
+    if (paintClose) {
+      this.closePainted = closable;
+      this.closeHover.paint(width, closable);
+    }
+    if (!closable) return [truncateToWidth("Too small · Esc to cancel", width)];
     const inner = width - 2;
     const models = this.options.models().filter((model) => model.api !== "pi-virtual");
     const rows = this.nativeRows(inner, models).filter(
@@ -202,10 +226,11 @@ export class PresetModelPopover implements Component, Focusable {
       height >= 10 ? [this.options.theme.fg("muted", "New Agents only; main unchanged")] : [];
     const budget = height - 2 - context.length;
     const body = this.fit(rows, budget);
+    if (paintClose) this.closeHover.paint(width, true, body.length + context.length + 2);
     const complete = (group: Group): boolean =>
       body.filter((row) => row.group === group).length === group.size;
     const result = [
-      popoverTitle(this.options.theme, width, this.options.title, true),
+      popoverTitle(this.options.theme, width, this.options.title, true, this.closeHover.hovered),
       ...context.map((text) => popoverRow(this.options.theme, text, inner)),
     ];
     for (const row of body) {
@@ -368,8 +393,9 @@ export class PresetModelPopover implements Component, Focusable {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult {
+    this.closeHover.mouse(event);
     if (this.closed) return { handled: true };
-    if (isPopoverCloseClick(event, this.width)) {
+    if (this.closePainted && isPopoverCloseClick(event, this.width)) {
       this.options.cancel();
       return { handled: true };
     }

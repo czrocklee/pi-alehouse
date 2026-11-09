@@ -41,5 +41,9 @@ export function stackedOverlayOptions(
     minRows?: number;
     nonCapturing?: boolean;
     onReveal?: () => void;
+    /** Presentation-only pointer cleanup; no focus or lifecycle changes. */
+    onHide?: () => void;
+    /** Retire pointer state when members below move this member vertically. */
+    onMove?: () => void;
   },
 ): StackedOverlayOptions;

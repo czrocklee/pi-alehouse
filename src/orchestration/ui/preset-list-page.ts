@@ -44,6 +44,7 @@ export const EMPTY_PAINT: PickerPaint = pickerPaint();
 
 export interface PresetPageState {
   selected: number;
+  closeHovered: boolean;
   slotIndex: number;
   canEdit: boolean;
   canEditPreset: boolean;
@@ -131,7 +132,13 @@ export class PresetPage {
   }
 
   title(width: number, title: string): string {
-    return popoverTitle(this.options.theme, width, title, this.options.pointer);
+    return popoverTitle(
+      this.options.theme,
+      width,
+      title,
+      this.options.pointer,
+      this.state.closeHovered,
+    );
   }
   divider(width: number): string {
     return popoverDivider(this.options.theme, width);

@@ -10,6 +10,7 @@ import {
   popoverSide,
   popoverTitleRow,
 } from "../../shared/popover-frame.mjs";
+import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import { formatTokenCount } from "../../shared/token-format.mjs";
 import type {
   SessionErrorStats,
@@ -616,6 +617,7 @@ export class StatsView {
   /** Per-tab positions survive refreshes and a trip through another tab. */
   private readonly offsets: [number, number, number] = [0, 0, 0];
   private disposed = false;
+  private readonly closeHover: ReturnType<typeof createPopoverCloseHover>;
   private paintedWidth = 0;
   private paintedTabRow = -1;
   private paintedViewport = 0;
@@ -624,7 +626,13 @@ export class StatsView {
   /** Widest content seen while open; see `preferredWidth`. */
   private wanted = 0;
 
-  constructor(private readonly options: StatsViewOptions) {}
+  constructor(private readonly options: StatsViewOptions) {
+    this.closeHover = createPopoverCloseHover({
+      closeHit: popoverCloseHit,
+      host: options.tui,
+      requestRender: () => options.tui.requestRender(),
+    });
+  }
 
   /**
    * Columns the content wants, at most `max`. The box hugs its tables rather
@@ -676,6 +684,7 @@ export class StatsView {
   }
 
   handleMouse(event: TuiMouseEvent): { handled: boolean } | undefined {
+    this.closeHover.mouse(event);
     if (this.disposed) return undefined;
     if (isPopoverCloseClick(event, this.paintedWidth)) {
       this.finish();
@@ -699,13 +708,16 @@ export class StatsView {
     if (this.disposed) return [];
     const columns = Math.max(0, Math.floor(finite(width) ?? 0));
     const rows = Math.max(0, Math.floor(nonNegative(this.options.tui.terminal.rows) ?? 0));
-    if (columns === 0 || rows === 0) return [];
-
-    this.paintedWidth = columns;
+    const budget = Math.floor(rows * 0.75);
+    this.closeHover.paint(columns, budget > 0 && !!popoverCloseHit(columns));
+    this.paintedWidth = budget > 0 ? columns : 0;
     this.paintedTabRow = -1;
     this.tabTargets = [];
-    const budget = Math.floor(rows * 0.75);
-    if (budget === 0) return [];
+    this.paintedViewport = this.paintedMaxScroll = 0;
+    if (columns === 0 || budget === 0) {
+      this.closeHover.paint(columns, false, 0);
+      return [];
+    }
     if (budget < MIN_FULL_FRAME_ROWS) return this.compact(columns, budget);
 
     const snapshot = this.readSnapshot();
@@ -726,6 +738,7 @@ export class StatsView {
     this.offsets[this.tab] = offset;
     this.paintedViewport = viewport;
     this.paintedMaxScroll = maxScroll;
+    this.closeHover.paint(columns, !!popoverCloseHit(columns), viewport + CHROME_ROWS);
 
     const lines = [
       this.top(columns),
@@ -741,11 +754,14 @@ export class StatsView {
 
   /** Pi calls this on theme/data invalidation; refresh ownership remains outside. */
   invalidate(): void {
+    this.closeHover.reset(false);
     if (!this.disposed) this.options.tui.requestRender();
   }
 
   dispose(): void {
     this.disposed = true;
+    this.closeHover.dispose();
+    this.paintedWidth = 0;
     this.tabTargets = [];
     this.paintedViewport = 0;
     this.paintedMaxScroll = 0;
@@ -753,10 +769,7 @@ export class StatsView {
 
   private finish(): void {
     if (this.disposed) return;
-    this.disposed = true;
-    this.tabTargets = [];
-    this.paintedViewport = 0;
-    this.paintedMaxScroll = 0;
+    this.dispose();
     this.options.close();
   }
 
@@ -893,6 +906,7 @@ export class StatsView {
   }
 
   private compact(width: number, budget: number): string[] {
+    this.closeHover.paint(width, !!popoverCloseHit(width), budget);
     this.paintedViewport = 0;
     this.paintedMaxScroll = 0;
     const middle = [
@@ -918,6 +932,7 @@ export class StatsView {
       TITLE,
       { clip: (text, columns) => truncateToWidth(text, columns, "…"), width: visibleWidth },
       closable,
+      this.closeHover.hovered,
     );
   }
 

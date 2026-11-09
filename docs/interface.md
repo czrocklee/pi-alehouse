@@ -7,6 +7,30 @@ Run-bound intent to the host, which invokes the existing Owner command; only the
 core changes lifecycle state. Panels coordinate through one request/overlay
 protocol so that a closing `ui.custom` cannot pop a newer overlay.
 
+## Close-button feedback
+
+Every Alehouse panel with a top-right `×` highlights that glyph in bold accent
+when the pointer is over its existing five-column close target. Hover is visual
+only: it does not close a panel, take keyboard focus, select a model or mode,
+or arm an Agent stop. Moving away, hiding the panel, invalidating its geometry
+or disposing it clears the highlight; tiny layouts without `×` have no hover
+target. Visible close controls keep their click action; unpainted controls are
+not clickable. Narrow Approval chrome fits the title around the close control;
+zero-row Stats and the model selector's “Too small” fallback have no invisible
+close hot spot.
+
+Hover cleanup, pointer-target validity and keyboard navigation are separate.
+Moving or hiding a panel retires its old pointer targets until a fresh paint,
+without dropping otherwise-valid keyboard navigation. The picker retains its
+layout-based keyboard navigation across theme invalidation; Context retains its
+snapshot/epoch checks for semantic activation. Cleanup performed during layout
+does not request an extra frame.
+
+This requires fullscreen mouse-motion reporting and the supported host input
+adapter. Terminals/multiplexers that do not report motion keep ordinary click
+and keyboard behavior. Keyboard input conservatively clears the highlight until
+the pointer next moves; hover never needs a polling timer.
+
 ## Agent widget
 
 The widget shows child work while active and lingers briefly after settlement.
@@ -493,7 +517,14 @@ dialogs rather than a floating menu.
 
 ## Session replacement confirmation
 
-`/new`, `/resume`, `/fork`, clone, and import replace the parent runtime only
+In Alehouse, `/clear` is an alias for `/new`: it starts a new session, not just
+an empty screen. The previous session remains available through `/resume`.
+After a successful switch it reports `✓ New session started` through the new
+session's notification UI. This is the same success text as `/new`, not its
+built-in transcript banner; cancellation reports no success. This alias is
+included only in Alehouse; ordinary Pi is unchanged.
+
+`/new` (or `/clear`), `/resume`, `/fork`, clone, and import replace the parent runtime only
 after confirmed Owner closure. A fresh Owner that has never accepted a Run starts
 its shutdown before the replacement guard first awaits and can proceed
 automatically once closed. If this Owner ever accepted work—even work now

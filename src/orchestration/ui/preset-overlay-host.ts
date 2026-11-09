@@ -16,7 +16,10 @@ const PRESET_OVERLAY_MIN_WIDTH = 34;
 export interface PresetOverlayPlacement {
   rows(): number;
   measure(height: number): void;
+  /** Compare the last completed paint to live placement before pointer actions. */
+  pointerCurrent(): boolean;
 }
+type PresetStackHost = StackHost & { readonly terminal: { readonly columns?: number } };
 type PresetCustomOptions =
   | { overlay: false }
   | {
@@ -33,7 +36,7 @@ export interface PresetOverlayHost {
   readonly floating: boolean;
   customOptions(): PresetCustomOptions;
   /** After the custom factory has mounted. Docked opens do not join the stack. */
-  attach(tui: StackHost): PresetOverlayPlacement | undefined;
+  attach(tui: PresetStackHost): PresetOverlayPlacement | undefined;
   /** Clear reveal, leave the stack, then release the pinned yield. Idempotent. */
   release(): void;
 }
@@ -41,8 +44,14 @@ export interface PresetOverlayHost {
 export function createPresetOverlayHost(options: {
   floating: boolean;
   emitPinned: (data: PinnedPopoverYield) => void;
+  /** Stack hiding skips component.render; retire pointer targets and capture,
+   * not keyboard readiness (which checks the current row budget separately). */
+  onHide?: () => void;
+  /** Retire pointer targets after a lower member translates this panel. */
+  onMove?: () => void;
 }): PresetOverlayHost {
   let place: StackMember | undefined;
+  let placement: OverlayOptions | undefined;
   let handle: OverlayHandle | undefined;
   let reveal: (() => void) | undefined;
   let releasePinned: (() => void) | undefined;
@@ -57,12 +66,14 @@ export function createPresetOverlayHost(options: {
         },
         overlayOptions: (): OverlayOptions =>
           place
-            ? stackedOverlayOptions(place, {
+            ? (placement ??= stackedOverlayOptions(place, {
                 width: PRESET_OVERLAY_WIDTH,
                 minWidth: PRESET_OVERLAY_MIN_WIDTH,
                 minRows: PRESET_PICKER_MIN_ROWS,
                 onReveal: () => reveal?.(),
-              })
+                onHide: options.onHide,
+                onMove: options.onMove,
+              }))
             : {
                 anchor: "center",
                 width: PRESET_OVERLAY_WIDTH,
@@ -82,15 +93,25 @@ export function createPresetOverlayHost(options: {
         };
         options.emitPinned({ token, active: true });
         place = joinPopoverStack(tui);
+        placement = undefined;
       }
       const openedFrom = focusOrigin(tui);
       reveal = () => {
         if (handle) focusRevealed(tui, handle, openedFrom);
       };
       const member = place;
-      return member
-        ? { rows: () => member.available(), measure: (height) => member.measure(height) }
-        : undefined;
+      if (!member) return undefined;
+      const position = () =>
+        `${tui.terminal.columns}:${tui.terminal.rows}:${member.bottom}:${member.width}`;
+      let paintedPosition: string | undefined;
+      return {
+        rows: () => member.available(),
+        measure: (height) => {
+          paintedPosition = position();
+          member.measure(height);
+        },
+        pointerCurrent: () => place === member && paintedPosition === position(),
+      };
     },
     release() {
       reveal = undefined;
@@ -98,6 +119,7 @@ export function createPresetOverlayHost(options: {
         place?.leave();
       } finally {
         place = undefined;
+        placement = undefined;
         const finish = releasePinned;
         releasePinned = undefined;
         finish?.();

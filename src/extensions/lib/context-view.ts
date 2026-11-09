@@ -16,10 +16,12 @@ import {
   popoverRule,
   popoverSide,
 } from "../../shared/popover-frame.mjs";
+import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import { formatTokenCount } from "../../shared/token-format.mjs";
 import type { ContextCategory, ContextItem, ContextSnapshot } from "./context-stats.ts";
 
 export interface ContextViewOptions {
+  tui?: object;
   theme: Theme;
   snapshot: () => ContextSnapshot;
   availableRows: () => number;
@@ -28,6 +30,8 @@ export interface ContextViewOptions {
   onRender?: (height: number) => void;
   compaction?: () => string | undefined;
   isFocused?: () => boolean;
+  /** Reject cached SDK pointer bounds after stack/terminal movement. */
+  pointerCurrent?: () => boolean;
 }
 
 type Tone = Parameters<Theme["fg"]>[0];
@@ -79,6 +83,7 @@ const pad = (text: string, width: number, right = false): string => {
 /** Presentation only: reads detached metadata, owns no SDK session, timers or focus. */
 export class ContextView {
   private disposed = false;
+  private readonly closeHover: ReturnType<typeof createPopoverCloseHover>;
   private selected: ContextCategory | undefined;
   private detail: Row | undefined;
   private offset = 0;
@@ -91,6 +96,9 @@ export class ContextView {
   // Navigation can accumulate against the last painted layout. Activation may
   // only use targets committed by a paint of the current epoch.
   private navigationReady = false;
+  private pointerReady = false;
+  private pointerPressed = false;
+  private suppressClick = false;
   private epoch = 0;
   private paintedEpoch = -1;
   private paintedSnapshot: ContextSnapshot | undefined;
@@ -102,19 +110,28 @@ export class ContextView {
   private detailLines: string[] = [];
   private tabs: ContextCategory[] = [];
 
-  constructor(private readonly options: ContextViewOptions) {}
+  constructor(private readonly options: ContextViewOptions) {
+    this.closeHover = createPopoverCloseHover({
+      closeHit: popoverCloseHit,
+      host: options.tui,
+      requestRender: options.requestRender,
+    });
+  }
 
   preferredWidth(max: number): number {
     return Math.min(96, Math.max(1, size(max)));
   }
 
   render(width: number): string[] {
-    this.clearGeometry();
+    this.clearGeometry(false);
     if (this.disposed) return [];
     const columns = size(width);
     const height = Math.min(HEIGHT, size(this.options.availableRows()));
     const snapshot = this.read();
-    if (!columns || !height) return this.finishPaint([], columns);
+    if (!columns || !height) {
+      this.closeHover.paint(columns, false, 0);
+      return this.finishPaint([], columns);
+    }
     if (!snapshot || columns < MIN_WIDTH || height < MIN_ROWS) {
       const text = snapshot
         ? `Context ${this.estimates(snapshot, true)} · readonly · ${this.usage(snapshot)}`
@@ -127,11 +144,13 @@ export class ContextView {
               popoverRule(this.options.theme, columns, "bottom"),
             ]
           : [this.fit(text, columns)];
+      this.closeHover.paint(columns, false, compact.length);
       // No close/tab/row/footer hit areas in a readonly fallback, even if a
       // previous paint had them. Esc remains the keyboard escape hatch.
       return this.finishPaint(compact, columns);
     }
 
+    this.closeHover.paint(columns, !!popoverCloseHit(columns), height);
     this.tabs = CATEGORIES.filter((id) => id !== "other" && this.present(snapshot, id));
     if (this.selected && !this.tabs.includes(this.selected)) this.reset(undefined);
     if (this.cachedSnapshot !== snapshot) {
@@ -203,9 +222,24 @@ export class ContextView {
     this.options.requestRender();
   }
 
+  /** Stack movement retires pointer targets, not the last valid keyboard layout. */
+  resetPointer(): void {
+    this.closeHover.reset(false);
+    this.pointerReady = false;
+    this.targets = [];
+    if (this.pointerPressed) this.suppressClick = true;
+  }
+
   handleMouse(event: TuiMouseEvent): { handled: boolean } | undefined {
+    if (event.type === "press" && event.button === "left") {
+      this.pointerPressed = true;
+      this.suppressClick = false;
+    }
+    if (this.options.pointerCurrent?.() === false) this.resetPointer();
+    this.closeHover.mouse(event);
     if (
       this.disposed ||
+      !this.pointerReady ||
       event.width !== this.paintedWidth ||
       size(this.options.availableRows()) < this.paintedHeight ||
       event.x < 0 ||
@@ -222,6 +256,10 @@ export class ContextView {
       return { handled: true };
     }
     if (!this.ready() || this.paintedEpoch !== this.epoch) return undefined;
+    if (event.type === "click") {
+      this.pointerPressed = false;
+      if (this.suppressClick) return undefined;
+    }
     if (isPopoverCloseClick(event, this.paintedWidth)) {
       this.close();
       return { handled: true };
@@ -263,6 +301,7 @@ export class ContextView {
   dispose(): void {
     this.disposed = true;
     this.clearGeometry();
+    this.closeHover.dispose();
   }
 
   private read(): ContextSnapshot | undefined {
@@ -555,7 +594,12 @@ export class ContextView {
       this.target(start, x, 0, () => this.select(id));
     }
     result += this.fg("borderAccent", POPOVER.h.repeat(Math.max(0, limit - x)));
-    return result + (close ? popoverCloseTail(theme) : this.fg("borderAccent", POPOVER.tr));
+    return (
+      result +
+      (close
+        ? popoverCloseTail(theme, this.closeHover.hovered)
+        : this.fg("borderAccent", POPOVER.tr))
+    );
   }
 
   private bottom(width: number, y: number, snapshot: ContextSnapshot): string {
@@ -708,8 +752,10 @@ export class ContextView {
       this.options.close();
     }
   }
-  private clearGeometry(): void {
+  private clearGeometry(resetHover = true): void {
+    if (resetHover) this.resetPointer();
     this.targets = [];
+    this.pointerReady = false;
     this.navigationReady = false;
     this.paintedEpoch = -1;
     this.paintedSnapshot = undefined;
@@ -732,6 +778,7 @@ export class ContextView {
     this.paintedWidth = width;
     this.paintedHeight = lines.length;
     this.paintedEpoch = this.epoch;
+    this.pointerReady = this.navigationReady;
     this.options.onRender?.(lines.length);
     return lines.map((line) => this.fit(line, width));
   }

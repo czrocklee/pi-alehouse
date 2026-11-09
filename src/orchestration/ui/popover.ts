@@ -40,6 +40,7 @@ export function popoverTitle(
   width: number,
   title: string,
   closable = false,
+  closeHovered = false,
 ): string {
   return popoverTitleRow(
     theme,
@@ -47,6 +48,7 @@ export function popoverTitle(
     title,
     { clip: (text, columns) => truncateToWidth(text, columns, "…"), width: visibleWidth },
     closable,
+    closeHovered,
   );
 }
 
@@ -85,6 +87,7 @@ export function popoverInlay(
   inlay: string,
   kind: "top" | "bottom",
   closable = false,
+  closeHovered = false,
 ): string {
   const chrome = popoverInlayWidth(width, kind, closable);
   const text = truncateToWidth(inlay, chrome);
@@ -97,7 +100,7 @@ export function popoverInlay(
       remaining >= 2
         ? " " + outer(theme, POPOVER.h.repeat(remaining - 1))
         : outer(theme, POPOVER.h.repeat(remaining));
-    return left + fill + popoverCloseTail(theme);
+    return left + fill + popoverCloseTail(theme, closeHovered);
   }
   return (
     left +

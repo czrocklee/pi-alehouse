@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { TuiAltScreen } from "@earendil-works/pi-tui";
+import { truncateToWidth, TuiAltScreen, visibleWidth } from "@earendil-works/pi-tui";
 import {
   POPOVER_DOCK_ROWS,
   POPOVER_MIN_ROWS,
@@ -9,6 +9,8 @@ import {
   joinPopoverStack,
   stackedOverlayOptions,
 } from "../../src/shared/popover-stack.mjs";
+import { createPopoverCloseHover } from "../../src/shared/popover-close-hover.mjs";
+import { popoverCloseHit, popoverTitleRow } from "../../src/shared/popover-frame.mjs";
 
 /** The SDK's own compositor, so anchoring, margins and clamping are real. */
 function screen(rows = 24, columns = 100) {
@@ -175,6 +177,119 @@ test("a crowded column caps each popover to the rows left and hides one with no 
   low.close();
   high.close();
   top.close();
+});
+
+test("off-screen transitions retire pointer state once, before any reentrant visibility query", () => {
+  const h = screen(12);
+  const member = joinPopoverStack(h.tui);
+  let hides = 0;
+  const options = stackedOverlayOptions(member, {
+    width: 20,
+    onHide: () => {
+      hides++;
+      assert.equal(options.visible(), false, "hidden state is latched before cleanup");
+    },
+  });
+  assert.equal(options.visible(), true);
+  assert.equal(hides, 0);
+  h.terminal.rows = 2;
+  assert.equal(options.visible(), false);
+  assert.equal(options.visible(), false);
+  assert.equal(hides, 1);
+  h.terminal.rows = 12;
+  assert.equal(options.visible(), true);
+  h.terminal.rows = 2;
+  assert.equal(options.visible(), false);
+  assert.equal(hides, 2);
+  member.leave();
+
+  const hiddenMember = joinPopoverStack(h.tui);
+  const initial = stackedOverlayOptions(hiddenMember, { width: 20, onHide: () => hides++ });
+  assert.equal(initial.visible(), false);
+  assert.equal(initial.visible(), false);
+  assert.equal(hides, 3, "an initially hidden member also retires old pointer state once");
+  hiddenMember.leave();
+});
+
+test("height changes and removals below a visible member retire its translated pointer target", () => {
+  const h = screen(24);
+  const low = joinPopoverStack(h.tui);
+  const high = joinPopoverStack(h.tui);
+  let moves = 0;
+  const options = stackedOverlayOptions(high, {
+    width: 20,
+    onMove: () => {
+      moves++;
+      assert.equal(options.visible(), true, "position is latched before pointer cleanup");
+    },
+  });
+  assert.equal(options.visible(), true);
+  assert.equal(moves, 0);
+  low.measure(5);
+  assert.equal(options.visible(), true);
+  assert.equal(options.visible(), true);
+  assert.equal(moves, 1);
+  low.measure(8);
+  assert.equal(options.visible(), true);
+  assert.equal(moves, 2);
+  low.leave();
+  assert.equal(options.visible(), true);
+  assert.equal(moves, 3, "removing the member below also translates the header");
+  high.leave();
+});
+
+test("lower growth during compositing clears the translated upper close on the first frame", (t) => {
+  const h = screen();
+  const low = popover(h, { height: 4, width: 40 });
+  const member = joinPopoverStack(h.tui);
+  const hover = createPopoverCloseHover({
+    host: h.tui,
+    requestRender: () => h.tui.requestRender(),
+    closeHit: popoverCloseHit,
+  });
+  const theme = {
+    fg: (_color, text) => `\x1b[36m${text}\x1b[39m`,
+    bold: (text) => `\x1b[1m${text}\x1b[22m`,
+  };
+  const metrics = { clip: truncateToWidth, width: visibleWidth };
+  const view = {
+    render(width) {
+      hover.paint(width, true, 3);
+      member.measure(3);
+      return [
+        popoverTitleRow(theme, width, "Context", metrics, true, hover.hovered),
+        "│" + " ".repeat(width - 2) + "│",
+        "╰" + "─".repeat(width - 2) + "╯",
+      ];
+    },
+    invalidate() {},
+  };
+  const handle = h.tui.showOverlay(
+    view,
+    stackedOverlayOptions(member, { width: 40, nonCapturing: true, onMove: () => hover.reset() }),
+  );
+  t.after(() => {
+    hover.dispose();
+    handle.hide();
+    member.leave();
+    low.close();
+  });
+  const once = () =>
+    h.tui.compositeOverlays(Array(h.terminal.rows).fill(""), h.terminal.columns, h.terminal.rows);
+  once();
+  hover.mouse({ type: "move", button: "none", x: 36, y: 0 });
+  const highlighted = once();
+  const before = handle.getBounds();
+  const glyph = theme.fg("accent", theme.bold("×"));
+  assert(highlighted[before.row].includes(glyph));
+  low.box.height = 7; // Do not pre-publish measure(): growth happens inside the native render pass.
+  const translated = once();
+  const after = handle.getBounds();
+  assert.equal(after.row, before.row - 3);
+  assert.equal(after.width, before.width);
+  assert.equal(after.height, before.height);
+  assert.equal(hover.hovered, false);
+  assert(!translated[after.row].includes(glyph), "not even the first translated frame keeps hover");
 });
 
 test("height changes relayout only when someone above depends on them", () => {

@@ -170,7 +170,32 @@ export function breakdownWidth(table: BreakdownTable): number {
   );
 }
 
-export function breakdownFrame(table: BreakdownTable, theme: Theme, width: number): string[] {
+/** Header-only repaint after the owner publishes a changed frame height. */
+export function breakdownTitle(theme: Theme, width: number, closeHovered = false): string {
+  const closable = !!popoverCloseHit(width);
+  const tailWidth = closable ? POPOVER_CLOSE_COLUMNS : 1;
+  const titleRoom = width - 4 - tailWidth - visibleWidth(BREAKDOWN_TITLE);
+  return titleRoom >= 0
+    ? popoverTitleRow(
+        theme,
+        width,
+        BREAKDOWN_TITLE,
+        { clip: (text, columns) => truncateToWidth(text, columns, "…"), width: visibleWidth },
+        closable,
+        closeHovered,
+      )
+    : closable
+      ? theme.fg("borderAccent", BOX.tl + BOX.h.repeat(width - 1 - tailWidth)) +
+        popoverCloseTail(theme, closeHovered)
+      : popoverRule(theme, width, "top");
+}
+
+export function breakdownFrame(
+  table: BreakdownTable,
+  theme: Theme,
+  width: number,
+  closeHovered = false,
+): string[] {
   const inner = Math.max(1, width - 4);
   // A narrow terminal gives up the least interesting columns before it starts
   // eating model names, which are what the breakdown is for.
@@ -185,33 +210,13 @@ export function breakdownFrame(table: BreakdownTable, theme: Theme, width: numbe
   // With no column left to give up, the names take whatever remains: a name is
   // recoverable from a prefix, a frame missing its closing edge just looks broken.
   const keyWidth = Math.max(1, inner - numeric);
-  const outer = (text: string): string => theme.fg("borderAccent", text);
   const rule = (kind: "top" | "bottom" | "divider"): string => popoverRule(theme, width, kind);
   // `used` is the plain width of the cells, which is known before they are
   // colored; measuring the escaped string instead would pad by the wrong amount.
   const row = (cells: string[], used: number): string =>
     `${popoverSide(theme)} ${cells.join("")}${" ".repeat(Math.max(0, inner - used))} ${popoverSide(theme)}`;
 
-  // The close control takes the top edge's right end, as on every popover;
-  // too narrow for it, the edge is a plain rule and only the footer closes.
-  const closable = !!popoverCloseHit(width);
-  // Painted after the edge it ends, like every other part of the frame.
-  const tail = (): string => (closable ? popoverCloseTail(theme) : outer(BOX.tr));
-  const tailWidth = closable ? POPOVER_CLOSE_COLUMNS : 1;
-  const titleRoom = width - 4 - tailWidth - visibleWidth(BREAKDOWN_TITLE);
-  const lines: string[] = [
-    titleRoom >= 0
-      ? popoverTitleRow(
-          theme,
-          width,
-          BREAKDOWN_TITLE,
-          { clip: (text, columns) => truncateToWidth(text, columns, "…"), width: visibleWidth },
-          closable,
-        )
-      : closable
-        ? outer(BOX.tl + BOX.h.repeat(width - 1 - tailWidth)) + tail()
-        : rule("top"),
-  ];
+  const lines: string[] = [breakdownTitle(theme, width, closeHovered)];
   if (table.body.length === 0) {
     lines.push(row([theme.fg("dim", padEnd("no usage recorded yet", inner))], inner));
   } else {

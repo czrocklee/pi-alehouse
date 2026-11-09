@@ -5,7 +5,8 @@ import {
   HIDE_TRANSIENT_OVERLAYS_EVENT,
   PINNED_POPOVER_YIELD_EVENT,
 } from "../../shared/overlay-protocol.mjs";
-import { isPopoverCloseClick } from "../../shared/popover-frame.mjs";
+import { isPopoverCloseClick, popoverCloseHit } from "../../shared/popover-frame.mjs";
+import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import {
   POPOVER_DOCK_ROWS,
   focusOrigin,
@@ -21,6 +22,7 @@ import {
   BREAKDOWN_CHROME,
   breakdownFrame,
   breakdownTable,
+  breakdownTitle,
   breakdownWidth,
   contextSummary,
 } from "./footer-layout.ts";
@@ -52,12 +54,21 @@ export function createFooterPanels(options: {
   const panelsHeld = () => promptDepth > 0 || pinnedHolds.size > 0;
   /** Close-control geometry follows the latest paint, not event bounds. */
   let paintedWidth = 0;
+  // Pi may dispatch using cached bounds before consulting visibility getters.
+  const placement = (place: StackMember) =>
+    `${place.bottom}:${tui.terminal.rows}:${tui.terminal.columns}`;
+  let breakdownPlacement: string | undefined;
+  let breakdownPressed = false;
+  let suppressBreakdownClick = false;
+  let breakdownHover: ReturnType<typeof createPopoverCloseHover> | undefined;
   const maxBreakdownRows = () =>
     (member?.available() ?? tui.terminal.rows - POPOVER_DOCK_ROWS) - BREAKDOWN_CHROME;
   const hideBreakdown = () => {
     if (restoreTimer) clearTimeout(restoreTimer);
     restoreTimer = undefined;
     const pinned = member !== undefined || overlay !== undefined;
+    breakdownHover?.dispose();
+    breakdownHover = undefined;
     overlay?.hide();
     overlay = undefined;
     member?.leave();
@@ -66,17 +77,37 @@ export function createFooterPanels(options: {
     if (pinned) tui.requestRender();
   };
   const breakdown = {
-    invalidate() {},
+    resetPointer() {
+      breakdownHover?.reset(false);
+      paintedWidth = 0;
+      if (breakdownPressed) suppressBreakdownClick = true;
+    },
+    invalidate() {
+      breakdown.resetPointer();
+    },
     // Share the leaf/revision-keyed data with every stacked width getter;
     // layout and focus changes do not invalidate historical accounting.
     render: (width: number): string[] => {
-      const lines = breakdownFrame(breakdownTable(spend(), maxBreakdownRows()), theme, width);
-      paintedWidth = width;
+      const closable = width > 0 && !!popoverCloseHit(width);
+      const table = breakdownTable(spend(), maxBreakdownRows());
+      const lines = width > 0 ? breakdownFrame(table, theme, width) : [];
+      breakdownHover?.paint(width, closable, lines.length);
+      if (lines.length) lines[0] = breakdownTitle(theme, width, breakdownHover?.hovered);
+      paintedWidth = closable ? width : 0;
+      breakdownPlacement = member && placement(member);
       member?.measure(lines.length);
       return lines;
     },
     handleMouse(event: TuiMouseEvent) {
+      if (event.type === "press" && event.button === "left") {
+        breakdownPressed = true;
+        suppressBreakdownClick = false;
+      }
+      if (!member || breakdownPlacement !== placement(member)) breakdown.resetPointer();
+      breakdownHover?.mouse(event);
       if (event.type !== "click" || event.button !== "left") return undefined;
+      breakdownPressed = false;
+      if (suppressBreakdownClick) return undefined;
       // Only the close control closes; clicks on the table leave it pinned.
       if (isPopoverCloseClick(event, paintedWidth)) hideBreakdown();
       return { handled: true };
@@ -91,13 +122,21 @@ export function createFooterPanels(options: {
         width: () => breakdownWidth(breakdownTable(spend(), maxBreakdownRows())),
         // The editor keeps the keyboard: this is a lightweight panel, not a dialog.
         nonCapturing: true,
+        onHide: () => breakdown.resetPointer(),
+        onMove: () => breakdown.resetPointer(),
       }),
     );
     tui.requestRender();
   };
   const showBreakdown = () => {
     if (member || tui.mode !== "fullscreen") return;
+    breakdownPressed = suppressBreakdownClick = false;
     member = joinPopoverStack(tui);
+    breakdownHover = createPopoverCloseHover({
+      closeHit: popoverCloseHit,
+      host: tui,
+      requestRender: () => tui.requestRender(),
+    });
     mountBreakdown(member);
   };
   // Cooperatively step aside during agent panel settlement, then return
@@ -106,9 +145,9 @@ export function createFooterPanels(options: {
   const pauseBreakdown = () => {
     if (restoreTimer) clearTimeout(restoreTimer);
     restoreTimer = undefined;
+    breakdown.resetPointer();
     overlay?.hide();
     overlay = undefined;
-    paintedWidth = 0;
     member?.measure(0);
   };
   const stepAside = () => {
@@ -182,6 +221,8 @@ export function createFooterPanels(options: {
         onReveal: () => {
           if (contextPanel === panel) revealContext();
         },
+        onHide: () => panel.view.resetPointer(),
+        onMove: () => panel.view.resetPointer(),
       }),
     );
     tui.requestRender();
@@ -201,7 +242,9 @@ export function createFooterPanels(options: {
     }
     if (!contextPanel) {
       const place = joinPopoverStack(tui);
+      let paintedPlacement: string | undefined;
       const view = new ContextView({
+        tui,
         theme,
         snapshot: contextSnapshot,
         availableRows: () => place.available(),
@@ -210,7 +253,11 @@ export function createFooterPanels(options: {
         },
         close: hideContext,
         isFocused: () => contextPanel?.handle?.isFocused() === true,
-        onRender: (height) => place.measure(height),
+        pointerCurrent: () => paintedPlacement === placement(place),
+        onRender: (height) => {
+          paintedPlacement = placement(place);
+          place.measure(height);
+        },
         compaction: options.compaction,
       });
       contextPanel = { member: place, view };
@@ -256,10 +303,10 @@ export function createFooterPanels(options: {
     if (contextRestore) clearTimeout(contextRestore);
     contextRestore = undefined;
     if (!contextPanel) return;
+    contextPanel.view.resetPointer();
     contextPanel.handle?.hide();
     contextPanel.handle = undefined;
     contextPanel.member.measure(0);
-    contextPanel.view.invalidate();
   };
   const stepContextAside = () => {
     if (!contextPanel?.handle) return;

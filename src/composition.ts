@@ -159,6 +159,7 @@ export default async function alehouse(pi: ExtensionAPI) {
       ["stats", join(paths.runtime, "extensions/stats.ts")],
       ["terminal-title", join(paths.runtime, "extensions/terminal-title-status.ts")],
       ["web-access", paths.web],
+      ["clear", join(paths.runtime, "extensions/clear.ts")],
     ];
     for (const [name, path] of entries) {
       // Reuse the module already checked above; a second loader must not bind

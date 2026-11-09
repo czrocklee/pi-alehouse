@@ -181,9 +181,13 @@ export function focusRevealed(host, handle, origin) {
  * controls or bottom edge cut off. Pi focuses a capturing overlay only when it
  * is shown visible; `onReveal` runs (outside the layout pass) each time the
  * popover comes back from off screen, so its owner can take the keyboard.
+ * `onHide` and `onMove` synchronously retire presentation-only pointer state
+ * when a member disappears or its bottom offset changes. They must not change
+ * focus, stack membership or lifecycle.
  * @param {StackMember} member
  * @param {{ width: number | (() => number), minWidth?: number, minRows?: number,
- *   nonCapturing?: boolean, onReveal?: () => void }} layout
+ *   nonCapturing?: boolean, onReveal?: () => void, onHide?: () => void,
+ *   onMove?: () => void }} layout
  */
 export function stackedOverlayOptions(member, layout) {
   const minRows = Math.max(POPOVER_MIN_ROWS, layout.minRows ?? 0);
@@ -195,6 +199,8 @@ export function stackedOverlayOptions(member, layout) {
   );
   /** @type {boolean | undefined} */
   let shown;
+  /** @type {number | undefined} */
+  let bottom;
   return {
     anchor: /** @type {const} */ ("bottom-right"),
     get width() {
@@ -202,7 +208,14 @@ export function stackedOverlayOptions(member, layout) {
     },
     minWidth: layout.minWidth ?? 1,
     get margin() {
-      return { bottom: member.bottom };
+      // Visibility is filtered for all overlays before any are rendered. A
+      // lower member can grow during that same pass, so check again here,
+      // before Pi renders this member at its newly translated position.
+      const currentBottom = member.bottom;
+      const moved = bottom !== undefined && bottom !== currentBottom;
+      bottom = currentBottom;
+      if (moved && shown !== false) layout.onMove?.();
+      return { bottom: currentBottom };
     },
     get maxHeight() {
       return Math.max(1, member.available());
@@ -213,7 +226,13 @@ export function stackedOverlayOptions(member, layout) {
       if (!room) member.measure(0);
       // Pi calls this mid-layout and mid-input; focus must change after it.
       if (room && shown === false && layout.onReveal) void Promise.resolve().then(layout.onReveal);
+      const hidden = !room && shown !== false;
+      const currentBottom = member.bottom;
+      const moved = bottom !== undefined && bottom !== currentBottom;
+      bottom = currentBottom;
       shown = room;
+      if (hidden) layout.onHide?.();
+      else if (room && moved) layout.onMove?.();
       return room;
     },
     nonCapturing: layout.nonCapturing === true,

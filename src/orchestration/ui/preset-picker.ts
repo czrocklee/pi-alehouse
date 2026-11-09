@@ -1,8 +1,9 @@
+import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import type { PersistentScope } from "../../shared/settings-store.mjs";
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type Component, type TUI } from "@earendil-works/pi-tui";
 import { OverlayRequest } from "./overlay-request.ts";
-import { isPopoverCloseClick } from "./popover.ts";
+import { isPopoverCloseClick, popoverCloseHit, popoverTitle } from "./popover.ts";
 import type { DelegationSetting } from "../delegation.ts";
 import {
   isOffPreset,
@@ -57,6 +58,8 @@ export interface PresetPickerOptions {
   pointer?: boolean;
   rows?: () => number;
   onRender?: (height: number) => void;
+  /** Native mouse/capture dispatch can precede SDK visibility/layout checks. */
+  pointerCurrent?: () => boolean;
   /** Applies immediately without settling the picker; set reports failures. */
   delegation?: {
     current(): DelegationSetting;
@@ -109,14 +112,25 @@ export class PresetPicker implements Component {
   private visibleRows = 1;
   private closed = false;
   private paint = EMPTY_PAINT;
-  private paintedWidth: number | undefined;
+  /** Last semantic layout gates keys independently of pointer placement. */
+  private layoutWidth: number | undefined;
+  /** Zero retires cached mouse bounds without changing keyboard readiness. */
+  private pointerWidth = 0;
+  private pointerPressed = false;
+  private suppressClick = false;
   private editing = false;
   private slotIndex = 0;
   private readonly delegation: PresetDelegation;
   private readonly effort: PresetEffortEditor;
+  private readonly closeHover: ReturnType<typeof createPopoverCloseHover>;
 
   constructor(private readonly options: PresetPickerOptions) {
     this.options = { ...options, presets: [...options.presets] };
+    this.closeHover = createPopoverCloseHover({
+      closeHit: popoverCloseHit,
+      host: options.tui,
+      requestRender: () => options.tui.requestRender(),
+    });
     const active = options.presets.findIndex((preset) => preset.name === options.activeName);
     this.selected = active < 0 ? 0 : active;
     this.delegation = new PresetDelegation(this.options, () => this.usable());
@@ -215,13 +229,28 @@ export class PresetPicker implements Component {
 
   handleMouse(event: PickerMouseEvent): PickerMouseResult | undefined {
     if (this.closed || !this.options.pointer) return undefined;
+    if (event.type === "press" && event.button === "left") {
+      this.pointerPressed = true;
+      this.suppressClick = false;
+    }
+    if (this.options.pointerCurrent?.() === false) this.invalidatePointerPaint();
+    this.closeHover.mouse(event);
     this.settleStaleEditor();
-    if (this.delegation.swallowCancelledPress(event)) return { handled: true };
-    if (isPopoverCloseClick(event, this.paintedWidth ?? 0)) {
+    const cancelled = this.delegation.swallowCancelledPress(event);
+    if (event.type === "click" && event.button === "left") {
+      this.pointerPressed = false;
+      const suppressed = this.suppressClick;
+      this.suppressClick = false;
+      if (suppressed || cancelled) return { handled: true };
+    } else if (cancelled) return { handled: true };
+    if (!this.pointerWidth || !this.usable()) {
+      this.invalidatePointerPaint();
+      return { handled: true };
+    }
+    if (isPopoverCloseClick(event, this.pointerWidth)) {
       this.finish(null);
       return { handled: true };
     }
-    if (!this.usable()) return { handled: true };
     if (!this.editing) {
       const delegation = this.delegation.mouse(event, this.paint);
       if (delegation) return delegation;
@@ -279,16 +308,46 @@ export class PresetPicker implements Component {
     // Retire the previous paint before any callbacks (the shared empty paint is
     // never written); publish one complete map after layout, never retaining
     // helpers' maps across pages or empty paints.
+    const previousWidth = this.pointerWidth;
     this.paint = EMPTY_PAINT;
-    this.paintedWidth = width;
+    this.pointerWidth = 0;
+    this.layoutWidth = 0;
+    const maxLines = this.closed || !Number.isFinite(width) || width < 8 ? 0 : this.rowBudget();
+    if (!(maxLines >= PRESET_PICKER_MIN_ROWS) || (previousWidth && previousWidth !== width))
+      this.invalidatePointerPaint();
+    const closable = !!this.options.pointer && maxLines >= PRESET_PICKER_MIN_ROWS;
+    this.closeHover.paint(width, closable);
+    const page = this.layout(width, maxLines);
+    const hovered = this.closeHover.hovered;
+    this.closeHover.paint(width, closable, page.lines.length);
+    // Height changes translate bottom-anchored chrome. Repair only its title;
+    // the page/maps and any host-provided projections are computed once.
+    if (hovered && !this.closeHover.hovered) {
+      const preset = this.options.presets[this.selected];
+      page.lines[0] = popoverTitle(
+        this.options.theme,
+        width,
+        this.editing && preset && !isOffPreset(preset) ? `Effort · ${preset.name}` : "Delegation",
+        this.options.pointer,
+        false,
+      );
+    }
+    this.paint = page.paint;
+    this.pointerWidth = this.layoutWidth;
+    this.options.onRender?.(page.lines.length);
+    return page.lines;
+  }
+
+  private layout(width: number, maxLines: number) {
     const paint = pickerPaint();
     let lines: string[] = [];
-    const maxLines = width < 8 ? 0 : this.rowBudget();
     if (maxLines >= PRESET_PICKER_MIN_ROWS) {
+      this.layoutWidth = width;
       const page = new PresetPage(
         this.options,
         {
           selected: this.selected,
+          closeHovered: this.closeHover.hovered,
           slotIndex: this.slotIndex,
           canEdit: this.canEdit(),
           canEditPreset: this.canEditPreset(),
@@ -309,14 +368,28 @@ export class PresetPicker implements Component {
         this.visibleRows = list.visibleRows;
       }
     }
-    this.paint = paint;
-    this.options.onRender?.(lines.length);
-    return lines;
+    return { lines, paint };
   }
 
-  invalidate(): void {}
+  resetCloseHover(): void {
+    this.closeHover.reset(false);
+  }
+  /** SDK input can still use cached bounds after a hide or stack translation.
+   * Retire all pointer targets/capture, but keep the last semantic paint for
+   * keyboard input while the current viewport still has room for controls. */
+  invalidatePointerPaint(): void {
+    this.pointerWidth = 0;
+    this.paint = EMPTY_PAINT;
+    if (this.pointerPressed) this.suppressClick = true;
+    this.delegation.interrupt(false);
+    this.resetCloseHover();
+  }
+  invalidate(): void {
+    this.invalidatePointerPaint();
+  }
   dispose(): void {
     this.closed = true;
+    this.closeHover.dispose();
   }
 
   private rowBudget(): number {
@@ -328,12 +401,13 @@ export class PresetPicker implements Component {
     return (
       this.rowBudget() >= PRESET_PICKER_MIN_ROWS &&
       this.options.tui.terminal.columns >= 8 &&
-      (this.paintedWidth === undefined || this.paintedWidth >= 8)
+      (this.layoutWidth === undefined || this.layoutWidth >= 8)
     );
   }
   private finish(value: PresetChoice | null): void {
     if (this.closed) return;
     this.closed = true;
+    this.closeHover.reset(false);
     this.options.done(value);
   }
   private canEdit(): boolean {

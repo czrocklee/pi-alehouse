@@ -21,7 +21,7 @@ export const POPOVER_CLOSE_COLUMNS = 5;
 const MIN_CLOSABLE_WIDTH = 9;
 
 /** @typedef {{ fg: (color: "borderAccent" | "borderMuted", text: string) => string }} FrameTheme */
-/** @typedef {{ fg: (color: "borderAccent" | "muted", text: string) => string }} CloseTheme */
+/** @typedef {{ fg: (color: "borderAccent" | "muted" | "accent", text: string) => string, bold?: (text: string) => string }} CloseTheme */
 
 /**
  * @param {FrameTheme} theme
@@ -58,10 +58,16 @@ export function popoverCloseHit(width) {
 }
 
 /** The top edge's closing tail, ` × ─╮`, exactly POPOVER_CLOSE_COLUMNS wide.
- * @param {CloseTheme} theme */
-export function popoverCloseTail(theme) {
+ * Hover changes only the glyph's emphasis, never the border or hit geometry.
+ * @param {CloseTheme} theme
+ * @param {boolean} [hovered] */
+export function popoverCloseTail(theme, hovered = false) {
+  const glyph = hovered ? (theme.bold?.(POPOVER.close) ?? POPOVER.close) : POPOVER.close;
   return (
-    " " + theme.fg("muted", POPOVER.close) + " " + theme.fg("borderAccent", POPOVER.h + POPOVER.tr)
+    " " +
+    theme.fg(hovered ? "accent" : "muted", glyph) +
+    " " +
+    theme.fg("borderAccent", POPOVER.h + POPOVER.tr)
   );
 }
 
@@ -74,8 +80,16 @@ export function popoverCloseTail(theme) {
  * @param {string} title
  * @param {{clip: (text: string, columns: number) => string, width: (text: string) => number}} metrics
  * @param {boolean} [closable]
+ * @param {boolean} [closeHovered]
  */
-export function popoverTitleRow(theme, width, title, metrics, closable = false) {
+export function popoverTitleRow(
+  theme,
+  width,
+  title,
+  metrics,
+  closable = false,
+  closeHovered = false,
+) {
   const close = closable && !!popoverCloseHit(width);
   const tailWidth = close ? POPOVER_CLOSE_COLUMNS : 1;
   if (width < tailWidth + 3) {
@@ -89,7 +103,7 @@ export function popoverTitleRow(theme, width, title, metrics, closable = false) 
     theme.fg("borderAccent", POPOVER.tl + POPOVER.h) +
     theme.fg("accent", theme.bold(label)) +
     theme.fg("borderAccent", POPOVER.h.repeat(Math.max(0, room - metrics.width(label) - 1))) +
-    (close ? popoverCloseTail(theme) : theme.fg("borderAccent", POPOVER.tr))
+    (close ? popoverCloseTail(theme, closeHovered) : theme.fg("borderAccent", POPOVER.tr))
   );
 }
 

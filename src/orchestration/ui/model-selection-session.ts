@@ -69,6 +69,15 @@ export class ModelSelectionSession {
       finishRequest?.();
     };
     this.cancelPicker = ownedCancel;
+    let ownerDisposed = false;
+    const disposeOwned = (): void => {
+      if (ownerDisposed) return;
+      ownerDisposed = true;
+      // Native Enter/cancel may already have disposed the selector. Leave its
+      // idempotent method untouched; floating cleanup must still retire hover.
+      if (view) view.dispose();
+      else picker?.dispose();
+    };
     try {
       const selected = await ctx.ui.custom<RegistryModel | undefined>(
         (tui, theme, _keybindings, done) => {
@@ -89,7 +98,7 @@ export class ModelSelectionSession {
               /* UI cleanup must not block a permission ask. */
             }
             try {
-              picker?.dispose();
+              disposeOwned();
             } finally {
               done(model);
             }
@@ -133,6 +142,7 @@ export class ModelSelectionSession {
           if (floating) {
             view = new PresetModelPopover({
               native,
+              tui,
               theme,
               title: `${target}: ${slot} model`,
               height: () => Number(modelPopoverOptions(terminal, position).maxHeight),
@@ -164,7 +174,7 @@ export class ModelSelectionSession {
               title.invalidate();
               native.invalidate();
             },
-            dispose: () => native.dispose(),
+            dispose: disposeOwned,
           };
         },
         floating
@@ -188,7 +198,7 @@ export class ModelSelectionSession {
     } finally {
       // Old callbacks/finally blocks cannot retire a later request's owner.
       if (this.cancelPicker === ownedCancel) this.cancelPicker = undefined;
-      picker?.dispose();
+      disposeOwned();
     }
   }
 }

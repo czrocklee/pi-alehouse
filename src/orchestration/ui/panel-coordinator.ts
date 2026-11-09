@@ -144,6 +144,7 @@ export class PanelCoordinator {
     this.approvals = new ApprovalWatch({
       onPrompt: (pending) => {
         this.detailPane?.resetStopInteraction();
+        this.detailPane?.resetCloseHover();
         // An ask for permission must reach the human: cancel any open model
         // selection first, but never let that best-effort cleanup block the
         // ordinary close/yield or the ask's own registration.
@@ -734,6 +735,8 @@ export class PanelCoordinator {
       const floating = this.floating();
       const presetOverlay = (overlay = createPresetOverlayHost({
         floating,
+        onHide: () => picker?.invalidatePointerPaint(),
+        onMove: () => picker?.invalidatePointerPaint(),
         emitPinned: (data) => {
           this.options.pi.events.emit(PINNED_POPOVER_YIELD_EVENT, data);
         },
@@ -840,6 +843,7 @@ export class PanelCoordinator {
               ? {
                   rows: () => stacked.rows(),
                   onRender: (height: number) => stacked.measure(height),
+                  pointerCurrent: () => stacked.pointerCurrent(),
                 }
               : {}),
           })),

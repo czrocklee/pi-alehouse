@@ -50,6 +50,7 @@ const fixtures = [
   ["stats", "generated/extensions/stats.ts"],
   ["title", "generated/extensions/terminal-title-status.ts"],
   ["web", "web.ts"],
+  ["clear", "generated/extensions/clear.ts"],
 ];
 const registryKey = Symbol.for("@gotgenes/pi-permission-system:session-services");
 async function fixture(t, replacements = {}, initializeProtection = "") {
@@ -422,7 +423,7 @@ test("session-start failure cannot fabricate ready even with an authority", asyn
   assert.throws(() => extension.handlers.get("user_bash")[0](), /startup failure/);
 });
 
-test("real pinned package factories load as one host extension with web_enable", async (t) => {
+test("real pinned package factories load as one host extension with web_enable and /clear", async (t) => {
   const agentDir = temporary(t);
   const previous = { ...process.env };
   process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -446,6 +447,18 @@ test("real pinned package factories load as one host extension with web_enable",
   );
   assert(extension.tools.has("web_enable"), "pinned web lazy-loader must remain available");
   assert(extension.commands.has("alehouse-status"));
+  const clear = extension.commands.get("clear");
+  assert(clear, "the Alehouse composition must register /clear without global discovery");
+  let newSessions = 0;
+  await clear.handler("", {
+    async newSession(options) {
+      assert.deepEqual(Object.keys(options), ["withSession"], "native defaults remain unchanged");
+      assert.equal(typeof options.withSession, "function", "feedback uses the fresh context");
+      newSessions++;
+      return { cancelled: true };
+    },
+  });
+  assert.equal(newSessions, 1, "a cancelled /clear must not retry session replacement");
   assert(
     !extension.commands.has("auto-approval"),
     "the retired Luna judge's command must not return",

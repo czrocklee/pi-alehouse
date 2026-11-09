@@ -978,14 +978,16 @@ function openApprovalPopover(f) {
   return f.host.component;
 }
 
-function clickPopoverRow(component, pattern) {
+// Capture real painted coordinates while the menu is live. A retained event
+// may then be replayed after disposal without resurrecting the old component.
+function capturePopoverRowClick(component, pattern) {
   const width = 60,
     lines = component.render(width);
   const y = lines.findIndex((line) =>
     typeof pattern === "string" ? line.includes(pattern) : pattern.test(line),
   );
   assert(y > 0, `expected clickable row ${String(pattern)} in ${lines.join("\n")}`);
-  component.handleMouse({
+  const event = {
     type: "click",
     button: "left",
     x: 6,
@@ -997,7 +999,12 @@ function clickPopoverRow(component, pattern) {
     shift: false,
     alt: false,
     ctrl: false,
-  });
+  };
+  return () => component.handleMouse({ ...event });
+}
+
+function clickPopoverRow(component, pattern) {
+  capturePopoverRowClick(component, pattern)();
 }
 
 for (const action of [
@@ -1102,6 +1109,7 @@ for (const scope of ["global", "workspace"]) {
     await f.start();
     const component = openApprovalPopover(f);
     clickPopoverRow(component, /^│. [○●] manual\s/);
+    const replayGlobalClick = capturePopoverRowClick(component, "global default");
     component.handleInput(scope === "global" ? "g" : "w");
     await tick();
     assert.equal(f.dialogs.length, 1);
@@ -1110,9 +1118,10 @@ for (const scope of ["global", "workspace"]) {
     assert.deepEqual(store.stages, []);
     assert.equal(f.choice, "approval: manual");
     assert.equal(sessionYoloSet().has(f.id), false);
+    assert.deepEqual(component.render(60), [], "dismissed menus stay disposed");
     component.handleInput("g");
     component.handleInput("w");
-    clickPopoverRow(component, "global default");
+    replayGlobalClick();
     await tick();
     assert.equal(f.dialogs.length, 1, "dismissed memory callbacks have no ownership");
     assert.deepEqual(store.stages, []);
@@ -1147,6 +1156,8 @@ for (const leave of ["switch", "shutdown", "choice", "trust", "store replacement
     await f.start();
     const component = openApprovalPopover(f);
     clickPopoverRow(component, /^│. [○●] manual\s/);
+    const replayGlobalClick = capturePopoverRowClick(component, "global default"),
+      replayProjectClick = capturePopoverRowClick(component, "project default");
     component.handleInput("w");
     assert.equal(f.host.component, undefined);
     assert.equal(f.dialogs[0].popoverVisible, false);
@@ -1159,10 +1170,11 @@ for (const leave of ["switch", "shutdown", "choice", "trust", "store replacement
     else if (leave === "trust") store.workspaceTrusted = false;
     else t.after(registerSettingsStore(f.id, replacement));
     const dialogs = f.dialogs.length;
+    assert.deepEqual(component.render(60), [], "stale menus stay disposed");
     component.handleInput("g");
     component.handleInput("w");
-    clickPopoverRow(component, "global default");
-    clickPopoverRow(component, "project default");
+    replayGlobalClick();
+    replayProjectClick();
     if (nextMenu)
       assert.equal(f.host.component, nextMenu, "stale callbacks cannot dismiss the new menu");
     answer.resolve(true);
@@ -1409,7 +1421,9 @@ test("/approval save dismisses an open popover before confirmation and retires i
     select: (_title, options) => options.find((label) => label === "All projects"),
   });
   await f.start();
-  const oldMenu = openApprovalPopover(f);
+  const oldMenu = openApprovalPopover(f),
+    replayGlobalClick = capturePopoverRowClick(oldMenu, "global default"),
+    replayProjectClick = capturePopoverRowClick(oldMenu, "project default");
   let settled = false;
   const pending = f.run("save").then(() => {
     settled = true;
@@ -1425,6 +1439,7 @@ test("/approval save dismisses an open popover before confirmation and retires i
     "command confirmation cannot appear under the menu",
   );
   const replayOldCallbacks = () => {
+    assert.deepEqual(oldMenu.render(60), [], "retained menu stays disposed");
     oldMenu.handleInput("\u001b");
     oldMenu.handleInput("\u001b[H");
     oldMenu.handleInput("\r");
@@ -1433,8 +1448,8 @@ test("/approval save dismisses an open popover before confirmation and retires i
     oldMenu.handleInput("\r");
     oldMenu.handleInput("G");
     oldMenu.handleInput("W");
-    clickPopoverRow(oldMenu, "global default");
-    clickPopoverRow(oldMenu, "project default");
+    replayGlobalClick();
+    replayProjectClick();
   };
   replayOldCallbacks();
   await tick();
@@ -1463,6 +1478,116 @@ test("/approval save dismisses an open popover before confirmation and retires i
   assert.deepEqual(f.requests, []);
   assert.equal(sessionYoloSet().has(f.id), false);
 });
+
+// Disposal blocks renderer input before it reaches these callbacks. Capture the
+// actual controller callbacks while live to test ownership independently, without
+// reviving a disposed view or exposing a production test API.
+for (const transition of ["same epoch", "new epoch"]) {
+  for (const action of [
+    "save global",
+    "save workspace",
+    "choose yolo",
+    "choose manual",
+    "close",
+    "requestRender",
+    "onRender",
+  ]) {
+    test(`captured approval ${action} callback is retired after ${transition} replacement`, async (t) => {
+      const store = fakeStore({ scope: "global" }),
+        replacement = fakeStore({ scope: "workspace" }),
+        answer = deferred();
+      const f = fixture(t, {
+        store,
+        fullscreen: true,
+        confirm: (title) => (title.startsWith("Save ") ? answer.promise : true),
+      });
+      await f.start();
+      const oldId = f.id,
+        oldMenu = openApprovalPopover(f),
+        callbacks = Reflect.get(oldMenu, "options");
+      for (const name of ["save", "choose", "close", "requestRender", "onRender"])
+        assert.equal(typeof callbacks[name], "function", `captures real ${name} callback`);
+
+      const slots = globalThis[Symbol.for("nixos-config.pi.popover-stack.v1")].get(f.host);
+      let measurements = 0;
+      if (action === "onRender") {
+        const oldSlot = slots.at(-1),
+          includes = slots.includes;
+        // measure() first tests membership, even for a departed slot. A height
+        // projection alone cannot detect an unguarded stale measurement because
+        // the stack also ignores departed slots. Observe that exact entry check,
+        // forwarding it unchanged on this host-local array only.
+        assert.equal(Object.hasOwn(slots, "includes"), false);
+        Object.defineProperty(slots, "includes", {
+          configurable: true,
+          value(slot, ...args) {
+            if (slot === oldSlot) measurements++;
+            return includes.call(this, slot, ...args);
+          },
+        });
+        t.after(() => delete slots.includes);
+        callbacks.onRender(7);
+        assert.equal(measurements, 1, "live callback reaches stack measurement");
+        assert.equal(oldSlot.height, 7, "live callback publishes its actual stack height");
+      }
+
+      const pending = f.run("save global");
+      assert.equal(f.dialogs.length, 1);
+      assert.equal(f.host.component, undefined);
+      if (transition === "new epoch") await f.start({ store: replacement });
+      else {
+        answer.resolve(false);
+        await pending;
+      }
+      // A stale manual choice must not revoke a live grant; a stale yolo choice
+      // must not create one. Persistent scopes also make illicit staging visible.
+      if (action === "choose manual") await f.run("yolo");
+      else if (action === "choose yolo") await f.run("manual");
+      const nextMenu = openApprovalPopover(f);
+      assert.notEqual(nextMenu, oldMenu);
+      nextMenu.render(60);
+      const snapshot = () => ({
+        choice: f.choice,
+        grants: [sessionYoloSet().has(oldId), sessionYoloSet().has(f.id)],
+        entries: structuredClone(f.entries),
+        requests: structuredClone(f.requests),
+        dialogs: structuredClone(f.dialogs),
+        stages: structuredClone([store.stages, replacement.stages]),
+        scopes: [store.scope, replacement.scope],
+        heights: slots.map(({ height }) => height),
+        mounts: f.host.mounts,
+      });
+      const before = snapshot();
+      let renders = 0;
+      f.host.requestRender = () => renders++;
+      measurements = 0;
+      if (action.startsWith("save ")) callbacks.save(action.slice(5));
+      else if (action.startsWith("choose ")) callbacks.choose(action.slice(7));
+      else if (action === "onRender") callbacks.onRender(39);
+      else callbacks[action]();
+      assert.equal(
+        f.host.component,
+        nextMenu,
+        "stale callback cannot close the replacement, even before async save validation",
+      );
+      assert.equal(renders, 0, "stale callback cannot repaint the host");
+      assert.equal(measurements, 0, "stale onRender cannot even attempt stack measurement");
+      assert.deepEqual(snapshot(), before, "stale callback has no synchronous effects");
+      await tick();
+      assert.equal(f.host.component, nextMenu);
+      assert.deepEqual(snapshot(), before, "stale callback cannot prompt, grant, record or stage");
+      answer.resolve(true);
+      await pending;
+      await tick();
+      assert.equal(f.host.component, nextMenu, "old dialog completion preserves the active menu");
+      assert.deepEqual(
+        snapshot(),
+        before,
+        "old dialog completion has no authority or stack effects",
+      );
+    });
+  }
+}
 
 test("fullscreen and slash save actions share one pending confirmation per epoch", async (t) => {
   const store = fakeStore(),

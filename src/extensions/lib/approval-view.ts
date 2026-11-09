@@ -3,14 +3,13 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TuiMouseEvent } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
-  POPOVER,
-  POPOVER_CLOSE_COLUMNS,
   isPopoverCloseClick,
   popoverCloseHit,
-  popoverCloseTail,
   popoverRule,
   popoverSide,
+  popoverTitleRow,
 } from "../../shared/popover-frame.mjs";
+import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import type { PersistentScope } from "../../shared/settings-store.mjs";
 import type { JudgeState } from "./approval-protocol.ts";
 import { CONFIRM_ROWS, currentChoice, type Choice, type ChoiceId } from "./approval-selection.ts";
@@ -34,6 +33,7 @@ export function approvalStatus(
 type PopoverTheme = Pick<Theme, "fg" | "bold" | "bg">;
 
 export interface ApprovalPopoverOptions {
+  tui?: object;
   theme: PopoverTheme;
   choices: () => Choice[];
   current: () => ChoiceId;
@@ -48,6 +48,8 @@ export interface ApprovalPopoverOptions {
   requestRender: () => void;
   /** Rows this paint produced, for the bottom-right column. */
   onRender?: (height: number) => void;
+  /** Reject cached SDK pointer bounds after stack/terminal movement. */
+  pointerCurrent?: () => boolean;
 }
 
 /**
@@ -59,9 +61,18 @@ export class ApprovalPopover implements Component {
   private selected: number;
   private armed: number | undefined;
   private paintedWidth = 0;
+  private pointerPressed = false;
+  private suppressClick = false;
+  private disposed = false;
+  private readonly closeHover: ReturnType<typeof createPopoverCloseHover>;
   private readonly rowTargets = new Map<number, number | PersistentScope>();
 
   constructor(private readonly options: ApprovalPopoverOptions) {
+    this.closeHover = createPopoverCloseHover({
+      closeHit: popoverCloseHit,
+      host: options.tui,
+      requestRender: options.requestRender,
+    });
     const index = options.choices().findIndex((choice) => choice.id === options.current());
     this.selected = Math.max(0, index);
   }
@@ -71,8 +82,9 @@ export class ApprovalPopover implements Component {
   }
 
   handleInput(data: string): void {
+    if (this.disposed) return;
     const count = this.options.choices().length;
-    if (matchesKey(data, "escape")) return this.options.close();
+    if (matchesKey(data, "escape")) return this.close();
     if (matchesKey(data, "g") || matchesKey(data, "shift+g")) return this.saveDefault("global");
     if (matchesKey(data, "w") || matchesKey(data, "shift+w")) return this.saveDefault("workspace");
     if (matchesKey(data, "enter")) return this.activate(this.selected);
@@ -86,8 +98,19 @@ export class ApprovalPopover implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): { handled: boolean } | undefined {
+    if (event.type === "press" && event.button === "left") {
+      this.pointerPressed = true;
+      this.suppressClick = false;
+    }
+    if (this.options.pointerCurrent?.() === false) this.resetPointer();
+    this.closeHover.mouse(event);
+    if (this.disposed || !this.paintedWidth || event.width !== this.paintedWidth) return undefined;
+    if (event.type === "click") {
+      this.pointerPressed = false;
+      if (this.suppressClick) return undefined;
+    }
     if (isPopoverCloseClick(event, this.paintedWidth)) {
-      this.options.close();
+      this.close();
       return { handled: true };
     }
     if (event.type === "wheel" && event.wheelDelta) {
@@ -103,13 +126,48 @@ export class ApprovalPopover implements Component {
 
   render(width: number): string[] {
     this.rowTargets.clear();
-    this.paintedWidth = width;
+    if (this.disposed) return [];
+    const closeVisible = width >= 12 && !!popoverCloseHit(width);
     const lines = width < 12 ? [] : this.layout(width);
+    this.closeHover.paint(width, closeVisible, lines.length);
+    this.paintedWidth = closeVisible ? width : 0;
+    // Publish actual height before styling the translated title, without
+    // laying out choices/warnings (and rebuilding their hit map) twice.
+    if (lines.length)
+      lines[0] = popoverTitleRow(
+        this.options.theme,
+        width,
+        "Approval",
+        { clip: (text, columns) => truncateToWidth(text, columns, "…"), width: visibleWidth },
+        closeVisible,
+        this.closeHover.hovered,
+      );
     this.options.onRender?.(lines.length);
     return lines;
   }
 
-  invalidate(): void {}
+  /** Presentation-only cleanup never disarms or moves the keyboard choice. */
+  resetPointer(): void {
+    this.closeHover.reset(false);
+    this.paintedWidth = 0;
+    this.rowTargets.clear();
+    if (this.pointerPressed) this.suppressClick = true;
+  }
+
+  invalidate(): void {
+    this.resetPointer();
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.invalidate();
+    this.closeHover.dispose();
+  }
+
+  private close(): void {
+    this.dispose();
+    this.options.close();
+  }
 
   private move(index: number): void {
     const count = this.options.choices().length;
@@ -149,7 +207,7 @@ export class ApprovalPopover implements Component {
     const choices = this.options.choices();
     const current = this.options.current();
     const labelWidth = Math.max(...choices.map((choice) => visibleWidth(choice.label)));
-    const lines = [titleEdge(theme, width, "Approval")];
+    const lines = [""]; // Final header follows actual-height publication.
     choices.forEach((choice, index) => {
       const selected = index === this.selected;
       const marker = selected ? theme.fg("accent", "›") : " ";
@@ -212,18 +270,3 @@ export class ApprovalPopover implements Component {
 
 const padTo = (text: string, width: number): string =>
   text + " ".repeat(Math.max(0, width - visibleWidth(text)));
-
-/** `╭─ Title ───── × ─╮`, the close control at the right end like every popover. */
-function titleEdge(theme: PopoverTheme, width: number, title: string): string {
-  const closable = !!popoverCloseHit(width);
-  const tailWidth = closable ? POPOVER_CLOSE_COLUMNS : 1;
-  const label = ` ${title} `;
-  const room = width - 2 - tailWidth - visibleWidth(label);
-  if (room < 0) return popoverRule(theme, width, "top");
-  return (
-    theme.fg("borderAccent", POPOVER.tl + POPOVER.h) +
-    theme.fg("accent", theme.bold(label)) +
-    theme.fg("borderAccent", POPOVER.h.repeat(room)) +
-    (closable ? popoverCloseTail(theme) : theme.fg("borderAccent", POPOVER.tr))
-  );
-}

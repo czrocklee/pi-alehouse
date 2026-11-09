@@ -20,10 +20,11 @@ export function popoverRule(
 ): string;
 export function popoverSide(theme: FrameTheme): string;
 export interface CloseTheme {
-  fg(color: "borderAccent" | "muted", text: string): string;
+  fg(color: "borderAccent" | "muted" | "accent", text: string): string;
+  bold?(text: string): string;
 }
 export function popoverCloseHit(width: number): { x: number; width: number } | undefined;
-export function popoverCloseTail(theme: CloseTheme): string;
+export function popoverCloseTail(theme: CloseTheme, hovered?: boolean): string;
 export function popoverTitleRow(
   theme: {
     fg(color: "borderAccent" | "muted" | "accent", text: string): string;
@@ -33,6 +34,7 @@ export function popoverTitleRow(
   title: string,
   metrics: { clip(text: string, columns: number): string; width(text: string): number },
   closable?: boolean,
+  closeHovered?: boolean,
 ): string;
 export function isPopoverCloseClick(
   event: { type: string; button?: string; x: number; y: number },

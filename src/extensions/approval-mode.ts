@@ -295,6 +295,7 @@ export default function approvalMode(pi: ExtensionAPI): void {
     open = undefined; // Retained components/callbacks lose ownership even if hide fails.
     if (!closing) return;
     for (const cleanup of [
+      () => closing.component.dispose(),
       () => closing.handle?.hide(),
       () => closing.member.leave(),
       () => host?.requestRender(),
@@ -324,6 +325,8 @@ export default function approvalMode(pi: ExtensionAPI): void {
         onReveal: () => {
           if (open === mounted && mounted.handle) focusRevealed(host, mounted.handle, openedFrom);
         },
+        onHide: () => mounted.component.resetPointer(),
+        onMove: () => mounted.component.resetPointer(),
       }),
     );
     host.requestRender();
@@ -335,7 +338,10 @@ export default function approvalMode(pi: ExtensionAPI): void {
     const host = tui,
       at = epoch;
     const live = (): boolean => at === epoch && open?.member === member;
+    const placement = () => `${member.bottom}:${host.terminal.rows}:${host.terminal.columns}`;
+    let paintedPlacement: string | undefined;
     const component = new ApprovalPopover({
+      tui: host,
       theme,
       choices: () => approvalChoices(boundJudgeName()),
       current: actualChoice,
@@ -370,8 +376,12 @@ export default function approvalMode(pi: ExtensionAPI): void {
       requestRender: () => {
         if (live()) host.requestRender();
       },
+      pointerCurrent: () => live() && paintedPlacement === placement(),
       onRender: (height) => {
-        if (live()) member.measure(height);
+        if (live()) {
+          paintedPlacement = placement();
+          member.measure(height);
+        }
       },
     });
     open = { component, member };
@@ -654,6 +664,7 @@ export default function approvalMode(pi: ExtensionAPI): void {
   // then return. Current Pi's ui.custom completion removes its own overlay entry.
   pi.events.on(HIDE_TRANSIENT_OVERLAYS_EVENT, () => {
     if (!open?.handle) return;
+    open.component.resetPointer();
     open.handle.hide();
     open.handle = undefined;
     if (restoreTimer) clearTimeout(restoreTimer);

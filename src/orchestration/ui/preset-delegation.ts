@@ -35,11 +35,11 @@ export class PresetDelegation {
     private readonly usable: () => boolean,
   ) {}
 
-  interrupt(): void {
+  interrupt(render = true): void {
     if (!this.dragging) return;
     this.cancelledPress = true;
     this.reset();
-    this.options.tui.requestRender();
+    if (render) this.options.tui.requestRender();
   }
 
   reset(): void {

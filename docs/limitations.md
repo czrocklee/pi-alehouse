@@ -592,6 +592,20 @@ are omitted from previews rather than displayed as false last lines. Real tools
 stay visible while cooperative cancellation/drain is pending; this observation
 is not proof of execution exit, and detailed drain diagnostics remain separate.
 
+Close-button hover is presentation-only and requires fullscreen mouse-motion
+reports. The optional adapter observes the host's private `handleViewportInput`
+method because Pi 1.5 has no component mouse-leave event and its first input
+listener consumes mouse reports. A missing/nonreplaceable adapter disables only
+hover, not clicking or keyboard controls. It forwards the native dispatch
+unchanged and clears stale feedback after outside motion, wheel, focus and
+keyboard input; keyboard input may leave a stationary pointer unhighlighted
+until it moves again. This is an implementation compatibility seam, not a new
+public SDK guarantee. Panel hiding/disposal retires the observer; no polling or
+mouse capture is added. Hover retirement does not clear keyboard navigation
+state. Pointer targets are retired independently on a move/hide and require a
+fresh paint before activation; stale cached SDK mouse bounds are not permission
+to activate a hidden control.
+
 Fullscreen alternate-screen rendering is required for floating worker panels and
 click input. Regular mode deliberately docks the detail/picker to avoid
 scrollback contamination; its footer retains totals but does not open the usage

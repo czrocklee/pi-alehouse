@@ -1,7 +1,14 @@
+import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { RunView } from "../core/contracts.ts";
 import { type Theme, type TranscriptFrame, type TranscriptRows } from "./format.ts";
-import { isPopoverCloseClick, popoverInlay, popoverInlayWidth, popoverSide } from "./popover.ts";
+import {
+  isPopoverCloseClick,
+  popoverCloseHit,
+  popoverInlay,
+  popoverInlayWidth,
+  popoverSide,
+} from "./popover.ts";
 import { wrapPlainText as wrapText } from "./text.ts";
 import {
   renderDetailFields,
@@ -141,9 +148,15 @@ export class DetailPane {
   private animating = false;
   private renderedRevision: unknown;
   private readonly timer: ReturnType<typeof setInterval>;
+  private readonly closeHover: ReturnType<typeof createPopoverCloseHover>;
 
   constructor(private readonly options: DetailPaneOptions) {
     this.selected = options.initial;
+    this.closeHover = createPopoverCloseHover({
+      closeHit: popoverCloseHit,
+      host: options.tui,
+      requestRender: () => options.tui.requestRender(),
+    });
     this.timer = setInterval(() => {
       if (this.closed || this.options.visible?.() === false) return;
       const staleStop = this.staleStopPaint();
@@ -194,6 +207,7 @@ export class DetailPane {
     if (this.closed) return;
     if (agent_id === this.selected) {
       this.closed = true;
+      this.resetCloseHover();
       this.resetStopInteraction();
       this.options.done();
       return;
@@ -211,6 +225,12 @@ export class DetailPane {
   resetStopInteraction(): void {
     this.stopPaint = undefined;
     this.confirmation = undefined;
+  }
+
+  /** Permission yield can hide the mounted pane without disposing it. */
+  resetCloseHover(render = true): void {
+    this.paintedWidth = 0;
+    this.closeHover.reset(render);
   }
 
   /** Timers request repaint without consuming the still-visible confirmation:
@@ -303,6 +323,7 @@ export class DetailPane {
       }
       this.closed = true;
       this.resetStopInteraction();
+      this.resetCloseHover();
       this.options.done();
       return;
     }
@@ -349,6 +370,7 @@ export class DetailPane {
    * own step -- Alt multiplies it by five upstream -- so it is used as given.
    */
   handleMouse(event: PaneMouseEvent): { handled: boolean } | undefined {
+    this.closeHover.mouse(event);
     if (this.closed) return undefined;
     this.retireStopPaint();
     const action = this.stopPaint?.action;
@@ -382,6 +404,7 @@ export class DetailPane {
     ) {
       this.closed = true;
       this.resetStopInteraction();
+      this.resetCloseHover();
       this.options.done();
       return { handled: true };
     }
@@ -400,22 +423,12 @@ export class DetailPane {
     this.stopPaint = undefined;
     this.paintedHeight = 0;
     this.animating = false;
-    if (this.closed || !Number.isFinite(width) || width < 12) {
-      this.transcriptAnchor = undefined;
-      this.resetStopInteraction();
-      return [];
-    }
-    // Floating, the two side columns come out of the body's width.
+    // Floating, side borders reduce the body; inlaid title/footer padding
+    // further reduces chrome. Every unpaintable layout retires the same state.
     const inner = this.options.frame ? width - 2 : width;
-    if (inner < 10) {
-      this.transcriptAnchor = undefined;
-      this.resetStopInteraction();
-      return [];
-    }
-    // Framed, the title and footer are inlaid between the corners, so they get
-    // two columns less than the body they sit above and below.
     const chrome = this.options.frame ? inner - 4 : inner;
-    if (chrome < 8) {
+    if (this.closed || !Number.isFinite(width) || width < 12 || inner < 10 || chrome < 8) {
+      this.resetCloseHover(false);
       this.transcriptAnchor = undefined;
       this.resetStopInteraction();
       return [];
@@ -548,12 +561,14 @@ export class DetailPane {
   }
 
   invalidate(): void {
+    this.resetCloseHover();
     this.resetStopInteraction();
     this.wrapped.clear();
     this.options.invalidate?.();
   }
   dispose(): void {
     this.closed = true;
+    this.closeHover.dispose();
     this.resetStopInteraction();
     clearInterval(this.timer);
     this.wrapped.clear();
@@ -608,11 +623,16 @@ export class DetailPane {
     width: number,
     inner: number,
   ): string[] {
+    this.closeHover.paint(
+      width,
+      !!this.options.frame && this.options.visible?.() !== false,
+      body.length + CHROME_LINES,
+    );
     if (!this.options.frame) return [truncateToWidth(title, width), ...body, footer];
     const th = this.options.theme;
     const side = popoverSide(th);
     return [
-      popoverInlay(th, width, title, "top", true),
+      popoverInlay(th, width, title, "top", true, this.closeHover.hovered),
       ...body.map((line) => side + padTo(truncateToWidth(line, inner), inner) + side),
       popoverInlay(th, width, footer, "bottom"),
     ];
