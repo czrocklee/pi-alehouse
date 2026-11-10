@@ -105,6 +105,7 @@ function fixture(t) {
     ui: tui,
     keybindings: {},
     disposeActiveSelector() {},
+    extensionOverlays: new Map(),
     extensionDialogs: [],
     programStatus: { setBlocked() {} },
     pushExtensionDialog: InteractiveMode.prototype.pushExtensionDialog,
@@ -252,102 +253,107 @@ test("pane requests coordinate queued, blocked and mounted settlement exactly", 
 });
 
 for (const trigger of ["escape", "external close"]) {
-  test(`real detail overlay ${trigger} preserves focus and removes newer transient overlays`, async () => {
-    const layers = [];
-    const editor = { getText: () => "draft", setText: () => {} };
-    let focus = editor,
-      pane,
-      transient,
-      transientHides = 0;
-    const tui = {
-      terminal: { columns: 100, rows: 30 },
-      requestRender() {},
-      setFocus(component) {
-        focus = component;
-      },
-      showOverlay(component, options = {}) {
-        const layer = { component, options };
-        layers.push(layer);
-        if (!options.nonCapturing) focus = component;
-        return {
-          hide() {
-            const index = layers.indexOf(layer);
-            if (index >= 0) layers.splice(index, 1);
-            if (focus === component) focus = editor;
-          },
-          setHidden() {},
-        };
-      },
-      hideOverlay() {
-        const removed = layers.pop();
-        if (removed && focus === removed.component) focus = editor;
-      },
-    };
-    const host = {
-      editor,
-      ui: tui,
-      keybindings: {},
-      disposeActiveSelector() {},
-      editorContainer: { clear() {}, addChild() {} },
-    };
-    const request = new PaneRequest(() => {
-      transientHides++;
-      transient?.hide();
-    });
-    const opening = InteractiveMode.prototype.showExtensionCustom.call(
-      host,
-      (_tui, _theme, _keys, done) => {
-        assert.equal(
-          request.mount(() => done(undefined), new PaneYield(), 0),
-          true,
-        );
-        pane = request.own(
-          new DetailPane({
-            tui,
-            theme: { fg: (_color, text) => text, bold: (text) => text },
-            initial: "agent",
-            done: request.close,
-            snapshot: () => [],
-            transcript: () => undefined,
-            frame: true,
-          }),
-        );
-        return pane;
-      },
-      { overlay: true },
-    );
-    await tick();
-    assert.deepEqual(
-      layers.map(({ component }) => component),
-      [pane],
-    );
-    assert.equal(focus, pane);
-    const footer = { render: () => ["footer"], invalidate() {} };
-    transient = tui.showOverlay(footer, { nonCapturing: true });
-    assert.deepEqual(
-      layers.map(({ component }) => component),
-      [pane, footer],
-    );
-    assert.equal(focus, pane);
+  test(
+    `real detail overlay ${trigger} preserves focus and removes newer transient overlays`,
+    { timeout: 5000 },
+    async () => {
+      const layers = [];
+      const editor = { getText: () => "draft", setText: () => {} };
+      let focus = editor,
+        pane,
+        transient,
+        transientHides = 0;
+      const tui = {
+        terminal: { columns: 100, rows: 30 },
+        requestRender() {},
+        setFocus(component) {
+          focus = component;
+        },
+        showOverlay(component, options = {}) {
+          const layer = { component, options };
+          layers.push(layer);
+          if (!options.nonCapturing) focus = component;
+          return {
+            hide() {
+              const index = layers.indexOf(layer);
+              if (index >= 0) layers.splice(index, 1);
+              if (focus === component) focus = editor;
+            },
+            setHidden() {},
+          };
+        },
+        hideOverlay() {
+          const removed = layers.pop();
+          if (removed && focus === removed.component) focus = editor;
+        },
+      };
+      const host = {
+        editor,
+        ui: tui,
+        keybindings: {},
+        extensionOverlays: new Map(),
+        disposeActiveSelector() {},
+        editorContainer: { clear() {}, addChild() {} },
+      };
+      const request = new PaneRequest(() => {
+        transientHides++;
+        transient?.hide();
+      });
+      const opening = InteractiveMode.prototype.showExtensionCustom.call(
+        host,
+        (_tui, _theme, _keys, done) => {
+          assert.equal(
+            request.mount(() => done(undefined), new PaneYield(), 0),
+            true,
+          );
+          pane = request.own(
+            new DetailPane({
+              tui,
+              theme: { fg: (_color, text) => text, bold: (text) => text },
+              initial: "agent",
+              done: request.close,
+              snapshot: () => [],
+              transcript: () => undefined,
+              frame: true,
+            }),
+          );
+          return pane;
+        },
+        { overlay: true },
+      );
+      await tick();
+      assert.deepEqual(
+        layers.map(({ component }) => component),
+        [pane],
+      );
+      assert.equal(focus, pane);
+      const footer = { render: () => ["footer"], invalidate() {} };
+      transient = tui.showOverlay(footer, { nonCapturing: true });
+      assert.deepEqual(
+        layers.map(({ component }) => component),
+        [pane, footer],
+      );
+      assert.equal(focus, pane);
 
-    if (trigger === "escape") pane.handleInput("\x1b");
-    else request.close();
-    await opening;
-    request.dispose();
-    assert.equal(transientHides, 1);
-    assert.deepEqual(layers, []);
-    assert.equal(focus, editor);
+      if (trigger === "escape") pane.handleInput("\x1b");
+      else request.close();
+      await opening;
+      request.dispose();
+      assert.equal(transientHides, 1);
+      assert.deepEqual(layers, []);
+      assert.equal(focus, editor);
 
-    const approval = { render: () => ["approval"], invalidate() {} };
-    tui.showOverlay(approval);
-    request.close();
-    assert.deepEqual(
-      layers.map(({ component }) => component),
-      [approval],
-    );
-    assert.equal(focus, approval, "stale pane close cannot pop the successor");
-    tui.hideOverlay();
-  });
+      const approval = { render: () => ["approval"], invalidate() {} };
+      tui.showOverlay(approval);
+      request.close();
+      assert.deepEqual(
+        layers.map(({ component }) => component),
+        [approval],
+      );
+      assert.equal(focus, approval, "stale pane close cannot pop the successor");
+      tui.hideOverlay();
+    },
+  );
 }
 
 test("a docked pane's ten-minute timeout closes the real UI even with no successor", async (t) => {
@@ -561,6 +567,7 @@ function nativeFixture(t, overrides = {}) {
   let current = editor;
   const host = {
     editor,
+    extensionOverlays: new Map(),
     extensionDialogs: [],
     programStatus: { setBlocked() {} },
     ui: { requestRender() {}, setFocus() {} },
@@ -973,84 +980,120 @@ test("native permission stall retires before the next ask and pane restoration n
   assert.equal(h.timeouts.size, 0);
 });
 
-test("real SDK custom completion removes only its own overlay beneath an unrelated overlay", async () => {
-  const layers = [];
-  let finish,
-    handleCloses = 0,
-    globalCloses = 0,
-    disposals = 0;
-  const a = {
-    render: () => ["A"],
-    invalidate() {},
-    dispose() {
-      disposals++;
-    },
-  };
-  const b = { render: () => ["B"], invalidate() {} };
-  const tui = {
-    requestRender() {},
-    showOverlay(component, options = {}) {
-      const layer = { component, options };
-      layers.push(layer);
-      return {
-        hide() {
-          handleCloses++;
-          const index = layers.indexOf(layer);
-          if (index >= 0) layers.splice(index, 1);
+test(
+  "real SDK custom completion removes only its own overlay beneath an unrelated overlay",
+  { timeout: 5000 },
+  async () => {
+    const layers = [];
+    let finish,
+      finishB,
+      bHandle,
+      handleCloses = 0,
+      globalCloses = 0,
+      disposals = 0;
+    const a = {
+      render: () => ["A"],
+      invalidate() {},
+      dispose() {
+        disposals++;
+      },
+    };
+    const b = { render: () => ["B"], invalidate() {} };
+    const tui = {
+      requestRender() {},
+      showOverlay(component, options = {}) {
+        const layer = { component, options };
+        layers.push(layer);
+        return {
+          hide() {
+            handleCloses++;
+            const index = layers.indexOf(layer);
+            if (index >= 0) layers.splice(index, 1);
+          },
+          setHidden() {},
+        };
+      },
+      hideOverlay() {
+        globalCloses++;
+        layers.pop();
+      },
+    };
+    const host = {
+      editor: { getText: () => "draft" },
+      ui: tui,
+      keybindings: {},
+      extensionOverlays: new Map(),
+    };
+    const opening = InteractiveMode.prototype.showExtensionCustom.call(
+      host,
+      (_tui, _theme, _keys, done) => {
+        finish = done;
+        return a;
+      },
+      { overlay: true },
+    );
+    await tick();
+    assert.deepEqual(
+      layers.map(({ component }) => component),
+      [a],
+    );
+    assert.equal(host.extensionOverlays.size, 1);
+    const [aHandle, removeA] = host.extensionOverlays.entries().next().value;
+    // B is unrelated and does not subscribe to the cooperative coordination event.
+    const openingB = InteractiveMode.prototype.showExtensionCustom.call(
+      host,
+      (_tui, _theme, _keys, done) => {
+        finishB = done;
+        return b;
+      },
+      {
+        overlay: true,
+        overlayOptions: { nonCapturing: true },
+        onHandle: (handle) => {
+          bHandle = handle;
         },
-        setHidden() {},
-      };
-    },
-    hideOverlay() {
-      globalCloses++;
-      layers.pop();
-    },
-  };
-  const host = { editor: { getText: () => "draft" }, ui: tui, keybindings: {} };
-  const opening = InteractiveMode.prototype.showExtensionCustom.call(
-    host,
-    (_tui, _theme, _keys, done) => {
-      finish = done;
-      return a;
-    },
-    { overlay: true },
-  );
-  await tick();
-  assert.deepEqual(
-    layers.map(({ component }) => component),
-    [a],
-  );
-  // B is unrelated and does not subscribe to the cooperative coordination event.
-  const bHandle = tui.showOverlay(b, { nonCapturing: true });
-  assert.deepEqual(
-    layers.map(({ component }) => component),
-    [a, b],
-  );
-  assert.equal(layers[1].options.nonCapturing, true);
-  finish("complete");
-  assert.equal(await opening, "complete");
-  assert.deepEqual(
-    layers.map(({ component }) => component),
-    [b],
-    "A is removed while B survives",
-  );
-  assert.equal(handleCloses, 1);
-  assert.equal(globalCloses, 0);
-  assert.equal(disposals, 1);
+      },
+    );
+    await tick();
+    assert.equal(host.extensionOverlays.size, 2);
+    assert.deepEqual(
+      layers.map(({ component }) => component),
+      [a, b],
+    );
+    assert.equal(layers[1].options.nonCapturing, true);
+    finish("complete");
+    assert.equal(await opening, "complete");
+    assert.equal(host.extensionOverlays.has(aHandle), false, "A's registry entry is removed");
+    assert.equal(host.extensionOverlays.has(bHandle), true, "B's registry entry survives");
+    assert.equal(host.extensionOverlays.size, 1);
+    assert.deepEqual(
+      layers.map(({ component }) => component),
+      [b],
+      "A is removed while B survives",
+    );
+    assert.equal(handleCloses, 1);
+    assert.equal(globalCloses, 0);
+    assert.equal(disposals, 1);
 
-  finish("late");
-  finish("later");
-  await tick();
-  assert.deepEqual(
-    layers.map(({ component }) => component),
-    [b],
-    "late completion cannot remove B",
-  );
-  assert.equal(handleCloses, 1, "late completion does not hide the handle again");
-  assert.equal(globalCloses, 0);
-  assert.equal(disposals, 1);
-  bHandle.hide();
-});
+    finish("late");
+    finish("later");
+    removeA(); // The registered reset cleanup is also idempotent after done().
+    assert.equal(host.extensionOverlays.has(bHandle), true);
+    assert.equal(host.extensionOverlays.size, 1);
+    await tick();
+    assert.deepEqual(
+      layers.map(({ component }) => component),
+      [b],
+      "late completion cannot remove B",
+    );
+    assert.equal(handleCloses, 1, "late completion does not hide the handle again");
+    assert.equal(globalCloses, 0);
+    assert.equal(disposals, 1);
+    finishB();
+    await openingB;
+    assert.equal(host.extensionOverlays.size, 0);
+  },
+);
 
 test("a floating pane is not subject to the inline queue's stall bound", async (t) => {
   const h = fixture(t),

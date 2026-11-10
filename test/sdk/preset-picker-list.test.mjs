@@ -213,97 +213,102 @@ test("a queued picker can be cancelled before mount and settles only once", () =
 });
 
 for (const trigger of ["approval", "shutdown"]) {
-  test(`a newer transient overlay cannot strand the picker during ${trigger}`, async () => {
-    const layers = [];
-    const editor = { getText: () => "draft", setText: () => {} };
-    let focus = editor,
-      doneCalls = 0,
-      transientHides = 0,
-      commits = 0;
-    const tui = {
-      requestRender() {},
-      setFocus(component) {
-        focus = component;
-      },
-      showOverlay(component, options = {}) {
-        const layer = { component, options };
-        layers.push(layer);
-        if (!options.nonCapturing) focus = component;
-        return {
-          hide() {
-            const index = layers.indexOf(layer);
-            if (index >= 0) layers.splice(index, 1);
-            if (focus === component) focus = editor;
-          },
-          setHidden() {},
-        };
-      },
-      hideOverlay() {
-        const removed = layers.pop();
-        if (removed && focus === removed.component) focus = editor;
-      },
-    };
-    const host = {
-      editor,
-      ui: tui,
-      keybindings: {},
-      disposeActiveSelector() {},
-      editorContainer: { clear() {}, addChild() {} },
-    };
-    let transient;
-    const request = new PresetPickerRequest(() => {
-      transientHides++;
-      transient?.hide();
-    });
-    const picker = { render: () => ["picker"], invalidate() {} };
-    const opening = InteractiveMode.prototype.showExtensionCustom.call(
-      host,
-      (_tui, _theme, _keys, done) => {
-        assert.equal(
-          request.mount((value) => {
-            doneCalls++;
-            done(value);
-          }, false),
-          true,
-        );
-        return picker;
-      },
-      { overlay: true },
-    );
-    await tick();
-    assert.deepEqual(
-      layers.map(({ component }) => component),
-      [picker],
-    );
-
-    const footer = { render: () => ["footer"], invalidate() {} };
-    transient = tui.showOverlay(footer, { nonCapturing: true });
-    assert.deepEqual(
-      layers.map(({ component }) => component),
-      [picker, footer],
-    );
-    assert.equal(focus, picker, "the noncapturing footer does not steal picker focus");
-
-    request.close();
-    request.close();
-    const selected = await opening;
-    if (selected) commits++;
-
-    assert.equal(transientHides, 1, "coordination runs once before ui.custom completion");
-    assert.equal(doneCalls, 1, "the picker settles once");
-    assert.equal(commits, 0, "programmatic cancellation cannot commit a selection");
-    assert.deepEqual(layers, [], "footer and picker overlays are both removed");
-
-    if (trigger === "approval") {
-      const approval = { render: () => ["approval"], invalidate() {} };
-      tui.showOverlay(approval);
+  test(
+    `a newer transient overlay cannot strand the picker during ${trigger}`,
+    { timeout: 5000 },
+    async () => {
+      const layers = [];
+      const editor = { getText: () => "draft", setText: () => {} };
+      let focus = editor,
+        doneCalls = 0,
+        transientHides = 0,
+        commits = 0;
+      const tui = {
+        requestRender() {},
+        setFocus(component) {
+          focus = component;
+        },
+        showOverlay(component, options = {}) {
+          const layer = { component, options };
+          layers.push(layer);
+          if (!options.nonCapturing) focus = component;
+          return {
+            hide() {
+              const index = layers.indexOf(layer);
+              if (index >= 0) layers.splice(index, 1);
+              if (focus === component) focus = editor;
+            },
+            setHidden() {},
+          };
+        },
+        hideOverlay() {
+          const removed = layers.pop();
+          if (removed && focus === removed.component) focus = editor;
+        },
+      };
+      const host = {
+        editor,
+        ui: tui,
+        keybindings: {},
+        extensionOverlays: new Map(),
+        disposeActiveSelector() {},
+        editorContainer: { clear() {}, addChild() {} },
+      };
+      let transient;
+      const request = new PresetPickerRequest(() => {
+        transientHides++;
+        transient?.hide();
+      });
+      const picker = { render: () => ["picker"], invalidate() {} };
+      const opening = InteractiveMode.prototype.showExtensionCustom.call(
+        host,
+        (_tui, _theme, _keys, done) => {
+          assert.equal(
+            request.mount((value) => {
+              doneCalls++;
+              done(value);
+            }, false),
+            true,
+          );
+          return picker;
+        },
+        { overlay: true },
+      );
+      await tick();
       assert.deepEqual(
         layers.map(({ component }) => component),
-        [approval],
+        [picker],
       );
-      assert.equal(focus, approval, "the approval retains focus after picker cleanup");
-    }
-  });
+
+      const footer = { render: () => ["footer"], invalidate() {} };
+      transient = tui.showOverlay(footer, { nonCapturing: true });
+      assert.deepEqual(
+        layers.map(({ component }) => component),
+        [picker, footer],
+      );
+      assert.equal(focus, picker, "the noncapturing footer does not steal picker focus");
+
+      request.close();
+      request.close();
+      const selected = await opening;
+      if (selected) commits++;
+
+      assert.equal(transientHides, 1, "coordination runs once before ui.custom completion");
+      assert.equal(doneCalls, 1, "the picker settles once");
+      assert.equal(commits, 0, "programmatic cancellation cannot commit a selection");
+      assert.deepEqual(layers, [], "footer and picker overlays are both removed");
+
+      if (trigger === "approval") {
+        const approval = { render: () => ["approval"], invalidate() {} };
+        tui.showOverlay(approval);
+        assert.deepEqual(
+          layers.map(({ component }) => component),
+          [approval],
+        );
+        assert.equal(focus, approval, "the approval retains focus after picker cleanup");
+      }
+    },
+  );
 }
 
 test("preset dashboard fits narrow, normal and wide terminals without hiding slot identities", () => {

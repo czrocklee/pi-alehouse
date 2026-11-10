@@ -145,6 +145,7 @@ export function emptyOwnerPanels(t, mode = "fullscreen", management, liveEffort 
     renderWidgetContainer: InteractiveMode.prototype.renderWidgetContainer,
     showExtensionSelector: InteractiveMode.prototype.showExtensionSelector,
     extensionDialogs: [],
+    extensionOverlays: new Map(),
     disposeActiveSelector() {},
     pushExtensionDialog: InteractiveMode.prototype.pushExtensionDialog,
     removeExtensionDialog: InteractiveMode.prototype.removeExtensionDialog,

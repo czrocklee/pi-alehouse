@@ -102,8 +102,10 @@ Natural-finish steering has SDK-version-specific scheduling behavior and a
 quarantined new-prompt fallback. These are known limitations under the documented cooperative contract, not
 newly fixed SDK behavior or public acceptance.
 
-`/reload` with an open Owner is unsupported. Pi offers no pre-teardown reload
-veto; an extension `session_shutdown` cancel/throw cannot provide one.
+`/reload` with an open Owner is unsupported. Pi 1.5.1 refuses reload while its
+own session is busy, but an idle parent with live Alehouse children is not
+protected by that check. Pi offers no pre-teardown reload veto; an extension
+`session_shutdown` cancel/throw cannot provide one.
 Switch/fork guards pass only after the Owner is confirmed closed. A never-used
 Owner starts shutdown synchronously before the first guard await and may proceed
 automatically; after any accepted Run, the host must have UI and its confirmation
@@ -148,7 +150,7 @@ tool execution, including parallel calls, which has not been verified.
 
 ## Host SDK and runtime scope
 
-Development API checks target Pi/AI/TUI 1.5.0 and TypeBox 1.3.27. The launcher
+Development API checks target Pi/AI/TUI 1.5.2 and TypeBox 1.3.27. The launcher
 uses the installed host SDK, not a bundled second SDK or a runtime version lock.
 There is no version allowlist, compatibility fallback, or historical support
 matrix. Unsupported host or event shapes fail closed; a discriminator's
@@ -196,7 +198,9 @@ expose all failed/cancelled/retried summary attempts or the actual routed model
 for successful summaries; successful summary usage is instead keyed as
 `compaction/<provider>/<requested-model>`. The ledger retains observed floors
 and partial flags; it cannot prove complete provider billing. Child
-cache-warming is stopped, but parent warming behavior is unchanged. Since
+cache-warming is stopped, including the idle warming that Pi 1.5.1 enables by
+default. Alehouse leaves the parent's warming policy and persisted settings to
+the host; parent idle warming can incur provider activity and cost after a run. Since
 Pi 1.4, a compaction summary may use the model's output limit, reduced to fit
 the context; `reserveTokens` controls when compaction starts, not summary
 length, so summaries can add output, latency and observed cost.

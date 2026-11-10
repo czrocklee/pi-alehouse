@@ -6,7 +6,7 @@ Pi Alehouse is currently a source preview, not an npm-registry release. It uses 
 
 - Linux and a local filesystem.
 - Node 22.19+ or 24+, npm, Bash, Git, ripgrep (`rg`) and util-linux `flock`.
-- A compatible installed Pi. The development SDK baseline is 1.5.0; see [host SDK scope](limitations.md#host-sdk-and-runtime-scope).
+- A compatible installed Pi. The development SDK baseline is 1.5.2; see [host SDK scope](limitations.md#host-sdk-and-runtime-scope).
 
 The launcher looks for host `pi` on PATH; `PI_ALEHOUSE_PI` can explicitly select its executable. It uses a trusted absolute `flock` path, not an arbitrary PATH match.
 

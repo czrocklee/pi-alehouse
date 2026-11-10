@@ -25,14 +25,14 @@ MIT License
 
 Copyright (c) 2025 Nico Bailon
 
-## Pi 1.5.0 (`@earendil-works/*`)
+## Pi 1.5.2 (`@earendil-works/*`)
 
 Applies to the pinned `@earendil-works/pi-coding-agent` / SDK / TUI / AI /
-telemetry / schema **1.5.0**. Those packages declare `"license": "MIT"` in
+telemetry / schema **1.5.2**. Those packages declare `"license": "MIT"` in
 `package.json` but ship no top-level `LICENSE` file, so the text below is
 reproduced and verified against
-https://github.com/earendil-works/pi/blob/v1.5.0/LICENSE.
-`@earendil-works/pi-schema` additionally ships `LICENSES/typebox-LICENSE` for
+https://github.com/earendil-works/pi/blob/v1.5.2/LICENSE.
+`@earendil-works/pi-schema` additionally ships `THIRD_PARTY_NOTICES/typebox-LICENSE` for
 the TypeBox-derived code it bundles; that file travels with the package.
 
 MIT License

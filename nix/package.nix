@@ -29,7 +29,7 @@ in
     version = (lib.importJSON ../package.json).version;
     inherit src;
     # Update with package-lock.json (nix build reports the expected hash).
-    npmDepsHash = "sha256-6IInQLmbK3ud6390qiyaBr++epMPtJ3v0eLLbx+xqFk=";
+    npmDepsHash = "sha256-4agh/xopC8qHt4ap3xu9fCG19njgyjdOONLoin3C5pI=";
 
     # Parser WASM is already shipped. Never run native tree-sitter install scripts.
     npmFlags = ["--ignore-scripts" "--legacy-peer-deps"];

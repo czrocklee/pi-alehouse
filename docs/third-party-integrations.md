@@ -2,8 +2,8 @@
 
 This is Pi Alehouse's internal opt-in local-worker orchestration layer, not a vendored/forked subagents backend. Dependencies retain their own licenses; the root lockfile pins development inputs, not the user's host runtime. The reproduced MIT texts, holders and attribution live in the root [third-party notices](../THIRD_PARTY_NOTICES.md).
 
-- **Pi**, `@earendil-works/pi-coding-agent` / SDK / TUI / AI **1.5.0**:
-  https://github.com/earendil-works/pi/tree/v1.5.0
+- **Pi**, `@earendil-works/pi-coding-agent` / SDK / TUI / AI **1.5.2**:
+  https://github.com/earendil-works/pi/tree/v1.5.2
   The controlled-provider fixture follows the stream pattern and message/event
   shapes in `docs/custom-provider.md`; session loading follows `docs/sdk.md` and
   `examples/sdk/06-extensions.ts`. The installed loader, SDK and UI are used
@@ -15,7 +15,7 @@ This is Pi Alehouse's internal opt-in local-worker orchestration layer, not a ve
   `@earendil-works/*` packages declare `"license": "MIT"` in `package.json`
   but ship no `LICENSE` file, so unlike the pi-packages entries that text
   cannot be taken from the installed tree; it is reproduced and verified
-  against the tagged repository at `v1.5.0`.
+  against the tagged repository at `v1.5.2`.
 - **pi-permission-system 32.0.3**:
   https://github.com/gotgenes/pi-packages/tree/pi-permission-system-v32.0.3/packages/pi-permission-system
   Consumed via its public `getPermissionsService(sessionId)` export and the
@@ -77,8 +77,8 @@ terms — live in the root
 [third-party notices](../THIRD_PARTY_NOTICES.md); this page keeps no separate
 license copies.
 
-The pinned Pi 1.5.0 packages ship no top-level `LICENSE` file; their reproduced
+The pinned Pi 1.5.2 packages ship no top-level `LICENSE` file; their reproduced
 and verified MIT text, holder and year live in the root notices referenced
 above. `@earendil-works/pi-schema` additionally ships
-`LICENSES/typebox-LICENSE` for the TypeBox-derived code it bundles; that file
+`THIRD_PARTY_NOTICES/typebox-LICENSE` for the TypeBox-derived code it bundles; that file
 travels with the package.
