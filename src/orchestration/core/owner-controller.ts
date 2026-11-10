@@ -51,6 +51,7 @@ import {
   enqueueManagedBlock,
   finishedCandidates,
   isCommunicationSettled,
+  owesObservation,
   recordFirstQuestion,
   scopedAlerts,
   snapshotManagedBlockTools,
@@ -2776,6 +2777,18 @@ export class OwnerController {
     };
   }
 
+  /** Read-only: whether an Owner-scope agent_wait still has something for the
+   * parent model, with the same admission and health inputs observe uses.
+   * Consumes and commits nothing. */
+  hasOutstandingCommunication(): boolean {
+    return owesObservation({
+      agents: [...this.agents.values()],
+      runs: [...this.runs.values()],
+      pending: this.alerts,
+      admissionEnabled: this.readAdmissionState().enabled,
+      ownerHealthy: this.communicationHealthy() && this.observationLeaseHeld(),
+    });
+  }
   getResult(run_id: string, options: { cursor?: string; limit?: number } = {}): ResultPage {
     const run = this.requireRun(run_id),
       limit = options.limit ?? 4096;

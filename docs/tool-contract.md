@@ -725,6 +725,12 @@ still waits for actual execution/cleanup promises, not an empty observer set.
 List is a read-only roster with `profile`/`reasoning_difficulty`, label/task
 projection and `has_question`. Killed names
 include newest 32 plus killed_omitted; use named/task read for retained results.
+After a parent compaction, while an Owner-scope `agent_wait` would still
+present something, one `alehouse:compaction-reminder:v1` parent custom message
+with fixed text says delegated work was still outstanding; idle, fully
+presented Agents do not trigger it. It is not a tool reply and carries no
+roster: it names no Agent, consumes no communication, starts no model turn,
+and is dropped when the check or queue fails.
 These are observations, not permission grants or source-checkout validation.
 Public worker maps to stable internal editor without rewriting historical IDs.
 Unavailable is a boolean fact with unavailable_reason diagnostics.

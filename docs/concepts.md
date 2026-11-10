@@ -292,7 +292,11 @@ with workers_disabled. All-empty returns nothing_pending immediately, not
 vacuous done. Timeout or abort ends observation, not worker execution. UI/list
 are count/read-only projections and never consume communication.
 
-The orchestration layer does not inject an Agent/Run roster after compaction. `agent_list`
+After a parent compaction, while an Owner-scope `agent_wait` would still
+present something, the orchestration layer appends one best-effort fixed-text
+reminder (`alehouse:compaction-reminder:v1`) that delegated work was still
+outstanding. It names no Agent or tool, asks for no action, consumes no alert,
+question or finished notice, and never starts a model turn. `agent_list`
 exposes Owner-local status, labels and bounded killed names, not full
 assignments, spend or admission authority. Live Run context, usage and elapsed
 time remain UI observations; retired timed warnings are not interpreted by the

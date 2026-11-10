@@ -52,16 +52,21 @@ test("child runtime overrides bound native retries without changing compaction t
   });
 });
 
-test("parent orchestration does not register post-compaction context injection", () => {
-  const handlers = new Map();
+test("parent orchestration appends after compaction; it never re-projects request context", () => {
+  const handlers = new Map(),
+    sent = [];
   orchestrationExtension({
     on: (name, fn) => handlers.set(name, fn),
     registerCommand() {},
     registerShortcut() {},
+    sendMessage: (...args) => sent.push(args),
   });
   assert(handlers.has("session_start"), "exercise the actual extension factory");
-  assert.equal(handlers.has("session_compact"), false);
+  // A per-request rewrite would move bytes inside the cached prompt prefix.
   assert.equal(handlers.has("context"), false);
+  assert.equal(handlers.has("session_before_compact"), false);
+  handlers.get("session_compact")({ type: "session_compact" });
+  assert.deepEqual(sent, [], "no Owner, no Agents: nothing enters parent context");
 });
 
 test("unreported spend is an audit snapshot, not a fake billed message or destructive drain", () => {

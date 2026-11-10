@@ -44,6 +44,7 @@ import type { ManagedBlockSubscription } from "./runtime/permission-blocks.ts";
 import { createDispatchRuntime } from "./runtime/dispatch-runtime.ts";
 import { researcherHostModules } from "./runtime/host-modules.ts";
 import { requestHumanStop } from "./runtime/human-stop.ts";
+import { registerCompactionReminder } from "./runtime/compaction-reminder.ts";
 import { FileOwnerLease } from "./runtime/owner-lease.ts";
 import { ownerSessionReplacementGuard } from "./runtime/owner-lifecycle.ts";
 import {
@@ -734,8 +735,9 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
     return { messages: hideParentWebDeclarations(event.messages, parentWebTools()) };
   });
   // Reconcile after startup/SDK restoration and before the first request, but
-  // never inject orchestration text or an Off message into model context: the
+  // never inject orchestration text or an Off message into request context: the
   // delegation guideline belongs to agent_spawn and follows its visibility.
+  // (The only appended orchestration text is the fixed compaction reminder.)
   pi.on("before_agent_start", (event) => {
     if (!ready) return;
     try {
@@ -759,6 +761,16 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
         ...new Set([...event.systemPromptOptions.hiddenTools, ...hiddenWeb]),
       ];
   });
+  // The summary may drop every trace of delegated work. Append one fixed
+  // reminder behind the compaction entry, only while an Owner-scope agent_wait
+  // would still present something and only for the Owner bound to the
+  // compacted session; never a per-request projection, which would rewrite the
+  // cached prompt prefix.
+  registerCompactionReminder(pi, (ctx) =>
+    ready && controller && ctx.sessionManager.getSessionId() === controller.identity.owner_id
+      ? controller
+      : undefined,
+  );
   pi.on("session_shutdown", async (_event, ctx) => {
     ready = false;
     routingContext = undefined;

@@ -227,7 +227,11 @@ durable custom record names are compatibility surface:
 - `alehouse:run-link:v1`, `alehouse:run-start:v1`, and `alehouse:run-end:v1`;
 - `alehouse:unreported-usage:v1` audit checkpoints;
 - `alehouse:human-cancellation:v1` parent custom messages for accepted human stops
-  (model-visible, non-triggering; distinct from non-context custom entries).
+  (model-visible, non-triggering; distinct from non-context custom entries);
+- `alehouse:compaction-reminder:v1` parent custom messages, at most one per
+  parent compaction while an Owner-scope `agent_wait` would still present
+  something (fixed text, model-visible, hidden from the transcript,
+  non-triggering).
 
 Record names and versions remain unchanged. New `alehouse:run-start:v1` entries
 carry the Agent's difficulty alongside the existing internally resolved route
@@ -296,9 +300,20 @@ and bounded local retry policy (one agent-level retry, 1 s base / 5 s accepted
 delay, provider-internal retries disabled, ten-minute provider request timeout).
 They retain inherited reserve/keep settings. The child cache-warming guard is
 final and returns `stop`, preventing child idle warming outside Runs; parent
-warming policy is unchanged. Parent compaction never injects a roster, task
-labels, or delegation reminders into model context; live orchestration state remains
-available on demand through `agent_list`.
+warming policy is unchanged. After a successful parent compaction, while an
+Owner-scope `agent_wait` would still present something (unsettled work, an
+unpresented finished notice including a killed Agent's, a pending alert, or a
+question `agent_answer` could accept), `session_compact` appends one
+`alehouse:compaction-reminder:v1` custom message with fixed text saying
+delegated work was still outstanding when the conversation was compacted; it
+names no tool and asks for no action. Pi delivers custom messages as
+user-role content, so the reminder interpolates no Agent name, status, label
+or diagnostic. It is an append-only transcript entry, written once and never
+re-projected per request, so the provider prompt prefix stays byte-stable; the
+SDK defers it to the end of the turn while a run is active. Idle Agents whose
+results were all presented do not trigger it. There is no `context` or
+`session_before_compact` hook, summary rewrite, roster, task prompt or
+delegation reminder; live state remains available through `agent_list`.
 
 The patched permission authority, generated worker policy, static guard, search
 policy, and optional Jev review policy are outside the internal orchestration

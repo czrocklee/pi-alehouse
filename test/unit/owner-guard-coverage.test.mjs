@@ -164,6 +164,11 @@ const ownerCases = {
     args: (f) => [f.run.agent_id],
     check: (value) => assert.equal(value, "otter"),
   },
+  hasOutstandingCommunication: {
+    kind: "projection",
+    args: () => [],
+    check: (value) => assert.equal(value, true, "a running Run is still owed"),
+  },
   list: {
     kind: "projection",
     args: () => [{ include_released: true }],

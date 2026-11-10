@@ -324,6 +324,31 @@ export function defaultObservationTargets<Run extends CommunicationRun>(
   return targets;
 }
 
+/** Read-only: whether an Owner-scope agent_wait would still have something to
+ * present -- work that has not settled, a finished notice not yet presented,
+ * any pending alert (Owner scope includes killed Agents) or a question
+ * agent_answer could accept. Built from the same predicates agent_wait uses so
+ * the two cannot disagree; it consumes and commits nothing. */
+export function owesObservation<Run extends CommunicationRun>(options: {
+  readonly agents: readonly CommunicationAgent[];
+  readonly runs: readonly Run[];
+  readonly pending: readonly PendingAlert<Run>[];
+  readonly admissionEnabled: boolean;
+  readonly ownerHealthy: boolean;
+}): boolean {
+  return (
+    options.runs.some((run) => !isCommunicationSettled(run)) ||
+    finishedCandidates(options.runs).length > 0 ||
+    scopedAlerts(options.pending, { kind: "owner" }).length > 0 ||
+    defaultObservationTargets(
+      options.agents,
+      options.runs,
+      options.admissionEnabled,
+      options.ownerHealthy,
+    ).length > 0
+  );
+}
+
 /** Pure core prefilter. Abort/deadline and snapshot policy belong to the shared
  * scheduler; registration captures reportedBlockAtStart, never consumes it. */
 export function communicationReadiness<Run extends CommunicationRun>(options: {
