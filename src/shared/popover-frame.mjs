@@ -29,6 +29,7 @@ const MIN_CLOSABLE_WIDTH = 9;
  * @param {"top" | "bottom" | "divider"} kind
  */
 export function popoverRule(theme, width, kind) {
+  if (width <= 0) return "";
   /** @type {[string, string, "borderAccent" | "borderMuted"]} */
   const [left, right, color] =
     kind === "top"
@@ -36,6 +37,7 @@ export function popoverRule(theme, width, kind) {
       : kind === "bottom"
         ? [POPOVER.bl, POPOVER.br, "borderAccent"]
         : [POPOVER.ml, POPOVER.mr, "borderMuted"];
+  if (width === 1) return theme.fg(color, POPOVER.h);
   return theme.fg(color, left + POPOVER.h.repeat(Math.max(0, width - 2)) + right);
 }
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { popoverCloseHit, popoverTitleRow } from "../../src/shared/popover-frame.mjs";
+import { popoverCloseHit, popoverRule, popoverTitleRow } from "../../src/shared/popover-frame.mjs";
 import { popoverTitle } from "../../dist/orchestration/ui/popover.js";
 
 const theme = { fg: (_color, text) => text, bold: (text) => text };
@@ -24,6 +24,30 @@ for (const width of [0, 1, 2, 3, 4, 8, 9, 12, 24, 64])
         assert.equal(close.x, width - 5);
       } else assert(!row.includes("×"));
     });
+
+for (const [themeName, ruleTheme] of [
+  ["plain", theme],
+  ["ANSI", { fg: (color, text) => `\x1b[${color === "borderMuted" ? 2 : 34}m${text}\x1b[39m` }],
+])
+  for (const [kind, left, right, color] of [
+    ["top", "╭", "╮", "borderAccent"],
+    ["bottom", "╰", "╯", "borderAccent"],
+    ["divider", "├", "┤", "borderMuted"],
+  ])
+    for (const width of [-3, 0, 1, 2, 24])
+      test(`shared rule preserves width and complete framing: ${themeName}/${kind}/${width}`, () => {
+        const row = popoverRule(ruleTheme, width, kind);
+        const expected = width <= 0 ? "" : width === 1 ? "─" : left + "─".repeat(width - 2) + right;
+        assert.equal(visibleWidth(row), Math.max(0, width));
+        assert.equal(stripTerminalSequences(row), expected);
+        // Styling stays whole, with the kind's original color and no clipped controls.
+        assert.equal(row, width <= 0 ? "" : ruleTheme.fg(color, expected));
+        assert(!row.includes("×"));
+        if (width >= 2) {
+          assert(expected.startsWith(left));
+          assert(expected.endsWith(right));
+        }
+      });
 
 test("close hover emphasizes only the glyph without changing text, width or hit columns", () => {
   const styled = {

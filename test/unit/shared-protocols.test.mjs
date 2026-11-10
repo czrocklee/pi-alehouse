@@ -29,7 +29,9 @@ test("shared popover frame preserves existing glyphs and theme roles", () => {
   assert.equal(popoverRule(theme, 5, "top"), "borderAccent:╭───╮");
   assert.equal(popoverRule(theme, 2, "bottom"), "borderAccent:╰╯");
   assert.equal(popoverRule(theme, 4, "divider"), "borderMuted:├──┤");
-  assert.equal(popoverRule(theme, 0, "top"), "borderAccent:╭╮");
+  assert.equal(popoverRule(theme, 0, "top"), "");
+  assert.equal(popoverRule(theme, 1, "top"), "borderAccent:─");
+  assert.equal(popoverRule(theme, 1, "divider"), "borderMuted:─");
   assert.equal(popoverSide(theme), `borderMuted:${POPOVER.v}`);
 });
 
