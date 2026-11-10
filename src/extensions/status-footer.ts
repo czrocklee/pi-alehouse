@@ -11,7 +11,13 @@ import {
   type ContextModelIdentity,
   type ContextSnapshot,
 } from "./lib/context-stats.ts";
-import { CompactionProgress } from "./lib/compaction-progress.ts";
+import {
+  CompactionProgress,
+  compactionModelKey,
+  previousSummaryTokens,
+  sharedCompactionHistory,
+  summaryOutputTokens,
+} from "./lib/compaction-progress.ts";
 import {
   FOOTER_INDICATOR_CLICK_EVENT,
   type FooterIndicatorClick,
@@ -164,7 +170,7 @@ export default function (pi: ExtensionAPI) {
   let lastPublishedQuota: CodexQuotaSnapshot | undefined;
   let requestFooterRender: (() => void) | undefined;
   const billing = createGrokBilling(() => requestFooterRender?.());
-  const compaction = new CompactionProgress();
+  const compaction = new CompactionProgress(undefined, sharedCompactionHistory());
   let compactionTimer: ReturnType<typeof setInterval> | undefined;
   let compactionUsage: ContextUsage | undefined;
   let frozenContext: ContextSnapshot | undefined;
@@ -218,7 +224,9 @@ export default function (pi: ExtensionAPI) {
   };
   const resetContext = () => {
     stopCompactionTimer();
-    compaction.reset();
+    // Drop the unfinished observation only: timing samples describe the model,
+    // not the session, so a new or resumed session keeps them.
+    compaction.finish(false);
     compactionUsage = undefined;
     frozenContext = undefined;
     effectivePrompt = undefined;
@@ -321,11 +329,11 @@ export default function (pi: ExtensionAPI) {
     // Capture the complete pre-compaction composition now, not on a later paint.
     frozenContext = contextSnapshot(ctx, compactionUsage, source);
     compaction.start({
-      modelKey:
-        ctx.model && ctx.model.api !== VIRTUAL_MODEL_API
-          ? `${ctx.model.provider}/${ctx.model.id}`
-          : undefined,
-      tokensBefore: event.preparation.tokensBefore,
+      modelKey: compactionModelKey(ctx.model, ctx.thinkingLevel),
+      previousOutputTokens: previousSummaryTokens(
+        event.preparation.previousSummary,
+        event.branchEntries,
+      ),
     });
     stopCompactionTimer();
     if (ctx.mode === "tui" && requestFooterRender) {
@@ -334,8 +342,8 @@ export default function (pi: ExtensionAPI) {
     }
     requestFooterRender?.();
   });
-  const finishCompaction = (success: boolean) => {
-    compaction.finish(success);
+  const finishCompaction = (success: boolean, outputTokens?: number) => {
+    compaction.finish(success, outputTokens);
     stopCompactionTimer();
     compactionUsage = undefined;
     frozenContext = undefined;
@@ -343,7 +351,9 @@ export default function (pi: ExtensionAPI) {
     clearContext();
     requestFooterRender?.();
   };
-  pi.on("session_compact", (event) => finishCompaction(!event.fromExtension));
+  pi.on("session_compact", (event) =>
+    finishCompaction(!event.fromExtension, summaryOutputTokens(event.compactionEntry)),
+  );
   pi.on("session_compact_failed", () => finishCompaction(false));
   pi.on("session_shutdown", resetContext);
   pi.registerCommand?.("context", {

@@ -49,6 +49,8 @@ function assistant({
   provider = "provider",
   model = "requested",
   responseModel,
+  api = "api",
+  thinkingLevel,
   output = 0,
   cost = 0,
   stopReason = "stop",
@@ -59,6 +61,8 @@ function assistant({
     role: "assistant",
     provider,
     model,
+    api,
+    ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     ...(responseModel ? { responseModel } : {}),
     ...(errorMessage !== undefined ? { errorMessage } : {}),
     ...(withUsage ? { usage: usage(output, cost) } : {}),
@@ -68,9 +72,9 @@ function assistant({
   };
 }
 
-function started(initial = 0) {
+function started(initial = 0, onSuccessfulRequest) {
   const c = clock(initial);
-  const stats = new SessionStats(c.now);
+  const stats = new SessionStats(c.now, onSuccessfulRequest);
   stats.startActivity();
   return { c, stats };
 }
@@ -742,6 +746,239 @@ test("monotonic clamping survives backwards, non-finite, and throwing clock samp
   assert.equal(stats.snapshot().busyMs, 150);
 });
 
+test("successful throughput keeps exact requested identity, not the panel response alias", () => {
+  const samples = [];
+  const { c, stats } = started(0, (sample) => samples.push(sample));
+  const requested = `requested-${"x".repeat(200)}`;
+  for (const stopReason of ["stop", "length", "toolUse"]) {
+    c.advance(10);
+    stats.requestStart(requested, "provider", { api: "api", thinkingLevel: "high" });
+    c.advance(100);
+    const response = assistant({
+      model: requested,
+      responseModel: "response-alias",
+      thinkingLevel: "high",
+      output: 20,
+      stopReason,
+    });
+    stats.messageEnd(response);
+    stats.messageEnd(response);
+  }
+  assert.deepEqual(
+    samples,
+    Array(3).fill({
+      provider: "provider",
+      model: requested,
+      api: "api",
+      thinkingLevel: "high",
+      outputTokens: 20,
+      elapsedMs: 100,
+    }),
+  );
+  const snapshot = stats.snapshot();
+  assert.equal(model(snapshot, "response-alias").requests, 3);
+  assert.equal(model(snapshot, "response-alias").tps, 200);
+  assert(!JSON.stringify(samples).includes("SECRET_TRANSCRIPT_FIXTURE"));
+
+  c.advance(10);
+  stats.requestStart(requested, "provider", { api: "api" });
+  c.advance(100);
+  stats.messageEnd(assistant({ model: requested, output: 2 }));
+  assert.equal(samples[3].thinkingLevel, undefined);
+  assert.equal(samples[3].model, requested);
+});
+
+test("success metadata must bind requested provider, model, API and thinking exactly", () => {
+  for (const [name, requested, response] of [
+    ["provider", {}, { provider: "other" }],
+    ["model", {}, { model: "other", responseModel: "requested" }],
+    ["API", {}, { api: "other-api" }],
+    ["missing API", {}, { api: undefined }],
+    ["thinking", {}, { thinkingLevel: "low" }],
+    ["missing thinking", {}, { thinkingLevel: undefined }],
+    ["unrequested thinking", { thinkingLevel: undefined }, { thinkingLevel: "high" }],
+    ["virtual selection", { api: "pi-virtual" }, { api: "pi-virtual" }],
+    ["missing requested API", { api: undefined }, {}],
+    ["invalid requested thinking", { thinkingLevel: 2 }, {}],
+  ]) {
+    const samples = [];
+    const { c, stats } = started(0, (sample) => samples.push(sample));
+    stats.requestStart("requested", "provider", {
+      api: "api",
+      thinkingLevel: "high",
+      ...requested,
+    });
+    c.advance(100);
+    stats.messageEnd({ ...assistant({ output: 10, thinkingLevel: "high" }), ...response });
+    assert.deepEqual(samples, [], name);
+    assert.equal(stats.snapshot().models[0].requests, 1, `${name}: panel still counts`);
+  }
+});
+
+test("reuse requires successful positive reported output, but does not require cost", () => {
+  const poison = () => {
+    throw new Error("malformed usage");
+  };
+  for (const [name, response] of [
+    ["failed", assistant({ stopReason: "error", output: 5 })],
+    ["aborted", assistant({ stopReason: "aborted", output: 5 })],
+    ["pending", assistant({ stopReason: "pending", output: 5 })],
+    ["unknown stop", assistant({ stopReason: "unknown", output: 5 })],
+    ["missing stop", { ...assistant({ output: 5 }), stopReason: undefined }],
+    ["missing usage", assistant({ withUsage: false })],
+    ["missing output", { ...assistant(), usage: { cost: { total: 0 } } }],
+    ...[0, -1, NaN, Infinity, "5", null].map((output) => [
+      `invalid/zero output ${output}`,
+      assistant({ output }),
+    ]),
+    [
+      "malformed",
+      {
+        ...assistant({ output: 5 }),
+        get usage() {
+          return poison();
+        },
+      },
+    ],
+  ]) {
+    const samples = [];
+    const { c, stats } = started(0, (sample) => samples.push(sample));
+    stats.requestStart("requested", "provider", { api: "api" });
+    c.advance(100);
+    assert.doesNotThrow(() => stats.messageEnd(response), name);
+    assert.deepEqual(samples, [], name);
+    assert.equal(stats.snapshot().models[0].requests, 1, `${name}: panel still counts`);
+  }
+  const samples = [];
+  const { c, stats } = started(0, (sample) => samples.push(sample));
+  stats.requestStart("requested", "provider", { api: "api" });
+  c.advance(100);
+  stats.messageEnd({ ...assistant({ output: 5 }), usage: { output: 5 } });
+  assert.equal(samples.length, 1, "missing cost is not missing throughput");
+  assert.equal(samples[0].outputTokens, 5);
+  assert.equal(stats.snapshot().models[0].partial, true, "panel cost semantics stay unchanged");
+});
+
+test("unfinished, superseded, malformed and zero-duration requests never publish reuse", () => {
+  const samples = [];
+  const { c, stats } = started(0, (sample) => samples.push(sample));
+  stats.requestStart("requested", "provider", { api: "api" });
+  c.advance(10);
+  stats.snapshot();
+  assert.deepEqual(samples, [], "a live snapshot never publishes");
+  stats.requestStart("requested", "provider", { api: "api" });
+  c.advance(10);
+  stats.settleActivity();
+  stats.messageEnd(assistant({ output: 5 }));
+  assert.deepEqual(samples, [], "settlement and supersession are forced partial");
+  stats.startActivity();
+  stats.requestStart("requested", "provider", { api: "api" });
+  stats.messageEnd(assistant({ output: 5 }));
+  assert.deepEqual(samples, [], "zero request duration");
+  stats.requestStart("requested", "provider", { api: "api" });
+  stats.messageEnd({
+    get role() {
+      throw new Error("bad role");
+    },
+  });
+  c.advance(10);
+  stats.messageEnd(assistant({ output: 5 }));
+  assert.deepEqual(samples, [], "a malformed message cannot later become a reliable sample");
+  assert.equal(stats.snapshot().models[0].requests, 4);
+});
+
+test("bad clocks at start, mid-request or completion suppress only reuse, not panel clamping", () => {
+  for (const stage of ["start", "middle", "end"]) {
+    for (const bad of [150, -1, NaN, Infinity, "throw"]) {
+      let value = 100;
+      const samples = [];
+      let reads = 0;
+      const stats = new SessionStats(
+        () => {
+          reads++;
+          if (value === "throw") throw new Error("clock fixture");
+          return value;
+        },
+        (sample) => samples.push(sample),
+      );
+      stats.startActivity();
+      value = 200;
+      stats.snapshot();
+      value = stage === "start" ? bad : 250;
+      stats.requestStart("requested", "provider", { api: "api" });
+      if (stage === "middle") {
+        value = bad;
+        stats.snapshot();
+      }
+      value = stage === "end" ? bad : 600;
+      assert.doesNotThrow(() => stats.messageEnd(assistant({ output: 5 })));
+      assert.deepEqual(samples, [], `${stage}: ${bad}`);
+      const calls = reads;
+      value = 700;
+      stats.requestStart("requested", "provider", { api: "api" });
+      value = 800;
+      stats.messageEnd(assistant({ output: 5 }));
+      assert.equal(reads, calls + 2, "reuse adds no clock samples");
+      assert.equal(samples.length, 1, "a later request with a sound clock can train");
+      assert.equal(samples[0].elapsedMs, 100);
+      assert(stats.snapshot().llmMs >= 100, "existing panel totals remain nonnegative");
+    }
+  }
+});
+
+test("throwing success callback runs after panel update and leaves counters/health unchanged", () => {
+  const c = clock();
+  const baseline = new SessionStats(c.now);
+  const callbackSnapshots = [];
+  const callbackHealth = [];
+  const observed = new SessionStats(c.now, () => {
+    callbackSnapshots.push(observed.snapshot());
+    callbackHealth.push(observed.health);
+    throw new Error("observer fixture");
+  });
+  for (const stats of [baseline, observed]) stats.startActivity();
+  for (const stopReason of ["error", "aborted", "toolUse", "length", "stop"]) {
+    c.advance(10);
+    for (const stats of [baseline, observed])
+      stats.requestStart("requested", "provider", { api: "api" });
+    c.advance(100);
+    for (const stats of [baseline, observed]) {
+      assert.doesNotThrow(() => stats.messageEnd(assistant({ output: 5, stopReason })));
+    }
+    assert.deepEqual(observed.snapshot(), baseline.snapshot());
+    if (["toolUse", "length", "stop"].includes(stopReason)) {
+      assert.deepEqual(
+        callbackSnapshots.at(-1),
+        baseline.snapshot(),
+        "panel updated before callback",
+      );
+    }
+  }
+  assert.equal(callbackSnapshots.length, 3);
+  assert.deepEqual(callbackHealth, ["busy", "busy", "busy"], "success cleared error health");
+  for (const stats of [baseline, observed]) stats.settleActivity();
+  assert.deepEqual(observed.snapshot(), baseline.snapshot());
+  const row = observed.snapshot().models[0];
+  assert.equal(row.requests, 5);
+  assert.equal(row.errors, 1);
+  assert.equal(row.outputTokens, 25, "failed/aborted output remains in panel totals");
+  assert.equal(row.timedOutputTokens, 25);
+  assert.equal(row.tps, 50);
+  assert.equal(row.partial, true);
+});
+
+test("optional observer preserves legacy two-argument callers and clock counts", () => {
+  for (const observer of [undefined, () => {}]) {
+    let reads = 0;
+    const stats = new SessionStats(() => reads++ * 100, observer);
+    stats.startActivity();
+    stats.requestStart("requested", "provider");
+    stats.messageEnd(assistant({ output: 5 }));
+    assert.equal(reads, 4, "no extra timing calls with or without a reuse observer");
+    assert.equal(stats.snapshot().models[0].outputTokens, 5);
+  }
+});
+
 test("model and tool aggregation are bounded with explicit overflow buckets", () => {
   const { c, stats } = started();
   for (let index = 0; index < 80; index++) {
@@ -813,6 +1050,56 @@ function eventFixture() {
     },
   };
 }
+
+test("binding supplies request metadata and retired/missing collectors cannot publish", () => {
+  const samples = [];
+  const { c, stats } = started(0, (sample) => samples.push(sample));
+  const f = eventFixture();
+  let current = stats;
+  const dispose = bindStatsEvents(
+    f.pi,
+    () => current,
+    () => {},
+  );
+  const ctx = {
+    model: { id: "requested", provider: "provider", api: "api" },
+    thinkingLevel: "high",
+  };
+  f.emit("turn_start", {}, ctx);
+  ctx.model.id = "changed-after-start";
+  ctx.model.api = "changed-after-start";
+  ctx.thinkingLevel = "low";
+  c.advance(100);
+  const message = assistant({ output: 10, thinkingLevel: "high" });
+  f.emit("message_end", { message });
+  assert.deepEqual(samples, [
+    {
+      provider: "provider",
+      model: "requested",
+      api: "api",
+      thinkingLevel: "high",
+      outputTokens: 10,
+      elapsedMs: 100,
+    },
+  ]);
+  current = undefined;
+  f.emit("turn_start", {}, ctx);
+  f.emit("message_end", { message });
+  assert.equal(samples.length, 1);
+  current = stats;
+  const staleTurn = [...f.handlers.get("turn_start")][0];
+  const staleEnd = [...f.handlers.get("message_end")][0];
+  f.emit(
+    "turn_start",
+    {},
+    { model: { id: "requested", provider: "provider", api: "api" }, thinkingLevel: "high" },
+  );
+  dispose();
+  c.advance(100);
+  staleEnd({ message });
+  staleTurn({}, ctx);
+  assert.equal(samples.length, 1, "even retained callback references stay inert after teardown");
+});
 
 test("event binding uses foreground turns and ignores uncorrelated provider/cache events", () => {
   const c = clock();

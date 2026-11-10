@@ -10,6 +10,7 @@ import {
 } from "../shared/overlay-protocol.mjs";
 import { bindStatsEvents, SessionStats, type SessionHealth } from "./lib/session-stats.ts";
 import { WorkerStats } from "./lib/worker-stats.ts";
+import { sharedCompactionHistory, compactionModelKey } from "./lib/compaction-progress.ts";
 import { STATS_WORKER_ATTACH, type WorkerStatsAttachment } from "../shared/stats-protocol.mjs";
 import { StatsView, statsSummary, type StatsDashboardSnapshot } from "./lib/stats-view.ts";
 
@@ -192,7 +193,13 @@ export default function statsExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, context) => {
     cleanup();
     ctx = context;
-    const observed = new SessionStats();
+    const observed = new SessionStats(undefined, (sample) => {
+      const key = compactionModelKey(
+        { provider: sample.provider, id: sample.model, api: sample.api },
+        sample.thinkingLevel,
+      );
+      if (key) sharedCompactionHistory().recordResponse(key, sample.outputTokens, sample.elapsedMs);
+    });
     stats = observed;
     const group = new WorkerStats(undefined, paint);
     workers = group;

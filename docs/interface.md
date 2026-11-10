@@ -694,12 +694,42 @@ share the same compact number format and `?` unknown marker.
 During native manual/automatic compaction, the context control uses a braille
 spinner and elapsed time, without a `compact` label. The panel and footer share
 the pre-compaction snapshot until a terminal event. A percentage is an estimate
-only: at least three comparable successful observations for the same requested
-model are needed, and missing/variable history, virtual routing or an overrun
-falls back to spinner plus elapsed time. Failures/cancellations do not train the
-estimate. Samples are bounded and memory-only; session teardown retires timers,
-snapshots and panels. These UI observations never alter compaction or request a
-model call.
+only: the previous summary's output tokens, with an assumed 15% growth, size the
+next summary, and an observed output rate for the same requested model,
+provider, API and thinking level times it. Native compactions are the preferred
+rate source; ordinary successful main-model responses supply the rate only until
+that identity has a successful native compaction. The two sources are kept apart
+because the same model is slower end to end on ordinary turns: they carry the
+whole conversation as context, and per-request waiting dominates their short
+outputs. Main response samples reuse the Stats collector's existing timings and
+positive reported output usage; no second request timer is started. Within a
+source the rate is total output tokens divided by the corresponding total
+observed duration, not an average of individual rates, and no correction factor
+converts one source into the other. Each compaction freezes its estimate at
+start; later observations affect only the next estimate.
+
+These are end-to-end rates, not measured decoding TPS. Main timing includes SDK
+preflight and reported reasoning tokens, but not tool execution or user idle
+time. The SDK exposes no portable compaction first-token boundary, and waiting
+or retry overhead cannot be separated as decoding time. Input size and waiting
+can differ between requests, so an observed rate does not make the percentage
+exact. Failed, aborted, unfinished, invalid-clock and identity-mismatched main
+responses do not train the rate, even if Stats retains their partial accounting.
+Requested identity, not a provider's response-model display alias, matches the
+compaction model. Failed, cancelled and extension-provided compactions likewise
+do not train the rate. Only positive reported output usage and valid bounded
+timing are retained; unreported previous summaries may use text-length estimates
+for sizing only, never TPS training.
+
+A first compaction (no previous summary), missing throughput history, virtual
+routing or an estimate that reaches 95% falls back to spinner plus elapsed time.
+Each source retains at most eight observations per key and 64 in total, so
+frequent ordinary turns never evict compaction samples. The history lives in
+process memory only, across session replacement and extension-factory
+recreation, and is separate from Stats' current-session observation window.
+Session teardown retires active observations, timers, snapshots and panels
+without retaining session references. These UI observations never alter
+compaction or request a model call.
 
 ## Optional footer network integrations
 

@@ -94,10 +94,27 @@ export interface SessionStatsSnapshot {
   recentErrors: SessionErrorStats[];
 }
 
+/** Successful foreground throughput, keyed by the exact requested physical model. */
+export interface SuccessfulRequestSample {
+  provider: string;
+  model: string;
+  api: string;
+  thinkingLevel?: string;
+  outputTokens: number;
+  elapsedMs: number;
+}
+
+export interface RequestStartOptions {
+  api?: string;
+  thinkingLevel?: string;
+}
+
 interface ActiveRequest {
   readonly startedAt: number;
   readonly model: string;
   readonly provider?: string;
+  requested?: Omit<SuccessfulRequestSample, "outputTokens" | "elapsedMs">;
+  clockReliable: boolean;
   firstOutputAt?: number;
   firstTextAt?: number;
 }
@@ -212,6 +229,8 @@ function cloneModel(value: ModelAggregate): ModelAggregate {
  */
 export class SessionStats {
   readonly #clock: () => number;
+  readonly #onSuccessfulRequest?: (sample: SuccessfulRequestSample) => void;
+  #lastClockReliable = true;
   readonly #openedAt: number;
   #lastNow: number;
   #lastEventAt?: number;
@@ -245,8 +264,12 @@ export class SessionStats {
   readonly #models = new Map<string, ModelAggregate>();
   readonly #tools = new Map<string, ToolAggregate>();
 
-  constructor(now: () => number = () => performance.now()) {
+  constructor(
+    now: () => number = () => performance.now(),
+    onSuccessfulRequest?: (sample: SuccessfulRequestSample) => void,
+  ) {
     this.#clock = now;
+    this.#onSuccessfulRequest = onSuccessfulRequest;
     const openedAt = this.#readClock(0);
     this.#openedAt = openedAt;
     this.#lastNow = openedAt;
@@ -255,14 +278,22 @@ export class SessionStats {
   #readClock(fallback: number): number {
     try {
       const sampled = this.#clock();
+      this.#lastClockReliable =
+        typeof sampled === "number" &&
+        Number.isFinite(sampled) &&
+        sampled >= 0 &&
+        sampled <= MAX_NUMBER;
       return finiteNonNegative(sampled) ?? fallback;
     } catch {
+      this.#lastClockReliable = false;
       return fallback;
     }
   }
 
   #now(): number {
     const sampled = this.#readClock(this.#lastNow);
+    this.#lastClockReliable &&= sampled >= this.#lastNow;
+    if (this.#request && !this.#lastClockReliable) this.#request.clockReliable = false;
     this.#lastNow = Math.max(this.#lastNow, sampled);
     return this.#lastNow;
   }
@@ -337,7 +368,7 @@ export class SessionStats {
     // decision or collector destruction may close it.
   }
 
-  requestStart(model: string, provider?: string): void {
+  requestStart(model: string, provider?: string, options?: RequestStartOptions): void {
     const now = this.#now();
     if (this.#activityStartedAt === undefined) return;
     this.#touch(now);
@@ -346,7 +377,34 @@ export class SessionStats {
       startedAt: now,
       model: label(model),
       ...(provider ? { provider: label(provider) } : {}),
+      clockReliable: this.#lastClockReliable,
     };
+    // Optional reuse metadata is independent of display labels and worker callers.
+    // Bad metadata must not prevent the existing panel observation.
+    if (this.#onSuccessfulRequest) {
+      try {
+        const requestedModel = identifier(model);
+        const requestedProvider = identifier(provider);
+        const api = identifier(options?.api);
+        const thinkingLevel = options?.thinkingLevel;
+        if (
+          requestedModel &&
+          requestedProvider &&
+          api &&
+          api !== "pi-virtual" &&
+          (thinkingLevel === undefined || identifier(thinkingLevel))
+        ) {
+          this.#request.requested = {
+            provider: requestedProvider,
+            model: requestedModel,
+            api,
+            ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+          };
+        }
+      } catch {
+        // No reusable sample, but the panel still owns its ordinary totals.
+      }
+    }
   }
 
   delta(kind: string, delta: string): void {
@@ -369,6 +427,7 @@ export class SessionStats {
     try {
       role = record(message)?.role;
     } catch {
+      this.#request.requested = undefined;
       this.#partial = true;
       this.#runStop = undefined;
       return;
@@ -560,6 +619,7 @@ export class SessionStats {
     let stopReason: unknown;
     let errorMessage: string | undefined;
     let outputTokens: number | undefined;
+    let reportedOutput: unknown;
     let cost: number | undefined;
     let malformed = false;
     if (message !== undefined) {
@@ -574,7 +634,8 @@ export class SessionStats {
           if (stopReason === "error")
             errorMessage = label(response.errorMessage, "", MAX_ERROR_LENGTH) || undefined;
           const usage = record(response.usage);
-          outputTokens = finiteNonNegative(usage?.output);
+          reportedOutput = usage?.output;
+          outputTokens = finiteNonNegative(reportedOutput);
           cost = finiteNonNegative(record(usage?.cost)?.total);
         }
       } catch {
@@ -626,6 +687,40 @@ export class SessionStats {
     if (this.#lastResponseSucceeded) this.#recover();
     if (isError) this.#latch(now, provider, model, errorMessage);
     if (partial || aggregate.model === OVERFLOW) this.#partial = true;
+
+    // Publish only after all panel counters/health have settled, using this very
+    // timing boundary. Cost completeness and panel overflow do not decide TPS.
+    if (
+      this.#onSuccessfulRequest &&
+      active.requested &&
+      active.clockReliable &&
+      !forcedPartial &&
+      !malformed &&
+      this.#lastResponseSucceeded &&
+      typeof reportedOutput === "number" &&
+      Number.isFinite(reportedOutput) &&
+      reportedOutput > 0 &&
+      duration > 0
+    ) {
+      try {
+        const response = record(message);
+        const requested = active.requested;
+        if (
+          response?.provider === requested.provider &&
+          response.model === requested.model &&
+          response.api === requested.api &&
+          response.thinkingLevel === requested.thinkingLevel
+        ) {
+          this.#onSuccessfulRequest({
+            ...requested,
+            outputTokens: reportedOutput,
+            elapsedMs: duration,
+          });
+        }
+      } catch {
+        // A reuse observer (or malformed metadata) never changes panel behavior.
+      }
+    }
   }
 
   #finishTool(id: string, isError: boolean, executionMs: number | undefined): void {
@@ -797,7 +892,10 @@ export function bindStatsEvents(
     pi.on("turn_start", (_event, ctx) =>
       observe((stats) => {
         const model = ctx.model;
-        stats.requestStart(model?.id ?? UNKNOWN, model?.provider);
+        stats.requestStart(model?.id ?? UNKNOWN, model?.provider, {
+          api: model?.api,
+          thinkingLevel: ctx.thinkingLevel,
+        });
       }),
     ),
   );

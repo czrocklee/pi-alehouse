@@ -64,7 +64,11 @@ for (const worker of [false, true])
           calls = 0,
           unbind;
         const toolName = failedTool ? "bash" : "probe";
-        const stats = new SessionStats(() => now);
+        const throughput = [];
+        const stats = new SessionStats(
+          () => now,
+          (sample) => throughput.push(sample),
+        );
         const workers = new WorkerStats(() => now);
         const parentBus = sdk.createEventBus();
         parentBus.on(STATS_WORKER_ATTACH, (request) => {
@@ -291,6 +295,21 @@ for (const worker of [false, true])
             "stream start/empty chunks are not the first effective output",
           );
           assert.equal(view.lastTextMs, 100);
+          assert.deepEqual(
+            throughput,
+            [
+              [10, 300],
+              [30, 500],
+            ].map(([outputTokens, elapsedMs]) => ({
+              provider: "stats-fixture",
+              model: "requested",
+              api: "stats-fixture",
+              thinkingLevel: session.thinkingLevel,
+              outputTokens,
+              elapsedMs,
+            })),
+            "real SDK success samples reuse turn timings and requested identity, not responseModel",
+          );
         }
         assert.equal(view.models.length, 1);
         const model = view.models[0];
@@ -315,6 +334,7 @@ for (const worker of [false, true])
           "drafts and arguments never enter metrics",
         );
         if (worker) {
+          assert.deepEqual(throughput, [], "worker requests cannot train the main model rate");
           assert.equal(
             stats.snapshot().models.length,
             0,
@@ -333,6 +353,20 @@ for (const worker of [false, true])
           assert.equal(parent.models[0].outputTokens, 30);
           assert.equal(parent.models[0].cost, 0.01);
           assert.equal(parent.llmMs, 500);
+          assert.deepEqual(
+            throughput,
+            [
+              {
+                provider: "stats-fixture",
+                model: "requested",
+                api: "stats-fixture",
+                thinkingLevel: parentSession.thinkingLevel,
+                outputTokens: 30,
+                elapsedMs: 500,
+              },
+            ],
+            "positive control: the bound parent publishes its own reusable throughput sample",
+          );
           assert.deepEqual(workers.snapshot(), view, "parent events do not rebill the worker");
           observer.beginRun();
           await session.prompt("Continue this resident worker and finish.");
