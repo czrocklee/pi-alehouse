@@ -41,6 +41,9 @@ export interface DetailInput {
   live: DetailLive;
 }
 
+/** A heuristic estimate, marked as approximate wherever it is shown. */
+const approxContextTokens = (tokens: number | null, unknown: string): string =>
+  tokens === null ? unknown : `≈${formatContextTokens(tokens)}`;
 const shortId = (value: string): string =>
   value.length <= 14 ? value : `${value.slice(0, 6)}…${value.slice(-4)}`;
 /** Every dispatch note, spelled out; the parent model is shown only tree_shared. */
@@ -215,7 +218,7 @@ export function renderDetailFields(
   if (context)
     field(
       "context",
-      `${context.tokens === null ? "unknown" : `≈${formatContextTokens(context.tokens)}`}/` +
+      `${approxContextTokens(context.tokens, "unknown")}/` +
         `${formatContextTokens(context.context_window)} tokens · ${formatContextPercent(context)}`,
     );
 
@@ -381,12 +384,26 @@ export function renderDetailFooter(input: {
   const required = action && confirming ? CONFIRM_HINT : action;
   const reserved = required ? visibleWidth(required) + 1 : 0;
   const status = view ? renderDetailStatus(view, spinnerFrame, th, width - reserved) : undefined;
-  const left =
-    status === undefined
-      ? counts
-      : visibleWidth(status) + 3 + visibleWidth(counts) + reserved > width
-        ? status
-        : `${status}${th.fg("dim", " · ")}${counts}`;
+  const context = view?.runtime?.context;
+  // Keep occupancy visible while the body follows the transcript. Whole optional
+  // segments yield to status and Stop/confirmation, with context before counts.
+  const metadata = [
+    ...(context
+      ? [
+          th.fg(
+            "dim",
+            `ctx ${approxContextTokens(context.tokens, "?")}/` +
+              formatContextTokens(context.context_window),
+          ),
+        ]
+      : []),
+    counts,
+  ];
+  let left = status ?? counts;
+  if (status !== undefined)
+    for (const text of metadata)
+      if (visibleWidth(left) + 3 + visibleWidth(text) + reserved <= width)
+        left += `${th.fg("dim", " · ")}${text}`;
   const navigation =
     confirming && action
       ? [CONFIRM_HELP]
