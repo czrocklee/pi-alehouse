@@ -554,15 +554,18 @@ test("a click on an Agent row resolves to that Agent, and chrome rows resolve to
   });
   assert.equal(lines.length, hits.length, "every painted line must answer who it belongs to");
   assert.equal(hits[0], undefined, "the heading belongs to no Agent");
-  assert.equal(hits[1], "f");
-  assert.equal(hits[2], "r", "the Agent header row");
+  assert.equal(hits[1], "r", "active identity precedes queued and ordinary terminal rows");
+  assert.match(lines[1], /^├─ ⠋ /);
   assert.equal(
-    hits[3],
+    hits[2],
     "r",
     "and its ⎿ activity row, so clicking the tool line opens the Agent running it",
   );
-  assert.match(lines[3], /⎿/);
-  assert.equal(hits[4], undefined, "the aggregate queued row names no single Agent");
+  assert.match(lines[2], /⎿/);
+  assert.equal(hits[3], undefined, "the aggregate queued row names no single Agent");
+  assert.match(lines[3], /^├─ ◦ 1 queued$/);
+  assert.equal(hits[4], "f", "ordinary terminal identity follows the queued aggregate");
+  assert.match(lines[4], /^└─ ✓ /);
 });
 
 test("an overflowing widget still answers correctly for the rows it did paint", () => {
@@ -599,10 +602,20 @@ test("an overflowing widget still answers correctly for the rows it did paint", 
   });
   assert.equal(lines.length, hits.length);
   assert.equal(hits.at(-1), undefined, "the +N more row is a count, not an Agent");
-  assert(lines.length <= 6, "unknown-height callers use the safe six-line widget budget");
-  assert.match(lines.at(-1), /\+6 more \(6 running\)/);
-  // Pairs stay paired: a header and its activity line never disagree.
-  for (let i = 1; i + 1 < hits.length; i += 2) assert.equal(hits[i], hits[i + 1]);
+  assert.equal(lines.length, 6, "unknown-height callers use the safe six-line widget budget");
+  assert.match(lines.at(-1), /^└─ \+4 more \(4 running\)$/);
+  assert.deepEqual(
+    hits.slice(1, -1),
+    runs.slice(0, 4).map((run) => run.agent_id),
+    "the stable priority prefix retains four immutable Agent identities before optional activity",
+  );
+  for (const line of lines.slice(1, -1)) assert.match(line, /^├─ ⠋ /);
+  assert.doesNotMatch(lines.join("\n"), /⎿/, "previews yield before active identities");
+  assert.equal(
+    hits.filter(Boolean).length + 4,
+    runs.length,
+    "overflow accounts for every hidden Agent",
+  );
 });
 
 // ---- The pane's scroll window across the two halves of its body ----

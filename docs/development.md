@@ -199,9 +199,23 @@ as validation or deployment acceptance.
 
 There is no metadata-only `agent_read` view as a functional feature. Keep all
 nine names and other arguments/features:
-required `continues`, optional label/after/dispatch, optional spawn-only
+required `continues` and spawn/run `label`, optional after/dispatch, optional spawn-only
 `return_to`, max_turns, inherit_context, wait's all/any selection, every wait_ms
 and max_chars. `return_to` is not an `agent_run` field and not a tenth tool.
+Spawn/run labels are concise 3–8 word task titles (not instructions/background),
+required nonblank strings capped at 72 UTF-16 units and used verbatim. Word counts
+are not enforced, so CJK titles are allowed. The model-tool prompt-first-line
+fallback is removed. `src/orchestration/tools/argument-limits.ts` centralizes the
+72-unit model title limit and parent text bounds. Raw nonblank and UTF-16
+(JavaScript `.length`) checks run before cloning/action in prepare and again in
+execute after hooks, including prompt, continues, send/answer, return_to.answer
+and cursor. Keep field/path-specific `INVALID_PARAMETERS` guidance and existing
+profile/difficulty precedence; dispatch retains its own checker. Model
+communication projection keeps `COMMUNICATION_LIMITS.label_units` at 120;
+generic core Run descriptions retain their separate 4096-unit bound. Historical
+labels remain byte-literal. Boundary tests must cover ASCII, astral, combining
+and ZWJ strings, hook mutation and zero admission/delivery/publication effects
+through direct and real pinned SDK routes.
 `max_duration_ms` and its hard/soft wall-clock timers are removed; command,
 observation or stop/cleanup timeouts remain. Parent replies omit routine telemetry. Live Run context, usage and elapsed time
 remain UI observations; retired timed warnings are not interpreted by the current

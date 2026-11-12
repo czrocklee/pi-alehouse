@@ -19,11 +19,26 @@ publication. Initial `off` hides all nine; after accepted work it retains only
 New tasks, steering and answers remain admission/revision-gated, even through
 cached tool handles. Accepted child work may continue to alert or ask while Off.
 
+Parent text inputs are nonblank strings measured explicitly in UTF-16 units
+(JavaScript `.length`), not code points, graphemes or UTF-8 bytes. Raw checks run
+before cloning/action in both preparation and execution, including after hooks:
+spawn/run `prompt` ≤131072, `label` ≤72; run `continues` ≤512; send `message`,
+answer `answer` and spawn `return_to.answer` ≤16384; supplied read `cursor` ≤1024.
+Values are preserved verbatim, not trimmed or truncated. Missing/blank/overlong
+titles fail `INVALID_PARAMETERS` naming public parameter `label` and its required
+72-unit guidance; other text failures name the exact field/path and limit.
+Unidentifiable structural failures remain generic. Spawn profile/difficulty
+errors retain precedence. Dispatch keeps its separate literal-path checks.
+
 The model addresses an **Agent** by name, not an internal Run UUID. A **task**
 is a Run's 1-based rank among that Agent's Runs ordered by enqueue sequence,
 derived for presentation and accepted only as a read-only `agent_read` selector,
-never as a command target. Labels are auxiliary (at most 120 UTF-16 units),
-never a substitute for task identity.
+never as a command target. Spawn/run require a concise 3–8 word task title in
+`label` (1--72 nonblank UTF-16 units), not instructions or background. Word counts
+are guidance, not validation; CJK titles are allowed. Labels are auxiliary,
+never a substitute for task identity. The model communication projection retains
+`COMMUNICATION_LIMITS.label_units` at 120; generic core Run descriptions retain
+their separate 4096-unit bound. Historical labels remain byte-literal.
 Routing, models, Owner IDs, generation and SDK session IDs stay internal.
 
 | Tool              | Intent                                                                                                           |
@@ -106,13 +121,13 @@ Final core admission then also rejects incompatible direct/queued submissions,
 while accepted-request replay remains intact. This is an adapter opt-in, not a
 restriction on optional/repeated display names in an unbound generic core Owner.
 
-Spawn requires `agent`, `prompt` (1--131072 UTF-16 units), `profile`
+Spawn requires `agent`, `prompt` (1--131072 UTF-16 units), `label` (1--72), `profile`
 (`worker` or `scout`) and integer `reasoning_difficulty` (1--5,
 from easiest to hardest). Worker maps to stable internal `editor`; scout maps
 to stable internal `researcher`. The public name `researcher` is unsupported,
 not an alias. Accepted Agents are not renamed. Reasoning difficulty is
 independent of profile.
-Optional fields are `label` (1--120), `inherit_context`, `after` (1--4 other names),
+Optional fields are `inherit_context`, `after` (1--4 other names),
 `wait_ms` (0--300000), `max_turns` (1--10000, default 256), plus optional
 `dispatch` and, on spawn only, `return_to`. Task execution has no wall-clock
 deadline. The retired `max_duration_ms` parameter is rejected, not ignored.
@@ -139,8 +154,8 @@ Agent at spawn; later tasks, steering and routing changes do not migrate them.
 Use a new Agent for a different binding. Spawn creates the Agent and submits its
 first task, which may queue rather than execute immediately. Prompt is the full
 task instruction, including deliverable, scope, stopping conditions and
-paths relative to the parent's cwd (or explicit absolute paths); label defaults to its
-first nonblank line and is never forwarded as an instruction.
+paths relative to the parent's cwd (or explicit absolute paths). The required label
+is used verbatim, never derived from prompt text or forwarded as an instruction.
 
 Worker is for local diagnosis, code review, design, implementation and
 verification. It has local read/edit/write/Bash/Git/build tools under normal
@@ -201,7 +216,7 @@ permission grant. Oversize fails `CONTEXT_SNAPSHOT_TOO_LARGE` before creation.
 
 ## Run, send and explicit answer
 
-`agent_run({agent, continues, prompt, label?, after?, wait_ms?, dispatch?})` admits a new task only
+`agent_run({agent, continues, prompt, label, after?, wait_ms?, dispatch?})` admits a new task only
 when idle. Finishing/stopping is waited out for at most 30 s outside the submit
 queue. Running fails `AGENT_BUSY`; a pending question fails `PENDING_QUESTION`
 and points to explicit answer. Run never delivers into an existing task.

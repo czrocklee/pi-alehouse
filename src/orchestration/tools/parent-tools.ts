@@ -2,17 +2,13 @@ import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding
 import type { TSchema } from "typebox";
 import type { OwnerController } from "../core/owner-controller.ts";
 import { terminal, type ReturnTo, type RunView, type SubmitRequest } from "../core/contracts.ts";
-import {
-  AGENT_EXISTS_RESOLUTION,
-  COMMUNICATION_LIMITS,
-  modelTaskStatus,
-} from "../core/communication-envelope.ts";
+import { AGENT_EXISTS_RESOLUTION, modelTaskStatus } from "../core/communication-envelope.ts";
 import { taskMetadata } from "../core/task-metadata.ts";
 import { OrchestrationError } from "../core/ports.ts";
 import { digest, textSnapshot } from "../runtime/context-snapshot.ts";
 import { requireParentAnswerPermission } from "../runtime/parent-answer-permission.ts";
 import { resolveRoute, type PresetSelection } from "../routing.ts";
-import { agentRow, taskReply, utf16Prefix } from "./replies.ts";
+import { agentRow, taskReply } from "./replies.ts";
 import { bindParentToolContext, type ParentToolBinding } from "./parent-tool-context.ts";
 import {
   agentAnswerDescription,
@@ -37,16 +33,6 @@ import { agentProfileNames, blockedDelegationToolNames, internalProfile } from "
 
 export { AGENT_NAME_PATTERN } from "./parent-schemas.ts";
 
-/** A label the model omitted: the first nonblank line of its instructions. */
-const labelOf = (label: string | undefined, instructions: string): string =>
-  label ??
-  utf16Prefix(
-    instructions
-      .split("\n")
-      .map((line) => line.trim())
-      .find(Boolean) ?? "task",
-    COMMUNICATION_LIMITS.label_units,
-  );
 const KILLED_SHOWN = 32;
 
 export interface ToolProfile {
@@ -239,7 +225,7 @@ function registerAdmissionTools(
               }
               return {
                 prompt: input.prompt,
-                description: labelOf(input.label, input.prompt),
+                description: input.label,
                 name: input.agent,
                 ...(input.max_turns === undefined ? {} : { max_turns: input.max_turns }),
                 ...(input.dispatch === undefined ? {} : { dispatch: input.dispatch }),
@@ -290,7 +276,7 @@ function registerAdmissionTools(
             return {
               resume: target.agent_id,
               prompt: input.prompt,
-              description: labelOf(input.label, input.prompt),
+              description: input.label,
               ...(input.dispatch === undefined ? {} : { dispatch: input.dispatch }),
               ...(after ? { after } : {}),
             };

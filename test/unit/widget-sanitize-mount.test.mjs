@@ -30,9 +30,9 @@ test("missing or empty allocation metadata stays absent and raw allocation value
     assert.match(line, /worker/);
   }
   for (const [model, effort, allocation] of [
-    [undefined, " high\t ", "[high]"],
-    ["\x1b[31mm\x1b[0m", undefined, "[m]"],
-    [" m\t x ", " high\n effort ", "[m x/high effort]"],
+    [undefined, " high\t ", "high"],
+    ["\x1b[31mm\x1b[0m", undefined, "m"],
+    [" m\t x ", " high\n effort ", "m x/high effort"],
   ]) {
     const line = render([run("safe-allocation", { status: "running", model, effort })], {
       width: 200,
@@ -180,7 +180,7 @@ test("raw widget metadata cannot inject protocols, bidi or row controls, while t
     ],
     { width: 200 },
   );
-  assert.match(clean[1], /rev bot .*\[m x\/high effort\] → check the tests/);
+  assert.match(clean[1], /rev bot .*m x\/high effort {2}↻3\/256 +12\.4s {2}check the tests$/);
   const styledName = render([run("styled", { status: "running", name: "rev\x1b[31m\tbot" })], {
     width: 200,
     theme: styled,

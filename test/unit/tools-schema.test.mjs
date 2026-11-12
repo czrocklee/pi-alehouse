@@ -28,6 +28,11 @@ import {
 } from "../../dist/orchestration/tools/tool-names.js";
 import { fixture, task, until } from "../support/controller-fixture.mjs";
 import { assertCallerTools } from "../support/caller-contract.mjs";
+import {
+  MODEL_TASK_TITLE_UNITS,
+  PARENT_TEXT_LIMITS,
+} from "../../dist/orchestration/tools/argument-limits.js";
+import { COMMUNICATION_LIMITS } from "../../dist/orchestration/core/communication-envelope.js";
 
 test("worker maps to editor and scout maps to researcher; retired public names are rejected", async (t) => {
   assert.deepEqual(agentProfileNames, ["editor", "researcher"]);
@@ -187,6 +192,203 @@ test("only prompt carries the assignment; labels, names and default-disabled con
   await settle(f, "label-agent");
 });
 
+test("spawn/run require short task titles before preparation and execution, without word-count rules", async (t) => {
+  const f = await fixture(t),
+    { tool, call } = toolsFor(f);
+  for (const [name, args] of [
+    ["agent_spawn", create()],
+    ["agent_run", run("orca")],
+  ]) {
+    const current = tool(name);
+    assert(current.parameters.required.includes("label"));
+    assert.equal(current.parameters.properties.label.maxLength, MODEL_TASK_TITLE_UNITS);
+    assert(MODEL_TASK_TITLE_UNITS <= COMMUNICATION_LIMITS.label_units);
+    assert.equal(COMMUNICATION_LIMITS.label_units, 120);
+    assert.match(
+      current.parameters.properties.label.description,
+      new RegExp(`${MODEL_TASK_TITLE_UNITS} UTF-16 units`),
+    );
+    const { label: _label, ...missing } = args;
+    for (const invalid of [
+      missing,
+      ...[undefined, null, 12, "", " \n\t", "x".repeat(73), "界".repeat(73), "🚀".repeat(37)].map(
+        (label) => ({ ...args, label }),
+      ),
+    ]) {
+      const titleError = (error) => {
+        const detail = JSON.parse(error.message).error;
+        assert.equal(detail.code, "INVALID_PARAMETERS");
+        assert.equal(detail.parameter, "label");
+        assert.match(
+          detail.resolution,
+          invalid.label === undefined
+            ? /label is required.*nonblank task title.*72 UTF-16 units/
+            : /label must be a nonblank task title.*72 UTF-16 units/,
+        );
+        return true;
+      };
+      assert.throws(() => current.prepareArguments(invalid), titleError);
+      await assert.rejects(call(name, invalid), titleError);
+    }
+    for (const label of ["x", "x".repeat(72), "界".repeat(72), "🚀".repeat(36), "  保留原样  "]) {
+      assert.equal(current.prepareArguments({ ...args, label }).label, label);
+    }
+    for (const label of [undefined, "x".repeat(73), "🚀".repeat(37)]) {
+      const mutated = current.prepareArguments(args);
+      if (label === undefined) delete mutated.label;
+      else mutated.label = label;
+      await assert.rejects(call(name, mutated), code("INVALID_PARAMETERS"));
+    }
+  }
+  assert.equal(f.controller.stats().runs, 0);
+  assert.equal(f.ports.length, 0);
+  for (const [name, args] of [
+    ["agent_spawn", create({ label: "界".repeat(72) })],
+    ["agent_run", run("orca", { label: "🚀".repeat(36) })],
+  ]) {
+    const reply = await call(name, args);
+    assert.equal(reply.agents[0].label, args.label);
+    assert.equal(viewOf(f, "orca").description, args.label);
+    await until(() => f.ports[0]?.streaming);
+    f.ports[0].finish();
+    await settle(f, "orca");
+  }
+});
+
+const textCases = () => [
+  ["agent_spawn", create(), "label", PARENT_TEXT_LIMITS.label],
+  ["agent_run", run("orca"), "label", PARENT_TEXT_LIMITS.label],
+  ["agent_spawn", create(), "prompt", PARENT_TEXT_LIMITS.prompt],
+  ["agent_run", run("orca"), "prompt", PARENT_TEXT_LIMITS.prompt],
+  ["agent_run", run("orca"), "continues", PARENT_TEXT_LIMITS.continues],
+  ["agent_send", send("orca"), "message", PARENT_TEXT_LIMITS.message],
+  [
+    "agent_answer",
+    { agent: "orca", question_id: `q_${"a".repeat(32)}`, answer: "yes" },
+    "answer",
+    PARENT_TEXT_LIMITS.answer,
+  ],
+  [
+    "agent_spawn",
+    create({
+      profile: "scout",
+      return_to: { agent: "orca", question_id: `q_${"a".repeat(32)}`, answer: "yes" },
+    }),
+    "return_to.answer",
+    PARENT_TEXT_LIMITS.answer,
+  ],
+  ["agent_read", { agent: "orca", cursor: "cursor" }, "cursor", PARENT_TEXT_LIMITS.cursor],
+];
+const withText = (args, path, value) => {
+  const copy = structuredClone(args);
+  const keys = path.split(".");
+  const target = keys.length === 2 ? copy[keys[0]] : copy;
+  target[keys.at(-1)] = value;
+  return copy;
+};
+const units = (token, length) =>
+  token.repeat(Math.floor(length / token.length)) + "x".repeat(length % token.length);
+const textError = (path, limit) => (error) => {
+  const detail = JSON.parse(error.message).error;
+  assert.equal(detail.code, "INVALID_PARAMETERS");
+  assert.equal(detail.parameter, path);
+  assert.equal(Object.hasOwn(detail, "path"), false);
+  assert.match(detail.resolution, new RegExp(`${path}.*nonblank.*${limit} UTF-16 units`));
+  return true;
+};
+
+test("every parent text field uses raw UTF-16 limits before clone, admission or publication", async (t) => {
+  const f = await fixture(t),
+    { tool, call } = toolsFor(f);
+  for (const [name, args, path, limit] of textCases()) {
+    const current = tool(name);
+    for (const token of ["a", "🚀", "e\u0301", "👩‍💻"]) {
+      const exact = units(token, limit),
+        over = units(token, limit + 1);
+      assert.equal(exact.length, limit);
+      assert.equal(over.length, limit + 1);
+      const valid = withText(args, path, exact);
+      assert.deepEqual(current.prepareArguments(valid), valid, `${name}.${path} exact ${token}`);
+      const invalid = withText(args, path, over);
+      if (token === "🚀")
+        assert(
+          Check(current.parameters, invalid),
+          "inherited TypeBox code-point check alone admits overlong UTF-16 text",
+        );
+      assert.throws(() => current.prepareArguments(invalid), textError(path, limit));
+      await assert.rejects(call(name, invalid), textError(path, limit));
+      const mutated = withText(current.prepareArguments(args), path, over);
+      await assert.rejects(call(name, mutated), textError(path, limit));
+    }
+    for (const value of [undefined, null, 12, "", " \n\t"]) {
+      if (name === "agent_read" && value === undefined) continue; // optional cursor
+      const invalid = withText(args, path, value);
+      assert.throws(() => current.prepareArguments(invalid), textError(path, limit));
+      await assert.rejects(call(name, invalid), textError(path, limit));
+    }
+  }
+  // Validate before structuredClone: invalid text wins over an unrelated
+  // non-cloneable value, rather than surfacing DataCloneError/TOOL_ERROR.
+  await assert.rejects(
+    call("agent_send", { agent: "orca", message: " ", extra() {} }),
+    textError("message", 16384),
+  );
+  for (const args of [
+    create({ profile: "admin", label: " " }),
+    create({ reasoning_difficulty: 2.5, label: " " }),
+  ]) {
+    const expected = args.profile === "admin" ? "INVALID_PROFILE" : "INVALID_DIFFICULTY";
+    assert.throws(() => tool("agent_spawn").prepareArguments(args), code(expected));
+    await assert.rejects(call("agent_spawn", args), code(expected));
+  }
+  assert.equal(f.controller.stats().runs, 0);
+  assert.equal(f.controller.stats().resident, 0);
+  assert.equal(f.ports.length, 0);
+  assert.deepEqual(f.events, []);
+});
+
+test("invalid text cannot steer, answer or consume retained communication", async (t) => {
+  const f = await fixture(t),
+    { tool, call } = toolsFor(f);
+  await call("agent_spawn", create());
+  await until(() => f.ports[0]?.streaming);
+  f.ports[0].callbacks.alert("pending alert");
+  const before = structuredClone(f.controller.stats());
+  for (const token of ["a", "🚀", "e\u0301", "👩‍💻"]) {
+    const prepared = tool("agent_send").prepareArguments(send("orca"));
+    prepared.message = units(token, PARENT_TEXT_LIMITS.message + 1);
+    await assert.rejects(call("agent_send", prepared), textError("message", 16384));
+    await assert.rejects(
+      call("agent_read", { agent: "orca", cursor: units(token, 1025) }),
+      textError("cursor", 1024),
+    );
+  }
+  assert.deepEqual(f.ports[0].inputs, []);
+  assert.deepEqual(f.controller.stats(), before);
+  f.ports[0].callbacks.question("Which approach?");
+  f.ports[0].finish();
+  await settle(f, "orca");
+  const observed = await call("agent_read", { agent: "orca" });
+  assert.equal(
+    observed.alerts[0].message,
+    "pending alert",
+    "invalid reads did not publish the alert",
+  );
+  const question_id = observed.agents[0].question_id;
+  assert(question_id);
+  const pending = structuredClone(f.controller.stats());
+  const prepared = tool("agent_answer").prepareArguments({
+    agent: "orca",
+    question_id,
+    answer: "yes",
+  });
+  prepared.answer = "🚀".repeat(8193);
+  await assert.rejects(call("agent_answer", prepared), textError("answer", 16384));
+  assert.deepEqual(f.controller.stats(), pending);
+  assert.equal(f.ports[0].calls.length, 1);
+  assert.equal((await call("agent_read", { agent: "orca" })).agents[0].question_id, question_id);
+});
+
 test("closed schemas reject unknown, mutated and malformed inputs before admission", async (t) => {
   const f = await fixture(t),
     { tools, tool, call, options } = toolsFor(f);
@@ -246,7 +448,7 @@ test("closed schemas reject unknown, mutated and malformed inputs before admissi
   for (const args of [
     (({ profile: _profile, ...rest }) => rest)(create()),
     (({ reasoning_difficulty: _difficulty, ...rest }) => rest)(create()),
-    create({ label: "x".repeat(121) }),
+    create({ label: "x".repeat(73) }),
     create({ prompt: " " }),
     create({ prompt: "x".repeat(131073) }),
   ]) {
@@ -317,8 +519,8 @@ test("closed schemas reject unknown, mutated and malformed inputs before admissi
     ["agent_send", { agent: "orca", message: "x", label: "x" }],
     ["agent_send", { agent: "orca", message: "x", after: ["a"] }],
     ["agent_run", { agent: "orca" }],
-    ["agent_run", { agent: "orca", prompt: "x", profile: "reader" }],
-    ["agent_run", { agent: "orca", prompt: "x", max_turns: 3 }],
+    ["agent_run", run("orca", { prompt: "x", profile: "reader" })],
+    ["agent_run", run("orca", { prompt: "x", max_turns: 3 })],
     ["agent_interrupt", { agent: "orca", run_id: "x" }],
     ["agent_list", { include_released: true }],
     ["agent_kill", {}],

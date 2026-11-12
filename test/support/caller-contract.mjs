@@ -51,6 +51,7 @@ export function assertCallerTools(tools) {
     fields = spawn.parameters.properties;
   assert.deepEqual(spawn.parameters.required.toSorted(), [
     "agent",
+    "label",
     "profile",
     "prompt",
     "reasoning_difficulty",
@@ -89,9 +90,12 @@ export function assertCallerTools(tools) {
   ])
     assert.match(fields.prompt.description, fact);
   assert.equal(fields.label.minLength, 1);
-  assert.equal(fields.label.maxLength, 120);
-  assert.match(fields.label.description, /not instructions/);
-  assert.match(fields.label.description, /first nonblank line/);
+  assert.equal(fields.label.maxLength, 72);
+  assert.equal(fields.label.pattern, "\\S");
+  assert.match(fields.label.description, /[Cc]oncise 3–8 word task title/);
+  assert.match(fields.label.description, /not instructions or background/);
+  assert.match(fields.label.description, /72 UTF-16 units/);
+  assert.doesNotMatch(fields.label.description, /default|first nonblank line/);
   assert.deepEqual(fields.profile.enum, ["worker", "scout"]);
   assert.equal(fields.profile.enum.includes("researcher"), false);
   // Roles and capabilities are stated together: worker owns engineering work;
@@ -191,7 +195,7 @@ export function assertCallerTools(tools) {
 
   const run = byName.get("agent_run"),
     runFields = run.parameters.properties;
-  assert.deepEqual(run.parameters.required.toSorted(), ["agent", "continues", "prompt"]);
+  assert.deepEqual(run.parameters.required.toSorted(), ["agent", "continues", "label", "prompt"]);
   assert.deepEqual(Object.keys(runFields).sort(), [
     "after",
     "agent",

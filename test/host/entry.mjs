@@ -953,7 +953,10 @@ try {
         label: "Blocked",
       },
     ],
-    ["agent_run", { agent: "entry", prompt: "Must not start", continues: "the entry task" }],
+    [
+      "agent_run",
+      { agent: "entry", prompt: "Must not start", label: "Blocked", continues: "the entry task" },
+    ],
     ["agent_send", { agent: "entry", message: "Must not steer" }],
     [
       "agent_answer",

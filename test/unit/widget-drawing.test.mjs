@@ -8,6 +8,8 @@ import {
   describeToolArgs,
   formatMs,
   formatTurns,
+  formatCost,
+  formatContextPercent,
   shortPath,
   SPINNER,
 } from "../../dist/orchestration/ui/format.js";
@@ -22,7 +24,7 @@ test("an empty, unblocked owner renders nothing at all", () => {
   );
 });
 
-test("the body is ordered finished, running, queued and the tree closes exactly once", () => {
+test("the body is ordered running, queued, ordinary terminal and the tree closes exactly once", () => {
   const lines = render(
     [
       run("q", { status: "queued" }),
@@ -32,34 +34,32 @@ test("the body is ordered finished, running, queued and the tree closes exactly 
     { owner: { ...owner, resident: 3 } },
   );
   assert.equal(lines[0], "▸ Subagents · ▹1 ◦1 ✓1");
-  assert.match(lines[1], /^├─ ✓ done/);
-  assert.match(lines[2], /^├─ ⠋ worker/);
-  assert.match(lines[3], /^│ {4}⎿ {2}thinking…$/);
-  assert.match(lines[4], /^└─ ◦ 1 queued$/);
+  assert.match(lines[1], /^├─ ⠋ worker/);
+  assert.match(lines[2], /^│ {4}⎿ {2}0\.9s thinking…$/);
+  assert.match(lines[3], /^├─ ◦ 1 queued$/);
+  assert.match(lines[4], /^└─ ✓ done/);
   assert.equal(lines.filter((line) => line.startsWith("└─")).length, 1);
 });
 
 test("a trailing activity line hands its corner to the header above it", () => {
   const lines = render([run("r", { status: "running", name: "solo" })]);
-  assert.deepEqual(lines.slice(1), [
-    "└─ ⠋ solo (worker/d3) [m/high] → Task · ↻3≤256 · ▸2 · 12.4s",
-    "   " + "  ⎿  thinking…",
-  ]);
+  assert.match(lines[1], /^└─ ⠋ solo {2}worker\/d3 {2}m\/high {2}↻3\/256 +12\.4s {2}Task$/);
+  assert.equal(lines[2], "   " + "  ⎿  thinking…");
   assert.equal(lines.filter((line) => line.includes("│")).length, 0);
 });
 
 test("each lifecycle state keeps its own glyph, and finishing differs from cancelling", () => {
   const state = (overrides) => render([run("a", overrides)])[1];
   assert.match(state({ status: "completed" }), /^└─ ✓ /);
-  assert.match(state({ status: "completed", limit_reached: true }), /^└─ ✓ .*· \(turn limit\)/);
-  assert.match(state({ status: "needs_input", question: true }), /^└─ \? .*· needs answer\b/);
+  assert.match(state({ status: "completed", limit_reached: true }), /^└─ ✓ .*turn limit reached/);
+  assert.match(state({ status: "needs_input", question: true }), /^└─ \? .*needs answer\b/);
   assert.match(
     state({ status: "failed", error: "SESSION_UNAVAILABLE" }),
-    /^└─ ✗ .*· failed: SESSION_UNAVAILABLE\b/,
+    /^└─ ✗ .*failed: SESSION_UNAVAILABLE\b/,
   );
-  assert.match(state({ status: "cancelled" }), /^└─ ■ .*· cancelled\b/);
-  assert.match(state({ status: "running", finishing: true }), /· finishing\b/);
-  assert.match(state({ status: "cancelling" }), /· cancelling\b/);
+  assert.match(state({ status: "cancelled" }), /^└─ ■ .*cancelled\b/);
+  assert.match(state({ status: "running", finishing: true }), /finishing\b/);
+  assert.match(state({ status: "cancelling" }), /cancelling\b/);
 });
 
 test("owner trouble is directly after the heading and survives an overflowing body", () => {
@@ -73,14 +73,18 @@ test("owner trouble is directly after the heading and survives an overflowing bo
     shouldShowFinished: () => true,
     owner: { blocked: true, error: "PARENT_HISTORY_UNAVAILABLE", resident: 9, resident_limit: 9 },
   });
-  // A running Agent costs two rows, so the last row can stay unused rather than half-drawn.
   assert(lines.length <= 12, String(lines.length));
   assert.equal(lines[0], "▸ Subagents (full) · ▹9");
   assert.match(lines[1], /^├─ ✗ owner blocked: PARENT_HISTORY_UNAVAILABLE$/);
-  assert.match(lines.at(-1), /^└─ \+5 more \(5 running\)$/);
+  assert.equal(lines.filter((line) => /^[├└]─ ⠋ /.test(line)).length, 9);
+  assert.doesNotMatch(
+    lines.join("\n"),
+    /\+\d+ more/,
+    "optional previews yield to active identities",
+  );
 });
 
-test("overflow keeps running work and reports what it hid", () => {
+test("optional activity yields when the complete compact roster can fit", () => {
   const runs = [
     ...Array.from({ length: 6 }, (_, i) => run(`r${i}`, { status: "running" })),
     ...Array.from({ length: 4 }, (_, i) => run(`f${i}`, { status: "completed" })),
@@ -88,8 +92,161 @@ test("overflow keeps running work and reports what it hid", () => {
   ];
   const lines = render(runs);
   assert.equal(lines.length, 12);
-  assert.equal(lines.slice(1).filter((line) => /^[├└]─ ⠋ /.test(line)).length, 5);
-  assert.match(lines.at(-1), /^└─ \+6 more \(1 running, 1 queued, 4 finished\)$/);
+  assert.equal(lines.slice(1).filter((line) => /^[├└]─ ⠋ /.test(line)).length, 6);
+  assert.equal(lines.filter((line) => /^[├└]─ ✓ /.test(line)).length, 4);
+  assert(lines.some((line) => /1 queued$/.test(line)));
+  assert.doesNotMatch(lines.join("\n"), /\+\d+ more/);
+});
+
+test("compact and expanded rosters share a stable question, live, attention, queued, failure, finished order", () => {
+  const rows = [
+    run("done", { status: "completed" }),
+    run("busy-a", { status: "running" }),
+    run("failed", { status: "failed" }),
+    run("queued", { status: "queued" }),
+    run("warned", { status: "completed", has_run_warnings: true }),
+    run("busy-b", { status: "cancelling" }),
+    run("question", { status: "needs_input" }),
+    run("pending", { status: "completed", pending_messages: 2 }),
+    run("cancelled", { status: "cancelled" }),
+  ];
+  const expected = ["question", "busy-a", "busy-b", "warned", "pending"];
+  for (const expanded of [false, true]) {
+    const seen = [];
+    for (let page = 0, pages = 1; page < pages; page++) {
+      const frame = renderWidget({
+        runs: rows,
+        owner,
+        theme,
+        width: 160,
+        maxLines: 13,
+        spinnerFrame: 0,
+        expanded,
+        page,
+        shouldShowFinished: () => true,
+      });
+      pages = frame.pagination?.pages ?? 1;
+      for (const id of frame.hits.filter(Boolean)) if (!seen.includes(id)) seen.push(id);
+      if (!expanded) {
+        const queued = frame.lines.findIndex((line) => /1 queued$/.test(line));
+        const terminal = frame.hits.indexOf("done");
+        assert(queued > frame.hits.lastIndexOf("busy-b"));
+        assert(terminal > queued);
+        assert.equal(frame.hits[queued], undefined, "the compact queued count stays inert");
+      }
+    }
+    assert.deepEqual(seen, [
+      ...expected,
+      ...(expanded ? ["queued"] : []),
+      "failed",
+      "done",
+      "cancelled",
+    ]);
+  }
+});
+
+test("only questions and pending alerts bypass terminal ageing; queued alerts remain clickable", () => {
+  const rows = [
+    run("idle", { status: "completed" }),
+    run("warned", { status: "completed", has_run_warnings: true }),
+    run("pending", { status: "completed", pending_messages: 2 }),
+    run("limited", { status: "completed", limit_reached: true }),
+    run("asked", { status: "needs_input" }),
+    run("queued-alert", { status: "queued", name: "alerted", pending_messages: 1 }),
+    run("queued-ordinary", { status: "queued" }),
+  ];
+  const frame = renderWidget({
+    runs: rows,
+    owner,
+    theme,
+    width: 160,
+    maxLines: 13,
+    spinnerFrame: 0,
+    shouldShowFinished: () => false,
+  });
+  assert.deepEqual(frame.hits.filter(Boolean), ["asked", "pending", "queued-alert"]);
+  assert.doesNotMatch(frame.lines.slice(1).join("\n"), /run warning|turn limit/);
+  assert.match(frame.lines[frame.hits.indexOf("queued-alert")], /◦ alerted .*1 pending/);
+  const aggregate = frame.lines.findIndex((line) => /1 queued$/.test(line));
+  assert(aggregate > frame.hits.indexOf("queued-alert"));
+  assert.equal(frame.hits[aggregate], undefined);
+});
+
+test("overflow sacrifices previews before attention or active identities and accounts for every hidden row", () => {
+  const rows = [
+    run("done", { status: "completed" }),
+    run("busy-a", { status: "running" }),
+    run("question", { status: "needs_input", question: true }),
+    run("queue", { status: "queued" }),
+    run("busy-b", { status: "cancelling" }),
+    run("failed", { status: "failed", error: "BROKEN" }),
+    run("busy-c", { status: "running" }),
+  ];
+  const frame = renderWidget({
+    runs: rows,
+    owner,
+    theme,
+    width: 120,
+    maxLines: 7,
+    spinnerFrame: 0,
+    shouldShowFinished: () => true,
+  });
+  assert.deepEqual(frame.hits.filter(Boolean), ["question", "busy-a", "busy-b", "busy-c"]);
+  assert(frame.lines.some((line) => /1 queued$/.test(line)));
+  assert.match(frame.lines.at(-1), /\+2 more \(1 failed, 1 finished\)$/);
+  assert.match(frame.lines[0], /\?1 ▹3 ◦1 ✓1 ✗1/);
+  assert.equal(frame.hits.at(-1), undefined);
+  assert.equal(frame.lines.length, 7);
+  assert.equal(frame.hits.length, frame.lines.length);
+});
+
+test("overflow labels hidden questions, failures and attention rather than calling them finished", () => {
+  const frame = renderWidget({
+    runs: [
+      run("asked-a", { status: "needs_input" }),
+      run("asked-b", { status: "needs_input" }),
+      run("failed", { status: "failed", limit_reached: true }),
+      run("warned", { status: "completed", has_run_warnings: true }),
+      run("busy", { status: "running" }),
+      run("queued", { status: "queued" }),
+      run("done", { status: "completed" }),
+    ],
+    owner,
+    theme,
+    width: 160,
+    maxLines: 3,
+    spinnerFrame: 0,
+    shouldShowFinished: () => true,
+  });
+  assert.deepEqual(frame.hits, [undefined, "busy", undefined]);
+  assert.match(
+    frame.lines[2],
+    /\+6 more \(2 needs input, 1 attention, 1 queued, 1 failed, 1 finished\)$/,
+  );
+});
+
+test("40-column overflow preserves every hidden attention category without ellipsis", () => {
+  const frame = renderWidget({
+    runs: [
+      run("asked", { status: "needs_input" }),
+      run("failed", { status: "failed" }),
+      run("pending", { status: "completed", pending_messages: 1 }),
+    ],
+    owner,
+    theme,
+    width: 40,
+    maxLines: 2,
+    spinnerFrame: 0,
+    shouldShowFinished: () => true,
+  });
+  const overflow = stripTerminalSequences(frame.lines[1]);
+  assert.match(overflow, /\+3(?: more)?/);
+  assert.match(overflow, /input1|\?1|1 needs input/);
+  assert.match(overflow, /fail1|✗1|1 failed/);
+  assert.match(overflow, /attn1|!1|1 attention/);
+  assert.doesNotMatch(overflow, /…/);
+  assert.deepEqual(frame.hits, [undefined, undefined]);
+  assert(frame.lines.every((line) => visibleWidth(line) <= 40));
 });
 
 test("a single available row prioritizes the Owner warning over body or disclosure", () => {
@@ -150,7 +307,8 @@ test("headings summarize all resident states, including aged-out terminal rows",
   const options = { owner: { ...owner, resident: 8 }, shouldShowFinished: () => false };
   const lines = render(runs, options);
   assert.equal(lines[0], "▸ Subagents (full) · ?1 ▹3 ◦1 ✓1 ✗1 ■1");
-  assert.doesNotMatch(lines.slice(1).join("\n"), /✓|✗|■|needs input/);
+  assert.match(lines.slice(1).join("\n"), /needs input/);
+  assert.doesNotMatch(lines.slice(1).join("\n"), /✓|✗|■/);
   for (const expanded of [false, true]) {
     assert.equal(
       render(runs, { ...options, width: 24, expanded })[0],
@@ -322,7 +480,7 @@ test("disclosure preflight uses the selected glyph width without redundant total
     }
 });
 
-test("resident summaries use dim static active glyphs while body lifecycle glyphs keep their colors", () => {
+test("resident summaries accent static active counts while body lifecycle glyphs keep their colors", () => {
   const paints = [],
     th = {
       fg: (color, text) => {
@@ -343,7 +501,7 @@ test("resident summaries use dim static active glyphs while body lifecycle glyph
   );
   for (const pair of [
     ["warning", "?1"],
-    ["dim", "▹1"],
+    ["accent", "▹1"],
     ["muted", "◦1"],
     ["dim", "✓1"],
   ]) {
@@ -408,7 +566,7 @@ test("all spinner frames keep static active heading glyphs and disclosure fixed 
       assert.equal(frame.lines[0], first.lines[0]);
       assert.equal(frame.headingWidth, first.headingWidth);
       assert.deepEqual(frame.hits, first.hits);
-      assert(paints.some(([color, text]) => color === "dim" && text === "▹1"));
+      assert(paints.some(([color, text]) => color === "accent" && text === "▹1"));
       assert(paints.some(([color, text]) => color === "dim" && text === " · "));
       assert.match(frame.lines[frame.hits.indexOf("busy")], new RegExp(`^[├└]─ ${glyph} `));
     }
@@ -450,10 +608,7 @@ test("expanded rendering pages every projected Agent within the bounded budget",
     assert.doesNotMatch(frame.lines.join("\n"), /\+\d+ more/);
     assert(frame.lines.every((line) => visibleWidth(line) <= 120));
   }
-  assert.deepEqual(
-    [...seen],
-    runs.map((row) => row.agent_id),
-  );
+  assert.deepEqual([...seen], ["busy", ...finished.map((row) => row.agent_id)]);
 });
 
 test("expanded queued Agents each have their own clickable identity instead of an aggregate", () => {
@@ -542,22 +697,28 @@ test("every line fits the terminal, counting CJK by the columns it occupies", ()
   }
 });
 
-test("turns always carry their budget, written as upstream writes it", () => {
+test("shared turn formatting retains its full-precision detail convention", () => {
   assert.equal(formatTurns(3, 256), "↻3≤256");
   assert.equal(formatTurns(128, 256), "↻128≤256");
   assert.equal(formatTurns(0, 4), "↻0≤4");
 });
 
-test("both clocks show: time on the current turn beside the counter, total time last", () => {
+test("the current-turn clock prefixes activity, while total duration remains in the roster", () => {
   const live = render([
-    run("a", { status: "running", name: "solo", turn_elapsed_ms: 2200, elapsed_ms: 12400 }),
-  ])[1];
-  assert.match(live, /↻3≤256 \(2\.2s\) · ▸2 · 12\.4s$/);
+    run("a", { status: "running", name: "solo", turn_elapsed_ms: 15600, elapsed_ms: 12400 }),
+  ]);
+  assert.match(live[1], /↻3\/256/);
+  assert.match(live[1], /12\.4s {2}Task$/);
+  assert.doesNotMatch(live[1], /15\.6s/);
+  assert.match(live[2], /15\.6s thinking…$/);
+  assert.doesNotMatch(live.join("\n"), /\bturn /);
   // A settled Run has no current turn, so only the total remains.
   const done = render([
-    run("a", { status: "completed", name: "solo", turn_elapsed_ms: 2200, elapsed_ms: 12400 }),
-  ])[1];
-  assert.match(done, /↻3≤256 · ▸2 · 12\.4s$/);
+    run("a", { status: "completed", name: "solo", turn_elapsed_ms: 15600, elapsed_ms: 12400 }),
+  ]);
+  assert.match(done[1], /↻3\/256/);
+  assert.match(done[1], /12\.4s {2}Task$/);
+  assert.doesNotMatch(done.join("\n"), /15\.6s|turn /);
   const queued = render([
     run("a", { status: "queued", name: "solo" }),
     run("b", { status: "running" }),
@@ -732,7 +893,8 @@ test("pending alerts and recorded warnings are surfaced per Agent", () => {
     run("a", { status: "needs_input", pending_messages: 2, has_run_warnings: true }),
   ])[1];
   assert.match(line, /run warning · 2 pending · needs input/);
-  assert.ok(line.indexOf("run warning") < line.indexOf("↻"));
+  assert.ok(line.indexOf("run warning") < line.indexOf("needs input"));
+  assert.match(line, /Task$/, "attention leaves the task as the last field");
   assert.doesNotMatch(line, /dropped|never reached/);
   assert.doesNotMatch(render([run("a", { status: "completed" })])[1], /pending|warning/);
 });
@@ -740,15 +902,15 @@ test("pending alerts and recorded warnings are surfaced per Agent", () => {
 test("an Agent without a nickname is named by its profile, never labelled twice", () => {
   assert.match(
     render([run("a", { status: "completed" })])[1],
-    /^└─ ✓ worker \(d3\) \[m\/high\] → Task/,
+    /^└─ ✓ worker {2}d3 {2}m\/high {2}↻3\/256 +12\.4s {2}Task$/,
   );
   assert.match(
     render([run("a", { status: "completed", name: "scout" })])[1],
-    /^└─ ✓ scout \(worker\/d3\) \[m\/high\] → Task/,
+    /^└─ ✓ scout {2}worker\/d3 {2}m\/high {2}↻3\/256 +12\.4s {2}Task$/,
   );
   assert.match(
     render([run("a", { status: "completed", name: "editor" })])[1],
-    /^└─ ✓ editor \(worker\/d3\)/,
+    /^└─ ✓ editor {2}worker\/d3/,
     "a nickname is never relabelled as a profile",
   );
 });
@@ -764,8 +926,12 @@ test("the widget shows every profile's admitted difficulty beside its nickname i
         const line = render([row])[1];
         const displayed =
           profile === "editor" ? "worker" : profile === "researcher" ? "scout" : profile;
-        const identity = `orca${status === "failed" ? " · failed" : ""} (${displayed}/d${difficulty})`;
-        assert.ok(line.includes(identity), `${status} ${profile}/d${difficulty}: ${line}`);
+        assert.match(
+          line,
+          new RegExp(`orca {2}${displayed}/d${difficulty} {2}`),
+          `${status} ${profile}/d${difficulty}: ${line}`,
+        );
+        if (status === "failed") assert.match(line, /failed/);
         assert.deepEqual(
           row,
           before,
@@ -863,7 +1029,7 @@ test("crowded 40/56-column warning rows keep a name prefix, complete tag and cou
     }
 });
 
-test("crowded attention retains questions, cancellation, finishing and turn limits before optional metadata", () => {
+test("crowded attention retains lifecycle facts, with turn limits trailing the task before optional metadata", () => {
   for (const width of [40, 56])
     for (const [status, extra, state] of [
       ["needs_input", { question: true }, /needs answer|answer\?/],
@@ -893,17 +1059,20 @@ test("crowded attention retains questions, cancellation, finishing and turn limi
       });
       const text = stripTerminalSequences(frame.lines[1]);
       assert.match(text, /ot(?:t|…)/);
-      assert.match(text, /\(worker\/d3\)/);
+      if (extra.limit_reached && width === 40)
+        assert.doesNotMatch(text, /\(worker\/d3\)/, "the tag yields to the task and limit suffix");
+      else assert.match(text, /\(worker\/d3\)/);
       assert.match(text, /run warning|warn|!/);
       assert.match(text, /1 pending|1pend/);
       assert.match(text, state);
       assert(text.search(/1 pending|1pend/) < text.search(state), text);
+      if (extra.limit_reached) assert.match(text, /Task \((?:turn limit reached|limit)\)$/);
       assert.equal(frame.hits[1], "identity");
       assert(frame.lines.every((line) => visibleWidth(line) <= width));
     }
 });
 
-test("wide attention wording and failed explanation stay unchanged", () => {
+test("wide attention retains full wording and failed explanation in the task column", () => {
   for (const [status, state] of [
     ["completed", ""],
     ["failed", " · failed: SDK broke"],
@@ -922,11 +1091,84 @@ test("wide attention wording and failed explanation stay unchanged", () => {
       ],
       { width: 180 },
     )[1];
-    assert.equal(
-      line,
-      `└─ ${status === "failed" ? "✗" : "✓"} otter · run warning · 1 pending${state} (worker/d3) [m/high] → Task · ↻3≤256 · ▸2 · 12.4s`,
-    );
+    assert.match(line, /^└─ [✗✓] otter {2}worker\/d3 {2}m\/high {2}/);
+    assert(line.includes(`run warning · 1 pending${state}  Task`), line);
+    assert.match(line, /↻3\/256 +12\.4s/);
+    assert.match(line, /Task$/);
+    assert.doesNotMatch(line, /▸\d/);
   }
+});
+
+test("120-column failure rows retain the wrapped SDK cause before optional metadata", () => {
+  const error = "Error: SESSION_UNAVAILABLE (sdk_error): Error: SDK broke";
+  const palettes = [
+    theme,
+    {
+      fg: (_color, text) => `\x1b[36m${text}\x1b[0m`,
+      bold: (text) => `\x1b[1m${text}\x1b[0m`,
+    },
+  ];
+  for (const palette of palettes)
+    for (const flagged of [false, true]) {
+      const width = flagged ? 160 : 120;
+      const row = run("released-failure", {
+        status: "failed",
+        resident: false,
+        model: "controlled",
+        effort: "off",
+        description: "Check diagnostics",
+        error,
+        turns: 1,
+        elapsed_ms: 0,
+        has_run_warnings: flagged,
+        pending_messages: flagged ? 2 : 0,
+      });
+      const frame = renderWidget({
+        runs: [row],
+        owner: { ...owner, resident: 0 },
+        theme: palette,
+        width,
+        maxLines: 6,
+        spinnerFrame: 0,
+        shouldShowFinished: () => true,
+      });
+      const text = stripTerminalSequences(frame.lines[1]);
+      assert.match(text, /failed: Error: SESSION_UNAVAILABLE \(sdk_error\): Error: SDK broke/);
+      assert.match(text, /Check diagno(?:stics|…)$/);
+      if (width === 120)
+        assert.doesNotMatch(
+          text,
+          /controlled\/off/,
+          "optional model yields before the identifying cause",
+        );
+      if (flagged) assert.match(text, /run warning · 2 pending · failed/);
+      assert(frame.lines.every((line) => visibleWidth(line) <= width));
+      assert.equal(frame.hits[1], "released-failure");
+      assert.equal(row.error, error, "display allocation never changes the retained diagnostic");
+    }
+});
+
+test("failure explanations remain bounded without displacing complete attention facts or the trailing task", () => {
+  const error = "x".repeat(500);
+  const lines = render(
+    [
+      run("failure", {
+        status: "failed",
+        error,
+        has_run_warnings: true,
+        pending_messages: 2,
+        limit_reached: true,
+        description: "Check diagnostics",
+      }),
+    ],
+    { width: 240 },
+  );
+  const text = stripTerminalSequences(lines[1]);
+  assert.match(text, /run warning · 2 pending · failed: x+…/);
+  assert.doesNotMatch(text, /x{61}/, "failure detail keeps its existing 60-cell ceiling");
+  assert.match(text, /Check diagnostics \(turn limit reached\)$/);
+  assert.equal(text.split("turn limit reached").length - 1, 1);
+  assert(lines.every((line) => visibleWidth(line) <= 240));
 });
 
 test("impossible-width rows keep a nickname prefix before clipped attention and omit the whole tag", () => {
@@ -962,11 +1204,9 @@ test("a fixed nickname points to the current task, which can use more than forty
       theme,
       shouldShowFinished: () => true,
     });
-    assert(
-      frame.lines[1].includes(`orca (worker/d3) [m/high] → ${description} · ↻`),
-      frame.lines[1],
-    );
-    assert.match(frame.lines[1], /▸2 · 12\.4s$/);
+    assert.match(frame.lines[1], /^└─ . orca {2}worker\/d3 {2}m\/high {2}↻3\/256 +12\.4s {2}/);
+    assert(frame.lines[1].endsWith(description), frame.lines[1]);
+    assert.doesNotMatch(frame.lines[1], /▸\d/);
     assert.equal(
       frame.hits[1],
       "orca-id",
@@ -993,13 +1233,14 @@ test("an absent task or insufficient room leaves no dangling task separator", ()
   }
 });
 
-test("tool counts use the compact tool-call glyph, including singular and zero", () => {
+test("tool counts are absent from Agent headers without changing the observations", () => {
   for (const status of ["running", "completed"]) {
     for (const count of [0, 1, 77]) {
-      const line = render([run("a", { status, tool_uses: count })])[1];
-      if (count) assert.ok(line.includes(`▸${count}`));
-      else assert.ok(!line.includes("▸"));
-      assert.doesNotMatch(line, /tool uses?|tokens?/);
+      const row = run("a", { status, tool_uses: count });
+      const line = render([row])[1];
+      assert.doesNotMatch(line, /▸\d|tool uses?|tokens?/);
+      assert.equal(row.tool_uses, count);
+      assert.match(line, /Task$/);
     }
   }
 });
@@ -1016,7 +1257,9 @@ test("allocation labels preserve model IDs and show creation-time effort", () =>
   ]) {
     for (const status of ["running", "completed"]) {
       assert.ok(
-        render([run("a", { model, effort: "xhigh", status })])[1].includes(`[${model}/xhigh]`),
+        render([run("a", { model, effort: "xhigh", status })], { width: 180 })[1].includes(
+          `${model}/xhigh`,
+        ),
       );
     }
   }
@@ -1025,8 +1268,8 @@ test("allocation labels preserve model IDs and show creation-time effort", () =>
 test("context distinguishes unknown, zero and over-window snapshots and fits narrow rows", () => {
   for (const [tokens, percent] of [
     [null, "?"],
-    [0, "0.0%"],
-    [299200, "110.0%"],
+    [0, "0%"],
+    [299200, "110%"],
   ]) {
     const a = run("a", {
       status: "running",
@@ -1074,19 +1317,13 @@ test("a long task yields to warnings and compact metrics at 120 and 160 columns"
   });
   for (const width of [120, 160]) {
     const lines = render([row], { width });
-    for (const text of [
-      "reviewer",
-      "[gpt-5.6-sol/high]",
-      "run warning",
-      "3 pending",
-      "▸77",
-      "ctx 84.9%",
-      "$0.500",
-      "12.4s",
-    ]) {
+    for (const text of ["reviewer", "run warning", "3 pending", "ctx 85%", "$0.50", "12.4s"]) {
       assert.ok(lines[1].includes(text), `${width}: missing ${text}: ${lines[1]}`);
     }
-    assert.ok(lines[1].indexOf("run warning") < lines[1].indexOf("[gpt-5.6-sol/high]"));
+    assert.equal(lines[1].includes("gpt-5.6-sol/high"), width === 160);
+    assert.ok(lines[1].indexOf("run warning") < lines[1].indexOf("3 pending"));
+    assert.doesNotMatch(lines[1], /▸77/);
+    assert.match(stripTerminalSequences(lines[1]), /Review.*…$/);
     assert.doesNotMatch(lines[1], /token|tool use/);
     for (const line of lines) assert.ok(visibleWidth(line) <= width);
   }
@@ -1118,10 +1355,13 @@ test("long identities and diagnostics cannot hide warnings or pending alerts", (
           theme: th,
           shouldShowFinished: () => true,
         });
-        for (const text of ["run warning", "3 pending"])
-          assert.ok(frame.lines[1].includes(text), frame.lines[1]);
-        if (status === "failed") assert.ok(frame.lines[1].includes("failed: SDK broke"));
-        if (status === "needs_input") assert.ok(frame.lines[1].includes("needs input"));
+        assert.match(frame.lines[1], /run warning|warn|!/);
+        assert.match(frame.lines[1], /3 pending|3pend/);
+        if (status === "failed") {
+          assert.ok(frame.lines[1].includes("failed"), frame.lines[1]);
+          if (width >= 160) assert.ok(frame.lines[1].includes("failed: SDK broke"), frame.lines[1]);
+        }
+        if (status === "needs_input") assert.match(frame.lines[1], /needs input|input\?/);
         if (status === "cancelling") assert.ok(frame.lines[1].includes("cancelling"));
         assert.equal(frame.hits[1], "a");
         assert.equal(frame.hits.length, frame.lines.length);
@@ -1134,13 +1374,615 @@ test("long identities and diagnostics cannot hide warnings or pending alerts", (
   }
 });
 
-test("cost is written the way Pi's own footer writes it, and is silent when nothing was reported", () => {
-  const priced = render([run("a", { status: "running", cost: 1.2345 })])[1];
-  assert.match(priced, /\$1\.234/);
+test("widget costs use cents while preserving missing, zero and partial observations", () => {
+  for (const [cost, cost_partial, expected] of [
+    [1.2345, false, "$1.23"],
+    [0.27, false, "$0.27"],
+    [0, false, "$0.00"],
+    [0.0042, false, "<$0.01"],
+    [0.27, true, "≥$0.27"],
+  ]) {
+    const line = render([run("a", { status: "running", cost, cost_partial })])[1];
+    assert(line.includes(expected), line);
+    assert.doesNotMatch(line, /\$\d+\.\d{3}/);
+  }
   const unpriced = render([run("b", { status: "running" })])[1];
-  assert.ok(!unpriced.includes("$"), "an unpriced Run shows no cost rather than $0.000");
-  // A measured zero is a fact, not a missing one, and reads differently.
-  assert.match(render([run("c", { status: "running", cost: 0 })])[1], /\$0\.000/);
+  assert.ok(!unpriced.includes("$"), "an unpriced Run does not invent a measured zero");
+});
+
+test("wide roster columns align by terminal cells across variable, CJK and ANSI rows", () => {
+  const rows = [
+    run("short", {
+      status: "completed",
+      name: "a",
+      model: "m",
+      effort: "off",
+      description: "Task one",
+      turns: 3,
+      max_turns: 256,
+      tool_uses: 2,
+      cost: 0.27,
+      elapsed_ms: 12400,
+      runtime: { activity: "idle", context: { tokens: 267, context_window: 1000 } },
+    }),
+    run("wide", {
+      status: "completed",
+      name: "复核者",
+      profile: "researcher",
+      difficulty: 5,
+      model: "fixture-long-model",
+      effort: "xhigh",
+      description: "核对任务",
+      turns: 120,
+      max_turns: 1024,
+      tool_uses: 77,
+      cost: 12.3,
+      elapsed_ms: 3723000,
+      runtime: { activity: "idle", context: { tokens: 1000, context_window: 1000 } },
+    }),
+    run("ansi", {
+      status: "completed",
+      name: "rev\x1b[31mbot",
+      model: "other",
+      effort: "high",
+      description: "Task three",
+      turns: 0,
+      max_turns: 8,
+      tool_uses: 1,
+      cost: 0,
+      elapsed_ms: 1000,
+      runtime: { activity: "idle", context: { tokens: 0, context_window: 1000 } },
+    }),
+  ];
+  const styled = {
+    fg: (_color, text) => `\x1b[36m${text}\x1b[0m`,
+    bold: (text) => `\x1b[1m${text}\x1b[0m`,
+  };
+  const before = structuredClone(rows);
+  for (const width of [160, 200]) {
+    let plain;
+    for (const th of [theme, styled]) {
+      const frame = renderWidget({
+        runs: rows,
+        owner,
+        theme: th,
+        width,
+        maxLines: 13,
+        spinnerFrame: 0,
+        shouldShowFinished: () => true,
+      });
+      const body = frame.lines.slice(1).map(stripTerminalSequences);
+      if (plain) assert.deepEqual(body, plain, "trusted ANSI cannot affect column allocation");
+      else plain = body;
+      assert.deepEqual(
+        frame.hits.slice(1),
+        rows.map((row) => row.agent_id),
+      );
+      assert(frame.lines.every((line) => visibleWidth(line) <= width));
+      const position = (text, token, edge = "start") => {
+        const index = text.indexOf(token);
+        assert(index >= 0, `missing ${token}: ${text}`);
+        return visibleWidth(text.slice(0, index)) + (edge === "end" ? visibleWidth(token) : 0);
+      };
+      const columns = [
+        ["worker/d3", "scout/d5", "worker/d3"],
+        ["m/off", "fixture-long-model/xhigh", "other/high"],
+        ["Task one", "核对任务", "Task three"],
+      ];
+      for (const tokens of columns)
+        assert.equal(
+          new Set(body.map((line, i) => position(line, tokens[i]))).size,
+          1,
+          tokens.join(", "),
+        );
+      const metrics = [
+        ["↻3/256", "↻120/1024", "↻0/8"],
+        ["ctx 27%", "ctx 100%", "ctx 0%"],
+        ["$0.27", "$12.30", "$0.00"],
+        ["12.4s", "62m03s", "1.0s"],
+      ];
+      for (const tokens of metrics)
+        assert.equal(
+          new Set(body.map((line, i) => position(line, tokens[i], "end"))).size,
+          1,
+          tokens.join(", "),
+        );
+      for (const [i, line] of body.entries()) {
+        assert(
+          visibleWidth(line) < width,
+          "natural trailing task width leaves unused terminal columns at the far right",
+        );
+        assert.doesNotMatch(line, /▸\d/);
+        assert.doesNotMatch(line, /[()[\]→]| · /, line);
+        const fields = [...columns.slice(0, 2), ...metrics, columns[2]].map((tokens) => tokens[i]);
+        for (let column = 0; column < fields.length - 1; column++) {
+          const gap = line.slice(
+            line.indexOf(fields[column]) + fields[column].length,
+            line.indexOf(fields[column + 1]),
+          );
+          assert.match(gap, /^ {2,}$/, `two-space column separator: ${JSON.stringify(gap)}`);
+        }
+      }
+    }
+  }
+  assert.deepEqual(rows, before, "alignment never rewrites admitted or usage facts");
+});
+
+test("83-column mixed attention rows choose grid or fallback for the whole roster", () => {
+  const rows = [
+    run("ordinary", { status: "completed", name: "short", cost: 1.23 }),
+    run("attention", {
+      status: "cancelling",
+      name: "复核".repeat(6),
+      has_run_warnings: true,
+      pending_messages: 12,
+      cost: 1.23,
+    }),
+    run("active", { status: "running", name: "active" }),
+  ];
+  for (const th of [
+    theme,
+    {
+      fg: (_color, text) => `\x1b[36m${text}\x1b[0m`,
+      bold: (text) => `\x1b[1m${text}\x1b[0m`,
+    },
+  ]) {
+    const frame = renderWidget({
+      runs: rows,
+      owner,
+      theme: th,
+      width: 83,
+      maxLines: 13,
+      spinnerFrame: 0,
+      shouldShowFinished: () => true,
+    });
+    const headers = ["attention", "active", "ordinary"].map((id) =>
+      stripTerminalSequences(frame.lines[frame.hits.indexOf(id)]),
+    );
+    const fallback = headers.map((line) => line.includes("(worker/d3)"));
+    assert.equal(new Set(fallback).size, 1, headers.join("\n"));
+    for (const line of headers) assert.match(line, /worker\/d3/);
+    assert.match(headers[0], /run warning|warn|!/);
+    assert.match(headers[0], /12 pending|12pend/);
+    assert.match(headers[0], /cancelling/);
+    if (!fallback[0]) {
+      const anchors = headers.map((line) => visibleWidth(line.slice(0, line.indexOf("worker/d3"))));
+      assert.equal(new Set(anchors).size, 1);
+    }
+    assert(frame.lines.every((line) => visibleWidth(line) <= 83));
+  }
+});
+
+test("pagination and missing observations preserve roster-wide column anchors without invented zeroes", () => {
+  const rows = Array.from({ length: 8 }, (_, index) =>
+    run(`page-${index}`, {
+      status: "completed",
+      name: index === 7 ? "long-review-name" : `p${index}`,
+      description: "Review task",
+      turns: index === 7 ? 120 : 3,
+      max_turns: 256,
+      tool_uses: index === 7 ? 77 : 2,
+      cost: index === 0 ? undefined : index === 1 ? 0 : 0.27,
+      runtime:
+        index === 0
+          ? undefined
+          : { activity: "idle", context: { tokens: 267, context_window: 1000 } },
+    }),
+  );
+  const starts = new Set(),
+    ends = new Set(),
+    seen = [];
+  for (let page = 0, pages = 1; page < pages; page++) {
+    const frame = renderWidget({
+      runs: rows,
+      owner,
+      theme,
+      width: 160,
+      maxLines: 5,
+      expanded: true,
+      page,
+      spinnerFrame: 0,
+      shouldShowFinished: () => false,
+    });
+    pages = frame.pagination.pages;
+    for (const [index, id] of frame.hits.entries()) {
+      if (!id) continue;
+      const line = frame.lines[index];
+      starts.add(visibleWidth(line.slice(0, line.indexOf("Review task"))));
+      const turn = line.match(/↻\d+\/256/);
+      assert(turn, line);
+      ends.add(visibleWidth(line.slice(0, turn.index + turn[0].length)));
+      if (id === "page-0") {
+        assert.doesNotMatch(line, /\$|ctx/, "missing observations are not measured zeroes");
+        assert.match(line, /—/);
+      }
+      if (id === "page-1") assert.match(line, /\$0\.00(?!\d)/);
+      seen.push(id);
+    }
+  }
+  assert.deepEqual(
+    seen,
+    rows.map((row) => row.agent_id),
+  );
+  assert.equal(
+    starts.size,
+    1,
+    "a longer identity on a later page sets the task anchor on every page",
+  );
+  assert.equal(ends.size, 1, "larger later-page turn values set a shared metric width");
+});
+
+test("responsive columns shed model and context before useful trailing task space", () => {
+  const row = run("responsive", {
+    status: "completed",
+    name: "long-review-name",
+    model: "fixture-long-model",
+    effort: "xhigh",
+    description: "Review lifecycle transitions and accounting",
+    turns: 3,
+    max_turns: 256,
+    tool_uses: 77,
+    cost: 12.3,
+    elapsed_ms: 3723000,
+    runtime: { activity: "idle", context: { tokens: 1000, context_window: 1000 } },
+  });
+  for (const width of [160, 100, 83, 80, 56, 40, 20]) {
+    const frame = renderWidget({
+      runs: [row],
+      owner,
+      theme,
+      width,
+      spinnerFrame: 0,
+      shouldShowFinished: () => true,
+    });
+    const line = stripTerminalSequences(frame.lines[1]);
+    assert.equal(frame.hits[1], "responsive");
+    assert(frame.lines.every((line) => visibleWidth(line) <= width));
+    if (width >= 83) {
+      assert.match(line, /long-review-name {2}worker\/d3/);
+      assert.match(line, /Review/);
+      assert.match(line, /↻3\/256/);
+      assert.match(line, /\$12\.30/);
+      assert.match(line, /62m03s +Review/);
+      assert.doesNotMatch(line, /[()[\]→]/);
+      assert.equal(line.includes("fixture-long-model/xhigh"), width === 160);
+      assert.doesNotMatch(line, /▸77/);
+      assert.equal(line.includes("ctx 100%"), width > 83);
+    } else if (width >= 40) {
+      assert.match(
+        line,
+        /\(worker\/d3\)/,
+        "tight fallback retains the complete profile/difficulty tag",
+      );
+    }
+  }
+});
+
+test("60-column rows retain a recognizable task and omit whole optional metrics rather than clipping values", () => {
+  for (const status of ["running", "completed"])
+    for (const [turns, tokens] of [
+      [3, 850],
+      [220, 950],
+    ]) {
+      const row = run("tight-task", {
+        status,
+        name: "orca",
+        description: "Review GTK direct-entry safety after foundation changes",
+        model: "fixture-long-model",
+        effort: "xhigh",
+        turns,
+        max_turns: 256,
+        tool_uses: 777,
+        cost: 0.27,
+        elapsed_ms: 12400,
+        runtime: { activity: "generating", context: { tokens, context_window: 1000 } },
+      });
+      const frame = renderWidget({
+        runs: [row],
+        owner,
+        theme,
+        width: 60,
+        spinnerFrame: 0,
+        shouldShowFinished: () => true,
+      });
+      const line = stripTerminalSequences(frame.lines[1]);
+      assert.match(line, /orca/);
+      assert.match(line, /\(worker\/d3\)/);
+      assert.match(line, /Review GTK/, line);
+      if (line.includes(".4s")) assert.match(line, /12\.4s.*Review GTK/, line);
+      if (line.includes("↻")) assert(line.includes(`↻${turns}/256`), line);
+      assert.doesNotMatch(line, /▸777/);
+      if (line.includes("ctx")) assert(line.includes(`ctx ${tokens / 10}%`), line);
+      if (line.includes("$")) assert.match(line, /\$0\.27(?!\d)/);
+      assert.doesNotMatch(line, /(?:↻\d*\/?\d*|▸\d*|ctx \d*%?|\$[\d.]*)…/);
+      assert.equal(frame.hits[1], "tight-task");
+      assert(frame.lines.every((text) => visibleWidth(text) <= 60));
+    }
+});
+
+test("widget metric severity uses observed thresholds, and rounding never crosses one", () => {
+  for (const [tokens, turns, contextColor, turnsColor, shown] of [
+    [699, 79, "dim", "dim", 69],
+    [700, 80, "warning", "warning", 70],
+    [899, 99, "warning", "warning", 89],
+    [900, 100, "error", "warning", 90],
+    [996, 100, "error", "warning", 100],
+  ]) {
+    const paints = [];
+    const th = {
+      fg: (color, text) => {
+        paints.push([color, text.trim()]);
+        return text;
+      },
+      bold: theme.bold,
+    };
+    render(
+      [
+        run("threshold", {
+          status: "completed",
+          turns,
+          max_turns: 100,
+          runtime: { activity: "idle", context: { tokens, context_window: 1000 } },
+        }),
+      ],
+      { width: 160, theme: th },
+    );
+    assert(
+      paints.some(([color, text]) => color === contextColor && text === `ctx ${shown}%`),
+      JSON.stringify(paints),
+    );
+    assert(
+      paints.some(([color, text]) => color === turnsColor && text === `↻${turns}/100`),
+      JSON.stringify(paints),
+    );
+  }
+});
+
+test("widget rounding does not change shared detail and accounting formatters", () => {
+  assert.equal(formatTurns(3, 256), "↻3≤256");
+  assert.equal(formatCost(0.27), "$0.270");
+  assert.equal(formatContextPercent({ tokens: 267, context_window: 1000 }), "26.7%");
+  const line = render([
+    run("rounded", {
+      status: "running",
+      cost: 0.27,
+      runtime: { activity: "generating", context: { tokens: 267, context_window: 1000 } },
+    }),
+  ])[1];
+  assert.match(line, /↻3\/256/);
+  assert.match(line, /ctx 27%/);
+  assert.match(line, /\$0\.27(?!\d)/);
+});
+
+test("headings omit all aggregate spend while per-Agent prices retain partial and unknown semantics", () => {
+  const rows = [
+    run("a", { status: "running", cost: 0.12 }),
+    run("b", { status: "completed", cost: 0.15 }),
+    run("released", { status: "failed", resident: false, cost: 99 }),
+    run("partial", { status: "completed", cost: 0.279, cost_partial: true }),
+    run("zero", { status: "completed", cost: 0 }),
+    run("unknown", { status: "completed" }),
+  ];
+  for (const expanded of [false, true]) {
+    const frame = renderWidget({
+      runs: rows,
+      owner,
+      theme,
+      width: 180,
+      maxLines: 13,
+      expanded,
+      spinnerFrame: 0,
+      shouldShowFinished: () => true,
+    });
+    assert.doesNotMatch(frame.lines[0], /latest|Σ|\$|lifetime/);
+    assert.match(frame.lines[0], /▹1 ✓4/);
+    for (const [id, price] of [
+      ["a", "$0.12"],
+      ["b", "$0.15"],
+      ["released", "$99.00"],
+      ["partial", "≥$0.27"],
+      ["zero", "$0.00"],
+    ]) {
+      assert(frame.lines[frame.hits.indexOf(id)].includes(price), id);
+    }
+    const unknown = frame.lines[frame.hits.indexOf("unknown")];
+    assert.doesNotMatch(unknown, /\$/);
+    assert.match(unknown, /—/);
+  }
+  assert.doesNotMatch(render(rows, { shouldShowFinished: () => false })[0], /latest|Σ|\$/);
+  assert.doesNotMatch(render([rows[2]], { owner: { ...owner, resident: 0 } })[0], /latest|Σ|\$/);
+});
+
+test("turn clocks identify turn time before tool or thinking previews and warn at one minute", () => {
+  for (const [turn_elapsed_ms, expected, warning] of [
+    [59900, "59.9s ", false],
+    [60000, "1m00s ", true],
+    [61500, "1m01s ", true],
+  ]) {
+    for (const activity of [
+      { active_tools: [tool("read", "src/a.ts")] },
+      { thinking: "considering lifecycle", channel: "thinking" },
+    ]) {
+      const paints = [];
+      const th = {
+        fg: (color, text) => {
+          paints.push([color, text]);
+          return text;
+        },
+        bold: theme.bold,
+      };
+      const lines = render([run("clock", { status: "running", turn_elapsed_ms, ...activity })], {
+        theme: th,
+      });
+      assert(lines[2].includes(expected), lines[2]);
+      assert.doesNotMatch(lines.join("\n"), /\bturn /);
+      assert.match(lines[2], / (?:reading src\/a\.ts|thinking: considering lifecycle)$/);
+      assert.doesNotMatch(lines[2], / · /, "the compact activity gap is one plain space");
+      assert.doesNotMatch(lines[1], /turn |59\.9s|1m00s|1m01s/);
+      assert.equal(
+        paints.some(([color, text]) => color === "warning" && text.includes(expected.trim())),
+        warning,
+        `${turn_elapsed_ms}: ${JSON.stringify(paints)}`,
+      );
+      for (const width of [20, 40, 80])
+        assert(
+          render([run("clock", { status: "running", turn_elapsed_ms, ...activity })], {
+            width,
+          }).every((line) => visibleWidth(line) <= width),
+        );
+    }
+  }
+});
+
+test("fixed metadata precedes trailing labels without stretching to ultrawide terminal edges", () => {
+  const rows = [
+    run("cjk", {
+      status: "completed",
+      name: "复核🦉",
+      profile: "researcher",
+      difficulty: 5,
+      model: "fixture",
+      effort: "xhigh",
+      description: "核对任务",
+      turns: 120,
+      max_turns: 1024,
+      tool_uses: 999,
+      cost: 1.159,
+      cost_partial: true,
+      runtime: { activity: "idle", context: { tokens: 900, context_window: 1000 } },
+    }),
+    run("ascii", {
+      status: "completed",
+      name: "a",
+      description: "Review",
+      turns: 0,
+      max_turns: 8,
+      cost: 0,
+      runtime: { activity: "idle", context: { tokens: 0, context_window: 1000 } },
+    }),
+  ];
+  const palettes = [
+    theme,
+    {
+      fg: (_color, text) => `\x1b[36m${text}\x1b[0m`,
+      bold: (text) => `\x1b[1m${text}\x1b[0m`,
+    },
+  ];
+  let baseline;
+  for (const width of [160, 240, 400])
+    for (const palette of palettes) {
+      const frame = renderWidget({
+        runs: rows,
+        owner,
+        theme: palette,
+        width,
+        maxLines: 13,
+        spinnerFrame: 0,
+        shouldShowFinished: () => true,
+      });
+      const body = frame.lines.slice(1).map(stripTerminalSequences);
+      if (baseline)
+        assert.deepEqual(body, baseline, "extra viewport space never pads internal columns");
+      else baseline = body;
+      assert.deepEqual(frame.hits.slice(1), ["cjk", "ascii"]);
+      assert.doesNotMatch(frame.lines[0], /latest|Σ|\$/);
+      for (const [index, line] of body.entries()) {
+        const tokens =
+          index === 0
+            ? [
+                "复核🦉",
+                "scout/d5",
+                "fixture/xhigh",
+                "↻120/1024",
+                "ctx 90%",
+                "≥$1.15",
+                "12.4s",
+                "核对任务",
+              ]
+            : ["a", "worker/d3", "m/high", "↻0/8", "ctx 0%", "$0.00", "12.4s", "Review"];
+        let after = 0;
+        for (const token of tokens) {
+          const at = line.indexOf(token, after);
+          assert(at >= after, `${token}: ${line}`);
+          after = at + token.length;
+        }
+        assert(line.endsWith(rows[index].description), line);
+        assert(visibleWidth(line) < 120, "short labels leave surplus width at the far right");
+        assert.doesNotMatch(line, /▸\d/);
+        assert.match(line, /12\.4s {2}(?:核对任务|Review)$/, "no flex-width hole before the label");
+      }
+      const taskStarts = body.map((line, index) =>
+        visibleWidth(line.slice(0, line.indexOf(rows[index].description))),
+      );
+      assert.equal(
+        taskStarts[0],
+        taskStarts[1],
+        "CJK/emoji names do not move the shared task anchor",
+      );
+    }
+});
+
+test("long trailing labels use remaining width without an arbitrary label cap in grid and fallback", () => {
+  const description = "Review lifecycle and cancellation boundaries ".repeat(20);
+  for (const width of [40, 56, 83, 120, 240]) {
+    const row = run("long-label", {
+      status: "completed",
+      name: "orca",
+      description,
+      cost: 0.279,
+      cost_partial: true,
+    });
+    const frame = renderWidget({
+      runs: [row],
+      owner,
+      theme,
+      width,
+      spinnerFrame: 0,
+      shouldShowFinished: () => true,
+    });
+    const header = stripTerminalSequences(frame.lines[1]);
+    assert.match(header, /Review.*…$/);
+    const start = header.indexOf("Review");
+    for (const token of ["worker/d3", "m/high", "↻", "$", "12.4s"])
+      if (header.includes(token)) assert(header.indexOf(token) < start, header);
+    if (width === 240) assert(visibleWidth(header.slice(start)) > 72);
+    assert(frame.lines.every((line) => visibleWidth(line) <= width));
+    assert.equal(frame.hits[1], "long-label");
+    assert.doesNotMatch(header, /▸\d/);
+    assert.equal(row.description, description);
+  }
+});
+
+test("attention has an independent budget and cannot shift the shared trailing task start", () => {
+  const rows = [
+    run("ordinary", { status: "completed", name: "calm", description: "Review task" }),
+    run("pending", {
+      status: "completed",
+      name: "news",
+      description: "Review task",
+      pending_messages: 2,
+    }),
+  ];
+  for (const width of [83, 120, 200]) {
+    const frame = renderWidget({
+      runs: rows,
+      owner,
+      theme,
+      width,
+      maxLines: 6,
+      spinnerFrame: 0,
+      shouldShowFinished: () => true,
+    });
+    const headers = rows.map((row) =>
+      stripTerminalSequences(frame.lines[frame.hits.indexOf(row.agent_id)]),
+    );
+    const starts = headers.map((line) => visibleWidth(line.slice(0, line.indexOf("Review task"))));
+    assert.equal(starts[0], starts[1]);
+    assert.match(headers[0], /Review task$/);
+    assert.match(headers[1], /2 pending +Review task$/);
+    assert(frame.lines.every((line) => visibleWidth(line) <= width));
+    assert.doesNotMatch(frame.lines[0], /latest|Σ|\$/);
+  }
 });
 
 test("suppressing mouse-only idle headings preserves attention facts", () => {

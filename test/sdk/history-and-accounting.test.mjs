@@ -1279,5 +1279,5 @@ test("widget distinguishes compaction/retry from stale prose and shows incomplet
     renderRunningLines({ ...run, runtime: { activity: "retrying" } }, 0, theme)[1],
     /retrying provider/,
   );
-  assert.match(renderRunningLines(run, 0, theme)[0], /≥\$0.250/);
+  assert.match(renderRunningLines(run, 0, theme)[0], /≥\$0\.25(?!\d)/);
 });

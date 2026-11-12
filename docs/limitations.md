@@ -596,6 +596,45 @@ are omitted from previews rather than displayed as false last lines. Real tools
 stay visible while cooperative cancellation/drain is pending; this observation
 is not proof of execution exit, and detailed drain diagnostics remain separate.
 
+The Subagents roster aligns identity, configuration and compact metrics before
+the final variable-length task label when width permits. Columns use spaces,
+not additional vertical dividers, and metrics follow configuration rather than
+anchoring to the terminal's right edge. Model and context columns yield before
+task space; tight rows retain compact attention-first labels. Questions precede
+live execution, then attention/queued/recent failed and finished tasks, stably
+within each group. Only unanswered questions and pending messages bypass normal
+finished-row linger; historical warnings and reached turn limits do not keep old
+rows permanently visible. Released diagnostics still expire. Compact overflow
+reserves a live identity when header space permits, drops previews before Agent
+identities, and counts hidden attention. Compact columns use only individually
+painted Agent headers: neither collapsed queued records nor overflow-only records
+contribute columns or padding. Expanded pages share their complete eligible
+roster's geometry; resident heading counts retain their full scope. Reached turn
+limits appear as a warning-colored `(turn limit reached)` suffix after the task
+label, shortened to `(limit)` when necessary; they do not reserve a shared
+attention column. They remain independent observations beside any lifecycle
+state, not proof that a soft-limit wrap-up stopped execution. The heading has no
+cost rollup, and compact
+rows omit tool-call counts; actual tool activity and detail counts remain.
+Per-Agent widget costs use cents and retain `≥` for partial observations:
+finite observations are interpreted by their shortest decimal spellings before
+rounding (or truncating partial lower bounds). Unknown prices are not zero,
+and a measured price below half a cent reads `<$0.01`, so only a reported zero
+reads `$0.00`. No epsilon guesses away an already-aggregated upstream
+just-below-cent value. Context uses whole percentages, and detail fields retain
+finer precision. Context at 70%/90% and turns at 80% receive warning/error tints
+from unrounded observations, not budget enforcement; the shown percentage never
+rounds up across a threshold the observation has not reached (69.9% reads 69%). The activity clock displays a duration
+without the `turn` prefix, but remains **turn** elapsed time, not tool/thinking
+duration. It moves into the
+header when that Agent's activity subline is omitted, without duplication in
+ordinary pairs; exited/finishing execution has no current-turn clock. Activity
+labels and content share the host theme's italic styling, while the clock and
+tree indentation remain upright; actual italic appearance depends on terminal
+font support. Its 60-second tint is only a presentation cue, not a hung-tool
+diagnosis or lifecycle timer. Timer comparisons may reuse a detached frame for the next actual paint;
+unpainted geometry is never activated as a click target or command evidence.
+
 Close-button hover is presentation-only and requires fullscreen mouse-motion
 reports. The optional adapter observes the host's private `handleViewportInput`
 method because Pi 1.5 has no component mouse-leave event and its first input

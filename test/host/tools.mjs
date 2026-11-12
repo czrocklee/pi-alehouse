@@ -199,6 +199,7 @@ provider.respond(async (call) => {
           arguments: {
             agent: "not-an-agent",
             prompt: "must not route",
+            label: "Forbidden child delegation probe",
             profile: "worker",
             reasoning_difficulty: 1,
           },
@@ -623,7 +624,12 @@ try {
   const beforeAnswer = provider.requests.length;
   await invoke(
     "agent_run",
-    { agent: "orca", prompt: "ANSWER_FACTOR 3", continues: "its pending question" },
+    {
+      agent: "orca",
+      prompt: "ANSWER_FACTOR 3",
+      label: "Answer the pending factor",
+      continues: "its pending question",
+    },
     { error: "PENDING_QUESTION" },
   );
   const notDelivered = await invoke("agent_send", { agent: "orca", message: "ANSWER_FACTOR 3" });

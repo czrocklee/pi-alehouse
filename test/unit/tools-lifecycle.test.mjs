@@ -1016,28 +1016,36 @@ test("only observation replies present finished tasks; roster, interrupt and kil
   assert.equal(alert.finished, undefined);
 });
 
-test("an omitted label is the first nonblank line of the instructions", async (t) => {
+test("required task titles are used verbatim, not derived from the instructions", async (t) => {
   const f = await fixture(t),
     { call } = toolsFor(f);
-  const { label: _label, ...args } = create({ prompt: "\n  Fix the parser  \nDetails follow." });
+  const args = create({
+    prompt: "\n  Fix the parser  \nDetails follow.",
+    label: "  Parser compatibility review  ",
+  });
   await call("agent_spawn", args, "spawn");
   await until(() => f.ports[0]?.streaming);
   f.ports[0].finish();
   await settle(f, "orca");
   await call(
     "agent_run",
-    { agent: "orca", prompt: "Now update the docs.\nKeep it short.", continues: "the parser fix" },
+    {
+      agent: "orca",
+      prompt: "Now update the docs.\nKeep it short.",
+      label: "  Parser documentation follow-up  ",
+      continues: "the parser fix",
+    },
     "run",
   );
   await until(() => f.ports[0].calls.length === 2);
   f.ports[0].finish();
   await settle(f, "orca");
   const [row] = (await call("agent_list", {})).agents;
-  assert.equal(row.label, "Now update the docs.");
+  assert.equal(row.label, "  Parser documentation follow-up  ");
   assert.equal(Object.hasOwn(row, "earlier_labels"), false);
   assert.equal(
     (await call("agent_read", { agent: "orca", task: 1 })).agents[0].label,
-    "Fix the parser",
+    "  Parser compatibility review  ",
   );
 });
 

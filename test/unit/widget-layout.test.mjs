@@ -419,6 +419,14 @@ test("real SDK diagnostic rows stay clickable without inflating resident summary
     next = lines.findIndex((line) => line.includes("[Next]"));
   assert.equal(arrow, 0);
   assert(next >= 0);
+  assert.deepEqual(
+    h.pointer(
+      frame,
+      lines.findIndex((line) => line.includes("✗ released diagnostic")),
+    ),
+    { handled: true },
+    "expanded priority diagnostics remain on the first page",
+  );
   assert.deepEqual(h.pointer(frame, next, lines[next].indexOf("[Next]")), {
     handled: true,
     render: true,
@@ -427,14 +435,18 @@ test("real SDK diagnostic rows stay clickable without inflating resident summary
   lines = h.linesOf(frame);
   assert.equal(lines[heading].indexOf("▾"), arrow);
   assert.equal(lines[heading], "▾ Subagents (full) · ✓12");
+  assert(
+    !lines.some((line) => line.includes("released diagnostic")),
+    "the later page contains ordinary terminal rows",
+  );
   assert.deepEqual(
     h.pointer(
       frame,
-      lines.findIndex((line) => line.includes("✗ released diagnostic")),
+      lines.findIndex((line) => line.includes("✓ review-11")),
     ),
     { handled: true },
   );
-  assert.deepEqual(h.opened, ["agent-12", "agent-12"]);
+  assert.deepEqual(h.opened, ["agent-12", "agent-12", "agent-11"]);
 });
 
 test("shrinking the real dock retires old page coordinates before they can act", (t) => {

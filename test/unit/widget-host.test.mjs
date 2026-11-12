@@ -61,8 +61,8 @@ test("resident summaries keep disclosure stable and retain released diagnostic c
   h.widget.onOpen((id) => opened.push(id));
   h.widget.wake();
   assert.equal(h.lines()[0], "▸ Subagents · ✓1");
-  assert.match(h.lines()[2], /✗ worker/);
-  assert.deepEqual(h.component().handleMouse({ ...headingClick, y: 2 }), { handled: true });
+  assert.match(h.lines()[1], /✗ worker/);
+  assert.deepEqual(h.component().handleMouse({ ...headingClick, y: 1 }), { handled: true });
   assert.deepEqual(opened, ["released"]);
   h.widget.onTurnStart();
   assert.equal(h.lines()[0], "▸ Subagents · ✓1");
@@ -73,7 +73,7 @@ test("resident summaries keep disclosure stable and retain released diagnostic c
   );
   h.component().handleMouse(headingClick);
   assert.equal(h.lines()[0], "▾ Subagents · ✓1");
-  assert.deepEqual(h.component().handleMouse({ ...headingClick, y: 2 }), { handled: true });
+  assert.deepEqual(h.component().handleMouse({ ...headingClick, y: 1 }), { handled: true });
   assert.deepEqual(opened, ["released", "released"]);
 
   assert.equal(
@@ -109,6 +109,76 @@ test("resident summaries keep disclosure stable and retain released diagnostic c
     width: 19,
   })[0];
   assert.equal(compact, "▸ Subagents (full)");
+});
+
+test("priority reordering opens the painted immutable identity and retires earlier coordinates", (t) => {
+  const views = [
+    { ...viewOf("done", "completed"), name: "same-label" },
+    { ...viewOf("busy", "running"), name: "same-label" },
+    { ...viewOf("question", "needs_input"), name: "same-label" },
+    { ...viewOf("failed", "failed"), name: "same-label" },
+    { ...viewOf("queued", "queued"), name: "same-label" },
+  ];
+  const h = mounted(views),
+    opened = [];
+  t.after(() => h.widget.dispose());
+  h.widget.onOpen((id) => opened.push(id));
+  h.widget.wake();
+  const compact = h.lines();
+  assert.match(compact[1], /needs input/);
+  assert.match(compact[2], /^├─ [\u2800-\u28ff] same-label/u);
+  h.component().handleMouse({ ...headingClick, y: 1 });
+  h.component().handleMouse({ ...headingClick, y: 2 });
+  assert.deepEqual(opened, ["question", "busy"]);
+  h.component().handleMouse(headingClick);
+  assert.equal(h.component().handleMouse({ ...headingClick, y: 1 }), undefined);
+  const expanded = h.lines();
+  const queued = expanded.findIndex((line) => /◦ same-label/.test(line));
+  assert(queued > 2);
+  h.component().handleMouse({ ...headingClick, y: queued });
+  assert.deepEqual(opened, ["question", "busy", "queued"]);
+  h.set(views.map((view) => (view.agent_id === "done" ? { ...view, pending_messages: 1 } : view)));
+  h.widget.wake();
+  assert.equal(h.component().handleMouse({ ...headingClick, y: 1 }), undefined);
+  const reordered = h.lines();
+  assert.match(reordered[1], /needs input/);
+  assert.match(reordered[2], /^├─ [\u2800-\u28ff] same-label/u);
+  assert.match(reordered[4], /1 pending/);
+  h.component().handleMouse({ ...headingClick, y: 4 });
+  assert.deepEqual(opened, ["question", "busy", "queued", "done"]);
+});
+
+test("resuming updates per-Agent prices without adding spend to the heading", (t) => {
+  const usage = (cost) =>
+    addToLedger(
+      undefined,
+      {
+        input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        cost,
+      },
+      "p/m",
+    );
+  const h = mounted([
+    { ...viewOf("a", "completed", "first"), usage: usage(0.5) },
+    { ...viewOf("released", "failed"), resident: false, usage: usage(99) },
+  ]);
+  t.after(() => h.widget.dispose());
+  h.widget.wake();
+  assert.equal(h.lines()[0], "▸ Subagents · ✓1");
+  assert.match(h.lines().slice(1).join("\n"), /\$0\.50/);
+  h.set([
+    { ...viewOf("a", "running", "second"), usage: usage(0.12) },
+    { ...viewOf("released", "failed"), resident: false, usage: usage(99) },
+  ]);
+  h.widget.wake();
+  assert.equal(h.lines()[0], "▸ Subagents · ▹1");
+  const body = h.lines().slice(1).join("\n");
+  assert.match(body, /\$0\.12/);
+  assert.doesNotMatch(body, /\$0\.50|\$0\.62/);
+  assert.doesNotMatch(h.lines()[0], /latest|Σ|\$/);
 });
 
 test("explicit opt-in heading clicks toggle only the leading mug with equal geometry and unchanged Agent rows", (t) => {
@@ -254,7 +324,7 @@ test("the main widget projects difficulty from effective settings without changi
   t.after(() => h.widget.dispose());
   h.widget.wake();
   const line = h.lines()[1];
-  assert.match(line, /orca \(scout\/d5\) \[m\/xhigh\]/);
+  assert.match(line, /orca {2,}scout\/d5 {2,}m\/xhigh/);
   assert.doesNotMatch(line, /researcher/);
   assert.equal(h.lines()[1], line, "repainting the same Run reuses its admitted difficulty");
   assert.deepEqual(view, before, "projection never rewrites effective settings or the Run");
@@ -275,10 +345,10 @@ test("resuming keeps who stable while changing what the widget says they are doi
   const h = mounted([first]);
   t.after(() => h.widget.dispose());
   h.widget.wake();
-  assert.match(h.lines()[1], /orca .*→ Review Windows foundations/);
+  assert.match(h.lines()[1], /orca .*Review Windows foundations/);
   h.set([next]);
   h.widget.wake();
-  assert.match(h.lines()[1], /orca .*→ Review GTK direct-entry safety/);
+  assert.match(h.lines()[1], /orca .*Review GTK direct-entry safety/);
   assert.doesNotMatch(h.lines()[1], /Windows/);
   assert.deepEqual(
     [first, next],
@@ -298,11 +368,15 @@ test("a painted row keeps cost but leaves cumulative tokens to the detail pane",
     return h.lines()[1] ?? "";
   };
   const line = paint(spend(100, 20, 9000, 10, 0.0042));
-  assert.match(line, /\$0\.004/, line);
+  assert.match(line, /<\$0\.01(?!\d)/, line);
   assert.doesNotMatch(line, /130|9\.1k|token/, "no cumulative token figure is painted");
   // Unknown and a reported zero are different facts, and the row says which.
   assert.ok(!paint(spend(100, 20, 0, 10, null)).includes("$"), "an unpriced Run shows no cost");
-  assert.match(paint(spend(100, 20, 0, 10, 0)), /\$0\.000/, "a Run that reported zero says zero");
+  assert.match(
+    paint(spend(100, 20, 0, 10, 0)),
+    /\$0\.00(?!\d)/,
+    "a Run that reported zero says zero",
+  );
   assert.ok(!paint(undefined).includes("token"), "a Run that reported nothing shows no figures");
 });
 
@@ -325,8 +399,8 @@ test("painted Agent rows show the resolved model and current context, not cumula
     t.after(() => h.widget.dispose());
     h.widget.wake();
     const line = h.lines()[1];
-    assert.match(line, /\[gpt-5\.6-sol\/off\]/);
-    assert.match(line, /ctx 84\.9% · \$0\.500/);
+    assert.match(line, /gpt-5\.6-sol\/off/);
+    assert.match(line, /ctx 85% {2,}\$0\.50(?!\d)/);
     assert.doesNotMatch(line, /openai-codex|231k|272k|700|token/);
     assert.deepEqual(view, before, "presentation never changes routing or billing metadata");
   }
@@ -373,7 +447,7 @@ test("idle editor renders reuse detached projections without Owner reads or obse
   assert.deepEqual(h.component().handleMouse(headingClick), { handled: true, render: true });
   assert.equal(h.reads(), held.list + 1);
   assert.equal(h.statsReads(), held.stats + 1);
-  assert.match(h.lines()[1], /after · 9 pending/);
+  assert.match(h.lines()[1], /after .*9 pending/);
   assert.deepEqual(
     counts,
     [1],
@@ -419,7 +493,7 @@ test("active timer ticks refresh cached activity and stop once idle", (t) => {
   t.mock.timers.tick(80);
   assert.equal(h.reads(), held.list + 1);
   assert.equal(h.statsReads(), held.stats + 1);
-  assert.match(h.lines()[1], /↻6≤8/);
+  assert.match(h.lines()[1], /↻6\/8/);
   h.set([viewOf("busy", "completed")]);
   t.mock.timers.tick(80);
   const idle = { list: h.reads(), stats: h.statsReads(), renders: h.renders() };
@@ -1148,7 +1222,7 @@ test("the paint loop starts when a Run is there, not when delegation is only abo
   h.widget.wake();
   assert.match(
     h.lines()[1],
-    /^└─ \S worker \(d3\) \[m\/off\] → Task/,
+    /^└─ \S worker .*m\/off {2}↻1\/8 +(?:\d+\.\ds|\d+m\d{2}s) {2}Task$/,
     "the Run is on screen as soon as it exists",
   );
   t.mock.timers.tick(240);
@@ -1265,7 +1339,7 @@ test("expansion does not resurrect released successes or extend released failure
   assert.deepEqual(h.widget.agents(), []);
 });
 
-test("a released failure expiring on a later page retires its old hit without extending linger", (t) => {
+test("a priority released failure expires without reviving its old hit or extending linger", (t) => {
   const idle = Array.from({ length: 12 }, (_, i) => ({
     ...viewOf(`id-${i}`, "completed"),
     name: `idle${i}`,
@@ -1291,15 +1365,21 @@ test("a released failure expiring on a later page retires its old hit without ex
   h.lines();
   h.component().handleMouse(headingClick);
   pageClick(h);
-  assert.match(h.lines()[3], /expired diagnostic/);
+  assert.doesNotMatch(
+    h.lines().join("\n"),
+    /expired diagnostic/,
+    "priority diagnostics are on the first page",
+  );
+  pageClick(h, "Prev");
+  assert.match(h.lines()[1], /expired diagnostic/);
   for (let turn = 0; turn < 3; turn++) h.widget.onTurnStart();
-  assert.equal(h.component().handleMouse({ ...headingClick, y: 3, x: 7 }), undefined);
+  assert.equal(h.component().handleMouse({ ...headingClick, y: 1, x: 7 }), undefined);
   assert.doesNotMatch(h.lines().join("\n"), /expired diagnostic/);
-  assert.equal(h.lines().length, 4, "later pages shrink but the idle roster remains expanded");
+  assert.equal(h.lines().length, 12, "the clamped first page retains the expanded idle roster");
   assert.equal(
-    h.component().handleMouse({ ...headingClick, y: 3, x: 7 }),
+    h.component().handleMouse({ ...headingClick, y: 12, x: 7 }),
     undefined,
-    "the old failure row is now inert page-chrome whitespace",
+    "no hit survives outside the replacement paint",
   );
   assert.deepEqual(opened, []);
   assert.deepEqual(
@@ -1476,14 +1556,18 @@ test("painting reads a child's activity and never resets it", (t) => {
   h.widget.wake();
   const painted = h.lines();
   assert.match(painted.join("\n"), /⎿ {2}running npm test/, painted.join("\n"));
-  assert.match(painted[1], /▸1/, painted[1]);
-  // A tool already running at that first paint still counts when it ends, and a
-  // second frame reports it -- the paint read the activity, it did not clear it.
+  assert.doesNotMatch(painted[1], /▸\d/, "the compact row no longer shows tool counts");
+  assert.equal(child.snapshot().tool_uses, 1);
+  // A tool already running at that first paint still counts when it ends:
+  // removing the compact counter must not clear the observation used by details.
   emit("tool_execution_end", { toolCallId: "t1" });
   h.widget.wake();
-  assert.match(h.lines()[1], /▸2/, h.lines()[1]);
-  // Repainting is a read: the same numbers however many times they are asked for.
-  assert.match(h.lines()[1], /▸2/);
+  const settled = h.lines();
+  assert.doesNotMatch(settled[1], /▸\d/);
+  assert.doesNotMatch(settled.join("\n"), /running npm test/);
+  assert.equal(child.snapshot().tool_uses, 2);
+  // Repainting is a read, including when the count is not painted.
+  assert.deepEqual(h.lines(), settled);
   assert.equal(child.snapshot().tool_uses, 2);
 });
 

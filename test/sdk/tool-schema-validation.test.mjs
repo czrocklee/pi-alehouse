@@ -10,6 +10,8 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { createOwnerTools } from "../../dist/orchestration/tools/parent-tools.js";
 import { createChildTools } from "../../dist/orchestration/tools/child-tools.js";
+import { bindParentToolContext } from "../../dist/orchestration/tools/parent-tool-context.js";
+import { PARENT_TEXT_LIMITS } from "../../dist/orchestration/tools/argument-limits.js";
 
 const sdkEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
 const sdkRequire = createRequire(sdkEntry);
@@ -40,7 +42,7 @@ const usage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 let callId = 0;
-async function invoke(definition, args, context = {}) {
+async function invoke(definition, args, context = {}, hooks = {}) {
   const id = `schema-${++callId}`;
   const toolCall = { type: "toolCall", id, name: definition.name, arguments: args };
   const assistantMessage = {
@@ -53,11 +55,12 @@ async function invoke(definition, args, context = {}) {
     usage,
     timestamp: 0,
   };
-  const tools = wrapToolDefinitions([definition]);
+  const tools = wrapToolDefinitions([definition], () => context);
   return runToolCall(toolCall, {
     tools,
     assistantMessage,
     context: { messages: [assistantMessage], tools, ...context },
+    ...hooks,
   });
 }
 
@@ -67,11 +70,28 @@ function ownerToolFixture() {
   const manager = { getSessionId: () => ownerId },
     registry = {};
   let admissionEffects = 0;
+  const actionEffects = { lookup: 0, delivery: 0, answer: 0, publication: 0 };
   const controller = {
     identity: { owner_id: ownerId, generation },
     assertEffectAllowed() {},
     validateObservationEntry: (read) => read(),
     bindModelCommunication() {},
+    findAgent() {
+      actionEffects.lookup++;
+      return { agent_id: "fixture-agent", run_id: "fixture-run" };
+    },
+    send() {
+      actionEffects.delivery++;
+      throw new Error("invalid text reached send");
+    },
+    answer() {
+      actionEffects.answer++;
+      throw new Error("invalid text reached answer");
+    },
+    observe() {
+      actionEffects.publication++;
+      throw new Error("invalid text reached publication");
+    },
     submitPrepared() {
       admissionEffects++;
       throw new Error("invalid parameters reached admission");
@@ -95,6 +115,7 @@ function ownerToolFixture() {
     get admissionEffects() {
       return admissionEffects;
     },
+    actionEffects,
     controller,
     manager,
     registry,
@@ -105,6 +126,7 @@ function ownerToolFixture() {
 const spawnArgs = (rest = {}) => ({
   agent: "otter",
   prompt: "Check the local change",
+  label: "Check the local change",
   profile: "worker",
   reasoning_difficulty: 3,
   ...rest,
@@ -213,6 +235,170 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
     isToolError(await invoke(spawn, args, rawInputContext));
   }
   assert.equal(fixture.admissionEffects, 0, "raw type/bound failures have no admission effects");
+});
+
+test("real SDK 1.5 requires short spawn/run titles and raw checks enforce UTF-16 bounds", async () => {
+  const fixture = ownerToolFixture();
+  for (const [name, args] of [
+    ["agent_spawn", spawnArgs()],
+    [
+      "agent_run",
+      {
+        agent: "otter",
+        continues: "Earlier inspection",
+        prompt: "Follow up",
+        label: "Follow up on inspection",
+      },
+    ],
+  ]) {
+    const tool = fixture.tools.find((value) => value.name === name);
+    assert(tool.parameters.required.includes("label"));
+    assert.equal(tool.parameters.properties.label.maxLength, 72);
+    let executions = 0;
+    const schemaProbe = {
+      name,
+      label: tool.label,
+      description: tool.description,
+      parameters: tool.parameters,
+      async execute(_id, input) {
+        executions++;
+        assert.equal(input.label, args.label);
+        return { content: [{ type: "text", text: "validated" }], details: undefined };
+      },
+    };
+    const { label: _label, ...missing } = args;
+    for (const invalid of [
+      missing,
+      ...["", " ", "x".repeat(73)].map((label) => ({ ...args, label })),
+    ]) {
+      isToolError(await invoke(schemaProbe, invalid));
+      isToolError(await invoke(tool, invalid, fixture.context));
+    }
+    assert.equal(executions, 0, "invalid titles cannot reach SDK tool execution");
+    for (const label of ["x", "界".repeat(72), "🚀".repeat(36)]) {
+      args.label = label;
+      assert.equal((await invoke(schemaProbe, args)).isError, false);
+      assert.equal(tool.prepareArguments(args).label, label);
+    }
+    const overlong = { ...args, label: "🚀".repeat(37) };
+    assert.throws(() => tool.prepareArguments(overlong));
+    isToolError(await invoke(tool, overlong, fixture.context));
+  }
+  assert.equal(fixture.admissionEffects, 0, "invalid titles never reach admission");
+});
+
+test("real SDK parent preparation and post-hook execution enforce every UTF-16 text boundary", async () => {
+  const fixture = ownerToolFixture();
+  const bound = bindParentToolContext({
+    controller: fixture.controller,
+    boundContext: fixture.context,
+  });
+  const followup = {
+    agent: "otter",
+    continues: "Earlier inspection",
+    prompt: "Follow up",
+    label: "Follow up",
+  };
+  const cases = [
+    ["agent_spawn", spawnArgs(), "label", PARENT_TEXT_LIMITS.label],
+    ["agent_run", followup, "label", PARENT_TEXT_LIMITS.label],
+    ["agent_spawn", spawnArgs(), "prompt", PARENT_TEXT_LIMITS.prompt],
+    ["agent_run", followup, "prompt", PARENT_TEXT_LIMITS.prompt],
+    ["agent_run", followup, "continues", PARENT_TEXT_LIMITS.continues],
+    ["agent_send", { agent: "otter", message: "Steer" }, "message", PARENT_TEXT_LIMITS.message],
+    [
+      "agent_answer",
+      { agent: "otter", question_id: `q_${"a".repeat(32)}`, answer: "yes" },
+      "answer",
+      PARENT_TEXT_LIMITS.answer,
+    ],
+    [
+      "agent_spawn",
+      spawnArgs({
+        profile: "scout",
+        return_to: { agent: "otter", question_id: `q_${"a".repeat(32)}`, answer: "yes" },
+      }),
+      "return_to.answer",
+      PARENT_TEXT_LIMITS.answer,
+    ],
+    ["agent_read", { agent: "otter", cursor: "cursor" }, "cursor", PARENT_TEXT_LIMITS.cursor],
+  ];
+  const mutate = (args, path, value) => {
+    const keys = path.split(".");
+    const target = keys.length === 2 ? args[keys[0]] : args;
+    if (value === undefined) delete target[keys.at(-1)];
+    else target[keys.at(-1)] = value;
+    return args;
+  };
+  const set = (args, path, value) => mutate(structuredClone(args), path, value);
+  const textAt = (token, size) =>
+    token.repeat(Math.floor(size / token.length)) + "x".repeat(size % token.length);
+  const failure = (response, path, limit, missing = false) => {
+    isToolError(response);
+    const detail = JSON.parse(response.result.content[0].text).error;
+    assert.equal(detail.code, "INVALID_PARAMETERS");
+    assert.equal(detail.parameter, path);
+    assert.equal(Object.hasOwn(detail, "path"), false);
+    assert.match(detail.resolution, new RegExp(`${limit} UTF-16 units`));
+    if (path === "label")
+      assert.match(
+        detail.resolution,
+        missing ? /label is required.*nonblank task title/ : /label must be a nonblank task title/,
+      );
+  };
+  for (const [name, args, path, limit] of cases) {
+    const tool = fixture.tools.find((value) => value.name === name);
+    let executions = 0;
+    // Same production binding/schema, with an action probe instead of Owner IO.
+    const probe = bound.define(name, tool.description, tool.parameters, (input) => {
+      executions++;
+      assert.deepEqual(input, expected);
+      return { content: [{ type: "text", text: "validated" }], details: undefined };
+    });
+    let expected;
+    for (const token of ["a", "🚀", "e\u0301", "👩‍💻"]) {
+      expected = set(args, path, textAt(token, limit));
+      assert.equal((await invoke(probe, expected, fixture.context)).isError, false);
+      // Direct execution independently repeats the same raw check.
+      await probe.execute("boundary-direct", expected, undefined, undefined, fixture.context);
+      const overlong = textAt(token, limit + 1);
+      failure(await invoke(tool, set(args, path, overlong), fixture.context), path, limit);
+      let hookCalls = 0;
+      failure(
+        await invoke(tool, args, fixture.context, {
+          beforeToolCall({ args: validated }) {
+            hookCalls++;
+            mutate(validated, path, overlong);
+          },
+        }),
+        path,
+        limit,
+      );
+      assert.equal(hookCalls, 1, "valid arguments reached the real SDK hook before mutation");
+    }
+    assert.equal(executions, 8, "exact maximum reaches action on real SDK and direct routes");
+    for (const value of [undefined, null, 12, "", " \n\t"]) {
+      if (name === "agent_read" && value === undefined) continue;
+      failure(
+        await invoke(tool, set(args, path, value), fixture.context),
+        path,
+        limit,
+        value === undefined,
+      );
+      failure(
+        await invoke(tool, args, fixture.context, {
+          beforeToolCall({ args: validated }) {
+            mutate(validated, path, value);
+          },
+        }),
+        path,
+        limit,
+        value === undefined,
+      );
+    }
+  }
+  assert.equal(fixture.admissionEffects, 0);
+  assert.deepEqual(fixture.actionEffects, { lookup: 0, delivery: 0, answer: 0, publication: 0 });
 });
 
 test("real SDK 1.5 rejects child schema violations before alert/question callbacks", async () => {

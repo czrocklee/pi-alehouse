@@ -18,6 +18,7 @@ const model = { provider: "fixture", id: "controlled", levels: ["off"] };
 const args = (rest = {}) => ({
   agent: "birch",
   prompt: "Find the requested facts.",
+  label: "Find the requested facts.",
   profile: "scout",
   reasoning_difficulty: 3,
   ...rest,
@@ -306,6 +307,7 @@ test("return_to validation is closed, scout-only and absent from agent_run", asy
         agent: "ash",
         continues: "Earlier work",
         prompt: "Continue",
+        label: "Continue the earlier work",
         return_to: destination,
       }),
     errorCode("INVALID_PARAMETERS"),

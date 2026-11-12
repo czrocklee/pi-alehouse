@@ -156,7 +156,10 @@ test("animation ticks avoid roster/stats/clones while clocks and independent act
   assert.match(h.paint().join("\n"), /reading visible\.ts/);
   handlers.get("tool_execution_end")({ toolCallId: "tool" });
   t.mock.timers.tick(80);
-  assert.match(h.paint().join("\n"), /▸1/);
+  assert.equal(child.snapshot().tool_uses, 1, "details retain the observed tool count");
+  const settled = h.paint();
+  assert.doesNotMatch(settled[1], /▸\d/, "the compact row omits tool counts");
+  assert.doesNotMatch(settled[2], /reading visible\.ts/);
   assert.equal(h.counts().lists, held.lists);
   assert.equal(h.counts().stats, held.stats);
   h.change(view({ turns: 4, drain: { waiting_for: "sdk_idle", elapsed_ms: 500 } }));
@@ -164,7 +167,7 @@ test("animation ticks avoid roster/stats/clones while clocks and independent act
   h.paint();
   assert.equal(h.counts().lists, held.lists + 1);
   assert.equal(h.counts().stats, held.stats + 1);
-  assert.match(h.paint().join("\n"), /↻4≤8|draining/);
+  assert.match(h.paint().join("\n"), /↻4\/8|draining/);
   const first = h.widget.presentationAgents()[0].view,
     count = h.counts().lists;
   time.advance(1000);
@@ -286,8 +289,9 @@ for (const kind of ["thinking", "text", "preparing"])
     time.advance(80);
     t.mock.timers.tick(80);
     const lines = h.paint();
-    assert.match(lines[1], /▸1/);
-    assert.match(lines[1], /ctx 17\.0%/);
+    assert.equal(child.snapshot().tool_uses, 1);
+    assert.doesNotMatch(lines[1], /▸\d/, "tool counts remain outside the compact row");
+    assert.match(lines[1], /ctx 17%/);
     assert.match(lines[1], /3 pending/);
     assert.match(lines[2], /replying: NEW_DELTA/);
     assert.equal(h.counts().lists, held.lists);

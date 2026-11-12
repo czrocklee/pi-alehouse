@@ -1,16 +1,17 @@
 import { Type, type Static, type TObject } from "typebox";
 import { Check } from "typebox/value";
 import { validDifficulty } from "../core/contracts.ts";
-import {
-  COMMUNICATION_LIMITS,
-  isModelAgentName,
-  MODEL_AGENT_NAME_PATTERN,
-} from "../core/communication-envelope.ts";
+import { isModelAgentName, MODEL_AGENT_NAME_PATTERN } from "../core/communication-envelope.ts";
 import { validateDispatch } from "../core/dispatch.ts";
 import { OrchestrationError } from "../core/ports.ts";
 import { QUESTION_ID_PATTERN } from "../core/question-id.ts";
 import { invalidDifficultyResolution } from "../routing.ts";
 import { modelProfileNames } from "./tool-names.ts";
+import {
+  checkParentTextArguments,
+  MODEL_TASK_TITLE_UNITS,
+  PARENT_TEXT_LIMITS,
+} from "./argument-limits.ts";
 
 // The model's whole vocabulary: an Agent (a named worker with a conversation)
 // does one task at a time. Agents are addressed by name; no Run ID is model-facing.
@@ -34,11 +35,9 @@ const agentNames = (maxItems: number, description: string) =>
   Type.Array(agentName(), { minItems: 1, maxItems, description });
 const waitMs = (description: string) => Type.Integer({ minimum: 0, maximum: 300000, description });
 
-const labelField = optional(
-  text(
-    COMMUNICATION_LIMITS.label_units,
-    "Summary label, not instructions; defaults to prompt's first nonblank line.",
-  ),
+const labelField = text(
+  MODEL_TASK_TITLE_UNITS,
+  `Concise 3–8 word task title, not instructions or background; max ${MODEL_TASK_TITLE_UNITS} UTF-16 units.`,
 );
 const afterField = optional(
   agentNames(
@@ -108,7 +107,7 @@ const returnToField = optional(
         description: "Exact pending question_id returned by wait/read for that worker.",
       }),
       answer: text(
-        16384,
+        PARENT_TEXT_LIMITS.answer,
         "Your instruction for continuing the worker's task; scout findings are attached separately as untrusted reference material.",
       ),
     },
@@ -125,7 +124,7 @@ export const spawnSchema = Type.Object(
       "Unique short nickname from one theme, not a task name; stays taken after kill.",
     ),
     prompt: text(
-      131072,
+      PARENT_TEXT_LIMITS.prompt,
       "Task instructions: deliverable, scope, stopping conditions, needed context, cwd-relative or absolute paths; source/version/date constraints and output format as relevant.",
     ),
     label: labelField,
@@ -163,11 +162,11 @@ export const runSchema = Type.Object(
   {
     agent: agentName("An existing, idle Agent."),
     continues: text(
-      512,
+      PARENT_TEXT_LIMITS.continues,
       "The specific earlier work of this Agent being continued; not sent to it. If you cannot name one, use agent_spawn (with after if only its output is needed).",
     ),
     prompt: text(
-      131072,
+      PARENT_TEXT_LIMITS.prompt,
       "Follow-up instructions: deliverable, scope, stopping conditions, cwd-relative or absolute paths; source/version/date constraints and output format as relevant; earlier conversation is retained.",
     ),
     label: labelField,
@@ -181,7 +180,7 @@ export const sendSchema = Type.Object(
   {
     agent: agentName("Agent whose task is selected now; never retargets later work."),
     message: text(
-      16384,
+      PARENT_TEXT_LIMITS.message,
       "A correction or extra instruction for the current task. Never an answer (use agent_answer) or another task.",
     ),
     wait_ms: waitField,
@@ -198,7 +197,7 @@ export const answerSchema = Type.Object(
       description: "Copy the pending question_id exactly from wait/read.",
     }),
     answer: text(
-      16384,
+      PARENT_TEXT_LIMITS.answer,
       "Answer to this pending question. A worker's question needs web research? Spawn a scout with return_to instead of relaying its findings.",
     ),
     wait_ms: waitField,
@@ -243,7 +242,7 @@ export const readSchema = Type.Object(
     ),
     cursor: optional(
       text(
-        1024,
+        PARENT_TEXT_LIMITS.cursor,
         "Copy next_cursor with its Agent to continue that original task. Do not also supply task.",
       ),
     ),
@@ -298,6 +297,7 @@ export function checkParentToolArguments<S extends TObject>(
       });
     }
   }
+  checkParentTextArguments(name, raw);
   const valid = Check(schema, raw);
   const fields = valid ? (raw as Record<string, unknown>) : {};
   const addressedNames: unknown[] = [

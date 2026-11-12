@@ -66,20 +66,27 @@ leave the widget/detail roster and their child render state is dropped. Child
 session shutdown clears live activity but does not sever the retained transcript
 reference during this diagnostic window; the observation registry retires it.
 
-A row prioritizes warning/drops/pending/exceptional state, then identity and
-statistics: latest Run state, original model ID without provider and its
-creation-time effective effort (`[example-model/high]`), turn count/budget,
-tool-call count, available context occupancy, cost, current turn duration in
-parentheses, total submission duration, and the current task label. The nickname
-is who; the description after `→` is what that Agent is doing on its latest Run.
-For example:
+A row keeps identity, configuration and compact metrics together, with the
+variable-length task label last: latest Run state and nickname, permission
+profile/difficulty, original model ID without provider and its creation-time
+effective effort, turn count/budget, available context occupancy, per-Agent
+cost, total submission duration, then the current task. Aligned rows share
+roster-local column widths, with text left-aligned and numeric values
+right-aligned. Groups use spaces, not additional vertical dividers; metrics
+follow configuration instead of being pushed to the terminal's right edge.
+The nickname is who; the final description is what that Agent is doing on its
+latest Run. For example:
 
 ```text
-orca (worker/d3) [example-model/high] → Review GTK direct-entry safety · …
+⠋ orca  worker/d3  example-model/high  ↻3/80  ctx 17%  $0.08  45.6s  Review GTK direct-entry safety
 ```
 
+Tool-call counts are not shown in compact rows, and the heading has no cost
+rollup. Actual tool activity remains visible below the row, and the detail
+pane retains its tool counts and accounting fields.
+
 The identity tag joins permission profile and creation-time reasoning difficulty:
-`(worker/d3)` or `(scout/d5)` for new Agents. Worker maps to the stable
+`worker/d3` or `scout/d5` for new Agents (parenthesized in compact fallback rows). Worker maps to the stable
 internal `editor` ID; scout maps to the stable internal `researcher` ID.
 The slash separates two
 independent properties; `d1` is easiest and `d5` hardest. The rating is not
@@ -93,17 +100,36 @@ principals and Jev provenance retain the internal `editor` or `researcher` ident
 label projection, not a profile alias or a change to approval scope.
 
 The task uses all remaining columns rather than a fixed 40-column cap. Warnings,
-identity and compact metrics retain priority; when no readable task fits, both
-its text and arrow are omitted. Row clicks still route by Agent ID, never by
+identity and compact metrics retain priority; when no readable task fits, its
+text and any compact fallback arrow are omitted. Row clicks still route by Agent ID, never by
 nickname or task text. `run warning` means recorded `cleanup_errors` (including input/output
 issues), not proof that resources remain held; exact diagnostics stay in the
 detail pane. Owner-level cleanup uncertainty has its own blocking state.
 
-The activity line (`⎿`) distinguishes tools, public thinking, and ordinary
-assistant prose without adding rows or bracket tags. Tools keep their action
+A reached turn limit is appended to that Agent's task label as
+`Review lifecycle (turn limit reached)`, with only the parenthetical suffix in
+warning color. It does not occupy the shared attention column or reserve an
+empty warning column on other Agents' rows. Long task text yields before this
+suffix; narrow layouts may shorten it to `(limit)`. Other pending, cleanup and
+lifecycle attention facts keep their existing placement. The suffix is an
+independent observation, not proof that execution stopped or that the Run failed.
+
+The activity line (`⎿`) keeps its existing tree indentation and distinguishes
+tools, public thinking, and ordinary assistant prose without adding rows or
+bracket tags. When available, the current-turn elapsed time precedes the
+activity as `7.2s reading …`, separated by one space and without a `turn` prefix.
+This clock still measures
+the current turn, not the displayed tool or thought; changing tools does not
+reset it. It is not combined with the total submission time above. If the
+activity line is omitted for space, its clock moves to the first row instead;
+exited or finishing execution has no current-turn clock. Tools keep their action
 words (`running`, `reading`, `editing`, `searching`): the action is dim and its
-argument muted, with no fixed-width padding. These are semantic theme roles, not
-a promise of fixed contrast in every terminal theme. Tool previews select only
+argument muted, with no fixed-width padding. The complete activity text uses
+the host theme's italic styling, including action words and preview content;
+the separate clock and tree indentation stay upright. Structural
+themes without an italic helper retain the same colors and spacing. These are
+semantic theme roles, not a promise of fixed contrast or italic font support in
+every terminal. Tool previews select only
 identifying argument fields such as a path, command, or pattern; they do not
 separately project read/write file bodies, edit payloads or tool output. A shell
 command can itself embed file content (for example a heredoc); this is a clipped
@@ -117,7 +143,8 @@ cancelling, draining or finishing. Streamed tool arguments instead display
 or thinking. Neither that label nor a paint proves tool admission.
 
 Public generation previews use `thinking: …` and `replying: …`, with the same
-dim-prefix/muted-content treatment. They show the last nonempty logical line,
+dim-prefix/muted-content treatment and italic styling across both prefix and
+content, including the empty `thinking…` and `replying…` placeholders. They show the last nonempty logical line,
 including an unfinished line, anchored at the left and ellipsized on the right
 to the available terminal width. Only leading Markdown headings/list markers
 (with one-to-three-digit list numbers) and leading bold markers immediately

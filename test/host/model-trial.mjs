@@ -936,6 +936,7 @@ try {
     ordinaryAnswer.args = {
       agent: "worker",
       prompt: "ANSWER_FACTOR 3",
+      label: "Calculate the source product",
       continues: "its pending question",
       wait_ms: 60000,
     };

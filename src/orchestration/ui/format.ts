@@ -19,7 +19,11 @@ export const GLYPHS = {
   agentsIdle: "○",
 } as const;
 export const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-export type Theme = { fg(color: string, text: string): string; bold(text: string): string };
+export type Theme = {
+  fg(color: string, text: string): string;
+  bold(text: string): string;
+  italic?(text: string): string;
+};
 
 const TOOL_ACTION: Record<string, { verb: string; noun?: string; joiner?: string }> = {
   read: { verb: "reading", noun: "files" },
@@ -156,7 +160,10 @@ function activityText(parts: readonly ActivityPart[], columns: number, theme: Th
 
 export const formatTokens = (count: number, unit = " token"): string =>
   formatTokenCount(count, { precision: "detailed" }) + unit;
-export function formatContextPercent(context: NonNullable<RunView["runtime"]>["context"]): string {
+/** One validation path; surfaces choose their own display precision. */
+export function contextPercent(
+  context: NonNullable<RunView["runtime"]>["context"],
+): number | undefined {
   if (
     context?.tokens == null ||
     !Number.isSafeInteger(context.tokens) ||
@@ -164,8 +171,12 @@ export function formatContextPercent(context: NonNullable<RunView["runtime"]>["c
     !Number.isSafeInteger(context.context_window) ||
     context.context_window <= 0
   )
-    return "?";
-  return `${((context.tokens / context.context_window) * 100).toFixed(1)}%`;
+    return undefined;
+  return (context.tokens / context.context_window) * 100;
+}
+export function formatContextPercent(context: NonNullable<RunView["runtime"]>["context"]): string {
+  const percent = contextPercent(context);
+  return percent === undefined ? "?" : `${percent.toFixed(1)}%`;
 }
 export const formatContextTokens = (count: number): string =>
   formatTokenCount(count, { precision: "compact", trimKZero: true });
@@ -193,7 +204,10 @@ export function renderActivity(
       : Number.isFinite(columns)
         ? Math.max(0, Math.floor(columns))
         : 0;
-  return activityText(activityParts(tools, live), width, theme);
+  const text = activityText(activityParts(tools, live), width, theme);
+  // Fit and color the complete preview before styling it, so the action and
+  // content share emphasis without pulling the separate turn clock into it.
+  return text && theme.italic ? theme.italic(text) : text;
 }
 
 /** Fold row breaks without removing already-applied theme styling. This is

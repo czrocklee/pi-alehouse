@@ -317,7 +317,7 @@ const { session } = await createAgentSession({
   tools: ["read", ...management],
 });
 const errors = [];
-const spawned = (message, agent, profile) => {
+const spawned = (message, agent, profile, key) => {
   assert.equal(message?.toolName, management[0]);
   assert.equal(message.isError, false, JSON.stringify({ toolResult: message, notices, errors }));
   const reply = JSON.parse(text(message));
@@ -334,7 +334,7 @@ const spawned = (message, agent, profile) => {
     task: 1,
     status: "completed",
     label: `Do ${profile} now.`,
-    result: `${profile}_DONE`,
+    result: `${key}_DONE`,
   });
   assert.equal(Object.hasOwn(reply, "alerts_pending"), false);
   assert.equal(Object.hasOwn(reply, "finished_pending"), false);
@@ -346,6 +346,7 @@ const spawn = (agent, profile, key) =>
   call(`spawn-${agent}`, "agent_spawn", {
     agent,
     prompt: `Do ${key} now.`,
+    label: `Do ${profile} now.`,
     profile,
     reasoning_difficulty: 1,
     wait_ms: 60000,
@@ -365,7 +366,7 @@ try {
   parentSteps.push(
     () => spawn("otter", "scout", "RESEARCH_TASK"),
     (last) => {
-      spawned(last, "otter", "RESEARCH_TASK");
+      spawned(last, "otter", "scout", "RESEARCH_TASK");
       return call("kill-otter", "agent_kill", { agent: "otter" });
     },
     (last) => {
@@ -373,15 +374,15 @@ try {
       return spawn("heron", "scout", "SECOND_TASK");
     },
     (last) => {
-      spawned(last, "heron", "SECOND_TASK");
+      spawned(last, "heron", "scout", "SECOND_TASK");
       return spawn("pike", "worker", "WORKER_TASK");
     },
     (last) => {
-      spawned(last, "pike", "WORKER_TASK");
+      spawned(last, "pike", "worker", "WORKER_TASK");
       return spawn("perch", "worker", "SIBLING_TASK");
     },
     (last) => {
-      spawned(last, "perch", "SIBLING_TASK");
+      spawned(last, "perch", "worker", "SIBLING_TASK");
       return { text: "PARENT_DONE" };
     },
   );

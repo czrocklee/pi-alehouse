@@ -227,8 +227,13 @@ test("typed initialization cleanup uncertainty stays strict without recovery pro
 test("large rosters stay bounded without exposing host telemetry or consuming finished facts", async (t) => {
   const f = await fixture(t, { controller: { concurrency: 16, resident_limit: 16 } }),
     { call } = toolsFor(f);
+  // Existing core/history labels retain their 120-unit packing bound; new
+  // model-tool labels are capped at 72 units.
   for (let n = 0; n < 16; n++)
-    await call("agent_spawn", spawn({ agent: `pine${n}`, label: "\0".repeat(120) }));
+    await f.controller.submit(
+      `historical-${n}`,
+      task("Inspect", { name: `pine${n}`, description: "\0".repeat(120) }),
+    );
   await until(() => f.ports.length === 16 && f.ports.every((port) => port.streaming));
   for (const port of f.ports) {
     port.callbacks.runtime({

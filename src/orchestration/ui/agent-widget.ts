@@ -129,9 +129,15 @@ interface WidgetMount {
 }
 /** A factory may be invoked more than once. Only its current instance owns the
  * renderer and hit geometry; replacing either identity retires old callbacks. */
+interface WidgetSnapshot {
+  runs: WidgetRun[];
+  owner: WidgetOwner;
+}
 interface WidgetInstance {
   tui: WidgetTui;
   page: number;
+  /** Pure comparison work, never evidence that its hit geometry was painted. */
+  pending?: { key: unknown[]; frame: WidgetFrame };
   paint?: { frame: WidgetFrame; columns: number; rows?: number; width: number; theme: Theme };
 }
 /**
@@ -146,8 +152,8 @@ export class AgentWidget {
   private frame = 0;
   private timer?: ReturnType<typeof setInterval>;
   private repaint?: ReturnType<typeof setTimeout>;
-  private snapshot?: { runs: WidgetRun[]; owner: WidgetOwner };
-  private sampled?: { runs: WidgetRun[]; owner: WidgetOwner };
+  private snapshot?: WidgetSnapshot;
+  private sampled?: WidgetSnapshot;
   private sampledAt = 0;
   private revision?: number;
   private rosterEpoch = 0;
@@ -197,6 +203,7 @@ export class AgentWidget {
     const mount = this.mount,
       instance = mount?.instance;
     if (!mount || !instance) return;
+    instance.pending = undefined;
     instance.paint = undefined;
     try {
       instance.tui.requestRender();
@@ -448,7 +455,10 @@ export class AgentWidget {
     this.sampledAt = performance.now();
     this.sampled = snapshot;
     this.snapshot = snapshot;
-    if (this.mount?.instance) this.mount.instance.paint = undefined;
+    if (this.mount?.instance) {
+      this.mount.instance.pending = undefined;
+      this.mount.instance.paint = undefined;
+    }
     // Best-effort UI coordination uses this projection, including hidden idle
     // residents and lingering released failures, before any show/clear decision.
     try {
@@ -522,18 +532,13 @@ export class AgentWidget {
     return {
       render: (width: number) => {
         if (!current() || !this.snapshot) return [];
-        const frame = renderWidget({
-          ...this.snapshot,
-          spinnerFrame: this.frame,
-          expanded: this.expanded && tui.mode === "fullscreen",
-          maxLines: lineBudget(tui.terminal.rows),
-          page: instance.page,
-          disclosure: tui.mode === "fullscreen",
-          beerMugs: this.beerMugs,
-          width: width || tui.terminal.columns,
+        const frame = this.renderFrame(
+          instance,
+          this.snapshot,
+          width || tui.terminal.columns,
           theme,
-          shouldShowFinished: (id, status) => this.lingering(id, status),
-        });
+        );
+        instance.pending = undefined;
         instance.page = frame.pagination?.page ?? 0;
         instance.paint = {
           frame,
@@ -584,6 +589,7 @@ export class AgentWidget {
           }
           this.expanded = !this.expanded;
           instance.page = 0;
+          instance.pending = undefined;
           instance.paint = undefined;
           tui.requestRender();
           return { handled: true, render: true };
@@ -595,6 +601,7 @@ export class AgentWidget {
           if (inside(nav.prev)) instance.page--;
           else if (inside(nav.next)) instance.page++;
           else return undefined;
+          instance.pending = undefined;
           instance.paint = undefined;
           tui.requestRender();
           return { handled: true, render: true };
@@ -617,6 +624,47 @@ export class AgentWidget {
         }, 0);
       },
     };
+  }
+
+  /** Share pure timer comparison work with the ensuing paint only while every
+   * presentation input still matches. Commands/inspection never read this cache. */
+  private renderFrame(
+    instance: WidgetInstance,
+    snapshot: WidgetSnapshot,
+    width: number,
+    theme: Theme,
+  ): WidgetFrame {
+    const { tui } = instance;
+    const key: unknown[] = [
+      snapshot,
+      this.frame,
+      this.controller.presentationRevision,
+      width,
+      theme,
+      this.beerMugs,
+      this.expanded,
+      instance.page,
+      tui.terminal.columns,
+      tui.terminal.rows,
+      tui.mode,
+      this.rosterEpoch,
+    ];
+    const pending = instance.pending;
+    if (pending && key.every((part, i) => part === pending.key[i])) return pending.frame;
+    const frame = renderWidget({
+      ...snapshot,
+      spinnerFrame: this.frame,
+      expanded: this.expanded && tui.mode === "fullscreen",
+      maxLines: lineBudget(tui.terminal.rows),
+      page: instance.page,
+      disclosure: tui.mode === "fullscreen",
+      beerMugs: this.beerMugs,
+      width,
+      theme,
+      shouldShowFinished: (id, status) => this.lingering(id, status),
+    });
+    instance.pending = { key, frame };
+    return frame;
   }
 
   /** Failure retains removal ownership and cached content, but no live instance
@@ -670,18 +718,7 @@ export class AgentWidget {
       if (!mount || !instance || mount.phase !== "ready") return;
       const paint = instance.paint;
       if (paint) {
-        const next = renderWidget({
-          ...this.snapshot,
-          spinnerFrame: this.frame,
-          expanded: this.expanded && instance.tui.mode === "fullscreen",
-          maxLines: lineBudget(instance.tui.terminal.rows),
-          page: instance.page,
-          disclosure: instance.tui.mode === "fullscreen",
-          beerMugs: this.beerMugs,
-          width: paint.width,
-          theme: paint.theme,
-          shouldShowFinished: (id, status) => this.lingering(id, status),
-        });
+        const next = this.renderFrame(instance, this.snapshot, paint.width, paint.theme);
         if (
           next.lines.length === paint.frame.lines.length &&
           next.lines.every((line, i) => line === paint.frame.lines[i])

@@ -1,18 +1,16 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { terminal, type RunView } from "../core/contracts.ts";
-import { profileLabel } from "../tools/tool-names.ts";
-import {
-  renderActivity,
-  formatContextPercent,
-  formatCost,
-  formatMs,
-  formatTurns,
-  GLYPHS,
-  withoutBreaks,
-  type Theme,
-} from "./format.ts";
+import { renderActivity, GLYPHS, withoutBreaks, type Theme } from "./format.ts";
 import { clipPlainText, singleLineText } from "./text.ts";
 import { activityPresentation, runPresentation } from "./run-presentation.ts";
+import {
+  renderHeader,
+  widgetColumns,
+  prepareWidgetRow,
+  turnClock,
+  type WidgetColumns,
+  type WidgetRow,
+} from "./widget-row.ts";
 import type { WidgetOwner, WidgetRun } from "./agent-widget.ts";
 
 const BRANCH = "├─",
@@ -21,152 +19,45 @@ const BRANCH = "├─",
 const WIDGET_TITLE = "Subagents";
 
 const active = (run: WidgetRun): boolean => !terminal(run.status);
-/** The Agent's nickname when the model gave one, else its profile — never both. */
-const label = (run: WidgetRun): { name: string; tag: string } => {
-  const difficulty =
-    Number.isInteger(run.difficulty) && run.difficulty >= 1 && run.difficulty <= 5
-      ? `d${run.difficulty}`
-      : "";
-  const profile = singleLineText(profileLabel(singleLineText(run.profile)));
-  const name = singleLineText(run.name);
-  const tag = name ? (difficulty ? `${profile}/${difficulty}` : profile) : difficulty;
-  return { name: name || profile, tag };
-};
 const ROW_ELLIPSIS = "…";
-
-const stats = (run: WidgetRun, running: boolean): string[] => {
-  // Dual timing. Time on the current turn sits beside the turn counter it belongs
-  // to; total time since submission stays last, where upstream puts its duration.
-  const turn =
-    running && run.turn_elapsed_ms !== undefined ? ` (${formatMs(run.turn_elapsed_ms)})` : "";
-  const parts = [formatTurns(run.turns, run.max_turns) + turn];
-  if (run.tool_uses > 0) parts.push(`${GLYPHS.toolCall}${run.tool_uses}`);
-  if (run.runtime?.context) parts.push(`ctx ${formatContextPercent(run.runtime.context)}`);
-  // `undefined` is the only "nobody priced this": a Run that genuinely billed
-  // zero says so, or the row would re-collapse the distinction `reported()` and
-  // the ledger exist to keep.
-  if (run.cost !== undefined) parts.push(`${run.cost_partial ? "≥" : ""}${formatCost(run.cost)}`);
-  parts.push(formatMs(run.elapsed_ms));
-  return parts;
-};
-/** Highest-severity notes first, before ordinary metadata and statistics. */
-const notes = (run: WidgetRun, theme: Theme, compact: 0 | 1 | 2): string[] => {
-  const out: string[] = [];
-  if (run.has_run_warnings)
-    out.push(theme.fg("error", compact === 0 ? "run warning" : compact === 1 ? "warn" : "!"));
-  if (run.pending_messages > 0)
-    out.push(
-      theme.fg(
-        "warning",
-        compact === 2 ? `${run.pending_messages}pend` : `${run.pending_messages} pending`,
-      ),
-    );
-  return out;
-};
-interface HeaderState {
-  text: string;
-  color: string;
-  detail?: string;
-  compact?: string;
+const attention = (run: WidgetRun): boolean =>
+  run.has_run_warnings || run.pending_messages > 0 || run.limit_reached;
+const live = (run: WidgetRun): boolean => active(run) && run.status !== "queued";
+// One order and vocabulary for grouping, allocation and truthful overflow counts.
+const ROW_STATES = [
+  { state: "needs input", short: "input", signal: "?" },
+  { state: "running", short: "run" },
+  { state: "attention", short: "attn", signal: "!" },
+  { state: "queued", short: "queue" },
+  { state: "failed", short: "fail", signal: "✗" },
+  { state: "finished", short: "fin" },
+] as const;
+type RowState = (typeof ROW_STATES)[number]["state"];
+function stateOf(run: WidgetRun): RowState {
+  if (run.status === "needs_input") return "needs input";
+  if (live(run)) return "running";
+  // A limit/warning flag must not relabel a real failure as generic attention.
+  if (run.status === "failed") return "failed";
+  if (attention(run)) return "attention";
+  return run.status === "queued" ? "queued" : "finished";
 }
+const priority = (state: RowState): number =>
+  ROW_STATES.findIndex((entry) => entry.state === state);
 
-/** Identity and attention precede optional model/task/metrics. Compact warning
- * labels and failed explanations before sacrificing a recognizable name or a
- * complete profile/difficulty tag. At impossible widths keep a name prefix and
- * severity/attention first, omit the whole tag, then let the final clip bound it. */
-function renderHeader(
+export function renderFinishedLine(
   run: WidgetRun,
-  icon: string,
-  state: HeaderState | undefined,
-  running: boolean,
   theme: Theme,
-  width: number,
+  width = Infinity,
+  columns?: WidgetColumns | null,
+  row: WidgetRow = prepareWidgetRow(run),
 ): string {
-  const { name, tag } = label(run);
-  const separator = theme.fg("dim", " · ");
-  const attentionText = (compact: 0 | 1 | 2, detailRoom = 60): string => {
-    const joiner = compact === 0 ? separator : theme.fg("dim", " ");
-    const detail =
-      compact === 0 && state?.detail && detailRoom > 1
-        ? `: ${truncateToWidth(singleLineText(state.detail), detailRoom, "…")}`
-        : "";
-    const text = state ? (compact === 2 ? (state.compact ?? state.text) : state.text) + detail : "";
-    const signals = [
-      ...notes(run, theme, compact),
-      ...(state ? [theme.fg(state.color, text)] : []),
-    ];
-    return signals.length ? joiner + signals.join(joiner) : "";
-  };
-  const nameText = name;
-  const wantedName = Math.min(8, visibleWidth(nameText));
-  const minimumName = Math.min(3, wantedName);
-  const iconRoom = visibleWidth(icon) + 1;
-  const clipRoom = visibleWidth(ROW_ELLIPSIS);
-  let tagText = tag ? ` ${theme.fg("dim", `(${tag})`)}` : "";
-  const attentionRoom = width - iconRoom - visibleWidth(tagText) - wantedName - clipRoom;
-  let attention = attentionText(0);
-  if (visibleWidth(attention) > attentionRoom && state?.detail) {
-    // Strip/truncate only the explanation, never the failed state or earlier
-    // warning/pending facts. Full-width wording remains byte-for-byte unchanged.
-    const detailRoom = Math.floor(attentionRoom - visibleWidth(attentionText(0, 0)) - 2);
-    attention = attentionText(0, detailRoom);
-  }
-  if (visibleWidth(attention) > attentionRoom) attention = attentionText(1);
-  if (visibleWidth(attention) > attentionRoom) attention = attentionText(2);
-  let availableName = width - iconRoom - visibleWidth(attention + tagText) - clipRoom;
-  if (availableName < minimumName) {
-    tagText = ""; // Never retain a misleading clipped profile/difficulty tag.
-    availableName = width - iconRoom - visibleWidth(attention) - clipRoom;
-  }
-  const tinyPrefix = Math.min(minimumName, Math.max(1, width - iconRoom - clipRoom));
-  const nameRoom = Math.max(tinyPrefix, Math.min(32, availableName));
-  const shortName = truncateToWidth(nameText, nameRoom, "…");
-  const identity = `${icon} ${running ? theme.bold(shortName) : theme.fg("dim", shortName)}${attention}`;
-  const allocation = [run.model, run.effort]
-    .filter(Boolean)
-    .map(singleLineText)
-    .filter(Boolean)
-    .join("/");
-  const allocationText = allocation ? ` ${theme.fg("dim", `[${allocation}]`)}` : "";
-  const metrics = separator + theme.fg("dim", stats(run, running).join(" · "));
-  const taskLead = theme.fg("dim", " → ");
-  const room =
-    width - visibleWidth(withoutBreaks(identity + tagText + allocationText + metrics + taskLead));
-  const description = singleLineText(run.description);
-  const task =
-    room >= 4 && description
-      ? taskLead + theme.fg(running ? "muted" : "dim", truncateToWidth(description, room, "…"))
-      : "";
-  return identity + tagText + allocationText + task + metrics;
-}
-
-export function renderFinishedLine(run: WidgetRun, theme: Theme, width = Infinity): string {
+  columns = columns === undefined ? (widgetColumns([row], width) ?? null) : columns;
   const presentation = runPresentation(run.status);
   const icon = theme.fg(
     run.status === "completed" && run.limit_reached ? "warning" : presentation.color,
     presentation.glyph,
   );
-  let state: HeaderState | undefined;
-  if (run.status === "completed") {
-    state = run.limit_reached
-      ? { text: "(turn limit)", compact: "limit", color: "warning" }
-      : undefined;
-  } else if (run.status === "needs_input") {
-    state = {
-      text: run.question ? "needs answer" : "needs input",
-      compact: run.question ? "answer?" : "input?",
-      color: "warning",
-    };
-  } else if (run.status === "cancelled") {
-    state = { text: presentation.label, color: presentation.color };
-  } else {
-    state = {
-      text: presentation.label,
-      detail: run.error ?? run.reason,
-      color: presentation.color,
-    };
-  }
-  return renderHeader(run, icon, state, false, theme, width);
+  return renderHeader(run, icon, row.state, false, theme, width, columns, row);
 }
 
 export function renderRunningLines(
@@ -174,32 +65,54 @@ export function renderRunningLines(
   spinnerFrame: number,
   theme: Theme,
   width = Infinity,
+  columns?: WidgetColumns | null,
+  row: WidgetRow = prepareWidgetRow(run),
 ): [header: string, activity: string] {
+  columns = columns === undefined ? (widgetColumns([row], width) ?? null) : columns;
+  const header = renderRunningHeader(run, spinnerFrame, theme, width, columns, row);
+  return [header, renderRunningActivity(run, theme, width, row.headerClock)];
+}
+
+function renderRunningHeader(
+  run: WidgetRun,
+  spinnerFrame: number,
+  theme: Theme,
+  width: number,
+  columns: WidgetColumns | null,
+  row: WidgetRow,
+): string {
   const presentation = runPresentation(run.status, spinnerFrame, run.finishing);
   // "finishing" and "cancelling" are distinct facts: the first is our own
   // finalization, the second is a request whose exit is not yet observed.
-  const state: HeaderState | undefined =
-    run.status === "cancelling"
-      ? { text: "cancelling", color: "warning" }
-      : run.finishing
-        ? { text: "finishing", color: "dim" }
-        : undefined;
-  const header = renderHeader(
+  return renderHeader(
     run,
     theme.fg(presentation.color, presentation.glyph),
-    state,
+    row.state,
     true,
     theme,
     width,
+    columns,
+    row,
   );
+}
+
+function renderRunningActivity(
+  run: WidgetRun,
+  theme: Theme,
+  width: number,
+  headerClock: boolean,
+): string {
   const { system, showGeneration } = activityPresentation(run);
-  const prefix = `  ${GLYPHS.subLine}  `;
-  const columns = Math.max(0, width - visibleWidth(prefix));
+  const prefix = theme.fg("dim", `  ${GLYPHS.subLine}  `);
+  // This is the turn clock, not the duration of the displayed tool/thought.
+  const clock = headerClock ? undefined : turnClock(run);
+  const turn = clock ? theme.fg(clock.color, clock.text) + " " : "";
+  const room = Math.max(0, width - visibleWidth(prefix + turn));
   const activity =
     run.active_tools.length || showGeneration
-      ? renderActivity(run.active_tools, run, theme, columns)
-      : theme.fg("dim", clipPlainText(singleLineText(system ?? "thinking…"), columns));
-  return [header, theme.fg("dim", prefix) + activity];
+      ? renderActivity(run.active_tools, run, theme, room)
+      : theme.fg("dim", clipPlainText(singleLineText(system ?? "thinking…"), room));
+  return prefix + turn + activity;
 }
 
 // Heading + the default twelve-Agent roster, without a pagination row.
@@ -218,19 +131,6 @@ export const lineBudget = (rows?: number): number =>
     ? Math.max(0, Math.min(MAX_WIDGET_LINES, Math.floor(rows! / 3), rows! - INPUT_CHROME_RESERVE))
     : 6;
 
-/** Queued Agents have identities too; the compact count is only a summary. */
-function renderQueuedLine(run: WidgetRun, theme: Theme, width: number): string {
-  const presentation = runPresentation(run.status);
-  return renderHeader(
-    run,
-    theme.fg(presentation.color, presentation.glyph),
-    { text: presentation.label, color: presentation.color },
-    false,
-    theme,
-    width,
-  );
-}
-
 /** One rendered row plus the Agent it belongs to; `agent` is what turns a click
  * at row N into "open that Agent". Chrome carries none: the heading has its own
  * expansion action, while aggregate queued/overflow/owner rows are inert. */
@@ -238,6 +138,16 @@ interface Row {
   line: string;
   agent?: string;
   kind?: "branch" | "activity";
+}
+interface RowGroup {
+  run?: WidgetRun;
+  state: RowState;
+  count: number;
+  activity: boolean;
+}
+interface AllocatedGroup {
+  group: RowGroup;
+  activity: boolean;
 }
 /** Geometry belongs to one paint, not the Owner or the shared widget binding. */
 export interface WidgetFrame {
@@ -286,18 +196,24 @@ export function renderWidget(params: {
     ? Math.max(0, Math.min(MAX_WIDGET_LINES, Math.floor(params.maxLines!)))
     : 6;
   if (maxLines === 0) return { lines: [], hits: [] };
-  const queued = runs.filter((run) => run.status === "queued");
-  const running = runs.filter((run) => active(run) && run.status !== "queued");
-  const finished = runs.filter(
-    (run) => terminal(run.status) && (expanded || shouldShowFinished(run.agent_id, run.status)),
-  );
-  const hasActive = running.length > 0 || queued.length > 0;
+  const eligible = runs
+    .filter(
+      (run) =>
+        active(run) ||
+        expanded ||
+        run.status === "needs_input" ||
+        run.pending_messages > 0 ||
+        shouldShowFinished(run.agent_id, run.status),
+    )
+    .map((run): RowGroup => ({ run, state: stateOf(run), count: 1, activity: live(run) }))
+    .toSorted((a, b) => priority(a.state) - priority(b.state));
+  const hasActive = runs.some(active);
   // A full roster is itself the news: the next delegation will be refused, and
   // the heading carrying "(full)" is the only place that is visible.
   const saturated = owner.resident_limit > 0 && owner.resident >= owner.resident_limit;
   if (
     !hasActive &&
-    !finished.length &&
+    !eligible.length &&
     !owner.blocked &&
     !saturated &&
     (!disclosure || owner.resident === 0)
@@ -309,8 +225,9 @@ export function renderWidget(params: {
   // Status counts describe the same resident population as capacity. Released
   // failure diagnostics still retain their body rows, inspection and clicks.
   const counts = new Map<WidgetRun["status"], number>();
-  for (const run of runs.filter((run) => run.resident)) {
-    const status = active(run) && run.status !== "queued" ? "running" : run.status;
+  const residents = runs.filter((run) => run.resident);
+  for (const run of residents) {
+    const status = live(run) ? "running" : run.status;
     counts.set(status, (counts.get(status) ?? 0) + 1);
   }
   const states = ["needs_input", "running", "queued", "completed", "failed", "cancelled"] as const;
@@ -318,8 +235,8 @@ export function renderWidget(params: {
     .filter((status) => (counts.get(status) ?? 0) > 0)
     .map((status) => {
       const count = counts.get(status) ?? 0;
-      // The rollup should be calm and readable; motion belongs to Agent rows.
-      if (status === "running") return theme.fg("dim", `${GLYPHS.running}${count}`);
+      // Keep summary glyphs static; animation belongs to individual Agent rows.
+      if (status === "running") return theme.fg("accent", `${GLYPHS.running}${count}`);
       const presentation = runPresentation(status);
       return theme.fg(
         status === "completed" ? "dim" : presentation.color,
@@ -331,10 +248,7 @@ export function renderWidget(params: {
   // Reserve warning space before body allocation, never at the clipped bottom.
   const chrome = 1 + (owner.blocked && maxLines > 1 ? 1 : 0);
   const bodyBudget = maxLines - chrome;
-  const rosterCost = runs.reduce(
-    (sum, run) => sum + (active(run) && run.status !== "queued" ? 2 : 1),
-    0,
-  );
+  const rosterCost = runs.reduce((sum, run) => sum + (live(run) ? 2 : 1), 0);
   const needsPages = rosterCost > bodyBudget;
   const controlWidth = visibleWidth(`[Prev] ${runs.length}/${runs.length} [Next]`);
   const inspectable =
@@ -375,31 +289,91 @@ export function renderWidget(params: {
   const headingWidth =
     canDisclose && visibleWidth(headingText) <= width ? visibleWidth(heading) : 0;
 
+  const ordinaryQueued = eligible.filter((group) => group.state === "queued");
+  const groups = expanded
+    ? eligible
+    : eligible.flatMap((group): RowGroup[] =>
+        group.state !== "queued"
+          ? [group]
+          : group === ordinaryQueued[0]
+            ? [{ state: "queued", count: ordinaryQueued.length, activity: false }]
+            : [],
+      );
+  // Allocate identities, previews and complete pages BEFORE preparing metrics.
+  // A surviving header gets the turn clock only when its activity will be absent.
+  let shown: AllocatedGroup[] = [];
+  let hidden: RowGroup[] = [];
+  let pages: AllocatedGroup[][] = [];
+  let page = 0;
+  if (expanded && inspectable) {
+    const budget = bodyBudget - (needsPages ? 1 : 0);
+    pages = [[]];
+    let used = 0;
+    for (const group of groups) {
+      const activity = group.activity && budget >= 2;
+      const cost = activity ? 2 : 1;
+      if (used + cost > budget) {
+        pages.push([]);
+        used = 0;
+      }
+      pages[pages.length - 1]!.push({ group, activity });
+      used += cost;
+    }
+    page = Math.max(0, Math.min(pages.length - 1, Math.floor(params.page ?? 0) || 0));
+    shown = pages[page]!;
+  } else if (!expanded) {
+    ({ shown, hidden } = fitGroups(groups, bodyBudget));
+  }
+  const headerClocks = new Set(
+    (expanded ? pages.flat() : shown)
+      .filter(({ group, activity }) => group.activity && !activity)
+      .map(({ group }) => group.run),
+  );
+  // Aggregated queue/overflow rows carry no individually painted metadata.
+  // Expanded inspection deliberately shares geometry across its complete roster;
+  // an expanded roster too small to inspect paints no Agent rows at all.
+  const layoutRuns = (
+    expanded ? (inspectable ? eligible : []) : shown.map(({ group }) => group)
+  ).flatMap(({ run }) => (run ? [run] : []));
+  const prepared = new Map<WidgetRun, WidgetRow>(
+    layoutRuns.map((run) => [run, prepareWidgetRow(run, headerClocks.has(run))]),
+  );
   const rowWidth = Math.max(0, width - visibleWidth(BRANCH) - 1);
-  const finishedRows: Row[] = finished.map((run) => ({
-    line: clip(`${theme.fg("dim", BRANCH)} ${renderFinishedLine(run, theme, rowWidth)}`),
-    agent: run.agent_id,
-    kind: "branch",
-  }));
-  const runningRows: [Row, Row][] = running.map((run) => {
-    const [header, activity] = renderRunningLines(run, spinnerFrame, theme, rowWidth);
-    // The activity line answers for the same Agent as its header, so clicking
-    // "⎿ reading src/core/controller.ts" opens the Agent doing the reading.
+  // Compact columns follow painted Agent headers; expanded columns span pages.
+  const columns = prepared.size ? (widgetColumns([...prepared.values()], rowWidth) ?? null) : null;
+  const paint = ({ group, activity }: AllocatedGroup): Row[] => {
+    const run = group.run;
+    if (!run) {
+      const presentation = runPresentation("queued");
+      return [
+        {
+          line: clip(
+            `${theme.fg("dim", BRANCH)} ${theme.fg(presentation.color, presentation.glyph)} ${theme.fg("dim", `${group.count} queued`)}`,
+          ),
+          kind: "branch",
+        },
+      ];
+    }
+    const row = prepared.get(run)!;
+    const header = group.activity
+      ? renderRunningHeader(run, spinnerFrame, theme, rowWidth, columns, row)
+      : renderFinishedLine(run, theme, rowWidth, columns, row);
     return [
       { line: clip(`${theme.fg("dim", BRANCH)} ${header}`), agent: run.agent_id, kind: "branch" },
-      { line: clip(theme.fg("dim", TRUNK) + activity), agent: run.agent_id, kind: "activity" },
+      ...(activity
+        ? [
+            {
+              line: clip(
+                theme.fg("dim", TRUNK) +
+                  renderRunningActivity(run, theme, rowWidth, row.headerClock),
+              ),
+              agent: run.agent_id,
+              kind: "activity" as const,
+            },
+          ]
+        : []),
     ];
-  });
-  const queuedPresentation = runPresentation("queued", spinnerFrame);
-  const queuedRow: Row | undefined = queued.length
-    ? {
-        line: clip(
-          `${theme.fg("dim", BRANCH)} ${theme.fg(queuedPresentation.color, queuedPresentation.glyph)} ` +
-            `${theme.fg("dim", `${queued.length} queued`)}`,
-        ),
-        kind: "branch",
-      }
-    : undefined;
+  };
   const rows: Row[] = [{ line: heading }];
   if (owner.blocked && maxLines > 1)
     rows.push({
@@ -408,27 +382,7 @@ export function renderWidget(params: {
     });
   let pagination: WidgetFrame["pagination"];
   if (expanded && inspectable) {
-    const budget = bodyBudget - (needsPages ? 1 : 0);
-    // Whole Agents, not line offsets: a tiny page still shows a clickable name.
-    // Keep the activity subline whenever the viewport can afford a pair.
-    const groups: Row[][] = [
-      ...finishedRows.map((row) => [row]),
-      ...runningRows.map((pair) => (budget >= 2 ? pair : [pair[0]])),
-      ...queued.map((run): Row[] => [
-        {
-          line: clip(`${theme.fg("dim", BRANCH)} ${renderQueuedLine(run, theme, rowWidth)}`),
-          agent: run.agent_id,
-          kind: "branch",
-        },
-      ]),
-    ];
-    const pages: Row[][] = [[]];
-    for (const group of groups) {
-      if (pages[pages.length - 1]!.length + group.length > budget) pages.push([]);
-      pages[pages.length - 1]!.push(...group);
-    }
-    const page = Math.max(0, Math.min(pages.length - 1, Math.floor(params.page ?? 0) || 0));
-    rows.push(...pages[page]!);
+    rows.push(...shown.flatMap(paint));
     if (needsPages) {
       const prefix = `[Prev] ${page + 1}/${pages.length} `;
       pagination = {
@@ -446,13 +400,8 @@ export function renderWidget(params: {
     if (runs.length > 0 && bodyBudget > 0)
       rows.push({ line: clip(theme.fg("dim", "Alt+A to inspect")) });
   } else {
-    const body = finishedRows.length + runningRows.length * 2 + (queuedRow ? 1 : 0);
-    if (body <= bodyBudget)
-      rows.push(...finishedRows, ...runningRows.flat(), ...(queuedRow ? [queuedRow] : []));
-    else
-      rows.push(
-        ...overflow(runningRows, [queuedRow, queued.length], finishedRows, bodyBudget, clip, theme),
-      );
+    rows.push(...shown.flatMap(paint));
+    if (hidden.length) rows.push(renderOverflow(hidden, width, clip, theme));
   }
   const closed = closeLast(rows);
   return {
@@ -466,55 +415,57 @@ export function renderWidget(params: {
 export const renderWidgetLines = (params: Parameters<typeof renderWidget>[0]): string[] =>
   renderWidget(params).lines;
 
-function overflow(
-  running: [Row, Row][],
-  queued: [row: Row | undefined, count: number],
-  finished: Row[],
+function fitGroups(
+  groups: readonly RowGroup[],
   maxBody: number,
+): { shown: AllocatedGroup[]; hidden: RowGroup[] } {
+  if (maxBody <= 0) return { shown: [], hidden: [] };
+  const overflow = groups.length > maxBody;
+  const slots = Math.max(0, maxBody - (overflow ? 1 : 0));
+  const selected = groups.slice(0, slots);
+  // Even many unanswered questions must not hide every executing identity when
+  // there is room for a header and an honest hidden-state summary.
+  if (slots > 0 && !selected.some((group) => group.activity)) {
+    const executing = groups.find((group) => group.activity);
+    if (executing) selected[selected.length - 1] = executing;
+  }
+  const selectedSet = new Set(selected);
+  const hidden = groups.filter((group) => !selectedSet.has(group));
+  let activityRoom = maxBody - selected.length - (hidden.length ? 1 : 0);
+  const shown = selected.map((group) => ({
+    group,
+    activity: group.activity && activityRoom-- > 0,
+  }));
+  return { shown, hidden };
+}
+
+function renderOverflow(
+  groups: readonly RowGroup[],
+  width: number,
   clip: (line: string) => string,
   theme: Theme,
-): Row[] {
-  const rows: Row[] = [];
-  if (maxBody <= 0) return rows;
-  // Priority inverts the calm order: still-running work matters most when space runs out.
-  let budget = maxBody - 1,
-    hiddenRunning = 0,
-    hiddenFinished = 0,
-    hiddenQueued = queued[1];
-  for (const pair of running) {
-    if (budget >= 2) {
-      rows.push(...pair);
-      budget -= 2;
-    } else if (budget === 1 && maxBody <= 2) {
-      rows.push(pair[0]);
-      budget--;
-    } else hiddenRunning++;
-  }
-  if (queued[0] && budget >= 1) {
-    rows.push(queued[0]);
-    budget--;
-    hiddenQueued = 0;
-  }
-  for (const row of finished) {
-    if (budget >= 1) {
-      rows.push(row);
-      budget--;
-    } else hiddenFinished++;
-  }
-  // The queued row is itself a count, so dropping it silently would lose the fact.
-  const hidden = [
-    hiddenRunning ? `${hiddenRunning} running` : "",
-    hiddenQueued ? `${hiddenQueued} queued` : "",
-    hiddenFinished ? `${hiddenFinished} finished` : "",
-  ].filter(Boolean);
-  const total = hiddenRunning + hiddenQueued + hiddenFinished;
-  rows.push({
-    line: clip(
-      `${theme.fg("dim", BRANCH)} ${theme.fg("dim", `+${total} more (${hidden.join(", ")})`)}`,
-    ),
+): Row {
+  const count = (state: RowState) =>
+    groups.filter((group) => group.state === state).reduce((sum, group) => sum + group.count, 0);
+  const total = groups.reduce((sum, group) => sum + group.count, 0);
+  const states = ROW_STATES.map((entry) => ({ ...entry, count: count(entry.state) }));
+  const hidden = states.filter((entry) => entry.count > 0);
+  const other = states
+    .filter((entry) => !("signal" in entry))
+    .reduce((sum, entry) => sum + entry.count, 0);
+  const signals = hidden.flatMap((entry) =>
+    "signal" in entry ? [`${entry.signal}${entry.count}`] : [],
+  );
+  const choices = [
+    `+${total} more (${hidden.map(({ state, count }) => `${count} ${state}`).join(", ")})`,
+    `+${total} more (${hidden.map(({ short, count }) => `${short}${count}`).join(" ")})`,
+    `+${total} (${[...signals, ...(other ? [`other${other}`] : [])].join(" ")})`,
+  ];
+  const text = choices.find((text) => visibleWidth(`${BRANCH} ${text}`) <= width) ?? choices[2]!;
+  return {
+    line: clip(`${theme.fg("dim", BRANCH)} ${theme.fg("dim", text)}`),
     kind: "branch",
-  });
-  return rows;
+  };
 }
 /**
  * Close the tree: the final branch becomes └─, and a trailing activity line

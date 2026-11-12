@@ -38,6 +38,11 @@ returns; no example claims a real provider result or improved model choices.
 
 ## 1. Independent work → wait → collect
 
+Every spawn/run needs a `label`: a concise 3–8 word task title, not instructions
+or background (1--72 nonblank UTF-16 units). It is used verbatim; there is no
+prompt-derived default. Word counts are guidance, so CJK titles are allowed.
+Historical labels remain unchanged.
+
 Submit the two independent tasks (they may run concurrently), then wait. Do not
 repeat an uncertain spawn: inspect `agent_list` first. A wait can return early
 for alerts, questions or task issues; handle them, then wait on remaining tasks.
@@ -46,8 +51,8 @@ until absent. A completed status or declared check is not correctness evidence.
 
 ```json
 [
-  {"tool":"agent_spawn","arguments":{"agent":"alpha","profile":"worker","reasoning_difficulty":3,"prompt":"Review src/parser.ts without edits. Return findings, evidence and gaps."}},
-  {"tool":"agent_spawn","arguments":{"agent":"beta","profile":"worker","reasoning_difficulty":2,"prompt":"Review docs/parser.md without edits. Return findings, evidence and gaps."}},
+  {"tool":"agent_spawn","arguments":{"agent":"alpha","profile":"worker","reasoning_difficulty":3,"label":"Review parser source risks","prompt":"Review src/parser.ts without edits. Return findings, evidence and gaps."}},
+  {"tool":"agent_spawn","arguments":{"agent":"beta","profile":"worker","reasoning_difficulty":2,"label":"Review parser documentation risks","prompt":"Review docs/parser.md without edits. Return findings, evidence and gaps."}},
   {"tool":"agent_wait","arguments":{"agents":["alpha","beta"],"mode":"all","wait_ms":300000}},
   {"tool":"agent_read","arguments":{"agent":"alpha"}},
   {"tool":"agent_read","arguments":{"agent":"beta"}}
@@ -64,10 +69,10 @@ send an answer through `agent_send` or bypass it with `agent_run`.
 
 ```json
 [
-  {"tool":"agent_spawn","arguments":{"agent":"alpha","profile":"worker","reasoning_difficulty":3,"prompt":"If the format is undecided, ask_parent for the required choice, then stop calling tools and end your turn. Otherwise implement the agreed parser format."}},
+  {"tool":"agent_spawn","arguments":{"agent":"alpha","profile":"worker","reasoning_difficulty":3,"label":"Implement agreed parser format","prompt":"If the format is undecided, ask_parent for the required choice, then stop calling tools and end your turn. Otherwise implement the agreed parser format."}},
   {"tool":"agent_wait","arguments":{"agents":["alpha"],"wait_ms":300000}},
   {"tool":"agent_answer","arguments":{"agent":"alpha","question_id":"<INVALID_QUESTION_ID>","answer":"Use the existing format; preserve compatibility."}},
-  {"tool":"agent_spawn","arguments":{"agent":"beta","profile":"worker","reasoning_difficulty":3,"prompt":"Review the completed parser work and report remaining risks; do not edit.","after":["alpha"]}},
+  {"tool":"agent_spawn","arguments":{"agent":"beta","profile":"worker","reasoning_difficulty":3,"label":"Review completed parser changes","prompt":"Review the completed parser work and report remaining risks; do not edit.","after":["alpha"]}},
   {"tool":"agent_wait","arguments":{"agents":["alpha","beta"],"wait_ms":300000}}
 ]
 ```
@@ -88,9 +93,9 @@ Agent. Both remain Owner-local, not restart recovery.
 
 ```json
 [
-  {"tool":"agent_spawn","arguments":{"agent":"alpha","profile":"worker","reasoning_difficulty":3,"prompt":"Investigate parser edge cases. Return detailed findings and evidence."}},
+  {"tool":"agent_spawn","arguments":{"agent":"alpha","profile":"worker","reasoning_difficulty":3,"label":"Investigate parser edge cases","prompt":"Investigate parser edge cases. Return detailed findings and evidence."}},
   {"tool":"agent_wait","arguments":{"agents":["alpha"],"wait_ms":300000}},
-  {"tool":"agent_run","arguments":{"agent":"alpha","continues":"Your parser edge-case investigation","prompt":"Continue that investigation: summarize the highest-priority remaining issue."}},
+  {"tool":"agent_run","arguments":{"agent":"alpha","continues":"Your parser edge-case investigation","label":"Prioritize remaining parser issue","prompt":"Continue that investigation: summarize the highest-priority remaining issue."}},
   {"tool":"agent_wait","arguments":{"agents":["alpha"],"wait_ms":300000}},
   {"tool":"agent_read","arguments":{"agent":"alpha","task":1,"max_chars":32}},
   {"tool":"agent_read","arguments":{"agent":"alpha","cursor":"<INVALID_RESULT_CURSOR>"}}
@@ -105,7 +110,7 @@ or proof that a check ran.
 
 ```json
 [
-  {"tool":"agent_spawn","arguments":{"agent":"alpha","profile":"worker","reasoning_difficulty":2,"prompt":"Fix src/parser.ts and run only the assigned parser unit check. Report the exact command, result, platform/tool versions and any unrun checks. Do not install dependencies; if unavailable, report the blocker.","dispatch":{"inputs":["src/parser.ts"],"ownership":["src/parser.ts"],"tree":"build","checks":["parser unit check"]}}},
+  {"tool":"agent_spawn","arguments":{"agent":"alpha","profile":"worker","reasoning_difficulty":2,"label":"Fix and verify parser","prompt":"Fix src/parser.ts and run only the assigned parser unit check. Report the exact command, result, platform/tool versions and any unrun checks. Do not install dependencies; if unavailable, report the blocker.","dispatch":{"inputs":["src/parser.ts"],"ownership":["src/parser.ts"],"tree":"build","checks":["parser unit check"]}}},
   {"tool":"agent_wait","arguments":{"agents":["alpha"],"wait_ms":300000}},
   {"tool":"agent_read","arguments":{"agent":"alpha"}}
 ]
@@ -149,6 +154,7 @@ await agent_spawn({
   agent: "beta",
   profile: "scout",
   reasoning_difficulty: 2,
+  label: "Correlate parser reference sources",
   prompt: "Read the local parser notes and correlate them with the cited public docs. Return cited findings only; do not edit.",
   return_to: {
     agent: "alpha",

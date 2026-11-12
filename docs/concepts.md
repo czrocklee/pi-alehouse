@@ -148,11 +148,11 @@ do not keep an SDK execution environment alive.
 
 ## Task fields, not roles
 
-`agent_spawn` requires `agent`, `prompt`, `profile` (`worker` or `scout`)
-and `reasoning_difficulty`. `agent_run` requires `agent`, `continues` and
-`prompt`; `continues` names the specific earlier work of that Agent being
+`agent_spawn` requires `agent`, `prompt`, `label`, `profile` (`worker` or `scout`)
+and `reasoning_difficulty`. `agent_run` requires `agent`, `continues`, `prompt`
+and `label`; `continues` names the specific earlier work of that Agent being
 continued (if none, spawn, even on a related topic; add `after` if only its
-result is needed). Both take optional `label`, `after`,
+result is needed). Both take optional `after`,
 `wait_ms` and `dispatch`; spawn also accepts `max_turns`, `inherit_context` and
 optional `return_to`. `return_to` is spawn-only and is not an `agent_run` field.
 `agent_read` retains `max_chars`. `agent_send`
@@ -164,10 +164,16 @@ run cannot bypass an unanswered question.
 - **`prompt`** is the execution instruction. It may be up to 131072 UTF-16
   units at parent-tool admission, although permission provenance has stricter
   review limits. It is not a name, a policy profile, or a routing request.
-- **`label`** is a short task label (up to 120 UTF-16 units) for summaries/roster/UI use,
-  stored as the Run's description and defaulting to the instructions' first
-  nonblank line. It is neither injected as a summary nor a
-  substitute for the prompt.
+- **`label`** is a required concise 3–8 word task title for spawn/run, not
+  instructions or background: a nonblank string capped at 72 UTF-16 units.
+  Word counts are guidance, not validation, so CJK titles are allowed. It is
+  stored verbatim as the Run's description, with no prompt-derived default.
+  Model communication projection retains its 120-unit label bound; generic core
+  Run descriptions retain a separate 4096-unit bound. Historical labels remain
+  byte-literal. A label is neither injected as a summary nor a substitute for
+  the prompt. Parent text admission uses UTF-16 units (JavaScript `.length`),
+  with nonblank/limit checks before cloning or action at preparation and again
+  at execution after hooks; it never trims or truncates accepted text.
 - **`agent`** names the Agent. It does not alter profile, permissions,
   routing, or identity.
 
