@@ -24,11 +24,11 @@ test("disabled spawn and resume stay pre-prepare and allocate neither Runs nor s
       preparations++;
       return task("must not prepare");
     }),
-    errorCode("WORKERS_DISABLED"),
+    errorCode("DELEGATION_OFF"),
   );
   await assert.rejects(
     c.submit("disabled-submit", task("must not start")),
-    errorCode("WORKERS_DISABLED"),
+    errorCode("DELEGATION_OFF"),
   );
   assert.equal(preparations, 0);
   assert.equal(c.hasAcceptedRuns, false);
@@ -51,7 +51,7 @@ test("disabled spawn and resume stay pre-prepare and allocate neither Runs nor s
       preparations++;
       return { resume: accepted.agent_id, prompt: "again" };
     }),
-    errorCode("WORKERS_DISABLED"),
+    errorCode("DELEGATION_OFF"),
   );
   assert.equal(preparations, 0);
   assert.equal(ports.length, portCount);
@@ -95,7 +95,7 @@ test("off rejects external steer but preserves accepted input, soft-budget deliv
   await tick();
   state.enabled = false;
   state.revision++;
-  assert.throws(() => c.steer(run.run_id, "rejected while off"), errorCode("WORKERS_DISABLED"));
+  assert.throws(() => c.steer(run.run_id, "rejected while off"), errorCode("DELEGATION_OFF"));
   assert.throws(() => c.steer("unknown", "no such Run"), errorCode("RUN_NOT_FOUND"));
   assert.deepEqual(
     events.map((event) => event.kind),
@@ -115,7 +115,7 @@ test("off rejects external steer but preserves accepted input, soft-budget deliv
       .content[0].text,
   );
   assert.equal(waited.reason, "task_issue");
-  assert.equal(waited.workers_disabled, true);
+  assert.match(waited.delegation_off, /^Ask the user to enable delegation/);
   assert.equal(c.getResult(run.run_id).text, "done");
   assert.throws(() => c.steer(run.run_id, "already finished"), errorCode("RUN_INPUT_CLOSED"));
   assert.deepEqual(
@@ -210,7 +210,7 @@ test("a pending request cannot cross an off-on ABA transition", async (t) => {
   state.revision++;
   state.enabled = true;
   hold.resolve();
-  await assert.rejects(pending, errorCode("WORKERS_DISABLED"));
+  await assert.rejects(pending, errorCode("DELEGATION_OFF"));
   assert.equal(preparations, 0);
   assert.equal(ports.length, 0);
   assert.equal(c.hasAcceptedRuns, false);
@@ -230,7 +230,7 @@ test("synchronous prepare reentry cannot accept after it closes admission", asyn
       state.revision++;
       return task("must not allocate");
     }),
-    errorCode("WORKERS_DISABLED"),
+    errorCode("DELEGATION_OFF"),
   );
   assert.equal(preparations, 1);
   assert.equal(ports.length, 0);
@@ -254,7 +254,7 @@ test("reenabling admits new and resumed Runs while a resident Agent retains fixe
   state.revision++;
   await assert.rejects(
     c.submit("blocked-resume", { resume: initial.agent_id, prompt: "blocked" }),
-    errorCode("WORKERS_DISABLED"),
+    errorCode("DELEGATION_OFF"),
   );
   state.enabled = true;
   const created = await c.submit("new", task("new"));
@@ -293,7 +293,7 @@ test("default callers remain enabled, while bad readers fail closed without pois
   reader = "throw";
   assert.equal((await c.submit("accepted", task("accepted"))).run_id, accepted.run_id);
   reader = "invalid";
-  await assert.rejects(c.submit("new", task("new")), errorCode("WORKERS_DISABLED"));
+  await assert.rejects(c.submit("new", task("new")), errorCode("DELEGATION_OFF"));
   assert.equal(c.stats().internal_error, undefined);
   assert.equal(c.stats().parent_error, undefined);
   ports[0].finish();

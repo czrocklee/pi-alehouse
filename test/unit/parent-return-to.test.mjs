@@ -89,7 +89,7 @@ function notice(row, state = "delivered") {
     "result_omitted",
     "result_truncated",
     "next_cursor",
-    "omitted_chars",
+    "lost_chars",
   ])
     assert(!Object.hasOwn(row, field), `${field} must not describe a notice`);
 }
@@ -128,10 +128,10 @@ test("compound spawn, completed wait and explicit source reads show handoff noti
   f.ports[1].callbacks.output(boundedOutput(marker, 1_048_576));
   const preview = await f.call("agent_wait", { agents: ["birch"], wait_ms: 0 });
   assert.doesNotMatch(JSON.stringify(preview), new RegExp(marker));
-  notice(preview.agents[0], "pending");
+  notice(preview.tasks[0], "pending");
   for (const input of [{ agent: "birch" }, { agent: "birch", task: 1, max_chars: 1 }]) {
     const live = await f.call("agent_read", input);
-    notice(live.agents[0], "pending");
+    notice(live.tasks[0], "pending");
     assert.doesNotMatch(JSON.stringify(live), new RegExp(marker));
   }
   const sent = await f.call("agent_send", {
@@ -140,7 +140,7 @@ test("compound spawn, completed wait and explicit source reads show handoff noti
     wait_ms: 0,
   });
   assert.equal(sent.action.delivery, "steered");
-  notice(sent.agents[0], "pending");
+  notice(sent.tasks[0], "pending");
   assert.doesNotMatch(JSON.stringify(sent), new RegExp(marker));
   f.ports[1].finish(marker);
   await until(() => f.ports[0].calls.length === 2 && f.ports[0].streaming);
@@ -155,28 +155,28 @@ test("compound spawn, completed wait and explicit source reads show handoff noti
   );
   assert.deepEqual(f.controller.view(continuationId).effective_settings, original);
   const hidden = await f.call("agent_wait", { agents: ["birch"], wait_ms: 0 });
-  notice(hidden.agents[0]);
+  notice(hidden.tasks[0]);
   assert.doesNotMatch(JSON.stringify(hidden), new RegExp(marker));
   const beforeFinal = await f.call("agent_read", { agent: "birch", task: 1, max_chars: 1 });
-  notice(beforeFinal.agents[0]);
+  notice(beforeFinal.tasks[0]);
   assert.doesNotMatch(JSON.stringify(beforeFinal), new RegExp(marker));
   f.ports[0].finish("WORKER_FINAL_RESULT");
   const reply = await result;
   assert.deepEqual(reply.action, { type: "agent_spawn", agent: "birch", task: 1 });
   assert.deepEqual(
-    reply.agents.map((row) => [row.agent, row.task, row.status]),
+    reply.tasks.map((row) => [row.agent, row.task, row.status]),
     [
       ["birch", 1, "completed"],
       ["ash", 2, "completed"],
     ],
   );
-  notice(reply.agents[0]);
-  assert.equal(reply.agents[1].result, "WORKER_FINAL_RESULT");
+  notice(reply.tasks[0]);
+  assert.equal(reply.tasks[1].result, "WORKER_FINAL_RESULT");
   assert.doesNotMatch(JSON.stringify(reply), new RegExp(marker));
   // The observed failure sequence: compound completion, completed source wait, then source read.
   const completed = await f.call("agent_wait", { agents: ["birch"], wait_ms: 0 });
-  assert.equal(completed.agents[0].status, "completed");
-  notice(completed.agents[0]);
+  assert.equal(completed.tasks[0].status, "completed");
+  notice(completed.tasks[0]);
   const identity = {
     owner: f.controller.identity.owner_id,
     generation: f.controller.identity.generation,
@@ -197,12 +197,12 @@ test("compound spawn, completed wait and explicit source reads show handoff noti
     { cursor: raw.next_cursor },
   ]) {
     const read = await f.call("agent_read", { agent: "birch", ...selector, max_chars: 1 });
-    assert.equal(read.agents[0].task, 1);
-    notice(read.agents[0]);
+    assert.equal(read.tasks[0].task, 1);
+    notice(read.tasks[0]);
     assert.doesNotMatch(JSON.stringify(read), new RegExp(marker));
   }
   const worker = await f.call("agent_read", { agent: "ash", task: 2 });
-  assert.equal(worker.agents[0].result, "WORKER_FINAL_RESULT");
+  assert.equal(worker.tasks[0].result, "WORKER_FINAL_RESULT");
 });
 
 for (const state of ["deny", "ask", "unknown"])
@@ -328,13 +328,13 @@ test("ordinary scout spawn keeps long output and paging without querying compoun
   const marker = "PARENT_CONSUMED_RESULT".repeat(1000);
   f.ports[0].finish(marker);
   await ended(f.controller, { run_id: f.controller.findAgent("birch").run_id });
-  const automatic = (await call("agent_wait", { agents: ["birch"], wait_ms: 0 })).agents[0];
+  const automatic = (await call("agent_wait", { agents: ["birch"], wait_ms: 0 })).tasks[0];
   assert.equal(automatic.result, marker.slice(0, 16384));
   assert.equal(automatic.result_omitted, undefined);
   assert.equal(automatic.result_truncated, undefined);
   assert.match(automatic.next_cursor, /^r1_/);
   const next = (await call("agent_read", { agent: "birch", cursor: automatic.next_cursor }))
-    .agents[0];
+    .tasks[0];
   assert.equal(next.result, marker.slice(16384));
   assert.equal(next.next_cursor, undefined);
 });
@@ -391,7 +391,7 @@ test("Off rejects compound admission before permission lookup and leaves the ori
   admission.revision++;
   await assert.rejects(
     f.call("agent_spawn", args({ return_to: f.destination }), "off-source"),
-    errorCode("WORKERS_DISABLED"),
+    errorCode("DELEGATION_OFF"),
   );
   assert.equal(checks, 0);
   assert.equal(f.controller.stats().runs, 1);

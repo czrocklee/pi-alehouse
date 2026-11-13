@@ -63,13 +63,19 @@ const modelRows = async (controller, agentIds) => {
       )
     ).content[0].text,
   );
-  assert.equal(Array.isArray(body.agents), true);
-  for (const row of body.agents) {
+  assert.equal(Array.isArray(body.tasks), true);
+  for (const row of body.tasks) {
     assert.equal(Object.hasOwn(row, "provider"), false, row.agent);
-    if (row.wait !== undefined)
-      assert.ok(row.wait === "dependencies" || row.wait === "capacity", row.wait);
+    assert.equal(Object.hasOwn(row, "wait"), false, row.agent);
+    if (row.queued_for !== undefined) {
+      assert.equal(row.status, "queued", row.agent);
+      assert.ok(
+        row.queued_for === "dependencies" || row.queued_for === "provider_capacity",
+        row.queued_for,
+      );
+    }
   }
-  return body.agents;
+  return body.tasks;
 };
 const openDefault = (t) => fixture(t, { omitLimits: true });
 
@@ -187,11 +193,11 @@ test("one provider shares its cap across model, profile and difficulty; FIFO ski
   assert.deepEqual(providerRow(c, "alpha"), { provider: "alpha", active: 2, queued: 2, limit: 2 });
   assert.deepEqual(providerRow(c, "beta"), { provider: "beta", active: 1, queued: 0, limit: 2 });
   const rows = await modelRows(c, [first.agent_id, third.agent_id, later.agent_id, other.agent_id]);
-  assert.equal(rows.find((row) => row.agent === "third").wait, "capacity");
-  assert.equal(rows.find((row) => row.agent === "later").wait, "capacity");
+  assert.equal(rows.find((row) => row.agent === "third").queued_for, "provider_capacity");
+  assert.equal(rows.find((row) => row.agent === "later").queued_for, "provider_capacity");
   assert.equal(rows.find((row) => row.agent === "first").status, "running");
-  assert.equal(rows.find((row) => row.agent === "first").wait, undefined);
-  assert.equal(rows.find((row) => row.agent === "other").wait, undefined);
+  assert.equal(rows.find((row) => row.agent === "first").queued_for, undefined);
+  assert.equal(rows.find((row) => row.agent === "other").queued_for, undefined);
   assertOwnerInvariants(c, "shared provider cap");
   portFor(ports, "first").finish("first done");
   await until(() => portFor(ports, "third")?.streaming);
@@ -397,7 +403,7 @@ test("a cross-provider dependency takes no slot and fails without one when unmet
   const [waiterRow] = await modelRows(c, [waiter.agent_id]);
   assert.equal(waiterRow.agent, "beta-wait");
   assert.equal(waiterRow.status, "queued");
-  assert.equal(waiterRow.wait, "dependencies");
+  assert.equal(waiterRow.queued_for, "dependencies");
   ports[0].finish("broken", "error", "boom");
   const failed = (await ended(c, waiter)).snapshots[0];
   assert.equal(failed.status, "failed");
@@ -441,10 +447,10 @@ for (const unfinished of [false, true]) {
     // the doomed successor. Assert the actual published result, not a later poll.
     const body = JSON.parse((await observation).content[0].text);
     assert.equal(body.reason, "task_issue");
-    assert.equal(body.agents.find((row) => row.agent === "alpha-dep").status, "failed");
-    const row = body.agents.find((entry) => entry.agent === "beta-wait");
+    assert.equal(body.tasks.find((row) => row.agent === "alpha-dep").status, "failed");
+    const row = body.tasks.find((entry) => entry.agent === "beta-wait");
     assert.equal(row.status, "queued");
-    assert.equal(Object.hasOwn(row, "wait"), false);
+    assert.equal(Object.hasOwn(row, "queued_for"), false);
     assert.equal(publications.length, 1);
     const published = publications[0];
     assert.equal(published.waiter.status, "queued");
@@ -485,13 +491,13 @@ test("wait-any can publish a ready successor queued without a blocker before pum
   );
   portFor(ports, "dep").finish("done");
   const body = JSON.parse((await observation).content[0].text);
-  assert.equal(Object.hasOwn(body, "reason"), false);
-  assert.equal(body.agents.find((row) => row.agent === "alpha-dep").status, "completed");
-  const row = body.agents.find((entry) => entry.agent === "beta-wait");
+  assert.equal(body.reason, "done");
+  assert.equal(body.tasks.find((row) => row.agent === "alpha-dep").status, "completed");
+  const row = body.tasks.find((entry) => entry.agent === "beta-wait");
   assert.equal(row.status, "queued");
   // Queue wait is conditional: this publication precedes pump, but neither
   // dependencies nor capacity blocks the successor anymore.
-  assert.equal(Object.hasOwn(row, "wait"), false);
+  assert.equal(Object.hasOwn(row, "queued_for"), false);
   assert.equal(publications.length, 1);
   assert.equal(publications[0].waiter.status, "queued");
   assert.equal(publications[0].waiter.queued_for, undefined);
@@ -635,7 +641,7 @@ test("queued projections reuse one occupancy snapshot and do not keep it", async
     assert.equal(waiting.length, queued.length);
     for (const row of waiting) {
       assert.equal(row.status, "queued");
-      assert.equal(row.wait, "capacity");
+      assert.equal(row.queued_for, "provider_capacity");
     }
     assert.equal(c.view(queued[0].run_id).queued_for, "capacity");
     assert.equal(taken(), 1);
@@ -658,9 +664,9 @@ test("queued projections reuse one occupancy snapshot and do not keep it", async
     const after = await modelRows(c, [queued[0].agent_id, queued[1].agent_id, queued[3].agent_id]);
     assert.equal(taken(), 1);
     assert.equal(after.find((row) => row.agent === "alpha-q1").status, "running");
-    assert.equal(after.find((row) => row.agent === "alpha-q1").wait, undefined);
-    assert.equal(after.find((row) => row.agent === "alpha-q2").wait, "capacity");
-    assert.equal(after.find((row) => row.agent === "beta-q1").wait, "capacity");
+    assert.equal(after.find((row) => row.agent === "alpha-q1").queued_for, undefined);
+    assert.equal(after.find((row) => row.agent === "alpha-q2").queued_for, "provider_capacity");
+    assert.equal(after.find((row) => row.agent === "beta-q1").queued_for, "provider_capacity");
     assert.equal(c.view(queued[0].run_id).status, "running");
     assert.equal(taken(), 0);
     assert.equal(c.view(queued[1].run_id).queued_for, "capacity");

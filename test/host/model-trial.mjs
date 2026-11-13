@@ -768,7 +768,7 @@ try {
         .filter((message) => message.role === "toolResult")
         .map((message) => parseJson(messageText(message)));
       const question = publications
-        .flatMap((value) => value?.agents ?? [])
+        .flatMap((value) => value?.tasks ?? [])
         .findLast(
           (row) =>
             row.agent === "worker" &&
@@ -779,7 +779,7 @@ try {
       if (dialogueStage === "question") {
         if (!question) {
           const row = publications
-            .flatMap((value) => value?.agents ?? [])
+            .flatMap((value) => value?.tasks ?? [])
             .findLast((entry) => entry.agent === "worker" && entry.task === 1);
           assert(
             row && !["failed", "interrupted"].includes(row.status),
@@ -805,9 +805,9 @@ try {
           wait_ms: 60000,
         });
       const answerEnvelope = result("answer"),
-        answerResult = answerEnvelope.agents[0];
+        answerResult = answerEnvelope.tasks[0];
       assert.deepEqual(answerEnvelope.action, { type: "agent_answer", agent: "worker", task: 2 });
-      assert.equal(Object.hasOwn(answerEnvelope, "reason"), false);
+      assert.equal(answerEnvelope.reason, "done");
       assert.equal(answerResult.status, "completed");
       assert.equal(answerResult.next_cursor, undefined);
       return {
@@ -923,7 +923,7 @@ try {
     delete ordinary.first.runStates[0].question_id;
     ordinary.runStates[0] = structuredClone(ordinary.first.runStates[0]);
     for (const call of ordinary.first.calls)
-      for (const row of call.value?.agents ?? []) {
+      for (const row of call.value?.tasks ?? []) {
         if (row.agent === "worker" && row.task === 1 && row.question) {
           row.result = row.question;
           row.status = "completed";
@@ -991,14 +991,14 @@ try {
         ["parent did not retrieve that task's complete question"],
         (copy) => {
           for (const call of copy.first.calls)
-            for (const row of call.value?.agents ?? [])
+            for (const row of call.value?.tasks ?? [])
               if (row.question) row.question_truncated = true;
         },
       ],
       "partial-answer": [
         ["parent did not retrieve and report the answer task's output"],
         (copy) => {
-          answerCall(copy).value.agents[0].next_cursor = "next-page";
+          answerCall(copy).value.tasks[0].next_cursor = "next-page";
         },
       ],
       "settings-drift": [

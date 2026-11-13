@@ -164,12 +164,9 @@ function body(
     .flatMap(({ task_index }, index) => (task_index === undefined ? [index] : []))
     .slice(0, finishedRows.length);
   const finishedRefs = [...bound, ...listed].sort((a, b) => a - b);
-  const reason = ["snapshot", "done"].includes(snapshot.data.reason)
-    ? undefined
-    : snapshot.data.reason;
   const envelope = {
-    ...(reason === undefined ? {} : { reason }),
-    agents: taskRows,
+    reason: snapshot.data.reason,
+    tasks: taskRows,
     ...(alertRefs.length
       ? { alerts: alertRefs.map((index) => ({ ...snapshot.data.alerts[index] })) }
       : {}),
@@ -1082,7 +1079,7 @@ test("same Agent's current running task/historical alert must not mark unshown o
   const snapshot = capture(state, { targets: [current] }),
     publication = body(snapshot, { alertRefs: [0] });
   assert(!Object.hasOwn(publication.envelope, "pending"));
-  assert.deepEqual(publication.envelope.agents, [{ agent: "otter", task: 3, status: "running" }]);
+  assert.deepEqual(publication.envelope.tasks, [{ agent: "otter", task: 3, status: "running" }]);
   assert.deepEqual(
     publication.envelope.alerts.map(({ agent, task }) => ({ agent, task })),
     [{ agent: "otter", task: 1 }],
@@ -1304,7 +1301,7 @@ for (const [description, corrupt] of [
   [
     "bound body omitted",
     ({ publication }) => {
-      publication.envelope.agents = [];
+      publication.envelope.tasks = [];
     },
   ],
   [
@@ -1553,7 +1550,7 @@ test("cancelled original Run is explicitly presented as interrupted and commits 
     state = { pending: [], runs: [live, cancelled] };
   const snapshot = capture(state, { targets: [cancelled] }),
     publication = body(snapshot);
-  assert.deepEqual(publication.envelope.agents, [
+  assert.deepEqual(publication.envelope.tasks, [
     { agent: "otter", task: 1, status: "interrupted" },
   ]);
   commit(state, snapshot, publication);
@@ -1892,7 +1889,7 @@ test("real scheduler+state+packer: finished cap leaves same-name old task untouc
   const observation = f.observe({ targets: [live], scope: agentScope(live) }),
     envelope = finalBody(await observation.promise);
   assert.equal(envelope.reason, "alert");
-  assert.deepEqual(envelope.agents, [{ agent: "otter", task: 2, status: "running" }]);
+  assert.deepEqual(envelope.tasks, [{ agent: "otter", task: 2, status: "running" }]);
   assert(!Object.hasOwn(envelope, "pending"));
   assert.equal(envelope.alerts[0].task, 1);
   assert.equal(envelope.finished.length, 8);
@@ -1908,7 +1905,7 @@ test("real scheduler+state+packer: finished cap leaves same-name old task untouc
   );
   const read = f.observe({ targets: [old], scope: agentScope(old), policy: { kind: "snapshot" } }),
     readBody = finalBody(await read.promise);
-  assert.deepEqual(readBody.agents, [{ agent: "otter", task: 1, status: "completed" }]);
+  assert.deepEqual(readBody.tasks, [{ agent: "otter", task: 1, status: "completed" }]);
   assert.deepEqual(read.publications[0].references.finished, [0]);
   assert.equal(
     readBody.finished,
@@ -1950,7 +1947,7 @@ for (const policy of [
       observation = f.observe({ policy });
     const envelope = finalBody(await observation.promise);
     assert.equal(envelope.reason, "nothing_pending");
-    assert.deepEqual(envelope.agents, []);
+    assert.deepEqual(envelope.tasks, []);
     assert.equal(envelope.alerts_pending, undefined);
     assert.equal(envelope.finished_pending, undefined);
     assert.equal(f.clock.scheduled.length, 0);
@@ -1965,7 +1962,7 @@ test("snapshot/body agreement cannot forge the original task label", () => {
   const snapshot = capture(state, { targets: [run] });
   snapshot.data.tasks[0].label = "forged label";
   const packed = packCommunication(snapshot.data);
-  assert.equal(packed.envelope.agents[0].label, "forged label");
+  assert.equal(packed.envelope.tasks[0].label, "forged label");
   unchanged(state, () => commit(state, snapshot, packed), "INVALID_COMMUNICATION_COMMIT");
 });
 
@@ -1978,7 +1975,7 @@ test("task summaries and optional finished labels validate against retained orig
   snapshot.data.finished[0].label = metadataOf(old).label;
   const packed = packCommunication(snapshot.data);
   assert.equal(packed.envelope.finished[0].label, "a".repeat(119));
-  assert.equal(packed.envelope.agents[0].label, metadataOf(live).label);
+  assert.equal(packed.envelope.tasks[0].label, metadataOf(live).label);
   commit(state, snapshot, packed);
   assert.equal(old.finished_presented, true);
   assert.equal(live.finished_presented, false);
@@ -1996,15 +1993,17 @@ for (const both of [false, true])
   });
 
 for (const reason of ["snapshot", "done"])
-  test(`${reason} commits its omitted public reason exactly, including absent zero reminders`, () => {
+  test(`${reason} commits its public reason exactly, including absent zero reminders`, () => {
     const run = settledRun("otter", 1),
       state = { pending: [], runs: [run] },
       snapshot = capture(state, { reason, targets: [run] });
     const packed = packCommunication(snapshot.data);
-    assert(!Object.hasOwn(packed.envelope, "reason"));
+    assert.equal(packed.envelope.reason, reason);
     assert(!Object.hasOwn(packed.envelope, "alerts_pending"));
     assert(!Object.hasOwn(packed.envelope, "finished_pending"));
-    for (const forged of ["snapshot", "done", "question"]) {
+    for (const forged of ["snapshot", "done", "question", undefined].filter(
+      (value) => value !== reason,
+    )) {
       unchanged(
         state,
         () =>
@@ -2032,7 +2031,7 @@ test("captured optional summary omission is valid, but cannot authorize a new sh
   const packed = packCommunication(snapshot.data);
   const envelope = {
     ...packed.envelope,
-    agents: [{ ...packed.envelope.agents[0], label: metadataOf(run).label }],
+    tasks: [{ ...packed.envelope.tasks[0], label: metadataOf(run).label }],
   };
   unchanged(
     state,
@@ -2049,6 +2048,6 @@ test("omitting a forged captured label from the body cannot evade provenance", (
     snapshot = capture(state, { targets: [run] });
   snapshot.data.tasks[0].label = "forged";
   const packed = packCommunication(snapshot.data);
-  delete packed.envelope.agents[0].label;
+  delete packed.envelope.tasks[0].label;
   unchanged(state, () => commit(state, snapshot, packed), "INVALID_COMMUNICATION_COMMIT");
 });

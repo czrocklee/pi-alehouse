@@ -233,12 +233,12 @@ for (const fixture of ["session-replacement", "run-lifecycle"]) {
       };
       const { envelope, result } = packCommunication(input);
       assert.equal(envelope.reason, reason);
-      assert.equal(envelope.agents[0].agent, agent);
+      assert.equal(envelope.tasks[0].agent, agent);
       assert.equal(envelope.alerts[0].label, input.alerts[0].label);
       assert.equal(envelope.finished.length, 8);
       assert.equal(envelope.finished_pending, finished.length - 8);
       assert.deepEqual(JSON.parse(result.content[0].text), envelope);
-      for (const row of [...envelope.agents, ...envelope.finished, ...envelope.alerts])
+      for (const row of [...envelope.tasks, ...envelope.finished, ...envelope.alerts])
         assert(validName(row.agent));
       for (const invalid of ["", "月兔", "a".repeat(25)]) {
         const bad = structuredClone(input);

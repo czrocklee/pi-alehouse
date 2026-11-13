@@ -332,7 +332,7 @@ test("preset/profile/context snapshots pin at admission; same ID keeps first acc
   await settle(f, "orca");
   const first = runOf(f, "orca");
   assert.equal(
-    (await call("agent_run", run("orca", { prompt: "follow-up" }), "reuse")).agents[0].status,
+    (await call("agent_run", run("orca", { prompt: "follow-up" }), "reuse")).tasks[0].status,
     "running",
   );
   assert.notEqual(runOf(f, "orca"), first);
@@ -351,7 +351,7 @@ test("preset/profile/context snapshots pin at admission; same ID keeps first acc
   await until(() => f.ports[0].streaming);
   f.ports[0].finish("second");
   await settle(f, "orca");
-  assert.equal((await call("agent_read", { agent: "orca" })).agents[0].result, "second");
+  assert.equal((await call("agent_read", { agent: "orca" })).tasks[0].result, "second");
   assert.equal(f.controller.getResult(first).text, "first", "earlier results are retained");
   await assert.rejects(
     call("agent_run", run("orca", { prompt: "different" }), "reuse"),
@@ -363,7 +363,7 @@ test("preset/profile/context snapshots pin at admission; same ID keeps first acc
     "continues is part of the request identity",
   );
   assert.equal(
-    (await call("agent_run", run("orca", { prompt: "follow-up" }), "reuse")).agents[0].task,
+    (await call("agent_run", run("orca", { prompt: "follow-up" }), "reuse")).tasks[0].task,
     2,
     "an identical retry replays",
   );
@@ -591,31 +591,31 @@ test("Off keeps pending question identity inspectable but hides and rejects new 
   f.ports[0].callbacks.question("Choose a branch?");
   f.ports[0].finish("decision needed");
   await settle(f, "orca");
-  const question_id = (await call("agent_read", { agent: "orca" })).agents[0].question_id;
+  const question_id = (await call("agent_read", { agent: "orca" })).tasks[0].question_id;
   admission.enabled = false;
   admission.revision++;
   assert.deepEqual(workerToolSelection([...delegationTools], false, true), [...cleanupToolNames]);
   const defaults = await call("agent_wait", {});
   assert.equal(defaults.reason, "nothing_pending");
-  assert.equal(defaults.workers_disabled, true);
-  assert.deepEqual(defaults.agents, []);
+  assert.match(defaults.delegation_off, /^Ask the user to enable delegation/);
+  assert.deepEqual(defaults.tasks, []);
   for (const [name, args] of [
     ["agent_read", { agent: "orca" }],
     ["agent_wait", { agents: ["orca"], wait_ms: 0 }],
   ]) {
     const observed = await call(name, args);
-    assert.equal(observed.workers_disabled, true);
-    assert.equal(observed.agents[0].question_id, question_id);
-    assert.equal(observed.agents[0].has_question, true);
+    assert.match(observed.delegation_off, /^Ask the user to enable delegation/);
+    assert.equal(observed.tasks[0].question_id, question_id);
+    assert.equal(observed.tasks[0].has_question, true);
   }
   const args = { agent: "orca", question_id, answer: "main" };
   await assert.rejects(call("agent_answer", args, "off-answer"), (error) => {
-    assert(code("WORKERS_DISABLED")(error));
+    assert(code("DELEGATION_OFF")(error));
     assert.match(JSON.parse(error.message).error.resolution, /ask the user to enable it/);
     return true;
   });
-  await assert.rejects(call("agent_run", run("orca"), "off-run"), code("WORKERS_DISABLED"));
-  await assert.rejects(call("agent_send", send("orca"), "off-send"), code("WORKERS_DISABLED"));
+  await assert.rejects(call("agent_run", run("orca"), "off-run"), code("DELEGATION_OFF"));
+  await assert.rejects(call("agent_send", send("orca"), "off-send"), code("DELEGATION_OFF"));
   assert.equal(f.controller.stats().runs, 1);
   assert.equal(viewOf(f, "orca").question_id, question_id);
   admission.enabled = true;
@@ -648,12 +648,12 @@ test("spawn returns a whole question and explicit answer continues it; UI failur
   f.ports[0].callbacks.question(question);
   f.ports[0].finish("need an answer");
   const asking = await first,
-    question_id = asking.agents[0].question_id;
+    question_id = asking.tasks[0].question_id;
   assert.match(question_id, /^q_[0-9a-f]{32}$/);
   assert.deepEqual(asking, {
     action: { type: "agent_spawn", agent: "orca", task: 1 },
     reason: "question",
-    agents: [
+    tasks: [
       {
         agent: "orca",
         task: 1,
@@ -677,7 +677,7 @@ test("spawn returns a whole question and explicit answer continues it; UI failur
     task: 1,
     delivery: "not_delivered",
   });
-  assert.equal(unsent.agents[0].question_id, question_id);
+  assert.equal(unsent.tasks[0].question_id, question_id);
   assert.equal(f.controller.stats().runs, 1);
   const args = { agent: "orca", question_id, answer: "answer", wait_ms: 300000 };
   const next = call("agent_answer", args, "answer");
@@ -685,13 +685,14 @@ test("spawn returns a whole question and explicit answer continues it; UI failur
   f.ports[0].finish("accepted answer");
   assert.deepEqual(await next, {
     action: { type: "agent_answer", agent: "orca", task: 2 },
-    agents: [
+    reason: "done",
+    tasks: [
       { agent: "orca", task: 2, status: "completed", label: "task", result: "accepted answer" },
     ],
   });
   assert.equal(accepted.length, 2);
   assert.equal(
-    (await call("agent_answer", { ...args, wait_ms: 1 }, "answer")).agents[0].result,
+    (await call("agent_answer", { ...args, wait_ms: 1 }, "answer")).tasks[0].result,
     "accepted answer",
   );
   assert.equal(f.ports[0].calls.length, 2);
@@ -707,13 +708,13 @@ test("effort changes only new Agents; queued work, same-ID retries and reuse kee
   await call("agent_spawn", create({ agent: "first" }), "effort-first");
   await until(() => f.ports[0]?.streaming);
   assert.equal(
-    (await call("agent_spawn", create({ agent: "queued" }), "effort-queued")).agents[0].status,
+    (await call("agent_spawn", create({ agent: "queued" }), "effort-queued")).tasks[0].status,
     "queued",
   );
   state.preset.effort = { d1: "inherit", d2: "inherit", d3: "high", d4: "inherit", d5: "inherit" };
   state.preset.effort_overrides = { d3: "high" };
   assert.equal(
-    (await call("agent_spawn", create({ agent: "queued" }), "effort-queued")).agents[0].status,
+    (await call("agent_spawn", create({ agent: "queued" }), "effort-queued")).tasks[0].status,
     "queued",
   );
   assert.equal(routed(f, "queued").thinking, "off");
@@ -809,7 +810,7 @@ test("an Agent with a pending question shows no context_tokens: only agent_answe
   f.ports[0].callbacks.question("Choose a branch?");
   f.ports[0].finish("decision needed");
   await settle(f, "orca");
-  const asking = (await call("agent_read", { agent: "orca" })).agents[0];
+  const asking = (await call("agent_read", { agent: "orca" })).tasks[0];
   assert.equal(asking.status, "needs_input");
   assert.equal(typeof asking.question_id, "string");
   assert.equal(asking.context_tokens, undefined);
@@ -845,18 +846,18 @@ test("routing changes before resume, replay and answer never re-resolve or migra
   admission.enabled = false;
   admission.revision++;
   const replay = await call("agent_spawn", spawnArgs, "pinned-spawn");
-  assert.equal(replay.workers_disabled, true);
-  assert.equal(replay.agents[0].task, 1);
-  assert.equal(Object.hasOwn(replay.agents[0], "recovery_hint"), false);
+  assert.match(replay.delegation_off, /^Ask the user to enable delegation/);
+  assert.equal(replay.tasks[0].task, 1);
+  assert.equal(Object.hasOwn(replay.tasks[0], "recovery_hint"), false);
   assert.deepEqual(routed(f, "orca"), bound);
   assert.equal(f.ports[0].calls.length, 1);
-  await assert.rejects(call("agent_run", run("orca"), "off-new-run"), code("WORKERS_DISABLED"));
+  await assert.rejects(call("agent_run", run("orca"), "off-new-run"), code("DELEGATION_OFF"));
   admission.enabled = true;
   admission.revision++;
   const runArgs = run("orca", { prompt: "Continue from the existing artifact" });
   const resumed = await call("agent_run", runArgs, "pinned-run");
   assert.equal(
-    resumed.agents[0].recovery_hint,
+    resumed.tasks[0].recovery_hint,
     undefined,
     "an earlier failure does not stick to a new Run",
   );
@@ -865,7 +866,7 @@ test("routing changes before resume, replay and answer never re-resolve or migra
   f.ports[0].callbacks.question("Which artifact should be used?");
   f.ports[0].finish("decision needed");
   await settle(f, "orca");
-  const asking = (await call("agent_read", { agent: "orca" })).agents[0];
+  const asking = (await call("agent_read", { agent: "orca" })).tasks[0];
   assert.equal(asking.status, "needs_input");
   assert.equal(asking.recovery_hint, undefined);
   const answerArgs = {
@@ -876,9 +877,9 @@ test("routing changes before resume, replay and answer never re-resolve or migra
   state.preset = preset("changed-again", "missing/another", "v3");
   admission.enabled = false;
   admission.revision++;
-  await assert.rejects(call("agent_answer", answerArgs, "off-answer"), code("WORKERS_DISABLED"));
+  await assert.rejects(call("agent_answer", answerArgs, "off-answer"), code("DELEGATION_OFF"));
   assert.equal(
-    (await call("agent_read", { agent: "orca" })).agents[0].question_id,
+    (await call("agent_read", { agent: "orca" })).tasks[0].question_id,
     asking.question_id,
   );
   admission.enabled = true;
@@ -893,14 +894,14 @@ test("routing changes before resume, replay and answer never re-resolve or migra
   admission.enabled = false;
   admission.revision++;
   const answerReplay = await call("agent_answer", answerArgs, "pinned-answer");
-  assert.equal(answerReplay.workers_disabled, true);
+  assert.match(answerReplay.delegation_off, /^Ask the user to enable delegation/);
   assert.deepEqual(answerReplay.action, answered.action);
-  assert.equal(Object.hasOwn(answerReplay.agents[0], "recovery_hint"), false);
+  assert.equal(Object.hasOwn(answerReplay.tasks[0], "recovery_hint"), false);
   const runReplay = await call("agent_run", runArgs, "pinned-run");
-  assert.equal(runReplay.agents[0].task, 2);
-  assert.equal(runReplay.agents[0].status, "needs_input");
+  assert.equal(runReplay.tasks[0].task, 2);
+  assert.equal(runReplay.tasks[0].status, "needs_input");
   assert.equal(
-    runReplay.agents[0].recovery_hint,
+    runReplay.tasks[0].recovery_hint,
     undefined,
     "replay projects its original outcome, not the latest task's failure",
   );
@@ -923,14 +924,14 @@ test("an interrupted answer that never started leaves the question answerable th
   await settle(f, "orca");
   await call("agent_spawn", create({ agent: "busy" }), "busy");
   await until(() => f.ports[1]?.streaming);
-  const question_id = (await call("agent_read", { agent: "orca" })).agents[0].question_id;
+  const question_id = (await call("agent_read", { agent: "orca" })).tasks[0].question_id;
   const firstAnswer = await call(
     "agent_answer",
     { agent: "orca", question_id, answer: "3" },
     "answer-1",
   );
   assert.deepEqual(firstAnswer.action, { type: "agent_answer", agent: "orca", task: 2 });
-  assert.equal(firstAnswer.agents[0].status, "queued");
+  assert.equal(firstAnswer.tasks[0].status, "queued");
   await call("agent_interrupt", { agent: "orca" });
   await settle(f, "orca");
 
@@ -938,8 +939,8 @@ test("an interrupted answer that never started leaves the question answerable th
   assert.equal(row.status, "needs_input");
   assert.equal(row.has_question, true);
   const restored = await call("agent_read", { agent: "orca" });
-  assert.equal(restored.agents[0].question, "Which factor?");
-  assert.equal(restored.agents[0].question_id, question_id);
+  assert.equal(restored.tasks[0].question, "Which factor?");
+  assert.equal(restored.tasks[0].question_id, question_id);
   await assert.rejects(call("agent_run", run("orca"), "run"), code("PENDING_QUESTION"));
   const secondAnswer = await call(
     "agent_answer",

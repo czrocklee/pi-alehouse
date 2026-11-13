@@ -60,7 +60,7 @@ export interface FinishedSnapshot {
 export interface CommunicationSnapshot {
   readonly reason: CommunicationReason;
   readonly action?: CommunicationAction;
-  readonly workers_disabled?: true;
+  readonly delegation_off?: true;
   /** Every bound task, already ordered at registration; maximum sixteen. */
   readonly tasks: readonly TaskSnapshot[];
   /** Already filtered to the typed scope, preserving the one Owner FIFO. */

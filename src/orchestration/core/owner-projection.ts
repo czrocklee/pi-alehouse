@@ -129,7 +129,7 @@ export function communicationRow(
   agent: CommunicationAgent,
   task: number,
   healthy: boolean,
-  wait: ThinTaskEntry["wait"],
+  queued_for: ThinTaskEntry["queued_for"],
 ): ThinTaskEntry {
   const record = run.record;
   const unavailable =
@@ -137,7 +137,7 @@ export function communicationRow(
   return {
     agent: record.name,
     task,
-    ...(wait ? { wait } : {}),
+    ...(queued_for ? { queued_for } : {}),
     status:
       record.execution_exited && !terminal(record.status)
         ? "finishing"
@@ -198,7 +198,7 @@ export function returnToNotice(
     return omitted > 0
       ? {
           readable: true,
-          text: `Result from ${source} has been returned to ${destination}, but the handoff omitted its last ${omitted} retained characters; ${read} shows the full result.`,
+          text: `Result from ${source} has been returned to ${destination}, but the handoff omitted its last ${omitted} characters; ${read} shows the retained result.`,
         }
       : { readable: false, text: `Result from ${source} has been returned to ${destination}.` };
   if (continuation.execution_exited || terminal(continuation.status))

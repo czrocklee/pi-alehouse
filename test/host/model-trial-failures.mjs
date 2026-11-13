@@ -67,10 +67,10 @@ for (const fault of ["parent-answer-error", "post-assembly", "post-assembly-clea
       .at(-1);
     assert.match(answer.args.question_id, /^q_[0-9a-f]{32}$/);
     assert.deepEqual(answer.value.action, { type: "agent_answer", agent: "worker", task: 2 });
-    assert.equal(Object.hasOwn(answer.value, "reason"), false);
-    assert.equal(answer.value.agents[0].status, "completed");
-    assert.equal(answer.value.agents[0].next_cursor, undefined);
-    assert.equal(answer.value.agents[0].result, scenario.final);
+    assert.equal(answer.value.reason, "done");
+    assert.equal(answer.value.tasks[0].status, "completed");
+    assert.equal(answer.value.tasks[0].next_cursor, undefined);
+    assert.equal(answer.value.tasks[0].result, scenario.final);
     const transcript = JSON.parse(readFileSync(join(output, "controlled-parent.json"), "utf8"));
     const last = transcript.findLast((message) => message.role === "assistant");
     assert.equal(last.stopReason, "error");

@@ -2,7 +2,6 @@ import {
   COMMUNICATION_LIMITS,
   alertAdmissionBudget,
   modelTaskStatus,
-  visibleCommunicationReason,
   type CommunicationEnvelope,
   type ThinTaskEntry,
 } from "./communication-envelope.ts";
@@ -414,7 +413,10 @@ function invalidCommit(): never {
   throw new OrchestrationError("INVALID_COMMUNICATION_COMMIT");
 }
 const sameRow = (a: ThinTaskEntry, b: ThinTaskEntry): boolean =>
-  a.agent === b.agent && a.task === b.task && a.status === b.status && a.wait === b.wait;
+  a.agent === b.agent &&
+  a.task === b.task &&
+  a.status === b.status &&
+  a.queued_for === b.queued_for;
 /** Compare a projection with a KNOWN original, never discover identity from it. */
 const matchesRun = <Run extends CommunicationRun>(
   run: Run,
@@ -465,11 +467,11 @@ export function validateCommunicationCommit<Run extends CommunicationRun>(option
   const ordinals = taskOrdinals(options.runs);
   const data = snapshot.data;
   if (
-    visibleCommunicationReason(data.reason) !== envelope.reason ||
+    data.reason !== envelope.reason ||
     data.alerts.length !== snapshot.alerts.length ||
     data.finished.length !== snapshot.finished.length ||
     snapshot.targets.length !== data.tasks.length ||
-    envelope.agents.length !== snapshot.targets.length
+    envelope.tasks.length !== snapshot.targets.length
   )
     invalidCommit();
   const suppressed = data.reason === "aborted" || data.reason === "timeout";
@@ -526,7 +528,7 @@ export function validateCommunicationCommit<Run extends CommunicationRun>(option
   const boundIndices = new Map<Run, number>();
   for (const [index, run] of snapshot.targets.entries()) {
     const task = data.tasks[index]!,
-      shown = envelope.agents[index]!;
+      shown = envelope.tasks[index]!;
     if (
       !task ||
       !shown ||

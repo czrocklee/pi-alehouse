@@ -283,7 +283,7 @@ validation share this function. It rejects stale/cross-generation references
 rather than relying on Agent/task names a new Owner could reuse; the negligible
 collision risk is accepted, not claimed impossible. Pending identity is retained
 while Off and explicit observations can still show its token with
-`workers_disabled: true`; Off independently forbids admission.
+`delegation_off`; Off independently forbids admission.
 
 Same request ID/arguments replay the accepted continuation; different arguments
 fail `REQUEST_CONFLICT`. Different requests competing for one reference reserve
@@ -310,8 +310,8 @@ before any Agent, name or task is allocated. Queued tasks hold no execution slot
 dependencies. They still count toward queue capacity, and their Agents toward
 resident capacity. Active work is capped at four Runs per admitted provider
 (models share it); waiting on that provider does not block another. Queued rows
-explain the wait without exposing model/provider routing: `wait: "dependencies"`
-or `wait: "capacity"`. Capacity waits are normal scheduling, not a failed task;
+explain the wait without exposing model/provider routing:
+`queued_for: "dependencies"` or `queued_for: "provider_capacity"`. Capacity waits are normal scheduling, not a failed task;
 wait for the accepted work rather than respawning it or changing difficulty
 to bypass the queue. See
 [architecture](architecture.md#ownership-and-lifecycle). Once any dependency settles without completing (including
@@ -387,9 +387,20 @@ guarantee. Publishing a terminal source row still follows the finished-bit rule.
 Source failure, `needs_input` or interruption fails the pending continuation and
 reopens the original question if the worker is healthy and the continuation has
 not entered input. After input entry, or after kill, quarantine or Owner loss,
-the question is not restored. Worker stop or kill does not cancel the scout; the
-scout stays resident until explicit kill. The two cancellations are not one
-transaction.
+the question is not restored. Worker stop or kill does not cancel the scout.
+The two cancellations are not one transaction.
+
+The source scout's task ends with one orchestration-authored sentence stating the
+characters its continuation will receive (the 16384-unit handoff budget, divided
+among that continuation's dependencies) and asking it to stay within them. It is
+outside the parent-authored `task_prompt` witness and is not added to any other task.
+Once the continuation's `input_entered` has taken the scout's whole result, the scout is
+released as an explicit kill would release it (`unavailable_reason: "result_returned"`): its
+name stays taken and its notice and retained result stay readable. A scout that
+was reused, has a pending question or is already ending, and one whose result the
+bounded handoff cut, stays resident until explicit kill. This follows the
+parent's own spawn, not a TTL/LRU eviction; a failed release is the same
+`cleanup_uncertain` an explicit kill would report.
 
 Compound observation `action` is `agent_spawn` for the source only. `done` is
 the continuation only; the source ending alone is not `done`. Published rows are
@@ -427,7 +438,7 @@ continuation pair, not a second pair. Replays cannot restore already-published
 alerts. Different arguments, including a different `return_to`, fail
 `REQUEST_CONFLICT`. New commands recheck context,
 abort, admission and revision after preparation/settle and before effects.
-`WORKERS_DISABLED` rejects new spawn/run/send/answer and submissions crossing a
+`DELEGATION_OFF` rejects new spawn/run/send/answer and submissions crossing a
 disable/re-enable boundary without allocating failed work or poisoning Owner
 health. Other errors include `QUEUE_FULL`, `RESIDENT_LIMIT`,
 `OWNER_HISTORY_LIMIT`, `AGENT_UNAVAILABLE`, `STALE_OWNER_CONTEXT` and
@@ -498,7 +509,7 @@ tasks and no scoped alerts returns `nothing_pending` before arming a timer, neve
 
 Commands with zero/omitted wait and read use **snapshot** policy after
 context/abort checks; they do not consume waiting-only Owner fault edges.
-Snapshot replies omit public `reason`. Wait (even wait_ms=0) and positive
+Snapshot replies carry `reason: "snapshot"`. Wait (even wait_ms=0) and positive
 command waits use this priority:
 
 1. `aborted`: latched abort, no alert/finished consumption.
@@ -513,8 +524,9 @@ command waits use this priority:
 8. `timeout`: unique timer's deadline latch; no alert/finished consumption.
 9. Otherwise keep the same waiter and timer.
 
-Reason is the primary trigger, not task status. Public `reason` is omitted for
-snapshot and done; done does not mean the inbox is empty. Faults broadcast to
+Reason is the primary trigger, not task status. Every reply carries it, so a
+missing reason never has to be decoded from task statuses; done does not mean
+the inbox is empty. Faults broadcast to
 observers already registered before the edge;
 successful reporting commits its marker. One reporter does not disqualify its
 concurrent peers, while later waits do not repeat a reported edge. Readiness
@@ -527,9 +539,9 @@ Spawn/run/send/answer/wait/read share one projection/publication path:
 ```ts
 {
   action?: { type, agent, task, delivery? },
-  reason?: string, // omitted for snapshot and done
-  workers_disabled?: true,
-  agents: TaskEntry[],
+  reason: string, // always present, including snapshot and done
+  delegation_off?: string, // the guidance text itself
+  tasks: TaskEntry[],
   alerts?: { agent, task, label, message, source?: "managed" }[],
   alerts_pending?: number, // positive only
   finished?: FinishedEntry[],
@@ -541,9 +553,10 @@ Spawn/run/send/answer/wait/read share one projection/publication path:
 Action is an accepted command fact: type is agent_spawn/run/answer for its new
 Run, or agent_send with joined/steered/not_delivered on the bound target.
 Compound `return_to` keeps a single `agent_spawn` action on the source, not an
-`agent_answer` action. Wait and read have no action. `workers_disabled` says new work/answers are forbidden,
-not that observation is forbidden or that the Owner is faulty; enable delegation
-to answer. Pending counts describe this scope **after commit**, never lost
+`agent_answer` action. Wait and read have no action. `delegation_off` says new
+work/answers are forbidden, not that observation is forbidden or that the Owner
+is faulty. Its value is the fixed guidance sentence (ask the user to enable
+delegation; accepted work continues), so tool descriptions do not repeat it. Pending counts describe this scope **after commit**, never lost
 messages. Alerts are top-level and never part of a result page.
 
 Zero `alerts_pending`/`finished_pending` counts and the redundant `pending`
@@ -565,7 +578,7 @@ a repeated Stop does not relabel an earlier request. The same source is retained
 in new run-end outcomes for cold inspection. A separate best-effort
 `alehouse:human-cancellation:v1` parent custom message requests no automatic retry
 and does not trigger a model turn; publication is not model acknowledgement.
-Queued rows retain `wait: "dependencies" | "capacity"` when that scheduling
+Queued rows retain `queued_for: "dependencies" | "provider_capacity"` when that scheduling
 condition applies; it is a mandatory bounded control, including in list/interrupt
 projections, not optional diagnostic text. Dependency names remain in the roster's
 `waiting_for`. Owner faults remain separately reported; an unavailable Owner is
@@ -574,11 +587,13 @@ Live Run context, usage and elapsed time remain UI observations; retired timed
 warning attempts are not interpreted by the current codec. Task descriptions stay on their original Runs.
 There is no separate touched-path/earlier-label summary or generic model-recovery
 hint. Question fields are `question_id`, `question`, `question_truncated`;
-historical text need not have a token. Real retained result pages use `result`, `next_cursor`, `result_omitted`,
-`result_truncated` and `omitted_chars`. Truncation/omission control flags are
-never silently removed by compact fallback. Omitted_chars means text never
-retained, not packing loss. Live previews shortened by packing explicitly mark
-result_truncated. Terminal cursors point to the actual displayed page end.
+historical text need not have a token. Real retained result pages use `result`,
+`next_cursor`, `result_truncated` and `lost_chars`. `next_cursor` alone says a
+final result has more to read, including a page packing displaced whole (no
+`result`, cursor at the unchanged offset); there is no separate omitted flag.
+`result_truncated` marks an incomplete live preview, which has no cursor.
+These controls are never silently removed by compact fallback. `lost_chars`
+means text never retained, not packing loss. Terminal cursors point to the actual displayed page end.
 Every bound terminal window of real retained result pages with remaining text
 reserves a cursor before body packing, including packing-omitted pages (unchanged
 offset). Thus reuse of that Agent during a bound wait cannot make the
@@ -605,7 +620,7 @@ same Agent, but inline action.task=3 never receives task-2 alerts.
 The model adapter requires effective resident capacity ≤16 at tool assembly
 (`UNSUPPORTED_MODEL_RESIDENT_LIMIT` otherwise). Production uses twelve. Core
 can still support larger configurations. All bound control rows
-are shown; there is no agents_omitted field.
+are shown; there is no omitted-rows field.
 
 ### Result cursors
 

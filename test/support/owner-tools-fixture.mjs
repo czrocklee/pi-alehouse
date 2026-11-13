@@ -93,15 +93,12 @@ export function toolsFor(f, hooks = {}) {
         "agent_read",
       ].includes(name)
     ) {
-      assert(Array.isArray(reply.agents));
-      if (Object.hasOwn(reply, "reason")) {
-        assert.equal(typeof reply.reason, "string");
-        assert(!["snapshot", "done"].includes(reply.reason));
-      }
+      assert(Array.isArray(reply.tasks));
+      assert.equal(typeof reply.reason, "string");
       for (const key of ["alerts_pending", "finished_pending"])
         if (Object.hasOwn(reply, key)) assert(reply[key] > 0);
       assert.equal(Object.hasOwn(reply, "pending"), false);
-      for (const row of reply.agents) {
+      for (const row of reply.tasks) {
         for (const key of [
           "context_tokens",
           "time_wrapped",

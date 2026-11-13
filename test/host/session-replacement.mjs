@@ -389,7 +389,7 @@ try {
   assert.deepEqual(alert.alerts, [
     { agent: run.name, task: 1, label: "synthetic child", message: "REAL_SDK_ALERT_BEFORE_WAIT" },
   ]);
-  assert.equal(alert.agents[0].status, "running");
+  assert.equal(alert.tasks[0].status, "running");
   assert.equal(Object.hasOwn(alert, "alerts_pending"), false);
   assert.equal(controller.view(run.run_id).pending_messages, 0);
   const timeout = JSON.parse((await observeRun(0)).content[0].text);

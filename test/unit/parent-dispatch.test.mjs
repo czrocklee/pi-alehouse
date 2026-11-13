@@ -287,8 +287,8 @@ for (const name of ["agent_spawn", "agent_run"]) {
     assert.deepEqual(a.submissions[0].request.dispatch, declaration);
     assert.notEqual(a.submissions[0].request.dispatch, declaration);
     const parsed = JSON.parse(result.content[0].text);
-    assert.equal(Object.hasOwn(parsed.agents[0], "time_wrapped"), false);
-    assert.deepEqual(parsed.agents[0].dispatch_notes, ["tree_shared"]);
+    assert.equal(Object.hasOwn(parsed.tasks[0], "time_wrapped"), false);
+    assert.deepEqual(parsed.tasks[0].dispatch_notes, ["tree_shared"]);
     declaration.inputs.push("late-mutation");
     assert.deepEqual(a.submissions[0].request.dispatch.inputs, ["ordinary.txt"]);
   });
@@ -300,15 +300,15 @@ for (const name of ["agent_spawn", "agent_run"]) {
     assert.equal(envelope.response_limit_reached, true);
     assert.equal(envelope.reason, "alert");
     assert.equal(envelope.alerts[0].message, "\0".repeat(8192));
-    assert(envelope.agents[0].question.length > 0);
-    assert.equal(envelope.agents[0].question_truncated, true);
+    assert(envelope.tasks[0].question.length > 0);
+    assert.equal(envelope.tasks[0].question_truncated, true);
     assert.equal(
-      envelope.agents[0].next_cursor.length,
+      envelope.tasks[0].next_cursor.length,
       37,
       "the original omitted result remains addressable",
     );
-    assert.equal(envelope.agents[0].time_wrapped, undefined);
-    assert.equal(envelope.agents[0].dispatch_notes, undefined);
+    assert.equal(envelope.tasks[0].time_wrapped, undefined);
+    assert.equal(envelope.tasks[0].dispatch_notes, undefined);
     const result = await a.execute(name, a.args(name, { dispatch: { checks: ["test/**/*.mjs"] } }));
     assert.equal(result, a.published);
     assert.equal(result.content[0].text, before);
@@ -330,7 +330,7 @@ for (const name of ["agent_spawn", "agent_run"]) {
     assert(!Object.hasOwn(a.submissions[0].request, "dispatch"));
     assert.equal(
       result.content[0].text,
-      '{"agents":[{"agent":"otter","task":1,"status":"running"}]}',
+      '{"reason":"snapshot","tasks":[{"agent":"otter","task":1,"status":"running"}]}',
     );
     if (name === "agent_run")
       assert.equal(

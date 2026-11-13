@@ -20,7 +20,7 @@ export function parentRoundEvidence(messages, start) {
   };
 }
 
-// All six model observations have agents rows. Agent/task identify the original
+// All six model observations have tasks rows. Agent/task identify the original
 // Run; action is a command fact, never a flattened observation. Zero-wait
 // snapshots can also retrieve already settled text. No legacy active fallback.
 const observations = new Set([
@@ -32,10 +32,10 @@ const observations = new Set([
   "agent_read",
 ]);
 const projections = (call, { paged = false } = {}) => {
-  if (call.is_error !== false || !observations.has(call.name) || !Array.isArray(call.value?.agents))
+  if (call.is_error !== false || !observations.has(call.name) || !Array.isArray(call.value?.tasks))
     return [];
   if (call.name === "agent_read" && !paged && call.args?.cursor !== undefined) return [];
-  return call.value.agents;
+  return call.value.tasks;
 };
 const sameTask = (value, run) => value?.agent === run?.name && value?.task === run?.task;
 const isQuestionReference = (value) =>
@@ -60,8 +60,7 @@ function retrievedOutput(calls, run) {
     value.status === "completed" &&
     value.result?.trim() &&
     value.next_cursor === undefined &&
-    !value.omitted_chars &&
-    !value.result_omitted &&
+    !value.lost_chars &&
     !value.result_truncated;
   return run && calls.some((call) => projections(call).some(whole));
 }

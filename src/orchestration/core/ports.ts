@@ -86,10 +86,10 @@ export class OrchestrationError extends Error {
 }
 /** One shared model-facing shape for the delegation-off gate, used by the core
  * admission checks and the trusted routing module alike. */
-export const workersDisabled = (): OrchestrationError =>
-  new OrchestrationError("WORKERS_DISABLED", {
+export const delegationOff = (): OrchestrationError =>
+  new OrchestrationError("DELEGATION_OFF", {
     resolution:
-      "Worker delegation is off in the user's configuration; ask the user to enable it. Already accepted tasks are unaffected.",
+      "Delegation is off in the user's configuration; ask the user to enable it. Already accepted tasks are unaffected.",
   });
 /** A failed write to the shared parent SDK session. */
 export class ParentHistoryError extends Error {

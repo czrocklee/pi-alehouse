@@ -40,7 +40,8 @@ test("the same host call ID replays accepted work; a fresh call cannot duplicate
     await call("agent_send", send("orca", { message: "also check docs" }), "host-call-3"),
     {
       action: { type: "agent_send", agent: "orca", task: 1, delivery: "steered" },
-      agents: [{ agent: "orca", task: 1, status: "running", label: "Recoverable task label" }],
+      reason: "snapshot",
+      tasks: [{ agent: "orca", task: 1, status: "running", label: "Recoverable task label" }],
     },
     "a busy Agent's task takes the message",
   );
@@ -87,24 +88,24 @@ test("agent_read pages UTF-16 output and returns the separate full question", as
   await settle(f, "orca");
   await settle(f, "otter");
   const whole = await call("agent_read", { agent: "orca" });
-  assert.equal(Object.hasOwn(whole, "reason"), false);
+  assert.equal(whole.reason, "snapshot");
   assert.equal(whole.action, undefined);
-  assert.equal(whole.agents[0].status, "needs_input");
-  assert.equal(whole.agents[0].question, "Full recorded question");
-  assert.equal(whole.agents[0].result.length, 16384 - "Full recorded question".length);
-  assert(whole.agents[0].next_cursor);
+  assert.equal(whole.tasks[0].status, "needs_input");
+  assert.equal(whole.tasks[0].question, "Full recorded question");
+  assert.equal(whole.tasks[0].result.length, 16384 - "Full recorded question".length);
+  assert(whole.tasks[0].next_cursor);
   const first = await call("agent_read", { agent: "orca", max_chars: 1 });
-  assert.equal(first.agents[0].result, "🚀", "a surrogate pair is never split");
+  assert.equal(first.tasks[0].result, "🚀", "a surrogate pair is never split");
   await assert.rejects(
-    call("agent_read", { agent: "orca", task: 1, cursor: first.agents[0].next_cursor }),
+    call("agent_read", { agent: "orca", task: 1, cursor: first.tasks[0].next_cursor }),
     code("INVALID_PARAMETERS"),
   );
-  const rest = await call("agent_read", { agent: "orca", cursor: first.agents[0].next_cursor });
-  const tail = await call("agent_read", { agent: "orca", cursor: rest.agents[0].next_cursor });
-  assert.equal(first.agents[0].result + rest.agents[0].result + tail.agents[0].result, text);
-  assert.equal(tail.agents[0].next_cursor, undefined);
+  const rest = await call("agent_read", { agent: "orca", cursor: first.tasks[0].next_cursor });
+  const tail = await call("agent_read", { agent: "orca", cursor: rest.tasks[0].next_cursor });
+  assert.equal(first.tasks[0].result + rest.tasks[0].result + tail.tasks[0].result, text);
+  assert.equal(tail.tasks[0].next_cursor, undefined);
   await assert.rejects(
-    call("agent_read", { agent: "otter", cursor: first.agents[0].next_cursor }),
+    call("agent_read", { agent: "otter", cursor: first.tasks[0].next_cursor }),
     code("INVALID_CURSOR"),
   );
   await assert.rejects(
@@ -188,7 +189,7 @@ for (const name of [
     const result = await tool(name).execute("passthrough", args, undefined, undefined, ctx);
     assert.equal(result, published, "the exact result object survives the tool success chain");
     const envelope = JSON.parse(result.content[0].text);
-    assert.equal(envelope.agents.length, 1);
+    assert.equal(envelope.tasks.length, 1);
     assert.equal(
       envelope.action?.type,
       ["agent_wait", "agent_read"].includes(name) ? undefined : name,
@@ -231,7 +232,7 @@ for (const effect of ["cancel", "observe", "spawn"])
     assert.equal(viewOf(f, "orca").status, "running");
     assert.equal(f.ports[0].stopped, 0);
     assert.equal(f.controller.stats().internal_error, undefined);
-    assert.equal(Object.hasOwn(await call("agent_read", { agent: "orca" }), "reason"), false);
+    assert.equal((await call("agent_read", { agent: "orca" })).reason, "snapshot");
   });
 
 test("an aborted wait is not an interrupt; kill ends a busy Agent and frees its capacity", async (t) => {
@@ -263,7 +264,8 @@ test("an aborted wait is not an interrupt; kill ends a busy Agent and frees its 
   assert.equal(f.ports[0].stopped, 0);
   assert.deepEqual(await call("agent_send", send("one", { message: "continue" })), {
     action: { type: "agent_send", agent: "one", task: 1, delivery: "steered" },
-    agents: [{ agent: "one", task: 1, status: "running", label: "task" }],
+    reason: "snapshot",
+    tasks: [{ agent: "one", task: 1, status: "running", label: "task" }],
   });
   assert.deepEqual(await call("agent_interrupt", { agent: "one" }), {
     agent: "one",
@@ -273,19 +275,19 @@ test("an aborted wait is not an interrupt; kill ends a busy Agent and frees its 
   });
   f.ports[0].finish("partial", "aborted");
   await settle(f, "one");
-  assert.equal((await call("agent_read", { agent: "one" })).agents[0].status, "interrupted");
+  assert.equal((await call("agent_read", { agent: "one" })).tasks[0].status, "interrupted");
   const next = await call("agent_run", run("one", { prompt: "redo" }), "redo");
-  assert.equal(next.agents[0].status, "running");
+  assert.equal(next.tasks[0].status, "running");
   await until(() => f.ports[0].streaming);
   const killing = call("agent_kill", { agent: "one" });
   await until(() => f.ports[0].stopped === 2);
   f.ports[0].finish("partial again", "aborted");
   assert.deepEqual(await killing, { agent: "one", status: "killed", label: "task" });
   const kept = await call("agent_read", { agent: "one" });
-  assert.equal(kept.agents[0].result, "partial again");
-  assert.equal(kept.agents[0].status, "interrupted");
-  assert.equal(kept.agents[0].unavailable, true);
-  assert.equal(kept.agents[0].unavailable_reason, "explicitly_released");
+  assert.equal(kept.tasks[0].result, "partial again");
+  assert.equal(kept.tasks[0].status, "interrupted");
+  assert.equal(kept.tasks[0].unavailable, true);
+  assert.equal(kept.tasks[0].unavailable_reason, "explicitly_released");
   await call("agent_spawn", create({ agent: "two" }), "full");
   await until(() => f.ports[1]?.streaming);
   const list = await call("agent_list", {});
@@ -317,7 +319,7 @@ test("a message to a busy Agent is bounded by the steering limit; a new task tak
   f.ports[0].finish();
   await settle(f, "orca");
   assert.equal(
-    (await call("agent_run", run("orca", { prompt: "y".repeat(20000) }), "new-task")).agents[0]
+    (await call("agent_run", run("orca", { prompt: "y".repeat(20000) }), "new-task")).tasks[0]
       .status,
     "running",
   );
@@ -354,10 +356,10 @@ for (const off of [false, true])
       );
     const check = async (settling, port) => {
       const { value, error } = await settling;
-      if (off) assert(code("WORKERS_DISABLED")(error));
+      if (off) assert(code("DELEGATION_OFF")(error));
       else {
         assert.equal(value.action.delivery, "not_delivered");
-        assert.equal(value.agents[0].result, port === f.ports[1] ? "cancelled" : "done");
+        assert.equal(value.tasks[0].result, port === f.ports[1] ? "cancelled" : "done");
       }
       assert.deepEqual(port.inputs, [], "the ended task never received the message");
       assert.equal(port.calls.length, 1, "a message never starts a task");
@@ -480,8 +482,8 @@ test("the roster lists resident busy, queued, idle and question Agents and only 
   );
   assert.equal(live.agents[1].question, undefined);
   assert(Buffer.byteLength(JSON.stringify(live)) < 2048);
-  assert.equal((await call("agent_read", { agent: "queued" })).agents[0].question, question);
-  assert.equal((await call("agent_read", { agent: "old0" })).agents[0].result, "old 0");
+  assert.equal((await call("agent_read", { agent: "queued" })).tasks[0].question, question);
+  assert.equal((await call("agent_read", { agent: "old0" })).tasks[0].result, "old 0");
 });
 
 test("reuse keeps an Agent's name, settings and conversation while each task has its own label", async (t) => {
@@ -539,7 +541,7 @@ test("reuse keeps an Agent's name, settings and conversation while each task has
     "Inspect cancellation race",
     "reuse does not rewrite earlier task metadata",
   );
-  const original = (await call("agent_read", { agent: "orca", task: 1 })).agents[0];
+  const original = (await call("agent_read", { agent: "orca", task: 1 })).tasks[0];
   assert.equal(original.task, 1);
   assert.equal(original.label, "Inspect cancellation race");
   assert.equal(
@@ -548,7 +550,7 @@ test("reuse keeps an Agent's name, settings and conversation while each task has
     "explicit task restarts the original result, not the latest task",
   );
   assert.equal(
-    (await call("agent_read", { agent: "orca" })).agents[0].label,
+    (await call("agent_read", { agent: "orca" })).tasks[0].label,
     "Review cancellation fix",
   );
   f.ports[0].finish("reviewed");
@@ -616,11 +618,11 @@ test("whole wait replies bound questions, results, alerts and diagnostics withou
   const raw = await tool("agent_wait").execute("bulk", { agents }, undefined, undefined, ctx);
   const reply = JSON.parse(raw.content[0].text);
   assert.equal(reply.reason, "owner_blocked");
-  assert.equal(reply.agents.length, 16);
+  assert.equal(reply.tasks.length, 16);
   assert.equal(reply.progress_omitted, undefined);
   assert.equal(reply.agents_omitted, undefined);
-  assert(reply.agents.some((entry) => entry.question_truncated));
-  assert(reply.agents.every((entry) => !entry.owner_error || entry.owner_error.length <= 512));
+  assert(reply.tasks.some((entry) => entry.question_truncated));
+  assert(reply.tasks.every((entry) => !entry.owner_error || entry.owner_error.length <= 512));
   assert(reply.response_limit_reached);
   assert.equal(
     (reply.alerts_pending ?? 0) + (reply.alerts?.length ?? 0),
@@ -628,7 +630,7 @@ test("whole wait replies bound questions, results, alerts and diagnostics withou
     "unshown alerts stay pending, not omitted",
   );
   const includedText =
-    reply.agents.reduce(
+    reply.tasks.reduce(
       (count, entry) => count + (entry.question?.length ?? 0) + (entry.result?.length ?? 0),
       0,
     ) + (reply.alerts ?? []).reduce((count, alert) => count + alert.message.length, 0);
@@ -637,41 +639,37 @@ test("whole wait replies bound questions, results, alerts and diagnostics withou
     Buffer.byteLength(JSON.stringify(raw), "utf8") <= 65536,
     "hard bound covers the model-facing content envelope",
   );
-  for (const entry of reply.agents) {
-    assert(entry.result !== undefined || entry.result_omitted, "a budget omission must say so");
+  for (const entry of reply.tasks) {
+    assert(entry.result !== undefined || entry.next_cursor, "a budget omission must say so");
     let retained = entry.next_cursor ? (entry.result ?? "") : "";
     let cursor = entry.next_cursor;
     do {
       const rest = await call("agent_read", { agent: entry.agent, ...(cursor ? { cursor } : {}) });
-      assert.equal(
-        rest.agents[0].question,
-        question,
-        "read prioritizes the full recorded question",
-      );
-      retained += rest.agents[0].result ?? "";
-      cursor = rest.agents[0].next_cursor;
+      assert.equal(rest.tasks[0].question, question, "read prioritizes the full recorded question");
+      retained += rest.tasks[0].result ?? "";
+      cursor = rest.tasks[0].next_cursor;
     } while (cursor);
     assert.equal(retained, answer);
   }
   for (const count of [1, 4, 5, 15, 16]) {
     const batch = await call("agent_wait", { agents: agents.slice(0, count) });
     const textSize =
-      batch.agents.reduce(
+      batch.tasks.reduce(
         (size, entry) => size + (entry.question?.length ?? 0) + (entry.result?.length ?? 0),
         0,
       ) + (batch.alerts ?? []).reduce((size, alert) => size + alert.message.length, 0);
     assert(textSize <= 16384);
-    for (const entry of batch.agents) {
+    for (const entry of batch.tasks) {
       assert.equal(entry.progress, undefined, "alerts never enter task result rows");
       assert.equal(!!entry.question_truncated, entry.question !== question);
     }
-    if (count === 1) assert.equal(batch.agents[0].question_truncated, undefined);
+    if (count === 1) assert.equal(batch.tasks[0].question_truncated, undefined);
   }
   const dup = await call("agent_wait", { agents: ["q0", "q0"] });
-  assert.equal(dup.agents.length, 1);
-  assert.equal(dup.agents[0].question, question);
-  assert.equal(dup.agents[0].result, answer, "a lone result may use the whole text budget");
-  assert.equal((await call("agent_read", { agent: "q0", max_chars: 1 })).agents[0].result, "x");
+  assert.equal(dup.tasks.length, 1);
+  assert.equal(dup.tasks[0].question, question);
+  assert.equal(dup.tasks[0].result, answer, "a lone result may use the whole text budget");
+  assert.equal((await call("agent_read", { agent: "q0", max_chars: 1 })).tasks[0].result, "x");
   for (const max_chars of [0, -1, 1.5, 16385, NaN])
     await assert.rejects(
       call("agent_read", { agent: "q0", max_chars }),
@@ -684,10 +682,10 @@ test("wait defaults are tool-local; inline waiting does not alter accepted task 
     { call } = toolsFor(f);
   assert.deepEqual(await call("agent_wait", {}, "empty"), {
     reason: "nothing_pending",
-    agents: [],
+    tasks: [],
   });
   const receipt = await call("agent_spawn", create({ wait_ms: 0 }), "background");
-  assert.equal(Object.hasOwn(receipt, "reason"), false);
+  assert.equal(receipt.reason, "snapshot");
   assert.deepEqual(receipt.action, { type: "agent_spawn", agent: "orca", task: 1 });
   const seen = [],
     realObserve = f.controller.observe.bind(f.controller);
@@ -701,7 +699,7 @@ test("wait defaults are tool-local; inline waiting does not alter accepted task 
   const all = await call("agent_wait", {}, "w4");
   assert.deepEqual(all, {
     reason: "timeout",
-    agents: [{ agent: "orca", task: 1, status: "running", label: "task" }],
+    tasks: [{ agent: "orca", task: 1, status: "running", label: "task" }],
   });
   const replay = await call("agent_spawn", create({ wait_ms: 300000 }), "background");
   assert.equal(replay.reason, "timeout");
@@ -748,9 +746,9 @@ test("accepted-request retries invoke the UI safeguard while Off without admitti
   assert.equal(f.ports[0].calls.length, 1);
   await assert.rejects(
     call("agent_spawn", create({ agent: "fresh" }), "fresh-off"),
-    code("WORKERS_DISABLED"),
+    code("DELEGATION_OFF"),
   );
-  await assert.rejects(call("agent_run", run("orca"), "reuse-off"), code("WORKERS_DISABLED"));
+  await assert.rejects(call("agent_run", run("orca"), "reuse-off"), code("DELEGATION_OFF"));
   assert.equal(observed.length, 2, "rejected work cannot invoke the accepted callback");
 });
 
@@ -775,14 +773,14 @@ test("accepted waits neither hold admission nor cancel workers on timeout or par
   assert.deepEqual(await first, {
     action: { type: "agent_spawn", agent: "orca", task: 1 },
     reason: "aborted",
-    agents: [{ agent: "orca", task: 1, status: "running", label: "task" }],
+    tasks: [{ agent: "orca", task: 1, status: "running", label: "task" }],
   });
   assert.equal(f.ports[0].stopped, 0);
   assert.equal(viewOf(f, "peer").status, "running");
   assert.deepEqual(await call("agent_spawn", create({ wait_ms: 1 }), "held"), {
     action: { type: "agent_spawn", agent: "orca", task: 1 },
     reason: "timeout",
-    agents: [{ agent: "orca", task: 1, status: "running", label: "task" }],
+    tasks: [{ agent: "orca", task: 1, status: "running", label: "task" }],
   });
   f.ports[0].finish("first done");
   await settle(f, "orca");
@@ -798,7 +796,7 @@ test("accepted waits neither hold admission nor cancel workers on timeout or par
   reuseAbort.abort();
   const interruptedWait = await reused;
   assert.equal(interruptedWait.reason, "aborted");
-  assert.equal(interruptedWait.agents[0].status, "running");
+  assert.equal(interruptedWait.tasks[0].status, "running");
   assert.equal(f.ports[0].stopped, 0);
 });
 
@@ -814,7 +812,7 @@ test("abort immediately after admission keeps the task; stale contexts still sup
     abort.signal,
   );
   assert.equal(accepted.reason, "aborted");
-  assert.equal(accepted.agents[0].status, "running");
+  assert.equal(accepted.tasks[0].status, "running");
   assert.equal(f.controller.list().length, 1);
   const pending = call("agent_spawn", create({ wait_ms: 300000 }), "accepted-abort");
   await until(() => f.ports[0]?.streaming);
@@ -838,7 +836,7 @@ test("alerts wake model waits while work continues; FIFO budget leaves unshown a
   assert.equal(reply.alerts[0].message, first);
   assert.equal(Object.hasOwn(reply, "pending"), false);
   assert.deepEqual(
-    reply.agents.map(({ agent, status }) => [agent, status]),
+    reply.tasks.map(({ agent, status }) => [agent, status]),
     agents.map((agent) => [agent, "running"]),
   );
   assert.equal(viewOf(f, "p0").status, "running");
@@ -848,10 +846,10 @@ test("alerts wake model waits while work continues; FIFO budget leaves unshown a
   f.ports[0].finish("x".repeat(4000));
   await settle(f, "p0");
   const next = await call("agent_wait", { agents, mode: "any" }, "done");
-  assert.equal(Object.hasOwn(next, "reason"), false);
+  assert.equal(next.reason, "done");
   assert.equal(Object.hasOwn(next, "pending"), false);
   assert.deepEqual(
-    next.agents.slice(1).map(({ agent, status }) => [agent, status]),
+    next.tasks.slice(1).map(({ agent, status }) => [agent, status]),
     agents.slice(1).map((agent) => [agent, "running"]),
   );
   assert.equal(next.alerts.length, 2);
@@ -860,12 +858,12 @@ test("alerts wake model waits while work continues; FIFO budget leaves unshown a
     next.alerts.map((alert) => alert.message.slice(0, 3)),
     ["0: ", "1: "],
   );
-  assert.equal(next.agents[0].result.length, 4000);
-  assert.equal(next.agents[0].next_cursor, undefined);
-  assert.equal(next.agents[0].progress, undefined);
+  assert.equal(next.tasks[0].result.length, 4000);
+  assert.equal(next.tasks[0].next_cursor, undefined);
+  assert.equal(next.tasks[0].progress, undefined);
   assert.equal(next.progress_omitted, undefined);
   const again = await call("agent_wait", { agents, mode: "any" }, "again");
-  assert.equal(Object.hasOwn(again, "reason"), false);
+  assert.equal(again.reason, "done");
   assert.match(again.alerts[0].message, /^2: /);
   assert.equal(viewOf(f, "p0").pending_messages, again.alerts_pending);
 });
@@ -882,13 +880,9 @@ test("mixed-length questions and results are not truncated when their aggregate 
   }
   await until(() => f.controller.list().every((view) => view.status === "needs_input"));
   const all = await call("agent_wait", { agents });
-  assert(
-    all.agents.every(
-      (entry) => !entry.question_truncated && !entry.next_cursor && !entry.result_omitted,
-    ),
-  );
-  assert.equal(all.agents[0].question.length, 6000);
-  assert.equal(all.agents[0].result.length, 4000);
+  assert(all.tasks.every((entry) => !entry.question_truncated && !entry.next_cursor));
+  assert.equal(all.tasks[0].question.length, 6000);
+  assert.equal(all.tasks[0].result.length, 4000);
 });
 
 test("agent_list hides per-Agent telemetry while original Run views retain observed context", async (t) => {
@@ -924,7 +918,7 @@ test("agent_list hides per-Agent telemetry while original Run views retain obser
 test("model reads omit context_tokens across reuse, history and kill while core context stays real", async (t) => {
   const f = await fixture(t),
     { call } = toolsFor(f);
-  const row = (reply) => reply.agents.find((entry) => entry.agent === "orca");
+  const row = (reply) => reply.tasks.find((entry) => entry.agent === "orca");
   await call("agent_spawn", create());
   await until(() => f.ports[0]?.streaming);
   f.ports[0].callbacks.runtime({
@@ -981,7 +975,7 @@ test("only observation replies present finished tasks; roster, interrupt and kil
   await settle(f, "a");
   const sent = await call("agent_send", send("b", { message: "hurry" }));
   assert.deepEqual(sent.action, { type: "agent_send", agent: "b", task: 1, delivery: "steered" });
-  assert.deepEqual(sent.agents, [{ agent: "b", task: 1, status: "running", label: "task" }]);
+  assert.deepEqual(sent.tasks, [{ agent: "b", task: 1, status: "running", label: "task" }]);
   assert.deepEqual(sent.finished, [{ agent: "a", task: 1, status: "completed", label: "task" }]);
   assert.equal(
     (await call("agent_send", send("b", { message: "again" }), "m2")).finished,
@@ -1044,7 +1038,7 @@ test("required task titles are used verbatim, not derived from the instructions"
   assert.equal(row.label, "  Parser documentation follow-up  ");
   assert.equal(Object.hasOwn(row, "earlier_labels"), false);
   assert.equal(
-    (await call("agent_read", { agent: "orca", task: 1 })).agents[0].label,
+    (await call("agent_read", { agent: "orca", task: 1 })).tasks[0].label,
     "  Parser compatibility review  ",
   );
 });
@@ -1060,7 +1054,10 @@ test("after queues a follow-up with the earlier result and reports what it waits
   );
   assert.deepEqual(reviewer, {
     action: { type: "agent_spawn", agent: "reviewer", task: 1 },
-    agents: [{ agent: "reviewer", task: 1, status: "queued", label: "task", wait: "dependencies" }],
+    reason: "snapshot",
+    tasks: [
+      { agent: "reviewer", task: 1, status: "queued", label: "task", queued_for: "dependencies" },
+    ],
   });
   assert.deepEqual(
     (await call("agent_list", {})).agents.find((row) => row.agent === "reviewer").waiting_for,
@@ -1121,14 +1118,14 @@ test("after rejects a task that already ended without completing; after agent_an
   );
   assert.equal(f.controller.findAgent("reviewer"), undefined, "a rejected spawn takes no name");
   assert.equal(f.controller.stats().runs, 2, "no task was allocated");
-  const question_id = (await call("agent_read", { agent: "author" })).agents[0].question_id;
+  const question_id = (await call("agent_read", { agent: "author" })).tasks[0].question_id;
   await call("agent_answer", { agent: "author", question_id, answer: "Use v2." }, "answer");
   const reviewer = await call(
     "agent_spawn",
     create({ agent: "reviewer", prompt: "Review it.", after: ["author"] }),
     "reviewer",
   );
-  assert.equal(reviewer.agents[0].status, "queued");
+  assert.equal(reviewer.tasks[0].status, "queued");
   assert.deepEqual(
     (await call("agent_list", {})).agents.find((row) => row.agent === "reviewer").waiting_for,
     ["author"],
@@ -1337,7 +1334,7 @@ for (const transition of ["off", "off-on", "shutdown"])
     const waits = t.mock.method(f.controller.observations, "observeLifecycle");
     const rejected = assert.rejects(
       call("agent_spawn", create({ agent: "two" }), "two"),
-      code(transition === "shutdown" ? "OWNER_CLOSED" : "WORKERS_DISABLED"),
+      code(transition === "shutdown" ? "OWNER_CLOSED" : "DELEGATION_OFF"),
     );
     let closing;
     try {
@@ -1437,7 +1434,7 @@ test("an agent_run retry binds after once, even when the dependency has since mo
   const args = run("orca", { prompt: "review", after: ["dep"] });
   const follow = await call("agent_run", args, "follow");
   assert.deepEqual(follow.action, { type: "agent_run", agent: "orca", task: 2 });
-  assert.equal(follow.agents[0].status, "queued");
+  assert.equal(follow.tasks[0].status, "queued");
   assert.deepEqual(
     (await call("agent_list", {})).agents.find((row) => row.agent === "orca").waiting_for,
     ["dep"],
@@ -1504,7 +1501,7 @@ test("failed model outcomes remain finishing until finalization and never expose
   assert.equal(finishing.outcome.model_stop_reason, "error");
   for (const name of ["agent_read", "agent_list", "agent_interrupt"]) {
     const reply = await call(name, name === "agent_list" ? {} : { agent: "orca" });
-    const projected = name === "agent_interrupt" ? reply : reply.agents[0];
+    const projected = name === "agent_interrupt" ? reply : (reply.tasks ?? reply.agents)[0];
     assert.equal(projected.status, "finishing");
     assert.equal(projected.recovery_hint, undefined, name);
   }
@@ -1528,7 +1525,7 @@ test("failed model outcomes remain finishing until finalization and never expose
   await settle(f, "orca");
   for (const name of ["agent_read", "agent_list", "agent_interrupt"]) {
     const reply = await call(name, name === "agent_list" ? {} : { agent: "orca" });
-    const projected = name === "agent_interrupt" ? reply : reply.agents[0];
+    const projected = name === "agent_interrupt" ? reply : (reply.tasks ?? reply.agents)[0];
     assert.equal(projected.status, "failed");
     assert.equal(Object.hasOwn(projected, "recovery_hint"), false, name);
   }
@@ -1538,7 +1535,7 @@ test("failed model errors retain diagnostics but omit recovery_hint without extr
   const f = await fixture(t),
     { call } = toolsFor(f);
   const started = await call("agent_spawn", create(), "recoverable-error");
-  assert.equal(started.agents[0].recovery_hint, undefined);
+  assert.equal(started.tasks[0].recovery_hint, undefined);
   await until(() => f.ports[0]?.streaming);
   f.ports[0].callbacks.alert("retain this artifact pointer");
   const raw = "fixture/controlled RAW_PROVIDER_DETAIL quota disabled";
@@ -1580,12 +1577,12 @@ test("failed model errors retain diagnostics but omit recovery_hint without extr
   );
   const waiting = await call("agent_wait", { agents: ["orca"], wait_ms: 0 });
   assert.equal(waiting.reason, "task_issue");
-  assert.equal(Object.hasOwn(waiting.agents[0], "recovery_hint"), false);
+  assert.equal(Object.hasOwn(waiting.tasks[0], "recovery_hint"), false);
   assert.equal(waiting.alerts[0].message, "retain this artifact pointer");
   assert.equal(original.finished_presented, true);
   assert.equal(viewOf(f, "orca").pending_messages, 0);
   const reading = await call("agent_read", { agent: "orca" });
-  assert.equal(Object.hasOwn(reading.agents[0], "recovery_hint"), false);
+  assert.equal(Object.hasOwn(reading.tasks[0], "recovery_hint"), false);
   assert.equal(reading.alerts, undefined);
   assert.deepEqual(
     original.record,
@@ -1617,8 +1614,8 @@ test("roster and communication omit recovery hints for every failed task on repe
     assert(roster.agents.every((entry) => !Object.hasOwn(entry, "recovery_hint")));
     assert.equal(roster.response_limit_reached, undefined);
     const waiting = await call("agent_wait", { agents: ["plain", "second", "first"], wait_ms: 0 });
-    assert(waiting.agents.every((entry) => !Object.hasOwn(entry, "recovery_hint")));
-    assert.equal(waiting.agents[1].agent, "second", "explicit bound order remains unchanged");
+    assert(waiting.tasks.every((entry) => !Object.hasOwn(entry, "recovery_hint")));
+    assert.equal(waiting.tasks[1].agent, "second", "explicit bound order remains unchanged");
     assert.equal(
       waiting.response_limit_reached,
       undefined,
@@ -1626,7 +1623,7 @@ test("roster and communication omit recovery hints for every failed task on repe
     );
   }
   assert.equal(
-    Object.hasOwn((await call("agent_read", { agent: "first" })).agents[0], "recovery_hint"),
+    Object.hasOwn((await call("agent_read", { agent: "first" })).tasks[0], "recovery_hint"),
     false,
   );
 });
@@ -1651,8 +1648,8 @@ for (const quarantine of [false, true])
     assert.equal(view.finalization_pending, false);
     assert.equal(view.resumable, false);
     const read = await call("agent_read", { agent: "orca" });
-    assert.equal(read.agents[0].unavailable, true);
-    assert.equal(Object.hasOwn(read.agents[0], "recovery_hint"), false);
+    assert.equal(read.tasks[0].unavailable, true);
+    assert.equal(Object.hasOwn(read.tasks[0], "recovery_hint"), false);
     assert.equal(view.outcome.reason, "execution_error");
     assert.equal(view.outcome.model_stop_reason, "error");
     await assert.rejects(call("agent_run", run("orca"), "cannot-reuse"), code("AGENT_UNAVAILABLE"));
@@ -1696,7 +1693,7 @@ test("raw quota/availability words and non-error terminal facts do not add recov
     for (const projected of [
       (await call("agent_list", {})).agents[0],
       await call("agent_interrupt", { agent: "orca" }),
-      (await call("agent_read", { agent: "orca" })).agents[0],
+      (await call("agent_read", { agent: "orca" })).tasks[0],
     ])
       assert.equal(projected.recovery_hint, undefined, name);
   }
@@ -1773,7 +1770,7 @@ test("independent roster pressure drops optional fields in order, preserving eve
     assert.equal(row.agent, `worker-${index}`);
     assert.equal(row.task, 1);
     assert.equal(row.status, "queued");
-    assert.equal(row.wait, "dependencies");
+    assert.equal(row.queued_for, "dependencies");
     assert.equal(row.label, "\0".repeat(120));
     assert.equal(row.cancellation_source, "human");
   }

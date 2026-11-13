@@ -28,7 +28,7 @@ import {
   ParentHistoryError,
   SessionInitializationError,
   SessionUnavailableError,
-  workersDisabled,
+  delegationOff,
   type AgentSessionPort,
   type OwnerLease,
   type RunCallbacks,
@@ -68,6 +68,7 @@ import {
   AGENT_EXISTS_RESOLUTION,
   COMMUNICATION_LIMITS,
   isModelAgentName,
+  modelQueueWait,
   modelTaskStatus,
   type CommunicationAction,
   type CommunicationEnvelope,
@@ -85,6 +86,7 @@ import {
   errorText,
   handoffOmittedChars,
   handoffText,
+  returnLimitText,
   settingsView,
   stable,
   updatesText,
@@ -237,6 +239,8 @@ interface AdmissionPlan {
   reuse: boolean;
 }
 /** Reserved namespace: ordinary submissions/deliveries cannot impersonate a secondary fact. */
+/** Release reason of a return_to scout whose whole result was handed off. */
+const RESULT_RETURNED = "result_returned";
 const RETURN_TO_REQUEST_PREFIX = "\u0000pi-alehouse/return-to/v1:";
 export interface ContextChange {
   event_id: string;
@@ -707,10 +711,10 @@ export class OwnerController {
   ): void {
     const current = this.admissionState();
     if (!captured?.enabled || !current?.enabled || current.revision !== captured.revision)
-      throw workersDisabled();
+      throw delegationOff();
   }
   private assertExternalSteerAdmission(): void {
-    if (!this.admissionState()?.enabled) throw workersDisabled();
+    if (!this.admissionState()?.enabled) throw delegationOff();
   }
 
   submit(request_id: string, input: SubmitRequest): Promise<RunView> {
@@ -819,7 +823,9 @@ export class OwnerController {
       agent.resident &&
       agent.unavailable !== "cleanup_uncertain" &&
       !this.uncertainClaim(agent) &&
-      (!!agent.exiting || agent.unavailable === "explicitly_released")
+      (!!agent.exiting ||
+        agent.unavailable === "explicitly_released" ||
+        agent.unavailable === RESULT_RETURNED)
     );
   }
   /** Agents being released that hold what a rejected admission needed. */
@@ -850,7 +856,7 @@ export class OwnerController {
       !(run.record.execution_exited || run.record.stop_reason)
     )
       return undefined;
-    if (!admission?.enabled) return Promise.reject(workersDisabled());
+    if (!admission?.enabled) return Promise.reject(delegationOff());
     return this.waitForRuns([run.record.run_id], {
       mode: "all",
       timeout_ms: settle.ms ?? 30000,
@@ -1821,6 +1827,7 @@ export class OwnerController {
             run.record.input_entered = true;
             this.presentationVersion++;
             if (agent.question?.reserved_by === run.record.run_id) agent.question = undefined;
+            this.releaseReturnedSource(run);
           },
           output: (value) => {
             this.assertEffectAllowed();
@@ -1913,6 +1920,8 @@ export class OwnerController {
           ),
           declaration,
           run.record.prompt,
+          // Orchestration-authored, so outside the parent-authored witness above.
+          this.returnLimit(run),
         ]
           .filter(Boolean)
           .join("\n\n");
@@ -2960,7 +2969,7 @@ export class OwnerController {
         const data: CommunicationSnapshot = {
           reason,
           ...(action ? { action } : {}),
-          ...(!enabled ? { workers_disabled: true } : {}),
+          ...(!enabled ? { delegation_off: true } : {}),
           tasks: targets.map((run) =>
             this.communicationTask(
               run,
@@ -3040,7 +3049,13 @@ export class OwnerController {
     providers: ProviderActivity,
   ): ThinTaskEntry {
     const agent = this.requireAgent(run.record.agent_id);
-    return communicationRow(run, agent, task, healthy, this.queuedFor(run, healthy, providers));
+    return communicationRow(
+      run,
+      agent,
+      task,
+      healthy,
+      modelQueueWait(this.queuedFor(run, healthy, providers)),
+    );
   }
   private communicationTask(
     run: ManagedRun,
@@ -3077,6 +3092,44 @@ export class OwnerController {
       },
     });
   }
+  /** The share of a return_to source's result its continuation will receive. */
+  private returnLimit(source: ManagedRun): string {
+    const id = source.record.return_to_run_id;
+    return id === undefined
+      ? ""
+      : returnLimitText(this.dependencies(this.requireRun(id).record).length, HANDOFF_CHARS);
+  }
+  /** A return_to scout exists for one handoff. Once the continuation has taken
+   * its whole result, release it as an explicit kill would: the parent cannot
+   * read that result and has nothing left to collect. A reused, asking or
+   * already ending scout, or one whose result the handoff cut, stays for the
+   * parent. Declared by the parent's own spawn, not TTL/LRU eviction. */
+  private releaseReturnedSource(continuation: ManagedRun): void {
+    const id = continuation.record.run_id;
+    const source = [...this.runs.values()].find((run) => run.record.return_to_run_id === id);
+    if (!source) return;
+    const agent = this.agents.get(source.record.agent_id);
+    if (
+      !agent?.resident ||
+      agent.current ||
+      agent.question ||
+      agent.release ||
+      agent.unavailable ||
+      agent.exiting ||
+      [...this.runs.values()].findLast((run) => run.record.agent_id === agent.id) !== source ||
+      handoffOmittedChars(
+        source.output,
+        this.dependencies(continuation.record).length,
+        HANDOFF_CHARS,
+      ) > 0
+    )
+      return;
+    try {
+      this.track(this.releaseAgent(agent, RESULT_RETURNED));
+    } catch {
+      /* Best-effort: the scout stays for an explicit kill; the continuation's input is unaffected. */
+    }
+  }
   /** Model-visible status follows the exact original continuation, never an
    * Agent's latest task. Actual retained output stays available to handoff/UI. */
   private returnToNotice(
@@ -3090,7 +3143,7 @@ export class OwnerController {
     // the prefix handoffText attached.
     const omitted = continuation.record.input_entered
       ? handoffOmittedChars(
-          run.output.text,
+          run.output,
           this.dependencies(continuation.record).length,
           HANDOFF_CHARS,
         )

@@ -16,7 +16,7 @@ test("independent packing preserves complete replies and never mutates captured 
   for (const captured of [
     { agent: "otter", task: 1, status: "interrupting", label: "Stop requested" },
     {
-      agents: [{ agent: "otter", task: 1, status: "queued", wait: "capacity" }],
+      agents: [{ agent: "otter", task: 1, status: "queued", queued_for: "provider_capacity" }],
       killed: ["badger"],
     },
     {
@@ -42,7 +42,7 @@ test("independent roster uses deterministic whole-field omission without droppin
       agent: `otter${i}`,
       task: 1,
       status: "queued",
-      wait: i % 2 ? "capacity" : "dependencies",
+      queued_for: i % 2 ? "provider_capacity" : "dependencies",
       error: "\0".repeat(20000),
       label: "fixture",
     })),
@@ -57,7 +57,7 @@ test("independent roster uses deterministic whole-field omission without droppin
   assert.equal(reply.agents.length, 16);
   assert.deepEqual(reply.killed, ["badger"]);
   for (const [index, row] of reply.agents.entries()) {
-    for (const field of ["agent", "task", "status", "wait"])
+    for (const field of ["agent", "task", "status", "queued_for"])
       assert.equal(row[field], before.agents[index][field]);
     for (const field of ["error", "label"])
       if (Object.hasOwn(row, field))

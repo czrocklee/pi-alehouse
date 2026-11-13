@@ -26,8 +26,6 @@ const stringEnum = <T extends readonly string[]>(
   options?: { description?: string; default?: T[number] },
 ) => Type.Unsafe<T[number]>({ type: "string", enum: values, ...options });
 const optional = Type.Optional;
-const offGuidance =
-  "workers_disabled: ask the user to enable delegation for new work, steering or answers; accepted work and inspection continue.";
 export const AGENT_NAME_PATTERN = MODEL_AGENT_NAME_PATTERN;
 const agentName = (description?: string) =>
   Type.String({ pattern: AGENT_NAME_PATTERN, ...(description ? { description } : {}) });
@@ -42,7 +40,7 @@ const labelField = text(
 const afterField = optional(
   agentNames(
     4,
-    "Wait for each named Agent's current or latest task, fixed when this call is accepted, to reach completed; any other settled status fails the dependency. Results become reference context. Does not follow later tasks or answers: wait until agent_answer returns before naming its Agent here.",
+    "Wait for each named Agent's current or latest task, fixed at this call, to reach completed; any other final status fails the dependency. Results become reference context. Does not follow later tasks or answers: wait until agent_answer returns before naming its Agent here.",
   ),
 );
 const waitField = optional(
@@ -73,7 +71,7 @@ const dispatchField = optional(
       ),
       tree: optional(
         dispatchPath(
-          "Build/test output directory; needs write permission and, if it exists, must be a directory. Overlapping declared resources conflict within this Owner; cross-Owner tree locks are advisory, not global exclusivity.",
+          "Build/test output directory; needs write permission and, if it exists, must be a directory. Declarations that overlap another Agent's conflict within this session; other sessions are only advised, not excluded.",
         ),
       ),
       checks: optional(
@@ -83,7 +81,7 @@ const dispatchField = optional(
             maxLength: 512,
             pattern: "^(?=.*\\S)[^\\x00-\\x1f\\x7f]+(?![\\s\\S])",
             description:
-              "Planned check identifier (globs allowed); ready for this task, not later go-ahead.",
+              "A check for this task to run now: an identifier, not a command (globs allowed); not one awaiting a later go-ahead.",
           }),
           { minItems: 1, maxItems: 16, uniqueItems: true },
         ),
@@ -99,7 +97,9 @@ const dispatchField = optional(
 const returnToField = optional(
   Type.Object(
     {
-      agent: agentName("Existing worker with a settled, unanswered question."),
+      agent: agentName(
+        "Existing worker whose task ended with a question that is still unanswered.",
+      ),
       question_id: Type.String({
         minLength: 34,
         maxLength: 34,
@@ -108,13 +108,13 @@ const returnToField = optional(
       }),
       answer: text(
         PARENT_TEXT_LIMITS.answer,
-        "Your instruction for continuing the worker's task; scout findings are attached separately as untrusted reference material.",
+        "Your instruction for continuing the worker's task, written before the findings exist: say how to proceed for each outcome you expect. Scout findings are attached separately as untrusted reference material.",
       ),
     },
     {
       additionalProperties: false,
       description:
-        "Scout only: answer a worker's pending question with this scout's findings. Needs agent_answer allowed for you without a prompt. The worker resumes automatically once the scout completes, findings attached; you do not read or relay them. wait_ms waits for the worker. Kill the scout when done.",
+        "Scout only: answer a worker's pending question with this scout's findings. The worker resumes automatically once the scout completes, findings attached; you do not read or relay them. The worker receives only the first 16384 characters, which the scout is told. wait_ms waits for the worker. The scout is released once its whole result is delivered; otherwise read it and kill it yourself. Needs agent_answer already approved for you; otherwise the error says what to do.",
     },
   ),
 );
@@ -141,7 +141,8 @@ export const spawnSchema = Type.Object(
     return_to: returnToField,
     inherit_context: optional(
       Type.Boolean({
-        description: "Default false: text context without tool calls/results; max 64 KiB.",
+        description:
+          "true: the Agent first receives this conversation's text so far (no tool calls/results, max 64 KiB). Use when the task depends on discussion you would otherwise restate in prompt. Default false.",
       }),
     ),
     dispatch: dispatchField,
@@ -178,7 +179,9 @@ export const runSchema = Type.Object(
 );
 export const sendSchema = Type.Object(
   {
-    agent: agentName("Agent whose task is selected now; never retargets later work."),
+    agent: agentName(
+      "Agent whose current task, fixed at this call, receives the message; a later task never does.",
+    ),
     message: text(
       PARENT_TEXT_LIMITS.message,
       "A correction or extra instruction for the current task. Never an answer (use agent_answer) or another task.",
@@ -213,7 +216,7 @@ export const waitSchema = Type.Object(
     agents: optional(
       agentNames(
         16,
-        `Bind each named Agent's active (running/queued) task, else its pending question, else its latest finished task, once at this call. Alerts span those Agents. Omit to wait on unfinished tasks, answerable questions and all Agents' alerts. Queued wait="capacity" means waiting for a provider slot; wait="dependencies" waits for fixed tasks.`,
+        `Wait on each named Agent's task, fixed at this call: its active (running/queued) task, else its pending question, else its latest finished task. Alerts span those Agents. Omit to wait on unfinished tasks, answerable questions and all Agents' alerts.`,
       ),
     ),
     mode: optional(
@@ -263,13 +266,13 @@ export const agentSpawnDescription =
 export const agentRunDescription =
   "Continue an idle Agent's own earlier work; each turn re-reads its whole conversation. New work, even on a related topic, or different settings: agent_spawn. Running task: agent_send or agent_wait; pending question: agent_answer.";
 export const agentSendDescription =
-  "Add instructions to the task selected now, not an answer or new task. delivery: joined=added to prompt, steered=sent while running, not_delivered=nothing sent. Delivery does not prove action.";
+  "Add instructions to the Agent's current task, fixed at this call, not an answer or new task. delivery: joined=added to prompt, steered=sent while running, not_delivered=nothing sent. Delivery does not prove action.";
 export const agentAnswerDescription =
-  'Answer the exact pending question_id and submit a continuation. First wait for status="needs_input" and a current question_id from agent_wait or agent_read; historical text alone cannot be answered. Keeps fixed settings and the asking task\'s label/dispatch. workers_disabled: ask the user to enable delegation before answering.';
-export const agentWaitDescription = `Wait for selected tasks; questions, issues or alerts return early. Prefer long waits to polling. Questions stay pending; name other Agents to defer one. Nothing pending returns now; timeout/abort never stops work. ${offGuidance}`;
-export const agentReadDescription = `Read a task's result/question and this Agent's alerts, including after reuse or kill. Prioritizes the full question; keep next_cursor to continue the original task. ${offGuidance}`;
+  'Answer the exact pending question_id and submit a continuation. First wait for status="needs_input" and a current question_id from agent_wait or agent_read; historical text alone cannot be answered. Keeps fixed settings and the asking task\'s label/dispatch.';
+export const agentWaitDescription = `Wait for selected tasks; questions, issues or alerts return early. Prefer long waits to polling. Questions stay pending; name other Agents to defer one. Nothing pending returns now; timeout/abort never stops work.`;
+export const agentReadDescription = `Read a task's result/question and this Agent's alerts, including after reuse or kill. Prioritizes the full question. next_cursor means more of that result remains: pass it back to continue the original task.`;
 export const agentInterruptDescription =
-  "Request a stop, not settlement; confirm with wait/read. An already ending task keeps its outcome. Keeps the conversation for follow-ups; consumes no alerts.";
+  "Request a stop; the task has stopped only once wait/read shows a final status. An already ending task keeps its outcome. Keeps the conversation for follow-ups; consumes no alerts.";
 export const agentKillDescription =
   "Permanently end an Agent, requesting stop of its task. exiting or cleanup_uncertain does not confirm release. Name stays taken, results stay readable; consumes no alerts.";
 export const agentListDescription =

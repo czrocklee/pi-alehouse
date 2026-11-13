@@ -56,7 +56,7 @@ const read = async (controller, agent_id, rest = {}) =>
   JSON.parse(
     (await controller.observe({ kind: "read", agent_id, max_chars: 1, ...rest }, { validate() {} }))
       .content[0].text,
-  ).agents[0];
+  ).tasks[0];
 
 test("getResult and model read use the same compact cursor and page boundaries", async (t) => {
   const { controller: c, ports } = await fixture(t);
@@ -138,7 +138,7 @@ test("live windows have no cursor and retained EOF preserves never-retained omis
   assert.equal(page.next_cursor, undefined);
   const row = await read(c, run.agent_id, { max_chars: 3 });
   assert.equal(row.result, page.text);
-  assert.equal(row.omitted_chars, 1);
-  assert.equal(row.result_omitted, undefined, "retention loss is omitted_chars, not page omission");
+  assert.equal(row.lost_chars, 1);
+  assert.equal(row.result_omitted, undefined, "retention loss is lost_chars, not page omission");
   assert.equal(row.next_cursor, undefined);
 });

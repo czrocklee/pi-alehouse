@@ -709,7 +709,7 @@ explicit `agent_answer`; child delegation remains excluded/denied for all nine
 and all retired names. Initial Off hides all nine. After accepted work, only
 wait/read/interrupt/kill/list remain visible. Off gates new tasks, steering and
 answers, not accepted child alert/ask callbacks or inspection. Observations carry
-`workers_disabled: true` separately from Owner faults; asking the user to enable
+`delegation_off` (whose value states the guidance) separately from Owner faults; asking the user to enable
 delegation is required before answering, not calling a hidden cached answer tool.
 
 Questions are immutable first-write-wins per original Run. Only a truly settled,
@@ -759,6 +759,13 @@ output/paging. Internal `getResult`, dependency handoff, human UI and history
 retain true raw source text unchanged. Alerts, questions and labels remain
 visible: this is not an OS sandbox or zero-information-flow guarantee, and adds
 no model-visible flag, read mode or permission.
+The handoff moves exposure rather than removing it: scout findings, including
+summarized web text, reach a worker that has Bash/edit/write without the parent
+model reading them first. They stay framed as untrusted reference outside the
+parent-authored witness, and the worker's ordinary permission gates still apply;
+no review step is claimed. The length sentence appended to the scout's task and
+the release of a fully delivered scout grant nothing: the release is the
+existing explicit-release path and keeps its `cleanup_uncertain` fail-closed outcome.
 `return_to_run_id` is live Owner metadata for the current Owner only.
 It is not a persisted or recoverable journal field. Existing journal names and
 data stay literal; restart does not hydrate a compound pair or restore

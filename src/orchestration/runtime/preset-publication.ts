@@ -110,7 +110,7 @@ export function validateWorkerEfforts<M extends { provider: string; id: string }
   preset: PresetSelection,
   input: EffortModels<M>,
 ): void {
-  if (isOffPreset(preset)) throw new OrchestrationError("WORKERS_DISABLED");
+  if (isOffPreset(preset)) throw new OrchestrationError("DELEGATION_OFF");
   for (const strength of strengths) {
     if (preset.effort[strength] === "inherit") continue;
     try {

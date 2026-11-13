@@ -226,7 +226,7 @@ there is no separate persisted enable switch or last-preset setting. This is
 independent of Pi's **thinking** level named `off`.
 
 Off rejects new `agent_spawn`, `agent_run`, `agent_send` and `agent_answer`
-with `WORKERS_DISABLED` before model resolution, new Run/session allocation,
+with `DELEGATION_OFF` before model resolution, new Run/session allocation,
 steering or question continuation, in the Controller. Unknown Agent names retain
 normal errors through cached handles. Accepted queued/running work, child
 alert_parent/ask_parent and internal finish-budget instructions continue; Off
@@ -253,7 +253,7 @@ Under the [tool contract](tool-contract.md), default wait selects current
 nonterminal tasks while Off; when initially On it also binds healthy settled
 pending questions. This choice is made once: switching during a wait neither
 adds nor removes targets. Explicit wait/read still show pending question identity
-with workers_disabled=true; Off does not consume it or make it answerable through
+with `delegation_off` (its value is the guidance text); Off does not consume it or make it answerable through
 send. Enable delegation before explicit agent_answer. On questions remain
 level-triggered independent of finished presentation: unanswered questions return
 again. To defer one, pass `agents` naming other Agents; this also limits alerts

@@ -253,7 +253,7 @@ test("all model waits continue past normal completion but prioritize questions a
     ).content[0].text,
   );
   assert.equal(value.reason, "question");
-  assert.equal(value.agents[0].status, "needs_input");
+  assert.equal(value.tasks[0].status, "needs_input");
 
   ports[3].finish("partial", "error", "provider failed");
   await ended(c, failed);
@@ -266,7 +266,7 @@ test("all model waits continue past normal completion but prioritize questions a
     ).content[0].text,
   );
   assert.equal(value.reason, "task_issue");
-  assert.equal(value.agents[0].status, "failed");
+  assert.equal(value.tasks[0].status, "failed");
 
   c.cancel(cancelled.run_id);
   ports[4].finish("partial", "aborted");
@@ -280,7 +280,7 @@ test("all model waits continue past normal completion but prioritize questions a
     ).content[0].text,
   );
   assert.equal(value.reason, "task_issue");
-  assert.equal(value.agents[0].status, "interrupted");
+  assert.equal(value.tasks[0].status, "interrupted");
 
   ports[5].callbacks.turnEnd(true);
   ports[5].finish("best effort");
@@ -294,9 +294,9 @@ test("all model waits continue past normal completion but prioritize questions a
     ).content[0].text,
   );
   assert.equal(value.reason, "task_issue");
-  assert.equal(value.agents[0].limit_reached, true);
+  assert.equal(value.tasks[0].limit_reached, true);
   assert.equal(Object.hasOwn(value, "pending"), false);
-  assert.equal(value.agents.find(({ agent }) => agent === "peer").status, "running");
+  assert.equal(value.tasks.find(({ agent }) => agent === "peer").status, "running");
   // Task issues outrank done even for any and already-terminal targets.
   assert.equal(
     JSON.parse(

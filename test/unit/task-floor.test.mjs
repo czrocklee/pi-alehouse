@@ -1383,25 +1383,25 @@ test(
     );
     const saturated = await hidden.read(16_384);
     assert.equal(saturated.response_limit_reached, true, "the full result cannot fit");
-    const fill = saturated.agents[0].result.length;
+    const fill = saturated.tasks[0].result.length;
     const exact = await hidden.read(fill);
-    assert.equal(exact.agents[0].result.length, fill);
+    assert.equal(exact.tasks[0].result.length, fill);
     assert.equal(
       exact.response_limit_reached,
       undefined,
       "hidden notes do not compete for the remaining bytes",
     );
-    assert.equal(Object.hasOwn(exact.agents[0], "dispatch_notes"), false);
+    assert.equal(Object.hasOwn(exact.tasks[0], "dispatch_notes"), false);
 
     const shown = await settledWith(["tree_shared", "tree_lock_unknown"]);
-    assert.deepEqual((await shown.read(100)).agents[0].dispatch_notes, ["tree_shared"]);
+    assert.deepEqual((await shown.read(100)).tasks[0].dispatch_notes, ["tree_shared"]);
     const crowded = await shown.read(fill);
-    assert.equal(crowded.agents[0].result.length, fill);
+    assert.equal(crowded.tasks[0].result.length, fill);
     assert.equal(
       crowded.response_limit_reached,
       true,
       "a note that reaches packing and cannot fit does set the flag",
     );
-    assert.equal(Object.hasOwn(crowded.agents[0], "dispatch_notes"), false);
+    assert.equal(Object.hasOwn(crowded.tasks[0], "dispatch_notes"), false);
   },
 );

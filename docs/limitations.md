@@ -251,7 +251,8 @@ Safe shared log-directory permissions are preserved; unsafe writable ancestors
 or a changed/unprotected symlink target still defer rather than weaken checks.
 
 The [tool contract](tool-contract.md) defines communication and retention.
-Public reason is omitted for snapshot/done; zero alerts_pending/finished_pending,
+Every reply carries its reason, including snapshot/done; zero
+alerts_pending/finished_pending,
 the redundant pending array and empty result text are absent. Positive counts,
 notification semantics, original-Run provenance and atomic publication remain.
 There is no metadata-only read view; other tools, arguments, execution
@@ -272,7 +273,7 @@ alerts are consumed. Bound tasks never drift. No bound tasks/scoped alerts
 returns nothing_pending without a timer. On default questions remain
 level-triggered, independent of their finished bit; Off excludes already-terminal
 questions only at first default binding, while explicit observation can still
-show question identity with workers_disabled. Unanswered questions return again;
+show question identity with delegation_off. Unanswered questions return again;
 to defer one, explicitly name other Agents in `agents`, which also limits alerts
 to those Agents. Preset changes do not rebind a wait. Alert wakes matching
 observers, not the parent model, parent Bash or a new
@@ -284,7 +285,12 @@ Optional scout `return_to` does not add atomic cancellation, isolation, a
 deadline, reserved capacity, restart recovery or a second admission after the
 scout finishes. One call installs both ordinary Runs or neither. Caller
 abort/timeout cancels the observation only. Stopping the worker does not stop
-the scout; the scout remains resident until explicit kill. Source failure can
+the scout. The scout is released only after the continuation's `input_entered`
+has taken its whole result; a cut, undelivered, reused, asking or ending scout
+remains resident until explicit kill. The length sentence appended to the scout's
+task is guidance, not enforcement: a longer result is still cut, and the worker
+cannot fetch the rest. `return_to.answer` is written before the findings exist.
+Source failure can
 fail the pending continuation and reopen the original question only while that
 continuation is pre-input and the worker is healthy. After input entry, nothing
 here restores the question. All parent-model result observations of the source,

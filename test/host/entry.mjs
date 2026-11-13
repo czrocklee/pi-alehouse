@@ -860,10 +860,10 @@ try {
     max_turns: 4,
     wait_ms: 60000,
   });
-  assert.equal(Object.hasOwn(first, "reason"), false);
+  assert.equal(first.reason, "done");
   assert.deepEqual(first.action, { type: "agent_spawn", agent: "entry", task: 1 });
   assert.deepEqual(
-    first.agents,
+    first.tasks,
     [
       {
         agent: "entry",
@@ -881,13 +881,12 @@ try {
   assert.equal(fixedLink.data.routing.effort_source, "user_override");
   assert.equal(fixedLink.data.routing.parent_thinking, "off");
   const finish = async (envelope) => {
-    const [reply] = envelope.agents;
+    const [reply] = envelope.tasks;
     assert(reply);
     if (reply.status === "completed" && reply.result !== undefined && !reply.next_cursor)
       return reply;
     for (let i = 0; i < 8; i++) {
-      const [waited] = (await invoke("agent_wait", { agents: [reply.agent], wait_ms: 1000 }))
-        .agents;
+      const [waited] = (await invoke("agent_wait", { agents: [reply.agent], wait_ms: 1000 })).tasks;
       if (waited.status === "completed") {
         assert.equal(waited.next_cursor, undefined);
         return waited;
@@ -973,7 +972,7 @@ try {
           undefined,
           parent.extensionRunner.createContext(),
         ),
-      /WORKERS_DISABLED/,
+      /DELEGATION_OFF/,
     );
   }
   await assert.rejects(
@@ -995,9 +994,9 @@ try {
     cleanupToolNames,
     "the next request must repair tool visibility without changing the Off selection",
   );
-  assert.equal(Object.hasOwn(offResult, "reason"), false);
-  assert.equal(offResult.workers_disabled, true);
-  assert.equal(offResult.agents[0].status, "running", "Off keeps inspection of the accepted task");
+  assert.equal(offResult.reason, "snapshot");
+  assert.match(offResult.delegation_off, /^Ask the user to enable delegation/);
+  assert.equal(offResult.tasks[0].status, "running", "Off keeps inspection of the accepted task");
   heldResponse.resolve();
   assert.equal(
     (await finish(held)).result,
@@ -1013,9 +1012,9 @@ try {
     label: "Entry again",
     wait_ms: 60000,
   });
-  assert.equal(Object.hasOwn(next, "reason"), false);
+  assert.equal(next.reason, "done");
   assert.deepEqual(next.action, { type: "agent_run", agent: "entry", task: 3 });
-  assert.deepEqual(next.agents, [
+  assert.deepEqual(next.tasks, [
     { agent: "entry", task: 3, status: "completed", label: "Entry again", result: "ENTRY_READ_OK" },
   ]);
   assert.deepEqual(
@@ -1047,10 +1046,10 @@ try {
     max_turns: 4,
     wait_ms: 60000,
   });
-  assert.equal(Object.hasOwn(inherited, "reason"), false);
+  assert.equal(inherited.reason, "done");
   assert.deepEqual(inherited.action, { type: "agent_spawn", agent: "inherit", task: 1 });
   assert.deepEqual(
-    inherited.agents,
+    inherited.tasks,
     [
       {
         agent: "inherit",

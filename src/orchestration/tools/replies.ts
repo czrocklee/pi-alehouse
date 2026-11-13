@@ -1,7 +1,7 @@
 import { terminal, validDifficulty, type RunView } from "../core/contracts.ts";
 import {
-  isQueueWait,
   modelDispatchNotes,
+  modelQueueWait,
   modelTaskStatus,
   type QueueWait,
 } from "../core/communication-envelope.ts";
@@ -23,11 +23,11 @@ export type NameOf = (run_id: string) => string;
 // The parent's verb is interrupt, so its statuses say so.
 const statusOf = (view: RunView) =>
   view.finalization_pending ? "finishing" : modelTaskStatus(view.status);
-/** Host RunView.queued_for, renamed. Only a queued projection may carry it, and
- * only the two enum values: a provider id or count is omitted, never copied. */
+/** Host RunView.queued_for in the model's wording. Only a queued projection may
+ * carry it, and only the two enum values: a provider id or count is never copied. */
 const queueWait = (view: RunView): QueueWait | undefined => {
   if (statusOf(view) !== "queued") return undefined;
-  return isQueueWait(view.queued_for) ? view.queued_for : undefined;
+  return modelQueueWait(view.queued_for);
 };
 
 /** Independent interrupt/roster projection. Communication observations serialize
@@ -38,13 +38,13 @@ export function taskReply(view: RunView, nameOf: NameOf) {
     (terminal(view.status) && !view.resumable) ||
     !!(view.unavailable_reason && view.unavailable_reason !== "agent_busy");
   const dispatch_notes = modelDispatchNotes(view.dispatch_notes);
-  const wait = queueWait(view);
+  const queued_for = queueWait(view);
   return {
     agent: view.name,
     task: view.task,
     status: statusOf(view),
     ...taskMetadata(view),
-    ...(wait === undefined ? {} : { wait }),
+    ...(queued_for === undefined ? {} : { queued_for }),
     ...(view.has_question ? { has_question: true } : {}),
     ...(view.outcome?.reason ? { reason: view.outcome.reason } : {}),
     ...(view.cancellation_source === "human" || view.outcome?.cancellation_source === "human"
@@ -55,7 +55,7 @@ export function taskReply(view: RunView, nameOf: NameOf) {
     ...(dispatch_notes ? { dispatch_notes } : {}),
     ...(view.outcome?.error ? { error: utf16Prefix(view.outcome.error, 512) } : {}),
     ...(view.owner_error ? { owner_error: utf16Prefix(view.owner_error, 512) } : {}),
-    // Dependency names stay; wait is only the queued reason, not a replacement.
+    // Dependency names stay; queued_for is only the reason, not a replacement.
     ...(view.blocked_by?.length ? { waiting_for: view.blocked_by.map(nameOf) } : {}),
     ...(unavailable ? { unavailable: true } : {}),
     ...(unavailable && view.unavailable_reason

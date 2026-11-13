@@ -145,8 +145,12 @@ with the scout row showing its status and any question. A later wait on
 the worker observes the continuation, not a second admission; but if the
 continuation failed before input, the original question is reopened and that
 wait reports it with the same `question_id`. If prepare is not your effective
-`agent_answer` allow, spawn the scout and call `agent_answer` separately. Stopping the worker does not stop the scout;
-the scout remains resident until explicitly killed. This illustration is not feature-test evidence.
+`agent_answer` allow, spawn the scout and call `agent_answer` separately. Stopping the worker does not stop the scout.
+The scout is told that the worker receives only the first 16384 characters of its
+result. Once the worker has taken the whole result the scout is released without a
+kill; if the handoff cut it, or it was not delivered, read the scout and kill it
+yourself. `answer` is written before the findings exist, so say how to proceed
+for each outcome you expect. This illustration is not feature-test evidence.
 
 ```ts
 const questionId = /* exact question_id from agent_wait or agent_read */;

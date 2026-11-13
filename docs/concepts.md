@@ -47,7 +47,9 @@ manage working copies. This is cooperative local execution, not OS isolation.
 An Agent can have only one current Run. It is reusable only after execution,
 input drain, history boundary handling, and cleanup state allow it. Cancelling
 is not sufficient. An Agent lives until it is killed: an interrupted or
-dependency-failed first task leaves it in place. Killing an Agent is permanent; uncertain cleanup
+dependency-failed first task leaves it in place. The one exception is a
+`return_to` scout whose whole result its worker continuation has taken: it is
+released as a kill would release it ([tool contract](tool-contract.md#scout-return_to)). Killing an Agent is permanent; uncertain cleanup
 leaves it reserved and is never force-released or automatically evicted.
 
 Through model tools, every Agent has a caller-chosen **name**
@@ -235,7 +237,7 @@ read selects current, pending-question or latest. No command gains a task target
 Each selected terminal window of real retained result pages with unread text
 reserves a fixed-width cursor before optional text packing; a packing-omitted
 page keeps its starting offset. Text never retained
-(omitted_chars) cannot be recovered; text omitted only by packing can be fetched
+(lost_chars) cannot be recovered; text omitted only by packing can be fetched
 on a later page. Keep returned cursors to continue a page; use the task selector
 to restart it. See [result cursor identity](tool-contract.md#result-cursors).
 
@@ -284,9 +286,9 @@ it, failure cannot. Historical questions remain readable without actionable
 tokens. Off forbids new tasks/steering/answers but accepted child work continues.
 
 Spawn/run/send/answer/wait/read share one envelope with complete bound
-Agent/task rows, optional action fact, top-level alerts, positive scoped pending
-counts and bounded finished reminders. Reason is omitted for snapshot/done;
-zero alerts_pending/finished_pending, the redundant pending array and empty
+task rows (`tasks`), optional action fact, top-level alerts, positive scoped pending
+counts and bounded finished reminders. Every reply names its reason, including
+snapshot and done; zero alerts_pending/finished_pending, the redundant pending array and empty
 result text are absent. Task conditions bind once; alert scopes are
 separate: inline sees its selected Run only, explicit wait/read span the chosen
 Agents' Runs, default wait receives all Owner alerts. Default On also selects
@@ -294,7 +296,7 @@ healthy pending questions level-triggered, independent of finished presentation;
 unanswered questions return again. To defer one, pass `agents` naming other
 Agents; this also limits alerts to those Agents. Off excludes already-terminal
 questions only at first default binding. Explicit observations still show them
-with workers_disabled. All-empty returns nothing_pending immediately, not
+with delegation_off. All-empty returns nothing_pending immediately, not
 vacuous done. Timeout or abort ends observation, not worker execution. UI/list
 are count/read-only projections and never consume communication.
 

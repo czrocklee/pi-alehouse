@@ -13,7 +13,7 @@ const wait = (c, runs, rest = {}) =>
   observe(c, { kind: "wait", agent_ids: runs.map((run) => run.agent_id), ...rest });
 const compact = (value) => {
   const forbidden =
-    /"(?:run_id|agent_id|owner_id|generation|phase|execution_exited|finalization_pending|history_ref|result_ref|cleanup_errors|effective_settings|outcome|snapshots|runtime|drain|resumable|model_stop_reason|max_duration_ms|settings|model|preset|tasks|cost_usd|cost_partial|idle_s|context_tokens|time_wrapped|recovery_hint|earlier_labels|touched|touched_omitted|elapsed_s|pending)"/;
+    /"(?:run_id|agent_id|owner_id|generation|phase|execution_exited|finalization_pending|history_ref|result_ref|cleanup_errors|effective_settings|outcome|snapshots|runtime|drain|resumable|model_stop_reason|max_duration_ms|settings|model|preset|cost_usd|cost_partial|idle_s|context_tokens|time_wrapped|recovery_hint|earlier_labels|touched|touched_omitted|elapsed_s|pending)"/;
   assert(!forbidden.test(JSON.stringify(value)), JSON.stringify(value));
 };
 
@@ -25,16 +25,16 @@ test("wait/read share the envelope, original task ordinal and result without exp
   await ended(c, a);
   const reply = await wait(c, [a]);
   compact(reply);
-  assert.equal(Object.hasOwn(reply, "reason"), false);
-  assert.deepEqual(reply.agents, [
+  assert.equal(reply.reason, "done");
+  assert.deepEqual(reply.tasks, [
     { agent: "orca", task: 1, status: "completed", label: "orca", result: "answer" },
   ]);
   assert.equal(Object.hasOwn(reply, "alerts_pending"), false);
   assert.equal(Object.hasOwn(reply, "finished_pending"), false);
   const page = await read(c, a);
   compact(page);
-  assert.equal(Object.hasOwn(page, "reason"), false);
-  assert.deepEqual(page.agents, reply.agents);
+  assert.equal(page.reason, "snapshot");
+  assert.deepEqual(page.tasks, reply.tasks);
   assert.deepEqual(taskReply(a, namesOf(c)), {
     agent: "orca",
     task: 1,
@@ -84,13 +84,13 @@ test("finalizing is finishing, has no stable result cursor and is not yet answer
   await entered.promise;
   const reply = await read(c, a, { max_chars: 2 });
   compact(reply);
-  assert.equal(reply.agents[0].status, "finishing");
-  assert.equal(reply.agents[0].next_cursor, undefined);
-  assert.equal(reply.agents[0].result_truncated, true);
-  assert.equal(reply.agents[0].question_id, undefined);
+  assert.equal(reply.tasks[0].status, "finishing");
+  assert.equal(reply.tasks[0].next_cursor, undefined);
+  assert.equal(reply.tasks[0].result_truncated, true);
+  assert.equal(reply.tasks[0].question_id, undefined);
   gate.resolve();
   await ended(c, a);
-  assert.equal((await read(c, a)).agents[0].status, "needs_input");
+  assert.equal((await read(c, a)).tasks[0].status, "needs_input");
 });
 
 test("runtime/drain/context/elapsed telemetry stays in core, not model replies", async (t) => {
@@ -129,19 +129,19 @@ test("alerts live at envelope top level and can wake a still-running task before
   const alert = await waiting;
   compact(alert);
   assert.equal(alert.reason, "alert");
-  assert.equal(alert.agents[0].status, "running");
+  assert.equal(alert.tasks[0].status, "running");
   assert.deepEqual(alert.alerts, [
     { agent: "orca", task: 1, label: "orca", message: "important fact" },
   ]);
-  assert.equal(alert.agents[0].progress, undefined);
+  assert.equal(alert.tasks[0].progress, undefined);
   ports[0].callbacks.question("factor?");
   ports[0].finish("Please provide factor");
   await ended(c, a);
   const question = await wait(c, [a]);
   assert.equal(question.reason, "question");
-  assert.equal(question.agents[0].question, "factor?");
-  assert.match(question.agents[0].question_id, /^q_[0-9a-f]{32}$/);
-  assert.equal(question.agents[0].has_question, true);
+  assert.equal(question.tasks[0].question, "factor?");
+  assert.match(question.tasks[0].question_id, /^q_[0-9a-f]{32}$/);
+  assert.equal(question.tasks[0].has_question, true);
   const names = { agent: (id) => c.agentName(id), run: namesOf(c) };
   assert.deepEqual(errorReply({ code: "AGENT_BUSY", details: { run_id: a.run_id } }, names).error, {
     code: "AGENT_BUSY",
@@ -159,7 +159,7 @@ test("a turn-capped completed task retains limit control and returns task_issue"
   await until(() => ports[0]?.streaming);
   ports[0].finish("exact");
   await ended(c, a);
-  assert.equal((await wait(c, [a])).agents[0].limit_reached, undefined);
+  assert.equal((await wait(c, [a])).tasks[0].limit_reached, undefined);
   const b = await c.submit("b", { resume: a.agent_id, prompt: "b", max_turns: 1 });
   await until(() => ports[0].calls.length === 2);
   ports[0].callbacks.turnEnd(true);
@@ -168,8 +168,8 @@ test("a turn-capped completed task retains limit control and returns task_issue"
   await ended(c, b);
   const reply = await wait(c, [b]);
   assert.equal(reply.reason, "task_issue");
-  assert.equal(reply.agents[0].status, "completed");
-  assert.equal(reply.agents[0].limit_reached, true);
+  assert.equal(reply.tasks[0].status, "completed");
+  assert.equal(reply.tasks[0].limit_reached, true);
   assert.equal(taskReply(c.view(b.run_id), namesOf(c)).limit_reached, true);
 });
 
@@ -189,9 +189,9 @@ test("sixteen real question rows retain all controls and bounded bodies without 
   const reply = await wait(c, runs);
   compact(reply);
   assert.equal(reply.reason, "question");
-  assert.equal(reply.agents.length, 16);
-  assert(reply.agents.every((row) => row.has_question && /^q_[0-9a-f]{32}$/.test(row.question_id)));
-  assert(reply.agents.slice(1).some((row) => row.question_truncated));
+  assert.equal(reply.tasks.length, 16);
+  assert(reply.tasks.every((row) => row.has_question && /^q_[0-9a-f]{32}$/.test(row.question_id)));
+  assert(reply.tasks.slice(1).some((row) => row.question_truncated));
   assert(communicationEnvelopeBytes(reply) <= 65536);
   assert.equal(reply.agents_omitted, undefined);
   assert.equal(reply.pending_omitted, undefined);
@@ -212,7 +212,7 @@ for (const remaining of [1, 9])
       await ended(c, run);
     }
     const reply = await wait(c, runs);
-    for (const [index, entry] of reply.agents.entries()) {
+    for (const [index, entry] of reply.tasks.entries()) {
       assert((entry.result ?? "").isWellFormed());
       assert(
         entry.next_cursor,
@@ -223,7 +223,8 @@ for (const remaining of [1, 9])
         answer,
       );
     }
-    if (remaining === 1) assert(reply.agents.every((row) => row.result_omitted));
+    if (remaining === 1)
+      assert(reply.tasks.every((row) => row.result === undefined && row.next_cursor));
   });
 
 test("diagnostic and abstract error prefixes never split a surrogate pair", async (t) => {
@@ -512,7 +513,7 @@ test("Esc abort is not task interruption, and neither consumes finished presenta
   await ended(c, run);
   const reply = await wait(c, [run]);
   assert.equal(reply.reason, "task_issue");
-  assert.equal(reply.agents[0].status, "interrupted");
+  assert.equal(reply.tasks[0].status, "interrupted");
 });
 
 test("historical stopped questions remain readable without actionable token; send never answers", async (t) => {
@@ -524,9 +525,9 @@ test("historical stopped questions remain readable without actionable token; sen
   ports[0].finish("partial", "aborted");
   await ended(c, a);
   const page = await read(c, a);
-  assert.equal(page.agents[0].question, "factor?");
-  assert.equal(page.agents[0].question_id, undefined);
-  assert.equal(page.agents[0].has_question, undefined);
+  assert.equal(page.tasks[0].question, "factor?");
+  assert.equal(page.tasks[0].question_id, undefined);
+  assert.equal(page.tasks[0].has_question, undefined);
   assert.equal(agentRow(c.view(a.run_id), namesOf(c)).has_question, undefined);
   assert.equal((await c.send("s", a.agent_id, "answer")).delivery, "not_delivered");
   const b = await c.submit("b", named("otter"));
@@ -535,7 +536,7 @@ test("historical stopped questions remain readable without actionable token; sen
   ports[1].finish("asked");
   await ended(c, b);
   assert.equal((await c.send("s2", b.agent_id, "because")).delivery, "not_delivered");
-  const question = (await read(c, b)).agents[0];
+  const question = (await read(c, b)).tasks[0];
   assert.equal(question.has_question, true);
   assert(question.question_id);
   const next = await c.answer("answer", b.agent_id, question.question_id, "because");
@@ -560,21 +561,20 @@ test("task replies copy queued_for to wait and keep dependency names without pro
     task: 2,
     status: "queued",
     label: "task",
-    wait: "dependencies",
+    queued_for: "dependencies",
     waiting_for: ["author", "editor"],
   });
   const capacity = taskReply({ ...base, queued_for: "capacity" }, names);
-  assert.equal(capacity.wait, "capacity");
+  assert.equal(capacity.queued_for, "provider_capacity");
   assert.deepEqual(
     capacity.waiting_for,
     ["author", "editor"],
     "capacity does not drop unmet dependency names",
   );
-  assert.equal(Object.hasOwn(capacity, "queued_for"), false);
   assert.equal(Object.hasOwn(capacity, "provider"), false);
   assert.equal(Object.hasOwn(capacity, "concurrency"), false);
   const plain = taskReply(base, names);
-  assert.equal(Object.hasOwn(plain, "wait"), false);
+  assert.equal(Object.hasOwn(plain, "queued_for"), false);
   assert.deepEqual(plain.waiting_for, ["author", "editor"]);
   const noNames = taskReply({ ...base, blocked_by: [], queued_for: "capacity" }, names);
   assert.deepEqual(noNames, {
@@ -582,31 +582,30 @@ test("task replies copy queued_for to wait and keep dependency names without pro
     task: 2,
     status: "queued",
     label: "task",
-    wait: "capacity",
+    queued_for: "provider_capacity",
   });
   for (const status of ["running", "completed", "failed", "needs_input", "interrupting"]) {
     const reply = taskReply({ ...base, status, queued_for: "dependencies" }, names);
-    assert.equal(Object.hasOwn(reply, "wait"), false, status);
+    assert.equal(Object.hasOwn(reply, "queued_for"), false, status);
     assert.deepEqual(reply.waiting_for, ["author", "editor"]);
   }
   assert.equal(
     Object.hasOwn(
       taskReply({ ...base, finalization_pending: true, queued_for: "capacity" }, names),
-      "wait",
+      "queued_for",
     ),
     false,
   );
   for (const queued_for of ["openai", "provider/model", 4, "4", "", null, false, "Dependencies"]) {
     const reply = taskReply({ ...base, queued_for }, names);
-    assert.equal(Object.hasOwn(reply, "wait"), false);
+    assert.equal(Object.hasOwn(reply, "queued_for"), false);
     assert.equal(JSON.stringify(reply).includes("openai"), false);
     assert.equal(JSON.stringify(reply).includes("provider"), false);
     assert.equal(JSON.stringify(reply).includes("concurrency"), false);
   }
   const roster = agentRow({ ...base, queued_for: "dependencies" }, names);
-  assert.equal(roster.wait, "dependencies");
+  assert.equal(roster.queued_for, "dependencies");
   assert.deepEqual(roster.waiting_for, ["author", "editor"]);
-  assert.equal(Object.hasOwn(roster, "queued_for"), false);
   assert.equal(Object.hasOwn(roster, "provider"), false);
   compact(roster);
 });

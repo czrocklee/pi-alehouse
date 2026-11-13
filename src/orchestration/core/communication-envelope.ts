@@ -41,9 +41,15 @@ export type TaskStatus =
   | "failed"
   | "interrupted";
 /** Why a queued task has not started. Not a provider id, model, or queue depth. */
-export type QueueWait = "dependencies" | "capacity";
+export type QueueWait = "dependencies" | "provider_capacity";
+/** Host RunView.queued_for value to the model's self-describing one. */
+export const modelQueueWait = (value: unknown): QueueWait | undefined =>
+  value === "dependencies" ? value : value === "capacity" ? "provider_capacity" : undefined;
 export const isQueueWait = (value: unknown): value is QueueWait =>
-  value === "dependencies" || value === "capacity";
+  value === "dependencies" || value === "provider_capacity";
+/** The reply explains the gate itself; fixed text, so its bytes are bounded. */
+export const DELEGATION_OFF =
+  "Ask the user to enable delegation before new work, steering or answers; accepted work continues.";
 /** Parent vocabulary only; retained Run statuses stay unchanged. Finalizing
  * projections add `finishing` separately, based on confirmed execution exit. */
 export const modelTaskStatus = (status: RunStatus): Exclude<TaskStatus, "finishing"> =>
@@ -58,11 +64,6 @@ export type CommunicationReason =
   | "alert"
   | "nothing_pending"
   | "timeout";
-/** Ordinary snapshots/completion need no trigger annotation in public replies. */
-export const visibleCommunicationReason = (
-  reason: CommunicationReason,
-): Exclude<CommunicationReason, "snapshot" | "done"> | undefined =>
-  reason === "snapshot" || reason === "done" ? undefined : reason;
 
 /** Dispatch notes the parent can act on: tree_shared means another session
  * holds the declared build tree. Lock and source-capture uncertainty stay
@@ -81,12 +82,13 @@ export interface ThinTaskEntry {
   readonly task: number;
   readonly status: TaskStatus;
   /** Queued rows only. Mandatory when set: packing must not yield it. */
-  readonly wait?: QueueWait;
+  readonly queued_for?: QueueWait;
   readonly has_question?: true;
   readonly limit_reached?: true;
   readonly unavailable?: true;
   readonly question_truncated?: true;
-  readonly result_omitted?: true;
+  /** The shown result is incomplete and has no cursor: a live preview. A final
+   * result with more to read carries next_cursor instead. */
   readonly result_truncated?: true;
 }
 
@@ -101,7 +103,7 @@ export interface TaskEntry extends ThinTaskEntry, Partial<TaskMetadata> {
   readonly question?: string;
   readonly result?: string;
   readonly next_cursor?: string;
-  readonly omitted_chars?: number; // Text never retained, not text displaced by packing.
+  readonly lost_chars?: number; // Text never retained, not text displaced by packing.
   readonly error?: string;
   readonly owner_error?: string;
   readonly unavailable_reason?: string;
@@ -139,9 +141,9 @@ export interface FinishedEntry extends ThinTaskEntry {
  * Counts are safe integers, emitted only when positive. Arrays are bounded by COMMUNICATION_LIMITS. */
 export interface RetainedEnvelope {
   readonly action?: CommunicationAction;
-  readonly reason?: Exclude<CommunicationReason, "snapshot" | "done">;
-  readonly workers_disabled?: true;
-  readonly agents: readonly ThinTaskEntry[];
+  readonly reason: CommunicationReason;
+  readonly delegation_off?: typeof DELEGATION_OFF;
+  readonly tasks: readonly ThinTaskEntry[];
   readonly alerts?: readonly AlertEntry[];
   readonly alerts_pending?: number;
   readonly finished_pending?: number;
@@ -149,7 +151,7 @@ export interface RetainedEnvelope {
 }
 
 export interface CommunicationEnvelope extends RetainedEnvelope {
-  readonly agents: readonly TaskEntry[];
+  readonly tasks: readonly TaskEntry[];
   readonly finished?: readonly FinishedEntry[];
 }
 
@@ -166,7 +168,7 @@ export function communicationEnvelopeBytes(value: unknown): number {
 /** Only question, result and alert.message spend the body budget. */
 export function communicationTextUnits(value: CommunicationEnvelope): number {
   return (
-    value.agents.reduce(
+    value.tasks.reduce(
       (sum, row) => sum + (row.question?.length ?? 0) + (row.result?.length ?? 0),
       0,
     ) + (value.alerts ?? []).reduce((sum, alert) => sum + alert.message.length, 0)
@@ -191,7 +193,7 @@ export function communicationBudget(value: CommunicationEnvelope): Communication
     fits:
       text_units <= COMMUNICATION_LIMITS.text_units &&
       envelope_bytes <= COMMUNICATION_LIMITS.envelope_bytes &&
-      value.agents.length <= COMMUNICATION_LIMITS.agents &&
+      value.tasks.length <= COMMUNICATION_LIMITS.agents &&
       (value.finished?.length ?? 0) <= COMMUNICATION_LIMITS.finished &&
       (value.alerts?.length ?? 0) <= COMMUNICATION_LIMITS.pending_alerts,
   };
@@ -200,14 +202,14 @@ export function communicationBudget(value: CommunicationEnvelope): Communication
 /** Intentionally impossible action combines the longest verb with delivery.
  * This conservative fixture is NOT a valid action for actual tool replies.
  * Optional question IDs provide a separate, stronger metadata bound. */
-export interface RetainedEnvelopeBound extends Omit<RetainedEnvelope, "action" | "agents"> {
+export interface RetainedEnvelopeBound extends Omit<RetainedEnvelope, "action" | "tasks"> {
   readonly action: {
     readonly type: "agent_answer";
     readonly agent: string;
     readonly task: number;
     readonly delivery: "not_delivered";
   };
-  readonly agents: readonly (ThinTaskEntry & {
+  readonly tasks: readonly (ThinTaskEntry & {
     readonly question_id?: QuestionId;
     readonly question?: string;
     readonly next_cursor?: string;
@@ -216,13 +218,13 @@ export interface RetainedEnvelopeBound extends Omit<RetainedEnvelope, "action" |
 
 /** Fresh pure proof data, with one complete alert and every bounded control
  * at its maximum, including the fixed feedback source tag even for a worst-escaped
- * child-sized body. Six flags coexist conservatively with wait:"dependencies"
+ * child-sized body. Five flags coexist conservatively with queued_for:"provider_capacity"
  * on the longest non-queued status; that pairing is a byte ceiling, not a
  * legal packed row. No stored Owner/Run state.
- * The bound excludes any redundant pending-name array. Normal reasons are
- * omitted, but this fixture reserves the longest exceptional reason. Including
+ * The bound excludes any redundant pending-name array. Every reply
+ * carries a reason; this fixture reserves the longest one. Including
  * all question IDs/cursors/empty question fields and an 8192-NUL alert costs
- * 65006 double-JSON bytes (530 spare).
+ * 64891 double-JSON bytes (645 spare).
  * The proof depends on these exact keys and bounds, not arbitrary JSON data. */
 export function retainedEnvelopeFixture(
   message: string,
@@ -234,16 +236,15 @@ export function retainedEnvelopeFixture(
   return {
     reason: "nothing_pending",
     action: { type: "agent_answer", agent: name, task: max, delivery: "not_delivered" },
-    agents: Array.from({ length: COMMUNICATION_LIMITS.agents }, () => ({
+    tasks: Array.from({ length: COMMUNICATION_LIMITS.agents }, () => ({
       agent: name,
       task: max,
       status: "interrupting",
-      wait: "dependencies",
+      queued_for: "provider_capacity",
       has_question: true,
       limit_reached: true,
       unavailable: true,
       question_truncated: true,
-      result_omitted: true,
       result_truncated: true,
       ...(withQuestionIds ? { question_id: `q_${"f".repeat(32)}` } : {}),
       ...(withResultCursors
@@ -265,7 +266,7 @@ export function retainedEnvelopeFixture(
         source: "managed",
       },
     ],
-    workers_disabled: true,
+    delegation_off: DELEGATION_OFF,
     alerts_pending: max,
     finished_pending: max,
     response_limit_reached: true,

@@ -16,7 +16,7 @@ const questionId = `q_${"1".repeat(32)}`;
 const otherQuestionId = `q_${"2".repeat(32)}`;
 const envelope = (row, extra = {}) => ({
   reason: "snapshot",
-  agents: [row],
+  tasks: [row],
   alerts_pending: 0,
   ...extra,
 });
@@ -106,11 +106,11 @@ function evidence() {
 }
 function retrieval(copy, name) {
   if (name === "agent_answer") {
-    const result = copy.calls.pop().value.agents[0];
+    const result = copy.calls.pop().value.tasks[0];
     const answer = copy.calls.findLast((call) => call.name === name);
     answer.args.wait_ms = 60000;
     answer.value = envelope(result, { reason: "done", action: answer.value.action });
-    return answer.value.agents[0];
+    return answer.value.tasks[0];
   }
   const call = copy.calls.at(-1);
   if (name === "agent_wait") {
@@ -118,7 +118,7 @@ function retrieval(copy, name) {
     call.args = { agents: ["worker"] };
     call.value.reason = "done";
   }
-  return call.value.agents[0];
+  return call.value.tasks[0];
 }
 
 const ordinaryFollowup = (copy) => {
@@ -127,7 +127,7 @@ const ordinaryFollowup = (copy) => {
   question.outcome = { status: "completed" };
   delete question.question_id;
   copy.runStates[0] = structuredClone(question);
-  const row = copy.first.calls[0].value.agents[0];
+  const row = copy.first.calls[0].value.tasks[0];
   Object.assign(row, { status: "completed", result: "factor?" });
   delete row.question;
   delete row.question_id;
@@ -205,7 +205,7 @@ for (const name of ["agent_read", "agent_wait", "agent_spawn"]) {
     test(`${name}: rejects question ${label}`, () => {
       const copy = evidence().first,
         call = copy.calls[0],
-        question = call.value.agents[0];
+        question = call.value.tasks[0];
       if (name !== "agent_read") {
         call.name = name;
         call.args =
@@ -381,8 +381,8 @@ test("a malformed original Run token cannot authorize a matching answer", () => 
   const copy = evidence(),
     token = `${questionId}\n`;
   copy.first.runStates[0].question_id = token;
-  copy.first.calls[0].value.agents[0].question_id = token;
-  copy.calls[0].value.agents[0].question_id = token;
+  copy.first.calls[0].value.tasks[0].question_id = token;
+  copy.calls[0].value.tasks[0].question_id = token;
   copy.calls.find((call) => call.value.action?.type === "agent_answer").args.question_id = token;
   assert.deepEqual(dialogueFailures(copy, expected), [
     "parent did not retrieve that task's complete question",
@@ -414,14 +414,14 @@ for (const name of ["agent_read", "agent_wait", "agent_answer"]) {
     [
       "omitted output",
       (value) => {
-        value.omitted_chars = 1;
+        value.lost_chars = 1;
       },
     ],
     [
       "result left for agent_read",
       (value) => {
         delete value.result;
-        value.result_omitted = true;
+        value.next_cursor = "next-page";
       },
     ],
     [
@@ -458,7 +458,7 @@ for (const name of ["agent_read", "agent_wait", "agent_answer"]) {
 }
 test("flattened historical replies cannot certify active matched-protocol retrieval", () => {
   const copy = evidence();
-  copy.calls.at(-1).value = copy.calls.at(-1).value.agents[0];
+  copy.calls.at(-1).value = copy.calls.at(-1).value.tasks[0];
   assert.deepEqual(dialogueFailures(copy, expected), [missingAnswer]);
 });
 test("a reply read before the answer task started cannot stand in for its result", () => {
@@ -481,7 +481,7 @@ test("a timed-out answer observation does not hide a later complete read", () =>
     name: "agent_read",
     is_error: false,
     args: { agent: "worker" },
-    value: envelope(completed.value.agents[0]),
+    value: envelope(completed.value.tasks[0]),
   });
   assert.deepEqual(
     dialogueFailures(copy, expected),

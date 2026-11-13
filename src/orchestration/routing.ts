@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import { OrchestrationError, workersDisabled } from "./core/ports.ts";
+import { OrchestrationError, delegationOff } from "./core/ports.ts";
 import {
   difficultySlots,
   validDifficulty,
@@ -567,7 +567,7 @@ interface RouteInput<M extends WorkerModelRef> {
 export function resolveRoute<M extends WorkerModelRef>(
   input: RouteInput<M> & { difficulty: number },
 ): ResolvedRoute {
-  if (isOffPreset(input.preset)) throw workersDisabled();
+  if (isOffPreset(input.preset)) throw delegationOff();
   if (!validDifficulty(input.difficulty))
     throw new OrchestrationError("INVALID_DIFFICULTY", {
       key: "difficulty",
@@ -595,7 +595,7 @@ export function resolveRoute<M extends WorkerModelRef>(
 export function resolveSlotRoute<M extends WorkerModelRef>(
   input: RouteInput<M> & { strength: Strength },
 ): Omit<ResolvedRoute, "difficulty"> {
-  if (isOffPreset(input.preset)) throw workersDisabled();
+  if (isOffPreset(input.preset)) throw delegationOff();
   const strength = input.strength;
   const effort = input.preset.effort[strength];
   const parentValid =

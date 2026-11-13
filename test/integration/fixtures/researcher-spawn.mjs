@@ -321,14 +321,10 @@ const spawned = (message, agent, profile, key) => {
   assert.equal(message?.toolName, management[0]);
   assert.equal(message.isError, false, JSON.stringify({ toolResult: message, notices, errors }));
   const reply = JSON.parse(text(message));
-  assert.equal(
-    Object.hasOwn(reply, "reason"),
-    false,
-    JSON.stringify({ reply, notices, errors, dialogs }),
-  );
+  assert.equal(reply.reason, "done", JSON.stringify({ reply, notices, errors, dialogs }));
   assert.deepEqual(reply.action, { type: "agent_spawn", agent, task: 1 });
-  const [row] = reply.agents;
-  assert.equal(reply.agents.length, 1);
+  const [row] = reply.tasks;
+  assert.equal(reply.tasks.length, 1);
   assert.deepEqual(row, {
     agent,
     task: 1,
@@ -340,7 +336,7 @@ const spawned = (message, agent, profile, key) => {
   assert.equal(Object.hasOwn(reply, "finished_pending"), false);
   assert.equal(Object.hasOwn(reply, "pending"), false);
   assert.equal(reply.alerts, undefined);
-  assert.equal(reply.workers_disabled, undefined);
+  assert.equal(reply.delegation_off, undefined);
 };
 const spawn = (agent, profile, key) =>
   call(`spawn-${agent}`, "agent_spawn", {

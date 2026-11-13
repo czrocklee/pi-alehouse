@@ -179,7 +179,8 @@ test("only prompt carries the assignment; labels, names and default-disabled con
     reply,
     {
       action: { type: "agent_spawn", agent: "label-agent", task: 1 },
-      agents: [
+      reason: "snapshot",
+      tasks: [
         { agent: "label-agent", task: 1, status: "running", label: "TASK_LABEL_NOT_INSTRUCTIONS" },
       ],
     },
@@ -247,7 +248,7 @@ test("spawn/run require short task titles before preparation and execution, with
     ["agent_run", run("orca", { label: "🚀".repeat(36) })],
   ]) {
     const reply = await call(name, args);
-    assert.equal(reply.agents[0].label, args.label);
+    assert.equal(reply.tasks[0].label, args.label);
     assert.equal(viewOf(f, "orca").description, args.label);
     await until(() => f.ports[0]?.streaming);
     f.ports[0].finish();
@@ -374,7 +375,7 @@ test("invalid text cannot steer, answer or consume retained communication", asyn
     "pending alert",
     "invalid reads did not publish the alert",
   );
-  const question_id = observed.agents[0].question_id;
+  const question_id = observed.tasks[0].question_id;
   assert(question_id);
   const pending = structuredClone(f.controller.stats());
   const prepared = tool("agent_answer").prepareArguments({
@@ -386,7 +387,7 @@ test("invalid text cannot steer, answer or consume retained communication", asyn
   await assert.rejects(call("agent_answer", prepared), textError("answer", 16384));
   assert.deepEqual(f.controller.stats(), pending);
   assert.equal(f.ports[0].calls.length, 1);
-  assert.equal((await call("agent_read", { agent: "orca" })).agents[0].question_id, question_id);
+  assert.equal((await call("agent_read", { agent: "orca" })).tasks[0].question_id, question_id);
 });
 
 test("closed schemas reject unknown, mutated and malformed inputs before admission", async (t) => {

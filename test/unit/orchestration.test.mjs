@@ -610,7 +610,7 @@ test("while Off, send and a settling run request fail at once rather than wait f
   admission.revision++;
   f.ports[0].finish("partial", "aborted");
   await ended(f.controller, run);
-  assert.deepEqual([await sending, await running], ["WORKERS_DISABLED", "WORKERS_DISABLED"]);
+  assert.deepEqual([await sending, await running], ["DELEGATION_OFF", "DELEGATION_OFF"]);
   assert.equal(f.ports[0].calls.length, 1, "no task started");
   const fresh = await resume(f.controller, "r2", run.agent_id, "next");
   await until(() => f.ports[0].calls.length === 2);

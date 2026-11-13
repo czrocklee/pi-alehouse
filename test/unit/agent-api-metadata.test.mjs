@@ -86,7 +86,8 @@ test("ordinary lifecycle retains the original cwd, lean replies and historical t
   const first = await call("agent_spawn", spawn());
   assert.deepEqual(first, {
     action: { type: "agent_spawn", agent: "pine", task: 1 },
-    agents: [{ agent: "pine", task: 1, status: "running", label: "Inspect first" }],
+    reason: "snapshot",
+    tasks: [{ agent: "pine", task: 1, status: "running", label: "Inspect first" }],
   });
   await until(() => f.ports[0]?.streaming);
   const firstView = f.controller.view(f.controller.findAgent("pine").run_id);
@@ -97,11 +98,12 @@ test("ordinary lifecycle retains the original cwd, lean replies and historical t
     ["agent_read", { agent: "pine" }],
     ["agent_list", {}],
   ])
-    noTelemetry((await call(name, args)).agents[0]);
+    noTelemetry(((reply) => (reply.tasks ?? reply.agents)[0])(await call(name, args)));
   f.ports[0].finish("SHORT_A");
   await ended(f.controller, firstView);
   assert.deepEqual(await call("agent_read", { agent: "pine" }), {
-    agents: [
+    reason: "snapshot",
+    tasks: [
       { agent: "pine", task: 1, status: "completed", label: "Inspect first", result: "SHORT_A" },
     ],
   });
@@ -122,16 +124,16 @@ test("ordinary lifecycle retains the original cwd, lean replies and historical t
   noTelemetry(current);
   f.ports[0].finish("SHORT_B");
   await ended(f.controller, current);
-  assert.equal((await call("agent_read", { agent: "pine" })).agents[0].result, "SHORT_B");
+  assert.equal((await call("agent_read", { agent: "pine" })).tasks[0].result, "SHORT_B");
   const old = await call("agent_read", { agent: "pine", task: 1 });
-  assert.equal(old.agents[0].result, "SHORT_A");
-  assert.equal(old.agents[0].label, "Inspect first");
+  assert.equal(old.tasks[0].result, "SHORT_A");
+  assert.equal(old.tasks[0].label, "Inspect first");
   assert.deepEqual(await call("agent_kill", { agent: "pine" }), {
     agent: "pine",
     status: "killed",
     label: "Second inspection",
   });
-  const retained = (await call("agent_read", { agent: "pine", task: 1 })).agents[0];
+  const retained = (await call("agent_read", { agent: "pine", task: 1 })).tasks[0];
   assert.equal(retained.result, "SHORT_A");
   noTelemetry(retained);
   for (const task of [0, -1, 1.5, NaN, Infinity, "1", Number.MAX_SAFE_INTEGER + 1]) {
@@ -166,9 +168,9 @@ test("retired metadata modes and cursors cannot consume communication", async (t
   await ended(f.controller, run);
   enabled = false;
   const normal = await read(f.controller, run, { max_chars: 1 });
-  noTelemetry(normal.agents[0]);
+  noTelemetry(normal.tasks[0]);
   assert.equal(normal.response_limit_reached, true);
-  assert.equal(normal.workers_disabled, true);
+  assert.match(normal.delegation_off, /^Ask the user to enable delegation/);
   assert.equal(normal.alerts_pending, 16);
   assert(communicationEnvelopeBytes(normal) <= 65536);
   const { call, tool } = toolsFor(f),
@@ -210,7 +212,7 @@ test("typed initialization cleanup uncertainty stays strict without recovery pro
   await ended(f.controller, run);
   noTelemetry(f.controller.view(run.run_id));
   assert.equal(f.controller.stats().cleanup_uncertain, true);
-  const row = (await read(f.controller, run)).agents[0];
+  const row = (await read(f.controller, run)).tasks[0];
   assert(row.error.length <= 512);
   noTelemetry(row);
   await assert.rejects(

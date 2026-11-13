@@ -661,7 +661,7 @@ test("off resolve rejects before model, difficulty, or thinking resolution", asy
           return [];
         },
       }),
-    { code: "WORKERS_DISABLED" },
+    { code: "DELEGATION_OFF" },
   );
   assert.equal(touched, false);
 });

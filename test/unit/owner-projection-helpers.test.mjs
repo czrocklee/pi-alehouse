@@ -222,8 +222,14 @@ test("thin communication rows preserve finishing, question, limit and availabili
     );
   }
   const queued = source({ status: "queued", phase: "queued", execution_exited: false });
-  assert.equal(communicationRow(queued, agent(), 3, true, "capacity").wait, "capacity");
-  assert.equal(communicationRow(queued, agent(), 3, true, "dependencies").wait, "dependencies");
+  assert.equal(
+    communicationRow(queued, agent(), 3, true, "provider_capacity").queued_for,
+    "provider_capacity",
+  );
+  assert.equal(
+    communicationRow(queued, agent(), 3, true, "dependencies").queued_for,
+    "dependencies",
+  );
   assert.deepEqual(run, before);
 });
 
@@ -336,15 +342,22 @@ test("handoff notices take status from the exact continuation with input entry w
     // A delivered handoff that left retained text out stays explicitly readable.
     assert.deepEqual(returnToNotice("heron", { ...record, input_entered: true }, 2, 1, 45), {
       readable: true,
-      text: "Result from heron has been returned to otter (task 2), but the handoff omitted its last 45 retained characters; agent_read heron task 1 shows the full result.",
+      text: "Result from heron has been returned to otter (task 2), but the handoff omitted its last 45 characters; agent_read heron task 1 shows the retained result.",
     });
   }
 });
 
 test("handoff omission counts exactly what the bounded handoff leaves out", () => {
-  assert.equal(handoffOmittedChars("x".repeat(16384), 1, 16384), 0);
-  assert.equal(handoffOmittedChars("x".repeat(16429), 1, 16384), 45);
-  assert.equal(handoffOmittedChars("x".repeat(9000), 2, 16384), 808);
+  const whole = (text) => ({ text, total_chars: text.length, truncated: false });
+  assert.equal(handoffOmittedChars(whole("x".repeat(16384)), 1, 16384), 0);
+  assert.equal(handoffOmittedChars(whole("x".repeat(16429)), 1, 16384), 45);
+  assert.equal(handoffOmittedChars(whole("x".repeat(9000)), 2, 16384), 808);
   // A surrogate pair is never split: the attached prefix stops before it.
-  assert.equal(handoffOmittedChars("ab😀", 1, 3), 2);
+  assert.equal(handoffOmittedChars(whole("ab😀"), 1, 3), 2);
+  // Output the retention cap never kept is omitted too, even when the
+  // retained prefix itself fits the handoff budget.
+  assert.equal(
+    handoffOmittedChars({ text: "abcdefgh", total_chars: 22, truncated: true }, 1, 16384),
+    14,
+  );
 });

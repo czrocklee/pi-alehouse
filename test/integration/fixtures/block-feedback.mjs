@@ -177,13 +177,13 @@ function observe(last, task, historical = false) {
   if (["agent_spawn", "agent_run"].includes(expectedCommand.name)) {
     assert.deepEqual(reply.action, { type: expectedCommand.name, agent, task });
   } else assert.equal(reply.action, undefined);
-  assert.equal(reply.workers_disabled, undefined);
-  assert([undefined, "alert"].includes(reply.reason), text(last));
-  assert.equal(reply.agents.length, 1);
-  assert.equal(reply.agents[0].agent, agent);
-  assert.equal(reply.agents[0].task, task);
+  assert.equal(reply.delegation_off, undefined);
+  assert(["snapshot", "done", "alert"].includes(reply.reason), text(last));
+  assert.equal(reply.tasks.length, 1);
+  assert.equal(reply.tasks[0].agent, agent);
+  assert.equal(reply.tasks[0].task, task);
   assert(
-    ["queued", "running", "finishing", "completed"].includes(reply.agents[0].status),
+    ["queued", "running", "finishing", "completed"].includes(reply.tasks[0].status),
     text(last),
   );
   for (const alert of reply.alerts ?? []) {
@@ -221,7 +221,7 @@ function observe(last, task, historical = false) {
     "the accepted summary is consumed; no zero count is emitted",
   );
   expectedCommand = undefined;
-  return reply.agents[0];
+  return reply.tasks[0];
 }
 function parentResponse(request) {
   const last = request.context.messages.at(-1);

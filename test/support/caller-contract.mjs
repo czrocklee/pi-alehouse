@@ -136,13 +136,15 @@ export function assertCallerTools(tools) {
   for (const fact of [
     /Scout only/,
     /worker's pending question/,
-    /Needs agent_answer allowed for you without a prompt/,
     /resumes automatically/,
     /do not read or relay/,
+    /receives only the first 16384 characters, which the scout is told/,
     /wait_ms waits for the worker/,
-    /Kill the scout when done/,
+    /released once its whole result is delivered; otherwise read it and kill it yourself/,
+    /Needs agent_answer already approved for you; otherwise the error says what to do/,
   ])
     assert.match(fields.return_to.description, fact);
+  assert.match(fields.return_to.properties.answer.description, /written before the findings exist/);
   assert(!spawn.parameters.required.includes("return_to"));
   assert.equal(Object.hasOwn(fields, "workspace"), false);
   assert.equal(fields.reasoning_difficulty.type, "integer");
@@ -176,7 +178,7 @@ export function assertCallerTools(tools) {
   ])
     assert.match(fields.reasoning_difficulty.description, fact);
   assert.equal(fields.inherit_context.type, "boolean");
-  for (const fact of [/Default false/, /text/, /without tool calls\/results/, /64 KiB/])
+  for (const fact of [/Default false/, /text/, /no tool calls\/results/, /64 KiB/])
     assert.match(fields.inherit_context.description, fact);
   assert.equal(fields.max_turns.minimum, 1);
   assert.equal(fields.max_turns.maximum, 10000);
@@ -245,9 +247,9 @@ export function assertCallerTools(tools) {
     assert.equal(after.items.pattern, fields.agent.pattern);
     for (const fact of [
       /current or latest task/,
-      /fixed when this call is accepted/,
+      /fixed at this call/,
       /reach completed/,
-      /other settled status fails/,
+      /other final status fails/,
       /reference context/,
       /until agent_answer returns/,
     ])
@@ -288,11 +290,9 @@ export function assertCallerTools(tools) {
     assert.equal(dispatch.properties.tree.maxLength, 512);
     assert.match(dispatch.properties.tree.description, /write permission/);
     assert.match(dispatch.properties.tree.description, /if it exists, must be a directory/);
-    assert.match(dispatch.properties.tree.description, /within this Owner/);
-    assert.match(
-      dispatch.properties.tree.description,
-      /cross-Owner.*advisory.*not global exclusivity/,
-    );
+    assert.match(dispatch.properties.tree.description, /conflict within this session/);
+    assert.match(dispatch.properties.tree.description, /other sessions are only advised/);
+    assert.doesNotMatch(dispatch.properties.tree.description, /Owner/);
     for (const fact of [
       /edit or create/,
       /write permission/,
@@ -301,7 +301,7 @@ export function assertCallerTools(tools) {
     ])
       assert.match(dispatch.properties.ownership.items.description, fact);
     assert.match(dispatch.properties.checks.items.description, /globs allowed/);
-    assert.match(dispatch.properties.checks.items.description, /not later go-ahead/);
+    assert.match(dispatch.properties.checks.items.description, /not one awaiting a later go-ahead/);
   }
   const send = byName.get("agent_send"),
     sendFields = send.parameters.properties;
@@ -311,7 +311,7 @@ export function assertCallerTools(tools) {
   assert.equal(sendFields.message.maxLength, 16384);
   assert.match(sendFields.message.description, /Never an answer/);
   for (const fact of [
-    /selected now/,
+    /current task, fixed at this call/,
     /not an answer or new task/,
     /joined=/,
     /steered=/,
@@ -343,10 +343,9 @@ export function assertCallerTools(tools) {
     /label\/dispatch/,
   ])
     assert.match(answer.description, fact);
-  for (const tool of [byName.get("agent_wait"), byName.get("agent_read"), answer]) {
-    assert.match(tool.description, /workers_disabled/);
-    assert.match(tool.description, /ask the user to enable delegation/);
-  }
+  // A delegation_off reply carries its own guidance; descriptions do not repeat it.
+  for (const tool of [byName.get("agent_wait"), byName.get("agent_read"), answer])
+    assert.doesNotMatch(tool.description, /delegation_off|workers_disabled/);
   for (const tool of [spawn, run, send, answer]) {
     const wait = tool.parameters.properties.wait_ms;
     assert.equal(wait.type, "integer");
@@ -368,14 +367,13 @@ export function assertCallerTools(tools) {
   assert.match(waitFields.wait_ms.description, /default 300000/);
   for (const fact of [
     /active \(running\/queued\) task, else its pending question, else its latest finished task/,
-    /once at this call/,
+    /fixed at this call/,
     /Omit to wait on unfinished tasks/,
     /all Agents' alerts/,
   ])
     assert.match(waitFields.agents.description, fact);
-  assert.match(waitFields.agents.description, /wait="capacity".*provider slot/);
-  assert.match(waitFields.agents.description, /wait="dependencies".*fixed tasks/);
-  assert.match(wait.description, /accepted work and inspection continue/);
+  // queued_for names its own reason in the reply; the parameter does not explain it.
+  assert.doesNotMatch(waitFields.agents.description, /capacity|provider slot/);
   for (const fact of [
     /questions, issues or alerts return early/,
     /long waits/,
@@ -420,7 +418,10 @@ export function assertCallerTools(tools) {
       JSON.stringify(declaration),
       /workspace|worktree|retained_paths|source_cwd/,
     );
-  assert.match(byName.get("agent_interrupt").description, /Request a stop, not settlement/);
+  assert.match(
+    byName.get("agent_interrupt").description,
+    /Request a stop; the task has stopped only once wait\/read shows a final status/,
+  );
   assert.match(byName.get("agent_interrupt").description, /Keeps the conversation/);
   assert.match(byName.get("agent_kill").description, /Permanently end/);
   assert.match(byName.get("agent_kill").description, /Name stays taken, results stay readable/);

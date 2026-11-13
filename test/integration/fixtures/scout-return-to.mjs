@@ -266,8 +266,8 @@ function parentResponse(request) {
     const reply = replyOf(last);
     assert.equal(reply.reason, "question");
     assert.deepEqual(reply.action, { type: "agent_spawn", agent: worker, task: 1 });
-    assert.equal(reply.agents.length, 1);
-    const row = reply.agents[0];
+    assert.equal(reply.tasks.length, 1);
+    const row = reply.tasks[0];
     assert.equal(row.agent, worker);
     assert.equal(row.task, 1);
     assert.equal(row.status, "needs_input");
@@ -292,18 +292,18 @@ function parentResponse(request) {
     assert.equal(last.isError, false, textOf(last));
     assert.equal(last.toolName, "agent_spawn");
     const reply = replyOf(last);
-    assert.equal(Object.hasOwn(reply, "reason"), false, "done omits reason");
+    assert.equal(reply.reason, "done");
     assert.deepEqual(
       reply.action,
       { type: "agent_spawn", agent: scout, task: 1 },
       "action identifies the source",
     );
-    assert.equal(reply.agents.length, 2, "wait covers the source and the worker continuation");
+    assert.equal(reply.tasks.length, 2, "wait covers the source and the worker continuation");
     assert.deepEqual(
-      reply.agents.map((row) => row.agent),
+      reply.tasks.map((row) => row.agent),
       [scout, worker],
     );
-    const [source, continuation] = reply.agents;
+    const [source, continuation] = reply.tasks;
     assert.deepEqual(
       { agent: source.agent, task: source.task, status: source.status, label: source.label },
       { agent: scout, task: 1, status: "completed", label: scoutLabel },
@@ -313,13 +313,7 @@ function parentResponse(request) {
       `Result from ${scout} has been returned to ${worker} (task 2).`,
       "source row explains the completed handoff",
     );
-    for (const field of [
-      "result_notice",
-      "result_omitted",
-      "result_truncated",
-      "next_cursor",
-      "omitted_chars",
-    ])
+    for (const field of ["result_notice", "result_truncated", "next_cursor", "lost_chars"])
       assert.equal(
         Object.hasOwn(source, field),
         false,
@@ -338,7 +332,7 @@ function parentResponse(request) {
     assert.equal(reply.alerts, undefined);
     assert.equal(Object.hasOwn(reply, "alerts_pending"), false);
     assert.equal(Object.hasOwn(reply, "finished_pending"), false);
-    assert.equal(reply.workers_disabled, undefined);
+    assert.equal(reply.delegation_off, undefined);
     assertNoSourceBody(reply, "compound tool result");
     phase = "done";
     return { text: "PARENT_RETURN_DONE" };
@@ -381,9 +375,9 @@ function parentResponse(request) {
   assert.equal(phase, "retained", phase);
   assert.equal(last.isError, false, textOf(last));
   const reply = replyOf(last);
-  assert.equal(Object.hasOwn(reply, "reason"), false);
-  assert.equal(reply.agents.length, 1);
-  const row = reply.agents[0];
+  assert.equal(reply.reason, "snapshot");
+  assert.equal(reply.tasks.length, 1);
+  const row = reply.tasks[0];
   assert.equal(row.agent, worker);
   assert.equal(row.task, 1);
   assert.equal(row.status, "needs_input");
@@ -629,12 +623,9 @@ try {
     );
   for (const context of parentContexts) assertNoSourceBody(context, "parent provider context");
   const created = lifecycle.filter((event) => event.kind === "session-created");
-  assert.equal(
-    lifecycle.filter((event) => event.kind === "disposed").length,
-    0,
-    "sessions stay until parent shutdown",
-  );
+  const early = lifecycle.filter((event) => event.kind === "disposed");
   if (answerPermission) {
+    assert.equal(early.length, 0, "sessions stay until parent shutdown");
     assert.equal(created.length, 1, "compound rejection happens before source Agent allocation");
     assert.deepEqual(calls, ["parent", "editor", "editor", "parent", "parent", "parent", "parent"]);
     assert.equal(
@@ -690,6 +681,11 @@ try {
     );
     assert.equal(links[0].data.ref.session_id, links[2].data.ref.session_id);
     assert.notEqual(links[1].data.ref.session_id, links[0].data.ref.session_id);
+    assert.deepEqual(
+      early.map((event) => event.sessionId),
+      [links[1].data.ref.session_id],
+      "only the fully delivered scout is released before parent shutdown",
+    );
     assert.equal(
       JSON.stringify(links).includes(marker),
       false,
@@ -718,5 +714,5 @@ assert.deepEqual(network, []);
 console.log(
   answerPermission
     ? `PASS: compound scout return_to is rejected for agent_answer ${answerPermission} before source allocation, with no human approval and the pending question retained`
-    : "PASS: real composition scout return_to hands the source marker to the worker without a parent relay or source body; shutdown disposes both sessions; nothing leaves the process",
+    : "PASS: real composition scout return_to hands the source marker to the worker without a parent relay or source body; the delivered scout is released and shutdown disposes the worker; nothing leaves the process",
 );

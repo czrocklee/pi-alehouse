@@ -19,7 +19,7 @@ const bytes = (value) =>
     "utf8",
   );
 const units = (value) =>
-  value.agents.reduce(
+  value.tasks.reduce(
     (sum, row) => sum + (row.question?.length ?? 0) + (row.result?.length ?? 0),
     0,
   ) + (value.alerts ?? []).reduce((sum, alert) => sum + alert.message.length, 0);
@@ -84,10 +84,10 @@ const name = (index) => `a${String(index).padStart(2, "0")}${"x".repeat(21)}`;
 // Deliberately impossible action and wait/status pairing are a ceiling only.
 // Arbitrary optional labels/diagnostics and finished rows are NOT
 // promised alongside this ceiling; the real packer must make them yield.
-test("budget contribution ledger reconstructs the 65006-byte conservative envelope from actual fields", () => {
+test("budget contribution ledger reconstructs the 64891-byte conservative envelope from actual fields", () => {
   const proof = retainedEnvelopeFixture("\0".repeat(8192), true, true);
-  const value = { agents: [] },
-    contributions = { empty_reply_with_agents: bytes(value) };
+  const value = { tasks: [] },
+    contributions = { empty_reply_with_tasks: bytes(value) };
   function add(label, change) {
     const before = bytes(value);
     change();
@@ -95,29 +95,28 @@ test("budget contribution ledger reconstructs the 65006-byte conservative envelo
     assert(contributions[label] > 0, label);
   }
   add("sixteen_identity_status_rows", () => {
-    value.agents = proof.agents.map(({ agent, task, status }) => ({ agent, task, status }));
+    value.tasks = proof.tasks.map(({ agent, task, status }) => ({ agent, task, status }));
   });
   for (const field of [
     "has_question",
     "limit_reached",
     "unavailable",
     "question_truncated",
-    "result_omitted",
     "result_truncated",
-    "wait",
+    "queued_for",
     "question_id",
     "question",
     "next_cursor",
   ])
     add(`sixteen_${field}`, () =>
-      value.agents.forEach((row, index) => {
-        row[field] = proof.agents[index][field];
+      value.tasks.forEach((row, index) => {
+        row[field] = proof.tasks[index][field];
       }),
     );
   for (const field of [
     "reason",
     "action",
-    "workers_disabled",
+    "delegation_off",
     "alerts_pending",
     "finished_pending",
     "response_limit_reached",
@@ -134,18 +133,18 @@ test("budget contribution ledger reconstructs the 65006-byte conservative envelo
       value.alerts[0][field] = proof.alerts[0][field];
     });
   assert.deepEqual(value, proof);
-  assert.equal(contributions.sixteen_wait, 416);
+  assert.equal(contributions.sixteen_queued_for, 16 * 37);
   assert.equal(contributions.sixteen_question_id, 880);
   assert.equal(contributions.first_alert_label, 120 * 7);
   assert.equal(contributions.first_alert_source, 23);
   assert.equal(contributions.first_alert_message, 8192 * 7);
   assert.equal(
     Object.values(contributions).reduce((sum, cost) => sum + cost, 0),
-    65006,
+    64891,
   );
-  assert.equal(bytes(value), 65006);
+  assert.equal(bytes(value), 64891);
   assert.equal(communicationEnvelopeBytes(value), bytes(value));
-  assert.equal(65536 - bytes(value), 530);
+  assert.equal(65536 - bytes(value), 645);
 });
 
 function generatedSnapshot(seed, scenario) {
@@ -161,7 +160,7 @@ function generatedSnapshot(seed, scenario) {
       has_question: true,
       limit_reached: true,
       unavailable: true,
-      ...(pending ? { wait: index % 8 ? "capacity" : "dependencies" } : {}),
+      ...(pending ? { queued_for: index % 8 ? "provider_capacity" : "dependencies" } : {}),
     };
     const settled = status === "needs_input";
     // A mix of at-EOF captured pages and windows whose tail is not captured.
@@ -212,7 +211,7 @@ function generatedSnapshot(seed, scenario) {
     tasks,
     alerts,
     finished,
-    workers_disabled: true,
+    delegation_off: true,
     action: {
       type: "agent_send",
       agent: name(0),
@@ -241,15 +240,15 @@ for (const seed of seeds)
       assert(bytes(envelope) <= 65536);
       assert(units(envelope) <= 16384);
       assert.deepEqual(JSON.parse(JSON.parse(JSON.stringify(result)).content[0].text), envelope);
-      assert.equal(envelope.agents.length, 16);
+      assert.equal(envelope.tasks.length, 16);
       assert.deepEqual(envelope.action, input.action);
-      assert.equal(envelope.workers_disabled, true);
+      assert.equal(typeof envelope.delegation_off, "string");
       assert.equal(
         envelope.response_limit_reached,
         true,
         "generated combinations intentionally exceed optional capacity",
       );
-      for (const [index, row] of envelope.agents.entries()) {
+      for (const [index, row] of envelope.tasks.entries()) {
         const original = input.tasks[index];
         for (const [field, value] of Object.entries(original.row))
           assert.equal(row[field], value, `required ${field} at ${index}`);
@@ -269,7 +268,6 @@ for (const seed of seeds)
             key: resultCursorKey(window.cursor),
             offset: window.offset + shown.length,
           });
-          if (!shown.length) assert.equal(row.result_omitted, true);
         } else
           assert.equal(row.next_cursor, undefined, "live previews and EOF do not invent locators");
         if (!original.settled && window.offset + shown.length < window.retained_chars)
@@ -297,7 +295,7 @@ for (const seed of seeds)
         assert(candidate, "every presentation reference addresses an original candidate");
         if (candidate.task_index !== undefined) {
           for (const [field, value] of Object.entries(candidate.row))
-            assert.equal(envelope.agents[candidate.task_index][field], value);
+            assert.equal(envelope.tasks[candidate.task_index][field], value);
         } else
           assert(
             (envelope.finished ?? []).some(
@@ -381,7 +379,7 @@ for (const seed of seeds)
         finished: [],
       };
       const { envelope } = packCommunication(input),
-        row = envelope.agents[0];
+        row = envelope.tasks[0];
       assert(bytes(envelope) <= 65536 && units(envelope) <= 16384);
       assert(row.result.length > 0);
       assertPrefix(row.result, text.slice(offset));

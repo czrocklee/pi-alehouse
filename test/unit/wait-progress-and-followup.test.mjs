@@ -51,7 +51,7 @@ test("alerts survive absent waiters, wake matching observations, and are present
   await tick();
   assert.equal(resolved, false, "the loser keeps waiting on the same task");
   ports[0].finish("A");
-  assert.equal(Object.hasOwn(await completion, "reason"), false);
+  assert.equal((await completion).reason, "done");
   assert.equal(c.view(a.run_id).pending_messages, 0);
   ports[1].finish("B");
   await ended(c, b);
@@ -76,12 +76,12 @@ test("a terminal any return can present alerts from all explicitly scoped Agents
   ports[0].finish("done");
   await ended(c, runs[0]);
   const reply = await wait(c, runs, { mode: "any" });
-  assert.equal(Object.hasOwn(reply, "reason"), false);
-  assert.equal(reply.agents.length, 16);
+  assert.equal(reply.reason, "done");
+  assert.equal(reply.tasks.length, 16);
   assert.equal(reply.alerts.length, 32);
   assert.equal(Object.hasOwn(reply, "pending"), false);
   assert.deepEqual(
-    reply.agents.slice(1).map(({ agent, status }) => [agent, status]),
+    reply.tasks.slice(1).map(({ agent, status }) => [agent, status]),
     runs.slice(1).map((_, index) => [`r${index + 1}`, "running"]),
   );
   assert.equal(Object.hasOwn(reply, "alerts_pending"), false);
@@ -99,14 +99,14 @@ test("pending questions remain level-triggered across concurrent and repeated pu
   ports[0].finish("please choose");
   for (const reply of await Promise.all([one, two])) {
     assert.equal(reply.reason, "question");
-    assert.equal(reply.agents[0].question, "which option?");
-    assert(reply.agents[0].question_id);
+    assert.equal(reply.tasks[0].question, "which option?");
+    assert(reply.tasks[0].question_id);
   }
   const again = await wait(c, [a, b], { wait_ms: 0 });
   assert.equal(again.reason, "question");
   assert.equal(Object.hasOwn(again, "pending"), false);
   assert.deepEqual(
-    again.agents.map(({ agent, status }) => [agent, status]),
+    again.tasks.map(({ agent, status }) => [agent, status]),
     [
       ["a", "needs_input"],
       ["b", "running"],
@@ -127,8 +127,8 @@ test("repeated asks validate then preserve the original full question", async (t
   ports[0].finish("please answer");
   await ended(c, a);
   const reply = await read(c, a);
-  assert.equal(reply.agents[0].question, question);
-  assert.equal(reply.agents[0].question_truncated, undefined);
+  assert.equal(reply.tasks[0].question, question);
+  assert.equal(reply.tasks[0].question_truncated, undefined);
 });
 
 test("full Agent inbox rejects without evicting accepted alerts; stale callbacks cannot claim success", async (t) => {
@@ -151,7 +151,7 @@ test("full Agent inbox rejects without evicting accepted alerts; stale callbacks
     Array.from({ length: 16 }, (_, index) => `message ${index}`),
   );
   assert.equal(Object.hasOwn(reply, "alerts_pending"), false);
-  assert.equal(reply.agents[0].result, "FINAL");
+  assert.equal(reply.tasks[0].result, "FINAL");
   const b = await c.submit("b", { resume: a.agent_id, prompt: "b" });
   await until(() => ports[0].calls.length === 2);
   assert.throws(() => old.alert("STALE"), errorCode("RUN_INPUT_CLOSED"));
@@ -179,7 +179,7 @@ test("new owner fault broadcasts to registered observers without requiring an un
     replies.map((reply) => reply.reason),
     ["owner_blocked", "owner_blocked"],
   );
-  assert(replies.every((reply) => reply.agents[0].unavailable === true));
+  assert(replies.every((reply) => reply.tasks[0].unavailable === true));
   assert.equal((await wait(c, [a, b], { wait_ms: 0 })).reason, "timeout");
   ports[0].callbacks.alert("A still running");
   assert.equal(
@@ -200,7 +200,7 @@ test("release preserves accepted alerts for Agent-scoped read or default Owner i
   assert.equal(c.view(a.run_id).pending_messages, 1);
   const reply = await observe(c, { kind: "wait" });
   assert.equal(reply.reason, "alert");
-  assert.deepEqual(reply.agents, []);
+  assert.deepEqual(reply.tasks, []);
   assert.deepEqual(
     reply.alerts.map((entry) => entry.message),
     ["recorded before release"],
@@ -276,14 +276,14 @@ test("thin results distinguish paging from retention omission and preserve actio
   await until(() => ports[0]?.streaming);
   ports[0].finish("0123456789");
   await ended(c, a);
-  const first = (await read(c, a, { max_chars: 2 })).agents[0];
-  assert.equal(first.omitted_chars, 5);
+  const first = (await read(c, a, { max_chars: 2 })).tasks[0];
+  assert.equal(first.lost_chars, 5);
   assert(first.next_cursor);
   assert.equal(first.truncated, undefined);
-  const last = (await read(c, a, { cursor: first.next_cursor })).agents[0];
+  const last = (await read(c, a, { cursor: first.next_cursor })).tasks[0];
   assert.equal(first.result + last.result, "01234");
   assert.equal(last.next_cursor, undefined);
-  assert.equal(last.omitted_chars, 5);
+  assert.equal(last.lost_chars, 5);
   await c.release(a.agent_id);
   try {
     await c.submit("released", { resume: a.agent_id, prompt: "x" });

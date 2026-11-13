@@ -90,10 +90,7 @@ test("spawn and reuse dispatch relative paths from the inherited parent cwd", as
     status: "killed",
     label: "task",
   });
-  assert.equal(
-    (await call("agent_read", { agent: "wren", task: 1 })).agents[0].status,
-    "completed",
-  );
+  assert.equal((await call("agent_read", { agent: "wren", task: 1 })).tasks[0].status, "completed");
 });
 
 assert.equal(
@@ -223,30 +220,30 @@ for (const [flowIndex, steps] of quickstartFlows.entries())
       }
       const reply = await call(step.tool, args, `quickstart-${flowIndex}-${stepIndex}`);
       if (flowIndex === 0 && step.tool === "agent_read") {
-        assert.equal(reply.agents[0].status, "completed");
+        assert.equal(reply.tasks[0].status, "completed");
         assert.equal(
-          reply.agents[0].result,
+          reply.tasks[0].result,
           args.agent === "alpha" ? "parser findings" : "documentation findings",
         );
       }
       if (flowIndex === 1 && step.tool === "agent_wait" && waits === 1) {
-        assert.equal(reply.agents[0].status, "needs_input");
-        assert.equal(reply.agents[0].question, "Which format?");
-        questionId = reply.agents[0].question_id;
+        assert.equal(reply.tasks[0].status, "needs_input");
+        assert.equal(reply.tasks[0].question, "Which format?");
+        questionId = reply.tasks[0].question_id;
       }
       if (flowIndex === 1 && step.tool === "agent_answer") assert.equal(reply.action.task, 2);
       if (flowIndex === 1 && step.tool === "agent_spawn" && args.after)
-        assert.equal(reply.agents[0].status, "queued");
+        assert.equal(reply.tasks[0].status, "queued");
       if (flowIndex === 2 && step.tool === "agent_read" && args.task) {
-        assert.equal(reply.agents[0].task, 1);
-        firstPage = reply.agents[0].result;
-        cursor = reply.agents[0].next_cursor;
+        assert.equal(reply.tasks[0].task, 1);
+        firstPage = reply.tasks[0].result;
+        cursor = reply.tasks[0].next_cursor;
       } else if (flowIndex === 2 && step.tool === "agent_read") {
-        assert.equal(reply.agents[0].task, 1);
-        assert.equal(firstPage + reply.agents[0].result, oldResult);
-        assert.equal(reply.agents[0].next_cursor, undefined);
+        assert.equal(reply.tasks[0].task, 1);
+        assert.equal(firstPage + reply.tasks[0].result, oldResult);
+        assert.equal(reply.tasks[0].next_cursor, undefined);
       }
       if (flowIndex === 3 && step.tool === "agent_read")
-        assert.equal(reply.agents[0].status, "completed");
+        assert.equal(reply.tasks[0].status, "completed");
     }
   });

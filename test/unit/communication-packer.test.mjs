@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { packCommunication } from "../../dist/orchestration/core/communication-packer.js";
+import { DELEGATION_OFF } from "../../dist/orchestration/core/communication-envelope.js";
 import {
   decodeResultCursor,
   resultCursorKey,
@@ -20,7 +21,6 @@ const controls = Object.freeze({
   limit_reached: true,
   unavailable: true,
   question_truncated: true,
-  result_omitted: true,
   result_truncated: true,
 });
 const row = (agent = "otter", task = 1, status = "running", flags = {}) => ({
@@ -60,11 +60,10 @@ const bytes = (value) =>
     JSON.stringify({ content: [{ type: "text", text: JSON.stringify(value) }] }),
   ).byteLength;
 const bodyUnits = (value) =>
-  value.agents.reduce(
+  value.tasks.reduce(
     (sum, entry) => sum + (entry.question?.length ?? 0) + (entry.result?.length ?? 0),
     0,
   ) + (value.alerts ?? []).reduce((sum, entry) => sum + entry.message.length, 0);
-const visibleReason = (reason) => (["snapshot", "done"].includes(reason) ? undefined : reason);
 function deepFreeze(value) {
   if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
     for (const child of Object.values(value)) deepFreeze(child);
@@ -78,9 +77,8 @@ function pack(input) {
   const packed = packCommunication(input),
     { envelope, result, references } = packed;
   assert.deepEqual(input, before, "packing may never mutate a captured snapshot");
-  assert.equal(envelope.agents.length, input.tasks.length, "all bound rows remain complete");
-  assert.equal(envelope.reason, visibleReason(input.reason));
-  assert.equal(Object.hasOwn(envelope, "reason"), visibleReason(input.reason) !== undefined);
+  assert.equal(envelope.tasks.length, input.tasks.length, "all bound rows remain complete");
+  assert.equal(envelope.reason, input.reason);
   assert.deepEqual(result.content, [{ type: "text", text: JSON.stringify(envelope) }]);
   assert.equal(result.details, undefined);
   assert.equal(new TextEncoder().encode(JSON.stringify(result)).byteLength, bytes(envelope));
@@ -89,7 +87,7 @@ function pack(input) {
   assert((envelope.finished?.length ?? 0) <= 8);
   for (const field of ["pending", "agents_omitted", "pending_omitted"])
     assert(!Object.hasOwn(envelope, field));
-  for (const entry of envelope.agents) {
+  for (const entry of envelope.tasks) {
     for (const field of ["context_tokens", "time_wrapped", "recovery_hint", "recovery", "metadata"])
       assert(!Object.hasOwn(entry, field));
     if (entry.result !== undefined) assert(entry.result.length > 0, "no empty result scaffold");
@@ -116,7 +114,7 @@ function pack(input) {
     const bound =
       link !== undefined &&
       input.tasks[link].settled &&
-      key(envelope.agents[link]) === key(candidate.row);
+      key(envelope.tasks[link]) === key(candidate.row);
     const listed = (envelope.finished ?? []).some((entry) => key(entry) === key(candidate.row));
     assert(bound || listed, "a reference needs its exact original row shown");
   }
@@ -149,7 +147,7 @@ function maximalSnapshot(message) {
   );
   return snapshot({
     reason: "alert",
-    workers_disabled: true,
+    delegation_off: true,
     tasks,
     action: {
       type: "agent_send",
@@ -176,14 +174,14 @@ function byteSaturatedSnapshot() {
   const full = structuredClone(input);
   full.tasks[0].question = "q".repeat(1 + remaining);
   const complete = pack(full);
-  assert.equal(complete.envelope.agents[0].question, full.tasks[0].question);
+  assert.equal(complete.envelope.tasks[0].question, full.tasks[0].question);
   assert.equal(complete.envelope.response_limit_reached, undefined);
   assert.equal(bytes({ ...complete.envelope, response_limit_reached: true }), 65536);
   return { input: full, complete };
 }
 
-test("ordinary snapshot/done omit reason and zero counts, without losing action acceptance/delivery facts", () => {
-  assert.deepEqual(pack(snapshot()).envelope, { agents: [] });
+test("ordinary snapshot/done name their reason and omit zero counts, without losing action acceptance/delivery facts", () => {
+  assert.deepEqual(pack(snapshot()).envelope, { reason: "snapshot", tasks: [] });
   for (const reason of ["snapshot", "done"])
     for (const action of [
       { type: "agent_spawn", agent: "otter", task: 1 },
@@ -205,7 +203,7 @@ test("ordinary snapshot/done omit reason and zero counts, without losing action 
           finished: [{ row: original, task_index: 0 }],
         }),
       );
-      assert.deepEqual(envelope, { action, agents: [original] });
+      assert.deepEqual(envelope, { reason, action, tasks: [original] });
       assert.deepEqual(references, { alerts: [], finished: [0] });
     }
 });
@@ -243,8 +241,8 @@ for (const message of ["\0".repeat(8192), "\ud800".repeat(8192), "\udfff".repeat
       { envelope, references, result } = pack(input);
     assert.equal(envelope.reason, "alert");
     assert.deepEqual(envelope.action, input.action);
-    assert.equal(envelope.workers_disabled, true);
-    for (const [index, entry] of envelope.agents.entries()) {
+    assert.equal(envelope.delegation_off, DELEGATION_OFF);
+    for (const [index, entry] of envelope.tasks.entries()) {
       for (const [field, value] of Object.entries(input.tasks[index].row))
         assert.equal(entry[field], value);
       assert.equal(entry.question_id, input.tasks[index].question_id);
@@ -267,10 +265,10 @@ for (const field of ["error", "owner_error", "unavailable_reason"])
           tasks: [task(row("otter", 1, "failed"), { diagnostics: { [field]: text } })],
         });
       const first = pack(input),
-        entry = first.envelope.agents[0];
+        entry = first.envelope.tasks[0];
       assert.equal(entry[field], text.slice(0, 512));
       assert.equal(first.envelope.response_limit_reached, undefined);
-      for (const key of ["next_cursor", "result_omitted", "result_truncated", "omitted_chars"])
+      for (const key of ["next_cursor", "result_truncated", "lost_chars"])
         assert.equal(entry[key], undefined);
       assert.deepEqual(pack(input), first, "a repeated read cannot recover the diagnostic tail");
     });
@@ -281,26 +279,26 @@ test("diagnostic truncation preserves pairs; only actual byte pressure sets resp
       tasks: [task(row("otter", 1, "failed"), { diagnostics: { error: "x".repeat(511) + "🚀" } })],
     }),
   );
-  assert.equal(envelope.agents[0].error, "x".repeat(511));
+  assert.equal(envelope.tasks[0].error, "x".repeat(511));
   assert.equal(envelope.response_limit_reached, undefined);
   const { input, complete } = byteSaturatedSnapshot(),
     pressured = structuredClone(input);
   pressured.tasks[1].diagnostics = { owner_error: "bounded", unavailable_reason: "bounded" };
   const packed = pack(pressured);
-  assert.deepEqual(packed.envelope.agents, complete.envelope.agents);
+  assert.deepEqual(packed.envelope.tasks, complete.envelope.tasks);
   assert.equal(packed.envelope.response_limit_reached, true);
   assert.equal(bytes(packed.envelope), 65536);
   const partial = maximalSnapshot("\0".repeat(8192));
   partial.alerts = partial.alerts.slice(0, 1);
   partial.tasks[0].diagnostics = { error: "\0".repeat(2048) };
-  const entry = pack(partial).envelope.agents[0];
+  const entry = pack(partial).envelope.tasks[0];
   assert(entry.error.length > 0 && entry.error.length < 512);
 });
 
 test("question priority leaves an unfit alert queued; alert priority reserves the first complete message", () => {
   const base = snapshot({
     reason: "question",
-    workers_disabled: true,
+    delegation_off: true,
     tasks: [
       task(row("otter", 2, "needs_input", { has_question: true }), {
         question_id: questionId(),
@@ -310,14 +308,14 @@ test("question priority leaves an unfit alert queued; alert priority reserves th
     alerts: [alert("\ud800".repeat(8192))],
   });
   const read = pack(base);
-  assert.equal(read.envelope.agents[0].question, base.tasks[0].question);
-  assert.equal(read.envelope.agents[0].question_truncated, undefined);
+  assert.equal(read.envelope.tasks[0].question, base.tasks[0].question);
+  assert.equal(read.envelope.tasks[0].question_truncated, undefined);
   assert.deepEqual(read.references.alerts, []);
   assert.equal(read.envelope.alerts_pending, 1);
   const waiting = structuredClone(base);
   waiting.reason = "alert";
   const { envelope, references } = pack(waiting),
-    entry = envelope.agents[0];
+    entry = envelope.tasks[0];
   assert.equal(envelope.alerts[0].message, waiting.alerts[0].message);
   assert.deepEqual(references.alerts, [0]);
   assert(entry.question.length > 0 && entry.question.length < 8192);
@@ -345,15 +343,14 @@ test("full ASCII question plus alert uses 16384 body units and leaves a displace
     alerts: [alert("a".repeat(8192), 1, "otter", "\0".repeat(120))],
   });
   const { envelope, references } = pack(input),
-    entry = envelope.agents[0];
+    entry = envelope.tasks[0];
   assert.equal(entry.question, input.tasks[0].question);
   assert.deepEqual(envelope.alerts, input.alerts);
   assert.equal(bodyUnits(envelope), 16384);
   assert.deepEqual(references.alerts, [0]);
   assert.equal(entry.result, undefined);
-  assert.equal(entry.result_omitted, true);
   assert.equal(decodeCursor(entry.next_cursor), 11);
-  assert.equal(entry.omitted_chars, 25);
+  assert.equal(entry.lost_chars, 25);
 });
 
 test("FIFO packing stops at an unfit head rather than skipping to a smaller tail", () => {
@@ -368,7 +365,7 @@ test("FIFO packing stops at an unfit head rather than skipping to a smaller tail
     alerts: [alert("first"), alert("\0".repeat(8192), 2), alert("small-tail", 3)],
   });
   const { envelope, references } = pack(input);
-  assert.equal(envelope.agents[0].question, input.tasks[0].question);
+  assert.equal(envelope.tasks[0].question, input.tasks[0].question);
   assert.deepEqual(envelope.alerts, [input.alerts[0]]);
   assert.deepEqual(references.alerts, [0]);
   assert.equal(envelope.alerts_pending, 2);
@@ -391,14 +388,14 @@ test("all question identities and controls remain when multiple worst-byte quest
     ),
   });
   const { envelope } = pack(input);
-  assert.equal(envelope.agents[0].question, input.tasks[0].question);
-  for (const [index, entry] of envelope.agents.entries()) {
+  assert.equal(envelope.tasks[0].question, input.tasks[0].question);
+  for (const [index, entry] of envelope.tasks.entries()) {
     assert.equal(entry.question_id, input.tasks[index].question_id);
     assert.equal(entry.has_question, true);
     assert.equal(entry.question, input.tasks[index].question.slice(0, entry.question.length));
     if (entry.question.length < 8192) assert.equal(entry.question_truncated, true);
   }
-  assert(envelope.agents.some((entry) => entry.question_truncated));
+  assert(envelope.tasks.some((entry) => entry.question_truncated));
 });
 
 test("abort/timeout preserve action/control facts but no alert/finished bodies or consumption references", () => {
@@ -409,7 +406,7 @@ test("abort/timeout preserve action/control facts but no alert/finished bodies o
       snapshot({
         reason,
         action,
-        workers_disabled: true,
+        delegation_off: true,
         blocked: "edge",
         tasks: [task(original)],
         alerts: [alert("retained", 2)],
@@ -417,7 +414,7 @@ test("abort/timeout preserve action/control facts but no alert/finished bodies o
       }),
     );
     assert.deepEqual(envelope.action, action);
-    assert.deepEqual(envelope.agents, [original]);
+    assert.deepEqual(envelope.tasks, [original]);
     assert.equal(envelope.alerts, undefined);
     assert.equal(envelope.finished, undefined);
     assert.equal(envelope.alerts_pending, 1);
@@ -443,7 +440,7 @@ test("bound terminal rows link original indices; other same-Agent tasks get sepa
       ],
     }),
   );
-  assert.deepEqual(envelope.agents, [otter, orca]);
+  assert.deepEqual(envelope.tasks, [otter, orca]);
   assert.deepEqual(envelope.finished, [old, middle]);
   assert.deepEqual(references.finished, [0, 1, 2, 3]);
   assert.equal(envelope.finished_pending, undefined);
@@ -472,7 +469,7 @@ test("a current row or historical alert never consumes an unshown finished origi
       finished: [{ row: old }],
     }),
   );
-  assert.deepEqual(envelope.agents[0], current);
+  assert.deepEqual(envelope.tasks[0], current);
   assert.equal(envelope.alerts[0].task, 1);
   assert.equal(envelope.finished, undefined);
   assert.deepEqual(references.finished, []);
@@ -514,7 +511,7 @@ test("eight-row finished prefix is independent of bound presentation, including 
     }),
   );
   assert.equal(reminder.envelope.reason, "nothing_pending");
-  assert.deepEqual(reminder.envelope.agents, []);
+  assert.deepEqual(reminder.envelope.tasks, []);
   assert.equal(reminder.envelope.finished[0].label, "finished task");
   assert.equal(reminder.envelope.finished[0].cancellation_source, "human");
   assert.deepEqual(reminder.references.finished, [0]);
@@ -548,11 +545,10 @@ test("stable result cursor advances to the actual shown endpoint and EOF removes
       }),
     ],
   });
-  const entry = pack(input).envelope.agents[0];
+  const entry = pack(input).envelope.tasks[0];
   assert.equal(entry.result, "abcd🚀ef");
   assert.equal(decodeCursor(entry.next_cursor), 15);
-  assert.equal(entry.omitted_chars, 12);
-  assert.equal(entry.result_omitted, undefined);
+  assert.equal(entry.lost_chars, 12);
   assert.equal(entry.result_truncated, undefined);
   const eof = pack(
     snapshot({
@@ -567,22 +563,16 @@ test("stable result cursor advances to the actual shown endpoint and EOF removes
         }),
       ],
     }),
-  ).envelope.agents[0];
+  ).envelope.tasks[0];
   assert.equal(eof.result, "last");
   assert.equal(eof.next_cursor, undefined);
-  assert.equal(eof.omitted_chars, 5);
+  assert.equal(eof.lost_chars, 5);
 });
 
 const handoffNotice = "Result from pine has been returned to cedar (task 2).";
 function noticeOnly(entry, expected) {
   assert.equal(entry.result, expected);
-  for (const field of [
-    "result_notice",
-    "result_omitted",
-    "result_truncated",
-    "next_cursor",
-    "omitted_chars",
-  ])
+  for (const field of ["result_notice", "result_truncated", "next_cursor", "lost_chars"])
     assert(!Object.hasOwn(entry, field), `${field} is not a notice projection`);
 }
 
@@ -596,15 +586,14 @@ test("private whole notices use ordinary result priority without changing ordina
     ],
   });
   const { envelope, result } = pack(input),
-    ordinary = envelope.agents[1];
-  noticeOnly(envelope.agents[0], handoffNotice);
+    ordinary = envelope.tasks[1];
+  noticeOnly(envelope.tasks[0], handoffNotice);
   assert.doesNotMatch(result.content[0].text, /result_notice|ordinary-run/);
   const endpoint = 16384 - handoffNotice.length;
   assert.equal(ordinary.result, text.slice(0, endpoint));
   assert.equal(decodeCursor(ordinary.next_cursor, ordinaryIdentity), endpoint);
-  assert.equal(ordinary.result_omitted, undefined);
   assert.equal(ordinary.result_truncated, undefined);
-  assert.equal(ordinary.omitted_chars, undefined);
+  assert.equal(ordinary.lost_chars, undefined);
   assert.equal(envelope.response_limit_reached, true);
   const next = pack(
     snapshot({
@@ -620,8 +609,8 @@ test("private whole notices use ordinary result priority without changing ordina
       ],
     }),
   ).envelope;
-  assert.equal(next.agents[0].result, text.slice(endpoint));
-  assert.equal(next.agents[0].next_cursor, undefined);
+  assert.equal(next.tasks[0].result, text.slice(endpoint));
+  assert.equal(next.tasks[0].next_cursor, undefined);
   assert.equal(next.response_limit_reached, undefined);
   for (const status of [
     "queued",
@@ -635,13 +624,13 @@ test("private whole notices use ordinary result priority without changing ordina
     const only = pack(
       snapshot({ tasks: [task(row("pine", 1, status), { result_notice: handoffNotice })] }),
     ).envelope;
-    noticeOnly(only.agents[0], handoffNotice);
+    noticeOnly(only.tasks[0], handoffNotice);
     assert.equal(only.response_limit_reached, undefined);
   }
   const bounded = pack(
     snapshot({ tasks: [task(row(), { result_notice: "n".repeat(512) })] }),
   ).envelope;
-  noticeOnly(bounded.agents[0], "n".repeat(512));
+  noticeOnly(bounded.tasks[0], "n".repeat(512));
   assert.equal(bounded.response_limit_reached, undefined);
 });
 
@@ -659,8 +648,8 @@ test("notice yields whole, never a prefix or cursor, under text and serialized-b
         ],
       }),
     ).envelope;
-    assert.equal(packed.agents[0].result, text);
-    noticeOnly(packed.agents[1], remaining === handoffNotice.length ? handoffNotice : undefined);
+    assert.equal(packed.tasks[0].result, text);
+    noticeOnly(packed.tasks[1], remaining === handoffNotice.length ? handoffNotice : undefined);
     assert.equal(
       packed.response_limit_reached,
       remaining === handoffNotice.length ? undefined : true,
@@ -679,13 +668,12 @@ test("notice yields whole, never a prefix or cursor, under text and serialized-b
       alerts: [alert("a".repeat(8192))],
     }),
   ).envelope;
-  assert.equal(crowded.agents[0].question.length, 8192);
+  assert.equal(crowded.tasks[0].question.length, 8192);
   assert.equal(crowded.alerts[0].message.length, 8192);
-  noticeOnly(crowded.agents[0], undefined);
+  noticeOnly(crowded.tasks[0], undefined);
   assert.equal(crowded.response_limit_reached, true);
   const { input } = byteSaturatedSnapshot(),
     baseline = structuredClone(input);
-  delete baseline.tasks[1].row.result_omitted;
   delete baseline.tasks[1].row.result_truncated;
   const seed = pack(structuredClone(baseline)).envelope;
   baseline.tasks[0].question += "q".repeat(
@@ -695,8 +683,8 @@ test("notice yields whole, never a prefix or cursor, under text and serialized-b
     pressured = structuredClone(baseline);
   pressured.tasks[1].result_notice = handoffNotice;
   const omitted = pack(pressured);
-  assert.deepEqual(omitted.envelope.agents, complete.envelope.agents);
-  noticeOnly(omitted.envelope.agents[1], undefined);
+  assert.deepEqual(omitted.envelope.tasks, complete.envelope.tasks);
+  noticeOnly(omitted.envelope.tasks[1], undefined);
   assert.equal(omitted.envelope.response_limit_reached, true);
   assert.equal(bytes(omitted.envelope), 65536);
 });
@@ -715,7 +703,7 @@ test("invalid private notice shapes, mixed result windows and result flags rejec
         }),
       ],
     }),
-    ...["result_omitted", "result_truncated"].map((flag) =>
+    ...["result_truncated"].map((flag) =>
       snapshot({
         tasks: [
           task(row("pine", 1, "completed", { [flag]: true }), { result_notice: handoffNotice }),
@@ -749,8 +737,8 @@ test("empty result windows omit result scaffolding but retain controls and real 
           }),
         ],
       });
-    const entry = pack(input).envelope.agents[0];
-    for (const field of ["result", "result_omitted", "result_truncated", "next_cursor"])
+    const entry = pack(input).envelope.tasks[0];
+    for (const field of ["result", "result_truncated", "next_cursor"])
       assert(!Object.hasOwn(entry, field));
   }
   const unshown = pack(
@@ -766,9 +754,8 @@ test("empty result windows omit result scaffolding but retain controls and real 
         }),
       ],
     }),
-  ).envelope.agents[0];
+  ).envelope.tasks[0];
   assert.equal(unshown.result, undefined);
-  assert.equal(unshown.result_omitted, true);
   assert.equal(decodeCursor(unshown.next_cursor), 3);
   const partial = pack(
     snapshot({
@@ -779,10 +766,10 @@ test("empty result windows omit result scaffolding but retain controls and real 
         }),
       ],
     }),
-  ).envelope.agents[0];
+  ).envelope.tasks[0];
   assert.equal(partial.result, undefined);
   assert.equal(partial.result_truncated, true);
-  assert.equal(partial.omitted_chars, 15);
+  assert.equal(partial.lost_chars, 15);
   assert.equal(partial.error, "failed after partial output");
 });
 
@@ -805,11 +792,11 @@ test("body-limited stable page backs off a pair boundary; live preview uses trun
     ],
     alerts: [alert("a")],
   });
-  const entry = pack(input).envelope.agents[0];
+  const entry = pack(input).envelope.tasks[0];
   assert.equal(entry.result, "r".repeat(8190));
   assert(entry.result.isWellFormed());
   assert.equal(decodeCursor(entry.next_cursor), offset + entry.result.length);
-  assert.equal(entry.omitted_chars, 33);
+  assert.equal(entry.lost_chars, 33);
   assert.equal(entry.result_truncated, undefined);
   const live = snapshot({
     tasks: [
@@ -820,11 +807,11 @@ test("body-limited stable page backs off a pair boundary; live preview uses trun
     ],
     alerts: [alert("a")],
   });
-  const preview = pack(live).envelope.agents[0];
+  const preview = pack(live).envelope.tasks[0];
   assert.equal(preview.result, "l".repeat(8191));
   assert.equal(preview.result_truncated, true);
   assert.equal(preview.next_cursor, undefined);
-  assert.equal(preview.omitted_chars, 10000);
+  assert.equal(preview.lost_chars, 10000);
 });
 
 for (const message of ["\0".repeat(8192), "\ud800".repeat(8192), "\udfff".repeat(8192)])
@@ -853,12 +840,12 @@ for (const message of ["\0".repeat(8192), "\ud800".repeat(8192), "\udfff".repeat
       snapshot({
         reason: "alert",
         tasks,
-        workers_disabled: true,
+        delegation_off: true,
         alerts: [alert(message, Number.MAX_SAFE_INTEGER, "a".repeat(24), "\0".repeat(120))],
       }),
     );
     assert.equal(envelope.alerts[0].message, message);
-    for (const [index, entry] of envelope.agents.entries())
+    for (const [index, entry] of envelope.tasks.entries())
       assert.equal(
         decodeCursor(entry.next_cursor, tasks[index].result.cursor),
         tasks[index].result.offset + (entry.result?.length ?? 0),
@@ -881,11 +868,10 @@ for (const [name, glyph, byteLimited] of [
         ],
       });
     const { envelope } = pack(input),
-      entry = envelope.agents[0];
+      entry = envelope.tasks[0];
     assert.equal(entry.result, text.slice(0, entry.result.length));
-    assert.equal(entry.result_omitted, undefined);
     assert.equal(entry.result_truncated, undefined);
-    assert.equal(entry.omitted_chars, undefined);
+    assert.equal(entry.lost_chars, undefined);
     assert.equal(decodeCursor(entry.next_cursor), entry.result.length);
     assert.equal(envelope.response_limit_reached, true);
     if (byteLimited) {
@@ -914,7 +900,7 @@ test("malformed controls, action facts, window identities and alert provenance r
     snapshot({ tasks: [task(row("otter", 1, "running", { error: "not thin" }))] }),
     snapshot({ tasks: [task(row(), { question_id: "q_bad" })] }),
     snapshot({ action: { type: "agent_send", agent: "otter", task: 1, delivery: "answered" } }),
-    snapshot({ workers_disabled: false }),
+    snapshot({ delegation_off: false }),
     snapshot({ reason: "alert" }),
     snapshot({ reason: "owner_blocked" }),
     snapshot({
@@ -961,11 +947,14 @@ test("malformed controls, action facts, window identities and alert provenance r
 });
 
 test("queued wait is mandatory whole control metadata, never provider telemetry or an optional diagnostic", () => {
-  for (const wait of ["dependencies", "capacity"]) {
+  for (const wait of ["dependencies", "provider_capacity"]) {
     const packed = pack(
-      snapshot({ tasks: [task(row("otter", 1, "queued", { wait }))], alerts: [alert("kept")] }),
+      snapshot({
+        tasks: [task(row("otter", 1, "queued", { queued_for: wait }))],
+        alerts: [alert("kept")],
+      }),
     );
-    assert.equal(packed.envelope.agents[0].wait, wait);
+    assert.equal(packed.envelope.tasks[0].queued_for, wait);
     assert.deepEqual(packed.references, { alerts: [0], finished: [] });
   }
   for (const status of [
@@ -980,12 +969,13 @@ test("queued wait is mandatory whole control metadata, never provider telemetry 
     assert.throws(
       () =>
         packCommunication(
-          snapshot({ tasks: [task(row("otter", 1, status, { wait: "dependencies" }))] }),
+          snapshot({ tasks: [task(row("otter", 1, status, { queued_for: "dependencies" }))] }),
         ),
       { code: "INVALID_COMMUNICATION_SNAPSHOT" },
     );
   for (const wait of [
     "provider",
+    "capacity",
     "openai/gpt-4",
     "concurrency",
     "4",
@@ -997,11 +987,14 @@ test("queued wait is mandatory whole control metadata, never provider telemetry 
     ["dependencies"],
   ])
     assert.throws(
-      () => packCommunication(snapshot({ tasks: [task(row("otter", 1, "queued", { wait }))] })),
+      () =>
+        packCommunication(
+          snapshot({ tasks: [task(row("otter", 1, "queued", { queued_for: wait }))] }),
+        ),
       { code: "INVALID_COMMUNICATION_SNAPSHOT" },
     );
   const tasks = Array.from({ length: 16 }, (_, index) =>
-    task(row(`worker-${index}`, 1, "queued", { ...controls, wait: "dependencies" }), {
+    task(row(`worker-${index}`, 1, "queued", { ...controls, queued_for: "provider_capacity" }), {
       question_id: questionId(index + 1),
       question: "Q".repeat(8192),
       diagnostics: { error: "\0".repeat(512) },
@@ -1011,7 +1004,9 @@ test("queued wait is mandatory whole control metadata, never provider telemetry 
     snapshot({ reason: "alert", tasks, alerts: [alert("\0".repeat(8192))] }),
   );
   assert(
-    envelope.agents.every((entry) => entry.wait === "dependencies" && entry.status === "queued"),
+    envelope.tasks.every(
+      (entry) => entry.queued_for === "provider_capacity" && entry.status === "queued",
+    ),
   );
   assert.equal(envelope.response_limit_reached, true);
 });
@@ -1068,18 +1063,18 @@ test("only actionable tree_shared notes are shown, before serialization and with
     tasks: [task(row(), { dispatch_notes: ["source_state_unknown", "tree_shared"] })],
   });
   const packed = pack(input);
-  assert.deepEqual(packed.envelope.agents[0].dispatch_notes, ["tree_shared"]);
-  assert.deepEqual(JSON.parse(packed.result.content[0].text).agents[0].dispatch_notes, [
+  assert.deepEqual(packed.envelope.tasks[0].dispatch_notes, ["tree_shared"]);
+  assert.deepEqual(JSON.parse(packed.result.content[0].text).tasks[0].dispatch_notes, [
     "tree_shared",
   ]);
-  assert.notEqual(packed.envelope.agents[0].dispatch_notes, input.tasks[0].dispatch_notes);
+  assert.notEqual(packed.envelope.tasks[0].dispatch_notes, input.tasks[0].dispatch_notes);
   const { input: full, complete } = byteSaturatedSnapshot(),
     pressured = structuredClone(full);
   for (const entry of pressured.tasks) entry.dispatch_notes = ["tree_shared"];
   const omitted = pack(pressured);
   assert.equal(omitted.envelope.response_limit_reached, true);
   assert.equal(bytes(omitted.envelope), 65536);
-  assert.deepEqual(omitted.envelope.agents, complete.envelope.agents);
+  assert.deepEqual(omitted.envelope.tasks, complete.envelope.tasks);
   assert.deepEqual(omitted.references, complete.references);
 });
 
@@ -1114,9 +1109,9 @@ test("labels precede results without losing controls", () => {
     ],
   });
   const { envelope } = pack(input);
-  assert.equal(envelope.agents[0].label, label);
-  assert.equal(envelope.agents[1].label, "second label");
-  assert.equal(envelope.agents[0].result.length, 16384);
+  assert.equal(envelope.tasks[0].label, label);
+  assert.equal(envelope.tasks[1].label, "second label");
+  assert.equal(envelope.tasks[0].result.length, 16384);
   assert.equal(envelope.response_limit_reached, true);
 });
 
@@ -1125,14 +1120,14 @@ test("whole summary fields and human cancellation detach from input and yield in
   const input = snapshot({ tasks: [task(row(), metadata)] }),
     packed = pack(input);
   for (const field of ["label", "cancellation_source"])
-    assert.deepEqual(packed.envelope.agents[0][field], metadata[field]);
+    assert.deepEqual(packed.envelope.tasks[0][field], metadata[field]);
   assert.equal(bodyUnits(packed.envelope), 0);
   assert.equal(packed.envelope.response_limit_reached, undefined);
   const { input: full, complete } = byteSaturatedSnapshot(),
     saturated = structuredClone(full);
   for (const entry of saturated.tasks) Object.assign(entry, metadata);
   const omitted = pack(saturated);
-  assert.deepEqual(omitted.envelope.agents, complete.envelope.agents);
+  assert.deepEqual(omitted.envelope.tasks, complete.envelope.tasks);
   assert.deepEqual(omitted.references, complete.references);
   assert.equal(omitted.envelope.response_limit_reached, true);
   assert.equal(bytes(omitted.envelope), 65536);
@@ -1174,7 +1169,7 @@ test("packing is deterministic and independent across invocations with no output
     second = pack(input);
   assert.deepEqual(first, second);
   assert.notEqual(first.result, second.result);
-  assert.notEqual(first.envelope.agents, second.envelope.agents);
+  assert.notEqual(first.envelope.tasks, second.envelope.tasks);
   assert.notEqual(first.references.alerts, second.references.alerts);
   assert(Object.isFrozen(input));
   assert(Object.isFrozen(input.alerts[0]));

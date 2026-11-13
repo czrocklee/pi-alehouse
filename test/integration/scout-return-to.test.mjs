@@ -58,7 +58,7 @@ test(
     runFixture(
       t,
       [],
-      /PASS: real composition scout return_to hands the source marker to the worker without a parent relay or source body; shutdown disposes both sessions; nothing leaves the process/,
+      /PASS: real composition scout return_to hands the source marker to the worker without a parent relay or source body; the delivered scout is released and shutdown disposes the worker; nothing leaves the process/,
     );
   },
 );

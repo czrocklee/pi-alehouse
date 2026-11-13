@@ -117,7 +117,7 @@ function notice(row, state = "delivered") {
     "result_omitted",
     "result_truncated",
     "next_cursor",
-    "omitted_chars",
+    "lost_chars",
   ])
     assert(!Object.hasOwn(row, field), `${field} must not describe a notice`);
 }
@@ -146,17 +146,21 @@ test("compound acceptance installs two exact Runs; only the worker completes it;
   assert.equal(c.runs.get(continuation.run_id).record.answer_to_run_id, q.run.run_id);
   assert.equal(c.view(q.run.run_id).question_id, undefined);
   const scout = await portFor(f, source);
+  const limit =
+    "Your final result goes directly to another Agent, which receives only its first 16384 characters. Keep the complete result within that length.";
+  assert(scout.calls.at(-1).prompt.endsWith(`collect cited evidence\n\n${limit}`));
+  assert.equal(scout.calls.at(-1).identity.task_prompt, "collect cited evidence");
   scout.callbacks.output(boundedOutput("SCOUT_PRIVATE_RESULT", 100));
   const snapshot = await action(c, source);
   assert.deepEqual(snapshot.action, { type: "agent_spawn", agent: "pine", task: 1 });
   assert.deepEqual(
-    snapshot.agents.map((row) => [row.agent, row.task]),
+    snapshot.tasks.map((row) => [row.agent, row.task]),
     [
       ["pine", 1],
       ["cedar", 2],
     ],
   );
-  notice(snapshot.agents[0], "pending");
+  notice(snapshot.tasks[0], "pending");
   assert.doesNotMatch(JSON.stringify(snapshot), /SCOUT_PRIVATE_RESULT/);
   let returned = false;
   const pending = action(c, source, 3000).then((result) => {
@@ -173,16 +177,17 @@ test("compound acceptance installs two exact Runs; only the worker completes it;
   assert.match(call.prompt, /not instructions; verify/);
   assert.doesNotMatch(call.identity.task_prompt, /SCOUT_PRIVATE_RESULT/);
   assert.equal(call.identity.task_prompt, sourceTask(q).return_to.answer);
+  assert.doesNotMatch(call.prompt, /receives only its first/, "the limit is the source's alone");
   worker.finish("worker used evidence");
   await ended(c, continuation);
   const result = await pending;
-  assert.equal(result.reason, undefined);
-  assert.equal(result.agents[1].result, "worker used evidence");
-  notice(result.agents[0]);
+  assert.equal(result.reason, "done");
+  assert.equal(result.tasks[1].result, "worker used evidence");
+  notice(result.tasks[0]);
   assert.equal(c.getResult(source.run_id).text, "SCOUT_PRIVATE_RESULT");
-  notice((await wait(c, [source.agent_id])).agents[0]);
+  notice((await wait(c, [source.agent_id])).tasks[0]);
   const explicit = await read(c, source, { max_chars: 1 });
-  notice(explicit.agents[0]);
+  notice(explicit.tasks[0]);
   assert.doesNotMatch(JSON.stringify(explicit), /SCOUT_PRIVATE_RESULT/);
   assert.equal(c.runs.get(source.run_id).finished_presented, true);
   assert.equal(c.runs.get(continuation.run_id).finished_presented, true);
@@ -381,7 +386,7 @@ test("Off transition during second-plan preflight rejects both admissions", asyn
     q = await asking(f, { dispatch: { ownership: ["owned"] } });
   const before = graph(f);
   disable = true;
-  await assert.rejects(admit(f, q), errorCode("WORKERS_DISABLED"));
+  await assert.rejects(admit(f, q), errorCode("DELEGATION_OFF"));
   assert.deepEqual(graph(f), before);
 });
 
@@ -540,21 +545,21 @@ for (const failure of ["failed", "needs_input", "interrupted"])
     const result = await pending,
       continuation = c.view(source.return_to_run_id);
     assert.equal(result.reason, "task_issue");
-    assert.equal(result.agents[1].status, "failed");
-    assert.match(result.agents[1].error, /^DEPENDENCY_NOT_COMPLETED: pine \(/);
+    assert.equal(result.tasks[1].status, "failed");
+    assert.match(result.tasks[1].error, /^DEPENDENCY_NOT_COMPLETED: pine \(/);
     assert.equal(c.view(continuation.run_id).outcome.reason, "dependency_not_completed");
     assert.equal(q.port.calls.length, 1);
     assert.equal(c.view(q.run.run_id).question_id, q.token);
-    notice(result.agents[0], "not_delivered");
-    const explicit = (await read(c, source, { max_chars: 1 })).agents[0];
+    notice(result.tasks[0], "not_delivered");
+    const explicit = (await read(c, source, { max_chars: 1 })).tasks[0];
     retained(explicit, "p");
     assert.equal(typeof explicit.next_cursor, "string");
     assert.equal(c.getResult(source.run_id).text, "partial untrusted research");
     if (failure === "needs_input") {
-      assert.equal(result.agents[0].question, "Need a source decision?");
-      assert.match(result.agents[0].question_id, /^q_/);
-      assert.equal(explicit.question, result.agents[0].question);
-      assert.equal(explicit.question_id, result.agents[0].question_id);
+      assert.equal(result.tasks[0].question, "Need a source decision?");
+      assert.match(result.tasks[0].question_id, /^q_/);
+      assert.equal(explicit.question, result.tasks[0].question);
+      assert.equal(explicit.question_id, result.tasks[0].question_id);
     }
   });
 
@@ -582,10 +587,10 @@ test("a turn-limited but completed scout hands off and does not end the compound
   worker.finish("worker done");
   await ended(c, continuation);
   const result = await pending;
-  assert.equal(result.reason, undefined);
-  assert.equal(result.agents[1].status, "completed");
-  assert.equal(result.agents[0].limit_reached, true);
-  notice(result.agents[0]);
+  assert.equal(result.reason, "done");
+  assert.equal(result.tasks[1].status, "completed");
+  assert.equal(result.tasks[0].limit_reached, true);
+  notice(result.tasks[0]);
 });
 
 test("worker pre-input cancellation and kill leave a sticky not-delivered notice; only an explicit read returns the source result", async (t) => {
@@ -618,13 +623,13 @@ test("worker pre-input cancellation and kill leave a sticky not-delivered notice
     sendReply,
   ]) {
     notice(
-      result.agents.find((row) => row.agent === "pine"),
+      result.tasks.find((row) => row.agent === "pine"),
       "not_delivered",
     );
     assert.doesNotMatch(JSON.stringify(result), /abcdefgh|NEVER_RETAINED/);
   }
   const explicit = await read(c, source, { task: source.task, max_chars: 1 });
-  retained(explicit.agents[0], "a");
+  retained(explicit.tasks[0], "a");
   assert.doesNotMatch(JSON.stringify(explicit), /NEVER_RETAINED/);
   assert.equal(c.getResult(source.run_id).text, "abcdefgh");
   const raw = c.getResult(source.run_id);
@@ -655,7 +660,7 @@ test("default and explicit waits, actions, sends and reads replace live and fina
     sendReply,
   ]) {
     notice(
-      result.agents.find((row) => row.agent === "pine"),
+      result.tasks.find((row) => row.agent === "pine"),
       "pending",
     );
     assert.doesNotMatch(JSON.stringify(result), /private live preview/);
@@ -667,8 +672,8 @@ test("default and explicit waits, actions, sends and reads replace live and fina
     worker = await portFor(f, continuation);
   worker.finish("done");
   await ended(c, continuation);
-  notice((await bound).agents.find((row) => row.agent === "pine"));
-  notice((await read(c, source, { max_chars: 1 })).agents[0]);
+  notice((await bound).tasks.find((row) => row.agent === "pine"));
+  notice((await read(c, source, { max_chars: 1 })).tasks[0]);
 });
 
 test("a delivered handoff that omitted retained text says so; only an explicit read pages the full result", async (t) => {
@@ -688,17 +693,20 @@ test("a delivered handoff that omitted retained text says so; only an explicit r
   worker.finish("worker done");
   await ended(c, continuation);
   assert.equal(c.runs.get(continuation.run_id).record.input_entered, true);
-  const partial = `Result from pine has been returned to cedar (task 2), but the handoff omitted its last ${tail.length} retained characters; agent_read pine task 1 shows the full result.`;
+  await tick();
+  assert.equal(c.agents.get(source.agent_id).resident, true, "a cut result stays for the parent");
+  assert.equal(c.agents.get(source.agent_id).unavailable, undefined);
+  const partial = `Result from pine has been returned to cedar (task 2), but the handoff omitted its last ${tail.length} characters; agent_read pine task 1 shows the retained result.`;
   for (const result of [await action(c, source), await wait(c, [source.agent_id])]) {
-    assert.equal(result.agents.find((row) => row.agent === "pine").result, partial);
+    assert.equal(result.tasks.find((row) => row.agent === "pine").result, partial);
     assert.doesNotMatch(JSON.stringify(result), new RegExp(tail));
   }
   await c.kill(source.agent_id, 1000);
-  let row = (await read(c, source, { task: 1 })).agents[0],
+  let row = (await read(c, source, { task: 1 })).tasks[0],
     paged = row.result,
     pages = 1;
   while (row.next_cursor && pages < 20) {
-    row = (await read(c, source, { cursor: row.next_cursor })).agents[0];
+    row = (await read(c, source, { cursor: row.next_cursor })).tasks[0];
     paged += row.result;
     pages++;
   }
@@ -711,6 +719,30 @@ test("a delivered handoff that omitted retained text says so; only an explicit r
   );
 });
 
+test("output beyond the retention cap is a cut handoff: the scout stays for the parent", async (t) => {
+  const f = await fixture(t, { controller: { output_chars: 8, history_output_chars: 1024 } }),
+    c = f.controller,
+    q = await asking(f),
+    source = await admit(f, q);
+  (await portFor(f, source)).finish("abcdefghNEVER_RETAINED");
+  await ended(c, source);
+  const continuation = c.view(source.return_to_run_id),
+    worker = await portFor(f, continuation);
+  const prompt = worker.calls.at(-1).prompt;
+  assert.match(prompt, /abcdefgh\n\[14 characters omitted\]/);
+  worker.finish("worker done");
+  await ended(c, continuation);
+  await tick();
+  assert.equal(c.agents.get(source.agent_id).resident, true, "a cut result stays for the parent");
+  assert.equal(c.agents.get(source.agent_id).unavailable, undefined);
+  const row = (await action(c, source)).tasks.find((task) => task.agent === "pine");
+  assert.equal(
+    row.result,
+    "Result from pine has been returned to cedar (task 2), but the handoff omitted its last 14 characters; agent_read pine task 1 shows the retained result.",
+  );
+  await c.kill(source.agent_id, 1000);
+});
+
 test("a fully attached handoff stays a notice even for explicit and cursor reads", async (t) => {
   const f = await fixture(t),
     c = f.controller,
@@ -718,9 +750,9 @@ test("a fully attached handoff stays a notice even for explicit and cursor reads
     source = await admit(f, q);
   const text = "x".repeat(16384);
   await finishPair(f, source, text);
-  notice((await read(c, source, { task: 1 })).agents[0]);
+  notice((await read(c, source, { task: 1 })).tasks[0]);
   const cursor = c.getResult(source.run_id, { limit: 1 }).next_cursor;
-  notice((await read(c, source, { cursor, max_chars: 1 })).agents[0]);
+  notice((await read(c, source, { cursor, max_chars: 1 })).tasks[0]);
 });
 
 test("notice cursor reads retain raw identity, version, range and surrogate checks without consuming alerts on rejection", async (t) => {
@@ -778,8 +810,8 @@ test("notice cursor reads retain raw identity, version, range and surrogate chec
     coreCursor,
   ]) {
     const result = await read(c, source, { cursor, max_chars: 1 });
-    assert.equal(result.agents[0].task, 1);
-    notice(result.agents[0]);
+    assert.equal(result.tasks[0].task, 1);
+    notice(result.tasks[0]);
     assert.doesNotMatch(JSON.stringify(result), /PRIVATE_SOURCE/);
     if (cursor === encodeResultCursor(identity, 0))
       assert.deepEqual(
@@ -831,26 +863,26 @@ test("handoff stays pending through source finalization, worker capacity and wor
   await until(() => journalText === marker);
   assert.equal(c.view(source.run_id).finalization_pending, true);
   assert.equal(c.view(continuationId).queued_for, "dependencies");
-  notice((await read(c, source, { max_chars: 1 })).agents[0], "pending");
+  notice((await read(c, source, { max_chars: 1 })).tasks[0], "pending");
   sourceHistory.resolve();
   await ended(c, source);
   assert.equal(c.view(continuationId).queued_for, "capacity");
-  notice((await action(c, source)).agents[0], "pending");
+  notice((await action(c, source)).tasks[0], "pending");
   blockerPort.finish("blocker done");
   await ended(c, blocker);
   await until(() => initializing);
   assert.equal(c.runs.get(continuationId).record.input_entered, false);
-  notice((await wait(c, [source.agent_id])).agents[0], "pending");
-  notice((await read(c, source, { task: 1, max_chars: 1 })).agents[0], "pending");
+  notice((await wait(c, [source.agent_id])).tasks[0], "pending");
+  notice((await read(c, source, { task: 1, max_chars: 1 })).tasks[0], "pending");
   initialization.resolve();
   const continuation = c.view(continuationId),
     worker = await portFor(f, continuation);
   assert.equal(c.runs.get(continuationId).record.input_entered, true);
   assert.match(worker.calls.at(-1).prompt, new RegExp(marker));
-  notice((await read(c, source, { max_chars: 1 })).agents[0]);
+  notice((await read(c, source, { max_chars: 1 })).tasks[0]);
   worker.finish("normal worker output");
   await ended(c, continuation);
-  assert.equal((await read(c, continuation)).agents[0].result, "normal worker output");
+  assert.equal((await read(c, continuation)).tasks[0].result, "normal worker output");
   assert.equal(journalText, marker);
   assert.equal(c.getResult(source.run_id).text, marker);
 });
@@ -874,16 +906,16 @@ test("execution-exited finalizing continuation without observed input is already
   await ended(c, source);
   const continuation = c.view(source.return_to_run_id),
     worker = await portFor(f, continuation);
-  notice((await read(c, source)).agents[0], "pending");
+  notice((await read(c, source)).tasks[0], "pending");
   worker.finish("pre-input worker failure", "error", "synthetic pre-input error");
   await until(() => c.view(continuation.run_id).finalization_pending);
   assert.equal(c.runs.get(continuation.run_id).record.input_entered, false);
   assert.equal(c.view(continuation.run_id).execution_exited, true);
-  retained((await read(c, source, { max_chars: 1 })).agents[0], "r");
-  notice((await action(c, source)).agents[0], "not_delivered");
+  retained((await read(c, source, { max_chars: 1 })).tasks[0], "r");
+  notice((await action(c, source)).tasks[0], "not_delivered");
   finalization.resolve();
   await ended(c, continuation);
-  retained((await read(c, source)).agents[0], "raw source stays private");
+  retained((await read(c, source)).tasks[0], "raw source stays private");
 });
 
 for (const outcome of ["failed", "interrupted", "killed"])
@@ -898,7 +930,7 @@ for (const outcome of ["failed", "interrupted", "killed"])
     const continuation = c.view(source.return_to_run_id),
       worker = await portFor(f, continuation);
     assert.equal(c.runs.get(continuation.run_id).record.input_entered, true);
-    notice((await read(c, source)).agents[0]);
+    notice((await read(c, source)).tasks[0]);
     if (outcome === "killed") {
       worker.autoStop = true;
       await c.kill(continuation.agent_id, 1000);
@@ -913,9 +945,9 @@ for (const outcome of ["failed", "interrupted", "killed"])
     await ended(c, continuation);
     admission = { enabled: false, revision: 1 };
     const result = await action(c, source);
-    assert.equal(result.workers_disabled, true);
-    notice(result.agents[0]);
-    notice((await read(c, source, { task: 1, max_chars: 1 })).agents[0]);
+    assert.match(result.delegation_off, /^Ask the user to enable delegation/);
+    notice(result.tasks[0]);
+    notice((await read(c, source, { task: 1, max_chars: 1 })).tasks[0]);
     assert.equal(c.getResult(source.run_id).text, "raw source evidence");
   });
 
@@ -938,13 +970,13 @@ test("a later observed answer cannot turn the original cancelled continuation in
   const worker = await portFor(f, later);
   assert.equal(later.task, 3);
   assert.equal(c.runs.get(later.run_id).record.input_entered, true);
-  notice((await action(c, source)).agents[0], "not_delivered");
-  retained((await read(c, source, { task: 1, max_chars: 1 })).agents[0], "r");
+  notice((await action(c, source)).tasks[0], "not_delivered");
+  retained((await read(c, source, { task: 1, max_chars: 1 })).tasks[0], "r");
   worker.finish("later worker result");
   await ended(c, later);
   const replay = await admit(f, q);
   assert.equal(replay.return_to_run_id, continuation.run_id);
-  notice((await action(c, replay)).agents[0], "not_delivered");
+  notice((await action(c, replay)).tasks[0], "not_delivered");
 });
 
 test("Off rejects before admission but never cancels an accepted pair", async (t) => {
@@ -954,17 +986,17 @@ test("Off rejects before admission but never cancels an accepted pair", async (t
     q = await asking(f);
   admission = { enabled: false, revision: 1 };
   const before = graph(f);
-  await assert.rejects(admit(f, q), errorCode("WORKERS_DISABLED"));
+  await assert.rejects(admit(f, q), errorCode("DELEGATION_OFF"));
   assert.deepEqual(graph(f), before);
   admission = { enabled: true, revision: 2 };
   const source = await admit(f, q);
   admission = { enabled: false, revision: 3 };
   await finishPair(f, source);
   const result = await action(c, source);
-  assert.equal(result.workers_disabled, true);
-  assert.equal(result.agents[1].status, "completed");
-  notice(result.agents[0]);
-  notice((await read(c, source, { max_chars: 1 })).agents[0]);
+  assert.match(result.delegation_off, /^Ask the user to enable delegation/);
+  assert.equal(result.tasks[1].status, "completed");
+  notice(result.tasks[0]);
+  notice((await read(c, source, { max_chars: 1 })).tasks[0]);
   assert.equal(
     (await admit(f, q)).run_id,
     source.run_id,
@@ -972,7 +1004,185 @@ test("Off rejects before admission but never cancels an accepted pair", async (t
   );
 });
 
-test("replay/conflict bind the same original pair after both Agents are reused; secondary IDs cannot be impersonated", async (t) => {
+test("whole delivery releases the scout like a kill; a reused scout is left to the parent", async (t) => {
+  const f = await fixture(t, { controller: { resident_limit: 2 } }),
+    c = f.controller,
+    q = await asking(f),
+    source = await admit(f, q);
+  (await portFor(f, source)).finish("SCOUT_PRIVATE_RESULT");
+  await ended(c, source);
+  const continuation = c.view(source.return_to_run_id),
+    worker = await portFor(f, continuation);
+  await until(() => !c.agents.get(source.agent_id).resident);
+  const scout = c.agents.get(source.agent_id);
+  assert.equal(scout.unavailable, "result_returned");
+  assert.equal(
+    f.ports.find((port) => port.calls[0]?.identity.run_id === source.run_id).disposed,
+    1,
+  );
+  assert.equal(c.stats().resident, 1, "its slot is free while the worker still runs");
+  assert.equal(c.view(continuation.run_id).status, "running");
+  worker.finish("worker final answer");
+  await ended(c, continuation);
+  // Like a kill: the notice and raw result stay readable.
+  notice((await read(c, source)).tasks[0]);
+  assert.equal(c.getResult(source.run_id).text, "SCOUT_PRIVATE_RESULT");
+  assert.deepEqual(await c.kill(source.agent_id, 1000), {
+    agent_id: source.agent_id,
+    state: "released",
+  });
+
+  // A scout the parent reused before the worker took input keeps its conversation.
+  const g = await fixture(t),
+    d = g.controller,
+    p = await asking(g),
+    blocker = await d.submit("blocker", task("hold the worker provider", { name: "oak" })),
+    second = await admit(g, p, { settings: { ...scoutSettings, provider: "scout-provider" } });
+  (await portFor(g, second)).finish("SCOUT_PRIVATE_RESULT");
+  await ended(d, second);
+  const next = d.view(second.return_to_run_id);
+  assert.equal(next.status, "queued", "the worker's provider slot is still held");
+  const reuse = await d.submit("reuse", { resume: second.agent_id, prompt: "more research" });
+  (await portFor(g, blocker)).finish("done");
+  await ended(d, blocker);
+  (await portFor(g, next)).finish("worker final answer");
+  await ended(d, next);
+  await tick();
+  assert.equal(d.agents.get(second.agent_id).resident, true);
+  assert.equal(d.agents.get(second.agent_id).unavailable, undefined);
+  assert.equal(d.view(reuse.run_id).status, "running");
+});
+
+test("duplicate continuation inputEntered disposes the scout once, during and after deferred cleanup", async (t) => {
+  const disposal = deferred();
+  const f = await fixture(t, { beforeShutdown: () => disposal.resolve() }),
+    c = f.controller,
+    q = await asking(f),
+    source = await admit(f, q),
+    scout = await portFor(f, source);
+  scout.dispose = async () => {
+    scout.disposed++;
+    await disposal.promise;
+    return { shutdownExited: true, errors: [] };
+  };
+  scout.finish("SCOUT_PRIVATE_RESULT");
+  await ended(c, source);
+  const continuation = c.view(source.return_to_run_id),
+    worker = await portFor(f, continuation),
+    sourceAgent = c.agents.get(source.agent_id);
+  await until(() => scout.disposed === 1);
+  assert.equal(sourceAgent.resident, true, "pending disposal retains the source reservation");
+  assert.equal(sourceAgent.unavailable, "result_returned");
+  assert.equal(c.stats().cleaning, 1);
+
+  const assertWorkerUnaffected = () => {
+    assert.equal(worker, q.port);
+    assert.equal(worker.calls.length, 2, "the continuation enters the worker exactly once");
+    assert.match(worker.calls.at(-1).prompt, /SCOUT_PRIVATE_RESULT/);
+    assert.equal(c.runs.get(continuation.run_id).record.input_entered, true);
+    assert.equal(c.view(continuation.run_id).status, "running");
+    assert.equal(c.agents.get(continuation.agent_id).unavailable, undefined);
+    assert.equal(worker.streaming, true);
+    assert.equal(worker.stopped, 0);
+    assert.equal(worker.disposed, 0);
+    assert.deepEqual(c.view(continuation.run_id).cleanup_errors, []);
+  };
+  worker.callbacks.inputEntered();
+  worker.callbacks.inputEntered();
+  await tick();
+  assert.equal(scout.disposed, 1, "duplicate input cannot start another pending disposal");
+  assertWorkerUnaffected();
+
+  disposal.resolve();
+  await until(() => !sourceAgent.resident && c.stats().cleaning === 0);
+  worker.callbacks.inputEntered();
+  worker.callbacks.inputEntered();
+  await tick();
+  assert.equal(scout.disposed, 1, "duplicate input cannot dispose an already released scout");
+  assert.equal(sourceAgent.unavailable, "result_returned");
+  assert.equal(c.stats().resident, 1);
+  assert.equal(c.stats().cleanup_uncertain, false);
+  assertWorkerUnaffected();
+  worker.finish("worker used the whole scout result");
+  await ended(c, continuation);
+  assert.equal(c.view(continuation.run_id).status, "completed");
+  assert.equal(c.getResult(continuation.run_id).text, "worker used the whole scout result");
+});
+
+for (const [mode, report, diagnostic] of [
+  ["rejects", undefined, "synthetic scout dispose rejection"],
+  ["does not confirm shutdown", { shutdownExited: false, errors: [] }, "shutdown_not_exited"],
+  [
+    "reports cleanup errors",
+    { shutdownExited: true, errors: ["synthetic scout cleanup error"] },
+    "synthetic scout cleanup error",
+  ],
+])
+  test(`automatic scout disposal ${mode}: retains the source, not the worker, and refuses Owner closure`, async (t) => {
+    const disposal = deferred();
+    const f = await fixture(t, {
+      cleanupUncertainExpected: true,
+      beforeShutdown: () => disposal.resolve(),
+    });
+    const c = f.controller,
+      q = await asking(f),
+      source = await admit(f, q),
+      scout = await portFor(f, source);
+    scout.dispose = async () => {
+      scout.disposed++;
+      await disposal.promise;
+      if (!report) throw new Error(diagnostic);
+      return report;
+    };
+    scout.finish("SCOUT_PRIVATE_RESULT");
+    await ended(c, source);
+    const continuation = c.view(source.return_to_run_id),
+      worker = await portFor(f, continuation);
+    await until(() => scout.disposed === 1);
+    disposal.resolve();
+    await until(() => c.stats().cleanup_uncertain && c.stats().cleaning === 0);
+    const sourceAgent = c.agents.get(source.agent_id);
+    assert.equal(sourceAgent.resident, true);
+    assert.equal(sourceAgent.unavailable, "cleanup_uncertain");
+    assert.equal(c.stats().resident, 2);
+    assert(c.view(source.run_id).cleanup_errors.some((error) => error.includes(diagnostic)));
+    assert.equal(c.view(source.run_id).status, "completed");
+    assert.equal(c.getResult(source.run_id).text, "SCOUT_PRIVATE_RESULT");
+    assert.deepEqual(await c.kill(source.agent_id, 1000), {
+      agent_id: source.agent_id,
+      state: "cleanup_uncertain",
+    });
+    assert.equal(scout.disposed, 1, "explicit kill cannot retry uncertain automatic cleanup");
+
+    assert.equal(worker, q.port);
+    assert.equal(worker.calls.length, 2);
+    assert.match(worker.calls.at(-1).prompt, /SCOUT_PRIVATE_RESULT/);
+    assert.equal(c.runs.get(continuation.run_id).record.input_entered, true);
+    assert.equal(c.view(continuation.run_id).status, "running");
+    assert.equal(c.agents.get(continuation.agent_id).unavailable, undefined);
+    assert.equal(c.agents.get(continuation.agent_id).question, undefined);
+    assert.equal(worker.streaming, true);
+    assert.equal(worker.stopped, 0);
+    assert.equal(worker.disposed, 0);
+    assert.deepEqual(c.view(continuation.run_id).cleanup_errors, []);
+    worker.finish("worker completed despite scout cleanup failure");
+    await ended(c, continuation);
+    assert.equal(c.view(continuation.run_id).status, "completed");
+    assert.equal(
+      c.getResult(continuation.run_id).text,
+      "worker completed despite scout cleanup failure",
+    );
+
+    const shutdown = await c.shutdown(1000);
+    assert.equal(shutdown.closed, false);
+    assert.equal(shutdown.cleanup_uncertain, true);
+    assert.equal(shutdown.resident, 1, "only the uncertain scout remains reserved");
+    assert.equal(shutdown.active + shutdown.finalizing + shutdown.cleaning, 0);
+    assert.equal(scout.disposed, 1, "shutdown cannot retry uncertain automatic cleanup");
+    f.owner.assertHeld();
+  });
+
+test("replay/conflict bind the same original pair after the worker is reused; secondary IDs cannot be impersonated", async (t) => {
   const f = await fixture(t),
     c = f.controller,
     q = await asking(f),
@@ -983,14 +1193,11 @@ test("replay/conflict bind the same original pair after both Agents are reused; 
     return request;
   });
   const { continuation } = await finishPair(f, source);
-  const laterSource = await c.submit("source-later", {
-    resume: source.agent_id,
-    prompt: "new scout task",
-  });
-  const scout = await portFor(f, laterSource);
-  scout.callbacks.alert("later scout alert");
-  scout.finish("later scout body");
-  await ended(c, laterSource);
+  // Whole delivery released the scout; only the worker can be reused.
+  await assert.rejects(
+    c.submit("source-later", { resume: source.agent_id, prompt: "new scout task" }),
+    errorCode("AGENT_UNAVAILABLE"),
+  );
   const laterWorker = await c.submit("worker-later", {
     resume: q.run.agent_id,
     prompt: "new worker task",
@@ -1007,15 +1214,15 @@ test("replay/conflict bind the same original pair after both Agents are reused; 
   assert.equal(replay.return_to_run_id, continuation.run_id);
   const result = await action(c, replay);
   assert.deepEqual(
-    result.agents.map((row) => [row.agent, row.task]),
+    result.tasks.map((row) => [row.agent, row.task]),
     [
       ["pine", 1],
       ["cedar", 2],
     ],
   );
-  assert.equal(result.agents[1].result, "worker final answer");
+  assert.equal(result.tasks[1].result, "worker final answer");
   assert.equal(result.alerts, undefined);
-  notice(result.agents[0]);
+  notice(result.tasks[0]);
   const identity = {
     owner: c.identity.owner_id,
     generation: c.identity.generation,
@@ -1031,8 +1238,8 @@ test("replay/conflict bind the same original pair after both Agents are reused; 
     { cursor: raw.next_cursor, max_chars: 1 },
   ]) {
     const historical = await read(c, source, extra);
-    assert.equal(historical.agents[0].task, 1);
-    notice(historical.agents[0]);
+    assert.equal(historical.tasks[0].task, 1);
+    notice(historical.tasks[0]);
     assert.doesNotMatch(JSON.stringify(historical), /SCOUT_PRIVATE_RESULT/);
   }
   assert.equal(
@@ -1040,14 +1247,12 @@ test("replay/conflict bind the same original pair after both Agents are reused; 
     "_PRIVATE_RESULT",
   );
   const latestSource = await read(c, source);
-  assert.equal(latestSource.agents[0].task, 2);
-  assert.equal(latestSource.agents[0].result, "later scout body");
-  // Explicit source read spans its Agent's alerts, unlike the compound action.
+  assert.equal(latestSource.tasks[0].task, 1);
+  notice(latestSource.tasks[0]);
   assert.equal(c.alerts.length, 1);
   assert.equal(c.alerts[0].message, "later worker alert");
-  assert.equal((await read(c, continuation, { task: 2 })).agents[0].result, "worker final answer");
+  assert.equal((await read(c, continuation, { task: 2 })).tasks[0].result, "worker final answer");
   assert.equal(c.alerts.length, 0);
-  assert.equal(c.view(laterSource.run_id).return_to_run_id, undefined);
   await assert.rejects(
     c.submit("compound", sourceTask(q, { return_to: { ...input.return_to, answer: "different" } })),
     errorCode("REQUEST_CONFLICT"),

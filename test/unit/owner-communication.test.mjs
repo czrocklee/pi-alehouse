@@ -171,13 +171,13 @@ test("sixteen original result payloads commit notifications atomically", async (
     c,
     runs.map((run) => run.agent_id),
   );
-  assert.equal(published.agents.length, 16);
-  assert(published.agents.every((row) => row.result === text));
+  assert.equal(published.tasks.length, 16);
+  assert(published.tasks.every((row) => row.result === text));
   assert.equal(
-    published.agents.reduce((sum, row) => sum + row.result.length, 0),
+    published.tasks.reduce((sum, row) => sum + row.result.length, 0),
     16000,
   );
-  for (const row of published.agents) {
+  for (const row of published.tasks) {
     assert.equal(row.task, 1);
     assert.equal(row.status, "completed");
     assert.equal(row.next_cursor, undefined);
@@ -208,8 +208,8 @@ test("unlatched lease loss removes question tokens from both views and explicit 
   assert.equal(c.view(run.run_id).question_id, undefined);
   assert.equal(c.view(run.run_id).unavailable_reason, "owner_lease_lost");
   const inspected = await read(c, run);
-  assert.equal(inspected.agents[0].question_id, undefined);
-  assert.equal(inspected.agents[0].question, "Original decision?");
+  assert.equal(inspected.tasks[0].question_id, undefined);
+  assert.equal(inspected.tasks[0].question, "Original decision?");
   assert.equal(
     c.stats().internal_error,
     undefined,
@@ -278,7 +278,7 @@ test("async observation/admission readers reject without consuming or leaking a 
   assert.equal(finishedBit(c, run), false);
   await assert.rejects(
     c.submit("disabled", task("disabled", { name: "orca" })),
-    hasCode("WORKERS_DISABLED"),
+    hasCode("DELEGATION_OFF"),
   );
   assert.equal(
     (await c.submit("async-ports", task("async-ports", { name: "otter" }))).run_id,
@@ -335,8 +335,8 @@ for (const lossAt of ["entry", "prepare"])
         assert.throws(() => owner.assertHeld(), { message: "LOCK_INODE_CHANGED" });
         assert.equal(c.view(accepted.run_id).question_id, undefined);
         const inspected = await read(c, accepted);
-        assert.equal(inspected.agents[0].question_id, undefined);
-        assert.equal(inspected.agents[0].question, "Second decision?");
+        assert.equal(inspected.tasks[0].question_id, undefined);
+        assert.equal(inspected.tasks[0].question, "Second decision?");
         assert.equal(c.stats().internal_error, undefined);
       }
       let preparations = 0;
@@ -433,16 +433,16 @@ for (const stage of ["ENTRY", "READY"])
       assert.equal(c.stats().cleanup_uncertain, false);
       const on = await wait(c, undefined);
       assert.equal(on.reason, "question");
-      assert.equal(on.workers_disabled, undefined);
-      assert.equal(on.agents[0].question_id, token);
+      assert.equal(on.delegation_off, undefined);
+      assert.equal(on.tasks[0].question_id, token);
       assert.equal(on.alerts[0].message, "must survive reader failure");
       enabled = false;
       const off = await read(c, run);
-      assert.equal(off.workers_disabled, true);
-      assert.equal(off.agents[0].question_id, token);
+      assert.match(off.delegation_off, /^Ask the user to enable delegation/);
+      assert.equal(off.tasks[0].question_id, token);
       assert.equal((await wait(c, undefined)).reason, "nothing_pending");
       enabled = true;
-      assert.equal((await wait(c, undefined)).agents[0].question_id, token);
+      assert.equal((await wait(c, undefined)).tasks[0].question_id, token);
       c.latchParentHistoryFailure(new ParentHistoryError("real existing fault edge"));
       const parentError = c.stats().parent_error;
       failIn = stage === "ENTRY" ? 1 : 2;
@@ -539,7 +539,7 @@ test("accepted alert wakes an observation before execution ends; no waiter leave
   port.callbacks.alert("same body");
   assert.equal(c.view(run.run_id).pending_messages, 2);
   const snapshot = await read(c, run);
-  assert.equal(Object.hasOwn(snapshot, "reason"), false);
+  assert.equal(snapshot.reason, "snapshot");
   assert.deepEqual(
     snapshot.alerts.map(({ message }) => message),
     ["same body", "same body"],
@@ -696,7 +696,7 @@ test("trusted managed feedback wakes scoped observations through Off without spe
   a.port.callbacks.managedBlock({ toolName: "bash" });
   const wake = await watching;
   assert.equal(wake.reason, "alert");
-  assert.equal(wake.workers_disabled, true);
+  assert.match(wake.delegation_off, /^Ask the user to enable delegation/);
   assert.equal(wake.alerts[0].source, "managed");
   assert.equal(wake.alerts[0].task, 1);
   assert.match(wake.alerts[0].message, /Parent: assess whether to steer/);
@@ -778,7 +778,7 @@ test("real FIFO enforces Agent 16 across reused Runs, no eviction, and lifecycle
   assert.equal(finishedBit(c, next), false);
   const publication = await wait(c, undefined);
   assert.equal(publication.reason, "alert");
-  assert.deepEqual(publication.agents, []);
+  assert.deepEqual(publication.tasks, []);
   assert.deepEqual(
     publication.alerts.map(({ task }) => task),
     [...Array(10).fill(1), ...Array(6).fill(2)],
@@ -846,8 +846,8 @@ test("invalid/closed child communication never reports acceptance or mutates alr
   await settled(c, run);
   assert.throws(() => saved.alert("after exit"), orchestrationFailure);
   const historical = await read(c, run);
-  assert.equal(historical.agents[0].question, "first?");
-  assert.equal(historical.agents[0].question_id, undefined);
+  assert.equal(historical.tasks[0].question, "first?");
+  assert.equal(historical.tasks[0].question_id, undefined);
   assert.deepEqual(
     historical.alerts.map(({ message }) => message),
     ["accepted"],
@@ -873,7 +873,7 @@ test("action snapshots/waits bind exactly the new Run while cursor read keeps or
   });
   await until(() => port.calls.length === 2 && port.streaming);
   const immediate = await inline(c, current);
-  assert.equal(Object.hasOwn(immediate, "reason"), false);
+  assert.equal(immediate.reason, "snapshot");
   assert.deepEqual(immediate.action, { type: "agent_run", agent: "otter", task: 2 });
   assert.equal(immediate.alerts, undefined);
   assert.equal(Object.hasOwn(immediate, "alerts_pending"), false);
@@ -895,10 +895,10 @@ test("action snapshots/waits bind exactly the new Run while cursor read keeps or
   assert.equal(c.view(old.run_id).pending_messages, 1);
   port.callbacks.alert("new message for Agent read");
   const cursorRead = await read(c, old, { cursor: page.next_cursor, max_chars: 3 });
-  assert.equal(Object.hasOwn(cursorRead, "reason"), false);
+  assert.equal(cursorRead.reason, "snapshot");
   assert.equal(cursorRead.action, undefined);
-  assert.equal(cursorRead.agents[0].task, 1);
-  assert.equal(cursorRead.agents[0].result, "def");
+  assert.equal(cursorRead.tasks[0].task, 1);
+  assert.equal(cursorRead.tasks[0].result, "def");
   assert.deepEqual(
     cursorRead.alerts.map(({ task, message }) => [task, message]),
     [
@@ -907,10 +907,10 @@ test("action snapshots/waits bind exactly the new Run while cursor read keeps or
     ],
   );
   assert.equal(Object.hasOwn(cursorRead, "alerts_pending"), false);
-  assert.equal(decodeResultCursor(cursorRead.agents[0].next_cursor).offset, 6);
+  assert.equal(decodeResultCursor(cursorRead.tasks[0].next_cursor).offset, 6);
   const latest = await read(c, current);
-  assert.equal(latest.agents[0].task, 2);
-  assert.equal(latest.agents[0].status, "running");
+  assert.equal(latest.tasks[0].task, 2);
+  assert.equal(latest.tasks[0].status, "running");
 });
 
 test("compact cursor binding rejects foreign fingerprints and invalid retained offsets without committing alerts or finished; EOF pins the old Run", async (t) => {
@@ -996,17 +996,17 @@ test("compact cursor binding rejects foreign fingerprints and invalid retained o
     assert.equal(c.stats().cleanup_uncertain, false);
   }
   const eof = await read(c, current, { cursor: encodeResultCursor(identity, text.length) });
-  assert.equal(Object.hasOwn(eof, "reason"), false);
-  assert.equal(eof.agents[0].task, 1);
-  assert.equal(eof.agents[0].status, "completed");
+  assert.equal(eof.reason, "snapshot");
+  assert.equal(eof.tasks[0].task, 1);
+  assert.equal(eof.tasks[0].status, "completed");
   assert.equal(
-    eof.agents[0].label,
+    eof.tasks[0].label,
     "cursor-original",
     "cursor labels belong to the original task, not its current successor",
   );
-  assert.equal(Object.hasOwn(eof.agents[0], "result"), false);
-  assert.equal(Object.hasOwn(eof.agents[0], "next_cursor"), false);
-  assert.equal(eof.agents[0].result_omitted, undefined);
+  assert.equal(Object.hasOwn(eof.tasks[0], "result"), false);
+  assert.equal(Object.hasOwn(eof.tasks[0], "next_cursor"), false);
+  assert.equal(eof.tasks[0].result_omitted, undefined);
   assert.deepEqual(
     eof.alerts.map(({ task, message }) => [task, message]),
     [
@@ -1018,7 +1018,7 @@ test("compact cursor binding rejects foreign fingerprints and invalid retained o
   assert.equal(finishedBit(c, current), false);
   assert.equal(c.view(current.run_id).status, "running");
   assert.equal(
-    (await read(c, current)).agents[0].task,
+    (await read(c, current)).tasks[0].task,
     2,
     "without the EOF cursor the Agent still addresses its current Run",
   );
@@ -1043,8 +1043,8 @@ test("a runtime compact cursor cannot cross fresh Owner generations with the sam
     second.c.view(b.run.run_id).result_ref.digest,
   );
   const issued = await read(first.c, a.run, { max_chars: 1 }),
-    cursor = issued.agents[0].next_cursor;
-  assert.equal(issued.agents[0].task, 1);
+    cursor = issued.tasks[0].next_cursor;
+  assert.equal(issued.tasks[0].task, 1);
   assert.equal(decodeResultCursor(cursor).offset, 1);
   assert.equal(second.c.view(b.run.run_id).task, 1);
   await assert.rejects(read(second.c, b.run, { cursor }), hasCode("INVALID_CURSOR"));
@@ -1053,7 +1053,7 @@ test("a runtime compact cursor cannot cross fresh Owner generations with the sam
   assert.equal(second.c.stats().internal_error, undefined);
   assert.equal(second.c.stats().cleanup_uncertain, false);
   const local = await read(second.c, b.run);
-  assert.equal(local.agents[0].result, text);
+  assert.equal(local.tasks[0].result, text);
   assert.equal(local.alerts[0].message, "second Owner original pending alert");
   assert.equal(finishedBit(second.c, b.run), true);
 });
@@ -1085,15 +1085,15 @@ for (const [budget, aText] of [
     a.port.finish(aText);
     await settled(c, a.run);
     const result = await bound;
-    assert.equal(Object.hasOwn(result, "reason"), false);
+    assert.equal(result.reason, "done");
     assert.deepEqual(
-      result.agents.map(({ agent, task }) => [agent, task]),
+      result.tasks.map(({ agent, task }) => [agent, task]),
       [
         ["otter", 1],
         ["orca", 1],
       ],
     );
-    const [large, omitted] = result.agents;
+    const [large, omitted] = result.tasks;
     if (budget === "escaped-byte") {
       assert(large.result.length > 0 && large.result.length < aText.length);
       assert.equal(decodeResultCursor(large.next_cursor).offset, large.result.length);
@@ -1101,7 +1101,7 @@ for (const [budget, aText] of [
       assert.equal(large.result, aText);
       assert.equal(Object.hasOwn(large, "next_cursor"), false);
       assert.equal(omitted.result, undefined);
-      assert.equal(omitted.result_omitted, true);
+      assert.equal(typeof omitted.next_cursor, "string");
     }
     // Cursor reservation may let a few B bytes fit in the original NUL repro;
     // text-budget exhaustion independently exercises a wholly omitted B page.
@@ -1113,7 +1113,7 @@ for (const [budget, aText] of [
     assert.equal(omitted.next_cursor.length, 37);
     assert.equal(decodeResultCursor(omitted.next_cursor).offset, offset);
     assert.equal(
-      (await read(c, reused)).agents[0].task,
+      (await read(c, reused)).tasks[0].task,
       2,
       "ordinary Agent addressing has moved on",
     );
@@ -1122,36 +1122,36 @@ for (const [budget, aText] of [
       hasCode("INVALID_CURSOR"),
     );
     const first = await read(c, b.run, { cursor: omitted.next_cursor, max_chars: 1000 });
-    assert.equal(first.agents[0].task, 1);
-    assert.equal(first.agents[0].result, originalText.slice(offset, offset + 1000));
-    assert.equal(decodeResultCursor(first.agents[0].next_cursor).offset, offset + 1000);
+    assert.equal(first.tasks[0].task, 1);
+    assert.equal(first.tasks[0].result, originalText.slice(offset, offset + 1000));
+    assert.equal(decodeResultCursor(first.tasks[0].next_cursor).offset, offset + 1000);
     admission = { enabled: false, revision: 1 };
     b.port.autoStop = true;
     assert.equal((await c.kill(b.run.agent_id, 1000)).state, "released");
     await settled(c, reused);
-    const final = await read(c, b.run, { cursor: first.agents[0].next_cursor, max_chars: 16384 });
-    assert.equal(final.workers_disabled, true);
-    assert.equal(final.agents[0].task, 1);
-    assert.equal(displayed + first.agents[0].result + final.agents[0].result, originalText);
+    const final = await read(c, b.run, { cursor: first.tasks[0].next_cursor, max_chars: 16384 });
+    assert.match(final.delegation_off, /^Ask the user to enable delegation/);
+    assert.equal(final.tasks[0].task, 1);
+    assert.equal(displayed + first.tasks[0].result + final.tasks[0].result, originalText);
     assert.equal(
-      Object.hasOwn(final.agents[0], "next_cursor"),
+      Object.hasOwn(final.tasks[0], "next_cursor"),
       false,
       "EOF removes even the pre-reserved cursor",
     );
     const reread = await read(c, b.run, { cursor: omitted.next_cursor });
-    assert.equal(reread.agents[0].result, originalText.slice(offset));
-    assert.equal(reread.workers_disabled, true);
-    assert.equal(Object.hasOwn(reread.agents[0], "next_cursor"), false);
+    assert.equal(reread.tasks[0].result, originalText.slice(offset));
+    assert.match(reread.delegation_off, /^Ask the user to enable delegation/);
+    assert.equal(Object.hasOwn(reread.tasks[0], "next_cursor"), false);
     // Core and model result paging share one cursor protocol in both directions.
     const corePage = c.getResult(b.run.run_id, { cursor: omitted.next_cursor, limit: 600 });
     assert.equal(corePage.text, originalText.slice(offset, offset + 600));
     assert.equal(decodeResultCursor(corePage.next_cursor).offset, offset + 600);
     const modelPage = await read(c, b.run, { cursor: corePage.next_cursor, max_chars: 600 });
-    assert.equal(modelPage.agents[0].task, 1);
-    assert.equal(modelPage.agents[0].result, originalText.slice(offset + 600, offset + 1200));
-    assert.equal(decodeResultCursor(modelPage.agents[0].next_cursor).offset, offset + 1200);
+    assert.equal(modelPage.tasks[0].task, 1);
+    assert.equal(modelPage.tasks[0].result, originalText.slice(offset + 600, offset + 1200));
+    assert.equal(decodeResultCursor(modelPage.tasks[0].next_cursor).offset, offset + 1200);
     const coreEnd = c.getResult(b.run.run_id, {
-      cursor: modelPage.agents[0].next_cursor,
+      cursor: modelPage.tasks[0].next_cursor,
       limit: 1200,
     });
     assert.equal(coreEnd.text, originalText.slice(offset + 1200));
@@ -1170,7 +1170,7 @@ for (const wait_ms of [0, 300000])
     const empty = await wait(c, undefined, wait_ms);
     t.mock.restoreAll();
     assert.equal(empty.reason, "nothing_pending");
-    assert.deepEqual(empty.agents, []);
+    assert.deepEqual(empty.tasks, []);
     assert.equal(Object.hasOwn(empty, "alerts_pending"), false);
     assert.equal(armed, 0);
   });
@@ -1189,20 +1189,20 @@ test("Off initial default binding excludes existing question, stays bound across
   peer.port.finish("peer done");
   await settled(c, peer.run);
   const result = await boundOff;
-  assert.equal(Object.hasOwn(result, "reason"), false);
+  assert.equal(result.reason, "done");
   assert.deepEqual(
-    result.agents.map(({ agent }) => agent),
+    result.tasks.map(({ agent }) => agent),
     ["orca"],
   );
-  assert.equal(result.workers_disabled, undefined);
+  assert.equal(result.delegation_off, undefined);
   assert.equal(c.view(later.run.run_id).status, "running");
   const nextOn = await wait(c, undefined);
   assert.equal(nextOn.reason, "question");
   assert.deepEqual(
-    nextOn.agents.map(({ agent }) => agent),
+    nextOn.tasks.map(({ agent }) => agent),
     ["otter", "marten"],
   );
-  assert.equal(nextOn.agents[0].question_id, asking.token);
+  assert.equal(nextOn.tasks[0].question_id, asking.token);
 });
 
 test("On-bound running task that asks after Off still returns question; Off explicit reads retain identity", async (t) => {
@@ -1215,22 +1215,22 @@ test("On-bound running task that asks after Off still returns question; Off expl
   port.finish("need input");
   await settled(c, run);
   const result = await boundOn,
-    token = result.agents[0].question_id;
+    token = result.tasks[0].question_id;
   assert.equal(result.reason, "question");
-  assert.equal(result.workers_disabled, true);
+  assert.match(result.delegation_off, /^Ask the user to enable delegation/);
   assert.match(token, /^q_[0-9a-f]{32}$/);
   assert.equal((await wait(c, undefined)).reason, "nothing_pending");
   const explicit = await wait(c, [run.agent_id]);
   assert.equal(explicit.reason, "question");
-  assert.equal(explicit.workers_disabled, true);
-  assert.equal(explicit.agents[0].question_id, token);
-  assert.equal((await read(c, run)).agents[0].question_id, token);
+  assert.match(explicit.delegation_off, /^Ask the user to enable delegation/);
+  assert.equal(explicit.tasks[0].question_id, token);
+  assert.equal((await read(c, run)).tasks[0].question_id, token);
   await assert.rejects(
     c.answer("off-answer", run.agent_id, token, "yes"),
-    hasCode("WORKERS_DISABLED"),
+    hasCode("DELEGATION_OFF"),
   );
   admission = { enabled: true, revision: 2 };
-  assert.equal((await wait(c, undefined)).agents[0].question_id, token);
+  assert.equal((await wait(c, undefined)).tasks[0].question_id, token);
   assert.equal(
     (await wait(c, undefined)).reason,
     "question",
@@ -1272,7 +1272,7 @@ test("atomic question reference: pre-settlement/foreign/stale answers do not all
     run_id: notDelivered.view.run_id,
     action: { type: "agent_send", delivery: notDelivered.delivery },
   });
-  assert.equal(sendBody.agents[0].question_id, token);
+  assert.equal(sendBody.tasks[0].question_id, token);
   assert.equal(sendBody.action.task, 1);
   assert.equal(c.stats().runs, before + 1);
   await assert.rejects(
@@ -1353,7 +1353,7 @@ test("inputEntered-before/after boundary: pre-input cancellation restores origin
   });
   gate = hold();
   const asking = await question(c, ports);
-  assert.equal((await read(c, asking.run)).agents[0].question_id, asking.token);
+  assert.equal((await read(c, asking.run)).tasks[0].question_id, asking.token);
   assert.equal(finishedBit(c, asking.run), true);
   asking.port.deferNextInput = true;
   const continuation = await c.answer("pre-input", asking.run.agent_id, asking.token, "yes");
@@ -1368,20 +1368,20 @@ test("inputEntered-before/after boundary: pre-input cancellation restores origin
   const whileFinalizing = await wait(c, undefined);
   assert.equal(whileFinalizing.reason, "timeout");
   assert.deepEqual(
-    whileFinalizing.agents.map(({ task }) => task),
+    whileFinalizing.tasks.map(({ task }) => task),
     [2],
   );
-  assert.equal(whileFinalizing.agents[0].question_id, undefined);
+  assert.equal(whileFinalizing.tasks[0].question_id, undefined);
   holdHistory = false;
   gate.resolve();
   await settled(c, continuation);
   const restored = await wait(c, undefined);
   assert.equal(restored.reason, "question");
   assert.deepEqual(
-    restored.agents.map(({ task }) => task),
+    restored.tasks.map(({ task }) => task),
     [1],
   );
-  assert.equal(restored.agents[0].question_id, asking.token);
+  assert.equal(restored.tasks[0].question_id, asking.token);
   assert.equal(finishedBit(c, asking.run), true);
   assert.equal(
     (await c.answer("pre-input", asking.run.agent_id, asking.token, "yes")).run_id,
@@ -1670,8 +1670,8 @@ test("finished is original task identity: current running task 3 plus old task a
   assert.equal(finishedBit(c, first), false, "roster is non-consuming");
   const publication = await wait(c, [first.agent_id]);
   assert.equal(publication.reason, "alert");
-  assert.equal(publication.agents[0].task, 3);
-  assert.equal(publication.agents[0].status, "running");
+  assert.equal(publication.tasks[0].task, 3);
+  assert.equal(publication.tasks[0].status, "running");
   assert.equal(Object.hasOwn(publication, "pending"), false);
   assert.equal(publication.alerts[0].task, 1);
   assert.equal(publication.finished.length, 8);
@@ -1682,8 +1682,8 @@ test("finished is original task identity: current running task 3 plus old task a
   assert.equal(publication.finished_pending, 2);
   assert.equal(finishedBit(c, current), false);
   const explicitOriginal = await read(c, first, { cursor, max_chars: 2 });
-  assert.equal(explicitOriginal.agents[0].task, 1);
-  assert.equal(explicitOriginal.agents[0].status, "completed");
+  assert.equal(explicitOriginal.tasks[0].task, 1);
+  assert.equal(explicitOriginal.tasks[0].status, "completed");
   assert.equal(finishedBit(c, first), true);
   assert.equal(finishedBit(c, current), false);
 });
@@ -1700,20 +1700,20 @@ for (const [space, aText] of [
     a.port.finish(aText);
     await settled(c, a.run);
     const firstA = await read(c, a.run);
-    assert.equal(firstA.agents[0].task, 1);
+    assert.equal(firstA.tasks[0].task, 1);
     assert.equal(finishedBit(c, a.run), true);
     assert.equal(Object.hasOwn(firstA, "finished_pending"), false);
     assert(communicationEnvelopeBytes(firstA) <= 65536);
     if (space === "byte pressure") {
-      assert(firstA.agents[0].result.length > 0 && firstA.agents[0].result.length < aText.length);
-      assert.equal(firstA.agents[0].result, aText.slice(0, firstA.agents[0].result.length));
+      assert(firstA.tasks[0].result.length > 0 && firstA.tasks[0].result.length < aText.length);
+      assert.equal(firstA.tasks[0].result, aText.slice(0, firstA.tasks[0].result.length));
       assert(
-        firstA.agents[0].next_cursor,
+        firstA.tasks[0].next_cursor,
         "present A's terminal row with only a partial result before B exists",
       );
       assert.equal(
-        decodeResultCursor(firstA.agents[0].next_cursor).offset,
-        firstA.agents[0].result.length,
+        decodeResultCursor(firstA.tasks[0].next_cursor).offset,
+        firstA.tasks[0].result.length,
       );
     }
     const b = await started(c, ports, "original-b", "otter"),
@@ -1727,11 +1727,11 @@ for (const [space, aText] of [
     assert.deepEqual([c.view(b.run.run_id).name, c.view(b.run.run_id).task], ["otter", 1]);
     assert.equal(finishedBit(c, b.run), false);
     const secondA = await read(c, a.run);
-    assert.equal(secondA.agents.length, 1);
+    assert.equal(secondA.tasks.length, 1);
     assert(communicationEnvelopeBytes(secondA) <= 65536);
     assert.equal(finishedBit(c, a.run), true);
     if (space === "ample") {
-      assert.equal(secondA.agents[0].result, aText);
+      assert.equal(secondA.tasks[0].result, aText);
       assert.deepEqual(
         secondA.finished,
         [{ agent: "otter", task: 1, status: "completed", label: "original-b" }],
@@ -1742,7 +1742,7 @@ for (const [space, aText] of [
     } else {
       assert.equal(secondA.response_limit_reached, true);
       assert.equal(secondA.finished, undefined);
-      const row = secondA.agents[0];
+      const row = secondA.tasks[0];
       assert(row.result.length > 0 && row.result.length < aText.length);
       assert.equal(
         row.result,
@@ -1762,10 +1762,10 @@ for (const [space, aText] of [
       assert.equal(secondA.finished_pending, 1);
     }
     const actualB = await read(c, b.run);
-    assert.equal(actualB.agents.length, 1);
-    assert.equal(actualB.agents[0].result, bText);
-    assert.equal(actualB.agents[0].task, 1);
-    assert.equal(actualB.agents[0].status, "completed");
+    assert.equal(actualB.tasks.length, 1);
+    assert.equal(actualB.tasks[0].result, bText);
+    assert.equal(actualB.tasks[0].task, 1);
+    assert.equal(actualB.tasks[0].status, "completed");
     assert.equal(actualB.finished, undefined);
     assert.equal(Object.hasOwn(actualB, "finished_pending"), false);
     assert.equal(finishedBit(c, b.run), true);
@@ -1796,7 +1796,7 @@ test("snapshot read does not consume waiting-only fault edge; failure to validat
   const { c, ports } = await ownerFixture(t),
     { run } = await started(c, ports, "fault-read", "otter");
   c.latchParentHistoryFailure(new ParentHistoryError("unreported edge"));
-  assert.equal(Object.hasOwn(await read(c, run), "reason"), false);
+  assert.equal((await read(c, run)).reason, "snapshot");
   await assert.rejects(
     async () =>
       c.observe(

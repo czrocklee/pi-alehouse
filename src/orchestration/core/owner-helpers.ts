@@ -132,16 +132,26 @@ interface HandoffSource {
 function handoffBudget(sources: number, maxChars: number): number {
   return sources ? Math.floor(maxChars / sources) : 0;
 }
-/** Retained characters of one source that handoffText leaves out. */
-export function handoffOmittedChars(text: string, sources: number, maxChars: number): number {
-  return text.length - boundedOutput(text, handoffBudget(sources, maxChars)).text.length;
+/** Characters of one source's whole result that handoffText leaves out: the
+ * retention cap's omission as well as the handoff budget's, so a source whose
+ * retained prefix fits still counts as cut when its output was not retained. */
+export function handoffOmittedChars(output: Output, sources: number, maxChars: number): number {
+  return Math.max(
+    0,
+    output.total_chars - boundedOutput(output.text, handoffBudget(sources, maxChars)).text.length,
+  );
+}
+/** Appended to a return_to source's task: the continuation receives only this
+ * leading share of its result, and cannot fetch the rest. */
+export function returnLimitText(sources: number, maxChars: number): string {
+  return `Your final result goes directly to another Agent, which receives only its first ${handoffBudget(sources, maxChars)} characters. Keep the complete result within that length.`;
 }
 export function handoffText(sources: readonly HandoffSource[], maxChars: number): string {
   if (!sources.length) return "";
   const budget = handoffBudget(sources.length, maxChars);
   const parts = sources.map((source) => {
     const text = boundedOutput(source.output.text, budget).text;
-    const omitted = source.output.total_chars - text.length;
+    const omitted = handoffOmittedChars(source.output, sources.length, maxChars);
     const label = source.record.name || source.record.settings.profile;
     return `--- ${label}: ${source.record.description.slice(0, 256)} (${source.record.status}${
       source.record.outcome?.limit_reached ? ", turn limit reached" : ""

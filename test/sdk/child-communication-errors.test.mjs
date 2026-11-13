@@ -288,7 +288,7 @@ test("pinned SDK exposes Owner64 before Agent16, denies a fifth Agent without re
   );
   assert.equal(Object.hasOwn(observed, "pending"), false);
   assert.equal(Object.hasOwn(observed, "finished_pending"), false);
-  for (const row of observed.agents)
+  for (const row of observed.tasks)
     assert.equal(Object.hasOwn(row, "result"), false, "live empty results are omitted");
   assert.equal(Object.hasOwn(observed, "alerts_pending"), false);
   assert.equal(c.alerts.length, 0);

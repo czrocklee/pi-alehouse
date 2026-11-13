@@ -4,9 +4,9 @@ import {
   communicationEnvelopeBytes,
   communicationTextUnits,
   isModelAgentName as validName,
+  DELEGATION_OFF,
   isQueueWait,
   modelDispatchNotes,
-  visibleCommunicationReason,
   type CommunicationAction,
   type CommunicationEnvelope,
   type CommunicationReason,
@@ -91,7 +91,6 @@ const flags = [
   "limit_reached",
   "unavailable",
   "question_truncated",
-  "result_omitted",
   "result_truncated",
 ] as const;
 const diagnostics = ["error", "owner_error", "unavailable_reason"] as const;
@@ -125,8 +124,8 @@ const safeCount = (value: number): boolean => Number.isSafeInteger(value) && val
 const nonblank = (value: string): boolean => typeof value === "string" && value.trim().length > 0;
 
 /** Reject extra required-layer keys rather than accidentally copying arbitrary
- * strings into the fixed shape whose byte bound was proved. wait, when present,
- * is part of that shape: queued status only, and only dependencies or capacity. */
+ * strings into the fixed shape whose byte bound was proved. queued_for, when
+ * present, is part of that shape: queued status only, and only its two values. */
 function copyRow(row: ThinTaskEntry): MutableRow {
   if (
     !row ||
@@ -137,14 +136,15 @@ function copyRow(row: ThinTaskEntry): MutableRow {
     !Object.hasOwn(statuses, row.status)
   )
     invalid("Invalid thin task identity or status");
-  const allowed: readonly string[] = ["agent", "task", "status", "wait", ...flags];
+  const allowed: readonly string[] = ["agent", "task", "status", "queued_for", ...flags];
   if (Object.keys(row).some((key) => !allowed.includes(key))) invalid("Unexpected thin task field");
   const result: MutableRow = { agent: row.agent, task: row.task, status: row.status };
   // Mandatory thin control, not optional metadata: a present reason is reserved
   // before any body or diagnostic can yield. Provider ids and counts are not keys.
-  if (row.wait !== undefined) {
-    if (row.status !== "queued" || !isQueueWait(row.wait)) invalid("Invalid queued wait reason");
-    result.wait = row.wait;
+  if (row.queued_for !== undefined) {
+    if (row.status !== "queued" || !isQueueWait(row.queued_for))
+      invalid("Invalid queued wait reason");
+    result.queued_for = row.queued_for;
   }
   for (const key of flags) {
     if (row[key] !== undefined && row[key] !== true) invalid(`Invalid ${key} control flag`);
@@ -235,7 +235,7 @@ function replaceRow(
 ): CommunicationEnvelope {
   return {
     ...envelope,
-    agents: envelope.agents.map((current, at) => (at === index ? row : current)),
+    tasks: envelope.tasks.map((current, at) => (at === index ? row : current)),
   };
 }
 
@@ -303,8 +303,8 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     !Array.isArray(snapshot.finished)
   )
     invalid("Invalid communication snapshot shape or model capacity");
-  if (snapshot.workers_disabled !== undefined && snapshot.workers_disabled !== true)
-    invalid("Invalid workers_disabled flag");
+  if (snapshot.delegation_off !== undefined && snapshot.delegation_off !== true)
+    invalid("Invalid delegation_off flag");
   if (snapshot.reason === "alert" && snapshot.alerts.length === 0)
     invalid("Alert reason requires a complete pending alert");
   if (
@@ -315,7 +315,7 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
 
   const action = copyAction(snapshot.action);
   const taskKeys = new Set<string>();
-  const agents = snapshot.tasks.map((task) => {
+  const tasks = snapshot.tasks.map((task) => {
     if (!task || typeof task !== "object" || typeof task.settled !== "boolean")
       invalid("Invalid task snapshot");
     const row = copyRow(task.row);
@@ -340,7 +340,6 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
       (!nonblank(task.result_notice) ||
         task.result_notice.length > 512 ||
         task.result !== undefined ||
-        row.result_omitted ||
         row.result_truncated)
     )
       invalid("Invalid bounded result notice");
@@ -352,9 +351,8 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
       // Fixed-width cursors reserve every eventual offset before ANY body text.
       const cursor = cursorAt(task.result, task.result.offset);
       if (cursor !== undefined) row.next_cursor = cursor;
-      row.result_omitted = true;
-      if (!task.result.cursor && task.result.offset < task.result.retained_chars)
-        row.result_truncated = true;
+      // Reserved before any body text; build() clears it for a whole preview.
+      if (!task.result.cursor) row.result_truncated = true;
     }
     if (task.diagnostics !== undefined) {
       if (
@@ -440,12 +438,11 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     return row;
   });
 
-  const reason = visibleCommunicationReason(snapshot.reason);
   let envelope: CommunicationEnvelope = {
-    ...(reason === undefined ? {} : { reason }),
+    reason: snapshot.reason,
     ...(action ? { action } : {}),
-    ...(snapshot.workers_disabled ? { workers_disabled: true } : {}),
-    agents,
+    ...(snapshot.delegation_off ? { delegation_off: DELEGATION_OFF } : {}),
+    tasks,
     ...(alerts.length ? { alerts_pending: alerts.length } : {}),
     ...(finished.length > presented.size
       ? { finished_pending: finished.length - presented.size }
@@ -469,7 +466,7 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
   for (let index = 0; index < snapshot.tasks.length; index++) {
     const task = snapshot.tasks[index]!;
     if (task.question === undefined) continue;
-    const base = envelope.agents[index]!;
+    const base = envelope.tasks[index]!;
     const fitted = fitPrefix(
       task.question,
       COMMUNICATION_LIMITS.text_units - communicationTextUnits(envelope),
@@ -507,7 +504,7 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     for (let index = 0; index < snapshot.tasks.length; index++) {
       const value = snapshot.tasks[index]![field];
       if (value === undefined) continue;
-      const candidate = replaceRow(envelope, index, { ...envelope.agents[index]!, [field]: value });
+      const candidate = replaceRow(envelope, index, { ...envelope.tasks[index]!, [field]: value });
       if (communicationBudget(candidate).fits) envelope = candidate;
       else limited = true;
     }
@@ -521,7 +518,7 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     const task = snapshot.tasks[index]!;
     if (task.result_notice !== undefined) {
       const candidate = replaceRow(envelope, index, {
-        ...envelope.agents[index]!,
+        ...envelope.tasks[index]!,
         result: task.result_notice,
       });
       if (communicationBudget(candidate).fits) envelope = candidate;
@@ -530,15 +527,12 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     }
     const window = task.result;
     if (!window) continue;
-    const base = envelope.agents[index]!;
+    const base = envelope.tasks[index]!;
     const build = (shown: string): CommunicationEnvelope => {
       const row: MutableRow = { ...base };
-      const hasRetainedText = window.offset < window.retained_chars;
-      const omitted = shown.length === 0 && (window.text.length > 0 || hasRetainedText);
       if (shown.length > 0) row.result = shown;
       else delete row.result;
-      if (omitted || task.row.result_omitted) row.result_omitted = true;
-      else delete row.result_omitted;
+      // A final page with more to read says so through next_cursor alone.
       if (
         task.row.result_truncated ||
         (!window.cursor && window.offset + shown.length < window.retained_chars)
@@ -549,7 +543,7 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
       if (cursor !== undefined) row.next_cursor = cursor;
       else delete row.next_cursor;
       const lost = window.total_chars - window.retained_chars;
-      if (lost > 0) row.omitted_chars = lost;
+      if (lost > 0) row.lost_chars = lost;
       return replaceRow(envelope, index, row);
     };
     const firstUnits = /^[\uD800-\uDBFF][\uDC00-\uDFFF]/.test(window.text) ? 2 : 1;
@@ -579,7 +573,7 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
       // envelope pressure or a promise of cursorless recovery. Only failure to
       // fit this bounded projection sets the response-limit flag.
       const bounded = prefix(text, 512);
-      const base = envelope.agents[index]!;
+      const base = envelope.tasks[index]!;
       const fitted = fitPrefix(bounded, bounded.length, 1, (shown) =>
         replaceRow(envelope, index, { ...base, [key]: shown }),
       );
@@ -589,7 +583,7 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     // Notes remain low-priority whole diagnostics, not reserved controls.
     // A later locatable observation can try again, but no cursor is introduced.
     for (const note of modelDispatchNotes(task.dispatch_notes) ?? []) {
-      const base = envelope.agents[index]!;
+      const base = envelope.tasks[index]!;
       const candidate = replaceRow(envelope, index, {
         ...base,
         dispatch_notes: [...(base.dispatch_notes ?? []), note],

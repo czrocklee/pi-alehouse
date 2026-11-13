@@ -168,7 +168,7 @@ test("fresh production assembly fences direct core names and lifetime collisions
   assert.equal(c.view(existing.run.run_id).pending_messages, 1);
   assert.equal(finishedBit(c, existing.run), false);
   const historical = await call("agent_read", { agent: "otter" });
-  assert.equal(historical.agents[0].result, "original retained result");
+  assert.equal(historical.tasks[0].result, "original retained result");
   assert.equal(historical.alerts[0].message, "original pending alert");
   assert.equal(finishedBit(c, existing.run), true);
 });
@@ -234,7 +234,7 @@ test("accepted generic request replays unchanged after binding and Off; binding 
   assert.equal((await c.submit("original", input)).run_id, run.run_id);
   assert.deepEqual(facts(f, [run]), before);
   const inspected = await call("agent_read", { agent: "otter" });
-  assert.equal(inspected.workers_disabled, true);
+  assert.match(inspected.delegation_off, /^Ask the user to enable delegation/);
   assert.equal(inspected.alerts[0].message, "retained across binding");
   const afterRead = facts(f, [run]);
   assert.equal((await c.submit("original", input)).run_id, run.run_id);
@@ -242,7 +242,7 @@ test("accepted generic request replays unchanged after binding and Off; binding 
   assert.equal((await call("agent_read", { agent: "otter" })).alerts, undefined);
   await assert.rejects(
     c.submit("off-new", task("off new", { name: "orca" })),
-    hasCode("WORKERS_DISABLED"),
+    hasCode("DELEGATION_OFF"),
   );
   admission = { enabled: true, revision: 2 };
   await assert.rejects(
@@ -274,25 +274,25 @@ test("bound tools keep read/wait, timeout/abort and accepted child communication
     AbortSignal.abort(),
   );
   assert.equal(aborted.reason, "aborted");
-  assert.equal(aborted.workers_disabled, true);
+  assert.match(aborted.delegation_off, /^Ask the user to enable delegation/);
   assert.equal(aborted.alerts, undefined);
   assert.equal(c.view(run.run_id).pending_messages, 1);
   assert.equal(finishedBit(c, run), false);
   const snapshot = await call("agent_read", { agent: "otter" });
-  assert.equal(Object.hasOwn(snapshot, "reason"), false);
-  assert.equal(snapshot.workers_disabled, true);
+  assert.equal(snapshot.reason, "snapshot");
+  assert.match(snapshot.delegation_off, /^Ask the user to enable delegation/);
   assert.equal(snapshot.alerts[0].message, "accepted while Off");
   assert.equal(port.stopped, 0);
   const offTimeout = await call("agent_wait", { agents: ["otter"], wait_ms: 0 });
   assert.equal(offTimeout.reason, "timeout");
-  assert.equal(offTimeout.workers_disabled, true);
+  assert.match(offTimeout.delegation_off, /^Ask the user to enable delegation/);
   port.callbacks.question("Accepted task may still ask while Off?");
   port.finish("needs input");
   await settle(c, run);
   const asking = await call("agent_wait", { agents: ["otter"], wait_ms: 0 });
   assert.equal(asking.reason, "question");
-  assert.equal(asking.workers_disabled, true);
-  assert.match(asking.agents[0].question_id, /^q_[0-9a-f]{32}$/);
+  assert.match(asking.delegation_off, /^Ask the user to enable delegation/);
+  assert.match(asking.tasks[0].question_id, /^q_[0-9a-f]{32}$/);
   assert.equal((await call("agent_wait", { wait_ms: 0 })).reason, "nothing_pending");
   const before = facts(f, [run]);
   assemble(f); // Idempotent reassembly also consumes nothing.

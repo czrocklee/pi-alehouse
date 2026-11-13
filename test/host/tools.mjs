@@ -540,10 +540,10 @@ try {
   });
   await settled("orca");
   const firstRun = runOf("orca");
-  assert.equal(Object.hasOwn(first, "reason"), false);
+  assert.equal(first.reason, "snapshot");
   assert.deepEqual(first.action, { type: "agent_spawn", agent: "orca", task: 1 });
-  assert.equal(first.agents[0].agent, "orca");
-  assert.equal(first.agents[0].task, 1);
+  assert.equal(first.tasks[0].agent, "orca");
+  assert.equal(first.tasks[0].task, 1);
   assert.equal(
     JSON.stringify(first).includes(firstRun),
     false,
@@ -565,16 +565,16 @@ try {
   );
   assert.equal(Object.hasOwn(waited, "alerts_pending"), false);
   assert.equal(controller.view(firstRun).pending_messages, 0);
-  assert.equal(waited.agents[0].question, "What is the factor?");
-  assert.equal(waited.agents[0].question_truncated, undefined);
-  assert.match(waited.agents[0].question_id, /^q_[0-9a-f]{32}$/);
-  assert.equal(waited.agents[0].label, firstArgs.label);
+  assert.equal(waited.tasks[0].question, "What is the factor?");
+  assert.equal(waited.tasks[0].question_truncated, undefined);
+  assert.match(waited.tasks[0].question_id, /^q_[0-9a-f]{32}$/);
+  assert.equal(waited.tasks[0].label, firstArgs.label);
   const questionResult = await invoke("agent_read", { agent: "orca" });
-  assert.equal(Object.hasOwn(questionResult, "reason"), false);
-  const question = questionResult.agents[0];
+  assert.equal(questionResult.reason, "snapshot");
+  const question = questionResult.tasks[0];
   assert.equal(question.question, "What is the factor?");
   assert.equal(question.result, "QUESTION_RECORDED");
-  assert.equal(question.question_id, waited.agents[0].question_id);
+  assert.equal(question.question_id, waited.tasks[0].question_id);
   assert.equal(controller.view(firstRun).effective_settings.context_mode, "text_snapshot");
   assert.equal(children[0].agent.settings.context_snapshot.split(inheritedMarker).length - 1, 1);
   const firstRequests = provider.requests.filter((call) => !isParent(call));
@@ -598,8 +598,8 @@ try {
   );
   assert.equal(duplicate.reason, "question");
   assert.deepEqual(duplicate.action, first.action);
-  assert.equal(duplicate.agents[0].status, "needs_input");
-  assert.equal(duplicate.agents[0].question, "What is the factor?");
+  assert.equal(duplicate.tasks[0].status, "needs_input");
+  assert.equal(duplicate.tasks[0].question, "What is the factor?");
   assert.equal(duplicate.alerts, undefined, "acceptance replay does not restore a consumed alert");
   assert.equal(runOf("orca"), firstRun);
   assert.equal(children.length, 1);
@@ -658,11 +658,11 @@ try {
     answer: "ANSWER_FACTOR 3",
     wait_ms: 300000,
   });
-  assert.equal(Object.hasOwn(answered, "reason"), false);
+  assert.equal(answered.reason, "done");
   assert.deepEqual(answered.action, { type: "agent_answer", agent: "orca", task: 2 });
-  assert.equal(answered.agents[0].status, "completed");
+  assert.equal(answered.tasks[0].status, "completed");
   assert.equal(
-    answered.agents[0].result,
+    answered.tasks[0].result,
     receipt,
     "a lone result arrives whole in the combined wait",
   );
@@ -686,16 +686,16 @@ try {
   });
   const answeredRun = runOf("orca");
   assert.notEqual(answeredRun, firstRun);
-  assert.equal("settings" in answered.agents[0], false, "task rows carry no routing");
+  assert.equal("settings" in answered.tasks[0], false, "task rows carry no routing");
   const answeredRoute = controller.view(answeredRun).effective_settings;
   assert.equal(answeredRoute.preset, "controlled-team");
   assert.equal(answeredRoute.parent_thinking, "off");
   assert.equal(answeredRoute.thinking, "off");
   assert.equal(answeredRoute.thinking_resolution, "identity");
   assert.equal(children.length, 1);
-  const page = (await invoke("agent_read", { agent: "orca", max_chars: 1000 })).agents[0];
+  const page = (await invoke("agent_read", { agent: "orca", max_chars: 1000 })).tasks[0];
   assert(page.next_cursor);
-  const rest = (await invoke("agent_read", { agent: "orca", cursor: page.next_cursor })).agents[0];
+  const rest = (await invoke("agent_read", { agent: "orca", cursor: page.next_cursor })).tasks[0];
   assert.equal(page.result + rest.result, receipt);
   assert.equal(rest.next_cursor, undefined);
   assert.equal(
@@ -713,14 +713,10 @@ try {
   activePreset = route("reasoning-team", "alehouse-fixture/reasoning", "v2");
   const blocking = await invoke("agent_spawn", newTask("BLOCK_FOR_CANCEL", "worker"));
   await until(() => children.length === 2 && children[1].session.isStreaming);
-  assert.equal(Object.hasOwn(blocking, "reason"), false);
+  assert.equal(blocking.reason, "snapshot");
   assert.deepEqual(blocking.action, { type: "agent_spawn", agent: "block-for-cancel", task: 1 });
-  assert.equal(blocking.agents[0].status, "running");
-  assert.equal(
-    Object.hasOwn(blocking.agents[0], "result"),
-    false,
-    "empty live results are omitted",
-  );
+  assert.equal(blocking.tasks[0].status, "running");
+  assert.equal(Object.hasOwn(blocking.tasks[0], "result"), false, "empty live results are omitted");
   assert.equal(Object.hasOwn(blocking, "pending"), false);
   const blockingRoute = controller.view(runOf("block-for-cancel")).effective_settings;
   assert.equal(blockingRoute.preset, "reasoning-team");
@@ -755,7 +751,7 @@ try {
   await settled("block-for-cancel");
   assert.equal(controller.view(runOf("block-for-cancel")).status, "cancelled");
   assert.equal(
-    (await invoke("agent_read", { agent: "orca" })).agents[0].result,
+    (await invoke("agent_read", { agent: "orca" })).tasks[0].result,
     receipt,
     "a released Agent's last result stays readable",
   );
@@ -774,13 +770,13 @@ try {
     "an interrupted task takes priority over the all-terminal done condition",
   );
   assert(
-    batch.agents.reduce(
+    batch.tasks.reduce(
       (count, entry) => count + (entry.result?.length ?? 0) + (entry.question?.length ?? 0),
       0,
     ) <= 16384,
   );
   assert.deepEqual(
-    batch.agents.map((entry) => entry.status),
+    batch.tasks.map((entry) => entry.status),
     ["completed", "interrupted", "completed"],
   );
   claim("actual SDK waits return results by Agent name within the shared text budget");
@@ -848,8 +844,8 @@ try {
     agent: "shutdown-probe",
     task: 1,
   });
-  assert.equal(abortProbe.wait.reply.agents[0].agent, "shutdown-probe");
-  assert.equal(abortProbe.wait.reply.agents[0].status, "running");
+  assert.equal(abortProbe.wait.reply.tasks[0].agent, "shutdown-probe");
+  assert.equal(abortProbe.wait.reply.tasks[0].status, "running");
   assert.equal(
     abortProbe.wait.reply.alerts,
     undefined,

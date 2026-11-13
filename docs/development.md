@@ -277,9 +277,10 @@ without rechecking the clock. Zero waits check readiness and empty selection
 before arming any timer.
 
 Spawn/run/send/answer/wait/read produce the same envelope, including derived
-task sequence and action facts. Snapshot/done omit reason; zero pending counts,
-the redundant pending array and empty result text are absent. Task binding is
-separate from typed alert scope. All bound rows remain complete;
+task sequence and action facts. Every reply carries its reason, including
+snapshot/done; zero pending counts, the redundant pending array and empty result
+text are absent. Task binding is separate from typed alert scope. All bound rows
+remain complete;
 createOwnerTools must reject resident >16 (extension fixes twelve), leaving core capacity configurable. As the
 last assembly step, it explicitly binds the Owner to model-compatible names:
 all retained Agents, including released history, must have unique valid model
@@ -375,6 +376,14 @@ No new model-visible flag, read mode or permission is added. Ordinary scouts
 without `return_to` retain normal output/paging; internal `getResult`, dependency
 handoff, human UI and history retain true raw source text unchanged. Alerts,
 questions and labels remain visible, not a zero-information-flow guarantee.
+Prompt composition appends `returnLimitText` to a source that has
+`return_to_run_id`, after the prompt and outside `task_prompt`. The
+continuation's `inputEntered` callback calls `releaseReturnedSource`: it releases
+the source Agent with reason `result_returned` only when that Agent is idle,
+unreleased, without a question, its latest Run is still the source and the
+handoff omitted nothing. `releasing` treats that reason like an explicit release,
+so an admission blocked only by it waits. A throw there leaves the scout for an
+explicit kill and never fails the continuation's input.
 `PiRunJournal` keeps serializing
 explicit identity, routing, outcome and result fields; it does not write the
 RunRecord or this link, and no history adapter change is planned. Do not rewrite
