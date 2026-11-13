@@ -763,7 +763,8 @@ space-constrained `/context` request shows a summary/notice; its one-shot reveal
 focus is cancelled by later key presses/repeats or paste, another focus owner,
 yield, close or teardown. Kitty key-release events alone do not cancel it.
 The close control or another click on the context control closes it; typing,
-pasting and outside clicks do not. Context and usage can stay pinned together.
+pasting and outside clicks do not. Context, usage and the Delegation picker can
+stay open together, stacked upward in opening order with matching column edges.
 Regular mode offers a non-modal summary through `/context` instead of drawing
 floating chrome into scrollback.
 
@@ -775,12 +776,18 @@ Other/unattributed rows remain in the overview rather than becoming a permanent
 tab. Tabs support clicks, and keyboard inspection supports navigation, paging
 and same-height source details. Closing or resizing clears obsolete hit targets.
 The shared stack determines the actual width; long paths do not widen the column
-without bound. Context and usage yield during blocking prompts and for the full
-mounted lifetime of a floating Delegation picker. Their hidden members measure
-zero rows but retain order, width preference and view state. Overlapping holds
-must all end before passive restoration; settlement timers cannot resurrect a
-held panel. Queue cancellation/construction failure releases only its own hold.
-Restoration never takes the keyboard back.
+without bound. Floating Delegation uses the same direct overlay path rather
+than a blocking SDK custom prompt, so it does not hide Context or usage. If the
+column has too little room, a later Context or usage member waits off screen
+(Context needs six free rows) until closing a lower member or enlarging the
+terminal reveals it. Delegation needs seven free rows: opened without them, it
+waits off screen the same way and says so in a notice, since nothing is visible
+and only Alt+S (or the footer indicator) cancels it until room appears and it
+takes the keyboard. Context and usage still yield during blocking prompts;
+the Delegation picker closes and cannot reopen until that prompt span ends.
+Hidden pinned members measure zero rows but retain order, width preference and
+view state. Settlement timers cannot resurrect a held panel, and passive
+restoration never takes the keyboard back.
 
 The long bar uses one theme hue with category-specific simulated alpha: System
 is strongest, followed by Summary, Messages and Tools. A selected category is
@@ -959,16 +966,18 @@ right edges align. Content changes, opening/closing the widest member and
 terminal resizes update the entire column without reopening panels. Temporarily
 stepping aside preserves both place and width. Each popover is capped to the
 rows left above those below it and waits off screen until its smallest usable
-layout fits (three rows by default, seven for the picker, every choice plus the
+layout fits (three rows by default, six for Context, seven for the picker, every choice plus the
 yolo warning for the approval popover), so controls and the bottom edge are
 never clipped. Pi focuses a capturing overlay only when it is shown on screen,
 so a picker or approval popover that appears later takes the keyboard itself --
 unless focus has moved since it opened, in which case that dialog keeps it. The footer and orchestration layer are separate bundles, so the column lives in a
-process-wide registry keyed by the TUI both draw into. During a mounted floating Delegation picker, the UI-only
-`pi-alehouse:pinned-popover-yield` token holds pinned footer panels aside until
-that request releases it; it grants no permission or Owner authority. At other
-custom-panel settlement boundaries, footer panels briefly step off the overlay
-stack and return on the next tick while retaining their members. This is
+process-wide registry keyed by the TUI both draw into. Floating Delegation does
+not acquire a `pi-alehouse:pinned-popover-yield` hold or hide sibling panels on
+settlement; its raw handle removes only itself, preserving sibling focus.
+The UI-only token protocol remains available for explicit display holds and
+grants no permission or Owner authority. At SDK-backed custom-panel settlement
+boundaries, footer panels briefly step off the overlay stack and return on the
+next tick while retaining their members. This is
 presentation coordination, not a claim that current Pi closes the wrong overlay. In regular TUI mode the
 footer totals remain but the popover does not open; multiplexers commonly require
 click rather than hover motion.

@@ -48,6 +48,17 @@ function column(host) {
 }
 
 /**
+ * Rows a popover joining the column now would have above the footer and
+ * every member already in it, as last painted.
+ * @param {StackHost} host
+ * @returns {number}
+ */
+export function popoverStackRoom(host) {
+  const below = column(host).reduce((rows, slot) => rows + slot.height, POPOVER_DOCK_ROWS);
+  return Math.max(0, host.terminal.rows - below);
+}
+
+/**
  * Take the next place up the column. Keep the member for as long as the
  * popover is logically open -- including while it briefly steps aside -- so
  * its place is held; `leave` gives the place up.

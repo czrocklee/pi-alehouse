@@ -132,6 +132,10 @@ async function fixture(rows = 24, columns = 120) {
       },
     },
     ui: {
+      theme,
+      setWidget(_key, factory) {
+        if (typeof factory === "function") factory(tui, theme);
+      },
       notify(message) {
         notifications.push(message);
       },
@@ -364,10 +368,10 @@ try {
     assert.equal(h.tui.getFocusedComponent(), h.editor, "restoration stays passive");
     checks++;
   }
-  // Real coordinator -> shared event -> real footer -> native compositor. This
-  // exercises the actual open/hold/settle/close path, not only manual hold events.
+  // Real coordinator -> real footer -> native compositor. Unlike explicit
+  // holds above, ordinary Routing shares the live column with pinned panels.
   for (const withUsage of [false, true]) {
-    const h = await fixture(withUsage ? 24 : 16),
+    const h = await fixture(withUsage ? 40 : 24),
       shortcuts = new Map();
     if (withUsage) h.openUsage();
     const context = h.openContext(),
@@ -379,27 +383,7 @@ try {
       isCurrent: () => true,
     };
     h.pi.registerShortcut = (name, spec) => shortcuts.set(name, spec);
-    let mountedPicker;
-    h.ctx.ui.custom = (factory, options) =>
-      new Promise((resolve, reject) => {
-        let handle;
-        try {
-          const component = factory(
-            h.tui,
-            theme,
-            { matches: (data, key) => data === "\x1b" && key === "tui.select.cancel" },
-            (choice) => {
-              handle?.hide();
-              resolve(choice);
-            },
-          );
-          handle = h.tui.showOverlay(component, options.overlayOptions());
-          mountedPicker = { component, handle };
-          options.onHandle?.(handle);
-        } catch (error) {
-          reject(error);
-        }
-      });
+    h.ctx.ui.custom = () => assert.fail("floating Routing must not acquire an SDK prompt");
     const panels = new PanelCoordinator({
       pi: h.pi,
       widget: { onOpen() {}, tuiMode: () => "fullscreen" },
@@ -416,9 +400,19 @@ try {
     try {
       const opening = shortcuts.get("alt+s").handler();
       h.paint();
-      const pick = mountedPicker;
-      assert(pick?.handle.getBounds(), "actual picker is visible at its first native layout");
-      assert(!h.tui.overlayStack.some((entry) => entry.component === context.component));
+      const pick = h.opened.at(-1);
+      assert.equal(
+        pick.component.constructor.name,
+        "PresetPicker",
+        "actual picker uses raw overlay",
+      );
+      assert(pick.handle.getBounds(), "actual picker is visible at its first native layout");
+      assert(h.tui.overlayStack.some((entry) => entry.component === context.component));
+      assert.deepEqual(
+        context.handle.getBounds(),
+        before,
+        "opening Routing leaves Context in place",
+      );
       await tick();
       h.paint();
       assert(pick.handle.getBounds(), "picker stays visible across the old 0ms restore boundary");
@@ -429,6 +423,7 @@ try {
       await tick();
       h.paint();
       const restored = h.opened.filter((entry) => entry.component === context.component).at(-1);
+      assert.equal(restored, context, "closing Routing never remounts Context");
       assert.deepEqual(restored.handle.getBounds(), before);
       assert.equal(h.tui.getFocusedComponent(), h.editor);
       checks++;

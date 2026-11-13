@@ -4,11 +4,12 @@ import {
   type EventBus,
   type ExtensionAPI,
   type ExtensionContext,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
+import { getKeybindings, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
+import { popoverStackRoom } from "../../shared/popover-stack.mjs";
 import {
   FOOTER_INDICATOR_CLICK_EVENT,
-  PINNED_POPOVER_YIELD_EVENT,
   WORKER_PRESET_INDICATOR,
   type FooterIndicatorClick,
 } from "../../shared/overlay-protocol.mjs";
@@ -34,11 +35,13 @@ import {
   paneYieldHandlers,
 } from "./permission-dialog-yield.ts";
 import {
+  PRESET_PICKER_MIN_ROWS,
   PresetPicker,
   PresetPickerRequest,
   type EffortCapabilities,
   type ModelPickerPosition,
   type PresetChoice,
+  type PresetPickerOptions,
 } from "./preset-picker.ts";
 import { createTranscriptMessageCache, createTranscriptMounts } from "./detail-transcript-cache.ts";
 import { createPresetOverlayHost } from "./preset-overlay-host.ts";
@@ -134,7 +137,12 @@ export class PanelCoordinator {
   private readonly yielding = new PaneYield();
   private host: Pick<ExtensionContext, "ui" | "mode"> | undefined;
   private hostAttached = false;
-  private tui: Pick<TUI, "mode"> | undefined;
+  private tui: TUI | undefined;
+  /** Started minus ended SDK prompt spans, as delivered to this handler. */
+  private promptBalance = 0;
+  private floatingPresetOpen = false;
+  private unwatchPromptStart: (() => void) | undefined;
+  private unwatchPromptEnd: (() => void) | undefined;
   private clearHostWidget: (() => void) | undefined;
   private paneAgent: string | undefined;
   /** Unsent message text, carried across a permission yield that closes the pane. */
@@ -250,6 +258,19 @@ export class PanelCoordinator {
         };
       },
     });
+    // A raw floating picker is not an SDK prompt. Ordinary dialogs still own
+    // the interaction, including a span that began before the picker request.
+    // Pi emits alternating outer start/end events, but delivers each through
+    // earlier handlers in turn, so an end can arrive before its start. A signed
+    // balance absorbs that order; a clamped counter would stay raised, and the
+    // picker refused, for the rest of the session.
+    this.unwatchPromptStart = this.options.pi.on?.("ui_prompt_start", () => {
+      this.promptBalance++;
+      if (this.floatingPresetOpen) this.closePreset?.();
+    });
+    this.unwatchPromptEnd = this.options.pi.on?.("ui_prompt_end", () => {
+      this.promptBalance--;
+    });
     // The Agent roster mounts only when there is activity. It cannot tell us
     // which renderer a fresh/Off session uses before its first Agent exists.
     // Capture the host independently, without a visible row, timer or roster.
@@ -280,6 +301,8 @@ export class PanelCoordinator {
     const cleanups = [
       this.unwatchIndicator,
       this.unwatchApprovals,
+      this.unwatchPromptStart,
+      this.unwatchPromptEnd,
       this.closePreset,
       this.closePane,
       () => this.options.widget.onOpen(undefined),
@@ -293,6 +316,10 @@ export class PanelCoordinator {
     this.clearHostWidget = undefined;
     this.unwatchApprovals = undefined;
     this.unwatchIndicator = undefined;
+    this.unwatchPromptStart = undefined;
+    this.unwatchPromptEnd = undefined;
+    this.promptBalance = 0;
+    this.floatingPresetOpen = false;
     this.closePreset = undefined;
     this.closePane = undefined;
     this.detailPane = undefined;
@@ -829,36 +856,44 @@ export class PanelCoordinator {
       !this.host ||
       !this.options.ready() ||
       this.paneOpen ||
+      this.promptBalance > 0 ||
       !mountable(this.yielding, this.approvals.pending)
     ) {
       ctx.ui.notify(
-        "The delegation panel is unavailable while another Alehouse panel or approval is active.",
+        "The delegation panel is unavailable while another panel, dialog or approval is active.",
         "warning",
       );
       return null;
     }
     const presets = live.inspect(candidate);
+    const floatingTui = this.floating() ? this.tui : undefined;
+    const floating = floatingTui !== undefined;
     this.pickerOpen = true;
-    const request = new PresetPickerRequest(() =>
-      this.options.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {}),
-    );
+    const request = new PresetPickerRequest(() => {
+      // Exact-handle raw completion must not hide/focus-reset sibling pins.
+      if (!floating) this.options.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {});
+    });
     this.closePreset = request.close;
     // Floating, the picker joins the bottom-right popover column above the
     // footer indicator that opens it, beside whatever is already pinned there.
     const host = this.host;
     let picker: PresetPicker | undefined;
     let overlay: ReturnType<typeof createPresetOverlayHost> | undefined;
+    let floatingHandle: OverlayHandle | undefined;
     try {
-      const floating = this.floating();
+      // Floating pickers are ordinary popovers, not blocking SDK custom
+      // prompts: Context and Usage keep their places in the same column.
       const presetOverlay = (overlay = createPresetOverlayHost({
         floating,
         onHide: () => picker?.invalidatePointerPaint(),
         onMove: () => picker?.invalidatePointerPaint(),
-        emitPinned: (data) => {
-          this.options.pi.events.emit(PINNED_POPOVER_YIELD_EVENT, data);
-        },
       }));
-      return await this.host.ui.custom<PresetChoice | null>((tui, theme, keybindings, done) => {
+      const createPicker = (
+        tui: TUI,
+        theme: Theme,
+        keybindings: PresetPickerOptions["keybindings"],
+        done: (choice: PresetChoice | null) => void,
+      ) => {
         if (
           !request.mount(
             done,
@@ -965,16 +1000,63 @@ export class PanelCoordinator {
               : {}),
           })),
         );
-      }, presetOverlay.customOptions());
+      };
+      if (!floatingTui) return await this.host.ui.custom(createPicker, { overlay: false });
+      const tui = floatingTui;
+      this.floatingPresetOpen = true;
+      return await new Promise<PresetChoice | null>((resolve, reject) => {
+        let settled = false;
+        const done = (choice: PresetChoice | null) => {
+          if (settled) return;
+          settled = true;
+          try {
+            floatingHandle?.hide();
+            resolve(choice);
+          } catch (error) {
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        };
+        try {
+          // pi-tui's module keybindings are the host's configured manager: Pi
+          // resolves an extension's pi-tui to its own instance (aliased or
+          // embedded modules), the one interactive mode passes to setKeybindings.
+          const component = createPicker(tui, ctx.ui.theme, getKeybindings(), done);
+          if (settled) return;
+          const options = presetOverlay.customOptions();
+          if (!options.overlay) throw new Error("FLOATING_PRESET_REQUIRES_OVERLAY");
+          // Opened behind taller pinned panels, the picker waits off screen
+          // and takes the keyboard when room appears. Say so: until then
+          // nothing is visible, and only the same toggle closes it.
+          const waiting = popoverStackRoom(tui) < PRESET_PICKER_MIN_ROWS;
+          floatingHandle = tui.showOverlay(component, options.overlayOptions());
+          options.onHandle(floatingHandle);
+          if (waiting)
+            try {
+              ctx.ui.notify(
+                `The delegation panel is waiting for ${PRESET_PICKER_MIN_ROWS} free rows above the pinned panels: close Context or Usage, or enlarge the terminal. Alt+S cancels it.`,
+                "info",
+              );
+            } catch {
+              /* the picker is mounted; a failed notice must not close it */
+            }
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
     } finally {
       try {
-        request.dispose();
+        try {
+          floatingHandle?.hide();
+        } finally {
+          request.dispose();
+        }
       } finally {
         try {
           overlay?.release();
         } finally {
           this.closePreset = undefined;
           this.pickerOpen = false;
+          this.floatingPresetOpen = false;
         }
       }
     }

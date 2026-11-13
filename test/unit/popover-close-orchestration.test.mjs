@@ -518,7 +518,6 @@ test("preset stack hide notifies close-geometry owner even when component is not
   lower.measure(39);
   const overlay = createPresetOverlayHost({
     floating: true,
-    emitPinned() {},
     onHide: () => hidden++,
   });
   overlay.attach(f.tui);
@@ -555,7 +554,6 @@ test("preset stack movement retires hover across repeated overlay option queries
   let moved = 0;
   const overlay = createPresetOverlayHost({
     floating: true,
-    emitPinned() {},
     onMove: () => {
       moved++;
       picker.resetCloseHover();

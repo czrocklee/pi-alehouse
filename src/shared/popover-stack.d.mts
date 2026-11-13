@@ -25,6 +25,8 @@ export interface StackedOverlayOptions {
   visible(): boolean;
   nonCapturing: boolean;
 }
+/** Rows a member joining now would have above the footer and current members. */
+export function popoverStackRoom(host: StackHost): number;
 export function joinPopoverStack(host: StackHost): StackMember;
 export function focusedComponent(host: object): unknown;
 export function focusOrigin(host: object): unknown[] | undefined;

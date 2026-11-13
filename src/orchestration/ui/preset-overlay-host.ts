@@ -1,5 +1,4 @@
 import type { OverlayHandle, OverlayOptions } from "@earendil-works/pi-tui";
-import type { PinnedPopoverYield } from "../../shared/overlay-protocol.mjs";
 import {
   focusOrigin,
   focusRevealed,
@@ -29,21 +28,20 @@ type PresetCustomOptions =
     };
 
 /**
- * Floating preset-picker overlay only: pinned yield, stack place, and reveal.
+ * Floating preset-picker overlay only: stack place and reveal.
  * Not a general overlay manager. The coordinator still owns the picker lock.
  */
 export interface PresetOverlayHost {
   readonly floating: boolean;
   customOptions(): PresetCustomOptions;
-  /** After the custom factory has mounted. Docked opens do not join the stack. */
+  /** Before the picker mounts. Docked opens do not join the stack. */
   attach(tui: PresetStackHost): PresetOverlayPlacement | undefined;
-  /** Clear reveal, leave the stack, then release the pinned yield. Idempotent. */
+  /** Clear reveal and leave the stack. Idempotent. */
   release(): void;
 }
 
 export function createPresetOverlayHost(options: {
   floating: boolean;
-  emitPinned: (data: PinnedPopoverYield) => void;
   /** Stack hiding skips component.render; retire pointer targets and capture,
    * not keyboard readiness (which checks the current row budget separately). */
   onHide?: () => void;
@@ -54,7 +52,6 @@ export function createPresetOverlayHost(options: {
   let placement: OverlayOptions | undefined;
   let handle: OverlayHandle | undefined;
   let reveal: (() => void) | undefined;
-  let releasePinned: (() => void) | undefined;
   return {
     floating: options.floating,
     customOptions() {
@@ -85,13 +82,6 @@ export function createPresetOverlayHost(options: {
     },
     attach(tui) {
       if (options.floating) {
-        const token = {};
-        // Own the release before publishing: even a throwing start must be paired.
-        releasePinned = () => {
-          releasePinned = undefined;
-          options.emitPinned({ token, active: false });
-        };
-        options.emitPinned({ token, active: true });
         place = joinPopoverStack(tui);
         placement = undefined;
       }
@@ -120,9 +110,6 @@ export function createPresetOverlayHost(options: {
       } finally {
         place = undefined;
         placement = undefined;
-        const finish = releasePinned;
-        releasePinned = undefined;
-        finish?.();
       }
     },
   };

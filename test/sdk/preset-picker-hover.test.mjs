@@ -316,7 +316,6 @@ function stackedFixture(t, editing = false) {
   let component;
   const overlay = createPresetOverlayHost({
     floating: true,
-    emitPinned() {},
     onHide: () => component?.invalidatePointerPaint(),
     onMove: () => component?.invalidatePointerPaint(),
   });

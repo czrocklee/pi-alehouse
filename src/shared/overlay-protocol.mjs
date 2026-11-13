@@ -3,8 +3,9 @@
 export const HIDE_TRANSIENT_OVERLAYS_EVENT = "pi-alehouse:hide-transient-overlays";
 
 /** UI-only display hold for pinned popovers, not permission or Owner authority.
- * Each mounted floating picker retains its opaque token until it leaves the
- * stack; consumers track tokens so overlapping holds release independently.
+ * Holders retain their opaque token until the display hold ends; consumers
+ * track tokens so overlapping holds release independently. Ordinary stacked
+ * popovers, including the floating Delegation picker, do not acquire a hold.
  * @typedef {{ token: object, active: boolean }} PinnedPopoverYield
  */
 export const PINNED_POPOVER_YIELD_EVENT = "pi-alehouse:pinned-popover-yield";

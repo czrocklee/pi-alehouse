@@ -119,9 +119,8 @@ export const fixture = ({
 
 export const mouse = (type, x, y, extra = {}) => ({ type, button: "left", x, y, ...extra });
 
-// The real empty Agent widget never mounts. Exercise the SDK widget factory and
-// ui.custom dispatch as well as the compositor: a canned fullscreen widget mock
-// would mask the first-open bug before the picker ever reaches the shared stack.
+// The real empty Agent widget never mounts. Exercise the SDK widget factory,
+// raw fullscreen overlays and docked ui.custom dispatch as well as the compositor.
 export function emptyOwnerPanels(t, mode = "fullscreen", management, liveEffort = false) {
   initTheme(undefined, false);
   const terminal = { columns: 120, rows: 50, hideCursor() {} };
@@ -157,10 +156,19 @@ export function emptyOwnerPanels(t, mode = "fullscreen", management, liveEffort 
     shortcuts = new Map(),
     mounts = [],
     widgets = [],
-    published = [];
+    published = [],
+    promptHandlers = new Map();
+  const showOverlay = tui.showOverlay.bind(tui);
+  tui.showOverlay = (component, options) => {
+    const handle = showOverlay(component, options);
+    if (component instanceof PresetPicker)
+      mounts.push({ component, handle, options: { overlay: true, overlayOptions: () => options } });
+    return handle;
+  };
   const router = new PresetRouter(starterPath);
   router.select("off");
   const ui = {
+    theme,
     notify() {
       assert.fail("unexpected UI notification");
     },
@@ -196,7 +204,14 @@ export function emptyOwnerPanels(t, mode = "fullscreen", management, liveEffort 
   assert.equal(widget.tuiMode(), undefined);
   assert.equal(widgets.length, 0, "no Agent rows have ever mounted");
   const panels = new PanelCoordinator({
-    pi: { events: bus, registerShortcut: (name, spec) => shortcuts.set(name, spec) },
+    pi: {
+      events: bus,
+      registerShortcut: (name, spec) => shortcuts.set(name, spec),
+      on(name, handler) {
+        promptHandlers.set(name, handler);
+        return () => promptHandlers.delete(name);
+      },
+    },
     widget,
     ready: () => true,
     router: () => router,
@@ -236,6 +251,7 @@ export function emptyOwnerPanels(t, mode = "fullscreen", management, liveEffort 
     mounts,
     widgets,
     published,
+    promptHandlers,
     paint,
     click,
     router,

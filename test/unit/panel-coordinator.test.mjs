@@ -8,11 +8,15 @@ import { applyAuditedPreset } from "../../dist/orchestration/extension.js";
 import { SettingsStore } from "../../src/shared/settings-store.mjs";
 import { stageWorkerSelection } from "../../dist/orchestration/ui/preferences-controls.js";
 import { createEventBus, initTheme, SessionManager } from "@earendil-works/pi-coding-agent";
-import { matchesKey, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { getKeybindings, matchesKey, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { AgentWidget } from "../../dist/orchestration/ui/agent-widget.js";
 import { ChildActivityRegistry } from "../../dist/orchestration/runtime/activity-observer.js";
 import { settings } from "../support/controller-fixture.mjs";
 import { starterPath } from "../support/preset-config.mjs";
+import { emptyOwnerPanels } from "../support/preset-picker-fixture.mjs";
+import { PINNED_POPOVER_YIELD_EVENT } from "../../src/shared/overlay-protocol.mjs";
+import { joinPopoverStack } from "../../src/shared/popover-stack.mjs";
+import { PRESET_PICKER_MIN_ROWS } from "../../dist/orchestration/ui/preset-picker.js";
 
 initTheme(undefined, false);
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -749,22 +753,27 @@ test("the footer's worker indicator toggles a picker stacked in the bottom-right
     publish: (_candidate, name) => published.push(name),
     showError: (error) => assert.fail(String(error)),
   });
-  const tui = { terminal: { columns: 120, rows: 30 }, requestRender() {} };
+  const tui = {
+    mode: "fullscreen",
+    terminal: { columns: 120, rows: 30 },
+    requestRender() {},
+    showOverlay(component, options) {
+      const handle = { hide() {} };
+      mounts.push({ component, handle, options });
+      return handle;
+    },
+  };
   panels.attachHost(
     {
       mode: "tui",
       ui: {
+        theme: { ...theme, bg: (_color, text) => text },
         notify() {},
-        custom(factory, options) {
-          return new Promise((resolve) => {
-            const component = factory(
-              tui,
-              { ...theme, bg: (_color, text) => text },
-              { matches: () => false },
-              resolve,
-            );
-            mounts.push({ component, options: options.overlayOptions() });
-          });
+        setWidget(_key, factory) {
+          factory?.(tui);
+        },
+        custom() {
+          assert.fail("fullscreen routing must not enter ui.custom");
         },
       },
     },
@@ -804,6 +813,180 @@ test("the footer's worker indicator toggles a picker stacked in the bottom-right
     ["fixture-light"],
     "a clicked preset is applied through the audited publish path",
   );
+});
+
+for (const mode of ["fullscreen", "regular"])
+  test(`${mode} routing uses its own mount path without yielding pinned panels`, async (t) => {
+    const h = emptyOwnerPanels(t, mode),
+      yields = [];
+    let customCalls = 0;
+    const custom = h.ctx.ui.custom;
+    h.ctx.ui.custom = (...args) => {
+      customCalls++;
+      return custom(...args);
+    };
+    h.bus.on(PINNED_POPOVER_YIELD_EVENT, (event) => yields.push(event));
+    h.panels.attachHost(h.ctx, h.bus);
+    const opening = h.shortcuts.get("alt+s").handler();
+    await tick();
+    h.paint();
+    const mount = h.mounts[0];
+    assert.equal(customCalls, mode === "fullscreen" ? 0 : 1);
+    assert.equal(h.mounts.length, 1);
+    assert.equal(h.tui.getFocusedComponent(), mount.component);
+    assert.equal(mount.options.overlay, mode === "fullscreen");
+    if (mode === "fullscreen") {
+      assert.equal(mount.component.options.theme, h.ctx.ui.theme);
+      assert.equal(mount.component.options.keybindings, getKeybindings());
+    }
+    mount.component.handleInput("\u001b");
+    await opening;
+    assert.equal(h.tui.getFocusedComponent(), h.host.editor);
+    assert.equal(h.tui.hasOverlay(), false);
+    assert.deepEqual(h.published, []);
+    assert.deepEqual(yields, [], "routing must not hide the other pinned panels");
+    const reopening = h.shortcuts.get("alt+s").handler();
+    await tick();
+    h.panels.dispose();
+    await reopening;
+    assert.equal(h.tui.hasOverlay(), false, "disposal removes the raw overlay too");
+    assert.deepEqual(yields, []);
+  });
+
+test("without a captured TUI even a fullscreen roster projection keeps routing docked", async (t) => {
+  const h = emptyOwnerPanels(t);
+  h.ctx.ui.setWidget = undefined;
+  h.widget.tuiMode = () => "fullscreen";
+  h.panels.attachHost(h.ctx, h.bus);
+  const opening = h.shortcuts.get("alt+s").handler();
+  await tick();
+  assert.equal(h.mounts.length, 1);
+  assert.equal(h.mounts[0].options.overlay, false);
+  assert.equal(h.mounts[0].handle, undefined);
+  assert.equal(h.host.editorContainer.children[0], h.mounts[0].component);
+  h.mounts[0].component.handleInput("\u001b");
+  await opening;
+  assert.equal(h.host.editorContainer.children[0], h.host.editor);
+});
+
+test("real UI prompts close raw routing and block reopening until every prompt ends", async (t) => {
+  const h = emptyOwnerPanels(t),
+    notices = [];
+  h.ctx.ui.notify = (message) => notices.push(message);
+  h.ctx.ui.custom = () => assert.fail("raw routing must not hold the custom prompt queue");
+  h.panels.attachHost(h.ctx, h.bus);
+  const prompt = (phase, kind) => {
+    const type = `ui_prompt_${phase}`;
+    h.promptHandlers.get(type)({ type, reason: "ui_prompt", kind });
+  };
+  const opening = h.shortcuts.get("alt+s").handler();
+  await tick();
+  h.paint();
+  const old = h.mounts[0];
+  assert.equal(old.handle.isHidden(), false);
+  prompt("start", "select");
+  await opening;
+  assert.equal(old.component.isOpen(), false);
+  assert.equal(old.handle.getBounds(), undefined);
+  assert.equal(h.tui.getFocusedComponent(), h.host.editor);
+  prompt("start", "confirm");
+  prompt("end", "select");
+  await h.shortcuts.get("alt+s").handler();
+  assert.equal(h.mounts.length, 1, "a nested prompt still owns the UI");
+  old.component.handleInput("\r");
+  assert.deepEqual(h.published, [], "a retained raw picker cannot publish after prompt closure");
+  prompt("end", "confirm");
+  const reopening = h.shortcuts.get("alt+s").handler();
+  await tick();
+  assert.equal(h.mounts.length, 2);
+  h.mounts[1].component.handleInput("\u001b");
+  await reopening;
+  assert(notices.some((message) => message.includes("unavailable")));
+  h.panels.dispose();
+  assert.equal(h.promptHandlers.size, 0, "retired hosts no longer observe real UI prompts");
+});
+
+test("a prompt already active before the first routing open prevents a raw mount", async (t) => {
+  const h = emptyOwnerPanels(t),
+    notices = [];
+  h.ctx.ui.notify = (message) => notices.push(message);
+  h.panels.attachHost(h.ctx, h.bus);
+  h.promptHandlers.get("ui_prompt_start")({
+    type: "ui_prompt_start",
+    reason: "ui_prompt",
+    kind: "custom",
+  });
+  await h.shortcuts.get("alt+s").handler();
+  assert.equal(h.mounts.length, 0);
+  assert(notices.some((message) => message.includes("unavailable")));
+  h.promptHandlers.get("ui_prompt_end")({
+    type: "ui_prompt_end",
+    reason: "ui_prompt",
+    kind: "custom",
+  });
+  const opening = h.shortcuts.get("alt+s").handler();
+  await tick();
+  assert.equal(h.mounts.length, 1);
+  h.panels.dispose();
+  await opening;
+});
+
+test("a prompt end delivered before its start still leaves routing available", async (t) => {
+  const h = emptyOwnerPanels(t),
+    notices = [];
+  h.ctx.ui.notify = (message) => notices.push(message);
+  h.panels.attachHost(h.ctx, h.bus);
+  const prompt = (phase) =>
+    h.promptHandlers.get(`ui_prompt_${phase}`)({
+      type: `ui_prompt_${phase}`,
+      reason: "ui_prompt",
+      kind: "confirm",
+    });
+  // An earlier async handler can hold the start back past its own end.
+  prompt("end");
+  prompt("start");
+  const opening = h.shortcuts.get("alt+s").handler();
+  await tick();
+  assert.equal(h.mounts.length, 1, "the reordered pair is balanced");
+  assert.deepEqual(notices, []);
+  h.mounts[0].component.handleInput("\u001b");
+  await opening;
+});
+
+test("floating routing opened above full pinned panels says it is waiting, then appears", async (t) => {
+  const h = emptyOwnerPanels(t),
+    notices = [];
+  h.ctx.ui.notify = (message, level) => notices.push([message, level]);
+  h.panels.attachHost(h.ctx, h.bus);
+  const pinned = joinPopoverStack(h.tui);
+  t.after(() => pinned.leave());
+  pinned.measure(h.tui.terminal.rows - 1 - (PRESET_PICKER_MIN_ROWS - 1));
+  const opening = h.shortcuts.get("alt+s").handler();
+  await tick();
+  h.paint();
+  assert.equal(h.mounts.length, 1);
+  assert.equal(h.mounts[0].handle.getBounds(), undefined, "it waits off screen");
+  assert.equal(h.tui.getFocusedComponent(), h.host.editor);
+  assert.deepEqual(notices, [
+    [
+      "The delegation panel is waiting for 7 free rows above the pinned panels: close Context or Usage, or enlarge the terminal. Alt+S cancels it.",
+      "info",
+    ],
+  ]);
+  pinned.measure(h.tui.terminal.rows - 1 - PRESET_PICKER_MIN_ROWS);
+  h.paint();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert(h.mounts[0].handle.getBounds(), "room appeared");
+  assert.equal(h.tui.getFocusedComponent(), h.mounts[0].component, "and it took the keyboard");
+  h.mounts[0].component.handleInput("\u001b");
+  await opening;
+
+  // With room, opening is silent.
+  const again = h.shortcuts.get("alt+s").handler();
+  await tick();
+  assert.equal(notices.length, 1);
+  h.mounts[1].component.handleInput("\u001b");
+  await again;
 });
 
 function liveEffortPanels(t, options = {}) {
@@ -1210,27 +1393,22 @@ test("a picker opened behind a tall usage panel appears with the keyboard when t
   const usage = joinPopoverStack(tui);
   usage.measure(9);
   let picker;
-  // Pi's ui.custom for an overlay: build, show, then hand out the handle.
+  const showOverlay = tui.showOverlay.bind(tui);
+  tui.showOverlay = (component, options) => {
+    picker = component;
+    return showOverlay(component, options);
+  };
   panels.attachHost(
     {
       mode: "tui",
       ui: {
+        theme: { ...theme, bg: (_color, text) => text },
         notify() {},
-        custom(factory, options) {
-          return new Promise((resolve) => {
-            let handle;
-            picker = factory(
-              tui,
-              { ...theme, bg: (_color, text) => text },
-              { matches: () => false },
-              (value) => {
-                handle?.hide();
-                resolve(value);
-              },
-            );
-            handle = tui.showOverlay(picker, options.overlayOptions());
-            options.onHandle?.(handle);
-          });
+        setWidget(_key, factory) {
+          factory?.(tui);
+        },
+        custom() {
+          assert.fail("fullscreen routing must not enter ui.custom");
         },
       },
     },
@@ -1262,7 +1440,7 @@ test("a picker opened behind a tall usage panel appears with the keyboard when t
 
 // Settings/preset management routing: the coordinator forwards the picker's
 // management choices to the host integration's standard dialogs, only after
-// the ui.custom interaction has fully settled, and never publishes for them.
+// the picker interaction has fully settled, and never publishes for them.
 async function managementPanels(t, overrides = {}) {
   const { PresetRouter } = await import("../../dist/orchestration/routing.js");
   const bus = createEventBus(),
@@ -1338,11 +1516,30 @@ async function managementPanels(t, overrides = {}) {
         }[binding] ?? "f12",
       ),
   };
+  const tui = {
+    mode: overrides.fullscreen ? "fullscreen" : "regular",
+    terminal: { columns: 100, rows: 40 },
+    requestRender() {},
+    showOverlay(picker) {
+      mounts++;
+      component = picker;
+      return {
+        hide() {
+          settled = true;
+        },
+      };
+    },
+  };
   const ctx = {
     mode: "tui",
     ui: {
+      theme: { ...theme, bg: (_color, text) => text },
       notify: (message) => notices.push(message),
+      setWidget(_key, factory) {
+        factory?.(tui);
+      },
       custom(factory) {
+        assert.equal(overrides.fullscreen ?? false, false, "only docked routing uses ui.custom");
         mounts++;
         return new Promise((resolve) => {
           component = factory(

@@ -1,6 +1,7 @@
 /**
- * Every orchestration panel announces this channel before it settles so cooperating
- * extensions can close or temporarily step aside for presentation coordination.
+ * SDK-backed orchestration panels announce this channel before settling so
+ * cooperating extensions can briefly step aside for presentation coordination.
+ * Raw stacked pickers remove only their own handle, leaving sibling pins alone.
  * This originated as a workaround for older Pi global-stack completion; current
  * Pi completes `ui.custom` through its own overlay handle, so unrelated overlays
  * do not need to step aside for the SDK to remove the correct entry.
@@ -11,8 +12,8 @@
 export { HIDE_TRANSIENT_OVERLAYS_EVENT } from "../../shared/overlay-protocol.mjs";
 
 /**
- * One `ui.custom` attempt, cancellable before its factory has a done handle.
- * A cancelled queued attempt still dequeues, but settles without building a
+ * One panel attempt, cancellable before its factory has a done handle.
+ * A cancelled queued `ui.custom` attempt still dequeues, but settles without building a
  * component. Owns that component from construction, because Pi may close before
  * receiving the object.
  *
@@ -20,8 +21,8 @@ export { HIDE_TRANSIENT_OVERLAYS_EVENT } from "../../shared/overlay-protocol.mjs
  * the attempt is still queued coordinates immediately AND again at dequeue,
  * because another transient overlay may open in the gap between the two.
  *
- * Both orchestration panels share this so their settlement seams cannot drift apart:
- * the cooperative settlement coordination stays consistent between them.
+ * Panel owners share the same settlement seam and opt into cooperative
+ * coordination only when their presentation path needs it.
  */
 export class OverlayRequest<T> {
   private cancelled = false;

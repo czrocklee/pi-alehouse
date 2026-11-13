@@ -667,7 +667,18 @@ to activate a hidden control.
 Fullscreen alternate-screen rendering is required for floating worker panels and
 click input. Regular mode deliberately docks the detail/picker to avoid
 scrollback contamination; its footer retains totals but does not open the usage
-popover. Multiplexers can further limit mouse motion. The pinned SDK's overlay sizing
+popover. Fullscreen Delegation shares the pinned Context/usage column through a
+raw overlay rather than a blocking SDK custom prompt. Later popovers wait off
+screen when the remaining row budget is too small; a Delegation picker opened
+that way also posts a notice, because it is otherwise invisible. Ordinary SDK prompt events
+close Delegation and temporarily hide pinned footer panels; permission prompts
+retain their synchronous priority protocol. Generic prompt events are delivered
+asynchronously by the host, not an atomic global UI transaction: an end can
+reach a handler before its start, so the Delegation gate keeps a signed balance.
+The raw path reads pi-tui's module keybindings, which are the host's only
+because Pi resolves an extension's pi-tui to its own instance (aliased or
+embedded modules); a host that loads a separate copy would see default keys. Multiplexers
+can further limit mouse motion. The pinned SDK's overlay sizing
 options carry width, minWidth and maxHeight but no maxWidth option; the floating
 detail pane therefore caps its width by computing a numeric column count from
 the mounted pane's own terminal (88% of the live width, at most 164 columns),
