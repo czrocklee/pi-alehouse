@@ -37,6 +37,8 @@ export interface TaskSnapshot extends Partial<TaskMetadata> {
   readonly diagnostics?: Pick<TaskEntry, "error" | "owner_error" | "unavailable_reason">;
   /** Optional bounded attribution, outside the required thin control row. */
   readonly cancellation_source?: CancellationSource;
+  /** Optional: a human message was admitted to this task. No text, no delivery claim. */
+  readonly human_steered?: true;
   /** Bounded host notes in the private capture; the packer filters model-visible
    * notes before fitting, outside the required thin control row. */
   readonly dispatch_notes?: readonly string[];
@@ -52,6 +54,7 @@ export interface FinishedSnapshot {
   readonly label?: string;
   readonly row: ThinTaskEntry;
   readonly cancellation_source?: CancellationSource;
+  readonly human_steered?: true;
   /** Explicit original-Run association with a bound tasks row. Absence means
    * this candidate needs its own finished row; never infer identity from names,
    * task ordinals or statuses. The Owner validates the original references. */

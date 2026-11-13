@@ -1,5 +1,11 @@
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
-import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  decodeKittyPrintable,
+  Input,
+  matchesKey,
+  truncateToWidth,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import type { RunView } from "../core/contracts.ts";
 import { type Theme, type TranscriptFrame, type TranscriptRows } from "./format.ts";
 import {
@@ -9,8 +15,9 @@ import {
   popoverInlayWidth,
   popoverSide,
 } from "./popover.ts";
-import { wrapPlainText as wrapText } from "./text.ts";
+import { plainText, wrapPlainText as wrapText } from "./text.ts";
 import {
+  renderComposeFooter,
   renderDetailFields,
   renderDetailFooter,
   renderDetailTitle,
@@ -35,10 +42,12 @@ interface StopAction {
   from: number;
   to: number;
 }
-interface StopPaint {
+interface ComposePaint {
   target: StopTarget;
-  action: StopAction;
   dimensions: PaintDimensions;
+}
+interface StopPaint extends ComposePaint {
+  action: StopAction;
 }
 interface StopConfirmation {
   target: StopTarget;
@@ -50,6 +59,34 @@ interface TranscriptAnchor {
   width: number;
   start: number;
 }
+/** An unsent human message, bound to the Run it was started for. */
+export interface DetailDraft {
+  target: StopTarget;
+  text: string;
+}
+interface Compose {
+  target: StopTarget;
+  input: Input;
+  empty: boolean;
+  paste: string | undefined;
+  pastePrefix: string;
+}
+const PASTE_START = "\x1b[200~";
+const PASTE_END = "\x1b[201~";
+/** Match Input's single-line paste behavior, but never retain terminal controls.
+ * The shared sanitizer preserves script/emoji joiners, selectors and graphemes. */
+const composeText = (text: string): string =>
+  plainText(text.replace(/\t/g, "    ")).replace(/\n/g, "");
+const sameRun = (target: StopTarget, view: RunView | undefined): boolean =>
+  !!view &&
+  view.agent_id === target.agent_id &&
+  view.owner_id === target.owner_id &&
+  view.generation === target.generation &&
+  view.run_id === target.run_id;
+/** Messages only reach live execution: a queued, stopping or settled Run has no
+ * open input path, and this control never starts a continuation. */
+const steerable = (view: RunView): boolean =>
+  view.status === "running" && !view.execution_exited && !view.stop_reason;
 const sameStop = (target: StopTarget, view: RunView | undefined, selected: string): boolean =>
   selected === target.agent_id &&
   !!view &&
@@ -112,6 +149,13 @@ export interface DetailPaneOptions {
   /** Request cancellation through the host's Owner. Bound to the painted Run,
    * not whichever task this Agent might be running when a later callback fires. */
   onStop?: (run_id: string) => void;
+  /** Submit one human message to the Run the draft was started for. Returns
+   * whether the draft is spent; a refused message stays in the input. */
+  onSteer?: (run_id: string, message: string) => boolean;
+  /** An unsent draft to restore; ignored unless its Run is still the one shown. */
+  draft?: DetailDraft;
+  /** Draft text changed, or was discarded by the user (undefined). */
+  onDraft?: (draft: DetailDraft | undefined) => void;
   /**
    * Draw a border. Set when the pane floats as a centred overlay, where nothing
    * brackets it; docked it sits between the agents widget and Pi's footer, which
@@ -142,7 +186,12 @@ export class DetailPane {
   /** Previous field/transcript boundary, scoped to one Run and wrapping width. */
   private transcriptAnchor: TranscriptAnchor | undefined;
   private stopPaint: StopPaint | undefined;
+  /** M starts from the Run actually painted, never a fresh replacement. */
+  private composePaint: ComposePaint | undefined;
   private confirmation: StopConfirmation | undefined;
+  /** Message mode. Separate from Stop intent: it has no side effect until Enter
+   * and survives repaints, scrolling and permission hiding. */
+  private compose: Compose | undefined;
   private frame = 0;
   private readonly wrapped = new Map<string, { width: number; rows: string[] }>();
   private animating = false;
@@ -152,13 +201,24 @@ export class DetailPane {
 
   constructor(private readonly options: DetailPaneOptions) {
     this.selected = options.initial;
+    const draft = options.draft;
+    if (draft) {
+      const view = options.snapshot().find((entry) => entry.agent_id === this.selected)?.input.view;
+      if (options.onSteer && draft.target.agent_id === this.selected && sameRun(draft.target, view))
+        this.beginCompose(draft.target, draft.text);
+      else options.onDraft?.(undefined);
+    }
     this.closeHover = createPopoverCloseHover({
       closeHit: popoverCloseHit,
       host: options.tui,
       requestRender: () => options.tui.requestRender(),
     });
     this.timer = setInterval(() => {
-      if (this.closed || this.options.visible?.() === false) return;
+      if (this.closed) return;
+      if (this.options.visible?.() === false) {
+        this.resetStopInteraction();
+        return;
+      }
       const staleStop = this.staleStopPaint();
       const revision = this.options.revision?.();
       if (
@@ -193,6 +253,7 @@ export class DetailPane {
     this.painted = 0;
     this.transcriptAnchor = undefined;
     this.resetStopInteraction();
+    this.endCompose();
     this.options.onSelect?.(agent_id);
   }
   private select(entries: { agent_id: string }[], index: number): void {
@@ -209,6 +270,7 @@ export class DetailPane {
       this.closed = true;
       this.resetCloseHover();
       this.resetStopInteraction();
+      this.endCompose();
       this.options.done();
       return;
     }
@@ -221,22 +283,25 @@ export class DetailPane {
     return !this.closed;
   }
 
-  /** Hiding/yielding must discard intent as well as stale hit geometry. */
+  /** Hiding/yielding retires action evidence, not an existing sticky draft. */
   resetStopInteraction(): void {
     this.stopPaint = undefined;
+    this.composePaint = undefined;
     this.confirmation = undefined;
   }
 
   /** Permission yield can hide the mounted pane without disposing it. */
   resetCloseHover(render = true): void {
     this.paintedWidth = 0;
+    this.composePaint = undefined;
     this.closeHover.reset(render);
   }
 
   /** Timers request repaint without consuming the still-visible confirmation:
    * its first Esc must cancel, even if the render request has not been serviced. */
   private staleStopPaint(width?: number): boolean {
-    const painted = this.stopPaint?.dimensions ?? this.confirmation?.dimensions;
+    const painted =
+      this.stopPaint?.dimensions ?? this.confirmation?.dimensions ?? this.composePaint?.dimensions;
     const terminal = this.options.tui.terminal;
     return !!(
       (this.confirmation && performance.now() >= this.confirmation.expiresAt) ||
@@ -301,8 +366,169 @@ export class DetailPane {
     this.options.tui.requestRender();
   }
 
+  private beginCompose(target: StopTarget, text = ""): void {
+    const input = new Input({
+      prompt: this.options.theme.fg("dim", "› "),
+      placeholder: "message this Agent",
+      placeholderStyle: (text) => this.options.theme.fg("dim", text),
+    });
+    // The pane holds focus, so its input owns the hardware cursor (and the IME).
+    input.focused = true;
+    const safe = composeText(text);
+    // setValue clamps the existing cursor (initially zero). Public paste input
+    // instead restores a nonempty draft with its caret at the end, including IME.
+    if (safe) input.handleInput(PASTE_START + safe + PASTE_END);
+    input.onSubmit = () => this.submitCompose();
+    input.onEscape = () => {
+      this.endCompose();
+      this.options.tui.requestRender();
+    };
+    this.compose = { target, input, empty: false, paste: undefined, pastePrefix: "" };
+    if (safe !== text) this.options.onDraft?.(safe ? { target, text: safe } : undefined);
+  }
+
+  /** The user discarded or spent the draft. Disposal alone keeps it with the host. */
+  private endCompose(): void {
+    if (!this.compose) return;
+    this.compose = undefined;
+    this.options.onDraft?.(undefined);
+  }
+
+  /** Fresh authority, as for Stop: the draft only ever reaches its original Run. */
+  private composeTarget(snapshot = this.options.snapshot): RunView | undefined {
+    const compose = this.compose;
+    if (!compose || this.selected !== compose.target.agent_id) return undefined;
+    const view = snapshot().find((entry) => entry.agent_id === compose.target.agent_id)?.input.view;
+    return sameRun(compose.target, view) && steerable(view!) ? view : undefined;
+  }
+
+  private submitCompose(): void {
+    const compose = this.compose;
+    if (!compose || !this.options.onSteer) return;
+    const message = compose.input.getValue().trim();
+    if (!message) {
+      compose.empty = true;
+      this.options.tui.requestRender();
+      return;
+    }
+    if (
+      this.paintedHeight === 0 ||
+      !this.bounds(this.painted).fits ||
+      !this.composeTarget(this.options.freshSnapshot ?? this.options.snapshot)
+    ) {
+      this.options.tui.requestRender();
+      return;
+    }
+    if (this.options.onSteer(compose.target.run_id, message) && this.compose === compose) {
+      this.endCompose();
+      this.followTail = true;
+    }
+    this.options.tui.requestRender();
+  }
+
+  private requestCompose(): void {
+    const paint = this.composePaint;
+    if (!paint || !this.options.onSteer || this.confirmation) return;
+    const view = (this.options.freshSnapshot ?? this.options.snapshot)().find(
+      (entry) => entry.agent_id === this.selected,
+    )?.input.view;
+    if (
+      this.selected !== paint.target.agent_id ||
+      !sameRun(paint.target, view) ||
+      !steerable(view!)
+    ) {
+      this.resetStopInteraction();
+      return;
+    }
+    this.resetStopInteraction();
+    this.beginCompose(paint.target);
+    this.options.tui.requestRender();
+  }
+
+  /** Paste is sanitized before SDK insertion. Keyboard edits (including Kitty
+   * printable decoding, undo and yank) are sanitized before preview/host storage. */
+  private editCompose(compose: Compose, data: string, paste = false): void {
+    const before = compose.input.getValue();
+    compose.input.handleInput(paste ? PASTE_START + composeText(data) + PASTE_END : data);
+    const raw = compose.input.getValue(),
+      text = composeText(raw);
+    if (raw !== text) compose.input.setValue(text);
+    if (this.compose === compose && text !== before) {
+      compose.empty = false;
+      this.options.onDraft?.(text ? { target: compose.target, text } : undefined);
+    }
+    this.options.tui.requestRender();
+  }
+
+  /** Message mode owns the keyboard except for body scrolling. */
+  private composeInput(data: string): boolean {
+    const compose = this.compose;
+    if (!compose) return false;
+    // Buffer raw paste privately until its terminator arrives. In particular an
+    // ESC, Enter or navigation key inside a paste is data, never a pane action.
+    if (compose.paste !== undefined) {
+      const buffered = compose.paste + data;
+      const end = buffered.indexOf(PASTE_END);
+      if (end < 0) {
+        compose.paste = buffered;
+        return true;
+      }
+      compose.paste = undefined;
+      this.editCompose(compose, buffered.slice(0, end), true);
+      const remaining = buffered.slice(end + PASTE_END.length);
+      if (remaining) this.handleInput(remaining);
+      return true;
+    }
+    data = compose.pastePrefix + data;
+    compose.pastePrefix = "";
+    const start = data.indexOf(PASTE_START);
+    if (start >= 0) {
+      if (start) this.composeInput(data.slice(0, start));
+      if (this.compose !== compose) return true;
+      compose.paste = "";
+      return this.composeInput(data.slice(start + PASTE_START.length));
+    }
+    // The host frames standalone Escape as cancel, not a partial paste marker.
+    // Longer start-marker prefixes can safely span input calls.
+    for (let length = PASTE_START.length - 1; length >= 2; length--) {
+      if (!data.endsWith(PASTE_START.slice(0, length))) continue;
+      const before = data.slice(0, -length);
+      if (before) this.composeInput(before);
+      if (this.compose === compose) compose.pastePrefix = data.slice(-length);
+      return true;
+    }
+    if (matchesKey(data, "escape")) {
+      // Discards the draft only; a second Esc closes the pane.
+      this.endCompose();
+      this.options.tui.requestRender();
+      return true;
+    }
+    if (
+      ["up", "down", "pageUp", "pageDown"].some((key) => matchesKey(data, key as "up")) &&
+      this.painted !== 0
+    )
+      return false;
+    const printable = decodeKittyPrintable(data);
+    if (printable !== undefined && composeText(printable) !== printable)
+      this.editCompose(compose, printable, true);
+    else if (!/\p{Cc}/u.test(data) && composeText(data) !== data)
+      this.editCompose(compose, data, true);
+    else this.editCompose(compose, data);
+    return true;
+  }
+
   handleInput(data: string): void {
     if (this.closed) return;
+    if (this.options.visible?.() === false) {
+      this.resetStopInteraction();
+      return;
+    }
+    if (this.composeInput(data)) return;
+    if (!this.compose && (matchesKey(data, "m") || matchesKey(data, "shift+m"))) {
+      this.retireStopPaint();
+      this.requestCompose();
+      return;
+    }
     if (matchesKey(data, "ctrl+s")) {
       this.retireStopPaint();
       this.confirmStop();
@@ -372,6 +598,10 @@ export class DetailPane {
   handleMouse(event: PaneMouseEvent): { handled: boolean } | undefined {
     this.closeHover.mouse(event);
     if (this.closed) return undefined;
+    if (this.options.visible?.() === false) {
+      this.resetStopInteraction();
+      return undefined;
+    }
     this.retireStopPaint();
     const action = this.stopPaint?.action;
     if (
@@ -404,6 +634,7 @@ export class DetailPane {
     ) {
       this.closed = true;
       this.resetStopInteraction();
+      this.endCompose();
       this.resetCloseHover();
       this.options.done();
       return { handled: true };
@@ -421,13 +652,21 @@ export class DetailPane {
   render(width: number): string[] {
     this.retireStopPaint(width);
     this.stopPaint = undefined;
+    this.composePaint = undefined;
     this.paintedHeight = 0;
     this.animating = false;
     // Floating, side borders reduce the body; inlaid title/footer padding
     // further reduces chrome. Every unpaintable layout retires the same state.
     const inner = this.options.frame ? width - 2 : width;
     const chrome = this.options.frame ? inner - 4 : inner;
-    if (this.closed || !Number.isFinite(width) || width < 12 || inner < 10 || chrome < 8) {
+    if (
+      this.closed ||
+      this.options.visible?.() === false ||
+      !Number.isFinite(width) ||
+      width < 12 ||
+      inner < 10 ||
+      chrome < 8
+    ) {
       this.resetCloseHover(false);
       this.transcriptAnchor = undefined;
       this.resetStopInteraction();
@@ -453,7 +692,7 @@ export class DetailPane {
             inner,
           ),
         ],
-        this.footer(chrome, 0, 0, 0, 0, undefined, false, false).text,
+        this.footer(chrome, 0, 0, 0, 0, undefined, false, false, false).text,
         width,
         inner,
       );
@@ -517,20 +756,32 @@ export class DetailPane {
     this.scrollOffset = Math.min(this.scrollOffset, maxScroll);
     if (this.followTail) this.scrollOffset = maxScroll;
     const start = this.scrollOffset;
-    const footer = this.footer(
-      chrome,
-      index + 1,
-      entries.length,
-      start + viewportHeight,
-      total,
-      view,
-      fits &&
-        Number.isFinite(this.options.tui.terminal.columns) &&
-        this.options.tui.terminal.columns > 0 &&
-        !!this.options.onStop &&
-        stoppable(view),
-      !!this.confirmation,
-    );
+    const compose = this.compose;
+    const footer: DetailFooterFrame = compose
+      ? {
+          text: renderComposeFooter({
+            width: chrome,
+            input: (room) => compose.input.render(room)[0] ?? "",
+            sendable: sameRun(compose.target, view) && steerable(view),
+            empty: compose.empty,
+            theme: this.options.theme,
+          }),
+        }
+      : this.footer(
+          chrome,
+          index + 1,
+          entries.length,
+          start + viewportHeight,
+          total,
+          view,
+          fits &&
+            Number.isFinite(this.options.tui.terminal.columns) &&
+            this.options.tui.terminal.columns > 0 &&
+            !!this.options.onStop &&
+            stoppable(view),
+          !!this.confirmation,
+          !!this.options.onSteer && steerable(view),
+        );
     this.paintedHeight = viewportHeight + CHROME_LINES;
     // Geometry is published once for this frame; formatting has no interaction
     // side effects. A hidden/unrenderable control cannot remain armed.
@@ -545,6 +796,23 @@ export class DetailPane {
         },
       };
     else this.resetStopInteraction();
+    if (
+      !compose &&
+      !this.confirmation &&
+      this.options.onSteer &&
+      steerable(view) &&
+      fits &&
+      Number.isFinite(this.options.tui.terminal.columns) &&
+      width <= this.options.tui.terminal.columns
+    )
+      this.composePaint = {
+        target: { owner_id, generation, agent_id, run_id },
+        dimensions: {
+          columns: this.options.tui.terminal.columns,
+          rows: this.options.tui.terminal.rows,
+          width,
+        },
+      };
     return this.dress(
       renderDetailTitle(
         entry.input,
@@ -667,6 +935,7 @@ export class DetailPane {
     view: RunView | undefined,
     available: boolean,
     confirming: boolean,
+    messaging: boolean,
   ): DetailFooterFrame {
     return renderDetailFooter({
       width,
@@ -677,6 +946,7 @@ export class DetailPane {
       view,
       available,
       confirming,
+      messaging,
       spinnerFrame: this.frame,
       theme: this.options.theme,
       framed: !!this.options.frame,

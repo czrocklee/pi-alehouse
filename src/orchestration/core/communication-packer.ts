@@ -369,6 +369,8 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     }
     if (task.cancellation_source !== undefined && task.cancellation_source !== "human")
       invalid("Invalid cancellation_source metadata");
+    if (task.human_steered !== undefined && task.human_steered !== true)
+      invalid("Invalid human_steered metadata");
     if (
       task.dispatch_notes !== undefined &&
       (!Array.isArray(task.dispatch_notes) ||
@@ -414,6 +416,8 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
     if (!terminalStatus(row.status)) invalid("Finished candidate requires a terminal status");
     if (candidate.cancellation_source !== undefined && candidate.cancellation_source !== "human")
       invalid("Invalid finished cancellation_source metadata");
+    if (candidate.human_steered !== undefined && candidate.human_steered !== true)
+      invalid("Invalid finished human_steered metadata");
     validateMetadata({ label: candidate.label });
     const key = `${row.agent}:${row.task}`;
     if (finishedKeys.has(key)) invalid("Duplicate finished candidate");
@@ -500,7 +504,7 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
   }
 
   // Bounded labels and Stop attribution retain their priority.
-  for (const field of ["cancellation_source", "label"] as const) {
+  for (const field of ["cancellation_source", "human_steered", "label"] as const) {
     for (let index = 0; index < snapshot.tasks.length; index++) {
       const value = snapshot.tasks[index]![field];
       if (value === undefined) continue;
@@ -617,7 +621,7 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
       // present/commit that original Run; no second reminder/ACK is invented.
       let row: FinishedEntry = finished[index]!;
       envelope = candidate;
-      for (const field of ["cancellation_source", "label"] as const) {
+      for (const field of ["cancellation_source", "human_steered", "label"] as const) {
         const value = snapshot.finished[index]![field];
         if (value === undefined) continue;
         const attributed = { ...row, [field]: value };

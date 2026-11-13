@@ -151,6 +151,7 @@ interface RunRecord {
   limit_reached: boolean;
   stop_reason?: StopReason;
   cancellation_source?: CancellationSource;
+  human_steered?: true;
   model_stop_reason?: ModelStopReason;
   outcome?: Outcome;
   result?: ResultRef;
@@ -2335,8 +2336,18 @@ export class OwnerController {
       !!run.session?.canInput()
     );
   }
-  steer(run_id: string, message: string): { accepted: true; event_id: string } {
-    return this.dispatchInput(this.requireRun(run_id), message, "steer");
+  /** Only explicit human input passes source; it marks the Run once admitted.
+   * Admission stays identical to model steering, including the Off gate. */
+  steer(
+    run_id: string,
+    message: string,
+    options?: { source: "human" },
+  ): { accepted: true; event_id: string } {
+    const source =
+      options === undefined
+        ? undefined
+        : this.validateObservationEntry(() => cancellationSource(options));
+    return this.dispatchInput(this.requireRun(run_id), message, "steer", source);
   }
   /** Parent input to the task that is current (or latest) when this call is
    * made; the target never drifts to a later task. A task whose prompt is not
@@ -2473,6 +2484,7 @@ export class OwnerController {
     run: ManagedRun,
     message: string,
     kind: "steer" | "soft_budget",
+    source?: CancellationSource,
   ): { accepted: true; event_id: string } {
     this.assertEffectAllowed();
     this.assertInputOpen(run);
@@ -2490,6 +2502,7 @@ export class OwnerController {
     if (kind === "steer" && run.inputCount >= 64) throw new OrchestrationError("INPUT_LIMIT");
     const event_id = this.changed(kind, run);
     if (kind === "steer") run.inputCount++;
+    if (source === "human") run.record.human_steered = true;
     // Schedule after recording the reservation, so synchronous port exceptions
     // and very fast exits are handled exactly like asynchronous preparation.
     const delivery = Promise.resolve()
@@ -2994,6 +3007,7 @@ export class OwnerController {
             ...(run.record.cancellation_source
               ? { cancellation_source: run.record.cancellation_source }
               : {}),
+            ...(run.record.human_steered ? { human_steered: true as const } : {}),
             ...(targetIndices.has(run) ? { task_index: targetIndices.get(run)! } : {}),
           })),
           blocked: this.communicationBlock(),

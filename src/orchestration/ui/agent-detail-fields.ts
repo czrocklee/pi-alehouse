@@ -344,6 +344,30 @@ export interface DetailFooterFrame {
   action?: DetailFooterAction;
 }
 
+/** Message mode replaces the footer with one input row; nothing else moves.
+ * The hint yields whole before the input does. A stale target keeps the text
+ * on screen but says plainly that Enter no longer sends it. */
+export function renderComposeFooter(input: {
+  width: number;
+  input: (room: number) => string;
+  sendable: boolean;
+  /** Enter refused an empty/whitespace draft; retained until its next edit. */
+  empty?: boolean;
+  theme: Theme;
+}): string {
+  const { width, theme: th } = input;
+  const hints = !input.sendable
+    ? ["task no longer running · Esc cancel", "not running · Esc", ""]
+    : input.empty
+      ? ["message is empty · Esc cancel", "empty · Esc", "empty"]
+      : ["Enter send · Esc cancel", "Enter · Esc", ""];
+  const hint =
+    hints.find((text) => !text || width - visibleWidth(text) - 2 >= (input.empty ? 1 : 16)) ?? "";
+  const room = hint ? width - visibleWidth(hint) - 2 : width;
+  const row = input.input(room);
+  return hint ? `${row}  ${th.fg(input.sendable && !input.empty ? "dim" : "warning", hint)}` : row;
+}
+
 /** Pure footer layout. Confirmation lifetime and painted hit geometry stay with the pane. */
 export function renderDetailFooter(input: {
   width: number;
@@ -354,6 +378,8 @@ export function renderDetailFooter(input: {
   view: RunView | undefined;
   available: boolean;
   confirming: boolean;
+  /** The shown Run accepts a human message; advertises the M key. */
+  messaging?: boolean;
   spinnerFrame: number;
   theme: Theme;
   framed: boolean;
@@ -367,6 +393,7 @@ export function renderDetailFooter(input: {
     view,
     available,
     confirming,
+    messaging,
     spinnerFrame,
     theme: th,
     framed,
@@ -407,7 +434,14 @@ export function renderDetailFooter(input: {
   const navigation =
     confirming && action
       ? [CONFIRM_HELP]
-      : ["←→ agent · ↑↓ scroll · Esc close", "←→ · ↑↓ · Esc", "Esc"];
+      : messaging
+        ? [
+            "←→ agent · ↑↓ scroll · M message · Esc close",
+            "←→ · ↑↓ · M msg · Esc",
+            "M msg · Esc",
+            "Esc",
+          ]
+        : ["←→ agent · ↑↓ scroll · Esc close", "←→ · ↑↓ · Esc", "Esc"];
   const choices = action
     ? [...navigation.map((text) => `${text} · ${action}`), ...(confirming ? [] : [action]), ""]
     : [...navigation, ""];

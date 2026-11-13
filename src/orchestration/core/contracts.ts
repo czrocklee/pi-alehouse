@@ -173,6 +173,9 @@ export interface RunView {
   runtime?: RunTelemetry;
   stop_reason?: StopReason;
   cancellation_source?: CancellationSource;
+  /** An explicit human message was admitted to this Run's input path. Admission
+   * only: neither delivery nor the message text is recorded here. */
+  human_steered?: true;
   model_stop_reason?: ModelStopReason;
   outcome?: Outcome;
   usage?: UsageLedger;

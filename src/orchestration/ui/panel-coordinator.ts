@@ -22,7 +22,7 @@ import type {
   PresetSnapshot,
   Strength,
 } from "../routing.ts";
-import { DetailPane, type DetailInput } from "./agent-detail.ts";
+import { DetailPane, type DetailDraft, type DetailInput } from "./agent-detail.ts";
 import { AgentWidget, type AgentDetail } from "./agent-widget.ts";
 import { HIDE_TRANSIENT_OVERLAYS_EVENT } from "./overlay-request.ts";
 import {
@@ -42,6 +42,22 @@ import {
 import { createTranscriptMessageCache, createTranscriptMounts } from "./detail-transcript-cache.ts";
 import { createPresetOverlayHost } from "./preset-overlay-host.ts";
 import { TranscriptContent } from "./transcript.ts";
+
+/** Why an explicit human message was not admitted, in the user's terms. */
+function steerFailure(error: unknown): string {
+  const code = error instanceof Error ? error.message : "";
+  const reason =
+    code === "DELEGATION_OFF"
+      ? "delegation is off"
+      : code === "RUN_INPUT_CLOSED"
+        ? "the task is not accepting input right now"
+        : code === "INPUT_LIMIT"
+          ? "this task has reached its input limit"
+          : code === "INVALID_MESSAGE"
+            ? "the message is empty or too long"
+            : String(error);
+  return `Message not sent: ${reason}. Your text is kept.`;
+}
 
 export interface HumanStopResult {
   result: "cancel_requested" | "already_terminal" | "already_exited";
@@ -63,6 +79,8 @@ export interface PanelCoordinatorOptions {
   showError(error: unknown, ctx: Pick<ExtensionContext, "ui">): void;
   /** Host core command only. Display refresh is a separate best-effort effect. */
   stopRun?: (run_id: string) => HumanStopResult;
+  /** Host core command only: admits one human message to that exact Run, or throws. */
+  steerRun?: (run_id: string, message: string) => { accepted: true };
   efforts?: (preset: PresetSnapshot, slot: Strength) => EffortCapabilities;
   /** Delegation mode: read live, and applied at once by the panel's slider. */
   delegation?: {
@@ -109,6 +127,8 @@ export class PanelCoordinator {
   private tui: Pick<TUI, "mode"> | undefined;
   private clearHostWidget: (() => void) | undefined;
   private paneAgent: string | undefined;
+  /** Unsent message text, carried across a permission yield that closes the pane. */
+  private paneDraft: DetailDraft | undefined;
   private unwatchApprovals: (() => void) | undefined;
   private unwatchIndicator: (() => void) | undefined;
   private yieldTimer: ReturnType<typeof setTimeout> | undefined;
@@ -268,6 +288,7 @@ export class PanelCoordinator {
     this.detailPane = undefined;
     this.paneOverlay = undefined;
     this.paneAgent = undefined;
+    this.paneDraft = undefined;
     this.paneOpen = false;
     this.pickerOpen = false;
     this.managementOpen = false;
@@ -434,6 +455,12 @@ export class PanelCoordinator {
       ctx.ui.notify("The agent detail pane needs the interactive TUI.", "warning");
       return;
     }
+    // A new opening supersedes an older permission-reopen intent. Otherwise
+    // its timer could resurrect this pane after the user has already closed it.
+    if (this.yieldTimer) {
+      clearTimeout(this.yieldTimer);
+      this.yieldTimer = undefined;
+    }
     this.paneOpen = true;
     const request = new PaneRequest(() =>
       this.options.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {}),
@@ -445,6 +472,10 @@ export class PanelCoordinator {
       const floating = this.floating();
       let markdownTheme = getMarkdownTheme();
       this.paneAgent = agent_id ?? agents[0]!.agent_id;
+      // Opening another Agent supersedes a permission-yield restore, even if
+      // that restore's deferred mount has not run yet.
+      if (this.paneDraft && this.paneDraft.target.agent_id !== this.paneAgent)
+        this.paneDraft = undefined;
       await ctx.ui.custom<void>(
         (tui, theme, _keybindings, done) => {
           if (!request.mount(() => done(undefined), this.yielding, this.approvals.pending)) {
@@ -515,8 +546,70 @@ export class PanelCoordinator {
               return content;
             },
             onSelect: (id) => {
+              if (this.paneAgent !== id) this.paneDraft = undefined;
               this.paneAgent = id;
             },
+            ...(this.options.steerRun
+              ? {
+                  draft: this.paneDraft,
+                  onDraft: (draft: DetailDraft | undefined) => {
+                    if (this.host === ctx && this.closePane === request.close)
+                      this.paneDraft = draft;
+                  },
+                  onSteer: (run_id: string, message: string): boolean => {
+                    // Same retirement rule as Stop: a superseded pane sends nothing.
+                    if (
+                      this.host !== ctx ||
+                      this.closePane !== request.close ||
+                      this.detailPane !== pane ||
+                      !pane.isOpen()
+                    )
+                      return false;
+                    try {
+                      if (!this.options.ready()) {
+                        this.detailNotice(
+                          "Message not sent: Alehouse is not ready.",
+                          "warning",
+                          ctx,
+                        );
+                        return false;
+                      }
+                      if (!mountable(this.yielding, this.approvals.pending)) {
+                        this.detailNotice(
+                          "Message not sent while a permission dialog is active.",
+                          "warning",
+                          ctx,
+                        );
+                        return false;
+                      }
+                      try {
+                        this.options.steerRun!(run_id, message);
+                      } catch (error) {
+                        this.detailNotice(steerFailure(error), "warning", ctx);
+                        return false;
+                      }
+                      // Admission cannot be undone or retried by a display failure.
+                      if (this.host !== ctx || this.closePane !== request.close) return true;
+                      let refreshFailed = false;
+                      try {
+                        this.options.widget.wake();
+                      } catch {
+                        refreshFailed = true;
+                      }
+                      this.detailNotice(
+                        "Message queued for the Agent's next input opportunity; delivery is not confirmed" +
+                          (refreshFailed ? "; display refresh failed" : ""),
+                        refreshFailed ? "warning" : "info",
+                        ctx,
+                      );
+                      return true;
+                    } catch (error) {
+                      this.observeDetailError(error, ctx);
+                      return true; // Admitted above or unknowable: never invite a resend.
+                    }
+                  },
+                }
+              : {}),
             ...(this.options.stopRun
               ? {
                   onStop: (run_id: string) => {
@@ -668,6 +761,9 @@ export class PanelCoordinator {
 
   private async activateFromWidget(agent_id: string): Promise<void> {
     if (this.paneOpen && agent_id) {
+      // An explicit row click selects another Agent or closes the current one;
+      // neither action may leave a host-held draft behind for a later mount.
+      this.paneDraft = undefined;
       if (this.detailPane) this.detailPane.activate(agent_id);
       else if (agent_id === this.paneAgent) this.closePane?.();
       else this.paneAgent = agent_id;

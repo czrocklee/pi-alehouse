@@ -18,6 +18,7 @@ type TaskRecord = Pick<
   | "outcome"
   | "dispatch_notes"
   | "cancellation_source"
+  | "human_steered"
 > & { readonly limit_reached: boolean };
 interface TaskSource {
   readonly record: TaskRecord;
@@ -45,6 +46,7 @@ interface ViewSource {
     | "model_stop_reason"
     | "outcome"
     | "cancellation_source"
+    | "human_steered"
     | "usage"
     | "cleanup_errors"
     | "discarded_inputs"
@@ -107,6 +109,7 @@ export function projectRun(run: ViewSource, facts: RunProjectionFacts): RunView 
     model_stop_reason: record.model_stop_reason,
     outcome: record.outcome,
     ...(record.cancellation_source ? { cancellation_source: record.cancellation_source } : {}),
+    ...(record.human_steered ? { human_steered: true as const } : {}),
     usage: record.usage ?? run.runtime?.usage,
     result_ref: record.result,
     cleanup_errors: record.cleanup_errors,
@@ -174,6 +177,7 @@ export function communicationTask(
     ...(run.record.cancellation_source
       ? { cancellation_source: run.record.cancellation_source }
       : {}),
+    ...(run.record.human_steered ? { human_steered: true as const } : {}),
     diagnostics: facts.diagnostics,
   };
 }

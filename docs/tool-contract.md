@@ -578,6 +578,11 @@ a repeated Stop does not relabel an earlier request. The same source is retained
 in new run-end outcomes for cold inspection. A separate best-effort
 `alehouse:human-cancellation:v1` parent custom message requests no automatic retry
 and does not trigger a model turn; publication is not model acknowledgement.
+Optional `human_steered: true` on task/finished rows and list projections says
+the user sent that task a direct message from the detail pane, so its result may
+deliberately differ from the brief. It records admission only: no text, count or
+delivery claim, no parent message and no run-end outcome field. It yields under
+envelope pressure like `cancellation_source`; model `agent_send` never sets it.
 Queued rows retain `queued_for: "dependencies" | "provider_capacity"` when that scheduling
 condition applies; it is a mandatory bounded control, including in list/interrupt
 projections, not optional diagnostic text. Dependency names remain in the roster's

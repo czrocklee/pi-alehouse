@@ -98,6 +98,14 @@ after pre-prompt compaction abort; this race is not fixed. The orchestration fin
 quarantines crossings, but cannot make provider admission atomic. Controlled
 probes observed SDK user-message/queue acceptance after gate closure in selected
 schedules; absence of a provider call in those tests is not a universal proof.
+A human message from Agent details uses the same cooperative steering path and
+the same limits (64 inputs per task, delegation Off rejects it). The fixed human
+lead leaves 16236 UTF-16 units for normalized, trimmed message text within the
+unchanged 16384-unit input bound; blank text is rejected before admission. The parent model
+sees at most the optional `human_steered` marker, never the text, and that marker
+may be omitted under byte pressure; a parent can therefore still redo work the
+user steered away from. The draft is single-line, memory-only and lost on session
+replacement.
 Natural-finish steering has SDK-version-specific scheduling behavior and a
 quarantined new-prompt fallback. These are known limitations under the documented cooperative contract, not
 newly fixed SDK behavior or public acceptance.

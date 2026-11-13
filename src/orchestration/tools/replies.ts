@@ -50,6 +50,7 @@ export function taskReply(view: RunView, nameOf: NameOf) {
     ...(view.cancellation_source === "human" || view.outcome?.cancellation_source === "human"
       ? { cancellation_source: "human" as const }
       : {}),
+    ...(view.human_steered ? { human_steered: true as const } : {}),
     // Qualifies `status`: a turn-capped task still settles as "completed".
     ...(view.outcome?.limit_reached ? { limit_reached: true } : {}),
     ...(dispatch_notes ? { dispatch_notes } : {}),

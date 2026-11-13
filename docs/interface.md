@@ -258,6 +258,41 @@ optional metadata; byte pressure may omit it. The host also attempts a visible
 asking the model not to repeat the task automatically. Neither queuing a message
 nor displaying a notice proves model receipt. An earlier model/budget stop or an
 already-exited task is not relabelled as a new human cancellation.
+**M** opens message mode for a running task: the footer row becomes one input
+line (`› … Enter send · Esc cancel`) without resizing the pane or moving the body.
+Printable keys, including **S**, enter text there; `←`/`→` edit the caret rather
+than switching Agents. `↑`/`↓`/PageUp/PageDown and the wheel still scroll. **Enter** submits one human message as steering input to
+the Run the draft was started for; **Esc** discards the draft and a subsequent
+**Esc** closes details. The hint `M message` is shown, and **M** acts, only while
+the selected task is running with no stop requested; queued, stopping and settled
+tasks have no message mode, and it never starts a continuation. Starting a draft
+binds the last visibly painted Owner, generation, Agent and Run, then checks that
+identity against fresh state; a changed or hidden frame requires a repaint before
+**M** can act. The host rechecks the original identity before invoking the Owner. If that
+Run ends or is replaced, the text stays visible with `task no longer running` and
+Enter sends nothing. Selecting another Agent, `×` or a row click discards the
+draft; a permission dialog that hides or closes the pane does not, and the draft
+returns only for the same Run, with the caret at its end after a closed pane is
+rebuilt. Explicitly opening another Agent supersedes a pending permission restore
+and discards the old draft. Empty messages and messages exceeding 16236 UTF-16
+units after normalization and trimming are refused; the fixed human-origin lead
+uses the rest of the unchanged 16384-unit input bound. A refused message
+(delegation Off, input not ready, input limit or invalid text) keeps its text and
+explains why. An accepted one reports
+`Message queued`: that is admission to the child-input path, not delivery, and a
+child blocked in a tool reads it only when that tool returns. Undelivered text
+appears under the task's discarded inputs.
+
+The child receives the text behind a fixed lead naming the human, not the parent,
+as its author. Nothing is published to the parent session and no model turn is
+triggered: the Run only carries `human_steered: true` in live state and parent
+tool projections, as bounded optional metadata that byte pressure may omit. The
+message text is never projected to the parent. Pasted newlines are removed for
+this single-line editor; terminal protocols are stripped and remaining control
+or bidirectional-control characters are escaped before draft storage, display or
+sending. Printable Unicode, including combining marks and emoji joiners, stays
+intact. This sanitization does not change the child's permission boundary.
+
 The title reserves space for the task and a Run reuse cue: `#N` for a valid task
 ordinal, otherwise an abbreviated Run ID. Nickname/profile text yields first.
 Ordinary metadata normalizes tabs/newlines readably, strips recognized terminal

@@ -43,6 +43,7 @@ import { configureChildRuntime } from "./runtime/execution-policy.ts";
 import type { ManagedBlockSubscription } from "./runtime/permission-blocks.ts";
 import { createDispatchRuntime } from "./runtime/dispatch-runtime.ts";
 import { researcherHostModules } from "./runtime/host-modules.ts";
+import { requestHumanSteer } from "./runtime/human-steer.ts";
 import { requestHumanStop } from "./runtime/human-stop.ts";
 import { registerCompactionReminder } from "./runtime/compaction-reminder.ts";
 import { FileOwnerLease } from "./runtime/owner-lease.ts";
@@ -575,6 +576,10 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
     stopRun: (run_id) => {
       if (!ready || !controller) throw new OrchestrationError("ORCHESTRATION_NOT_READY");
       return requestHumanStop(controller, pi, run_id);
+    },
+    steerRun: (run_id, message) => {
+      if (!ready || !controller) throw new OrchestrationError("ORCHESTRATION_NOT_READY");
+      return requestHumanSteer(controller, run_id, message);
     },
     delegation: {
       current: () => ({ ...delegation }),

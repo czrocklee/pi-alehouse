@@ -96,6 +96,9 @@ export interface ThinTaskEntry {
 export interface TaskEntry extends ThinTaskEntry, Partial<TaskMetadata> {
   /** Explicit human Stop provenance; optional metadata may yield at saturation. */
   readonly cancellation_source?: CancellationSource;
+  /** The user messaged this task directly, so its result may deliberately differ
+   * from the brief. Admission only; optional metadata may yield at saturation. */
+  readonly human_steered?: true;
   /** Whole bounded notes (at most two, each 1..120 nonblank UTF-16 units).
    * Optional diagnostics yield to retained controls/body; no recovery promise. */
   readonly dispatch_notes?: readonly string[];
@@ -135,6 +138,7 @@ export interface FinishedEntry extends ThinTaskEntry {
   readonly label?: string;
   /** May yield independently of the finished row and its presentation commit. */
   readonly cancellation_source?: CancellationSource;
+  readonly human_steered?: true;
 }
 
 /** Projection only; these arrays must never become another persistent registry.
