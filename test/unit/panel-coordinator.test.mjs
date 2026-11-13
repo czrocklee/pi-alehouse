@@ -423,7 +423,7 @@ test("an open queued pane follows late child history and streaming without remou
   assert.deepEqual(retained.entries(), sessionManager.getEntries());
   assert.equal(retained.inFlight(), draft);
   // Match the transcript, not the independently refreshed activity preview.
-  const transcript = () => pane.render(120).join("\n").split(" transcript ")[1];
+  const transcript = () => pane.render(120).join("\n").split(" Transcript · Info ")[1];
   assert.match(transcript(), /LATE_CHILD_HISTORY/);
   assert.match(transcript(), /LATE_CHILD_STREAM/);
   sessionManager.appendMessage({ ...draft, stopReason: "stop" });

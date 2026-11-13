@@ -23,6 +23,8 @@ export type Theme = {
   fg(color: string, text: string): string;
   bold(text: string): string;
   italic?(text: string): string;
+  /** Background fill, e.g. `selectedBg`; structural themes without it fall back to bold. */
+  bg?(color: string, text: string): string;
 };
 
 const TOOL_ACTION: Record<string, { verb: string; noun?: string; joiner?: string }> = {
@@ -219,6 +221,20 @@ export const withoutBreaks = (text: string): string => text.replace(ROW_BREAKS, 
 export interface TranscriptFrame {
   readonly lineCount: number;
   slice(start: number, count: number): string[];
+  /** Presentation-only stable read anchor, scoped to THIS frame's already
+   * captured block heights/identities (and the streaming tail's component
+   * identity): anchorAt(row) identifies the message block the row falls
+   * inside plus the row's offset within it, without resampling the source;
+   * resolveAnchor(anchor) maps an anchor back under a LATER frame's layout,
+   * clamping within the same block if it collapsed. Both are pure reads over
+   * the frame's own snapshot: a frame keeps its scope even if the source
+   * changes afterwards, and an anchor whose block the new frame's retained
+   * history no longer contains (compaction/branch rewrite, another pane, a
+   * finished stream) resolves to undefined — no position is invented.
+   * Frames without these methods give NO stability guarantee; callers must
+   * not silently assume one. */
+  anchorAt?(row: number): unknown;
+  resolveAnchor?(anchor: unknown): number | undefined;
 }
 export interface TranscriptRows {
   /** Capture settled history and the streaming tail once for a pane frame. */
@@ -226,6 +242,25 @@ export interface TranscriptRows {
   lineCount(width: number): number;
   slice(width: number, start: number, count: number): string[];
   invalidate(): void;
+  /** Presentation-only default expansion for settled, successful tool cards.
+   * Active/incomplete and failed cards stay expanded; implementers invalidate
+   * only the caches whose cards actually changed. */
+  setToolsExpanded?(expanded: boolean): void;
+  /** Presentation-only stable read anchor, for surviving a height-changing
+   * presentation toggle (e.g. setToolsExpanded) without losing the first
+   * visible message. captureAnchor(width, row) identifies the message block
+   * the row falls inside — plus the row's offset within it — under the current
+   * rendering, BEFORE the toggle; resolveAnchor(width, anchor) maps it back
+   * under the new rendering, clamping within the same block if it collapsed.
+   * Both are reads with no side effects beyond rendering at the given width.
+   * An anchor is valid only against the same retained block/component
+   * objects of the same implementer: history rewritten by a compaction or
+   * branch, an anchor from another pane, or any malformed value resolves to
+   * undefined — no position is invented. Implementations without these
+   * methods give NO stability guarantee across height changes; callers must
+   * not silently assume one. */
+  captureAnchor?(width: number, row: number): unknown;
+  resolveAnchor?(width: number, anchor: unknown): number | undefined;
 }
 /**
  * OSC 133 zone markers, as Pi's message components emit them

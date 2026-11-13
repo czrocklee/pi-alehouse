@@ -35,20 +35,21 @@ without Jev/checkpoint review.
 
 ## Lifecycle and cancellation
 
-Esc interrupts the parent's wait, not child work. In Agent details it only
-closes the pane, or cancels an armed Stop confirmation before a later Esc closes
-it. **S** / the bottom-right, rightmost **[S Stop]** arms confirmation in the
+Esc interrupts the parent's wait, not child work. In Agent details each press
+leaves one layer: an armed Stop confirmation, then a message draft, then Info,
+and finally the pane. **S** / the bottom-right, rightmost **[S Stop]** arms confirmation in the
 footer without replacing the title/body/transcript or changing scroll or height.
 The footer shows `best-effort · Ctrl+S · Esc cancel · [Confirm stop]`, with the
 warning-colored bold action rightmost (ordinary Stop is dim);
 **Ctrl+S** or a separate single click then requests cooperative cancellation through
 the Owner; rapid double/triple clicks do not confirm. Initial Stop requires the
-full inline confirmation hint plus compact live status to fit the footer and the
-normal pane height to fit a known finite
-viewport, not full identity/task text to fit a separate confirmation body.
+full inline confirmation hint to fit the footer beside a minimal selected tab
+when several Agents exist; live status stays in the title. The normal pane
+height must fit a known finite viewport, not full identity/task text in a
+separate confirmation body.
 Long or CJK task/name text alone no longer suppresses Stop. Ordinary typing,
-plain Enter and repeated S never confirm Stop; hidden controls cannot be
-activated. Confirmation binds the originally painted Owner/generation/Agent/Run;
+plain Enter and repeated S never confirm Stop; neither Stop step accepts an
+unpainted control. Confirmation binds the originally painted Owner/generation/Agent/Run;
 user scrolling by keys or wheel, stale geometry, selection changes, replacement
 work and permission hiding retire it rather than retargeting. Confirmation expires
 after ten seconds of monotonic elapsed time, checked before rendering or acting
@@ -666,7 +667,12 @@ to activate a hidden control.
 Fullscreen alternate-screen rendering is required for floating worker panels and
 click input. Regular mode deliberately docks the detail/picker to avoid
 scrollback contamination; its footer retains totals but does not open the usage
-popover. Multiplexers can further limit mouse motion. Pi's unexported native
+popover. Multiplexers can further limit mouse motion. The pinned SDK's overlay sizing
+options carry width, minWidth and maxHeight but no maxWidth option; the floating
+detail pane therefore caps its width by computing a numeric column count from
+the mounted pane's own terminal (88% of the live width, at most 164 columns),
+falling back to the plain 88% percentage when that width is unknown. A stub or
+structural host without a column count gets the uncapped percentage width. Pi's unexported native
 tool renderers mean child transcripts fall back to plain tool argument/output
 blocks for built-in tools. PTY/UI fixtures and scripted permission RPC are not
 human-TUI acceptance. Expanded Agent inspection is paginated within a widget

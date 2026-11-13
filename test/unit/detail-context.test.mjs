@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { DetailPane } from "../../dist/orchestration/ui/agent-detail.js";
-import { renderDetailFooter } from "../../dist/orchestration/ui/agent-detail-fields.js";
+import {
+  renderDetailFooter,
+  renderDetailSummary,
+} from "../../dist/orchestration/ui/agent-detail-fields.js";
 import { settings } from "../support/controller-fixture.mjs";
 
 const theme = { fg: (_color, text) => text, bold: (text) => text };
@@ -30,14 +33,20 @@ const view = (overrides = {}) => ({
   ...overrides,
 });
 const live = { active_tools: [], tool_uses: 0, preview: "" };
-const footer = (overrides = {}) =>
-  renderDetailFooter({
+const entryOf = (current) => ({ agent_id: current.agent_id, input: { view: current, live } });
+const footer = (overrides = {}) => {
+  const current =
+    "view" in overrides
+      ? overrides.view
+      : view({ runtime: { activity: "generating", context: context() } });
+  return renderDetailFooter({
     width: 120,
-    position: 1,
-    count: 2,
-    shown: 20,
-    total: 200,
-    view: view({ runtime: { activity: "generating", context: context() } }),
+    entries: current
+      ? [entryOf(current), entryOf(view({ agent_id: "b", run_id: "run-b", name: "b" }))]
+      : [],
+    selected: "a",
+    below: 0,
+    view: current,
     available: false,
     confirming: false,
     spinnerFrame: 0,
@@ -45,48 +54,42 @@ const footer = (overrides = {}) =>
     framed: false,
     ...overrides,
   });
+};
 
 for (const [tokens, expected] of [
   [45000, "ctx ≈45k/500k"],
   [null, "ctx ?/500k"],
   [0, "ctx ≈0/500k"],
 ]) {
-  test(`detail footer renders current context as ${expected} without changing the snapshot`, () => {
+  test(`the pinned metrics row renders current context as ${expected} without changing the snapshot`, () => {
     const current = view({ runtime: { activity: "generating", context: context(tokens) } });
     const before = structuredClone(current);
+    const [metrics] = renderDetailSummary({ view: current, live }, theme, 120);
+    assert.ok(metrics.includes(expected), metrics);
+    // The edge is navigation and actions only: it never repeats the figure.
     const rendered = footer({ view: current });
-    assert.match(rendered.text, /^⠋ running · ctx /);
-    assert.ok(rendered.text.includes(expected), rendered.text);
-    assert.ok(rendered.text.indexOf(expected) < rendered.text.indexOf("1/2 agents"));
-    assert.match(rendered.text, /20\/200 lines/);
-    assert.match(rendered.text, /←→ agent · ↑↓ scroll · Esc close$/);
+    assert.doesNotMatch(rendered.text, /ctx|agents|lines|running/);
     assert.ok(visibleWidth(rendered.text) <= 120);
     assert.deepEqual(current, before, "formatting is a read-only projection");
   });
 }
 
-test("absent context preserves the previous footer, not an invented zero or unknown", () => {
-  const left = "⠋ running · 1/2 agents · 20/200 lines";
-  const right = "←→ agent · ↑↓ scroll · Esc close";
-  const expected = left + " ".repeat(120 - visibleWidth(left) - visibleWidth(right)) + right;
+test("absent context is not invented as zero or unknown", () => {
   for (const current of [view(), view({ runtime: { activity: "generating" } })]) {
-    assert.deepEqual(footer({ view: current }), { text: expected });
+    const [metrics] = renderDetailSummary({ view: current, live }, theme, 120);
+    assert.doesNotMatch(metrics, /ctx/);
+    assert.doesNotMatch(footer({ view: current }).text, /ctx/);
   }
-  const empty = footer({ view: undefined, count: 0 });
-  assert.match(empty.text, /^no agents/);
-  assert.doesNotMatch(empty.text, /ctx/);
+  const empty = footer({ view: undefined });
+  assert.doesNotMatch(empty.text, /ctx|agents/);
+  assert.deepEqual(empty.tabs, []);
 });
 
-test("context yields after status but before agent and line counters under width pressure", () => {
-  const rendered = footer({ width: 40 });
-  assert.match(rendered.text, /^⠋ running · ctx ≈45k\/500k/);
-  assert.doesNotMatch(rendered.text, /agents|lines/);
-  assert.ok(visibleWidth(rendered.text) <= 40);
-  for (const width of [22, 14, 8]) {
-    const tight = footer({ width });
-    assert.match(tight.text, /^⠋ (?:running|run)/);
-    assert.doesNotMatch(tight.text, /ctx|agents|lines|…/);
-    assert.ok(visibleWidth(tight.text) <= width);
+test("the edge carries no counters, status or context at any width", () => {
+  for (const width of [120, 40, 32, 26, 14, 8]) {
+    const rendered = footer({ width });
+    assert.doesNotMatch(rendered.text, /ctx|agents|lines|\d+\/\d+|run/);
+    assert.ok(visibleWidth(rendered.text) <= width);
   }
 });
 
@@ -132,11 +135,13 @@ function paneFixture(t, frame, { width = 120, onStop } = {}) {
 }
 
 for (const frame of [false, true]) {
-  test(`context persists offscreen while scrolling and following the transcript (frame=${frame})`, (t) => {
+  test(`context stays pinned while scrolling and following the transcript (frame=${frame})`, (t) => {
     const h = paneFixture(t, frame);
     const check = (last) => {
       const lines = h.paint();
-      assert.match(lines.at(-1), /ctx ≈45k\/500k/);
+      // The metrics row is the first fixed row and never scrolls away.
+      assert.match(lines[1], /ctx ≈45k\/500k/);
+      assert.doesNotMatch(lines.at(-1), /ctx/);
       assert.ok(lines.at(-2).includes(last), lines.at(-2));
       assert.doesNotMatch(lines.slice(1, -1).join("\n"), /context\s/);
       assert.ok(lines.every((line) => visibleWidth(line) <= 120));
@@ -157,7 +162,8 @@ for (const frame of [false, true]) {
 
   test(`context refresh and Agent selection use the currently selected snapshot (frame=${frame})`, (t) => {
     const h = paneFixture(t, frame);
-    assert.match(h.paint().at(-1), /ctx ≈45k\/500k/);
+    const metrics = () => h.paint()[1];
+    assert.match(metrics(), /ctx ≈45k\/500k/);
     const entries = [
       {
         agent_id: "a",
@@ -181,27 +187,28 @@ for (const frame of [false, true]) {
     ];
     const before = structuredClone(entries);
     h.replace(entries);
-    assert.match(h.paint().at(-1), /ctx ≈90k\/500k/);
+    assert.match(metrics(), /ctx ≈90k\/500k/);
     h.pane.handleInput("\u001b[C");
-    assert.match(h.paint().at(-1), /ctx ≈12k\/200k/);
-    assert.doesNotMatch(h.paint().at(-1), /500k/);
+    assert.match(metrics(), /ctx ≈12k\/200k/);
+    assert.doesNotMatch(h.paint().join("\n"), /500k/);
     h.pane.handleInput("\u001b[C");
-    assert.doesNotMatch(h.paint().at(-1), /ctx/);
+    assert.doesNotMatch(h.paint().join("\n"), /ctx/);
     h.pane.handleInput("\u001b[D");
-    assert.match(h.paint().at(-1), /ctx ≈12k\/200k/);
+    assert.match(metrics(), /ctx ≈12k\/200k/);
     h.replace([]);
-    assert.doesNotMatch(h.paint().at(-1), /ctx/);
+    assert.doesNotMatch(h.paint().join("\n"), /ctx/);
     assert.deepEqual(entries, before);
   });
 
   for (const fits of [false, true]) {
-    const width = (frame ? 62 : 56) - (fits ? 0 : 1);
+    // A lone Agent's edge needs only the 50-column confirmation (+6 framed).
+    const width = (frame ? 56 : 50) - (fits ? 0 : 1);
     test(`context never displaces protected Stop confirmation (frame=${frame}, width=${width})`, (t) => {
       const stopped = [];
       const h = paneFixture(t, frame, { width, onStop: (id) => stopped.push(id) });
       const initial = h.paint();
       assert.ok(initial.every((line) => visibleWidth(line) <= width));
-      assert.match(initial.at(-1), /⠋ (?:running|run)/);
+      assert.match(initial[0], /⠋ (?:running|run)/, "the title carries the live status");
       if (!fits) {
         assert.doesNotMatch(initial.at(-1), /\[S Stop\]/);
         h.pane.handleInput("s");
@@ -214,7 +221,7 @@ for (const frame of [false, true]) {
       h.pane.handleInput("s");
       const armed = h.paint();
       assert.equal(armed.length, initial.length);
-      assert.match(armed.at(-1), /⠋ run/);
+      assert.match(armed[0], /⠋ (?:running|run)/, "the sticky title keeps the live status");
       assert.match(armed.at(-1), /best-effort · Ctrl\+S · Esc cancel · \[Confirm stop\]/);
       assert.doesNotMatch(armed.at(-1), /ctx|agents|lines/);
       assert.ok(armed.every((line) => visibleWidth(line) <= width));

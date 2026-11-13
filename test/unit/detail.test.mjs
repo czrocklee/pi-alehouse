@@ -132,9 +132,14 @@ test("the title reserves task and Run reuse cue before optional identity text", 
   assert.doesNotMatch(title, /researcher/);
   assert.match(title, /Review the lifecycle contract/);
   assert.match(title, /r-8f3a/);
-  for (const overrides of [{}, { status: "completed" }, { finalization_pending: true }]) {
+  // The title is sticky and carries the live status itself.
+  for (const [overrides, badge] of [
+    [{}, "⠋ running"],
+    [{ status: "completed" }, "✓ completed"],
+    [{ finalization_pending: true }, "⠋ finishing"],
+  ]) {
     const header = renderDetailTitle({ view: view(overrides), live: live() }, 0, theme, 60);
-    assert.doesNotMatch(header, /running|completed|finishing|⠋|✓/);
+    assert.ok(header.includes(badge), `${badge} stays pinned in the title: ${header}`);
     assert(visibleWidth(header) <= 60);
   }
   for (const width of [60, 44, 30]) {
@@ -659,21 +664,28 @@ const pane = (transcriptLines, rows = 20, extra = {}) => {
 };
 const strip = (lines) => lines.slice(1, -1);
 
-test("the pane paints the fields, then the rule, then the transcript, with no row lost at the seam", (t) => {
-  // Tall enough that the fields, the rule and the first transcript rows are all
-  // on screen at once, which is the only way to see the seam.
+test("the pane pins compact metrics, then the rule, then the transcript, with no row lost at the seam", (t) => {
+  // Tall enough that the pinned rows, the rule and the first transcript rows
+  // are all on screen at once, which is the only way to see the seam.
   const p = pane(40, 60);
   t.after(() => p.dispose());
-  const fields = renderDetailFields({ view: view(), live: live() }, theme, 80);
   p.render(80); // lay out once, so the keys have geometry
   p.handleInput("\u001b[H"); // home: pin to the top and stop following
   const top = strip(p.render(80));
-  assert.equal(top[0], fields[0], "the first body row is the first field");
-  assert.equal(top.filter((line) => line.includes("transcript")).length, 1, "exactly one rule");
+  // The full fields live on the Info page; the transcript page leads with the
+  // compact metrics row, never a field row.
+  assert.match(top[0], /claude-opus-5\/medium · ↻3≤256/);
+  const isRule = (line) => line.includes("Transcript · Info");
+  const ruleAt = top.findIndex(isRule);
+  assert.equal(top.filter(isRule).length, 1, "exactly one rule");
+  assert.ok(
+    top
+      .slice(0, ruleAt)
+      .every((line) => !/^ {2}(?:task|run|routing|effort|model|cwd|tools)\s/.test(line)),
+    "the transcript starts directly after the rule, not after all full fields",
+  );
   // The row right after the rule must be the transcript's row 0 — an off-by-one
   // here silently eats the first line of every conversation.
-  const ruleAt = top.findIndex((line) => line.includes("transcript"));
-  assert.equal(ruleAt, fields.length, "the rule sits directly after the last field");
   assert.equal(top[ruleAt + 1], "T0", "and the transcript starts on the very next row");
   assert.equal(top[ruleAt + 2], "T1");
 });
@@ -735,32 +747,40 @@ test("scrolling up stops the follow, and reaching the end again resumes it", (t)
   assert.equal(strip(p.render(80)).at(-1), "T279", "and following has resumed, not merely landed");
 });
 
+// Marks the selected tab's `selectedBg` fill as brackets, so plain text shows it.
+const marked = { ...theme, bg: (_color, text) => `[${text.trim()}]` };
+const named = (agent_id) => ({
+  agent_id,
+  input: { view: view({ agent_id, name: agent_id }), live: live() },
+});
+
 test("when the selected assistant exits, the pane adopts a row rather than drifting onto one", (t) => {
   let agents = ["a", "b", "c"],
     chosen;
   const tui = { terminal: { columns: 80, rows: 24 }, requestRender: () => {} };
   const p = new DetailPane({
     tui,
-    theme,
+    theme: marked,
     initial: "b",
     done: () => {},
     onSelect: (id) => {
       chosen = id;
     },
-    snapshot: () => agents.map((agent_id) => ({ agent_id, input: { view: view(), live: live() } })),
+    snapshot: () => agents.map(named),
     transcript: () => fakeRows(40),
   });
   t.after(() => p.dispose());
   const footer = () => p.render(80).at(-1);
-  assert.match(footer(), /2\/3/, "the pane opens on the agent it was given");
+  assert.match(footer(), /⠋ a +\[⠋ b\] +⠋ c/, "the pane opens on the agent it was given");
   agents = ["a", "c"];
-  assert.match(footer(), /1\/2/, "the vanished agent's row is gone and the first is shown");
+  assert.match(footer(), /\[⠋ a\] +⠋ c/, "the vanished agent's tab is gone and the first is shown");
+  assert.doesNotMatch(footer(), /⠋ b/);
   // Shown is not enough: the selection itself has to move, or left/right walk
   // from a row nobody is on and the host still thinks the gone agent is open.
   assert.equal(chosen, "a", "the host is told which agent the pane is actually on");
   p.handleInput("\u001b[C"); // right
   assert.equal(chosen, "c", "the neighbour is the one after the row on screen");
-  assert.match(footer(), /2\/2/);
+  assert.match(footer(), /⠋ a +\[⠋ c\]/);
 });
 
 test("widget activation selects another assistant and toggles the selected one closed", (t) => {
@@ -775,7 +795,7 @@ test("widget activation selects another assistant and toggles the selected one c
   };
   const p = new DetailPane({
     tui,
-    theme,
+    theme: marked,
     initial: "a",
     done: () => {
       closes++;
@@ -783,15 +803,14 @@ test("widget activation selects another assistant and toggles the selected one c
     onSelect: (id) => {
       chosen = id;
     },
-    snapshot: () =>
-      ["a", "b"].map((agent_id) => ({ agent_id, input: { view: view(), live: live() } })),
+    snapshot: () => ["a", "b"].map(named),
     transcript: () => fakeRows(40),
   });
   t.after(() => p.dispose());
   p.activate("b");
   assert.equal(chosen, "b");
   assert.equal(renders, 1);
-  assert.match(p.render(80).at(-1), /2\/2/);
+  assert.match(p.render(80).at(-1), /⠋ a +\[⠋ b\]/);
   p.activate("b");
   assert.equal(closes, 1, "clicking the selected row closes like Esc");
   p.activate("a");
@@ -837,7 +856,7 @@ test("a short body is not padded into a tall pane, and a tall one is capped", (t
 });
 
 for (const frame of [false, true])
-  test(`live status stays at the lower left with shared lifecycle glyphs/colors (frame=${frame})`, (t) => {
+  test(`live status stays pinned in the title with shared lifecycle glyphs/colors (frame=${frame})`, (t) => {
     let current = view();
     const colors = [];
     const recording = {
@@ -867,16 +886,23 @@ for (const frame of [false, true])
       colors.length = 0;
       const lines = p.render(80),
         badge = `${icon} ${label}`;
-      assert(lines.at(-1).startsWith(`${frame ? "╰─ " : ""}${badge} · 1/1 agents`), lines.at(-1));
-      assert(!lines[0].includes(badge), lines[0]);
-      assert.match(lines.at(-1), /←→ agent · ↑↓ scroll · Esc close/);
+      // The sticky title carries the status at its right end; the footer
+      // never repeats it. Docked it keeps the close hint, framed the close
+      // control on the title replaces it.
+      assert(lines[0].includes(badge), lines[0]);
+      assert(!lines.at(-1).includes(label), lines.at(-1));
+      if (frame) assert.match(lines[0], new RegExp(`${label} ─ × ─╮$`));
+      else {
+        assert(lines[0].endsWith(badge), lines[0]);
+        assert.match(lines.at(-1), /Esc/);
+      }
       assert(colors.some(([used, text]) => used === color && text === icon));
       assert(colors.some(([used, text]) => used === color && text === label));
     }
   });
 
 for (const frame of [false, true])
-  test(`narrow chrome prioritizes lower-left status without adding rows (frame=${frame})`, (t) => {
+  test(`narrow chrome keeps the status pinned and the close affordance whole (frame=${frame})`, (t) => {
     const p = pane(40, 30, {
       frame,
       snapshot: () => [
@@ -889,50 +915,50 @@ for (const frame of [false, true])
       const lines = p.render(width);
       assert.equal(lines.length, height);
       assert(lines.every((line) => visibleWidth(line) <= width));
-      assert(
-        lines
-          .at(-1)
-          .startsWith(`${frame ? "╰─ " : ""}? ${frame && width === 14 ? "input" : "needs_input"}`),
-        lines.at(-1),
-      );
-      assert(!lines[0].includes("needs_input"));
-      if (frame && width === 24) {
-        assert.doesNotMatch(
-          lines.at(-1),
-          /agents|lines|\d\/|…/,
-          "omit counters rather than clipping mid-value",
-        );
-        assert.match(lines.at(-1), /Esc/, "spare room still shows the close hint");
-      }
+      // The status never scrolls away: the sticky title keeps its glyph at
+      // every width, and the whole label while there is room for it.
+      assert(lines[0].includes("?"), lines[0]);
+      if (width >= 40) assert(lines[0].includes("input"), lines[0]);
+      // Docked, the close hint always keeps its room; framed, the close
+      // control on the title edge does. Nothing on the edge clips mid-value.
+      const footer = lines.at(-1);
+      if (frame) assert.match(lines[0], / × ─╮$/, "the close control keeps its room");
+      else assert.match(footer, /Esc/, "spare room still shows the close hint");
+      assert.doesNotMatch(footer, /…/, "edge parts yield whole, never clip mid-value");
     }
   });
 
-test("minimum-width framed footers keep every status readable without crowding it with counts", (t) => {
+test("minimum-width framed panes keep the status glyph, Run cue and close hint readable", (t) => {
   let current = view();
   const p = pane(40, 30, {
     frame: true,
     snapshot: () => [{ agent_id: "a", input: { view: current, live: live() } }],
   });
   t.after(() => p.dispose());
-  for (const [status, pending, badge] of [
-    ["queued", false, "◦ queued"],
-    ["running", false, "⠋ run"],
-    ["running", true, "⠋ finish"],
-    ["cancelling", false, "⠋ cancel"],
-    ["completed", false, "✓ done"],
-    ["needs_input", false, "? input"],
-    ["failed", false, "✗ failed"],
-    ["cancelled", false, "■ cancel"],
+  for (const [status, pending, icon] of [
+    ["queued", false, "◦"],
+    ["running", false, "⠋"],
+    ["running", true, "⠋"],
+    ["cancelling", false, "⠋"],
+    ["completed", false, "✓"],
+    ["needs_input", false, "?"],
+    ["failed", false, "✗"],
+    ["cancelled", false, "■"],
   ]) {
     current = view({ status, finalization_pending: pending });
-    const bottom = p.render(14).at(-1);
-    assert(bottom.startsWith(`╰─ ${badge}`), bottom);
-    assert(!bottom.includes("…"), bottom);
+    const lines = p.render(14);
+    // The sticky title keeps the status glyph, the Run reuse cue and the
+    // close control at exactly 14 columns; a lone Agent's edge is plain rule.
+    assert(lines[0].includes(icon), lines[0]);
+    assert(lines[0].includes("r-8"), lines[0]);
+    assert.match(lines[0], / × ─╮$/, lines[0]);
+    const bottom = lines.at(-1);
+    assert.match(bottom, /^╰─+╯$/, bottom);
     assert.equal(visibleWidth(bottom), 14);
   }
 });
 
-test("an empty roster never retains the previous Agent's footer status", (t) => {
+test("an empty roster never retains the previous Agent's status", (t) => {
   let available = true;
   const p = pane(40, 30, {
     frame: true,
@@ -942,19 +968,27 @@ test("an empty roster never retains the previous Agent's footer status", (t) => 
         : [],
   });
   t.after(() => p.dispose());
-  assert.match(p.render(80).at(-1), /\? needs_input/);
+  assert.match(p.render(80)[0], /\? needs_input/);
   available = false;
   const lines = p.render(80);
-  assert.match(lines.at(-1), /^╰─ no agents/);
-  assert.doesNotMatch(lines.at(-1), /needs_input/);
+  assert.match(lines[0], /^╭─ Agents /);
+  assert.match(lines.at(-1), /^╰─+╯$/);
+  assert.doesNotMatch(lines.join("\n"), /needs_input/);
 });
 
-test("the footer counts the whole body, fields and transcript together", (t) => {
+test("the edge counts the transcript rows below the viewport, never a position counter", (t) => {
   const p = pane(40);
   t.after(() => p.dispose());
-  const fields = renderDetailFields({ view: view(), live: live() }, theme, 80);
-  assert.match(p.render(80).at(-1), new RegExp(`/${fields.length + 1 + 40} lines`));
-  assert.match(p.render(80).at(-1), /^⠋ running · 1\/1 agents/);
+  // At the tail there is nothing below: no cue and no `n/m` counters.
+  assert.doesNotMatch(p.render(80).at(-1), /more|\d+\/\d+/);
+  p.handleInput("\u001b[H"); // home
+  const lines = p.render(80);
+  // The count is the transcript's own rows: the full fields live on the Info
+  // page and never pad it.
+  const shown = lines.filter((line) => /^T\d+$/.test(line)).length;
+  assert.match(lines.at(-1), new RegExp(`↓ ${40 - shown} more`));
+  p.handleInput("\u001b[F"); // end
+  assert.doesNotMatch(p.render(80).at(-1), /more/);
 });
 
 test("a pane row drops the terminal's turn markers but keeps hyperlinks and colour", () => {
@@ -994,8 +1028,12 @@ test("the wheel scrolls the pane itself and stops the event from reaching the pa
   assert.deepEqual(p.handleMouse({ type: "wheel", wheelDelta: 4 }), { handled: true });
   const down = strip(p.render(80));
   assert.notDeepEqual(down, before);
-  // Four logical lines down means the row that was fifth is now first.
-  assert.equal(down[0], before[4]);
+  // Four logical lines down moves the transcript window four rows; the pinned
+  // observations above the rule stay exactly where they were.
+  const ruleAt = before.findIndex((line) => line.includes("Transcript · Info"));
+  assert.equal(down[0], before[0], "pinned metrics do not move");
+  assert.equal(down[ruleAt], before[ruleAt], "the rule does not move");
+  assert.equal(down[ruleAt + 1], before[ruleAt + 5], "the transcript window moved four rows");
   assert.deepEqual(p.handleMouse({ type: "wheel", wheelDelta: -4 }), { handled: true });
   assert.deepEqual(strip(p.render(80)), before, "scrolling back returns the same window");
 });
@@ -1008,7 +1046,11 @@ test("the wheel clamps at both ends and hands the live tail back at the bottom",
   p.handleInput("\u001b[H");
   p.handleMouse({ type: "wheel", wheelDelta: -999 });
   const top = strip(p.render(80));
-  assert.equal(top[0], renderDetailFields({ view: view(), live: live() }, theme, 80)[0]);
+  // The top of the page is the pinned metrics row, and the transcript window
+  // is clamped at its own first row.
+  const ruleAt = top.findIndex((line) => line.includes("Transcript · Info"));
+  assert.equal(top[ruleAt + 1], "T0", "clamped at the first transcript row");
+  assert.match(top[0], /claude-opus-5\/medium/, "pinned metrics stay above the rule");
   // Past the end the pane pins to the tail and resumes following, exactly as End does.
   p.handleMouse({ type: "wheel", wheelDelta: 999 });
   const bottom = strip(p.render(80));
@@ -1050,7 +1092,7 @@ test("a floating pane uses the worker-picker popover chrome", (t) => {
   }
 });
 
-test("the floating pane draws a frame that costs columns but never rows", (t) => {
+test("a floating pane spends its larger height budget on chrome, never on rows", (t) => {
   const docked = pane(40, 30);
   const floating = pane(40, 30, { frame: true });
   t.after(() => {
@@ -1059,23 +1101,31 @@ test("the floating pane draws a frame that costs columns but never rows", (t) =>
   });
   const a = docked.render(80),
     b = floating.render(80);
-  assert.equal(a.length, b.length, "a frame must not eat a row of transcript");
+  // Floating gets 84% of the terminal, docked 70%; within either budget the
+  // frame's title and footer ride the border rows, so it costs no body rows.
+  assert.equal(a.length, 21, "docked caps at 70% of 30 rows");
+  assert.equal(b.length, 25, "floating caps at 84% of 30 rows");
   for (const line of b) assert.equal(visibleWidth(line), 80, JSON.stringify(line));
   assert.match(b[0], /^.*\u256d/, "top border");
   assert.match(b.at(-1), /\u256f.*$/, "bottom border");
-  // The title and the footer ride on the border rows rather than above and below it.
+  // The title rides on the border row rather than above it; a lone Agent's
+  // edge has no tabs or actions, so it stays one unbroken rule.
   assert.match(b[0], /reviewer \(scout\)/);
   assert.doesNotMatch(b[0], /researcher/);
-  assert.match(b.at(-1), /agents/);
+  assert.match(b.at(-1), /^╰─+╯$/);
   // Riding on the border does not open it: what the inlay does not use is rule.
   assert.doesNotMatch(b[0], / {3}/, `top border left open: ${JSON.stringify(b[0])}`);
   assert.doesNotMatch(b[0], / {2}×/, `extra space before close: ${JSON.stringify(b[0])}`);
   assert.doesNotMatch(b.at(-1), / {3}/, `bottom border left open: ${JSON.stringify(b.at(-1))}`);
   // The divider is a rule of the same row, so it reaches the frame it sits inside.
   assert.equal(visibleWidth(transcriptRule(theme, 78)), 78);
+  const rule = b.find((line) => line.includes("Transcript · Info"));
+  assert.ok(rule, "the floating body keeps its section rule");
+  assert.doesNotMatch(rule, / {3}/, `rule leaves the frame open: ${JSON.stringify(rule)}`);
   for (const line of b.slice(1, -1)) {
     assert.match(line, /^\u2502/, "body rows are bounded left");
-    assert.match(line, /\u2502$/, "body rows are bounded right");
+    // A scrolled pane marks its thumb on the right edge in place of the border.
+    assert.match(line, /[\u2502\u2503]$/, "body rows are bounded right");
   }
   // Docked, nothing is drawn around it: the widget above and Pi's footer bound it.
   assert(!a.some((line) => /[\u256d\u256e\u2570\u256f\u2502]/.test(line)));

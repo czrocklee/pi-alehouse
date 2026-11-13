@@ -10,7 +10,11 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { DetailPane } from "../../dist/orchestration/ui/agent-detail.js";
-import { humanSteerLead, requestHumanSteer } from "../../dist/orchestration/runtime/human-steer.js";
+import {
+  HUMAN_STEER_MAX_UNITS,
+  humanSteerLead,
+  requestHumanSteer,
+} from "../../dist/orchestration/runtime/human-steer.js";
 import { settings } from "../support/controller-fixture.mjs";
 
 initTheme(undefined, false);
@@ -92,6 +96,10 @@ function paneFixture(
   });
   t.after(() => pane.dispose());
   const footer = (width = 120) => stripTerminalSequences(pane.render(width).at(-1));
+  // The two-row composer tray keeps the draft on its own input row (and the
+  // who-is-steered hints on the heading row) above the footer.
+  const draftRow = () => stripTerminalSequences(pane.render(120).at(-2));
+  const composeHeading = () => stripTerminalSequences(pane.render(120).at(-3));
   const type = (text) => {
     for (const ch of text) pane.handleInput(ch);
   };
@@ -106,6 +114,8 @@ function paneFixture(
     sent,
     drafts,
     footer,
+    draftRow,
+    composeHeading,
     type,
     get closes() {
       return closes;
@@ -122,17 +132,25 @@ for (const frame of [false, true])
     f.pane.handleInput("m");
     const composing = f.pane.render(120);
     assert.equal(composing.length, before.length, "message mode does not resize the pane");
-    assert.deepEqual(composing.slice(0, -1), before.slice(0, -1));
+    // The two-row tray borrows two viewport rows; the body above it is intact.
+    assert.deepEqual(composing.slice(0, -3), before.slice(0, -3));
     assert(composing.every((line) => visibleWidth(line) <= 120));
-    assert.match(f.footer(), /› message this Agent.*Enter send · Esc cancel/);
-    assert.doesNotMatch(f.footer(), /\[S Stop\]/);
+    assert.match(stripTerminalSequences(composing.at(-3)), /Steer a/);
+    assert.match(stripTerminalSequences(composing.at(-3)), /Enter send · Esc discard/);
+    assert.match(stripTerminalSequences(composing.at(-2)), /› message this Agent/);
+    // While composing, the draft owns the keyboard: the heading above names
+    // its own Enter/Esc, and the edge offers no key the input would swallow --
+    // no ←/→ arrows, M or Esc -- while Stop stays clickable, without its S key.
+    assert.doesNotMatch(f.footer(), /M message|[‹›]|Esc|Enter|\[S Stop\]/);
+    assert.match(f.footer(), /\[Stop\](?: ─╯)?$/);
     // Keys that navigate, stop or close outside message mode are plain text here.
     f.type("skip hls 别动 config");
-    assert.match(f.footer(), /› skip hls 别动 config/);
+    assert.match(f.draftRow(), /› skip hls 别动 config/);
     assert.deepEqual(f.sent, []);
     f.pane.handleInput(ENTER);
     assert.deepEqual(f.sent, [["run-a", "skip hls 别动 config"]]);
-    assert.match(f.footer(), /\[S Stop\]/, "an accepted message leaves message mode");
+    assert.match(f.footer(), /\[S Stop\]/);
+    assert.match(f.footer(), /M message/, "an accepted message leaves message mode");
     assert.equal(f.drafts.at(-1), undefined);
     assert.equal(f.closes, 0);
   });
@@ -158,19 +176,19 @@ test("an empty message and a refused message stay in message mode", (t) => {
   f.pane.render(120);
   f.pane.handleInput("m");
   f.pane.handleInput(ENTER);
-  assert.match(f.footer(), /message is empty/);
+  assert.match(f.composeHeading(), /message is empty/);
   f.type("   ");
   const whitespace = f.drafts.at(-1);
   f.pane.handleInput(ENTER);
-  assert.match(f.footer(), /message is empty/);
+  assert.match(f.composeHeading(), /message is empty/);
   assert.equal(f.drafts.at(-1), whitespace, "refusal does not change draft text");
   assert.equal(whitespace.text, "   ");
   assert.deepEqual(f.sent, []);
   f.type("keep me");
-  assert.doesNotMatch(f.footer(), /message is empty/);
+  assert.doesNotMatch(f.composeHeading(), /message is empty/);
   f.pane.handleInput(ENTER);
   assert.deepEqual(f.sent, [["run-a", "keep me"]]);
-  assert.match(f.footer(), /keep me/, "a refused message keeps its text");
+  assert.match(f.draftRow(), /keep me/, "a refused message keeps its text");
 });
 
 test("message mode is offered only for a running Run with a host command", (t) => {
@@ -278,7 +296,9 @@ test("a draft never reaches a replacement or ended Run", (t) => {
   f.pane.handleInput("m");
   f.type("for the old task");
   f.views[0] = view("a", { run_id: "run-replacement" });
-  assert.match(f.footer(), /for the old task.*task no longer running/);
+  assert.match(f.draftRow(), /for the old task/);
+  assert.match(f.composeHeading(), /Steer original task/);
+  assert.match(f.composeHeading(), /task ended · Esc discard/);
   f.pane.handleInput(ENTER);
   assert.deepEqual(f.sent, []);
   f.views[0] = view("a", { status: "completed", execution_exited: true });
@@ -300,11 +320,11 @@ test("drafts stay bound across same-Run paints, invalidation and permission hidi
   f.pane.handleInput(ENTER);
   assert.deepEqual(f.sent, [], "hidden input does not act");
   f.setVisible(true);
-  assert.match(f.footer(), /sticky 中👩‍💻/);
+  assert.match(f.draftRow(), /sticky 中👩‍💻/);
   f.pane.render(5);
   f.pane.handleInput(ENTER);
   assert.deepEqual(f.sent, [], "an unrenderable composer does not submit");
-  assert.match(f.footer(), /sticky 中👩‍💻/);
+  assert.match(f.draftRow(), /sticky 中👩‍💻/);
   f.pane.handleInput(ENTER);
   assert.deepEqual(f.sent, [["run-a", "sticky 中👩‍💻"]]);
 });
@@ -338,19 +358,21 @@ test("selecting another Agent discards the draft", (t) => {
   f.type("x");
   f.pane.activate("b");
   assert.equal(f.drafts.at(-1), undefined);
-  assert.doesNotMatch(f.footer(), /›/);
+  // The compact composer's `› ` prompt would lead the edge; tab arrows never do.
+  assert.doesNotMatch(f.footer(), /^(?:╰─ )?› /);
 });
 
 test("a host-held draft is restored only for the same Run", (t) => {
   const target = { owner_id: "owner", generation: "generation", agent_id: "a", run_id: "run-a" };
   const same = paneFixture(t, { draft: { target, text: "carried over" } });
-  assert.match(same.footer(), /› carried over/);
+  assert.match(same.draftRow(), /› carried over/);
   same.pane.handleInput(ENTER);
   assert.deepEqual(same.sent, [["run-a", "carried over"]]);
   const other = paneFixture(t, {
     draft: { target: { ...target, run_id: "run-old" }, text: "stale" },
   });
   assert.doesNotMatch(other.footer(), /stale/);
+  assert.doesNotMatch(other.draftRow(), /stale/);
   assert.equal(other.drafts.at(-1), undefined);
 });
 
@@ -434,12 +456,74 @@ test("split bracketed paste keeps controls and pane keys private until sanitized
     assert.doesNotMatch(f.footer(), /hidden|\[31m/);
   }
   for (const chunk of ["\x1b", "[20", "1", "~"]) f.pane.handleInput(chunk);
-  const expected = "中𠮷e\u0301👩‍💻✈️    完";
+  // Newlines become spaces rather than concatenation: the line break costs
+  // one column, the tab its usual four.
+  const expected = "中𠮷e\u0301👩‍💻✈️     完";
   assert.equal(f.drafts.at(-1).text, expected);
   assertSafeDraft(f.drafts.at(-1).text);
   f.pane.handleInput(ENTER);
   assert.deepEqual(f.sent, [["run-a", expected]]);
   assert.equal(f.closes, 0);
+});
+
+test("a paste whose terminator never arrives releases the keyboard after it settles", (t) => {
+  let now = 1_000;
+  t.mock.method(performance, "now", () => now);
+  const f = paneFixture(t);
+  f.pane.render(120);
+  f.pane.handleInput("m");
+  f.pane.handleInput(PASTE_START + "kept\x1b]52;c;x\x07");
+  f.pane.handleInput("\r");
+  assert.deepEqual(f.sent, [], "Enter inside a live paste is data");
+  now += 600;
+  // The lost terminator: buffered text is inserted, the late Esc is a key again.
+  f.pane.handleInput(ESC);
+  assert.deepEqual(f.sent, []);
+  assert.equal(f.drafts.at(-2).text, "kept ");
+  assertSafeDraft(f.drafts.at(-2).text);
+  assert.equal(f.drafts.at(-1), undefined, "Esc discards the draft");
+  assert.doesNotMatch(f.composeHeading(), /Steer/);
+
+  // An oversized unterminated buffer is inserted as soon as it passes the bound.
+  f.pane.handleInput("m");
+  f.pane.handleInput(PASTE_START + "y".repeat(4 * 16_384 + 1));
+  assert.equal(f.drafts.at(-1).text.length, 4 * 16_384 + 1);
+  f.pane.handleInput(ESC);
+  assert.equal(f.drafts.at(-1), undefined);
+  assert.equal(f.closes, 0);
+});
+
+test("held marker prefixes that never become a paste are replayed as their own keys", (t) => {
+  const f = paneFixture(t);
+  f.pane.render(120);
+  f.pane.handleInput("m");
+  f.type("a");
+  f.pane.handleInput("\x1b["); // Alt+[
+  f.pane.handleInput("x");
+  f.pane.handleInput("\x1b[");
+  f.pane.handleInput("2");
+  f.pane.handleInput("z");
+  assert.equal(f.drafts.at(-1).text, "ax2z");
+  f.pane.handleInput(ENTER);
+  assert.deepEqual(f.sent, [["run-a", "ax2z"]]);
+});
+
+test("a draft beyond the human message limit says so and Enter keeps it", (t) => {
+  const f = paneFixture(t);
+  f.pane.render(120);
+  f.pane.handleInput("m");
+  f.pane.handleInput(paste("z".repeat(HUMAN_STEER_MAX_UNITS)));
+  assert.doesNotMatch(f.composeHeading(), /too long/);
+  f.type("!");
+  assert.match(f.composeHeading(), /message too long · Esc discard/);
+  f.pane.handleInput(ENTER);
+  assert.deepEqual(f.sent, [], "a draft core would reject is never sent");
+  assert.equal(f.drafts.at(-1).text.length, HUMAN_STEER_MAX_UNITS + 1);
+  f.pane.handleInput("\x7f");
+  assert.doesNotMatch(f.composeHeading(), /too long/);
+  f.pane.handleInput(ENTER);
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent[0][1].length, HUMAN_STEER_MAX_UNITS);
 });
 
 test("safe paste preserves middle-caret editing and undo cannot revive terminal controls", (t) => {
@@ -473,14 +557,17 @@ test("restored and decoded keyboard controls are safe without destroying IME or 
   f.pane.handleInput("文字𠮷e\u0301👩‍💻✈️"); // One IME commit, not per-codepoint typing.
   assert.match(f.drafts.at(-1).text, /文字𠮷e\u0301👩‍💻✈️$/);
   f.pane.handleInput(paste("a\rb\nc\r\nd\u2028e\u0085f\tend"));
-  assert.match(f.drafts.at(-1).text, /abcdef {4}end$/);
+  assert.match(f.drafts.at(-1).text, /a b c d e f {4}end$/);
   assertSafeDraft(f.drafts.at(-1).text);
   f.pane.handleInput(ENTER);
   assert.equal(f.sent.length, 1);
   assertSafeDraft(f.sent[0][1]);
 });
 
-test("narrow empty-message refusal remains visible without changing the one-line layout", (t) => {
+test("narrow empty-message refusal remains visible without resizing the pane", (t) => {
+  // The composer's form follows the terminal budget, never the width: a tall
+  // terminal keeps the two-row tray even in a narrow pane, and the refusal
+  // moves to the tray heading without displacing the input row.
   for (const frame of [false, true]) {
     const f = paneFixture(t, { frame });
     const before = f.pane.render(30);
@@ -489,7 +576,26 @@ test("narrow empty-message refusal remains visible without changing the one-line
     f.pane.handleInput(ENTER);
     const after = f.pane.render(30);
     assert.equal(after.length, before.length);
-    assert.match(stripTerminalSequences(after.at(-1)), /empty/);
+    assert.match(stripTerminalSequences(after.at(-3)), /empty · Esc/);
+    assert.match(stripTerminalSequences(after.at(-2)), /›/);
+    assert(after.every((line) => visibleWidth(line) <= 30));
+    assert.equal(f.drafts.at(-1).text, " ");
+    assert.deepEqual(f.sent, []);
+  }
+  // A tiny budget keeps the single footer input row, and the refusal stays
+  // on that one line while the outer height still does not change.
+  for (const [frame, rows] of [
+    [false, 12],
+    [true, 11],
+  ]) {
+    const f = paneFixture(t, { frame, terminal: { columns: 120, rows } });
+    const before = f.pane.render(30);
+    f.pane.handleInput("m");
+    f.pane.handleInput(" ");
+    f.pane.handleInput(ENTER);
+    const after = f.pane.render(30);
+    assert.equal(after.length, before.length);
+    assert.match(stripTerminalSequences(after.at(-1)), /›.*empty · Esc/);
     assert(after.every((line) => visibleWidth(line) <= 30));
     assert.equal(f.drafts.at(-1).text, " ");
     assert.deepEqual(f.sent, []);
@@ -497,13 +603,33 @@ test("narrow empty-message refusal remains visible without changing the one-line
 });
 
 test("narrow panes drop the hint before the input", (t) => {
+  // In the two-row tray the input row never carries a hint; the heading and
+  // the footer degrade instead.
   const f = paneFixture(t);
   f.pane.render(30);
   f.pane.handleInput("m");
   f.type("abc");
   const lines = f.pane.render(30);
   assert(lines.every((line) => visibleWidth(line) <= 30));
-  assert.match(stripTerminalSequences(lines.at(-1)), /› abc/);
+  assert.match(stripTerminalSequences(lines.at(-2)), /› abc/);
+  assert.doesNotMatch(stripTerminalSequences(lines.at(-2)), /Enter|Esc/);
+  // The tiny-budget single-row composer drops its hint whole before the
+  // input gives up room.
+  const g = paneFixture(t, { terminal: { columns: 120, rows: 12 } });
+  g.pane.render(30);
+  g.pane.handleInput("m");
+  g.type("abc");
+  const hinted = g.pane.render(30);
+  assert(hinted.every((line) => visibleWidth(line) <= 30));
+  assert.match(stripTerminalSequences(hinted.at(-1)), /› abc +Enter · Esc/);
+  const h = paneFixture(t, { terminal: { columns: 120, rows: 12 } });
+  h.pane.render(20);
+  h.pane.handleInput("m");
+  h.type("abc");
+  const bare = h.pane.render(20);
+  assert(bare.every((line) => visibleWidth(line) <= 20));
+  assert.match(stripTerminalSequences(bare.at(-1)), /› abc/);
+  assert.doesNotMatch(stripTerminalSequences(bare.at(-1)), /Enter|Esc/);
 });
 
 test("the host adapter marks the message as human and never publishes to the parent", () => {

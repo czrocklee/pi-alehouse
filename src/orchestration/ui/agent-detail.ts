@@ -7,9 +7,11 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { RunView } from "../core/contracts.ts";
+import { HUMAN_STEER_MAX_UNITS } from "../presentation/human-steer-text.ts";
 import { type Theme, type TranscriptFrame, type TranscriptRows } from "./format.ts";
 import {
   isPopoverCloseClick,
+  popoverBottom,
   popoverCloseHit,
   popoverInlay,
   popoverInlayWidth,
@@ -21,16 +23,31 @@ import {
   renderDetailFields,
   renderDetailFooter,
   renderDetailTitle,
+  renderDetailAttention,
+  renderDetailComposeHeading,
+  renderDetailInfo,
+  renderDetailRule,
+  renderDetailSummary,
+  getDetailAttentionNotes,
   transcriptRule,
+  type DetailAttentionNote,
   type DetailFooterFrame,
   type DetailInput,
   type DetailLive,
 } from "./agent-detail-fields.ts";
 
 export { wrapText };
-export { renderDetailFields, renderDetailTitle, transcriptRule, type DetailInput, type DetailLive };
+export {
+  renderDetailFields,
+  renderDetailRule,
+  renderDetailTitle,
+  transcriptRule,
+  type DetailInput,
+  type DetailLive,
+};
 
 const CONFIRM_LIFETIME_MS = 10_000;
+const STEER_NOTICE_MS = 5_000;
 type StopTarget = Pick<RunView, "owner_id" | "generation" | "agent_id" | "run_id">;
 interface PaintDimensions {
   columns: number;
@@ -54,10 +71,20 @@ interface StopConfirmation {
   expiresAt: number;
   dimensions: PaintDimensions;
 }
-interface TranscriptAnchor {
+/** One clickable chrome range: an Agent tab (or `+N`, `‹`, `›`), the jump to
+ * the tail, a body page or the tools toggle. Rows and columns are pane cells. */
+type ChromeHit = { y: number; from: number; to: number } & (
+  { kind: "agent"; agent_id: string } | { kind: "tail" | "transcript" | "info" | "tools" }
+);
+interface ChromePaint {
+  dimensions: PaintDimensions;
+  hits: ChromeHit[];
+}
+interface TranscriptRead {
   target: StopTarget;
+  source: TranscriptRows;
   width: number;
-  start: number;
+  anchor: unknown;
 }
 /** An unsent human message, bound to the Run it was started for. */
 export interface DetailDraft {
@@ -69,14 +96,24 @@ interface Compose {
   input: Input;
   empty: boolean;
   paste: string | undefined;
-  pastePrefix: string;
+  /** A paste that never terminates stops owning the keyboard at this time. */
+  pasteDeadline: number;
+  /** Separate input chunks that together may begin a split paste marker. */
+  pastePrefix: string[];
 }
 const PASTE_START = "\x1b[200~";
 const PASTE_END = "\x1b[201~";
+/** Split paste chunks arrive back to back; a lost terminator must not keep
+ * Esc and Enter captured as data. The buffer is bounded the same way. */
+const PASTE_SETTLE_MS = 500;
+const PASTE_BUFFER_UNITS = 4 * 16_384;
+/** Trimmed drafts beyond the admitted steer size cannot be sent. */
+const overLimit = (compose: Compose): boolean =>
+  compose.input.getValue().trim().length > HUMAN_STEER_MAX_UNITS;
 /** Match Input's single-line paste behavior, but never retain terminal controls.
  * The shared sanitizer preserves script/emoji joiners, selectors and graphemes. */
 const composeText = (text: string): string =>
-  plainText(text.replace(/\t/g, "    ")).replace(/\n/g, "");
+  plainText(text.replace(/\t/g, "    ")).replace(/\n+/g, " ");
 const sameRun = (target: StopTarget, view: RunView | undefined): boolean =>
   !!view &&
   view.agent_id === target.agent_id &&
@@ -107,7 +144,9 @@ const stoppable = (view: RunView): boolean =>
  */
 const CHROME_LINES = 2;
 const MIN_VIEWPORT = 3;
-const VIEWPORT_HEIGHT_PCT = 70;
+const DOCKED_HEIGHT_PCT = 70;
+const FLOATING_HEIGHT_PCT = 84;
+const COMPOSE_ROWS = 2;
 
 /** Pads a styled row to `columns` display columns; ANSI has no width of its own. */
 const padTo = (line: string, columns: number): string =>
@@ -152,6 +191,9 @@ export interface DetailPaneOptions {
   /** Submit one human message to the Run the draft was started for. Returns
    * whether the draft is spent; a refused message stays in the input. */
   onSteer?: (run_id: string, message: string) => boolean;
+  /** Match the host's public tools-expand binding. The transcript is a string
+   * projection, so this toggles all settled cards, like T, not a hovered card. */
+  expandToolsKey?: (data: string) => boolean;
   /** An unsent draft to restore; ignored unless its Run is still the one shown. */
   draft?: DetailDraft;
   /** Draft text changed, or was discarded by the user (undefined). */
@@ -166,7 +208,8 @@ export interface DetailPaneOptions {
 
 /**
  * The docked detail pane: one agent at a time, ←/→ between them, ↑/↓ through the
- * body, Esc to close. Mounted through `ui.custom`'s NON-overlay path — Pi's
+ * body. Esc unwinds one layer at a time: an armed Stop, then a draft, then the
+ * Info page, and only then closes the pane. Mounted through `ui.custom`'s NON-overlay path — Pi's
  * regular-mode renderer composites overlays into the buffer that backs
  * scrollback, so an overlay would bake this pane's rows into terminal history.
  */
@@ -183,8 +226,20 @@ export class DetailPane {
   /** Width of the last framed paint; the close control's hit area follows it. */
   private paintedWidth = 0;
   private paintedHeight = 0;
-  /** Previous field/transcript boundary, scoped to one Run and wrapping width. */
-  private transcriptAnchor: TranscriptAnchor | undefined;
+  private fixedHeight = 0;
+  private composeRows = 0;
+  private bodyFloor = MIN_VIEWPORT;
+  private hiddenNotes = 0;
+  private readonly wrapped = new Map<string, { width: number; rows: string[] }>();
+  private transcriptRead: TranscriptRead | undefined;
+  private pendingToolAnchor: TranscriptRead | undefined;
+  private info = false;
+  private transcriptPosition: { offset: number; follow: boolean } | undefined;
+  private toolsExpanded = false;
+  private chromePaint: ChromePaint | undefined;
+  private messageAction: DetailFooterFrame["messageAction"];
+  /** Admission only: the UI has no delivery acknowledgement to correlate. */
+  private recentSteer: { target: StopTarget; expiresAt: number } | undefined;
   private stopPaint: StopPaint | undefined;
   /** M starts from the Run actually painted, never a fresh replacement. */
   private composePaint: ComposePaint | undefined;
@@ -193,7 +248,6 @@ export class DetailPane {
    * and survives repaints, scrolling and permission hiding. */
   private compose: Compose | undefined;
   private frame = 0;
-  private readonly wrapped = new Map<string, { width: number; rows: string[] }>();
   private animating = false;
   private renderedRevision: unknown;
   private readonly timer: ReturnType<typeof setInterval>;
@@ -216,6 +270,7 @@ export class DetailPane {
     this.timer = setInterval(() => {
       if (this.closed) return;
       if (this.options.visible?.() === false) {
+        this.chromePaint = undefined;
         this.resetStopInteraction();
         return;
       }
@@ -251,7 +306,12 @@ export class DetailPane {
     this.scrollOffset = 0;
     this.followTail = true;
     this.painted = 0;
-    this.transcriptAnchor = undefined;
+    this.info = false;
+    this.transcriptPosition = undefined;
+    this.recentSteer = undefined;
+    this.transcriptRead = undefined;
+    this.pendingToolAnchor = undefined;
+    this.chromePaint = undefined;
     this.resetStopInteraction();
     this.endCompose();
     this.options.onSelect?.(agent_id);
@@ -283,17 +343,21 @@ export class DetailPane {
     return !this.closed;
   }
 
-  /** Hiding/yielding retires action evidence, not an existing sticky draft. */
+  /** Retire command evidence/Stop intent, not tabs or an existing sticky draft.
+   * Selection geometry belongs to its paint, independently of Stop state. */
   resetStopInteraction(): void {
     this.stopPaint = undefined;
     this.composePaint = undefined;
+    this.messageAction = undefined;
     this.confirmation = undefined;
   }
 
   /** Permission yield can hide the mounted pane without disposing it. */
   resetCloseHover(render = true): void {
     this.paintedWidth = 0;
+    this.chromePaint = undefined;
     this.composePaint = undefined;
+    this.messageAction = undefined;
     this.closeHover.reset(render);
   }
 
@@ -301,23 +365,34 @@ export class DetailPane {
    * its first Esc must cancel, even if the render request has not been serviced. */
   private staleStopPaint(width?: number): boolean {
     const painted =
-      this.stopPaint?.dimensions ?? this.confirmation?.dimensions ?? this.composePaint?.dimensions;
-    const terminal = this.options.tui.terminal;
+      this.stopPaint?.dimensions ??
+      this.confirmation?.dimensions ??
+      this.composePaint?.dimensions ??
+      this.chromePaint?.dimensions;
     return !!(
       (this.confirmation && performance.now() >= this.confirmation.expiresAt) ||
-      (painted &&
-        (painted.columns !== terminal.columns ||
-          painted.rows !== terminal.rows ||
-          (width !== undefined && painted.width !== width)))
+      (painted && this.geometryChanged(painted, width))
     );
   }
 
   /** Actions and rendering retire expired intent/stale geometry immediately.
    * A delayed repaint cannot extend the confirmation's ten-second lifetime. */
   private retireStopPaint(width?: number): void {
-    if (!this.staleStopPaint(width)) return;
+    const stale = this.staleStopPaint(width);
+    if (this.chromePaint && this.geometryChanged(this.chromePaint.dimensions, width))
+      this.chromePaint = undefined;
+    if (!stale) return;
     this.resetStopInteraction();
     this.options.tui.requestRender();
+  }
+
+  private geometryChanged(paint: PaintDimensions, width?: number): boolean {
+    const terminal = this.options.tui.terminal;
+    return (
+      paint.columns !== terminal.columns ||
+      paint.rows !== terminal.rows ||
+      (width !== undefined && paint.width !== width)
+    );
   }
 
   /** Actions get fresh authority; rendering reuses its one captured snapshot. */
@@ -367,6 +442,7 @@ export class DetailPane {
   }
 
   private beginCompose(target: StopTarget, text = ""): void {
+    this.recentSteer = undefined;
     const input = new Input({
       prompt: this.options.theme.fg("dim", "› "),
       placeholder: "message this Agent",
@@ -383,7 +459,14 @@ export class DetailPane {
       this.endCompose();
       this.options.tui.requestRender();
     };
-    this.compose = { target, input, empty: false, paste: undefined, pastePrefix: "" };
+    this.compose = {
+      target,
+      input,
+      empty: false,
+      paste: undefined,
+      pasteDeadline: 0,
+      pastePrefix: [],
+    };
     if (safe !== text) this.options.onDraft?.(safe ? { target, text: safe } : undefined);
   }
 
@@ -411,6 +494,12 @@ export class DetailPane {
       this.options.tui.requestRender();
       return;
     }
+    // The footer already says so while typing; Enter never sends a draft that
+    // core would reject, and the text stays for the user to shorten.
+    if (message.length > HUMAN_STEER_MAX_UNITS) {
+      this.options.tui.requestRender();
+      return;
+    }
     if (
       this.paintedHeight === 0 ||
       !this.bounds(this.painted).fits ||
@@ -419,7 +508,12 @@ export class DetailPane {
       this.options.tui.requestRender();
       return;
     }
+    this.recentSteer = undefined;
     if (this.options.onSteer(compose.target.run_id, message) && this.compose === compose) {
+      this.recentSteer = {
+        target: compose.target,
+        expiresAt: performance.now() + STEER_NOTICE_MS,
+      };
       this.endCompose();
       this.followTail = true;
     }
@@ -470,6 +564,21 @@ export class DetailPane {
       const buffered = compose.paste + data;
       const end = buffered.indexOf(PASTE_END);
       if (end < 0) {
+        // A terminal or multiplexer that drops the terminator must not keep
+        // the keyboard: a late chunk is ordinary input again, after what was
+        // buffered is inserted as the paste it began as.
+        if (performance.now() > compose.pasteDeadline) {
+          const pasted = compose.paste;
+          compose.paste = undefined;
+          if (pasted) this.editCompose(compose, pasted, true);
+          if (this.compose === compose) this.handleInput(data);
+          return true;
+        }
+        if (buffered.length > PASTE_BUFFER_UNITS) {
+          compose.paste = undefined;
+          this.editCompose(compose, buffered, true);
+          return true;
+        }
         compose.paste = buffered;
         return true;
       }
@@ -479,13 +588,31 @@ export class DetailPane {
       if (remaining) this.handleInput(remaining);
       return true;
     }
-    data = compose.pastePrefix + data;
-    compose.pastePrefix = "";
+    const held = compose.pastePrefix;
+    compose.pastePrefix = [];
+    if (held.length) {
+      const joined = held.join("") + data;
+      if (!joined.startsWith(PASTE_START) && !PASTE_START.startsWith(joined)) {
+        // The held chunks were keys of their own (Alt+[ is ESC [), not a split
+        // marker: replay each one, then this input, in arrival order.
+        for (const chunk of held) {
+          this.editCompose(compose, chunk);
+          if (this.compose !== compose) return true;
+        }
+        return this.composeInput(data);
+      }
+      if (!joined.startsWith(PASTE_START)) {
+        compose.pastePrefix = [...held, data];
+        return true;
+      }
+      data = joined;
+    }
     const start = data.indexOf(PASTE_START);
     if (start >= 0) {
       if (start) this.composeInput(data.slice(0, start));
       if (this.compose !== compose) return true;
       compose.paste = "";
+      compose.pasteDeadline = performance.now() + PASTE_SETTLE_MS;
       return this.composeInput(data.slice(start + PASTE_START.length));
     }
     // The host frames standalone Escape as cancel, not a partial paste marker.
@@ -494,7 +621,7 @@ export class DetailPane {
       if (!data.endsWith(PASTE_START.slice(0, length))) continue;
       const before = data.slice(0, -length);
       if (before) this.composeInput(before);
-      if (this.compose === compose) compose.pastePrefix = data.slice(-length);
+      if (this.compose === compose) compose.pastePrefix = [data.slice(-length)];
       return true;
     }
     if (matchesKey(data, "escape")) {
@@ -520,10 +647,59 @@ export class DetailPane {
   handleInput(data: string): void {
     if (this.closed) return;
     if (this.options.visible?.() === false) {
+      this.chromePaint = undefined;
       this.resetStopInteraction();
       return;
     }
+    const compose = this.compose;
+    if (
+      compose &&
+      (compose.paste !== undefined ||
+        compose.pastePrefix.length > 0 ||
+        data.includes(PASTE_START) ||
+        (data.length >= 2 && PASTE_START.startsWith(data)))
+    ) {
+      // A pointer can arm Stop between chunks of an unfinished paste. Retire
+      // that intent before buffering any more bytes: pasted Ctrl+S/Esc/Enter
+      // remain private data, never confirmation or a pane command.
+      this.resetStopInteraction();
+      this.composeInput(data);
+      return;
+    }
+    // Stop confirmation remains deliberate even with a draft open. Ordinary
+    // typing cancels the armed intent, never interpreting S or Enter as Stop.
+    if (this.compose && this.confirmation) {
+      this.retireStopPaint();
+      if (matchesKey(data, "ctrl+s")) {
+        this.confirmStop();
+        return;
+      }
+      if (matchesKey(data, "escape")) {
+        this.resetStopInteraction();
+        this.options.tui.requestRender();
+        return;
+      }
+      this.resetStopInteraction();
+      // Enter cancels Stop intent only. In a short viewport confirmation may
+      // temporarily occupy the draft's footer, so never submit unseen text.
+      if (matchesKey(data, "enter")) {
+        this.options.tui.requestRender();
+        return;
+      }
+    }
     if (this.composeInput(data)) return;
+    if (matchesKey(data, "i") || matchesKey(data, "shift+i")) {
+      this.toggleInfo();
+      return;
+    }
+    if (
+      matchesKey(data, "t") ||
+      matchesKey(data, "shift+t") ||
+      this.options.expandToolsKey?.(data)
+    ) {
+      this.toggleTools();
+      return;
+    }
     if (!this.compose && (matchesKey(data, "m") || matchesKey(data, "shift+m"))) {
       this.retireStopPaint();
       this.requestCompose();
@@ -545,6 +721,11 @@ export class DetailPane {
       if (this.confirmation) {
         this.resetStopInteraction();
         this.options.tui.requestRender();
+        return;
+      }
+      // The Info page is a layer over the transcript: Esc returns to it first.
+      if (this.info) {
+        this.toggleInfo();
         return;
       }
       this.closed = true;
@@ -599,10 +780,45 @@ export class DetailPane {
     this.closeHover.mouse(event);
     if (this.closed) return undefined;
     if (this.options.visible?.() === false) {
+      this.chromePaint = undefined;
       this.resetStopInteraction();
       return undefined;
     }
     this.retireStopPaint();
+    const chrome = this.chromePaint;
+    if (
+      (event.type === "press" || event.type === "click") &&
+      event.button === "left" &&
+      event.x !== undefined &&
+      event.y !== undefined &&
+      chrome
+    ) {
+      const hit = chrome.hits.find(
+        (item) => item.y === event.y && event.x! >= item.from && event.x! < item.to,
+      );
+      if (hit) {
+        // Claim the press as well: an unclaimed press starts SDK text
+        // selection, whose third rapid gesture selects the whole chrome line
+        // and swallows the click. Claiming keeps counting with the SDK's
+        // component/position counter; only the released click activates, so a
+        // drag away or a stale paint never triggers the transition.
+        if (event.type === "click") this.activateChrome(hit);
+        return { handled: true };
+      }
+    }
+    const message = this.messageAction;
+    if (
+      (event.type === "press" || event.type === "click") &&
+      event.button === "left" &&
+      event.y === this.paintedHeight - 1 &&
+      event.x !== undefined &&
+      message &&
+      event.x >= message.from &&
+      event.x < message.to
+    ) {
+      if (event.type === "click" && (event.clickCount ?? 1) === 1) this.requestCompose();
+      return { handled: true };
+    }
     const action = this.stopPaint?.action;
     if (
       (event.type === "press" || event.type === "click") &&
@@ -653,10 +869,15 @@ export class DetailPane {
     this.retireStopPaint(width);
     this.stopPaint = undefined;
     this.composePaint = undefined;
+    this.messageAction = undefined;
+    this.chromePaint = undefined;
     this.paintedHeight = 0;
+    this.fixedHeight = 0;
+    this.composeRows = 0;
+    this.bodyFloor = MIN_VIEWPORT;
+    this.hiddenNotes = 0;
     this.animating = false;
-    // Floating, side borders reduce the body; inlaid title/footer padding
-    // further reduces chrome. Every unpaintable layout retires the same state.
+    // The text gutter aligns the transcript with the title/footer inlays.
     const inner = this.options.frame ? width - 2 : width;
     const chrome = this.options.frame ? inner - 4 : inner;
     if (
@@ -668,10 +889,12 @@ export class DetailPane {
       chrome < 8
     ) {
       this.resetCloseHover(false);
-      this.transcriptAnchor = undefined;
       this.resetStopInteraction();
+      this.painted = 0;
       return [];
     }
+    const gutter = this.options.frame ? (inner >= 72 ? 2 : 1) : 0;
+    const contentWidth = inner - gutter * 2;
     // Framed, the title shares the top edge with the close control.
     const titleWidth = this.options.frame ? popoverInlayWidth(width, "top", true) : chrome;
     this.paintedWidth = this.options.frame ? width : 0;
@@ -682,19 +905,19 @@ export class DetailPane {
     if (!entry) {
       this.resetStopInteraction();
       this.painted = 0; // No visible body for keys/wheel to scroll against.
-      this.transcriptAnchor = undefined;
       this.paintedHeight = CHROME_LINES + 1;
       return this.dress(
         this.options.theme.fg("dim", "Agents"),
         [
           truncateToWidth(
             this.options.theme.fg("dim", "No agents are available to inspect."),
-            inner,
+            contentWidth,
           ),
         ],
-        this.footer(chrome, 0, 0, 0, 0, undefined, false, false, false).text,
+        this.footer(chrome, [], 0, undefined, false, false, false),
         width,
         inner,
+        gutter,
       );
     }
     const view = entry.input.view;
@@ -704,49 +927,104 @@ export class DetailPane {
       this.resetStopInteraction();
     const { owner_id, generation, agent_id, run_id } = view;
     const target = this.confirmation?.target ?? { owner_id, generation, agent_id, run_id };
-    // Confirmation changes only the footer action. Keep the same selected Run,
-    // title, transcript and scroll position instead of replacing the pane.
-    // Fields first, then a rule, then the transcript Pi's own components render.
-    const fields = renderDetailFields(entry.input, this.options.theme, inner, (text, width) => {
-      const cached = this.wrapped.get(text);
-      this.wrapped.delete(text);
-      const rows = cached?.width === width ? cached.rows : wrapText(text, width);
-      this.wrapped.set(text, { width, rows });
-      if (this.wrapped.size > 64) this.wrapped.delete(this.wrapped.keys().next().value!);
-      return rows;
-    });
-    const source = this.options.transcript(entry.agent_id);
-    const rows =
-      source?.frame?.(inner) ??
-      (source
-        ? {
-            lineCount: source.lineCount(inner),
-            slice: (start: number, count: number) => source.slice(inner, start, count),
-          }
-        : undefined);
-    const transcript = rows?.lineCount ?? 0;
-    const transcriptStart = fields.length + 1;
-    const previous = this.transcriptAnchor;
+    // Pinned observations never share the transcript's scroll coordinates.
+    // Attention and one metrics row take priority in short terminals; the
+    // optional activity row yields before the minimum reading viewport does.
+    // The agent tabs ride on the bottom edge and cost no body row at all.
+    const th = this.options.theme;
+    const recent = this.recentSteer;
     if (
-      !this.followTail &&
-      previous?.width === inner &&
-      this.scrollOffset >= previous.start &&
-      previous.target.owner_id === owner_id &&
-      previous.target.generation === generation &&
-      previous.target.agent_id === agent_id &&
-      previous.target.run_id === run_id
-    ) {
-      // Fields can appear/disappear between messages. A reader already in the
-      // transcript should keep seeing the same transcript row, not those fields.
-      this.scrollOffset += transcriptStart - previous.start;
-    }
-    this.transcriptAnchor = {
-      target: { owner_id, generation, agent_id, run_id },
-      width: inner,
-      start: transcriptStart,
-    };
-    const total = transcriptStart + transcript;
+      recent &&
+      (!sameRun(recent.target, view) || !steerable(view) || performance.now() >= recent.expiresAt)
+    )
+      this.recentSteer = undefined;
+    // One admission row. The Owner records `human_steered` synchronously on
+    // admission, so a fresh acceptance -- the first or any later one -- takes
+    // over that row for its lifetime instead of adding a second row.
+    const collected = getDetailAttentionNotes(entry.input);
+    const notes: readonly DetailAttentionNote[] = this.recentSteer
+      ? [
+          ...collected.filter((note) => note.key !== "human-steer"),
+          {
+            key: "recent-steer",
+            priority: 12,
+            glyph: "✓",
+            color: "dim",
+            severity: "info",
+            text: "Steer accepted · delivery unconfirmed",
+          },
+        ]
+      : collected;
+    const noteCount = notes.length;
+    const budget = this.heightBudget();
+    // Form depends on terminal space, never transcript length or arriving notes.
+    // Reserve three dashboard rows before admitting a two-row composer tray.
+    const trayRoom =
+      !!this.options.onSteer &&
+      (steerable(view) || !!this.compose) &&
+      budget >= CHROME_LINES + MIN_VIEWPORT + COMPOSE_ROWS + 3;
+    this.bodyFloor = MIN_VIEWPORT + (trayRoom ? COMPOSE_ROWS : 0);
+    const capacity = Math.max(0, budget - CHROME_LINES - this.bodyFloor);
+    let room = Math.max(0, capacity - 1); // Section rule yields only at tiny heights.
+    // If just one row fits, a blocking note outranks routine metrics.
+    const metricsRows = room > 0 && !(room === 1 && noteCount) ? 1 : 0;
+    room -= metricsRows;
+    const noticeRows = Math.min(2, room, noteCount);
+    room -= noticeRows;
+    const notices = renderDetailAttention(entry.input, th, contentWidth, {
+      maxRows: noticeRows,
+      notes,
+      info: this.info,
+    });
+    // Avoid formatting hidden activity/summary rows on every spinner frame.
+    const summary = metricsRows
+      ? renderDetailSummary(entry.input, th, contentWidth, { activity: room > 0 })
+      : [];
+    this.hiddenNotes = capacity === 0 ? noteCount : 0;
+    // The rule names both pages either way; notes without a pinned row are
+    // counted on Info, the page that lists them.
+    const rule =
+      capacity > 0
+        ? renderDetailRule({
+            theme: th,
+            width: contentWidth,
+            info: this.info,
+            toolsExpanded: this.toolsExpanded,
+            hiddenNotes: noteCount && !noticeRows ? noteCount : 0,
+            keys: !this.compose,
+          })
+        : undefined;
+    const fixed = [...summary, ...notices, ...(rule ? [rule.text] : [])];
+    this.fixedHeight = fixed.length;
+    const source = this.info ? undefined : this.options.transcript(entry.agent_id);
+    source?.setToolsExpanded?.(this.toolsExpanded);
+    const info = this.info
+      ? renderDetailInfo(entry.input, th, contentWidth, (text, width) => this.wrapInfo(text, width))
+      : undefined;
+    const rows: TranscriptFrame | undefined = info
+      ? { lineCount: info.length, slice: (start, count) => info.slice(start, start + count) }
+      : (source?.frame?.(contentWidth) ??
+        (source
+          ? {
+              lineCount: source.lineCount(contentWidth),
+              slice: (start, count) => source.slice(contentWidth, start, count),
+            }
+          : undefined));
+    const total = Math.max(1, rows?.lineCount ?? 0);
     this.painted = total;
+    this.composeRows = this.compose && trayRoom ? COMPOSE_ROWS : 0;
+    if (!this.info && this.pendingToolAnchor) {
+      const pending = this.pendingToolAnchor;
+      if (
+        source === pending.source &&
+        contentWidth === pending.width &&
+        sameRun(pending.target, view)
+      ) {
+        const restored = rows?.resolveAnchor?.(pending.anchor);
+        if (restored !== undefined) this.scrollOffset = restored;
+      }
+      this.pendingToolAnchor = undefined;
+    }
     const { viewportHeight, maxScroll, fits } = this.bounds(total);
     // A live transcript grows under the reader; only follow when they are at the end.
     // Clamped, not merely read: a body that SHRANK -- compaction, a resize, an
@@ -755,64 +1033,109 @@ export class DetailPane {
     // re-engage following instead of scrolling.
     this.scrollOffset = Math.min(this.scrollOffset, maxScroll);
     if (this.followTail) this.scrollOffset = maxScroll;
+    const inputAvailable =
+      fits &&
+      Number.isFinite(this.options.tui.terminal.columns) &&
+      width <= this.options.tui.terminal.columns;
+    const canCompose =
+      !this.compose &&
+      !this.confirmation &&
+      !!this.options.onSteer &&
+      steerable(view) &&
+      inputAvailable;
     const start = this.scrollOffset;
+    if (!this.info) {
+      const anchor = !this.followTail ? rows?.anchorAt?.(start) : undefined;
+      this.transcriptRead =
+        source && anchor !== undefined
+          ? {
+              source,
+              width: contentWidth,
+              target: { owner_id, generation, agent_id, run_id },
+              anchor,
+            }
+          : undefined;
+    }
     const compose = this.compose;
-    const footer: DetailFooterFrame = compose
-      ? {
-          text: renderComposeFooter({
-            width: chrome,
-            input: (room) => compose.input.render(room)[0] ?? "",
-            sendable: sameRun(compose.target, view) && steerable(view),
-            empty: compose.empty,
-            theme: this.options.theme,
-          }),
-        }
-      : this.footer(
-          chrome,
-          index + 1,
-          entries.length,
-          start + viewportHeight,
-          total,
-          view,
-          fits &&
-            Number.isFinite(this.options.tui.terminal.columns) &&
-            this.options.tui.terminal.columns > 0 &&
-            !!this.options.onStop &&
-            stoppable(view),
-          !!this.confirmation,
-          !!this.options.onSteer && steerable(view),
-        );
-    this.paintedHeight = viewportHeight + CHROME_LINES;
-    // Geometry is published once for this frame; formatting has no interaction
-    // side effects. A hidden/unrenderable control cannot remain armed.
+    const footer: DetailFooterFrame =
+      compose && this.composeRows === 0 && !this.confirmation
+        ? {
+            text: renderComposeFooter({
+              width: chrome,
+              input: (room) => compose.input.render(room)[0] ?? "",
+              sendable: sameRun(compose.target, view) && steerable(view),
+              empty: compose.empty,
+              tooLong: overLimit(compose),
+              hiddenNotes: this.hiddenNotes,
+              unavailable: inputAvailable ? undefined : "geometry",
+              theme: this.options.theme,
+            }),
+          }
+        : this.footer(
+            chrome,
+            entries,
+            Math.max(0, total - (start + viewportHeight)),
+            view,
+            fits &&
+              Number.isFinite(this.options.tui.terminal.columns) &&
+              width <= this.options.tui.terminal.columns &&
+              !!this.options.onStop &&
+              stoppable(view),
+            !!this.confirmation,
+            canCompose,
+          );
+    this.paintedHeight = fixed.length + viewportHeight + this.composeRows + CHROME_LINES;
+    const dimensions = {
+      columns: this.options.tui.terminal.columns,
+      rows: this.options.tui.terminal.rows,
+      width,
+    };
+    // Geometry is published once per paint; formatting never admits input.
     if (footer.action)
       this.stopPaint = {
         target,
         action: footer.action,
-        dimensions: {
-          columns: this.options.tui.terminal.columns,
-          rows: this.options.tui.terminal.rows,
-          width,
-        },
+        dimensions,
       };
     else this.resetStopInteraction();
-    if (
-      !compose &&
-      !this.confirmation &&
-      this.options.onSteer &&
-      steerable(view) &&
-      fits &&
-      Number.isFinite(this.options.tui.terminal.columns) &&
-      width <= this.options.tui.terminal.columns
-    )
+    if (canCompose)
       this.composePaint = {
         target: { owner_id, generation, agent_id, run_id },
-        dimensions: {
-          columns: this.options.tui.terminal.columns,
-          rows: this.options.tui.terminal.rows,
-          width,
-        },
+        dimensions,
       };
+    this.messageAction = this.composePaint ? footer.messageAction : undefined;
+    if (fits && Number.isFinite(dimensions.columns) && width <= dimensions.columns) {
+      // Rule columns are body cells: past the frame's side and the gutter.
+      const edge = this.paintedHeight - 1;
+      const ruleY = fixed.length; // The title row is 0, the rule the last fixed row.
+      const ruleX = (this.options.frame ? 1 : 0) + gutter;
+      const hits: ChromeHit[] = [
+        ...(footer.tabs ?? []).map((tab) => ({ kind: "agent" as const, y: edge, ...tab })),
+        ...(footer.tail ? [{ kind: "tail" as const, y: edge, ...footer.tail }] : []),
+        ...(rule?.items ?? []).map((item) => ({
+          kind: item.kind,
+          y: ruleY,
+          from: item.from + ruleX,
+          to: item.to + ruleX,
+        })),
+      ];
+      if (hits.length) this.chromePaint = { dimensions, hits };
+    }
+    const body = [...fixed, ...this.window(rows, contentWidth, start, viewportHeight)];
+    if (compose && this.composeRows) {
+      body.push(
+        renderDetailComposeHeading({
+          width: contentWidth,
+          name: sameRun(compose.target, view) ? view.name || "Agent" : "original task",
+          task: sameRun(compose.target, view) ? view.task : undefined,
+          sendable: sameRun(compose.target, view) && steerable(view),
+          empty: compose.empty,
+          tooLong: overLimit(compose),
+          theme: th,
+        }),
+        compose.input.render(contentWidth)[0] ?? "",
+      );
+    }
     return this.dress(
       renderDetailTitle(
         entry.input,
@@ -821,10 +1144,12 @@ export class DetailPane {
         titleWidth,
         !!this.options.frame,
       ),
-      this.window(fields, rows, inner, start, viewportHeight),
-      footer.text,
+      body,
+      footer,
       width,
       inner,
+      gutter,
+      { from: fixed.length, height: viewportHeight, offset: start, total },
     );
   }
 
@@ -832,6 +1157,8 @@ export class DetailPane {
     this.resetCloseHover();
     this.resetStopInteraction();
     this.wrapped.clear();
+    this.transcriptRead = undefined;
+    this.pendingToolAnchor = undefined;
     this.options.invalidate?.();
   }
   dispose(): void {
@@ -839,41 +1166,89 @@ export class DetailPane {
     this.closeHover.dispose();
     this.resetStopInteraction();
     clearInterval(this.timer);
+    this.chromePaint = undefined;
     this.wrapped.clear();
+    this.transcriptRead = undefined;
+    this.pendingToolAnchor = undefined;
   }
 
   // ---- Private ----
 
-  /**
-   * The visible slice across the two halves of the body. The fields are strings
-   * this module produced; the transcript is sliced by its own owner, which
-   * renders each settled message once per width rather than on every scroll.
-   */
+  private wrapInfo(text: string, width: number): string[] {
+    const cached = this.wrapped.get(text);
+    this.wrapped.delete(text);
+    const rows = cached?.width === width ? cached.rows : wrapText(text, width);
+    if (text.length <= 16_384) {
+      this.wrapped.set(text, { width, rows });
+      if (this.wrapped.size > 64) this.wrapped.delete(this.wrapped.keys().next().value!);
+    }
+    return rows;
+  }
+
+  /** A chrome click: the same transitions as the keys that the chrome names. */
+  private activateChrome(hit: ChromeHit): void {
+    if (hit.kind === "agent") {
+      const { entries } = this.current();
+      if (
+        hit.agent_id !== this.selected &&
+        entries.some((entry) => entry.agent_id === hit.agent_id)
+      )
+        this.adopt(hit.agent_id);
+      this.options.tui.requestRender();
+      return;
+    }
+    if (hit.kind === "tools") return this.toggleTools();
+    if (hit.kind === "transcript" || hit.kind === "info") {
+      if ((hit.kind === "info") !== this.info) this.toggleInfo();
+      return;
+    }
+    // `↓ N more` is End: back to the tail, following it again.
+    if (this.painted === 0) return;
+    this.scrollOffset = this.bounds(this.painted).maxScroll;
+    this.followTail = true;
+    this.resetStopInteraction();
+    this.options.tui.requestRender();
+  }
+
+  private toggleTools(): void {
+    const following = this.info ? (this.transcriptPosition?.follow ?? true) : this.followTail;
+    this.pendingToolAnchor = following ? undefined : this.transcriptRead;
+    this.toolsExpanded = !this.toolsExpanded;
+    this.resetStopInteraction();
+    this.chromePaint = undefined;
+    this.painted = 0;
+    this.options.tui.requestRender();
+  }
+
+  private toggleInfo(): void {
+    if (!this.info) {
+      this.transcriptPosition = { offset: this.scrollOffset, follow: this.followTail };
+      this.scrollOffset = 0;
+      this.followTail = false;
+    } else {
+      this.scrollOffset = this.transcriptPosition?.offset ?? 0;
+      this.followTail = this.transcriptPosition?.follow ?? true;
+      this.transcriptPosition = undefined;
+    }
+    this.info = !this.info;
+    this.painted = 0;
+    this.chromePaint = undefined;
+    this.resetStopInteraction();
+    this.options.tui.requestRender();
+  }
+
+  /** Only the active page scrolls; pinned observations are separate rows. */
   private window(
-    fields: string[],
     rows: TranscriptFrame | undefined,
     width: number,
     start: number,
     height: number,
   ): string[] {
-    const out: string[] = [];
-    for (let i = start; i < start + height; i++) {
-      if (i < fields.length) out.push(fields[i]!);
-      else if (i === fields.length) out.push(transcriptRule(this.options.theme, width));
-      else break;
-    }
-    const remaining = height - out.length;
-    if (remaining <= 0 || !rows) {
-      while (out.length < height) out.push("");
-      return out;
-    }
-    const from = Math.max(0, start - fields.length - 1);
-    out.push(
-      ...rows
-        .slice(from, remaining)
-        .slice(0, remaining)
-        .map((row) => truncateToWidth(row, width)),
-    );
+    const out = (
+      rows?.slice(start, height) ?? [this.options.theme.fg("dim", "No transcript available.")]
+    )
+      .slice(0, height)
+      .map((row) => truncateToWidth(row, width));
     while (out.length < height) out.push("");
     return out;
   }
@@ -887,22 +1262,49 @@ export class DetailPane {
   private dress(
     title: string,
     body: string[],
-    footer: string,
+    footer: Pick<DetailFooterFrame, "text" | "flush">,
     width: number,
     inner: number,
+    gutter = 0,
+    scroll?: { from: number; height: number; offset: number; total: number },
   ): string[] {
     this.closeHover.paint(
       width,
       !!this.options.frame && this.options.visible?.() !== false,
       body.length + CHROME_LINES,
     );
-    if (!this.options.frame) return [truncateToWidth(title, width), ...body, footer];
+    if (!this.options.frame)
+      return [title, ...body, footer.text].map((line) => truncateToWidth(line, width));
     const th = this.options.theme;
     const side = popoverSide(th);
     return [
       popoverInlay(th, width, title, "top", true, this.closeHover.hovered),
-      ...body.map((line) => side + padTo(truncateToWidth(line, inner), inner) + side),
-      popoverInlay(th, width, footer, "bottom"),
+      ...body.map((line, i) => {
+        let edge = side;
+        if (
+          scroll &&
+          scroll.total > scroll.height &&
+          i >= scroll.from &&
+          i < scroll.from + scroll.height
+        ) {
+          const thumb = Math.max(1, Math.floor((scroll.height * scroll.height) / scroll.total));
+          const top = Math.round(
+            (scroll.offset / (scroll.total - scroll.height)) * (scroll.height - thumb),
+          );
+          if (i - scroll.from >= top && i - scroll.from < top + thumb)
+            edge = th.fg("borderAccent", "┃");
+        }
+        return (
+          side +
+          " ".repeat(gutter) +
+          padTo(truncateToWidth(line, inner - gutter * 2), inner - gutter * 2) +
+          " ".repeat(gutter) +
+          edge
+        );
+      }),
+      footer.text
+        ? popoverInlay(th, width, footer.text, "bottom", false, false, footer.flush)
+        : popoverBottom(th, width),
     ];
   }
 
@@ -910,28 +1312,34 @@ export class DetailPane {
    * cannot disagree about how far the pane scrolls. Content-sized and capped at
    * a share of the terminal, never a fixed reservation of blank rows. */
   private bounds(total: number): { viewportHeight: number; maxScroll: number; fits: boolean } {
-    const rows = this.options.tui.terminal.rows;
-    const budget = Number.isFinite(rows)
-      ? Math.max(0, Math.floor((rows * VIEWPORT_HEIGHT_PCT) / 100))
-      : 0;
-    const viewportHeight = Math.max(
-      MIN_VIEWPORT,
-      Math.min(total, Math.max(0, budget - CHROME_LINES)),
+    const budget = this.heightBudget();
+    const bodyHeight = Math.max(
+      this.bodyFloor,
+      Math.min(total, Math.max(0, budget - CHROME_LINES - this.fixedHeight)),
     );
+    const viewportHeight = bodyHeight - this.composeRows;
     return {
       viewportHeight,
       maxScroll: Math.max(0, total - viewportHeight),
-      fits: viewportHeight + CHROME_LINES <= budget,
+      fits: bodyHeight + this.fixedHeight + CHROME_LINES <= budget,
     };
+  }
+
+  private heightBudget(): number {
+    const rows = this.options.tui.terminal.rows;
+    return Number.isFinite(rows)
+      ? Math.max(
+          0,
+          Math.floor((rows * (this.options.frame ? FLOATING_HEIGHT_PCT : DOCKED_HEIGHT_PCT)) / 100),
+        )
+      : 0;
   }
 
   /** Pure chrome layout. Only render publishes its optional painted action. */
   private footer(
     width: number,
-    position: number,
-    count: number,
-    shown: number,
-    total: number,
+    entries: readonly { agent_id: string; input: DetailInput }[],
+    below: number,
     view: RunView | undefined,
     available: boolean,
     confirming: boolean,
@@ -939,14 +1347,17 @@ export class DetailPane {
   ): DetailFooterFrame {
     return renderDetailFooter({
       width,
-      position,
-      count,
-      shown,
-      total,
+      entries,
+      selected: this.selected,
+      below,
+      // Only a live Run's transcript keeps growing under the reader.
+      live: !this.info && this.animating,
       view,
       available,
       confirming,
       messaging,
+      composing: !!this.compose,
+      hiddenNotes: this.hiddenNotes,
       spinnerFrame: this.frame,
       theme: this.options.theme,
       framed: !!this.options.frame,

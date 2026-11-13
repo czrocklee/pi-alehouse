@@ -223,22 +223,27 @@ remain disabled.
 
 `Alt+A` opens the Agent detail pane. A row click opens it, selects a different
 Agent, or closes it when clicking the selected Agent. `←`/`→` choose an Agent,
-`↑`/`↓` scroll, and **only** `Esc` closes it, restoring typed editor text. The
-pane keeps focus: unbound printable input does not dismiss it.
+`↑`/`↓` scroll, and `×` closes it, restoring typed editor text. `Esc` unwinds one
+layer at a time: an armed Stop, then a message draft, then the Info page, and
+only then closes the pane. The pane keeps focus: unbound printable input does
+not dismiss it.
 The dim **[S Stop]** is the rightmost action at the footer's bottom-right. **S** or a
-click arms confirmation in place: the footer shows
+click arms confirmation in place (while a message draft is open, **S** is draft
+text and the control reads **[Stop]**, click only): the footer shows
 `best-effort · Ctrl+S · Esc cancel · [Confirm stop]`, with warning-colored,
 bold **[Confirm stop]** rightmost.
 Arming does not replace the title, body or transcript, change the scroll position,
 or resize the pane. Only **Ctrl+S** or a separate single click on **[Confirm stop]**
 then requests cooperative cancellation; rapid double/triple clicks do not confirm.
-**Esc** cancels confirmation, and a subsequent
-**Esc** closes details. Ordinary typing, plain `Enter` and repeated **S** never
+**Esc** cancels confirmation; subsequent presses leave any draft and Info page
+before closing details. Ordinary typing, plain `Enter` and repeated **S** never
 confirm Stop. Both steps require their controls to be painted. Initial Stop is
-offered only when the full inline confirmation hint and compact live status fit
-the footer and the normal pane height fits a known finite viewport. Full task/name
+offered only when the full inline confirmation hint fits the footer (beside a
+minimal selected tab when several Agents exist; the title keeps the live status)
+and the normal pane height fits a known finite viewport. Full task/name
 text need not fit a separate confirmation body; long or CJK text alone does not
-suppress Stop. There is no visible but unusable Stop button or hidden keyboard action.
+suppress Stop. Neither Stop step accepts an unpainted control; a visible Stop
+button is always usable.
 Confirmation expires after ten seconds of monotonic elapsed time, checked before
 rendering or acting even without a repaint. User scrolling (scroll keys or wheel),
 stale geometry, Agent selection changes, replacement work, permission hiding and
@@ -249,7 +254,8 @@ or Owner shutdown, and it also works for queued tasks and while delegation is Of
 Once stopping starts or execution exits the control disappears. Status and drain
 diagnostics, not the command's acceptance notice, confirm progress toward exit.
 A display-refresh failure is reported separately from an accepted stop request.
-Outside confirmation, `Esc` and `×` only close the pane.
+Outside confirmation, `×` only closes the pane, and `Esc` leaves a draft or the
+Info page before it closes the pane.
 
 The first accepted explicit human stop carries `cancellation_source: "human"` in
 live state and the recorded outcome. Parent tool projections attempt this bounded
@@ -258,19 +264,35 @@ optional metadata; byte pressure may omit it. The host also attempts a visible
 asking the model not to repeat the task automatically. Neither queuing a message
 nor displaying a notice proves model receipt. An earlier model/budget stop or an
 already-exited task is not relabelled as a new human cancellation.
-**M** opens message mode for a running task: the footer row becomes one input
-line (`› … Enter send · Esc cancel`) without resizing the pane or moving the body.
-Printable keys, including **S**, enter text there; `←`/`→` edit the caret rather
-than switching Agents. `↑`/`↓`/PageUp/PageDown and the wheel still scroll. **Enter** submits one human message as steering input to
-the Run the draft was started for; **Esc** discards the draft and a subsequent
-**Esc** closes details. The hint `M message` is shown, and **M** acts, only while
-the selected task is running with no stop requested; queued, stopping and settled
-tasks have no message mode, and it never starts a continuation. Starting a draft
+**M** opens message mode for a running task: a two-row composer tray borrows
+transcript height while the pane's outer height stays unchanged, and the footer
+keeps the Agent tabs and the Stop control. When terminal space permits the tray, its
+minimum body space is reserved before composing, even with an empty transcript;
+message growth and compaction never switch the input between tray and footer. The tray's input is a full-width single line
+(`› …`); printable keys, including **S**, enter text there, and `←`/`→` edit the
+caret rather than switching Agents. Tiny panes that cannot fit the tray fall
+back to the previous one-line composer in the footer row
+(`› … Enter send · Esc cancel`), which then replaces the tabs. While typing, the
+tray's heading names only sending and discarding the draft, and a stale target
+is not offered Enter send. The footer drops every key the draft would swallow
+(the `‹ ›` arrows, `[M message]` and the docked `Esc` hint) and the section rule
+drops its key accents. Tabs, **[Stop]**, page/tool labels and the tail cue stay
+clickable when painted. While Stop confirmation is armed, Enter only
+cancels that intent; it does not send the draft. If compaction leaves no room
+for the tray, confirmation temporarily occupies the footer without discarding
+the draft. `↑`/`↓`/PageUp/PageDown and the wheel still scroll. **Enter** submits one human message as steering input to
+the Run the draft was started for; **Esc** discards the draft, then leaves an
+open Info page before closing details. **M** acts only while the selected task
+is running with no stop requested and its painted geometry fits a known
+viewport. The optional `[M message]` hint may yield under width pressure without
+disabling that shortcut; it still requires a visibly painted original Run and
+fresh target validation. Queued, stopping and settled tasks have no message
+mode, and it never starts a continuation. Starting a draft
 binds the last visibly painted Owner, generation, Agent and Run, then checks that
 identity against fresh state; a changed or hidden frame requires a repaint before
 **M** can act. The host rechecks the original identity before invoking the Owner. If that
-Run ends or is replaced, the text stays visible with `task no longer running` and
-Enter sends nothing. Selecting another Agent, `×` or a row click discards the
+Run ends or is replaced, the draft reports `task ended` (or `task no longer
+running` in the compact fallback) and Enter sends nothing. Selecting another Agent, `×` or a row click discards the
 draft; a permission dialog that hides or closes the pane does not, and the draft
 returns only for the same Run, with the caret at its end after a closed pane is
 rebuilt. Explicitly opening another Agent supersedes a pending permission restore
@@ -278,20 +300,31 @@ and discards the old draft. Empty messages and messages exceeding 16236 UTF-16
 units after normalization and trimming are refused; the fixed human-origin lead
 uses the rest of the unchanged 16384-unit input bound. A refused message
 (delegation Off, input not ready, input limit or invalid text) keeps its text and
-explains why. An accepted one reports
-`Message queued`: that is admission to the child-input path, not delivery, and a
-child blocked in a tool reads it only when that tool returns. Undelivered text
-appears under the task's discarded inputs.
+explains why. An accepted one reports inline that the message was admitted to
+the child-input path and that delivery is unconfirmed; a child blocked in a tool
+reads it only when that tool returns. This transient feedback lasts at most five
+seconds and clears on a new draft, refusal, task replacement or exit. It takes
+over the Run's single human-steer admission row for that time, after the first
+or any later accepted message, rather than adding a second row; the row then
+returns to the admission fact. Neither is a delivery state inferred from
+the transcript: the pane never relabels a steering message as
+queued or delivered based on what later appears there. Undelivered text appears
+under the task's discarded inputs.
 
 The child receives the text behind a fixed lead naming the human, not the parent,
 as its author. Nothing is published to the parent session and no model turn is
 triggered: the Run only carries `human_steered: true` in live state and parent
 tool projections, as bounded optional metadata that byte pressure may omit. The
-message text is never projected to the parent. Pasted newlines are removed for
-this single-line editor; terminal protocols are stripped and remaining control
-or bidirectional-control characters are escaped before draft storage, display or
-sending. Printable Unicode, including combining marks and emoji joiners, stays
-intact. This sanitization does not change the child's permission boundary.
+message text is never projected to the parent. Pasted newlines are normalized to
+spaces for this single-line editor; terminal protocols are stripped and remaining
+control or bidirectional-control characters are escaped before draft storage,
+display or sending. Printable Unicode, including combining marks and emoji
+joiners, stays intact. This sanitization does not change the child's permission
+boundary. Displaying which transcript rows came from steering recognizes that
+fixed lead text; this is qualified text recognition, not source-authenticated
+authorship. All other transcript user messages use the neutral `Input` label:
+compaction and branching cannot prove which surviving message was the task's
+original input, and none is guessed to be from the parent.
 
 The title reserves space for the task and a Run reuse cue: `#N` for a valid task
 ordinal, otherwise an abbreviated Run ID. Nickname/profile text yields first.
@@ -300,37 +333,75 @@ protocols and explicitly escapes remaining control and bidirectional-control
 characters; ZWJ, ZWNJ and variation selectors remain intact. This does not
 blanket-strip styled SDK transcripts or their hyperlinks. Wrapping respects
 grapheme clusters and display width.
-Live status and its spinner or outcome glyph
-sit at the lower left, before the Agent/line counts, in both docked and floating layouts.
+Identity and task lead the title; live status and its spinner or outcome glyph
+sit at its right end (before `×` when framed), so a status change or an Agent
+switch never shifts the name. The status label shortens before it yields, and
+the glyph never does.
 
-The pane shows the fields a row cannot: identity, profile/name/task, internally
-resolved difficulty slot `d1`–`d5`, model, actual effort and its recorded source (fixed preset,
-parent identity, or automatic mapping; user override when present). Historical
-manual maps retain the distinct `preset map` label. Effort is
-labelled fixed at creation, not editable on a resident Agent. The pane also shows
+The footer, or the bottom edge of a floating pane, is the pane's navigation and
+action bar. Agent tabs sit at its left when more than one Agent exists, each
+showing its status glyph and `?`/`!` attention markers; the selected tab is
+filled with the theme's selection background when background styling is
+available, otherwise distinguished by bold text. Peers that do not fit fold into
+clickable `+N` summaries with their attention counts, and `‹ ›` step to the
+previous/next Agent. At its right, `↓ N more` counts rows below the viewport on
+the current page, Transcript or Info. It is accented while a live transcript
+keeps growing; a click or **End** goes to the current page's end, resuming live
+tail following on Transcript. Next come `[M message]` and `[S Stop]`, Stop always
+outermost. Docked panes, which have no `×`, keep an `Esc` hint before the
+actions. The footer does not repeat counters, status, context or a key legend;
+the title, metrics and section rule carry the current Agent's information.
+Framed panes additionally show a scrollbar.
+Under width pressure peer tabs fold first, then the arrows, then `↓ N more`
+(framed, where the scrollbar also shows position) or `[M message]` (docked, where
+the cue is the only position left). An armed Stop folds every peer so the
+confirmation names a single target.
+
+Sticky compact metric and attention rows stay pinned above the independently
+scrollable transcript. At most two highest-priority attention rows are shown;
+when height permits only one, its overflow count still includes every omitted
+note. With no attention row, the section rule counts them as `Info +N` on either
+page; with no rule either, the selected tab's own `?`/`!` marker carries them,
+or a required `!N` cue leads the footer. Clipping a nickname never suppresses
+the last warning/question cue. **I** exposes all diagnostics,
+including the human-steer admission fact. The section rule above the body reads
+`Transcript · Info` (the page shown is brighter) and, on the transcript page,
+`Tools collapsed` or `Tools expanded`; the keys **I** and **T** are accented on
+their own labels, and each label is also clickable. Narrow rules retain the
+current page's label, except that hidden diagnostics prioritize `Info +N`;
+**I** still switches pages and **Esc** leaves Info when its other label cannot
+fit. The default compact view keeps running and
+error tool entries expanded; **T**, or the host's configured tools-expand key,
+expands and collapses all settled successful tool cards. A held reading position
+tracks the same message block through expansion; collapsing a held tool clamps
+within that block rather than jumping into another message. **I** replaces the
+transcript viewport with an info page holding the low-frequency fields: identity, profile/name/task, internally
+resolved difficulty slot `d1`–`d5`, model, actual effort and its recorded source
+(fixed preset, parent identity, or automatic mapping; user override when
+present), with historical manual maps keeping the distinct `preset map` label and
+effort labelled fixed at creation, not editable on a resident Agent. Wide panes
+arrange those low-frequency fields in two columns. The info page also shows
 tool facts, phase, full cumulative usage split, one-row active-tool argument
 summaries (one per tool, with paths shortened to retain their filename), separate
 `thinking` and ordinary-prose `draft` previews for the current assistant message,
-and a separate `preparing` tool field. Commands and all these previews are clipped
-to the actual remaining width before styling and never wrap into extra rows;
-full streamed content remains in the native transcript. When the reader has
-scrolled into the transcript, fields appearing/disappearing preserve that
-transcript row within the same Run and width. Agent/Owner/Run changes and resizes
-do not reuse the old anchor. The pane also shows each stalling condition and every dispatch note (the parent model sees only
-`tree_shared`), and a child transcript. Context occupancy is
-separate from cumulative billed usage (`≈231k/272k tokens · 84.9%`); unknown
-occupancy remains unknown. Formatting shares rounded-unit carry rules with the
-footer: compact counts use whole k above 10k, detailed billed usage retains
-tenths, 999500 is `1.0M` compact or `999.5k` detailed, and 999950 never prints
-`1000k`/`1000.0k`.
+a separate `preparing` tool field, and every dispatch note (the parent model sees
+only `tree_shared`). Context occupancy is separate from cumulative billed usage
+(`≈231k/272k tokens · 84.9%`); unknown occupancy remains unknown. Commands and
+all previews are clipped to the actual remaining width before styling and never
+wrap into extra rows; full streamed content remains in the native transcript.
+Returning from Info restores the held transcript position and follow intent.
+Pinned observations never share the transcript's scroll coordinates.
+Formatting shares rounded-unit carry rules with the footer: compact counts use
+whole k above 10k, detailed billed usage retains tenths, 999500 is `1.0M` compact
+or `999.5k` detailed, and 999950 never prints `1000k`/`1000.0k`.
 
 The transcript uses Pi's own message components so markdown, syntax highlighting,
 thinking, skills, compaction, and branch summaries match the parent. Within the
 compaction-aware branch it displays raw messages, including failed attempts
 omitted from model context by SDK retry; context edits do not rewrite this
-transcript. It follows
-the live tail until the reader scrolls away and resumes when returned to the
-end. Pi does not export its built-in tool renderers and tool definitions do not
+transcript. It scrolls independently of the surrounding pane and follows the
+live tail until the reader scrolls away; **End** returns to the tail and resumes
+following. Pi does not export its built-in tool renderers and tool definitions do not
 supply them, so native `read`, `bash`, and `edit` use a plain arguments/output
 fallback. This is an upstream SDK/UI limitation, not a custom imitation.
 Transcript rows strip OSC 133 markers because repeated viewport emission must
@@ -344,7 +415,10 @@ a preference: regular overlays are composited into the scrollback backing array
 and a later append can bake chrome into terminal history. Unknown renderer mode
 docks. Fullscreen mouse reporting enables row clicks; in regular mode `Alt+A`
 is the reliable entry. Floating panes use shared rounded popover chrome,
-centered sizing, wheel handling, and no outside-click dismissal. Like every
+centered sizing computed from the mounted pane's own terminal: 88% of its
+width capped at 164 columns, 84% of its height, and at least 40 columns; when
+the terminal width is unknown the plain 88% width applies. Wheel handling and
+no outside-click dismissal are unchanged. Like every
 floating popover, the pane closes from the `×` at the right end of its top edge
 (` × ─╮`, five columns, all of them the target); below 9 columns the control is
 omitted rather than painted unhittable.

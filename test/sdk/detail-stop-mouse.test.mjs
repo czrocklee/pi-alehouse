@@ -149,9 +149,11 @@ for (const frame of [false, true])
 for (const frame of [false, true])
   for (const status of ["running", "queued"])
     for (const fits of [false, true]) {
-      const minimum = (frame ? 62 : 56) + (status === "queued" ? 3 : 0);
+      // Only the 50-column confirmation is reserved (+6 framed): the title row,
+      // not the footer, keeps the live status, so queued shares the boundary.
+      const minimum = frame ? 56 : 50;
       const width = minimum - (fits ? 0 : 1);
-      test(`SDK footer honors the complete best-effort hint/status boundary (frame=${frame}, status=${status}, width=${width})`, (t) => {
+      test(`SDK footer honors the complete best-effort hint boundary (frame=${frame}, status=${status}, width=${width})`, (t) => {
         const h = mouseFixture(t, frame, width, { status });
         if (!fits) {
           assert(

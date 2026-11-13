@@ -1439,8 +1439,8 @@ test("a real Controller's automatic release frees capacity but retains clickable
   });
   t.after(() => pane.dispose());
   const runningPane = pane.render(120);
-  assert.match(runningPane.at(-1), /running/);
-  assert.doesNotMatch(runningPane[0], /running/);
+  assert.doesNotMatch(runningPane.at(-1), /running/, "the footer never repeats the status");
+  assert.match(runningPane[0], /running/, "the sticky title carries the live state");
   ports[0].calls[0].done.reject(new SessionUnavailableError("sdk_error", new Error("SDK broke")));
   await ended(controller, run);
   widget.update();
@@ -1469,11 +1469,10 @@ test("a real Controller's automatic release frees capacity but retains clickable
   );
   const failedPane = pane.render(120);
   assert.match(
-    failedPane.at(-1),
-    /failed/,
-    "the already-open pane retains the retired agent in its lower-left status",
+    failedPane[0],
+    /✗ failed$/,
+    "the already-open pane's sticky title retains the retired agent's failure state",
   );
-  assert.doesNotMatch(failedPane[0], /failed/);
   assert.match(pane.render(120).join("\n"), /SDK broke/);
   for (let turn = 1; turn < 3; turn++) {
     widget.onTurnStart();

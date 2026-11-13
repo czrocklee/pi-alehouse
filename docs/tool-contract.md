@@ -583,6 +583,9 @@ the user sent that task a direct message from the detail pane, so its result may
 deliberately differ from the brief. It records admission only: no text, count or
 delivery claim, no parent message and no run-end outcome field. It yields under
 envelope pressure like `cancellation_source`; model `agent_send` never sets it.
+Parent text that reaches a child (`prompt`, `continues`, `message`, `answer`,
+`return_to.answer`) is rejected with `INVALID_PARAMETERS` when it contains the
+human steering lead, so the parent cannot present its own words as the user's.
 Queued rows retain `queued_for: "dependencies" | "provider_capacity"` when that scheduling
 condition applies; it is a mandatory bounded control, including in list/interrupt
 projections, not optional diagnostic text. Dependency names remain in the roster's

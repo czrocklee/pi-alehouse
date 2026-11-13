@@ -138,10 +138,13 @@ function assertRightmostLabel(lines, label, width, frame) {
     frame ? " ─╯" : "",
     "only frame chrome follows the action",
   );
+  // The footer spends its left side on agent tabs while a confirmation holds
+  // the row; the live status itself never scrolls away — the sticky title ends
+  // with it, right above the action (framed, before the close control).
   assert.match(
-    footer.slice(0, at),
-    /\b(?:run(?:ning)?|queued|finish(?:ing)?)\b/,
-    "live status remains before the action",
+    stripTerminalSequences(lines[0]),
+    /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◦] (?:running|queued)(?: ─ × ─╮)?$/,
+    "the sticky title keeps the live status above the footer action",
   );
 }
 function arm(pane, width = 120, key = "s") {
@@ -186,9 +189,9 @@ for (const frame of [false, true])
       h.pane.handleInput(CONFIRM);
       assert.deepEqual(stopped, ["run-a"]);
       assert.equal(h.closes, 0);
-      const footer = h.pane.render(120).at(-1);
-      assert.match(footer, /cancelling/);
-      assert.doesNotMatch(footer, /\[S Stop\]/);
+      const after = h.pane.render(120);
+      assert.match(after[0], /cancelling/, "the title reports the cancellation");
+      assert.doesNotMatch(after.at(-1), /\[S Stop\]/);
       h.pane.handleInput(key);
       h.pane.handleInput(CONFIRM);
       assert.deepEqual(stopped, ["run-a"], "already-stopping work is not stopped again");
@@ -221,6 +224,8 @@ for (const frame of [false, true])
   test(`Stop and confirm click geometry follows painting (frame=${frame})`, (t) => {
     const stopped = [];
     const h = paneFixture(t, { frame, onStop: (id) => stopped.push(id) });
+    // Actions need a paint that fits the terminal; widen it for the wide probes.
+    h.terminal.columns = 240;
     const minimum = frame ? 62 : 56;
     const widths = [...Array.from({ length: 121 - minimum }, (_, i) => minimum + i), 160, 240];
     for (const width of widths) {
@@ -241,7 +246,10 @@ for (const frame of [false, true])
             "adjacent columns do not arm intent",
           );
         }
-        if (width >= 80) assert.match(footer, /Esc.*\[S Stop\]/, "navigation precedes Stop");
+        // Docked there is no close control, so its Esc hint precedes Stop;
+        // framed, the close control replaces it.
+        if (frame) assert.doesNotMatch(footer, /Esc/, "the close control replaces Esc");
+        else assert.match(footer, /Esc.*\[S Stop\]/, "navigation precedes Stop");
         assert.deepEqual(
           clickLabel(h.pane, lines, "[S Stop]", edge === "first" ? 0 : "[S Stop]".length - 1),
           { handled: true },
@@ -434,7 +442,7 @@ for (const change of ["columns", "rows"])
   });
 
 for (const frame of [false, true])
-  for (const width of [80, 121])
+  for (const width of [80, 119])
     for (const pointer of [false, true]) {
       test(`component width alone retires inline confirmation (frame=${frame}, width=${width}, pointer=${pointer})`, (t) => {
         const stopped = [];
@@ -468,6 +476,22 @@ for (const frame of [false, true])
         assert.deepEqual(stopped, ["run-a"]);
       });
     }
+
+for (const frame of [false, true])
+  test(`a paint wider than the terminal offers no Stop action (frame=${frame})`, (t) => {
+    const stopped = [];
+    const h = paneFixture(t, { frame, onStop: (id) => stopped.push(id) });
+    const beyond = h.pane.render(h.terminal.columns + 1);
+    assert(beyond.length > 0, "the body still renders wider than the terminal");
+    assert(
+      !beyond.some((line) => line.includes("[S Stop]")),
+      "an unrenderable paint cannot arm cancellation",
+    );
+    h.pane.handleInput("s");
+    h.pane.handleInput(CONFIRM);
+    assert.deepEqual(stopped, []);
+    assertRightmostLabel(h.pane.render(120), "[S Stop]", 120, frame);
+  });
 
 for (const change of ["columns", "rows"])
   test(`Esc still backs out before resized confirmation repaints (${change})`, (t) => {
@@ -511,14 +535,14 @@ for (const { label, prefix, suffix, plainPrefix = "", plainSuffix = "" } of [
       const h = paneFixture(t, { frame, views: [original], onStop: (id) => stopped.push(id) });
       h.terminal.columns = 240;
       h.pane.render(240);
-      h.pane.handleInput("\x1b[H");
+      h.pane.handleInput("i"); // the full identity fields are the Info page now
       const ordinary = h.pane.render(240);
       assert(
         ordinary[0].includes(plain("name")),
         "a roomy ordinary title uses visible sanitized identity",
       );
       const body = ordinary.slice(1, -1).join("\n");
-      assert(body.includes(plain("task")), "the ordinary task field is sanitized too");
+      assert(body.includes(plain("task")), "the Info page task field is sanitized too");
       if (!plainPrefix)
         assert(
           body.includes("run · agent agent"),
@@ -528,7 +552,12 @@ for (const { label, prefix, suffix, plainPrefix = "", plainSuffix = "" } of [
       assertInlineConfirmation(ordinary, confirmation);
       for (const lines of [ordinary, confirmation]) {
         assert(
-          lines.every((line) => !/\p{Cc}/u.test(line)),
+          lines.every(
+            (line) =>
+              !/\p{Cc}/u.test(
+                line.replaceAll("\x1b[0m...\x1b[0m", "...").replaceAll("\x1b[0m…\x1b[0m", "…"),
+              ),
+          ),
           "no ANSI/OSC/raw controls may reach the pane",
         );
         const text = lines.join("\n");
@@ -562,7 +591,7 @@ for (const frame of [false, true])
       onStop: (id) => stopped.push(id),
     });
     h.pane.render(120);
-    h.pane.handleInput("\x1b[H");
+    h.pane.handleInput("i"); // the full identity fields are the Info page now
     const lines = h.pane.render(120),
       body = lines.slice(1, -1).join("\n");
     assert(lines[0].includes("\\x08name"));
@@ -605,27 +634,26 @@ function assertStopFits(h, width, stopped, run_id = "run-a") {
   const lines = arm(h.pane, width);
   assertRightmostLabel(lines, "[Confirm stop]", width, h.frame);
   // pi-tui's truncateToWidth inserts SGR resets around ellipses even with this
-  // plain theme. Permit only those exact title markers, never arbitrary ANSI;
-  // separate title pieces can each be truncated. Body/footer stay control-free.
+  // plain theme. Permit only those exact markers, never arbitrary ANSI; the
+  // title and the section rules can each be truncated. All else stays plain.
   assert(
-    !lines.some((line, row) =>
+    !lines.some((line) =>
       /\p{Cc}/u.test(
-        row === 0
-          ? line.replaceAll("\x1b[0m...\x1b[0m", "...").replaceAll("\x1b[0m…\x1b[0m", "…")
-          : line,
+        line.replaceAll("\x1b[0m...\x1b[0m", "...").replaceAll("\x1b[0m…\x1b[0m", "…"),
       ),
     ),
-    "only SDK title-truncation resets may accompany plain text",
+    "only SDK truncation resets may accompany plain text",
   );
   h.pane.handleInput(CONFIRM);
   assert.deepEqual(stopped, [run_id]);
 }
 
-// Reserve the full 50-column hint, one separator and compact live status (5).
-// Framed chrome is width-6: running Stop starts at docked 56 / framed 62.
+// Reserve the full 50-column hint; a lone Agent has no tab beside it and the
+// title row keeps the live status. Framed chrome is width-6: Stop starts at
+// docked 50 / framed 56.
 for (const frame of [false, true]) {
-  const minimum = frame ? 62 : 56;
-  for (const width of [24, 40, 46, 50, minimum - 1]) {
+  const minimum = frame ? 56 : 50;
+  for (const width of [24, 40, 46, minimum - 1]) {
     test(`unfittable inline hint/status is not offered (frame=${frame}, width=${width})`, (t) => {
       const h = paneFixture(t, {
         frame,
@@ -651,27 +679,32 @@ for (const frame of [false, true]) {
       assertNoStopAction(h, 120);
     });
   }
+  // Docked caps at 70% of the terminal, floating at 84%, so the floating pane
+  // reaches the five-row Stop floor sooner and shows more fixed rows per budget.
+  const floor = frame ? 6 : 8;
+  const heights = frame ? { 6: 5, 7: 5, 8: 6, 9: 7 } : { 8: 5, 9: 6 };
   for (const rows of [6, 7, 8, 9])
     test(`normal pane height boundary gates Stop (frame=${frame}, rows=${rows})`, (t) => {
       const stopped = [];
       const h = paneFixture(t, { frame, onStop: (id) => stopped.push(id) });
       h.terminal.rows = rows;
-      if (rows < 8) assertNoStopAction(h, minimum);
+      if (rows < floor) assertNoStopAction(h, minimum);
       else {
         assert.equal(
           h.pane.render(minimum).length,
-          rows === 8 ? 5 : 6,
-          "normal pane uses its unchanged 70% height cap",
+          heights[rows],
+          `normal pane uses its unchanged ${frame ? 84 : 70}% height cap`,
         );
         assertStopFits(h, minimum, stopped);
       }
-      assert.deepEqual(stopped, rows < 8 ? [] : ["run-a"]);
+      assert.deepEqual(stopped, rows < floor ? [] : ["run-a"]);
     });
 }
 for (const frame of [false, true])
   for (const fits of [false, true]) {
-    const width = (frame ? 65 : 59) - (fits ? 0 : 1);
-    test(`queued compact status also fits alongside confirmation (frame=${frame}, width=${width})`, (t) => {
+    // Queued work shares the running boundary: no status rides in the footer.
+    const width = (frame ? 56 : 50) - (fits ? 0 : 1);
+    test(`queued Stop shares the running confirmation boundary (frame=${frame}, width=${width})`, (t) => {
       const stopped = [];
       const h = paneFixture(t, {
         frame,
@@ -719,7 +752,8 @@ for (const frame of [false, true])
         const h = paneFixture(t, { frame, views: [original], onStop: (id) => stopped.push(id) });
         h.terminal.rows = 8;
         const width = frame ? 62 : 56;
-        assert.equal(h.pane.render(width).length, 5);
+        // Floating keeps 84% of the terminal, so its eight rows also fit the rule.
+        assert.equal(h.pane.render(width).length, frame ? 6 : 5);
         assertStopFits(h, width, stopped, original.run_id);
         assert.equal(
           original[field],
@@ -1215,7 +1249,8 @@ for (const frame of [false, true])
   test(`shrinking below normal pane height retires inline confirmation (frame=${frame})`, (t) => {
     const h = paneFixture(t, { frame, onStop: () => assert.fail("old confirmation was retired") });
     arm(h.pane);
-    h.terminal.rows = 7;
+    // Floating keeps 84% of the terminal, so only a smaller terminal retires it.
+    h.terminal.rows = frame ? 5 : 7;
     assertNoStopAction(h, 120);
     h.terminal.rows = 40;
     assert.match(h.pane.render(120).at(-1), /\[S Stop\]/);

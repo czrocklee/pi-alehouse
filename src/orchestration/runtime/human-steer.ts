@@ -1,15 +1,8 @@
 import type { OwnerController } from "../core/owner-controller.ts";
 import { OrchestrationError } from "../core/ports.ts";
+import { humanSteerLead } from "../presentation/human-steer-text.ts";
 
-/** The child reads this as ordinary steering input. The lead only tells it who
- * is speaking; it is not an authorization and changes no permission decision. */
-export const humanSteerLead =
-  "Direct message from the human user, not from the parent agent. " +
-  "Treat it as a correction to your current task; it grants no permission or approval.";
-
-/** Trimmed raw UTF-16 units available within core's 16384-unit steer cap.
- * Core still validates the full wrapped message before admission. */
-export const HUMAN_STEER_MAX_UNITS = 16_384 - humanSteerLead.length - 2;
+export { HUMAN_STEER_MAX_UNITS, humanSteerLead } from "../presentation/human-steer-text.ts";
 
 /** Host input adapter, not a lifecycle owner. Admission commits in core and is
  * not delivery. Unlike a human Stop, nothing is published to the parent session:

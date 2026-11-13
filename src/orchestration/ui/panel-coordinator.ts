@@ -14,6 +14,7 @@ import {
 } from "../../shared/overlay-protocol.mjs";
 import type { DelegationSetting } from "../delegation.ts";
 import { OrchestrationError } from "../core/ports.ts";
+import { HUMAN_STEER_MAX_UNITS } from "../presentation/human-steer-text.ts";
 import type {
   EffortOverrides,
   PresetCandidate,
@@ -54,7 +55,7 @@ function steerFailure(error: unknown): string {
         : code === "INPUT_LIMIT"
           ? "this task has reached its input limit"
           : code === "INVALID_MESSAGE"
-            ? "the message is empty or too long"
+            ? `the message is empty or longer than ${HUMAN_STEER_MAX_UNITS} characters`
             : String(error);
   return `Message not sent: ${reason}. Your text is kept.`;
 }
@@ -110,6 +111,15 @@ export interface PanelCoordinatorOptions {
 }
 
 type PickerState = { router: PresetRouter; candidate: PresetCandidate };
+
+/** Floating pane width: 88% of the live terminal width, capped at 164 columns
+ * so ultrawide terminals stay readable. Falls back to the plain percentage
+ * when the terminal size is unknown. */
+export function floatingPaneWidth(columns: number | undefined): number | `${number}%` {
+  return typeof columns === "number" && Number.isFinite(columns) && columns > 0
+    ? Math.min(164, Math.floor(columns * 0.88))
+    : "88%";
+}
 
 /** Owns only parent UI mounting, selection and approval-yield state. */
 export class PanelCoordinator {
@@ -468,6 +478,10 @@ export class PanelCoordinator {
     this.closePane = request.close;
     const mounts = createTranscriptMounts<TranscriptContent>();
     let currentAgents = new Map<string, AgentDetail>();
+    // Read-only columns of the exact TUI this mount receives, captured by the
+    // factory below and read per render by the overlay options; a stale or
+    // shared coordinator-level width is never consulted.
+    let paneColumns: (() => number) | undefined;
     try {
       const floating = this.floating();
       let markdownTheme = getMarkdownTheme();
@@ -477,7 +491,8 @@ export class PanelCoordinator {
       if (this.paneDraft && this.paneDraft.target.agent_id !== this.paneAgent)
         this.paneDraft = undefined;
       await ctx.ui.custom<void>(
-        (tui, theme, _keybindings, done) => {
+        (tui, theme, keybindings, done) => {
+          paneColumns = () => tui.terminal.columns;
           if (!request.mount(() => done(undefined), this.yielding, this.approvals.pending)) {
             return { render: () => [], invalidate() {} };
           }
@@ -681,6 +696,12 @@ export class PanelCoordinator {
                 }
               : {}),
             frame: floating,
+            // Structural hosts may pass no keybinding registry at all; the
+            // pane's own T binding must keep working without one.
+            expandToolsKey: (data) =>
+              !!keybindings &&
+              typeof keybindings.matches === "function" &&
+              keybindings.matches(data, "app.tools.expand"),
           });
           this.detailPane = pane;
           return request.own(pane);
@@ -690,8 +711,8 @@ export class PanelCoordinator {
               overlay: true,
               overlayOptions: () => ({
                 anchor: "center",
-                width: "80%",
-                maxHeight: "70%",
+                width: floatingPaneWidth(paneColumns?.()),
+                maxHeight: "84%",
                 minWidth: 40,
               }),
               onHandle: (handle) => {

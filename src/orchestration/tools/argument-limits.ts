@@ -1,4 +1,5 @@
 import { OrchestrationError } from "../core/ports.ts";
+import { humanSteerLead } from "../presentation/human-steer-text.ts";
 
 /** Model task titles are narrower than the communication projection's label bound. */
 export const MODEL_TASK_TITLE_UNITS = 72;
@@ -20,8 +21,18 @@ const fieldsByTool: Readonly<Record<string, readonly TextField[]>> = {
   agent_read: ["cursor"],
 };
 
+/** Parent-authored text that reaches a child. Only the detail pane's human
+ * input may carry the human steering lead, so the parent cannot present its
+ * own text as the user's. */
+const childFacing: ReadonlySet<TextField> = new Set(["prompt", "continues", "message", "answer"]);
+
 function checkText(value: unknown, field: TextField, path: string = field): void {
   const limit = PARENT_TEXT_LIMITS[field];
+  if (typeof value === "string" && childFacing.has(field) && value.includes(humanSteerLead))
+    throw new OrchestrationError("INVALID_PARAMETERS", {
+      key: path,
+      resolution: `${path} must not contain Alehouse's human steering lead; only messages the user sends from the Agents pane carry it.`,
+    });
   // JSON Schema validators disagree about astral maxLength. The public contract
   // is JavaScript UTF-16 units, not code points, graphemes or encoded bytes.
   if (typeof value === "string" && value.length <= limit && /\S/.test(value)) return;

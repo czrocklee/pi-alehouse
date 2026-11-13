@@ -79,7 +79,10 @@ export function popoverInlayWidth(width: number, kind: "top" | "bottom", closabl
 /**
  * Top or bottom edge with chrome inlaid between the corners. Unused columns
  * are rule, so the box cannot trail off into the conversation behind it. A
- * closable top edge ends in the close control instead of `─╮`.
+ * closable top edge ends in the close control instead of `─╮`. An inlay that
+ * begins (`flush.start`) or ends (`flush.end`) in rule of its own has that
+ * pad column drawn as rule too, so the edge meets the corner unbroken while
+ * every inlay column stays put.
  */
 export function popoverInlay(
   theme: PopoverTheme,
@@ -88,11 +91,15 @@ export function popoverInlay(
   kind: "top" | "bottom",
   closable = false,
   closeHovered = false,
+  flush: { start?: boolean; end?: boolean } = {},
 ): string {
   const chrome = popoverInlayWidth(width, kind, closable);
   const text = truncateToWidth(inlay, chrome);
   const remaining = Math.max(0, chrome - visibleWidth(text));
-  const left = outer(theme, (kind === "top" ? POPOVER.tl : POPOVER.bl) + POPOVER.h) + " " + text;
+  const left =
+    outer(theme, (kind === "top" ? POPOVER.tl : POPOVER.bl) + POPOVER.h) +
+    (flush.start ? outer(theme, POPOVER.h) : " ") +
+    text;
   if (inlayClosable(width, kind, closable)) {
     // The close tail already starts with a space. Separate a short title from
     // the rule, but don't add another pad when the inlay fills its whole width.
@@ -104,10 +111,12 @@ export function popoverInlay(
   }
   return (
     left +
-    " " +
+    (flush.end ? "" : " ") +
     outer(
       theme,
-      POPOVER.h.repeat(remaining) + POPOVER.h + (kind === "top" ? POPOVER.tr : POPOVER.br),
+      POPOVER.h.repeat(remaining + (flush.end ? 1 : 0)) +
+        POPOVER.h +
+        (kind === "top" ? POPOVER.tr : POPOVER.br),
     )
   );
 }

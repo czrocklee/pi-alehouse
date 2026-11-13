@@ -32,11 +32,19 @@ const view = (agent_id) => ({
   discarded_inputs: [],
 });
 
-function fixture(t, { mode = "regular", failure, brokenNotify = false, brokenWake = false } = {}) {
+function fixture(t, options = {}) {
+  const { mode = "regular", failure, brokenNotify = false, brokenWake = false, stop } = options;
+  // A destructuring default would silently rewrite an explicitly missing
+  // registry (`keybindings: undefined`) into a present-but-empty one, so the
+  // pane would never see the structural-host case. Only an absent option
+  // defaults to the shared empty registry; explicit undefined/null reach the
+  // pane's factory argument unchanged.
+  const keybindings = Object.hasOwn(options, "keybindings") ? options.keybindings : {};
   const shortcuts = new Map(),
     bus = createEventBus(),
     notices = [],
     sent = [],
+    stopped = [],
     hidden = [],
     panes = [];
   let clicked,
@@ -79,6 +87,14 @@ function fixture(t, { mode = "regular", failure, brokenNotify = false, brokenWak
       if (failure) throw new Error(failure);
       return { accepted: true };
     },
+    ...(stop
+      ? {
+          stopRun(run_id) {
+            stopped.push(run_id);
+            return { result: "cancel_requested", already_stopping: false };
+          },
+        }
+      : {}),
   });
   panels.attachHost(
     {
@@ -93,7 +109,7 @@ function fixture(t, { mode = "regular", failure, brokenNotify = false, brokenWak
             const pane = factory(
               { mode, terminal: { columns: 120, rows: 40 }, requestRender() {} },
               theme,
-              {},
+              keybindings,
               resolve,
             );
             panes.push(pane);
@@ -117,10 +133,22 @@ function fixture(t, { mode = "regular", failure, brokenNotify = false, brokenWak
     hidden,
     notices,
     sent,
+    stopped,
     open: () => shortcuts.get("alt+a").handler(),
     click: (id) => clicked?.(id),
     pane: current,
     footer: () => stripTerminalSequences(current().render(120).at(-1)),
+    // The two-row composer tray keeps the draft on its own input row above
+    // the footer, so draft assertions read the tray's input row and its
+    // heading, which names the draft's own Enter/Esc.
+    draft: () => stripTerminalSequences(current().render(120).at(-2)),
+    heading: () => stripTerminalSequences(current().render(120).at(-3)),
+    // The section rule carries the body's page and tools-expansion state.
+    rule: () =>
+      current()
+        .render(120)
+        .map(stripTerminalSequences)
+        .find((line) => line.includes("Transcript · Info")) ?? "",
     type,
     compose(text) {
       current().render(120);
@@ -150,7 +178,13 @@ for (const mode of ["regular", "fullscreen"])
     await tick();
     if (mode === "regular") assert.notEqual(h.pane(), original);
     else assert.deepEqual(h.hidden, [true, false]);
-    assert.match(h.footer(), /keep this draft/);
+    assert.match(h.draft(), /keep this draft/);
+    // While typing, the tray's heading names the draft's own Enter/Esc, and
+    // the edge offers no keyboard affordance the input would swallow: no
+    // ←/→ arrows, no M, no Esc close. Its tabs stay clickable.
+    assert.match(h.heading(), /Enter send · Esc discard/);
+    assert.match(h.footer(), /⠋ a .*⠋ b/);
+    assert.doesNotMatch(h.footer(), /[‹›]|\[M message\]|Esc/);
     h.type("!");
     h.pane().handleInput("\r");
     assert.deepEqual(h.sent, [["run-b", "keep this draft!"]]);
@@ -173,11 +207,11 @@ test("opening another Agent before a docked yield reopens discards the old host-
   t.mock.timers.tick(1);
   await tick();
   assert.equal(h.panes.length, 2);
-  assert.doesNotMatch(h.footer(), /discard this draft|›/);
+  assert.doesNotMatch(h.footer(), /discard this draft|^› /);
   h.pane().handleInput("\x1b");
   await tick();
   h.click("b");
-  assert.doesNotMatch(h.footer(), /discard this draft|›/);
+  assert.doesNotMatch(h.footer(), /discard this draft|^› /);
   h.pane().handleInput("\r");
   assert.deepEqual(h.sent, []);
 });
@@ -199,7 +233,7 @@ test("an explicit opening consumes an older permission-reopen timer before the u
   assert.equal(h.panes.length, 2, "the superseded timer must not reopen the closed pane");
   assert.equal(h.pane().isOpen(), false);
   h.click("b");
-  assert.doesNotMatch(h.footer(), /discard this draft|›/);
+  assert.doesNotMatch(h.footer(), /discard this draft|^› /);
   assert.deepEqual(h.sent, []);
 });
 
@@ -214,7 +248,7 @@ test("a docked yield never restores a draft onto a replacement Run", async (t) =
   h.bus.emit("permissions:decision", { requestId: "ask" });
   t.mock.timers.tick(1);
   await tick();
-  assert.doesNotMatch(h.footer(), /for the original task|›/);
+  assert.doesNotMatch(h.footer(), /for the original task|^› /);
   h.pane().handleInput("\r");
   assert.deepEqual(h.sent, []);
 });
@@ -223,7 +257,7 @@ for (const [failure, reason] of [
   ["DELEGATION_OFF", "delegation is off"],
   ["RUN_INPUT_CLOSED", "not accepting input"],
   ["INPUT_LIMIT", "input limit"],
-  ["INVALID_MESSAGE", "empty or too long"],
+  ["INVALID_MESSAGE", "empty or longer than 16236 characters"],
 ])
   for (const brokenNotify of [false, true])
     test(`message rejection keeps the draft and explains ${failure} (broken notify=${brokenNotify})`, async (t) => {
@@ -233,7 +267,8 @@ for (const [failure, reason] of [
       assert.doesNotThrow(() => h.pane().handleInput("\r"));
       assert.deepEqual(h.sent, [["run-a", "keep the refused message"]]);
       assert.equal(h.wakes, 0);
-      assert.match(h.footer(), /keep the refused message/);
+      assert.match(h.draft(), /keep the refused message/);
+      assert.match(h.heading(), /Enter send · Esc discard/);
       assert.equal(h.notices.at(-1).kind, "warning");
       assert(h.notices.at(-1).message.includes(reason));
       assert.match(h.notices.at(-1).message, /Your text is kept/);
@@ -248,7 +283,7 @@ for (const brokenNotify of [false, true])
       const opening = h.open();
       h.compose("one human correction");
       assert.doesNotThrow(() => h.pane().handleInput("\r"));
-      assert.doesNotMatch(h.footer(), /›|one human correction/);
+      assert.doesNotMatch(h.footer(), /^› |one human correction/);
       h.pane().handleInput("\r");
       assert.deepEqual(h.sent, [["run-a", "one human correction"]]);
       assert.equal(h.wakes, 1);
@@ -258,3 +293,60 @@ for (const brokenNotify of [false, true])
       h.panels.dispose();
       await opening;
     });
+
+for (const keybindings of [undefined, null])
+  test(`pane keys survive a missing host keybinding registry (${String(keybindings)})`, async (t) => {
+    const h = fixture(t, { keybindings, stop: true });
+    const opening = h.open();
+    assert.match(h.rule(), /Tools collapsed/);
+    h.pane().handleInput("t");
+    assert.match(h.rule(), /Tools expanded/);
+    h.pane().handleInput("t");
+    assert.match(h.rule(), /Tools collapsed/);
+    h.pane().handleInput("l");
+    h.compose("steers the selected agent");
+    h.pane().handleInput("\r");
+    assert.deepEqual(h.sent, [["run-b", "steers the selected agent"]]);
+    // Stop stays deliberate: arming then Esc cancels without a cancellation.
+    // S arms only from painted geometry, and the fixture's requestRender is a
+    // no-op, so the post-send paint -- which must offer Stop again once
+    // message mode ends -- is also what makes arming possible.
+    assert.match(h.footer(), /\[S Stop\]/);
+    h.pane().handleInput("s");
+    assert.match(h.footer(), /\[Confirm stop\]/);
+    h.pane().handleInput("\x1b");
+    assert.deepEqual(h.stopped, []);
+    assert.equal(h.pane().isOpen(), true);
+    h.pane().handleInput("\x1b");
+    await tick();
+    assert.equal(h.pane().isOpen(), false);
+    assert.deepEqual(h.sent, [["run-b", "steers the selected agent"]]);
+    assert.deepEqual(h.stopped, []);
+    h.panels.dispose();
+    await opening;
+  });
+
+test("an exact host tools-expand binding is honored when the registry is present", async (t) => {
+  const seen = [];
+  const h = fixture(t, {
+    keybindings: {
+      matches(data, binding) {
+        seen.push([data, binding]);
+        return binding === "app.tools.expand" && data === "expand!";
+      },
+    },
+  });
+  const opening = h.open();
+  assert.match(h.rule(), /Tools collapsed/);
+  h.pane().handleInput("t");
+  assert.match(h.rule(), /Tools expanded/);
+  h.pane().handleInput("t");
+  assert.match(h.rule(), /Tools collapsed/);
+  h.pane().handleInput("expand!");
+  assert.match(h.rule(), /Tools expanded/);
+  h.pane().handleInput("x");
+  assert.match(h.rule(), /Tools expanded/);
+  assert.deepEqual(seen.at(-1), ["x", "app.tools.expand"]);
+  h.panels.dispose();
+  await opening;
+});

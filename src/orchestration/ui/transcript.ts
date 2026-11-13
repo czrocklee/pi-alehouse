@@ -6,8 +6,18 @@
  * One gap that is not ours to close: Pi's built-in tool renderers live behind a
  * path its `exports` map does not expose, and a built-in definition carries
  * none of its own, so `read`/`bash`/`edit` fall back to plain text.
- * Unrecognized recorded tools render as raw transcript data. Rendering never
- * interprets them as current tools or hydrates alerts or questions.
+ * Unrecognized recorded tools render as raw transcript data — through the
+ * SDK's own bounded generic card, since its definition-less dump prints full
+ * arguments regardless of `expanded`. Rendering never interprets a record as
+ * a current tool or hydrates alerts or questions.
+ *
+ * The pane's own presentation choices, none of which interpret a record:
+ * tool cards default collapsed (active/incomplete and failed ones stay
+ * expanded, and `setToolsExpanded()` is a presentation-only toggle);
+ * `alert_parent`/`ask_parent` calls with exactly their one recorded string
+ * argument get a labeled read-only display instead of raw JSON; user messages
+ * carry neutral labels, with the human steering lead shown only as the
+ * qualified label it itself declares.
  */
 
 import {
@@ -19,17 +29,21 @@ import {
   SkillInvocationMessageComponent,
   ToolExecutionComponent,
   UserMessageComponent,
+  type ToolRenderers,
   type sessionEntryToContextMessages,
 } from "@earendil-works/pi-coding-agent";
 import {
   Box,
   Container,
   Spacer,
+  Text,
   type Component,
   type MarkdownTheme,
   type TUI,
 } from "@earendil-works/pi-tui";
+import { humanSteerLead } from "../presentation/human-steer-text.ts";
 import { paneRow, type TranscriptFrame, type TranscriptRows } from "./format.ts";
+import { plainText } from "./text.ts";
 
 /** Where a child's messages come from. Structural, so the pane never holds a session. */
 export interface TranscriptSource {
@@ -52,10 +66,198 @@ interface Block {
   readonly container: Container;
   rows: readonly string[] | undefined;
 }
-/** A tool call awaiting its result, and the block whose rows it will invalidate. */
-interface Pending {
+/** One tool card this pane created, with the state that drives its expansion.
+ * The SDK component keeps `expanded` private, so the pane tracks the value it
+ * applied; nothing else can flip it, because the pane is a projection that
+ * never routes mouse events into these components. */
+interface ToolEntry {
   readonly component: ToolExecutionComponent;
   readonly block: Block;
+  expanded: boolean;
+  /** A result (or the assistant's own failure) has been applied to the card. */
+  settled: boolean;
+  error: boolean;
+}
+
+/** Settled block geometry for the anchor index: the retained blocks with
+ * their cumulative start/end rows and a block→index map. Immutable once
+ * built; held frames keep their own snapshot. */
+interface BlockLayout {
+  readonly blocks: readonly Block[];
+  readonly starts: readonly number[];
+  readonly ends: readonly number[];
+  readonly byBlock: ReadonlyMap<Block, number>;
+  readonly total: number;
+}
+
+/** A captured read anchor: the actual retained block object (or streaming
+ * component) plus the row's offset inside it, so resolving after a
+ * presentation-only change finds the same message again. Opaque to callers;
+ * only the pane's own block/component identities make it valid. */
+interface ReadAnchor {
+  readonly kind: "block" | "inFlight";
+  readonly offset: number;
+  readonly target: Block | AssistantMessageComponent;
+}
+
+/** The two current child-to-parent communication tools, and the single string
+ * argument each records. Only these exact current tools get the labeled
+ * display; retired names like `notify_parent` keep the generic raw rendering. */
+const COMMUNICATION_DISPLAY = {
+  alert_parent: { label: "Alert to parent", key: "message" },
+  ask_parent: { label: "Question to parent", key: "question" },
+} as const;
+
+/** The SDK bounds a card's arguments and output only through its
+ * definition-present fallback; handed no definition at all, it dumps full raw
+ * JSON whatever `expanded` says. An empty renderers object selects that
+ * bounded fallback (title, argument preview, result preview) without
+ * customizing anything, so unknown tools stay literal raw data — collapsed to
+ * a preview until expanded. */
+const RAW_RENDERERS: ToolRenderers = {};
+
+/** Bounds and markers for the projection below. Recorded arguments are
+ * JSON-scale data, but the pane reads them while the child may still be
+ * writing, and a malformed or hostile record can be cyclic, accessor-bound,
+ * callable or unbounded. Past these limits the projection substitutes a
+ * literal marker instead of invoking anything or growing without end; the
+ * markers are display-only observations, never claims about the record. */
+const PROJECTION_DEPTH_LIMIT = 24;
+const PROJECTION_NODE_BUDGET = 20_000;
+const CYCLE_MARKER = "[circular reference]";
+const LIMIT_MARKER = "[elided]";
+const ACCESSOR_MARKER = "[accessor property]";
+const CALLABLE_MARKER = "[callable value]";
+const MALFORMED_MARKER = "[unrenderable]";
+
+/** A detached, display-only projection of a recorded tool's name and
+ * arguments. The SDK's expanded fallback interpolates string values (and the
+ * title) raw, its nested values go through JSON.stringify — which emits C1 and
+ * bidi controls literally — and its definition-less dump stringifies the whole
+ * arguments object the same way, so strings AND keys are neutralized for the
+ * terminal here at every depth, preserving everything else byte-literally,
+ * emoji and graphemes included. The recorded source is never mutated, and
+ * semantic matching (the communication-tool check, pending/result keyed by
+ * call id) keeps using the original exact name and arguments.
+ *
+ * Robustness against non-data records is bounded and passive: own data
+ * properties are copied through, but accessor properties (object keys and
+ * array elements alike) are replaced with a marker rather than invoking their
+ * getter, callable values are never called,
+ * cycles and over-deep or over-large structures stop at a marker, and a node
+ * whose own enumeration fails (a hostile proxy trap) falls back to a marker
+ * instead of taking the pane down. `__proto__` survives as an own key, exactly
+ * as JSON would have shown it. */
+function sanitizedToolProjection(name: string, args: unknown): { name: string; args: unknown } {
+  const budget = { nodes: PROJECTION_NODE_BUDGET };
+  const project = (value: unknown, ancestors: readonly object[]): unknown => {
+    if (budget.nodes-- <= 0) return LIMIT_MARKER;
+    if (typeof value === "string") return plainText(value);
+    // A callable's source is not display data; the SDK would print it via
+    // String(), escapes included, so it is never handed over raw.
+    if (typeof value === "function") return CALLABLE_MARKER;
+    if (typeof value !== "object" || value === null) return value;
+    if (ancestors.includes(value)) return CYCLE_MARKER;
+    if (ancestors.length >= PROJECTION_DEPTH_LIMIT) return LIMIT_MARKER;
+    const nested = [...ancestors, value];
+    try {
+      if (Array.isArray(value)) {
+        const out: unknown[] = [];
+        for (let index = 0; index < value.length; index++) {
+          if (budget.nodes <= 0) {
+            out.push(LIMIT_MARKER);
+            break;
+          }
+          // Elements are read through their descriptors too, so an accessor
+          // index is marked like an accessor key; a hole stays undefined.
+          const descriptor = Object.getOwnPropertyDescriptor(value, index);
+          out.push(
+            project(
+              descriptor === undefined
+                ? undefined
+                : "value" in descriptor
+                  ? descriptor.value
+                  : ACCESSOR_MARKER,
+              nested,
+            ),
+          );
+        }
+        return out;
+      }
+      const out: Record<string, unknown> = {};
+      for (const key of Object.getOwnPropertyNames(value)) {
+        if (budget.nodes <= 0) {
+          Object.defineProperty(out, plainText(key), {
+            value: LIMIT_MARKER,
+            enumerable: true,
+            writable: true,
+            configurable: true,
+          });
+          break;
+        }
+        // JSON shows own enumerable properties only. Descriptors are read
+        // directly so a getter is never invoked on the pane's behalf.
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (!descriptor || descriptor.enumerable === false) continue;
+        Object.defineProperty(out, plainText(key), {
+          value: project("value" in descriptor ? descriptor.value : ACCESSOR_MARKER, nested),
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+      }
+      return out;
+    } catch {
+      return MALFORMED_MARKER;
+    }
+  };
+  return { name: plainText(name), args: project(args, []) };
+}
+
+/** A read-only labeled display for a well-formed `alert_parent`/`ask_parent`
+ * call: the recorded text under a neutral label, then the recorded result
+ * text, instead of bare JSON. Malformed arguments and every other tool name
+ * stay on the generic raw path. The block only projects what the record says —
+ * it hydrates nothing, acknowledges nothing, and a receipt line is the child's
+ * own recorded output, never a claim the parent read it. Both the call text
+ * and the result text are untrusted display input, so they pass plainText
+ * (like the native result path's stripAnsi+sanitizeBinaryOutput): recognized
+ * protocols drop, remaining control and bidi characters escape explicitly,
+ * newlines and graphemes survive. */
+function communicationRenderers(name: string, args: unknown): ToolRenderers | undefined {
+  const display = COMMUNICATION_DISPLAY[name as keyof typeof COMMUNICATION_DISPLAY];
+  if (!display || typeof args !== "object" || args === null || Array.isArray(args))
+    return undefined;
+  const keys = Object.keys(args);
+  if (keys.length !== 1 || keys[0] !== display.key) return undefined;
+  const text = (args as Record<string, unknown>)[display.key];
+  if (typeof text !== "string" || !text) return undefined;
+  const resultText = (result: unknown): string => {
+    const content = (result as { content?: unknown } | undefined)?.content;
+    return (Array.isArray(content) ? content : [])
+      .map((part) =>
+        part && typeof part === "object" && (part as { type?: unknown }).type === "text"
+          ? (part as { text?: unknown }).text
+          : undefined,
+      )
+      .filter((output): output is string => typeof output === "string")
+      .join("\n");
+  };
+  return {
+    renderCall: (_args, theme, context) => {
+      const view = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      view.setText(
+        `${theme.fg("toolTitle", theme.bold(display.label))}\n${theme.fg("toolOutput", plainText(text))}`,
+      );
+      return view;
+    },
+    renderResult: (result, _options, theme, context) => {
+      const output = plainText(resultText(result));
+      const view = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      view.setText(output ? theme.fg("toolOutput", output) : "");
+      return view;
+    },
+  };
 }
 
 // Keep the source opaque; only project the role-specific public SDK shape at
@@ -76,6 +278,14 @@ const role = (message: unknown): unknown =>
  *
  * The streaming message is a separate component updated in place, exactly as
  * Pi's interactive mode does, so a token never invalidates settled history.
+ *
+ * A presentation-only stable READ ANCHOR sits over those blocks, so the
+ * parent can save which message a pane was scrolled to before a
+ * height-changing toggle and get the same message back after it, with no
+ * position invented for anchors the retained history no longer contains.
+ * frame() exposes it as closures scoped to that frame's own snapshot (no
+ * source resampling); captureAnchor/resolveAnchor are per-call helpers over
+ * the same anchors.
  */
 export class TranscriptContent implements TranscriptRows {
   private blocks: Block[] = [];
@@ -84,9 +294,21 @@ export class TranscriptContent implements TranscriptRows {
   private messagesIdentity: readonly unknown[] | undefined;
   /** Whether anything above a user message was rendered, driving its spacer. */
   private visible = false;
-  private readonly pending = new Map<string, Pending>();
+  /** Every tool card this pane created, for the presentation-only expansion
+   * toggle; results also find their card through `pending` while incomplete. */
+  private readonly tools: ToolEntry[] = [];
+  /** Default expansion for settled, successful tool cards. Collapsed is the
+   * pane's own presentation choice; active/incomplete and failed cards stay
+   * expanded regardless, so progress and errors remain visible. */
+  private toolsExpanded = false;
+  private readonly pending = new Map<string, ToolEntry>();
   private width: number | undefined;
   private rows: readonly string[] | undefined;
+  /** Anchor index for the current settled rows, keyed by that array's
+   * identity: every width/content/expansion/render invalidation replaces the
+   * rows array, so an identity match proves the geometry is unchanged and
+   * the index can be reused; reset() drops it with the blocks it names. */
+  private layout: { rows: readonly string[]; layout: BlockLayout } | undefined;
   private inFlight: AssistantMessageComponent | undefined;
   private inFlightWidth: number | undefined;
   private inFlightRows: readonly string[] | undefined;
@@ -94,8 +316,25 @@ export class TranscriptContent implements TranscriptRows {
   constructor(private readonly options: TranscriptOptions) {}
 
   frame(width: number): TranscriptFrame {
-    const settled = width > 0 ? this.settled(width) : [],
-      tail = width > 0 ? this.tail(width) : [];
+    if (width <= 0)
+      return {
+        lineCount: 0,
+        slice: () => [],
+        // A non-positive width paints nothing, so it has no blocks to anchor
+        // into — not even stale ones from an earlier, wider paint.
+        anchorAt: () => undefined,
+        resolveAnchor: () => undefined,
+      };
+    const settled = this.settled(width),
+      tail = this.tail(width);
+    // The anchor index is rebuilt only when the settled rows array is — an
+    // identity match means no width/content/expansion/render change happened
+    // since it was built — so an unchanged history costs no reindex, streaming
+    // or not. The closures below capture this frame's own immutable snapshot,
+    // so a later rebuild never re-scopes an older frame.
+    const layout =
+        this.layout?.rows === settled ? this.layout.layout : this.buildBlockLayout(settled),
+      inFlight = this.inFlight;
     return {
       lineCount: settled.length + tail.length,
       slice: (start, count) => {
@@ -105,7 +344,75 @@ export class TranscriptContent implements TranscriptRows {
           out.push(...tail.slice(Math.max(0, start - settled.length), end - settled.length));
         return out;
       },
+      anchorAt: (row) => {
+        if (!Number.isInteger(row) || row < 0) return undefined;
+        if (row < layout.total) {
+          // First block whose cumulative end passes the row. A zero-height
+          // block's end equals its start, so it can never be the first end
+          // above the row: the search skips such blocks by construction.
+          let low = 0,
+            high = layout.ends.length;
+          while (low < high) {
+            const mid = (low + high) >> 1;
+            if (layout.ends[mid]! <= row) low = mid + 1;
+            else high = mid;
+          }
+          return {
+            kind: "block",
+            offset: row - layout.starts[low]!,
+            target: layout.blocks[low]!,
+          } satisfies ReadAnchor;
+        }
+        if (inFlight && tail.length > 0 && row < layout.total + tail.length)
+          return {
+            kind: "inFlight",
+            offset: row - layout.total,
+            target: inFlight,
+          } satisfies ReadAnchor;
+        return undefined;
+      },
+      resolveAnchor: (anchor) => {
+        if (typeof anchor !== "object" || anchor === null) return undefined;
+        const { kind, offset, target } = anchor as Partial<ReadAnchor>;
+        if (
+          (kind !== "block" && kind !== "inFlight") ||
+          typeof offset !== "number" ||
+          !Number.isInteger(offset) ||
+          offset < 0
+        )
+          return undefined;
+        if (kind === "inFlight") {
+          if (target !== inFlight || tail.length === 0) return undefined;
+          return settled.length + Math.min(offset, tail.length - 1);
+        }
+        // Identity, not index: a rewrite builds new block objects, so an
+        // anchor into the old generation matches nothing this frame kept.
+        const index = layout.byBlock.get(target as Block);
+        if (index === undefined) return undefined;
+        const height = layout.ends[index]! - layout.starts[index]!;
+        return height > 0 ? layout.starts[index]! + Math.min(offset, height - 1) : undefined;
+      },
     };
+  }
+
+  /** Index the current blocks once per settled rows array. Presentation-only
+   * geometry; no source, authority or lifecycle state is touched. */
+  private buildBlockLayout(rows: readonly string[]): BlockLayout {
+    const blocks = [...this.blocks],
+      starts: number[] = [],
+      ends: number[] = [],
+      byBlock = new Map<Block, number>();
+    let start = 0;
+    for (const [index, block] of this.blocks.entries()) {
+      const height = block.rows?.length ?? 0;
+      starts.push(start);
+      ends.push(start + height);
+      byBlock.set(block, index);
+      start += height;
+    }
+    const layout: BlockLayout = { blocks, starts, ends, byBlock, total: start };
+    this.layout = { rows, layout };
+    return layout;
   }
 
   /** Explicit MarkdownTheme/palette replacement rebuilds captured components,
@@ -167,10 +474,49 @@ export class TranscriptContent implements TranscriptRows {
     this.inFlightRows = undefined;
   }
 
+  /** Presentation-only default expansion for settled, successful tool cards.
+   * Active/incomplete and failed cards ignore it. Only the blocks whose cards
+   * actually changed lose their cached rows; the streaming tail and untouched
+   * settled blocks keep theirs. No runtime or permission state is involved. */
+  setToolsExpanded(expanded: boolean): void {
+    if (this.toolsExpanded === expanded) return;
+    this.toolsExpanded = expanded;
+    for (const entry of this.tools) this.applyExpansion(entry);
+  }
+
   dispose(): void {
     this.reset();
     this.inFlight = undefined;
     this.inFlightRows = undefined;
+  }
+
+  /** Presentation-only stable read anchor: identify the message block the
+   * given row falls inside — plus the row's offset within it — under the
+   * CURRENT rendering, before a height-changing presentation toggle. The
+   * streaming tail is anchored by its component identity instead. A row
+   * outside the rendered content, a non-positive width or a malformed row
+   * yields undefined; nothing is invented. Beyond rendering at the given
+   * width (exactly what a paint does), this is a read: no expansion mode,
+   * scroll, source or lifecycle state changes. Implemented over frame(), so
+   * each call is its own sample; a per-paint flow should instead hold the
+   * frame and use its anchorAt/resolveAnchor closures, which never resample
+   * and stay scoped to that frame's captured blocks. */
+  captureAnchor(width: number, row: number): unknown {
+    return this.frame(width).anchorAt?.(row);
+  }
+
+  /** Map an anchor back to a row under the CURRENT rendering, after a
+   * presentation-only change (e.g. setToolsExpanded) and possibly at a new
+   * width. The same retained block keeps its captured row; if the block
+   * collapsed, the offset clamps to its last row rather than drifting into
+   * the next message. An anchor is only valid against the same retained
+   * block/component objects of this pane: history rewritten by a compaction
+   * or branch (or an anchor from another pane, or any malformed value) has no
+   * position to preserve, and resolves to undefined — never a guess. Also a
+   * per-call sample over frame(); a held frame's resolveAnchor closure gives
+   * the same answer without touching the source again. */
+  resolveAnchor(width: number, anchor: unknown): number | undefined {
+    return this.frame(width).resolveAnchor?.(anchor);
   }
 
   // ---- Private ----
@@ -230,8 +576,10 @@ export class TranscriptContent implements TranscriptRows {
     this.consumedMessages = [];
     this.messagesIdentity = undefined;
     this.visible = false;
+    this.tools.length = 0;
     this.pending.clear();
     this.rows = undefined;
+    this.layout = undefined;
   }
 
   private consume(): void {
@@ -314,24 +662,51 @@ export class TranscriptContent implements TranscriptRows {
     const failure = TranscriptContent.failureText(message);
     for (const content of Array.isArray(message.content) ? message.content : []) {
       if (content?.type !== "toolCall") continue;
+      // Semantic matching first, on the original exact name and arguments; the
+      // component itself is handed only the detached, terminal-safe projection.
+      const renderers =
+        communicationRenderers(content.name, content.arguments) ??
+        (this.options.source.toolDefinition(content.name) as ToolRenderers | undefined) ??
+        RAW_RENDERERS;
+      const projection = sanitizedToolProjection(content.name, content.arguments);
       const tool = new ToolExecutionComponent(
-        content.name,
+        projection.name,
         content.id,
-        content.arguments,
+        projection.args,
         { showImages: false },
-        this.options.source.toolDefinition(content.name) as ConstructorParameters<
-          typeof ToolExecutionComponent
-        >[4],
+        renderers,
         this.options.tui,
         this.options.cwd,
       );
+      // A fresh card is active/incomplete (or already failed below), so it
+      // starts expanded; a successful result later collapses it when the
+      // pane's mode asks for it.
       tool.setExpanded(true);
+      const entry: ToolEntry = {
+        component: tool,
+        block,
+        expanded: true,
+        settled: failure !== undefined,
+        error: failure !== undefined,
+      };
+      this.tools.push(entry);
       block.container.addChild(tool);
       // Only a call that can still be answered stays pending; the rest are done.
-      if (failure === undefined) this.pending.set(content.id, { component: tool, block });
+      if (failure === undefined) this.pending.set(content.id, entry);
       else tool.updateResult({ content: [{ type: "text", text: failure }], isError: true });
     }
     this.visible = true;
+  }
+
+  /** The pane's expansion rule: active/incomplete and failed cards stay
+   * expanded; a settled successful card follows the pane's mode. */
+  private applyExpansion(entry: ToolEntry): void {
+    const want = !entry.settled || entry.error || this.toolsExpanded;
+    if (entry.expanded === want) return;
+    entry.expanded = want;
+    entry.component.setExpanded(want);
+    entry.block.rows = undefined;
+    this.rows = undefined;
   }
 
   /** A result mutates the block holding its call; no other block changes. */
@@ -339,6 +714,9 @@ export class TranscriptContent implements TranscriptRows {
     const pending = this.pending.get(message.toolCallId);
     if (!pending) return;
     pending.component.updateResult(message);
+    pending.settled = true;
+    pending.error = message.isError === true;
+    this.applyExpansion(pending);
     pending.block.rows = undefined;
     this.rows = undefined;
     this.pending.delete(message.toolCallId);
@@ -358,21 +736,42 @@ export class TranscriptContent implements TranscriptRows {
     // Whether a leading spacer is needed is a whole-transcript property, so it
     // is decided here, where what precedes this block is known.
     if (this.visible) block.container.addChild(new Spacer(1));
-    const skill = parseSkillBlock(text);
-    if (!skill) {
-      block.container.addChild(new UserMessageComponent(text, this.options.markdownTheme));
+    const steer = `${humanSteerLead}\n\n`;
+    if (text.startsWith(steer)) {
+      // The recorded lead is the only authorship evidence, and it says "human",
+      // so the pane shows exactly that qualification — no verified-authorship
+      // claim — and drops the boilerplate, keeping the message bytes untouched.
+      block.container.addChild(this.userLabel("Steering input (human lead)"));
+      block.container.addChild(
+        new UserMessageComponent(text.slice(steer.length), this.options.markdownTheme),
+      );
     } else {
-      const invocation = new SkillInvocationMessageComponent(skill, this.options.markdownTheme);
-      invocation.setExpanded(true);
-      block.container.addChild(invocation);
-      if (skill.userMessage) {
-        block.container.addChild(new Spacer(1));
-        block.container.addChild(
-          new UserMessageComponent(skill.userMessage, this.options.markdownTheme),
-        );
+      // Neutral labels only, and the same one for every generic user message:
+      // after a compaction or branch rewrite the pane cannot prove which
+      // rendered user message was the original task input, so it never claims
+      // one. The recorded steering lead stays the only qualified label.
+      block.container.addChild(this.userLabel("Input"));
+      const skill = parseSkillBlock(text);
+      if (!skill) {
+        block.container.addChild(new UserMessageComponent(text, this.options.markdownTheme));
+      } else {
+        const invocation = new SkillInvocationMessageComponent(skill, this.options.markdownTheme);
+        invocation.setExpanded(true);
+        block.container.addChild(invocation);
+        if (skill.userMessage) {
+          block.container.addChild(new Spacer(1));
+          block.container.addChild(
+            new UserMessageComponent(skill.userMessage, this.options.markdownTheme),
+          );
+        }
       }
     }
     this.visible = true;
+  }
+
+  /** A user block's neutral label, aligned with the message's own padding. */
+  private userLabel(label: string): Text {
+    return new Text(this.options.markdownTheme.bold(label), 1, 0);
   }
 
   private consumeBash(message: MessageOf<"bashExecution">): void {

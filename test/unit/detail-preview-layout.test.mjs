@@ -37,15 +37,20 @@ const rowFor = (rows, label) =>
 const body = (paint) =>
   paint.slice(1, -1).map((line) =>
     stripTerminalSequences(line)
-      .replace(/^│(.*)│$/u, "$1")
+      // A scrolled pane marks its thumb on the right edge in place of the border.
+      .replace(/^│(.*)[│┃]$/u, "$1")
       .trimEnd(),
   );
 const firstTranscript = (paint) =>
   Number(
     body(paint)
-      .find((line) => /^transcript-\d+$/.test(line))
-      ?.slice("transcript-".length),
+      .find((line) => /^\s*transcript-\d+$/.test(line))
+      ?.trim()
+      .slice("transcript-".length),
   );
+/** The transcript's own scroll viewport: every body row below the rule. */
+const ruleAt = (paint) => body(paint).findIndex((line) => line.includes("Transcript · Info"));
+const windowRows = (paint) => body(paint).slice(ruleAt(paint) + 1);
 
 function paneFixture(t, frame = false) {
   const state = view(),
@@ -328,28 +333,29 @@ for (const state of [
   });
 
 for (const frame of [false, true])
-  test(`scrolled transcript stays anchored as preview fields change (frame=${frame})`, (t) => {
+  test(`a scrolled transcript window stays anchored as pinned previews change (frame=${frame})`, (t) => {
     const h = paneFixture(t, frame),
       width = frame ? 102 : 100;
     h.pane.render(width);
     h.pane.handleInput("\x1b[5~");
-    const before = h.pane.render(width),
-      expected = body(before);
+    const before = h.pane.render(width);
     assert(Number.isFinite(firstTranscript(before)));
+    // Previews live in the pinned activity row now; they may change it, but the
+    // transcript's own viewport below the rule must not move a single row.
     Object.assign(h.generation, {
       thinking: "x".repeat(1024),
       preview: "y".repeat(1024),
       channel: "text",
     });
     assert.deepEqual(
-      body(h.pane.render(width)),
-      expected,
+      windowRows(h.pane.render(width)),
+      windowRows(before),
       "adding thinking and draft does not move transcript rows",
     );
     h.generation.preparing_tool = "write";
     assert.deepEqual(
-      body(h.pane.render(width)),
-      expected,
+      windowRows(h.pane.render(width)),
+      windowRows(before),
       "tool preparation does not move transcript rows",
     );
     h.generation.thinking = "";
@@ -357,34 +363,35 @@ for (const frame of [false, true])
     delete h.generation.preparing_tool;
     h.transcript.count += 3;
     assert.deepEqual(
-      body(h.pane.render(width)),
-      expected,
+      windowRows(h.pane.render(width)),
+      windowRows(before),
       "removing fields and live transcript growth preserve the reading window",
     );
+    assert.equal(ruleAt(h.pane.render(width)), ruleAt(before), "the rule itself never slides");
   });
 
 test("field changes do not scroll a reader who is still in metadata", (t) => {
   const h = paneFixture(t);
   h.pane.render(100);
+  h.pane.handleInput("i"); // the full fields are their own scrollable page now
   h.pane.handleInput("\x1b[H");
   const before = h.pane.render(100);
   h.generation.thinking = "New thought";
   h.generation.preview = "New reply";
   const after = h.pane.render(100);
-  assert.equal(body(after)[0], body(before)[0]);
-  assert.match(body(after)[0], /^ {2}task /);
+  assert.equal(windowRows(after)[0], windowRows(before)[0]);
+  assert.match(windowRows(after)[0], /^ {2}task /);
 });
 
 test("the first transcript row is included in scroll anchoring", (t) => {
   const h = paneFixture(t);
   h.pane.render(100);
   h.pane.handleInput("\x1b[H");
-  for (let i = 0; i < fields(h.state, h.generation).length + 1; i++) h.pane.handleInput("\x1b[B");
-  const before = body(h.pane.render(100));
-  assert.equal(before[0], "transcript-0");
+  const before = h.pane.render(100);
+  assert.equal(windowRows(before)[0], "transcript-0");
   h.generation.thinking = "New thought";
   h.generation.preview = "New reply";
-  assert.deepEqual(body(h.pane.render(100)), before);
+  assert.deepEqual(windowRows(h.pane.render(100)), windowRows(before));
 });
 
 test("follow-tail still follows live transcript through preview changes", (t) => {
@@ -403,7 +410,7 @@ test("follow-tail still follows live transcript through preview changes", (t) =>
   assert.match(body(h.pane.render(100)).at(-1), /transcript-181$/);
 });
 
-test("resize discards the previous width's transcript anchor", (t) => {
+test("resize keeps the transcript window in transcript coordinates", (t) => {
   const h = paneFixture(t);
   h.pane.render(100);
   h.pane.handleInput("\x1b[5~");
@@ -414,20 +421,17 @@ test("resize discards the previous width's transcript anchor", (t) => {
   const resized = firstTranscript(h.pane.render(120));
   assert.equal(
     resized,
-    before - 4,
-    "a changed wrapping width cannot borrow the old boundary delta",
+    before,
+    "a changed wrapping width cannot move the reader's own row; the transcript " +
+      "viewport has its own coordinates and no field boundary to re-anchor",
   );
   h.generation.thinking = "";
   h.generation.preview = "";
-  assert.equal(
-    firstTranscript(h.pane.render(120)),
-    resized,
-    "the new width establishes its own anchor",
-  );
+  assert.equal(firstTranscript(h.pane.render(120)), resized, "the new width holds the same window");
 });
 
 for (const interruption of ["unrenderable-width", "empty-roster"])
-  test(`interrupted paint retires the previous transcript anchor (${interruption})`, (t) => {
+  test(`interrupted paint keeps the reading window deterministic (${interruption})`, (t) => {
     const h = paneFixture(t);
     h.pane.render(100);
     h.pane.handleInput("\x1b[5~");
@@ -440,15 +444,17 @@ for (const interruption of ["unrenderable-width", "empty-roster"])
     }
     h.generation.thinking = "New thought";
     h.generation.preview = "New reply";
+    const after = firstTranscript(h.pane.render(100));
     assert.equal(
-      firstTranscript(h.pane.render(100)),
-      before - 4,
-      "restoring the original width or roster cannot revive the retired anchor",
+      after,
+      before,
+      "an interrupted paint moves nothing; restoring the width or roster keeps " +
+        "the reader's row without reviving any stale boundary",
     );
   });
 
 for (const identity of ["owner_id", "generation", "run_id"])
-  test(`Run replacement cannot borrow a transcript anchor (${identity})`, (t) => {
+  test(`Run replacement cannot shift the transcript window (${identity})`, (t) => {
     const h = paneFixture(t);
     h.pane.render(100);
     h.pane.handleInput("\x1b[5~");
@@ -456,7 +462,11 @@ for (const identity of ["owner_id", "generation", "run_id"])
     h.state[identity] = `new-${identity}`;
     h.generation.thinking = "New thought";
     h.generation.preview = "New reply";
-    assert.equal(firstTranscript(h.pane.render(100)), before - 4);
+    assert.equal(
+      firstTranscript(h.pane.render(100)),
+      before,
+      "the transcript viewport has no per-Run field boundary to borrow",
+    );
   });
 
 test("Agent selection resets transcript following instead of borrowing the previous anchor", (t) => {
@@ -488,7 +498,10 @@ test("automatic Agent fallback resets following when the previous selection disa
     },
   });
   const rendered = h.pane.render(100);
-  assert.match(stripTerminalSequences(rendered[0]), /^b /);
+  assert.ok(
+    stripTerminalSequences(rendered[0]).includes("run-b"),
+    `the fallback Agent is the one on screen: ${stripTerminalSequences(rendered[0])}`,
+  );
   assert.match(body(rendered).at(-1), /transcript-179$/);
 });
 
@@ -496,6 +509,9 @@ for (const frame of [false, true])
   test(`preview changes preserve inline Stop geometry and bound confirmation (frame=${frame})`, (t) => {
     const h = paneFixture(t, frame),
       width = frame ? 102 : 100;
+    // Actions need a paint that fits the terminal; the framed pane's outer
+    // width includes its borders, so give the terminal room for them.
+    h.terminal.columns = 120;
     h.pane.render(width);
     h.pane.handleInput("\x1b[5~");
     const before = h.pane.render(width);
