@@ -69,8 +69,9 @@ Manual has its own line; other modes combine one division-of-work sentence and
 one eagerness sentence (`src/orchestration/delegation.ts`), then a fixed sentence
 about web research. The default, Co-worker × balanced, reads:
 
-> Work alongside Agents: you and they each take parts of the task. Hand off
-> independent pieces that would take you longer to do than to explain.
+> Work alongside Agents: keep doing your own share of the task while they do
+> theirs, rather than waiting on them. Hand off independent pieces that would
+> take you longer to do than to explain.
 > Scouts do all web research, even small lookups; do not fetch pages through Bash.
 
 Pi renders it only while `agent_spawn` is active, rebuilding the loadout every

@@ -33,7 +33,8 @@ const manualText =
   "Start or assign Agent work only when the user asks for it; when delegation would clearly help, suggest it briefly. " +
   "Answer, wait for and collect results from Agents already at work.";
 const modeText: Readonly<Record<Exclude<DelegationMode, "manual">, string>> = Object.freeze({
-  "co-worker": "Work alongside Agents: you and they each take parts of the task.",
+  "co-worker":
+    "Work alongside Agents: keep doing your own share of the task while they do theirs, rather than waiting on them.",
   lead: "Lead the work: keep the critical path and key decisions yourself; Agents take the rest.",
   supervisor:
     "Supervise the work: split it into tasks for Agents, and spend your own effort on planning, " +
