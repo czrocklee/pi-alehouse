@@ -1,7 +1,7 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { profileLabel } from "../tools/tool-names.ts";
 import { contextPercent, formatMs, GLYPHS, type Theme } from "./format.ts";
-import { singleLineText } from "./text.ts";
+import { clipPlainText, singleLineText } from "./text.ts";
 import { runPresentation } from "./run-presentation.ts";
 import type { WidgetRun } from "./agent-widget.ts";
 import { isObservedCost, widgetCost } from "./widget-cost.ts";
@@ -18,7 +18,9 @@ export function headerState(run: WidgetRun): HeaderState | undefined {
   const presentation = runPresentation(run.status);
   switch (run.status) {
     case "running":
-      return run.finishing ? { text: "finishing", color: "dim" } : undefined;
+      return run.finishing
+        ? { text: "finishing", compact: runPresentation("running", 0, true).compact, color: "dim" }
+        : undefined;
     case "completed":
       return undefined;
     case "needs_input":
@@ -30,7 +32,11 @@ export function headerState(run: WidgetRun): HeaderState | undefined {
     case "queued":
     case "cancelling":
     case "cancelled":
-      return { text: presentation.label, color: presentation.color };
+      return {
+        text: presentation.label,
+        compact: presentation.compact,
+        color: presentation.color,
+      };
     case "failed":
       return {
         text: presentation.label,
@@ -52,9 +58,7 @@ export interface WidgetColumns {
   tag: number;
   model: number;
   task: number;
-  attention: number;
-  attentionStyle: 0 | 1 | 2;
-  attentionDetailRoom: number;
+  taskStyle: 0 | 1 | 2;
   metrics: { key: Metric; width: number }[];
 }
 /** Detached, paint-local pure values. Width allocation and drawing reuse the
@@ -71,7 +75,8 @@ export interface WidgetRow {
   cells: Record<Metric, Cell>;
 }
 
-/** Highest-severity facts precede optional task/configuration/telemetry. */
+/** Preserve severity order within the suffix; complete facts take allocation
+ * priority over optional title/configuration/telemetry. */
 function attentionText(
   run: WidgetRun,
   state: HeaderState | undefined,
@@ -87,10 +92,9 @@ function attentionText(
       theme.fg("warning", `${run.pending_messages}${compact === 2 ? "pend" : " pending"}`),
     );
   if (state) {
-    const detail =
-      compact === 0 && state.detail && detailRoom > 1
-        ? `: ${truncateToWidth(singleLineText(state.detail), detailRoom, "…")}`
-        : "";
+    const cause =
+      compact === 0 && state.detail ? readableText(singleLineText(state.detail), detailRoom) : "";
+    const detail = cause ? `: ${cause}` : "";
     signals.push(
       theme.fg(state.color, (compact === 2 ? (state.compact ?? state.text) : state.text) + detail),
     );
@@ -174,21 +178,105 @@ export function prepareWidgetRow(run: WidgetRun, headerClock = false): WidgetRow
 const METRICS: readonly Metric[] = ["turns", "turnClock", "context", "cost", "elapsed"];
 const LIMIT_SUFFIX = "(turn limit reached)";
 const SHORT_LIMIT_SUFFIX = "(limit)";
-const taskWidth = (row: WidgetRow): number =>
-  visibleWidth(row.description) +
-  (row.run.limit_reached ? visibleWidth(LIMIT_SUFFIX) + (row.description ? 1 : 0) : 0);
+/** Facts belong to this task, never to a separately padded roster column. */
+function taskSuffix(
+  row: WidgetRow,
+  theme: Theme,
+  style: 0 | 1 | 2,
+  detailRoom: number,
+  limit = LIMIT_SUFFIX,
+  state = row.state,
+): string {
+  const attention = attentionText(row.run, state, theme, style, detailRoom);
+  const facts = attention ? theme.fg("dim", "(") + attention + theme.fg("dim", ")") : "";
+  return [facts, row.run.limit_reached && limit ? theme.fg("warning", limit) : ""]
+    .filter(Boolean)
+    .join(" ");
+}
 
-/** Reserve the observation before clipping the title, and tint only the suffix.
- * Empty labels still carry the fact; tiny viewports retain the existing clipping
- * fallback rather than inventing an unrecognizable partial marker. */
-function taskText(row: WidgetRow, theme: Theme, tint: string, width: number): string {
-  if (!row.run.limit_reached) return theme.fg(tint, truncateToWidth(row.description, width, "…"));
-  const titleMinimum = row.description ? Math.min(4, visibleWidth(row.description)) + 1 : 0;
-  const suffix =
-    width >= visibleWidth(LIMIT_SUFFIX) + titleMinimum ? LIMIT_SUFFIX : SHORT_LIMIT_SUFFIX;
-  const room = width - visibleWidth(suffix) - (row.description ? 1 : 0);
-  const title = room > 0 ? truncateToWidth(row.description, room, "…") : "";
-  return (title ? theme.fg(tint, title) + " " : "") + theme.fg("warning", suffix);
+/** A short label fits whole; an ellipsized label needs four literal cells,
+ * excluding the ellipsis. A one-cell title fragment is not useful content. */
+function readableText(text: string, width: number): string {
+  if (!(width > 0) || visibleWidth(text) === 0) return "";
+  const clipped = clipPlainText(text, width);
+  if (clipped === text) return text;
+  const prefix = clipped.endsWith("…") ? clipped.slice(0, -1) : clipped;
+  return visibleWidth(prefix) >= Math.min(4, visibleWidth(text)) ? clipped : "";
+}
+const readableMinimum = (text: string): number => {
+  const width = visibleWidth(text);
+  return width <= 4 ? width : 5;
+};
+const taskWidth = (
+  row: WidgetRow,
+  style: 0 | 1 | 2 = 0,
+  detailRoom = 60,
+  titleRoom = Infinity,
+  limit = LIMIT_SUFFIX,
+): number => {
+  const title = Math.min(titleRoom, visibleWidth(row.description));
+  const suffix = visibleWidth(taskSuffix(row, plainTheme, style, detailRoom, limit));
+  return title + suffix + (title && suffix ? 1 : 0);
+};
+
+/** One row's actual task budget, shared by measurement and painting. The
+ * complete short limit participates in fit before facts/cause are shortened;
+ * it can disappear only as a whole when even that marker cannot fit. */
+function planTask(
+  row: WidgetRow,
+  width: number,
+  style: 0 | 1 | 2,
+  state = row.state,
+  allowOmitLimit = true,
+) {
+  const suffixWidth = (detail: number, limit: string): number =>
+    visibleWidth(taskSuffix(row, plainTheme, style, detail, limit, state));
+  const cause = style === 0 && state?.detail ? singleLineText(state.detail) : "";
+  const maximumDetail = Math.min(60, visibleWidth(cause));
+  const minimumDetail = readableMinimum(cause);
+  const minimumTitle = readableMinimum(row.description);
+  let limit = row.run.limit_reached ? LIMIT_SUFFIX : "";
+  const titleGap = minimumTitle ? minimumTitle + (suffixWidth(maximumDetail, limit) ? 1 : 0) : 0;
+  if (row.run.limit_reached && suffixWidth(maximumDetail, limit) + titleGap > width)
+    limit = SHORT_LIMIT_SUFFIX;
+  if (suffixWidth(0, limit) > width) {
+    if (!allowOmitLimit) return undefined;
+    limit = "";
+  }
+  const base = suffixWidth(0, limit);
+  if (base > width) return undefined;
+  // A readable title is a soft floor. If it cannot coexist with a useful
+  // cause, the title yields; extra title space never displaces cause cells.
+  const titleReserve =
+    minimumTitle &&
+    base + minimumTitle + (base ? 1 : 0) + (maximumDetail ? 2 + minimumDetail : 0) <= width
+      ? minimumTitle + (base ? 1 : 0)
+      : 0;
+  let detailRoom = maximumDetail
+    ? Math.min(maximumDetail, Math.max(0, width - base - titleReserve - 2))
+    : 0;
+  if (detailRoom < minimumDetail) detailRoom = 0;
+  const suffix = suffixWidth(detailRoom, limit);
+  const title = readableText(row.description, width - suffix - (suffix ? 1 : 0));
+  return { title, detailRoom, limit };
+}
+
+/** Paint only a fitting plan: no count, parenthetical fact or limit marker is
+ * handed to the outer row clip as an oversized/truncated fragment. */
+function taskText(
+  row: WidgetRow,
+  theme: Theme,
+  tint: string,
+  width: number,
+  style: 0 | 1 | 2 = 0,
+  state = row.state,
+): string {
+  const plan = planTask(row, width, style, state);
+  if (!plan) return "";
+  const suffix = taskSuffix(row, theme, style, plan.detailRoom, plan.limit, state);
+  return (
+    (plan.title ? theme.fg(tint, plan.title) : "") + (plan.title && suffix ? " " : "") + suffix
+  );
 }
 // truncateToWidth's padding covers left-aligned cells; right-aligned numeric
 // cells still need leading spaces, measured in terminal cells rather than UTF16.
@@ -198,7 +286,7 @@ const pad = (text: string, width: number, right = false): string =>
     : truncateToWidth(text, width, "…", true);
 
 /** The caller supplies painted compact headers or the complete expanded roster.
- * One geometry spans those rows; attention and a fallback turn clock never
+ * One geometry spans those rows; task facts and a fallback turn clock never
  * yield to optional model/context columns. */
 export function widgetColumns(
   rows: readonly WidgetRow[],
@@ -212,58 +300,31 @@ export function widgetColumns(
     key,
     width: Math.max(0, ...rows.map((row) => visibleWidth(row.cells[key].text))),
   })).filter((column) => column.width > 0);
-  // Fixed columns hug their contents. The trailing label uses only its natural
-  // width, or the available room for a longer label; it never pads later cells.
-  const naturalTask = Math.max(...rows.map(taskWidth));
-  const minimumTask = Math.max(
-    ...rows.map(
-      (row) =>
-        Math.min(12, visibleWidth(row.description)) +
-        (row.run.limit_reached ? visibleWidth(LIMIT_SUFFIX) + (row.description ? 1 : 0) : 0),
+  // Fixed columns hug their contents. The 24-cell preference belongs to the
+  // title itself, not a title+facts total. Each row gets its own bounded cause.
+  const naturalTask = Math.max(...rows.map((row) => taskWidth(row)));
+  const minimumTask = (style: 0 | 1 | 2): number =>
+    Math.max(...rows.map((row) => taskWidth(row, style, 0, 0, SHORT_LIMIT_SUFFIX)));
+  const wantedTask = Math.max(
+    ...rows.map((row) =>
+      taskWidth(row, 0, 60, Math.min(24, visibleWidth(row.description)), LIMIT_SUFFIX),
     ),
   );
-  const wantedTask = Math.max(Math.min(24, naturalTask), minimumTask);
-  const attentionWidths = ([0, 1, 2] as const).map((style) =>
-    Math.max(
-      ...rows.map((row) => visibleWidth(attentionText(row.run, row.state, plainTheme, style, 0))),
-    ),
-  );
-  // Prefer the bounded failure explanation before optional model/telemetry;
-  // wrappers can carry the identifying cause after a long error-code prefix.
-  const preferredAttention = Math.max(
-    ...rows.map((row) => visibleWidth(attentionText(row.run, row.state, plainTheme, 0))),
-  );
-  const contentRoom = (attention = preferredAttention) =>
+  const contentRoom = () =>
     width -
     2 -
     name -
     (tag ? tag + 2 : 0) -
     (model ? model + 2 : 0) -
     metrics.reduce((sum, column) => sum + column.width + 2, 0) -
-    (attention ? attention + 2 : 0) -
     (naturalTask ? 2 : 0);
   if (contentRoom() < wantedTask) model = 0;
   for (const key of ["context", "elapsed", "cost", "turns"] as const)
     if (contentRoom() < wantedTask) metrics = metrics.filter((column) => column.key !== key);
-  const attentionStyle = ([0, 1, 2] as const).find(
-    (style) => contentRoom(attentionWidths[style]) >= minimumTask,
-  );
-  if (attentionStyle === undefined) return undefined;
-  // Complete attention facts and a recognizable trailing task survive even
-  // when the preferred explanation cannot fit. Quiet rows share the same anchor.
-  const attentionDetailRoom =
-    attentionStyle === 0
-      ? Math.min(60, Math.max(0, contentRoom(attentionWidths[0]) - minimumTask - 2))
-      : 0;
-  const attention = Math.max(
-    ...rows.map((row) =>
-      visibleWidth(
-        attentionText(row.run, row.state, plainTheme, attentionStyle, attentionDetailRoom),
-      ),
-    ),
-  );
-  const task = Math.min(naturalTask, contentRoom(attention));
-  return { name, tag, model, task, attention, attentionStyle, attentionDetailRoom, metrics };
+  const taskStyle = ([0, 1, 2] as const).find((style) => contentRoom() >= minimumTask(style));
+  if (taskStyle === undefined) return undefined;
+  const task = Math.min(naturalTask, contentRoom());
+  return { name, tag, model, task, taskStyle, metrics };
 }
 
 export function renderHeader(
@@ -276,38 +337,32 @@ export function renderHeader(
   columns?: WidgetColumns | null,
   row = prepareWidgetRow(run),
 ): string {
+  width = Math.max(0, Math.floor(width));
+  if (!(width > 0)) return "";
   const { name, tag, model, description } = row;
   const tint = running ? "text" : "muted";
   if (columns) {
-    const attention = attentionText(
-      run,
-      state,
-      theme,
-      columns.attentionStyle,
-      columns.attentionDetailRoom,
+    const shortName = truncateToWidth(name, columns.name, "…");
+    const head =
+      `${icon} ${pad(running ? theme.bold(shortName) : theme.fg("muted", shortName), columns.name)}` +
+      (columns.tag
+        ? `  ${pad(theme.fg(run.profile === "researcher" ? "muted" : "dim", tag), columns.tag)}`
+        : "") +
+      (columns.model ? `  ${pad(theme.fg("dim", model), columns.model)}` : "");
+    return (
+      head +
+      columns.metrics
+        .map(({ key, width }) => {
+          const cell = row.cells[key];
+          return (
+            "  " + theme.fg(cell.color, pad(cell.text || (cell.blank ? "" : "—"), width, true))
+          );
+        })
+        .join("") +
+      (columns.task
+        ? "  " + taskText(row, theme, tint, columns.task, columns.taskStyle, state)
+        : "")
     );
-    if (visibleWidth(attention) <= columns.attention) {
-      const shortName = truncateToWidth(name, columns.name, "…");
-      const head =
-        `${icon} ${pad(running ? theme.bold(shortName) : theme.fg("muted", shortName), columns.name)}` +
-        (columns.tag
-          ? `  ${pad(theme.fg(run.profile === "researcher" ? "muted" : "dim", tag), columns.tag)}`
-          : "") +
-        (columns.model ? `  ${pad(theme.fg("dim", model), columns.model)}` : "");
-      return (
-        head +
-        columns.metrics
-          .map(({ key, width }) => {
-            const cell = row.cells[key];
-            return (
-              "  " + theme.fg(cell.color, pad(cell.text || (cell.blank ? "" : "—"), width, true))
-            );
-          })
-          .join("") +
-        (columns.attention ? "  " + pad(attention, columns.attention) : "") +
-        (columns.task ? "  " + taskText(row, theme, tint, columns.task) : "")
-      );
-    }
   }
 
   const separator = theme.fg("dim", " · ");
@@ -315,48 +370,61 @@ export function renderHeader(
   const minimumName = Math.min(3, wantedName);
   const iconRoom = visibleWidth(icon) + 1;
   const clockCell = row.cells.turnClock;
-  const clockText = clockCell.text ? separator + theme.fg(clockCell.color, clockCell.text) : "";
-  const clockRoom = visibleWidth(clockText);
-  // The short marker is mandatory at usable narrow widths. Optional tags and
-  // ordinary numbers yield before it; attention keeps its independent priority.
-  const limitTaskMinimum =
-    visibleWidth(SHORT_LIMIT_SUFFIX) +
-    (description ? Math.min(4, visibleWidth(description)) + 1 : 0);
-  const limitRoom = run.limit_reached ? limitTaskMinimum + 3 : 0;
+  let clockText = clockCell.text ? separator + theme.fg(clockCell.color, clockCell.text) : "";
+  const hasFacts = attentionText(run, state, plainTheme, 2, 0) !== "";
+  const taskGap = hasFacts ? "  " : theme.fg("dim", " → ");
+  const gapRoom = visibleWidth(taskGap);
+  let limit = run.limit_reached ? SHORT_LIMIT_SUFFIX : "";
+  const suffixWidth = (style: 0 | 1 | 2, detail = 0, marker = limit): number =>
+    visibleWidth(taskSuffix(row, plainTheme, style, detail, marker, state));
+  let minimumSuffix = suffixWidth(2);
   let tagText = tag ? ` ${theme.fg("dim", `(${tag})`)}` : "";
+  const requiredGap = (): number => (minimumSuffix ? gapRoom : 0);
+  // A clock is useful telemetry, never a reason to cut a count or the name.
+  // Shorten facts before a nickname/tag, and drop the clock before either.
   if (
-    run.limit_reached &&
-    width -
-      iconRoom -
-      visibleWidth(tagText) -
-      minimumName -
-      clockRoom -
-      visibleWidth(attentionText(run, state, plainTheme, 2, 0)) -
-      1 <
-      limitRoom
+    width - iconRoom - visibleWidth(tagText + clockText) - wantedName - requiredGap() <
+    minimumSuffix
+  )
+    clockText = "";
+  const clockRoom = visibleWidth(clockText);
+  if (
+    width - iconRoom - visibleWidth(tagText) - minimumName - clockRoom - requiredGap() <
+    minimumSuffix
   )
     tagText = "";
-  const attentionRoom =
-    width - iconRoom - visibleWidth(tagText) - wantedName - clockRoom - 1 - limitRoom;
-  const signal = (compact: 0 | 1 | 2, room = 60): string => {
-    const text = attentionText(run, state, theme, compact, room);
-    return text ? (compact === 0 ? separator : " ") + text : "";
-  };
-  let attention = signal(0);
-  if (visibleWidth(attention) > attentionRoom && state?.detail)
-    attention = signal(0, Math.floor(attentionRoom - visibleWidth(signal(0, 0)) - 2));
-  if (visibleWidth(attention) > attentionRoom) attention = signal(1);
-  if (visibleWidth(attention) > attentionRoom) attention = signal(2);
-  const safetyRoom = run.limit_reached ? 0 : 1;
-  let availableName =
-    width - iconRoom - visibleWidth(attention + tagText) - clockRoom - safetyRoom - limitRoom;
-  if (availableName < minimumName) {
-    tagText = "";
-    availableName = width - iconRoom - visibleWidth(attention) - clockRoom - safetyRoom - limitRoom;
+  if (width - iconRoom - minimumName - clockRoom - requiredGap() < minimumSuffix) {
+    limit = "";
+    minimumSuffix = suffixWidth(2);
   }
-  const tinyPrefix = Math.min(minimumName, Math.max(1, width - iconRoom - 1));
-  const shortName = truncateToWidth(name, Math.max(tinyPrefix, Math.min(32, availableName)), "…");
-  const head = `${icon} ${running ? theme.bold(shortName) : theme.fg("muted", shortName)}${attention}${tagText}${clockText}`;
+  if (
+    width < iconRoom + minimumName ||
+    width - iconRoom - minimumName - clockRoom - requiredGap() < minimumSuffix
+  ) {
+    // Impossible budgets keep only an identity, not a clipped numeric fact or
+    // half a parenthetical. The unchanged outer row clip handles tree chrome.
+    const label = clipPlainText(name, Math.max(0, Math.min(32, width - iconRoom)));
+    return label
+      ? `${icon} ${running ? theme.bold(label) : theme.fg("muted", label)}`
+      : truncateToWidth(icon, width, "");
+  }
+  const factsRoom = width - iconRoom - visibleWidth(tagText) - wantedName - clockRoom - gapRoom;
+  const taskStyle = ([0, 1, 2] as const).find((style) => suffixWidth(style) <= factsRoom) ?? 2;
+  const preferred = planTask(row, factsRoom, taskStyle, state, false);
+  const detailRoom = preferred?.detailRoom ?? 0;
+  const marker = preferred?.limit ?? limit;
+  const suffixRoom = suffixWidth(taskStyle, detailRoom, marker);
+  // Optional title space is computed only AFTER the wanted name, never from
+  // the smaller emergency nickname floor. No readable prefix means no title.
+  const titleReserve = preferred?.title ? readableMinimum(description) : 0;
+  const taskReserve =
+    (suffixRoom || titleReserve ? gapRoom : 0) +
+    suffixRoom +
+    titleReserve +
+    (suffixRoom && titleReserve ? 1 : 0);
+  const availableName = width - iconRoom - visibleWidth(tagText) - clockRoom - taskReserve;
+  const shortName = clipPlainText(name, Math.max(minimumName, Math.min(32, availableName)));
+  const head = `${icon} ${running ? theme.bold(shortName) : theme.fg("muted", shortName)}${tagText}${clockText}`;
   let cells = METRICS.filter((key) => key !== "turnClock")
     .map((key) => ({ key, ...row.cells[key] }))
     .filter((cell) => cell.text);
@@ -364,11 +432,8 @@ export function renderHeader(
     cells.length
       ? separator + cells.map((cell) => theme.fg(cell.color, cell.text)).join(separator)
       : "";
-  const taskMinimum = run.limit_reached
-    ? limitTaskMinimum
-    : width >= 48 && description
-      ? Math.min(12, visibleWidth(description))
-      : 0;
+  const minimumTitle = width >= 48 ? Math.min(12, visibleWidth(description)) : titleReserve;
+  const taskMinimum = suffixRoom + minimumTitle + (suffixRoom && minimumTitle ? 1 : 0);
   const elevated = (key: Metric): boolean =>
     (key === "context" && (row.context ?? 0) >= 70) ||
     (key === "turns" && run.max_turns > 0 && run.turns / run.max_turns >= 0.8);
@@ -377,20 +442,16 @@ export function renderHeader(
     ...optionalOrder.filter((key) => !elevated(key)),
     ...optionalOrder.filter(elevated),
   ]) {
-    if (width - visibleWidth(head + renderMetrics()) - 3 >= taskMinimum) break;
+    if (width - visibleWidth(head + renderMetrics()) - gapRoom >= taskMinimum) break;
     cells = cells.filter((cell) => cell.key !== key);
   }
   const metrics = renderMetrics();
   const allocation = model ? ` ${theme.fg("dim", `[${model}]`)}` : "";
+  const wantedTitle = Math.min(24, visibleWidth(description));
+  const wantedTask = Math.max(24, suffixRoom + wantedTitle + (suffixRoom && wantedTitle ? 1 : 0));
   const allocationText =
-    width - visibleWidth(head + allocation + metrics) >= Math.max(24, taskMinimum + 3)
-      ? allocation
-      : "";
-  const room = width - visibleWidth(head + allocationText + metrics) - 3;
-  const task =
-    room >= (run.limit_reached ? visibleWidth(SHORT_LIMIT_SUFFIX) : 4) &&
-    (description || run.limit_reached)
-      ? theme.fg("dim", " → ") + taskText(row, theme, tint, room)
-      : "";
-  return head + allocationText + metrics + task;
+    width - visibleWidth(head + allocation + metrics) - gapRoom >= wantedTask ? allocation : "";
+  const room = width - visibleWidth(head + allocationText + metrics) - gapRoom;
+  const body = taskText(row, theme, tint, room, taskStyle, state);
+  return head + allocationText + metrics + (body ? taskGap + body : "");
 }

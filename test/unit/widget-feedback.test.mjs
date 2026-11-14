@@ -105,15 +105,16 @@ test("overflow reserves a live identity despite arbitrarily many questions and p
 });
 
 test("turn-limit observations coexist with every lifecycle status, including real failures", () => {
-  for (const [status, extra, lifecycle] of [
-    ["running", {}, undefined],
-    ["running", { finishing: true }, /finishing/],
-    ["cancelling", {}, /cancelling/],
-    ["queued", {}, /queued/],
-    ["completed", {}, undefined],
-    ["needs_input", { question: true }, /needs answer|answer\?/],
-    ["cancelled", {}, /cancelled/],
-    ["failed", { error: "SDK_BROKE" }, /failed/],
+  const limits = /\((?:turn limit reached|limit)\)$/;
+  for (const [status, extra, lifecycle, compact] of [
+    ["running", {}, undefined, undefined],
+    ["running", { finishing: true }, "finishing", "finish"],
+    ["cancelling", {}, "cancelling", "cancel"],
+    ["queued", {}, "queued", "queued"],
+    ["completed", {}, undefined, undefined],
+    ["needs_input", { question: true }, "needs answer", "answer?"],
+    ["cancelled", {}, "cancelled", "cancel"],
+    ["failed", { error: "SDK_BROKE" }, "failed", "failed"],
   ]) {
     for (const width of [40, 56, 120, 180]) {
       for (const th of [theme, styled]) {
@@ -121,13 +122,28 @@ test("turn-limit observations coexist with every lifecycle status, including rea
           before = structuredClone(row),
           result = frame([row], { width, theme: th });
         const text = stripTerminalSequences(result.lines[1]);
-        assert.match(
-          text,
-          width >= 120 ? /Task \(turn limit reached\)$/ : /Task \((?:turn limit reached|limit)\)$/,
-        );
+        // At 40, icon+otter+tag+gap+(finish/cancel/queued/failed)+(limit)
+        // uses all 37 body cells. answer? needs one more, so only its name
+        // shortens to ott…; a Task fragment must not displace either identity.
+        const omitTitle = width === 40 && lifecycle !== undefined;
+        const name = omitTitle && status === "needs_input" ? "ott…" : "otter";
+        assert(text.includes(`${name}${width < 83 ? " (worker/d3)" : "  worker/d3"}`), text);
+        if (omitTitle) {
+          assert.doesNotMatch(text, /Task|T…/, text);
+          assert(text.endsWith(`(${compact}) (limit)`), text);
+          assert.equal(visibleWidth(text), 40, "the protected fields fit exactly");
+        } else {
+          assert(text.includes("Task"), `${status}/${width}: ${text}`);
+          assert(text.indexOf("Task") < text.search(limits), text);
+          if (lifecycle) assert(text.indexOf("Task") < text.indexOf(lifecycle), text);
+        }
+        assert.match(text, width >= 120 ? /\(turn limit reached\)$/ : limits);
         assert.equal((text.match(/\((?:turn limit reached|limit)\)/g) ?? []).length, 1);
-        if (lifecycle) assert(text.search(lifecycle) < text.indexOf("Task"), text);
-        if (lifecycle) assert.match(text, lifecycle, `${status}/${width}: ${text}`);
+        if (lifecycle) {
+          const label = width === 40 ? compact : lifecycle;
+          assert(text.includes(label), `${status}/${width}: ${text}`);
+          assert(text.indexOf(label) < text.search(limits), text);
+        }
         assert.equal(result.hits[1], "immutable-id");
         assert(result.lines.every((line) => visibleWidth(line) <= width));
         assert.deepEqual(row, before);

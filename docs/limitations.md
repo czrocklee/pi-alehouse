@@ -645,8 +645,10 @@ Malformed and retired tool records stay literal.
 The Subagents roster aligns identity, configuration and compact metrics before
 the final variable-length task label when width permits. Columns use spaces,
 not additional vertical dividers, and metrics follow configuration rather than
-anchoring to the terminal's right edge. Model and context columns yield before
-task space; tight rows retain compact attention-first labels. Questions precede
+anchoring to the terminal's right edge. Optional model/ordinary metrics yield
+before essential facts, bounded causes and the preferred title allocation;
+the 24-cell title preference excludes the suffix width. Tight rows retain
+compact facts in the trailing task field, never a separate attention prefix. Questions precede
 live execution, then attention/queued/recent failed and finished tasks, stably
 within each group. Only unanswered questions and pending messages bypass normal
 finished-row linger; historical warnings and reached turn limits do not keep old
@@ -655,11 +657,23 @@ reserves a live identity when header space permits, drops previews before Agent
 identities, and counts hidden attention. Compact columns use only individually
 painted Agent headers: neither collapsed queued records nor overflow-only records
 contribute columns or padding. Expanded pages share their complete eligible
-roster's geometry; resident heading counts retain their full scope. Reached turn
-limits appear as a warning-colored `(turn limit reached)` suffix after the task
-label, shortened to `(limit)` when necessary; they do not reserve a shared
-attention column. They remain independent observations beside any lifecycle
-state, not proof that a soft-limit wrap-up stopped execution. The heading has no
+roster's geometry; resident heading counts retain their full scope. Pending,
+warning and lifecycle text share the final task field as parenthetical suffixes,
+such as `Review gate (1 pending)` or `Review choice (needs answer)`; there is no
+separate attention column or shared empty attention padding. Task text yields
+to complete essential suffix facts under width pressure. Titles fit whole when
+short, or retain at least four literal cells before an ellipsis; otherwise the
+optional title is omitted rather than taking preferred nickname cells. Each
+row plans its own failure detail allowance (at most 60 cells), independent of a
+sibling's title length. Short-limit alternatives participate in fitting as well
+as painting, including at the grid boundary. Reached turn limits remain a final
+warning-colored `(turn limit reached)` group, shortened to `(limit)` when
+necessary, after any other group. In impossible budgets clock/tag, an unfitting
+limit, or finally the whole attention group may be omitted; structured counts
+and marker words are not clipped into plausible partial facts. These remain independent
+observations beside any lifecycle state, not proof that a soft-limit wrap-up
+stopped execution. Moving these labels does not acknowledge alerts, answer
+questions or alter retained error facts. The heading has no
 cost rollup, and compact
 rows omit tool-call counts; actual tool activity and detail counts remain.
 Per-Agent widget costs use cents and retain `≥` for partial observations:
@@ -674,7 +688,8 @@ rounds up across a threshold the observation has not reached (69.9% reads 69%). 
 without the `turn` prefix, but remains **turn** elapsed time, not tool/thinking
 duration. It moves into the
 header when that Agent's activity subline is omitted, without duplication in
-ordinary pairs; exited/finishing execution has no current-turn clock. Activity
+ordinary pairs; at extreme widths it can yield whole before structured facts
+are truncated. Exited/finishing execution has no current-turn clock. Activity
 labels and content share the host theme's italic styling, while the clock and
 tree indentation remain upright; actual italic appearance depends on terminal
 font support. Its 60-second tint is only a presentation cue, not a hung-tool

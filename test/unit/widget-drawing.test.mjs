@@ -892,9 +892,9 @@ test("pending alerts and recorded warnings are surfaced per Agent", () => {
   const line = render([
     run("a", { status: "needs_input", pending_messages: 2, has_run_warnings: true }),
   ])[1];
-  assert.match(line, /run warning · 2 pending · needs input/);
+  assert.match(line, /Task \(run warning · 2 pending · needs input\)$/);
   assert.ok(line.indexOf("run warning") < line.indexOf("needs input"));
-  assert.match(line, /Task$/, "attention leaves the task as the last field");
+  assert.ok(line.indexOf("Task") < line.indexOf("run warning"), "attention merges after the title");
   assert.doesNotMatch(line, /dropped|never reached/);
   assert.doesNotMatch(render([run("a", { status: "completed" })])[1], /pending|warning/);
 });
@@ -1006,13 +1006,15 @@ test("crowded 40/56-column warning rows keep a name prefix, complete tag and cou
           assert.notEqual(warning, undefined, text);
           assert.notEqual(pending, undefined, text);
           assert(warning < pending, text);
+          // Merged attention trails the identity and any surviving optional metadata.
+          assert(warning > text.indexOf(name === "otter" ? "ott" : "复"), text);
           if (status === "failed") {
             assert.match(text, /failed/);
             assert(pending < text.indexOf("failed"), text);
             assert.doesNotMatch(text, /SDK broke: 失败说明SDK broke: 失败说明/);
           }
           for (const optional of ["[m/high]", "→", "↻"]) {
-            if (text.includes(optional)) assert(pending < text.indexOf(optional), text);
+            if (text.includes(optional)) assert(text.indexOf(optional) < warning, text);
           }
           assert.doesNotMatch(text, /dropped|lost|never reached/);
           if (th === styled)
@@ -1031,13 +1033,13 @@ test("crowded 40/56-column warning rows keep a name prefix, complete tag and cou
 
 test("crowded attention retains lifecycle facts, with turn limits trailing the task before optional metadata", () => {
   for (const width of [40, 56])
-    for (const [status, extra, state] of [
-      ["needs_input", { question: true }, /needs answer|answer\?/],
-      ["needs_input", { question: false }, /needs input|input\?/],
-      ["cancelling", {}, /cancelling/],
-      ["running", { finishing: true }, /finishing/],
-      ["completed", { limit_reached: true }, /turn limit|limit/],
-      ["cancelled", {}, /cancelled/],
+    for (const [status, extra, nameAt40, stateAt40, stateAt56] of [
+      ["needs_input", { question: true }, "ott…", "answer?", "needs answer"],
+      ["needs_input", { question: false }, "otter", "input?", "needs input"],
+      ["cancelling", {}, "otter", "cancel", "cancelling"],
+      ["running", { finishing: true }, "otter", "finish", "finishing"],
+      ["completed", { limit_reached: true }, "ott…", "", ""],
+      ["cancelled", {}, "otter", "cancel", "cancelled"],
     ]) {
       const frame = renderWidget({
         runs: [
@@ -1059,14 +1061,28 @@ test("crowded attention retains lifecycle facts, with turn limits trailing the t
       });
       const text = stripTerminalSequences(frame.lines[1]);
       assert.match(text, /ot(?:t|…)/);
-      if (extra.limit_reached && width === 40)
-        assert.doesNotMatch(text, /\(worker\/d3\)/, "the tag yields to the task and limit suffix");
-      else assert.match(text, /\(worker\/d3\)/);
+      assert.match(text, /\(worker\/d3\)/);
+      const state = width === 40 ? stateAt40 : stateAt56;
+      const facts = `${width === 40 ? "! 1pend" : "warn 1 pending"}${state ? ` ${state}` : ""}`;
+      const suffix = `(${facts})${extra.limit_reached ? " (limit)" : ""}`;
+      if (width === 40) {
+        // No header clock is supplied. Complete facts and identity fit exactly;
+        // an optional title must not displace the name/tag or become a fragment.
+        assert.equal(text.slice(5), `${nameAt40} (worker/d3)  ${suffix}`, text);
+        assert.equal(visibleWidth(text), 40, text);
+      } else {
+        assert(text.includes("otter (worker/d3)  "), text);
+        assert(text.endsWith(suffix), text);
+      }
       assert.match(text, /run warning|warn|!/);
       assert.match(text, /1 pending|1pend/);
-      assert.match(text, state);
-      assert(text.search(/1 pending|1pend/) < text.search(state), text);
-      if (extra.limit_reached) assert.match(text, /Task \((?:turn limit reached|limit)\)$/);
+      if (state) {
+        assert(text.includes(state), text);
+        assert(text.search(/1 pending|1pend/) < text.indexOf(state), text);
+      } else {
+        assert(text.search(/1 pending|1pend/) < text.indexOf("(limit)"), text);
+      }
+      if (extra.limit_reached) assert.match(text, /\((?:turn limit reached|limit)\)$/);
       assert.equal(frame.hits[1], "identity");
       assert(frame.lines.every((line) => visibleWidth(line) <= width));
     }
@@ -1092,9 +1108,10 @@ test("wide attention retains full wording and failed explanation in the task col
       { width: 180 },
     )[1];
     assert.match(line, /^└─ [✗✓] otter {2}worker\/d3 {2}m\/high {2}/);
-    assert(line.includes(`run warning · 1 pending${state}  Task`), line);
+    const group = `run warning · 1 pending${state}`;
+    assert(line.includes(`Task (${group})`), line);
     assert.match(line, /↻3\/256 +12\.4s/);
-    assert.match(line, /Task$/);
+    assert.match(line, /Task \([^()]*\)$/);
     assert.doesNotMatch(line, /▸\d/);
   }
 });
@@ -1134,7 +1151,8 @@ test("120-column failure rows retain the wrapped SDK cause before optional metad
       });
       const text = stripTerminalSequences(frame.lines[1]);
       assert.match(text, /failed: Error: SESSION_UNAVAILABLE \(sdk_error\): Error: SDK broke/);
-      assert.match(text, /Check diagno(?:stics|…)$/);
+      assert.match(text, /Check diagno(?:stics|…)/);
+      assert(text.indexOf("Check diagno") < text.indexOf("failed:"), text);
       if (width === 120)
         assert.doesNotMatch(
           text,
@@ -1166,7 +1184,10 @@ test("failure explanations remain bounded without displacing complete attention 
   const text = stripTerminalSequences(lines[1]);
   assert.match(text, /run warning · 2 pending · failed: x+…/);
   assert.doesNotMatch(text, /x{61}/, "failure detail keeps its existing 60-cell ceiling");
-  assert.match(text, /Check diagnostics \(turn limit reached\)$/);
+  assert.match(
+    text,
+    /Check diagnostics \(run warning · 2 pending · failed: x+…\) \(turn limit reached\)$/,
+  );
   assert.equal(text.split("turn limit reached").length - 1, 1);
   assert(lines.every((line) => visibleWidth(line) <= 240));
 });
@@ -1320,10 +1341,14 @@ test("a long task yields to warnings and compact metrics at 120 and 160 columns"
     for (const text of ["reviewer", "run warning", "3 pending", "ctx 85%", "$0.50", "12.4s"]) {
       assert.ok(lines[1].includes(text), `${width}: missing ${text}: ${lines[1]}`);
     }
-    assert.equal(lines[1].includes("gpt-5.6-sol/high"), width === 160);
+    assert.equal(lines[1].includes("gpt-5.6-sol/high"), width === 160, `${width}: ${lines[1]}`);
     assert.ok(lines[1].indexOf("run warning") < lines[1].indexOf("3 pending"));
     assert.doesNotMatch(lines[1], /▸77/);
-    assert.match(stripTerminalSequences(lines[1]), /Review.*…$/);
+    assert.match(stripTerminalSequences(lines[1]), /Review.*… \(run warning · 3 pending\)$/);
+    const title = stripTerminalSequences(lines[1]).match(
+      /(Review.*…) \(run warning · 3 pending\)$/,
+    )?.[1];
+    assert.ok(title && visibleWidth(title) >= 24, `${width}: title needs 24 cells before facts`);
     assert.doesNotMatch(lines[1], /token|tool use/);
     for (const line of lines) assert.ok(visibleWidth(line) <= width);
   }
@@ -1953,7 +1978,7 @@ test("long trailing labels use remaining width without an arbitrary label cap in
   }
 });
 
-test("attention has an independent budget and cannot shift the shared trailing task start", () => {
+test("merged task attention keeps the shared trailing task start without a quiet-row hole", () => {
   const rows = [
     run("ordinary", { status: "completed", name: "calm", description: "Review task" }),
     run("pending", {
@@ -1979,7 +2004,12 @@ test("attention has an independent budget and cannot shift the shared trailing t
     const starts = headers.map((line) => visibleWidth(line.slice(0, line.indexOf("Review task"))));
     assert.equal(starts[0], starts[1]);
     assert.match(headers[0], /Review task$/);
-    assert.match(headers[1], /2 pending +Review task$/);
+    assert.match(headers[1], /Review task \(2 pending\)$/);
+    assert.doesNotMatch(
+      headers[0],
+      / {3,}Review task/,
+      "no attention column hole before a quiet title",
+    );
     assert(frame.lines.every((line) => visibleWidth(line) <= width));
     assert.doesNotMatch(frame.lines[0], /latest|Σ|\$/);
   }

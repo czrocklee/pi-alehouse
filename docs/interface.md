@@ -70,9 +70,13 @@ A row keeps identity, configuration and compact metrics together, with the
 variable-length task label last: latest Run state and nickname, permission
 profile/difficulty, original model ID without provider and its creation-time
 effective effort, turn count/budget, available context occupancy, per-Agent
-cost, total submission duration, then the current task. Aligned rows share
-roster-local column widths, with text left-aligned and numeric values
-right-aligned. Groups use spaces, not additional vertical dividers; metrics
+cost, total submission duration, then the current task with any parenthetical
+attention suffixes. Pending alerts, recorded warnings and lifecycle wording do
+not occupy a separate column: for example, `Review gate (1 pending)`,
+`Review choice (needs answer)` or `Review failure (failed: SDK broke)`.
+Aligned rows share roster-local column widths, with text left-aligned and
+numeric values right-aligned. Quiet rows reserve no attention padding for
+another Agent's suffix. Groups use spaces, not additional vertical dividers; metrics
 follow configuration instead of being pushed to the terminal's right edge.
 The nickname is who; the final description is what that Agent is doing on its
 latest Run. For example:
@@ -99,20 +103,37 @@ Permission dialogs also display `worker` or `scout`, while authorization, forwar
 principals and Jev provenance retain the internal `editor` or `researcher` identity. This is a
 label projection, not a profile alias or a change to approval scope.
 
-The task uses all remaining columns rather than a fixed 40-column cap. Warnings,
-identity and compact metrics retain priority; when no readable task fits, its
-text and any compact fallback arrow are omitted. Row clicks still route by Agent ID, never by
+The combined task field uses all remaining columns rather than a fixed
+40-column cap. Attention suffixes reserve their space before task text is
+clipped; optional model and ordinary metrics yield before essential facts,
+bounded failure explanations and the preferred title allocation. The grid's
+24-cell title preference is separate from its facts, not a 24-cell combined
+budget. Failure details have their own per-row allowance up to 60 cells; one
+row's longer title does not impose a shared minimum detail allowance on its
+siblings. Fitting and painting use the same row plan, including the short
+`(limit)` alternative before degrading facts or discarding a cause.
+
+An optional title cannot steal the preferred nickname's cells. A short title
+must fit whole; an ellipsized title needs at least four literal terminal cells,
+not counting the ellipsis, or it is omitted. Narrow rows shorten warning/status
+wording first (including the existing `cancel`/`finish` forms), without moving
+facts back into a separate column. At impossible widths the header clock/tag
+may yield whole, then an unfitting limit or entire attention group is omitted;
+structured counts and markers are not handed to the outer clip as misleading
+partial digits, words or parentheses. Row clicks still route by Agent ID, never by
 nickname or task text. `run warning` means recorded `cleanup_errors` (including input/output
 issues), not proof that resources remain held; exact diagnostics stay in the
 detail pane. Owner-level cleanup uncertainty has its own blocking state.
 
 A reached turn limit is appended to that Agent's task label as
 `Review lifecycle (turn limit reached)`, with only the parenthetical suffix in
-warning color. It does not occupy the shared attention column or reserve an
-empty warning column on other Agents' rows. Long task text yields before this
-suffix; narrow layouts may shorten it to `(limit)`. Other pending, cleanup and
-lifecycle attention facts keep their existing placement. The suffix is an
-independent observation, not proof that execution stopped or that the Run failed.
+warning color. It remains the final suffix, after any other attention group:
+`Review gate (1 pending) (turn limit reached)`. Neither group reserves an empty
+attention column on other Agents' rows. Long task text yields before these
+suffixes; narrow layouts may shorten the limit to `(limit)` and other facts to
+their compact forms. Each fact retains its semantic color independently of
+the title. The limit is an independent observation, not proof that execution
+stopped or that the Run failed.
 
 The activity line (`⎿`) keeps its existing tree indentation and distinguishes
 tools, public thinking, and ordinary assistant prose without adding rows or
@@ -122,7 +143,8 @@ This clock still measures
 the current turn, not the displayed tool or thought; changing tools does not
 reset it. It is not combined with the total submission time above. If the
 activity line is omitted for space, its clock moves to the first row instead;
-exited or finishing execution has no current-turn clock. Tools keep their action
+at extremely narrow widths that header clock may yield whole to identity and
+complete facts. Exited or finishing execution has no current-turn clock. Tools keep their action
 words (`running`, `reading`, `editing`, `searching`): the action is dim and its
 argument muted, with no fixed-width padding. The complete activity text uses
 the host theme's italic styling, including action words and preview content;

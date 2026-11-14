@@ -1,18 +1,34 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createJiti } from "jiti";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+
+// No SDK/source module may observe real HOME, Pi state or temporary caches.
+const home = mkdtempSync("/tmp/alehouse-turn-limit-suffix-");
+for (const [key, value] of [
+  ["HOME", home],
+  ["USERPROFILE", home],
+  ["PI_CODING_AGENT_DIR", join(home, "agent")],
+  ...["CONFIG", "DATA", "STATE", "CACHE", "RUNTIME"].map((kind) => [
+    `XDG_${kind}_${kind === "RUNTIME" ? "DIR" : "HOME"}`,
+    join(home, "xdg", kind.toLowerCase()),
+  ]),
+  ...["TMPDIR", "TMP", "TEMP"].map((key) => [key, join(home, "tmp")]),
+]) {
+  mkdirSync(value, { recursive: true });
+  process.env[key] = value;
+}
+process.on("exit", () => rmSync(home, { recursive: true, force: true }));
+const { createJiti } = await import("jiti");
+const { stripTerminalSequences, visibleWidth } = await import("@earendil-works/pi-tui");
 
 // Exercise current source without a build or a dependency on dist output.
 const jiti = createJiti(import.meta.url, { fsCache: false });
 const { renderWidget } = await jiti.import("../../src/orchestration/ui/widget-render.ts");
-const { prepareWidgetRow, widgetColumns } = await jiti.import(
-  "../../src/orchestration/ui/widget-row.ts",
-);
 const theme = { fg: (_color, text) => text, bold: (text) => text };
+const CODE = { warning: 33, error: 31, dim: 90, muted: 35, text: 36, accent: 34 };
 const styled = {
-  fg: (color, text) =>
-    `\x1b[${color === "warning" ? 33 : color === "error" ? 31 : 36}m${text}\x1b[0m`,
+  fg: (color, text) => `\x1b[${CODE[color] ?? 37}m${text}\x1b[0m`,
   bold: (text) => `\x1b[1m${text}\x1b[0m`,
   italic: (text) => `\x1b[3m${text}\x1b[23m`,
 };
@@ -57,6 +73,11 @@ const position = (line, token, end = false) => {
   return visibleWidth(line.slice(0, index)) + (end ? visibleWidth(token) : 0);
 };
 const marker = /\((?:turn limit reached|limit)\)$/;
+const spans = (text) =>
+  text.split("\x1b[").flatMap((part) => {
+    const match = /^(\d+)m(.*)$/s.exec(part);
+    return match && Number(match[1]) !== 0 ? [[Number(match[1]), match[2]]] : [];
+  });
 
 test("a lone reached limit adds no attention column or hole before any roster label", () => {
   const rows = [
@@ -70,12 +91,6 @@ test("a lone reached limit adds no attention column or hole before any roster la
     run("last", { description: "Review last", cost: 0 }),
   ];
   for (const width of [120, 160, 240]) {
-    const columns = widgetColumns(
-      rows.map((row) => prepareWidgetRow(row)),
-      width - 3,
-    );
-    assert(columns);
-    assert.equal(columns.attention, 0, "the limit is not a shared attention cell");
     const baseline = frame(
       rows.map((row) => ({ ...row, limit_reached: false })),
       { width },
@@ -95,6 +110,7 @@ test("a lone reached limit adds no attention column or hole before any roster la
       ])
         assert.equal(position(line, token, true), position(old, token, true));
       assert.match(line, /12\.4s {2}(?:Review|复核)/, "only the ordinary two-space gap");
+      assert.doesNotMatch(line, /\(\s*\)/, "no empty attention group trails a quiet row");
       if (row.limit_reached) assert(line.endsWith(`${row.description} (turn limit reached)`), line);
       else assert(line.endsWith(row.description), line);
       assert.equal((line.match(/turn limit reached/g) ?? []).length, row.limit_reached ? 1 : 0);
@@ -127,9 +143,24 @@ test("long English/CJK/emoji/ANSI and empty labels reserve a terminal suffix at 
             : description.includes("Review")
               ? "Re"
               : undefined;
+        assert.match(text, /\botter\b/, `${width}: ${text}`);
         if (title) {
-          assert(text.includes(title), `${width}: ${text}`);
-          assert(text.indexOf(title) < text.search(marker), text);
+          const titleAt = text.indexOf(title);
+          if (width >= 56) assert(titleAt >= 0, `${width}: readable title fits: ${text}`);
+          if (titleAt >= 0) {
+            assert(titleAt < text.search(marker), text);
+            const shown = text.slice(titleAt, text.search(marker)).trim();
+            assert(
+              visibleWidth(shown.replace(/…/g, "")) >= 4,
+              `title clipping must retain >=4 literal cells: ${width}: ${text}`,
+            );
+          } else {
+            // A tight row may omit the whole optional title, but only while
+            // retaining the full identity/tag and complete terminal limit.
+            assert.match(text, /otter \(worker\/d3\)/, `${width}: ${text}`);
+            assert.match(text, marker, text);
+            assert.doesNotMatch(text, /…/, `no lone ellipsis/partial title: ${text}`);
+          }
           if (width >= 120) assert.match(text, /… \(turn limit reached\)$/);
         } else assert.doesNotMatch(text, /… \(/, "empty titles do not invent a label");
         if (width >= 120) assert.match(text, /\(turn limit reached\)$/);
@@ -142,17 +173,17 @@ test("long English/CJK/emoji/ANSI and empty labels reserve a terminal suffix at 
   }
 });
 
-test("pending, warnings and real lifecycle attention stay before the label, independently of the suffix", () => {
+test("pending, warnings and lifecycle attention merge into the task field before the trailing limit group", () => {
   for (const [status, extra, state] of [
     ["completed", {}, undefined],
     ["running", {}, undefined],
-    ["running", { finishing: true }, /finishing/],
-    ["cancelling", {}, /cancelling/],
+    ["running", { finishing: true }, /\b(?:finishing|finish)\b/],
+    ["cancelling", {}, /\b(?:cancelling|cancel)\b/],
     ["queued", {}, /queued/],
     ["needs_input", { question: true }, /needs answer|answer\?/],
     ["needs_input", {}, /needs input|input\?/],
     ["failed", { error: "SDK broke" }, /failed/],
-    ["cancelled", {}, /cancelled/],
+    ["cancelled", {}, /\b(?:cancelled|cancel)\b/],
   ]) {
     const row = run("otter", {
       status,
@@ -161,6 +192,12 @@ test("pending, warnings and real lifecycle attention stay before the label, inde
       pending_messages: 2,
       has_run_warnings: true,
     });
+    const before = structuredClone(row);
+    const fullLifecycle = extra.finishing
+      ? "finishing"
+      : status === "cancelling" || status === "cancelled"
+        ? status
+        : undefined;
     for (const width of [40, 56, 83, 120, 160, 240]) {
       const result = frame([row], { width, theme: styled });
       const text = header(result, row.agent_id);
@@ -168,22 +205,38 @@ test("pending, warnings and real lifecycle attention stay before the label, inde
       const warning = text.search(/run warning|warn|!/);
       const pending = text.search(/2 pending|2pend/);
       assert(warning >= 0 && pending > warning, text);
-      assert(pending < text.search(marker), text);
+      // The merged group trails the title and precedes the limit group.
+      if (text.includes("Review task")) assert(text.indexOf("Review task") < warning, text);
+      assert(warning < text.search(marker), text);
       if (state) {
         assert.match(text, state);
         assert(pending < text.search(state), text);
         assert(text.search(state) < text.search(marker), text);
       }
       if (width >= 160) {
-        assert.match(text, /Review task \(turn limit reached\)$/);
+        assert.match(text, /Review task \(run warning · 2 pending[^()]*\) \(turn limit reached\)$/);
         if (status === "failed") assert.match(text, /failed: SDK broke/);
+        if (fullLifecycle)
+          assert(
+            text.endsWith(
+              `Review task (run warning · 2 pending · ${fullLifecycle}) (turn limit reached)`,
+            ),
+            `wide rows retain the full lifecycle spelling: ${text}`,
+          );
       }
+      if (fullLifecycle)
+        assert(
+          text.startsWith(status === "cancelled" ? "└─ ■ " : "└─ ⠋ "),
+          `compact wording must not change the lifecycle glyph: ${text}`,
+        );
+      assert.equal(result.hits[1], row.agent_id);
       assert(result.lines.every((line) => visibleWidth(line) <= width));
+      assert.deepEqual(row, before, "compact lifecycle painting is an immutable projection");
     }
   }
 });
 
-test("the full failure cause and limit suffix displace optional model and ordinary metrics", () => {
+test("the full failure cause and limit group displace optional model and ordinary metrics", () => {
   const error = "Error: SESSION_UNAVAILABLE (sdk_error): Error: SDK broke";
   const row = run("worker", {
     name: "",
@@ -197,6 +250,8 @@ test("the full failure cause and limit suffix displace optional model and ordina
   const result = frame([row], { width: 120 });
   const text = header(result, row.agent_id);
   assert(text.includes(`failed: ${error}`), text);
+  // The title leads and the merged group carries the cause before the limit.
+  assert(text.indexOf("Check diagno") < text.indexOf(`failed: ${error}`), text);
   assert.match(text, /Check.* \(turn limit reached\)$/);
   assert.doesNotMatch(text, /controlled\/off/);
   assert(result.lines.every((line) => visibleWidth(line) <= 120));
@@ -204,14 +259,7 @@ test("the full failure cause and limit suffix displace optional model and ordina
 
 test("warning color belongs to the suffix, not the title; pressure and completed glyph retain their tints", () => {
   for (const status of ["completed", "running", "failed"]) {
-    const paints = [];
-    const th = {
-      ...styled,
-      fg: (color, text) => {
-        paints.push([color, text]);
-        return styled.fg(color, text);
-      },
-    };
+    const th = styled;
     const row = run("otter", {
       status,
       limit_reached: true,
@@ -221,15 +269,32 @@ test("warning color belongs to the suffix, not the title; pressure and completed
       runtime: { activity: "idle", context: { tokens: 900, context_window: 1000 } },
     });
     const result = frame([row], { width: 240, theme: th });
-    assert.match(header(result, row.agent_id), /Review title \(turn limit reached\)$/);
-    assert(paints.some(([color, text]) => color === "warning" && text === "(turn limit reached)"));
-    assert(
-      paints.some(
-        ([color, text]) =>
-          color === (status === "running" ? "text" : "muted") && text === "Review title",
-      ),
+    // A real failure keeps its state fact in the merged group before the limit.
+    assert.match(
+      header(result, row.agent_id),
+      status === "failed"
+        ? /Review title \(failed\) \(turn limit reached\)$/
+        : /Review title \(turn limit reached\)$/,
     );
-    assert(!paints.some(([color, text]) => color === "warning" && text.includes("Review")));
+    const painted = spans(result.lines[result.hits.indexOf(row.agent_id)]);
+    const titleAt = painted.findIndex(([, text]) => text === "Review title");
+    assert(titleAt >= 0, header(result, row.agent_id));
+    assert.deepEqual(
+      painted.slice(titleAt),
+      status === "failed"
+        ? [
+            [35, "Review title"],
+            [90, "("],
+            [31, "failed"],
+            [90, ")"],
+            [33, "(turn limit reached)"],
+          ]
+        : [
+            [status === "running" ? 36 : 35, "Review title"],
+            [33, "(turn limit reached)"],
+          ],
+      "the emitted suffix includes both warning-colored parentheses, never the title",
+    );
     for (const [color, token] of [
       ["warning", "↻80/100"],
       ["error", "ctx 90%"],
@@ -238,8 +303,11 @@ test("warning color belongs to the suffix, not the title; pressure and completed
         status === "completed" ? "✓" : status === "failed" ? "✗" : "⠋",
       ],
     ])
-      assert(
-        paints.some(([tint, text]) => tint === color && text.trim() === token),
+      assert.deepEqual(
+        painted
+          .filter(([, text]) => text.trim() === token)
+          .map(([code, text]) => [code, text.trim()]),
+        [[CODE[color], token]],
         `${color}:${token}`,
       );
   }
@@ -289,24 +357,61 @@ test("active sublines, clock placement, pagination and hits are untouched by the
   }
 });
 
-test("extremely small viewports keep bounded compact degradation", () => {
+test("extremely small viewports keep bounded compact degradation", async (t) => {
   for (const width of [1, 2, 3, 5, 8, 12, 20, 24, 30]) {
-    const result = frame(
-      [
-        run("otter", {
-          status: "failed",
-          error: "SDK broke",
-          limit_reached: true,
-          pending_messages: 2,
-          has_run_warnings: true,
-        }),
-      ],
-      { width, theme: styled },
-    );
-    assert(
-      result.lines.every((line) => visibleWidth(line) <= width),
-      `${width}: ${result.lines}`,
-    );
-    assert.equal(result.hits[1], "otter");
+    await t.test(`whole groups at ${width}`, () => {
+      const result = frame(
+        [
+          run("otter", {
+            status: "failed",
+            error: "SDK broke",
+            limit_reached: true,
+            pending_messages: 2,
+            has_run_warnings: true,
+          }),
+        ],
+        { width, theme: styled },
+      );
+      assert(
+        result.lines.every((line) => visibleWidth(line) <= width),
+        `${width}: ${result.lines}`,
+      );
+      assert.equal(result.hits[1], "otter");
+      const text = header(result, "otter");
+      assert.equal((text.match(/\(/g) ?? []).length, (text.match(/\)/g) ?? []).length, text);
+      assert.doesNotMatch(text, /\([^)]*$|\(\s*\)|\([^)]*…|\([^)]*\(/, text);
+      for (const group of text.match(/\([^)]*\)/g) ?? [])
+        assert.match(
+          group,
+          /^\((?:turn limit reached|limit|(?:run warning|warn|!)(?: · | )2(?: pending|pend)(?: · | )failed)\)$/,
+          text,
+        );
+      assert.doesNotMatch(
+        text.replace(/\([^)]*\)/g, ""),
+        /pending|pend|failed|warning|warn|limit|[()!]/,
+        text,
+      );
+    });
+  }
+  // Include the 3-cell tree: quiet short limit costs 3+2+5+3+7=20;
+  // with pending, 3+2+5+2+7+1+7=27 fits at 30, not 24.
+  for (const [width, pending] of [
+    [20, 0],
+    [30, 2],
+  ]) {
+    await t.test(`complete short limit at ${width}/pending=${pending}`, () => {
+      const row = run("otter", { limit_reached: true, pending_messages: pending });
+      const before = structuredClone(row);
+      const result = frame([row], { width });
+      const text = header(result, "otter");
+      assert.match(text, /\botter\b/, text);
+      assert.match(text, /\(limit\)$/, text);
+      if (pending) assert.match(text, /\(2pend\) \(limit\)$/, text);
+      else assert.doesNotMatch(text, /pending|pend/, text);
+      assert.doesNotMatch(text, /\([^)]*…|\([^)]*$/, text);
+      assert(result.lines.every((line) => visibleWidth(line) <= width));
+      assert.equal(result.hits[1], "otter");
+      assert.deepEqual(row, before);
+    });
   }
 });
