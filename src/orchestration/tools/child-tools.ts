@@ -36,7 +36,10 @@ export function createChildTools(
       ["ask_parent", "question"],
     ] as const
   ).map(([name, key]) => {
-    const parameters = Type.Object({ [key]: text(8192) }, { additionalProperties: false });
+    const parameters = Type.Object(
+      { [key]: text(COMMUNICATION_LIMITS.child_text_units) },
+      { additionalProperties: false },
+    );
     return {
       name,
       label: name,
@@ -48,9 +51,9 @@ export function createChildTools(
       async execute(_id: string, args: unknown) {
         // Like owner tools, recheck AFTER mutable SDK tool_call hooks, before
         // callbacks can enqueue an alert or record the first question.
-        if (!Check(parameters, args) || args[key]!.length > 8192)
+        if (!Check(parameters, args) || args[key]!.length > COMMUNICATION_LIMITS.child_text_units)
           throw new OrchestrationError("INVALID_PARAMETERS", {
-            resolution: "Check the argument: 1-8192 nonblank UTF-16 units.",
+            resolution: `Check the argument: 1-${COMMUNICATION_LIMITS.child_text_units} nonblank UTF-16 units.`,
           });
         const callbacks = current();
         if (!callbacks || !gate.accepting || gate.stopped)

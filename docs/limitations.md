@@ -620,6 +620,28 @@ are omitted from previews rather than displayed as false last lines. Real tools
 stay visible while cooperative cancellation/drain is pending; this observation
 is not proof of execution exit, and detailed drain diagnostics remain separate.
 
+Well-formed current `ask_parent`/`alert_parent` transcript calls use the host's
+Input background with right-aligned titles and literal bodies, not ordinary
+tool-card framing. Bodies use tool-argument encoding: protocol payloads and
+Unicode whitespace survive, controls/backslashes stay distinguishable, tabs
+are visible `\x09` and LF keeps paragraphs. Matching requires exactly one own
+enumerable data-property string, nonblank and at most 8192 UTF-16 units; accessors
+and extra own keys (including symbols/hidden keys) stay raw without invoking
+recorded getters. Proxy traps are not effect-free or resource-bounded.
+
+Recorded receipts remain separate and use `plainText`, not faithful argument
+encoding: recognized protocol payloads disappear, whitespace is normalized and
+literal/encoded control spellings may coincide. Failed receipts with zero
+SDK-measured non-whitespace cells get an `Error` line, retaining any nonblank
+normalized text below it. This metric is not a complete blank-glyph or pixel
+visibility detector. With no recorded result a dim `No recorded result` line
+appears outside the background; any final result, even empty content, or a
+synthetic failure clears it. It asserts neither live execution nor failure,
+delivery or parent acknowledgement. Generic `Input` messages are not relabeled
+as `From parent` without reliable origin evidence. The existing human-lead label
+remains qualified text recognition, not source-authenticated authorship.
+Malformed and retired tool records stay literal.
+
 The Subagents roster aligns identity, configuration and compact metrics before
 the final variable-length task label when width permits. Columns use spaces,
 not additional vertical dividers, and metrics follow configuration rather than

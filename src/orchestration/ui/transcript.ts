@@ -15,8 +15,9 @@
  * tool cards default collapsed (active/incomplete and failed ones stay
  * expanded, and `setToolsExpanded()` is a presentation-only toggle);
  * `alert_parent`/`ask_parent` calls with exactly their one recorded string
- * argument get a labeled read-only display instead of raw JSON; user messages
- * carry neutral labels, with the human steering lead shown only as the
+ * argument get an Input-style message block with a right-aligned title and a
+ * separate receipt instead of raw JSON; user messages carry neutral labels,
+ * with the human steering lead shown only as the
  * qualified label it itself declares.
  */
 
@@ -36,15 +37,19 @@ import {
   Container,
   Spacer,
   Text,
+  visibleWidth,
   type Component,
   type MarkdownTheme,
   type TUI,
 } from "@earendil-works/pi-tui";
+import { COMMUNICATION_LIMITS } from "../core/communication-envelope.ts";
 import { humanSteerLead } from "../presentation/human-steer-text.ts";
 import { copyDisplayData } from "../presentation/display-data.ts";
 import { toolArgumentText } from "../presentation/tool-argument-text.ts";
+import { blockedDelegationToolNames } from "../tools/tool-names.ts";
 import { paneRow, type TranscriptFrame, type TranscriptRows } from "./format.ts";
 import { plainText } from "./text.ts";
+import { CommunicationBubble } from "./communication-bubble.ts";
 import { TranscriptToolCard } from "./transcript-tool-card.ts";
 import { detachedToolResult } from "./tool-result-projection.ts";
 
@@ -134,24 +139,38 @@ function sanitizedToolProjection(name: string, args: unknown): { name: string; a
   };
 }
 
-/** A read-only labeled display for a well-formed `alert_parent`/`ask_parent`
- * call: the recorded text under a neutral label, then the recorded result
- * text, instead of bare JSON. Malformed arguments and every other tool name
- * stay on the generic raw path. The block only projects what the record says —
+/** A read-only message block for a well-formed `alert_parent`/`ask_parent`
+ * call: Input-style background, a right-aligned neutral title, then the
+ * recorded result outside that background. Malformed arguments and retired
+ * names stay raw; other tools keep their normal renderer selection. The block
+ * only projects what the record says —
  * it hydrates nothing, acknowledges nothing, and a receipt line is the child's
- * own recorded output, never a claim the parent read it. Both the call text
- * and the result text are untrusted display input, so they pass plainText
- * (like the native result path's stripAnsi+sanitizeBinaryOutput): recognized
- * protocols drop, remaining control and bidi characters escape explicitly,
- * newlines and graphemes survive. */
+ * own recorded output, never a claim the parent read it. The body uses faithful
+ * tool-argument encoding, including visible tabs and protocol payloads. Receipts
+ * retain the native-result-style plainText prose projection instead: recognized
+ * protocols drop and whitespace normalizes. Neither path rewrites history. */
 function communicationRenderers(name: string, args: unknown): ToolRenderers | undefined {
   const display = COMMUNICATION_DISPLAY[name as keyof typeof COMMUNICATION_DISPLAY];
-  if (!display || typeof args !== "object" || args === null || Array.isArray(args))
+  if (!display || typeof args !== "object" || args === null) return undefined;
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    if (Array.isArray(args)) return undefined;
+    const keys = Reflect.ownKeys(args);
+    if (keys.length !== 1 || keys[0] !== display.key) return undefined;
+    descriptor = Object.getOwnPropertyDescriptor(args, display.key);
+  } catch {
+    // Reflection failures stay local to this raw card. Proxy traps themselves
+    // remain arbitrary trusted code; do not invoke a recorded property getter.
     return undefined;
-  const keys = Object.keys(args);
-  if (keys.length !== 1 || keys[0] !== display.key) return undefined;
-  const text = (args as Record<string, unknown>)[display.key];
-  if (typeof text !== "string" || !text) return undefined;
+  }
+  if (!descriptor?.enumerable || !("value" in descriptor)) return undefined;
+  const text: unknown = descriptor.value;
+  if (
+    typeof text !== "string" ||
+    text.length > COMMUNICATION_LIMITS.child_text_units ||
+    !/\S/.test(text)
+  )
+    return undefined;
   const resultText = (result: unknown): string => {
     const content = (result as { content?: unknown } | undefined)?.content;
     return (Array.isArray(content) ? content : [])
@@ -164,17 +183,38 @@ function communicationRenderers(name: string, args: unknown): ToolRenderers | un
       .join("\n");
   };
   return {
+    // Own only the framing: record state and receipts stay outside the bubble,
+    // without a pending/success/error tool-card background or delivery claim.
+    renderShell: "self",
     renderCall: (_args, theme, context) => {
-      const view = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      view.setText(
-        `${theme.fg("toolTitle", theme.bold(display.label))}\n${theme.fg("toolOutput", plainText(text))}`,
-      );
+      const view =
+        context.lastComponent instanceof Container ? context.lastComponent : new Container();
+      const previousBubble = view.children[0];
+      const previousNote = view.children[1];
+      const note = previousNote instanceof Text ? previousNote : new Text("", 1, 0);
+      if (!(previousBubble instanceof CommunicationBubble) || note !== previousNote) {
+        view.clear();
+        view.addChild(
+          previousBubble instanceof CommunicationBubble
+            ? previousBubble
+            : new CommunicationBubble(display.label, toolArgumentText(text), theme),
+        );
+        view.addChild(note);
+      }
+      // This transcript applies only final recorded/synthetic results. Here
+      // isPartial means no result record yet, not proof of live execution.
+      note.setText(context.isPartial ? theme.fg("dim", "No recorded result") : "");
       return view;
     },
     renderResult: (result, _options, theme, context) => {
-      const output = plainText(resultText(result));
-      const view = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      view.setText(output ? theme.fg("toolOutput", output) : "");
+      const recorded = plainText(resultText(result));
+      const needsMarker = context.isError && visibleWidth(recorded.replace(/\s/gu, "")) === 0;
+      // Cell width is not pixel visibility. Retain nonblank combining-only
+      // text below the marker rather than erasing potentially visible ink.
+      const output = needsMarker ? (recorded.trim() ? `Error\n${recorded}` : "Error") : recorded;
+      const view =
+        context.lastComponent instanceof Text ? context.lastComponent : new Text("", 1, 0);
+      view.setText(output ? theme.fg(context.isError ? "error" : "dim", output) : "");
       return view;
     },
   };
@@ -606,10 +646,16 @@ export class TranscriptContent implements TranscriptRows {
       if (content?.type !== "toolCall") continue;
       // Semantic matching first, on the original exact name and arguments; the
       // component itself is handed only the detached, terminal-safe projection.
-      const renderers =
-        communicationRenderers(content.name, content.arguments) ??
-        (this.options.source.toolDefinition(content.name) as ToolRenderers | undefined) ??
-        RAW_RENDERERS;
+      let renderers: ToolRenderers = RAW_RENDERERS;
+      if (Object.hasOwn(COMMUNICATION_DISPLAY, content.name)) {
+        // Malformed current calls and retired names cannot gain a message
+        // presentation from a live registry lookup.
+        renderers = communicationRenderers(content.name, content.arguments) ?? RAW_RENDERERS;
+      } else if (!blockedDelegationToolNames.includes(content.name)) {
+        renderers =
+          (this.options.source.toolDefinition(content.name) as ToolRenderers | undefined) ??
+          RAW_RENDERERS;
+      }
       const projection = sanitizedToolProjection(content.name, content.arguments);
       const binding = this.toolRenderersRevision;
       const tool = new TranscriptToolCard({

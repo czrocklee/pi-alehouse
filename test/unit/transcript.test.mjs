@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createJiti } from "jiti";
 import {
   getMarkdownTheme,
   initTheme,
   ToolExecutionComponent,
   UserMessageComponent,
 } from "@earendil-works/pi-coding-agent";
-import { TranscriptContent } from "../../dist/orchestration/ui/transcript.js";
-import { humanSteerLead } from "../../dist/orchestration/runtime/human-steer.js";
+
+// Load the production source, not a potentially stale dist build.
+const jiti = createJiti(import.meta.url, { fsCache: false });
+const { TranscriptContent } = await jiti.import("../../src/orchestration/ui/transcript.ts");
+const { humanSteerLead } = await jiti.import(
+  "../../src/orchestration/presentation/human-steer-text.ts",
+);
 
 // Pi's components read a module-level theme singleton; no watcher in a test.
 initTheme(undefined, false);

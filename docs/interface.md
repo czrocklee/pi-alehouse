@@ -452,6 +452,41 @@ select a stable bounded raw fallback instead of failing neighboring history;
 asynchronous rendering is not supported. This protects bridge-supplied entry
 points, not arbitrary retained component references or extension-owned timers.
 
+Well-formed `alert_parent` and `ask_parent` calls use an Input-style message
+background (`userMessageBg`/`userMessageText`) rather than the ordinary tool-card
+shell. Their titles, `Alert to parent` and `Question to parent`, align to the
+right inside the block; the recorded body stays left-aligned, keeps paragraphs,
+and wraps as literal text using the same tool-argument encoding described above.
+Tabs appear as `\x09`; protocol payloads, indentation, Unicode whitespace and
+original escape spellings remain distinguishable. No extra frame or Markdown
+interpretation is added.
+
+The recorded result appears below, outside that background: dim for an ordinary
+receipt and error-colored for a failure. Receipts retain the native-result-style
+`plainText` prose projection: recognized terminal protocols and their payloads
+are removed, line endings/Unicode spaces are normalized, and literal escape
+spellings can coincide with encoded controls. Receipt text is not a faithful
+argument encoding. A failed receipt with zero SDK-measured non-whitespace cells
+gets an explicit `Error` line; any nonblank normalized text is retained below it,
+including combining-only text. This is a cell-width policy, not detection of
+every visually blank glyph or a terminal-pixel visibility guarantee.
+
+Without a recorded result the block instead has a separate dim
+`No recorded result` line, cleared by any final result (including empty content)
+or the transcript's synthetic failure. This describes only the available record,
+not execution, failure, delivery or parent acknowledgement. Neither the message
+block nor its receipt means the parent read or received it. Tool expansion does
+not hide these communication messages or their record-state line. Only the
+current exact names with exactly one own enumerable data-property string
+(`message` or `question`), nonblank and at most 8192 UTF-16 units, get this layout.
+Accessors, extra own keys (including symbols/non-enumerable keys), malformed
+calls and retired names retain literal generic rendering. Classification reads
+descriptors, not recorded getters; arbitrary Proxy traps remain trusted in-process
+code, not an effect-free or hard-resource-bound operation.
+Incoming messages keep the neutral `Input` label unless the existing exact
+human-steering lead supplies its qualified label; no `From parent` attribution
+is inferred from a user role or its position in history.
+
 On Pi's alternate/fullscreen renderer the pane floats as a centered overlay; on
 the regular renderer it docks where the editor is. This is a safety choice, not
 a preference: regular overlays are composited into the scrollback backing array
