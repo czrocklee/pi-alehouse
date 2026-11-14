@@ -401,6 +401,117 @@ test("real SDK parent preparation and post-hook execution enforce every UTF-16 t
   assert.deepEqual(fixture.actionEffects, { lookup: 0, delivery: 0, answer: 0, publication: 0 });
 });
 
+test("real SDK 1.5 accepts only a raw agent_run max_turns integer and forwards that override", async () => {
+  const fixture = ownerToolFixture();
+  const spawn = fixture.tools.find((tool) => tool.name === "agent_spawn");
+  const run = fixture.tools.find((tool) => tool.name === "agent_run");
+  assert(spawn && run);
+  assert.equal(run.parameters.additionalProperties, false);
+  assert.equal(Object.keys(run.parameters.properties).at(-1), "max_turns");
+  assert.equal(run.parameters.required.includes("max_turns"), false);
+  assert.equal(run.parameters.properties.max_turns.type, "integer");
+  assert.equal(run.parameters.properties.max_turns.minimum, 1);
+  assert.equal(run.parameters.properties.max_turns.maximum, 10000);
+  const followup = () => ({
+    agent: "otter",
+    continues: "Earlier inspection",
+    prompt: "Follow up",
+    label: "Follow up",
+  });
+  const parameterError = (result) => {
+    isToolError(result);
+    const detail = JSON.parse(result.result.content[0].text).error;
+    assert.equal(detail.code, "INVALID_PARAMETERS");
+    assert.match(detail.resolution, /do not match this tool's schema/);
+  };
+  // The probe uses the registered schema without prepareArguments, so it shows
+  // what pi-schema itself rejects. Production rejection is the raw check below.
+  const captured = [];
+  const schemaProbe = {
+    name: run.name,
+    label: run.label,
+    description: run.description,
+    parameters: run.parameters,
+    async execute(_id, args) {
+      captured.push(structuredClone(args));
+      return { content: [{ type: "text", text: "validated" }], details: undefined };
+    },
+  };
+  assert.equal(schemaProbe.parameters, run.parameters);
+  for (const max_turns of [1, 10000]) {
+    assert.equal((await invoke(schemaProbe, { ...followup(), max_turns })).isError, false);
+    assert.equal(captured.at(-1).max_turns, max_turns);
+  }
+  assert.equal((await invoke(schemaProbe, followup())).isError, false);
+  assert.equal(Object.hasOwn(captured.at(-1), "max_turns"), false);
+  for (const max_turns of [0, -1, 10001]) {
+    isToolError(await invoke(schemaProbe, { ...followup(), max_turns }));
+    assert.equal(captured.length, 3, "schema-invalid turn limits never reach the probe");
+  }
+
+  // prepareArguments runs before pi-schema coercion, including after a hook mutates
+  // a value the SDK already accepted.
+  const invalid = [0, -1, 10001, 1.5, "256", null, NaN, Infinity];
+  for (const max_turns of invalid) {
+    parameterError(await invoke(spawn, spawnArgs({ max_turns }), fixture.context));
+    parameterError(await invoke(run, { ...followup(), max_turns }, fixture.context));
+    let hooks = 0;
+    parameterError(
+      await invoke(run, followup(), fixture.context, {
+        beforeToolCall({ args }) {
+          hooks++;
+          args.max_turns = max_turns;
+        },
+      }),
+    );
+    parameterError(
+      await invoke(spawn, spawnArgs(), fixture.context, {
+        beforeToolCall({ args }) {
+          hooks++;
+          args.max_turns = max_turns;
+        },
+      }),
+    );
+    assert.equal(hooks, 2);
+  }
+  assert.equal(fixture.admissionEffects, 0);
+  assert.deepEqual(fixture.actionEffects, {
+    lookup: 0,
+    delivery: 0,
+    answer: 0,
+    publication: 0,
+  });
+
+  const forwarded = [];
+  fixture.controller.view = () => ({ status: "completed", has_question: false });
+  fixture.controller.submitPrepared = (_id, submission, prepare) => {
+    forwarded.push(prepare(submission));
+    return { run_id: "accepted-run" };
+  };
+  fixture.controller.observe = async () => ({
+    content: [{ type: "text", text: "observed" }],
+    details: undefined,
+  });
+  for (const max_turns of [1, 10000, undefined]) {
+    const args = followup();
+    if (max_turns !== undefined) args.max_turns = max_turns;
+    assert.equal((await invoke(run, args, fixture.context)).isError, false);
+    const request = forwarded.at(-1);
+    assert.equal(request.resume, "fixture-agent");
+    assert.equal(request.prompt, args.prompt);
+    assert.equal(request.description, args.label);
+    assert.equal(Object.hasOwn(request, "continues"), false);
+    assert.equal(Object.hasOwn(request, "settings"), false);
+    if (max_turns === undefined) assert.equal(Object.hasOwn(request, "max_turns"), false);
+    else assert.equal(request.max_turns, max_turns);
+  }
+  assert.equal(fixture.admissionEffects, 0);
+  assert.equal(fixture.actionEffects.lookup > 0, true);
+  assert.equal(fixture.actionEffects.delivery, 0);
+  assert.equal(fixture.actionEffects.answer, 0);
+  assert.equal(fixture.actionEffects.publication, 0);
+});
+
 test("real SDK 1.5 rejects child schema violations before alert/question callbacks", async () => {
   const effects = [];
   const callbacks = {

@@ -66,7 +66,9 @@ packing is not a generic-name conversion API.
 
 A **Run** is one queued or executing task on an Agent; parent tools call it a
 _task_ and never expose its ID. It has its own internal `run_id`, request identity/digest, prompt boundary, turn limit,
-outcome, result reference, telemetry, and optional SDK-history links. A reused
+outcome, result reference, telemetry, and optional SDK-history links. That turn
+limit is per task: optional `agent_run.max_turns` applies only to the new task,
+and omission uses the spawn default rather than the previous task's cap. A reused
 Agent receives a new Run; it never changes the Agent's admitted routing or
 permission configuration. Model replies derive a 1-based `task` sequence within
 that Agent from enqueue order, without exposing the internal Run UUID. That
@@ -155,12 +157,20 @@ and `reasoning_difficulty`. `agent_run` requires `agent`, `continues`, `prompt`
 and `label`; `continues` names the specific earlier work of that Agent being
 continued (if none, spawn, even on a related topic; add `after` if only its
 result is needed). Both take optional `after`,
-`wait_ms` and `dispatch`; spawn also accepts `max_turns`, `inherit_context` and
-optional `return_to`. `return_to` is spawn-only and is not an `agent_run` field.
+`wait_ms` and `dispatch`. Spawn also accepts `max_turns` (integer 1--10000,
+default 256: first-task cap and the Agent default), `inherit_context` and
+optional `return_to`. `agent_run` also accepts optional `max_turns` in that
+same range, for the new task only; omitted, that task uses the spawn default,
+not the last task's override. It does not change model, profile, context or
+the Agent default. `return_to` is spawn-only and is not an `agent_run` field.
+The worker continuation it installs uses the Agent-default turn limit;
+`return_to` itself has no override. `agent_answer` likewise does not accept
+`max_turns`.
 `agent_read` retains `max_chars`. `agent_send`
 joins/steers the task bound when called; it never starts a continuation.
 `agent_answer` takes `agent`, the exact pending `question_id`, and `answer`,
-with optional wait_ms. It preserves the asking task's label, dispatch and Agent settings;
+with optional wait_ms. It preserves the asking task's label, dispatch and Agent settings,
+and uses the Agent-default turn limit, not a last-task override;
 run cannot bypass an unanswered question.
 
 - **`prompt`** is the execution instruction. It may be up to 131072 UTF-16
@@ -197,7 +207,8 @@ worker model and either a fixed effort or inherited parent thinking (captured
 at submission, with identity or the automatic supported-level rule; inheritance
 never crosses the off boundary). Session effort
 overrides are operator configuration, not model tool arguments. Reuse preserves
-all accepted settings and does not accept or re-score difficulty.
+all accepted settings and does not accept or re-score difficulty. A per-task
+`agent_run.max_turns` is not a settings change.
 Callers choose profile and reasoning difficulty, never a
 concrete worker model or thinking level, arbitrary cwd, owner, generation,
 session path or history path.

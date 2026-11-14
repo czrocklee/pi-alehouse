@@ -180,16 +180,25 @@ export function assertCallerTools(tools) {
   assert.equal(fields.inherit_context.type, "boolean");
   for (const fact of [/Default false/, /text/, /no tool calls\/results/, /64 KiB/])
     assert.match(fields.inherit_context.description, fact);
+  assert.equal(Object.keys(fields).at(-1), "max_turns");
+  assert.equal(fields.max_turns.type, "integer");
   assert.equal(fields.max_turns.minimum, 1);
   assert.equal(fields.max_turns.maximum, 10000);
-  assert.match(fields.max_turns.description, /[Pp]er.task.*256/);
-  assert.match(fields.max_turns.description, /fixed for follow-ups/);
-  assert.match(fields.max_turns.description, /No task wall-clock deadline/);
+  for (const fact of [
+    /[Ff]irst task/,
+    /Agent default/,
+    /default 256/,
+    /No task wall-clock deadline/,
+    /[Mm]ay leave partial results/,
+  ])
+    assert.match(fields.max_turns.description, fact);
+  assert.doesNotMatch(fields.max_turns.description, /fixed for follow-ups/);
   assert.equal(Object.hasOwn(fields, "max_duration_ms"), false);
   assert.match(spawn.description, /submit its first task/);
   assert.match(spawn.description, /Execution may queue/);
   assert.match(spawn.description, /default for any new work or review/);
-  assert.match(spawn.description, /stay fixed/);
+  assert.match(spawn.description, /Model, profile and context stay fixed/);
+  assert.doesNotMatch(spawn.description, /turn limit/);
   assert.match(spawn.description, /no nested delegation/);
   assert.match(spawn.description, /agent_list/);
   assert.match(spawn.description, /Queued work is accepted.*do not respawn/);
@@ -204,10 +213,23 @@ export function assertCallerTools(tools) {
     "continues",
     "dispatch",
     "label",
+    "max_turns",
     "prompt",
     "wait_ms",
   ]);
+  assert.equal(Object.keys(runFields).at(-1), "max_turns");
   assert.deepEqual(Object.keys(runFields).slice(0, 3), ["agent", "continues", "prompt"]);
+  assert.equal(run.parameters.required.includes("max_turns"), false);
+  assert.equal(runFields.max_turns.type, "integer");
+  assert.equal(runFields.max_turns.minimum, 1);
+  assert.equal(runFields.max_turns.maximum, 10000);
+  for (const fact of [
+    /[Pp]er-task override/,
+    /omit for spawn default/,
+    /not last override/,
+    /[Mm]ay leave partial results/,
+  ])
+    assert.match(runFields.max_turns.description, fact);
   assert.equal(runFields.continues.minLength, 1);
   assert.equal(runFields.continues.maxLength, 512);
   assert.equal(runFields.continues.pattern, "\\S");
@@ -237,6 +259,8 @@ export function assertCallerTools(tools) {
     /idle Agent's own earlier work/,
     /re-reads its whole conversation/,
     /even on a related topic.*agent_spawn/,
+    /different profile\/reasoning_difficulty\/context/,
+    /max_turns overrides this task only/,
     /pending question: agent_answer/,
   ])
     assert.match(run.description, fact);
@@ -341,6 +365,7 @@ export function assertCallerTools(tools) {
     /historical text alone cannot be answered/,
     /fixed settings/,
     /label\/dispatch/,
+    /Turn cap: Agent default, not the asking task's override/,
   ])
     assert.match(answer.description, fact);
   // A delegation_off reply carries its own guidance; descriptions do not repeat it.

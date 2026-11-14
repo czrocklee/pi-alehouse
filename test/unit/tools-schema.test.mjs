@@ -559,7 +559,6 @@ test("closed schemas reject unknown, mutated and malformed inputs before admissi
     ["agent_send", { agent: "orca", message: "x", after: ["a"] }],
     ["agent_run", { agent: "orca" }],
     ["agent_run", run("orca", { prompt: "x", profile: "reader" })],
-    ["agent_run", run("orca", { prompt: "x", max_turns: 3 })],
     ["agent_interrupt", { agent: "orca", run_id: "x" }],
     ["agent_list", { include_released: true }],
     ["agent_kill", {}],
@@ -674,6 +673,71 @@ test("spawn creates and send addresses: each rejects the other's names with a po
     code("AGENT_EXISTS"),
     "a killed name stays taken",
   );
+});
+
+test("agent_run max_turns is an optional raw integer; invalid values and closed tools do not admit", async (t) => {
+  const f = await fixture(t),
+    { tool, call } = toolsFor(f);
+  const spawn = tool("agent_spawn"),
+    follow = tool("agent_run");
+  assert.equal(Object.keys(follow.parameters.properties).at(-1), "max_turns");
+  assert.equal(follow.parameters.required.includes("max_turns"), false);
+  assert.equal(follow.parameters.additionalProperties, false);
+  for (const max_turns of [1, 256, 10000]) {
+    assert.equal(Check(spawn.parameters, create({ max_turns })), true);
+    assert.equal(Check(follow.parameters, run("orca", { max_turns })), true);
+    assert.equal(spawn.prepareArguments(create({ max_turns })).max_turns, max_turns);
+    assert.equal(follow.prepareArguments(run("orca", { max_turns })).max_turns, max_turns);
+  }
+  assert.equal(Object.hasOwn(spawn.prepareArguments(create()), "max_turns"), false);
+  assert.equal(Object.hasOwn(follow.prepareArguments(run("orca")), "max_turns"), false);
+  const before = structuredClone(f.controller.stats());
+  const invalid = [0, -1, 10001, 1.5, "256", null, NaN, Infinity];
+  for (const max_turns of invalid) {
+    for (const [name, valid, args] of [
+      ["agent_spawn", create(), create({ max_turns })],
+      ["agent_run", run("orca"), run("orca", { max_turns })],
+    ]) {
+      const current = tool(name);
+      assert.equal(Check(current.parameters, args), false, `${name} ${String(max_turns)}`);
+      assert.throws(
+        () => current.prepareArguments(args),
+        code("INVALID_PARAMETERS"),
+        `${name} prepare ${String(max_turns)}`,
+      );
+      await assert.rejects(
+        call(name, args),
+        code("INVALID_PARAMETERS"),
+        `${name} execute ${String(max_turns)}`,
+      );
+      // Execute repeats the raw check, so a hook cannot widen a value prepare accepted.
+      const mutated = current.prepareArguments({ ...valid, max_turns: 4 });
+      mutated.max_turns = max_turns;
+      await assert.rejects(
+        call(name, mutated),
+        code("INVALID_PARAMETERS"),
+        `${name} recheck ${String(max_turns)}`,
+      );
+    }
+  }
+  const question_id = `q_${"a".repeat(32)}`;
+  for (const [name, args] of [
+    ["agent_send", send("orca", { max_turns: 3 })],
+    ["agent_answer", { agent: "orca", question_id, answer: "yes", max_turns: 3 }],
+    [
+      "agent_spawn",
+      create({
+        profile: "scout",
+        return_to: { agent: "orca", question_id, answer: "yes", max_turns: 3 },
+      }),
+    ],
+  ]) {
+    assert.throws(() => tool(name).prepareArguments(args), code("INVALID_PARAMETERS"), name);
+    await assert.rejects(call(name, args), code("INVALID_PARAMETERS"), name);
+  }
+  assert.deepEqual(f.controller.stats(), before);
+  assert.equal(f.ports.length, 0);
+  assert.equal(f.controller.list().length, 0);
 });
 
 test("agent_run requires continues and never forwards it to the Agent", async (t) => {

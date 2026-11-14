@@ -61,7 +61,8 @@ not policy denial. Silence proves neither no blocks nor no prohibited retries.
 Task replies show concrete errors and availability facts, not a generic
 `recovery_hint` lecture. A failed task does not establish model unavailability
 or ability. An Agent's model stays fixed across routing changes, `agent_run`
-and `agent_answer`; different settings require a fresh Agent.
+and `agent_answer`; different settings require a fresh Agent. Optional
+`agent_run.max_turns` is a per-task cap, not a settings change.
 
 Usage and context size remain host/UI observations, not routine parent-model
 fields. Retired timed-warning attempts are not interpreted by the current codec.

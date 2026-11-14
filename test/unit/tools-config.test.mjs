@@ -22,7 +22,11 @@ import {
   workerToolSelection,
 } from "../../dist/orchestration/tools/tool-names.js";
 import { digest } from "../../dist/orchestration/runtime/context-snapshot.js";
-import { fixture, until } from "../support/controller-fixture.mjs";
+import { fixture, tick, until } from "../support/controller-fixture.mjs";
+import {
+  DEFAULT_OWNER_LIMITS,
+  softBudgetMessage,
+} from "../../dist/orchestration/core/owner-controller.js";
 
 test("resolver exposes bounded abstract choices and incompatibility without model inventory", async (t) => {
   const f = await fixture(t),
@@ -339,7 +343,7 @@ test("preset/profile/context snapshots pin at admission; same ID keeps first acc
   assert.equal(
     viewOf(f, "orca").max_turns,
     view.max_turns,
-    "each task uses the Agent's turn limit",
+    "an omitted follow-up uses the Agent's spawn turn limit",
   );
   assert.equal(Object.hasOwn(viewOf(f, "orca"), "max_duration_ms"), false);
   assert.equal(routed(f, "orca").preset, "fixture");
@@ -958,4 +962,394 @@ test("an interrupted answer that never started leaves the question answerable th
   );
   f.ports[0].finish("done");
   await settle(f, "orca");
+});
+
+test("agent_run max_turns overrides only the new task; omission and replay keep the spawn default", async (t) => {
+  const f = await fixture(t),
+    { call } = toolsFor(f);
+  const sameConversation = (port, prompts) => {
+    assert.equal(f.ports.length, port + 1);
+    assert.deepEqual(
+      f.ports[port].calls.map((item) => item.prompt),
+      prompts,
+    );
+    assert.equal(new Set(f.ports[port].calls.map((item) => item.identity.agent_id)).size, 1);
+  };
+  await call("agent_spawn", create(), "default-spawn");
+  await until(() => f.ports[0]?.streaming);
+  const defaultFirst = runOf(f, "orca");
+  assert.equal(f.controller.view(defaultFirst).max_turns, 256);
+  await assert.rejects(
+    call("agent_run", run("orca", { max_turns: 9 }), "busy-override"),
+    code("AGENT_BUSY"),
+  );
+  await assert.rejects(
+    call("agent_send", send("orca", { max_turns: 9 }), "busy-send"),
+    code("INVALID_PARAMETERS"),
+  );
+  assert.equal(f.controller.view(defaultFirst).max_turns, 256);
+  assert.equal(f.controller.stats().runs, 1);
+  assert.equal(f.ports[0].calls.length, 1);
+  f.ports[0].finish("first");
+  await settle(f, "orca");
+
+  await call("agent_run", run("orca", { prompt: "higher", max_turns: 10000 }), "higher");
+  const defaultHigher = runOf(f, "orca");
+  await until(() => f.ports[0].calls.length === 2);
+  assert.equal(f.controller.view(defaultHigher).max_turns, 10000);
+  assert.equal(f.controller.view(defaultFirst).max_turns, 256);
+  assert.equal(f.controller.view(defaultHigher).status, "running");
+  assert.deepEqual(
+    f.controller.view(defaultHigher).effective_settings,
+    f.controller.view(defaultFirst).effective_settings,
+  );
+  f.ports[0].finish("higher done");
+  await settle(f, "orca");
+
+  await call("agent_run", run("orca", { prompt: "lower", max_turns: 1 }), "lower");
+  const defaultLower = runOf(f, "orca");
+  await until(() => f.ports[0].calls.length === 3);
+  assert.equal(f.controller.view(defaultLower).max_turns, 1);
+  assert.equal(f.controller.view(defaultHigher).max_turns, 10000);
+  f.ports[0].finish("lower done");
+  await settle(f, "orca");
+
+  const omitted = await call("agent_run", run("orca", { prompt: "omitted" }), "omitted");
+  const defaultOmitted = runOf(f, "orca");
+  await until(() => f.ports[0].calls.length === 4);
+  assert.equal(f.controller.view(defaultOmitted).max_turns, 256);
+  assert.equal(f.controller.view(defaultLower).max_turns, 1);
+  sameConversation(0, ["task", "higher", "lower", "omitted"]);
+  f.ports[0].finish("omitted done");
+  await settle(f, "orca");
+  const replay = await call("agent_run", run("orca", { prompt: "omitted" }), "omitted");
+  assert.equal(replay.tasks[0].task, omitted.tasks[0].task);
+  assert.equal(f.controller.stats().runs, 4);
+  assert.equal(f.ports[0].calls.length, 4);
+  await assert.rejects(
+    call("agent_run", run("orca", { prompt: "omitted", max_turns: 3 }), "omitted"),
+    code("REQUEST_CONFLICT"),
+  );
+  assert.equal(f.controller.stats().runs, 4);
+  assert.equal(f.controller.view(defaultOmitted).max_turns, 256);
+
+  await call(
+    "agent_spawn",
+    create({ agent: "otter", prompt: "custom", max_turns: 7 }),
+    "custom-spawn",
+  );
+  await until(() => f.ports[1]?.streaming);
+  const customFirst = runOf(f, "otter");
+  assert.equal(f.controller.view(customFirst).max_turns, 7);
+  assert.equal(f.ports.length, 2);
+  f.ports[1].finish("custom first");
+  await settle(f, "otter");
+
+  await call("agent_run", run("otter", { prompt: "up", max_turns: 40 }), "custom-up");
+  const customUp = runOf(f, "otter");
+  await until(() => f.ports[1].calls.length === 2);
+  assert.equal(f.controller.view(customUp).max_turns, 40);
+  assert.equal(f.controller.view(customFirst).max_turns, 7);
+  f.ports[1].finish("up done");
+  await settle(f, "otter");
+
+  const down = await call(
+    "agent_run",
+    run("otter", { prompt: "down", max_turns: 2 }),
+    "custom-down",
+  );
+  const customDown = runOf(f, "otter");
+  await until(() => f.ports[1].calls.length === 3);
+  assert.equal(f.controller.view(customDown).max_turns, 2);
+  assert.equal(f.controller.view(customUp).max_turns, 40);
+  f.ports[1].finish("down done");
+  await settle(f, "otter");
+  await call("agent_run", run("otter", { prompt: "back" }), "custom-omit");
+  const customOmit = runOf(f, "otter");
+  await until(() => f.ports[1].calls.length === 4);
+  assert.equal(f.controller.view(customOmit).max_turns, 7);
+  assert.equal(f.controller.view(customDown).max_turns, 2);
+  assert.equal(f.controller.view(customOmit).agent_id, f.controller.view(customFirst).agent_id);
+  assert.deepEqual(
+    f.controller.view(customOmit).effective_settings,
+    f.controller.view(customFirst).effective_settings,
+  );
+  sameConversation(1, ["custom", "up", "down", "back"]);
+  f.ports[1].finish("back done");
+  await settle(f, "otter");
+  const downReplay = await call(
+    "agent_run",
+    run("otter", { prompt: "down", max_turns: 2 }),
+    "custom-down",
+  );
+  assert.equal(downReplay.tasks[0].task, down.tasks[0].task);
+  assert.equal(f.ports[1].calls.length, 4);
+  await assert.rejects(
+    call("agent_run", run("otter", { prompt: "down", max_turns: 9 }), "custom-down"),
+    code("REQUEST_CONFLICT"),
+  );
+  assert.equal(f.controller.stats().runs, 8);
+  assert.equal(f.controller.view(customDown).max_turns, 2);
+  assert.equal(f.controller.view(customFirst).max_turns, 7);
+});
+
+test("tool max_turns wraps once on continuing turnEnd, hard-stops at shipped grace, and does not stick", async (t) => {
+  const grace = DEFAULT_OWNER_LIMITS.grace;
+  assert.equal(grace, 5);
+  const priorHard = 1 + grace + 1;
+  const softCount = (port) => port.inputs.filter((text) => text === softBudgetMessage).length;
+  const expectSoft = async (port, count) => {
+    await tick();
+    await tick();
+    assert.equal(softCount(port), count);
+  };
+  const drive = (port, view, turns) => {
+    while (view().turns < turns) port.callbacks.turnStart();
+    assert.equal(view().turns, turns);
+  };
+
+  for (const spec of [
+    { agent: "orca", max: 256, id: "default" },
+    { agent: "otter", max: 7, id: "custom" },
+  ]) {
+    await t.test(spec.id, async (st) => {
+      const f = await fixture(st),
+        { call } = toolsFor(f);
+      const port = () => f.ports[0];
+      await call(
+        "agent_spawn",
+        create({
+          agent: spec.agent,
+          ...(spec.max === 256 ? {} : { prompt: "custom", max_turns: spec.max }),
+        }),
+        `${spec.id}-spawn`,
+      );
+      await until(() => port()?.streaming);
+      const first = runOf(f, spec.agent);
+      assert.equal(f.controller.view(first).max_turns, spec.max);
+      assert.equal(f.controller.view(first).turns, 1);
+      port().callbacks.turnEnd(true);
+      await expectSoft(port(), 0);
+      port().finish("first");
+      await settle(f, spec.agent);
+
+      await call(
+        "agent_run",
+        run(spec.agent, { prompt: "capped", max_turns: 1 }),
+        `${spec.id}-cap`,
+      );
+      await until(() => port().calls.length === 2);
+      const capped = runOf(f, spec.agent);
+      const cappedView = () => f.controller.view(capped);
+      assert.equal(cappedView().max_turns, 1);
+      assert.equal(cappedView().turns, 1);
+      const cappedBase = softCount(port());
+      port().callbacks.turnEnd(true);
+      await until(() => softCount(port()) === cappedBase + 1);
+      port().callbacks.turnEnd(true);
+      await expectSoft(port(), cappedBase + 1);
+      assert.equal(cappedView().stop_reason, undefined);
+      assert.equal(port().stopped, 0);
+      drive(port(), cappedView, 1 + grace);
+      assert.equal(cappedView().status, "running");
+      assert.equal(cappedView().stop_reason, undefined);
+      assert.equal(port().streaming, true);
+      port().callbacks.turnStart();
+      assert.equal(cappedView().turns, priorHard);
+      assert.equal(cappedView().stop_reason, "hard_budget");
+      assert.equal(cappedView().status, "cancelling");
+      assert.equal(cappedView().execution_exited, false);
+      await tick();
+      assert.equal(port().stopped, 1);
+      assert.equal(port().streaming, true);
+      port().finish("partial", "aborted");
+      await settle(f, spec.agent);
+      assert.equal(cappedView().status, "failed");
+      assert.equal(cappedView().stop_reason, "hard_budget");
+      assert.equal(cappedView().outcome.reason, "turn_limit");
+      assert.equal(cappedView().outcome.limit_reached, true);
+
+      const omitBase = softCount(port());
+      const stopped = port().stopped;
+      await call("agent_run", run(spec.agent, { prompt: "omitted" }), `${spec.id}-omit`);
+      await until(() => port().calls.length === 3);
+      const omitted = runOf(f, spec.agent);
+      const omittedView = () => f.controller.view(omitted);
+      assert.equal(omittedView().max_turns, spec.max);
+      assert.equal(omittedView().turns, 1);
+      port().callbacks.turnEnd(true);
+      await expectSoft(port(), omitBase);
+      if (spec.max === 7) {
+        drive(port(), omittedView, 6);
+        port().callbacks.turnEnd(true);
+        await expectSoft(port(), omitBase);
+        drive(port(), omittedView, 7);
+        await expectSoft(port(), omitBase);
+        assert.equal(omittedView().stop_reason, undefined);
+        port().callbacks.turnEnd(true);
+        await until(() => softCount(port()) === omitBase + 1);
+      } else {
+        drive(port(), omittedView, priorHard);
+        port().callbacks.turnEnd(true);
+        await expectSoft(port(), omitBase);
+      }
+      assert.equal(omittedView().stop_reason, undefined);
+      assert.equal(omittedView().status, "running");
+      assert.equal(port().stopped, stopped);
+      assert.equal(port().streaming, true);
+      port().finish("omitted done");
+      await settle(f, spec.agent);
+      assert.equal(omittedView().status, "completed");
+      assert.equal(omittedView().stop_reason, undefined);
+      assert.equal(omittedView().outcome.limit_reached, spec.max === 7);
+      assert.equal(f.controller.view(first).max_turns, spec.max);
+    });
+  }
+});
+
+test("agent_answer and return_to keep the spawn turn default and do not retarget past tasks", async (t) => {
+  const f = await fixture(t),
+    { call } = toolsFor(f, {
+      parentPermission: () => ({
+        checkToolCallPermission: () => ({ state: "allow" }),
+      }),
+    });
+  await call(
+    "agent_spawn",
+    create({ agent: "cedar", prompt: "start", max_turns: 7 }),
+    "cedar-spawn",
+  );
+  await until(() => f.ports[0]?.streaming);
+  const spawned = runOf(f, "cedar");
+  f.ports[0].finish("started");
+  await settle(f, "cedar");
+  await call("agent_run", run("cedar", { prompt: "wide", max_turns: 40 }), "wide");
+  const wide = runOf(f, "cedar");
+  await until(() => f.ports[0].calls.length === 2);
+  f.ports[0].finish("wide done");
+  await settle(f, "cedar");
+
+  await call(
+    "agent_run",
+    run("cedar", { prompt: "ask", label: "Ask for evidence", max_turns: 15 }),
+    "ask",
+  );
+  const asking = runOf(f, "cedar");
+  await until(() => f.ports[0].calls.length === 3);
+  f.ports[0].callbacks.question("Which evidence?");
+  f.ports[0].finish("waiting");
+  await settle(f, "cedar");
+  const question_id = f.controller.view(asking).question_id;
+  assert.match(question_id, /^q_[0-9a-f]{32}$/);
+  const pending = f.controller.stats().runs;
+  await assert.rejects(
+    call(
+      "agent_answer",
+      { agent: "cedar", question_id, answer: "use main", max_turns: 99 },
+      "bad-answer",
+    ),
+    code("INVALID_PARAMETERS"),
+  );
+  assert.equal(f.controller.stats().runs, pending);
+  assert.equal(f.controller.view(asking).question_id, question_id);
+  assert.equal(f.controller.view(asking).max_turns, 15);
+  assert.equal(f.controller.view(spawned).max_turns, 7);
+  assert.equal(f.controller.view(wide).max_turns, 40);
+
+  const answered = await call(
+    "agent_answer",
+    { agent: "cedar", question_id, answer: "use main" },
+    "answer",
+  );
+  const continuation = runOf(f, "cedar");
+  await until(() => f.ports[0].calls.length === 4);
+  assert.equal(answered.action.task, 4);
+  assert.equal(f.controller.view(continuation).max_turns, 7);
+  assert.equal(f.controller.view(continuation).description, "Ask for evidence");
+  assert.equal(f.controller.view(asking).max_turns, 15);
+  assert.equal(f.ports[0].calls[3].identity.agent_id, f.ports[0].calls[0].identity.agent_id);
+  assert.equal(f.ports[0].calls[3].identity.task_prompt, "use main");
+  assert.deepEqual(
+    f.controller.view(continuation).effective_settings,
+    f.controller.view(spawned).effective_settings,
+  );
+  f.ports[0].finish("answered");
+  await settle(f, "cedar");
+
+  await call("agent_run", run("cedar", { prompt: "ask again", max_turns: 20 }), "ask-again");
+  const askedAgain = runOf(f, "cedar");
+  await until(() => f.ports[0].calls.length === 5);
+  f.ports[0].callbacks.question("Which version?");
+  f.ports[0].finish("waiting again");
+  await settle(f, "cedar");
+  const again = f.controller.view(askedAgain).question_id;
+  const beforeReturn = f.controller.stats().runs;
+  await assert.rejects(
+    call(
+      "agent_spawn",
+      create({
+        agent: "pine",
+        profile: "scout",
+        prompt: "Collect cited facts.",
+        label: "Collect cited facts",
+        max_turns: 3,
+        return_to: { agent: "cedar", question_id: again, answer: "Use findings.", max_turns: 99 },
+      }),
+      "bad-return",
+    ),
+    code("INVALID_PARAMETERS"),
+  );
+  assert.equal(f.controller.stats().runs, beforeReturn);
+  assert.equal(f.controller.view(askedAgain).question_id, again);
+  assert.equal(f.controller.view(askedAgain).max_turns, 20);
+  assert.equal(f.ports.length, 1);
+
+  const returned = call(
+    "agent_spawn",
+    create({
+      agent: "pine",
+      profile: "scout",
+      prompt: "Collect cited facts.",
+      label: "Collect cited facts",
+      max_turns: 3,
+      return_to: { agent: "cedar", question_id: again, answer: "Use findings." },
+    }),
+    "return-to",
+  );
+  await until(() => f.ports[1]?.streaming);
+  const scout = runOf(f, "pine");
+  const handed = f.controller.view(scout).return_to_run_id;
+  assert.equal(f.controller.view(scout).max_turns, 3);
+  assert.equal(f.controller.view(handed).max_turns, 7);
+  assert.equal(f.controller.view(handed).status, "queued");
+  assert.equal(f.controller.view(askedAgain).max_turns, 20);
+  assert.equal(f.controller.view(spawned).max_turns, 7);
+  assert.equal(f.controller.view(handed).agent_id, f.controller.view(spawned).agent_id);
+  assert.equal(f.controller.view(scout).effective_settings.profile, "researcher");
+  assert.deepEqual(
+    f.controller.view(handed).effective_settings,
+    f.controller.view(spawned).effective_settings,
+  );
+  assert.equal(f.ports[0].calls.length, 5);
+  f.ports[1].finish("SCOUT_ONLY");
+  await until(() => f.ports[0].calls.length === 6);
+  assert.equal(f.controller.view(handed).max_turns, 7);
+  assert.equal(f.ports[0].calls[5].identity.agent_id, f.ports[0].calls[0].identity.agent_id);
+  assert.equal(f.ports[0].calls[5].identity.task_prompt, "Use findings.");
+  assert.equal(f.ports.length, 2);
+  f.ports[0].finish("worker continued");
+  await returned;
+  await settle(f, "cedar");
+  await call("agent_run", run("cedar", { prompt: "plain follow-up" }), "plain");
+  const plain = runOf(f, "cedar");
+  await until(() => f.ports[0].calls.length === 7);
+  assert.equal(f.controller.view(plain).max_turns, 7);
+  assert.equal(f.controller.view(handed).max_turns, 7);
+  assert.equal(f.controller.view(spawned).max_turns, 7);
+  assert.equal(f.controller.view(wide).max_turns, 40);
+  assert.equal(f.controller.view(askedAgain).max_turns, 20);
+  assert.equal(f.ports[0].calls[6].prompt, "plain follow-up");
+  assert.equal(f.ports[1].calls.length, 1);
+  f.ports[0].finish("plain done");
+  await settle(f, "cedar");
 });

@@ -153,7 +153,7 @@ export const spawnSchema = Type.Object(
         minimum: 1,
         maximum: 10000,
         description:
-          "Per-task turn limit; default 256, fixed for follow-ups. No task wall-clock deadline. May leave partial results.",
+          "First task's turn limit and Agent default; default 256. No task wall-clock deadline. May leave partial results.",
       }),
     ),
   },
@@ -174,6 +174,14 @@ export const runSchema = Type.Object(
     dispatch: dispatchField,
     after: afterField,
     wait_ms: waitField,
+    max_turns: optional(
+      Type.Integer({
+        minimum: 1,
+        maximum: 10000,
+        description:
+          "Per-task override; omit for spawn default, not last override. May leave partial results.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -262,13 +270,13 @@ export const readSchema = Type.Object(
 export const listSchema = Type.Object({}, { additionalProperties: false });
 
 export const agentSpawnDescription =
-  "Create an Agent and submit its first task: the default for any new work or review. Execution may queue. Model, profile, context and turn limit stay fixed; no nested delegation. If acceptance is unclear, check agent_list before repeating. Queued work is accepted; wait, do not respawn.";
+  "Create an Agent and submit its first task: the default for any new work or review. Execution may queue. Model, profile and context stay fixed; no nested delegation. If acceptance is unclear, check agent_list before repeating. Queued work is accepted; wait, do not respawn.";
 export const agentRunDescription =
-  "Continue an idle Agent's own earlier work; each turn re-reads its whole conversation. New work, even on a related topic, or different settings: agent_spawn. Running task: agent_send or agent_wait; pending question: agent_answer.";
+  "Continue an idle Agent's own earlier work; each turn re-reads its whole conversation. New work, even on a related topic, or different profile/reasoning_difficulty/context: agent_spawn. max_turns overrides this task only. Running task: agent_send or agent_wait; pending question: agent_answer.";
 export const agentSendDescription =
   "Add instructions to the Agent's current task, fixed at this call, not an answer or new task. delivery: joined=added to prompt, steered=sent while running, not_delivered=nothing sent. Delivery does not prove action.";
 export const agentAnswerDescription =
-  'Answer the exact pending question_id and submit a continuation. First wait for status="needs_input" and a current question_id from agent_wait or agent_read; historical text alone cannot be answered. Keeps fixed settings and the asking task\'s label/dispatch.';
+  "Answer the exact pending question_id and submit a continuation. First wait for status=\"needs_input\" and a current question_id from agent_wait or agent_read; historical text alone cannot be answered. Keeps fixed settings and the asking task's label/dispatch. Turn cap: Agent default, not the asking task's override.";
 export const agentWaitDescription = `Wait for selected tasks; questions, issues or alerts return early. Prefer long waits to polling. Questions stay pending; name other Agents to defer one. Nothing pending returns now; timeout/abort never stops work.`;
 export const agentReadDescription = `Read a task's result/question and this Agent's alerts, including after reuse or kill. Prioritizes the full question. next_cursor means more of that result remains: pass it back to continue the original task.`;
 export const agentInterruptDescription =

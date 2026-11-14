@@ -219,6 +219,10 @@ for (const [flowIndex, steps] of quickstartFlows.entries())
         }
       }
       const reply = await call(step.tool, args, `quickstart-${flowIndex}-${stepIndex}`);
+      if (flowIndex === 2 && step.tool === "agent_run") {
+        assert.equal(args.max_turns, 32, "the documented follow-up demonstrates a per-task cap");
+        assert.equal(viewOf(f, args.agent).max_turns, args.max_turns);
+      }
       if (flowIndex === 0 && step.tool === "agent_read") {
         assert.equal(reply.tasks[0].status, "completed");
         assert.equal(

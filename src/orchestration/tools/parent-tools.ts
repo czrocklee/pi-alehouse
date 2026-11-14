@@ -277,6 +277,7 @@ function registerAdmissionTools(
               resume: target.agent_id,
               prompt: input.prompt,
               description: input.label,
+              ...(input.max_turns === undefined ? {} : { max_turns: input.max_turns }),
               ...(input.dispatch === undefined ? {} : { dispatch: input.dispatch }),
               ...(after ? { after } : {}),
             };

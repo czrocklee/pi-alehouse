@@ -200,7 +200,9 @@ as validation or deployment acceptance.
 There is no metadata-only `agent_read` view as a functional feature. Keep all
 nine names and other arguments/features:
 required `continues` and spawn/run `label`, optional after/dispatch, optional spawn-only
-`return_to`, max_turns, inherit_context, wait's all/any selection, every wait_ms
+`return_to`, spawn `max_turns` (first-task cap and Agent default) and optional
+`agent_run.max_turns` (that new task only; omitted uses the spawn default, not
+the last task's cap), inherit_context, wait's all/any selection, every wait_ms
 and max_chars. `return_to` is not an `agent_run` field and not a tenth tool.
 Spawn/run labels are concise 3–8 word task titles (not instructions/background),
 required nonblank strings capped at 72 UTF-16 units and used verbatim. Word counts

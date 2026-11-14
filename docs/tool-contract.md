@@ -129,11 +129,14 @@ to stable internal `researcher`. The public name `researcher` is unsupported,
 not an alias. Accepted Agents are not renamed. Reasoning difficulty is
 independent of profile.
 Optional fields are `inherit_context`, `after` (1--4 other names),
-`wait_ms` (0--300000), `max_turns` (1--10000, default 256), plus optional
-`dispatch` and, on spawn only, `return_to`. Task execution has no wall-clock
-deadline. The retired `max_duration_ms` parameter is rejected, not ignored.
+`wait_ms` (0--300000), `max_turns` (integer 1--10000, default 256), plus optional
+`dispatch` and, on spawn only, `return_to`. Spawn `max_turns` caps the first
+task and is the Agent default for later tasks that omit a per-task cap. Task
+execution has no wall-clock deadline, timer or timed wrap-up. The retired
+`max_duration_ms` parameter is rejected, not ignored.
 `return_to` is specified under [Scout return_to](#scout-return_to); on
-`agent_run` it is rejected, not ignored.
+`agent_run` it is rejected, not ignored. Optional `agent_run.max_turns` is
+specified under [Run, send and explicit answer](#run-send-and-explicit-answer).
 
 Spawn/run `dispatch` is closed plain data: `inputs` ≤8 paths, `ownership` ≤16
 paths, `tree` one build-root path and `checks` ≤16 parent-declared identifiers;
@@ -150,9 +153,14 @@ tree locks are advisory, not global exclusivity. Preflight permission errors
 expose the target `profile` and checked `surface`, separately from missing-input
 and wrong-type errors.
 
-Profile, cwd, reasoning difficulty, context and turn limit are fixed for the
-Agent at spawn; later tasks, steering and routing changes do not migrate them.
-Use a new Agent for a different binding. Spawn creates the Agent and submits its
+Profile, cwd, reasoning difficulty and context are fixed for the Agent at
+spawn; later tasks, steering and routing changes do not migrate them. Use a
+new Agent for a different binding. The spawn turn cap is the Agent default,
+not an immutable cap on every later task: only a new idle `agent_run` may set
+a different cap, and only for that new task. It does not rewrite the Agent
+default, model, profile, context, historical tasks or a running task, and it
+is not a mid-run update, timer or wall-clock deadline. Steering,
+`agent_answer` and `return_to` do not accept `max_turns`. Spawn creates the Agent and submits its
 first task, which may queue rather than execute immediately. Prompt is the full
 task instruction, including deliverable, scope, stopping conditions and
 paths relative to the parent's cwd (or explicit absolute paths). The required label
@@ -217,7 +225,7 @@ permission grant. Oversize fails `CONTEXT_SNAPSHOT_TOO_LARGE` before creation.
 
 ## Run, send and explicit answer
 
-`agent_run({agent, continues, prompt, label, after?, wait_ms?, dispatch?})` admits a new task only
+`agent_run({agent, continues, prompt, label, after?, wait_ms?, dispatch?, max_turns?})` admits a new task only
 when idle. Finishing/stopping is waited out for at most 30 s outside the submit
 queue. Running fails `AGENT_BUSY`; a pending question fails `PENDING_QUESTION`
 and points to explicit answer. Run never delivers into an existing task.
@@ -228,7 +236,13 @@ spawn, even on a related topic, with `after` when only an earlier result is
 needed. The name marks continuation, not dependency (`after`); it replaces
 `builds_on`. `continues` participates in request identity but is not forwarded
 to the Agent or stored in `alehouse:*` records.
-Reuse retains the conversation and fixed settings. For capacity, kill finished
+Reuse retains the conversation and fixed settings (model, profile, cwd,
+reasoning difficulty and context). Optional `max_turns` is an integer
+1--10000 and applies only to the new task this call admits. Omitting it uses
+the Agent default from spawn (256 when spawn also omitted it), not the previous
+task's override. It does not change that default. Historical and running tasks
+keep the cap they were admitted with; `agent_send` cannot replace a running
+task's cap. For capacity, kill finished
 Agents whose work is accepted before workers still needed for validation.
 
 `agent_send({agent, message, wait_ms?})` takes 1--16384 nonblank units and binds
@@ -252,11 +266,12 @@ agent_answer({ agent, question_id, answer, wait_ms? })
 ```
 
 Answer is 1--16384 nonblank UTF-16 units. No profile, cwd,
-reasoning_difficulty, turn limit, label or after is accepted. The original task must already be truly settled
+reasoning_difficulty, turn limit (`max_turns`), label or after is accepted. The original task must already be truly settled
 `needs_input`, still pending and unreserved, with no current Run and a healthy,
 reusable Agent/Owner. Answer does not wait and then silently answer a future
 question. It reserves the original question and admits a continuation with the
-Agent's fixed settings/turn limit and the asking task's label and dispatch. Its
+Agent's fixed settings and Agent-default turn limit (spawn `max_turns`, not the
+asking task's cap when that task overrode it) and the asking task's label and dispatch. Its
 resource claim lineage remains held across the pending question; pre-input
 rollback that reopens the question also restores that claim, including any
 existing tree lease. Final termination/required cleanup, not a stop request,
@@ -353,7 +368,8 @@ arm a lifecycle deadline or write an external store.
 Coordinator admission installs two ordinary Runs or neither. The source is the
 new scout Run. The worker continuation is preadmitted `after` that exact source
 Run, with the original `answer_to`, dispatch and claim, and the Agent's fixed
-settings and turn limit exactly as `agent_answer` admits them.
+settings and Agent-default turn limit exactly as `agent_answer` admits them
+(not a last-task override; `return_to` has no `max_turns`).
 `return_to.answer` is the continuation `task_prompt` and parent-authored witness
 text. Source output crosses only by the existing handoff prefix, shared
 16384-unit budget and untrusted framing, outside `task_prompt`. Every `return_to`-specific
@@ -462,7 +478,8 @@ rejection unchanged. Only a release
 already under way when admission rejects is waited for: parallel tool-batch
 order is not a guarantee, and a later kill is not anticipated.
 
-Execution has a turn limit but no wall-clock deadline or timed wrap-up input;
+Execution has a per-admitted-task turn limit but no wall-clock deadline, timer
+or timed wrap-up input;
 see [execution limits](task-dispatch.md#execution-limits). Turn wrap still uses
 `soft_budget` and invalidates the approval witness
 (`pi-alehouse:approval:invalidated`). Elapsed time remains an observation, not a

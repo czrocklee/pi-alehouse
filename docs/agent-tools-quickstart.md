@@ -15,18 +15,18 @@ except the scout `return_to` example. The
 [task dispatch](task-dispatch.md) owns paths, claims and validation. [Security](security.md), [limitations](limitations.md)
 and [development](development.md) own authority, support and implementation/checks.
 
-| Need                                                          | Tool                                                                     |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| New work or review, even on a related topic                   | `agent_spawn` (creates Agent + submits first task; may queue)            |
-| Continue this Agent's own specific earlier work               | `agent_run` (required `continues`; fixed settings/conversation)          |
-| Correct an unfinished task                                    | `agent_send` (delivery is not action)                                    |
-| Answer a settled pending question                             | `agent_answer`                                                           |
-| Answer a settled worker question using a new scout's findings | `agent_spawn` with scout `return_to`, or scout spawn then `agent_answer` |
-| Wait for events/end                                           | `agent_wait` (`all`/`any`; prefer long waits)                            |
-| Read results, old task or next page                           | `agent_read`                                                             |
-| Request task stop, retain conversation                        | `agent_interrupt`, then wait/read for settlement                         |
-| Permanently end Agent                                         | `agent_kill` (not deletion; exiting/cleanup_uncertain is not release)    |
-| Inspect roster without consuming alerts/finished reminders    | `agent_list`                                                             |
+| Need                                                          | Tool                                                                                           |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| New work or review, even on a related topic                   | `agent_spawn` (creates Agent + submits first task; may queue)                                  |
+| Continue this Agent's own specific earlier work               | `agent_run` (required `continues`; fixed settings/conversation; optional per-task `max_turns`) |
+| Correct an unfinished task                                    | `agent_send` (delivery is not action)                                                          |
+| Answer a settled pending question                             | `agent_answer`                                                                                 |
+| Answer a settled worker question using a new scout's findings | `agent_spawn` with scout `return_to`, or scout spawn then `agent_answer`                       |
+| Wait for events/end                                           | `agent_wait` (`all`/`any`; prefer long waits)                                                  |
+| Read results, old task or next page                           | `agent_read`                                                                                   |
+| Request task stop, retain conversation                        | `agent_interrupt`, then wait/read for settlement                                               |
+| Permanently end Agent                                         | `agent_kill` (not deletion; exiting/cleanup_uncertain is not release)                          |
+| Inspect roster without consuming alerts/finished reminders    | `agent_list`                                                                                   |
 
 The JSON below lists **tool calls**, not tool returns or a batch API. Names and
 paths are illustrative; adapt them to the assigned task. Each section is a
@@ -89,13 +89,15 @@ restarts that retained task at page one. The example uses task 1 because this
 separate workflow creates exactly one task before its follow-up. The first
 result is assumed long enough to return a cursor; if none is returned, omit the
 last call. Never combine `task` and `cursor`, and never move a cursor to another
-Agent. Both remain Owner-local, not restart recovery.
+Agent. Both remain Owner-local, not restart recovery. Optional `max_turns` caps
+only that new follow-up; omit it to use the spawn default, not the previous
+task's cap.
 
 ```json
 [
   {"tool":"agent_spawn","arguments":{"agent":"alpha","profile":"worker","reasoning_difficulty":3,"label":"Investigate parser edge cases","prompt":"Investigate parser edge cases. Return detailed findings and evidence."}},
   {"tool":"agent_wait","arguments":{"agents":["alpha"],"wait_ms":300000}},
-  {"tool":"agent_run","arguments":{"agent":"alpha","continues":"Your parser edge-case investigation","label":"Prioritize remaining parser issue","prompt":"Continue that investigation: summarize the highest-priority remaining issue."}},
+  {"tool":"agent_run","arguments":{"agent":"alpha","continues":"Your parser edge-case investigation","label":"Prioritize remaining parser issue","prompt":"Continue that investigation: summarize the highest-priority remaining issue.","max_turns":32}},
   {"tool":"agent_wait","arguments":{"agents":["alpha"],"wait_ms":300000}},
   {"tool":"agent_read","arguments":{"agent":"alpha","task":1,"max_chars":32}},
   {"tool":"agent_read","arguments":{"agent":"alpha","cursor":"<INVALID_RESULT_CURSOR>"}}

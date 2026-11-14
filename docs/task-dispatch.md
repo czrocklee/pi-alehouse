@@ -131,7 +131,7 @@ unaccepted rollback; replay still identifies it.
 Optional scout `return_to` installs that same continuation in the spawn
 admission, not a later answer call. The continuation is preadmitted `after` the
 exact new source Run and keeps the original `answer_to`, dispatch and claim
-lineage, with the Agent's fixed settings and turn limit as `agent_answer` uses. Source dispatch is a separate scout
+lineage, with the Agent's fixed settings and Agent-default turn limit as `agent_answer` uses. The worker continuation uses that Agent default; `return_to` itself has no turn-cap override. Source dispatch is a separate scout
 declaration and does not alter the inherited claim. Preflight of both sides is
 all-or-none: a scout path denial, a lost or changed inherited claim, or any
 other admission failure installs neither Run. Existing predecessor exemption and
@@ -158,7 +158,12 @@ are Owner-memory state, not persisted locks, grants or restart hydration.
 
 ## Execution limits
 
-Runs have a turn limit, not a wall-clock execution deadline. `max_duration_ms`
+Runs have a turn limit, not a wall-clock execution deadline or timer. Spawn
+`max_turns` is the first-task cap and Agent default; optional `agent_run.max_turns`
+applies only to that new task, and omission uses the spawn default, not the last
+task's cap. Field rules are in the [tool contract](tool-contract.md#run-send-and-explicit-answer).
+`agent_answer` and the worker continuation from `return_to` use the Agent default;
+`return_to` itself has no override. `max_duration_ms`
 is retired and rejected at admission; no hard execution timer or timed
 wrap-up message is armed during queueing, initialization, execution, reuse or
 answer continuation. Long tool calls cannot consume a queued steering reminder

@@ -187,7 +187,7 @@ interface Agent {
   question?: { run_id: string; reserved_by?: string };
   /** Parent messages for the next prompt this Agent composes; memory only. */
   inbox: string[];
-  /** Per-task turn limit chosen at creation; each task uses it. */
+  /** Default per-task turn limit chosen at creation; individual tasks may override it. */
   limits: { max_turns?: number };
   /** kill() on a busy Agent: release once its task settles. */
   exiting?: true;
