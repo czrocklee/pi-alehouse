@@ -848,7 +848,7 @@ test("each tool contributes the argument that identifies its work, and nothing e
   );
   assert.equal(at("write", { path: `${cwd}/out.txt`, content: "never rendered" }), "out.txt");
   assert.equal(at("ls", {}), ".");
-  assert.equal(at("bash", { command: "npm  test\n  --silent" }), "npm test --silent");
+  assert.equal(at("bash", { command: "npm  test\n  --silent" }), "npm  test\\n  --silent");
   assert.equal(
     at("grep", { pattern: "createOwnerTools", path: `${cwd}/src` }),
     '"createOwnerTools" in src',

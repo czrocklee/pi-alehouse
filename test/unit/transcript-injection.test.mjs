@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createJiti } from "jiti";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
-import { TranscriptContent } from "../../dist/orchestration/ui/transcript.js";
+
+const jiti = createJiti(import.meta.url, { fsCache: false });
+const { TranscriptContent } = await jiti.import("../../src/orchestration/ui/transcript.ts");
 
 // Pi's components read a module-level theme singleton; no watcher in a test.
 initTheme(undefined, false);
@@ -79,13 +82,13 @@ test("nested tool arguments are sanitized at every depth, source unchanged", () 
       "\u2068",
       "\u2069",
       "\u202e",
-      "NESTED_CLIPBOARD",
     ])
       assert.ok(!text.includes(raw), `raw ${JSON.stringify(raw)} survived into the pane`);
-    // The neutralized forms are explicitly escaped, not silently dropped.
-    // (U+0085 becomes a plain newline, so it has no x85 marker.)
-    for (const marker of ["x9d", "x93", "x94", "u2068", "u2069", "u202e"])
+    // Controls become visible spellings; their payload text is still part of
+    // the recorded arguments, not disposable terminal-protocol metadata.
+    for (const marker of ["x1b", "x07", "x85", "x9d", "x93", "x94", "u2068", "u2069", "u202e"])
       assert.ok(text.includes(marker), `escaped marker ${marker} is shown`);
+    assert.ok(text.includes("NESTED_CLIPBOARD"), "ordinary protocol payload text is retained");
     // Benign structure survives: numbers, null, booleans, arrays, graphemes.
     assert.match(text, /"keep": 7/, "nested numbers survive sanitization");
     assert.match(text, /"empty": null/, "nested null survives");

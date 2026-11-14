@@ -1,16 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { plainText, singleLineText, wrapPlainText } from "../../dist/orchestration/ui/text.js";
-import {
-  renderActivity,
-  describeToolArgs,
-  paneRow,
-  shortPath,
-  SPINNER,
-  withoutBreaks,
-} from "../../dist/orchestration/ui/format.js";
-import { runPresentation } from "../../dist/orchestration/ui/run-presentation.js";
+import { createJiti } from "jiti";
+
+const jiti = createJiti(import.meta.url, { fsCache: false });
+const { plainText, singleLineText, wrapPlainText } = await jiti.import(
+  "../../src/orchestration/ui/text.ts",
+);
+const { renderActivity, describeToolArgs, paneRow, shortPath, SPINNER, withoutBreaks } =
+  await jiti.import("../../src/orchestration/ui/format.ts");
+const { runPresentation } = await jiti.import("../../src/orchestration/ui/run-presentation.ts");
 
 const protocols = [
   ["OSC8", "\x1b]8;;https://example.invalid\x1b\\X\x1b]8;;\x1b\\", "X"],
@@ -173,8 +172,25 @@ test("grapheme-width fast wrapping preserves the whole-candidate boundary contra
       );
 });
 
-test("tool arguments and paths are normalized before width and path decisions", () => {
-  for (const [kind, input, expected] of protocols) {
+test("tool arguments and paths visibly escape protocols before width and path decisions", () => {
+  const argumentEscapes = [
+    "\\x1b]8;;https://example.invalid\\x1b\\\\X\\x1b]8;;\\x1b\\\\",
+    "\\x1b]0;title\\x07X",
+    "\\x1b]2;title\\x1b\\\\X",
+    "\\x1b]52;c;WA==\\x07X",
+    "\\x1b[2J\\x1b[10;10HX\\x1b[1G\\x1b[K",
+    "\\x1b[8mX\\x1b[0m",
+    "\\x1b_pi:c\\x07X",
+    "\\x1b[2AX",
+    "\\x1b]0;unfinished",
+    "\\x1bPpayload\\x1b\\\\X",
+    "\\x9b2JX",
+    "\\x9d52;c;WA==\\x9cX",
+    "\\x00\\x08\\x7f\\x80\\x9fX",
+  ];
+  assert.equal(argumentEscapes.length, protocols.length);
+  for (const [index, [kind, input]] of protocols.entries()) {
+    const expected = argumentEscapes[index];
     const argsFor = {
       read: { path: input },
       edit: { path: input },
@@ -201,18 +217,58 @@ test("tool arguments and paths are normalized before width and path decisions", 
   assert.equal(shortPath("\x1b[8m/w\x1b[0m/src/file.ts", "\x1b[8m/w\x1b[0m", 72), "src/file.ts");
   assert.equal(
     describeToolArgs("bash", { command: "make\tcheck\r\n  --offline" }, "/w", 72),
-    "make check --offline",
+    "make\\x09check\\x0d\\n  --offline",
   );
   assert.equal(
     describeToolArgs("grep", { pattern: "x", glob: "\x1b]0;title\x07**/*.ts" }, "/w", 72),
-    '"x" in **/*.ts',
+    '"x" in \\x1b]0;title\\x07**/*.ts',
   );
   assert.equal(shortPath("/w/a\u202eb.ts", "/w", 72), "a\\u202eb.ts");
+  assert.equal(shortPath("/w/a\u00a0\u3000b.ts", "/w", 72), "a\u00a0\u3000b.ts");
+  assert.equal(
+    describeToolArgs("bash", { command: "  echo\u00a0\u3000x  " }, "/w", 72),
+    "  echo\u00a0\u3000x  ",
+  );
 });
 
-test("production activity rendering sanitizes raw tools and suppresses complete or unfinished preview protocols", () => {
+test("already-escaped activity paths are tail-clipped without escaping backslashes again", () => {
   const theme = { fg: (_color, text) => text };
-  for (const [kind, input, expected] of protocols) {
+  const detail = describeToolArgs(
+    "read",
+    { path: "/w/long-directory/dir\\name/\tfile.ts" },
+    "/w",
+    Infinity,
+  );
+  assert.equal(detail, "long-directory/dir\\\\name/\\x09file.ts");
+  assert.equal(
+    renderActivity([{ name: "read", detail }], { preview: "" }, theme, 200),
+    `reading ${detail}`,
+  );
+  assert.equal(
+    renderActivity([{ name: "read", detail }], { preview: "" }, theme, 35),
+    "reading …/dir\\\\name/\\x09file.ts",
+  );
+});
+
+test("activity details visibly neutralize controls while metadata and preview protocols keep their own contracts", () => {
+  const theme = { fg: (_color, text) => text };
+  const defensiveDetails = [
+    "\\x1b]8;;https://example.invalid\\x1b\\X\\x1b]8;;\\x1b\\",
+    "\\x1b]0;title\\x07X",
+    "\\x1b]2;title\\x1b\\X",
+    "\\x1b]52;c;WA==\\x07X",
+    "\\x1b[2J\\x1b[10;10HX\\x1b[1G\\x1b[K",
+    "\\x1b[8mX\\x1b[0m",
+    "\\x1b_pi:c\\x07X",
+    "\\x1b[2AX",
+    "\\x1b]0;unfinished",
+    "\\x1bPpayload\\x1b\\X",
+    "\\x9b2JX",
+    "\\x9d52;c;WA==\\x9cX",
+    "\\x00\\x08\\x7f\\x80\\x9fX",
+  ];
+  assert.equal(defensiveDetails.length, protocols.length);
+  for (const [index, [kind, input, expected]] of protocols.entries()) {
     const preview = ["incomplete OSC", "APC marker"].includes(kind)
       ? ""
       : ["DCS", "C1 OSC/ST"].includes(kind)
@@ -226,7 +282,8 @@ test("production activity rendering sanitizes raw tools and suppresses complete 
     );
     assert.equal(
       renderActivity([{ name: "bash", detail: input }], { preview: "" }, theme, 200),
-      `running ${expected}`,
+      `running ${defensiveDetails[index]}`,
+      `${kind}: activity detail controls stay visible, unlike ordinary metadata protocols`,
     );
     assert.equal(renderActivity([{ name: input }], { preview: "" }, theme, 200), `${expected}…`);
     assert.equal(
@@ -268,11 +325,11 @@ test("raw-field sanitizing does not strip subsequently applied theme/SDK styling
     "plain clipping removes even SDK-issued resets before styling",
   );
   assert(argument.endsWith("…"));
-  assert(!argument.includes("]52;"));
+  assert(argument.startsWith("\\x1b]52;"), "raw argument payload remains visible before clipping");
   const styled = renderActivity([{ name: "bash", detail: argument }], { preview: "" }, theme, 72);
   assert(styled.startsWith("\x1b[33m"));
   assert(styled.endsWith("\x1b[0m"));
-  assert(!styled.includes("]52;"));
+  assert(styled.includes("\\x1b]52;"), "styling does not erase the escaped payload");
   assert.equal(withoutBreaks(styled), styled, "styled row folding is not a sanitizer");
   const linked = "\x1b]8;;https://example.invalid\x1b\\link\x1b]8;;\x1b\\";
   assert.equal(paneRow(linked, 80), linked, "SDK transcript hyperlink contract stays separate");

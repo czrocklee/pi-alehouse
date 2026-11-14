@@ -135,7 +135,7 @@ test("real tool capture keeps short bash and an 8KB heredoc to the same one-row 
         4097,
         "the real observer bounded the 8KB input at 4096 plus ellipsis",
       );
-      assert.match(rowFor(rendered, "active"), /bash python <<'PY' x+…$/);
+      assert.match(rowFor(rendered, "active"), /bash python <<'PY'\\nx+…$/);
     }
     handlers.get("tool_execution_end")({ toolCallId: "bash" });
   }
@@ -188,8 +188,8 @@ test("active tool names and arguments are sanitized before measuring and styling
     }),
   );
   const active = rowFor(rendered, "active");
-  assert.match(active, /bash npm test\\x08 測+…$/);
-  assert(!active.includes("hidden-title"));
+  assert.match(active, /bash \\x1b\]0;hidden-title\\x07npm\\ntest\\x08 測+…$/);
+  assert(active.includes("hidden-title"), "parameter payload text is encoded, not deleted");
   assert(!/\p{Cc}/u.test(active));
   assert(visibleWidth(active) <= 100);
 });

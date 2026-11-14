@@ -3,7 +3,12 @@ import type { RunView } from "../core/contracts.ts";
 import { formatTokenCount } from "../../shared/token-format.mjs";
 import type { ActiveTool, GenerationPreview } from "../runtime/activity-types.ts";
 import { identifyingToolArgs, relativeToolPath } from "../presentation/tool-identity.ts";
+import {
+  singleLineToolArgumentDisplay,
+  singleLineToolArgumentText,
+} from "../presentation/tool-argument-text.ts";
 import { clipPlainText, previewText, singleLineText } from "./text.ts";
+import { safeStyledRow } from "./styled-row.ts";
 
 export const GLYPHS = {
   turns: "↻",
@@ -39,7 +44,20 @@ const TOOL_ACTION: Record<string, { verb: string; noun?: string; joiner?: string
   alert_parent: { verb: "alerting you", joiner: ": " },
 };
 export function shortPath(value: string, cwd: string, columns: number): string {
-  const relative = relativeToolPath(value, cwd);
+  return shortPlainPath(relativeToolPath(value, cwd), columns);
+}
+
+/** A downstream activity path is already encoded. Strip its encoded cwd
+ * prefix if present, but never interpret its visible escapes as raw input. */
+export function shortDisplayPath(value: string, cwd: string, columns: number): string {
+  const path = singleLineToolArgumentDisplay(value);
+  const base = singleLineToolArgumentText(cwd);
+  const relative = base && path.startsWith(`${base}/`) ? path.slice(base.length + 1) : path;
+  return shortPlainPath(relative, columns);
+}
+
+/** Tail clipping only: the identifying path has already been escaped. */
+function shortPlainPath(relative: string, columns: number): string {
   if (visibleWidth(relative) <= columns) return relative;
   const parts = relative.split("/");
   let tail = parts.pop() ?? relative;
@@ -54,10 +72,11 @@ export function describeToolArgs(
   cwd: string,
   columns: number,
 ): string | undefined {
-  return identifyingToolArgs(name, args, cwd, {
+  const detail = identifyingToolArgs(name, args, cwd, {
     path: (value) => shortPath(value, cwd, columns),
-    text: (text) => clipPlainText(singleLineText(text), columns),
+    text: (text) => clipPlainText(singleLineToolArgumentText(text), columns),
   });
+  return detail === undefined ? undefined : clipPlainText(detail, columns);
 }
 interface ActivityPart {
   action: string;
@@ -84,7 +103,7 @@ function activityParts(tools: readonly ActiveTool[], live: GenerationPreview): A
   if (tools.length <= 2 && tools.length > 0)
     return tools.map((tool) => {
       const name = singleLineText(tool.name),
-        detail = tool.detail ? singleLineText(tool.detail) : "";
+        detail = tool.detail ? singleLineToolArgumentDisplay(tool.detail) : "";
       const action = TOOL_ACTION[name];
       return {
         action: `${action?.verb ?? name}${detail ? (action?.joiner ?? " ") : "…"}`,
@@ -148,7 +167,7 @@ function activityText(parts: readonly ActivityPart[], columns: number, theme: Th
       const room = widths[index]!;
       const detailRoom = Math.max(0, room - visibleWidth(part.action));
       const detail =
-        part.path && part.detail ? shortPath(part.detail, "", detailRoom) : (part.detail ?? "");
+        part.path && part.detail ? shortPlainPath(part.detail, detailRoom) : (part.detail ?? "");
       const clipped = clipPlainText(part.action + detail, room);
       const action = clipped.startsWith(part.action) ? part.action : clipped;
       // Clip plain strings first, then color every visible cell, including ….
@@ -272,9 +291,23 @@ export interface TranscriptRows {
  * frame of a streaming reply, which would fill the terminal's mark list with
  * prompt positions that are really just rows of a scrolling viewport. They
  * carry no visual meaning, so they go. OSC 8 hyperlinks stay — those are content.
+ * Native/custom renderers can also interpolate recorded tool data into styled
+ * rows: preserve SGR and complete hyperlinks, but never let other terminal
+ * protocols from those records reach the terminal as executable controls.
  */
-// eslint-disable-next-line no-control-regex -- intentionally match terminal OSC control sequences
-const OSC133 = /\x1b\]133;[ABC](?:\x07|\x1b\\)/g;
-/** One row as the pane paints it: no turn markers, clipped to the width. */
-export const paneRow = (line: string, width: number): string =>
-  truncateToWidth(line.replace(OSC133, ""), width);
+/** One display-only row: retain styling/links, strip other protocols, then fit. */
+export const paneRow = (line: string, width: number): string => {
+  const safe = safeStyledRow(line);
+  // Styled ASCII that already fits would be returned byte-for-byte by the SDK,
+  // but its truncator still segments every ANSI-delimited run. Plain ASCII
+  // needs only the length check; measure styled rows only when necessary.
+  // Keep Unicode on the original path: stripping ANSI before measuring can
+  // join graphemes that the truncator observes as separate runs.
+  if (
+    width > 0 &&
+    !/[\u0080-\uffff]/.test(safe) &&
+    (safe.length <= width || (safe.includes("\x1b") && visibleWidth(safe) <= width))
+  )
+    return safe;
+  return truncateToWidth(safe, width);
+};

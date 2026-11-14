@@ -128,6 +128,6 @@ test("CJK, emoji and dirty text clip after the gap without overrunning the width
     }
     const full = stripTerminalSequences(activity(run(state), plainTheme, 200));
     assert.match(full, /^ {2}⎿ {2}1\.2s /);
-    assert.ok(full.includes("检查 👩‍💻"), full);
+    assert.ok(full.includes(state.active_tools ? "\\x1b[31m检查\\x1b[0m 👩‍💻" : "检查 👩‍💻"), full);
   }
 });

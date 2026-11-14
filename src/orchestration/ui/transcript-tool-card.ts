@@ -6,6 +6,8 @@
  */
 import { ToolExecutionComponent, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Box, Container, type Component, type TUI } from "@earendil-works/pi-tui";
+import { copyDisplayData } from "../presentation/display-data.ts";
+import { detachedToolResult } from "./tool-result-projection.ts";
 
 type RecordedResult = Parameters<ToolExecutionComponent["updateResult"]>[0];
 type CallRenderer = NonNullable<ToolRenderers["renderCall"]>;
@@ -69,7 +71,9 @@ export class TranscriptToolCard implements Component {
   constructor(options: CardOptions) {
     this.name = options.name;
     this.callId = options.callId;
-    this.args = options.args;
+    // Never give this private snapshot to SDK/custom display code. A renderer
+    // may mutate its working copy before throwing, or retain it after failure.
+    this.args = copyDisplayData(options.args);
     this.tui = options.tui;
     this.cwd = options.cwd;
     this.isCurrent = options.isCurrent;
@@ -116,13 +120,13 @@ export class TranscriptToolCard implements Component {
 
   updateResult(result: RecordedResult): void {
     if (!this.current()) return;
-    this.result = result;
+    this.result = detachedToolResult(result);
     if (this.rawBroken) {
       // New data may make raw rendering possible; never retry custom callbacks.
       this.rawBroken = false;
       this.fallbackPending = true;
       this.finish();
-    } else this.run(() => this.sdk?.updateResult(result));
+    } else this.run(() => this.sdk?.updateResult(detachedToolResult(this.result!)));
   }
 
   retire(): void {
@@ -139,7 +143,7 @@ export class TranscriptToolCard implements Component {
     return new ToolExecutionComponent(
       this.name,
       this.callId,
-      this.args,
+      copyDisplayData(this.args),
       { showImages: false },
       renderers,
       this.tui,
@@ -165,18 +169,30 @@ export class TranscriptToolCard implements Component {
     const call = renderers.renderCall;
     const result = renderers.renderResult;
     if (call)
-      wrapped.renderCall = (args, theme, context) =>
-        this.callback(() => call(args, theme, this.context(context)));
+      wrapped.renderCall = (_args, theme, context) =>
+        this.callback(() => {
+          const args = copyDisplayData(this.args);
+          return call(args, theme, this.context(context, args));
+        });
     if (result)
-      wrapped.renderResult = (data, options, theme, context) =>
-        this.callback(() => result(data, options, theme, this.context(context)));
+      wrapped.renderResult = (_data, options, theme, context) =>
+        this.callback(() => {
+          const args = copyDisplayData(this.args);
+          const display = detachedToolResult(this.result ?? { content: [] });
+          const data = {
+            content: display.content,
+            details: display.details as unknown,
+          } as Parameters<typeof result>[0];
+          return result(data, options, theme, this.context(context, args));
+        });
     return wrapped;
   }
 
-  private context(context: RenderContext): RenderContext {
+  private context(context: RenderContext, args: unknown): RenderContext {
     const epoch = this.epoch;
     return {
       ...context,
+      args,
       lastComponent: context.lastComponent
         ? (this.originals.get(context.lastComponent) ?? context.lastComponent)
         : undefined,
@@ -350,7 +366,7 @@ export class TranscriptToolCard implements Component {
       try {
         const raw = this.create(RAW_RENDERERS);
         raw.setExpanded(this.expanded);
-        if (this.result) raw.updateResult(this.result);
+        if (this.result) raw.updateResult(detachedToolResult(this.result));
         this.sdk = raw;
       } catch {
         this.sdk = undefined;

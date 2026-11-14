@@ -1,9 +1,10 @@
 import { singleLineText } from "./plain-text.ts";
+import { singleLineToolArgumentText } from "./tool-argument-text.ts";
 
 /** Identifying paths only; no terminal-width or filesystem interpretation. */
 export function relativeToolPath(value: string, cwd: string): string {
-  const path = singleLineText(value),
-    base = singleLineText(cwd);
+  const path = singleLineToolArgumentText(value),
+    base = singleLineToolArgumentText(cwd);
   return base && path.startsWith(`${base}/`) ? path.slice(base.length + 1) : path;
 }
 
@@ -19,7 +20,7 @@ export function identifyingToolArgs(
   cwd: string,
   format: ToolArgumentFormat = {
     path: (value) => relativeToolPath(value, cwd),
-    text: singleLineText,
+    text: singleLineToolArgumentText,
   },
 ): string | undefined {
   if (!args || typeof args !== "object") return undefined;
@@ -45,8 +46,9 @@ export function identifyingToolArgs(
     case "find": {
       const pattern = str("pattern");
       if (!pattern) return undefined;
-      const where = path("path") ?? str("glob");
-      return format.text(`"${pattern}"${where ? ` in ${where}` : ""}`);
+      const glob = str("glob");
+      const where = path("path") ?? (glob ? format.text(glob) : undefined);
+      return `"${format.text(pattern)}"${where ? ` in ${where}` : ""}`;
     }
     case "ask_parent": {
       const question = str("question");

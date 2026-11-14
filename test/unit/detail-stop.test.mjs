@@ -1197,7 +1197,7 @@ for (const [field, input] of [
   ["cleanup", metadataInput({ cleanup_errors: [unsafeMetadata] })],
   ["discarded", metadataInput({ discarded_inputs: [unsafeMetadata] })],
 ])
-  test(`all metadata values are sanitized before field styling/wrapping (${field})`, () => {
+  test(`field controls are neutralized before styling/wrapping (${field})`, () => {
     const fields = renderDetailFields(input, theme, 120);
     assert(
       fields.every((line) => !/\p{Cc}/u.test(line)),
@@ -1207,7 +1207,10 @@ for (const [field, input] of [
       fields.join("").includes("x\\x08"),
       "safe visible content and explicit unsafe-control escape remain",
     );
-    assert(!fields.join("").includes("spoof"));
+    if (field === "active tools") {
+      assert(fields.join("").includes("spoof"), "argument payload text is not deleted");
+      assert(fields.join("").includes("\\x1b]0;"), "the argument protocol is visibly encoded");
+    } else assert(!fields.join("").includes("spoof"), "ordinary metadata keeps its strip policy");
     assert(fields.every((line) => visibleWidth(line) <= 120));
   });
 

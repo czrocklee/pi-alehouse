@@ -401,13 +401,47 @@ compaction-aware branch it displays raw messages, including failed attempts
 omitted from model context by SDK retry; context edits do not rewrite this
 transcript. It scrolls independently of the surrounding pane and follows the
 live tail until the reader scrolls away; **End** returns to the tail and resumes
-following. Pi does not export its built-in tool renderers and tool definitions do not
-supply them, so native `read`, `bash`, and `edit` use a plain arguments/output
-fallback. This is an upstream SDK/UI limitation, not a custom imitation.
-Transcript rows strip OSC 133 markers because repeated viewport emission must
-not manufacture terminal prompt boundaries. Full tool output remains visible
+following. Tool cards use supplied display callbacks when available, otherwise
+a bounded generic arguments/output card. Display callbacks do not execute the
+recorded tool. Final row filtering removes OSC 133 markers so repeated viewport
+emission does not manufacture terminal prompt boundaries. Recorded tool output remains available
 in the detail transcript; tool arguments in the compact widget remain restricted
 to identifying fields. Preview simplification does not rewrite the native transcript.
+
+Tool-argument projections visibly escape backslashes, C0/C1/DEL and bidi controls
+instead of stripping terminal-protocol payloads. LF stays a paragraph break;
+other Unicode whitespace, code indentation and graphemes stay literal. Escaping
+backslashes distinguishes original escape spellings from encoded controls, and
+ambiguous transformed keys become an explicit marker rather than overwriting an
+earlier field. Compact argument previews use the same encoding with visible
+`\n` for LF before ordinary width clipping. Activity and Info consumers preserve
+already-encoded argument details and their whitespace without escaping paths a
+second time. Metadata and generated prose previews retain their separate
+normalization/omission policy; this is not a shell parser
+or an execution-parameter rewrite.
+
+Result content selects only visual text/image fields before copying: `type/text`
+or `type/data/mimeType`. Extra block properties, including valid SDK
+`textSignature` metadata, are not forwarded and cannot consume the body budget.
+Details remain a separate literal display copy. Argument/details structures use
+24 levels and 20,000 inspection/value visits; content uses its own 20,000 selected
+field inspections. Hidden property checks count, non-JSON repeated aliases get
+an explicit marker, and string length is not a character budget. These limits do
+not bound one property enumeration, arbitrary Proxy code, total CPU or heap/RSS.
+
+Each card keeps a private pristine snapshot of its projected inputs. Callbacks
+and raw fallbacks receive separate mutable copies, including `context.args`, so
+callback failure or a retained work-copy reference cannot corrupt the fallback.
+A fallback does not reread the original history. Renderer state and the original
+`lastComponent` identities still persist across successful callback updates.
+
+Final transcript rows retain SGR and complete OSC 8 links while dropping other
+terminal protocols. Controls/bidi outside preserved protocols are visible
+escapes; custom component row tabs stay `\x09`, not terminal tab stops. Preserving
+SGR also preserves effects such as conceal. OSC 8 parameters/URIs can retain
+Unicode bidi characters; links are not validated destinations. Neither styling
+preservation nor row filtering guarantees visual truthfulness of arbitrary
+trusted renderer output, redacts secrets, or grants permission to follow a link.
 
 Each tool card scopes renderer invalidation to its live binding and its own
 presentation lifetime. Binding changes, history rewrites, theme replacement and

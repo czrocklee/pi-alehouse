@@ -692,9 +692,14 @@ options carry width, minWidth and maxHeight but no maxWidth option; the floating
 detail pane therefore caps its width by computing a numeric column count from
 the mounted pane's own terminal (88% of the live width, at most 164 columns),
 falling back to the plain 88% percentage when that width is unknown. A stub or
-structural host without a column count gets the uncapped percentage width. Pi's unexported native
-tool renderers mean child transcripts fall back to plain tool argument/output
-blocks for built-in tools. PTY/UI fixtures and scripted permission RPC are not
+structural host without a column count gets the uncapped percentage width.
+Child transcript tool cards use supplied display callbacks or bounded generic
+cards. Final rows retain SGR/complete OSC 8 links and filter other protocols;
+remaining controls/bidi outside preserved protocols are visible escapes.
+Tabs remain visible `\x09`. SGR can conceal glyphs, and OSC 8 parameters/URIs can
+retain Unicode bidi; links are not validated or trusted destinations. This is
+not secret redaction, OS isolation or a guarantee of visible text.
+PTY/UI fixtures and scripted permission RPC are not
 human-TUI acceptance. Expanded Agent inspection is paginated within a widget
 budget (at most thirteen lines and one third of terminal height, with a further
 reserve for normal SDK input chrome and transcript space), not an unbounded
@@ -705,6 +710,25 @@ inspection fallback. Ordinary nonfull idle headings are hidden in regular/unknow
 modes; full capacity and attention facts remain visible. Idle widget repaints
 reuse detached presentation snapshots, not fresh command-admission evidence;
 out-of-band idle changes appear only on the next explicit refresh.
+
+Tool-argument display encoding preserves protocol payload text, Unicode
+whitespace and code indentation instead of stripping or normalizing them.
+Backslashes and controls get distinct visible spellings; ambiguous projected
+keys become markers, never overwrites. This does not change execution arguments
+or the permission authority. Compact argument fields are still width-bounded;
+Activity/Info consumers keep their existing encoding and parameter whitespace,
+without re-encoding paths. Ordinary metadata/generated-preview normalization
+remains separate.
+
+Cards retain private pristine projected input snapshots; renderer callbacks
+and raw fallbacks get separate work copies, including `context.args`. Result
+blocks select only visual text/image fields: extra metadata (even SDK
+`textSignature`) is not forwarded or charged against body capacity. Details have
+an independent 20,000 inspection/value-visit budget and 24-level bound; argument
+copies use the same limits, and body field reads have their own 20,000 cap.
+Hidden property checks are charged, repeated non-JSON aliases become markers,
+and strings are not character-truncated. This is not a total CPU/RSS bound:
+one complete property enumeration or arbitrary Proxy code may still be costly.
 
 Tool cards revoke bridge-supplied invalidation handles when retired and isolate
 synchronous callback/component failures with bounded raw fallbacks.

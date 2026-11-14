@@ -3,6 +3,7 @@ import { validDifficulty, type RunView } from "../core/contracts.ts";
 import { reported, type UsageComponent } from "../core/usage-ledger.ts";
 import { profileLabel } from "../tools/tool-names.ts";
 import type { ActiveTool, GenerationPreview } from "../runtime/activity-types.ts";
+import { singleLineToolArgumentDisplay } from "../presentation/tool-argument-text.ts";
 import {
   contextPercent,
   formatContextPercent,
@@ -15,7 +16,7 @@ import {
   generationLine,
   GLYPHS,
   renderActivity,
-  shortPath,
+  shortDisplayPath,
   type Theme,
 } from "./format.ts";
 import { POPOVER } from "./popover.ts";
@@ -180,10 +181,15 @@ export function renderDetailFields(
     }
   };
   const lineRoom = Math.max(0, width - LABEL - 2);
-  const oneLineField = (label: string, value: string, color = "muted"): void => {
+  const oneLineField = (
+    label: string,
+    value: string,
+    color = "muted",
+    display = singleLineText,
+  ): void => {
     out.push(
       theme.fg("dim", clipPlainText(`  ${key(label)}`, Math.max(0, width))) +
-        theme.fg(color, clipPlainText(singleLineText(value), lineRoom)),
+        theme.fg(color, clipPlainText(display(value), lineRoom)),
     );
   };
   const blank = (): void => {
@@ -292,11 +298,16 @@ export function renderDetailFields(
     blank();
     for (const [i, tool] of live.active_tools.entries()) {
       const name = singleLineText(tool.name);
-      let detail = singleLineText(tool.detail ?? "…");
+      let detail = singleLineToolArgumentDisplay(tool.detail ?? "…");
       if (["read", "edit", "write", "ls"].includes(name)) {
-        detail = shortPath(detail, s.cwd, Math.max(0, lineRoom - visibleWidth(`${name} `)));
+        detail = shortDisplayPath(detail, s.cwd, Math.max(0, lineRoom - visibleWidth(`${name} `)));
       }
-      oneLineField(i === 0 ? "active" : "", `${name} ${detail}`, "accent");
+      oneLineField(
+        i === 0 ? "active" : "",
+        `${name} ${detail}`,
+        "accent",
+        singleLineToolArgumentDisplay,
+      );
     }
   }
   if (activityPresentation({ ...view, finishing: view.finalization_pending }).showGeneration) {

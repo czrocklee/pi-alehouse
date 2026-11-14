@@ -41,9 +41,12 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import { humanSteerLead } from "../presentation/human-steer-text.ts";
+import { copyDisplayData } from "../presentation/display-data.ts";
+import { toolArgumentText } from "../presentation/tool-argument-text.ts";
 import { paneRow, type TranscriptFrame, type TranscriptRows } from "./format.ts";
 import { plainText } from "./text.ts";
 import { TranscriptToolCard } from "./transcript-tool-card.ts";
+import { detachedToolResult } from "./tool-result-projection.ts";
 
 /** Where a child's messages come from. Structural, so the pane never holds a session. */
 export interface TranscriptSource {
@@ -118,102 +121,17 @@ const COMMUNICATION_DISPLAY = {
  * a preview until expanded. */
 const RAW_RENDERERS: ToolRenderers = {};
 
-/** Bounds and markers for the projection below. Recorded arguments are
- * JSON-scale data, but the pane reads them while the child may still be
- * writing, and a malformed or hostile record can be cyclic, accessor-bound,
- * callable or unbounded. Past these limits the projection substitutes a
- * literal marker instead of invoking anything or growing without end; the
- * markers are display-only observations, never claims about the record. */
-const PROJECTION_DEPTH_LIMIT = 24;
-const PROJECTION_NODE_BUDGET = 20_000;
-const CYCLE_MARKER = "[circular reference]";
-const LIMIT_MARKER = "[elided]";
-const ACCESSOR_MARKER = "[accessor property]";
-const CALLABLE_MARKER = "[callable value]";
-const MALFORMED_MARKER = "[unrenderable]";
-
-/** A detached, display-only projection of a recorded tool's name and
- * arguments. The SDK's expanded fallback interpolates string values (and the
- * title) raw, its nested values go through JSON.stringify — which emits C1 and
- * bidi controls literally — and its definition-less dump stringifies the whole
- * arguments object the same way, so strings AND keys are neutralized for the
- * terminal here at every depth, preserving everything else byte-literally,
- * emoji and graphemes included. The recorded source is never mutated, and
- * semantic matching (the communication-tool check, pending/result keyed by
- * call id) keeps using the original exact name and arguments.
- *
- * Robustness against non-data records is bounded and passive: own data
- * properties are copied through, but accessor properties (object keys and
- * array elements alike) are replaced with a marker rather than invoking their
- * getter, callable values are never called,
- * cycles and over-deep or over-large structures stop at a marker, and a node
- * whose own enumeration fails (a hostile proxy trap) falls back to a marker
- * instead of taking the pane down. `__proto__` survives as an own key, exactly
- * as JSON would have shown it. */
+/** Detached display arguments, not execution arguments. Escape controls and
+ * backslashes without deleting protocol payloads or normalizing code whitespace.
+ * The shared copier bounds inspected structure (including hidden properties),
+ * marks non-data/repeated nodes, and refuses ambiguous transformed keys instead
+ * of replacing an earlier field. Semantic matching still uses the original
+ * recorded name, arguments and call ID; history is never rewritten. */
 function sanitizedToolProjection(name: string, args: unknown): { name: string; args: unknown } {
-  const budget = { nodes: PROJECTION_NODE_BUDGET };
-  const project = (value: unknown, ancestors: readonly object[]): unknown => {
-    if (budget.nodes-- <= 0) return LIMIT_MARKER;
-    if (typeof value === "string") return plainText(value);
-    // A callable's source is not display data; the SDK would print it via
-    // String(), escapes included, so it is never handed over raw.
-    if (typeof value === "function") return CALLABLE_MARKER;
-    if (typeof value !== "object" || value === null) return value;
-    if (ancestors.includes(value)) return CYCLE_MARKER;
-    if (ancestors.length >= PROJECTION_DEPTH_LIMIT) return LIMIT_MARKER;
-    const nested = [...ancestors, value];
-    try {
-      if (Array.isArray(value)) {
-        const out: unknown[] = [];
-        for (let index = 0; index < value.length; index++) {
-          if (budget.nodes <= 0) {
-            out.push(LIMIT_MARKER);
-            break;
-          }
-          // Elements are read through their descriptors too, so an accessor
-          // index is marked like an accessor key; a hole stays undefined.
-          const descriptor = Object.getOwnPropertyDescriptor(value, index);
-          out.push(
-            project(
-              descriptor === undefined
-                ? undefined
-                : "value" in descriptor
-                  ? descriptor.value
-                  : ACCESSOR_MARKER,
-              nested,
-            ),
-          );
-        }
-        return out;
-      }
-      const out: Record<string, unknown> = {};
-      for (const key of Object.getOwnPropertyNames(value)) {
-        if (budget.nodes <= 0) {
-          Object.defineProperty(out, plainText(key), {
-            value: LIMIT_MARKER,
-            enumerable: true,
-            writable: true,
-            configurable: true,
-          });
-          break;
-        }
-        // JSON shows own enumerable properties only. Descriptors are read
-        // directly so a getter is never invoked on the pane's behalf.
-        const descriptor = Object.getOwnPropertyDescriptor(value, key);
-        if (!descriptor || descriptor.enumerable === false) continue;
-        Object.defineProperty(out, plainText(key), {
-          value: project("value" in descriptor ? descriptor.value : ACCESSOR_MARKER, nested),
-          enumerable: true,
-          writable: true,
-          configurable: true,
-        });
-      }
-      return out;
-    } catch {
-      return MALFORMED_MARKER;
-    }
+  return {
+    name: toolArgumentText(name),
+    args: copyDisplayData(args, { text: toolArgumentText }),
   };
-  return { name: plainText(name), args: project(args, []) };
 }
 
 /** A read-only labeled display for a well-formed `alert_parent`/`ask_parent`
@@ -743,9 +661,10 @@ export class TranscriptContent implements TranscriptRows {
   private consumeToolResult(message: MessageOf<"toolResult">): void {
     const pending = this.pending.get(message.toolCallId);
     if (!pending) return;
-    pending.component.updateResult(message);
+    const projected = detachedToolResult(message);
+    pending.component.updateResult(projected);
     pending.settled = true;
-    pending.error = message.isError === true;
+    pending.error = projected.isError === true;
     this.applyExpansion(pending);
     pending.block.rows = undefined;
     this.rows = undefined;

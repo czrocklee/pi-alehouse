@@ -1,6 +1,8 @@
 /** Plain identifying metadata for a tool that has actually started execution. */
 export interface ActiveTool {
   name: string;
+  /** Already-encoded identifying argument text. Consumers must not encode
+   * backslashes again or apply ordinary metadata whitespace normalization. */
   detail?: string;
 }
 

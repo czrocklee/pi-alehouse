@@ -49,6 +49,15 @@ fresh inspection also supplies the next detached pane snapshot instead of
 immediately repeating that read. Ordinary transcript invalidation preserves
 settled components; real theme replacement must still repaint correctly.
 
+Styled transcript rows always pass the final terminal-protocol filter before
+width fitting. Sanitized ASCII rows that already fit can retain their exact
+bytes without SDK truncation: length suffices for plain text, while styled
+rows use the public width API when needed. Unicode and overflowing rows keep
+the original SDK truncation path. Do not generalize the shortcut to Unicode:
+removing ANSI before measuring can join graphemes that the truncator observes
+as separate runs. This adds no renderer cache or callback-state change and
+never shortens recorded results to manufacture a speedup.
+
 Grok billing remains opt-in. Refresh attempts are throttled and final dirty
 activity is coalesced; leaving the applicable provider retires delayed work.
 The display distinguishes pending/failed data and the last successful refresh;

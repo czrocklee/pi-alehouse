@@ -212,11 +212,11 @@ test("nothing that reaches a row can end it early", () => {
     assert.ok(visibleWidth(line) <= 120);
   }
   assert.equal(frame.lines.length, frame.hits.length, "one hit per painted row");
-  // Folded to spaces, not dropped: the text is still readable and still attributed.
+  // Metadata folds to spaces; parameter controls are visible escapes instead.
   assert.match(frame.lines[1], /owner blocked: boom +at foo\(\) +at bar\(\)/);
   assert.match(frame.lines[2], /rev bot/);
   assert.match(frame.lines[2], /Review the code and tests/);
-  assert.match(frame.lines[3], /running make test/);
+  assert.match(frame.lines[3], /running make\\x09test/);
   assert.equal(frame.hits[2], "a");
 });
 
