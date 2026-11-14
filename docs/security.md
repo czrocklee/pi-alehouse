@@ -53,6 +53,44 @@ Worker has no extra child-only blanket Git mutation ban and no automatic Git
 allow. Review-only work is a task instruction. User-configured command/path denies and base credential/resource/high-risk
 protections remain; generated policy never overwrites live user configuration.
 
+### Skill discovery and permissions
+
+Child skill discovery is enabled by default for both profiles and can be turned
+off with **Agent skills** (`childSkills` in scoped preferences). The launch flags
+`--no-skills` / `-ns` also suppress child discovery for that launch and cannot be
+overridden by the menu or a saved `true`; they never change saved preferences.
+Newly created sessions use SDK discovery under the same cwd, agent directory and
+project-trust settings; resource exclusions still apply. Already-created child
+sessions retain their resources on reuse. Queued Agents without a session use
+the choice at first session creation, not at admission. No arbitrary extension
+discovery is enabled.
+
+Discovery advertises skill metadata, not full instructions or executable tools.
+Reading instructions and running any suggested commands retain ordinary
+permissions and profile ceilings. Skills are prompt input, not permission
+grants; review unfamiliar skills. A scout does not acquire Bash/edit/write just
+because skill instructions mention them.
+
+The singular `skill` permission surface controls advertised skill use. Configure
+`permission.skill` in the normal policy scopes; agent-definition frontmatter can
+also carry `permission.skill` for the internal `editor` / `researcher` identities.
+Managed definitions still require deliberate matched reconciliation; do not edit
+generated output or silently rewrite installed policies. With an existing policy
+that omits `skill`, its ordinary `"*"` fallback applies. An `ask` can introduce
+additional human approvals in manual/Jev modes: Jev never auto-allows the skill
+surface. Existing allows and ordinary yolo keep their normal behavior. The init
+seed explicitly allows skills but initializes only missing files, so it does
+not update an existing policy.
+
+Skill-name checks are catalog-dependent: the authority filters denied entries
+from the advertised catalog and adds a skill gate to matching `read` calls for
+active entries and their directories. Hidden/unadvertised entries, unmatched
+paths or other tool surfaces are not a universal skill-name file gate. Turning
+discovery off reduces automatic exposure but does not prohibit known-file reads;
+even with discovery on, a skill deny is not a general file-access deny. Use
+ordinary tool/path permissions for file-access control. Neither setting provides
+an OS sandbox or guarantees protection from malicious instructions.
+
 ### Cooperative Git commands
 
 Repository queries and writes use ordinary Bash permission. With the neutral

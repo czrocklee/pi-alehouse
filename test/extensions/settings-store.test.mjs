@@ -62,6 +62,77 @@ function intercept(method, implementation, run) {
 }
 const isTempFd = (fd) => fs.readlinkSync(`/proc/self/fd/${fd}`).endsWith(".tmp");
 
+test("childSkills is an optional boolean in the closed version-2 schema", () => {
+  assert.deepEqual(validateSettings({ version: 2 }), { version: 2 });
+  for (const childSkills of [true, false])
+    assert.deepEqual(validateSettings({ version: 2, childSkills }), { version: 2, childSkills });
+  for (const childSkills of [undefined, null, 0, 1, "true", "false", [], {}])
+    assert.throws(
+      () => validateSettings({ version: 2, childSkills }),
+      /childSkills must be a boolean/,
+    );
+  assert.throws(
+    () => validateSettings({ version: 2, childSkills: true, skills: true }),
+    /unsupported field/,
+  );
+  assert.throws(
+    () => validateSettings({ version: 2, ui: { childSkills: true } }),
+    /unsupported field/,
+  );
+});
+
+for (const global of [undefined, true, false])
+  for (const workspace of [undefined, true, false])
+    test(`childSkills merges global=${global}, workspace=${workspace} only when trusted`, (t) => {
+      const f = fixture(t);
+      if (global !== undefined) f.put("global", { version: 2, childSkills: global });
+      if (workspace !== undefined) f.put("workspace", { version: 2, childSkills: workspace });
+      const trusted = f.store();
+      assert.equal(trusted.effective().childSkills, workspace ?? global);
+      const untrusted = new SettingsStore({ ...f.options, projectTrusted: false });
+      assert.equal(untrusted.effective().childSkills, global);
+      assert.deepEqual(untrusted.get("workspace"), { version: 2 });
+      assert.throws(() => untrusted.stage("workspace", ["childSkills"], false), /project trust/);
+    });
+
+for (const scope of ["global", "workspace"])
+  test(`childSkills ${scope} stage, save, reload and removal preserve absence and unrelated fields`, (t) => {
+    const f = fixture(t);
+    let store = f.store();
+    assert.deepEqual(store.effective(), { version: 2 });
+    assert.deepEqual(store.pending(), []);
+    assert.deepEqual(store.flush(), []);
+    for (const path of Object.values(f.paths)) assert.equal(existsSync(path), false);
+    f.put(scope, { version: 2, approval: "manual" });
+    const before = readFileSync(f.paths[scope], "utf8");
+    store = f.store();
+    assert.equal(Object.hasOwn(store.effective(), "childSkills"), false);
+    assert.deepEqual(store.flush(), []);
+    assert.equal(readFileSync(f.paths[scope], "utf8"), before);
+    for (const childSkills of [true, false]) {
+      store.stage(scope, ["childSkills"], childSkills);
+      assert.deepEqual(store.pending(), [{ scope, path: ["childSkills"], value: childSkills }]);
+      assert.equal(store.effective().childSkills, childSkills);
+      assert.throws(() => store.stage(scope, ["childSkills"], "false"), /must be a boolean/);
+      assert.equal(store.get(scope).childSkills, childSkills);
+      assert(store.flush().every((result) => !result.error));
+      assert.deepEqual(read(f.paths[scope]), { version: 2, approval: "manual", childSkills });
+      store = f.store();
+      assert.equal(store.effective().childSkills, childSkills);
+      store.stage(scope, ["childSkills"], childSkills);
+      assert.deepEqual(store.pending(), []);
+    }
+    store.stage(scope, ["childSkills"], undefined);
+    assert.deepEqual(store.pending(), [{ scope, path: ["childSkills"], value: undefined }]);
+    assert.equal(Object.hasOwn(store.effective(), "childSkills"), false);
+    assert.equal(read(f.paths[scope]).childSkills, false);
+    assert(store.flush().every((result) => !result.error));
+    store = f.store();
+    assert.deepEqual(store.get(scope), { version: 2, approval: "manual" });
+    assert.equal(Object.hasOwn(store.effective(), "childSkills"), false);
+    assert.deepEqual(read(f.paths[scope]), { version: 2, approval: "manual" });
+  });
+
 // Every fixture is synthetic and local. No SDK, credentials, provider, network,
 // human approval or packaging lane is exercised by this file.
 test("constructor and clean operations never create directories", (t) => {

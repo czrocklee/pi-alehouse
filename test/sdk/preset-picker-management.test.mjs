@@ -665,6 +665,7 @@ test(
       store: { scope: "session" },
       ready: () => true,
       beerMugs: { current: () => false, set() {} },
+      childSkills: { current: () => true, set() {} },
       router: () => h.router,
       delegation: () => ({}),
       createModelSelector: (options) => createPresetModelSelector({ ...options, runtime }),

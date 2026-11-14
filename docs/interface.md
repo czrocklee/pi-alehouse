@@ -537,14 +537,28 @@ creation-time route, which may differ from the current picker defaults.
 
 Open **P Settings** in the Delegation panel or run `/alehouse-settings`. Every
 new Pi session starts with save scope **session**. The menu offers **Change save
-scope**, **Beer mugs: on/off**, **Remember current worker settings**, **Save
-pending now**, **Discard pending writes**, **Remove a saved override**, and
+scope**, **Agent skills: on/off**, **Beer mugs: on/off**, **Remember current
+worker settings**, **Save pending now**, **Discard pending writes**, **Remove a saved override**, and
 **Show paths and pending changes**. The beer-mug switch changes the live widget;
 only a persistent save scope queues its preference. Choosing global or
 workspace as the future scope requires a
 confirmation; changing scope alone copies and writes nothing. Workspace scope
 is available only for a trusted project and targets the current working
 directory, not a discovered Git root.
+
+**Agent skills** defaults to **on**. New worker and scout sessions discover skills
+through Pi's normal trusted resource configuration and read matching `SKILL.md`
+files on demand; the parent need not paste them. Turning it off suppresses the
+catalogue for new sessions, not file-read permission. Already-created child
+sessions keep their loaded catalogue when reused. Queued Agents without a session
+use the choice at first session creation. With `--no-skills` / `-ns`, the menu
+shows **Agent skills: off (--no-skills)**: this launch cannot enable child
+discovery, and selecting the row explains why without staging a preference.
+Like Beer mugs, the toggle is initially
+session-only; choose and confirm a persistent scope before toggling to queue
+`childSkills`, then save now or on normal exit. Discarding pending writes or
+removing an override leaves the live choice unchanged. The routing-only
+**Remember current worker settings** snapshot does not include this toggle.
 
 The Delegation panel's **Save as global/project default** (`G`/`W`) and
 **Remember current worker settings** use the same snapshot confirmation. The

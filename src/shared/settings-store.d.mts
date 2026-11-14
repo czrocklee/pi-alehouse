@@ -28,6 +28,8 @@ export type SettingsDocument = {
   approval?: ApprovalPreference;
   presets?: Record<string, PresetDefinition>;
   ui?: { beerMugs?: boolean };
+  /** Omitted stays absent; consumers enable skills unless explicitly false. */
+  childSkills?: boolean;
 };
 export type SettingsPatch = { scope: PersistentScope; path: string[]; value: unknown };
 export type SettingsFlushResult = { scope: PersistentScope; path: string; error?: string };

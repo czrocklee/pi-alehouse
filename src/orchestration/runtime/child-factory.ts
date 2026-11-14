@@ -48,6 +48,8 @@ export function createChildSessionFactory(options: {
   runtime: ModelRuntime;
   profiles: Readonly<Record<string, ChildProfile>>;
   settings(): SettingsManager;
+  /** Sampled at session creation, including queued Agents' first Runs; existing sessions keep resources. */
+  skillsEnabled?(): boolean;
   parentHistory: ConstructorParameters<typeof PiRunJournal>[0]["parent"];
   approvalBindings: ApprovalBindings;
   activities: ChildActivityRegistry;
@@ -122,7 +124,9 @@ export function createChildSessionFactory(options: {
       settingsManager: childSettings,
       eventBus: bus,
       noExtensions: true,
-      noSkills: true,
+      // Skills are instructions, not extra executable extensions or permission grants.
+      // The SDK keeps discovery subject to childSettings' project trust and resource filters.
+      noSkills: options.skillsEnabled?.() === false,
       noThemes: true,
       noPromptTemplates: true,
       additionalExtensionPaths: [

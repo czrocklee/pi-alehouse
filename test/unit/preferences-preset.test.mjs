@@ -204,14 +204,18 @@ for (const scope of ["global", "workspace"])
     f.router.apply(f.router.prepare(), "team", () => {}, { d1: "inherit", d5: "off" });
     f.store.setScope(scope === "global" ? "workspace" : "global");
     f.store.stage(scope, ["approval"], "manual");
+    f.store.stage(scope, ["childSkills"], false);
     f.store.stage(scope, ["effort", "other", "d1"], "high");
     const before = f.router.current(),
       ongoingScope = f.store.scope,
       c = controls(f, [], [true]);
+    c.childSkills.enabled = true;
     await c.ui.saveDefault(scope);
     assert.equal(f.store.scope, ongoingScope);
     assert.deepEqual(f.router.current(), before);
     assert.deepEqual(c.published, []);
+    assert.deepEqual(c.childSkills.calls, [], "worker snapshots do not apply or save skills");
+    assert.equal(f.store.get(ongoingScope).childSkills, undefined);
     assert.deepEqual(c.selectPrompts, [], "a direct save already has its destination");
     assert.equal(c.confirmPrompts.length, 1);
     assert(
@@ -225,6 +229,7 @@ for (const scope of ["global", "workspace"])
     assert.deepEqual(f.store.get(scope), {
       version: 2,
       approval: "manual",
+      childSkills: false,
       preset: "team",
       delegation: { mode: "lead", eagerness: "eager" },
       presets: { team: team("custom") },

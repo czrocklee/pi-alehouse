@@ -255,7 +255,7 @@ for (const scope of ["global", "workspace"])
     await c.ui.open();
     assert.equal(f.store.scope, scope);
     assert.deepEqual(f.store.pending(), [], "scope consent alone copies nothing");
-    assert.match(c.confirmPrompts[0].text, /worker, approval and appearance choices/);
+    assert.match(c.confirmPrompts[0].text, /worker, approval, appearance and Agent skills choices/);
     await c.ui.open();
     assert.equal(c.beerMugs.enabled, true);
     assert.deepEqual(f.store.pending(), [{ scope, path: ["ui", "beerMugs"], value: true }]);

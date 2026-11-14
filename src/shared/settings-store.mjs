@@ -28,7 +28,7 @@ import { dirname, join, parse, resolve, sep } from "node:path";
  * @typedef {{version: string, slots: Record<Slot, PresetSlotDefinition>}} PresetDefinition */
 /** @typedef {{version: 2, preset?: string, delegation?: {mode?: "manual" | "co-worker" | "lead" | "supervisor",
  * eagerness?: "reserved" | "balanced" | "eager"}, effort?: EffortPolicy, approval?: ApprovalPreference,
- * presets?: Record<string, PresetDefinition>, ui?: {beerMugs?: boolean}}} SettingsDocument */
+ * presets?: Record<string, PresetDefinition>, ui?: {beerMugs?: boolean}, childSkills?: boolean}} SettingsDocument */
 /** @typedef {{scope: PersistentScope, path: string[], value: unknown}} Patch */
 /** @typedef {{scope: PersistentScope, path: string, error?: string}} FlushResult */
 /** @typedef {import("node:fs").Stats} Stat */
@@ -182,7 +182,7 @@ export function validateSettings(value, layers = 1) {
   const root = record(value, "document");
   exactKeys(
     root,
-    ["version", "preset", "delegation", "effort", "approval", "presets", "ui"],
+    ["version", "preset", "delegation", "effort", "approval", "presets", "ui", "childSkills"],
     "document",
   );
   if (root.version === 1)
@@ -194,6 +194,8 @@ export function validateSettings(value, layers = 1) {
     invalid("preset must be a routing name (or off)");
   if (Object.hasOwn(root, "approval"))
     enumeration(root.approval, ["manual", "judge", "judge+sub", "yolo"], "approval");
+  if (Object.hasOwn(root, "childSkills") && typeof root.childSkills !== "boolean")
+    invalid("childSkills must be a boolean");
   if (Object.hasOwn(root, "delegation")) {
     const delegation = record(root.delegation, "delegation");
     exactKeys(delegation, ["mode", "eagerness"], "delegation");

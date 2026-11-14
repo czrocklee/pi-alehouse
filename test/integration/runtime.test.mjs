@@ -376,7 +376,7 @@ test("launcher supplies exactly one composition and never mutates global setting
   const marker = join(dir, "args.json");
   writeFileSync(
     fake,
-    `#!${process.execPath}\nimport fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({args:process.argv.slice(2),flock:process.env.PI_ALEHOUSE_FLOCK,permission:process.env.PI_ALEHOUSE_PERMISSION_ROOT,policy:process.env.PI_ALEHOUSE_POLICY_ROOT}));\n`,
+    `#!${process.execPath}\nimport fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({args:process.argv.slice(2),flock:process.env.PI_ALEHOUSE_FLOCK,permission:process.env.PI_ALEHOUSE_PERMISSION_ROOT,policy:process.env.PI_ALEHOUSE_POLICY_ROOT,noChildSkills:process.env.PI_ALEHOUSE_NO_CHILD_SKILLS}));\n`,
     { mode: 0o755 },
   );
   const env = { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_ALEHOUSE_PI: fake };
@@ -399,15 +399,87 @@ test("launcher supplies exactly one composition and never mutates global setting
   assert.deepEqual(observed.args.slice(-3), ["--", "-example", "--extension=prompt-text"]);
   assert.equal(observed.permission, join(packageRoot, "generated/authority"));
   assert.equal(observed.policy, join(packageRoot, "generated/extensions"));
+  assert.equal(observed.noChildSkills, "0");
   assert(!existsSync(join(agentDir, "settings.json")));
   rmSync(marker);
-  const denied = spawnSync(process.execPath, [cli, "--extension", "npm:evil"], {
-    env,
-    encoding: "utf8",
-  });
-  assert.notEqual(denied.status, 0);
-  assert.match(denied.stderr, /Additional extensions/);
-  assert(!existsSync(marker));
+  for (const args of [
+    ["--extension", "npm:evil"],
+    ["-e", "path"],
+    ["--extension=path"],
+    ["-eattached"],
+    ["-e=path"],
+    ["-example"],
+    ["prompt", "-e", "path"],
+    ["--no-skills", "-e", "path"],
+    ["--system-prompt", "--", "-e", "path"],
+  ]) {
+    const denied = spawnSync(process.execPath, [cli, ...args], {
+      env,
+      encoding: "utf8",
+    });
+    assert.notEqual(denied.status, 0, JSON.stringify(args));
+    assert.match(denied.stderr, /Additional extensions/);
+    assert(!existsSync(marker));
+  }
+});
+
+test("launcher scopes no-skills to parsed argv and overwrites inherited child-skills state", (t) => {
+  const dir = temporary(t),
+    agentDir = join(dir, "agent"),
+    fake = join(dir, "pi"),
+    marker = join(dir, "invocation.json");
+  initialize({ agentDir });
+  writeFileSync(
+    fake,
+    `#!${process.execPath}\nimport fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({args:process.argv.slice(2),noChildSkills:process.env.PI_ALEHOUSE_NO_CHILD_SKILLS}));\n`,
+    { mode: 0o755 },
+  );
+  const env = {
+    ...process.env,
+    HOME: dir,
+    XDG_CONFIG_HOME: join(dir, "config"),
+    XDG_STATE_HOME: join(dir, "state"),
+    PI_CODING_AGENT_DIR: agentDir,
+    PI_ALEHOUSE_PI: fake,
+  };
+  delete env.PI_ALEHOUSE_PERMISSION_ROOT;
+  delete env.PI_ALEHOUSE_POLICY_ROOT;
+  delete env.PI_ALEHOUSE_FLOCK;
+  const cli = join(packageRoot, "bin/pi-alehouse.mjs");
+  for (const [args, inherited, expected] of [
+    [[], undefined, "0"],
+    [[], "1", "0"],
+    [["prompt"], "stale", "0"],
+    [["--no-skills"], undefined, "1"],
+    [["-ns"], "0", "1"],
+    [["--no-skills", "-ns", "--no-skills"], "1", "1"],
+    [[" spaced\n子 prompt ", "--no-skills"], "0", "1"],
+    [["--system-prompt", "--no-skills"], "1", "0"],
+    [["--append-system-prompt", "-ns"], "1", "0"],
+    [["--system-prompt", "-e"], "1", "0"],
+    [["--system-prompt", "--extension"], "1", "0"],
+    [["--append-system-prompt", "--extension=prompt-data"], "1", "0"],
+    [["--name", "-eattached"], "1", "0"],
+    [["--no-skills=false"], "1", "0"],
+    [["--", "--no-skills", "-ns"], "1", "0"],
+    [["--", "-e", "path", "--extension=prompt-data"], "1", "0"],
+    [["--system-prompt", "--", "--no-skills"], "0", "1"],
+    [["--system-prompt", "--", "prompt", "-ns"], "0", "1"],
+    [["--system-prompt", "--", "--", "--no-skills"], "1", "0"],
+  ]) {
+    const invocationEnv = { ...env };
+    if (inherited === undefined) delete invocationEnv.PI_ALEHOUSE_NO_CHILD_SKILLS;
+    else invocationEnv.PI_ALEHOUSE_NO_CHILD_SKILLS = inherited;
+    const forwarded = ["--offline", "--print", ...args];
+    execFileSync(process.execPath, [cli, ...forwarded], { env: invocationEnv });
+    const observed = JSON.parse(readFileSync(marker));
+    assert.deepEqual(observed, {
+      args: ["--no-extensions", "-e", join(packageRoot, "src/composition.ts"), ...forwarded],
+      noChildSkills: expected,
+    });
+  }
+  assert(!existsSync(join(agentDir, "settings.json")));
+  assert(!existsSync(join(agentDir, "extensions/pi-alehouse/config.json")));
 });
 
 test("help and version work before init without creating any resources", (t) => {

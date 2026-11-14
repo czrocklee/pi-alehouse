@@ -53,6 +53,7 @@ export function controls(f, answers = [], confirmations = []) {
     published = [],
     confirmPrompts = [],
     selectPrompts = [];
+  const childSkills = { enabled: f.store.effective().childSkills ?? true, calls: [] };
   const beerMugs = { enabled: f.store.effective().ui?.beerMugs === true, calls: [] };
   let live = true;
   const ctx = {
@@ -85,6 +86,14 @@ export function controls(f, answers = [], confirmations = []) {
         beerMugs.calls.push(enabled);
       },
     },
+    childSkills: {
+      current: () => !childSkills.disabledReason && childSkills.enabled,
+      set: (enabled) => {
+        childSkills.enabled = enabled;
+        childSkills.calls.push(enabled);
+      },
+      disabledReason: () => childSkills.disabledReason,
+    },
     delegation: () => f.delegation ?? { mode: "lead", eagerness: "eager" },
     publishDefinition: (candidate, name, definition) =>
       published.push({ candidate, name, definition }),
@@ -93,6 +102,7 @@ export function controls(f, answers = [], confirmations = []) {
     ui,
     ctx,
     beerMugs,
+    childSkills,
     notifications,
     published,
     confirmPrompts,
@@ -201,6 +211,7 @@ export function tuiControls(f, options = {}) {
     confirmations = [...(options.confirms ?? [])],
     typed = [...(options.inputs ?? [])];
   const beerMugs = { enabled: f.store.effective().ui?.beerMugs === true, calls: [] };
+  const childSkills = { enabled: f.store.effective().childSkills ?? true, calls: [] };
   let live = true,
     queuedFactory;
   const mockTui = {
@@ -289,6 +300,13 @@ export function tuiControls(f, options = {}) {
         beerMugs.calls.push(enabled);
       },
     },
+    childSkills: {
+      current: () => childSkills.enabled,
+      set: (enabled) => {
+        childSkills.enabled = enabled;
+        childSkills.calls.push(enabled);
+      },
+    },
     delegation: () => ({ mode: "lead", eagerness: "eager" }),
     // The UI layer owns no runtime value import: the selector constructor is
     // injected here exactly like the extension binds the acquired host runtime.
@@ -313,6 +331,7 @@ export function tuiControls(f, options = {}) {
     ui,
     ctx,
     beerMugs,
+    childSkills,
     tui: mockTui,
     registry,
     state: double.state,

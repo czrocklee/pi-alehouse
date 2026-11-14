@@ -220,6 +220,38 @@ test("SDK, loader, activity and approval all retain the original admitted cwd ac
   await port.dispose();
 });
 
+for (const profile of ["editor", "researcher"])
+  for (const enabled of [undefined, true, false])
+    test(`${profile} skill discovery is ${enabled === false ? "disabled explicitly" : "enabled"}${enabled === undefined ? " by default" : ""}`, async (t) => {
+      const f = fixture(t, profile);
+      if (enabled !== undefined) f.options.skillsEnabled = () => enabled;
+      const port = await f.create();
+      const loader = seam.state.loaders[0].options;
+      assert.equal(loader.noSkills, enabled === false);
+      assert.equal(loader.noExtensions, true);
+      assert.equal(loader.noPromptTemplates, true);
+      assert.equal(loader.noThemes, true);
+      await port.dispose();
+    });
+
+test("skill preference is sampled for each new session without changing an existing Agent", async (t) => {
+  const f = fixture(t);
+  let enabled = true;
+  f.options.skillsEnabled = () => enabled;
+  const create = createChildSessionFactory(f.options);
+  const first = await create(f.agent);
+  enabled = false;
+  await first.run("reuse after settings change", {}, { run_id: "reuse" });
+  assert.equal(seam.state.loaders.length, 1);
+  assert.equal(seam.state.loaders[0].options.noSkills, false);
+  const second = await create({ ...f.agent, agent_id: "another-agent", name: "another" });
+  assert.equal(seam.state.loaders.length, 2);
+  assert.equal(seam.state.loaders[0].options.noSkills, false);
+  assert.equal(seam.state.loaders[1].options.noSkills, true);
+  await first.dispose();
+  await second.dispose();
+});
+
 test("child and approval identities use the real SDK manager ID across Runs", async (t) => {
   const f = fixture(t),
     port = await f.create();

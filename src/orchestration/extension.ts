@@ -379,6 +379,10 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
   let router: PresetRouter | undefined;
   let routingContext: ExtensionContext | undefined;
   let settingsStore: SettingsStore | undefined, settingsUi: PreferencesControls | undefined;
+  let childSkillsEnabled = true;
+  // Invocation-only override: the launcher normalizes argv and clears stale inherited values.
+  const noChildSkills = process.env.PI_ALEHOUSE_NO_CHILD_SKILLS === "1";
+  const currentChildSkills = (): boolean => !noChildSkills && childSkillsEnabled;
   let unregisterSettings: (() => void) | undefined;
   let sessionDefinitions: Record<string, PresetDefinition> = {};
   const effortInputs = () => {
@@ -844,6 +848,7 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
         projectTrusted: ctx.isProjectTrusted(),
       });
       preferences = settingsStore.effective();
+      childSkillsEnabled = preferences.childSkills !== false;
     } catch (error) {
       showPresetError(settingsLoadFailure(error, agentDir, ctx.cwd), ctx);
       return;
@@ -907,6 +912,7 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
       runtime,
       profiles,
       settings,
+      skillsEnabled: currentChildSkills,
       parentHistory,
       approvalBindings,
       activities,
@@ -983,6 +989,13 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
         beerMugs: {
           current: () => widget.beerMugsEnabled,
           set: (enabled) => widget.setBeerMugs(enabled),
+        },
+        childSkills: {
+          current: currentChildSkills,
+          set: (enabled) => {
+            childSkillsEnabled = enabled;
+          },
+          disabledReason: () => (noChildSkills ? "--no-skills" : undefined),
         },
         createModelSelector: (options) => createPresetModelSelector({ ...options, runtime }),
         modelPopover: () => panels.isFullscreen(),

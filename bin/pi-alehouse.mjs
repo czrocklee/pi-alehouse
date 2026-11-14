@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
+import { scanLaunchOptions } from "./launch-options.mjs";
 import { executable, packageRoot, preflight, runtimeEnvironment } from "./runtime-support.mjs";
 
 const args = process.argv.slice(2);
@@ -22,13 +23,8 @@ try {
       `Initialized ${result.created.length} absent resources; preserved ${result.preserved.length}. Settings and credentials were not changed.`,
     );
   } else {
-    const boundary = args.indexOf("--");
-    const options = boundary < 0 ? args : args.slice(0, boundary);
-    if (
-      options.includes("-e") ||
-      options.includes("--extension") ||
-      options.some((arg) => arg.startsWith("--extension=") || /^-e.+/.test(arg))
-    ) {
+    const { noSkills, additionalExtensions } = scanLaunchOptions(args);
+    if (additionalExtensions) {
       throw new Error(
         "Additional extensions are not supported: Alehouse owns one composition. Use plain pi for other extensions.",
       );
@@ -47,7 +43,11 @@ try {
     process.execve(
       pi,
       [pi, "--no-extensions", "-e", join(packageRoot, "src/composition.ts"), ...args],
-      runtimeEnvironment(paths),
+      {
+        ...runtimeEnvironment(paths),
+        // Invocation-only: overwrite inherited state, never persist a preference.
+        PI_ALEHOUSE_NO_CHILD_SKILLS: noSkills ? "1" : "0",
+      },
     );
   }
 } catch (error) {

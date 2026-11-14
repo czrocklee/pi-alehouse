@@ -346,7 +346,7 @@ nothing.
 
 The closed version-2 document has optional `preset`, partial `delegation`
 (`mode`, `eagerness`), per-preset/per-slot `effort`, `approval`, custom
-model `presets`, and partial `ui` preferences. `ui` accepts only the optional
+model `presets`, boolean `childSkills`, and partial `ui` preferences. `ui` accepts only the optional
 boolean `beerMugs`: `true` enables the [beer-mug widget Easter egg](interface.md#beer-mug-easter-egg),
 while missing or `false` uses the normal arrows. UI leaves merge global then
 trusted workspace, so an explicit workspace `false` disables a global `true`;
@@ -356,6 +356,31 @@ record or worker/model effect. `/alehouse-settings` also offers **Beer mugs:
 on/off** for an immediate live toggle. It is session-only at the initial save
 scope; an explicitly selected global/workspace scope queues only `ui.beerMugs`,
 flushed by **Save pending now** or normal exit. Startup still writes nothing.
+
+`childSkills` defaults to `true` when absent. **Agent skills: on/off** in
+`/alehouse-settings` controls normal SDK skill discovery for newly created worker
+and scout sessions, using their shared parent cwd, agent directory, trusted Pi
+settings and resource filters. Only skill names, descriptions and paths enter
+the catalogue; children read instructions on demand. Parent-only explicit CLI
+skill paths and extension-contributed paths are not copied.
+`pi-alehouse --no-skills` (or `-ns`) also suppresses child discovery for that launch, regardless
+of saved preferences. Settings shows **Agent skills: off (--no-skills)** and
+cannot enable discovery until a new launch without that option; the override is
+not saved. Already-created child sessions keep their loaded resources on reuse.
+A queued Agent without a session uses the current choice when its first Run
+creates the session, not the choice at Agent admission. The toggle follows the selected
+save scope: session-only initially, or queue just `childSkills` for an explicitly
+selected global/workspace scope. A trusted workspace boolean overrides the global
+value, including `false`; missing values inherit. The preference is read at each
+session startup, including restored sessions, without a branch record or startup
+write. Off disables discovery, not permission to read a known skill file.
+
+Enabling discovery can introduce additional human approvals with existing
+policies: a missing `skill` rule falls back to the ordinary `"*"` rule, which may
+be `ask`, and Jev does not auto-allow the skill surface. The absent-only init
+seed explicitly allows skills, but never updates an existing policy. Review
+`permission.skill` deliberately; see [skill permission scope](security.md#skill-discovery-and-permissions).
+
 Delegation uses the modes and eagerness values above; effort
 uses `inherit` or a Pi thinking level. `approval` is one of `manual`, `judge`,
 `judge+sub`, or `yolo`. Each custom `presets` entry has the same body shape as a
@@ -429,8 +454,8 @@ cannot reuse pending consent.
 
 `/alehouse-settings` or **P Settings** opens the scope and save menu. **Remember
 current worker settings** uses the same exact-patch/destination confirmation;
-it remembers worker preset/delegation/effort settings, not the beer-mug appearance
-or approval (use the approval menu's **Save as global/project default** or
+it remembers worker preset/delegation/effort settings, not `childSkills`, the beer-mug
+appearance or approval (use the approval menu's **Save as global/project default** or
 `/approval save`). **Save pending now**, **Discard pending writes**,
 **Remove a saved override**, and **Show paths and pending changes** are explicit
 menu actions. Workspace writes require project trust. See the

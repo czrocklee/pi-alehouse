@@ -25,6 +25,12 @@ import { ModelSelectionSession, type ModelSelectionOptions } from "./model-selec
 export interface PreferencesControlsOptions extends ModelSelectionOptions {
   store: SettingsStore;
   beerMugs: { current(): boolean; set(enabled: boolean): void };
+  childSkills: {
+    current(): boolean;
+    set(enabled: boolean): void;
+    /** Invocation-only suppression; changing saved preferences cannot enable this launch. */
+    disabledReason?(): string | undefined;
+  };
   ready(): boolean;
   router(): PresetRouter;
   delegation(): DelegationSetting;
@@ -118,8 +124,11 @@ export class PreferencesControls {
     await this.interaction(async () => {
       const { ctx, store } = this.options;
       const beerMugsAction = `Beer mugs: ${this.options.beerMugs.current() ? "on" : "off"}`;
+      const childSkillsReason = this.options.childSkills.disabledReason?.();
+      const childSkillsAction = `Agent skills: ${this.options.childSkills.current() ? "on" : "off"}${childSkillsReason ? ` (${childSkillsReason})` : ""}`;
       const action = await ctx.ui.select(`Alehouse settings · ${this.summary()}`, [
         beerMugsAction,
+        childSkillsAction,
         "Change save scope",
         "Remember current worker settings",
         "Save pending now",
@@ -158,6 +167,49 @@ export class PreferencesControls {
             );
           }
         }
+      } else if (action === childSkillsAction) {
+        const disabledReason = this.options.childSkills.disabledReason?.();
+        if (disabledReason) {
+          ctx.ui.notify(
+            `Agent skills are disabled for this launch by ${disabledReason} (-ns). ` +
+              "Start Pi without that option to change child skill discovery. Saved preferences are unchanged.",
+            "info",
+          );
+          return;
+        }
+        const enabled = !this.options.childSkills.current();
+        this.options.childSkills.set(enabled);
+        const description = `Agent skills: ${enabled ? "on" : "off"}`;
+        const effect =
+          "New child sessions only; already-created sessions retain their loaded skill catalogue. " +
+          "Queued Agents without a session use the choice at session creation. " +
+          "Off disables skill discovery, not file reads or permissions.";
+        if (store.scope === "session") {
+          ctx.ui.notify(`${description} (session only; no configuration write). ${effect}`, "info");
+        } else {
+          try {
+            store.stage(store.scope, ["childSkills"], enabled);
+          } catch (error) {
+            ctx.ui.notify(
+              `${description} is live for new child sessions, but defaults were not queued: ${String(error).slice(0, 512)}. ${effect}`,
+              "warning",
+            );
+            return;
+          }
+          ctx.ui.notify(`${description}. ${effect} ${this.summary()}`, "info");
+          const workspace =
+            store.scope === "global" && store.canWriteWorkspace()
+              ? store.get("workspace").childSkills
+              : undefined;
+          if (workspace !== undefined) {
+            ctx.ui.notify(
+              `Current session: ${description}. Save scope: global. ` +
+                `Next startup after saving pending writes, if any: Agent skills: ${workspace ? "on" : "off"}. ` +
+                "The workspace childSkills override takes precedence over the global default; it was not removed.",
+              "info",
+            );
+          }
+        }
       } else if (action === "Change save scope") {
         const scope = await ctx.ui.select("Future explicit changes in this session save to", [
           "session",
@@ -170,7 +222,7 @@ export class PreferencesControls {
           scopes.includes(scope as PersistentScope) &&
           (await this.confirm(
             scope as PersistentScope,
-            "Future applied worker, approval and appearance choices in this session will also update defaults. Switching scope alone copies nothing.",
+            "Future applied worker, approval, appearance and Agent skills choices in this session will also update defaults. Switching scope alone copies nothing.",
           ))
         ) {
           store.setScope(scope as PersistentScope);
@@ -204,6 +256,7 @@ export class PreferencesControls {
         const paths: string[][] = [];
         if (layer.preset !== undefined) paths.push(["preset"]);
         if (layer.approval !== undefined) paths.push(["approval"]);
+        if (layer.childSkills !== undefined) paths.push(["childSkills"]);
         if (layer.ui?.beerMugs !== undefined) paths.push(["ui", "beerMugs"]);
         for (const key of Object.keys(layer.delegation ?? {})) paths.push(["delegation", key]);
         for (const [name, slots] of Object.entries(layer.effort ?? {}))

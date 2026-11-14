@@ -483,6 +483,15 @@ and web calls together can move project content to the network; source hygiene f
 [researcher web access](security.md#researcher-web-access)). Tool availability
 is not authorization.
 
+Child skills default to discovery on unless `childSkills` is false or this launch
+uses `--no-skills` / `-ns`. The choice is sampled when a child session is created,
+not when an Agent is queued; existing sessions retain their resources. Skill-name
+permissions depend on the advertised catalog and do not provide universal file
+protection, including for hidden known skill paths. Off reduces discovery, not
+file-read authority. Existing policies whose missing `skill` rule falls back to
+`ask` can add manual/Jev-mode human approvals; init does not update them and Jev
+never auto-allows the skill surface. See [skill permission scope](security.md#skill-discovery-and-permissions).
+
 [Git literal restrictions](git-read-proof.md) inventory identifiable literal
 file operands, historical path spellings, explicit outputs and redirects, not
 arbitrary historical content. Repository queries and mutations use ordinary
