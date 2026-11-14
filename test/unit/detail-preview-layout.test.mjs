@@ -48,8 +48,11 @@ const firstTranscript = (paint) =>
       ?.trim()
       .slice("transcript-".length),
   );
-/** The transcript's own scroll viewport: every body row below the rule. */
-const ruleAt = (paint) => body(paint).findIndex((line) => line.includes("Transcript · Info"));
+/** The transcript's own scroll viewport: every body row below the last fixed
+ * chrome row — the merged toolbar's plain divider, or the labeled section
+ * rule in the narrow fallback. */
+const ruleAt = (paint) =>
+  body(paint).findLastIndex((line) => /^\s*─+$/.test(line) || line.includes("Transcript · Info"));
 const windowRows = (paint) => body(paint).slice(ruleAt(paint) + 1);
 
 function paneFixture(t, frame = false) {

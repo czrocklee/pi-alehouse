@@ -52,6 +52,10 @@ const approxContextTokens = (tokens: number | null, unknown: string): string =>
   tokens === null ? unknown : `≈${formatContextTokens(tokens)}`;
 const shortId = (value: string): string =>
   value.length <= 14 ? value : `${value.slice(0, 6)}…${value.slice(-4)}`;
+/** Busy describes reuse availability, not a session fault. Keep the core fact
+ * unchanged while excluding it from both the Info diagnostics and attention. */
+const sessionProblem = (view: RunView): string | undefined =>
+  view.unavailable_reason === "agent_busy" ? undefined : view.unavailable_reason;
 /** Every dispatch note, spelled out; the parent model is shown only tree_shared. */
 const DISPATCH_NOTES: ReadonlyMap<string, string> = new Map([
   ["tree_shared", "another session holds this build tree"],
@@ -337,7 +341,8 @@ export function renderDetailFields(
   if (view.outcome?.limit_reached) notes.push(["limit", "warning", "stopped at the turn limit"]);
   for (const note of view.dispatch_notes ?? [])
     notes.push(["dispatch", "warning", DISPATCH_NOTES.get(note) ?? note]);
-  if (view.unavailable_reason) notes.push(["session", "error", view.unavailable_reason]);
+  const unavailable = sessionProblem(view);
+  if (unavailable) notes.push(["session", "error", unavailable]);
   if (view.owner_error) notes.push(["owner", "error", view.owner_error]);
   if (view.history_error) notes.push(["history", "warning", view.history_error]);
   if (view.pending_messages > 0)
@@ -498,13 +503,14 @@ export function getDetailAttentionNotes(input: DetailInput): readonly DetailAtte
       text: `owner: ${view.owner_error}`,
       severity: "error",
     });
-  if (view.unavailable_reason)
+  const unavailable = sessionProblem(view);
+  if (unavailable)
     notes.push({
       key: "session",
       priority: 4,
       glyph: GLYPHS.failure,
       color: "error",
-      text: `session: ${view.unavailable_reason}`,
+      text: `session: ${unavailable}`,
       severity: "error",
     });
   for (const error of view.cleanup_errors)
@@ -700,8 +706,9 @@ const TAB_LABEL_MAX = 16;
  * The agent tabs, painted only when there is more than one agent. Each tab is
  * padded by a space on either side, and its click range includes that padding.
  * On a frame edge the tabs are joined by rule; docked their padding alone
- * separates them. The selected tab is always visible, filled with `selectedBg`
- * where the theme has one; hidden peers are summarized as clickable `+N` with
+ * separates them. The selected tab is always visible, with an accent, bold,
+ * optionally underlined nickname and no background fill; hidden peers are
+ * summarized as clickable `+N` with
  * attention counts, and optional `‹ ›` step to the previous/next Agent. Hit
  * ranges are relative to the returned text, so the caller adds its own offsets.
  */
@@ -777,8 +784,18 @@ export function renderDetailAgentStrip(input: {
         if (windowWidth(start, end) <= width) return { start, end };
     return undefined;
   })();
-  const paint = (tab: Tab, body: string): string =>
-    tab.selected && theme.bg ? theme.bg("selectedBg", body) : body;
+  const selectedText = (text: string): string => {
+    const bold = theme.bold(text);
+    return theme.underline ? theme.underline(bold) : bold;
+  };
+  const paintName = (tab: Tab, label: string): string =>
+    !label ? "" : tab.selected ? selectedText(theme.fg("accent", label)) : theme.fg("muted", label);
+  // Glyph-only clipping still identifies the selection without repainting its
+  // lifecycle color. Markers and padding never inherit the name's underline.
+  const paintGlyph = (tab: Tab, selectedOnly = false): string => {
+    const glyph = theme.fg(tab.color, tab.glyph);
+    return selectedOnly && tab.selected ? selectedText(glyph) : glyph;
+  };
   if (!found) {
     // Not even the selected tab fits whole beside its summaries: clip it alone,
     // and keep its hit range inside what was actually painted. The glyph
@@ -787,7 +804,7 @@ export function renderDetailAgentStrip(input: {
     // tab keeps the cue the footer's `!N` suppression counts on. The marker
     // keeps the whole strip's semantics -- `?` warning-coloured, `!`
     // error-coloured -- so neither the glyph's lifecycle colour nor the
-    // selected fill can repaint a warning as success.
+    // selected nickname's accent can repaint a warning as success.
     const tab = tabs[selectedIndex]!;
     const marker = tab.marker ? ` ${tab.marker}` : "";
     // Styled only where it is painted, so an unpainted marker styles nothing.
@@ -798,21 +815,24 @@ export function renderDetailAgentStrip(input: {
     const budget = Math.max(0, width - 2);
     const markerWidth = visibleWidth(marker);
     const labelRoom = budget - 2 - markerWidth;
-    const glyph = theme.fg(tab.color, tab.glyph);
-    // Below four columns there is no room for the tab's own padding: the
-    // glyph alone continues the frame's rule.
-    const text = paint(
-      tab,
+    // The glyph is a fixed, single-cell lifecycle symbol. Split only that
+    // known plain prefix, after cell-aware clipping, to preserve every old
+    // padding/hit column while styling the nickname separately.
+    const unmarked = clipPlainText(`${tab.glyph} ${tab.label}`, budget);
+    const tail = unmarked.slice(tab.glyph.length);
+    const space = tail.startsWith(" ") ? " " : "";
+    const label = tail.slice(space.length);
+    const tiny = clipPlainText(`${tab.glyph}${marker}`, budget);
+    const text =
       width < 4
-        ? theme.fg(tab.color, clipPlainText(tab.glyph, width))
+        ? paintGlyph(tab, true)
         : !marker
-          ? theme.fg(tab.color, ` ${clipPlainText(`${tab.glyph} ${tab.label}`, budget)} `)
+          ? ` ${paintGlyph(tab, !label)}${space}${paintName(tab, label)} `
           : labelRoom >= 1
-            ? ` ${glyph} ${theme.fg(tab.color, clipPlainText(tab.label, labelRoom))}${markerStyled()} `
+            ? ` ${paintGlyph(tab)} ${paintName(tab, clipPlainText(tab.label, labelRoom))}${markerStyled()} `
             : budget >= 1 + markerWidth
-              ? ` ${glyph}${markerStyled()} `
-              : theme.fg(tab.color, ` ${clipPlainText(`${tab.glyph}${marker}`, budget)} `),
-    );
+              ? ` ${paintGlyph(tab, true)}${markerStyled()} `
+              : ` ${paintGlyph(tab, true)}${theme.fg(tab.color, tiny.slice(tab.glyph.length))} `;
     return {
       text,
       items: text ? [{ agent_id: tab.agent_id, from: 0, to: visibleWidth(text) }] : [],
@@ -830,19 +850,17 @@ export function renderDetailAgentStrip(input: {
   for (let i = found.start; i <= found.end; i++) {
     const tab = tabs[i]!;
     elements.push({
-      text: paint(
-        tab,
+      text:
         " " +
-          theme.fg(tab.color, tab.glyph) +
-          " " +
-          (tab.selected ? theme.bold(tab.label) : theme.fg("muted", tab.label)) +
-          (tab.marker
-            ? " " +
-              (tab.question ? theme.fg("warning", "?") : "") +
-              (tab.warning ? theme.fg("error", "!") : "")
-            : "") +
-          " ",
-      ),
+        paintGlyph(tab) +
+        " " +
+        paintName(tab, tab.label) +
+        (tab.marker
+          ? " " +
+            (tab.question ? theme.fg("warning", "?") : "") +
+            (tab.warning ? theme.fg("error", "!") : "")
+          : "") +
+        " ",
       agent_id: tab.agent_id,
     });
   }
@@ -904,6 +922,86 @@ export interface DetailRuleItem {
   to: number;
 }
 
+type DetailControlPart = { text: string; width: number; kind?: DetailRuleItem["kind"] };
+interface DetailControlOptions {
+  theme: Theme;
+  info: boolean;
+  toolsExpanded: boolean;
+  hiddenNotes?: number;
+  keys: boolean;
+}
+
+/** Both header layouts paint the same labels, keys and attention count. */
+function detailControlParts(input: DetailControlOptions) {
+  const { theme: th, info, keys } = input;
+  const hidden = input.hiddenNotes && input.hiddenNotes > 0 ? input.hiddenNotes : 0;
+  const page = (label: string, active: boolean, key: boolean): string => {
+    const style = (text: string): string =>
+      active ? th.bold(th.fg("muted", text)) : th.fg("dim", text);
+    return key && keys ? th.fg("accent", label[0]!) + style(label.slice(1)) : style(label);
+  };
+  const transcript: DetailControlPart = {
+    text: page("Transcript", !info, false),
+    width: 10,
+    kind: "transcript",
+  };
+  const infoPart: DetailControlPart = {
+    text: page("Info", info, true) + (hidden ? th.fg("warning", ` +${hidden}`) : ""),
+    width: 4 + (hidden ? visibleWidth(` +${hidden}`) : 0),
+    kind: "info",
+  };
+  const dot: DetailControlPart = { text: th.fg("dim", " · "), width: 3 };
+  const state = input.toolsExpanded ? "expanded" : "collapsed";
+  const tools = (long: boolean): DetailControlPart => ({
+    text: page("Tools", false, true) + (long ? th.fg("dim", ` ${state}`) : ""),
+    width: 5 + (long ? 1 + state.length : 0),
+    kind: "tools",
+  });
+  return { hidden, transcript, infoPart, dot, tools };
+}
+
+/** Merge complete metrics with right-aligned body controls only when both fit.
+ * A dim, isolated vertical separator belongs to the controls, with two spaces
+ * on each side and any remaining space before it. Narrow rows retain the old
+ * separate section-rule layout rather than sacrificing another metric. Reserve
+ * the full Transcript group and longest Tools state on both pages, so switching
+ * page/state cannot move a control or change the merge decision. */
+export function renderDetailToolbar(
+  input: DetailControlOptions & { metrics: string; width: number },
+): { text: string; items: DetailRuleItem[]; divider: string } | undefined {
+  const { theme, width, metrics } = input;
+  if (!Number.isInteger(width) || width < 1) return undefined;
+  const { transcript, infoPart, dot, tools } = detailControlParts(input);
+  const toolsWidth = Math.max("Tools collapsed".length, "Tools expanded".length);
+  const parts = [transcript, dot, infoPart, { text: "   ", width: 3 }];
+  if (input.info) parts.push({ text: " ".repeat(toolsWidth), width: toolsWidth });
+  else {
+    const tool = tools(true);
+    // The visible label owns its hit range; reserved blank cells do not.
+    const padding = toolsWidth - tool.width;
+    parts.push(tool, { text: " ".repeat(padding), width: padding });
+  }
+  const rightWidth = parts.reduce((sum, part) => sum + part.width, 0);
+  const gap = width - visibleWidth(metrics) - rightWidth;
+  if (gap < 5) return undefined;
+  const items: DetailRuleItem[] = [];
+  let offset = width - rightWidth;
+  for (const part of parts) {
+    if (part.kind) items.push({ kind: part.kind, from: offset, to: offset + part.width });
+    offset += part.width;
+  }
+  return {
+    text:
+      metrics +
+      " ".repeat(gap - 3) +
+      theme.fg("borderMuted", "│") +
+      "  " +
+      parts.map((part) => part.text).join(""),
+    items,
+    divider: theme.fg("borderMuted", POPOVER.h.repeat(width)),
+  };
+}
+
 /**
  * The divider between the fields and the body, carrying the body's own
  * controls: `Transcript · Info` (the page shown is brighter) at the left and
@@ -921,33 +1019,10 @@ export function renderDetailRule(input: {
   hiddenNotes?: number;
   keys: boolean;
 }): { text: string; items: DetailRuleItem[] } {
-  const { theme: th, width, info, keys } = input;
-  const hidden = input.hiddenNotes && input.hiddenNotes > 0 ? input.hiddenNotes : 0;
+  const { theme: th, width, info } = input;
+  const { hidden, transcript, infoPart, dot, tools } = detailControlParts(input);
   const rule = (count: number): string => th.fg("borderMuted", POPOVER.h.repeat(count));
-  const page = (label: string, active: boolean, key: boolean): string => {
-    const style = (text: string): string =>
-      active ? th.bold(th.fg("muted", text)) : th.fg("dim", text);
-    return key && keys ? th.fg("accent", label[0]!) + style(label.slice(1)) : style(label);
-  };
-  const count = hidden ? th.fg("warning", ` +${hidden}`) : "";
-  type Part = { text: string; width: number; kind?: DetailRuleItem["kind"] };
-  const transcript: Part = {
-    text: page("Transcript", !info, false),
-    width: 10,
-    kind: "transcript",
-  };
-  const infoPart: Part = {
-    text: page("Info", info, true) + count,
-    width: 4 + (hidden ? visibleWidth(` +${hidden}`) : 0),
-    kind: "info",
-  };
-  const dot: Part = { text: th.fg("dim", " · "), width: 3 };
-  const state = input.toolsExpanded ? "expanded" : "collapsed";
-  const tools = (long: boolean): Part => ({
-    text: page("Tools", false, true) + (long ? th.fg("dim", ` ${state}`) : ""),
-    width: 5 + (long ? 1 + state.length : 0),
-    kind: "tools",
-  });
+  type Part = DetailControlPart;
   const compose = (
     left: Part[],
     right: Part | undefined,

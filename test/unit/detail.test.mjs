@@ -1,17 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createJiti } from "jiti";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import {
-  DetailPane,
-  renderDetailFields,
-  renderDetailTitle,
-  transcriptRule,
-  wrapText,
-} from "../../dist/orchestration/ui/agent-detail.js";
-import { paneRow } from "../../dist/orchestration/ui/format.js";
-import { plainText, singleLineText } from "../../dist/orchestration/ui/text.js";
-import { renderWidget } from "../../dist/orchestration/ui/agent-widget.js";
-import { addToLedger } from "../../dist/orchestration/core/usage-ledger.js";
+
+// Direct source verification: this suite exercises the pane against the
+// current src/ tree, never a possibly stale dist/ build. The unit lane's
+// build step still serves the other dist-importing files.
+const jiti = createJiti(import.meta.url, { fsCache: false });
+const { DetailPane, renderDetailFields, renderDetailTitle, transcriptRule, wrapText } =
+  await jiti.import("../../src/orchestration/ui/agent-detail.ts");
+const { paneRow } = await jiti.import("../../src/orchestration/ui/format.ts");
+const { plainText, singleLineText } = await jiti.import("../../src/orchestration/ui/text.ts");
+const { renderWidget } = await jiti.import("../../src/orchestration/ui/agent-widget.ts");
+const { addToLedger } = await jiti.import("../../src/orchestration/core/usage-ledger.ts");
 
 const spend = (input, output, cache_read, cache_write, cost, model = "anthropic/claude-opus-5") =>
   addToLedger(undefined, { input, output, cache_read, cache_write, cost }, model);
@@ -747,8 +748,9 @@ test("scrolling up stops the follow, and reaching the end again resumes it", (t)
   assert.equal(strip(p.render(80)).at(-1), "T279", "and following has resumed, not merely landed");
 });
 
-// Marks the selected tab's `selectedBg` fill as brackets, so plain text shows it.
-const marked = { ...theme, bg: (_color, text) => `[${text.trim()}]` };
+// Marks the selected tab's accent+bold+underline nickname paint, so plain
+// text shows it: bold as asterisks, underline as tildes.
+const marked = { ...theme, bold: (text) => `*${text}*`, underline: (text) => `~${text}~` };
 const named = (agent_id) => ({
   agent_id,
   input: { view: view({ agent_id, name: agent_id }), live: live() },
@@ -771,16 +773,20 @@ test("when the selected assistant exits, the pane adopts a row rather than drift
   });
   t.after(() => p.dispose());
   const footer = () => p.render(80).at(-1);
-  assert.match(footer(), /⠋ a +\[⠋ b\] +⠋ c/, "the pane opens on the agent it was given");
+  assert.match(footer(), /⠋ a +⠋ ~\*b\*~ +⠋ c/, "the pane opens on the agent it was given");
   agents = ["a", "c"];
-  assert.match(footer(), /\[⠋ a\] +⠋ c/, "the vanished agent's tab is gone and the first is shown");
+  assert.match(
+    footer(),
+    /⠋ ~\*a\*~ +⠋ c/,
+    "the vanished agent's tab is gone and the first is shown",
+  );
   assert.doesNotMatch(footer(), /⠋ b/);
   // Shown is not enough: the selection itself has to move, or left/right walk
   // from a row nobody is on and the host still thinks the gone agent is open.
   assert.equal(chosen, "a", "the host is told which agent the pane is actually on");
   p.handleInput("\u001b[C"); // right
   assert.equal(chosen, "c", "the neighbour is the one after the row on screen");
-  assert.match(footer(), /⠋ a +\[⠋ c\]/);
+  assert.match(footer(), /⠋ a +⠋ ~\*c\*~/);
 });
 
 test("widget activation selects another assistant and toggles the selected one closed", (t) => {
@@ -810,7 +816,7 @@ test("widget activation selects another assistant and toggles the selected one c
   p.activate("b");
   assert.equal(chosen, "b");
   assert.equal(renders, 1);
-  assert.match(p.render(80).at(-1), /⠋ a +\[⠋ b\]/);
+  assert.match(p.render(80).at(-1), /⠋ a +⠋ ~\*b\*~/);
   p.activate("b");
   assert.equal(closes, 1, "clicking the selected row closes like Esc");
   p.activate("a");

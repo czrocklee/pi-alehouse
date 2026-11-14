@@ -193,7 +193,11 @@ test("the Info tail cue counts the current page, without changing transcript fol
   const f = fixture(t, { rows: 24 });
   f.pane.handleInput("i");
   const info = f.paint();
-  const rule = info.findIndex((line) => line.includes("Transcript · Info"));
+  // The last fixed chrome row bounds the Info viewport: the merged toolbar's
+  // plain divider, or the labeled rule in the narrow fallback.
+  const rule = info.findLastIndex(
+    (line) => /^─+$/.test(line) || line.includes("Transcript · Info"),
+  );
   assert(rule >= 0);
   const shown = info.length - rule - 2;
   const total = renderDetailInfo(entries(f.views)[0].input, theme, 60).length;

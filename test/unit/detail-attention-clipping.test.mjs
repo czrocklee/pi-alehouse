@@ -370,9 +370,11 @@ test("a partially clipped label keeps the marker's own colours", () => {
     theme: rec.theme,
     framed: true,
   });
-  // The nickname yields its own columns; the marker keeps its error colour.
+  // The nickname yields columns but keeps its selected accent; neither the
+  // lifecycle glyph nor the marker inherits that nickname color.
   assert.match(strip.text, /✓ curre… !/);
-  assert.ok(fgCall(rec.calls, "success", "curre…"), JSON.stringify(rec.calls));
+  assert.ok(fgCall(rec.calls, "success", "✓"), JSON.stringify(rec.calls));
+  assert.ok(fgCall(rec.calls, "accent", "curre…"), JSON.stringify(rec.calls));
   assert.ok(fgCall(rec.calls, "error", "!"), JSON.stringify(rec.calls));
   // Too narrow for the marker at all: nothing is painted beside the glyph,
   // so the footer's forced cue is the only warning left.

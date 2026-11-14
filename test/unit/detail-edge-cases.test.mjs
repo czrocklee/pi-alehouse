@@ -5,7 +5,7 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { settings } from "../support/controller-fixture.mjs";
 
-const jiti = createJiti(import.meta.url);
+const jiti = createJiti(import.meta.url, { fsCache: false });
 const { DetailPane, renderDetailFields } = await jiti.import(
   "../../src/orchestration/ui/agent-detail.ts",
 );
@@ -271,9 +271,10 @@ for (const [height, hidden] of [
       info.join("\n"),
     );
     assert(!info.some((line) => /I info\b/.test(line)), info.join("\n"));
-    // The rule shows the Info page: both page names, no tools state.
+    // Both page names keep their toolbar columns; Info's full Tools slot is
+    // blank (three separator cells plus fifteen Tools cells), not a control.
     assert(
-      info.some((line) => /Transcript · Info ─+$/.test(line)),
+      info.some((line) => /Transcript · Info {18}$/.test(line)),
       info.join("\n"),
     );
     f.pane.handleInput("i");

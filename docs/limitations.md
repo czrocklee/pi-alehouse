@@ -678,7 +678,20 @@ ordinary pairs; exited/finishing execution has no current-turn clock. Activity
 labels and content share the host theme's italic styling, while the clock and
 tree indentation remain upright; actual italic appearance depends on terminal
 font support. Its 60-second tint is only a presentation cue, not a hung-tool
-diagnosis or lifecycle timer. Timer comparisons may reuse a detached frame for the next actual paint;
+diagnosis or lifecycle timer. In Agent details, a wide metrics row shares its
+space with right-aligned page/tool controls after a dim, isolated `│`; narrow
+panes keep the controls on the section rule instead of dropping more metrics.
+Both pages reserve the full Transcript group and longest Tools state before
+merging: Info's absent Tools slot and the shorter state's trailing padding have
+no hit targets. With width, metrics and hidden-note count unchanged, page/Tools
+transitions do not move the page controls or change the chosen row; real
+metrics/count changes and resizing may still do so. Repeated clicks are not
+filtered globally, and the narrow section rule keeps its existing behavior.
+The selected Agent tab uses accent/bold and optional host underline, not a solid
+background fill; terminal transparency and underline appearance remain host
+properties. Normal `agent_busy` is not a session-error or attention cue, without
+changing core resumability or admission. Genuine diagnostics retain their cues.
+Timer comparisons may reuse a detached frame for the next actual paint;
 unpainted geometry is never activated as a click target or command evidence.
 
 Close-button hover is presentation-only and requires fullscreen mouse-motion

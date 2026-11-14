@@ -28,6 +28,7 @@ import {
   renderDetailInfo,
   renderDetailRule,
   renderDetailSummary,
+  renderDetailToolbar,
   getDetailAttentionNotes,
   transcriptRule,
   type DetailAttentionNote,
@@ -981,20 +982,43 @@ export class DetailPane {
       ? renderDetailSummary(entry.input, th, contentWidth, { activity: room > 0 })
       : [];
     this.hiddenNotes = capacity === 0 ? noteCount : 0;
-    // The rule names both pages either way; notes without a pinned row are
-    // counted on Info, the page that lists them.
+    // Notes without a pinned row are counted on Info, the page that lists
+    // them: on the toolbar's Info control, or the section rule's own label in
+    // the narrow fallback.
+    const unpinned = noteCount && !noticeRows ? noteCount : 0;
+    // The metrics row doubles as a toolbar when the whole metrics row and the
+    // whole page/tools control group fit together; the helper never trims the
+    // metrics to force the controls in, it declines instead. Then the last
+    // fixed row is a plain dim rule, and the controls are clickable on the
+    // metrics row itself. When it declines, the original metrics row stands
+    // and the labeled section rule below carries the controls as before.
+    const metricsRow = summary[0];
+    const toolbar =
+      metricsRows && capacity > 0 && metricsRow !== undefined
+        ? renderDetailToolbar({
+            metrics: metricsRow,
+            theme: th,
+            width: contentWidth,
+            info: this.info,
+            toolsExpanded: this.toolsExpanded,
+            hiddenNotes: unpinned,
+            keys: !this.compose,
+          })
+        : undefined;
     const rule =
-      capacity > 0
+      capacity > 0 && !toolbar
         ? renderDetailRule({
             theme: th,
             width: contentWidth,
             info: this.info,
             toolsExpanded: this.toolsExpanded,
-            hiddenNotes: noteCount && !noticeRows ? noteCount : 0,
+            hiddenNotes: unpinned,
             keys: !this.compose,
           })
         : undefined;
-    const fixed = [...summary, ...notices, ...(rule ? [rule.text] : [])];
+    const fixed = toolbar
+      ? [toolbar.text, ...summary.slice(1), ...notices, toolbar.divider]
+      : [...summary, ...notices, ...(rule ? [rule.text] : [])];
     this.fixedHeight = fixed.length;
     const source = this.info ? undefined : this.options.transcript(entry.agent_id);
     source?.setToolsExpanded?.(this.toolsExpanded);
@@ -1105,16 +1129,18 @@ export class DetailPane {
       };
     this.messageAction = this.composePaint ? footer.messageAction : undefined;
     if (fits && Number.isFinite(dimensions.columns) && width <= dimensions.columns) {
-      // Rule columns are body cells: past the frame's side and the gutter.
+      // Control columns are body cells: past the frame's side and the gutter.
       const edge = this.paintedHeight - 1;
-      const ruleY = fixed.length; // The title row is 0, the rule the last fixed row.
+      // Toolbar controls ride the metrics row (the title row is 0); the
+      // fallback section rule stays the last fixed row.
+      const controlY = toolbar ? 1 : fixed.length;
       const ruleX = (this.options.frame ? 1 : 0) + gutter;
       const hits: ChromeHit[] = [
         ...(footer.tabs ?? []).map((tab) => ({ kind: "agent" as const, y: edge, ...tab })),
         ...(footer.tail ? [{ kind: "tail" as const, y: edge, ...footer.tail }] : []),
-        ...(rule?.items ?? []).map((item) => ({
+        ...((toolbar ?? rule)?.items ?? []).map((item) => ({
           kind: item.kind,
-          y: ruleY,
+          y: controlY,
           from: item.from + ruleX,
           to: item.to + ruleX,
         })),

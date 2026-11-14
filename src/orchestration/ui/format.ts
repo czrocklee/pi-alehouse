@@ -28,8 +28,8 @@ export type Theme = {
   fg(color: string, text: string): string;
   bold(text: string): string;
   italic?(text: string): string;
-  /** Background fill, e.g. `selectedBg`; structural themes without it fall back to bold. */
-  bg?(color: string, text: string): string;
+  /** Selected tab names use the host's underline, with accent/bold as the fallback. */
+  underline?(text: string): string;
 };
 
 const TOOL_ACTION: Record<string, { verb: string; noun?: string; joiner?: string }> = {

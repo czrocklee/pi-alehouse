@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createJiti } from "jiti";
-import { Theme } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+
+// The host `Theme` styles through chalk, which detects colour support once at
+// module load and reports none in a test pipe. Force its level before the SDK
+// module is imported, so bold/underline paint their real closed SGR pairs.
+// Test files run in their own process, so this stays file-local.
+process.env.FORCE_COLOR = "3";
+const { Theme } = await import("@earendil-works/pi-coding-agent");
 
 // Direct source tests: the pane integration is a separate lane, these exercise
 // the pure layout helpers only, without a build.
@@ -714,9 +720,9 @@ test("hidden attention rides the selected tab's marker, else a !N cue leads the 
 test("hit ranges slice by terminal column through real ANSI, CJK and emoji", () => {
   // The pinned SDK's public `Theme` class with a controlled token fixture --
   // not a live host instance and no private loader state. It still renders
-  // the real SGR sequences, so the selected tab carries a concrete
-  // `selectedBg` background, not just any foreground escape.
-  const SELECTED_BG_SGR = "\u001b[48;2;18;52;86m"; // truecolor SGR for #123456
+  // the real SGR sequences, and it still offers a `selectedBg` background:
+  // the selected tab must never ask for it. Selection is the nickname's own
+  // accent+bold+underline, closed around the name alone.
   const host = new Theme(
     {
       accent: "#aa00aa",
@@ -733,12 +739,18 @@ test("hit ranges slice by terminal column through real ANSI, CJK and emoji", () 
     { selectedBg: "#123456" },
     "truecolor",
   );
-  assert.equal(host.getBgAnsi("selectedBg"), SELECTED_BG_SGR);
-  assert.ok(host.bg("selectedBg", "x").startsWith(SELECTED_BG_SGR));
+  // The host theme really can paint that fill; the render simply must not.
+  assert.ok(host.bg("selectedBg", "x").startsWith("\u001b[48;2;18;52;86m"));
   const names = ["审查员🚀", "beta"];
   const entries = names.map((name, index) => ({
     agent_id: `p${index}`,
-    input: input({ agent_id: `p${index}`, run_id: `run-p${index}`, name }),
+    input: input({
+      agent_id: `p${index}`,
+      run_id: `run-p${index}`,
+      name,
+      status: "completed",
+      execution_exited: true,
+    }),
   }));
   for (const framed of [false, true]) {
     const frame = renderDetailFooter({
@@ -756,6 +768,8 @@ test("hit ranges slice by terminal column through real ANSI, CJK and emoji", () 
     });
     const offset = framed ? 3 : 0;
     assert.ok(frame.text.includes("\u001b["), `${framed}: real ANSI is painted`);
+    // No background SGR anywhere on the edge, although the theme has one.
+    assert.ok(!frame.text.includes("\u001b[48;"), `${framed}: the selected tab has no fill`);
     // `审查员🚀` is 8 cells but 4 code points: code-point slicing would shift
     // every following range, so each tab must name exactly its own Agent.
     const labels = { p0: "审查员🚀", p1: "beta" };
@@ -776,15 +790,37 @@ test("hit ranges slice by terminal column through real ANSI, CJK and emoji", () 
       for (const other of Object.values(labels).filter((name) => name !== own))
         assert.ok(!label.includes(other), `${framed}: ${JSON.stringify(label)}`);
     }
-    // The selected tab's range keeps the real `selectedBg` fill: the slice
-    // carries that exact background SGR, not just any escape.
+    // The selected tab: accent+bold+underline on the nickname alone.
     const selected = frame.tabs.find((tab) => tab.agent_id === "p1");
     const content = slice(frame, selected, offset);
-    assert.ok(content.includes(SELECTED_BG_SGR), `${framed}: the selected tab keeps its fill`);
+    assert.ok(content.includes(host.getFgAnsi("accent")), `${framed}: the nickname is accented`);
+    assert.ok(content.includes("\u001b[1m"), `${framed}: the nickname is bold`);
     assert.match(stripTerminalSequences(content), /beta/);
+    // The underline opens exactly once and closes again inside the tab's own
+    // columns, wrapping the nickname alone -- never the lifecycle glyph, the
+    // padding or a peer.
+    assert.equal(content.split("\u001b[4m").length - 1, 1, `${framed}: one underline`);
+    const open = content.indexOf("\u001b[4m");
+    const close = content.indexOf("\u001b[24m", open);
+    assert.ok(close > open, `${framed}: the underline is closed`);
+    assert.equal(
+      stripTerminalSequences(content.slice(open, close + "\u001b[24m".length)),
+      "beta",
+      `${framed}: only the nickname is underlined`,
+    );
+    // The lifecycle glyph keeps its own colour: success, not the accent.
+    assert.ok(content.includes(host.getFgAnsi("success")), `${framed}: the glyph keeps its colour`);
     // One column short of the range: the tab's own padding, never the label.
     const edge = sliceByColumn(frame.text, selected.to - offset - 1, 1);
     assert.equal(stripTerminalSequences(edge), " ", `${framed}: the boundary is a cell`);
+    // The unselected peer carries neither the accent nor the underline.
+    const peer = frame.tabs.find((tab) => tab.agent_id === "p0");
+    const peerContent = slice(frame, peer, offset);
+    assert.ok(
+      !peerContent.includes(host.getFgAnsi("accent")),
+      `${framed}: the peer is not accented`,
+    );
+    assert.ok(!peerContent.includes("\u001b[4m"), `${framed}: the peer is not underlined`);
   }
 });
 

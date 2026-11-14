@@ -275,8 +275,8 @@ back to the previous one-line composer in the footer row
 (`› … Enter send · Esc cancel`), which then replaces the tabs. While typing, the
 tray's heading names only sending and discarding the draft, and a stale target
 is not offered Enter send. The footer drops every key the draft would swallow
-(the `‹ ›` arrows, `[M message]` and the docked `Esc` hint) and the section rule
-drops its key accents. Tabs, **[Stop]**, page/tool labels and the tail cue stay
+(the `‹ ›` arrows, `[M message]` and the docked `Esc` hint) and the body controls
+drop their key accents. Tabs, **[Stop]**, page/tool labels and the tail cue stay
 clickable when painted. While Stop confirmation is armed, Enter only
 cancels that intent; it does not send the draft. If compaction leaves no room
 for the tray, confirmation temporarily occupies the footer without discarding
@@ -340,9 +340,13 @@ the glyph never does.
 
 The footer, or the bottom edge of a floating pane, is the pane's navigation and
 action bar. Agent tabs sit at its left when more than one Agent exists, each
-showing its status glyph and `?`/`!` attention markers; the selected tab is
-filled with the theme's selection background when background styling is
-available, otherwise distinguished by bold text. Peers that do not fit fold into
+showing its status glyph and `?`/`!` attention markers. The selected nickname
+uses accent, bold and the host theme's optional underline, without a background
+fill; structural themes without underline retain accent and bold. Status glyphs
+and attention markers keep their own semantic colors, and neither the padding
+nor the markers inherits the nickname's underline. With only a glyph fitting,
+that glyph carries the selection styling without changing its lifecycle color.
+Peers that do not fit fold into
 clickable `+N` summaries with their attention counts, and `‹ ›` step to the
 previous/next Agent. At its right, `↓ N more` counts rows below the viewport on
 the current page, Transcript or Info. It is accented while a live transcript
@@ -350,7 +354,7 @@ keeps growing; a click or **End** goes to the current page's end, resuming live
 tail following on Transcript. Next come `[M message]` and `[S Stop]`, Stop always
 outermost. Docked panes, which have no `×`, keep an `Esc` hint before the
 actions. The footer does not repeat counters, status, context or a key legend;
-the title, metrics and section rule carry the current Agent's information.
+the title, metrics and body controls carry the current Agent's information.
 Framed panes additionally show a scrollbar.
 Under width pressure peer tabs fold first, then the arrows, then `↓ N more`
 (framed, where the scrollbar also shows position) or `[M message]` (docked, where
@@ -358,16 +362,33 @@ the cue is the only position left). An armed Stop folds every peer so the
 confirmation names a single target.
 
 Sticky compact metric and attention rows stay pinned above the independently
-scrollable transcript. At most two highest-priority attention rows are shown;
+scrollable transcript. Normal `agent_busy` is a reuse-availability observation,
+not a session fault: it creates no red session diagnostic, attention row or
+warning marker. This does not change resumability or command admission; real
+session, history, cleanup and other attention facts remain visible.
+At most two highest-priority attention rows are shown;
 when height permits only one, its overflow count still includes every omitted
 note. With no attention row, the section rule counts them as `Info +N` on either
 page; with no rule either, the selected tab's own `?`/`!` marker carries them,
 or a required `!N` cue leads the footer. Clipping a nickname never suppresses
 the last warning/question cue. **I** exposes all diagnostics,
-including the human-steer admission fact. The section rule above the body reads
-`Transcript · Info` (the page shown is brighter) and, on the transcript page,
-`Tools collapsed` or `Tools expanded`; the keys **I** and **T** are accented on
-their own labels, and each label is also clickable. Narrow rules retain the
+including the human-steer admission fact. When width permits, the metrics row
+places the complete current metrics at the left and the right-aligned
+`Transcript · Info` controls plus `Tools collapsed` or `Tools expanded` at the
+right. Merge eligibility always reserves the complete Transcript group with
+the longer of `collapsed`/`expanded`, independent of page and Tools state. Info
+leaves a blank, non-clickable Tools slot; the shorter Tools state has non-clickable
+trailing padding. At fixed width, metrics and hidden-note count, page labels and
+the merge/fallback choice therefore stay put across those transitions. Real
+metrics/count changes or resizing may still change the layout.
+A dim `│` belongs to the right group, with at least two spaces before it and
+exactly two after it; it does not extend into other rows. The following section
+rule is then a plain dim horizontal line. This uses the existing rows, not an
+extra toolbar or blank row. If both reserved groups do not fit, the metrics are
+not shortened further to force them together: the controls return to the labeled
+section rule above the body, retaining its existing repeated-click behavior.
+The page shown is brighter; the keys **I** and **T** are accented on their own
+labels, and each painted label is clickable in either layout. Narrow rules retain the
 current page's label, except that hidden diagnostics prioritize `Info +N`;
 **I** still switches pages and **Esc** leaves Info when its other label cannot
 fit. The default compact view keeps running and
