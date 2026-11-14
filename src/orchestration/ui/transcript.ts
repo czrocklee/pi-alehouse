@@ -27,7 +27,6 @@ import {
   CompactionSummaryMessageComponent,
   parseSkillBlock,
   SkillInvocationMessageComponent,
-  ToolExecutionComponent,
   UserMessageComponent,
   type ToolRenderers,
   type sessionEntryToContextMessages,
@@ -44,6 +43,7 @@ import {
 import { humanSteerLead } from "../presentation/human-steer-text.ts";
 import { paneRow, type TranscriptFrame, type TranscriptRows } from "./format.ts";
 import { plainText } from "./text.ts";
+import { TranscriptToolCard } from "./transcript-tool-card.ts";
 
 /** Where a child's messages come from. Structural, so the pane never holds a session. */
 export interface TranscriptSource {
@@ -53,6 +53,8 @@ export interface TranscriptSource {
   inFlight(): unknown;
   /** The child's registered definition for a tool, for custom renderers. */
   toolDefinition(name: string): unknown;
+  /** Binding changes retire existing cards; token updates must not change it. */
+  toolRenderersRevision?(): unknown;
 }
 export interface TranscriptOptions {
   tui: TUI;
@@ -71,7 +73,7 @@ interface Block {
  * applied; nothing else can flip it, because the pane is a projection that
  * never routes mouse events into these components. */
 interface ToolEntry {
-  readonly component: ToolExecutionComponent;
+  readonly component: TranscriptToolCard;
   readonly block: Block;
   expanded: boolean;
   /** A result (or the assistant's own failure) has been applied to the card. */
@@ -292,6 +294,7 @@ export class TranscriptContent implements TranscriptRows {
   private consumed = 0;
   private consumedMessages: readonly unknown[] = [];
   private messagesIdentity: readonly unknown[] | undefined;
+  private toolRenderersRevision: unknown;
   /** Whether anything above a user message was rendered, driving its spacer. */
   private visible = false;
   /** Every tool card this pane created, for the presentation-only expansion
@@ -448,8 +451,10 @@ export class TranscriptContent implements TranscriptRows {
    * Opaque wrappers (including MouseRegion) use public invalidate(); the native
    * assistant's thinking wrapper delegates to its Markdown/Text leaf. */
   invalidateLayout(): void {
+    this.syncRendererBinding();
     const invalidate = (component: Component): void => {
-      if (component instanceof Container || component instanceof Box) {
+      if (component instanceof TranscriptToolCard) component.invalidateLayout();
+      else if (component instanceof Container || component instanceof Box) {
         for (const child of component.children) invalidate(child);
       } else component.invalidate();
     };
@@ -465,6 +470,7 @@ export class TranscriptContent implements TranscriptRows {
   /** Ordinary external invalidation retains its native-component semantics.
    * Palette replacement should use setTheme() to refresh captured ANSI too. */
   invalidate(): void {
+    this.syncRendererBinding();
     for (const block of this.blocks) {
       block.container.invalidate();
       block.rows = undefined;
@@ -479,6 +485,7 @@ export class TranscriptContent implements TranscriptRows {
    * actually changed lose their cached rows; the streaming tail and untouched
    * settled blocks keep theirs. No runtime or permission state is involved. */
   setToolsExpanded(expanded: boolean): void {
+    this.syncRendererBinding();
     if (this.toolsExpanded === expanded) return;
     this.toolsExpanded = expanded;
     for (const entry of this.tools) this.applyExpansion(entry);
@@ -571,6 +578,7 @@ export class TranscriptContent implements TranscriptRows {
    * compaction or a branch — start over rather than appending onto stale blocks.
    */
   private reset(): void {
+    for (const entry of this.tools) entry.component.retire();
     this.blocks = [];
     this.consumed = 0;
     this.consumedMessages = [];
@@ -582,7 +590,23 @@ export class TranscriptContent implements TranscriptRows {
     this.layout = undefined;
   }
 
+  /** Retire callback-bearing components before any SDK operation can render
+   * or invalidate them, not only before the next frame samples the history. */
+  private syncRendererBinding(): void {
+    let revision: unknown;
+    try {
+      revision = this.options.source.toolRenderersRevision?.();
+    } catch {
+      // A presentation lookup failure is not an Owner/session failure.
+    }
+    if (revision !== this.toolRenderersRevision) {
+      this.reset();
+      this.toolRenderersRevision = revision;
+    }
+  }
+
   private consume(): void {
+    this.syncRendererBinding();
     const messages = this.options.source.messages();
     if (messages === this.messagesIdentity && messages.length === this.consumed) return;
     // Only inspect prefixes when the source history actually changed. A branch
@@ -669,15 +693,21 @@ export class TranscriptContent implements TranscriptRows {
         (this.options.source.toolDefinition(content.name) as ToolRenderers | undefined) ??
         RAW_RENDERERS;
       const projection = sanitizedToolProjection(content.name, content.arguments);
-      const tool = new ToolExecutionComponent(
-        projection.name,
-        content.id,
-        projection.args,
-        { showImages: false },
+      const binding = this.toolRenderersRevision;
+      const tool = new TranscriptToolCard({
+        name: projection.name,
+        callId: content.id,
+        args: projection.args,
         renderers,
-        this.options.tui,
-        this.options.cwd,
-      );
+        tui: this.options.tui,
+        cwd: this.options.cwd,
+        isCurrent: () => this.options.source.toolRenderersRevision?.() === binding,
+        changed: () => {
+          block.rows = undefined;
+          this.rows = undefined;
+          this.layout = undefined;
+        },
+      });
       // A fresh card is active/incomplete (or already failed below), so it
       // starts expanded; a successful result later collapses it when the
       // pane's mode asks for it.

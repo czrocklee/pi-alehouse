@@ -409,6 +409,15 @@ not manufacture terminal prompt boundaries. Full tool output remains visible
 in the detail transcript; tool arguments in the compact widget remain restricted
 to identifying fields. Preview simplification does not rewrite the native transcript.
 
+Each tool card scopes renderer invalidation to its live binding and its own
+presentation lifetime. Binding changes, history rewrites, theme replacement and
+pane disposal revoke the old card's supplied invalidation handles, including
+before the next paint. Active invalidation also clears the card's transcript
+row cache. Callback/component failures and Promise-returning display code
+select a stable bounded raw fallback instead of failing neighboring history;
+asynchronous rendering is not supported. This protects bridge-supplied entry
+points, not arbitrary retained component references or extension-owned timers.
+
 On Pi's alternate/fullscreen renderer the pane floats as a centered overlay; on
 the regular renderer it docks where the editor is. This is a safety choice, not
 a preference: regular overlays are composited into the scrollback backing array

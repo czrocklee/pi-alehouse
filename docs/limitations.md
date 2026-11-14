@@ -706,6 +706,12 @@ modes; full capacity and attention facts remain visible. Idle widget repaints
 reuse detached presentation snapshots, not fresh command-admission evidence;
 out-of-band idle changes appear only on the next explicit refresh.
 
+Tool cards revoke bridge-supplied invalidation handles when retired and isolate
+synchronous callback/component failures with bounded raw fallbacks.
+Promise-returning display code is rejected, not awaited. These display guards
+are not an OS isolation boundary: they do not cancel arbitrary extension-owned
+timers or revoke independently retained component references.
+
 Interactive preset editing reuses the host's native `/model` selector with a
 physical-model-only view; RPC uses a standard list instead. The native selector
 may refresh provider catalogues and update host credential/cache state, just as
