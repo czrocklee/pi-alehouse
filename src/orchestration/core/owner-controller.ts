@@ -2506,7 +2506,13 @@ export class OwnerController {
     // Schedule after recording the reservation, so synchronous port exceptions
     // and very fast exits are handled exactly like asynchronous preparation.
     const delivery = Promise.resolve()
-      .then(() => run.session!.steer(message, () => this.acceptsInput(run)))
+      .then(() =>
+        run.session!.steer(
+          message,
+          () => this.acceptsInput(run),
+          source === "human" ? "human" : kind === "soft_budget" ? "orchestration" : "parent",
+        ),
+      )
       .then((queued) => {
         if (!queued) {
           run.record.discarded_inputs.push(message);

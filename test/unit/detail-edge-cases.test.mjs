@@ -236,47 +236,53 @@ test("every accepted steer takes over the one admission row", (t) => {
   assert.equal(f.sent.length, 2);
 });
 
-test("an open Info page keeps the hidden count on its rule, and Esc returns from it", (t) => {
-  // Nine docked rows leave room for the section rule but no attention row.
+test("an open Info page keeps the hidden count on the footer cue, and Esc returns from it", (t) => {
+  // Nine docked rows leave room for the dock but no attention row or back link.
   const f = fixture(t, {
     height: 9,
     current: view({ cleanup_errors: ["first fault", "second fault"] }),
   });
-  const rule = (lines) => lines.find((line) => line.includes("Transcript · Info")) ?? "";
-  assert.match(rule(f.paint()), /Info \+2 ─+ Tools collapsed ──$/);
+  assert.match(f.paint().at(-1), /!2/, "the footer cue counts every hidden note");
+  assert.ok(!f.paint().join("\n").includes("Transcript · Info"), "no constant page row");
   f.pane.handleInput("i");
   const info = f.paint();
-  // Info has no tool cards: its rule keeps the count but not the tools state.
-  assert.match(rule(info), /Info \+2 ─+$/, info.join("\n"));
+  assert.match(info.at(-1), /!2/, "the count survives the page switch");
+  assert.ok(
+    info.some((line) => /^ {2}task\b/.test(line)),
+    "the fields page is shown",
+  );
+  // The notes are listed on that page, at its own scroll position.
+  f.pane.handleInput("\x1b[F");
+  assert.ok(
+    f.paint().some((line) => line.includes("second fault")),
+    "Info lists the notes",
+  );
   // Esc unwinds the Info layer before it ever closes the pane.
   f.pane.handleInput("\x1b");
   assert.equal(f.pane.isOpen(), true);
-  assert.match(rule(f.paint()), /Tools collapsed/);
+  assert.match(f.paint().at(-1), /!2/);
+  assert.ok(
+    f.paint().some((line) => /ROW\d+/.test(line)),
+    "the transcript returns",
+  );
 });
 
-for (const [height, hidden] of [
-  [12, 2],
-  [40, 1],
-])
-  test(`Info attention overflow keeps its count without offering I info at height ${height}`, (t) => {
+for (const height of [12, 40])
+  test(`Info keeps the hidden-note count without offering I info at height ${height}`, (t) => {
     const f = fixture(t, {
       height,
       current: view({ cleanup_errors: ["first fault", "second fault", "third fault"] }),
     });
-    assert(f.paint().some((line) => line.includes("I info")));
+    assert(
+      f.paint().some((line) => line.includes("I info")),
+      f.paint().join("\n"),
+    );
     f.pane.handleInput("i");
     const info = f.paint();
-    assert(
-      info.some((line) => line.includes(`+${hidden}`)),
-      info.join("\n"),
-    );
-    assert(!info.some((line) => /I info\b/.test(line)), info.join("\n"));
-    // Both page names keep their toolbar columns; Info's full Tools slot is
-    // blank (three separator cells plus fifteen Tools cells), not a control.
-    assert(
-      info.some((line) => /Transcript · Info {18}$/.test(line)),
-      info.join("\n"),
-    );
+    const flat = info.join("\n");
+    assert.doesNotMatch(flat, /I info\b/, "Info is already open: no redundant key hint");
+    assert.match(flat, /\+\d|!\d/, `the omitted notes stay counted: ${flat}`);
+    assert.doesNotMatch(flat, /Transcript · Info/, "no constant page row");
     f.pane.handleInput("i");
     assert(f.paint().some((line) => line.includes("I info")));
   });
@@ -371,12 +377,26 @@ test("tool toggles preserve the painted message, including from Info", (t) => {
   );
 });
 
-test("hidden summaries and tabs are not formatted", (t) => {
+test("an unpaintable pane does not format its hidden summary", (t) => {
   const current = view();
   current.effective_settings = { ...settings };
   Object.defineProperty(current.effective_settings, "model", {
     get() {
       throw new Error("hidden summary was formatted");
+    },
+  });
+  const f = fixture(t, { current, height: 4 });
+  assert.deepEqual(f.paint(), [], "the two-row budget cannot fit title/status/footer");
+});
+
+test("compact drafts skip hidden tabs while keeping visible bottom metrics", (t) => {
+  const current = view();
+  current.effective_settings = { ...settings };
+  let modelReads = 0;
+  Object.defineProperty(current.effective_settings, "model", {
+    get() {
+      modelReads++;
+      return settings.model;
     },
   });
   let hidden = false;
@@ -388,14 +408,20 @@ test("hidden summaries and tabs are not formatted", (t) => {
     },
   });
   const f = fixture(t, { current, peers: [peer], height: 8 });
-  // Tabs ride the edge, so they survive heights that hide every pinned row.
-  assert.match(f.paint().at(-1), /cobalt/);
-  // A compact draft owns that edge: then the hidden tabs are never formatted.
+  // The bottom metrics now survive this height; tabs still ride the edge.
+  const before = f.paint();
+  assert.match(before.at(-1), /cobalt/);
+  assert.match(before.at(-2), /running/);
+  assert.ok(modelReads > 0, "the visible summary is formatted");
+  // A compact draft owns that edge: only the hidden tabs skip formatting.
   f.pane.handleInput("m");
   hidden = true;
+  const previousReads = modelReads;
   const composing = f.paint();
   assert.match(composing.at(-1), /^› /);
   assert.doesNotMatch(composing.at(-1), /cobalt/);
+  assert.match(composing.at(-2), /running/);
+  assert.ok(modelReads > previousReads, "the summary remains visible beside a compact draft");
 });
 
 test("retiring Stop state does not retire still-painted tabs", (t) => {

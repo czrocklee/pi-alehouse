@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createJiti } from "jiti";
 import { createEventBus, initTheme, SessionManager } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, Text } from "@earendil-works/pi-tui";
 import { settings } from "../support/controller-fixture.mjs";
 
 // The UI bridge loads source through jiti (`fsCache: false`): ChildActivity
@@ -142,7 +142,13 @@ function bridgedRoster(t, { ids = ["a", "b"], toolName = "bash", observe } = {})
     paneTui,
     pane: () => pane,
     open: () => shortcuts.get("alt+a").handler(),
-    transcript: () => pane.render(120).join("\n").split("Transcript · Info")[1] ?? "",
+    // The scrolling body between the title and the bottom dock's plain
+    // separator; the dock's metrics row is not transcript.
+    transcript: () => {
+      const rows = pane.render(120).map(stripTerminalSequences);
+      const rule = rows.findLastIndex((row) => /^─+$/.test(row));
+      return rows.slice(1, rule === -1 ? rows.length - 1 : rule).join("\n");
+    },
   };
 }
 
@@ -318,6 +324,86 @@ test("a pane T toggle after an unbind retires callbacks through the production r
   assert.match(text, /bash/, "the card falls back to bounded raw rendering");
   assert.match(text, /echo a/, "with its recorded arguments");
   assert.match(text, /TASK_FOR_a/, "and the recorded history stays on screen");
+  h.pane().handleInput("\x1b");
+  await opening;
+});
+
+/** The user-message labels printed in the pane, in paint order. Only these
+ * exact rows are labels, so the sequence also proves no other label appeared. */
+const LABELS = [
+  "From parent",
+  "From user",
+  "Alehouse input",
+  "Input",
+  "Steering input (human lead)",
+];
+// eslint-disable-next-line no-control-regex -- strip the theme's own SGR spans
+const SGR = /\x1b\[[0-9;]*m/g;
+const labelSequence = (text) =>
+  text
+    .replace(SGR, "")
+    .split("\n")
+    .map((row) => row.trim())
+    .filter((row) => LABELS.includes(row));
+
+test("the panel factory forwards each recorded origin to the pane by message identity", async (t) => {
+  const h = bridgedRoster(t, { ids: ["a"] });
+  const a = h.agents[0];
+  // Identical recorded text with three different provenances: only message
+  // identity can tell them apart, so a content-derived label would collapse
+  // all three into one. The fixture's own TASK_FOR_a message stays unbound.
+  const fromParent = { role: "user", content: "SAME_TEXT", timestamp: 2 };
+  const fromHuman = { role: "user", content: "SAME_TEXT", timestamp: 3 };
+  const unbound = { role: "user", content: "SAME_TEXT", timestamp: 4 };
+  a.sessionManager.appendMessage(fromParent);
+  a.sessionManager.appendMessage(fromHuman);
+  a.sessionManager.appendMessage(unbound);
+  a.activity.recordInputOrigin(fromParent, "parent");
+  a.activity.recordInputOrigin(fromHuman, "human");
+  // Observe what the pane asks the live observation about, without replacing
+  // the projection: the widget's own forwarding stays under test.
+  const asked = [];
+  const lookup = a.activity.inputOrigin.bind(a.activity);
+  a.activity.inputOrigin = (message) => {
+    asked.push(message);
+    return lookup(message);
+  };
+  const opening = h.open();
+  assert.deepEqual(
+    labelSequence(h.transcript()),
+    ["Input", "From parent", "From user", "Input"],
+    "the unbound message stays neutral while the two recorded origins are named",
+  );
+  assert.equal(h.transcript().match(/SAME_TEXT/g)?.length, 3, "every body still renders");
+  for (const message of [fromParent, fromHuman, unbound])
+    assert.ok(
+      asked.includes(message),
+      "the pane asked about the exact recorded message object, not its text",
+    );
+
+  // Renderer retirement (the session_shutdown backstop) drops no provenance:
+  // the pane rebuilds its blocks and still labels the retained history.
+  a.activity.retireToolRenderers();
+  h.widget.wake();
+  assert.deepEqual(
+    labelSequence(h.transcript()),
+    ["Input", "From parent", "From user", "Input"],
+    "retained history keeps its recorded origins after the live session retires",
+  );
+  assert.equal(a.activity.inputOrigin(fromParent), "parent", "the sidecar itself survives");
+  assert.equal(a.activity.inputOrigin(unbound), undefined, "and still invents nothing");
+
+  // A message recorded after retirement is labeled from its own origin.
+  const afterRetirement = { role: "user", content: "LATE_TEXT", timestamp: 5 };
+  a.sessionManager.appendMessage(afterRetirement);
+  a.activity.recordInputOrigin(afterRetirement, "orchestration");
+  h.widget.wake();
+  assert.deepEqual(
+    labelSequence(h.transcript()),
+    ["Input", "From parent", "From user", "Input", "Alehouse input"],
+    "a later recorded origin reaches the same pane",
+  );
+  assert.match(h.transcript(), /LATE_TEXT/);
   h.pane().handleInput("\x1b");
   await opening;
 });

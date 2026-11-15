@@ -276,6 +276,29 @@ test("hidden peers keep their +N, ?q and !w counts, unstyled and exact", () => {
   noBg(rec.calls, "strip");
 });
 
+test("the framed divider is a muted ASCII pipe, styled by nothing else", () => {
+  const rec = recording();
+  const { text } = strip({ framed: true, theme: rec.theme });
+  // One join, one literal U+007C: never the rule chrome the frame draws.
+  assert.equal([...text].filter((ch) => ch === "|").length, 1, text);
+  assert.ok(!text.includes("\u2502") && !text.includes("\u2500"), text);
+  assert.deepEqual(
+    rec.calls.filter(([kind, , t]) => kind === "fg" && t === "|"),
+    [["fg", "borderMuted", "|"]],
+    JSON.stringify(rec.calls),
+  );
+  noBg(rec.calls, "strip");
+  // Docked, nothing is painted between the tabs' own padding.
+  const docked = recording();
+  const plainDocked = strip({ framed: false, theme: docked.theme }).text;
+  assert.ok(!plainDocked.includes("|"), plainDocked);
+  assert.deepEqual(
+    docked.calls.filter(([, , t]) => t === "|"),
+    [],
+    JSON.stringify(docked.calls),
+  );
+});
+
 test("a theme without an underline helper degrades to accent+bold", () => {
   const degraded = {
     fg: (color, text) => (color === "accent" ? `<${text}>` : text),

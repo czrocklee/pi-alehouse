@@ -7,8 +7,9 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 // current src/ tree, never a possibly stale dist/ build. The unit lane's
 // build step still serves the other dist-importing files.
 const jiti = createJiti(import.meta.url, { fsCache: false });
-const { DetailPane, renderDetailFields, renderDetailTitle, transcriptRule, wrapText } =
-  await jiti.import("../../src/orchestration/ui/agent-detail.ts");
+const { DetailPane, renderDetailFields, renderDetailTitle, wrapText } = await jiti.import(
+  "../../src/orchestration/ui/agent-detail.ts",
+);
 const { paneRow } = await jiti.import("../../src/orchestration/ui/format.ts");
 const { plainText, singleLineText } = await jiti.import("../../src/orchestration/ui/text.ts");
 const { renderWidget } = await jiti.import("../../src/orchestration/ui/agent-widget.ts");
@@ -127,33 +128,30 @@ test("ordinary detail metadata cannot inject terminal or bidi controls", () => {
 });
 
 test("the title reserves task and Run reuse cue before optional identity text", () => {
-  const title = renderDetailTitle({ view: view(), live: live() }, 0, theme, 100);
+  const title = renderDetailTitle({ view: view(), live: live() }, theme, 100);
   assert.match(title, /reviewer/);
   assert.match(title, /scout/);
   assert.doesNotMatch(title, /researcher/);
   assert.match(title, /Review the lifecycle contract/);
   assert.match(title, /r-8f3a/);
-  // The title is sticky and carries the live status itself.
-  for (const [overrides, badge] of [
-    [{}, "⠋ running"],
-    [{ status: "completed" }, "✓ completed"],
-    [{ finalization_pending: true }, "⠋ finishing"],
-  ]) {
-    const header = renderDetailTitle({ view: view(overrides), live: live() }, 0, theme, 60);
-    assert.ok(header.includes(badge), `${badge} stays pinned in the title: ${header}`);
+  // The title is sticky for identity/task/reuse only: lifecycle state belongs
+  // to the one bottom dock row.
+  for (const overrides of [{}, { status: "completed" }, { finalization_pending: true }]) {
+    const header = renderDetailTitle({ view: view(overrides), live: live() }, theme, 60);
+    assert.doesNotMatch(header, /(?:◦|⠋|✓|\?|✗|■) /, header);
     assert(visibleWidth(header) <= 60);
   }
   for (const width of [60, 44, 30]) {
     const long = view({ task: 27, name: "nickname".repeat(50), description: "审查".repeat(60) });
     const before = structuredClone(long);
-    const tight = renderDetailTitle({ view: long, live: live() }, 0, theme, width);
+    const tight = renderDetailTitle({ view: long, live: live() }, theme, width);
     assert(visibleWidth(tight) <= width, JSON.stringify(tight));
     assert.match(tight, /#27/);
     assert.match(tight, /审查/);
     assert.deepEqual(long, before, "title fitting is a projection, not a metadata rewrite");
   }
   for (const task of [undefined, 0, -1, 1.5, NaN, Infinity]) {
-    const fallback = renderDetailTitle({ view: view({ task }), live: live() }, 0, theme, 100);
+    const fallback = renderDetailTitle({ view: view({ task }), live: live() }, theme, 100);
     assert.match(fallback, /r-8f3a/, "invalid task ordinals fall back to the Run ID");
     assert.doesNotMatch(fallback, /#(?:0|-1|1\.5|NaN|Infinity)/);
   }
@@ -168,8 +166,11 @@ test("detail profile labels say worker and scout without renaming nicknames or h
     for (const name of ["", "editor"]) {
       const v = view({ name, effective_settings: { ...view().effective_settings, profile } });
       const before = structuredClone(v);
-      const title = renderDetailTitle({ view: v, live: live() }, 0, theme, 100);
-      assert.ok(title.includes(name ? `${name} (${displayed})` : displayed), title);
+      const title = renderDetailTitle({ view: v, live: live() }, theme, 100);
+      // A named Agent carries role/difficulty; an unnamed one uses the profile
+      // as its identity, so only the difficulty tag remains.
+      const expected = name ? `${name} (${displayed}/d5)` : `${displayed} (d5)`;
+      assert.ok(title.includes(expected), title);
       if (!name)
         assert.equal(title.split(displayed).length - 1, 1, "unnamed profile appears only once");
       assert.deepEqual(
@@ -520,7 +521,6 @@ test("every field line fits the width, counting CJK by the columns it occupies",
         },
         width,
       ),
-      transcriptRule(theme, width),
     ];
     for (const line of lines)
       assert.ok(visibleWidth(line) <= width, `${width}: ${JSON.stringify(line)}`);
@@ -663,32 +663,32 @@ const pane = (transcriptLines, rows = 20, extra = {}) => {
   });
   return p;
 };
-const strip = (lines) => lines.slice(1, -1);
+/** The scrollable window only: the title, the bottom dock rows and the footer
+ * are fixed chrome, so a body read starts at the row after the header. */
+const strip = (lines) => lines.slice(1, -3);
 
-test("the pane pins compact metrics, then the rule, then the transcript, with no row lost at the seam", (t) => {
-  // Tall enough that the pinned rows, the rule and the first transcript rows
-  // are all on screen at once, which is the only way to see the seam.
+test("the transcript opens under the header and the dock closes the body, with no row lost at the seam", (t) => {
+  // Tall enough that the dock and the first transcript rows are on screen at
+  // once, which is the only way to see both seams.
   const p = pane(40, 60);
   t.after(() => p.dispose());
   p.render(80); // lay out once, so the keys have geometry
   p.handleInput("\u001b[H"); // home: pin to the top and stop following
-  const top = strip(p.render(80));
-  // The full fields live on the Info page; the transcript page leads with the
-  // compact metrics row, never a field row.
-  assert.match(top[0], /claude-opus-5\/medium · ↻3≤256/);
-  const isRule = (line) => line.includes("Transcript · Info");
-  const ruleAt = top.findIndex(isRule);
-  assert.equal(top.filter(isRule).length, 1, "exactly one rule");
+  const lines = p.render(80);
+  const top = strip(lines);
+  // The full fields live on the Info page; the transcript page begins with the
+  // transcript itself, never a metrics, rule or field row.
+  assert.equal(top[0], "T0", "the transcript starts on the very next row");
+  assert.equal(top[1], "T1");
   assert.ok(
-    top
-      .slice(0, ruleAt)
-      .every((line) => !/^ {2}(?:task|run|routing|effort|model|cwd|tools)\s/.test(line)),
-    "the transcript starts directly after the rule, not after all full fields",
+    top.every((line) => !/^ {2}(?:task|run|routing|effort|model|cwd|tools)\s/.test(line)),
+    "no full field row leads the transcript",
   );
-  // The row right after the rule must be the transcript's row 0 — an off-by-one
-  // here silently eats the first line of every conversation.
-  assert.equal(top[ruleAt + 1], "T0", "and the transcript starts on the very next row");
-  assert.equal(top[ruleAt + 2], "T1");
+  // The one dock row and its plain separator close the body.
+  assert.match(lines.at(-2), /↻3\/256/, "the dock carries the turns ratio");
+  assert.match(lines.at(-2), /total 1m33s/, "and the elapsed total");
+  assert.match(lines.at(-3), /^─+$/);
+  assert.ok(!lines.at(-3).includes("Transcript"), "the separator carries no page labels");
 });
 
 test("the pane follows the live tail by default, as the main conversation does", (t) => {
@@ -862,7 +862,7 @@ test("a short body is not padded into a tall pane, and a tall one is capped", (t
 });
 
 for (const frame of [false, true])
-  test(`live status stays pinned in the title with shared lifecycle glyphs/colors (frame=${frame})`, (t) => {
+  test(`live status stays pinned in the bottom dock with shared lifecycle glyphs/colors (frame=${frame})`, (t) => {
     let current = view();
     const colors = [];
     const recording = {
@@ -884,7 +884,7 @@ for (const frame of [false, true])
       ["running", true, "⠋", "finishing", "dim"],
       ["cancelling", false, "⠋", "cancelling", "warning"],
       ["completed", false, "✓", "completed", "success"],
-      ["needs_input", false, "?", "needs_input", "warning"],
+      ["needs_input", false, "?", "needs input", "warning"],
       ["failed", false, "✗", "failed", "error"],
       ["cancelled", false, "■", "cancelled", "dim"],
     ]) {
@@ -892,18 +892,23 @@ for (const frame of [false, true])
       colors.length = 0;
       const lines = p.render(80),
         badge = `${icon} ${label}`;
-      // The sticky title carries the status at its right end; the footer
-      // never repeats it. Docked it keeps the close hint, framed the close
-      // control on the title replaces it.
-      assert(lines[0].includes(badge), lines[0]);
+      // The one dock row carries the status; the title never repeats it and the
+      // footer stays navigation/actions only. Docked the footer keeps the close
+      // hint, framed the close control on the title replaces it.
+      assert(lines.at(-2).includes(badge), lines.at(-2));
+      assert(!lines[0].includes(label), lines[0]);
       assert(!lines.at(-1).includes(label), lines.at(-1));
-      if (frame) assert.match(lines[0], new RegExp(`${label} ─ ✕ ─╮$`));
-      else {
-        assert(lines[0].endsWith(badge), lines[0]);
-        assert.match(lines.at(-1), /Esc/);
-      }
-      assert(colors.some(([used, text]) => used === color && text === icon));
-      assert(colors.some(([used, text]) => used === color && text === label));
+      if (frame) assert.match(lines[0], / ✕ ─╮$/, "the title ends at the close control");
+      else assert.match(lines.at(-1), /Esc/);
+      // The dock paints the glyph and its label together in the lifecycle colour.
+      assert(
+        colors.some(([used, text]) => used === color && text.includes(icon)),
+        `the dock paints ${icon} in ${color}`,
+      );
+      assert(
+        colors.some(([used, text]) => used === color && text.includes(label)),
+        `the dock paints ${label} in ${color}`,
+      );
     }
   });
 
@@ -921,10 +926,10 @@ for (const frame of [false, true])
       const lines = p.render(width);
       assert.equal(lines.length, height);
       assert(lines.every((line) => visibleWidth(line) <= width));
-      // The status never scrolls away: the sticky title keeps its glyph at
-      // every width, and the whole label while there is room for it.
-      assert(lines[0].includes("?"), lines[0]);
-      if (width >= 40) assert(lines[0].includes("input"), lines[0]);
+      // The status never scrolls away: the dock keeps its glyph at every width,
+      // and the whole label while there is room for it.
+      assert(lines.at(-2).includes("?"), lines.at(-2));
+      if (width >= 40) assert(lines.at(-2).includes("input"), lines.at(-2));
       // Docked, the close hint always keeps its room; framed, the close
       // control on the title edge does. Nothing on the edge clips mid-value.
       const footer = lines.at(-1);
@@ -953,13 +958,14 @@ test("minimum-width framed panes keep the status glyph, Run cue and close hint r
   ]) {
     current = view({ status, finalization_pending: pending });
     const lines = p.render(14);
-    // The sticky title keeps the status glyph, the Run reuse cue and the
-    // close control at exactly 14 columns; a lone Agent's edge is plain rule.
-    assert(lines[0].includes(icon), lines[0]);
-    assert(lines[0].includes("r-8"), lines[0]);
+    // The title keeps the Run reuse cue and the close control at exactly 14
+    // columns; the status glyph rides the dock row above the footer. The cue
+    // is clipped by the inlay's own budget here, so only its token must remain.
+    assert.match(lines[0], /r-/, lines[0]);
     assert.match(lines[0], / ✕ ─╮$/, lines[0]);
+    assert(lines.at(-2).includes(icon), lines.at(-2));
     const bottom = lines.at(-1);
-    assert.match(bottom, /^╰─+╯$/, bottom);
+    assert.match(bottom, /^╰─.*╯$/, bottom);
     assert.equal(visibleWidth(bottom), 14);
   }
 });
@@ -974,12 +980,12 @@ test("an empty roster never retains the previous Agent's status", (t) => {
         : [],
   });
   t.after(() => p.dispose());
-  assert.match(p.render(80)[0], /\? needs_input/);
+  assert.match(p.render(80).at(-2), /\? needs input/);
   available = false;
   const lines = p.render(80);
   assert.match(lines[0], /^╭─ Agents /);
-  assert.match(lines.at(-1), /^╰─+╯$/);
-  assert.doesNotMatch(lines.join("\n"), /needs_input/);
+  assert.match(lines.at(-1), /^╰─.*╯$/, "the bottom border still closes");
+  assert.doesNotMatch(lines.join("\n"), /needs input|needs answer/);
 });
 
 test("the edge counts the transcript rows below the viewport, never a position counter", (t) => {
@@ -1031,15 +1037,15 @@ test("the wheel scrolls the pane itself and stops the event from reaching the pa
   assert.equal(p.handleMouse({ type: "wheel" }), undefined, "a wheel with no delta moves nothing");
   assert.deepEqual(strip(p.render(80)), before);
 
+  const beforeLines = p.render(80);
   assert.deepEqual(p.handleMouse({ type: "wheel", wheelDelta: 4 }), { handled: true });
-  const down = strip(p.render(80));
+  const downLines = p.render(80);
+  const down = strip(downLines);
   assert.notDeepEqual(down, before);
-  // Four logical lines down moves the transcript window four rows; the pinned
-  // observations above the rule stay exactly where they were.
-  const ruleAt = before.findIndex((line) => line.includes("Transcript · Info"));
-  assert.equal(down[0], before[0], "pinned metrics do not move");
-  assert.equal(down[ruleAt], before[ruleAt], "the rule does not move");
-  assert.equal(down[ruleAt + 1], before[ruleAt + 5], "the transcript window moved four rows");
+  // Four logical lines down moves the transcript window four rows; the bottom
+  // dock and its separator stay exactly where they were.
+  assert.equal(down[0], before[4], "the transcript window moved four rows");
+  assert.deepEqual(downLines.slice(-3, -1), beforeLines.slice(-3, -1), "the dock does not move");
   assert.deepEqual(p.handleMouse({ type: "wheel", wheelDelta: -4 }), { handled: true });
   assert.deepEqual(strip(p.render(80)), before, "scrolling back returns the same window");
 });
@@ -1051,12 +1057,11 @@ test("the wheel clamps at both ends and hands the live tail back at the bottom",
   p.render(80);
   p.handleInput("\u001b[H");
   p.handleMouse({ type: "wheel", wheelDelta: -999 });
-  const top = strip(p.render(80));
-  // The top of the page is the pinned metrics row, and the transcript window
-  // is clamped at its own first row.
-  const ruleAt = top.findIndex((line) => line.includes("Transcript · Info"));
-  assert.equal(top[ruleAt + 1], "T0", "clamped at the first transcript row");
-  assert.match(top[0], /claude-opus-5\/medium/, "pinned metrics stay above the rule");
+  const topLines = p.render(80);
+  // The transcript window is clamped at its own first row, and the dock keeps
+  // its place below it.
+  assert.equal(strip(topLines)[0], "T0", "clamped at the first transcript row");
+  assert.match(topLines.at(-2), /↻3\/256/, "the dock stays below the window");
   // Past the end the pane pins to the tail and resumes following, exactly as End does.
   p.handleMouse({ type: "wheel", wheelDelta: 999 });
   const bottom = strip(p.render(80));
@@ -1115,18 +1120,18 @@ test("a floating pane spends its larger height budget on chrome, never on rows",
   assert.match(b[0], /^.*\u256d/, "top border");
   assert.match(b.at(-1), /\u256f.*$/, "bottom border");
   // The title rides on the border row rather than above it; a lone Agent's
-  // edge has no tabs or actions, so it stays one unbroken rule.
-  assert.match(b[0], /reviewer \(scout\)/);
+  // edge carries only the actions-menu control.
+  assert.match(b[0], /reviewer \(scout\/d5\)/);
   assert.doesNotMatch(b[0], /researcher/);
-  assert.match(b.at(-1), /^╰─+╯$/);
+  assert.match(b.at(-1), /^╰─.*╯$/, "the bottom border closes the frame");
+  assert.ok(b.at(-1).includes("[⋯]"), "the actions menu rides the bottom edge");
   // Riding on the border does not open it: what the inlay does not use is rule.
   assert.doesNotMatch(b[0], / {3}/, `top border left open: ${JSON.stringify(b[0])}`);
   assert.doesNotMatch(b[0], / {2}✕/, `extra space before close: ${JSON.stringify(b[0])}`);
   assert.doesNotMatch(b.at(-1), / {3}/, `bottom border left open: ${JSON.stringify(b.at(-1))}`);
-  // The divider is a rule of the same row, so it reaches the frame it sits inside.
-  assert.equal(visibleWidth(transcriptRule(theme, 78)), 78);
-  const rule = b.find((line) => line.includes("Transcript · Info"));
-  assert.ok(rule, "the floating body keeps its section rule");
+  // The separator is a rule of the same row, so it reaches the frame it sits inside.
+  const rule = b.find((line) => /^│ {2}─+ {2}│$/.test(line));
+  assert.ok(rule, "the floating body keeps its plain separator");
   assert.doesNotMatch(rule, / {3}/, `rule leaves the frame open: ${JSON.stringify(rule)}`);
   for (const line of b.slice(1, -1)) {
     assert.match(line, /^\u2502/, "body rows are bounded left");

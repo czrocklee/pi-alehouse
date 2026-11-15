@@ -212,6 +212,7 @@ export function createChildSessionFactory(options: {
         session: child.session,
         parentBus: options.parentBus,
         gate,
+        observeInput: (message, origin) => activity.recordInputOrigin(message, origin),
         invalidateApproval: () => {
           if (approvalRun) options.approvalBindings.end(child.session.sessionId, approvalRun);
         },
@@ -279,7 +280,7 @@ export function createChildSessionFactory(options: {
           }
         },
         canInput: () => port.canInput(),
-        steer: (text, valid) => port.steer(text, valid),
+        steer: (text, valid, origin) => port.steer(text, valid, origin),
         stop: () => {
           blocks.end();
           return port.stop();

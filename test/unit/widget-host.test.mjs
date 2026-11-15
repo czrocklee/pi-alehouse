@@ -1440,7 +1440,10 @@ test("a real Controller's automatic release frees capacity but retains clickable
   t.after(() => pane.dispose());
   const runningPane = pane.render(120);
   assert.doesNotMatch(runningPane.at(-1), /running/, "the footer never repeats the status");
-  assert.match(runningPane[0], /running/, "the sticky title carries the live state");
+  assert.doesNotMatch(runningPane[0], /running/, "the title carries no lifecycle");
+  const runningDock = runningPane.findLastIndex((row) => /^─+$/.test(row));
+  assert.ok(runningDock >= 0, "the bottom dock separator is painted");
+  assert.match(runningPane[runningDock + 1], /running/, "the bottom dock carries the live state");
   ports[0].calls[0].done.reject(new SessionUnavailableError("sdk_error", new Error("SDK broke")));
   await ended(controller, run);
   widget.update();
@@ -1468,10 +1471,13 @@ test("a real Controller's automatic release frees capacity but retains clickable
     /SDK broke/,
   );
   const failedPane = pane.render(120);
+  assert.doesNotMatch(failedPane[0], /✗ failed/, "the title carries no lifecycle");
+  const failedDock = failedPane.findLastIndex((row) => /^─+$/.test(row));
+  assert.ok(failedDock >= 0, "the bottom dock separator is painted");
   assert.match(
-    failedPane[0],
-    /✗ failed$/,
-    "the already-open pane's sticky title retains the retired agent's failure state",
+    failedPane[failedDock + 1],
+    /✗ failed/,
+    "the bottom dock retains the retired agent's failure state",
   );
   assert.match(pane.render(120).join("\n"), /SDK broke/);
   for (let turn = 1; turn < 3; turn++) {

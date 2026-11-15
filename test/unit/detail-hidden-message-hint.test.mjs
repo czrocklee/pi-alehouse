@@ -193,15 +193,17 @@ test("the Info tail cue counts the current page, without changing transcript fol
   const f = fixture(t, { rows: 24 });
   f.pane.handleInput("i");
   const info = f.paint();
-  // The last fixed chrome row bounds the Info viewport: the merged toolbar's
-  // plain divider, or the labeled rule in the narrow fallback.
-  const rule = info.findLastIndex(
-    (line) => /^─+$/.test(line) || line.includes("Transcript · Info"),
-  );
-  assert(rule >= 0);
-  const shown = info.length - rule - 2;
+  // The plain separator closes the Info page; the back link leads it and any
+  // pinned notice sits directly above the separator.
+  const separator = info.findLastIndex((line) => /^─+$/.test(line));
+  assert(separator >= 0, info.join("\n"));
+  const back = info.findIndex((line) => line.includes("← Transcript"));
+  assert.equal(back, 1, "the page-local return link leads the body");
+  let end = separator - 1;
+  while (end > back && /^[✓?!]\s/.test(info[end])) end--;
+  const shown = end - back;
   const total = renderDetailInfo(entries(f.views)[0].input, theme, 60).length;
-  assert(total > shown);
+  assert(total > shown, "the page really overflows its window");
   assert.match(info.at(-1), new RegExp(`↓ ${total - shown} more`));
   f.pane.handleInput("\x1b[F");
   assert.doesNotMatch(f.paint().at(-1), /↓/);

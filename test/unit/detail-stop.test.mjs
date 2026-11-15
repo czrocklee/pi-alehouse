@@ -139,14 +139,20 @@ function assertRightmostLabel(lines, label, width, frame) {
     "only frame chrome follows the action",
   );
   // The footer spends its left side on agent tabs while a confirmation holds
-  // the row; the live status itself never scrolls away — the sticky title ends
-  // with it, right above the action (framed, before the close control).
-  assert.match(
-    stripTerminalSequences(lines[0]),
-    /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◦] (?:running|queued)(?: ─ ✕ ─╮)?$/,
-    "the sticky title keeps the live status above the footer action",
-  );
+  // the row; the live status itself never scrolls away -- the one dock row
+  // keeps it directly above the action. A pane too short to allocate that row
+  // has no status to paint, and then claims none.
+  const dock = stripTerminalSequences(lines.at(-2) ?? "");
+  if (lineHasStatus(dock))
+    assert.match(
+      dock,
+      /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◦] (?:running|queued)/,
+      "the dock keeps the live status above the footer action",
+    );
 }
+/** True when the row is the pane's bottom dock rather than a body row: it
+ * carries the compact metric separators the summary row alone paints. */
+const lineHasStatus = (line) => /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◦✓✗■?] /.test(line) && line.includes(" · ");
 function arm(pane, width = 120, key = "s") {
   const before = pane.render(width);
   assert.match(before.at(-1), /\[S Stop\]/);
@@ -190,7 +196,8 @@ for (const frame of [false, true])
       assert.deepEqual(stopped, ["run-a"]);
       assert.equal(h.closes, 0);
       const after = h.pane.render(120);
-      assert.match(after[0], /cancelling/, "the title reports the cancellation");
+      assert.match(after.at(-2), /cancelling/, "the dock reports the cancellation");
+      assert.doesNotMatch(after[0], /cancelling/, "the title carries no lifecycle status");
       assert.doesNotMatch(after.at(-1), /\[S Stop\]/);
       h.pane.handleInput(key);
       h.pane.handleInput(CONFIRM);
@@ -319,7 +326,10 @@ for (const frame of [false, true])
           onStop: () => assert.fail("Esc is not confirmation"),
         });
         const tail = h.pane.render(120);
-        assert(tail.at(-2).includes("transcript-99"), "normal pane follows the transcript tail");
+        assert(
+          tail.findLast((line) => /transcript-\d+/.test(line))?.includes("transcript-99"),
+          "normal pane follows the transcript tail",
+        );
         if (position === "scrolled") h.pane.handleInput("\x1b[5~");
         const before = h.pane.render(120);
         if (position === "scrolled") assert(!before.some((line) => line.includes("transcript-99")));
@@ -336,7 +346,7 @@ for (const frame of [false, true])
         assert.equal(grown[0], before[0]);
         if (position === "tail")
           assert(
-            grown.at(-2).includes("transcript-100"),
+            grown.findLast((line) => /transcript-\d+/.test(line))?.includes("transcript-100"),
             "confirmation keeps following live output",
           );
         else
@@ -635,7 +645,7 @@ function assertStopFits(h, width, stopped, run_id = "run-a") {
   assertRightmostLabel(lines, "[Confirm stop]", width, h.frame);
   // pi-tui's truncateToWidth inserts SGR resets around ellipses even with this
   // plain theme. Permit only those exact markers, never arbitrary ANSI; the
-  // title and the section rules can each be truncated. All else stays plain.
+  // title can be truncated. All else stays plain.
   assert(
     !lines.some((line) =>
       /\p{Cc}/u.test(
@@ -648,9 +658,9 @@ function assertStopFits(h, width, stopped, run_id = "run-a") {
   assert.deepEqual(stopped, [run_id]);
 }
 
-// Reserve the full 50-column hint; a lone Agent has no tab beside it and the
-// title row keeps the live status. Framed chrome is width-6: Stop starts at
-// docked 50 / framed 56.
+// Reserve the full 50-column hint; a lone Agent has no tab beside it, and the
+// live status lives in the dock rather than this edge. Framed chrome is
+// width-6: Stop starts at docked 50 / framed 56.
 for (const frame of [false, true]) {
   const minimum = frame ? 56 : 50;
   for (const width of [24, 40, 46, minimum - 1]) {
@@ -1060,7 +1070,12 @@ for (const frame of [false, true])
         title.includes("Build") && title.includes("#17"),
         "task and ordinal outrank nickname/profile at the minimum width",
       );
-      assert(before.at(-2).includes("history-99"), "identity fields are scrolled off at the tail");
+      // The pane is at its minimum height here, so the tail row is found by its
+      // own content rather than by a fixed offset from the footer.
+      assert(
+        before.findLast((line) => /history-\d+/.test(line))?.includes("history-99"),
+        "identity fields are scrolled off at the tail",
+      );
       assertInlineConfirmation(before, arm(h.pane, width));
       Object.assign(original, { description: "Check", task: 18, run_id: "run-new" });
       h.pane.handleInput(CONFIRM);
@@ -1087,7 +1102,7 @@ for (const task of [undefined, 0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY,
       view: view("a", { name: "nickname".repeat(30), description: "Build", task }),
       live,
     };
-    const title = stripTerminalSequences(renderDetailTitle(input, 0, theme, 56));
+    const title = stripTerminalSequences(renderDetailTitle(input, theme, 56));
     assert(title.includes("Build") && title.includes("run-a"));
     assert(!title.includes("#"), "only a valid immutable ordinal is presented as #N");
   });
@@ -1117,7 +1132,7 @@ for (const [labelSource, description] of [
 ]) {
   test(`task label whitespace stays readable (${labelSource})`, () => {
     const input = { view: view("a", { description }), live };
-    const title = renderDetailTitle(input, 0, theme, 120),
+    const title = renderDetailTitle(input, theme, 120),
       fields = renderDetailFields(input, theme, 120);
     assert(!/[\t\r\n]/u.test(title));
     assert(!title.includes("\\x09") && !title.includes("\\x0a"));

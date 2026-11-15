@@ -15,10 +15,11 @@
  * tool cards default collapsed (active/incomplete and failed ones stay
  * expanded, and `setToolsExpanded()` is a presentation-only toggle);
  * `alert_parent`/`ask_parent` calls with exactly their one recorded string
- * argument get an Input-style message block with a right-aligned title and a
- * separate receipt instead of raw JSON; user messages carry neutral labels,
- * with the human steering lead shown only as the
- * qualified label it itself declares.
+ * argument get an Input-style body with a right-aligned title above its
+ * background and a separate receipt instead of raw JSON; user messages carry
+ * neutral labels unless the runtime recorded a confirmed origin for that exact
+ * message, with the human steering lead shown only as the qualified label it
+ * itself declares when no origin was recorded.
  */
 
 import {
@@ -43,6 +44,7 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import { COMMUNICATION_LIMITS } from "../core/communication-envelope.ts";
+import type { InputOrigin } from "../core/ports.ts";
 import { humanSteerLead } from "../presentation/human-steer-text.ts";
 import { copyDisplayData } from "../presentation/display-data.ts";
 import { toolArgumentText } from "../presentation/tool-argument-text.ts";
@@ -65,6 +67,11 @@ export interface TranscriptSource {
    * allocation or stream updates). Thrown reads suspend custom renderers and
    * use raw cards until a successful read starts a new display epoch. */
   toolRenderersRevision?(): unknown;
+  /** Provenance the runtime recorded for this exact message, when it has one.
+   * Absence is unknown: the pane then keeps its existing labels and never
+   * infers authorship from content or position. Read per message, so retained
+   * history keeps working after the live session is gone. */
+  inputOrigin?(message: unknown): InputOrigin | undefined;
 }
 export interface TranscriptOptions {
   tui: TUI;
@@ -112,6 +119,14 @@ interface ReadAnchor {
   readonly target: Block | AssistantMessageComponent;
 }
 
+/** Labels for a confirmed recorded origin. Only these exact values are
+ * recognized; anything else stays unknown rather than being guessed at. */
+const ORIGIN_LABELS: Readonly<Record<InputOrigin, string>> = {
+  parent: "From parent",
+  human: "From user",
+  orchestration: "Alehouse input",
+};
+
 /** The two current child-to-parent communication tools, and the single string
  * argument each records. Only these exact current tools get the labeled
  * display; retired names like `notify_parent` keep the generic raw rendering. */
@@ -148,7 +163,7 @@ function sanitizedToolProjection(name: string, args: unknown): { name: string; a
 }
 
 /** A read-only message block for a well-formed `alert_parent`/`ask_parent`
- * call: Input-style background, a right-aligned neutral title, then the
+ * call: a right-aligned neutral title above an Input-style body, then the
  * recorded result outside that background. Malformed arguments and retired
  * names stay raw; other tools keep their normal renderer selection. The block
  * only projects what the record says —
@@ -760,20 +775,29 @@ export class TranscriptContent implements TranscriptRows {
     // is decided here, where what precedes this block is known.
     if (this.visible) block.container.addChild(new Spacer(1));
     const steer = `${humanSteerLead}\n\n`;
-    if (text.startsWith(steer)) {
-      // The recorded lead is the only authorship evidence, and it says "human",
-      // so the pane shows exactly that qualification — no verified-authorship
-      // claim — and drops the boilerplate, keeping the message bytes untouched.
-      block.container.addChild(this.userLabel("Steering input (human lead)"));
+    // A confirmed origin outranks the recorded text: a parent or internal
+    // message that merely carries the human steering lead is neither relabeled
+    // nor stripped, because the runtime says who actually sent it. Only a
+    // confirmed human origin — or the unknown-origin lead fallback — may drop
+    // that exact prefix, and the message bytes are never rewritten either way.
+    const origin = this.inputOrigin(message),
+      label = origin === undefined ? undefined : ORIGIN_LABELS[origin],
+      stripLead = text.startsWith(steer) && (origin === undefined || origin === "human");
+    if (stripLead) {
+      // The recorded lead says "human", so the pane shows exactly that
+      // qualification — no verified-authorship claim — and drops the
+      // boilerplate. A confirmed human origin names the same speaker directly.
+      block.container.addChild(this.userLabel(label ?? "Steering input (human lead)"));
       block.container.addChild(
         new UserMessageComponent(text.slice(steer.length), this.options.markdownTheme),
       );
     } else {
-      // Neutral labels only, and the same one for every generic user message:
-      // after a compaction or branch rewrite the pane cannot prove which
-      // rendered user message was the original task input, so it never claims
-      // one. The recorded steering lead stays the only qualified label.
-      block.container.addChild(this.userLabel("Input"));
+      // Without a confirmed origin the label stays neutral, and it is the same
+      // one for every generic user message: after a compaction or branch
+      // rewrite the pane cannot prove which rendered user message was the
+      // original task input, so it never claims one. The recorded steering lead
+      // stays the only qualified fallback label.
+      block.container.addChild(this.userLabel(label ?? "Input"));
       const skill = parseSkillBlock(text);
       if (!skill) {
         block.container.addChild(new UserMessageComponent(text, this.options.markdownTheme));
@@ -790,6 +814,23 @@ export class TranscriptContent implements TranscriptRows {
       }
     }
     this.visible = true;
+  }
+
+  /** Ask the source for this exact message's recorded origin. A missing or
+   * throwing lookup, or a value outside the confirmed vocabulary, is unknown:
+   * the pane then keeps its neutral/lead-qualified labels and infers nothing
+   * from content, position or an earlier message's origin. */
+  private inputOrigin(message: unknown): InputOrigin | undefined {
+    try {
+      const origin = this.options.source.inputOrigin?.(message);
+      // A host may hand back a value outside the confirmed vocabulary; only an
+      // exact known origin is projected, so nothing new is ever claimed.
+      return typeof origin === "string" && Object.hasOwn(ORIGIN_LABELS, origin)
+        ? origin
+        : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /** A user block's neutral label, aligned with the message's own padding. */

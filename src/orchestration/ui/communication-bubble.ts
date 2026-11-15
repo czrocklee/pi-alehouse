@@ -1,9 +1,9 @@
 /**
  * A child-to-parent communication message drawn as an Input-style background
- * block: the host theme's `userMessageBg`/`userMessageText` tokens, the label
- * right-aligned on the first inside row, and the body left-aligned below it
- * with its line breaks preserved. No extra frame, border or tool-card chrome;
- * the caller renders any receipt outside this component.
+ * block: the label sits right-aligned above the background, and the body uses
+ * the host theme's `userMessageBg`/`userMessageText` tokens with its line breaks
+ * preserved. No extra frame, border or tool-card chrome; the caller renders
+ * any receipt outside this component.
  *
  * The body arrives already encoded as literal tool-argument text; this component
  * never parses markdown or re-encodes it. Wrapping, CJK/emoji/ANSI display widths and
@@ -29,7 +29,7 @@ export type HostTheme = Theme;
  */
 const MIN_PADDED_WIDTH = 4;
 
-/** The label row: right-aligned inside the content width, truncated by cells. */
+/** The label row: right-aligned above the body, truncated by cells. */
 class TitleLine implements Component {
   private readonly label: string;
   private readonly theme: HostTheme;
@@ -41,9 +41,8 @@ class TitleLine implements Component {
 
   render(width: number): string[] {
     if (!this.label || !Number.isInteger(width) || width <= 0) return [];
-    // The label is trusted plain text. clipPlainText also strips any SGR the
-    // SDK truncator emits even for plain input, so no internal reset can
-    // clear the Box background under this row's right padding.
+    // The label is trusted plain text. Strip any SGR the SDK truncator emits
+    // even for plain input before applying the title's self-closing foreground.
     const title = clipPlainText(this.label, width);
     const margin = Math.max(0, width - visibleWidth(title));
     return [" ".repeat(margin) + this.theme.fg("userMessageText", title)];
@@ -84,6 +83,7 @@ class CellClipped implements Component {
 
 /** One child-to-parent communication message as an Input-style block. */
 export class CommunicationBubble implements Component {
+  private readonly title: TitleLine;
   private readonly box: Box;
   /** The horizontal padding currently applied to the box. */
   private paddingX = 1;
@@ -91,8 +91,8 @@ export class CommunicationBubble implements Component {
   constructor(label: string, text: string, theme: HostTheme) {
     // The Text holds the plain body; the foreground is applied per row only
     // after clipping, and the Box paints the background around the padded row.
+    this.title = new TitleLine(label, theme);
     this.box = new Box(1, 1, (line) => theme.bg("userMessageBg", line));
-    this.box.addChild(new TitleLine(label, theme));
     this.box.addChild(
       new CellClipped(new Text(text, 0, 0), (row) => theme.fg("userMessageText", row)),
     );
@@ -110,10 +110,15 @@ export class CommunicationBubble implements Component {
       this.paddingX = paddingX;
       this.box.setPaddingX(paddingX);
     }
-    return this.box.render(width);
+    // Keep the title aligned with the body's inner edge, without extending
+    // the body's background into this separate metadata row.
+    const padding = " ".repeat(paddingX);
+    const title = this.title.render(width - paddingX * 2).map((row) => padding + row + padding);
+    return [...title, ...this.box.render(width)];
   }
 
   invalidate(): void {
+    this.title.invalidate();
     this.box.invalidate();
   }
 }

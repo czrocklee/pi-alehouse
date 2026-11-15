@@ -257,7 +257,7 @@ test("a detail title stays one row however it is labelled", () => {
     phase: "executing",
   };
   const live = { active_tools: [], tool_uses: 0, preview: "" };
-  const title = renderDetailTitle({ view, live }, 0, theme, 120);
+  const title = renderDetailTitle({ view, live }, theme, 120);
   assert.doesNotMatch(
     title,
     /[\t\n\v\f\r]/,

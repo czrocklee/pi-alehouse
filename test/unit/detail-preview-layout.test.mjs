@@ -34,8 +34,10 @@ const fields = (state, generation = live(), width = 100, palette = theme) =>
   renderDetailFields({ view: state, live: generation }, palette, width);
 const rowFor = (rows, label) =>
   rows.find((line) => stripTerminalSequences(line).startsWith(`  ${label} `));
+// The title, the bottom dock row and the footer are fixed chrome; the body
+// between them holds the reading window and, last, the plain separator.
 const body = (paint) =>
-  paint.slice(1, -1).map((line) =>
+  paint.slice(1, -2).map((line) =>
     stripTerminalSequences(line)
       // A scrolled pane marks its thumb on the right edge in place of the border.
       .replace(/^│(.*)[│┃]$/u, "$1")
@@ -48,12 +50,14 @@ const firstTranscript = (paint) =>
       ?.trim()
       .slice("transcript-".length),
   );
-/** The transcript's own scroll viewport: every body row below the last fixed
- * chrome row — the merged toolbar's plain divider, or the labeled section
- * rule in the narrow fallback. */
-const ruleAt = (paint) =>
-  body(paint).findLastIndex((line) => /^\s*─+$/.test(line) || line.includes("Transcript · Info"));
-const windowRows = (paint) => body(paint).slice(ruleAt(paint) + 1);
+/** The plain separator between the reading window and the bottom dock. */
+const ruleAt = (paint) => body(paint).findLastIndex((line) => /^\s*─+$/.test(line));
+/** The page's own scroll viewport: every body row above the separator. */
+const windowRows = (paint) => {
+  const rows = body(paint);
+  const at = ruleAt(paint);
+  return at < 0 ? rows : rows.slice(0, at);
+};
 
 function paneFixture(t, frame = false) {
   const state = view(),
@@ -382,8 +386,10 @@ test("field changes do not scroll a reader who is still in metadata", (t) => {
   h.generation.thinking = "New thought";
   h.generation.preview = "New reply";
   const after = h.pane.render(100);
-  assert.equal(windowRows(after)[0], windowRows(before)[0]);
-  assert.match(windowRows(after)[0], /^ {2}task /);
+  // Info leads with its page-local back link, then the fields themselves.
+  assert.match(windowRows(after)[0], /← Transcript/);
+  assert.equal(windowRows(after)[1], windowRows(before)[1]);
+  assert.match(windowRows(after)[1], /^ {2}task /);
 });
 
 test("the first transcript row is included in scroll anchoring", (t) => {
@@ -399,18 +405,18 @@ test("the first transcript row is included in scroll anchoring", (t) => {
 
 test("follow-tail still follows live transcript through preview changes", (t) => {
   const h = paneFixture(t);
-  assert.match(body(h.pane.render(100)).at(-1), /transcript-179$/);
+  assert.match(windowRows(h.pane.render(100)).at(-1), /transcript-179$/);
   h.generation.thinking = "New thought";
   h.generation.preview = "New reply";
   h.transcript.count++;
-  assert.match(body(h.pane.render(100)).at(-1), /transcript-180$/);
+  assert.match(windowRows(h.pane.render(100)).at(-1), /transcript-180$/);
   h.pane.handleInput("\x1b[5~");
   h.pane.render(100);
   h.pane.handleInput("\x1b[F");
   h.generation.thinking = "";
   h.generation.preview = "";
   h.transcript.count++;
-  assert.match(body(h.pane.render(100)).at(-1), /transcript-181$/);
+  assert.match(windowRows(h.pane.render(100)).at(-1), /transcript-181$/);
 });
 
 test("resize keeps the transcript window in transcript coordinates", (t) => {
@@ -485,7 +491,7 @@ test("Agent selection resets transcript following instead of borrowing the previ
   h.pane.handleInput("\x1b[5~");
   h.pane.render(100);
   h.pane.activate("b");
-  assert.match(body(h.pane.render(100)).at(-1), /transcript-179$/);
+  assert.match(windowRows(h.pane.render(100)).at(-1), /transcript-179$/);
 });
 
 test("automatic Agent fallback resets following when the previous selection disappears", (t) => {
@@ -505,7 +511,7 @@ test("automatic Agent fallback resets following when the previous selection disa
     stripTerminalSequences(rendered[0]).includes("run-b"),
     `the fallback Agent is the one on screen: ${stripTerminalSequences(rendered[0])}`,
   );
-  assert.match(body(rendered).at(-1), /transcript-179$/);
+  assert.match(windowRows(rendered).at(-1), /transcript-179$/);
 });
 
 for (const frame of [false, true])

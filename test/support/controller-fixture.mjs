@@ -59,10 +59,12 @@ export class FakePort {
       .at(-1)
       .done.resolve({ kind, error, model_stop_reason, output: boundedOutput(text, 1_048_576) });
   }
-  async steer(message, valid) {
+  origins = [];
+  async steer(message, valid, origin) {
     await this.deliveryGate?.promise;
     if (!valid()) return false;
     this.inputs.push(message);
+    this.origins.push(origin);
     return true;
   }
   async stop() {

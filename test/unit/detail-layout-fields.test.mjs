@@ -22,9 +22,7 @@ const {
   renderDetailAgentStrip,
   renderDetailFooter,
   renderDetailComposeHeading,
-  renderDetailRule,
   getDetailAttentionNotes,
-  transcriptRule,
 } = await jiti.import("../../src/orchestration/ui/agent-detail-fields.ts");
 const { wrapPlainText: wrapText } = await jiti.import("../../src/orchestration/ui/text.ts");
 const { addToLedger } = await jiti.import("../../src/orchestration/core/usage-ledger.ts");
@@ -77,61 +75,79 @@ const view = (overrides = {}) => ({
 const live = (overrides = {}) => ({ active_tools: [], tool_uses: 12, preview: "", ...overrides });
 const input = (v = {}, l = {}) => ({ view: view(v), live: live(l) });
 
-// ---- The title row: live status joins identity, task and the reuse cue ----
+// ---- The title row: identity, task and the reuse cue; status lives in the dock ----
 
-test("the title carries the live status cue at its right end, after identity and task", () => {
-  const title = renderDetailTitle(input(), 0, theme, 100);
-  assert.match(title, /^reviewer \(scout\) {2}Review the lifecycle contract/);
-  assert.match(title, / ⠋ running$/, "the status rides the right end, so the name never shifts");
-  assert.equal(visibleWidth(title), 100);
-  // Framed, a short rule separates it from the close control that follows.
-  const framed = renderDetailTitle(input(), 0, theme, 100, true);
-  assert.match(framed, / ─+ ⠋ running ─$/);
-  assert.equal(visibleWidth(framed), 100);
+test("the title carries identity, task and the reuse cue, never the lifecycle status", () => {
+  // The pane's inlay pads the row and draws the rule to its close control, so
+  // the helper itself returns content only and adds nothing for the frame.
+  const title = renderDetailTitle(input(), theme, 100);
+  assert.match(title, /^reviewer \(scout\/d5\) {2}Review the lifecycle contract/);
+  assert(visibleWidth(title) <= 100, JSON.stringify(title));
   assert.match(title, /reviewer/);
   assert.match(title, /scout/);
   assert.doesNotMatch(title, /researcher/);
   assert.match(title, /Review the lifecycle contract/);
   assert.match(title, /r-8f3a/);
   assert(visibleWidth(title) <= 100, JSON.stringify(title));
-  for (const [status, pending, glyph, label] of [
-    ["queued", false, "◦", "queued"],
-    ["running", true, "⠋", "finishing"],
-    ["completed", false, "✓", "completed"],
-    ["needs_input", false, "?", "needs_input"],
-    ["failed", false, "✗", "failed"],
+  // The one bottom summary row owns lifecycle state, so the title never repeats it.
+  for (const [status, pending] of [
+    ["queued", false],
+    ["running", true],
+    ["completed", false],
+    ["needs_input", false],
+    ["failed", false],
+    ["cancelled", false],
   ]) {
-    const header = renderDetailTitle(
-      input({ status, finalization_pending: pending }),
-      0,
-      theme,
-      80,
+    const header = renderDetailTitle(input({ status, finalization_pending: pending }), theme, 80);
+    assert(visibleWidth(header) <= 80, header);
+    assert.doesNotMatch(
+      header,
+      /(?:◦|⠋|✓|\?|✗|■) (?:queued|running|finishing|completed|needs_input|failed|cancelled)/,
+      `the title must not repeat the status: ${header}`,
     );
-    assert.ok(header.includes(`${glyph} ${label}`), header);
   }
 });
 
-test("status and the task cue outrank identity and task text when narrow", () => {
+test("the task cue and reuse marker outrank identity when narrow", () => {
   for (const width of [60, 44, 30, 20]) {
     const v = view({ task: 27, name: "nickname".repeat(50), description: "审查".repeat(60) });
     const before = structuredClone(v);
-    const title = renderDetailTitle({ view: v, live: live() }, 0, theme, width);
+    const title = renderDetailTitle({ view: v, live: live() }, theme, width);
     assert(visibleWidth(title) <= width, `${width}: ${JSON.stringify(title)}`);
     assert.match(title, /#27/, `${width}: the reuse cue never scrolls away`);
-    assert.match(title, /⠋/, `${width}: the live glyph never scrolls away`);
     assert.match(title, /审查/, `${width}: the task cue keeps its reserved context`);
     assert.deepEqual(v, before, "fitting is a projection, not a metadata rewrite");
   }
+  // A tagged identity keeps three cells, so a short name never becomes a lone
+  // ellipsis beside its tag; the tag yields instead.
+  for (const name of ["Ada", "艾达"]) {
+    const floor = Math.min(3, visibleWidth(name));
+    for (let width = 20; width <= 40; width++) {
+      const title = stripTerminalSequences(renderDetailTitle(input({ name }), theme, width));
+      assert(visibleWidth(title) <= width, `${name} ${width}: ${JSON.stringify(title)}`);
+      const tagged = /^(.*?) \(scout\/d5\)/.exec(title);
+      if (!tagged) continue;
+      assert.ok(
+        visibleWidth(tagged[1]) >= floor,
+        `${name} ${width}: tagged identity ${JSON.stringify(tagged[1])}`,
+      );
+    }
+  }
 });
 
-test("a title too narrow for identity degrades to the two cues, clipped safely", () => {
+test("a title too narrow for identity degrades to the clipped task cue, safely", () => {
   const v = view({ task: 3, name: "nn", description: "审查".repeat(40) });
   for (const width of [12, 9]) {
-    const title = renderDetailTitle({ view: v, live: live() }, 0, theme, width);
+    const title = renderDetailTitle({ view: v, live: live() }, theme, width);
     assert(visibleWidth(title) <= width, `${width}: ${JSON.stringify(title)}`);
-    assert.match(title, /⠋/, `${width}: the glyph stays`);
+    assert.doesNotMatch(title, /\p{Cc}/u, `${width}: no raw control reaches the title`);
   }
-  const fallback = renderDetailTitle(input({ task: NaN }), 0, theme, 100);
+  assert.match(
+    renderDetailTitle({ view: v, live: live() }, theme, 12),
+    /#3/,
+    "the reuse cue survives the narrowest identity budget",
+  );
+  const fallback = renderDetailTitle(input({ task: NaN }), theme, 100);
   assert.match(fallback, /r-8f3a/, "invalid task ordinals fall back to the Run ID");
   assert.doesNotMatch(fallback, /#(?:NaN|3)/);
 });
@@ -139,15 +155,15 @@ test("a title too narrow for identity degrades to the two cues, clipped safely",
 test("title metadata is sanitized: no controls, bidi or raw ANSI can spoof chrome", () => {
   const raw = "bad\u001b[31mred\u001b[0m\u0007\u202ename\tline";
   const v = view({ name: raw, description: raw, run_id: raw });
-  const title = renderDetailTitle({ view: v, live: live() }, 0, theme, 100);
+  const title = renderDetailTitle({ view: v, live: live() }, theme, 100);
   assert.doesNotMatch(title, /[\p{Cc}\p{Bidi_Control}]/u);
   assert.match(title, /\\u202e/);
   assert.match(title, /\\x07/);
 });
 
-// ---- The compact summary: one metrics row, one bounded activity row ----
+// ---- The compact summary: one dock row, plus an opt-in activity row ----
 
-test("the summary packs model/effort, turns, calls, context, cost and elapsed in one row", () => {
+test("the summary packs status, turns, context, token flow, cost and the turn clock in one row", () => {
   const rows = renderDetailSummary(
     input(
       {
@@ -156,17 +172,51 @@ test("the summary packs model/effort, turns, calls, context, cost and elapsed in
       {},
     ),
     theme,
-    90,
+    120,
+    { activity: false },
   );
-  assert.equal(rows.length, 2, "a running child always has its shared activity row");
-  assert.match(rows[1], /thinking…/);
+  assert.equal(rows.length, 1, "the bottom dock is exactly one row");
   const [row] = rows;
-  assert.match(row, /↻3≤256/);
-  assert.match(row, /▸12/);
-  assert.match(row, /ctx ≈231k\/272k/);
+  assert.match(row, /running/, "lifecycle status leads the dock, not the title");
+  assert.match(row, /↻3\/256/, "turns use a slash, never the retired ≤ form");
+  assert.doesNotMatch(row, /≤/, "the dock never paints the retired ≤ turn form");
+  assert.doesNotMatch(row, /▸/, "the dock never counts tool calls");
+  assert.match(row, /ctx ≈231k\/272k/, "context keeps its ctx label");
+  assert.doesNotMatch(row, /ctx ≈\S+ \d+%/, "the ctx label never gains a percent");
+  assert.match(row, /↑/, "input flow leads the token segment");
+  assert.match(row, /↓/, "output flow closes the token segment");
+  assert.match(row, /\(\s*\d+(?:\.\d+)?%\s*\)/, "the cache-hit share is parenthesized");
   assert.doesNotMatch(row, /\$/);
-  assert.match(row, /1m33s/);
-  assert(visibleWidth(row) <= 90, JSON.stringify(row));
+  assert.match(row, /total 1m33s/, "elapsed is spelled out as a total");
+  assert.match(row, /\(1s\)/, "the current-turn clock is parenthesized");
+  assert(visibleWidth(row) <= 120, JSON.stringify(row));
+});
+
+test("the dock shows the current-turn clock only while a turn is timed", () => {
+  const timed = renderDetailSummary(input(), theme, 120, { activity: false })[0];
+  assert.match(timed, /\(1s\)/, timed);
+  // Whole, floored seconds at every magnitude: no tenths survive the floor.
+  for (const [ms, clock] of [
+    [18_000, "(18s)"],
+    [59_900, "(59s)"],
+    [62_000, "(1m02s)"],
+    [900, "(0s)"],
+  ]) {
+    const row = renderDetailSummary(input({ turn_elapsed_ms: ms }), theme, 120, {
+      activity: false,
+    })[0];
+    assert.ok(row.includes(clock), `${ms}: ${row}`);
+    assert.doesNotMatch(row, /\(\d+(?:m\d{2})?\.\d+s\)/, `${ms}: ${row}`);
+  }
+  for (const [label, overrides] of [
+    ["settled", { status: "completed", execution_exited: true }],
+    ["queued", { status: "queued" }],
+    ["untimed", { turn_elapsed_ms: undefined }],
+  ]) {
+    const row = renderDetailSummary(input(overrides), theme, 120, { activity: false })[0];
+    // The usage ratio is parenthesized too: only a clock-shaped group counts.
+    assert.doesNotMatch(row, /\(\d+(?:m\d{2})?s\)/, `${label}: ${row}`);
+  }
 });
 
 test("summary cost and context stay accurate: floors and unknowns are never zeros", () => {
@@ -183,14 +233,20 @@ test("summary cost and context stay accurate: floors and unknowns are never zero
     theme,
     90,
   ).join("\n");
-  assert.match(rows, /≥\$2\.5/);
-  assert.match(rows, /ctx \?\/272k/);
-  const notReported = renderDetailSummary(input({ usage: undefined }), theme, 90)[0];
+  assert.match(rows, /≥\$2\.50/, "a partial observation is a cents floor");
+  assert.doesNotMatch(rows, /\$2\.5(?!\d)/, "the retired three-decimal form is gone");
+  assert.match(rows, /ctx \?\/272k/, "unknown context keeps the ctx label");
+  assert.doesNotMatch(rows, /ctx \S+ \d+%/, "no percent is invented for it");
+  const notReported = renderDetailSummary(input({ usage: undefined }), theme, 90, {
+    activity: false,
+  })[0];
   assert.doesNotMatch(notReported, /\$/, "no cost is invented");
-  assert.doesNotMatch(notReported, /ctx/, "no context is invented");
-  const noCalls = renderDetailSummary(input({ usage: undefined }, { tool_uses: 0 }), theme, 90)[0];
-  assert.doesNotMatch(noCalls, /▸/, "zero tool uses are not a call figure");
-  assert.match(notReported, /↻3≤256/, "turns remain real telemetry");
+  assert.doesNotMatch(notReported, /\?\/\d/, "no context is invented");
+  const noCalls = renderDetailSummary(input({ usage: undefined }, { tool_uses: 0 }), theme, 90, {
+    activity: false,
+  })[0];
+  assert.doesNotMatch(noCalls, /▸/, "the dock never counts tool calls");
+  assert.match(notReported, /↻3\/256/, "turns remain real telemetry");
 });
 
 test("the summary drops the least urgent figures first and never exceeds the width", () => {
@@ -199,43 +255,63 @@ test("the summary drops the least urgent figures first and never exceeds the wid
     {},
   );
   for (const width of [64, 48, 40, 28, 16, 8]) {
-    const row = renderDetailSummary(base, theme, width)[0];
+    const row = renderDetailSummary(base, theme, width, { activity: false })[0];
     assert(visibleWidth(row) <= width, `${width}: ${JSON.stringify(row)}`);
-    if (width >= 16) assert.match(row, /claude-opus-5/, `${width}: model/effort survives`);
-    if (width >= 64) assert.match(row, /1m33s/, `${width}: elapsed is the first to go`);
+    if (width >= 64) assert.match(row, /↻3\/256/, `${width}: turns survive`);
+    if (width >= 64) assert.match(row, /running/, `${width}: the status outlasts routine figures`);
   }
+  // The total time is the first whole figure to yield, so it needs the full row.
+  assert.match(
+    renderDetailSummary(base, theme, 120, { activity: false })[0],
+    /total 1m33s/,
+    "elapsed is spelled out only while the row holds it",
+  );
   // Elevated context pressure outlives routine turns/elapsed/cost figures.
   const hot = input({
     runtime: { activity: "generating", context: { tokens: 250_000, context_window: 272_000 } },
   });
-  const row = renderDetailSummary(hot, theme, 40)[0];
+  const row = renderDetailSummary(hot, theme, 40, { activity: false })[0];
   assert.match(row, /ctx ≈250k\/272k/, row);
-  assert.doesNotMatch(row, /1m33s|↻3≤256/, "routine figures yield before elevated context");
+  assert.doesNotMatch(row, /total 1m33s|↻3\/256/, "routine figures yield before elevated context");
 });
 
-test("the summary adds one bounded activity row for tools and generation, never full text", () => {
+test("the summary keeps one bounded activity row only when a caller allocates it", () => {
   const tools = renderDetailSummary(
     input({}, { active_tools: [{ name: "read", detail: "src/core/controller.ts" }] }),
     theme,
     60,
+    { activity: true },
   );
-  assert.equal(tools.length, 2);
+  assert.equal(tools.length, 2, "the explicit compatibility row is retained");
   assert.match(tools[1], /reading src\/core\/controller\.ts/);
   const drafting = renderDetailSummary(
     input({}, { active_tools: [], channel: "text", preview: "turnStarted 在 turnEnd 里被清掉" }),
     theme,
     40,
+    { activity: true },
   );
   assert.equal(drafting.length, 2);
   assert.match(drafting[1], /replying: /);
   for (const line of drafting) assert(visibleWidth(line) <= 40, JSON.stringify(line));
   // Settled work shows no fabricated generation row.
   assert.equal(
-    renderDetailSummary(input({ status: "completed", execution_exited: true }), theme, 60).length,
+    renderDetailSummary(input({ status: "completed", execution_exited: true }), theme, 60, {
+      activity: true,
+    }).length,
+    1,
+  );
+  // The dock itself never grows a second row: the pane asks for the metrics alone.
+  assert.equal(
+    renderDetailSummary(
+      input({}, { active_tools: [{ name: "read", detail: "src/core/controller.ts" }] }),
+      theme,
+      60,
+      { activity: false },
+    ).length,
     1,
   );
   // A task row is not duplicated: the title owns the task.
-  for (const line of renderDetailSummary(input(), theme, 90))
+  for (const line of renderDetailSummary(input(), theme, 90, { activity: false }))
     assert.doesNotMatch(line, /Review the lifecycle contract/);
 });
 
@@ -541,15 +617,15 @@ test("the edge is tabs and actions only: no counters, status, context or key leg
   ]);
 });
 
-test("framed tabs are joined by rule and the corner pad continues it", () => {
+test("framed tabs use ASCII pipes while the corner pad keeps its rule", () => {
   const frame = footer({ framed: true, messaging: false, below: 0 });
-  assert.match(frame.text, /^‹ ⠋ a ─ ⠋ b ─ ⠋ c ›$/);
+  assert.match(frame.text, /^‹ ⠋ a \| ⠋ b \| ⠋ c ›$/);
   assert.equal(frame.flush?.start, false, "an arrow keeps the corner's pad");
   assert.equal(frame.flush?.end, false);
   // Hit ranges are pane columns: past the frame's `╰─ ` offset.
   for (const tab of frame.tabs) assert.ok(tab.from >= 3, JSON.stringify(tab));
   const confirming = footer({ framed: true, available: true, confirming: true });
-  assert.match(confirming.text, /^ ⠋ a ─ \+2 /, confirming.text);
+  assert.match(confirming.text, /^ ⠋ a \| \+2 /, confirming.text);
   assert.equal(confirming.flush?.start, true, "a padded tab meets the corner's rule");
   const lone = renderDetailFooter({
     width: 60,
@@ -592,6 +668,35 @@ test("Stop stays outermost, after the docked Esc hint, with its fit safety and o
   assert.equal(footer({ available: true, width: 54 }).action, undefined);
   assert.equal(footer({ available: true, width: 55 }).action?.to, 55);
   assert.equal(footer({ available: true, width: 20 }).action, undefined);
+});
+
+test("the actions menu is an optional footer control before Message and Stop", () => {
+  const frame = footer({ menu: true, available: true });
+  assert.ok(frame.menu, "menu: true paints the control");
+  assert.equal(slice(frame, frame.menu), "[⋯]");
+  const at = frame.text.indexOf("[⋯]");
+  assert.ok(at >= 0, frame.text);
+  assert.ok(at < frame.text.indexOf("[M message]"), "the menu precedes Message");
+  assert.ok(
+    frame.text.indexOf("[M message]") < frame.text.indexOf("[S Stop]"),
+    "Stop stays rightmost",
+  );
+  assert.equal(footer().menu, undefined, "the control is opt-in");
+  assert.equal(footer({ menu: false }).menu, undefined);
+  // The caller decides: the pane suppresses the menu while a draft owns the
+  // keyboard, and an armed Stop owns the whole row here.
+  assert.ok(footer({ menu: true, composing: true }).menu, "the helper paints what it is told");
+  assert.equal(footer({ menu: true, confirming: true, available: true }).menu, undefined);
+  // Framed, the range is offset by the frame's side and pad.
+  const framed = footer({ menu: true, framed: true });
+  assert.ok(framed.menu.from >= 3, JSON.stringify(framed.menu));
+  assert.equal(slice(framed, framed.menu, 3), "[⋯]");
+  // It yields whole under width pressure, never as a clipped label.
+  for (let width = 20; width <= 120; width++) {
+    const narrow = footer({ menu: true, width });
+    assert(visibleWidth(narrow.text) <= width, `${width}: ${narrow.text}`);
+    if (narrow.menu) assert.equal(slice(narrow, narrow.menu), "[⋯]", `${width}`);
+  }
 });
 
 test("the tail cue counts the rows below and jumps back to them", () => {
@@ -733,6 +838,7 @@ test("hit ranges slice by terminal column through real ANSI, CJK and emoji", () 
       dim: "#777777",
       text: "#eeeeee",
       borderAccent: "#444444",
+      borderMuted: "#333333",
       // Fallback targets for the optional tokens the fixture omits.
       thinkingXhigh: "#dddddd",
     },
@@ -824,68 +930,6 @@ test("hit ranges slice by terminal column through real ANSI, CJK and emoji", () 
   }
 });
 
-// ---- The section rule: body pages, tools state, hidden notes ----
-
-const rule = (overrides = {}) =>
-  renderDetailRule({
-    theme,
-    width: 80,
-    info: false,
-    toolsExpanded: false,
-    keys: true,
-    ...overrides,
-  });
-
-test("the section rule names both pages and the tools state, spanning its row", () => {
-  const plain = rule();
-  assert.match(plain.text, /^── Transcript · Info ─+ Tools collapsed ──$/);
-  assert.equal(visibleWidth(plain.text), 80);
-  assert.match(rule({ toolsExpanded: true }).text, /Tools expanded ──$/);
-  // Info has no tool cards: the toggle state is not shown there.
-  const info = rule({ info: true, toolsExpanded: true });
-  assert.match(info.text, /^── Transcript · Info ─+$/);
-  assert.equal(visibleWidth(info.text), 80);
-  // Notes without a pinned row are counted on Info, the page that lists them.
-  assert.match(rule({ hiddenNotes: 3 }).text, /^── Transcript · Info \+3 ─/);
-  // Every item is a hit range on its own label.
-  const hits = Object.fromEntries(plain.items.map((item) => [item.kind, slice(plain, item)]));
-  assert.deepEqual(hits, { transcript: "Transcript", info: "Info", tools: "Tools collapsed" });
-  const counted = rule({ hiddenNotes: 3 });
-  assert.equal(
-    slice(
-      counted,
-      counted.items.find((item) => item.kind === "info"),
-    ),
-    "Info +3",
-  );
-});
-
-test("live keys are accented by their own letter, and only while they are keys", () => {
-  const accent = {
-    fg: (color, text) => (color === "accent" ? `<${text}>` : text),
-    bold: (text) => text,
-  };
-  const live = rule({ theme: accent }).text;
-  assert.match(live, /Transcript · <I>nfo .* <T>ools collapsed/, "I on Info, T on Tools");
-  assert.doesNotMatch(live, /<T>ranscript/, "T does not select the transcript");
-  const typing = rule({ theme: accent, keys: false }).text;
-  assert.doesNotMatch(typing, /</, "a draft owns the keyboard: no accents");
-});
-
-test("a narrow rule sheds the tools state, then the inactive page, never its width", () => {
-  for (const width of [80, 40, 30, 22, 12, 6]) {
-    for (const overrides of [{}, { info: true }, { hiddenNotes: 4 }]) {
-      const { text, items } = rule({ width, ...overrides });
-      assert(visibleWidth(text) <= width, `${width}: ${JSON.stringify(text)}`);
-      for (const item of items) assert.ok(item.to <= visibleWidth(text), `${width}: hit inside`);
-    }
-  }
-  assert.match(rule({ width: 40 }).text, /Transcript · Info ─+ Tools ──$/);
-  assert.match(rule({ width: 30 }).text, /^── Transcript · Info ─+$/);
-  assert.match(rule({ width: 18 }).text, /^── Transcript ─+$/);
-  assert.match(rule({ width: 18, hiddenNotes: 4 }).text, /^── Info \+4 ─+$/);
-});
-
 // ---- The compose heading: Steer name #N, Enter/Esc hints ----
 
 test("the compose heading names its target and its keys", () => {
@@ -935,63 +979,43 @@ test("the compose heading fits CJK names and narrow rows without breaking", () =
 
 // ---- Summary hierarchy ----
 
-test("elevated context and turn pressure outlast the model name", () => {
+test("elevated context and turn pressure survive a narrow dock without a percent", () => {
   const hot = input({
     runtime: { activity: "generating", context: { tokens: 259_000, context_window: 272_000 } },
   });
-  // 95% context at width 30: the elevated figure stays, routine model yields.
-  const row = renderDetailSummary(hot, theme, 30)[0];
+  // The labelled ratio stays at a narrow width; the percent never returns.
+  const row = renderDetailSummary(hot, theme, 40, { activity: false })[0];
   assert.match(row, /ctx ≈259k\/272k/, row);
-  assert.doesNotMatch(row, /claude-opus-5/, row);
-  // A long model name is still routine: it never displaces elevated context.
-  const longModel = input({
-    effective_settings: { ...view().effective_settings, model: "very-long-model-name-x" },
-    runtime: { activity: "generating", context: { tokens: 259_000, context_window: 272_000 } },
-  });
-  const longRow = renderDetailSummary(longModel, theme, 30)[0];
-  assert.match(longRow, /ctx ≈259k\/272k/, longRow);
-  assert.doesNotMatch(longRow, /very-long-model-name-x/, longRow);
-  // Turns at >= 80% are elevated the same way.
+  assert.doesNotMatch(row, /≈\S+ \d+%/, "the retired context percent never returns");
+  // Turns at >= 80% keep the same slash form.
   const turns = input({ turns: 205, max_turns: 256 });
-  const turnsRow = renderDetailSummary(turns, theme, 30)[0];
-  assert.match(turnsRow, /↻205≤256/, turnsRow);
-  assert.doesNotMatch(turnsRow, /claude-opus-5/, turnsRow);
-  // Elevated context and turns together: context compacts to a whole percent
-  // instead of losing its place.
-  const both = input({
-    turns: 205,
-    max_turns: 256,
-    runtime: { activity: "generating", context: { tokens: 259_000, context_window: 272_000 } },
-  });
-  const bothRow = renderDetailSummary(both, theme, 20)[0];
-  assert.match(bothRow, /↻205≤256 · ctx 95%/, bothRow);
-  // The compact percent form appears only when the full form cannot fit.
-  for (const width of [13, 11, 8]) {
-    const compact = renderDetailSummary(hot, theme, width)[0];
-    assert.match(compact, /ctx 95%/, `${width}: ${compact}`);
-    assert(visibleWidth(compact) <= width, `${width}`);
-  }
-  assert.match(renderDetailSummary(hot, theme, 30)[0], /ctx ≈259k\/272k/);
+  const turnsRow = renderDetailSummary(turns, theme, 40, { activity: false })[0];
+  assert.match(turnsRow, /↻205\/256/, turnsRow);
   // Unknown figures stay unknown: no invented zeros, percents or prices.
   const unknown = input({
     usage: undefined,
     runtime: { activity: "generating", context: { tokens: null, context_window: 272_000 } },
   });
-  const unknownRow = renderDetailSummary(unknown, theme, 48)[0];
+  const unknownRow = renderDetailSummary(unknown, theme, 48, { activity: false })[0];
   assert.match(unknownRow, /ctx \?\/272k/, unknownRow);
   assert.doesNotMatch(unknownRow, /\$/, unknownRow);
-  assert.doesNotMatch(unknownRow, /ctx 0%|ctx \?%/, "an unknown percent is never fabricated");
+  assert.doesNotMatch(unknownRow, /0%|\?%/, "an unknown percent is never fabricated");
   // Every row fits its width, whatever survives.
+  const both = input({
+    turns: 205,
+    max_turns: 256,
+    runtime: { activity: "generating", context: { tokens: 259_000, context_window: 272_000 } },
+  });
   for (const width of [48, 40, 30, 20, 13, 8]) {
-    const squeezed = renderDetailSummary(both, theme, width)[0];
+    const squeezed = renderDetailSummary(both, theme, width, { activity: false })[0];
     assert(visibleWidth(squeezed) <= width, `${width}: ${JSON.stringify(squeezed)}`);
   }
 });
 
 test("the summary can skip its activity row when none is allocated for it", () => {
   const base = input({}, { active_tools: [{ name: "read", detail: "src/core/controller.ts" }] });
-  const rows = renderDetailSummary(base, theme, 60);
-  assert.equal(rows.length, 2, "the default keeps the bounded activity row");
+  const rows = renderDetailSummary(base, theme, 60, { activity: true });
+  assert.equal(rows.length, 2, "the explicit activity row stays available to other callers");
   const metricsOnly = renderDetailSummary(base, theme, 60, { activity: false });
   assert.equal(metricsOnly.length, 1, "activity: false paints the metrics row only");
   assert.equal(metricsOnly[0], rows[0], "the metrics row itself is unchanged");
@@ -1137,21 +1161,6 @@ test("attention takes the caller's final row budget and transient extra notes", 
   );
   // Extra notes never leak into the pure collection of the view itself.
   assert.equal(getDetailAttentionNotes(base).length, 8);
-});
-
-test("transcriptRule shares its rule math with a safe custom label", () => {
-  const rule = transcriptRule(theme, 40);
-  assert.match(rule, /── transcript /);
-  assert.equal(visibleWidth(rule), 40);
-  const info = transcriptRule(theme, 40, "Info · I transcript");
-  assert.match(info, /── Info · I transcript /);
-  assert.equal(visibleWidth(info), 40);
-  // The default label is byte-identical to the previous two-argument form.
-  assert.equal(transcriptRule(theme, 33), transcriptRule(theme, 33, "transcript"));
-  // A custom label cannot spoof the chrome.
-  const raw = transcriptRule(theme, 40, "bad\u001b[31m\u0007\u202ename\t");
-  assert.doesNotMatch(raw, /[\p{Cc}\p{Bidi_Control}]/u);
-  assert(visibleWidth(raw) <= 40, JSON.stringify(raw));
 });
 
 test("info accepts the parent's bounded wrap callback for both layouts", () => {

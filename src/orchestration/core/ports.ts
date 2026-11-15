@@ -53,6 +53,9 @@ export interface RunCallbacks {
   /** Owner feedback; never registered as a child tool. */
   managedBlock?(fact: RepeatedManagedBlock): void;
 }
+/** Where a steered message came from, as observed by the execution port. */
+export type InputOrigin = "parent" | "human" | "orchestration";
+
 export interface AgentSessionPort {
   readonly session_id: string;
   readonly history?: HistoryPort;
@@ -62,7 +65,7 @@ export interface AgentSessionPort {
     callbacks: RunCallbacks,
     identity: RunExecutionIdentity,
   ): Promise<ExecutionFacts>;
-  steer(message: string, valid: () => boolean): Promise<boolean>;
+  steer(message: string, valid: () => boolean, origin?: InputOrigin): Promise<boolean>;
   stop(): Promise<void>;
   clearInputs(): string[];
   dispose(): Promise<{ shutdownExited: boolean; errors: string[] }>;

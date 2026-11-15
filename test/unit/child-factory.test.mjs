@@ -73,14 +73,18 @@ export const disposeChildSession = async () => {
   return state.cleanupReport;
 };
 export class PiAgentSessionAdapter {
-  constructor(options) { this.session_id = options.session.sessionId; this.history = options.history; }
+  constructor(options) {
+    this.session_id = options.session.sessionId;
+    this.history = options.history;
+    state.adapterOptions.push(options);
+  }
   async run(prompt) {
     state.runs.push(prompt);
     if (state.onRun) await state.onRun();
     return { kind: "success" };
   }
   canInput() { return false; }
-  async steer() { return false; }
+  async steer(text, valid, origin) { state.adapterSteers.push([text, valid, origin]); return false; }
   async stop() { state.blockEndsAtStop = state.blockEnds; }
   clearInputs() { return []; }
   async dispose() {
@@ -136,6 +140,9 @@ function fixture(t, profile = "editor") {
     rendererLookups: [],
     rendererBinds: [],
     rendererUnbinds: 0,
+    adapterOptions: [],
+    adapterSteers: [],
+    inputOrigins: [],
     approvalBegins: [],
     cleanupReport: { shutdownExited: true, errors: [] },
   });
@@ -192,6 +199,9 @@ function fixture(t, profile = "editor") {
         return {
           extension() {},
           begin() {},
+          recordInputOrigin(...args) {
+            seam.state.inputOrigins.push(args);
+          },
           bindToolRenderers(lookup) {
             seam.state.rendererBinds.push({ id, lookup });
             let unbound = false;
@@ -464,3 +474,23 @@ for (const disposal of ["hanging", "throwing"])
     }
     assert.equal(seam.state.rendererBinds.length, 1);
   });
+
+test("adapter options.observeInput forwards the exact message and origin to the bound activity", async (t) => {
+  const f = fixture(t),
+    port = await f.create();
+  assert.equal(seam.state.adapterOptions.length, 1);
+  const message = { role: "user", content: [{ type: "text", text: "continue" }] };
+  seam.state.adapterOptions[0].observeInput(message, "human");
+  assert.deepEqual(seam.state.inputOrigins, [[message, "human"]]);
+  assert.equal(seam.state.inputOrigins[0][0], message, "message identity is preserved");
+  await port.dispose();
+});
+
+test("wrapper steer preserves the origin argument to the adapter", async (t) => {
+  const f = fixture(t),
+    port = await f.create();
+  const valid = () => true;
+  await port.steer("origin probe", valid, "human");
+  assert.deepEqual(seam.state.adapterSteers, [["origin probe", valid, "human"]]);
+  await port.dispose();
+});

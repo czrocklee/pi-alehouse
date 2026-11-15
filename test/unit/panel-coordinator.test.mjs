@@ -426,8 +426,13 @@ test("an open queued pane follows late child history and streaming without remou
   });
   assert.deepEqual(retained.entries(), sessionManager.getEntries());
   assert.equal(retained.inFlight(), draft);
-  // Match the transcript, not the independently refreshed activity preview.
-  const transcript = () => pane.render(120).join("\n").split(" Transcript · Info ")[1];
+  // Match the scrolling body between the title and the bottom dock's plain
+  // separator, not the title or the dock's activity-free metrics row.
+  const transcript = () => {
+    const rows = pane.render(120).map(stripTerminalSequences);
+    const rule = rows.findLastIndex((row) => /^─+$/.test(row));
+    return rows.slice(1, rule === -1 ? rows.length - 1 : rule).join("\n");
+  };
   assert.match(transcript(), /LATE_CHILD_HISTORY/);
   assert.match(transcript(), /LATE_CHILD_STREAM/);
   sessionManager.appendMessage({ ...draft, stopReason: "stop" });

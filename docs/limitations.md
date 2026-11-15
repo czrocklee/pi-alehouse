@@ -36,17 +36,18 @@ without Jev/checkpoint review.
 ## Lifecycle and cancellation
 
 Esc interrupts the parent's wait, not child work. In Agent details each press
-leaves one layer: an armed Stop confirmation, then a message draft, then Info,
-and finally the pane. **S** / the bottom-right, rightmost **[S Stop]** arms confirmation in the
+leaves one layer: the actions menu, then an armed Stop confirmation, then a
+message draft, then Info, and finally the pane. **S** / the bottom-right, rightmost **[S Stop]** arms confirmation in the
 footer without replacing the title/body/transcript or changing scroll or height.
 The footer shows `best-effort · Ctrl+S · Esc cancel · [Confirm stop]`, with the
 warning-colored bold action rightmost (ordinary Stop is dim);
 **Ctrl+S** or a separate single click then requests cooperative cancellation through
 the Owner; rapid double/triple clicks do not confirm. Initial Stop requires the
 full inline confirmation hint to fit the footer beside a minimal selected tab
-when several Agents exist; live status stays in the title. The normal pane
-height must fit a known finite viewport, not full identity/task text in a
-separate confirmation body.
+when several Agents exist; live status stays in the bottom info row. The normal pane
+height must fit a known finite viewport with the previous five-row budget floor,
+not full identity/task text in a separate confirmation body. At heights below that floor the pane may still paint its minimal
+title/status/footer rows, but offers no Stop or compose authority.
 Long or CJK task/name text alone no longer suppresses Stop. Ordinary typing,
 plain Enter and repeated S never confirm Stop; neither Stop step accepts an
 unpainted control. Confirmation binds the originally painted Owner/generation/Agent/Run;
@@ -621,9 +622,9 @@ stay visible while cooperative cancellation/drain is pending; this observation
 is not proof of execution exit, and detailed drain diagnostics remain separate.
 
 Well-formed current `ask_parent`/`alert_parent` transcript calls use the host's
-Input background with right-aligned titles and literal bodies, not ordinary
-tool-card framing. Bodies use tool-argument encoding: protocol payloads and
-Unicode whitespace survive, controls/backslashes stay distinguishable, tabs
+Input background for literal bodies, with right-aligned titles above and outside
+that background, not ordinary tool-card framing. Bodies use tool-argument encoding:
+protocol payloads and Unicode whitespace survive, controls/backslashes stay distinguishable, tabs
 are visible `\x09` and LF keeps paragraphs. Matching requires exactly one own
 enumerable data-property string, nonblank and at most 8192 UTF-16 units; accessors
 and extra own keys (including symbols/hidden keys) stay raw without invoking
@@ -637,10 +638,25 @@ normalized text below it. This metric is not a complete blank-glyph or pixel
 visibility detector. With no recorded result a dim `No recorded result` line
 appears outside the background; any final result, even empty content, or a
 synthetic failure clears it. It asserts neither live execution nor failure,
-delivery or parent acknowledgement. Generic `Input` messages are not relabeled
-as `From parent` without reliable origin evidence. The existing human-lead label
-remains qualified text recognition, not source-authenticated authorship.
-Malformed and retired tool records stay literal.
+delivery or parent acknowledgement. Incoming messages with an exact live
+message-object origin show `From parent`, `From user` or `Alehouse input`.
+The parent label identifies the dispatched envelope, not authorship of its
+embedded reference material. Origins are a presentation-only in-memory sidecar,
+not journal metadata or permission evidence; retained messages keep it after
+child disposal, but reloaded objects do not recover it. Unknown messages retain
+`Input`, with the existing exact human-lead qualified fallback (text recognition,
+not authenticated authorship). Neither body equality nor history position
+establishes origin. Malformed and retired tool records stay literal.
+
+Origin capture observes the public child Agent's `prompt`/`steer` methods in a
+single ticket-admitted async dispatch and binds at most one exact user object.
+The initial prompt also requires the SDK's `preflightResult('started')` hook,
+currently documented for internal RPC use. These are compatibility seams, not
+a public SDK provenance API. Missing/nonreplaceable methods, changed message
+shapes, lost dispatch context or failed presentation observation leave the label
+unknown without changing execution. Inputs, queues, provider text and journal
+records are not rewritten to carry origin markers. Trusted in-process code is
+not isolated by this observation.
 
 The Subagents roster aligns identity, configuration and compact metrics before
 the final variable-length task label when width permits. Columns use spaces,
@@ -693,15 +709,45 @@ are truncated. Exited/finishing execution has no current-turn clock. Activity
 labels and content share the host theme's italic styling, while the clock and
 tree indentation remain upright; actual italic appearance depends on terminal
 font support. Its 60-second tint is only a presentation cue, not a hung-tool
-diagnosis or lifecycle timer. In Agent details, a wide metrics row shares its
-space with right-aligned page/tool controls after a dim, isolated `│`; narrow
-panes keep the controls on the section rule instead of dropping more metrics.
-Both pages reserve the full Transcript group and longest Tools state before
-merging: Info's absent Tools slot and the shorter state's trailing padding have
-no hit targets. With width, metrics and hidden-note count unchanged, page/Tools
-transitions do not move the page controls or change the chosen row; real
-metrics/count changes and resizing may still do so. Repeated clicks are not
-filtered globally, and the narrow section rule keeps its existing behavior.
+diagnosis or lifecycle timer. In Agent details the metrics moved to one bottom
+info row above the Agent-tab footer, under a plain separator that carries no
+text, controls or hit targets; there is no merged toolbar and no labeled section
+rule. Its live-turn clock is floored to whole seconds uniformly, while the
+60-second tint still reads the raw unrounded observation. The figures keep a
+fixed display order but yield separately under width pressure: the model text
+shortens first, then the total, cache percentage, whole usage group, cost and
+routine turns drop. The shortened model yields before elevated turns, and the
+status compacts before context yields; numeric figures are never clipped
+mid-figure and only the model text may be shortened. A shortened model that
+survives that ladder regains leftover cells only after the optional fields have
+dropped; regained width never reintroduces a dropped field or reorders the
+yield priority. The row reserves the
+critical ones (lifecycle status, its turn clock, elevated context/turn
+pressure); no completeness ratio is invented, an unknown share is omitted rather
+than rendered as zero, and a partial cost keeps its `≥` floor. The title's
+identity tag needs the nickname to fit whole or keep three terminal cells
+including its ellipsis, and the tag-less task title requires that same
+nickname floor; where the task and a recognizable name cannot fit, the nickname
+plus its Run cue wins over a bare ellipsis name. Page and tool controls live in the footer's actions menu
+and their keys. That `[⋯]` control is reserved in the footer, so optional peers,
+message and tail forms yield before it; it is absent when no Agent is selected
+or the caller's minimum width, current geometry or two-option menu viewport
+cannot fit it. The menu is an overlay: it changes neither the pane's height nor the scroll
+position, adds hit targets only while painted, and closes on selection, resize,
+permission hiding, an armed Stop, a started draft or a stale target. Body scroll
+aliases and the wheel close it and apply the body-scroll request in the same
+event, subject to normal bounds (no extra dismiss-only press); its own Up/Down
+move the selection. An
+outside press that dismisses it is claimed and cannot also activate Stop or a
+newly exposed control. Repeated clicks are not filtered globally. A partial
+diagnostic overflow is counted on the last painted note row and on the menu's
+Info item; the footer's `!N` cue is only the no-note-row fallback, never a
+duplicate. At known small supported heights the pane keeps the minimal bottom
+status by shrinking the body below three rows; a known budget under the
+title/status/footer three rows paints no pane. Non-finite geometry admits no
+Stop or compose commands, and command admission keeps the previous five-row
+floor. Relative scrolling with no body rows preserves reading/following intent;
+Home/End remain explicit choices.
 The selected Agent tab uses accent/bold and optional host underline, not a solid
 background fill; terminal transparency and underline appearance remain host
 properties. Normal `agent_busy` is not a session-error or attention cue, without

@@ -6,11 +6,13 @@ import {
   SessionUnavailableError,
   type AgentSessionPort,
   type HistoryPort,
+  type InputOrigin,
   type RunCallbacks,
 } from "../core/ports.ts";
 import { boundedOutput, OutputBuffer } from "../core/result-text.ts";
 import { addToLedger, normalizeUsage, type UsageLedger } from "../core/usage-ledger.ts";
 import { disposeChildSession } from "./child-session.ts";
+import { InputOriginCapture } from "./input-origin.ts";
 
 /** The adapter needs only the live journal controls beyond the core history port. */
 export interface RunJournalPort extends HistoryPort {
@@ -89,6 +91,7 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
   private unavailable?: SessionUnavailableError;
   private readonly deliveries = new Set<Promise<boolean>>();
   private readonly discarded: string[] = [];
+  private readonly origins?: InputOriginCapture;
   readonly session_id: string;
   readonly history?: RunJournalPort;
   constructor(
@@ -99,6 +102,8 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
       readiness(): void;
       /** Synchronous revocation before stop/exit/drain; never extends Run life. */
       invalidateApproval?(): void;
+      /** Optional, read-only-to-execution message attribution for the human UI. */
+      observeInput?(message: object, origin: InputOrigin): void;
       outputChars?: number;
       shutdownTimeoutMs?: number;
       /** Bound for the SDK abort in stop(); a timeout is reported, never awaited forever. */
@@ -108,6 +113,15 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
   ) {
     this.session_id = options.session.sessionId;
     this.history = options.history;
+    if (options.observeInput) {
+      try {
+        this.origins = new InputOriginCapture(options.session.agent, (message, origin) =>
+          options.observeInput?.(message, origin),
+        );
+      } catch {
+        // A missing/changed public Agent leaves labels neutral, not unusable.
+      }
+    }
   }
 
   private abortTracked(): void {
@@ -180,7 +194,12 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
     if (this.options.gate.uncertain) throw new Error("INPUT_BOUNDARY_UNCERTAIN");
     return this.discarded.splice(0);
   }
-  private async send(text: string, valid: () => boolean, steer: boolean): Promise<boolean> {
+  private async send(
+    text: string,
+    valid: () => boolean,
+    steer: boolean,
+    origin?: InputOrigin,
+  ): Promise<boolean> {
     const { session, gate } = this.options;
     if (!valid() || !gate.accepting || gate.stopped) return false;
     this.assertReady();
@@ -193,20 +212,36 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
     try {
       // prompt() traverses permission input and supplies the Run-owned ticket.
       // The SDK also routes direct steer()/followUp() through input handlers.
-      await session.prompt(ticket.prefix + text, {
-        expandPromptTemplates: false,
-        source: "extension",
-        ...(steer ? { streamingBehavior: "steer" as const } : {}),
-      });
+      const invoke = (started?: () => void) =>
+        session.prompt(ticket.prefix + text, {
+          expandPromptTemplates: false,
+          source: "extension",
+          ...(steer ? { streamingBehavior: "steer" as const } : {}),
+          ...(started
+            ? {
+                preflightResult: (disposition) => {
+                  if (disposition === "started") started();
+                },
+              }
+            : {}),
+        });
+      if (this.origins && origin) {
+        await this.origins.dispatch(
+          { origin, text, steer, admitted: () => ticket.passed && gate.tickets.has(ticket) },
+          invoke,
+        );
+      } else {
+        await invoke();
+      }
       if (steer && ticket.passed && (!gate.accepting || gate.stopped)) gate.uncertain = true;
       return ticket.passed;
     } finally {
       gate.tickets.delete(ticket);
     }
   }
-  async steer(text: string, valid: () => boolean): Promise<boolean> {
+  async steer(text: string, valid: () => boolean, origin?: InputOrigin): Promise<boolean> {
     if (!this.canInput() || !valid()) return false;
-    const delivery = this.send(text, valid, true);
+    const delivery = this.send(text, valid, true, origin);
     this.deliveries.add(delivery);
     try {
       return await delivery;
@@ -509,7 +544,12 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
     });
     try {
       publish();
-      await this.send(prompt, () => this.active && gate.accepting && !gate.stopped, false);
+      await this.send(
+        prompt,
+        () => this.active && gate.accepting && !gate.stopped,
+        false,
+        "parent",
+      );
     } catch (caught) {
       // An unexpected SDK rejection may leave its in-memory log ahead of disk.
       // Do not retry the writer or call it a known filesystem fault; quarantine.

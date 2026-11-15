@@ -262,31 +262,69 @@ test("plain transcript presses keep ordinary SDK text selection", (t) => {
 });
 
 for (const frame of [false, true]) {
-  test(`rule and tail chrome route through SDK clicks (frame=${frame})`, (t) => {
+  test(`footer menu routes Info, tools and the tail through SDK clicks (frame=${frame})`, (t) => {
     const h = chromeFixture(t, { frame, transcript: true });
     let screen = h.paint();
     assert.ok(
       screen.some((line) => /ROW\d+/.test(line)),
       "transcript body is shown",
     );
-    const tools = h.locate("Tools collapsed");
-    h.click(tools.x, tools.y);
-    assert.ok(
-      h.paint().some((line) => line.includes("Tools expanded")),
-      "the toggle flips",
+    const height = h.pane.render(120).length;
+    const bodyY = screen.findIndex((line) => /ROW\d+/.test(line));
+
+    // The footer's [⋯] opens the compact actions menu over the bottom of the
+    // viewport: no pane row and no scroll position changes.
+    const trigger = h.locate("[⋯]");
+    h.click(trigger.x, trigger.y);
+    screen = h.paint();
+    assert.equal(h.pane.render(120).length, height, "the menu costs no pane row");
+    assert.equal(
+      screen.findIndex((line) => /ROW\d+/.test(line)),
+      bodyY,
+      "opening the menu does not scroll the body",
     );
-    const expanded = h.locate("Tools expanded");
-    h.click(expanded.x, expanded.y);
-    assert.ok(h.paint().some((line) => line.includes("Tools collapsed")));
+    assert.ok(
+      screen.some((line) => line.includes("Expand tools")),
+      "the menu lists the tools toggle",
+    );
+
+    const tools = h.locate("Expand tools");
+    h.click(tools.x, tools.y);
+    screen = h.paint();
+    assert.ok(
+      screen.some((line) => /ROW\d+/.test(line)),
+      "toggling tools keeps the body",
+    );
+    assert.ok(
+      !screen.some((line) => line.includes("Expand tools")),
+      "activating an item closes the menu",
+    );
+
+    const reopen = h.locate("[⋯]");
+    h.click(reopen.x, reopen.y);
+    assert.ok(
+      h.paint().some((line) => line.includes("Collapse tools")),
+      "the menu follows the expansion state",
+    );
+    const collapse = h.locate("Collapse tools");
+    h.click(collapse.x, collapse.y);
+    assert.ok(
+      h.paint().some((line) => /ROW\d+/.test(line)),
+      "collapsing keeps the body",
+    );
+
+    const infoTrigger = h.locate("[⋯]");
+    h.click(infoTrigger.x, infoTrigger.y);
     const info = h.locate("Info");
     h.click(info.x, info.y);
     assert.ok(!h.paint().some((line) => /ROW\d+/.test(line)), "Info replaces the transcript body");
-    const transcript = h.locate("Transcript");
-    h.click(transcript.x, transcript.y);
+    const back = h.locate("← Transcript");
+    h.click(back.x, back.y);
     assert.ok(
       h.paint().some((line) => /ROW\d+/.test(line)),
-      "Transcript restores the body",
+      "the page-local ← Transcript restores the body",
     );
+
     h.pane.handleInput("\x1b[A"); // Scroll one row away from the live tail.
     screen = h.paint();
     const tailY = screen.findIndex((line) => line.includes("more"));
@@ -296,6 +334,95 @@ for (const frame of [false, true]) {
     assert.ok(
       !h.paint().some((line) => line.includes("more")),
       "the tail click jumps back and resumes following",
+    );
+  });
+}
+
+for (const frame of [false, true]) {
+  test(`the actions menu closes before the pane and needs painted geometry (frame=${frame})`, (t) => {
+    const h = chromeFixture(t, { frame, transcript: true });
+    h.paint();
+    h.pane.handleInput(".");
+    assert.ok(
+      h.paint().some((line) => line.includes("Expand tools")),
+      "'.' opens the compact menu",
+    );
+    h.pane.handleInput(".");
+    assert.ok(!h.paint().some((line) => line.includes("Expand tools")), "'.' closes it again");
+    h.pane.handleInput(".");
+    h.pane.handleInput("\x1b");
+    assert.ok(
+      !h.paint().some((line) => line.includes("Expand tools")),
+      "Esc closes the menu first",
+    );
+    assert.equal(h.pane.isOpen(), true, "the pane stays open");
+    h.pane.handleInput("\x1b");
+    assert.equal(h.pane.isOpen(), false, "the next Esc closes the pane");
+  });
+}
+
+test("a stale terminal geometry cannot open the actions menu", (t) => {
+  const h = chromeFixture(t, { frame: false, transcript: true });
+  h.paint();
+  h.terminal.rows = 20; // Resize without an intervening repaint.
+  h.pane.handleInput(".");
+  assert.ok(
+    !h.paint().some((line) => line.includes("Expand tools")),
+    "the old paint's menu is void after a resize",
+  );
+  h.pane.handleInput(".");
+  assert.ok(
+    h.paint().some((line) => line.includes("Expand tools")),
+    "a fresh paint restores the menu",
+  );
+});
+
+test("a menu press claims without opening; a moved release never opens it", (t) => {
+  const h = chromeFixture(t, { frame: false, transcript: true });
+  h.paint();
+  const trigger = h.locate("[⋯]");
+  h.send(trigger.x, trigger.y, false);
+  assert.ok(
+    !h.paint().some((line) => line.includes("Expand tools")),
+    "press alone never opens the menu",
+  );
+  h.drag(2, 2);
+  h.send(2, 2, true);
+  assert.ok(
+    !h.paint().some((line) => line.includes("Expand tools")),
+    "a moved release never opens the menu",
+  );
+  const fresh = h.locate("[⋯]");
+  h.click(fresh.x, fresh.y);
+  assert.ok(
+    h.paint().some((line) => line.includes("Expand tools")),
+    "an unmoved click opens the menu",
+  );
+});
+
+for (const [rows, boxed] of [
+  [10, false],
+  [40, true],
+]) {
+  test(`the actions menu uses ${boxed ? "four rounded rows" : "two rows"} at ${rows}-row terminals`, (t) => {
+    const h = chromeFixture(t, { frame: false, transcript: true });
+    h.terminal.rows = rows;
+    h.paint();
+    h.pane.handleInput(".");
+    const screen = h.paint();
+    assert.ok(
+      screen.some((line) => line.includes("Expand tools")),
+      "the menu is painted",
+    );
+    assert.equal(
+      screen.some((line) => line.includes("╭")),
+      boxed,
+      boxed ? "room for the rounded box" : "a short viewport stays borderless",
+    );
+    assert.equal(
+      screen.some((line) => line.includes("╰")),
+      boxed,
+      "the box closes only when it opened",
     );
   });
 }

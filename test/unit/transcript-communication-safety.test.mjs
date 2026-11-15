@@ -123,11 +123,15 @@ for (const { label, tool, raw, expected } of bodyCases) {
     const before = structuredClone(messages);
     const content = pane(t, messages);
     const width = 160;
-    const block = plainRows(bubbleRows(rowsAt(content, width)));
-    assert.equal(block.length, expected.length + 3, "padding, title, body paragraphs, padding");
-    assert.ok(block[1].endsWith(`${tool.title} `));
+    const paneRows = rowsAt(content, width);
+    const block = plainRows(paneRows.filter((row) => row.startsWith(bubbleBg)));
+    assert.equal(block.length, expected.length + 2, "padding, body paragraphs, padding");
+    const title = paneRows.find((row) => stripTerminalSequences(row).endsWith(`${tool.title} `));
+    assert.ok(title, "the right-aligned title renders above its block");
+    assert.ok(!title.startsWith(bubbleBg), "the title sits outside the body background");
+    assert.equal(visibleWidth(title), width, "the title spans the pane width");
     assert.deepEqual(
-      block.slice(2, -1),
+      block.slice(1, -1),
       expected.map((line) => ` ${line}${" ".repeat(width - visibleWidth(line) - 1)}`),
       "only display escaping changes recorded body bytes",
     );
@@ -363,7 +367,8 @@ test("F3: empty normal results invent neither success nor Error nor missing-resu
     );
   }
   const rows = rowsAt(pane(t, messages));
-  assert.equal(bubbleRows(rows).length, 16);
+  // Four calls, one block each: padding, body, padding — titles sit outside.
+  assert.equal(bubbleRows(rows).length, 12);
   assert.equal(noticeRows(rows).length, 0);
   assert.doesNotMatch(screen(rows), /Error|success|queued|delivered|acknowledged/i);
 });
@@ -402,7 +407,7 @@ for (const trap of ["ownKeys", "getOwnPropertyDescriptor"]) {
     assert.equal(lookups, 0);
     assert.ok(text.includes("AFTER_NEIGHBOR"), "a matching failure cannot swallow the next call");
     assert.ok(text.includes("BEFORE_NEIGHBOR"));
-    assert.equal(bubbleRows(rows).length, 8, "only the two healthy neighbors receive bubbles");
+    assert.equal(bubbleRows(rows).length, 6, "only the two healthy neighbors receive bubbles");
     for (const literal of [
       "alert_parent",
       "[unrenderable]",
@@ -436,7 +441,11 @@ for (const tool of tools) {
       assert.ok(notices[0].includes(hostTheme.fg("dim", noResult)));
       assert.ok(!notices[0].includes(bubbleBg));
       assert.ok(!notices[0].includes(pendingBg), "not generic pending-card styling");
-      assert.equal(bubbleRows(rows).length, 4, "the notice is not a body row");
+      assert.equal(
+        bubbleRows(rows).length,
+        3,
+        "padding plus body only; the title and the notice are not body rows",
+      );
       const generic = rows.find((row) =>
         stripTerminalSequences(row).includes("GENERIC_PENDING_ARGUMENT"),
       );
@@ -464,7 +473,7 @@ for (const [label, text, isError] of [
       content.setToolsExpanded(expanded);
       const rows = rowsAt(content);
       assert.equal(noticeRows(rows).length, 0);
-      assert.equal(bubbleRows(rows).length, 4);
+      assert.equal(bubbleRows(rows).length, 3);
       if (text) {
         const row = rows.find((line) => stripTerminalSequences(line).includes(text));
         assert.ok(row?.includes(hostTheme.fg(isError ? "error" : "dim", text)));
@@ -503,7 +512,7 @@ test("F3: synthetic provider errorMessage containing only WORD JOINER still show
     "retain recorded WORD JOINER below Error",
   );
   assert.ok(!rows[errorRow + 1].includes(bubbleBg));
-  assert.equal(bubbleRows(rows).length, 4);
+  assert.equal(bubbleRows(rows).length, 3);
   assert.equal(noticeRows(rows).length, 0, "synthetic failure clears missing-result observation");
 });
 
@@ -522,7 +531,7 @@ for (const [stopReason, extra, receipt] of [
     messages = [assistant(calls, { stopReason, ...extra })];
     const rows = rowsAt(content);
     assert.equal(noticeRows(rows).length, 0);
-    assert.equal(bubbleRows(rows).length, 4);
+    assert.equal(bubbleRows(rows).length, 3);
     const row = rows.find((line) => stripTerminalSequences(line).includes(receipt));
     assert.ok(row?.includes(hostTheme.fg("error", receipt)));
     assert.ok(!row.includes(bubbleBg));

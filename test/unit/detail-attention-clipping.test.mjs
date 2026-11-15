@@ -89,7 +89,10 @@ test("a clipped selected tab keeps its warning on the shortest framed pane", (t)
   );
   const edge = painted.at(-1);
   // The warning rides the clipped tab itself, beside the real lifecycle glyph.
-  assert.match(edge, /✓ aspen !/, edge);
+  // The footer's own actions and menu share the row, so the nickname may be
+  // ellipsized: the marker and the lifecycle glyph are what must survive.
+  assert.match(edge, /✓ asp/, edge);
+  assert.match(edge, /!/, "the warning marker survives the narrower tab");
   assert.doesNotMatch(edge, /✗/, "a warning is not turned into a failure");
   assert.doesNotMatch(edge, /!\d/, "the marker it carries suppresses the !N cue");
 });
@@ -134,7 +137,7 @@ test("arming Stop never erases every warning beside its whole confirmation", (t)
   );
   const p = pane(t, { width: 61, entries, chosen: "aspen", onStop() {} });
   const before = plain(p, 61).at(-1);
-  assert.match(before, /⠋ aspen ! ─ ⠋ cedar !/, before);
+  assert.match(before, /⠋ aspen ! \| ⠋ cedar !/, before);
   p.handleInput("s");
   const painted = plain(p, 61);
   assert(
@@ -164,7 +167,10 @@ test("a non-ASCII nickname cannot clip the warning away", (t) => {
     painted.every((line) => visibleWidth(line) <= 24),
     painted.join("\n"),
   );
-  assert.match(painted.at(-1), /✓ 审查员配置 !/, painted.at(-1));
+  // The footer's own controls share the row, so the nickname may be
+  // ellipsized: the lifecycle glyph and the marker are what must survive.
+  assert.match(painted.at(-1), /✓ 审查员/, painted.at(-1));
+  assert.match(painted.at(-1), /!/, painted.at(-1));
 });
 
 test("a question keeps its `?` through a clipped tab as well", (t) => {
@@ -178,7 +184,8 @@ test("a question keeps its `?` through a clipped tab as well", (t) => {
   ];
   const p = pane(t, { width: 20, entries, chosen: "aspen" });
   const edge = plain(p, 20).at(-1);
-  assert.match(edge, /✓ aspen \?/, edge);
+  assert.match(edge, /✓ asp/, edge);
+  assert.match(edge, /\?/, "the question marker survives the narrower tab");
   assert.doesNotMatch(edge, /✗/, "a question is not turned into a failure");
 });
 

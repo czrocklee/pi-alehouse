@@ -1,4 +1,5 @@
 import type { ExtensionFactory, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import type { InputOrigin } from "../core/ports.ts";
 import { identifyingToolArgs } from "../presentation/tool-identity.ts";
 import { singleLineText } from "../presentation/plain-text.ts";
 import type { ActiveTool, GenerationPreview } from "./activity-types.ts";
@@ -37,6 +38,8 @@ export interface ChildActivityObservation {
   snapshot(): ChildActivitySnapshot;
   entries(): unknown[] | undefined;
   inFlight(): unknown;
+  /** Exact live message identity, never inferred from its body or position. */
+  inputOrigin?(message: unknown): InputOrigin | undefined;
   /** Live renderer projection for one tool name, or undefined for the UI's
    * own raw fallback (unknown tool, missing API, closed session). */
   toolRenderers?(name: string): ToolRenderers | undefined;
@@ -60,6 +63,9 @@ export class ChildActivity implements ChildActivityObservation {
   private sessions?: SessionEntries;
   private revision = 0;
   private history?: ActivityHistoryState;
+  /** Presentation-only sidecar: retained history keeps its original labels
+   * after disposal, without serializing metadata or retaining message objects. */
+  private readonly inputOrigins = new WeakMap<object, InputOrigin>();
   /** Live renderer resolver; undefined after unbind/retire (raw fallback). */
   private rendererLookup?: ToolRendererLookup;
   /** Stable per-instance opaque token; replaced only on binding changes. */
@@ -211,6 +217,18 @@ export class ChildActivity implements ChildActivityObservation {
   }
   inFlight(): unknown {
     return this.streaming;
+  }
+  /** Called only by the ticket-admitted SDK dispatch observer. First binding
+   * wins; the sidecar never changes recorded messages or execution authority. */
+  recordInputOrigin(message: object, origin: InputOrigin): void {
+    if (this.inputOrigins.has(message)) return;
+    this.inputOrigins.set(message, origin);
+    this.revision++;
+  }
+  inputOrigin(message: unknown): InputOrigin | undefined {
+    return message !== null && typeof message === "object"
+      ? this.inputOrigins.get(message)
+      : undefined;
   }
   /** Bind the live renderer resolver. The returned unbind is idempotent and
    * matched to this call's own binding token, not to the lookup function:

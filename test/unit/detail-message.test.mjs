@@ -132,8 +132,11 @@ for (const frame of [false, true])
     f.pane.handleInput("m");
     const composing = f.pane.render(120);
     assert.equal(composing.length, before.length, "message mode does not resize the pane");
-    // The two-row tray borrows two viewport rows; the body above it is intact.
-    assert.deepEqual(composing.slice(0, -3), before.slice(0, -3));
+    // The two-row tray borrows two viewport rows and sits under the dock, so
+    // the header and the dock itself keep their content and order.
+    assert.equal(composing[0], before[0], "the header does not move");
+    assert.deepEqual(composing.at(-4), before.at(-2), "the summary dock follows the tray");
+    assert.deepEqual(composing.at(-5), before.at(-3), "the separator follows the tray");
     assert(composing.every((line) => visibleWidth(line) <= 120));
     assert.match(stripTerminalSequences(composing.at(-3)), /Steer a/);
     assert.match(stripTerminalSequences(composing.at(-3)), /Enter send · Esc discard/);

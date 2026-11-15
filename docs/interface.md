@@ -270,14 +270,16 @@ click arms confirmation in place (while a message draft is open, **S** is draft
 text and the control reads **[Stop]**, click only): the footer shows
 `best-effort · Ctrl+S · Esc cancel · [Confirm stop]`, with warning-colored,
 bold **[Confirm stop]** rightmost.
-Arming does not replace the title, body or transcript, change the scroll position,
-or resize the pane. Only **Ctrl+S** or a separate single click on **[Confirm stop]**
+Arming changes only the footer row: it does not replace the title, body or
+transcript, change the scroll position, or resize the pane, and the footer's
+actions menu is not offered while confirmation is armed. Only **Ctrl+S** or a separate single click on **[Confirm stop]**
 then requests cooperative cancellation; rapid double/triple clicks do not confirm.
 **Esc** cancels confirmation; subsequent presses leave any draft and Info page
 before closing details. Ordinary typing, plain `Enter` and repeated **S** never
 confirm Stop. Both steps require their controls to be painted. Initial Stop is
 offered only when the full inline confirmation hint fits the footer (beside a
-minimal selected tab when several Agents exist; the title keeps the live status)
+minimal selected tab when several Agents exist; the bottom info row keeps the
+live status)
 and the normal pane height fits a known finite viewport. Full task/name
 text need not fit a separate confirmation body; long or CJK text alone does not
 suppress Stop. Neither Stop step accepts an unpainted control; a visible Stop
@@ -358,27 +360,43 @@ spaces for this single-line editor; terminal protocols are stripped and remainin
 control or bidirectional-control characters are escaped before draft storage,
 display or sending. Printable Unicode, including combining marks and emoji
 joiners, stays intact. This sanitization does not change the child's permission
-boundary. Displaying which transcript rows came from steering recognizes that
-fixed lead text; this is qualified text recognition, not source-authenticated
-authorship. All other transcript user messages use the neutral `Input` label:
-compaction and branching cannot prove which surviving message was the task's
-original input, and none is guessed to be from the parent.
+boundary. Live transcript labels use the exact message object's in-memory
+origin: parent dispatches show `From parent`, direct human steering shows
+`From user`, and internal budget inputs show `Alehouse input`. The parent label
+describes the dispatched envelope, which can include orchestration context and
+other Agents' reference material; it does not attribute every byte to the parent.
+Unknown-origin messages retain `Input`. An unknown message with the exact human
+lead keeps the qualified `Steering input (human lead)` fallback; text recognition
+alone is not source-authenticated authorship. Compaction and branching never
+infer origin from message position.
 
-The title reserves space for the task and a Run reuse cue: `#N` for a valid task
-ordinal, otherwise an abbreviated Run ID. Nickname/profile text yields first.
+The title carries the task and reserves a Run reuse cue: `#N` for a valid task
+ordinal, otherwise an abbreviated Run ID. Task and identity share the bounded
+cell budgets described below.
 Ordinary metadata normalizes tabs/newlines readably, strips recognized terminal
 protocols and explicitly escapes remaining control and bidirectional-control
 characters; ZWJ, ZWNJ and variation selectors remain intact. This does not
 blanket-strip styled SDK transcripts or their hyperlinks. Wrapping respects
 grapheme clusters and display width.
-Identity and task lead the title; live status and its spinner or outcome glyph
-sit at its right end (before `✕` when framed), so a status change or an Agent
-switch never shifts the name. The status label shortens before it yields, and
-the glyph never does.
+The title leads with the bold nickname, its dim `worker|scout/dN` identity tag
+and the task; a framed pane's upper right carries only the close control. The
+tag is painted only while the nickname keeps a recognizable cell budget: either
+the whole name fits, or it retains at least three terminal cells including the
+ellipsis (three cells total, not three literal characters before one). A
+narrower title drops the tag whole before the name falls below that budget. The
+task-bearing title holds that same budget with or without the tag; where the
+task and a recognizable name cannot fit together, the title keeps the nickname
+and its `#N`/Run cue and drops the task, rather than an ellipsis-fragment name
+beside task text. Live
+status no longer rides the title: the lifecycle state and its spinner or outcome
+glyph moved to the single bottom info row, so a status change or an Agent switch
+never shifts the name.
 
 The footer, or the bottom edge of a floating pane, is the pane's navigation and
 action bar. Agent tabs sit at its left when more than one Agent exists, each
-showing its status glyph and `?`/`!` attention markers. The selected nickname
+showing its status glyph and `?`/`!` attention markers. Framed tabs use muted
+ASCII `|` separators; docked tabs retain spacing-only separation. Outer frame
+rules and the `‹ ›` navigation joins are unchanged. The selected nickname
 uses accent, bold and the host theme's optional underline, without a background
 fill; structural themes without underline retain accent and bold. Status glyphs
 and attention markers keep their own semantic colors, and neither the padding
@@ -391,45 +409,104 @@ the current page, Transcript or Info. It is accented while a live transcript
 keeps growing; a click or **End** goes to the current page's end, resuming live
 tail following on Transcript. Next come `[M message]` and `[S Stop]`, Stop always
 outermost. Docked panes, which have no `✕`, keep an `Esc` hint before the
-actions. The footer does not repeat counters, status, context or a key legend;
-the title, metrics and body controls carry the current Agent's information.
-Framed panes additionally show a scrollbar.
+actions. The footer also carries a `[⋯]` actions control (keyboard `.`) that
+opens the pane's actions menu; it is not offered while a draft is composed or a
+stop confirmation is armed. The footer does not repeat counters, status, context
+or a key legend; the title, the bottom info row and the body carry the current
+Agent's information. Framed panes additionally show a scrollbar.
 Under width pressure peer tabs fold first, then the arrows, then `↓ N more`
 (framed, where the scrollbar also shows position) or `[M message]` (docked, where
-the cue is the only position left). An armed Stop folds every peer so the
-confirmation names a single target.
+the cue is the only position left). The `[⋯]` control is reserved: those
+optional peers, message and tail forms yield before it ever does. It is absent
+when no Agent is selected or the caller's minimum width, current geometry or
+two-option menu viewport cannot fit it, never as an arbitrary optional yield. An armed Stop
+folds every peer so the confirmation names a single target.
 
-Sticky compact metric and attention rows stay pinned above the independently
-scrollable transcript. Normal `agent_busy` is a reuse-availability observation,
-not a session fault: it creates no red session diagnostic, attention row or
-warning marker. This does not change resumability or command admission; real
-session, history, cleanup and other attention facts remain visible.
-At most two highest-priority attention rows are shown;
-when height permits only one, its overflow count still includes every omitted
-note. With no attention row, the section rule counts them as `Info +N` on either
-page; with no rule either, the selected tab's own `?`/`!` marker carries them,
-or a required `!N` cue leads the footer. Clipping a nickname never suppresses
-the last warning/question cue. **I** exposes all diagnostics,
-including the human-steer admission fact. When width permits, the metrics row
-places the complete current metrics at the left and the right-aligned
-`Transcript · Info` controls plus `Tools collapsed` or `Tools expanded` at the
-right. Merge eligibility always reserves the complete Transcript group with
-the longer of `collapsed`/`expanded`, independent of page and Tools state. Info
-leaves a blank, non-clickable Tools slot; the shorter Tools state has non-clickable
-trailing padding. At fixed width, metrics and hidden-note count, page labels and
-the merge/fallback choice therefore stay put across those transitions. Real
-metrics/count changes or resizing may still change the layout.
-A dim `│` belongs to the right group, with at least two spaces before it and
-exactly two after it; it does not extend into other rows. The following section
-rule is then a plain dim horizontal line. This uses the existing rows, not an
-extra toolbar or blank row. If both reserved groups do not fit, the metrics are
-not shortened further to force them together: the controls return to the labeled
-section rule above the body, retaining its existing repeated-click behavior.
-The page shown is brighter; the keys **I** and **T** are accented on their own
-labels, and each painted label is clickable in either layout. Narrow rules retain the
-current page's label, except that hidden diagnostics prioritize `Info +N`;
-**I** still switches pages and **Esc** leaves Info when its other label cannot
-fit. The default compact view keeps running and
+The actions menu overlays the bottom of the viewport without changing the pane's
+height, scroll position or transcript anchor. It offers the page that is not
+shown — `Info`, carrying ` +N` when pinned diagnostics overflow, or
+`Transcript` while Info is open — and `Expand tools`/`Collapse tools`. The active
+item paints accent and bold; `↑`/`↓`/`Tab` move its selection (they never scroll
+the body while it is open), `Enter` activates the painted item, and `Esc` closes
+the menu before it unwinds any other layer. **I**, **T** and the host's
+configured tools key keep working while it is open. Body scroll aliases and the
+wheel close it and apply the body-scroll request in the same event, subject to
+normal scroll bounds; there is no extra dismiss-only first press. The
+conversation behind the pane never scrolls along. The menu closes on
+an Agent selection, a resize or geometry change, permission hiding, an armed
+Stop, a started draft, a stale target or pane invalidation. A press outside the
+menu dismisses it and is claimed: it cannot also click through to **[Confirm
+stop]**, a tab or any newly exposed control. `Esc` unwinds one layer at a time:
+the menu, then an armed Stop, then a message draft, then the Info page, and only
+then the pane.
+
+Fixed observation rows sit below the reading area, pinned directly above the
+footer: up to two diagnostic note rows, then a plain separator, then one info
+row. Pinned observations never share the transcript's scroll coordinates. The
+transcript and Info page stay the only routine activity surfaces; the pane adds
+no activity preview row beside them. Normal `agent_busy` is a
+reuse-availability observation, not a session fault: it creates no red session
+diagnostic, attention row or warning marker. This does not change resumability
+or command admission; real session, history, cleanup and other attention facts
+remain visible.
+
+At most two highest-priority attention rows are pinned just above the separator
+when height permits; when height permits only one, its overflow count still
+includes every omitted note. When at least one note row is painted, notes beyond
+the shown rows are counted as `· +N · I info` on the last painted note row and
+as ` +N` on the footer menu's Info item. The footer's `!N` cue is only the
+no-note-row fallback -- when no note row could be painted at all -- so a partial
+overflow is never duplicated there. When no note row fits, the selected tab's
+own `?`/`!` marker retains an attention cue, or the required `!N` cue leads the
+footer; a tab marker is not a numeric overflow count. Clipping a nickname never
+suppresses the last warning/question cue. **I**
+exposes all diagnostics, including the human-steer admission fact.
+
+The single bottom info row sits directly above the Agent-tab footer and carries
+the selected Run's lifecycle status plus its adaptive metrics. The status keeps
+its spinner or outcome glyph; while a turn is running, the current-turn elapsed
+follows in parentheses as `(18s)`, with no `turn` word, and exited or finishing
+execution shows no turn clock. The live clock is uniformly floored to whole
+seconds (`1.1s` reads `(1s)`), while its 60-second warning tint still reads the
+raw unrounded observation, so flooring never moves the tint boundary. The
+figures have a fixed display order -- status, `model/effort`, `↻turns/max`,
+context, usage, cost, total -- separate from the order in which they yield.
+Under width pressure the model text shortens first, never below a readable
+fragment; then the total, the cache percentage, the whole usage group, cost and
+routine turns drop. The shortened model then yields; elevated turn pressure
+keeps its turns until after that model has gone. The status compacts through its short label and
+glyph forms before context ever yields; once context must yield, the most
+readable status that fits is restored. A model that survives the yield ladder
+reclaims any leftover cells up to its full text; this never reintroduces dropped
+fields or consumes the live clock's reserved width. Numeric fields are never
+clipped mid-figure; only the model text may be shortened. The figures themselves are
+model and creation-time effort as `model/effort`; `↻turns/max` in the widget's
+own compact form; context occupancy as `ctx ≈59k/500k` without a percent,
+unknown occupancy staying unknown rather than zero; the current Run's cumulative
+usage as `↑input (cache%) ↓output` with the footer's compact counts; observed
+cost in the widget's rounded-cents form, a partial observation keeping its `≥`
+floor; and the Run total as `total 2m48s`. No completeness ratio is invented: an
+unknown share is omitted, never rendered as zero.
+
+Height pressure prioritizes the info row: diagnostic rows yield first, then the
+separator. At known small supported heights the pane keeps its minimal bottom
+status by reducing the body below its usual three rows. A known budget too small
+for the title, the info row and the footer (three rows) paints no pane at all.
+Non-finite geometry stays observation-only, with no Stop or compose admission.
+Command admission keeps the previous five-row budget floor, so reducing the body
+adds no authority at tiny sizes; read-only keyboard navigation and Esc still
+work. When no body row fits, relative scrolling and wheel events preserve the
+held position and tail-following intent; Home/End remain explicit choices.
+With no room for a pinned row, hidden diagnostics retain the footer
+attention cue. Narrow rows omit whole numeric fields rather than clipping them;
+model text may shorten, while context, elevated turn pressure and lifecycle
+status outlast routine figures.
+
+A plain dim horizontal separator, inset to the transcript body's width, sits
+immediately above the info row. It carries no text, controls or hit targets and
+replaces the former labeled section rule and the merged metrics/controls
+toolbar; page and tool controls live only in the footer menu (above) and their
+keys. The default compact view keeps running and
 error tool entries expanded; **T**, or the host's configured tools-expand key,
 expands and collapses all settled successful tool cards. A held reading position
 tracks the same message block through expansion; collapsing a held tool clamps
@@ -439,7 +516,10 @@ resolved difficulty slot `d1`–`d5`, model, actual effort and its recorded sour
 (fixed preset, parent identity, or automatic mapping; user override when
 present), with historical manual maps keeping the distinct `preset map` label and
 effort labelled fixed at creation, not editable on a resident Agent. Wide panes
-arrange those low-frequency fields in two columns. The info page also shows
+arrange those low-frequency fields in two columns. When the pane's height
+permits, the Info page opens with a page-local `← Transcript` link above its
+content, clickable like the menu item; short panes keep **I** and **Esc**
+working without allocating that row. The info page also shows
 tool facts, phase, full cumulative usage split, one-row active-tool argument
 summaries (one per tool, with paths shortened to retain their filename), separate
 `thinking` and ordinary-prose `draft` previews for the current assistant message,
@@ -449,7 +529,6 @@ only `tree_shared`). Context occupancy is separate from cumulative billed usage
 all previews are clipped to the actual remaining width before styling and never
 wrap into extra rows; full streamed content remains in the native transcript.
 Returning from Info restores the held transcript position and follow intent.
-Pinned observations never share the transcript's scroll coordinates.
 Formatting shares rounded-unit carry rules with the footer: compact counts use
 whole k above 10k, detailed billed usage retains tenths, 999500 is `1.0M` compact
 or `999.5k` detailed, and 999950 never prints `1000k`/`1000.0k`.
@@ -541,7 +620,8 @@ points, not arbitrary retained component references or extension-owned timers.
 Well-formed `alert_parent` and `ask_parent` calls use an Input-style message
 background (`userMessageBg`/`userMessageText`) rather than the ordinary tool-card
 shell. Their titles, `Alert to parent` and `Question to parent`, align to the
-right inside the block; the recorded body stays left-aligned, keeps paragraphs,
+right above the background block; the recorded body stays left-aligned, keeps
+paragraphs,
 and wraps as literal text using the same tool-argument encoding described above.
 Tabs appear as `\x09`; protocol payloads, indentation, Unicode whitespace and
 original escape spellings remain distinguishable. No extra frame or Markdown
@@ -569,9 +649,12 @@ Accessors, extra own keys (including symbols/non-enumerable keys), malformed
 calls and retired names retain literal generic rendering. Classification reads
 descriptors, not recorded getters; arbitrary Proxy traps remain trusted in-process
 code, not an effect-free or hard-resource-bound operation.
-Incoming messages keep the neutral `Input` label unless the existing exact
-human-steering lead supplies its qualified label; no `From parent` attribution
-is inferred from a user role or its position in history.
+Incoming messages show `From parent`, `From user`, or `Alehouse input` only
+when their exact live message object has a bound origin. Otherwise they retain
+`Input` or the existing exact human-lead qualified label. Confirmed origins
+outrank text: a parent message quoting the human lead is neither relabeled nor
+stripped. No attribution is inferred from a user role, matching body text or
+position in history; reloaded messages without the live sidecar stay unknown.
 
 On Pi's alternate/fullscreen renderer the pane floats as a centered overlay; on
 the regular renderer it docks where the editor is. This is a safety choice, not

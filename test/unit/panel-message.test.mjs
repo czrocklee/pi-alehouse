@@ -143,12 +143,18 @@ function fixture(t, options = {}) {
     // heading, which names the draft's own Enter/Esc.
     draft: () => stripTerminalSequences(current().render(120).at(-2)),
     heading: () => stripTerminalSequences(current().render(120).at(-3)),
-    // The section rule carries the body's page and tools-expansion state.
-    rule: () =>
-      current()
-        .render(120)
-        .map(stripTerminalSequences)
-        .find((line) => line.includes("Transcript · Info")) ?? "",
+    // The compact actions menu carries the body's page and tools-expansion
+    // state. It overlays the bottom of the viewport from the footer's [⋯], so
+    // open it only when it is not already painted.
+    menu: () => {
+      const paint = () => current().render(120).map(stripTerminalSequences).join("\n");
+      let text = paint();
+      if (!/Expand tools|Collapse tools/.test(text)) {
+        current().handleInput(".");
+        text = paint();
+      }
+      return text;
+    },
     type,
     compose(text) {
       current().render(120);
@@ -298,11 +304,11 @@ for (const keybindings of [undefined, null])
   test(`pane keys survive a missing host keybinding registry (${String(keybindings)})`, async (t) => {
     const h = fixture(t, { keybindings, stop: true });
     const opening = h.open();
-    assert.match(h.rule(), /Tools collapsed/);
+    assert.match(h.menu(), /Expand tools/);
     h.pane().handleInput("t");
-    assert.match(h.rule(), /Tools expanded/);
+    assert.match(h.menu(), /Collapse tools/);
     h.pane().handleInput("t");
-    assert.match(h.rule(), /Tools collapsed/);
+    assert.match(h.menu(), /Expand tools/);
     h.pane().handleInput("l");
     h.compose("steers the selected agent");
     h.pane().handleInput("\r");
@@ -337,15 +343,15 @@ test("an exact host tools-expand binding is honored when the registry is present
     },
   });
   const opening = h.open();
-  assert.match(h.rule(), /Tools collapsed/);
+  assert.match(h.menu(), /Expand tools/);
   h.pane().handleInput("t");
-  assert.match(h.rule(), /Tools expanded/);
+  assert.match(h.menu(), /Collapse tools/);
   h.pane().handleInput("t");
-  assert.match(h.rule(), /Tools collapsed/);
+  assert.match(h.menu(), /Expand tools/);
   h.pane().handleInput("expand!");
-  assert.match(h.rule(), /Tools expanded/);
+  assert.match(h.menu(), /Collapse tools/);
   h.pane().handleInput("x");
-  assert.match(h.rule(), /Tools expanded/);
+  assert.match(h.menu(), /Collapse tools/);
   assert.deepEqual(seen.at(-1), ["x", "app.tools.expand"]);
   h.panels.dispose();
   await opening;

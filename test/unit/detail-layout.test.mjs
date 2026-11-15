@@ -118,7 +118,7 @@ test("floating detail width is capped without relying on an unsupported maxWidth
 test("observations stay pinned while only the transcript scrolls", (t) => {
   const f = setup(t, { views: [view("amber", { outcome: { question: "Which branch?" } })] });
   const tail = f.paint();
-  assert(tail[0].includes("running"));
+  assert(tail.at(-2).includes("running"), tail.at(-2));
   assert(tail.some((line) => line.includes("Which branch?")));
   assert.equal(transcriptRows(tail).at(-1), "T499");
   f.pane.handleInput(HOME);
@@ -161,7 +161,7 @@ test("info is a separate page and restores the held transcript position", (t) =>
   assert.equal(transcriptRows(f.paint())[0], "T10", "Info navigation did not turn following on");
 });
 
-test("a changing pinned warning cannot shift the first held transcript row", (t) => {
+test("a changing bottom-docked warning cannot shift the first held transcript row", (t) => {
   const f = setup(t);
   f.paint();
   f.pane.handleInput(HOME);

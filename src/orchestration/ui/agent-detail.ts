@@ -1,9 +1,11 @@
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import {
+  compositeTuiLine,
   decodeKittyPrintable,
   Input,
   matchesKey,
+  sliceByColumn,
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
@@ -18,6 +20,7 @@ import {
   popoverSide,
 } from "./popover.ts";
 import { plainText, wrapPlainText as wrapText } from "./text.ts";
+import { renderDetailActionsMenu } from "./detail-actions-menu.ts";
 import {
   renderComposeFooter,
   renderDetailFields,
@@ -26,11 +29,8 @@ import {
   renderDetailAttention,
   renderDetailComposeHeading,
   renderDetailInfo,
-  renderDetailRule,
   renderDetailSummary,
-  renderDetailToolbar,
   getDetailAttentionNotes,
-  transcriptRule,
   type DetailAttentionNote,
   type DetailFooterFrame,
   type DetailInput,
@@ -38,14 +38,7 @@ import {
 } from "./agent-detail-fields.ts";
 
 export { wrapText };
-export {
-  renderDetailFields,
-  renderDetailRule,
-  renderDetailTitle,
-  transcriptRule,
-  type DetailInput,
-  type DetailLive,
-};
+export { renderDetailFields, renderDetailTitle, type DetailInput, type DetailLive };
 
 const CONFIRM_LIFETIME_MS = 10_000;
 const STEER_NOTICE_MS = 5_000;
@@ -72,10 +65,10 @@ interface StopConfirmation {
   expiresAt: number;
   dimensions: PaintDimensions;
 }
-/** One clickable chrome range: an Agent tab (or `+N`, `‹`, `›`), the jump to
- * the tail, a body page or the tools toggle. Rows and columns are pane cells. */
+/** One clickable chrome range: an Agent tab (or `+N`, `‹`, `›`), the tail,
+ * actions-menu control/item, or page-local back link. Coordinates are pane cells. */
 type ChromeHit = { y: number; from: number; to: number } & (
-  { kind: "agent"; agent_id: string } | { kind: "tail" | "transcript" | "info" | "tools" }
+  { kind: "agent"; agent_id: string } | { kind: "tail" | "transcript" | "info" | "tools" | "menu" }
 );
 interface ChromePaint {
   dimensions: PaintDimensions;
@@ -209,7 +202,7 @@ export interface DetailPaneOptions {
 
 /**
  * The docked detail pane: one agent at a time, ←/→ between them, ↑/↓ through the
- * body. Esc unwinds one layer at a time: an armed Stop, then a draft, then the
+ * body. Esc unwinds one layer at a time: the menu, an armed Stop, a draft, the
  * Info page, and only then closes the pane. Mounted through `ui.custom`'s NON-overlay path — Pi's
  * regular-mode renderer composites overlays into the buffer that backs
  * scrollback, so an overlay would bake this pane's rows into terminal history.
@@ -239,6 +232,9 @@ export class DetailPane {
   private toolsExpanded = false;
   private chromePaint: ChromePaint | undefined;
   private messageAction: DetailFooterFrame["messageAction"];
+  private menuPaint: ComposePaint | undefined;
+  private actionsMenu: (ComposePaint & { selected: 0 | 1 }) | undefined;
+  private menuDismissPress = false;
   /** Admission only: the UI has no delivery acknowledgement to correlate. */
   private recentSteer: { target: StopTarget; expiresAt: number } | undefined;
   private stopPaint: StopPaint | undefined;
@@ -272,6 +268,8 @@ export class DetailPane {
     this.timer = setInterval(() => {
       if (this.closed) return;
       if (this.options.visible?.() === false) {
+        this.actionsMenu = undefined;
+        this.menuPaint = undefined;
         this.chromePaint = undefined;
         this.resetStopInteraction();
         return;
@@ -309,6 +307,8 @@ export class DetailPane {
     this.followTail = true;
     this.painted = 0;
     this.info = false;
+    this.actionsMenu = undefined;
+    this.menuPaint = undefined;
     this.transcriptPosition = undefined;
     this.recentSteer = undefined;
     this.transcriptRead = undefined;
@@ -356,6 +356,9 @@ export class DetailPane {
 
   /** Permission yield can hide the mounted pane without disposing it. */
   resetCloseHover(render = true): void {
+    this.actionsMenu = undefined;
+    this.menuPaint = undefined;
+    this.menuDismissPress = false;
     this.paintedWidth = 0;
     this.chromePaint = undefined;
     this.composePaint = undefined;
@@ -383,6 +386,11 @@ export class DetailPane {
     const stale = this.staleStopPaint(width);
     if (this.chromePaint && this.geometryChanged(this.chromePaint.dimensions, width))
       this.chromePaint = undefined;
+    if (this.actionsMenu && this.geometryChanged(this.actionsMenu.dimensions, width)) {
+      this.actionsMenu = undefined;
+      this.menuPaint = undefined;
+      this.chromePaint = undefined;
+    }
     if (!stale) return;
     this.resetStopInteraction();
     this.options.tui.requestRender();
@@ -416,6 +424,7 @@ export class DetailPane {
       this.resetStopInteraction();
       return;
     }
+    this.actionsMenu = undefined;
     this.resetStopInteraction();
     this.confirmation = {
       target: paint.target,
@@ -444,6 +453,7 @@ export class DetailPane {
   }
 
   private beginCompose(target: StopTarget, text = ""): void {
+    this.actionsMenu = undefined;
     this.recentSteer = undefined;
     const input = new Input({
       prompt: this.options.theme.fg("dim", "› "),
@@ -633,7 +643,7 @@ export class DetailPane {
       return true;
     }
     if (
-      ["up", "down", "pageUp", "pageDown"].some((key) => matchesKey(data, key as "up")) &&
+      (["up", "down", "pageUp", "pageDown"] as const).some((key) => matchesKey(data, key)) &&
       this.painted !== 0
     )
       return false;
@@ -649,6 +659,8 @@ export class DetailPane {
   handleInput(data: string): void {
     if (this.closed) return;
     if (this.options.visible?.() === false) {
+      this.actionsMenu = undefined;
+      this.menuPaint = undefined;
       this.chromePaint = undefined;
       this.resetStopInteraction();
       return;
@@ -690,6 +702,40 @@ export class DetailPane {
       }
     }
     if (this.composeInput(data)) return;
+    // Escape dismisses the layer still visible to the user, even if its
+    // geometry or confirmation lifetime expired before the next repaint.
+    // Retiring its command evidence first would accidentally close the pane.
+    if (matchesKey(data, "escape")) {
+      if (this.actionsMenu) {
+        this.dismissMenu();
+        return;
+      }
+      if (this.confirmation) {
+        this.resetStopInteraction();
+        this.options.tui.requestRender();
+        return;
+      }
+    }
+    this.retireStopPaint();
+    if (this.actionsMenu) {
+      if ((["up", "down", "tab"] as const).some((key) => matchesKey(data, key))) {
+        this.actionsMenu.selected = this.actionsMenu.selected === 0 ? 1 : 0;
+        this.chromePaint = undefined;
+        this.options.tui.requestRender();
+        return;
+      }
+      if (matchesKey(data, "enter")) {
+        const kind =
+          this.actionsMenu.selected === 0 ? (this.info ? "transcript" : "info") : "tools";
+        const hit = this.chromePaint?.hits.find((item) => item.kind === kind);
+        if (hit) this.activateChrome(hit);
+        return;
+      }
+    }
+    if (!this.compose && matchesKey(data, ".")) {
+      this.toggleMenu();
+      return;
+    }
     if (matchesKey(data, "i") || matchesKey(data, "shift+i")) {
       this.toggleInfo();
       return;
@@ -703,28 +749,20 @@ export class DetailPane {
       return;
     }
     if (!this.compose && (matchesKey(data, "m") || matchesKey(data, "shift+m"))) {
-      this.retireStopPaint();
       this.requestCompose();
       return;
     }
     if (matchesKey(data, "ctrl+s")) {
-      this.retireStopPaint();
       this.confirmStop();
       return;
     }
     if (matchesKey(data, "s") || matchesKey(data, "shift+s")) {
-      this.retireStopPaint();
       if (!this.confirmation) this.requestStop();
       return;
     }
     // Pi's focused-input dispatcher requests an immediate render on return.
     // The 120 ms timer animates live activity; it does not gate keyboard paints.
     if (matchesKey(data, "escape")) {
-      if (this.confirmation) {
-        this.resetStopInteraction();
-        this.options.tui.requestRender();
-        return;
-      }
       // The Info page is a layer over the transcript: Esc returns to it first.
       if (this.info) {
         this.toggleInfo();
@@ -736,7 +774,6 @@ export class DetailPane {
       this.options.done();
       return;
     }
-    this.retireStopPaint();
     const { entries, index } = this.current();
     if (matchesKey(data, "left") || matchesKey(data, "h")) return this.select(entries, index - 1);
     if (matchesKey(data, "right") || matchesKey(data, "l") || matchesKey(data, "tab"))
@@ -756,6 +793,9 @@ export class DetailPane {
       this.scrollOffset = maxScroll;
       this.followTail = true;
     } else {
+      // A minimal title/status/footer paint has no body to scroll. Preserve
+      // both a held position and tail-following until there are visible rows.
+      if (viewportHeight === 0) return;
       if (matchesKey(data, "up") || matchesKey(data, "k"))
         this.scrollOffset = Math.max(0, this.scrollOffset - 1);
       else if (matchesKey(data, "down") || matchesKey(data, "j"))
@@ -767,6 +807,9 @@ export class DetailPane {
       else return;
       this.followTail = this.scrollOffset >= maxScroll;
     }
+    // All body-scroll aliases share the same dismissal; unmodified Up/Down
+    // were consumed above when the menu owns selection.
+    this.dismissMenu();
     this.resetStopInteraction();
     this.options.tui.requestRender();
   }
@@ -798,12 +841,20 @@ export class DetailPane {
     }
     if (this.closed) return undefined;
     if (this.options.visible?.() === false) {
+      this.actionsMenu = undefined;
+      this.menuPaint = undefined;
       this.chromePaint = undefined;
       this.resetStopInteraction();
       return undefined;
     }
     this.retireStopPaint();
+    if (event.type === "press") this.menuDismissPress = false;
+    if (event.type === "click" && this.menuDismissPress) {
+      this.menuDismissPress = false;
+      return { handled: true };
+    }
     const chrome = this.chromePaint;
+    if (this.actionsMenu && event.type === "wheel") this.dismissMenu();
     if (
       (event.type === "press" || event.type === "click") &&
       event.button === "left" &&
@@ -820,9 +871,21 @@ export class DetailPane {
         // and swallows the click. Claiming keeps counting with the SDK's
         // component/position counter; only the released click activates, so a
         // drag away or a stale paint never triggers the transition.
+        if (this.actionsMenu && !["menu", "info", "transcript", "tools"].includes(hit.kind)) {
+          this.menuDismissPress = event.type === "press";
+          this.dismissMenu();
+          return { handled: true };
+        }
         if (event.type === "click") this.activateChrome(hit);
         return { handled: true };
       }
+    }
+    if (this.actionsMenu && (event.type === "press" || event.type === "click")) {
+      // Claim the resulting click as well as this press, so closing a menu
+      // cannot also activate a newly exposed Stop, tab or transcript link.
+      this.menuDismissPress = event.type === "press";
+      this.dismissMenu();
+      return { handled: true };
     }
     const message = this.messageAction;
     if (
@@ -858,7 +921,8 @@ export class DetailPane {
     }
     if (event.type !== "wheel" || !event.wheelDelta || this.painted === 0) return undefined;
     this.resetStopInteraction();
-    const { maxScroll } = this.bounds(this.painted);
+    const { viewportHeight, maxScroll } = this.bounds(this.painted);
+    if (viewportHeight === 0) return { handled: true };
     this.scrollOffset = Math.max(0, Math.min(maxScroll, this.scrollOffset + event.wheelDelta));
     // Same rule as the keys: reaching the end resumes following the live tail.
     this.followTail = this.scrollOffset >= maxScroll;
@@ -871,6 +935,7 @@ export class DetailPane {
     this.stopPaint = undefined;
     this.composePaint = undefined;
     this.messageAction = undefined;
+    this.menuPaint = undefined;
     this.chromePaint = undefined;
     this.paintedHeight = 0;
     this.fixedHeight = 0;
@@ -887,7 +952,8 @@ export class DetailPane {
       !Number.isFinite(width) ||
       width < 12 ||
       inner < 10 ||
-      chrome < 8
+      chrome < 8 ||
+      (Number.isFinite(this.options.tui.terminal.rows) && this.heightBudget() < CHROME_LINES + 1)
     ) {
       this.resetCloseHover(false);
       this.resetStopInteraction();
@@ -928,10 +994,9 @@ export class DetailPane {
       this.resetStopInteraction();
     const { owner_id, generation, agent_id, run_id } = view;
     const target = this.confirmation?.target ?? { owner_id, generation, agent_id, run_id };
-    // Pinned observations never share the transcript's scroll coordinates.
-    // Attention and one metrics row take priority in short terminals; the
-    // optional activity row yields before the minimum reading viewport does.
-    // The agent tabs ride on the bottom edge and cost no body row at all.
+    // A single bottom metrics row stays separate from the scroll coordinates.
+    // Diagnostics may add bounded rows, but routine activity stays in the
+    // transcript/Info rather than duplicating a preview beside the reader.
     const th = this.options.theme;
     const recent = this.recentSteer;
     if (
@@ -964,62 +1029,42 @@ export class DetailPane {
       !!this.options.onSteer &&
       (steerable(view) || !!this.compose) &&
       budget >= CHROME_LINES + MIN_VIEWPORT + COMPOSE_ROWS + 3;
-    this.bodyFloor = MIN_VIEWPORT + (trayRoom ? COMPOSE_ROWS : 0);
-    const capacity = Math.max(0, budget - CHROME_LINES - this.bodyFloor);
-    let room = Math.max(0, capacity - 1); // Section rule yields only at tiny heights.
-    // If just one row fits, a blocking note outranks routine metrics.
-    const metricsRows = room > 0 && !(room === 1 && noteCount) ? 1 : 0;
-    room -= metricsRows;
-    const noticeRows = Math.min(2, room, noteCount);
-    room -= noticeRows;
+    // Lifecycle state has no title/tab fallback for a lone Agent. Reserve its
+    // bottom row before the preferred three body rows, even at tiny heights.
+    this.bodyFloor =
+      Math.min(MIN_VIEWPORT, Math.max(0, budget - CHROME_LINES - 1)) +
+      (trayRoom ? COMPOSE_ROWS : 0);
+    const capacity = Math.max(1, budget - CHROME_LINES - this.bodyFloor);
+    // The Info return link is page-local, not a permanent toolbar. Short panes
+    // retain I/Esc even if they cannot allocate its row.
+    const back =
+      this.info && capacity >= 3 && contentWidth >= visibleWidth("← Transcript")
+        ? [th.fg("accent", "← Transcript")]
+        : [];
+    const available = capacity - back.length;
+    const ruleRows = available > 1 ? 1 : 0;
+    const noticeRows = Math.min(2, Math.max(0, available - 1 - ruleRows), noteCount);
     const notices = renderDetailAttention(entry.input, th, contentWidth, {
       maxRows: noticeRows,
       notes,
       info: this.info,
     });
-    // Avoid formatting hidden activity/summary rows on every spinner frame.
-    const summary = metricsRows
-      ? renderDetailSummary(entry.input, th, contentWidth, { activity: room > 0 })
-      : [];
-    this.hiddenNotes = capacity === 0 ? noteCount : 0;
-    // Notes without a pinned row are counted on Info, the page that lists
-    // them: on the toolbar's Info control, or the section rule's own label in
-    // the narrow fallback.
-    const unpinned = noteCount && !noticeRows ? noteCount : 0;
-    // The metrics row doubles as a toolbar when the whole metrics row and the
-    // whole page/tools control group fit together; the helper never trims the
-    // metrics to force the controls in, it declines instead. Then the last
-    // fixed row is a plain dim rule, and the controls are clickable on the
-    // metrics row itself. When it declines, the original metrics row stands
-    // and the labeled section rule below carries the controls as before.
-    const metricsRow = summary[0];
-    const toolbar =
-      metricsRows && capacity > 0 && metricsRow !== undefined
-        ? renderDetailToolbar({
-            metrics: metricsRow,
-            theme: th,
-            width: contentWidth,
-            info: this.info,
-            toolsExpanded: this.toolsExpanded,
-            hiddenNotes: unpinned,
-            keys: !this.compose,
-          })
-        : undefined;
-    const rule =
-      capacity > 0 && !toolbar
-        ? renderDetailRule({
-            theme: th,
-            width: contentWidth,
-            info: this.info,
-            toolsExpanded: this.toolsExpanded,
-            hiddenNotes: unpinned,
-            keys: !this.compose,
-          })
-        : undefined;
-    const fixed = toolbar
-      ? [toolbar.text, ...summary.slice(1), ...notices, toolbar.divider]
-      : [...summary, ...notices, ...(rule ? [rule.text] : [])];
-    this.fixedHeight = fixed.length;
+    const summary = renderDetailSummary(entry.input, th, contentWidth, {
+      activity: false,
+      spinnerFrame: this.frame,
+    });
+    // Menu overflow and the footer's no-pinned-row fallback are different
+    // facts: partial overflow belongs on Info, not an extra footer !N.
+    const overflowNotes = Math.max(0, noteCount - noticeRows);
+    this.hiddenNotes = noticeRows === 0 ? noteCount : 0;
+    // No text or controls ride this separator. It separates reading from the
+    // one-line observation dock, with the same inset as the transcript body.
+    const fixed = [
+      ...notices,
+      ...(ruleRows ? [th.fg("borderMuted", "─".repeat(contentWidth))] : []),
+      ...summary,
+    ];
+    this.fixedHeight = back.length + fixed.length;
     const source = this.info ? undefined : this.options.transcript(entry.agent_id);
     source?.setToolsExpanded?.(this.toolsExpanded);
     const info = this.info
@@ -1108,7 +1153,7 @@ export class DetailPane {
             !!this.confirmation,
             canCompose,
           );
-    this.paintedHeight = fixed.length + viewportHeight + this.composeRows + CHROME_LINES;
+    this.paintedHeight = this.fixedHeight + viewportHeight + this.composeRows + CHROME_LINES;
     const dimensions = {
       columns: this.options.tui.terminal.columns,
       rows: this.options.tui.terminal.rows,
@@ -1131,23 +1176,69 @@ export class DetailPane {
     if (fits && Number.isFinite(dimensions.columns) && width <= dimensions.columns) {
       // Control columns are body cells: past the frame's side and the gutter.
       const edge = this.paintedHeight - 1;
-      // Toolbar controls ride the metrics row (the title row is 0); the
-      // fallback section rule stays the last fixed row.
-      const controlY = toolbar ? 1 : fixed.length;
-      const ruleX = (this.options.frame ? 1 : 0) + gutter;
+      const contentX = (this.options.frame ? 1 : 0) + gutter;
       const hits: ChromeHit[] = [
         ...(footer.tabs ?? []).map((tab) => ({ kind: "agent" as const, y: edge, ...tab })),
         ...(footer.tail ? [{ kind: "tail" as const, y: edge, ...footer.tail }] : []),
-        ...((toolbar ?? rule)?.items ?? []).map((item) => ({
-          kind: item.kind,
-          y: controlY,
-          from: item.from + ruleX,
-          to: item.to + ruleX,
-        })),
+        ...(footer.menu ? [{ kind: "menu" as const, y: edge, ...footer.menu }] : []),
+        ...(back.length
+          ? [
+              {
+                kind: "transcript" as const,
+                y: 1,
+                from: contentX,
+                to: contentX + visibleWidth("← Transcript"),
+              },
+            ]
+          : []),
       ];
       if (hits.length) this.chromePaint = { dimensions, hits };
+      if (footer.menu && !this.compose && !this.confirmation)
+        this.menuPaint = { target: { owner_id, generation, agent_id, run_id }, dimensions };
     }
-    const body = [...fixed, ...this.window(rows, contentWidth, start, viewportHeight)];
+    const window = this.window(rows, contentWidth, start, viewportHeight);
+    const menuState = this.actionsMenu;
+    if (menuState && (!sameRun(menuState.target, view) || !inputAvailable)) this.dismissMenu();
+    if (this.actionsMenu) {
+      const menu = renderDetailActionsMenu({
+        width: contentWidth,
+        height: viewportHeight,
+        info: this.info,
+        toolsExpanded: this.toolsExpanded,
+        hiddenNotes: overflowNotes,
+        selected: this.actionsMenu.selected,
+        theme: th,
+      });
+      if (menu && this.chromePaint) {
+        const offset = viewportHeight - menu.rows.length;
+        for (const [index, row] of menu.rows.entries()) {
+          const underneath = window[offset + index] ?? "";
+          // A sliced prefix may still own SGR or OSC 8 state. The public SDK
+          // compositor closes both segment boundaries, including before the
+          // pane's right gutter/frame, while preserving left-hand styling.
+          window[offset + index] = compositeTuiLine(
+            underneath,
+            sliceByColumn(row, menu.from, contentWidth - menu.from, true),
+            menu.from,
+            contentWidth - menu.from,
+            contentWidth,
+          );
+        }
+        const contentX = (this.options.frame ? 1 : 0) + gutter;
+        this.chromePaint.hits = [
+          ...this.chromePaint.hits.filter((hit) => hit.kind === "menu"),
+          ...menu.items.map((item) => ({
+            kind: item.kind,
+            y: 1 + back.length + offset + item.y,
+            from: contentX + item.from,
+            to: contentX + item.to,
+          })),
+        ];
+      } else {
+        this.dismissMenu();
+      }
+    }
+    const body = [...back, ...window, ...fixed];
     if (compose && this.composeRows) {
       body.push(
         renderDetailComposeHeading({
@@ -1163,19 +1254,13 @@ export class DetailPane {
       );
     }
     return this.dress(
-      renderDetailTitle(
-        entry.input,
-        this.frame,
-        this.options.theme,
-        titleWidth,
-        !!this.options.frame,
-      ),
+      renderDetailTitle(entry.input, this.options.theme, titleWidth),
       body,
       footer,
       width,
       inner,
       gutter,
-      { from: fixed.length, height: viewportHeight, offset: start, total },
+      { from: back.length, height: viewportHeight, offset: start, total },
     );
   }
 
@@ -1213,6 +1298,7 @@ export class DetailPane {
 
   /** A chrome click: the same transitions as the keys that the chrome names. */
   private activateChrome(hit: ChromeHit): void {
+    if (hit.kind === "menu") return this.toggleMenu();
     if (hit.kind === "agent") {
       const { entries } = this.current();
       if (
@@ -1237,6 +1323,8 @@ export class DetailPane {
   }
 
   private toggleTools(): void {
+    this.actionsMenu = undefined;
+    this.menuPaint = undefined;
     const following = this.info ? (this.transcriptPosition?.follow ?? true) : this.followTail;
     this.pendingToolAnchor = following ? undefined : this.transcriptRead;
     this.toolsExpanded = !this.toolsExpanded;
@@ -1247,6 +1335,8 @@ export class DetailPane {
   }
 
   private toggleInfo(): void {
+    this.actionsMenu = undefined;
+    this.menuPaint = undefined;
     if (!this.info) {
       this.transcriptPosition = { offset: this.scrollOffset, follow: this.followTail };
       this.scrollOffset = 0;
@@ -1260,6 +1350,27 @@ export class DetailPane {
     this.painted = 0;
     this.chromePaint = undefined;
     this.resetStopInteraction();
+    this.options.tui.requestRender();
+  }
+
+  private dismissMenu(): void {
+    if (!this.actionsMenu) return;
+    this.actionsMenu = undefined;
+    this.chromePaint = undefined;
+    this.options.tui.requestRender();
+  }
+
+  private toggleMenu(): void {
+    if (this.actionsMenu) return this.dismissMenu();
+    const paint = this.menuPaint;
+    if (!paint || this.compose || this.confirmation) return;
+    const view = (this.options.freshSnapshot ?? this.options.snapshot)().find(
+      (entry) => entry.agent_id === this.selected,
+    )?.input.view;
+    if (this.geometryChanged(paint.dimensions) || !sameRun(paint.target, view)) return;
+    this.resetStopInteraction();
+    this.actionsMenu = { ...paint, selected: 0 };
+    this.chromePaint = undefined;
     this.options.tui.requestRender();
   }
 
@@ -1347,7 +1458,11 @@ export class DetailPane {
     return {
       viewportHeight,
       maxScroll: Math.max(0, total - viewportHeight),
-      fits: bodyHeight + this.fixedHeight + CHROME_LINES <= budget,
+      // Keep the existing five-row command-admission floor. Smaller paints
+      // may still show title/status/footer, but do not mint input evidence.
+      fits:
+        budget >= CHROME_LINES + MIN_VIEWPORT &&
+        bodyHeight + this.fixedHeight + CHROME_LINES <= budget,
     };
   }
 
@@ -1383,6 +1498,15 @@ export class DetailPane {
       confirming,
       messaging,
       composing: !!this.compose,
+      menu:
+        !!view &&
+        !this.compose &&
+        !confirming &&
+        width >= (this.options.frame ? 14 : 16) &&
+        this.bounds(this.painted).fits &&
+        this.bounds(this.painted).viewportHeight >= 2 &&
+        Number.isFinite(this.options.tui.terminal.columns) &&
+        width <= this.options.tui.terminal.columns - (this.options.frame ? 6 : 0),
       hiddenNotes: this.hiddenNotes,
       spinnerFrame: this.frame,
       theme: this.options.theme,

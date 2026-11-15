@@ -1,6 +1,7 @@
 import type { ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { terminal, type RunView } from "../core/contracts.ts";
+import type { InputOrigin } from "../core/ports.ts";
 import { reported } from "../core/usage-ledger.ts";
 import type {
   ActivityHistoryState,
@@ -113,6 +114,9 @@ export interface AgentDetail {
   toolRenderers?(name: string): ToolRenderers | undefined;
   /** Stable opaque binding token; unlike streaming activity it changes rarely. */
   toolRenderersRevision?(): unknown;
+  /** Provenance the child's observation recorded for this exact message, or
+   * undefined when it has none. Absence is unknown, never inferred from text. */
+  inputOrigin?(message: unknown): InputOrigin | undefined;
 }
 interface WidgetController {
   /** Presentation hint only. Commands and explicit inspection remain fresh. */
@@ -311,6 +315,9 @@ export class AgentWidget {
         inFlight: () => this.activities.get(view.agent_id)?.inFlight(),
         toolRenderers: (name) => this.activities.get(view.agent_id)?.toolRenderers?.(name),
         toolRenderersRevision: () => this.activities.get(view.agent_id)?.toolRenderersRevision,
+        // Resolved per message, so retained history still answers after a
+        // session retires; an absent observation is simply unknown.
+        inputOrigin: (message) => this.activities.get(view.agent_id)?.inputOrigin?.(message),
       };
     });
   }

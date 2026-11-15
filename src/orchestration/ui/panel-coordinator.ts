@@ -583,6 +583,9 @@ export class PanelCoordinator {
                   inFlight: () => currentAgents.get(id)?.inFlight(),
                   toolDefinition: (name) => currentAgents.get(id)?.toolRenderers?.(name),
                   toolRenderersRevision: () => currentAgents.get(id)?.toolRenderersRevision?.(),
+                  // Forwarded lazily from the current projection, so a retained
+                  // pane reads the origin of the exact message it renders.
+                  inputOrigin: (message) => currentAgents.get(id)?.inputOrigin?.(message),
                 },
               });
               mounts.remember(id, content);

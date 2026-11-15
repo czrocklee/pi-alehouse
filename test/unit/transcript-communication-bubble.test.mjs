@@ -1,8 +1,8 @@
 /**
  * The child-to-parent communication display: well-formed `alert_parent` /
  * `ask_parent` calls render as Input-style message blocks over the host
- * theme's real `userMessageBg`/`userMessageText` tokens, with the recorded
- * receipt kept outside that background.
+ * theme's real `userMessageBg`/`userMessageText` tokens, with the right-aligned
+ * label above that background and the recorded receipt kept outside it.
  *
  * The production source is loaded through jiti (`fsCache: false`), never a
  * stale dist build. The host theme is the real SDK singleton, initialized
@@ -70,22 +70,38 @@ const FG = "\u001b[31m";
 const FG_CLOSE = "\u001b[39m";
 const FAMILY = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
 
-test("the block paints exactly the user-message tokens, padded, framed nothing, closed per row", () => {
+test("the block paints exactly the user-message tokens with the title above, padded, framed nothing, closed per row", () => {
   const theme = recordingTheme();
   const rows = new CommunicationBubble("Alert to parent", "BODY_TEXT", theme).render(60);
-  assert.equal(rows.length, 4, "one backgrounded padding row above and below the content");
-  // The whole row, inner-edge padding included, carries the background, and
-  // every row closes it again so the color cannot bleed into the transcript.
-  assert.equal(rows[0], `${BG}${" ".repeat(60)}${BG_CLOSE}`);
-  assert.equal(rows[3], rows[0]);
-  // The title sits right-aligned on the first inside row (60 columns minus
-  // two padding cells); the body follows left-aligned one padding cell in.
-  assert.equal(rows[1], `${BG} ${" ".repeat(43)}${FG}Alert to parent${FG_CLOSE} ${BG_CLOSE}`);
+  assert.equal(
+    rows.length,
+    4,
+    "the title above, then one backgrounded padding row above and below the body",
+  );
+  // The title sits right-aligned ABOVE the background block: a one-cell inset
+  // on each side keeps the body's inner edge and the old in-box right edge,
+  // but the row carries no userMessageBg of its own.
+  assert.equal(rows[0], ` ${" ".repeat(43)}${FG}Alert to parent${FG_CLOSE} `);
+  // The whole padding/body row, inner-edge padding included, carries the
+  // background, and every row closes it again so the color cannot bleed into
+  // the transcript.
+  assert.equal(rows[1], `${BG}${" ".repeat(60)}${BG_CLOSE}`);
+  assert.equal(rows[3], rows[1]);
   // The body's foreground opens and closes around the already-clipped,
   // content-padded row; the Box adds the last padding cell inside the background.
   assert.equal(rows[2], `${BG} ${FG}BODY_TEXT${" ".repeat(49)}${FG_CLOSE} ${BG_CLOSE}`);
-  for (const row of rows) {
-    assert.ok(row.startsWith(BG) && row.endsWith(BG_CLOSE), `each row closes its background`);
+  for (const [index, row] of rows.entries()) {
+    if (index === 0) {
+      assert.ok(
+        !row.includes(BG) && !row.includes(BG_CLOSE),
+        "the title row stays outside the background",
+      );
+    } else {
+      assert.ok(
+        row.startsWith(BG) && row.endsWith(BG_CLOSE),
+        `each block row closes its background`,
+      );
+    }
     assert.equal(visibleWidth(row), 60);
     assert.doesNotMatch(row, /[─│┌┐└┘├┤┬┴┼═║╔╗╚╝]/, "no frame or border is drawn around the block");
   }
@@ -108,8 +124,8 @@ test("recorded line breaks survive; every paragraph keeps the block background",
     recordingTheme(),
   );
   assert.deepEqual(rows.render(20).map(stripTerminalSequences), [
-    " ".repeat(20),
     `${" ".repeat(14)}Title `,
+    " ".repeat(20),
     ` line one${" ".repeat(11)}`,
     ` line two${" ".repeat(11)}`,
     " ".repeat(20),
@@ -121,8 +137,8 @@ test("recorded line breaks survive; every paragraph keeps the block background",
 test("wrapping breaks between words and keeps each row a full block line", () => {
   const rows = new CommunicationBubble("L", `a${FAMILY}b 你好`, recordingTheme()).render(6);
   assert.deepEqual(rows.map(stripTerminalSequences), [
-    " ".repeat(6),
     "    L ",
+    " ".repeat(6),
     ` a${FAMILY}b `,
     " 你好 ",
     " ".repeat(6),
@@ -144,11 +160,18 @@ test("CJK and emoji clusters wrap cell-safely at every width from 1 to 200", () 
       `no cluster fragment survives without the whole family at width ${width}`,
     );
     assert.equal(whole, width >= 2 ? 1 : 0, `the whole cluster at width ${width}`);
-    for (const row of rows) {
-      assert.ok(
-        row.startsWith(BG) && row.endsWith(BG_CLOSE),
-        `row closes its background at ${width}`,
-      );
+    for (const [index, row] of rows.entries()) {
+      if (index === 0) {
+        assert.ok(
+          !row.includes(BG) && !row.includes(BG_CLOSE),
+          `the title row stays outside the background at ${width}`,
+        );
+      } else {
+        assert.ok(
+          row.startsWith(BG) && row.endsWith(BG_CLOSE),
+          `row closes its background at ${width}`,
+        );
+      }
       assert.ok(visibleWidth(row) <= width, `row of width ${visibleWidth(row)} fits ${width}`);
       if (width >= 2) assert.equal(visibleWidth(row), width, `row fills the block at ${width}`);
     }
@@ -168,8 +191,8 @@ test("the body is plain text, never markdown", () => {
 test("an overlong title truncates by cells and stays right-aligned", () => {
   const rows = new CommunicationBubble("A very long label that cannot fit", "x", recordingTheme());
   assert.deepEqual(rows.render(20).map(stripTerminalSequences), [
-    " ".repeat(20),
     " A very long label… ",
+    " ".repeat(20),
     ` x${" ".repeat(18)}`,
     " ".repeat(20),
   ]);
@@ -224,19 +247,19 @@ const sgrWalk = (row) => {
   return { cells, fg, bg, sawReset };
 };
 
-test("a truncated title keeps its background under the right padding: no mid-row reset", () => {
+test("a truncated title stays outside the background: no mid-row reset", () => {
   const titles = { 8: "Alert…", 12: "Alert to …", 20: "Alert to parent" };
   for (const width of [8, 12, 20]) {
     const rows = new CommunicationBubble("Alert to parent", "BODY", recordingTheme()).render(width);
-    const title = rows[1];
+    const title = rows[0];
     const walk = sgrWalk(title);
     assert.ok(!walk.sawReset, `no hard reset inside the title row at width ${width}`);
     assert.ok(walk.cells.length > 0, `the title row has visible cells at width ${width}`);
     for (const cell of walk.cells)
       assert.equal(
         cell.bg,
-        BG,
-        `the background stays active under every cell, right padding included, at width ${width}`,
+        null,
+        `no background under any title cell, right padding included, at width ${width}`,
       );
     // The foreground paints exactly the clipped title, nothing more.
     assert.equal(
@@ -248,18 +271,36 @@ test("a truncated title keeps its background under the right padding: no mid-row
       `the foreground covers the clipped title at width ${width}`,
     );
     assert.ok(
-      title.lastIndexOf(FG_CLOSE) < title.lastIndexOf(BG_CLOSE),
-      `the foreground closes before the row's final background close at width ${width}`,
+      !title.includes(BG) && !title.includes(BG_CLOSE),
+      `no background sequence appears on the title row at width ${width}`,
     );
     assert.equal(walk.fg, null, `the title row leaves no foreground open at width ${width}`);
     assert.equal(walk.bg, null, `the title row leaves no background open at width ${width}`);
   }
 });
 
+test("below four columns the title drops its inset instead of starving the row", () => {
+  // Same cell-safe clip as the body's extreme-narrow path: the ellipsis
+  // replaces what cannot fit, and no inset remains at widths 1..3.
+  const titles = { 1: "…", 2: "A…", 3: "Al…" };
+  for (const [width, title] of Object.entries(titles)) {
+    const rows = new CommunicationBubble("Alert to parent", "BODY", recordingTheme()).render(
+      Number(width),
+    );
+    assert.equal(stripTerminalSequences(rows[0]), title, `the clipped title at width ${width}`);
+    assert.ok(
+      !rows[0].includes(BG) && !rows[0].includes(BG_CLOSE),
+      `no background on the narrow title at width ${width}`,
+    );
+    assert.equal(visibleWidth(rows[0]), Number(width), `the narrow title fills width ${width}`);
+  }
+});
+
 test("an extreme-narrow clip still closes the body foreground inside the row", () => {
   const rows = new CommunicationBubble("L", "你好", recordingTheme()).render(1);
-  // Between the block's padding rows: the title, then the body rows where the
-  // two-cell graphemes were dropped whole by the width-1 clip.
+  assert.ok(!rows[0].includes(BG), "the title stays outside the background even at width 1");
+  // After the outside title and the block's top padding row: the body rows
+  // where the two-cell graphemes were dropped whole by the width-1 clip.
   const body = rows.slice(2, -1);
   assert.ok(body.length > 0, "the width-1 body renders rows");
   for (const row of body) {
@@ -350,21 +391,32 @@ test("well-formed alert and ask calls render as message blocks over the real use
   try {
     const rows = rowsAt(content);
     const block = rows.filter((row) => row.startsWith(bubbleBg));
-    // Two calls, one block each: padding, title, body, padding.
-    assert.equal(block.length, 8, JSON.stringify(rows));
+    // Two calls, one block each: padding, body, padding — the title sits
+    // above its block, outside the background.
+    assert.equal(block.length, 6, JSON.stringify(rows));
     for (const row of block) {
       assert.ok(row.endsWith(bubbleBgClose), "every block row closes its background");
       assert.equal(visibleWidth(row), 70, "the block spans the full pane width");
       assert.doesNotMatch(row, /[─│┌┐└┘├┤┬┴┼═║╔╗╚╝]/, "no frame or border around the block");
     }
-    const stripped = rows.map(stripTerminalSequences);
     for (const [label, body] of [
       ["Alert to parent", "ALERT_BODY_TEXT"],
       ["Question to parent", "QUESTION_BODY_TEXT"],
     ]) {
-      const title = stripped.find((row) => row.endsWith(`${label} `));
-      assert.ok(title, `${label} is the right-aligned title of its block`);
-      assert.match(title, new RegExp(`^ *${label} $`), "the title row is padding plus the label");
+      const titleIndex = rows.findIndex((row) => stripTerminalSequences(row).endsWith(`${label} `));
+      assert.ok(titleIndex !== -1, `${label} is the right-aligned title of its block`);
+      const title = rows[titleIndex];
+      assert.match(
+        stripTerminalSequences(title),
+        new RegExp(`^ *${label} $`),
+        "the title row is an inset plus the label",
+      );
+      assert.ok(!title.startsWith(bubbleBg), `${label} sits above, outside the gray block`);
+      assert.equal(visibleWidth(title), 70, "the title spans the full pane width");
+      assert.ok(
+        rows[titleIndex + 1].startsWith(bubbleBg),
+        "the background block starts directly below its title",
+      );
       const bodyRow = rows.find((row) => stripTerminalSequences(row).startsWith(` ${body}`));
       assert.ok(bodyRow, `${body} is left-aligned inside its block`);
       assert.ok(bodyRow.startsWith(bubbleBg), "the body carries the block background");
@@ -492,8 +544,8 @@ test("the tools-expanded toggle never hides a communication message or its recei
     assert.equal(expanded, collapsed, "the block ignores the card expansion mode");
     assert.equal(
       rowsAt(content).filter((row) => row.startsWith(bubbleBg)).length,
-      4,
-      "the block is still painted after both toggles",
+      3,
+      "the block is still painted after both toggles (title outside the background)",
     );
   } finally {
     content.dispose();

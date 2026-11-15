@@ -61,11 +61,14 @@ for (const [tokens, expected] of [
   [null, "ctx ?/500k"],
   [0, "ctx ≈0/500k"],
 ]) {
-  test(`the pinned metrics row renders current context as ${expected} without changing the snapshot`, () => {
+  test(`the bottom dock renders current context as ${expected} without changing the snapshot`, () => {
     const current = view({ runtime: { activity: "generating", context: context(tokens) } });
     const before = structuredClone(current);
-    const [metrics] = renderDetailSummary({ view: current, live }, theme, 120);
+    const [metrics] = renderDetailSummary({ view: current, live }, theme, 120, {
+      activity: false,
+    });
     assert.ok(metrics.includes(expected), metrics);
+    assert.doesNotMatch(metrics, /≈\S+ \d+%/, "and never paints a context percent");
     // The edge is navigation and actions only: it never repeats the figure.
     const rendered = footer({ view: current });
     assert.doesNotMatch(rendered.text, /ctx|agents|lines|running/);
@@ -76,8 +79,10 @@ for (const [tokens, expected] of [
 
 test("absent context is not invented as zero or unknown", () => {
   for (const current of [view(), view({ runtime: { activity: "generating" } })]) {
-    const [metrics] = renderDetailSummary({ view: current, live }, theme, 120);
-    assert.doesNotMatch(metrics, /ctx/);
+    const [metrics] = renderDetailSummary({ view: current, live }, theme, 120, {
+      activity: false,
+    });
+    assert.doesNotMatch(metrics, /\?\/\d|≈\d/);
     assert.doesNotMatch(footer({ view: current }).text, /ctx/);
   }
   const empty = footer({ view: undefined });
@@ -139,11 +144,11 @@ for (const frame of [false, true]) {
     const h = paneFixture(t, frame);
     const check = (last) => {
       const lines = h.paint();
-      // The metrics row is the first fixed row and never scrolls away.
-      assert.match(lines[1], /ctx ≈45k\/500k/);
+      // The one bottom dock row never scrolls away.
+      assert.match(lines.at(-2), /ctx ≈45k\/500k/);
       assert.doesNotMatch(lines.at(-1), /ctx/);
-      assert.ok(lines.at(-2).includes(last), lines.at(-2));
-      assert.doesNotMatch(lines.slice(1, -1).join("\n"), /context\s/);
+      assert.ok(lines.at(-4).includes(last), lines.at(-4));
+      assert.doesNotMatch(lines.slice(1, -3).join("\n"), /context\s/);
       assert.ok(lines.every((line) => visibleWidth(line) <= 120));
       return lines.length;
     };
@@ -162,7 +167,7 @@ for (const frame of [false, true]) {
 
   test(`context refresh and Agent selection use the currently selected snapshot (frame=${frame})`, (t) => {
     const h = paneFixture(t, frame);
-    const metrics = () => h.paint()[1];
+    const metrics = () => h.paint().at(-2);
     assert.match(metrics(), /ctx ≈45k\/500k/);
     const entries = [
       {
@@ -192,7 +197,7 @@ for (const frame of [false, true]) {
     assert.match(metrics(), /ctx ≈12k\/200k/);
     assert.doesNotMatch(h.paint().join("\n"), /500k/);
     h.pane.handleInput("\u001b[C");
-    assert.doesNotMatch(h.paint().join("\n"), /ctx/);
+    assert.doesNotMatch(h.paint().join("\n"), /≈\d+[kM]?\//);
     h.pane.handleInput("\u001b[D");
     assert.match(metrics(), /ctx ≈12k\/200k/);
     h.replace([]);
@@ -208,7 +213,7 @@ for (const frame of [false, true]) {
       const h = paneFixture(t, frame, { width, onStop: (id) => stopped.push(id) });
       const initial = h.paint();
       assert.ok(initial.every((line) => visibleWidth(line) <= width));
-      assert.match(initial[0], /⠋ (?:running|run)/, "the title carries the live status");
+      assert.match(initial.at(-2), /⠋ (?:running|run)/, "the dock carries the live status");
       if (!fits) {
         assert.doesNotMatch(initial.at(-1), /\[S Stop\]/);
         h.pane.handleInput("s");
@@ -221,7 +226,7 @@ for (const frame of [false, true]) {
       h.pane.handleInput("s");
       const armed = h.paint();
       assert.equal(armed.length, initial.length);
-      assert.match(armed[0], /⠋ (?:running|run)/, "the sticky title keeps the live status");
+      assert.match(armed.at(-2), /⠋ (?:running|run)/, "the sticky dock keeps the live status");
       assert.match(armed.at(-1), /best-effort · Ctrl\+S · Esc cancel · \[Confirm stop\]/);
       assert.doesNotMatch(armed.at(-1), /ctx|agents|lines/);
       assert.ok(armed.every((line) => visibleWidth(line) <= width));
