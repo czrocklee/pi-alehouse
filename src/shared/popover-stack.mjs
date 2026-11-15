@@ -196,12 +196,11 @@ export function focusRevealed(host, handle, origin) {
  * when a member disappears or its bottom offset changes. They must not change
  * focus, stack membership or lifecycle.
  * @param {StackMember} member
- * @param {{ width: number | (() => number), minWidth?: number, minRows?: number,
+ * @param {{ width: number | (() => number), minWidth?: number, minRows?: number | (() => number),
  *   nonCapturing?: boolean, onReveal?: () => void, onHide?: () => void,
  *   onMove?: () => void }} layout
  */
 export function stackedOverlayOptions(member, layout) {
-  const minRows = Math.max(POPOVER_MIN_ROWS, layout.minRows ?? 0);
   member.preferWidth(() =>
     Math.max(
       layout.minWidth ?? 1,
@@ -232,6 +231,9 @@ export function stackedOverlayOptions(member, layout) {
       return Math.max(1, member.available());
     },
     visible() {
+      const requestedRows =
+        typeof layout.minRows === "function" ? layout.minRows() : layout.minRows;
+      const minRows = Math.max(POPOVER_MIN_ROWS, requestedRows ?? 0);
       const room = member.available() >= minRows;
       // Off screen it covers no rows, so nothing above should leave a gap for it.
       if (!room) member.measure(0);

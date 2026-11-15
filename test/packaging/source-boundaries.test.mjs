@@ -193,6 +193,23 @@ test("neutral helpers and the ordinary footer have no orchestration dependency",
         edges.every(({ broad }) => !broad),
         "storage must name its native dependencies",
       );
+    } else if (name === "popover-chrome.mjs") {
+      // Shared panel composition may reuse only the neutral frame leaf. Keep
+      // both bundles SDK/runtime-free without copying the frame implementation.
+      assert.deepEqual(
+        edges.map(({ specifier }) => specifier),
+        ["./popover-frame.mjs"],
+      );
+      assert.equal(edges[0].broad, false, "chrome must name its frame primitives");
+      assert.deepEqual(edges[0].names.slice().sort(), [
+        "POPOVER",
+        "POPOVER_CLOSE_COLUMNS",
+        "popoverCloseHit",
+        "popoverCloseTail",
+        "popoverRule",
+        "popoverSide",
+        "popoverTitleRow",
+      ]);
     } else assert.deepEqual(edges, [], `${name} must remain a dependency-free leaf`);
   }
   const visited = new Set();

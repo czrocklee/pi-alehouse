@@ -339,6 +339,43 @@ test("separately loaded modules share one column per TUI, and TUIs never share",
   assert.equal(joinPopoverStack(h.tui).bottom, POPOVER_DOCK_ROWS);
 });
 
+test("a live minimum follows chrome changes without rebuilding reveal state", async () => {
+  const h = screen(10);
+  const member = joinPopoverStack(h.tui);
+  const above = joinPopoverStack(h.tui);
+  let minimum = 7;
+  let hidden = 0;
+  let revealed = 0;
+  const options = stackedOverlayOptions(member, {
+    width: 40,
+    minRows: () => minimum,
+    onHide: () => hidden++,
+    onReveal: () => revealed++,
+  });
+  assert.equal(options.visible(), true);
+  member.measure(7);
+  assert.equal(above.bottom, 8);
+  minimum = 10;
+  assert.equal(options.visible(), false);
+  assert.equal(options.visible(), false);
+  assert.equal(hidden, 1, "only the visible-to-hidden edge invalidates");
+  assert.equal(above.bottom, 1, "hidden chrome releases its painted row reservation");
+  minimum = 7;
+  assert.equal(options.visible(), true);
+  assert.equal(options.visible(), true);
+  await Promise.resolve();
+  assert.equal(revealed, 1, "same options preserve the hidden-to-visible edge");
+  minimum = 10;
+  assert.equal(options.visible(), false);
+  minimum = 7;
+  assert.equal(options.visible(), true);
+  await Promise.resolve();
+  assert.equal(hidden, 2);
+  assert.equal(revealed, 2);
+  above.leave();
+  member.leave();
+});
+
 test("a popover waits off screen until its own minimum fits, and is handed the keyboard when it appears", async () => {
   const h = screen(12);
   const editor = { render: () => [], invalidate() {}, handleInput() {} };

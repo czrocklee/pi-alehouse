@@ -52,10 +52,14 @@ terminal layout stays in UI. Runtime must not load UI implementations. Widget
 rendering, detail fields and transcript caches are separate from the components
 that own paint-bound input, Stop confirmation and overlay single-flight locks.
 
-Shared pure presentation/accounting helpers live in `src/shared/`:
-`token-format.mjs`, `popover-frame.mjs`, `overlay-protocol.mjs`, and
-`usage-attribution.mjs`, with declaration files. They have no orchestration
-runtime dependency so the independently bundled footer continues to work
+Shared presentation/accounting infrastructure lives in `src/shared/`:
+`token-format.mjs`, `popover-frame.mjs`, `popover-chrome.mjs`,
+`overlay-protocol.mjs`, and `usage-attribution.mjs`, with declaration files.
+The frame module owns glyph primitives; the chrome module owns common border/inset
+bands, their geometry and the one process-wide border-label appearance preference.
+Panels supply content and dispose live appearance subscriptions rather than
+copying a framing implementation or keeping per-panel preference overrides.
+These shared modules have no orchestration runtime dependency, so the independently bundled footer continues to work
 without the orchestration layer. The footer's quota parsing, optional billing,
 journal spend, layout and pinned panels live in separate `src/extensions/lib/`
 modules. Its layout returns the

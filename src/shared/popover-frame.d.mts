@@ -36,6 +36,8 @@ export function popoverTitleRow(
   closable?: boolean,
   closeHovered?: boolean,
 ): string;
+/** Border-only row-0 primitive. Panels use createPopoverCloseControl with
+ * popoverChromeCloseHit for placement-aware painted gestures. */
 export function isPopoverCloseClick(
   event: { type: string; button?: string; x: number; y: number },
   width: number,

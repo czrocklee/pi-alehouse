@@ -8,14 +8,18 @@ import {
   WORKER_PRESET_INDICATOR,
 } from "../../shared/overlay-protocol.mjs";
 import {
-  POPOVER as BOX,
+  POPOVER,
   POPOVER_CLOSE_COLUMNS,
-  popoverCloseHit,
   popoverCloseTail,
   popoverRule,
   popoverSide,
-  popoverTitleRow,
 } from "../../shared/popover-frame.mjs";
+import {
+  borderLabelsEnabled,
+  popoverChromeCloseHit,
+  popoverChromeLayout,
+  popoverTitleRows,
+} from "../../shared/popover-chrome.mjs";
 import type { UsageTotals } from "../../shared/usage-attribution.mjs";
 import type { ContextSnapshot } from "./context-stats.ts";
 import {
@@ -109,6 +113,9 @@ const BREAKDOWN_MIN_KEY = 6;
 const BREAKDOWN_GAP = 2;
 /** Non-model rows: frame, headings, total/separator and overflow. */
 export const BREAKDOWN_CHROME = 6;
+/** The same budget with the shared top band's current row count. */
+export const breakdownChromeRows = (): number =>
+  BREAKDOWN_CHROME - 1 + popoverChromeLayout({ framed: true }).top.rows;
 const BREAKDOWN_COLUMNS: readonly BreakdownColumn[] = [
   { label: "↑", drop: 4, color: "text", value: (t) => formatTokens(promptTokens(t)) },
   { label: "R", drop: 2, color: "accent", value: (t) => formatTokens(t.cacheRead) },
@@ -170,24 +177,28 @@ export function breakdownWidth(table: BreakdownTable): number {
   );
 }
 
-/** Header-only repaint after the owner publishes a changed frame height. */
-export function breakdownTitle(theme: Theme, width: number, closeHovered = false): string {
-  const closable = !!popoverCloseHit(width);
+/** Header rows for the current chrome mode; the owner repaints these alone. */
+export function breakdownTitle(theme: Theme, width: number, closeHovered = false): string[] {
+  const closable = !!popoverChromeCloseHit(width);
   const tailWidth = closable ? POPOVER_CLOSE_COLUMNS : 1;
-  const titleRoom = width - 4 - tailWidth - visibleWidth(BREAKDOWN_TITLE);
-  return titleRoom >= 0
-    ? popoverTitleRow(
-        theme,
-        width,
-        BREAKDOWN_TITLE,
-        { clip: (text, columns) => truncateToWidth(text, columns, "…"), width: visibleWidth },
-        closable,
-        closeHovered,
-      )
-    : closable
-      ? theme.fg("borderAccent", BOX.tl + BOX.h.repeat(width - 1 - tailWidth)) +
-        popoverCloseTail(theme, closeHovered)
-      : popoverRule(theme, width, "top");
+  // Preserve the existing border-title readability floor. Inset titles use
+  // the shared band renderer rather than this legacy narrow-edge fallback.
+  if (borderLabelsEnabled() && width - 4 - tailWidth < visibleWidth(BREAKDOWN_TITLE)) {
+    return [
+      closable
+        ? theme.fg("borderAccent", POPOVER.tl + POPOVER.h.repeat(width - 1 - tailWidth)) +
+          popoverCloseTail(theme, closeHovered)
+        : popoverRule(theme, width, "top"),
+    ];
+  }
+  return popoverTitleRows(
+    theme,
+    width,
+    BREAKDOWN_TITLE,
+    { clip: (text, columns) => truncateToWidth(text, columns, "…"), width: visibleWidth },
+    closable,
+    closeHovered,
+  );
 }
 
 export function breakdownFrame(
@@ -216,7 +227,7 @@ export function breakdownFrame(
   const row = (cells: string[], used: number): string =>
     `${popoverSide(theme)} ${cells.join("")}${" ".repeat(Math.max(0, inner - used))} ${popoverSide(theme)}`;
 
-  const lines: string[] = [breakdownTitle(theme, width, closeHovered)];
+  const lines: string[] = [...breakdownTitle(theme, width, closeHovered)];
   if (table.body.length === 0) {
     lines.push(row([theme.fg("dim", padEnd("no usage recorded yet", inner))], inner));
   } else {

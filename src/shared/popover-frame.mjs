@@ -110,8 +110,12 @@ export function popoverTitleRow(
 }
 
 /**
- * A left click on the close control. `width` is what the popover last painted
- * at, never the event's own bounds, which a renderer may have clipped.
+ * Low-level border-only click helper for `popoverTitleRow` (row 0), not a
+ * placement-aware panel control. Interactive panels use
+ * `createPopoverCloseControl` with `popoverChromeCloseHit` instead, so inset
+ * rows and press/release cancellation share painted geometry.
+ * `width` is what the popover last painted at, never the event's own bounds,
+ * which a renderer may have clipped.
  * @param {{ type: string, button?: string, x: number, y: number }} event
  * @param {number} width
  */

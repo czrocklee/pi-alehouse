@@ -34,5 +34,5 @@ export function createPopoverCloseControl(options: {
   /** Hover/gesture adapter factory, injected to keep this module a leaf. */
   createHover: typeof createPopoverCloseHover;
   /** Shared frame hit test, injected so the control remains dependency-free. */
-  closeHit(width: number): { x: number; width: number } | undefined;
+  closeHit(width: number): { x: number; width: number; y?: number } | undefined;
 }): PopoverCloseControl;

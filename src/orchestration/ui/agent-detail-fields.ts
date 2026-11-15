@@ -1200,6 +1200,8 @@ export function renderDetailFooter(input: {
   spinnerFrame: number;
   theme: Theme;
   framed: boolean;
+  /** A framed row can be interior chrome rather than an inlaid edge. */
+  borderLabels?: boolean;
 }): DetailFooterFrame {
   const {
     width,
@@ -1218,6 +1220,7 @@ export function renderDetailFooter(input: {
     framed,
   } = input;
   const base = framed ? 3 : 0;
+  const inlaid = framed && input.borderLabels !== false;
   const multi = entries.length > 1;
   const offerMessage = !!messaging && !composing && !confirming;
   const entry = entries.find((candidate) => candidate.agent_id === selected);
@@ -1300,7 +1303,7 @@ export function renderDetailFooter(input: {
     for (const [index, group] of groups.entries()) {
       if (index)
         out.push(
-          framed
+          inlaid
             ? { text: ` ${th.fg("borderAccent", POPOVER.h)} `, width: 3 }
             : { text: "  ", width: 2 },
         );
@@ -1357,7 +1360,7 @@ export function renderDetailFooter(input: {
         width: Math.max(0, room),
         spinnerFrame,
         theme: th,
-        framed,
+        framed: inlaid,
         arrows: arrows && !composing && !armed,
         collapse: armed,
       });
@@ -1387,7 +1390,7 @@ export function renderDetailFooter(input: {
   const trail = rightWidth ? 1 : 0;
   const filler = !rightWidth
     ? ""
-    : framed && gap - lead - trail >= 1
+    : inlaid && gap - lead - trail >= 1
       ? " ".repeat(lead) +
         th.fg("borderAccent", POPOVER.h.repeat(gap - lead - trail)) +
         " ".repeat(trail)
@@ -1415,7 +1418,7 @@ export function renderDetailFooter(input: {
         : "",
     // A padded tab at either end, like an empty side, continues the corner's
     // rule: `╰── +5 ─ ⠋ elm ─`, never a doubled space beside the corner.
-    ...(framed
+    ...(inlaid
       ? {
           flush: {
             start: leftWidth ? !cue && !!strip.padded : rightWidth > 0,

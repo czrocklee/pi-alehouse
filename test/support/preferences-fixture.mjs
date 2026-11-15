@@ -55,6 +55,10 @@ export function controls(f, answers = [], confirmations = []) {
     selectPrompts = [];
   const childSkills = { enabled: f.store.effective().childSkills ?? true, calls: [] };
   const beerMugs = { enabled: f.store.effective().ui?.beerMugs === true, calls: [] };
+  const borderLabels = {
+    enabled: f.store.effective().ui?.borderLabels !== false,
+    calls: [],
+  };
   let live = true;
   const ctx = {
     hasUI: true,
@@ -86,6 +90,13 @@ export function controls(f, answers = [], confirmations = []) {
         beerMugs.calls.push(enabled);
       },
     },
+    borderLabels: {
+      current: () => borderLabels.enabled,
+      set: (enabled) => {
+        borderLabels.enabled = enabled;
+        borderLabels.calls.push(enabled);
+      },
+    },
     childSkills: {
       current: () => !childSkills.disabledReason && childSkills.enabled,
       set: (enabled) => {
@@ -102,6 +113,7 @@ export function controls(f, answers = [], confirmations = []) {
     ui,
     ctx,
     beerMugs,
+    borderLabels,
     childSkills,
     notifications,
     published,
@@ -211,6 +223,10 @@ export function tuiControls(f, options = {}) {
     confirmations = [...(options.confirms ?? [])],
     typed = [...(options.inputs ?? [])];
   const beerMugs = { enabled: f.store.effective().ui?.beerMugs === true, calls: [] };
+  const borderLabels = {
+    enabled: f.store.effective().ui?.borderLabels !== false,
+    calls: [],
+  };
   const childSkills = { enabled: f.store.effective().childSkills ?? true, calls: [] };
   let live = true,
     queuedFactory;
@@ -300,6 +316,13 @@ export function tuiControls(f, options = {}) {
         beerMugs.calls.push(enabled);
       },
     },
+    borderLabels: {
+      current: () => borderLabels.enabled,
+      set: (enabled) => {
+        borderLabels.enabled = enabled;
+        borderLabels.calls.push(enabled);
+      },
+    },
     childSkills: {
       current: () => childSkills.enabled,
       set: (enabled) => {
@@ -331,6 +354,7 @@ export function tuiControls(f, options = {}) {
     ui,
     ctx,
     beerMugs,
+    borderLabels,
     childSkills,
     tui: mockTui,
     registry,

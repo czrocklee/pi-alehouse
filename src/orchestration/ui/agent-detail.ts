@@ -1,6 +1,11 @@
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import {
+  onBorderLabelsChange,
+  popoverChromeCloseHit,
+  popoverChromeLayout,
+} from "../../shared/popover-chrome.mjs";
+import {
   compositeTuiLine,
   decodeKittyPrintable,
   Input,
@@ -12,13 +17,7 @@ import {
 import type { RunView } from "../core/contracts.ts";
 import { HUMAN_STEER_MAX_UNITS } from "../presentation/human-steer-text.ts";
 import { type Theme, type TranscriptFrame, type TranscriptRows } from "./format.ts";
-import {
-  popoverBottom,
-  popoverCloseHit,
-  popoverInlay,
-  popoverInlayWidth,
-  popoverSide,
-} from "./popover.ts";
+import { popoverBottom, popoverInlayWidth, popoverLabelRows, popoverSide } from "./popover.ts";
 import { plainText, wrapPlainText as wrapText } from "./text.ts";
 import { renderDetailActionsMenu } from "./detail-actions-menu.ts";
 import {
@@ -131,12 +130,8 @@ const stoppable = (view: RunView): boolean =>
   (view.status === "queued" || view.status === "running") &&
   !view.execution_exited &&
   !view.stop_reason;
-/**
- * Chrome: two rows, whether docked or floating. Docked, they are a title row and
- * a footer row; floating, the same two strings ride on the top and bottom border
- * so a frame costs no extra height -- only the two side columns.
- */
-const CHROME_LINES = 2;
+/** Inlaid bands cost one row each; an inset band costs an outer rule, a
+ * content row and a separator. The shared layout owns those row coordinates. */
 const MIN_VIEWPORT = 3;
 const DOCKED_HEIGHT_PCT = 70;
 const FLOATING_HEIGHT_PCT = 84;
@@ -220,6 +215,8 @@ export class DetailPane {
   /** Width of the last framed paint; the close control's hit area follows it. */
   private paintedWidth = 0;
   private paintedHeight = 0;
+  private layout = popoverChromeLayout();
+  private readonly unwatchBorderLabels: () => void;
   private fixedHeight = 0;
   private composeRows = 0;
   private bodyFloor = MIN_VIEWPORT;
@@ -252,6 +249,7 @@ export class DetailPane {
 
   constructor(private readonly options: DetailPaneOptions) {
     this.selected = options.initial;
+    this.layout = popoverChromeLayout({ framed: !!options.frame });
     const draft = options.draft;
     if (draft) {
       const view = options.snapshot().find((entry) => entry.agent_id === this.selected)?.input.view;
@@ -261,9 +259,18 @@ export class DetailPane {
     }
     this.closeHover = createPopoverCloseControl({
       createHover: createPopoverCloseHover,
-      closeHit: popoverCloseHit,
+      closeHit: popoverChromeCloseHit,
       host: options.tui,
       requestRender: () => options.tui.requestRender(),
+    });
+    this.unwatchBorderLabels = onBorderLabelsChange(() => {
+      if (this.closed) return;
+      this.layout = popoverChromeLayout({ framed: !!options.frame });
+      this.resetCloseHover(false);
+      this.resetStopInteraction();
+      this.painted = 0;
+      this.paintedHeight = 0;
+      options.tui.requestRender();
     });
     this.timer = setInterval(() => {
       if (this.closed) return;
@@ -891,7 +898,7 @@ export class DetailPane {
     if (
       (event.type === "press" || event.type === "click") &&
       event.button === "left" &&
-      event.y === this.paintedHeight - 1 &&
+      event.y === this.paintedHeight - this.layout.footerFromBottom &&
       event.x !== undefined &&
       message &&
       event.x >= message.from &&
@@ -904,7 +911,7 @@ export class DetailPane {
     if (
       (event.type === "press" || event.type === "click") &&
       event.button === "left" &&
-      event.y === this.paintedHeight - 1 &&
+      event.y === this.paintedHeight - this.layout.footerFromBottom &&
       event.x !== undefined &&
       action &&
       event.x >= action.from &&
@@ -953,7 +960,8 @@ export class DetailPane {
       width < 12 ||
       inner < 10 ||
       chrome < 8 ||
-      (Number.isFinite(this.options.tui.terminal.rows) && this.heightBudget() < CHROME_LINES + 1)
+      (Number.isFinite(this.options.tui.terminal.rows) &&
+        this.heightBudget() < this.layout.rows + 1)
     ) {
       this.resetCloseHover(false);
       this.resetStopInteraction();
@@ -972,7 +980,7 @@ export class DetailPane {
     if (!entry) {
       this.resetStopInteraction();
       this.painted = 0; // No visible body for keys/wheel to scroll against.
-      this.paintedHeight = CHROME_LINES + 1;
+      this.paintedHeight = this.layout.rows + 1;
       return this.dress(
         this.options.theme.fg("dim", "Agents"),
         [
@@ -1028,13 +1036,13 @@ export class DetailPane {
     const trayRoom =
       !!this.options.onSteer &&
       (steerable(view) || !!this.compose) &&
-      budget >= CHROME_LINES + MIN_VIEWPORT + COMPOSE_ROWS + 3;
+      budget >= this.layout.rows + MIN_VIEWPORT + COMPOSE_ROWS + 3;
     // Lifecycle state has no title/tab fallback for a lone Agent. Reserve its
     // bottom row before the preferred three body rows, even at tiny heights.
     this.bodyFloor =
-      Math.min(MIN_VIEWPORT, Math.max(0, budget - CHROME_LINES - 1)) +
+      Math.min(MIN_VIEWPORT, Math.max(0, budget - this.layout.rows - 1)) +
       (trayRoom ? COMPOSE_ROWS : 0);
-    const capacity = Math.max(1, budget - CHROME_LINES - this.bodyFloor);
+    const capacity = Math.max(1, budget - this.layout.rows - this.bodyFloor);
     // The Info return link is page-local, not a permanent toolbar. Short panes
     // retain I/Esc even if they cannot allocate its row.
     const back =
@@ -1153,7 +1161,7 @@ export class DetailPane {
             !!this.confirmation,
             canCompose,
           );
-    this.paintedHeight = this.fixedHeight + viewportHeight + this.composeRows + CHROME_LINES;
+    this.paintedHeight = this.fixedHeight + viewportHeight + this.composeRows + this.layout.rows;
     const dimensions = {
       columns: this.options.tui.terminal.columns,
       rows: this.options.tui.terminal.rows,
@@ -1175,7 +1183,7 @@ export class DetailPane {
     this.messageAction = this.composePaint ? footer.messageAction : undefined;
     if (fits && Number.isFinite(dimensions.columns) && width <= dimensions.columns) {
       // Control columns are body cells: past the frame's side and the gutter.
-      const edge = this.paintedHeight - 1;
+      const edge = this.paintedHeight - this.layout.footerFromBottom;
       const contentX = (this.options.frame ? 1 : 0) + gutter;
       const hits: ChromeHit[] = [
         ...(footer.tabs ?? []).map((tab) => ({ kind: "agent" as const, y: edge, ...tab })),
@@ -1185,7 +1193,7 @@ export class DetailPane {
           ? [
               {
                 kind: "transcript" as const,
-                y: 1,
+                y: this.layout.bodyY,
                 from: contentX,
                 to: contentX + visibleWidth("← Transcript"),
               },
@@ -1229,7 +1237,7 @@ export class DetailPane {
           ...this.chromePaint.hits.filter((hit) => hit.kind === "menu"),
           ...menu.items.map((item) => ({
             kind: item.kind,
-            y: 1 + back.length + offset + item.y,
+            y: this.layout.bodyY + back.length + offset + item.y,
             from: contentX + item.from,
             to: contentX + item.to,
           })),
@@ -1274,6 +1282,7 @@ export class DetailPane {
   }
   dispose(): void {
     this.closed = true;
+    this.unwatchBorderLabels();
     this.closeHover.dispose();
     this.resetStopInteraction();
     clearInterval(this.timer);
@@ -1390,12 +1399,8 @@ export class DetailPane {
     return out;
   }
 
-  /**
-   * Chrome around the body. Docked, the title and footer are plain rows. Framed,
-   * they are inlaid into the border rows, so the frame costs two columns and no
-   * rows at all -- a floating pane that spent two of its rows on bare rules
-   * would show that much less transcript.
-   */
+  /** Chrome around the body. Bands share one layout for their row budget and
+   * hit coordinates; inset labels keep the outer frame and scrollbar. */
   private dress(
     title: string,
     body: string[],
@@ -1408,14 +1413,21 @@ export class DetailPane {
     this.closeHover.paint(
       width,
       !!this.options.frame && this.options.visible?.() !== false,
-      body.length + CHROME_LINES,
+      body.length + this.layout.rows,
     );
     if (!this.options.frame)
       return [title, ...body, footer.text].map((line) => truncateToWidth(line, width));
     const th = this.options.theme;
     const side = popoverSide(th);
+    const top = popoverLabelRows(th, width, title, "top", true, this.closeHover.hovered);
+    // Keep the reserved band when narrow-width labels yield completely:
+    // content changes must not move the viewport or rebase painted controls.
+    const bottom =
+      footer.text || this.layout.bottom.placement === "inside"
+        ? popoverLabelRows(th, width, footer.text, "bottom", false, false, footer.flush)
+        : [popoverBottom(th, width)];
     return [
-      popoverInlay(th, width, title, "top", true, this.closeHover.hovered),
+      ...top,
       ...body.map((line, i) => {
         let edge = side;
         if (
@@ -1439,9 +1451,7 @@ export class DetailPane {
           edge
         );
       }),
-      footer.text
-        ? popoverInlay(th, width, footer.text, "bottom", false, false, footer.flush)
-        : popoverBottom(th, width),
+      ...bottom,
     ];
   }
 
@@ -1452,17 +1462,18 @@ export class DetailPane {
     const budget = this.heightBudget();
     const bodyHeight = Math.max(
       this.bodyFloor,
-      Math.min(total, Math.max(0, budget - CHROME_LINES - this.fixedHeight)),
+      Math.min(total, Math.max(0, budget - this.layout.rows - this.fixedHeight)),
     );
     const viewportHeight = bodyHeight - this.composeRows;
     return {
       viewportHeight,
       maxScroll: Math.max(0, total - viewportHeight),
-      // Keep the existing five-row command-admission floor. Smaller paints
-      // may still show title/status/footer, but do not mint input evidence.
+      // Keep the existing three-body-row command floor beyond the chrome
+      // bands (five total rows in the default border layout). Smaller paints
+      // can show title/status/footer, but do not mint input evidence.
       fits:
-        budget >= CHROME_LINES + MIN_VIEWPORT &&
-        bodyHeight + this.fixedHeight + CHROME_LINES <= budget,
+        budget >= this.layout.rows + MIN_VIEWPORT &&
+        bodyHeight + this.fixedHeight + this.layout.rows <= budget,
     };
   }
 
@@ -1511,6 +1522,7 @@ export class DetailPane {
       spinnerFrame: this.frame,
       theme: this.options.theme,
       framed: !!this.options.frame,
+      borderLabels: this.layout.bottom.placement === "border",
     });
   }
 }

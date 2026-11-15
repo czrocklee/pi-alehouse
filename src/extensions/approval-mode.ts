@@ -37,6 +37,7 @@ import {
   HIDE_TRANSIENT_OVERLAYS_EVENT,
   type FooterIndicatorClick,
 } from "../shared/overlay-protocol.mjs";
+import { popoverChromeLayout } from "../shared/popover-chrome.mjs";
 import {
   focusOrigin,
   focusRevealed,
@@ -308,6 +309,16 @@ export default function approvalMode(pi: ExtensionAPI): void {
     }
   };
 
+  /** Every choice plus the frame and a confirmation warning: the popover waits
+   * off screen rather than be clipped with an armed row clickable. The top band
+   * owns one row on the border or three inside, while the bottom stays bare. */
+  const approvalMinRows = (): number =>
+    approvalChoices(boundJudgeName()).length +
+    popoverChromeLayout({ framed: true }).top.rows +
+    2 +
+    CONFIRM_ROWS +
+    (sharedStore() ? 4 : 0);
+
   const mount = (): void => {
     if (!open || !tui) return;
     const host = tui;
@@ -318,10 +329,7 @@ export default function approvalMode(pi: ExtensionAPI): void {
       stackedOverlayOptions(mounted.member, {
         width: POPOVER_WIDTH,
         minWidth: 36,
-        // Every choice plus the frame and a confirmation warning: the popover
-        // waits off screen rather than be clipped with an armed row clickable.
-        minRows:
-          approvalChoices(boundJudgeName()).length + 3 + CONFIRM_ROWS + (sharedStore() ? 4 : 0),
+        minRows: approvalMinRows,
         onReveal: () => {
           if (open === mounted && mounted.handle) focusRevealed(host, mounted.handle, openedFrom);
         },

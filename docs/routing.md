@@ -346,16 +346,26 @@ nothing.
 
 The closed version-2 document has optional `preset`, partial `delegation`
 (`mode`, `eagerness`), per-preset/per-slot `effort`, `approval`, custom
-model `presets`, boolean `childSkills`, and partial `ui` preferences. `ui` accepts only the optional
-boolean `beerMugs`: `true` enables the [beer-mug widget Easter egg](interface.md#beer-mug-easter-egg),
-while missing or `false` uses the normal arrows. UI leaves merge global then
-trusted workspace, so an explicit workspace `false` disables a global `true`;
-an empty workspace `ui` inherits the global setting. This appearance-only choice
-is read at every session startup (including restored sessions), with no branch
-record or worker/model effect. `/alehouse-settings` also offers **Beer mugs:
-on/off** for an immediate live toggle. It is session-only at the initial save
-scope; an explicitly selected global/workspace scope queues only `ui.beerMugs`,
+model `presets`, boolean `childSkills`, and partial `ui` preferences. `ui` accepts
+only the optional booleans `beerMugs` and `borderLabels`. `beerMugs: true` enables
+the [beer-mug widget Easter egg](interface.md#beer-mug-easter-egg); missing or
+`false` uses the normal arrows. `borderLabels` defaults to `true`; `false` moves
+all Alehouse panel border titles, tabs, close controls and footer actions into
+interior rows with separators, retaining the outer frame. It is one global
+appearance choice, not a per-panel setting; native Pi and third-party UI are not
+rewritten. See [border labels](interface.md#border-labels).
+
+UI leaves merge global then trusted workspace, so an explicit workspace `false`
+disables a global `true`; an empty workspace `ui` inherits the global setting.
+These appearance choices are read at every session startup (including restored
+sessions), with no branch record or worker/model effect. `/alehouse-settings`
+offers **Beer mugs: on/off** and **Border labels: on/off (all Alehouse panels)**
+for immediate live toggles. They are session-only at the initial save scope;
+an explicitly selected global/workspace scope queues only the changed UI leaf,
 flushed by **Save pending now** or normal exit. Startup still writes nothing.
+A failed settings load reports the error and resets the shared border-label
+appearance to its on default rather than inheriting a previous session's toggle;
+it does not repair or rewrite the invalid configuration.
 
 `childSkills` defaults to `true` when absent. **Agent skills: on/off** in
 `/alehouse-settings` controls normal SDK skill discovery for newly created worker

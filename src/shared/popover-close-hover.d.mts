@@ -21,7 +21,7 @@ export function createPopoverCloseHover(options: {
   host?: object;
   requestRender(): void;
   /** Shared frame hit test, injected so the tracker remains dependency-free. */
-  closeHit(width: number): { x: number; width: number } | undefined;
+  closeHit(width: number): { x: number; width: number; y?: number } | undefined;
   /** Best-effort interruption notification; callback errors cannot affect input. */
   onGestureInterrupted?(): void;
 }): PopoverCloseHover;

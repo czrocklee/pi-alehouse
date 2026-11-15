@@ -40,7 +40,8 @@ export function stackedOverlayOptions(
   layout: {
     width: number | (() => number);
     minWidth?: number;
-    minRows?: number;
+    /** Re-read during layout so appearance changes preserve reveal tracking. */
+    minRows?: number | (() => number);
     nonCapturing?: boolean;
     onReveal?: () => void;
     /** Presentation-only pointer cleanup; no focus or lifecycle changes. */

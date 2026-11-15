@@ -70,6 +70,15 @@ test("an inlaid edge keeps the same outer colors and never leaves the box open",
   }
 });
 
+test("legacy inlays preserve the SDK default ellipsis independently of title styling", () => {
+  const { theme } = record();
+  const line = popoverInlay(theme, 20, "long-label-".repeat(10), "top");
+  assert.ok(line.includes("..."), line);
+  assert.ok(!line.includes("…"), line);
+  assert.equal(visibleWidth(line), 20);
+  assert.ok(popoverTitle(theme, 20, "long-label-".repeat(10)).includes("…"));
+});
+
 test("a filled closable inlay keeps exactly one space before ✕ without shifting its hit area", () => {
   const { theme } = record();
   const styled = { ...theme, fg: (_color, text) => `\u001b[36m${text}\u001b[39m` };

@@ -42,7 +42,13 @@ catalogue. The neutral generated `alehouse-presets.json` starts at `off` with
 empty presets; normal routing/UI tests should use controlled test catalogues,
 not a developer's personal model inventory. Shared independent helpers in
 `src/shared/` are bundled for both orchestration and footer; never make the footer
-import orchestration runtime. Permission/policy code lives in `src/authority`,
+import orchestration runtime. Panel chrome uses `popover-frame.mjs` and
+`popover-chrome.mjs`: keep border/inset rendering, row geometry and the
+cross-bundle border-label preference there, not copied into individual panels.
+The single `ui.borderLabels` switch applies to every Alehouse panel; consumers
+provide label content and derive their viewport/hit offsets from the shared
+bands. Dispose appearance subscriptions with their panels and retire painted
+controls on a live layout change. Permission/policy code lives in `src/authority`,
 outside `src/orchestration`.
 
 The build generates `generated/agents/{editor,researcher,Explore,Plan,general-purpose}.md`,

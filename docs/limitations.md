@@ -601,6 +601,13 @@ retry classification and do not establish the operation or deny reason.
 
 ## UI scope
 
+`ui.borderLabels` is one appearance switch for all Alehouse-owned panel border
+chrome, defaulting to on. Off retains the frame and moves labels and close/action
+controls into interior rows with separators; native Pi and third-party UI are
+outside this switch. Additional rows reduce the body budget and can make a tiny
+panel or its controls unavailable. Switching retires old painted targets and
+armed pane actions; it does not submit actions or change Owner authority.
+
 Worker thinking previews contain only provider-visible thinking text or reasoning
 summaries; hidden or encrypted reasoning is not decoded. Summaries can arrive
 late or never arrive. The `thinking…` placeholder does not prove public thinking

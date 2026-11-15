@@ -15,6 +15,7 @@ function fixture({
   replaceable = true,
   painted = true,
   createHover = createPopoverCloseHover,
+  closeHit = popoverCloseHit,
 } = {}) {
   const host = {
     terminal: { columns, rows },
@@ -31,7 +32,7 @@ function fixture({
     createHover,
     host,
     requestRender: () => renders++,
-    closeHit: popoverCloseHit,
+    closeHit,
   });
   if (painted) control.paint(width, true, height);
   return {
@@ -403,6 +404,45 @@ test("the injected hover factory receives the host, hit test, render and interru
   assert.equal(control.mouse(press(36)), undefined);
   assert.equal(control.mouse(click(36)), undefined);
   assert.equal(renders(), disposedRenders);
+});
+
+test("an inset close control uses its painted row, including hover", () => {
+  const { control } = fixture({
+    closeHit: (width) => ({ ...popoverCloseHit(width), y: 1 }),
+  });
+  assert.equal(control.mouse(click(36)), undefined);
+  assert.deepEqual(control.mouse(click(36, { y: 1 })), closing);
+  control.mouse(move(36, { y: 1 }));
+  assert.equal(control.hovered, true);
+  control.mouse(move(36));
+  assert.equal(control.hovered, false);
+  control.dispose();
+});
+
+test("a moved close row retires both a pending gesture and unpainted targets", () => {
+  let y = 0;
+  const { control } = fixture({
+    closeHit: (width) => ({ ...popoverCloseHit(width), y }),
+  });
+  assert.deepEqual(control.mouse(press(36)), claimed);
+  y = 1;
+  assert.deepEqual(control.mouse(release(36, { y })), claimed);
+  assert.deepEqual(control.mouse(click(36, { y })), claimed);
+  assert.equal(control.mouse(click(36, { y })), undefined, "not yet painted");
+  control.paint(40, true, 3);
+  assert.deepEqual(control.mouse(click(36, { y })), closing);
+  control.dispose();
+});
+
+test("an inset close row outside the painted height has no target", () => {
+  const { control } = fixture({
+    height: 1,
+    closeHit: (width) => ({ ...popoverCloseHit(width), y: 1 }),
+  });
+  assert.equal(control.mouse(click(36, { y: 1 })), undefined);
+  control.mouse(move(36, { y: 1 }));
+  assert.equal(control.hovered, false);
+  control.dispose();
 });
 
 for (const adapter of ["missing", "nonreplaceable"])

@@ -5,7 +5,12 @@ import {
   HIDE_TRANSIENT_OVERLAYS_EVENT,
   PINNED_POPOVER_YIELD_EVENT,
 } from "../../shared/overlay-protocol.mjs";
-import { popoverCloseHit } from "../../shared/popover-frame.mjs";
+import {
+  borderLabelsEnabled,
+  onBorderLabelsChange,
+  popoverChromeCloseHit,
+  popoverChromeLayout,
+} from "../../shared/popover-chrome.mjs";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import {
@@ -20,7 +25,7 @@ import { ContextView } from "./context-view.ts";
 import type { ContextSnapshot } from "./context-stats.ts";
 import type { ModelSpend } from "./session-spend.ts";
 import {
-  BREAKDOWN_CHROME,
+  breakdownChromeRows,
   breakdownFrame,
   breakdownTable,
   breakdownTitle,
@@ -63,7 +68,18 @@ export function createFooterPanels(options: {
   let suppressBreakdownClick = false;
   let breakdownHover: ReturnType<typeof createPopoverCloseControl> | undefined;
   const maxBreakdownRows = () =>
-    (member?.available() ?? tui.terminal.rows - POPOVER_DOCK_ROWS) - BREAKDOWN_CHROME;
+    (member?.available() ?? tui.terminal.rows - POPOVER_DOCK_ROWS) - breakdownChromeRows();
+  /** The smallest complete frame this table can paint. ON keeps the shared
+   * three-row floor; OFF includes both extra title rows and the bottom rule so
+   * the stack hides rather than exposing controls above a clipped edge. */
+  const breakdownMinRows = (): number => {
+    if (borderLabelsEnabled()) return 0;
+    const table = breakdownTable(spend(), maxBreakdownRows());
+    const topRows = popoverChromeLayout({ framed: true }).top.rows;
+    if (table.body.length === 0) return topRows + 2;
+    const totals = table.body.reduce((sum, row) => sum + (row.kind === "total" ? 1 : 0), 0);
+    return topRows + 1 + table.body.length + totals + (table.hidden > 0 ? 1 : 0) + 1;
+  };
   const hideBreakdown = () => {
     if (restoreTimer) clearTimeout(restoreTimer);
     restoreTimer = undefined;
@@ -89,11 +105,14 @@ export function createFooterPanels(options: {
     // Share the leaf/revision-keyed data with every stacked width getter;
     // layout and focus changes do not invalidate historical accounting.
     render: (width: number): string[] => {
-      const closable = width > 0 && !!popoverCloseHit(width);
+      const closable = width > 0 && !!popoverChromeCloseHit(width);
       const table = breakdownTable(spend(), maxBreakdownRows());
       const lines = width > 0 ? breakdownFrame(table, theme, width) : [];
       breakdownHover?.paint(width, closable, lines.length);
-      if (lines.length) lines[0] = breakdownTitle(theme, width, breakdownHover?.hovered);
+      if (lines.length) {
+        const title = breakdownTitle(theme, width, breakdownHover?.hovered);
+        lines.splice(0, title.length, ...title);
+      }
       paintedWidth = closable ? width : 0;
       breakdownPlacement = member && placement(member);
       member?.measure(lines.length);
@@ -128,6 +147,14 @@ export function createFooterPanels(options: {
       return { handled: true };
     },
   };
+  /** Context has a labeled top and bottom band; the shared layout adds four
+   * rows when both move inside. The base six rows keep its existing floor, so
+   * the stack hides rather than paints a readonly compact when it cannot fit. */
+  const contextMinRows = (): number => 6 + popoverChromeLayout({ framed: true }).rows - 2;
+  const unwatchBorderLabels = onBorderLabelsChange(() => {
+    breakdown.invalidate();
+    if (member) tui.requestRender();
+  });
   const mountBreakdown = (place: StackMember) => {
     if (panelsHeld() || !currentFooter()) return;
     overlay = tui.showOverlay(
@@ -135,6 +162,7 @@ export function createFooterPanels(options: {
       stackedOverlayOptions(place, {
         // Grows with new usage and follows resizes without remounting.
         width: () => breakdownWidth(breakdownTable(spend(), maxBreakdownRows())),
+        minRows: breakdownMinRows,
         // The editor keeps the keyboard: this is a lightweight panel, not a dialog.
         nonCapturing: true,
         onHide: () => breakdown.resetPointer(),
@@ -149,7 +177,7 @@ export function createFooterPanels(options: {
     member = joinPopoverStack(tui);
     breakdownHover = createPopoverCloseControl({
       createHover: createPopoverCloseHover,
-      closeHit: popoverCloseHit,
+      closeHit: popoverChromeCloseHit,
       host: tui,
       requestRender: () => tui.requestRender(),
     });
@@ -195,7 +223,7 @@ export function createFooterPanels(options: {
       panelsHeld()
     )
       return;
-    if (panel.member.available() < 6) return;
+    if (panel.member.available() < contextMinRows()) return;
     focusRevealed(tui, panel.handle, pending.origin);
     // A different focus owner wins permanently, not merely until resize.
     cancelPendingContextFocus();
@@ -232,7 +260,7 @@ export function createFooterPanels(options: {
       panel.view,
       stackedOverlayOptions(panel.member, {
         width: () => panel.view.preferredWidth(Math.max(1, tui.terminal.columns - 4)),
-        minRows: 6,
+        minRows: contextMinRows,
         nonCapturing: true,
         onReveal: () => {
           if (contextPanel === panel) revealContext();
@@ -390,6 +418,7 @@ export function createFooterPanels(options: {
       // Preserve host callback/timer retirement before unmounting usage chrome.
       retireContext();
       hideBreakdown();
+      unwatchBorderLabels();
       unsubscribeTransientOverlayHide();
     },
   };

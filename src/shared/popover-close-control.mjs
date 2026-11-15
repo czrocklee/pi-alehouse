@@ -8,7 +8,7 @@
  * SDK-free, dependency-free leaf without duplicating geometry constants. */
 
 /** @typedef {{ host?: object, requestRender(): void,
- * closeHit(width: number): {x: number, width: number} | undefined,
+ * closeHit(width: number): {x: number, width: number, y?: number} | undefined,
  * createHover: typeof import("./popover-close-hover.mjs").createPopoverCloseHover }} ControlOptions */
 /** @typedef {{ type: string, button?: string, x?: number, y?: number,
  * width?: number }} ControlMouseEvent */
@@ -38,6 +38,8 @@ function dimensions(host) {
 export function createPopoverCloseControl(options) {
   let disposed = false;
   let paintedWidth = 0;
+  /** @type {{x: number, width: number, y?: number} | undefined} */
+  let paintedHit;
   /** @type {number | undefined} */
   let paintedHeight;
   /** @type {unknown[]} */
@@ -71,7 +73,7 @@ export function createPopoverCloseControl(options) {
   const insideHit = (event) => {
     if (
       paintedWidth <= 0 ||
-      event.y !== 0 ||
+      event.y !== (paintedHit?.y ?? 0) ||
       event.x === undefined ||
       !Number.isFinite(event.x) ||
       !Number.isFinite(event.y) ||
@@ -79,7 +81,16 @@ export function createPopoverCloseControl(options) {
     )
       return false;
     const hit = options.closeHit(paintedWidth);
-    if (!hit || event.x < hit.x || event.x >= hit.x + hit.width) return false;
+    if (
+      !hit ||
+      !paintedHit ||
+      hit.x !== paintedHit.x ||
+      hit.width !== paintedHit.width ||
+      (hit.y ?? 0) !== (paintedHit.y ?? 0) ||
+      event.x < hit.x ||
+      event.x >= hit.x + hit.width
+    )
+      return false;
     const current = dimensions(options.host);
     return current.every((value, index) => value === paintedDimensions[index]);
   };
@@ -88,6 +99,7 @@ export function createPopoverCloseControl(options) {
   };
   const retire = () => {
     paintedWidth = 0;
+    paintedHit = undefined;
     paintedHeight = undefined;
     paintedDimensions = [];
     cancel();
@@ -106,19 +118,26 @@ export function createPopoverCloseControl(options) {
       if (disposed) return;
       try {
         const next = dimensions(options.host);
+        const hit = options.closeHit(width);
         const valid =
           enabled &&
           Number.isInteger(width) &&
-          !!options.closeHit(width) &&
-          (height === undefined || (Number.isInteger(height) && height > 0));
+          !!hit &&
+          Number.isInteger(hit.y ?? 0) &&
+          (hit.y ?? 0) >= 0 &&
+          (height === undefined || (Number.isInteger(height) && height > (hit.y ?? 0)));
         if (
           !valid ||
           width !== paintedWidth ||
+          hit?.x !== paintedHit?.x ||
+          hit?.width !== paintedHit?.width ||
+          (hit?.y ?? 0) !== (paintedHit?.y ?? 0) ||
           (height !== undefined && height !== paintedHeight) ||
           next.some((value, index) => value !== paintedDimensions[index])
         )
           cancel(); // Geometry moved: the armed gesture dies, its events stay consumed.
         paintedWidth = valid ? width : 0;
+        paintedHit = valid && hit ? { ...hit } : undefined;
         if (height !== undefined) paintedHeight = height;
         paintedDimensions = next;
         hover.paint(width, enabled, height);

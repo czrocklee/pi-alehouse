@@ -153,11 +153,15 @@ export class PresetEffortEditor {
       return warning ? [`${slot}: ${warning}`] : [];
     });
     const baseRows = strengths.length + 4;
-    const saveRows = page.state.canSave("global") && maxLines >= baseRows + 1 ? 1 : 0;
-    const lines = [page.title(width, `Effort · ${preset.name}`)];
-    if (maxLines >= baseRows + 1 + saveRows)
+    // The border-label switch moves the title between one and three rows;
+    // optional-row gates and the slot window follow the same paint.
+    const title = page.titleRows(width, `Effort · ${preset.name}`);
+    const extra = title.length - 1;
+    const saveRows = page.state.canSave("global") && maxLines >= baseRows + extra + 1 ? 1 : 0;
+    const lines = [...title];
+    if (maxLines >= baseRows + extra + 1 + saveRows)
       lines.push(page.row(theme.fg("muted", " New Agents only; main unchanged"), inner));
-    if (maxLines >= baseRows + 2 + saveRows)
+    if (maxLines >= baseRows + extra + 2 + saveRows)
       lines.push(
         page.row(
           theme.fg(
@@ -167,7 +171,7 @@ export class PresetEffortEditor {
           inner,
         ),
       );
-    if (maxLines >= baseRows + 3 + saveRows) lines.push(page.divider(width));
+    if (maxLines >= baseRows + extra + 3 + saveRows) lines.push(page.divider(width));
     const slots = page.slotWindow(maxLines - lines.length - 3 - saveRows);
     for (const slot of slots) {
       const selected = slot === selectedSlot,
@@ -192,7 +196,7 @@ export class PresetEffortEditor {
       caps[selectedSlot].inheritError ??
       caps[selectedSlot].inherited ??
       "unavailable";
-    if (maxLines >= baseRows + 4 + saveRows)
+    if (maxLines >= baseRows + extra + 4 + saveRows)
       lines.push(
         page.row(
           theme.fg(

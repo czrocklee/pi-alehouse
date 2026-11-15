@@ -7,7 +7,7 @@ import {
   type StackHost,
   type StackMember,
 } from "../../shared/popover-stack.mjs";
-import { PRESET_PICKER_MIN_ROWS } from "./preset-picker.ts";
+import { presetPickerMinRows } from "./preset-picker.ts";
 
 const PRESET_OVERLAY_WIDTH = 76;
 const PRESET_OVERLAY_MIN_WIDTH = 34;
@@ -66,7 +66,10 @@ export function createPresetOverlayHost(options: {
             ? (placement ??= stackedOverlayOptions(place, {
                 width: PRESET_OVERLAY_WIDTH,
                 minWidth: PRESET_OVERLAY_MIN_WIDTH,
-                minRows: PRESET_PICKER_MIN_ROWS,
+                // The reveal floor follows the current title chrome: the
+                // shared switch owns the delta, so the waiting notice and the
+                // stack agree on how many rows the picker needs.
+                minRows: presetPickerMinRows,
                 onReveal: () => reveal?.(),
                 onHide: options.onHide,
                 onMove: options.onMove,

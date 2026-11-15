@@ -11,11 +11,18 @@ import {
 import {
   POPOVER,
   POPOVER_CLOSE_COLUMNS,
-  popoverCloseHit,
   popoverCloseTail,
   popoverRule,
   popoverSide,
 } from "../../shared/popover-frame.mjs";
+import {
+  borderLabelsEnabled,
+  onBorderLabelsChange,
+  popoverChromeCloseHit,
+  popoverChromeLayout,
+  popoverInlayWidth,
+  popoverInsetLabelRows,
+} from "../../shared/popover-chrome.mjs";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import { formatTokenCount } from "../../shared/token-format.mjs";
@@ -85,6 +92,12 @@ const pad = (text: string, width: number, right = false): string => {
 export class ContextView {
   private disposed = false;
   private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
+  private readonly unwatchBorderLabels: () => void;
+  /** Shared label metrics: the chrome helpers clip and measure inset labels. */
+  private readonly labelMetrics = {
+    clip: (text: string, columns: number): string => truncateToWidth(text, columns, "…"),
+    width: (text: string): number => visibleWidth(text),
+  };
   private selected: ContextCategory | undefined;
   private detail: Row | undefined;
   private offset = 0;
@@ -114,10 +127,13 @@ export class ContextView {
   constructor(private readonly options: ContextViewOptions) {
     this.closeHover = createPopoverCloseControl({
       createHover: createPopoverCloseHover,
-      closeHit: popoverCloseHit,
+      closeHit: popoverChromeCloseHit,
       host: options.tui,
       requestRender: options.requestRender,
     });
+    // A border-label switch is a geometry change: retire painted targets and
+    // request a repaint so input cannot act on the retired layout.
+    this.unwatchBorderLabels = onBorderLabelsChange(() => this.invalidate());
   }
 
   preferredWidth(max: number): number {
@@ -128,13 +144,16 @@ export class ContextView {
     this.clearGeometry(false);
     if (this.disposed) return [];
     const columns = size(width);
-    const height = Math.min(HEIGHT, size(this.options.availableRows()));
+    // Budgets and label rows come from the shared chrome layout: with border
+    // labels off, each edge's label moves into a three-row inset band.
+    const layout = popoverChromeLayout({ framed: true });
+    const height = Math.min(HEIGHT + layout.rows - 2, size(this.options.availableRows()));
     const snapshot = this.read();
     if (!columns || !height) {
       this.closeHover.paint(columns, false, 0);
       return this.finishPaint([], columns);
     }
-    if (!snapshot || columns < MIN_WIDTH || height < MIN_ROWS) {
+    if (!snapshot || columns < MIN_WIDTH || height < MIN_ROWS + layout.rows - 2) {
       const text = snapshot
         ? `Context ${this.estimates(snapshot, true)} · readonly · ${this.usage(snapshot)}`
         : "Context unavailable · readonly";
@@ -152,7 +171,7 @@ export class ContextView {
       return this.finishPaint(compact, columns);
     }
 
-    this.closeHover.paint(columns, !!popoverCloseHit(columns), height);
+    this.closeHover.paint(columns, !!popoverChromeCloseHit(columns), height);
     this.tabs = CATEGORIES.filter((id) => id !== "other" && this.present(snapshot, id));
     if (this.selected && !this.tabs.includes(this.selected)) this.reset(undefined);
     if (this.cachedSnapshot !== snapshot) {
@@ -161,7 +180,7 @@ export class ContextView {
       this.metrics = undefined;
       if (this.detail) this.detail = this.rows.find((row) => row.id === this.detail!.id);
     }
-    this.viewport = height - 4;
+    this.viewport = height - layout.rows - 2;
     this.cursor = Math.max(0, Math.min(this.cursor, this.rows.length - 1));
     this.offset = Math.max(0, Math.min(this.offset, Math.max(0, this.rows.length - this.viewport)));
     // Keep the retained scroll anchor whenever the cursor still fits. A
@@ -172,7 +191,10 @@ export class ContextView {
       this.offset = this.cursor - this.viewport + 1;
     this.navigationReady = true;
     this.paintedSnapshot = snapshot;
-    const lines = [this.top(columns), this.row(this.bar(snapshot, columns - 4), columns)];
+    const lines = [
+      ...this.topRows(columns, layout.top.labelY),
+      this.row(this.bar(snapshot, columns - 4), columns),
+    ];
     if (this.textPage()) {
       lines.push(
         this.row(
@@ -213,8 +235,8 @@ export class ContextView {
       if (!this.rows.length)
         lines.push(this.row(this.fg("dim", "No attributed context metadata"), columns));
     }
-    while (lines.length < height - 1) lines.push(this.row("", columns));
-    lines.push(this.bottom(columns, height - 1, snapshot));
+    while (lines.length < height - layout.bottom.rows) lines.push(this.row("", columns));
+    lines.push(...this.bottomRows(columns, height, snapshot, layout.footerFromBottom));
     return this.finishPaint(lines, columns);
   }
 
@@ -318,6 +340,7 @@ export class ContextView {
   dispose(): void {
     this.disposed = true;
     this.clearGeometry();
+    this.unwatchBorderLabels();
     this.closeHover.dispose();
   }
 
@@ -568,15 +591,51 @@ export class ContextView {
     ];
   }
 
+  /** The top band: the bespoke labeled edge, or with border labels off the
+   * shared inset band carrying the same title and tab label. */
+  private topRows(width: number, labelY: number): string[] {
+    if (borderLabelsEnabled()) return [this.top(width)];
+    const closable = !!popoverChromeCloseHit(width);
+    return popoverInsetLabelRows(
+      this.options.theme,
+      width,
+      this.topLabel(width, 3, 3 + popoverInlayWidth(width, "top", closable), labelY, "Context ")
+        .text,
+      "top",
+      this.labelMetrics,
+      { closable, closeHovered: this.closeHover.hovered },
+    );
+  }
+
   private top(width: number): string {
     const theme = this.options.theme;
-    const close = !!popoverCloseHit(width);
+    const close = !!popoverChromeCloseHit(width);
     const limit = width - (close ? POPOVER_CLOSE_COLUMNS : 1);
-    let x = 2;
-    let result = this.fg("borderAccent", POPOVER.tl + POPOVER.h);
-    const title = " Context ";
-    result += this.fg(this.selected === undefined ? "accent" : "muted", theme.bold(title));
-    this.target(x, x + visibleWidth(title), 0, () => {
+    const { text, end } = this.topLabel(width, 2, limit, 0, " Context ");
+    return (
+      this.fg("borderAccent", POPOVER.tl + POPOVER.h) +
+      text +
+      this.fg("borderAccent", POPOVER.h.repeat(Math.max(0, limit - end))) +
+      (close
+        ? popoverCloseTail(theme, this.closeHover.hovered)
+        : this.fg("borderAccent", POPOVER.tr))
+    );
+  }
+
+  /** Title and tab inlay shared by the labeled border edge and the inset
+   * label row: one styled label plus its hit targets at `y`. The caller owns
+   * the surrounding frame bytes and the label's origin. */
+  private topLabel(
+    width: number,
+    origin: number,
+    limit: number,
+    y: number,
+    title: string,
+  ): { text: string; end: number } {
+    const theme = this.options.theme;
+    let x = origin;
+    let text = this.fg(this.selected === undefined ? "accent" : "muted", theme.bold(title));
+    this.target(origin, origin + visibleWidth(title), y, () => {
       this.reset(undefined);
       this.changed();
     });
@@ -602,24 +661,55 @@ export class ContextView {
       const label = full <= room ? LABELS[id] : shortWidth <= room ? short[id] : tiny[id];
       const raw = this.selected === id ? `›${label}‹` : ` ${label} `;
       if (x + visibleWidth(raw) > limit) break;
-      result += this.fg(
+      text += this.fg(
         this.selected === id ? "accent" : "muted",
         this.selected === id ? theme.bold(raw) : raw,
       );
       const start = x;
       x += visibleWidth(raw);
-      this.target(start, x, 0, () => this.select(id));
+      this.target(start, x, y, () => this.select(id));
     }
-    result += this.fg("borderAccent", POPOVER.h.repeat(Math.max(0, limit - x)));
-    return (
-      result +
-      (close
-        ? popoverCloseTail(theme, this.closeHover.hovered)
-        : this.fg("borderAccent", POPOVER.tr))
+    return { text, end: x };
+  }
+
+  /** The bottom band: the bespoke pager edge, or with border labels off the
+   * shared inset band carrying the same pager label. */
+  private bottomRows(
+    width: number,
+    height: number,
+    snapshot: ContextSnapshot,
+    footerFromBottom: number,
+  ): string[] {
+    const y = height - footerFromBottom;
+    if (borderLabelsEnabled()) return [this.bottom(width, y, snapshot)];
+    return popoverInsetLabelRows(
+      this.options.theme,
+      width,
+      this.pagerLabel(width, y, 3, 3 + popoverInlayWidth(width, "bottom"), snapshot).text,
+      "bottom",
+      this.labelMetrics,
+      {},
     );
   }
 
   private bottom(width: number, y: number, snapshot: ContextSnapshot): string {
+    const { text, end } = this.pagerLabel(width, y, 2, width - 2, snapshot);
+    return (
+      this.fg("borderAccent", POPOVER.bl + POPOVER.h) +
+      text +
+      this.fg("borderAccent", POPOVER.h.repeat(Math.max(0, width - 1 - end)) + POPOVER.br)
+    );
+  }
+
+  /** The pager/action inlay shared by the labeled bottom edge and the inset
+   * label row: one styled label plus its hit targets at `y`. */
+  private pagerLabel(
+    width: number,
+    y: number,
+    origin: number,
+    edge: number,
+    snapshot: ContextSnapshot,
+  ): { text: string; end: number } {
     const total = this.textPage() ? this.detailLines.length : this.rows.length;
     const offset = this.textPage() ? this.detailOffset : this.offset;
     const range = total
@@ -627,13 +717,13 @@ export class ContextView {
       : "0/0";
     const canPrev = offset > 0,
       canNext = offset + this.viewport < total;
-    let x = 2;
-    let result = this.fg("borderAccent", POPOVER.bl + POPOVER.h);
-    const add = (text: string, action?: () => void, reserve = 0): void => {
-      if (x + visibleWidth(text) > width - 2 - reserve) return;
+    let x = origin;
+    let text = "";
+    const add = (piece: string, action?: () => void, reserve = 0): void => {
+      if (x + visibleWidth(piece) > edge - reserve) return;
       const start = x;
-      result += this.fg(action ? "accent" : "dim", text);
-      x += visibleWidth(text);
+      text += this.fg(action ? "accent" : "dim", piece);
+      x += visibleWidth(piece);
       if (action) this.target(start, x, y, action);
     };
     const compact = ` ${this.estimates(snapshot, true)}`;
@@ -668,11 +758,10 @@ export class ContextView {
       compact,
     ];
     add(
-      caveats.find((text) => visibleWidth(text) <= width - 2 - x) ?? "",
+      caveats.find((piece) => visibleWidth(piece) <= edge - x) ?? "",
       this.showingNote ? undefined : () => this.openNote(),
     );
-    result += this.fg("borderAccent", POPOVER.h.repeat(Math.max(0, width - 1 - x)) + POPOVER.br);
-    return result;
+    return { text, end: x };
   }
 
   private open(id: string): void {

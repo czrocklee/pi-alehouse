@@ -78,6 +78,7 @@ import {
   type SettingsDocument,
 } from "../shared/settings-store.mjs";
 import { managedBlockToolNames } from "../shared/managed-block-tools.mjs";
+import { borderLabelsEnabled, setBorderLabelsEnabled } from "../shared/popover-chrome.mjs";
 
 export {
   applyAuditedPreset,
@@ -849,7 +850,14 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
       });
       preferences = settingsStore.effective();
       childSkillsEnabled = preferences.childSkills !== false;
+      // Appearance is one cross-bundle process switch: every Alehouse panel
+      // reads and subscribes to it, so no per-panel state is kept here.
+      setBorderLabelsEnabled(preferences.ui?.borderLabels !== false);
     } catch (error) {
+      // The shared preference outlives extension instances in this process.
+      // An unreadable/invalid layer must not inherit an earlier session-only
+      // choice; refuse startup visibly while restoring the appearance default.
+      setBorderLabelsEnabled(true);
       showPresetError(settingsLoadFailure(error, agentDir, ctx.cwd), ctx);
       return;
     }
@@ -989,6 +997,10 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
         beerMugs: {
           current: () => widget.beerMugsEnabled,
           set: (enabled) => widget.setBeerMugs(enabled),
+        },
+        borderLabels: {
+          current: borderLabelsEnabled,
+          set: setBorderLabelsEnabled,
         },
         childSkills: {
           current: currentChildSkills,

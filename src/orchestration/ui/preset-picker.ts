@@ -1,10 +1,11 @@
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
+import { onBorderLabelsChange } from "../../shared/popover-chrome.mjs";
 import type { PersistentScope } from "../../shared/settings-store.mjs";
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type Component, type TUI } from "@earendil-works/pi-tui";
 import { OverlayRequest } from "./overlay-request.ts";
-import { popoverCloseHit, popoverTitle } from "./popover.ts";
+import { popoverChromeCloseHit, popoverTitleRows } from "./popover.ts";
 import type { DelegationSetting } from "../delegation.ts";
 import {
   isOffPreset,
@@ -27,7 +28,11 @@ import {
   type PickerAction,
 } from "./preset-list-page.ts";
 
-export { workerSlotDisplayOrder, PRESET_PICKER_MIN_ROWS } from "./preset-list-page.ts";
+export {
+  workerSlotDisplayOrder,
+  PRESET_PICKER_MIN_ROWS,
+  presetPickerMinRows,
+} from "./preset-list-page.ts";
 export type { EffortCapabilities } from "../routing.ts";
 
 export type PresetChoice =
@@ -124,12 +129,13 @@ export class PresetPicker implements Component {
   private readonly delegation: PresetDelegation;
   private readonly effort: PresetEffortEditor;
   private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
+  private readonly unsubscribeChrome: () => void;
 
   constructor(private readonly options: PresetPickerOptions) {
     this.options = { ...options, presets: [...options.presets] };
     this.closeHover = createPopoverCloseControl({
       createHover: createPopoverCloseHover,
-      closeHit: popoverCloseHit,
+      closeHit: popoverChromeCloseHit,
       host: options.tui,
       requestRender: () => options.tui.requestRender(),
     });
@@ -147,6 +153,12 @@ export class PresetPicker implements Component {
       },
     );
     if (options.startInEffort) this.openEditor();
+    // One process-wide appearance switch: close-hit row and content geometry
+    // move together, so retire pointer targets and request one repaint.
+    this.unsubscribeChrome = onBorderLabelsChange(() => {
+      this.invalidatePointerPaint();
+      this.options.tui.requestRender();
+    });
   }
 
   selection(): string | undefined {
@@ -330,13 +342,14 @@ export class PresetPicker implements Component {
     // the page/maps and any host-provided projections are computed once.
     if (hovered && !this.closeHover.hovered) {
       const preset = this.options.presets[this.selected];
-      page.lines[0] = popoverTitle(
+      const title = popoverTitleRows(
         this.options.theme,
         width,
         this.editing && preset && !isOffPreset(preset) ? `Effort · ${preset.name}` : "Delegation",
         this.options.pointer,
         false,
       );
+      page.lines.splice(0, title.length, ...title);
     }
     this.paint = page.paint;
     this.pointerWidth = this.layoutWidth;
@@ -394,6 +407,7 @@ export class PresetPicker implements Component {
     this.invalidatePointerPaint();
   }
   dispose(): void {
+    this.unsubscribeChrome();
     this.closed = true;
     this.closeHover.dispose();
   }

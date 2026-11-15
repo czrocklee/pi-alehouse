@@ -28,7 +28,8 @@ import { dirname, join, parse, resolve, sep } from "node:path";
  * @typedef {{version: string, slots: Record<Slot, PresetSlotDefinition>}} PresetDefinition */
 /** @typedef {{version: 2, preset?: string, delegation?: {mode?: "manual" | "co-worker" | "lead" | "supervisor",
  * eagerness?: "reserved" | "balanced" | "eager"}, effort?: EffortPolicy, approval?: ApprovalPreference,
- * presets?: Record<string, PresetDefinition>, ui?: {beerMugs?: boolean}, childSkills?: boolean}} SettingsDocument */
+ * presets?: Record<string, PresetDefinition>, ui?: {beerMugs?: boolean, borderLabels?: boolean},
+ * childSkills?: boolean}} SettingsDocument */
 /** @typedef {{scope: PersistentScope, path: string[], value: unknown}} Patch */
 /** @typedef {{scope: PersistentScope, path: string, error?: string}} FlushResult */
 /** @typedef {import("node:fs").Stats} Stat */
@@ -40,6 +41,9 @@ const slots = ["d1", "d2", "d3", "d4", "d5"];
 const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const efforts = [...thinkingLevels, "inherit"];
 const persistentScopes = /** @type {const} */ (["global", "workspace"]);
+// Appearance leaves merge global then trusted workspace; omitted consumers keep
+// their documented default (beer mugs off, border labels on).
+const uiFields = ["beerMugs", "borderLabels"];
 const unsafeKeys = new Set(["__proto__", "constructor", "prototype"]);
 const namePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const registryKey = Symbol.for("pi-alehouse:settings-stores:v1");
@@ -210,9 +214,10 @@ export function validateSettings(value, layers = 1) {
   }
   if (Object.hasOwn(root, "ui")) {
     const ui = record(root.ui, "ui");
-    exactKeys(ui, ["beerMugs"], "ui");
-    if (Object.hasOwn(ui, "beerMugs") && typeof ui.beerMugs !== "boolean")
-      invalid("ui.beerMugs must be a boolean");
+    exactKeys(ui, uiFields, "ui");
+    for (const field of uiFields)
+      if (Object.hasOwn(ui, field) && typeof ui[field] !== "boolean")
+        invalid(`ui.${field} must be a boolean`);
   }
   if (Object.hasOwn(root, "effort")) {
     for (const [name, body] of Object.entries(record(root.effort, "effort"))) {

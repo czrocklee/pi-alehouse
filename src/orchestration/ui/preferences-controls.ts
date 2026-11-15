@@ -22,9 +22,27 @@ import {
 import { workerSlotDisplayOrder, type ModelPickerPosition } from "./preset-picker.ts";
 import { ModelSelectionSession, type ModelSelectionOptions } from "./model-selection-session.ts";
 
+/** Appearance-only controls: session scope applies live, a persistent scope
+ * queues just the named `ui` leaf. */
+export interface AppearancePreferenceControl {
+  current(): boolean;
+  set(enabled: boolean): void;
+}
+interface AppearanceAction {
+  key: "beerMugs" | "borderLabels";
+  label: string;
+  /** Scope hint shown in the menu row and its notifications. */
+  detail?: string;
+  control: AppearancePreferenceControl;
+  action: string;
+}
+const describeAppearance = (entry: Pick<AppearanceAction, "label" | "detail">, enabled: boolean) =>
+  `${entry.label}: ${enabled ? "on" : "off"}${entry.detail ? ` (${entry.detail})` : ""}`;
+
 export interface PreferencesControlsOptions extends ModelSelectionOptions {
   store: SettingsStore;
-  beerMugs: { current(): boolean; set(enabled: boolean): void };
+  beerMugs: AppearancePreferenceControl;
+  borderLabels: AppearancePreferenceControl;
   childSkills: {
     current(): boolean;
     set(enabled: boolean): void;
@@ -106,6 +124,59 @@ export class PreferencesControls {
     return accepted === true;
   }
 
+  /** Both appearance rows share one live/staging path; only their label and
+   * preference leaf differ. */
+  private appearanceActions(): AppearanceAction[] {
+    const entries: Omit<AppearanceAction, "action">[] = [
+      { key: "beerMugs", label: "Beer mugs", control: this.options.beerMugs },
+      {
+        key: "borderLabels",
+        label: "Border labels",
+        detail: "all Alehouse panels",
+        control: this.options.borderLabels,
+      },
+    ];
+    return entries.map((entry) => ({
+      ...entry,
+      action: describeAppearance(entry, entry.control.current()),
+    }));
+  }
+  /** Apply the live choice first so a failed queue never hides the toggle. A
+   * global save still explains a more specific workspace override. */
+  private toggleAppearance(entry: AppearanceAction): void {
+    const { key, control } = entry;
+    const { ctx, store } = this.options;
+    const enabled = !control.current();
+    control.set(enabled);
+    const description = describeAppearance(entry, enabled);
+    if (store.scope === "session") {
+      ctx.ui.notify(`${description} (session only; no configuration write).`, "info");
+      return;
+    }
+    try {
+      store.stage(store.scope, ["ui", key], enabled);
+    } catch (error) {
+      ctx.ui.notify(
+        `${description} is live for this session, but defaults were not queued: ${String(error).slice(0, 512)}`,
+        "warning",
+      );
+      return;
+    }
+    ctx.ui.notify(`${description}. ${this.summary()}`, "info");
+    const workspace =
+      store.scope === "global" && store.canWriteWorkspace()
+        ? store.get("workspace").ui?.[key]
+        : undefined;
+    if (workspace !== undefined) {
+      ctx.ui.notify(
+        `Current session: ${description}. Save scope: global. ` +
+          `Next startup after saving pending writes, if any: ${describeAppearance(entry, workspace)}. ` +
+          `The workspace ui.${key} override takes precedence over the global default; it was not removed.`,
+        "info",
+      );
+    }
+  }
+
   private notifyPending(): void {
     const { store, ctx } = this.options;
     ctx.ui.notify(this.summary(), "info");
@@ -123,11 +194,11 @@ export class PreferencesControls {
   async open(): Promise<void> {
     await this.interaction(async () => {
       const { ctx, store } = this.options;
-      const beerMugsAction = `Beer mugs: ${this.options.beerMugs.current() ? "on" : "off"}`;
+      const appearance = this.appearanceActions();
       const childSkillsReason = this.options.childSkills.disabledReason?.();
       const childSkillsAction = `Agent skills: ${this.options.childSkills.current() ? "on" : "off"}${childSkillsReason ? ` (${childSkillsReason})` : ""}`;
       const action = await ctx.ui.select(`Alehouse settings · ${this.summary()}`, [
-        beerMugsAction,
+        ...appearance.map((entry) => entry.action),
         childSkillsAction,
         "Change save scope",
         "Remember current worker settings",
@@ -137,36 +208,9 @@ export class PreferencesControls {
         "Show paths and pending changes",
       ]);
       this.assertLive();
-      if (action === beerMugsAction) {
-        const enabled = !this.options.beerMugs.current();
-        this.options.beerMugs.set(enabled);
-        const description = `Beer mugs: ${enabled ? "on" : "off"}`;
-        if (store.scope === "session") {
-          ctx.ui.notify(`${description} (session only; no configuration write).`, "info");
-        } else {
-          try {
-            store.stage(store.scope, ["ui", "beerMugs"], enabled);
-          } catch (error) {
-            ctx.ui.notify(
-              `${description} is live for this session, but defaults were not queued: ${String(error).slice(0, 512)}`,
-              "warning",
-            );
-            return;
-          }
-          ctx.ui.notify(`${description}. ${this.summary()}`, "info");
-          const workspace =
-            store.scope === "global" && store.canWriteWorkspace()
-              ? store.get("workspace").ui?.beerMugs
-              : undefined;
-          if (workspace !== undefined) {
-            ctx.ui.notify(
-              `Current session: ${description}. Save scope: global. ` +
-                `Next startup after saving pending writes, if any: Beer mugs: ${workspace ? "on" : "off"}. ` +
-                "The workspace ui.beerMugs override takes precedence over the global default; it was not removed.",
-              "info",
-            );
-          }
-        }
+      const appearanceAction = appearance.find((entry) => entry.action === action);
+      if (appearanceAction) {
+        this.toggleAppearance(appearanceAction);
       } else if (action === childSkillsAction) {
         const disabledReason = this.options.childSkills.disabledReason?.();
         if (disabledReason) {
@@ -258,6 +302,7 @@ export class PreferencesControls {
         if (layer.approval !== undefined) paths.push(["approval"]);
         if (layer.childSkills !== undefined) paths.push(["childSkills"]);
         if (layer.ui?.beerMugs !== undefined) paths.push(["ui", "beerMugs"]);
+        if (layer.ui?.borderLabels !== undefined) paths.push(["ui", "borderLabels"]);
         for (const key of Object.keys(layer.delegation ?? {})) paths.push(["delegation", key]);
         for (const [name, slots] of Object.entries(layer.effort ?? {}))
           for (const key of Object.keys(slots)) paths.push(["effort", name, key]);

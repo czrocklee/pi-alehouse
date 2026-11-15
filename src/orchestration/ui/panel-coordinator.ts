@@ -35,7 +35,7 @@ import {
   paneYieldHandlers,
 } from "./permission-dialog-yield.ts";
 import {
-  PRESET_PICKER_MIN_ROWS,
+  presetPickerMinRows,
   PresetPicker,
   PresetPickerRequest,
   type EffortCapabilities,
@@ -1031,13 +1031,13 @@ export class PanelCoordinator {
           // Opened behind taller pinned panels, the picker waits off screen
           // and takes the keyboard when room appears. Say so: until then
           // nothing is visible, and only the same toggle closes it.
-          const waiting = popoverStackRoom(tui) < PRESET_PICKER_MIN_ROWS;
+          const waiting = popoverStackRoom(tui) < presetPickerMinRows();
           floatingHandle = tui.showOverlay(component, options.overlayOptions());
           options.onHandle(floatingHandle);
           if (waiting)
             try {
               ctx.ui.notify(
-                `The delegation panel is waiting for ${PRESET_PICKER_MIN_ROWS} free rows above the pinned panels: close Context or Usage, or enlarge the terminal. Alt+S cancels it.`,
+                `The delegation panel is waiting for ${presetPickerMinRows()} free rows above the pinned panels: close Context or Usage, or enlarge the terminal. Alt+S cancels it.`,
                 "info",
               );
             } catch {

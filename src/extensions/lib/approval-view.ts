@@ -2,12 +2,13 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TuiMouseEvent } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { popoverRule, popoverSide } from "../../shared/popover-frame.mjs";
 import {
-  popoverCloseHit,
-  popoverRule,
-  popoverSide,
-  popoverTitleRow,
-} from "../../shared/popover-frame.mjs";
+  onBorderLabelsChange,
+  popoverChromeCloseHit,
+  popoverChromeLayout,
+  popoverTitleRows,
+} from "../../shared/popover-chrome.mjs";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import type { PersistentScope } from "../../shared/settings-store.mjs";
@@ -65,14 +66,20 @@ export class ApprovalPopover implements Component {
   private suppressClick = false;
   private disposed = false;
   private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
+  private readonly unwatchBorderLabels: () => void;
   private readonly rowTargets = new Map<number, number | PersistentScope>();
 
   constructor(private readonly options: ApprovalPopoverOptions) {
     this.closeHover = createPopoverCloseControl({
       createHover: createPopoverCloseHover,
-      closeHit: popoverCloseHit,
+      closeHit: popoverChromeCloseHit,
       host: options.tui,
       requestRender: options.requestRender,
+    });
+    this.unwatchBorderLabels = onBorderLabelsChange(() => {
+      if (this.disposed) return;
+      this.invalidate();
+      this.options.requestRender();
     });
     const index = options.choices().findIndex((choice) => choice.id === options.current());
     this.selected = Math.max(0, index);
@@ -136,14 +143,15 @@ export class ApprovalPopover implements Component {
   render(width: number): string[] {
     this.rowTargets.clear();
     if (this.disposed) return [];
-    const closeVisible = width >= 12 && !!popoverCloseHit(width);
-    const lines = width < 12 ? [] : this.layout(width);
+    const closeVisible = width >= 12 && !!popoverChromeCloseHit(width);
+    const lines =
+      width < 12 ? [] : this.layout(width, popoverChromeLayout({ framed: true }).top.rows);
     this.closeHover.paint(width, closeVisible, lines.length);
     this.paintedWidth = closeVisible ? width : 0;
     // Publish actual height before styling the translated title, without
     // laying out choices/warnings (and rebuilding their hit map) twice.
-    if (lines.length)
-      lines[0] = popoverTitleRow(
+    if (lines.length) {
+      const title = popoverTitleRows(
         this.options.theme,
         width,
         "Approval",
@@ -151,6 +159,8 @@ export class ApprovalPopover implements Component {
         closeVisible,
         this.closeHover.hovered,
       );
+      lines.splice(0, title.length, ...title);
+    }
     this.options.onRender?.(lines.length);
     return lines;
   }
@@ -169,6 +179,7 @@ export class ApprovalPopover implements Component {
 
   dispose(): void {
     this.disposed = true;
+    this.unwatchBorderLabels();
     this.invalidate();
     this.closeHover.dispose();
   }
@@ -208,7 +219,7 @@ export class ApprovalPopover implements Component {
     this.options.choose(choice.id);
   }
 
-  private layout(width: number): string[] {
+  private layout(width: number, headerRows: number): string[] {
     const { theme } = this.options;
     const inner = width - 2;
     const row = (content: string): string =>
@@ -216,7 +227,9 @@ export class ApprovalPopover implements Component {
     const choices = this.options.choices();
     const current = this.options.current();
     const labelWidth = Math.max(...choices.map((choice) => visibleWidth(choice.label)));
-    const lines = [""]; // Final header follows actual-height publication.
+    // The shared chrome owns the top band: one inlaid title row, or an outer
+    // rule, an interior label/close row and a separator when labels are off.
+    const lines = Array.from({ length: headerRows }, () => "");
     choices.forEach((choice, index) => {
       const selected = index === this.selected;
       const marker = selected ? theme.fg("accent", "›") : " ";

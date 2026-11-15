@@ -10,11 +10,19 @@ import {
 import type { DelegationMode } from "../delegation.ts";
 import type { PresetPickerOptions } from "./preset-picker.ts";
 import type { PresetDelegation } from "./preset-delegation.ts";
-import { popoverBottom, popoverDivider, popoverRow, popoverTitle } from "./popover.ts";
+import { popoverChromeLayout } from "../../shared/popover-chrome.mjs";
+import { popoverBottom, popoverDivider, popoverRow, popoverTitleRows } from "./popover.ts";
 
 /** Detached UI order: numeric keys always retain canonical slot identity. */
 export const workerSlotDisplayOrder: readonly Strength[] = Object.freeze([...strengths].reverse());
 export const PRESET_PICKER_MIN_ROWS = 7;
+/** Rows before the stack reveals the picker and before its waiting notice
+ * clears: the paint floor plus the current title-chrome delta. The shared
+ * layout owns the delta (0 with border labels on, 2 with them off); the hard
+ * paint floor stays `PRESET_PICKER_MIN_ROWS` in every internal gate. */
+export function presetPickerMinRows(): number {
+  return PRESET_PICKER_MIN_ROWS + popoverChromeLayout({ framed: true }).top.rows - 1;
+}
 const MIN_FULL_LINES = strengths.length + 8;
 const MODE_ROWS = 3;
 const GUIDELINE_ROWS = 3;
@@ -131,8 +139,10 @@ export class PresetPage {
     return true;
   }
 
-  title(width: number, title: string): string {
-    return popoverTitle(
+  /** Title chrome rows for the current border-label switch; row budgets
+   * count the same paint they emit, so a live switch cannot overflow. */
+  titleRows(width: number, title: string): string[] {
+    return popoverTitleRows(
       this.options.theme,
       width,
       title,
@@ -175,9 +185,13 @@ export function renderPresetList(
 ): { lines: string[]; visibleRows: number } {
   const list = new PresetListPage(page.options, page.state, page.paint, delegation);
   const modeRows = page.options.delegation ? MODE_ROWS : 0;
-  return compact || maxLines < MIN_FULL_LINES + modeRows
-    ? { lines: list.compact(width, width - 2, maxLines), visibleRows: 1 }
-    : list.full(width, width - 2, maxLines);
+  // The border-label switch moves the title between one and three rows;
+  // the full/compact gate and every row budget follow the same paint.
+  const title = list.titleRows(width, "Delegation");
+  const extra = title.length - 1;
+  return compact || maxLines < MIN_FULL_LINES + modeRows + extra
+    ? { lines: list.compact(width, width - 2, maxLines, title), visibleRows: 1 }
+    : list.full(width, width - 2, maxLines, title);
 }
 
 class PresetListPage extends PresetPage {
@@ -190,25 +204,34 @@ class PresetListPage extends PresetPage {
     super(options, state, paint);
   }
 
-  full(width: number, inner: number, maxLines: number): { lines: string[]; visibleRows: number } {
+  full(
+    width: number,
+    inner: number,
+    maxLines: number,
+    title: string[],
+  ): { lines: string[]; visibleRows: number } {
     const { presets, activeName, theme } = this.options;
+    const extra = title.length - 1;
     const modeRows = this.options.delegation ? MODE_ROWS : 0;
     const saveRows =
-      this.state.canSave("global") && maxLines >= MIN_FULL_LINES + modeRows + 1 ? 1 : 0;
+      this.state.canSave("global") && maxLines >= MIN_FULL_LINES + modeRows + extra + 1 ? 1 : 0;
     const summary = this.managementSummary();
     const summaryRows =
-      summary !== undefined && maxLines >= MIN_FULL_LINES + modeRows + saveRows + 1 ? 1 : 0;
+      summary !== undefined && maxLines >= MIN_FULL_LINES + modeRows + extra + saveRows + 1 ? 1 : 0;
     const guidelineRows = this.options.delegation
       ? Math.max(
           0,
-          Math.min(GUIDELINE_ROWS, maxLines - MIN_FULL_LINES - modeRows - saveRows - summaryRows),
+          Math.min(
+            GUIDELINE_ROWS,
+            maxLines - MIN_FULL_LINES - extra - modeRows - saveRows - summaryRows,
+          ),
         )
       : 0;
     const visibleRows = Math.max(
       1,
       Math.min(
         presets.length,
-        maxLines - (MIN_FULL_LINES - 1) - modeRows - guidelineRows - saveRows - summaryRows,
+        maxLines - (MIN_FULL_LINES - 1) - extra - modeRows - guidelineRows - saveRows - summaryRows,
       ),
     );
     const start = Math.max(
@@ -223,7 +246,7 @@ class PresetListPage extends PresetPage {
         " Model preset · new Agents only",
         " Model preset",
       ].find((text) => visibleWidth(text) + visibleWidth(range) + 1 <= inner) ?? " Model preset";
-    const lines = [this.title(width, "Delegation")];
+    const lines = [...title];
     if (this.options.delegation) this.delegation.section(this, lines, width, inner, guidelineRows);
     lines.push(this.row(twoSides(theme.fg("muted", scope), theme.fg("dim", range), inner), inner));
     if (summaryRows) lines.push(this.row(theme.fg("dim", ` ${summary}`), inner));
@@ -247,11 +270,11 @@ class PresetListPage extends PresetPage {
     return { lines, visibleRows };
   }
 
-  compact(width: number, inner: number, maxLines: number): string[] {
+  compact(width: number, inner: number, maxLines: number, title: string[]): string[] {
     const { presets, theme } = this.options;
     const current = presets[this.state.selected];
     const position = current ? `${this.state.selected + 1}/${presets.length}` : "0/0";
-    const lines = [this.title(width, "Delegation")];
+    const lines = [...title];
     if (this.options.delegation && maxLines > PRESET_PICKER_MIN_ROWS)
       lines.push(this.delegation.compactRow(this, lines.length, inner, true));
     if (!current) lines.push(this.row(theme.fg("warning", " No presets available"), inner));
@@ -272,8 +295,12 @@ class PresetListPage extends PresetPage {
           inner,
         ),
       );
-      if (isOffPreset(current)) lines.push(...this.offNoticeRows(inner));
-      else {
+      if (isOffPreset(current)) {
+        // The Off notice is the one optional compact chrome: a labels-off
+        // title can consume its rows on the smallest budgets.
+        const notice = this.offNoticeRows(inner);
+        if (lines.length + notice.length + 2 <= maxLines) lines.push(...notice);
+      } else {
         const slots = this.slotWindow(maxLines - lines.length - 2);
         for (const slot of slots)
           lines.push(

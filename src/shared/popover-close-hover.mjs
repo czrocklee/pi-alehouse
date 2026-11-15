@@ -16,7 +16,7 @@ const METHOD = "handleViewportInput";
  * original: (...args: unknown[]) => unknown, wrapper: (...args: unknown[]) => unknown,
  * descriptor?: PropertyDescriptor }} Bridge */
 /** @typedef {{ host?: object, requestRender(): void,
- * closeHit(width: number): {x: number, width: number} | undefined,
+ * closeHit(width: number): {x: number, width: number, y?: number} | undefined,
  * onGestureInterrupted?(): void }} HoverOptions */
 /** @typedef {{ type: string, button?: string, x?: number, y?: number }} HoverMouseEvent */
 
@@ -151,6 +151,8 @@ function dimensions(host) {
 export function createPopoverCloseHover(options) {
   let disposed = false;
   let paintedWidth = 0;
+  /** @type {{x: number, width: number, y?: number} | undefined} */
+  let paintedHit;
   /** @type {number | undefined} */
   let paintedHeight;
   /** @type {unknown[]} */
@@ -193,6 +195,7 @@ export function createPopoverCloseHover(options) {
   /** @param {boolean} [render] */
   const reset = (render = true) => {
     paintedWidth = 0;
+    paintedHit = undefined;
     paintedHeight = undefined;
     paintedDimensions = [];
     member.clear(render);
@@ -206,19 +209,26 @@ export function createPopoverCloseHover(options) {
       if (disposed) return;
       try {
         const next = dimensions(options.host);
+        const hit = options.closeHit(width);
         const valid =
           enabled &&
           Number.isInteger(width) &&
-          !!options.closeHit(width) &&
-          (height === undefined || (Number.isInteger(height) && height > 0));
+          !!hit &&
+          Number.isInteger(hit.y ?? 0) &&
+          (hit.y ?? 0) >= 0 &&
+          (height === undefined || (Number.isInteger(height) && height > (hit.y ?? 0)));
         if (
           !valid ||
           width !== paintedWidth ||
+          hit?.x !== paintedHit?.x ||
+          hit?.width !== paintedHit?.width ||
+          (hit?.y ?? 0) !== (paintedHit?.y ?? 0) ||
           (height !== undefined && height !== paintedHeight) ||
           next.some((value, index) => value !== paintedDimensions[index])
         )
           member.clear(false);
         paintedWidth = valid ? width : 0;
+        paintedHit = valid && hit ? { ...hit } : undefined;
         if (height !== undefined) paintedHeight = height;
         paintedDimensions = next;
       } catch {
@@ -253,9 +263,13 @@ export function createPopoverCloseHover(options) {
         const hit = options.closeHit(paintedWidth);
         if (
           !hit ||
+          !paintedHit ||
+          hit.x !== paintedHit.x ||
+          hit.width !== paintedHit.width ||
+          (hit.y ?? 0) !== (paintedHit.y ?? 0) ||
           event.type !== "move" ||
           (event.button !== undefined && event.button !== "none") ||
-          event.y !== 0 ||
+          event.y !== (paintedHit.y ?? 0) ||
           event.x === undefined ||
           !Number.isFinite(event.x) ||
           event.x < hit.x ||

@@ -1,5 +1,6 @@
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
+import { onBorderLabelsChange } from "../../shared/popover-chrome.mjs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   Text,
@@ -16,10 +17,10 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ModelPickerPosition } from "./preset-picker.ts";
 import {
-  popoverCloseHit,
-  popoverInlay,
+  popoverChromeCloseHit,
+  popoverLabelRows,
   popoverRow,
-  popoverTitle,
+  popoverTitleRows,
   type PopoverTheme,
 } from "./popover.ts";
 
@@ -85,6 +86,7 @@ export class PresetModelPopover implements Component, Focusable {
   private closePainted = false;
   private closed = false;
   private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
+  private readonly unsubscribeChrome: () => void;
   private targets = new Map<number, Target>();
   private selectedVisible = false;
   /** False when the public tree could not be identified; keyboard then remains
@@ -112,9 +114,15 @@ export class PresetModelPopover implements Component, Focusable {
   ) {
     this.closeHover = createPopoverCloseControl({
       createHover: createPopoverCloseHover,
-      closeHit: popoverCloseHit,
+      closeHit: popoverChromeCloseHit,
       host: options.tui,
       requestRender: () => options.tui?.requestRender(),
+    });
+    // One process-wide appearance switch: close-hit row and body budget move
+    // together, so retire stale hits/capture and request one repaint.
+    this.unsubscribeChrome = onBorderLabelsChange(() => {
+      this.closeHover.reset(false);
+      this.options.tui?.requestRender();
     });
   }
 
@@ -189,6 +197,7 @@ export class PresetModelPopover implements Component, Focusable {
   }
   dispose(): void {
     if (this.closed) return;
+    this.unsubscribeChrome();
     this.closed = true;
     this.closeHover.dispose();
     this.targets.clear();
@@ -210,13 +219,24 @@ export class PresetModelPopover implements Component, Focusable {
     this.visibleModel = undefined;
     if (this.closed) return [];
     const height = Math.max(1, this.options.height());
-    const closable = Number.isFinite(width) && width >= 12 && height >= 5;
+    const inner = width - 2;
+    const bottomRows = popoverLabelRows(
+      this.options.theme,
+      width,
+      this.options.theme.fg("muted", "↑↓ choose · Enter apply · Esc cancel"),
+      "bottom",
+    );
+    // Chrome row counts are independent of hover and the close control; the
+    // emitted title below is rebuilt with both once eligibility is settled.
+    const frameRows =
+      popoverTitleRows(this.options.theme, width, this.options.title, false, false).length +
+      bottomRows.length;
+    const closable = Number.isFinite(width) && width >= 12 && height >= Math.max(5, frameRows + 1);
     if (paintClose) {
       this.closePainted = closable;
       this.closeHover.paint(width, closable);
     }
     if (!closable) return [truncateToWidth("Too small · Esc to cancel", width)];
-    const inner = width - 2;
     const models = this.options.models().filter((model) => model.api !== "pi-virtual");
     const rows = this.nativeRows(inner, models).filter(
       ({ plain }) => plain.trim() && !/^─+$/u.test(plain),
@@ -225,13 +245,19 @@ export class PresetModelPopover implements Component, Focusable {
     // On short screens, reduce its ten-item window around the painted arrow.
     const context =
       height >= 10 ? [this.options.theme.fg("muted", "New Agents only; main unchanged")] : [];
-    const budget = height - 2 - context.length;
+    const budget = height - frameRows - context.length;
     const body = this.fit(rows, budget);
-    if (paintClose) this.closeHover.paint(width, true, body.length + context.length + 2);
+    if (paintClose) this.closeHover.paint(width, true, body.length + context.length + frameRows);
     const complete = (group: Group): boolean =>
       body.filter((row) => row.group === group).length === group.size;
     const result = [
-      popoverTitle(this.options.theme, width, this.options.title, true, this.closeHover.hovered),
+      ...popoverTitleRows(
+        this.options.theme,
+        width,
+        this.options.title,
+        true,
+        this.closeHover.hovered,
+      ),
       ...context.map((text) => popoverRow(this.options.theme, text, inner)),
     ];
     for (const row of body) {
@@ -253,14 +279,7 @@ export class PresetModelPopover implements Component, Focusable {
       }
       result.push(painted);
     }
-    result.push(
-      popoverInlay(
-        this.options.theme,
-        width,
-        this.options.theme.fg("muted", "↑↓ choose · Enter apply · Esc cancel"),
-        "bottom",
-      ),
-    );
+    result.push(...bottomRows);
     return result;
   }
 

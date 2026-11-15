@@ -27,7 +27,9 @@ export type SettingsDocument = {
   effort?: EffortPolicy;
   approval?: ApprovalPreference;
   presets?: Record<string, PresetDefinition>;
-  ui?: { beerMugs?: boolean };
+  /** Appearance-only leaves; omitted consumers render arrows and keep border
+   * labels (beerMugs off, borderLabels on). */
+  ui?: { beerMugs?: boolean; borderLabels?: boolean };
   /** Omitted stays absent; consumers enable skills unless explicitly false. */
   childSkills?: boolean;
 };

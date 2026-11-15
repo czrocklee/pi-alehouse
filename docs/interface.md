@@ -7,10 +7,18 @@ Run-bound intent to the host, which invokes the existing Owner command; only the
 core changes lifecycle state. Panels coordinate through one request/overlay
 protocol so that a closing `ui.custom` cannot pop a newer overlay.
 
+Border and row-count descriptions below assume the default **Border labels: on**.
+The global [Border labels](#border-labels) switch relocates all Alehouse chrome
+inward when off; a label band then costs three rows instead of one. Bare edges
+without a label band and existing interior controls do not gain blank bands.
+Agent details reserve the footer band even when its labels yield completely at
+narrow widths, keeping its height and control coordinates stable as labels return.
+
 ## Close-button feedback
 
 Every Alehouse panel with a top-right `✕` highlights that glyph in bold accent
-when the pointer is over the glyph's single terminal cell. Hover is visual
+when the pointer is over the glyph's single terminal cell. The glyph sits on
+row 0 by default and on the interior title row (row 1) with border labels off. Hover is visual
 only: it does not close a panel, take keyboard focus, select a model or mode,
 or arm an Agent stop. Moving away, hiding the panel, invalidating its geometry
 or disposing it clears the highlight; tiny layouts without `✕` have no hover
@@ -256,6 +264,29 @@ toggle needs no restart and changes no worker behavior. Discarding pending write
 or removing a saved override leaves the current appearance unchanged. When
 inspection is unavailable, the opt-in marker stays `🍺`, never `🍻`, and clicks
 remain disabled.
+
+### Border labels
+
+**Border labels: on/off (all Alehouse panels)** in `/alehouse-settings` is one
+shared appearance switch. It defaults to **on**, preserving titles, tabs,
+close controls and action hints on panel borders. **Off** keeps the frame but
+moves that chrome into interior rows, separated from content by plain rules.
+This applies to Agents, Delegation, model selection, Context, Stats, Approval
+and Usage panels; it does not restyle native Pi or third-party components.
+There are no per-panel overrides. Existing interior controls stay interior.
+
+The toggle takes effect immediately, invalidating old pointer targets and armed
+pane actions without submitting them. Extra chrome rows reduce the available
+body viewport; tiny panels can suppress controls rather than expose unseen
+hit targets. Keyboard navigation remains available where the panel fits.
+
+Saving follows the same scope rules as Beer mugs: session-only initially,
+or queue just `ui.borderLabels` after explicitly selecting global/trusted
+workspace scope. For example, `{"version":2,"ui":{"borderLabels":false}}`
+sets an interior-chrome default. Workspace leaves override global leaves;
+discarding pending writes or removing an override does not undo the live
+choice. Startup does not write settings, and manual file edits require a fresh
+process rather than live-Owner `/reload`.
 
 ## Agent detail and transcript
 
@@ -784,8 +815,8 @@ creation-time route, which may differ from the current picker defaults.
 
 Open **P Settings** in the Delegation panel or run `/alehouse-settings`. Every
 new Pi session starts with save scope **session**. The menu offers **Change save
-scope**, **Agent skills: on/off**, **Beer mugs: on/off**, **Remember current
-worker settings**, **Save pending now**, **Discard pending writes**, **Remove a saved override**, and
+scope**, **Agent skills: on/off**, **Beer mugs: on/off**, **Border labels: on/off
+(all Alehouse panels)**, **Remember current worker settings**, **Save pending now**, **Discard pending writes**, **Remove a saved override**, and
 **Show paths and pending changes**. The beer-mug switch changes the live widget;
 only a persistent save scope queues its preference. Choosing global or
 workspace as the future scope requires a
