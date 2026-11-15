@@ -27,8 +27,16 @@ answer `answer` and spawn `return_to.answer` ≤16384; supplied read `cursor` �
 Values are preserved verbatim, not trimmed or truncated. Missing/blank/overlong
 titles fail `INVALID_PARAMETERS` naming public parameter `label` and its required
 72-unit guidance; other text failures name the exact field/path and limit.
-Unidentifiable structural failures remain generic. Spawn profile/difficulty
-errors retain precedence. Dispatch keeps its separate literal-path checks.
+Identifiable schema failures name a qualified known field/index parameter (for
+example `dispatch.inputs.0`; whole-array and `tree` fields stay
+`dispatch.inputs`/`dispatch.tree`) with bounded resolution, without copied
+user values or unknown property names; see
+[task dispatch](task-dispatch.md) for the diagnostic ordering rule. Spawn
+profile/difficulty errors retain precedence, as do the UTF-16 unit bounds.
+Schema-engine length diagnostics may count approximate graphemes, not code
+points; they are not a public length contract, and public text limits remain
+the UTF-16 bounds enforced independently. Dispatch keeps its separate
+literal-path checks.
 
 The model addresses an **Agent** by name, not an internal Run UUID. A **task**
 is a Run's 1-based rank among that Agent's Runs ordered by enqueue sequence,
@@ -138,12 +146,17 @@ execution has no wall-clock deadline, timer or timed wrap-up. The retired
 `agent_run` it is rejected, not ignored. Optional `agent_run.max_turns` is
 specified under [Run, send and explicit answer](#run-send-and-explicit-answer).
 
-Spawn/run `dispatch` is closed plain data: `inputs` ≤8 paths, `ownership` ≤16
+Spawn/run `dispatch` is closed plain data: `inputs` ≤32 paths, `ownership` ≤16
 paths, `tree` one build-root path and `checks` ≤16 parent-declared identifiers;
 supplied arrays are nonempty with unique entries, and each string is bounded
-to 512 UTF-16 units. Paths have no leading/trailing whitespace and are literal,
-not shell globs or expansions. See [task dispatch](task-dispatch.md) for exact path language,
-profile/external preflight, claims, after rechecks and validation observations.
+to 512 UTF-16 units. When supplied, `inputs` declares required file/directory
+prerequisites Alehouse preflights before task execution; optional
+references belong in the prompt, and inputs are not content injection,
+allowlists, access grants or locks. Paths have no leading/trailing whitespace
+and are literal, not shell globs or expansions. See
+[task dispatch](task-dispatch.md) for exact path language, full input semantics
+and the bound rationale, profile/external preflight, claims, after rechecks and
+validation observations.
 These declarations do not grant permissions or prove that checks ran. In
 particular, `ownership` and `tree` are checked as `path_write`; omit `ownership`
 for read-only tasks, and `tree` cannot create an output-root exception. Relative
@@ -294,7 +307,9 @@ q_ + lowercase_hex(first 16 bytes of SHA256(UTF8(JSON.stringify([
 ```
 
 The schema is `^q_[0-9a-f]{32}$` (34 characters, 128-bit digest). Display and
-validation share this function. It rejects stale/cross-generation references
+validation share this function. Malformed `question_id` input, including its
+length, fails with field-specific guidance to copy the exact pending token,
+not a UTF-16 count. It rejects stale/cross-generation references
 rather than relying on Agent/task names a new Owner could reuse; the negligible
 collision risk is accepted, not claimed impossible. Pending identity is retained
 while Off and explicit observations can still show its token with
@@ -376,10 +391,12 @@ text. Source output crosses only by the existing handoff prefix, shared
 refusal (shape, profiles, token, answer, an already settled non-completed source
 dependency) precedes shared capacity, so it is never reported as `QUEUE_FULL` or
 `OWNER_HISTORY_LIMIT`. Those core refusals carry `parameter` and a resolution;
-argument-schema rejections of malformed input come earlier and name no
-`parameter`. Admission needs one free resident Agent slot (only the scout is
-new) and two free queue entries, history Runs and output reservations; one free
-entry of the last three is not enough, and a compound `QUEUE_FULL` resolution
+argument-schema rejections of malformed input come earlier and, when
+identifiable, likewise name a qualified known field/index parameter with
+bounded resolution; unmapped shapes may omit it. Admission needs one free
+resident Agent slot (only the scout is new) and two free queue entries,
+history Runs and output reservations; one free entry of the last three is not
+enough, and a compound `QUEUE_FULL` resolution
 says two entries are needed. Off, failed eligibility, either preflight or
 any shortfall rejects before admission. The final lease probe before install is
 read-only, so a reentrant lease adapter cannot change what was planned. An

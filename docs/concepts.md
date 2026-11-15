@@ -99,9 +99,15 @@ share its cap, and a saturated provider does not block another. See
 
 ## Dispatch, claims and validation observations
 
-Optional spawn/run `dispatch` declares inputs (≤8), ownership (≤16), one tree
-and checks (≤16), with strings bounded to 512 UTF-16 units. Inputs are existing
-ordinary files/directories; output ownership/tree may be new. Relative paths
+Optional spawn/run `dispatch` declares inputs (≤32), ownership (≤16), one tree
+and checks (≤16), with strings bounded to 512 UTF-16 units. When supplied,
+`inputs` declares required file/directory prerequisites Alehouse preflights
+before execution (existence, file-or-dir type, known policy deny refusal);
+optional references belong in the prompt. Inputs are not content injection,
+allowlists, access grants or locks. Inputs must already exist as ordinary
+files/directories; output ownership/tree may be new. See
+[task dispatch](task-dispatch.md) for full input semantics and the bound
+rationale. Relative paths
 resolve at the Agent's cwd; absolute paths keep their meaning. Literal paths
 are not shell globs/expansions; lexical and nearest-existing-ancestor canonical
 aliases identify scope/conflicts. Profile/external preflight is approximate,

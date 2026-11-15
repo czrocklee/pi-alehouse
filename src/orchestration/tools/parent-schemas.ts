@@ -2,11 +2,12 @@ import { Type, type Static, type TObject } from "typebox";
 import { Check } from "typebox/value";
 import { validDifficulty } from "../core/contracts.ts";
 import { isModelAgentName, MODEL_AGENT_NAME_PATTERN } from "../core/communication-envelope.ts";
-import { validateDispatch } from "../core/dispatch.ts";
+import { DISPATCH_LIMITS, validateDispatch } from "../core/dispatch.ts";
 import { OrchestrationError } from "../core/ports.ts";
 import { QUESTION_ID_PATTERN } from "../core/question-id.ts";
 import { invalidDifficultyResolution } from "../routing.ts";
 import { modelProfileNames } from "./tool-names.ts";
+import { parentSchemaFailure } from "./schema-diagnostics.ts";
 import {
   checkParentTextArguments,
   MODEL_TASK_TITLE_UNITS,
@@ -49,7 +50,7 @@ const waitField = optional(
 const dispatchPath = (description: string) =>
   Type.String({
     minLength: 1,
-    maxLength: 512,
+    maxLength: DISPATCH_LIMITS.stringUnits,
     pattern: "^(?![~@])(?=.*\\S)[^\\x00-\\x1f\\x7f*?[\\]{}'\"`$\\\\]+(?![\\s\\S])",
     description,
   });
@@ -62,10 +63,15 @@ const dispatchPaths = (maxItems: number, description: string) =>
 const dispatchField = optional(
   Type.Object(
     {
-      inputs: optional(dispatchPaths(8, "Input file/directory; must exist when checked.")),
+      inputs: optional(
+        dispatchPaths(
+          DISPATCH_LIMITS.inputs,
+          "If set: preflight prerequisites; must exist. Other refs: prompt.",
+        ),
+      ),
       ownership: optional(
         dispatchPaths(
-          16,
+          DISPATCH_LIMITS.ownership,
           "File/directory to edit or create; needs write permission, one editor per shared file. Omit for read-only tasks.",
         ),
       ),
@@ -78,12 +84,12 @@ const dispatchField = optional(
         Type.Array(
           Type.String({
             minLength: 1,
-            maxLength: 512,
+            maxLength: DISPATCH_LIMITS.stringUnits,
             pattern: "^(?=.*\\S)[^\\x00-\\x1f\\x7f]+(?![\\s\\S])",
             description:
               "A check for this task to run now: an identifier, not a command (globs allowed); not one awaiting a later go-ahead.",
           }),
-          { minItems: 1, maxItems: 16, uniqueItems: true },
+          { minItems: 1, maxItems: DISPATCH_LIMITS.checks, uniqueItems: true },
         ),
       ),
     },
@@ -309,31 +315,49 @@ export function checkParentToolArguments<S extends TObject>(
     }
   }
   checkParentTextArguments(name, raw);
-  const valid = Check(schema, raw);
-  const fields = valid ? (raw as Record<string, unknown>) : {};
-  const addressedNames: unknown[] = [
-    ...(fields.agent === undefined ? [] : [fields.agent]),
-    ...(Array.isArray(fields.agents) ? (fields.agents as unknown[]) : []),
-    ...(Array.isArray(fields.after) ? (fields.after as unknown[]) : []),
+  if (!Check(schema, raw)) throw parentSchemaFailure(schema, raw);
+  const fields = raw as Record<string, unknown>;
+  const addressedNames: (readonly [string, unknown])[] = [
+    ...(fields.agent === undefined ? [] : [["agent", fields.agent] as const]),
+    ...(Array.isArray(fields.agents)
+      ? fields.agents.map((value: unknown, index: number) => [`agents.${index}`, value] as const)
+      : []),
+    ...(Array.isArray(fields.after)
+      ? fields.after.map((value: unknown, index: number) => [`after.${index}`, value] as const)
+      : []),
     ...(fields.return_to && typeof fields.return_to === "object"
-      ? [(fields.return_to as Record<string, unknown>).agent]
+      ? [["return_to.agent", (fields.return_to as Record<string, unknown>).agent] as const]
       : []),
   ];
-  // Preserve the published pattern, but reject JS `$`'s final-newline
-  // exception before admission can create an undeliverable Agent name.
-  if (!valid || addressedNames.some((value) => !isModelAgentName(value)))
+  // Keep core's complete-name admission rule as a defensive boundary check,
+  // retaining the public field/index if it disagrees with schema validation.
+  const invalidName = addressedNames.find(([, value]) => !isModelAgentName(value));
+  if (invalidName)
     throw new OrchestrationError("INVALID_PARAMETERS", {
-      allowed: Object.keys(schema.properties),
-      resolution:
-        "The arguments do not match this tool's schema; check the required fields, their types and bounds.",
+      key: invalidName[0],
+      resolution: `${invalidName[0]} must be a complete Agent name matching the tool's naming pattern.`,
     });
   if (name === "agent_spawn" && fields.return_to !== undefined && fields.profile !== "scout")
     throw new OrchestrationError("INVALID_RETURN_TO", {
       key: "return_to",
       resolution: "Only a scout spawn can return results to a worker's pending question.",
     });
-  if ((name === "agent_spawn" || name === "agent_run") && fields.dispatch !== undefined)
-    validateDispatch(fields.dispatch);
+  if ((name === "agent_spawn" || name === "agent_run") && fields.dispatch !== undefined) {
+    try {
+      validateDispatch(fields.dispatch);
+    } catch (error) {
+      if (error instanceof OrchestrationError && error.code === "INVALID_DISPATCH") {
+        const { key, index } = error.details;
+        const suffix =
+          typeof index === "number" && Number.isSafeInteger(index) && index >= 0 ? `.${index}` : "";
+        throw new OrchestrationError(error.code, {
+          ...error.details,
+          key: typeof key === "string" ? `dispatch.${key}${suffix}` : "dispatch",
+        });
+      }
+      throw error;
+    }
+  }
   if (name === "agent_read" && fields.task !== undefined && fields.cursor !== undefined)
     throw new OrchestrationError("INVALID_PARAMETERS", {
       key: "task",

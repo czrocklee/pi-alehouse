@@ -296,7 +296,7 @@ export function assertCallerTools(tools) {
     ])
       assert.match(dispatch.description, fact);
     for (const [field, limit] of [
-      ["inputs", 8],
+      ["inputs", 32],
       ["ownership", 16],
       ["checks", 16],
     ]) {
@@ -317,6 +317,11 @@ export function assertCallerTools(tools) {
     assert.match(dispatch.properties.tree.description, /conflict within this session/);
     assert.match(dispatch.properties.tree.description, /other sessions are only advised/);
     assert.doesNotMatch(dispatch.properties.tree.description, /Owner/);
+    // The field is optional; when set, inputs are prerequisites preflighted
+    // before execution, not references or grants.
+    for (const fact of [/prerequisites/i, /preflight/i, /must (already )?exist/])
+      assert.match(dispatch.properties.inputs.items.description, fact);
+    assert.doesNotMatch(dispatch.properties.inputs.items.description, /required/i);
     for (const fact of [
       /edit or create/,
       /write permission/,

@@ -67,6 +67,7 @@ before changing contracts.
 
 ## Validation
 
+- Hold a high review bar: assess every finding, including optional nitpicks; fix valid issues or explicitly justify leaving them unchanged.
 - One explicitly delegated owner runs the full gate after shared
   source/policy/schema changes are frozen; other tasks run only their assigned
   focused checks.

@@ -3,6 +3,7 @@ import test from "node:test";
 import { Check } from "typebox/value";
 import { createOwnerTools } from "../../dist/orchestration/tools/parent-tools.js";
 import { packCommunication } from "../../dist/orchestration/core/communication-packer.js";
+import { DISPATCH_LIMITS } from "../../dist/orchestration/core/dispatch.js";
 
 // Actual model schemas, checked/prepared arguments and tool action bodies.
 // The core admission/IO boundary is a capture-only mock, not a claim/preflight,
@@ -155,15 +156,17 @@ for (const name of ["agent_spawn", "agent_run"]) {
       "ownership",
       "tree",
     ]);
-    assert.equal(dispatch.properties.tree.maxLength, 512);
+    assert.equal(DISPATCH_LIMITS.inputs, 32);
+    assert.equal(dispatch.properties.tree.maxLength, DISPATCH_LIMITS.stringUnits);
     for (const [field, count] of [
-      ["inputs", 8],
+      ["inputs", 32],
       ["ownership", 16],
       ["checks", 16],
     ]) {
       const array = dispatch.properties[field];
       assert.equal(array.minItems, 1);
       assert.equal(array.maxItems, count);
+      assert.equal(array.maxItems, DISPATCH_LIMITS[field]);
       assert.equal(array.uniqueItems, true);
       assert.equal(array.items.type, "string");
       assert.equal(array.items.minLength, 1);
@@ -173,7 +176,7 @@ for (const name of ["agent_spawn", "agent_run"]) {
       {},
       { inputs: ["input/space name.txt"] },
       {
-        inputs: Array.from({ length: 8 }, (_, i) => `input-${i}`),
+        inputs: Array.from({ length: 32 }, (_, i) => `input-${i}`),
         ownership: Array.from({ length: 16 }, (_, i) => `output-${i}`),
         tree: "new/build-tree",
         checks: Array.from({ length: 16 }, (_, i) => `test/${i}/**/*.test.mjs`),
@@ -210,7 +213,7 @@ for (const name of ["agent_spawn", "agent_run"]) {
       { tree: 4 },
       { inputs: "not-array" },
       { checks: [4] },
-      { inputs: Array.from({ length: 9 }, (_, i) => `i${i}`) },
+      { inputs: Array.from({ length: 33 }, (_, i) => `i${i}`) },
       { ownership: Array.from({ length: 17 }, (_, i) => `o${i}`) },
       { checks: Array.from({ length: 17 }, (_, i) => `c${i}`) },
       ...["inputs", "ownership", "checks"].map((key) => ({ [key]: ["x".repeat(513)] })),
@@ -251,6 +254,55 @@ for (const name of ["agent_spawn", "agent_run"]) {
       await assert.rejects(a.execute(name, raw), invalid, JSON.stringify(dispatch));
     }
     assert.deepEqual(a.submissions, [], "malformed declarations never reach the core preparer");
+  });
+
+  test(`${name} identifies bounded dispatch errors without echoing input values`, async () => {
+    const a = adapter();
+    for (const [dispatch, parameter, resolution] of [
+      [
+        { inputs: Array.from({ length: 33 }, (_, i) => `private-input-${i}`) },
+        "dispatch.inputs",
+        /32.*33/,
+      ],
+      [{ tree: "🚀".repeat(257) }, "dispatch.tree", /512 UTF-16 units.*514/],
+      [{ inputs: [" private-input"] }, "dispatch.inputs.0", /literal path.*padding/],
+      [{ inputs: ["private-input "] }, "dispatch.inputs.0", /literal path.*padding/],
+      [{ inputs: ["valid", "private-input "] }, "dispatch.inputs.1", /literal path.*padding/],
+      [{ inputs: ["a".repeat(513)] }, "dispatch.inputs.0", /512 UTF-16 units.*513/],
+      [{ checks: ["🚀".repeat(257)] }, "dispatch.checks.0", /512 UTF-16 units.*514/],
+    ]) {
+      const raw = a.args(name, { dispatch });
+      const matches = (error) => {
+        const detail = JSON.parse(error.message).error;
+        assert(["INVALID_PARAMETERS", "INVALID_DISPATCH"].includes(detail.code));
+        assert.equal(detail.parameter, parameter);
+        assert.match(detail.resolution, resolution);
+        assert.equal(Object.hasOwn(detail, "path"), false);
+        assert.doesNotMatch(error.message, /private-input|🚀/);
+        return true;
+      };
+      assert.throws(() => a.tool(name).prepareArguments(raw), matches);
+      await assert.rejects(a.execute(name, raw), matches);
+    }
+    assert.deepEqual(a.submissions, [], "bad declarations never reach admission");
+    for (const field of ["inputs", "ownership", "checks", "tree"]) {
+      const boundary = "🚀".repeat(256);
+      const dispatch = { [field]: field === "tree" ? boundary : [boundary] };
+      assert.deepEqual(
+        a.tool(name).prepareArguments(a.args(name, { dispatch })).dispatch,
+        dispatch,
+      );
+    }
+  });
+
+  test(`${name} accepts the formerly rejected nine-path review declaration`, async () => {
+    const a = adapter();
+    // Preserve the failing shape, not private transcript paths or task text.
+    const inputs = Array.from({ length: 9 }, (_, i) => `source/component-${i}.ts`);
+    const raw = a.args(name, { dispatch: { inputs } });
+    const prepared = a.tool(name).prepareArguments(raw);
+    await a.execute(name, prepared);
+    assert.deepEqual(a.submissions[0].request.dispatch.inputs, inputs);
   });
 
   test(`${name} revalidates dispatch after hooks mutate prepared arguments`, async () => {

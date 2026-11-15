@@ -133,6 +133,47 @@ async function ask(port, question = "Which safe next step?") {
 const serial = { concurrency: false };
 const twoDays = 2 * 24 * 60 * 60 * 1000;
 
+test(
+  "direct core admission rejects 33 inputs before preflight and starts 32 with rechecks",
+  serial,
+  async (t) => {
+    const dispatch = dispatchPort();
+    const { controller: c, ports } = await memoryFixture(t, { controller: { dispatch } });
+    const inputs = Array.from({ length: 32 }, (_, i) => `input-${i}`);
+    await assert.rejects(
+      c.submit(
+        "over-input-limit",
+        task("too many inputs", { dispatch: { inputs: [...inputs, "extra"] } }),
+      ),
+      (failure) => {
+        assert.equal(failure.code, "INVALID_DISPATCH");
+        assert.equal(failure.details.key, "inputs");
+        assert.match(failure.details.resolution, /32.*33/);
+        return true;
+      },
+    );
+    assert.equal(c.stats().runs, 0);
+    assert.equal(c.claims.size, 0);
+    assert.equal(ports.length, 0);
+    assert.deepEqual(dispatch.prepares, []);
+    const accepted = await c.submit(
+      "input-limit",
+      task("required inputs", { dispatch: { inputs } }),
+    );
+    await until(() => ports[0]?.streaming);
+    assert.equal(
+      dispatch.prepares.length,
+      2,
+      "admission and execution each preflight the declaration",
+    );
+    for (const preparation of dispatch.prepares)
+      assert.deepEqual(preparation.declaration.inputs, inputs);
+    assert(ports[0].calls[0].prompt.includes(JSON.stringify({ inputs })));
+    ports[0].finish();
+    await ended(c, accepted);
+  },
+);
+
 for (const code of ["DISPATCH_INPUT_MISSING", "PREFLIGHT_DENIED"]) {
   test(
     `queued answer ${code} restores its pending question, claim and existing lease`,

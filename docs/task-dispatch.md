@@ -14,7 +14,7 @@ with this contract; documentation alone is not acceptance evidence.
 
 ```ts
 dispatch?: {
-  inputs?: string[];    // at most 8 literal input paths
+  inputs?: string[];    // at most 32 literal input paths
   ownership?: string[]; // at most 16 literal output/resource paths
   tree?: string;        // one literal build-tree root
   checks?: string[];    // at most 16 parent-declared check identifiers
@@ -26,14 +26,39 @@ Supplied arrays must be nonempty and contain unique entries. Each entry and
 parent's planned checks (for example test-file/glob identifiers or platform),
 not executable shell commands, evidence they ran or permission to execute them.
 It is not a full/focused scheduler enum. There is no dispatch override that
-bypasses a resource conflict. Omitting dispatch adds no dispatch claim or
+bypasses a resource conflict.
+
+When supplied, `inputs` declares required file/directory prerequisites Alehouse
+must preflight before task execution: existence, file-or-dir type and
+known policy deny refusal. Optional references belong in the prompt, not
+`inputs`; a reading list is not categorically disallowed when its entries are
+genuinely mandatory inputs. `inputs` provide no content injection, allowlist,
+access grant or input locks, and preflight performs no recursive directory
+scan; declared paths stay visible to the child in the task preface. For an
+`after` task, admission defers input existence and file-or-dir type
+classification to the pump recheck; path interpretation and known policy
+denials are still checked at admission. The bound of 32 is a pragmatic bounded
+engineering default, not a measured safety or performance threshold and not a
+byte cap. Omitting dispatch adds no dispatch claim or
 validation observation. Task execution has no wall-clock deadline or timed warning.
 
 Path fields are literal relative/absolute filesystem paths, not shell words or
 shell globs. No expansion is performed. Reject leading/trailing whitespace,
 glob syntax, control characters,
 shell quoting, `$`, backslash and leading `~` or `@`; do not wrap a path in shell
-quotes to express spaces. Relative paths resolve against the Agent's
+quotes to express spaces. Raw model-tool schema and `INVALID_DISPATCH`
+validation diagnostics name the qualified known field/index parameter (for
+example `dispatch.inputs.0`; whole-array and `tree` fields stay
+`dispatch.inputs`/`dispatch.tree`) with bounded resolution, without copying
+unknown property names or user values into error details. Within raw schema
+diagnostics, declared array length bounds are checked first, so count errors
+take priority over item errors at any sizes; mapping then reports the first
+safely interpretable item error, skips unmappable ones and falls back to the
+generic diagnostic only when none is safely mappable. This is a bounded
+ordering rule, not a universal first-error promise or a CPU/memory/time
+guarantee. Runtime preflight and missing-input/inspection errors intentionally
+report declared and normalized paths and are unchanged. Relative paths resolve
+against the Agent's
 **cwd**, shared with the parent; absolute paths keep their meaning. Paths use
 lexical absolute and nearest-existing-ancestor canonical aliases for
 permission, external scope, conflicts and tree identity, including new outputs

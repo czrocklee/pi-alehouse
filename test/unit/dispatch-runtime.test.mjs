@@ -112,6 +112,36 @@ test("dispatch prepare is synchronous, copied, literal, and keeps all resolved d
   );
 });
 
+test("32 input prerequisites are preflighted and revalidated; 33 fail before permission IO", (t) => {
+  const f = fixture(t),
+    runtime = f.runtime(),
+    inputs = Array.from({ length: 32 }, (_, i) => `input-${i}`);
+  for (const path of inputs) writeFileSync(join(f.cwd, path), "fixture");
+  const prepared = runtime.prepare({ inputs }, f.context);
+  assert.equal(prepared.inputs.length, 32);
+  assert.deepEqual(
+    f.calls.map((call) => call.value),
+    inputs.map((path) => join(f.cwd, path)),
+  );
+  f.calls.length = 0;
+  assert.throws(
+    () => runtime.prepare({ inputs: [...inputs, "input-32"] }, f.context),
+    (failure) => {
+      assert.equal(failure.code, "INVALID_DISPATCH");
+      assert.equal(failure.details.key, "inputs");
+      assert.match(failure.details.resolution, /32.*33/);
+      return true;
+    },
+  );
+  assert.deepEqual(f.calls, [], "count validation rejects before permission preflight");
+  rmSync(join(f.cwd, inputs.at(-1)));
+  assert.throws(
+    () => runtime.prepare({ inputs }, f.context),
+    error("DISPATCH_INPUT_MISSING", "inputs", inputs.at(-1)),
+  );
+  assert.equal(f.calls.length, 32, "revalidation still checks every declared input permission");
+});
+
 test("validateDispatch rejects ambiguous path language before permissions or IO classification", (t) => {
   const f = fixture(t);
   for (const path of [

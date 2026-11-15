@@ -1,8 +1,17 @@
 import { isAbsolute, relative } from "node:path";
 import { OrchestrationError } from "./ports.ts";
 
+/** Shared declaration bounds, not a filesystem-time or encoded-byte budget. */
+export const DISPATCH_LIMITS = Object.freeze({
+  inputs: 32,
+  ownership: 16,
+  checks: 16,
+  stringUnits: 512,
+});
+
 /** Parent declarations, not permissions or evidence that checks were executed. */
 export interface Dispatch {
+  /** Required file/directory prerequisites to preflight, not an access allowlist. */
   inputs?: string[];
   ownership?: string[];
   tree?: string;
@@ -66,32 +75,58 @@ export interface DispatchPort {
 }
 
 export function validateDispatch(value: unknown): asserts value is Dispatch {
+  const fail = (resolution: string, key?: string, index?: number): never => {
+    throw new OrchestrationError("INVALID_DISPATCH", {
+      ...(key === undefined ? {} : { key }),
+      ...(index === undefined ? {} : { index }),
+      resolution,
+    });
+  };
   if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new OrchestrationError("INVALID_DISPATCH");
+    fail("dispatch must be an object with only inputs, ownership, tree and checks.");
   const fields = value as Record<string, unknown>;
   if (Object.keys(fields).some((key) => !["inputs", "ownership", "tree", "checks"].includes(key)))
-    throw new OrchestrationError("INVALID_DISPATCH");
-  const word = (item: unknown, path: boolean): item is string =>
-    typeof item === "string" &&
-    !!item.trim() &&
-    item.length <= 512 &&
+    fail("Remove undeclared dispatch fields; use only inputs, ownership, tree and checks.");
+  const word = (item: unknown, key: "inputs" | "ownership" | "checks" | "tree", index?: number) => {
+    const parameter = `dispatch.${key}${index === undefined ? "" : `.${index}`}`;
+    if (typeof item !== "string" || !item.trim())
+      fail(`${parameter} must be a nonblank string.`, key, index);
+    const text = item as string;
+    if (text.length > DISPATCH_LIMITS.stringUnits)
+      fail(
+        `${parameter} must contain at most ${DISPATCH_LIMITS.stringUnits} UTF-16 units; received ${text.length}.`,
+        key,
+        index,
+      );
     // eslint-disable-next-line no-control-regex -- declarations must not contain ASCII control characters
-    !/[\x00-\x1f\x7f]/.test(item) &&
-    (!path || (item === item.trim() && !/[*?[\]{}'"`$\\]/.test(item) && !/^[~@]/.test(item)));
+    if (/[\x00-\x1f\x7f]/.test(text))
+      fail(`${parameter} must not contain ASCII control characters.`, key, index);
+    if (
+      key !== "checks" &&
+      (text !== text.trim() || /[*?[\]{}'"`$\\]/.test(text) || /^[~@]/.test(text))
+    )
+      fail(
+        `${parameter} must be a literal path without padding (leading/trailing whitespace), globs, shell quoting or expansion.`,
+        key,
+        index,
+      );
+  };
   for (const key of ["inputs", "ownership", "checks"] as const) {
     const items = fields[key];
-    if (
-      items !== undefined &&
-      (!Array.isArray(items) ||
-        !items.length ||
-        items.length > (key === "inputs" ? 8 : 16) ||
-        Array.from(items).some((item) => !word(item, key !== "checks")) ||
-        new Set(items).size !== items.length)
-    )
-      throw new OrchestrationError("INVALID_DISPATCH", { key });
+    if (items === undefined) continue;
+    if (!Array.isArray(items)) fail(`dispatch.${key} must be an array.`, key);
+    const entries = items as unknown[];
+    if (!entries.length) fail(`dispatch.${key} must contain at least 1 item.`, key);
+    if (entries.length > DISPATCH_LIMITS[key])
+      fail(
+        `dispatch.${key} accepts at most ${DISPATCH_LIMITS[key]} items; received ${entries.length}.`,
+        key,
+      );
+    Array.from(entries).forEach((item, index) => word(item, key, index));
+    if (new Set(entries).size !== entries.length)
+      fail(`dispatch.${key} must contain unique entries; remove duplicates.`, key);
   }
-  if (fields.tree !== undefined && !word(fields.tree, true))
-    throw new OrchestrationError("INVALID_DISPATCH", { key: "tree" });
+  if (fields.tree !== undefined) word(fields.tree, "tree");
 }
 export function pathsOverlap(left: DispatchPath, right: DispatchPath): boolean {
   const within = (base: string, path: string): boolean => {

@@ -156,7 +156,11 @@ resource claims, execution limits and validation observations. Core owns
 atomic claim admission, dependency/answer lineage and confirmed cleanup;
 runtime ports own synchronous profile/external preflight, path aliases, trusted
 Git capture and local tree locks. Do not put claim/IO side effects into tool
-preparation or accepted-request replay. Checks capture superproject-only partial
+preparation or accepted-request replay. Shared core `DISPATCH_LIMITS` bounds
+dispatch at 32 inputs / 16 ownership / 16 checks with 512-unit strings, and raw
+tool argument/schema diagnostics derive bounded `dispatch.<field>.<index>`
+parameters without copying unknown names or user values. Checks capture
+superproject-only partial
 metadata at execution start; optional failures are unknown/advisory, not Owner
 faults. Preserve pending-question claims and any lease on pre-input answer
 rollback. Keep optional public notes in pre-commit packing, never thin controls
