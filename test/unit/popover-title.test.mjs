@@ -10,7 +10,7 @@ const metrics = {
   width: visibleWidth,
 };
 
-for (const width of [0, 1, 2, 3, 4, 8, 9, 12, 24, 64])
+for (const width of [0, 1, 2, 3, 4, 8, 9, 10, 11, 12, 24, 64])
   for (const title of ["Stats", "用量 · 👩‍💻", "a very long title that must be clipped"])
     test(`shared title frame preserves width and close placement: ${width}/${title}`, () => {
       const row = popoverTitleRow(theme, width, title, metrics, true);
@@ -20,9 +20,10 @@ for (const width of [0, 1, 2, 3, 4, 8, 9, 12, 24, 64])
       if (width >= 4) assert(row.startsWith("╭─"));
       const close = popoverCloseHit(width);
       if (close) {
-        assert(row.endsWith(" × ─╮"));
-        assert.equal(close.x, width - 5);
-      } else assert(!row.includes("×"));
+        assert(row.endsWith(" ✕ ─╮"));
+        assert.equal(close.x, width - 4);
+        assert.equal(close.width, 1);
+      } else assert(!row.includes("✕"));
     });
 
 for (const [themeName, ruleTheme] of [
@@ -42,7 +43,7 @@ for (const [themeName, ruleTheme] of [
         assert.equal(stripTerminalSequences(row), expected);
         // Styling stays whole, with the kind's original color and no clipped controls.
         assert.equal(row, width <= 0 ? "" : ruleTheme.fg(color, expected));
-        assert(!row.includes("×"));
+        assert(!row.includes("✕"));
         if (width >= 2) {
           assert(expected.startsWith(left));
           assert(expected.endsWith(right));
@@ -55,15 +56,15 @@ test("close hover emphasizes only the glyph without changing text, width or hit 
       `\x1b[${color === "accent" ? 36 : color === "muted" ? 2 : 34}m${text}\x1b[39m`,
     bold: (text) => `\x1b[1m${text}\x1b[22m`,
   };
-  for (const width of [0, 1, 8, 9, 24, 64]) {
+  for (const width of [0, 1, 8, 9, 10, 11, 24, 64]) {
     const idle = popoverTitleRow(styled, width, "用量 · 👩‍💻", metrics, true);
     const hovered = popoverTitleRow(styled, width, "用量 · 👩‍💻", metrics, true, true);
     assert.equal(stripTerminalSequences(hovered), stripTerminalSequences(idle));
     assert.equal(visibleWidth(hovered), width);
     if (popoverCloseHit(width)) {
       assert.notEqual(hovered, idle);
-      assert(hovered.includes("\x1b[36m\x1b[1m×\x1b[22m\x1b[39m"));
-      assert(idle.includes("\x1b[2m×\x1b[39m"));
+      assert(hovered.includes("\x1b[36m\x1b[1m✕\x1b[22m\x1b[39m"));
+      assert(idle.includes("\x1b[2m✕\x1b[39m"));
     } else assert.equal(hovered, idle, "no hover for an absent close control");
   }
 });

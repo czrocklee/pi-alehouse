@@ -50,7 +50,7 @@ function hover(t, f, component) {
   assert.notEqual(hovered[0], initial[0]);
   assert.equal(stripTerminalSequences(hovered[0]), stripTerminalSequences(initial[0]));
   assert.deepEqual(hovered.slice(1), initial.slice(1));
-  f.tui.handleViewportInput(move(78));
+  f.tui.handleViewportInput(move(76));
   assert.equal(f.renders(), before + 1);
   assert.deepEqual(component.render(80), hovered, "normal repaint preserves hover");
   f.tui.handleViewportInput(move(5, 2));
@@ -310,7 +310,7 @@ test("model selector too-small/invalidation paints clear hover and unseen close 
   f.view.render(80);
   f.tui.handleViewportInput(move());
   f.height(4);
-  assert(!f.view.render(80)[0].includes("×"));
+  assert(!f.view.render(80)[0].includes("✕"));
   assert.equal(f.view.canSelect(model), false, "too-small paint cannot confirm unseen selection");
   assert.equal(f.tui.handleViewportInput, f.original);
   f.tui.handleViewportInput(move());
@@ -323,7 +323,7 @@ test("model selector too-small/invalidation paints clear hover and unseen close 
   assert.equal(f.tui.handleViewportInput, f.original);
   f.view.render(80);
   f.tui.handleViewportInput(move());
-  assert(!f.view.render(11)[0].includes("×"));
+  assert(!f.view.render(11)[0].includes("✕"));
   f.tui.handleViewportInput({ type: "click", button: "left", x: 7, y: 0 });
   assert.equal(f.tui.handleViewportInput, f.original);
   assert.deepEqual(f.cancelled, [], "narrow paint also has no invisible close target");

@@ -8,20 +8,16 @@ import {
   popoverSide,
   popoverTitleRow,
 } from "../../shared/popover-frame.mjs";
-export {
-  POPOVER,
-  isPopoverCloseClick,
-  popoverCloseHit,
-  popoverSide,
-} from "../../shared/popover-frame.mjs";
+export { POPOVER, popoverCloseHit, popoverSide } from "../../shared/popover-frame.mjs";
 
 /**
  * Rounded chrome for every orchestration / status popover. Top and bottom edges are
  * `borderAccent`; sides and interior dividers are `borderMuted`; a simple title
  * is `accent` and bold. The floating detail pane inlays its own title/footer
  * into the same outer edge rather than spending extra rows on bare rules.
- * A popover the pointer can reach closes from ` × ─╮` at the right end of its
- * top edge; `isPopoverCloseClick` hit-tests those same columns.
+ * A popover the pointer can reach closes from ` ✕ ─╮` at the right end of its
+ * top edge. `popoverCloseHit` supplies the glyph's single-cell geometry;
+ * consumers use the shared close control to own press/release gestures.
  *
  * The independent status-footer bundle shares only the neutral framing
  * primitives in src/shared, never this Alehouse UI module.
@@ -34,7 +30,7 @@ export type PopoverTheme = {
 
 const outer = (theme: PopoverTheme, text: string): string => theme.fg("borderAccent", text);
 
-/** `╭─ Title ─────────╮`, or `╭─ Title ───── × ─╮` when closable. */
+/** `╭─ Title ─────────╮`, or `╭─ Title ───── ✕ ─╮` when closable. */
 export function popoverTitle(
   theme: PopoverTheme,
   width: number,

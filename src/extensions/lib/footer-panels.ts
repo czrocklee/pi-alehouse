@@ -5,7 +5,8 @@ import {
   HIDE_TRANSIENT_OVERLAYS_EVENT,
   PINNED_POPOVER_YIELD_EVENT,
 } from "../../shared/overlay-protocol.mjs";
-import { isPopoverCloseClick, popoverCloseHit } from "../../shared/popover-frame.mjs";
+import { popoverCloseHit } from "../../shared/popover-frame.mjs";
+import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import {
   POPOVER_DOCK_ROWS,
@@ -60,7 +61,7 @@ export function createFooterPanels(options: {
   let breakdownPlacement: string | undefined;
   let breakdownPressed = false;
   let suppressBreakdownClick = false;
-  let breakdownHover: ReturnType<typeof createPopoverCloseHover> | undefined;
+  let breakdownHover: ReturnType<typeof createPopoverCloseControl> | undefined;
   const maxBreakdownRows = () =>
     (member?.available() ?? tui.terminal.rows - POPOVER_DOCK_ROWS) - BREAKDOWN_CHROME;
   const hideBreakdown = () => {
@@ -99,17 +100,31 @@ export function createFooterPanels(options: {
       return lines;
     },
     handleMouse(event: TuiMouseEvent) {
+      // Native dispatch can still send its captured synthetic click after the
+      // release synchronously hid this panel and disposed its close control.
+      // Consume it at the closed component boundary, not through a new panel.
+      if (!member)
+        return event.type === "click" && event.button === "left" ? { handled: true } : undefined;
       if (event.type === "press" && event.button === "left") {
         breakdownPressed = true;
         suppressBreakdownClick = false;
       }
       if (!member || breakdownPlacement !== placement(member)) breakdown.resetPointer();
-      breakdownHover?.mouse(event);
+      // Eligibility is a flag, not a gate: the control still observes the event
+      // so it can cancel an in-progress gesture the panel would reject.
+      const close = breakdownHover?.mouse(
+        event,
+        !!member && !!paintedWidth && !suppressBreakdownClick,
+      );
+      if (close) {
+        if (event.type === "click") breakdownPressed = false;
+        if (close.close) hideBreakdown();
+        return { handled: true };
+      }
       if (event.type !== "click" || event.button !== "left") return undefined;
       breakdownPressed = false;
       if (suppressBreakdownClick) return undefined;
       // Only the close control closes; clicks on the table leave it pinned.
-      if (isPopoverCloseClick(event, paintedWidth)) hideBreakdown();
       return { handled: true };
     },
   };
@@ -132,7 +147,8 @@ export function createFooterPanels(options: {
     if (member || tui.mode !== "fullscreen") return;
     breakdownPressed = suppressBreakdownClick = false;
     member = joinPopoverStack(tui);
-    breakdownHover = createPopoverCloseHover({
+    breakdownHover = createPopoverCloseControl({
+      createHover: createPopoverCloseHover,
       closeHit: popoverCloseHit,
       host: tui,
       requestRender: () => tui.requestRender(),

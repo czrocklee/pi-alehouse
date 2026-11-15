@@ -86,7 +86,7 @@ for (const editing of [false, true]) {
   test(`picker ${editing ? "effort" : "list"} close hover is feedback only and survives repaint`, (t) => {
     const f = fixture(t, { startInEffort: editing });
     const initial = f.component.render(80);
-    assert(initial[0].includes("×"));
+    assert(initial[0].includes("✕"));
     const before = f.renders();
     assert.equal(f.tui.handleViewportInput(move(76)), undefined);
     assert.equal(f.renders(), before + 1);
@@ -95,7 +95,7 @@ for (const editing of [false, true]) {
     assert.equal(stripTerminalSequences(hovered[0]), stripTerminalSequences(initial[0]));
     assert.deepEqual(hovered.slice(1), initial.slice(1), "only the top close chrome changes");
     assert(hovered.every((line) => visibleWidth(line) <= 80));
-    f.tui.handleViewportInput(move(78));
+    f.tui.handleViewportInput(move(76));
     assert.equal(f.renders(), before + 1, "repeated movement is render-deduplicated");
     assert.deepEqual(f.component.render(80), hovered);
     f.tui.handleViewportInput(move(5, 2));
@@ -168,7 +168,7 @@ test("picker empty/narrow/docked paints and invalidation retire hover without hi
   assert.equal(f.tui.handleViewportInput, f.originalDispatch);
   const docked = fixture(t, { pointer: false });
   const lines = docked.component.render(80);
-  assert(!lines[0].includes("×"));
+  assert(!lines[0].includes("✕"));
   docked.tui.handleViewportInput(move(76));
   assert.deepEqual(docked.component.render(80), lines);
 });

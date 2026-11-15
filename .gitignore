@@ -4,6 +4,7 @@ node_modules/
 /generated/
 /.generated-build-*/
 /.evidence/
+/docs/plan/
 coverage/
 artifacts/
 .cache/

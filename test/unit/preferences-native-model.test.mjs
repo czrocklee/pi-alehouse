@@ -859,7 +859,7 @@ test("floating native selector retains rounded frame, IME search focus and nativ
   );
   const lines = picker.component.render(74).map(stripTerminalSequences);
   assert(lines[0].startsWith("╭") && lines[0].endsWith("╮"));
-  assert(lines[0].includes("×"));
+  assert(lines[0].includes("✕"));
   assert(lines.at(-1).startsWith("╰") && lines.at(-1).endsWith("╯"));
   assert(lines.every((line) => visibleWidth(line) <= 74));
   picker.component.focused = true;
@@ -1005,7 +1005,7 @@ test(
 );
 
 test(
-  "floating native × closes only its own model selection without publishing or dirtying settings",
+  "floating native ✕ closes only its own model selection without publishing or dirtying settings",
   { timeout: 5000 },
   async (t) => {
     const f = await fixture(t);
@@ -1015,7 +1015,7 @@ test(
     const picker = await waitForPicker(c, 0),
       width = 68;
     const lines = picker.component.render(width).map(stripTerminalSequences),
-      x = lines[0].indexOf("×");
+      x = lines[0].indexOf("✕");
     assert(x > 0);
     mouseClick(picker, x, 0, width, lines.length);
     await editing;

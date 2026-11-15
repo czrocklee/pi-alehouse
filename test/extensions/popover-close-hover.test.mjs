@@ -3,7 +3,7 @@ import test from "node:test";
 import { createPopoverCloseHover } from "../../src/shared/popover-close-hover.mjs";
 import { popoverCloseHit } from "../../src/shared/popover-frame.mjs";
 
-const inside = { type: "move", button: "none", x: 15, y: 0 };
+const inside = { type: "move", button: "none", x: 16, y: 0 };
 
 function fixture(t, factory = createPopoverCloseHover, closeHit = popoverCloseHit) {
   let receive = () => undefined;
@@ -41,11 +41,13 @@ test("only the painted top-row closing tail accepts button-free movement", (t) =
   h.dispatch();
   assert.equal(h.tracker.hovered, false, "unpainted geometry is dead");
   h.tracker.paint(20);
-  for (const x of [15, 16, 17, 18, 19]) {
+  h.dispatch({ type: "move", x: 16, y: 0 });
+  assert.equal(h.tracker.hovered, true, "the ✕ cell itself is the whole hit");
+  assert.equal(h.renders, 1, "repeated motion inside the same cell does not repaint");
+  for (const x of [15, 17, 18, 19]) {
     h.dispatch({ type: "move", x, y: 0 });
-    assert.equal(h.tracker.hovered, true, `tail column ${x}`);
+    assert.equal(h.tracker.hovered, false, `adjacent tail column ${x} is body`);
   }
-  assert.equal(h.renders, 1, "repeated motion inside the same tail does not repaint");
   for (const event of [
     { ...inside, x: 14 },
     { ...inside, x: 20 },
@@ -188,17 +190,17 @@ test("disable, narrow paint, resized geometry, reset and disposal retire stale h
     assert.equal(h.tracker.hovered, false, `narrow width ${width}`);
   }
   h.tracker.paint(9);
-  h.dispatch({ ...inside, x: 4 });
+  h.dispatch({ ...inside, x: 5 });
   assert.equal(h.tracker.hovered, true, "nine columns is the shared minimum");
   h.tracker.paint(30);
   h.dispatch();
   assert.equal(h.tracker.hovered, false, "old width's tail is no longer a hit");
-  h.dispatch({ ...inside, x: 25 });
+  h.dispatch({ ...inside, x: 26 });
   assert.equal(h.tracker.hovered, true);
   h.tracker.reset();
   assert.equal(h.tracker.hovered, false);
   assert.equal(h.host.handleViewportInput, h.original, "reset releases the last bridge reference");
-  h.dispatch({ ...inside, x: 25 });
+  h.dispatch({ ...inside, x: 26 });
   assert.equal(h.tracker.hovered, false, "reset also retires painted geometry");
   h.tracker.paint(20);
   h.dispatch();

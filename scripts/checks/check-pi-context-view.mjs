@@ -1657,24 +1657,32 @@ test("4000-row basis/mode refresh rebuilds metrics once without reshuffling old 
   assert.equal(m.view.detail.id, oldDetail);
 });
 
-test("snapshot failures redact errors; close tail's entire five columns close exactly once; dispose is inert", () => {
+test("snapshot failures redact errors; only the close glyph cell closes once; dispose is inert", () => {
   const failed = mount({ failSnapshot: true });
   assert.match(text(failed), /Context unavailable/);
   assert.doesNotMatch(text(failed), /SECRET ERROR/);
-  for (let x = 91; x < 96; x++) {
-    const m = mount();
-    paint(m);
-    assert.deepEqual(click(m, x, 0), { handled: true });
-    assert.equal(m.closes, 1);
-    const renders = m.renders;
-    m.view.dispose();
-    m.view.dispose();
-    m.view.invalidate();
-    m.view.handleInput("\t");
-    m.view.handleInput("\x1b");
-    click(m, x, 0);
-    assert.equal(m.closes, 1);
-    assert.equal(m.renders, renders);
-    assert.deepEqual(m.view.render(96), []);
+  const m = mount();
+  paint(m);
+  for (const [x, y] of [
+    [91, 0],
+    [93, 0],
+    [94, 0],
+    [95, 0],
+    [92, 1],
+  ]) {
+    assert.equal(click(m, x, y), undefined, "neighboring cells do not close");
+    assert.equal(m.closes, 0);
   }
+  assert.deepEqual(click(m, 92, 0), { handled: true });
+  assert.equal(m.closes, 1);
+  const renders = m.renders;
+  m.view.dispose();
+  m.view.dispose();
+  m.view.invalidate();
+  m.view.handleInput("\t");
+  m.view.handleInput("\x1b");
+  click(m, 92, 0);
+  assert.equal(m.closes, 1);
+  assert.equal(m.renders, renders);
+  assert.deepEqual(m.view.render(96), []);
 });

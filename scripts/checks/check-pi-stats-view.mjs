@@ -601,7 +601,7 @@ test("the regular-mode summary is the plain Time table", () => {
   assert(lines.every((line) => !/\x1b/.test(line)));
 });
 
-test("Esc and × close once; invalidate/input/mouse callbacks are inert after disposal", () => {
+test("Esc and ✕ close once; invalidate/input/mouse callbacks are inert after disposal", () => {
   const mounted = mount();
   paint(mounted, 100);
   const before = mounted.renders();
@@ -622,8 +622,14 @@ test("Esc and × close once; invalidate/input/mouse callbacks are inert after di
 
   const closeByPointer = mount();
   const top = plain(paint(closeByPointer, 100)[0]);
-  const x = top.indexOf("×");
+  const x = top.indexOf("✕");
   assert(x >= 0, top);
+  for (const neighbor of [x - 1, x + 1, x + 2, x + 3]) {
+    click(closeByPointer.view, neighbor, 0);
+    assert.equal(closeByPointer.closes(), 0, "adjacent padding and frame never close");
+  }
+  click(closeByPointer.view, x, 1);
+  assert.equal(closeByPointer.closes(), 0, "another row in the same column never closes");
   assert.deepEqual(click(closeByPointer.view, x, 0), { handled: true });
   assert.equal(closeByPointer.closes(), 1);
   click(closeByPointer.view, x, 0);

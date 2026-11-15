@@ -10,12 +10,13 @@ import {
 } from "@earendil-works/pi-tui";
 import {
   POPOVER,
-  isPopoverCloseClick,
+  POPOVER_CLOSE_COLUMNS,
   popoverCloseHit,
   popoverCloseTail,
   popoverRule,
   popoverSide,
 } from "../../shared/popover-frame.mjs";
+import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import { formatTokenCount } from "../../shared/token-format.mjs";
 import type { ContextCategory, ContextItem, ContextSnapshot } from "./context-stats.ts";
@@ -83,7 +84,7 @@ const pad = (text: string, width: number, right = false): string => {
 /** Presentation only: reads detached metadata, owns no SDK session, timers or focus. */
 export class ContextView {
   private disposed = false;
-  private readonly closeHover: ReturnType<typeof createPopoverCloseHover>;
+  private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
   private selected: ContextCategory | undefined;
   private detail: Row | undefined;
   private offset = 0;
@@ -111,7 +112,8 @@ export class ContextView {
   private tabs: ContextCategory[] = [];
 
   constructor(private readonly options: ContextViewOptions) {
-    this.closeHover = createPopoverCloseHover({
+    this.closeHover = createPopoverCloseControl({
+      createHover: createPopoverCloseHover,
       closeHit: popoverCloseHit,
       host: options.tui,
       requestRender: options.requestRender,
@@ -236,7 +238,26 @@ export class ContextView {
       this.suppressClick = false;
     }
     if (this.options.pointerCurrent?.() === false) this.resetPointer();
-    this.closeHover.mouse(event);
+    // Eligibility is a flag, not a gate: the control still observes the event
+    // so it can cancel an in-progress gesture its panel would reject.
+    const active =
+      !this.disposed &&
+      this.pointerReady &&
+      event.width === this.paintedWidth &&
+      size(this.options.availableRows()) >= this.paintedHeight &&
+      event.x >= 0 &&
+      event.x < this.paintedWidth &&
+      event.y >= 0 &&
+      event.y < this.paintedHeight &&
+      !this.suppressClick &&
+      this.ready() &&
+      this.paintedEpoch === this.epoch;
+    const close = this.closeHover.mouse(event, active);
+    if (close) {
+      if (event.type === "click") this.pointerPressed = false;
+      if (close.close) this.close();
+      return { handled: true };
+    }
     if (
       this.disposed ||
       !this.pointerReady ||
@@ -259,10 +280,6 @@ export class ContextView {
     if (event.type === "click") {
       this.pointerPressed = false;
       if (this.suppressClick) return undefined;
-    }
-    if (isPopoverCloseClick(event, this.paintedWidth)) {
-      this.close();
-      return { handled: true };
     }
     if (event.type !== "click" || event.button !== "left") return undefined;
     const target = this.targets.find(
@@ -554,7 +571,7 @@ export class ContextView {
   private top(width: number): string {
     const theme = this.options.theme;
     const close = !!popoverCloseHit(width);
-    const limit = width - (close ? 5 : 1);
+    const limit = width - (close ? POPOVER_CLOSE_COLUMNS : 1);
     let x = 2;
     let result = this.fg("borderAccent", POPOVER.tl + POPOVER.h);
     const title = " Context ";

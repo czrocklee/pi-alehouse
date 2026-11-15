@@ -135,7 +135,7 @@ for (const mode of ["regular", "unknown"])
     assert.equal(mount.options.overlay, false);
     assert.equal(mount.handle, undefined);
     assert.equal(h.host.editorContainer.children[0], mount.component);
-    assert.doesNotMatch(stripTerminalSequences(mount.component.render(120)[0]), /×/);
+    assert.doesNotMatch(stripTerminalSequences(mount.component.render(120)[0]), /✕/);
     mount.component.handleInput("\u001b");
     await opening;
     assert.equal(h.host.editorContainer.children[0], h.host.editor);
@@ -456,18 +456,18 @@ test("configured selection keys navigate, page, apply once and cancel without ap
   assert.equal(cancelled.tui.renders, 0);
 });
 
-test("a floating picker closes from its × and applies a clicked preset like a menu", () => {
+test("a floating picker closes from its ✕ and applies a clicked preset like a menu", () => {
   const closing = fixture({ pointer: true });
   let lines = closing.picker.render(76).map(stripTerminalSequences);
-  assert.match(lines[0], /^╭─ Delegation ─+ × ─╮$/);
+  assert.match(lines[0], /^╭─ Delegation ─+ ✕ ─╮$/);
   assert.equal(
     closing.picker.handleMouse(mouse("click", 73, 1)).handled,
     true,
     "the body swallows clicks",
   );
   assert.deepEqual(closing.result, []);
-  closing.picker.handleMouse(mouse("click", lines[0].indexOf("×"), 0));
-  assert.deepEqual(closing.result, [null], "× cancels without applying");
+  closing.picker.handleMouse(mouse("click", lines[0].indexOf("✕"), 0));
+  assert.deepEqual(closing.result, [null], "✕ cancels without applying");
 
   const applying = fixture({ pointer: true });
   lines = applying.picker.render(76).map(stripTerminalSequences);
@@ -499,7 +499,7 @@ test("the wheel moves the highlight; a docked picker leaves the pointer alone", 
 
   const docked = fixture();
   const lines = docked.picker.render(76).map(stripTerminalSequences);
-  assert(!lines[0].includes("×"), "no pointer, no control to click");
+  assert(!lines[0].includes("✕"), "no pointer, no control to click");
   assert.equal(docked.picker.handleMouse(mouse("click", lines[0].length - 3, 0)), undefined);
   assert.deepEqual(docked.result, []);
 });

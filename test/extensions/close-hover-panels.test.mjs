@@ -23,6 +23,7 @@ const theme = {
   bold: (text) => `\x1b[1m${text}\x1b[0m`,
   bg: (_tone, text) => `\x1b[44m${text}\x1b[0m`,
 };
+const hasCloseAccent = (line) => line.includes("\x1b[36m✕") || line.includes("\x1b[36m\x1b[1m✕");
 const choices = [
   { id: "manual", label: "manual", detail: "human approval" },
   { id: "yolo", label: "YOLO", detail: "session asks" },
@@ -175,7 +176,7 @@ function mount(kind, { supported = true, owner = false } = {}) {
       height = lines.length;
       return lines;
     },
-    move(x = width - 5, y = 0, extra = {}) {
+    move(x = width - 4, y = 0, extra = {}) {
       const event = { type: "move", button: "none", x, y, ...extra };
       return supported
         ? tui.handleViewportInput(event)
@@ -193,7 +194,7 @@ for (const kind of ["Approval", "Context", "Stats", "Usage"]) {
     const h = mount(kind);
     t.after(() => h.dispose());
     const normal = h.paint();
-    assert.match(plain(normal[0]), /×/);
+    assert.match(plain(normal[0]), /✕/);
     const actions = h.actions;
     const before = h.renders;
     assert.equal(h.move(), undefined, "hover never captures or requests focus");
@@ -202,13 +203,21 @@ for (const kind of ["Approval", "Context", "Stats", "Usage"]) {
     assert.notEqual(hovered[0], normal[0]);
     assert.deepEqual(hovered.map(plain), normal.map(plain));
     assert.deepEqual(hovered.slice(1), normal.slice(1));
-    for (const x of [75, 76, 77, 78, 79]) assert.equal(h.move(x), undefined);
-    assert.equal(h.renders, before + 1, "same tail is not another repaint");
+    for (const x of [75, 77, 78, 79]) {
+      h.move();
+      const entered = h.renders;
+      assert.equal(h.move(x), undefined);
+      assert.equal(h.renders, entered + 1, `adjacent tail column ${x} never holds the hover`);
+    }
+    assert.equal(h.move(), undefined);
+    const back = h.renders;
+    assert.equal(h.move(), undefined);
+    assert.equal(h.renders, back, "same-cell motion is not another repaint");
     assert.equal(h.move(74), undefined);
-    assert.equal(h.renders, before + 2);
+    assert.equal(h.renders, back + 1);
     assert.deepEqual(h.paint(), normal);
     h.move(74);
-    assert.equal(h.renders, before + 2);
+    assert.equal(h.renders, back + 1);
     assert.deepEqual(h.actions, actions);
     assert.equal(h.tui.handleViewportInput, h.original, "leave retires the optional observer");
   });
@@ -220,16 +229,16 @@ for (const kind of ["Approval", "Context", "Stats", "Usage"]) {
     h.move();
     const resized = h.paint(79);
     assert.deepEqual(h.paint(79), resized);
-    h.move(74);
+    h.move(75);
     h.view.invalidate();
     assert.equal(h.tui.handleViewportInput, h.original);
     const normal = h.paint(79);
-    h.move(74);
+    h.move(75);
     assert.notEqual(h.paint()[0], normal[0]);
     h.paint(0);
     assert.equal(h.tui.handleViewportInput, h.original);
     h.paint(79);
-    h.move(74);
+    h.move(75);
     h.dispose();
     assert.equal(h.tui.handleViewportInput, h.original);
     assert.deepEqual(h.actions, { closes: 0, selected: 0, saves: 0 });
@@ -260,7 +269,7 @@ test("Approval: tiny paint has no close target; clipped titles keep visible clos
   assert.equal(h.actions.closes, 0);
   for (const width of [12, 16, 17, 80]) {
     const lines = h.paint(width);
-    assert.match(plain(lines[0]), /×/);
+    assert.match(plain(lines[0]), /✕/);
     assert(lines.every((line) => visibleWidth(line) <= width));
   }
   h.view.handleInput("\x1b[B");
@@ -293,7 +302,7 @@ test("Context: readonly width/height/unavailable fallbacks have no hover geometr
     if (fallback === "height") h.available = 3;
     if (fallback === "unavailable") h.unavailable = true;
     const lines = h.paint(fallback === "width" ? 27 : 80);
-    assert.doesNotMatch(plain(lines[0]), /×/);
+    assert.doesNotMatch(plain(lines[0]), /✕/);
     assert.equal(h.tui.handleViewportInput, h.original);
     const before = h.renders;
     h.move();
@@ -316,8 +325,8 @@ test("Stats and Usage: narrow rules are inert, while compact/untitled visible cl
     assert.equal(h.renders, before);
     if (kind === "Stats") h.tui.terminal.rows = 3;
     const normal = h.paint(9);
-    assert.match(plain(normal[0]), /×/);
-    h.move(4);
+    assert.match(plain(normal[0]), /✕/);
+    h.move(5);
     assert.notEqual(h.paint()[0], normal[0]);
     if (kind === "Stats") {
       h.tui.terminal.rows = 0;
@@ -364,7 +373,7 @@ for (const kind of ["Approval", "Context", "Stats", "Usage"]) {
     t.after(() => h.dispose());
     h.paint();
     h.move();
-    h.tui.handleViewportInput({ type: "click", button: "left", x: 75, y: 0 });
+    h.tui.handleViewportInput({ type: "click", button: "left", x: 76, y: 0 });
     assert.equal(h.tui.handleViewportInput, h.original);
     assert.deepEqual(h.actions, { closes: kind === "Usage" ? 0 : 1, selected: 0, saves: 0 });
     if (kind === "Usage") {
@@ -377,13 +386,64 @@ for (const kind of ["Approval", "Context", "Stats", "Usage"]) {
   });
 }
 
+for (const [label, action] of [
+  ["human approval", "selected"],
+  ["Save as global default", "saves"],
+]) {
+  test(`Approval: a cancelled close consumes a structural click on the painted ${action} target`, (t) => {
+    const h = mount("Approval");
+    t.after(() => h.dispose());
+    const lines = h.paint().map(plain);
+    const y = lines.findIndex((line) => line.includes(label));
+    assert(y > 0, `missing painted ${label} target`);
+    const closeX = visibleWidth(lines[0].slice(0, lines[0].indexOf("✕")));
+    const mouse = (type, x, row) =>
+      h.view.handleMouse({ type, button: "left", x, y: row, width: 80, height: lines.length });
+    assert.equal(mouse("press", closeX, 0)?.handled, true);
+    assert.equal(mouse("release", 5, y)?.handled, true);
+    // Explicit structural click: a raw SDK release at a different coordinate
+    // does not synthesize this event. The component must still swallow it.
+    assert.equal(mouse("click", 5, y)?.handled, true);
+    assert.deepEqual(h.actions, { closes: 0, selected: 0, saves: 0 });
+    mouse("press", 5, y);
+    mouse("click", 5, y);
+    assert.deepEqual(
+      h.actions,
+      {
+        closes: 0,
+        selected: action === "selected" ? 1 : 0,
+        saves: action === "saves" ? 1 : 0,
+      },
+      "a fresh structural click really activates this same painted body target",
+    );
+  });
+}
+
 // Real pinned SDK compositor and native input, with source-loaded extension
 // owners. No terminal starts, provider calls, approval choices or session files.
 function nativeFixture(t, kind, { below = false, scheduler = false } = {}) {
   const terminal = { columns: 100, rows: 40, write() {}, hideCursor() {} };
   const tui = new TuiAltScreen(terminal, false, undefined, { copyOnSelect: false });
   let requests = 0,
-    frames = 0;
+    frames = 0,
+    closeCount = 0,
+    chooseCount = 0,
+    saveCount = 0,
+    bodyActions = 0;
+  let panels, view;
+  const mouseDispatches = [];
+  const showOverlay = tui.showOverlay.bind(tui);
+  tui.showOverlay = (component, options) => {
+    const handle = showOverlay(component, options);
+    if (kind === "Usage") {
+      const hide = handle.hide.bind(handle);
+      handle.hide = () => {
+        if (component === view) closeCount++;
+        return hide();
+      };
+    }
+    return handle;
+  };
   const requestRender = tui.requestRender.bind(tui);
   const immediateRender = tui.requestImmediateRender.bind(tui);
   const doRender = tui.doRender.bind(tui);
@@ -456,14 +516,18 @@ function nativeFixture(t, kind, { below = false, scheduler = false } = {}) {
     { key: "provider/model-a", input: 10, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0.1 },
   ];
   const stats = { health: "idle", models: [], tools: [], recentErrors: [] };
-  let panels, view;
   if (kind === "Approval") {
     approvalExtension(pi);
     listeners.emit("session_start", {}, ctx);
     events.emit(FOOTER_INDICATOR_CLICK_EVENT, { key: APPROVAL_INDICATOR, handled: false });
     view = tui.overlayStack.at(-1).component;
   } else if (kind === "Stats") {
-    view = new StatsView({ tui, theme, snapshot: () => stats, close() {} });
+    view = new StatsView({
+      tui,
+      theme,
+      snapshot: () => stats,
+      close() {},
+    });
     tui.showOverlay(view, { anchor: "center", width: 80, maxHeight: "75%" });
   } else {
     panels = createFooterPanels({
@@ -481,6 +545,43 @@ function nativeFixture(t, kind, { below = false, scheduler = false } = {}) {
     view = tui.overlayStack.at(-1).component;
   }
   const entry = tui.overlayStack.at(-1);
+  // Count actual owner callbacks, not dispose calls: Approval and Context owners
+  // may dispose again during close; Usage has no view.dispose or close callback.
+  if (kind !== "Usage") {
+    const close = view.options.close;
+    view.options.close = (...args) => {
+      closeCount++;
+      return close(...args);
+    };
+  }
+  if (kind === "Approval") {
+    const choose = view.options.choose;
+    view.options.choose = (...args) => {
+      chooseCount++;
+      return choose(...args);
+    };
+    if (view.options.save) {
+      const save = view.options.save;
+      view.options.save = (...args) => {
+        saveCount++;
+        return save(...args);
+      };
+    }
+  }
+  const bodyMethod = { Approval: "activate", Context: "open", Stats: "select" }[kind];
+  if (bodyMethod) {
+    const action = view[bodyMethod].bind(view);
+    view[bodyMethod] = (...args) => {
+      bodyActions++;
+      return action(...args);
+    };
+  }
+  const handleMouse = view.handleMouse;
+  view.handleMouse = function (event) {
+    const result = handleMouse.call(this, event);
+    mouseDispatches.push({ view: this, event: { ...event }, result });
+    return result;
+  };
   let painted = { width: 0, height: 0 };
   const render = view.render.bind(view);
   view.render = (width) => {
@@ -511,14 +612,14 @@ function nativeFixture(t, kind, { below = false, scheduler = false } = {}) {
     );
     assert(y >= 0, `missing ${kind} header`);
     const text = plain(screen[y]);
-    const index = text.lastIndexOf("×");
+    const index = text.lastIndexOf("✕");
     assert(index >= 0, `missing ${kind} close`);
     return { y, x: visibleWidth(text.slice(0, index)), raw: screen[y], ...painted };
   };
   const hover = () => {
     const at = header();
     tui.handleTerminalInput(`\x1b[<35;${at.x + 1};${at.y + 1}M`);
-    assert.match(header().raw, /\x1b\[36m(?:\x1b\[1m)?×/, `${kind} native hover`);
+    assert.ok(hasCloseAccent(header().raw), `${kind} native hover`);
     return at;
   };
   return {
@@ -527,6 +628,10 @@ function nativeFixture(t, kind, { below = false, scheduler = false } = {}) {
     entry,
     spend,
     stats,
+    mouseDispatches,
+    get actions() {
+      return { closes: closeCount, chooses: chooseCount, saves: saveCount, bodyActions };
+    },
     get requests() {
       return requests;
     },
@@ -544,6 +649,20 @@ function nativeFixture(t, kind, { below = false, scheduler = false } = {}) {
     },
     pointer(type, x, y) {
       tui.handleTerminalInput(`\x1b[<0;${x + 1};${y + 1}${type === "release" ? "m" : "M"}`);
+    },
+    drag(x, y) {
+      tui.handleTerminalInput(`\x1b[<32;${x + 1};${y + 1}M`);
+    },
+    motion(x, y) {
+      tui.handleTerminalInput(`\x1b[<35;${x + 1};${y + 1}M`);
+    },
+    get closes() {
+      return closeCount;
+    },
+    closed() {
+      return kind === "Stats"
+        ? closeCount > 0
+        : !tui.overlayStack.some((entry) => entry.component === view);
     },
     header,
     hover,
@@ -653,6 +772,84 @@ for (const kind of ["Approval", "Context", "Usage"]) {
   });
 }
 
+for (const kind of ["Approval", "Context", "Stats", "Usage"]) {
+  test(`native ${kind}: tail press claims without closing; an adjacent tail release cancels`, (t) => {
+    const h = nativeFixture(t, kind);
+    const at = h.header();
+    h.pointer("press", at.x, at.y);
+    assert.equal(h.closed(), false, "a claimed press never closes by itself");
+    h.pointer("release", at.x + 2, at.y);
+    assert.equal(h.closed(), false, "a release outside the ✕ cell cancels, never closes");
+    if (kind === "Stats") assert.equal(h.closes, 0);
+    h.pointer("press", at.x, at.y);
+    h.pointer("release", at.x, at.y);
+    assert.equal(h.closed(), true, "a fresh same-cell gesture still closes exactly once");
+    if (kind === "Stats") assert.equal(h.closes, 1);
+  });
+
+  test(`native ${kind}: same-cell motion keeps the claimed press closable`, (t) => {
+    const h = nativeFixture(t, kind);
+    const at = h.header();
+    h.pointer("press", at.x, at.y);
+    h.motion(at.x, at.y);
+    h.pointer("release", at.x, at.y);
+    assert.equal(h.closed(), true, "stationary within-cell motion preserves the gesture");
+    if (kind === "Stats") assert.equal(h.closes, 1);
+  });
+
+  test(`native ${kind}: the captured view consumes the synthetic click after its closing release`, (t) => {
+    const h = nativeFixture(t, kind);
+    const at = h.header();
+    h.pointer("press", at.x, at.y);
+    assert.deepEqual(h.actions, { closes: 0, chooses: 0, saves: 0, bodyActions: 0 });
+    h.pointer("release", at.x, at.y);
+    assert.equal(h.closed(), true, "the same-cell release closes");
+    assert.deepEqual(
+      h.mouseDispatches.map(({ event }) => [event.type, event.button]),
+      [
+        ["press", "left"],
+        ["release", "left"],
+        ["click", "left"],
+      ],
+      "the SDK really delivers a synthetic click, even after the close callback",
+    );
+    for (const dispatch of h.mouseDispatches) {
+      assert.equal(dispatch.view, h.view, "dispatch stays with the original captured view");
+      assert.equal(dispatch.event.y, 0);
+      assert.equal(dispatch.result?.handled, true, `${dispatch.event.type} is consumed`);
+    }
+    assert.equal(h.mouseDispatches[2].event.clickCount, 1);
+    // This asserts consumption at the component boundary, not which internal
+    // guard consumed it. Shared-control consumption has its own unit oracles.
+    assert.deepEqual(h.actions, { closes: 1, chooses: 0, saves: 0, bodyActions: 0 });
+  });
+
+  test(`native ${kind}: raw drag outside the tail spends the claimed press; returning cannot revive it`, (t) => {
+    const h = nativeFixture(t, kind);
+    const at = h.header();
+    h.pointer("press", at.x, at.y);
+    h.drag(at.x - 6, at.y + 2);
+    h.drag(at.x, at.y);
+    h.pointer("release", at.x, at.y);
+    assert.equal(h.closed(), false, "a gesture that left the tail cannot close on return");
+    if (kind === "Stats") assert.equal(h.closes, 0);
+  });
+
+  test(`native ${kind}: ordinary body movement never closes`, (t) => {
+    const h = nativeFixture(t, kind);
+    const at = h.header();
+    for (const [x, y] of [
+      [3, at.y + 2],
+      [10, at.y],
+      [20, at.y + 1],
+      [40, at.y],
+    ])
+      h.motion(x, y);
+    assert.equal(h.closed(), false, "body motion is never a close gesture");
+    if (kind === "Stats") assert.equal(h.closes, 0);
+  });
+}
+
 test("native Context: pointer cleanup preserves true snapshot and data-epoch activation guards", (t) => {
   const h = nativeFixture(t, "Context", { below: true });
   h.paint();
@@ -686,7 +883,7 @@ for (const hovered of [false, true]) {
     await settle();
     assert.equal(h.frames - frames, 1, "one stack layout request, no repaint from pointer cleanup");
     const top = h.tui.getScreenLines().find((line) => plain(line).includes(" Context "));
-    assert.match(top, /\x1b\[90m×/, "the active frame already has cleared chrome");
+    assert.ok(top.includes("\x1b[90m✕"), "the active frame already has cleared chrome");
   });
 }
 
@@ -698,13 +895,12 @@ test("native Usage: same-width spend growth clears hover before emitting its tra
   assert.equal(moved.width, before.width);
   assert(moved.height > before.height);
   assert(moved.y < before.y, "adding spend rows raises the bottom-anchored top");
-  assert.match(
-    moved.raw,
-    /\x1b\[90m×/,
+  assert.ok(
+    moved.raw.includes("\x1b[90m✕"),
     "new location must be muted without a new pointer observation",
   );
   h.hover();
-  assert.match(h.header().raw, /\x1b\[36m(?:\x1b\[1m)?×/, "unchanged repaint retains hover");
+  assert.ok(hasCloseAccent(h.header().raw), "unchanged repaint retains hover");
 });
 
 for (const kind of ["Approval", "Context", "Usage"]) {
@@ -716,20 +912,16 @@ for (const kind of ["Approval", "Context", "Usage"]) {
     assert.equal(moved.width, before.width);
     assert.equal(moved.height, before.height);
     assert(moved.y < before.y, "lower member growth raises the same-height panel");
-    assert.match(moved.raw, /\x1b\[90m×/);
+    assert.ok(moved.raw.includes("\x1b[90m✕"));
     before = h.hover();
     h.removeBelow();
     moved = h.header();
     assert.equal(moved.width, before.width);
     assert.equal(moved.height, before.height);
     assert(moved.y > before.y, "removing lower member drops the same-height panel");
-    assert.match(moved.raw, /\x1b\[90m×/);
+    assert.ok(moved.raw.includes("\x1b[90m✕"));
     h.hover();
-    assert.match(
-      h.header().raw,
-      /\x1b\[36m(?:\x1b\[1m)?×/,
-      "stable geometry does not clear every paint",
-    );
+    assert.ok(hasCloseAccent(h.header().raw), "stable geometry does not clear every paint");
   });
 }
 
@@ -744,7 +936,7 @@ test("native Stats: centered content-height growth clears hover at the new top",
   assert.equal(moved.width, before.width);
   assert(moved.height > before.height);
   assert(moved.y < before.y, "more model rows enlarge and translate the centered Stats panel");
-  assert.match(moved.raw, /\x1b\[90m×/);
+  assert.ok(moved.raw.includes("\x1b[90m✕"));
   h.hover();
 });
 
@@ -762,6 +954,6 @@ test("native Approval: newly observed judge choices clear hover when the frame g
   assert.equal(moved.width, before.width);
   assert(moved.height > before.height);
   assert(moved.y < before.y, "new judge choices increase bottom-anchored Approval height");
-  assert.match(moved.raw, /\x1b\[90m×/);
+  assert.ok(moved.raw.includes("\x1b[90m✕"));
   h.hover();
 });

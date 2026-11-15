@@ -1,7 +1,8 @@
-/** Presentation-only hover state for the shared five-column close control.
+/** Presentation-only hover state for the shared single-cell close control.
  * Pi 1.5's fullscreen listener consumes mouse input before extension listeners,
  * and components receive no mouse-leave event. This optional adapter observes
  * the native viewport dispatch without parsing, consuming or retargeting input.
+ * Gesture observation stays attached independently of the visible highlight.
  * Missing/nonreplaceable host support leaves the existing controls unchanged.
  * Consumers inject the shared frame's hit test, keeping this an SDK-free,
  * dependency-free leaf without duplicating geometry constants. */
@@ -9,12 +10,14 @@
 const REGISTRY_KEY = Symbol.for("pi-alehouse.popover-close-hover.v1");
 const METHOD = "handleViewportInput";
 
-/** @typedef {{ hovered: boolean, seen?: object, clear(render?: boolean): void }} Member */
+/** @typedef {{ hovered: boolean, seen?: object, watching?: boolean,
+ * gestureSeen?: object, interrupted?(): void, clear(render?: boolean): void }} Member */
 /** @typedef {{ members: Set<Member>, active?: Member, token?: object,
  * original: (...args: unknown[]) => unknown, wrapper: (...args: unknown[]) => unknown,
  * descriptor?: PropertyDescriptor }} Bridge */
 /** @typedef {{ host?: object, requestRender(): void,
- * closeHit(width: number): {x: number, width: number} | undefined }} HoverOptions */
+ * closeHit(width: number): {x: number, width: number} | undefined,
+ * onGestureInterrupted?(): void }} HoverOptions */
 /** @typedef {{ type: string, button?: string, x?: number, y?: number }} HoverMouseEvent */
 
 /** @returns {WeakMap<object, Bridge> | undefined} */
@@ -51,7 +54,18 @@ function join(host, member) {
     const existing = bridges.get(host);
     if (existing) {
       if (Reflect.get(host, METHOD) !== existing.wrapper) {
-        for (const previous of [...existing.members]) previous.clear();
+        for (const previous of [...existing.members]) {
+          try {
+            previous.interrupted?.();
+          } catch {
+            // One observer cannot prevent another member's cleanup.
+          }
+          try {
+            previous.clear();
+          } catch {
+            // Ignore cleanup exceptions from another bundle's member.
+          }
+        }
         return undefined;
       }
       existing.members.add(member);
@@ -80,9 +94,25 @@ function join(host, member) {
           return Reflect.apply(bridge.original, this, args);
         } finally {
           try {
-            const active = bridge.active;
-            if (active && active.seen !== token) active.clear();
-            else if (active) active.seen = parent;
+            const members = [...bridge.members];
+            try {
+              const active = bridge.active;
+              if (active && active.seen !== token) active.clear();
+              else if (active) active.seen = parent;
+            } catch {
+              // Visual cleanup cannot suppress gesture observers.
+            }
+            for (const observer of members) {
+              try {
+                // A callback may dispose/rejoin members or install a new bridge.
+                // An old wrapper must never interrupt that new membership.
+                if (!bridge.members.has(observer) || !observer.watching) continue;
+                if (observer.gestureSeen === token) observer.gestureSeen = parent;
+                else observer.interrupted?.();
+              } catch {
+                // Preserve native result/throw and continue with other members.
+              }
+            }
           } catch {
             // Observation must preserve the native result/error even on teardown.
           } finally {
@@ -134,20 +164,29 @@ export function createPopoverCloseHover(options) {
       // Pure feedback must never interfere with native input or close actions.
     }
   };
+  const leave = () => {
+    const previous = bridge;
+    bridge = undefined;
+    if (!previous) return;
+    previous.members.delete(member);
+    if (previous.active === member) previous.active = undefined;
+    if (!previous.members.size && options.host) detach(options.host, previous);
+  };
   /** @type {Member} */
   const member = {
     hovered: false,
+    watching: false,
+    interrupted() {
+      if (member.watching) options.onGestureInterrupted?.();
+    },
     clear(render = true) {
-      const previous = bridge;
-      bridge = undefined;
-      if (previous) {
-        previous.members.delete(member);
-        if (previous.active === member) previous.active = undefined;
-        if (!previous.members.size && options.host) detach(options.host, previous);
-      }
+      if (bridge?.active === member) bridge.active = undefined;
+      member.seen = undefined;
+      // Press/reset may clear feedback, but the claimed gesture still needs
+      // native dispatch observation until its terminal event or interruption.
+      if (!member.watching) leave();
       if (!member.hovered) return;
       member.hovered = false;
-      member.seen = undefined;
       if (render) redraw();
     },
   };
@@ -186,24 +225,45 @@ export function createPopoverCloseHover(options) {
         reset(false);
       }
     },
-    /** @param {HoverMouseEvent} event */
-    mouse(event) {
-      if (disposed) return;
-      const hit = options.closeHit(paintedWidth);
-      if (
-        !hit ||
-        event.type !== "move" ||
-        (event.button !== undefined && event.button !== "none") ||
-        event.y !== 0 ||
-        event.x === undefined ||
-        !Number.isFinite(event.x) ||
-        event.x < hit.x ||
-        event.x >= hit.x + hit.width
-      ) {
-        member.clear();
+    /** @param {boolean} active */
+    watchGesture(active) {
+      if (disposed || member.watching === active) return;
+      member.watching = active;
+      if (!active) {
+        if (!member.hovered) leave();
         return;
       }
       try {
+        if (!options.host) return;
+        bridge ??= join(options.host, member);
+        // A watch can begin inside native dispatch, after mouse() already
+        // cleared its visual membership. That new watch belongs to this scope.
+        member.gestureSeen = bridge?.token;
+      } catch {
+        // Optional observation cannot make structural-host controls unusable.
+      }
+    },
+    /** @param {HoverMouseEvent} event */
+    mouse(event) {
+      if (disposed) return;
+      // Every delivered event acknowledges the current native scope, even a
+      // press, wheel or release that clears the presentation-only highlight.
+      member.gestureSeen = bridge?.token;
+      try {
+        const hit = options.closeHit(paintedWidth);
+        if (
+          !hit ||
+          event.type !== "move" ||
+          (event.button !== undefined && event.button !== "none") ||
+          event.y !== 0 ||
+          event.x === undefined ||
+          !Number.isFinite(event.x) ||
+          event.x < hit.x ||
+          event.x >= hit.x + hit.width
+        ) {
+          member.clear();
+          return;
+        }
         const current = dimensions(options.host);
         if (current.some((value, index) => value !== paintedDimensions[index])) return reset();
         if (!options.host) return;
@@ -227,6 +287,7 @@ export function createPopoverCloseHover(options) {
     reset,
     dispose() {
       disposed = true;
+      member.watching = false;
       reset();
     },
   };

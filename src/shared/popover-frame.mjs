@@ -9,13 +9,13 @@ export const POPOVER = Object.freeze({
   h: "─",
   ml: "├",
   mr: "┤",
-  close: "×",
+  close: "✕",
 });
 
-/** Every popover closes from the right end of its top edge: `╭─ Title ─ × ─╮`.
- * These are the columns of that ` × ─╮` tail, which is also the hit area. */
+/** Every popover closes from the right end of its top edge: `╭─ Title ─ ✕ ─╮`.
+ * These are the layout columns of the ` ✕ ─╮` tail; only the glyph is a hit. */
 export const POPOVER_CLOSE_COLUMNS = 5;
-/** Narrower than this, an inlaid edge (`╭─ … × ─╮`) has no room left for the
+/** Narrower than this, an inlaid edge (`╭─ … ✕ ─╮`) has no room left for the
  * control; the popover then paints none, rather than a fragment that cannot be
  * hit. Titles and inlays share the bound so hit tests need not know which. */
 const MIN_CLOSABLE_WIDTH = 9;
@@ -47,7 +47,7 @@ export function popoverSide(theme) {
 }
 
 /**
- * The close control's columns on row 0 of a popover painted `width` columns
+ * The close glyph's single cell on row 0 of a popover painted `width` columns
  * wide, or undefined when it is too narrow to carry one. Painting and hit
  * testing both ask this, so they cannot disagree about where the control is.
  * @param {number} width
@@ -55,11 +55,11 @@ export function popoverSide(theme) {
  */
 export function popoverCloseHit(width) {
   return width >= MIN_CLOSABLE_WIDTH
-    ? { x: width - POPOVER_CLOSE_COLUMNS, width: POPOVER_CLOSE_COLUMNS }
+    ? { x: width - POPOVER_CLOSE_COLUMNS + 1, width: 1 }
     : undefined;
 }
 
-/** The top edge's closing tail, ` × ─╮`, exactly POPOVER_CLOSE_COLUMNS wide.
+/** The top edge's closing tail, ` ✕ ─╮`, exactly POPOVER_CLOSE_COLUMNS wide.
  * Hover changes only the glyph's emphasis, never the border or hit geometry.
  * @param {CloseTheme} theme
  * @param {boolean} [hovered] */

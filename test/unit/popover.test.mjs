@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { isPopoverCloseClick } from "../../dist/shared/popover-frame.mjs";
 import {
   POPOVER,
-  isPopoverCloseClick,
   popoverBottom,
   popoverCloseHit,
   popoverDivider,
@@ -70,7 +70,7 @@ test("an inlaid edge keeps the same outer colors and never leaves the box open",
   }
 });
 
-test("a filled closable inlay keeps exactly one space before × without shifting its hit area", () => {
+test("a filled closable inlay keeps exactly one space before ✕ without shifting its hit area", () => {
   const { theme } = record();
   const styled = { ...theme, fg: (_color, text) => `\u001b[36m${text}\u001b[39m` };
   for (const th of [theme, styled])
@@ -86,21 +86,26 @@ test("a filled closable inlay keeps exactly one space before × without shifting
         const top = popoverInlay(th, width, caption, "top", true);
         const plain = stripTerminalSequences(top);
         assert.equal(visibleWidth(top), width, plain);
-        assert.match(plain, / × ─╮$/);
-        assert.doesNotMatch(plain, / {2}×/, plain);
+        assert.match(plain, / ✕ ─╮$/);
+        assert.doesNotMatch(plain, / {2}✕/, plain);
         const closeColumn = visibleWidth(plain.slice(0, plain.indexOf(POPOVER.close)));
         assert.equal(closeColumn, width - 4, plain);
-        assert.ok(
-          isPopoverCloseClick({ type: "click", button: "left", x: width - 5, y: 0 }, width),
-        );
-        assert.ok(
-          !isPopoverCloseClick({ type: "click", button: "left", x: width - 6, y: 0 }, width),
-        );
+        // Hit exactly the glyph cell, never adjacent padding or frame.
+        for (const x of [closeColumn])
+          assert.ok(
+            isPopoverCloseClick({ type: "click", button: "left", x, y: 0 }, width),
+            `inside ${x}`,
+          );
+        for (const x of [width - 5, width - 3, width - 2, width - 1, width])
+          assert.ok(
+            !isPopoverCloseClick({ type: "click", button: "left", x, y: 0 }, width),
+            `outside ${x}`,
+          );
       }
     }
 });
 
-test("a closable edge ends in ` × ─╮` exactly where the shared hit test looks", () => {
+test("a closable edge ends in ` ✕ ─╮` exactly where the shared hit test looks", () => {
   const { theme } = record();
   for (const width of [9, 24, 80]) {
     const title = popoverTitle(theme, width, "Worker routing", true);
@@ -115,10 +120,11 @@ test("a closable edge ends in ` × ─╮` exactly where the shared hit test loo
   }
   const click = (x, extra = {}) =>
     isPopoverCloseClick({ type: "click", button: "left", x, y: 0, ...extra }, 24);
-  assert.ok(click(19) && click(23), "the whole ` × ─╮` tail is the target");
-  assert.ok(!click(18) && !click(24), "nothing outside the tail");
+  assert.ok(click(20), "the glyph's one cell is the target");
+  for (const x of [18, 19, 21, 22, 23, 24])
+    assert.ok(!click(x), `padding and frame cell ${x} is not the target`);
   assert.ok(
-    !click(21, { y: 1 }) && !click(21, { button: "right" }) && !click(21, { type: "move" }),
+    !click(20, { y: 1 }) && !click(20, { button: "right" }) && !click(20, { type: "move" }),
   );
   // Too narrow to carry the control: plain corner, and no invisible hit area.
   assert.equal(popoverCloseHit(8), undefined);

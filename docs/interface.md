@@ -9,15 +9,31 @@ protocol so that a closing `ui.custom` cannot pop a newer overlay.
 
 ## Close-button feedback
 
-Every Alehouse panel with a top-right `×` highlights that glyph in bold accent
-when the pointer is over its existing five-column close target. Hover is visual
+Every Alehouse panel with a top-right `✕` highlights that glyph in bold accent
+when the pointer is over the glyph's single terminal cell. Hover is visual
 only: it does not close a panel, take keyboard focus, select a model or mode,
 or arm an Agent stop. Moving away, hiding the panel, invalidating its geometry
-or disposing it clears the highlight; tiny layouts without `×` have no hover
-target. Visible close controls keep their click action; unpainted controls are
+or disposing it clears the highlight; tiny layouts without `✕` have no hover
+target. A left press in that 1×1 cell claims the gesture; release in the same
+cell closes. The whole character cell counts, not just the glyph's painted
+strokes; adjacent spaces, rules, the corner and other rows do not. Press alone
+never closes. Leaving the cell, hiding the panel or changing its painted
+geometry cancels the gesture; a later synthetic left click cannot revive it or
+activate a body control. Any new press, including a different button, ends the
+old close gesture; only a left press can arm a new one. Unpainted controls are
 not clickable. Narrow Approval chrome fits the title around the close control;
 zero-row Stats and the model selector's “Too small” fallback have no invisible
 close hot spot.
+
+On the supported native viewport adapter, gesture observation stays attached
+independently of hover while a claimed gesture or its trailing events are
+pending. A native dispatch that does not reach that panel interrupts the old
+close intent, including terminal focus-out and a new press in the transcript.
+A later selection release over `✕` cannot close the panel or discard an Agent
+message draft. Interruption does not consume an unrelated selection release;
+a delayed click from the old claimed press remains suppressed. This observer
+forwards input unchanged and does not acquire mouse capture or alter the SDK's
+selection state.
 
 Hover cleanup, pointer-target validity and keyboard navigation are separate.
 Moving or hiding a panel retires its old pointer targets until a fresh paint,
@@ -245,7 +261,7 @@ remain disabled.
 
 `Alt+A` opens the Agent detail pane. A row click opens it, selects a different
 Agent, or closes it when clicking the selected Agent. `←`/`→` choose an Agent,
-`↑`/`↓` scroll, and `×` closes it, restoring typed editor text. `Esc` unwinds one
+`↑`/`↓` scroll, and `✕` closes it, restoring typed editor text. `Esc` unwinds one
 layer at a time: an armed Stop, then a message draft, then the Info page, and
 only then closes the pane. The pane keeps focus: unbound printable input does
 not dismiss it.
@@ -276,7 +292,7 @@ or Owner shutdown, and it also works for queued tasks and while delegation is Of
 Once stopping starts or execution exits the control disappears. Status and drain
 diagnostics, not the command's acceptance notice, confirm progress toward exit.
 A display-refresh failure is reported separately from an accepted stop request.
-Outside confirmation, `×` only closes the pane, and `Esc` leaves a draft or the
+Outside confirmation, `✕` only closes the pane, and `Esc` leaves a draft or the
 Info page before it closes the pane.
 
 The first accepted explicit human stop carries `cancellation_source: "human"` in
@@ -314,7 +330,7 @@ binds the last visibly painted Owner, generation, Agent and Run, then checks tha
 identity against fresh state; a changed or hidden frame requires a repaint before
 **M** can act. The host rechecks the original identity before invoking the Owner. If that
 Run ends or is replaced, the draft reports `task ended` (or `task no longer
-running` in the compact fallback) and Enter sends nothing. Selecting another Agent, `×` or a row click discards the
+running` in the compact fallback) and Enter sends nothing. Selecting another Agent, `✕` or a row click discards the
 draft; a permission dialog that hides or closes the pane does not, and the draft
 returns only for the same Run, with the caret at its end after a closed pane is
 rebuilt. Explicitly opening another Agent supersedes a pending permission restore
@@ -356,7 +372,7 @@ characters; ZWJ, ZWNJ and variation selectors remain intact. This does not
 blanket-strip styled SDK transcripts or their hyperlinks. Wrapping respects
 grapheme clusters and display width.
 Identity and task lead the title; live status and its spinner or outcome glyph
-sit at its right end (before `×` when framed), so a status change or an Agent
+sit at its right end (before `✕` when framed), so a status change or an Agent
 switch never shifts the name. The status label shortens before it yields, and
 the glyph never does.
 
@@ -374,7 +390,7 @@ previous/next Agent. At its right, `↓ N more` counts rows below the viewport o
 the current page, Transcript or Info. It is accented while a live transcript
 keeps growing; a click or **End** goes to the current page's end, resuming live
 tail following on Transcript. Next come `[M message]` and `[S Stop]`, Stop always
-outermost. Docked panes, which have no `×`, keep an `Esc` hint before the
+outermost. Docked panes, which have no `✕`, keep an `Esc` hint before the
 actions. The footer does not repeat counters, status, context or a key legend;
 the title, metrics and body controls carry the current Agent's information.
 Framed panes additionally show a scrollbar.
@@ -567,9 +583,9 @@ centered sizing computed from the mounted pane's own terminal: 88% of its
 width capped at 164 columns, 84% of its height, and at least 40 columns; when
 the terminal width is unknown the plain 88% width applies. Wheel handling and
 no outside-click dismissal are unchanged. Like every
-floating popover, the pane closes from the `×` at the right end of its top edge
-(` × ─╮`, five columns, all of them the target); below 9 columns the control is
-omitted rather than painted unhittable.
+floating popover, the pane closes from the `✕` at the right end of its top edge
+(` ✕ ─╮`, five layout columns, but only the `✕` cell is the 1×1 target); below
+9 columns the control is omitted rather than painted unhittable.
 
 ## Delegation panel
 
@@ -597,7 +613,7 @@ open beside a detail pane or active approval. A zero-row host widget captures th
 renderer independently of Agent activity, so the first open in an empty or Off
 session still floats and joins the shared column in fullscreen. `↑`/`↓` and `PgUp`/`PgDn`
 navigate; `Enter` applies; `Esc` cancels. Floating, it joins the bottom-right
-popover column (below) and takes the pointer too: `×` cancels, a left click on
+popover column (below) and takes the pointer too: `✕` cancels, a left click on
 a preset applies it as a menu would, and the wheel moves the highlight so a
 preset's slots can be read before choosing. It displays the active
 marker, each configured preset's version, exact
@@ -662,7 +678,7 @@ accepted running, queued, idle and resumed Agents keep their original allocation
   Reset; invalid defaults require model/preset or base-catalogue repair.
   `inherit` slots are saved without resolving current parent thinking.
 - `Enter` or `Esc` returns to the list without undoing changes. `Alt+S`, the
-  footer toggle, `×` or a permission dialog closes the picker, also without undo.
+  footer toggle, `✕` or a permission dialog closes the picker, also without undo.
 - `G` / `W` offers the same confirmed global/project snapshot saving on either page.
 
 There is no effort draft or Apply step. Successful changes update the footer;
@@ -888,7 +904,7 @@ In fullscreen, clicking the usage figures or an otherwise unclaimed part of
 the bottom status row toggles a pinned per-model usage breakdown. Clicking the
 context control instead toggles the separate Context popover below. Hover does
 nothing; typing, pasting, and table clicks do not dismiss the usage panel. Click
-its footer entry again or its `×` to close it. The footer's reserved row is
+its footer entry again or its `✕` to close it. The footer's reserved row is
 separate from popover chrome.
 
 A click on a status segment is first offered to the extension that owns it over
@@ -1060,7 +1076,7 @@ a table: Overview sets Main beside Workers for time, current activity and the
 last main request, and Models and Tools give one aligned row per entry. The box
 is sized to its widest tab rather than a fixed share of the terminal, and its
 key hints sit in the bottom edge. Use `Tab` / `Shift+Tab` or `1` / `2` / `3` to
-switch views; arrows, paging and the wheel scroll; `Esc` or `×` closes. The
+switch views; arrows, paging and the wheel scroll; `Esc` or `✕` closes. The
 small usage popover remains unchanged. Stats is not part of the bottom-right
 column and does not widen those popovers.
 

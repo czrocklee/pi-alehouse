@@ -1,3 +1,4 @@
+import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import {
   decodeKittyPrintable,
@@ -10,7 +11,6 @@ import type { RunView } from "../core/contracts.ts";
 import { HUMAN_STEER_MAX_UNITS } from "../presentation/human-steer-text.ts";
 import { type Theme, type TranscriptFrame, type TranscriptRows } from "./format.ts";
 import {
-  isPopoverCloseClick,
   popoverBottom,
   popoverCloseHit,
   popoverInlay,
@@ -252,7 +252,7 @@ export class DetailPane {
   private animating = false;
   private renderedRevision: unknown;
   private readonly timer: ReturnType<typeof setInterval>;
-  private readonly closeHover: ReturnType<typeof createPopoverCloseHover>;
+  private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
 
   constructor(private readonly options: DetailPaneOptions) {
     this.selected = options.initial;
@@ -263,7 +263,8 @@ export class DetailPane {
         this.beginCompose(draft.target, draft.text);
       else options.onDraft?.(undefined);
     }
-    this.closeHover = createPopoverCloseHover({
+    this.closeHover = createPopoverCloseControl({
+      createHover: createPopoverCloseHover,
       closeHit: popoverCloseHit,
       host: options.tui,
       requestRender: () => options.tui.requestRender(),
@@ -778,7 +779,23 @@ export class DetailPane {
    * own step -- Alt multiplies it by five upstream -- so it is used as given.
    */
   handleMouse(event: PaneMouseEvent): { handled: boolean } | undefined {
-    this.closeHover.mouse(event);
+    const close = this.closeHover.mouse(
+      event,
+      !this.closed &&
+        !!this.options.frame &&
+        this.paintedWidth > 0 &&
+        this.options.visible?.() !== false,
+    );
+    if (close?.handled) {
+      if (close.close) {
+        this.closed = true;
+        this.resetStopInteraction();
+        this.endCompose();
+        this.resetCloseHover();
+        this.options.done();
+      }
+      return { handled: true };
+    }
     if (this.closed) return undefined;
     if (this.options.visible?.() === false) {
       this.chromePaint = undefined;
@@ -837,23 +854,6 @@ export class DetailPane {
         if (this.confirmation) this.confirmStop();
         else this.requestStop();
       }
-      return { handled: true };
-    }
-    if (
-      this.options.frame &&
-      !this.closed &&
-      event.x !== undefined &&
-      event.y !== undefined &&
-      isPopoverCloseClick(
-        { type: event.type, button: event.button, x: event.x, y: event.y },
-        this.paintedWidth,
-      )
-    ) {
-      this.closed = true;
-      this.resetStopInteraction();
-      this.endCompose();
-      this.resetCloseHover();
-      this.options.done();
       return { handled: true };
     }
     if (event.type !== "wheel" || !event.wheelDelta || this.painted === 0) return undefined;

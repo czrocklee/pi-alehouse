@@ -3,12 +3,12 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TuiMouseEvent } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
-  isPopoverCloseClick,
   popoverCloseHit,
   popoverRule,
   popoverSide,
   popoverTitleRow,
 } from "../../shared/popover-frame.mjs";
+import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import type { PersistentScope } from "../../shared/settings-store.mjs";
 import type { JudgeState } from "./approval-protocol.ts";
@@ -64,11 +64,12 @@ export class ApprovalPopover implements Component {
   private pointerPressed = false;
   private suppressClick = false;
   private disposed = false;
-  private readonly closeHover: ReturnType<typeof createPopoverCloseHover>;
+  private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
   private readonly rowTargets = new Map<number, number | PersistentScope>();
 
   constructor(private readonly options: ApprovalPopoverOptions) {
-    this.closeHover = createPopoverCloseHover({
+    this.closeHover = createPopoverCloseControl({
+      createHover: createPopoverCloseHover,
       closeHit: popoverCloseHit,
       host: options.tui,
       requestRender: options.requestRender,
@@ -103,15 +104,23 @@ export class ApprovalPopover implements Component {
       this.suppressClick = false;
     }
     if (this.options.pointerCurrent?.() === false) this.resetPointer();
-    this.closeHover.mouse(event);
+    // Eligibility is a flag, not a gate: the control still observes the event
+    // so it can cancel an in-progress gesture its panel would reject.
+    const active =
+      !this.disposed &&
+      !!this.paintedWidth &&
+      event.width === this.paintedWidth &&
+      !this.suppressClick;
+    const close = this.closeHover.mouse(event, active);
+    if (close) {
+      if (event.type === "click") this.pointerPressed = false;
+      if (close.close) this.close();
+      return { handled: true };
+    }
     if (this.disposed || !this.paintedWidth || event.width !== this.paintedWidth) return undefined;
     if (event.type === "click") {
       this.pointerPressed = false;
       if (this.suppressClick) return undefined;
-    }
-    if (isPopoverCloseClick(event, this.paintedWidth)) {
-      this.close();
-      return { handled: true };
     }
     if (event.type === "wheel" && event.wheelDelta) {
       this.move(this.selected + Math.sign(event.wheelDelta));

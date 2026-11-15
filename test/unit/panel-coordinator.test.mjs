@@ -795,7 +795,7 @@ test("the footer's worker indicator toggles a picker stacked in the bottom-right
   assert.equal(options.anchor, "bottom-right");
   assert.equal(options.margin.bottom, 1, "rests on the footer row when nothing else is pinned");
   assert.equal(options.nonCapturing, false, "a picker takes the keyboard");
-  assert.match(component.render(76)[0], /× ─╮$/, "floating, it closes from the pointer");
+  assert.match(component.render(76)[0], /✕ ─╮$/, "floating, it closes from the pointer");
 
   assert.equal(click(WORKER_PRESET_INDICATOR).handled, true);
   await tick();

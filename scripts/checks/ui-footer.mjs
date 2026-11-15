@@ -52,9 +52,9 @@ export function createFooterTests(
       )
       .filter((key) => key && !/^[\u2500-\u257f]+$/.test(key));
 
-  /** The × closes every popover from the right end of its top edge. */
+  /** The ✕ closes every popover from its single cell at the right end of the top edge. */
   const CLOSE_TAIL = ` ${POPOVER.close} ${POPOVER.h}${POPOVER.tr}`;
-  /** Visible column of the × on a painted top edge, ANSI or not. */
+  /** Visible column of the ✕ on a painted top edge, ANSI or not. */
   const closeColumn = (top) => stripVTControlCharacters(top).indexOf(POPOVER.close);
   const nextTick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -81,12 +81,20 @@ export function createFooterTests(
       requestRender() {},
       terminal,
       showOverlay(component, options) {
-        const entry = { component, options, hidden: false, lines: [], handle: undefined };
+        const entry = {
+          component,
+          options,
+          hidden: false,
+          lastWidth: 0,
+          lines: [],
+          handle: undefined,
+        };
         const handle = compositor.showOverlay(
           {
             ...component,
             render(width) {
               entry.lines = component.render(width);
+              entry.lastWidth = width;
               return entry.lines;
             },
           },
@@ -175,24 +183,31 @@ export function createFooterTests(
           alt: false,
           ctrl: false,
         }),
-      clickOverlay: (x = 1, y = 1, button = "left") =>
-        visible()
-          .at(-1)
-          .component.handleMouse({
-            type: "click",
-            button,
-            x,
-            y,
-            screenX: x,
-            screenY: y,
-            width: visible().at(-1).options.width,
-            height: 10,
-            shift: false,
-            alt: false,
-            ctrl: false,
-          }),
+      clickOverlay: (x = 1, y = 1, button = "left") => {
+        const entry = visible().at(-1);
+        // Pointer geometry comes from the last paint, never the SDK sizing getter.
+        assert.equal(typeof entry.lastWidth, "number");
+        return entry.component.handleMouse({
+          type: "click",
+          button,
+          x,
+          y,
+          screenX: x,
+          screenY: y,
+          width: entry.lastWidth,
+          height: entry.lines.length,
+          shift: false,
+          alt: false,
+          ctrl: false,
+        });
+      },
       overlayLines: (width) => {
-        if (width !== undefined) return visible().at(-1).component.render(width);
+        if (width !== undefined) {
+          const entry = visible().at(-1);
+          entry.lines = entry.component.render(width);
+          entry.lastWidth = width;
+          return entry.lines;
+        }
         paintOverlay();
         return visible().at(-1).lines;
       },
@@ -337,7 +352,7 @@ export function createFooterTests(
         assert(!lines.some((line) => /openai-codex|ollama/.test(line)));
         assert(
           stripVTControlCharacters(lines[0]).endsWith(CLOSE_TAIL),
-          "the × replaces the old Dismiss row",
+          "the ✕ replaces the old Dismiss row",
         );
         assert(
           !lines[1].includes(" W "),
@@ -675,7 +690,7 @@ export function createFooterTests(
       }
     });
 
-    test("the pinned panel stays live and fits its × and chrome on empty and crowded screens", async () => {
+    test("the pinned panel stays live and fits its ✕ and chrome on empty and crowded screens", async () => {
       const entries = [];
       const mounted = await mountFooter({ mode: "fullscreen", entries });
       try {
@@ -721,7 +736,7 @@ export function createFooterTests(
         }
         const lines = mounted.overlayLines(60);
         mounted.clickOverlay(closeColumn(lines[0]), 0);
-        assert.deepEqual(mounted.visible(), [], "× hit geometry follows the latest paint");
+        assert.deepEqual(mounted.visible(), [], "✕ hit geometry follows the latest paint");
       } finally {
         mounted.footer.dispose();
       }
@@ -776,7 +791,7 @@ export function createFooterTests(
         }
         lines = mounted.overlayLines();
         mounted.clickOverlay(closeColumn(lines[0]), 0);
-        assert.deepEqual(mounted.visible(), [], "the × follows the last layout");
+        assert.deepEqual(mounted.visible(), [], "the ✕ follows the last layout");
       } finally {
         mounted.footer.dispose();
       }
@@ -1120,7 +1135,7 @@ export function createFooterTests(
       }
     });
 
-    test("the breakdown is click-to-pin, with only the footer and its × toggling it closed", async (t) => {
+    test("the breakdown is click-to-pin, with only the footer and its ✕ toggling it closed", async (t) => {
       t.mock.timers.enable({ apis: ["Date"], now: 100_000 });
       const mounted = await mountFooter({ mode: "fullscreen", entries: spendEntries });
       const { footer } = mounted;
@@ -1149,13 +1164,21 @@ export function createFooterTests(
         for (const width of [60, 20]) {
           const lines = mounted.overlayLines(width);
           const x = closeColumn(lines[0]);
-          assert.equal(x, width - 4, "the × sits at the right end of the top edge");
+          assert.equal(x, width - 4, "the ✕ sits at the right end of the top edge");
           mounted.clickOverlay(width - 6, 0);
           mounted.clickOverlay(x, 1);
           mounted.clickOverlay(x, 0, "right");
-          assert.equal(mounted.visible().length, 1, "only a left click on the × tail closes");
-          mounted.clickOverlay(width - 1, 0);
-          assert.deepEqual(mounted.visible(), [], "the whole ` × ─╮` tail is the target");
+          assert.equal(mounted.visible().length, 1, "only a left click on the ✕ cell closes");
+          for (const column of [x - 1, x + 1, x + 2, width - 1]) {
+            mounted.clickOverlay(column, 0);
+            assert.equal(
+              mounted.visible().length,
+              1,
+              `blank, rule and corner column ${column} never closes`,
+            );
+          }
+          mounted.clickOverlay(x, 0);
+          assert.deepEqual(mounted.visible(), [], "the ✕ cell itself closes");
           mounted.hover();
           assert.deepEqual(mounted.visible(), []);
           mounted.clickFooter();
@@ -1476,7 +1499,7 @@ export function createFooterTests(
       }
     });
 
-    test("× hit-testing uses visual columns even when the theme adds ANSI escapes", async () => {
+    test("✕ hit-testing uses visual columns even when the theme adds ANSI escapes", async () => {
       const theme = {
         fg: (_color, text) => `\x1b[33m${text}\x1b[0m`,
         bold: (text) => `\x1b[1m${text}\x1b[0m`,
@@ -1500,7 +1523,7 @@ export function createFooterTests(
       }
     });
 
-    test("a narrow usage panel omits the × instead of painting a non-clickable fragment", async () => {
+    test("a narrow usage panel omits the ✕ instead of painting a non-clickable fragment", async () => {
       const mounted = await mountFooter({ mode: "fullscreen", entries: spendEntries });
       try {
         mounted.clickFooter();
@@ -1526,7 +1549,7 @@ export function createFooterTests(
         assert.deepEqual(
           mounted.visible(),
           [],
-          "the footer still closes a panel too narrow for the ×",
+          "the footer still closes a panel too narrow for the ✕",
         );
         mounted.clickFooter();
         const fits = mounted.overlayLines(9);

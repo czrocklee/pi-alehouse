@@ -95,6 +95,7 @@ test("ignore files exclude generated, private, and package paths but not source"
     ".generated-build-fixture/out.js",
     "dist/orchestration/extension.js",
     ".evidence/session.json",
+    "docs/plan/local-review.md",
     "artifacts/report.json",
     "coverage/lcov.info",
     ".cache/prettier.json",

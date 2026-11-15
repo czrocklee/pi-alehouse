@@ -1,9 +1,10 @@
+import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import type { PersistentScope } from "../../shared/settings-store.mjs";
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type Component, type TUI } from "@earendil-works/pi-tui";
 import { OverlayRequest } from "./overlay-request.ts";
-import { isPopoverCloseClick, popoverCloseHit, popoverTitle } from "./popover.ts";
+import { popoverCloseHit, popoverTitle } from "./popover.ts";
 import type { DelegationSetting } from "../delegation.ts";
 import {
   isOffPreset,
@@ -122,11 +123,12 @@ export class PresetPicker implements Component {
   private slotIndex = 0;
   private readonly delegation: PresetDelegation;
   private readonly effort: PresetEffortEditor;
-  private readonly closeHover: ReturnType<typeof createPopoverCloseHover>;
+  private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
 
   constructor(private readonly options: PresetPickerOptions) {
     this.options = { ...options, presets: [...options.presets] };
-    this.closeHover = createPopoverCloseHover({
+    this.closeHover = createPopoverCloseControl({
+      createHover: createPopoverCloseHover,
       closeHit: popoverCloseHit,
       host: options.tui,
       requestRender: () => options.tui.requestRender(),
@@ -234,9 +236,17 @@ export class PresetPicker implements Component {
       this.suppressClick = false;
     }
     if (this.options.pointerCurrent?.() === false) this.invalidatePointerPaint();
-    this.closeHover.mouse(event);
     this.settleStaleEditor();
     const cancelled = this.delegation.swallowCancelledPress(event);
+    const close = this.closeHover.mouse(
+      event,
+      !!this.pointerWidth && this.usable() && !this.suppressClick && !cancelled,
+    );
+    if (close?.handled) {
+      if (event.type === "release" || event.type === "click") this.pointerPressed = false;
+      if (close.close) this.finish(null);
+      return { handled: true };
+    }
     if (event.type === "click" && event.button === "left") {
       this.pointerPressed = false;
       const suppressed = this.suppressClick;
@@ -245,10 +255,6 @@ export class PresetPicker implements Component {
     } else if (cancelled) return { handled: true };
     if (!this.pointerWidth || !this.usable()) {
       this.invalidatePointerPaint();
-      return { handled: true };
-    }
-    if (isPopoverCloseClick(event, this.pointerWidth)) {
-      this.finish(null);
       return { handled: true };
     }
     if (!this.editing) {

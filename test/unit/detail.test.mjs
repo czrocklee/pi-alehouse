@@ -897,7 +897,7 @@ for (const frame of [false, true])
       // control on the title replaces it.
       assert(lines[0].includes(badge), lines[0]);
       assert(!lines.at(-1).includes(label), lines.at(-1));
-      if (frame) assert.match(lines[0], new RegExp(`${label} ─ × ─╮$`));
+      if (frame) assert.match(lines[0], new RegExp(`${label} ─ ✕ ─╮$`));
       else {
         assert(lines[0].endsWith(badge), lines[0]);
         assert.match(lines.at(-1), /Esc/);
@@ -928,7 +928,7 @@ for (const frame of [false, true])
       // Docked, the close hint always keeps its room; framed, the close
       // control on the title edge does. Nothing on the edge clips mid-value.
       const footer = lines.at(-1);
-      if (frame) assert.match(lines[0], / × ─╮$/, "the close control keeps its room");
+      if (frame) assert.match(lines[0], / ✕ ─╮$/, "the close control keeps its room");
       else assert.match(footer, /Esc/, "spare room still shows the close hint");
       assert.doesNotMatch(footer, /…/, "edge parts yield whole, never clip mid-value");
     }
@@ -957,7 +957,7 @@ test("minimum-width framed panes keep the status glyph, Run cue and close hint r
     // close control at exactly 14 columns; a lone Agent's edge is plain rule.
     assert(lines[0].includes(icon), lines[0]);
     assert(lines[0].includes("r-8"), lines[0]);
-    assert.match(lines[0], / × ─╮$/, lines[0]);
+    assert.match(lines[0], / ✕ ─╮$/, lines[0]);
     const bottom = lines.at(-1);
     assert.match(bottom, /^╰─+╯$/, bottom);
     assert.equal(visibleWidth(bottom), 14);
@@ -1121,7 +1121,7 @@ test("a floating pane spends its larger height budget on chrome, never on rows",
   assert.match(b.at(-1), /^╰─+╯$/);
   // Riding on the border does not open it: what the inlay does not use is rule.
   assert.doesNotMatch(b[0], / {3}/, `top border left open: ${JSON.stringify(b[0])}`);
-  assert.doesNotMatch(b[0], / {2}×/, `extra space before close: ${JSON.stringify(b[0])}`);
+  assert.doesNotMatch(b[0], / {2}✕/, `extra space before close: ${JSON.stringify(b[0])}`);
   assert.doesNotMatch(b.at(-1), / {3}/, `bottom border left open: ${JSON.stringify(b.at(-1))}`);
   // The divider is a rule of the same row, so it reaches the frame it sits inside.
   assert.equal(visibleWidth(transcriptRule(theme, 78)), 78);
@@ -1141,7 +1141,7 @@ test("an Agent with no Runs still closes its frame", (t) => {
   const p = pane(40, 30, { frame: true, snapshot: () => [] });
   t.after(() => p.dispose());
   const lines = p.render(60);
-  assert.match(lines[0], /^\u256d\u2500 Agents \u2500+ \u00d7 \u2500\u256e$/);
+  assert.match(lines[0], /^\u256d\u2500 Agents \u2500+ ✕ \u2500\u256e$/);
   assert.doesNotMatch(lines.at(-1), / {2}/);
 });
 
@@ -1171,7 +1171,7 @@ test("a framed pane keeps CJK aligned and narrows gracefully", (t) => {
   assert.deepEqual(p.render(9), [], "too narrow to frame at all");
 });
 
-test("a floating pane closes from the × in its top edge; a docked pane has none", (t) => {
+test("a floating pane closes from the ✕ in its top edge; a docked pane has none", (t) => {
   let closed = 0;
   const p = pane(4, 30, {
     frame: true,
@@ -1181,18 +1181,30 @@ test("a floating pane closes from the × in its top edge; a docked pane has none
   });
   t.after(() => p.dispose());
   const lines = p.render(60);
-  assert.match(lines[0], / × ─╮$/);
+  assert.match(lines[0], / ✕ ─╮$/);
   assert.equal(
     p.handleMouse({ type: "click", button: "left", x: 50, y: 0 }),
     undefined,
     "the title is not the control",
   );
-  assert.equal(p.handleMouse({ type: "click", button: "right", x: 57, y: 0 }), undefined);
-  assert.deepEqual(p.handleMouse({ type: "click", button: "left", x: 57, y: 0 }), {
+  for (const [x, y] of [
+    [55, 0],
+    [57, 0],
+    [58, 0],
+    [59, 0],
+    [56, 1],
+  ])
+    assert.equal(
+      p.handleMouse({ type: "click", button: "left", x, y }),
+      undefined,
+      "only the close glyph's single cell activates",
+    );
+  assert.equal(p.handleMouse({ type: "click", button: "right", x: 56, y: 0 }), undefined);
+  assert.deepEqual(p.handleMouse({ type: "click", button: "left", x: 56, y: 0 }), {
     handled: true,
   });
   assert.equal(closed, 1);
-  p.handleMouse({ type: "click", button: "left", x: 57, y: 0 });
+  p.handleMouse({ type: "click", button: "left", x: 56, y: 0 });
   assert.equal(closed, 1, "closing is once");
 
   const docked = pane(4, 30, {
@@ -1201,7 +1213,7 @@ test("a floating pane closes from the × in its top edge; a docked pane has none
     },
   });
   t.after(() => docked.dispose());
-  assert(!docked.render(60)[0].includes("×"));
+  assert(!docked.render(60)[0].includes("✕"));
   assert.equal(docked.handleMouse({ type: "click", button: "left", x: 57, y: 0 }), undefined);
   assert.equal(closed, 1);
 });

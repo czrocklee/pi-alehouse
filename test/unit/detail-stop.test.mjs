@@ -143,7 +143,7 @@ function assertRightmostLabel(lines, label, width, frame) {
   // with it, right above the action (framed, before the close control).
   assert.match(
     stripTerminalSequences(lines[0]),
-    /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◦] (?:running|queued)(?: ─ × ─╮)?$/,
+    /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◦] (?:running|queued)(?: ─ ✕ ─╮)?$/,
     "the sticky title keeps the live status above the footer action",
   );
 }
@@ -1338,7 +1338,7 @@ for (const close of ["dispose", "activate", "frame-close"])
     arm(h.pane);
     if (close === "dispose") h.pane.dispose();
     else if (close === "activate") h.pane.activate("a");
-    else h.pane.handleMouse({ type: "click", button: "left", x: 117, y: 0 });
+    else h.pane.handleMouse({ type: "click", button: "left", x: 116, y: 0 });
     h.pane.handleInput(CONFIRM);
     assert.deepEqual(h.pane.render(120), []);
   });

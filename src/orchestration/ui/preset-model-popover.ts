@@ -1,3 +1,4 @@
+import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -15,7 +16,6 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ModelPickerPosition } from "./preset-picker.ts";
 import {
-  isPopoverCloseClick,
   popoverCloseHit,
   popoverInlay,
   popoverRow,
@@ -84,7 +84,7 @@ export class PresetModelPopover implements Component, Focusable {
   private width = 0;
   private closePainted = false;
   private closed = false;
-  private readonly closeHover: ReturnType<typeof createPopoverCloseHover>;
+  private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
   private targets = new Map<number, Target>();
   private selectedVisible = false;
   /** False when the public tree could not be identified; keyboard then remains
@@ -110,7 +110,8 @@ export class PresetModelPopover implements Component, Focusable {
       cancel(): void;
     },
   ) {
-    this.closeHover = createPopoverCloseHover({
+    this.closeHover = createPopoverCloseControl({
+      createHover: createPopoverCloseHover,
       closeHit: popoverCloseHit,
       host: options.tui,
       requestRender: () => options.tui?.requestRender(),
@@ -393,10 +394,16 @@ export class PresetModelPopover implements Component, Focusable {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult {
-    this.closeHover.mouse(event);
+    const close = this.closeHover.mouse(
+      event,
+      !this.closed &&
+        this.closePainted &&
+        this.options.height() >= 5 &&
+        this.selectionWidth() === this.width,
+    );
     if (this.closed) return { handled: true };
-    if (this.closePainted && isPopoverCloseClick(event, this.width)) {
-      this.options.cancel();
+    if (close?.handled) {
+      if (close.close) this.options.cancel();
       return { handled: true };
     }
     if (event.type === "click" && event.button === "left") {

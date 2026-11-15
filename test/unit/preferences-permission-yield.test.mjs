@@ -107,7 +107,7 @@ test("permission yield aborts an opened refresh without dirtying; old callbacks 
   old.component.handleInput("\u001b");
   old.component.handleInput("\r");
   const oldLines = old.component.render(70).map(stripTerminalSequences),
-    closeX = oldLines[0]?.indexOf("×");
+    closeX = oldLines[0]?.indexOf("✕");
   if (closeX > 0) mouseClick(old, closeX, 0, 70, oldLines.length);
   await tick(3);
   assert.equal(

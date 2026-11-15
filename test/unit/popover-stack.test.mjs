@@ -280,7 +280,7 @@ test("lower growth during compositing clears the translated upper close on the f
   hover.mouse({ type: "move", button: "none", x: 36, y: 0 });
   const highlighted = once();
   const before = handle.getBounds();
-  const glyph = theme.fg("accent", theme.bold("×"));
+  const glyph = theme.fg("accent", theme.bold("✕"));
   assert(highlighted[before.row].includes(glyph));
   low.box.height = 7; // Do not pre-publish measure(): growth happens inside the native render pass.
   const translated = once();

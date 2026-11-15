@@ -81,12 +81,12 @@ function fixture(
           clicks.push(event.clickCount);
           return { handled: true };
         }
+        // The panel claims presses exactly like the shared 1×1 close cell.
         if (
           event.type === "press" &&
           event.button === "left" &&
           event.y === 0 &&
-          event.x >= width - 5 &&
-          event.x < width
+          event.x === width - 4
         ) {
           return { handled: true };
         }
@@ -182,8 +182,8 @@ test("raw native motion changes only the close style and transfers between two o
   const hovered = h.paint();
   assert.notEqual(hovered[h.a.row], before[h.a.row], "the real painted close style changes");
   assert.equal(stripTerminalSequences(hovered[h.a.row]), stripTerminalSequences(before[h.a.row]));
-  assert(hovered[h.a.row].includes(theme.fg("accent", theme.bold("×"))));
-  assert(before[h.a.row].includes(theme.fg("muted", "×")));
+  assert(hovered[h.a.row].includes(theme.fg("accent", theme.bold("✕"))));
+  assert(before[h.a.row].includes(theme.fg("muted", "✕")));
   assert.deepEqual(h.gestureState(), state, "hover does not focus, capture, press or select");
   assert.deepEqual(h.a.clicks, []);
   assert.deepEqual(h.b.clicks, []);
@@ -202,7 +202,7 @@ test("raw native motion changes only the close style and transfers between two o
   assert.equal(h.b.tracker.hovered, true);
   const transferred = h.paint();
   assert.equal(transferred[h.a.row], before[h.a.row]);
-  assert(transferred[h.b.row].includes(theme.fg("accent", theme.bold("×"))));
+  assert(transferred[h.b.row].includes(theme.fg("accent", theme.bold("✕"))));
   assert.deepEqual(h.gestureState(), state);
   assert.deepEqual(h.lateInput, []);
 });
@@ -326,7 +326,7 @@ test("height-only growth retires hover when the SDK compositor moves a bottom-an
   assert.equal(before.height, 3);
   h.send(35, h.a.x, before.row);
   assert.equal(h.a.tracker.hovered, true);
-  assert(h.paint()[before.row].includes(theme.fg("accent", theme.bold("×"))));
+  assert(h.paint()[before.row].includes(theme.fg("accent", theme.bold("✕"))));
   const state = h.gestureState();
   const eventCount = h.a.events.length;
   const renders = h.renders;
@@ -340,8 +340,8 @@ test("height-only growth retires hover when the SDK compositor moves a bottom-an
   assert.equal(h.a.tracker.hovered, false, "no pointer event revalidated the moved close control");
   assert.equal(h.a.events.length, eventCount, "growth does not invent a mouse event");
   assert.equal(h.renders, renders, "the current geometry paint needs no follow-up hover frame");
-  assert(screen[after.row].includes(theme.fg("muted", "×")));
-  assert(!screen[after.row].includes(theme.fg("accent", theme.bold("×"))));
+  assert(screen[after.row].includes(theme.fg("muted", "✕")));
+  assert(!screen[after.row].includes(theme.fg("accent", theme.bold("✕"))));
   assert.equal(h.tui.handleViewportInput, h.original);
   assert.deepEqual(h.gestureState(), state);
   assert.deepEqual(h.a.clicks, []);
@@ -352,7 +352,7 @@ test("height-only growth retires hover when the SDK compositor moves a bottom-an
   h.send(35, h.a.x, after.row);
   assert.equal(h.a.tracker.hovered, true, "fresh native motion can enter the moved close control");
   const stationary = h.renders;
-  assert(h.paint()[after.row].includes(theme.fg("accent", theme.bold("×"))));
+  assert(h.paint()[after.row].includes(theme.fg("accent", theme.bold("✕"))));
   h.send(35, h.a.x, after.row);
   assert.equal(h.renders, stationary, "stable actual height preserves stationary hover");
 });

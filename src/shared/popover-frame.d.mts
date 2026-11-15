@@ -7,7 +7,7 @@ export const POPOVER: Readonly<{
   h: "─";
   ml: "├";
   mr: "┤";
-  close: "×";
+  close: "✕";
 }>;
 export const POPOVER_CLOSE_COLUMNS: 5;
 export interface FrameTheme {

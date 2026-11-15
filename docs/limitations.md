@@ -712,16 +712,31 @@ unpainted geometry is never activated as a click target or command evidence.
 Close-button hover is presentation-only and requires fullscreen mouse-motion
 reports. The optional adapter observes the host's private `handleViewportInput`
 method because Pi 1.5 has no component mouse-leave event and its first input
-listener consumes mouse reports. A missing/nonreplaceable adapter disables only
-hover, not clicking or keyboard controls. It forwards the native dispatch
-unchanged and clears stale feedback after outside motion, wheel, focus and
+listener consumes mouse reports. A missing/nonreplaceable adapter leaves
+ordinary clicking and keyboard controls usable, but cannot supply hover or
+native-interruption observation. The adapter forwards native dispatch unchanged
+and clears stale feedback after outside motion, wheel, focus and
 keyboard input; keyboard input may leave a stationary pointer unhighlighted
 until it moves again. This is an implementation compatibility seam, not a new
-public SDK guarantee. Panel hiding/disposal retires the observer; no polling or
-mouse capture is added. Hover retirement does not clear keyboard navigation
-state. Pointer targets are retired independently on a move/hide and require a
-fresh paint before activation; stale cached SDK mouse bounds are not permission
-to activate a hidden control.
+public SDK guarantee. Panel hiding clears hover; gesture observation can remain
+until a pending claimed press is consumed or interrupted. Final disposal retires
+both. No polling or mouse capture is added. Hover retirement does not clear
+keyboard navigation state. Pointer targets are retired independently on a
+move/hide and require a fresh paint before activation; stale cached SDK mouse bounds are not permission
+to activate a hidden control. The `✕` close target is exactly its 1×1 terminal
+cell, not the surrounding spaces or frame. A claimed left press closes only on
+release within that same cell; observed movement outside it, reset or changed
+painted geometry cancels the gesture. This is panel-local
+press/release handling, not a global change to the SDK's click synthesis.
+Window focus loss is not delivered as a component mouse event. On the supported
+native viewport adapter, a dispatch not delivered to the panel interrupts its
+old close intent without parsing input or changing native capture/selection.
+This covers the host's focus reset and a fresh outside-origin gesture; a new
+right/middle press delivered to the panel also ends the old close intent.
+Missing or nonreplaceable viewport support still permits ordinary component
+close/keyboard events, but cannot observe native interruptions that never reach
+the component. That unsupported-host fallback is not an OS focus/capture
+guarantee or real-terminal acceptance.
 
 Fullscreen alternate-screen rendering is required for floating worker panels and
 click input. Regular mode deliberately docks the detail/picker to avoid

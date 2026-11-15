@@ -1,7 +1,6 @@
 // UI approval checker theme. The entry initializes Pi/jiti/parser once and calls this in-process.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { join, resolve } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 export function registerApprovalTests(
   approvalExtension,
@@ -16,7 +15,7 @@ export function registerApprovalTests(
   TuiAltScreen,
   joinPopoverStack,
   HIDE_TRANSIENT_OVERLAYS_EVENT,
-  FOOTER_INDICATOR_CLICK_EVENT,
+  _FOOTER_INDICATOR_CLICK_EVENT,
   FOOTER_HEIGHT,
   nextTick,
 ) {
@@ -447,7 +446,7 @@ export function registerApprovalTests(
     try {
       assert.equal(m.indicator(), true, "the footer click is claimed");
       const lines = m.lines();
-      assert.match(lines[0], /^╭─ Approval ─+ × ─╮$/);
+      assert.match(lines[0], /^╭─ Approval ─+ ✕ ─╮$/);
       assert.deepEqual(
         lines.slice(1, 5).map((line) => line.slice(1, 16).trim()),
         ["○ manual", "○ jev", "› ● jev + sub", "○ yolo"],
@@ -543,7 +542,7 @@ export function registerApprovalTests(
     }
   });
 
-  test("keyboard, × and permission dialogs all close the approval popover without applying", async () => {
+  test("keyboard, ✕ and permission dialogs all close the approval popover without applying", async () => {
     const m = await mountApproval();
     try {
       m.indicator();
@@ -555,8 +554,54 @@ export function registerApprovalTests(
       assert.deepEqual(m.setRequests.at(-1), ROOT, "↑ then Enter applies the (narrower) row above");
       m.indicator();
       const top = m.lines()[0];
-      m.click(top.indexOf("×"), 0);
-      assert.equal(m.popover(), undefined, "× closes");
+      const closeX = top.indexOf("✕");
+      assert(closeX >= 0, "the normalized-click fixture paints a close glyph");
+      const popover = m.popover();
+      const actions = [];
+      for (const name of ["choose", "save"]) {
+        const callback = popover.options[name];
+        if (callback)
+          popover.options[name] = (...args) => {
+            actions.push(name);
+            return callback(...args);
+          };
+      }
+      const before = structuredClone({
+        requests: m.setRequests,
+        entries: m.entries,
+        dialogs: m.dialogs,
+      });
+      for (const [label, x, y] of [
+        ["left space", closeX - 1, 0],
+        ["right space", closeX + 1, 0],
+        ["rule", closeX + 2, 0],
+        ["corner", closeX + 3, 0],
+      ]) {
+        m.click(x, y); // Direct normalized clicks, not raw terminal gestures.
+        assert.equal(m.popover(), popover, `${label} normalized click leaves the panel open`);
+        assert.deepEqual(actions, [], `${label} neither applies nor saves`);
+        assert.deepEqual(
+          { requests: m.setRequests, entries: m.entries, dialogs: m.dialogs },
+          before,
+          `${label} has no approval or save effects`,
+        );
+      }
+      // With choices, y=1 is a real full-row apply target, even under the
+      // close column. Paint chrome without choices to isolate the y boundary;
+      // never require a legitimate body click to have no approval effects.
+      popover.options.choices = () => [];
+      m.lines();
+      m.click(closeX, 1);
+      assert.equal(m.popover(), popover, "next-row normalized chrome click leaves it open");
+      assert.deepEqual(actions, [], "next-row chrome click neither applies nor saves");
+      assert.deepEqual(
+        { requests: m.setRequests, entries: m.entries, dialogs: m.dialogs },
+        before,
+        "next-row chrome click has no approval or save effects",
+      );
+      m.click(closeX, 0);
+      assert.equal(m.popover(), undefined, "a fresh normalized click on ✕ closes");
+      assert.deepEqual(actions, [], "closing neither applies nor saves");
       m.indicator();
       m.f.pi.events.emit("permissions:ui_prompt", { requestId: "r1" });
       assert.equal(m.popover(), undefined, "a permission dialog takes the keyboard back");

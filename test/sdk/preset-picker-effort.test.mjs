@@ -174,7 +174,7 @@ test("pointer arrows and reset publish immediately; inactive editing is a confir
   assert.match(painted(h.picker).join("\n"), /Delegation/);
   clickText(h.picker, "Edit effort");
   const top = painted(h.picker)[0];
-  h.picker.handleMouse(mouse("click", top.indexOf("×"), 0));
+  h.picker.handleMouse(mouse("click", top.indexOf("✕"), 0));
   assert.deepEqual(h.result, [null]);
   assert.equal(h.applied.length, 4, "closing never rolls back or republishes");
   for (const pointer of [false, true]) {

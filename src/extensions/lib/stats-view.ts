@@ -4,12 +4,13 @@ import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
   POPOVER,
-  isPopoverCloseClick,
+  POPOVER_CLOSE_COLUMNS,
   popoverCloseHit,
   popoverRule,
   popoverSide,
   popoverTitleRow,
 } from "../../shared/popover-frame.mjs";
+import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import { formatTokenCount } from "../../shared/token-format.mjs";
 import type {
@@ -617,8 +618,7 @@ export class StatsView {
   /** Per-tab positions survive refreshes and a trip through another tab. */
   private readonly offsets: [number, number, number] = [0, 0, 0];
   private disposed = false;
-  private readonly closeHover: ReturnType<typeof createPopoverCloseHover>;
-  private paintedWidth = 0;
+  private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
   private paintedTabRow = -1;
   private paintedViewport = 0;
   private paintedMaxScroll = 0;
@@ -627,7 +627,8 @@ export class StatsView {
   private wanted = 0;
 
   constructor(private readonly options: StatsViewOptions) {
-    this.closeHover = createPopoverCloseHover({
+    this.closeHover = createPopoverCloseControl({
+      createHover: createPopoverCloseHover,
       closeHit: popoverCloseHit,
       host: options.tui,
       requestRender: () => options.tui.requestRender(),
@@ -656,8 +657,8 @@ export class StatsView {
       this.wanted,
       4 + figures.reduce((widest, line) => Math.max(widest, visibleWidth(line)), 0),
       4 + tabs + (snapshot ? GAP + visibleWidth(this.status(snapshot)) : 0),
-      // `╭─`, the padded title, one rule column and the ` × ─╮` close tail.
-      2 + visibleWidth(TITLE) + 2 + 1 + 5,
+      // `╭─`, the padded title, one rule column and the ` ✕ ─╮` close tail.
+      2 + visibleWidth(TITLE) + 2 + 1 + POPOVER_CLOSE_COLUMNS,
     );
     return Math.min(limit, this.wanted);
   }
@@ -684,12 +685,14 @@ export class StatsView {
   }
 
   handleMouse(event: TuiMouseEvent): { handled: boolean } | undefined {
-    this.closeHover.mouse(event);
-    if (this.disposed) return undefined;
-    if (isPopoverCloseClick(event, this.paintedWidth)) {
-      this.finish();
+    // Eligibility is a flag, not a gate: the control still observes the event
+    // so it can cancel an in-progress gesture the view would reject.
+    const close = this.closeHover.mouse(event, !this.disposed);
+    if (close) {
+      if (close.close) this.finish();
       return { handled: true };
     }
+    if (this.disposed) return undefined;
     if (event.type === "wheel") {
       const delta = finite(event.wheelDelta);
       if (delta !== undefined && delta !== 0) this.scrollBy(Math.trunc(delta));
@@ -710,7 +713,6 @@ export class StatsView {
     const rows = Math.max(0, Math.floor(nonNegative(this.options.tui.terminal.rows) ?? 0));
     const budget = Math.floor(rows * 0.75);
     this.closeHover.paint(columns, budget > 0 && !!popoverCloseHit(columns));
-    this.paintedWidth = budget > 0 ? columns : 0;
     this.paintedTabRow = -1;
     this.tabTargets = [];
     this.paintedViewport = this.paintedMaxScroll = 0;
@@ -761,7 +763,6 @@ export class StatsView {
   dispose(): void {
     this.disposed = true;
     this.closeHover.dispose();
-    this.paintedWidth = 0;
     this.tabTargets = [];
     this.paintedViewport = 0;
     this.paintedMaxScroll = 0;
@@ -923,7 +924,7 @@ export class StatsView {
     if (width < 3)
       return this.fit(this.options.theme.fg("borderAccent", POPOVER.h.repeat(width)), width);
     const closable = !!popoverCloseHit(width);
-    const tailWidth = closable ? 5 : 1;
+    const tailWidth = closable ? POPOVER_CLOSE_COLUMNS : 1;
     const room = width - 2 - tailWidth;
     if (room < 1) return popoverRule(this.options.theme, width, "top");
     return popoverTitleRow(
