@@ -581,7 +581,8 @@ export class PanelCoordinator {
                 source: {
                   messages: () => cache.messages(currentAgents.get(id)),
                   inFlight: () => currentAgents.get(id)?.inFlight(),
-                  toolDefinition: () => undefined,
+                  toolDefinition: (name) => currentAgents.get(id)?.toolRenderers?.(name),
+                  toolRenderersRevision: () => currentAgents.get(id)?.toolRenderersRevision?.(),
                 },
               });
               mounts.remember(id, content);

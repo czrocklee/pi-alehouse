@@ -743,12 +743,25 @@ detail pane therefore caps its width by computing a numeric column count from
 the mounted pane's own terminal (88% of the live width, at most 164 columns),
 falling back to the plain 88% percentage when that width is unknown. A stub or
 structural host without a column count gets the uncapped percentage width.
-Child transcript tool cards use supplied display callbacks or bounded generic
-cards. Final rows retain SGR/complete OSC 8 links and filter other protocols;
-remaining controls/bidi outside preserved protocols are visible escapes.
-Tabs remain visible `\x09`. SGR can conceal glyphs, and OSC 8 parameters/URIs can
-retain Unicode bidi; links are not validated or trusted destinations. This is
-not secret redaction, OS isolation or a guarantee of visible text.
+Child transcripts use renderer-only projections from the live public SDK
+registry, including native renderers present on built-in tool definitions.
+Missing, failed or detached lookups use bounded generic cards; closed children
+keep their history, not a live renderer-registry lease. Already-created cards
+rebuild on binding changes, not on every streaming token. Binding-token readers
+must be synchronous and keep the same identity until a real binding change;
+allocating a fresh token on every read is unsupported. A thrown read suspends
+custom display callbacks and shows bounded raw records; a later successful
+read, including `undefined`, starts a new display epoch and replays history.
+This is display recovery, not Owner/session recovery. Historical native
+cards do not enable argument-complete/execution-started previews that could
+read the current worktree; recorded results remain the source of the display.
+Renderer callbacks are trusted extension code, not an OS isolation boundary or
+a guarantee of no IO. Final styled rows keep SGR and complete OSC 8 links while
+filtering other terminal protocols and exposing remaining control/bidi codes
+outside preserved protocols. Tabs remain visible `\x09`. SGR can conceal glyphs,
+and OSC 8 parameters/URIs can retain Unicode bidi; links are not validated
+or trusted destinations. This is not secret redaction or a general guarantee
+about callback behavior or visible text.
 PTY/UI fixtures and scripted permission RPC are not
 human-TUI acceptance. Expanded Agent inspection is paginated within a widget
 budget (at most thirteen lines and one third of terminal height, with a further

@@ -1,4 +1,4 @@
-import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type { ExtensionFactory, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { identifyingToolArgs } from "../presentation/tool-identity.ts";
 import { singleLineText } from "../presentation/plain-text.ts";
 import type { ActiveTool, GenerationPreview } from "./activity-types.ts";
@@ -21,13 +21,25 @@ export interface ChildActivitySnapshot extends GenerationPreview {
   active_tools: ActiveTool[];
   tool_uses: number;
 }
+/** A live per-session renderer resolver; the bound session is never handed on. */
+export type ToolRendererLookup = (name: string) => ToolRenderers | undefined;
+
 export interface ChildActivityObservation {
   /** Pure invalidation hints; optional for structural observation sources. */
   readonly presentationRevision?: number;
+  /** Stable opaque token whose identity changes only when the live renderer
+   * binding changes (bind/unbind/retire). Renderer lookups and stream
+   * messages never change it, so a UI epoch keyed on this token rebuilds
+   * callback-bearing blocks only across a real binding change — not on every
+   * presentationRevision bump. */
+  readonly toolRenderersRevision?: unknown;
   historyState?(): ActivityHistoryState | undefined;
   snapshot(): ChildActivitySnapshot;
   entries(): unknown[] | undefined;
   inFlight(): unknown;
+  /** Live renderer projection for one tool name, or undefined for the UI's
+   * own raw fallback (unknown tool, missing API, closed session). */
+  toolRenderers?(name: string): ToolRenderers | undefined;
 }
 export interface ActivityObservationSource {
   get(agent_id: string): ChildActivityObservation | undefined;
@@ -48,6 +60,10 @@ export class ChildActivity implements ChildActivityObservation {
   private sessions?: SessionEntries;
   private revision = 0;
   private history?: ActivityHistoryState;
+  /** Live renderer resolver; undefined after unbind/retire (raw fallback). */
+  private rendererLookup?: ToolRendererLookup;
+  /** Stable per-instance opaque token; replaced only on binding changes. */
+  private rendererToken: unknown = Object.freeze({});
   constructor(private readonly cwd: string) {}
 
   private clearPreviews(): void {
@@ -66,6 +82,9 @@ export class ChildActivity implements ChildActivityObservation {
     pi.on("session_start", (_event, ctx) => {
       this.sessions = ctx.sessionManager;
       this.history = undefined;
+      // A new session (or reload) invalidates the bound resolver; the retained
+      // SessionManager/entries access above stays exactly as it was.
+      this.retireToolRenderers();
       this.revision++;
     });
     pi.on("turn_start", () => this.clearGeneration());
@@ -81,6 +100,9 @@ export class ChildActivity implements ChildActivityObservation {
     pi.on("session_shutdown", () => {
       this.clearGeneration();
       this.running.clear();
+      // Backstop retirement: the factory's dispose/catch unbinds first, because
+      // an earlier handler can block this one from running at all.
+      this.retireToolRenderers();
     });
     pi.on("tool_execution_start", (event) => {
       this.revision++;
@@ -190,6 +212,49 @@ export class ChildActivity implements ChildActivityObservation {
   inFlight(): unknown {
     return this.streaming;
   }
+  /** Bind the live renderer resolver. The returned unbind is idempotent and
+   * matched to this call's own binding token, not to the lookup function:
+   * rebinding the same function still supersedes the older unbind, and no
+   * unbind can ever clear a newer binding. Only bind/unbind/retire change
+   * the opaque token — never a lookup — and each change bumps
+   * presentationRevision to wake the UI. */
+  bindToolRenderers(lookup: ToolRendererLookup): () => void {
+    const binding = Object.freeze({});
+    this.rendererLookup = lookup;
+    this.rendererToken = binding;
+    this.revision++;
+    let unbound = false;
+    return () => {
+      if (unbound) return;
+      unbound = true;
+      if (this.rendererToken === binding) {
+        this.rendererLookup = undefined;
+        this.rendererToken = Object.freeze({});
+        this.revision++;
+      }
+    };
+  }
+  /** Drop the live resolver (registry/factory cleanup, a new session's
+   * session_start, session_shutdown). Retained history and entries stay;
+   * the UI falls back to its own raw rendering. */
+  retireToolRenderers(): void {
+    if (this.rendererLookup === undefined) return;
+    this.rendererLookup = undefined;
+    this.rendererToken = Object.freeze({});
+    this.revision++;
+  }
+  get toolRenderersRevision(): unknown {
+    return this.rendererToken;
+  }
+  toolRenderers(name: string): ToolRenderers | undefined {
+    const lookup = this.rendererLookup;
+    if (lookup === undefined) return undefined;
+    try {
+      return lookup(name);
+    } catch {
+      return undefined;
+    }
+  }
 }
 
 /** Owns activity observers independently from the widget's display lifetime. */
@@ -206,9 +271,16 @@ export class ChildActivityRegistry {
     return created;
   }
   retain(agent_ids: ReadonlySet<string>): void {
-    for (const id of this.activities.keys()) if (!agent_ids.has(id)) this.activities.delete(id);
+    for (const [id, activity] of this.activities) {
+      if (agent_ids.has(id)) continue;
+      // Retire the live resolver before dropping the observation, so a still
+      // held UI reference stops calling into an untracked session.
+      activity.retireToolRenderers();
+      this.activities.delete(id);
+    }
   }
   clear(): void {
+    for (const activity of this.activities.values()) activity.retireToolRenderers();
     this.activities.clear();
   }
 }

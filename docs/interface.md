@@ -444,10 +444,40 @@ compaction-aware branch it displays raw messages, including failed attempts
 omitted from model context by SDK retry; context edits do not rewrite this
 transcript. It scrolls independently of the surrounding pane and follows the
 live tail until the reader scrolls away; **End** returns to the tail and resumes
-following. Tool cards use supplied display callbacks when available, otherwise
-a bounded generic arguments/output card. Display callbacks do not execute the
-recorded tool. Final row filtering removes OSC 133 markers so repeated viewport
-emission does not manufacture terminal prompt boundaries. Recorded tool output remains available
+following. Tool cards resolve the child's renderers through the public SDK
+registry and resolver chain. Built-in definitions such as `read`, `bash` and
+`edit` already carry native renderers; extension overrides keep their resolver
+order. Only `renderCall`, `renderResult` and `renderShell` reach the UI, not an
+executable tool definition or the child session. Unknown or unavailable
+renderers use the bounded generic arguments/output card. Retired/blocked tool
+names and malformed communication calls stay literal, even if a resolver would
+recognize them.
+
+The lookup is live and does not cache unknown names. Shutdown, disposal and
+observation eviction detach it; a separate binding token rebuilds existing
+cards without dropping retained history, so a closed child's transcript can
+fall back to generic cards instead of querying its disposed registry. Normal
+streaming updates do not change that token. A token reader must return
+synchronously with the same identity until a real binding change; allocating
+one on every read violates that contract. If reading throws, custom display
+callbacks are suspended and the call/result use bounded raw cards instead.
+Read failure is distinct from a legitimate `undefined` token: a later successful
+read starts a new display epoch and replays retained records, even if the
+successful value is `undefined`. Old callbacks and invalidation handles remain
+retired throughout; this does not recover Owner/session state.
+Historical cards are not marked as arguments-complete or execution-started: the native edit renderer must not
+read today's worktree to manufacture a preview of an old edit. Its displayed
+result comes from the recorded result data. Argument and result data use the
+isolated display projections described below.
+Final transcript rows retain theme SGR and complete OSC 8 hyperlinks, but strip
+other terminal protocols, including OSC 52 clipboard controls and OSC 133
+markers. Repeated viewport emission must not manufacture terminal prompt
+boundaries or execute control sequences embedded in a recorded native diff.
+Outside preserved display protocols, remaining control and bidirectional-control
+characters are displayed explicitly. Tabs in custom component rows remain visible
+`\x09` spellings, not terminal tab stops. This is row-display filtering, not a
+content redactor, a guarantee of visible glyphs or an OS sandbox.
+Recorded tool output remains available
 in the detail transcript; tool arguments in the compact widget remain restricted
 to identifying fields. Preview simplification does not rewrite the native transcript.
 
@@ -478,13 +508,10 @@ callback failure or a retained work-copy reference cannot corrupt the fallback.
 A fallback does not reread the original history. Renderer state and the original
 `lastComponent` identities still persist across successful callback updates.
 
-Final transcript rows retain SGR and complete OSC 8 links while dropping other
-terminal protocols. Controls/bidi outside preserved protocols are visible
-escapes; custom component row tabs stay `\x09`, not terminal tab stops. Preserving
-SGR also preserves effects such as conceal. OSC 8 parameters/URIs can retain
-Unicode bidi characters; links are not validated destinations. Neither styling
-preservation nor row filtering guarantees visual truthfulness of arbitrary
-trusted renderer output, redacts secrets, or grants permission to follow a link.
+Preserving SGR also preserves effects such as conceal. OSC 8 parameters/URIs can
+retain Unicode bidi characters; links are not validated destinations. Neither
+styling preservation nor final row filtering guarantees visual truthfulness of
+arbitrary trusted renderer output or grants permission to follow a link.
 
 Each tool card scopes renderer invalidation to its live binding and its own
 presentation lifetime. Binding changes, history rewrites, theme replacement and

@@ -29,6 +29,11 @@ export const createEventBus = () => ({});
 export const createAgentSession = () => {};
 export const requireReadiness = () => {};
 export const createChildTools = () => [];
+export const createChildToolRendererLookup = (session) => {
+  const lookup = () => undefined;
+  state.rendererLookups.push({ session, lookup });
+  return lookup;
+};
 export const webProfileNames = ["researcher"];
 export const childWebExtension = (factory) => factory;
 export const orderFreeToolSchemaExtension = () => {};
@@ -128,6 +133,9 @@ function fixture(t, profile = "editor") {
     blockFlushes: 0,
     blockUnsubscribes: 0,
     activities: [],
+    rendererLookups: [],
+    rendererBinds: [],
+    rendererUnbinds: 0,
     approvalBegins: [],
     cleanupReport: { shutdownExited: true, errors: [] },
   });
@@ -181,7 +189,19 @@ function fixture(t, profile = "editor") {
     activities: {
       track: (id, cwd) => {
         seam.state.activities.push({ id, cwd });
-        return { extension() {}, begin() {} };
+        return {
+          extension() {},
+          begin() {},
+          bindToolRenderers(lookup) {
+            seam.state.rendererBinds.push({ id, lookup });
+            let unbound = false;
+            return () => {
+              if (unbound) return;
+              unbound = true;
+              seam.state.rendererUnbinds++;
+            };
+          },
+        };
       },
     },
     web: { acquire: async () => ({ factory() {}, release: () => webReleases.push("released") }) },
@@ -389,4 +409,58 @@ for (const rejected of [false, true])
       assert.equal((await port.dispose()).shutdownExited, false);
     }
     assert.deepEqual(f.webReleases, []);
+  });
+
+test("renderer lookup is created for the assembled session and bound exactly once at handoff", async (t) => {
+  const f = fixture(t),
+    port = await f.create();
+  // The lookup is created for the assembled child session — never the parent
+  // context or the agent record — and the factory binds exactly what it got.
+  assert.equal(seam.state.rendererLookups.length, 1);
+  assert.equal(seam.state.rendererLookups[0].session.sessionId, port.session_id);
+  assert.notEqual(seam.state.rendererLookups[0].session.sessionId, f.options.parentId);
+  assert.equal(seam.state.rendererBinds.length, 1);
+  assert.equal(seam.state.rendererBinds[0].id, f.agent.agent_id);
+  assert.equal(seam.state.rendererBinds[0].lookup, seam.state.rendererLookups[0].lookup);
+  assert.equal(seam.state.rendererUnbinds, 0, "handoff binds without unbinding");
+  await port.dispose();
+  assert.equal(seam.state.rendererUnbinds, 1, "dispose unbinds the bound lookup");
+  assert.equal(seam.state.rendererBinds.length, 1, "bind history is not rewritten");
+});
+
+for (const failure of ["badThinking", "sessionIdOverride"])
+  test(`${failure} handoff binds no renderer lookup and leaves no residue`, async (t) => {
+    const f = fixture(t, "researcher");
+    if (failure === "badThinking") seam.state.badThinking = true;
+    else seam.state.sessionIdOverride = "unexpected-sdk-session";
+    await assert.rejects(f.create());
+    // Bind happens only after identity verification and adapter creation, so
+    // a failed handoff records no lookup, no binding and no unbind. (The
+    // post-bind defensive unbind in the factory catch is unreachable through
+    // this seam: nothing between bind and return can throw here.)
+    assert.deepEqual(seam.state.rendererLookups, []);
+    assert.deepEqual(seam.state.rendererBinds, []);
+    assert.equal(seam.state.rendererUnbinds, 0);
+  });
+
+for (const disposal of ["hanging", "throwing"])
+  test(`${disposal} port disposal still unbinds renderers at dispose entry`, async (t) => {
+    const f = fixture(t, "researcher"),
+      port = await f.create();
+    assert.equal(seam.state.rendererUnbinds, 0);
+    if (disposal === "hanging") {
+      // The unbind runs before the disposal await, so a disposal that never
+      // settles cannot leave the renderer binding live behind it.
+      const deferred = Promise.withResolvers();
+      seam.state.disposal = deferred.promise;
+      const pending = port.dispose();
+      assert.equal(seam.state.rendererUnbinds, 1, "unbind precedes the disposal await");
+      deferred.resolve(seam.state.cleanupReport);
+      await pending;
+    } else {
+      seam.state.disposeError = new Error("synthetic disposal rejection");
+      await assert.rejects(port.dispose(), /synthetic disposal rejection/);
+      assert.equal(seam.state.rendererUnbinds, 1, "a throwing disposal still unbinds first");
+    }
+    assert.equal(seam.state.rendererBinds.length, 1);
   });

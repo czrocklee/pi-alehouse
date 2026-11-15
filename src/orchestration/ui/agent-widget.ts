@@ -1,3 +1,4 @@
+import type { ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { terminal, type RunView } from "../core/contracts.ts";
 import { reported } from "../core/usage-ledger.ts";
@@ -108,6 +109,10 @@ export interface AgentDetail {
   entries(): unknown[] | undefined;
   historyState?(): ActivityHistoryState | undefined;
   inFlight(): unknown;
+  /** Display callbacks only, never an executable tool definition or session. */
+  toolRenderers?(name: string): ToolRenderers | undefined;
+  /** Stable opaque binding token; unlike streaming activity it changes rarely. */
+  toolRenderersRevision?(): unknown;
 }
 interface WidgetController {
   /** Presentation hint only. Commands and explicit inspection remain fresh. */
@@ -281,7 +286,7 @@ export class AgentWidget {
       const child = this.activities.get(id);
       const history = child?.historyState?.();
       if (child && (child.presentationRevision === undefined || !history)) return undefined;
-      key.push(id, child, child?.presentationRevision, history);
+      key.push(id, child, child?.presentationRevision, history, child?.toolRenderersRevision);
     }
     if (
       key.length !== this.versionKey.length ||
@@ -304,6 +309,8 @@ export class AgentWidget {
         entries: () => this.activities.get(view.agent_id)?.entries(),
         historyState: () => this.activities.get(view.agent_id)?.historyState?.(),
         inFlight: () => this.activities.get(view.agent_id)?.inFlight(),
+        toolRenderers: (name) => this.activities.get(view.agent_id)?.toolRenderers?.(name),
+        toolRenderersRevision: () => this.activities.get(view.agent_id)?.toolRenderersRevision,
       };
     });
   }

@@ -1439,7 +1439,14 @@ for (const queued of [false, true])
     const opening = h.open(),
       target = second ?? first;
     if (widget.agents()[0].agent_id !== target.agent_id) h.pane.activate(target.agent_id);
-    arm(h.pane);
+    // Compare confirmation frames at one instant, not across an elapsed-time boundary.
+    const sampledNow = performance.now();
+    const now = t.mock.method(performance, "now", () => sampledNow);
+    try {
+      arm(h.pane);
+    } finally {
+      now.mock.restore();
+    }
     admission.enabled = false;
     admission.revision++;
     h.pane.handleInput(CONFIRM);

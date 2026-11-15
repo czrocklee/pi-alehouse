@@ -3,10 +3,10 @@
  * the main one. The SDK/TUI half of the detail pane: `agent-detail.ts` stays pure and
  * reaches this only through `TranscriptRows`.
  *
- * One gap that is not ours to close: Pi's built-in tool renderers live behind a
- * path its `exports` map does not expose, and a built-in definition carries
- * none of its own, so `read`/`bash`/`edit` fall back to plain text.
- * Unrecognized recorded tools render as raw transcript data — through the
+ * Tool presentation comes from the child's public renderer registry, including
+ * native renderers carried by its built-in definitions. The UI receives only
+ * display callbacks, not executable definitions or the child session. Missing
+ * or retired tool renderers fall back to literal transcript data through the
  * SDK's own bounded generic card, since its definition-less dump prints full
  * arguments regardless of `expanded`. Rendering never interprets a record as
  * a current tool or hydrates alerts or questions.
@@ -50,8 +50,8 @@ import { blockedDelegationToolNames } from "../tools/tool-names.ts";
 import { paneRow, type TranscriptFrame, type TranscriptRows } from "./format.ts";
 import { plainText } from "./text.ts";
 import { CommunicationBubble } from "./communication-bubble.ts";
-import { TranscriptToolCard } from "./transcript-tool-card.ts";
 import { detachedToolResult } from "./tool-result-projection.ts";
+import { TranscriptToolCard } from "./transcript-tool-card.ts";
 
 /** Where a child's messages come from. Structural, so the pane never holds a session. */
 export interface TranscriptSource {
@@ -59,9 +59,11 @@ export interface TranscriptSource {
   messages(): readonly unknown[];
   /** The assistant message being streamed right now, or undefined. */
   inFlight(): unknown;
-  /** The child's registered definition for a tool, for custom renderers. */
-  toolDefinition(name: string): unknown;
-  /** Binding changes retire existing cards; token updates must not change it. */
+  /** The child's renderer-only projection, never its executable definition. */
+  toolDefinition(name: string): ToolRenderers | undefined;
+  /** Synchronous identity, stable until a real binding change (not per-read
+   * allocation or stream updates). Thrown reads suspend custom renderers and
+   * use raw cards until a successful read starts a new display epoch. */
   toolRenderersRevision?(): unknown;
 }
 export interface TranscriptOptions {
@@ -125,6 +127,12 @@ const COMMUNICATION_DISPLAY = {
  * customizing anything, so unknown tools stay literal raw data — collapsed to
  * a preview until expanded. */
 const RAW_RENDERERS: ToolRenderers = {};
+/** Failed reads are not a legitimate missing/undefined binding. Keep a stable
+ * raw-only epoch so records stay visible and recovery always replays them. */
+const UNAVAILABLE_RENDERER_BINDING = Symbol("unavailable renderer binding");
+interface RendererBinding {
+  readonly value: unknown;
+}
 
 /** Detached display arguments, not execution arguments. Escape controls and
  * backslashes without deleting protocol payloads or normalizing code whitespace.
@@ -252,7 +260,11 @@ export class TranscriptContent implements TranscriptRows {
   private consumed = 0;
   private consumedMessages: readonly unknown[] = [];
   private messagesIdentity: readonly unknown[] | undefined;
-  private toolRenderersRevision: unknown;
+  private toolRenderersRevision: RendererBinding | undefined;
+  /** Track every observed transition, including failures seen by a saved
+   * handle before frame sync. Returning to the same source token cannot then
+   * revive a card from an earlier observation epoch. */
+  private observedRendererBinding: RendererBinding | undefined;
   /** Whether anything above a user message was rendered, driving its spacer. */
   private visible = false;
   /** Every tool card this pane created, for the presentation-only expansion
@@ -548,15 +560,25 @@ export class TranscriptContent implements TranscriptRows {
     this.layout = undefined;
   }
 
+  /** The same guarded observation drives frame sync and immediate callback
+   * freshness. In particular, a failure cannot accidentally authorize an old
+   * callback or masquerade as a successful undefined-token read. */
+  private readRendererBinding(): RendererBinding {
+    let value: unknown;
+    try {
+      value = this.options.source.toolRenderersRevision?.();
+    } catch {
+      value = UNAVAILABLE_RENDERER_BINDING;
+    }
+    if (!this.observedRendererBinding || this.observedRendererBinding.value !== value)
+      this.observedRendererBinding = { value };
+    return this.observedRendererBinding;
+  }
+
   /** Retire callback-bearing components before any SDK operation can render
    * or invalidate them, not only before the next frame samples the history. */
   private syncRendererBinding(): void {
-    let revision: unknown;
-    try {
-      revision = this.options.source.toolRenderersRevision?.();
-    } catch {
-      // A presentation lookup failure is not an Owner/session failure.
-    }
+    const revision = this.readRendererBinding();
     if (revision !== this.toolRenderersRevision) {
       this.reset();
       this.toolRenderersRevision = revision;
@@ -646,18 +668,22 @@ export class TranscriptContent implements TranscriptRows {
       if (content?.type !== "toolCall") continue;
       // Semantic matching first, on the original exact name and arguments; the
       // component itself is handed only the detached, terminal-safe projection.
+      const binding = this.toolRenderersRevision;
       let renderers: ToolRenderers = RAW_RENDERERS;
-      if (Object.hasOwn(COMMUNICATION_DISPLAY, content.name)) {
-        // Malformed current calls and retired names cannot gain a message
-        // presentation from a live registry lookup.
-        renderers = communicationRenderers(content.name, content.arguments) ?? RAW_RENDERERS;
-      } else if (!blockedDelegationToolNames.includes(content.name)) {
-        renderers =
-          (this.options.source.toolDefinition(content.name) as ToolRenderers | undefined) ??
-          RAW_RENDERERS;
+      if (binding?.value !== UNAVAILABLE_RENDERER_BINDING) {
+        if (Object.hasOwn(COMMUNICATION_DISPLAY, content.name)) {
+          // Malformed communication records stay raw, even if a resolver would
+          // recognize their names. The message bubble remains the exact match.
+          renderers = communicationRenderers(content.name, content.arguments) ?? RAW_RENDERERS;
+        } else if (!blockedDelegationToolNames.includes(content.name)) {
+          try {
+            renderers = this.options.source.toolDefinition(content.name) ?? RAW_RENDERERS;
+          } catch {
+            // An unavailable resolver must not hide the recorded call or result.
+          }
+        }
       }
       const projection = sanitizedToolProjection(content.name, content.arguments);
-      const binding = this.toolRenderersRevision;
       const tool = new TranscriptToolCard({
         name: projection.name,
         callId: content.id,
@@ -665,15 +691,17 @@ export class TranscriptContent implements TranscriptRows {
         renderers,
         tui: this.options.tui,
         cwd: this.options.cwd,
-        isCurrent: () => this.options.source.toolRenderersRevision?.() === binding,
+        isCurrent: () => this.readRendererBinding() === binding,
         changed: () => {
           block.rows = undefined;
           this.rows = undefined;
           this.layout = undefined;
         },
       });
-      // A fresh card is active/incomplete (or already failed below), so it
-      // starts expanded; a successful result later collapses it when the
+      // Do not mark historical arguments complete or execution started: some
+      // native renderers would then read today's worktree for a preview diff.
+      // Only recorded results belong here. A fresh card starts expanded; a
+      // successful result later collapses it when the
       // pane's mode asks for it.
       tool.setExpanded(true);
       const entry: ToolEntry = {

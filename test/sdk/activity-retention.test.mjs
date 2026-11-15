@@ -8,8 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as sdk from "@earendil-works/pi-coding-agent";
 import * as ai from "@earendil-works/pi-ai";
+import { createJiti } from "jiti";
 import { OwnerController } from "../../dist/orchestration/core/owner-controller.js";
-import { ChildActivity } from "../../dist/orchestration/runtime/activity-observer.js";
 import {
   ChildRunGate,
   PiAgentSessionAdapter,
@@ -17,6 +17,11 @@ import {
 import { renderDetailFields } from "../../dist/orchestration/ui/agent-detail.js";
 import { TranscriptContent } from "../../dist/orchestration/ui/transcript.js";
 import { deferred, until } from "../support/controller-fixture.mjs";
+
+// The activity observer is under active child tool-renderer changes: load
+// the real source, never a stale dist build.
+const jiti = createJiti(import.meta.url, { fsCache: false });
+const { ChildActivity } = await jiti.import("../../src/orchestration/runtime/activity-observer.ts");
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const theme = { fg: (_color, text) => text, bold: (text) => text };

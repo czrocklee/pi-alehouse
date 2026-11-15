@@ -24,6 +24,7 @@ import { createChildTools } from "../tools/child-tools.ts";
 import { webProfileNames, type AgentProfileName } from "../tools/tool-names.ts";
 import { PiAgentSessionAdapter, ChildRunGate } from "./agent-session.ts";
 import type { ChildActivityRegistry } from "./activity-observer.ts";
+import { createChildToolRendererLookup } from "./child-tool-renderers.ts";
 import { assembleChildSession, disposeChildSession } from "./child-session.ts";
 import { childWebExtension, type ChildWebModules, type WebLease } from "./child-web.ts";
 import { digest } from "./context-snapshot.ts";
@@ -173,6 +174,10 @@ export function createChildSessionFactory(options: {
           : {}),
       },
     });
+    // The renderer unbind is identity-matched inside ChildActivity: this
+    // closure's unbind can never clear a newer binding for a replacement
+    // session of the same agent.
+    let unbindRenderers: (() => void) | undefined;
     const child = await assembleChildSession({
       createSession: createAgentSession,
       options: {
@@ -220,6 +225,11 @@ export function createChildSessionFactory(options: {
             agent.settings.definition_digest,
           ),
       });
+      // Bind the live tool-renderer resolver only after readiness, identity
+      // verification and adapter creation, before handoff. The UI reads it
+      // solely through the activity's projected observation; the session
+      // itself never reaches the UI.
+      unbindRenderers = activity.bindToolRenderers(createChildToolRendererLookup(child.session));
       return {
         session_id: port.session_id,
         history: port.history,
@@ -276,6 +286,11 @@ export function createChildSessionFactory(options: {
         },
         clearInputs: () => port.clearInputs(),
         dispose: async () => {
+          // Unbind at dispose entry: session_shutdown retirement is only a
+          // backstop, since an earlier handler can block it. Renderer
+          // cleanup adds no step to and never reorders the existing
+          // callbacks/gates/webLease lifecycle below.
+          unbindRenderers?.();
           blocks.end();
           const report = await port.dispose();
           stats.dispose();
@@ -284,6 +299,10 @@ export function createChildSessionFactory(options: {
         },
       };
     } catch (error) {
+      // Failed handoff: unbind before child session disposal, for the same
+      // blocked-handler reason as the dispose entry. Nothing here affects the
+      // cleanup order below.
+      unbindRenderers?.();
       stats.dispose();
       // No prompt has started before handoff; disposal itself checks idle.
       try {
