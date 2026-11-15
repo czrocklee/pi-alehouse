@@ -96,6 +96,24 @@ test("generated managed definitions deny all current/retired parent tools and no
   }
 });
 
+test("shared child prompt retains help-seeking and result-reporting guidance", () => {
+  const common = readFileSync(new URL("../../resources/agent.md", import.meta.url), "utf8");
+  for (const fact of [
+    /after substantive investigation/,
+    /ask_parent, explaining the blocker/,
+    /independent work before asking when practical/,
+    /without further parent input, report it/,
+  ])
+    assert.match(common, fact);
+  assert.doesNotMatch(
+    common,
+    /stop calling tools|Only the first question|returning a blocked result/,
+  );
+  assert.doesNotMatch(common, /\bd[1-5]\b/i, "help-seeking is not tied to a routing slot");
+  const { agents } = renderWorkers();
+  for (const definition of [agents.editor, agents.researcher]) assert(definition.includes(common));
+});
+
 test("scout source guidance supports local and web synthesis without worker execution or model-tier assumptions", () => {
   const { agents } = renderWorkers();
   const common = readFileSync(new URL("../../resources/agent.md", import.meta.url), "utf8");

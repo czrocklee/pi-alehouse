@@ -186,11 +186,20 @@ synthesis, extraction, citation and untrusted-data discipline. The generator
 composes that common text, the profile body, and any optional existing
 `profile.prompt`. The researcher profile's trust text moves from
 `profile.prompt` into `resources/scout.md`; the internal ID stays
-`researcher`. Guidance is not enforcement. [Runtime feedback](runtime-feedback.md)
-adds partial exact-tool block summaries, not a semantic denial counter or
-availability diagnosis. The explicitly assigned validation owner must report
-actual comparisons, platform/configuration, commands and unrun, blocked,
-interrupted or zero-match checks. Keep temporary evidence outside source.
+`researcher`. Shared guidance encourages scoped completion and asking for help
+when progress needs inputs unavailable within scope, decisions beyond delegated
+discretion, or help after substantive investigation stalls. It encourages useful
+independent work before asking where practical, without delaying needed parent
+decisions.
+Requested failure, unknown or limit findings remain normal results when no
+further parent input is needed. Child tool descriptions own question recording
+and end-turn mechanics rather than repeating that guidance. This is not progress
+detection or enforcement; prompt tests check wording, not model behavior.
+[Runtime feedback](runtime-feedback.md) adds partial exact-tool block summaries,
+not a semantic denial counter or availability diagnosis. The explicitly assigned
+validation owner must report actual comparisons, platform/configuration,
+commands and unrun, blocked, interrupted or zero-match checks. Keep temporary
+evidence outside source.
 Edits to those prompt sources change generated digests: use matched resources
 and a fresh process, never replace user files or claim documentation changes
 as validation or deployment acceptance.

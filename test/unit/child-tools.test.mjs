@@ -49,6 +49,15 @@ test("children expose exactly two closed communication tools, without notificati
     assert.equal(tool.parameters.properties[key].maxLength, 8192);
     assert.equal(tool.parameters.properties[key].pattern, "\\S");
   }
+  const [alert, ask] = tools;
+  assert.equal(
+    alert.description,
+    "Queue a decision-relevant fact, then continue. Queued does not mean read; no new parent turn.",
+  );
+  assert.equal(
+    ask.description,
+    "Record a blocking question for the parent, then stop calling tools and end your turn so the task can settle for an answer. Only the first question is kept.",
+  );
 });
 
 for (const [name, key] of [

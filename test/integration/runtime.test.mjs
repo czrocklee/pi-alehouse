@@ -40,7 +40,7 @@ test("portable generator matches role-specific agent bytes and policy digests", 
   const { agents, metadata } = renderWorkers();
   assert.equal(
     metadata.editor.digest,
-    "adf3518371e3dec7ab1654704d81118cc893d4ee81c801b6dee238fce14d7d23",
+    "5dbf16a1684389648c07e3b1464a14c9d18a16c01a4fa11bbe6df97a246b91a3",
   );
   const { editor } = JSON.parse(
     readFileSync(join(packageRoot, "resources/worker-policy.json"), "utf8"),
@@ -63,7 +63,7 @@ test("portable generator matches role-specific agent bytes and policy digests", 
   assert.deepEqual(Object.keys(metadata).sort(), ["editor", "researcher"]);
   assert.equal(
     metadata.researcher.digest,
-    "284bd725144fe057aa69dc6f1995c44f0426b2a2d25a0c6cad2a1c5381bfd29a",
+    "c243bd9f2b2016c19d623b505fe8aa72e7becd8bb264f571fbdd8353d01b136b",
   );
   for (const name of Object.keys(metadata)) {
     const worker = agents[name];

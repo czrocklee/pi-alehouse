@@ -47,7 +47,7 @@ export function createChildTools(
       description:
         name === "ask_parent"
           ? "Record a blocking question for the parent, then stop calling tools and end your turn so the task can settle for an answer. Only the first question is kept."
-          : "Queue a decision-relevant fact, then continue. Queued does not mean read; no new parent turn. For a required decision, use ask_parent and finish.",
+          : "Queue a decision-relevant fact, then continue. Queued does not mean read; no new parent turn.",
       async execute(_id: string, args: unknown) {
         // Like owner tools, recheck AFTER mutable SDK tool_call hooks, before
         // callbacks can enqueue an alert or record the first question.
