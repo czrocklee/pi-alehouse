@@ -668,11 +668,14 @@ not isolated by this observation.
 The Subagents roster aligns identity, configuration and compact metrics before
 the final variable-length task label when width permits. Columns use spaces,
 not additional vertical dividers, and metrics follow configuration rather than
-anchoring to the terminal's right edge. Optional model/ordinary metrics yield
-before essential facts, bounded causes and the preferred title allocation;
-the 24-cell title preference excludes the suffix width. Tight rows retain
-compact facts in the trailing task field, never a separate attention prefix. Questions precede
-live execution, then attention/queued/recent failed and finished tasks, stably
+anchoring to the terminal's right edge. Within metric columns, the turn marker
+and context label align left and values align right, with any padding between
+them; absent context observations remain a bare right-aligned dash.
+Optional model/ordinary metrics yield before essential facts, bounded causes and
+the preferred title allocation; the 24-cell title preference excludes the suffix
+width. Tight rows retain compact facts in the trailing task field, never a separate
+attention prefix. Questions precede live execution, then attention/queued/recent
+failed and finished tasks, stably
 within each group. Only unanswered questions and pending messages bypass normal
 finished-row linger; historical warnings and reached turn limits do not keep old
 rows permanently visible. Released diagnostics still expire. Compact overflow

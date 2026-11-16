@@ -1500,9 +1500,33 @@ test("wide roster columns align by terminal cells across variable, CJK and ANSI 
           1,
           tokens.join(", "),
         );
+      // Labeled metrics keep the label at the shared left edge and
+      // right-align the numeric value inside the same column width.
+      const labeled = [
+        {
+          prefix: "↻",
+          raw: ["↻3/256", "↻120/1024", "↻0/8"],
+          values: ["3/256", "120/1024", "0/8"],
+        },
+        {
+          prefix: "ctx ",
+          raw: ["ctx 27%", "ctx 100%", "ctx 0%"],
+          values: ["27%", "100%", "0%"],
+        },
+      ];
+      for (const { prefix, values } of labeled) {
+        assert.equal(
+          new Set(body.map((line) => position(line, prefix))).size,
+          1,
+          `${prefix} labels share a left edge`,
+        );
+        assert.equal(
+          new Set(body.map((line, i) => position(line, values[i], "end"))).size,
+          1,
+          `${prefix} values share a right edge`,
+        );
+      }
       const metrics = [
-        ["↻3/256", "↻120/1024", "↻0/8"],
-        ["ctx 27%", "ctx 100%", "ctx 0%"],
         ["$0.27", "$12.30", "$0.00"],
         ["12.4s", "62m03s", "1.0s"],
       ];
@@ -1512,6 +1536,13 @@ test("wide roster columns align by terminal cells across variable, CJK and ANSI 
           1,
           tokens.join(", "),
         );
+      // Painted labeled cells pad internally between label and value.
+      const painted = labeled.map(({ prefix, raw, values }) => {
+        const cellWidth = Math.max(...raw.map(visibleWidth));
+        return values.map(
+          (value) => prefix + " ".repeat(cellWidth - visibleWidth(prefix + value)) + value,
+        );
+      });
       for (const [i, line] of body.entries()) {
         assert(
           visibleWidth(line) < width,
@@ -1519,7 +1550,9 @@ test("wide roster columns align by terminal cells across variable, CJK and ANSI 
         );
         assert.doesNotMatch(line, /▸\d/);
         assert.doesNotMatch(line, /[()[\]→]| · /, line);
-        const fields = [...columns.slice(0, 2), ...metrics, columns[2]].map((tokens) => tokens[i]);
+        const fields = [...columns.slice(0, 2), ...painted, ...metrics, columns[2]].map(
+          (tokens) => tokens[i],
+        );
         for (let column = 0; column < fields.length - 1; column++) {
           const gap = line.slice(
             line.indexOf(fields[column]) + fields[column].length,
@@ -1595,6 +1628,7 @@ test("pagination and missing observations preserve roster-wide column anchors wi
     }),
   );
   const starts = new Set(),
+    turnStarts = new Set(),
     ends = new Set(),
     seen = [];
   for (let page = 0, pages = 1; page < pages; page++) {
@@ -1614,8 +1648,11 @@ test("pagination and missing observations preserve roster-wide column anchors wi
       if (!id) continue;
       const line = frame.lines[index];
       starts.add(visibleWidth(line.slice(0, line.indexOf("Review task"))));
-      const turn = line.match(/↻\d+\/256/);
+      // The label keeps the column's left edge; find the numeric end past
+      // the internal padding a wider sibling page introduces.
+      const turn = line.match(/↻ *\d+\/256/);
       assert(turn, line);
+      turnStarts.add(visibleWidth(line.slice(0, turn.index)));
       ends.add(visibleWidth(line.slice(0, turn.index + turn[0].length)));
       if (id === "page-0") {
         assert.doesNotMatch(line, /\$|ctx/, "missing observations are not measured zeroes");
@@ -1634,6 +1671,7 @@ test("pagination and missing observations preserve roster-wide column anchors wi
     1,
     "a longer identity on a later page sets the task anchor on every page",
   );
+  assert.equal(turnStarts.size, 1, "turn markers share their left edge across all pages");
   assert.equal(ends.size, 1, "larger later-page turn values set a shared metric width");
 });
 
@@ -1918,13 +1956,15 @@ test("fixed metadata precedes trailing labels without stretching to ultrawide te
                 "复核🦉",
                 "scout/d5",
                 "fixture/xhigh",
-                "↻120/1024",
-                "ctx 90%",
+                "↻",
+                "120/1024",
+                "ctx",
+                "90%",
                 "≥$1.15",
                 "12.4s",
                 "核对任务",
               ]
-            : ["a", "worker/d3", "m/high", "↻0/8", "ctx 0%", "$0.00", "12.4s", "Review"];
+            : ["a", "worker/d3", "m/high", "↻", "0/8", "ctx", "0%", "$0.00", "12.4s", "Review"];
         let after = 0;
         for (const token of tokens) {
           const at = line.indexOf(token, after);

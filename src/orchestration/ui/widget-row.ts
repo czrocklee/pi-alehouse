@@ -50,6 +50,8 @@ type Metric = "turns" | "turnClock" | "context" | "cost" | "elapsed";
 interface Cell {
   text: string;
   color: string;
+  /** Keep a metric label at the left edge and right-align its value. */
+  prefix?: string;
   /** A non-applicable turn clock is blank, not an unknown observation. */
   blank?: boolean;
 }
@@ -151,6 +153,7 @@ export function prepareWidgetRow(run: WidgetRun, headerClock = false): WidgetRow
     cells: {
       turns: {
         text: `${GLYPHS.turns}${run.turns}/${run.max_turns}`,
+        prefix: GLYPHS.turns,
         color: run.max_turns > 0 && run.turns / run.max_turns >= 0.8 ? "warning" : "dim",
       },
       turnClock: { text: clock?.text ?? "", color: clock?.color ?? "dim", blank: true },
@@ -158,6 +161,7 @@ export function prepareWidgetRow(run: WidgetRun, headerClock = false): WidgetRow
         text: run.runtime?.context
           ? `ctx ${shownContext === undefined ? "?" : `${shownContext}%`}`
           : "",
+        prefix: "ctx ",
         color:
           context === undefined
             ? "dim"
@@ -278,8 +282,8 @@ function taskText(
     (plan.title ? theme.fg(tint, plan.title) : "") + (plan.title && suffix ? " " : "") + suffix
   );
 }
-// truncateToWidth's padding covers left-aligned cells; right-aligned numeric
-// cells still need leading spaces, measured in terminal cells rather than UTF16.
+// truncateToWidth's padding covers left-aligned cells; right-aligned values
+// still need leading spaces, measured in terminal cells rather than UTF16.
 const pad = (text: string, width: number, right = false): string =>
   right
     ? " ".repeat(Math.max(0, width - visibleWidth(text))) + text
@@ -354,8 +358,14 @@ export function renderHeader(
       columns.metrics
         .map(({ key, width }) => {
           const cell = row.cells[key];
+          const text = cell.text || (cell.blank ? "" : "—");
+          const prefix = cell.text ? (cell.prefix ?? "") : "";
           return (
-            "  " + theme.fg(cell.color, pad(cell.text || (cell.blank ? "" : "—"), width, true))
+            "  " +
+            theme.fg(
+              cell.color,
+              prefix + pad(text.slice(prefix.length), width - visibleWidth(prefix), true),
+            )
           );
         })
         .join("") +

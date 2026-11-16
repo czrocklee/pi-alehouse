@@ -103,12 +103,15 @@ test("a lone reached limit adds no attention column or hole before any roster la
       starts.add(position(line, row.description));
       for (const token of ["worker/d3", "m/high"])
         assert.equal(position(line, token), position(old, token));
-      for (const token of [
-        `↻${row.turns}/256`,
-        row.cost === 12.3 ? "$12.30" : row.cost ? "$0.27" : "$0.00",
-        "12.4s",
+      // Adding a limit suffix preserves this row's marker and numeric
+      // anchors relative to its no-limit baseline.
+      for (const [token, atEnd] of [
+        ["↻", false],
+        [`${row.turns}/256`, true],
+        [row.cost === 12.3 ? "$12.30" : row.cost ? "$0.27" : "$0.00", true],
+        ["12.4s", true],
       ])
-        assert.equal(position(line, token, true), position(old, token, true));
+        assert.equal(position(line, token, atEnd), position(old, token, atEnd));
       assert.match(line, /12\.4s {2}(?:Review|复核)/, "only the ordinary two-space gap");
       assert.doesNotMatch(line, /\(\s*\)/, "no empty attention group trails a quiet row");
       if (row.limit_reached) assert(line.endsWith(`${row.description} (turn limit reached)`), line);

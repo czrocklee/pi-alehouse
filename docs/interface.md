@@ -99,9 +99,11 @@ attention suffixes. Pending alerts, recorded warnings and lifecycle wording do
 not occupy a separate column: for example, `Review gate (1 pending)`,
 `Review choice (needs answer)` or `Review failure (failed: SDK broke)`.
 Aligned rows share roster-local column widths, with text left-aligned and
-numeric values right-aligned. Quiet rows reserve no attention padding for
-another Agent's suffix. Groups use spaces, not additional vertical dividers; metrics
-follow configuration instead of being pushed to the terminal's right edge.
+numeric values right-aligned. The turn marker and `ctx` label stay at their
+metric cells' left edges, with extra padding before the values. Quiet rows reserve
+no attention padding for another Agent's suffix. Groups use spaces, not additional
+vertical dividers; metrics follow configuration instead of being pushed to the
+terminal's right edge.
 The nickname is who; the final description is what that Agent is doing on its
 latest Run. For example:
 
