@@ -221,7 +221,7 @@ function bound(root: SchemaNode, raw: unknown, error: BoundError): Orchestration
   const key = resolved.key;
   const count = actualSize(raw, resolved.segments);
   const suffix = count === undefined ? "." : `; it has ${count}.`;
-  const unit = limit === "1" ? "unit" : "units";
+  const unit = limit === "1" ? "character" : "characters";
   switch (error.keyword) {
     case "minItems":
     case "maxItems":
@@ -236,7 +236,7 @@ function bound(root: SchemaNode, raw: unknown, error: BoundError): Orchestration
     case "maxLength":
       return failure({
         key,
-        resolution: `${key} must be a string of at most ${limit} UTF-16 ${unit}${suffix}`,
+        resolution: `${key} must be a string of at most ${limit} ${unit}${suffix}`,
       });
     case "minimum":
       return failure({ key, resolution: `${key} must be at least ${limit}.` });

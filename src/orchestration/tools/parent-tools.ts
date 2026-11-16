@@ -4,6 +4,7 @@ import type { OwnerController } from "../core/owner-controller.ts";
 import { terminal, type ReturnTo, type RunView, type SubmitRequest } from "../core/contracts.ts";
 import { AGENT_EXISTS_RESOLUTION, modelTaskStatus } from "../core/communication-envelope.ts";
 import { taskMetadata } from "../core/task-metadata.ts";
+import { publicDispatchToInternal } from "../core/dispatch.ts";
 import { OrchestrationError } from "../core/ports.ts";
 import { digest, textSnapshot } from "../runtime/context-snapshot.ts";
 import { requireParentAnswerPermission } from "../runtime/parent-answer-permission.ts";
@@ -33,7 +34,7 @@ import { agentProfileNames, blockedDelegationToolNames, internalProfile } from "
 
 export { AGENT_NAME_PATTERN } from "./parent-schemas.ts";
 
-const KILLED_SHOWN = 32;
+const RELEASED_SHOWN = 32;
 
 export interface ToolProfile {
   definition: string;
@@ -199,11 +200,11 @@ function registerAdmissionTools(
                 }
                 // The authority decides under the principal its own agent_answer gate binds.
                 requireParentAnswerPermission(permission, ctx);
-                const target = find(input.return_to.agent, "return_to");
+                const target = find(input.return_to.agent, "return_to.agent");
                 return_to = {
                   agent_id: target.agent_id,
                   question_id: input.return_to.question_id,
-                  answer: input.return_to.answer,
+                  answer: input.return_to.instruction,
                 };
               }
               const profileId = internalProfile(input.profile);
@@ -228,7 +229,9 @@ function registerAdmissionTools(
                 description: input.label,
                 name: input.agent,
                 ...(input.max_turns === undefined ? {} : { max_turns: input.max_turns }),
-                ...(input.dispatch === undefined ? {} : { dispatch: input.dispatch }),
+                ...(input.dispatch === undefined
+                  ? {}
+                  : { dispatch: publicDispatchToInternal(input.dispatch) }),
                 ...(after ? { after } : {}),
                 ...(return_to === undefined ? {} : { return_to }),
                 settings: {
@@ -278,7 +281,9 @@ function registerAdmissionTools(
               prompt: input.prompt,
               description: input.label,
               ...(input.max_turns === undefined ? {} : { max_turns: input.max_turns }),
-              ...(input.dispatch === undefined ? {} : { dispatch: input.dispatch }),
+              ...(input.dispatch === undefined
+                ? {}
+                : { dispatch: publicDispatchToInternal(input.dispatch) }),
               ...(after ? { after } : {}),
             };
           }),
@@ -403,7 +408,7 @@ function registerLifecycleTools(
       const { state } = await controller.kill(target.agent_id);
       return bound.independent(ctx, () => ({
         agent,
-        status: state === "released" ? "killed" : state,
+        agent_status: state,
         label: taskMetadata(controller.view(target.run_id)).label,
         ...(state === "exiting"
           ? { resolution: "Still stopping; use agent_wait or agent_read." }
@@ -416,13 +421,15 @@ function registerLifecycleTools(
       bound.independent(ctx, () => {
         const views = controller.list(),
           live = views.filter((view) => view.resident);
-        const killed = views.filter((view) => !view.resident).map((view) => view.name);
+        const released = views.filter((view) => !view.resident).map((view) => view.name);
         const addressed = (view: RunView) =>
           controller.view(controller.findAgent(view.name)?.run_id ?? view.run_id);
         return {
           agents: live.map((view) => agentRow(addressed(view), nameOf)),
-          ...(killed.length ? { killed: killed.slice(-KILLED_SHOWN) } : {}),
-          ...(killed.length > KILLED_SHOWN ? { killed_omitted: killed.length - KILLED_SHOWN } : {}),
+          ...(released.length ? { released: released.slice(-RELEASED_SHOWN) } : {}),
+          ...(released.length > RELEASED_SHOWN
+            ? { released_omitted: released.length - RELEASED_SHOWN }
+            : {}),
         };
       }),
     ),

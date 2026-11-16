@@ -1,12 +1,15 @@
 import { terminal, validDifficulty, type RunView } from "../core/contracts.ts";
 import {
   modelDispatchNotes,
+  modelOutcomeReason,
   modelQueueWait,
   modelTaskStatus,
   type QueueWait,
 } from "../core/communication-envelope.ts";
 import { profileLabel } from "./tool-names.ts";
 import { taskMetadata } from "../core/task-metadata.ts";
+import { isSettledRecord } from "../core/communication-state.ts";
+import { publicDispatchErrorCode, publicDispatchParameter } from "../core/dispatch.ts";
 
 // Model-facing projections. The model addresses Agents by name and calls each
 // assignment a task; Run and Agent IDs, routing and diagnostics stay host-only.
@@ -39,6 +42,9 @@ export function taskReply(view: RunView, nameOf: NameOf) {
     !!(view.unavailable_reason && view.unavailable_reason !== "agent_busy");
   const dispatch_notes = modelDispatchNotes(view.dispatch_notes);
   const queued_for = queueWait(view);
+  const outcome_reason = isSettledRecord(view)
+    ? modelOutcomeReason(view.outcome?.reason)
+    : undefined;
   return {
     agent: view.name,
     task: view.task,
@@ -46,9 +52,9 @@ export function taskReply(view: RunView, nameOf: NameOf) {
     ...taskMetadata(view),
     ...(queued_for === undefined ? {} : { queued_for }),
     ...(view.has_question ? { has_question: true } : {}),
-    ...(view.outcome?.reason ? { reason: view.outcome.reason } : {}),
+    ...(outcome_reason === undefined ? {} : { outcome_reason }),
     ...(view.cancellation_source === "human" || view.outcome?.cancellation_source === "human"
-      ? { cancellation_source: "human" as const }
+      ? { interrupted_by: "human" as const }
       : {}),
     ...(view.human_steered ? { human_steered: true as const } : {}),
     // Qualifies `status`: a turn-capped task still settles as "completed".
@@ -113,13 +119,26 @@ export function errorReply(
           : undefined;
   const internalParameter =
     typeof d.key === "string" ? d.key : typeof d.parameter === "string" ? d.parameter : undefined;
-  // The caller vocabulary is separate from admitted settings and journal keys.
-  const parameter = internalParameter === "difficulty" ? "reasoning_difficulty" : internalParameter;
+  const code = error.code ?? "TOOL_ERROR";
   const dispatchError =
     error.code === "INVALID_DISPATCH" ||
     error.code?.startsWith("DISPATCH_") ||
     ["PREFLIGHT_DENIED", "RESOURCE_OWNED", "BUILD_TREE_BUSY"].includes(error.code ?? "");
   const surfaceError = dispatchError || error.code === "RETURN_TO_PERMISSION_DENIED";
+  // Map only typed parameter slots and known codes, never text embedded in a
+  // caller's path or an arbitrary diagnostic. Internal records stay literal.
+  const parameter =
+    internalParameter === "difficulty"
+      ? "reasoning_difficulty"
+      : internalParameter === "return_to.answer"
+        ? "return_to.instruction"
+        : dispatchError && internalParameter !== undefined
+          ? publicDispatchParameter(internalParameter)
+          : internalParameter;
+  const resolution =
+    code === "INVALID_ANSWER" && internalParameter === "return_to.answer"
+      ? "return_to.instruction must be nonblank text of at most 16384 characters."
+      : d.resolution;
   // Keep abstract requested choices at their existing 128-unit cap. Dispatch
   // failures additionally show the concrete declaration/normalized path, with
   // a 512-unit prefix (whole legal raw declarations, bounded resolved paths).
@@ -131,7 +150,7 @@ export function errorReply(
         : undefined;
   return {
     error: {
-      code: error.code ?? "TOOL_ERROR",
+      code: publicDispatchErrorCode(code),
       ...(agent ? { agent: utf16Prefix(agent, 64) } : {}),
       ...(parameter === undefined ? {} : { parameter }),
       ...(path === undefined ? {} : { path: utf16Prefix(path, 512) }),
@@ -145,7 +164,7 @@ export function errorReply(
         : {}),
       ...(typeof d.reason === "string" ? { reason: utf16Prefix(d.reason, 512) } : {}),
       ...(typeof d.error === "string" ? { message: utf16Prefix(d.error, 512) } : {}),
-      ...(typeof d.resolution === "string" ? { resolution: utf16Prefix(d.resolution, 512) } : {}),
+      ...(typeof resolution === "string" ? { resolution: utf16Prefix(resolution, 512) } : {}),
       ...(typeof d.requested === "string" ? { requested: utf16Prefix(d.requested, 128) } : {}),
       ...(validDifficulty(d.difficulty) ? { reasoning_difficulty: d.difficulty } : {}),
       ...allowedFields(d.allowed),

@@ -126,7 +126,7 @@ async function ask(port, question = "Which safe next step?") {
     .execute("ask", { question });
   assert.equal(
     receipt.content[0].text,
-    "Question recorded. Stop calling tools and end your turn now.",
+    "Question recorded. Stop calling tools and end your turn now. Do not repeat the question in your final reply.",
   );
 }
 
@@ -168,7 +168,7 @@ test(
     );
     for (const preparation of dispatch.prepares)
       assert.deepEqual(preparation.declaration.inputs, inputs);
-    assert(ports[0].calls[0].prompt.includes(JSON.stringify({ inputs })));
+    assert(ports[0].calls[0].prompt.includes(JSON.stringify({ required_paths: inputs })));
     ports[0].finish();
     await ended(c, accepted);
   },
@@ -935,6 +935,161 @@ for (const failure of ["DISPATCH_INPUT_MISSING", "PREFLIGHT_DENIED", "host inter
   );
 }
 
+test(
+  "reused Agent prestart dispatch failure begins no child history and appends no run-end",
+  serial,
+  async (t) => {
+    const history = [];
+    let failRecheck = true;
+    const dispatch = dispatchPort({
+      preflight(declaration, context) {
+        if (failRecheck && declaration.inputs?.length && !context.deferInputs)
+          throw new OrchestrationError("DISPATCH_INPUT_MISSING", { path: "artifact" });
+      },
+    });
+    const { controller: c, ports } = await memoryFixture(t, {
+      controller: { dispatch },
+      history: (port) => ({
+        begin: async (run) => {
+          const ref = { ...run, session_id: port.session_id, start_entry_id: "aaaaaaaa" };
+          history.push({ point: "begin", ref });
+          return ref;
+        },
+        finish: async (ref) => {
+          const end = { ...ref, end_entry_id: "bbbbbbbb" };
+          history.push({ point: "finish", ref: end });
+          return end;
+        },
+      }),
+    });
+    const first = await c.submit("first", task("first"));
+    await until(() => ports[0]?.streaming);
+    ports[0].finish("first done");
+    await ended(c, first);
+    assert.deepEqual(
+      history.map((entry) => [entry.point, entry.ref.run_id]),
+      [
+        ["begin", first.run_id],
+        ["finish", first.run_id],
+      ],
+      "the initial task writes exactly one begin/end pair",
+    );
+    assert.equal(c.view(first.run_id).history_ref.end_entry_id, "bbbbbbbb");
+    assert.deepEqual(
+      {
+        owner_id: history[0].ref.owner_id,
+        generation: history[0].ref.generation,
+        agent_id: history[0].ref.agent_id,
+        run_id: history[0].ref.run_id,
+        session_id: history[0].ref.session_id,
+      },
+      {
+        owner_id: c.view(first.run_id).owner_id,
+        generation: c.view(first.run_id).generation,
+        agent_id: c.view(first.run_id).agent_id,
+        run_id: first.run_id,
+        session_id: ports[0].session_id,
+      },
+      "the boundary carries the internal run identity and session id",
+    );
+    const blocker = await c.submit("blocker", task("blocker"));
+    await until(() => ports[1]?.streaming);
+    const beforeReuse = history.length;
+    const reused = await c.submit("reused", {
+      resume: first.agent_id,
+      prompt: "reused after a real dependency",
+      after: [blocker.run_id],
+      dispatch: { inputs: ["artifact"], ownership: ["out"] },
+    });
+    assert.equal(c.view(reused.run_id).status, "queued");
+    assert.equal(claimFor(c, reused).prepared.ownership.length, 1, "admission installs the claim");
+    assert.equal(dispatch.prepares.length, 1);
+    assert.equal(
+      dispatch.prepares[0].context.deferInputs,
+      true,
+      "admission defers input inspection",
+    );
+    assert.deepEqual(dispatch.prepares[0].declaration, {
+      inputs: ["artifact"],
+      ownership: ["out"],
+    });
+    assert.equal(
+      history.length,
+      beforeReuse,
+      "a queued reuse writes no history boundary of its own",
+    );
+    ports[1].finish("blocker done");
+    await ended(c, blocker);
+    await ended(c, reused);
+    const view = c.view(reused.run_id);
+    assert.equal(view.status, "failed");
+    assert.equal(
+      view.outcome.reason,
+      "dependency_input_missing",
+      "the internal outcome reason stays internal",
+    );
+    assert.match(
+      view.outcome.error,
+      /^DISPATCH_REQUIRED_PATH_MISSING: Declared required path is missing/,
+      "the stored live error keeps the public-prefix diagnostic",
+    );
+    assert.doesNotMatch(view.outcome.error, /DISPATCH_INPUT_MISSING/);
+    assert.equal(view.history_ref, undefined, "no begin means no exposed ref");
+    assert.equal(view.history_error, undefined);
+    assert.equal(view.resident, true);
+    assert.equal(view.resumable, true);
+    assert.deepEqual(
+      history.map((entry) => [entry.point, entry.ref.run_id]),
+      [
+        ["begin", first.run_id],
+        ["finish", first.run_id],
+        ["begin", blocker.run_id],
+        ["finish", blocker.run_id],
+      ],
+      "the failed reuse appends no child begin or run-end",
+    );
+    assert.equal(
+      history.some((entry) => entry.ref.run_id === reused.run_id),
+      false,
+      "no history entry names the failed reuse",
+    );
+    assert.equal(dispatch.prepares.length, 2);
+    assert.equal(
+      dispatch.prepares[1].context.deferInputs,
+      false,
+      "the pump recheck is non-deferred",
+    );
+    assert.equal(ports.length, 2, "the failed reuse starts no extra session");
+    assert.equal(ports[0].calls.length, 1, "the reused Agent's session never ran the failed task");
+    assert.equal(ports[1].calls.length, 1);
+    assert.equal(c.claims.size, 0, "the failed reuse releases its claim normally");
+    assert.equal(c.stats().active, 0);
+    assert.equal(c.stats().settled_reasons["failed/dependency_input_missing"], 1);
+    failRecheck = false;
+    const resumed = await c.submit("resume", {
+      resume: first.agent_id,
+      prompt: "try an available task",
+    });
+    await until(() => ports[0].calls.length === 2 && ports[0].streaming);
+    ports[0].finish("recovered");
+    await ended(c, resumed);
+    assert.equal(c.view(resumed.run_id).status, "completed");
+    assert.deepEqual(
+      history.map((entry) => [entry.point, entry.ref.run_id]),
+      [
+        ["begin", first.run_id],
+        ["finish", first.run_id],
+        ["begin", blocker.run_id],
+        ["finish", blocker.run_id],
+        ["begin", resumed.run_id],
+        ["finish", resumed.run_id],
+      ],
+      "the resumed task on the same Agent writes its own begin/end pair",
+    );
+    assert.equal(c.view(resumed.run_id).history_ref.end_entry_id, "bbbbbbbb");
+  },
+);
+
 test("every dispatched Run rechecks preflight in pump, even without after", serial, async (t) => {
   let calls = 0;
   const dispatch = dispatchPort({
@@ -969,7 +1124,10 @@ test(
       assert.match(prompt, /Parent dispatch.*scope.*planned checks/i);
       assert.match(prompt, /not permissions or execution evidence/i);
       assert(prompt.includes(`Execution cwd: ${JSON.stringify(settings.cwd)}`));
-      assert.match(prompt, /Relative inputs, ownership, and tree paths resolve from this cwd/);
+      assert.match(
+        prompt,
+        /Relative required_paths, ownership, and build_dir paths resolve from this cwd/,
+      );
       assert.match(prompt, /declarations grant no permissions/);
       assert.match(prompt, /focused/);
     }
@@ -1394,7 +1552,7 @@ test(
 );
 
 test(
-  "model observations show only tree_shared; private hidden notes never spend reply budget",
+  "model observations show only build_dir_shared; private hidden notes never spend reply budget",
   serial,
   async (t) => {
     // One settled Agent per Owner, so no other task's finished row shares the
@@ -1435,7 +1593,7 @@ test(
     assert.equal(Object.hasOwn(exact.tasks[0], "dispatch_notes"), false);
 
     const shown = await settledWith(["tree_shared", "tree_lock_unknown"]);
-    assert.deepEqual((await shown.read(100)).tasks[0].dispatch_notes, ["tree_shared"]);
+    assert.deepEqual((await shown.read(100)).tasks[0].dispatch_notes, ["build_dir_shared"]);
     const crowded = await shown.read(fill);
     assert.equal(crowded.tasks[0].result.length, fill);
     assert.equal(

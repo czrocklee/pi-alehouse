@@ -47,11 +47,11 @@ test("core dispatch retains exact UTF-16, padding and literal-path checks with b
     validateDispatch(declaration("🚀".repeat(256)));
     assert.throws(
       () => validateDispatch(declaration("🚀".repeat(257))),
-      failure(key, /512 UTF-16 units.*514/, index),
+      failure(key, /512 characters.*514/, index),
     );
     assert.throws(
       () => validateDispatch(declaration("private-value" + "x".repeat(512))),
-      failure(key, /512 UTF-16 units/, index),
+      failure(key, /512 characters/, index),
     );
     assert.throws(() => validateDispatch(declaration("\t")), failure(key, /nonblank/, index));
     assert.throws(
@@ -76,7 +76,7 @@ test("core item indexes remain numeric while field-level errors omit them", () =
   );
   assert.throws(
     () => validateDispatch({ checks: ["valid", "ok", "🚀".repeat(257)] }),
-    failure("checks", /dispatch\.checks\.2.*512 UTF-16/, 2),
+    failure("checks", /dispatch\.checks\.2.*512 characters/, 2),
   );
 });
 

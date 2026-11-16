@@ -299,7 +299,11 @@ the scout. The scout is released only after the continuation's `input_entered`
 has taken its whole result; a cut, undelivered, reused, asking or ending scout
 remains resident until explicit kill. The length sentence appended to the scout's
 task is guidance, not enforcement: a longer result is still cut, and the worker
-cannot fetch the rest. `return_to.answer` is written before the findings exist.
+cannot fetch the rest. `return_to.instruction` is the worker's conditional
+continuation instruction, written before the scout's findings exist; it is not a
+preknown answer or the scout's prompt. `agent_answer.answer` remains the
+explicit answer field; model `instruction` maps to the internal core `answer`
+field.
 Source failure can
 fail the pending continuation and reopen the original question only while that
 continuation is pre-input and the worker is healthy. After input entry, nothing
@@ -308,7 +312,7 @@ including spawn/send/wait and explicit `agent_read` by name/task/cursor, replace
 raw source text with a short orchestration-authored notice identifying the source and
 exact original worker continuation name/task. It reports pending until that
 continuation's `input_entered`, delivered only after it, or not delivered if it
-ended before input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted characters. Later failure/kill does not undo observed delivery. The exact
+ended before input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted UTF-16 units. Later failure/kill does not undo observed delivery. The exact
 link stays sticky after either Agent's reuse/kill or Off. No raw paging/omission
 flags or source result cursors accompany the notice. Ordinary scouts without
 `return_to` retain normal output/paging. Internal `getResult`, dependency handoff,
@@ -348,7 +352,8 @@ to raw pages, not bounded notices. Fixed-width recovery cursors are reserved for
 bound terminal windows of real retained result pages with remaining text,
 including packing-omitted pages after Agent reuse;
 the conservative retained-envelope fixture stays under the 65536-byte cap,
-excluding the retired pending-name array. Whole optional labels can yield with
+reserving the longer of queue-wait and terminal outcome reasons and excluding
+the retired pending-name array. Whole optional labels can yield with
 response_limit_reached; there is no metadata-only view. Keep
 returned result cursors to continue a page, or use a positive safe
 `agent_read.task` to restart that named Agent's retained task from page one.
@@ -371,7 +376,9 @@ drain but never model publication; empty observations are not child-exit or
 Owner-closure proof. Cooperative execution/lease limits above are unchanged.
 
 Finished reminders use each original Run's fixed finished_presented bit and
-settled_seq, not a second log or cursor. Showing that original task's terminal
+settled_seq, not a second log or cursor. Candidates are Owner-wide for every
+observation, not limited to its bound tasks, and only rows actually shown are
+consumed, so nothing is consumed silently. Showing that original task's terminal
 row commits its bit;
 a running row with the same Agent name, alert/list/UI/count never does. A
 finished label is optional and checked against that original Run; omission
@@ -381,7 +388,14 @@ messages and host-side live history projections are bounded Owner-memory state,
 not restored from journals. Live Run context, usage and elapsed time remain UI
 observations; retired timed warnings are not interpreted by the current codec.
 Task descriptions stay on their Runs, without a separate earlier-label or
-touched-path summary. Old notify/progress/send-answered logs stay readable literally,
+touched-path summary. Every task row, including list/interrupt, may carry a
+bounded, nonyieldable `outcome_reason` from the closed set; unknown internal
+reasons map to `other`, finishing rows have none, and historical records stay
+byte-literal. Model task/finished rows attribute the first accepted explicit
+human stop request as `interrupted_by: "human"`; internal records, snapshots
+and history retain `cancellation_source`, and attribution is not proof the task
+stopped. The top-level observation `reason` and `error.reason` are separate and
+unchanged. Old notify/progress/send-answered logs stay readable literally,
 never rewritten or hydrated as new pending work. Handed-off text is another child's retained
 final output, bounded and framed as reference; it is not verified.
 
@@ -420,7 +434,10 @@ resolutions neither diagnose model ability nor authorize migration or retry.
 The linked contract lists unobserved paths and publication limits.
 
 The orchestration layer depends on, but does not own, generated worker policy, permission
-authority, static guards, search policy, and Jev review policy. New model
+authority, static guards, search policy, and Jev review policy. The
+permission-aware search tool keeps its 1–500 match-limit and 0–10 context-line
+clamps and reports the effective values when it normalizes a request; the
+schema adds no maximum and no new deny. New model
 requests offer only `worker` and `scout`. Worker maps to stable internal
 `editor`, with local read/edit/write/Bash/Git/build tools under normal permission
 for local diagnosis, code review, design, implementation and verification. It has
@@ -479,7 +496,10 @@ a fail-closed ask instead. Other scope precedence is unchanged. See
 
 Nested delegation is excluded for every child. Only scout (internal `researcher`) has web tools;
 worker has no web tool table. Scout fetch schemas and capability wording
-allow only absolute HTTP(S) URLs, never local-video paths. Scout file reads
+allow only absolute HTTP(S) URLs, never local-video paths. Scout `web_search`
+has no `workflow` or `model` and always resolves `workflow: "none"`, even when
+configuration would inherit `summary-review`; `fetch_content` answer/extract
+and video analysis remain upstream residual risks. Scout file reads
 and web calls together can move project content to the network; source hygiene forbids that but cannot enforce it (see
 [researcher web access](security.md#researcher-web-access)). Tool availability
 is not authorization.
@@ -543,12 +563,14 @@ use can refresh an auth file.
 [Task dispatch](task-dispatch.md) is bounded declaration/observation, not a DAG,
 OS sandbox or general test scheduler. Only a single explicitly delegated
 validation owner may run the full gate; others stay focused. Declared `checks`
-do not prove execution, and undeclared effects or different agentDir/host/tree
-identities are not automatically coordinated. Profile/external preflight is
+do not prove execution, and undeclared effects or different
+agentDir/host/build-directory (internal tree) identities are not automatically
+coordinated. Profile/external preflight is
 approximate: ask/unknown is not a grant; child gates may be stricter. Literal
 paths and lexical/canonical aliases do not provide hardlink tracking or atomic
-filesystem protection. Inputs must exist when actually checked, whereas ownership/tree may name new
-outputs. Inputs are revalidated, not held resource locks. Pump/answer rechecks
+filesystem protection. Required paths must exist when actually checked, whereas
+ownership/build directory may name new outputs. Required paths are revalidated,
+not held resource locks. Pump/answer rechecks
 retain strict claimed-resource equality. Pump rechecks can wait for a free slot on that Run's own provider; failing a task
 whose dependency settled without completing does not. The admission wait for a
 release already under way is bounded (10 s) and does not make parallel

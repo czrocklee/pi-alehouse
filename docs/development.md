@@ -139,7 +139,8 @@ alias. No legacy profile aliases or capabilities are supported. All Agents
 use the parent's admitted cwd for resource discovery, policy and tools. Spawn
 has no workspace selector; Alehouse does not create or manage worktrees.
 Relative dispatch paths use that cwd, and ordinary canonical-path permission
-checks, strict ownership/tree claim rechecks and input revalidation remain.
+checks, strict ownership/build-directory (internal tree) claim rechecks and
+required-path revalidation remain.
 Existing user worktrees, files and historical records are not migrated or
 removed. Ordinary Git remains available under normal permission.
 
@@ -157,15 +158,16 @@ source or public release evidence.
 
 ## Task floor and validation ownership
 
-[Task dispatch](task-dispatch.md) is the central contract for literal inputs,
-resource claims, execution limits and validation observations. Core owns
+[Task dispatch](task-dispatch.md) is the central contract for literal required
+paths, resource claims, execution limits and validation observations. Core owns
 atomic claim admission, dependency/answer lineage and confirmed cleanup;
 runtime ports own synchronous profile/external preflight, path aliases, trusted
 Git capture and local tree locks. Do not put claim/IO side effects into tool
 preparation or accepted-request replay. Shared core `DISPATCH_LIMITS` bounds
-dispatch at 32 inputs / 16 ownership / 16 checks with 512-unit strings, and raw
-tool argument/schema diagnostics derive bounded `dispatch.<field>.<index>`
-parameters without copying unknown names or user values. Checks capture
+dispatch at 32 required paths / 16 ownership / 16 checks with 512-unit strings;
+internal `Dispatch` fields remain `inputs`/`tree`. Raw tool argument/schema
+diagnostics derive bounded model parameters such as
+`dispatch.required_paths.<index>` without copying unknown names or user values. Checks capture
 superproject-only partial
 metadata at execution start; optional failures are unknown/advisory, not Owner
 faults. Preserve pending-question claims and any lease on pre-input answer
@@ -188,7 +190,7 @@ and configured fsmonitor=false still conservatively withhold known state.
 
 Prompt text is split. `resources/agent.md` is shared lifecycle, scope,
 permission-communication and result guidance. `resources/worker.md` is
-worker-only execution, checks and tree discipline: scoped, reviewable work,
+worker-only execution, checks and build-directory discipline: scoped, reviewable work,
 denial/ownership coordination and concise actual check results with unfinished
 or blocked work. It does not carry a universal evidence-audit checklist.
 `resources/scout.md` is scout source hygiene: local and web gathering,
@@ -219,19 +221,28 @@ as validation or deployment acceptance.
 There is no metadata-only `agent_read` view as a functional feature. Keep all
 nine names and other arguments/features:
 required `continues` and spawn/run `label`, optional after/dispatch, optional spawn-only
-`return_to`, spawn `max_turns` (first-task cap and Agent default) and optional
+`return_to`, spawn `max_turns` (first-task soft budget and Agent default) and optional
 `agent_run.max_turns` (that new task only; omitted uses the spawn default, not
-the last task's cap), inherit_context, wait's all/any selection, every wait_ms
+the last task's budget), inherit_context, wait's all/any selection, every wait_ms
 and max_chars. `return_to` is not an `agent_run` field and not a tenth tool.
-Spawn/run labels are concise 3–8 word task titles (not instructions/background),
-required nonblank strings capped at 72 UTF-16 units and used verbatim. Word counts
-are not enforced, so CJK titles are allowed. The model-tool prompt-first-line
+Spawn/run labels are concise task titles in the task's language (not
+instructions/background), required nonblank strings capped at 72 UTF-16 units
+and used verbatim. There is no word-count guidance, so any language is allowed.
+The model-tool prompt-first-line
 fallback is removed. `src/orchestration/tools/argument-limits.ts` centralizes the
 72-unit model title limit and parent text bounds. Raw nonblank and UTF-16
-(JavaScript `.length`) checks run before cloning/action in prepare and again in
-execute after hooks, including prompt, continues, send/answer, return_to.answer
-and cursor. Keep field/path-specific `INVALID_PARAMETERS` guidance and existing
-profile/difficulty precedence; dispatch retains its own checker. Model
+unit checks run before cloning/action in prepare and again in
+execute after hooks, including prompt, continues, send/answer,
+return_to.instruction and cursor. `continues` remains request identity and is never forwarded to the
+child, so it is not child-facing text. Keep field/path-specific
+`INVALID_PARAMETERS` guidance and existing profile/difficulty precedence;
+dispatch retains its own checker. The raw dispatch schema keeps nonblank,
+length and ASCII control-character bounds, but no longer enforces the
+literal-path restriction; padding, globs, shell quoting/expansion and a leading
+`~`/`@` are rejected by `validateDispatch` as `INVALID_DISPATCH`. Schema defaults are annotated where
+they exist (spawn `max_turns` 256, `inherit_context` false, `agent_wait`
+300000, command waits 0, mode `all`, `max_chars` 16384); `agent_run.max_turns`
+has none because it inherits the Agent default. Model
 communication projection keeps `COMMUNICATION_LIMITS.label_units` at 120;
 generic core Run descriptions retain their separate 4096-unit bound. Historical
 labels remain byte-literal. Boundary tests must cover ASCII, astral, combining
@@ -256,7 +267,12 @@ agent_answer) are registered once; initial Off exposes none, Off after accepted
 work keeps wait/read/interrupt/kill/list unchanged. Off gates new tasks, steering
 and answers; accepted child alert/ask work continues. Child communication is
 exactly alert_parent/ask_parent: notify_parent is retired, denied and display-only
-in historical journals, never a runtime alias or restart-hydration input. Cached tools are still execution-gated. Controlled entry fixtures
+in historical journals, never a runtime alias or restart-hydration input. The
+ask receipt says the question was recorded and tells the child to stop calling
+tools, end its turn and not repeat the question in its final reply; an
+already-recorded receipt says it was not replaced. Child admission failures are
+projected through a fixed closed code whitelist with bounded wording; other
+errors are not rewritten with arbitrary core details or resolutions. Cached tools are still execution-gated. Controlled entry fixtures
 should inspect provider-visible declarations; switching Off cannot erase
 historical context. Keep user workflow choices out of standing policy.
 
@@ -319,7 +335,13 @@ Inline observations see only their accepted/bound Run, except scout `return_to`:
 `observe` expands an `agent_spawn` of a source that has `return_to_run_id` to
 that source and its continuation, scopes alerts to exactly those two Runs, and
 takes readiness from the continuation alone (no extra readiness target).
-Do not use legacy progress claims or name-based finished consumption.
+Finished candidates are Owner-wide for every observation, not restricted to
+the bound tasks; only rows actually shown are marked presented, so nothing is
+consumed silently. Every task row, including list/interrupt, may add
+terminal-row `outcome_reason` from the closed bounded set, mapping unknown
+internal reasons to `other`; the top-level observation `reason` and
+`error.reason` are separate and unchanged. Do not use legacy progress claims or
+name-based finished consumption.
 
 One Owner pending FIFO derives independent child (64 Owner / 16 Agent) and
 owner/agent feedback (16 Owner / one pending per Agent) quotas, at most 80 entries;
@@ -362,10 +384,10 @@ fixture `test/integration/fixtures/parent-web.mjs` covers auto, dynamic and eage
 activation, host exclusion of `agent_spawn`, and hot permission deny-to-ask/allow
 restoration.
 Core create
-requests keep optional `return_to` as internal `{agent_id, question_id,
-answer}`. Preflight is all-or-none before mutation; Off rejects before
-allocation. Replay of the caller request returns the source Run before new-work
-validation. The continuation request ID is derived, prefixed
+requests keep optional `return_to` with an internal agent id, question id and
+answer text; the model `instruction` maps to the internal core `answer` field.
+Preflight is all-or-none before mutation; Off rejects before allocation.
+Replay of the caller request returns the source Run before new-work validation. The continuation request ID is derived, prefixed
 `\u0000pi-alehouse/return-to/v1:`, and direct submission is `INVALID_REQUEST_ID`.
 Source `return_to_run_id` links that continuation. A different `return_to` is
 `REQUEST_CONFLICT`. Return_to-specific checks precede shared capacity. Install
@@ -384,9 +406,10 @@ into model tool output, and never a journal field. Derive the source's handoff
 notice from this link, without a redundant RunRecord visibility fact. All
 parent-model observations, including spawn/send/wait and explicit `agent_read`
 by name/task/cursor, replace the raw source body with that short orchestration-authored
-notice identifying the source and exact original worker continuation name/task.
+notice identifying the source and exact original worker continuation name/task,
+with an exact `agent_read` call for the source.
 Report pending before the continuation's `input_entered`, delivered only after
-it, or not delivered if it ended before input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted characters. Later failure/kill does not undo
+it, or not delivered if it ended before input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted UTF-16 units. Later failure/kill does not undo
 observed delivery. The link stays sticky after either Agent's reuse/kill or Off.
 Private `TaskSnapshot.result_notice` is separate from a real `ResultWindow`:
 pack it whole as a normal `result` string or yield with `response_limit_reached`
@@ -438,7 +461,8 @@ bit. Keep required controls, question identity and stateless r1_ result cursors
 reserved. Kill returns independent lifecycle status;
 named task reads remain available within the Owner. The double-JSON content cap
 is 65536 bytes; the conservative retained-envelope fixture reserves bounded
-controls, not arbitrary labels or the retired pending-name array. See [packing budgets](tool-contract.md#budget-and-local-publication).
+controls including the longer of queue-wait and terminal outcome reasons, not
+arbitrary labels or the retired pending-name array. See [packing budgets](tool-contract.md#budget-and-local-publication).
 Tool success only passes that result through, without later
 assertCurrent/serialization/withChanges/UI. onRunAccepted UI wake stays separate
 best-effort before observation. The SDK tool_result hook may append usage, not
@@ -449,7 +473,7 @@ formatting is read-only.
 Coordinate one **explicitly delegated, unique validation owner** for build →
 focused tests → full portable gate after shared source/policy/schema changes are
 frozen. Other tasks run only their assigned focused checks; dispatch `checks`
-and advisory tree leases are not a mechanical full-suite lock. Do not repeat
+and advisory build-directory leases are not a mechanical full-suite lock. Do not repeat
 the full gate against an inconsistent shared checkout. Report platform/tool
 versions/key configuration, exact command/evidence paths and unrun, blocked,
 interrupted and zero-match checks honestly; synthetic seams do not establish
@@ -500,6 +524,15 @@ one migration unit:
 This revision deliberately changes the record/event namespace, runtime environment
 keys, usage/status keys, routing catalogue name and lease-directory names. It
 provides no previous-namespace aliases or automatic resource conversion.
+
+The model-name revision (`return_to.instruction`, `dispatch.required_paths`,
+`dispatch.build_dir`, `outcome_reason`, `interrupted_by`, `agent_status` and
+list `released`/`released_omitted`) has no old-name aliases or historical decoder.
+Internal `Dispatch`, validation-receipt and history fields keep
+`inputs`/`tree`/`cancellation_source`; the internal core `return_to.answer`
+field also remains, and historical records stay byte-literal.
+Close the Owner and start a new matched process; absent-only init does not
+overwrite, migrate or deploy existing sessions.
 
 Before changing generations, close every Owner and stop all Pi processes sharing
 an agent directory or canonical tree. Leases under different directory names do

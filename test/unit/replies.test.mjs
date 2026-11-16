@@ -301,7 +301,7 @@ test("bounded error choices retain remainder counts and hide concrete routing in
     assert.equal(errorReply({ code: "X", details: { allowed } }).error.allowed, undefined);
 });
 
-test("independent task/roster replies retain tree_shared notes but hide live and final time telemetry", () => {
+test("independent task/roster replies retain public build_dir_shared notes but hide live and final time telemetry", () => {
   const base = {
     name: "otter",
     task: 1,
@@ -320,7 +320,7 @@ test("independent task/roster replies retain tree_shared notes but hide live and
     task: 1,
     status: "running",
     label: "task",
-    dispatch_notes: ["tree_shared"],
+    dispatch_notes: ["build_dir_shared"],
   });
   assert.notEqual(
     reply.dispatch_notes,
@@ -339,12 +339,12 @@ test("independent task/roster replies retain tree_shared notes but hide live and
   assert.equal(Object.hasOwn(final, "model_stop_reason"), false);
   assert.equal(terminalView.outcome.model_stop_reason, "stop");
   assert.equal(final.limit_reached, undefined);
-  assert.deepEqual(final.dispatch_notes, ["tree_shared"]);
+  assert.deepEqual(final.dispatch_notes, ["build_dir_shared"]);
   assert.equal(final.next_cursor, undefined);
   // Spend, idle time and the run count stay host-side even when known.
   const roster = agentRow(terminalView, () => "otter");
   assert.equal(Object.hasOwn(roster, "elapsed_ms"), false);
-  assert.deepEqual(roster.dispatch_notes, ["tree_shared"]);
+  assert.deepEqual(roster.dispatch_notes, ["build_dir_shared"]);
   compact(roster);
   assert.equal(roster.reasoning_difficulty, 3);
   assert.equal(Object.hasOwn(roster, "difficulty"), false);
@@ -366,14 +366,86 @@ test("independent task/roster replies retain tree_shared notes but hide live and
   }
 });
 
+test("settled task replies expose only bounded outcome_reason and interrupted_by", () => {
+  const settled = {
+    name: "otter",
+    task: 1,
+    status: "failed",
+    phase: "settled",
+    execution_exited: true,
+    finalization_pending: false,
+    description: "task",
+    cancellation_source: "human",
+    outcome: { status: "failed", reason: "execution_error", error: "provider detail" },
+  };
+  const reply = taskReply(settled, () => "otter");
+  assert.equal(reply.outcome_reason, "execution_error");
+  assert.equal(reply.interrupted_by, "human");
+  assert.equal(Object.hasOwn(reply, "reason"), false, "the observation reason is not a row field");
+  assert.equal(reply.error, "provider detail", "nested error.reason stays a diagnostic");
+  assert.equal(Object.hasOwn(reply, "cancellation_source"), false);
+  for (const [outcome, expected] of [
+    [{ ...settled.outcome, reason: "historical_retired_reason" }, "other"],
+    [{ ...settled.outcome, reason: "" }, undefined],
+    [{ ...settled.outcome, reason: undefined }, undefined],
+    [{ ...settled.outcome, reason: 4 }, undefined],
+  ]) {
+    const projected = taskReply({ ...settled, outcome }, () => "otter");
+    assert.equal(projected.outcome_reason, expected);
+  }
+  for (const partial of [
+    { phase: "finalizing" },
+    { execution_exited: false },
+    { finalization_pending: true },
+    { status: "running" },
+  ]) {
+    const projected = taskReply({ ...settled, ...partial }, () => "otter");
+    assert.equal(projected.outcome_reason, undefined, JSON.stringify(partial));
+  }
+});
+
+test("dispatch error replies map only the fixed public code and slot vocabulary", () => {
+  for (const [internal, shown] of [
+    ["BUILD_TREE_BUSY", "BUILD_DIR_BUSY"],
+    ["DISPATCH_TREE_TYPE", "DISPATCH_BUILD_DIR_TYPE"],
+    ["DISPATCH_TREE_INSPECTION_FAILED", "DISPATCH_BUILD_DIR_INSPECTION_FAILED"],
+    ["DISPATCH_INPUT_MISSING", "DISPATCH_REQUIRED_PATH_MISSING"],
+    ["DISPATCH_INPUT_TYPE", "DISPATCH_REQUIRED_PATH_TYPE"],
+    ["DISPATCH_INPUT_INSPECTION_FAILED", "DISPATCH_REQUIRED_PATH_INSPECTION_FAILED"],
+  ]) {
+    assert.equal(errorReply({ code: internal }).error.code, shown);
+    assert.equal(
+      errorReply({ code: internal, details: { key: "inputs" } }).error.parameter,
+      "required_paths",
+    );
+    assert.equal(
+      errorReply({ code: internal, details: { key: "tree" } }).error.parameter,
+      "build_dir",
+    );
+  }
+  // A caller path is data, not a slot name, even when it contains either word.
+  const literal = errorReply({
+    code: "DISPATCH_INPUT_INSPECTION_FAILED",
+    details: { key: "inputs", path: "/tmp/inputs/tree/build" },
+  }).error;
+  assert.equal(literal.code, "DISPATCH_REQUIRED_PATH_INSPECTION_FAILED");
+  assert.equal(literal.parameter, "required_paths");
+  assert.equal(literal.path, "/tmp/inputs/tree/build");
+});
+
 test("dispatch error replies name concrete raw or normalized paths with a bounded 512-unit whole-declaration projection", () => {
   const raw = "a".repeat(510) + "/x";
-  for (const code of ["PREFLIGHT_DENIED", "DISPATCH_INPUT_MISSING", "INVALID_DISPATCH"]) {
+  for (const [code, shown] of [
+    ["PREFLIGHT_DENIED", "PREFLIGHT_DENIED"],
+    ["DISPATCH_INPUT_MISSING", "DISPATCH_REQUIRED_PATH_MISSING"],
+    ["INVALID_DISPATCH", "INVALID_DISPATCH"],
+  ]) {
     const result = errorReply({
       code,
       details: { key: "inputs", requested: raw, path: "/tmp/" + raw },
     }).error;
-    assert.equal(result.parameter, "inputs");
+    assert.equal(result.code, shown);
+    assert.equal(result.parameter, "required_paths");
     assert.equal(
       result.path,
       raw,
@@ -385,9 +457,13 @@ test("dispatch error replies name concrete raw or normalized paths with a bounde
       "the existing abstract-choice field retains its published bound",
     );
   }
-  for (const code of ["RESOURCE_OWNED", "BUILD_TREE_BUSY"]) {
+  for (const [code, shown] of [
+    ["RESOURCE_OWNED", "RESOURCE_OWNED"],
+    ["BUILD_TREE_BUSY", "BUILD_DIR_BUSY"],
+  ]) {
     const path = "/" + "normalized".repeat(100),
       result = errorReply({ code, details: { path } }).error;
+    assert.equal(result.code, shown);
     assert.equal(result.path, path.slice(0, 512));
     assert.equal(result.requested, undefined);
   }
@@ -400,18 +476,24 @@ test("dispatch error replies name concrete raw or normalized paths with a bounde
   assert.equal(
     errorReply({ code: "INVALID_DISPATCH", details: { key: "tree", parameter: "ownership" } }).error
       .parameter,
-    "tree",
+    "build_dir",
   );
+  // Only the typed dispatch slot is renamed. Path text that happens to contain
+  // the old words is a caller value, not a field name, and stays byte-literal.
+  const literal = errorReply({
+    code: "DISPATCH_REQUIRED_PATH_MISSING",
+    details: { key: "inputs", path: "/tmp/inputs/tree/build" },
+  }).error;
+  assert.equal(literal.parameter, "required_paths");
+  assert.equal(literal.path, "/tmp/inputs/tree/build");
   const paired = "x".repeat(510) + "🚀",
     clipped = "x".repeat(511) + "🚀";
-  assert.equal(
-    errorReply({ code: "DISPATCH_TREE_TYPE", details: { requested: paired } }).error.path,
-    paired,
-  );
-  assert.equal(
-    errorReply({ code: "BUILD_TREE_BUSY", details: { path: clipped } }).error.path,
-    "x".repeat(511),
-  );
+  const treeType = errorReply({ code: "DISPATCH_TREE_TYPE", details: { requested: paired } }).error;
+  assert.equal(treeType.code, "DISPATCH_BUILD_DIR_TYPE");
+  assert.equal(treeType.path, paired);
+  const busy = errorReply({ code: "BUILD_TREE_BUSY", details: { path: clipped } }).error;
+  assert.equal(busy.code, "BUILD_DIR_BUSY");
+  assert.equal(busy.path, "x".repeat(511));
   assert.equal(
     errorReply({ code: "INVALID_MODEL", details: { requested: raw } }).error.path,
     undefined,
@@ -424,7 +506,7 @@ test("preflight denials project the checked surface and target profile only for 
     code: "PREFLIGHT_DENIED",
     details: { key: "tree", requested: "build/tree", surface: "path_write", profile: "researcher" },
   }).error;
-  assert.equal(denial.parameter, "tree");
+  assert.equal(denial.parameter, "build_dir");
   assert.equal(denial.surface, "path_write");
   assert.equal(denial.profile, "scout");
   assert.equal(denial.path, "build/tree");
@@ -453,6 +535,8 @@ test("preflight denials project the checked surface and target profile only for 
     code: "DISPATCH_TREE_TYPE",
     details: { key: "tree", requested: "file" },
   }).error;
+  assert.equal(filesystem.code, "DISPATCH_BUILD_DIR_TYPE");
+  assert.equal(filesystem.parameter, "build_dir");
   assert.equal(filesystem.surface, undefined);
   assert.equal(filesystem.profile, undefined);
 });
@@ -489,7 +573,7 @@ test("a changed canonical resource classifies as a dispatch error without a path
   assert.deepEqual(result, {
     code: "DISPATCH_RESOURCE_CHANGED",
     agent: "wren",
-    parameter: "tree",
+    parameter: "build_dir",
     path: "build",
     requested: "build",
     resolution,

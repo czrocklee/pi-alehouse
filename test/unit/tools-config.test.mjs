@@ -1293,7 +1293,12 @@ test("agent_answer and return_to keep the spawn turn default and do not retarget
         prompt: "Collect cited facts.",
         label: "Collect cited facts",
         max_turns: 3,
-        return_to: { agent: "cedar", question_id: again, answer: "Use findings.", max_turns: 99 },
+        return_to: {
+          agent: "cedar",
+          question_id: again,
+          instruction: "Use findings.",
+          max_turns: 99,
+        },
       }),
       "bad-return",
     ),
@@ -1312,7 +1317,7 @@ test("agent_answer and return_to keep the spawn turn default and do not retarget
       prompt: "Collect cited facts.",
       label: "Collect cited facts",
       max_turns: 3,
-      return_to: { agent: "cedar", question_id: again, answer: "Use findings." },
+      return_to: { agent: "cedar", question_id: again, instruction: "Use findings." },
     }),
     "return-to",
   );

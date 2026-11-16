@@ -333,7 +333,7 @@ test("handoff notices take status from the exact continuation with input entry w
     const record = { ...continuation, ...ended };
     assert.deepEqual(returnToNotice("heron", record, 2, 1, 0), {
       readable: true,
-      text: "Result from heron was not returned to otter (task 2): the worker continuation ended before receiving input; agent_read heron task 1 shows the result.",
+      text: 'Result from heron was not returned to otter (task 2): the worker continuation ended before receiving input; agent_read({ agent: "heron", task: 1 }) shows the result.',
     });
     assert.deepEqual(returnToNotice("heron", { ...record, input_entered: true }, 2, 1, 0), {
       readable: false,
@@ -342,7 +342,7 @@ test("handoff notices take status from the exact continuation with input entry w
     // A delivered handoff that left retained text out stays explicitly readable.
     assert.deepEqual(returnToNotice("heron", { ...record, input_entered: true }, 2, 1, 45), {
       readable: true,
-      text: "Result from heron has been returned to otter (task 2), but the handoff omitted its last 45 characters; agent_read heron task 1 shows the retained result.",
+      text: 'Result from heron has been returned to otter (task 2), but the handoff omitted its last 45 characters; agent_read({ agent: "heron", task: 1 }) shows the retained result.',
     });
   }
 });

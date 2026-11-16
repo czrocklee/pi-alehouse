@@ -83,7 +83,7 @@ test("nested required errors point at the parent object and name a known field",
   const empty = failure(spawnSchema, { ...base, return_to: {} });
   assert.equal(empty.details.key, "return_to.agent");
   assert.equal(empty.details.resolution, "return_to.agent is required.");
-  assert.deepEqual(empty.details.allowed, ["agent", "question_id", "answer"]);
+  assert.deepEqual(empty.details.allowed, ["agent", "question_id", "instruction"]);
   const partial = failure(spawnSchema, { ...base, return_to: { agent: "b" } });
   assert.equal(partial.details.key, "return_to.question_id");
 });
@@ -93,12 +93,12 @@ test("type errors map known fields and bounded array indexes", () => {
   assert.equal(boolean.details.key, "inherit_context");
   assert.match(boolean.details.resolution, /boolean/);
   noEcho(boolean, "SECRET_BOOLEAN");
-  const array = failure(spawnSchema, { ...base, dispatch: { inputs: "SECRET_ARRAY" } });
-  assert.equal(array.details.key, "dispatch.inputs");
+  const array = failure(spawnSchema, { ...base, dispatch: { required_paths: "SECRET_ARRAY" } });
+  assert.equal(array.details.key, "dispatch.required_paths");
   assert.match(array.details.resolution, /array/);
   noEcho(array, "SECRET_ARRAY");
-  const item = failure(spawnSchema, { ...base, dispatch: { inputs: [1] } });
-  assert.equal(item.details.key, "dispatch.inputs.0");
+  const item = failure(spawnSchema, { ...base, dispatch: { required_paths: [1] } });
+  assert.equal(item.details.key, "dispatch.required_paths.0");
   assert.match(item.details.resolution, /string/);
   const indexed = failure(
     Type.Object({ values: Type.Array(Type.String()) }, { additionalProperties: false }),
@@ -122,7 +122,7 @@ test("Agent names with trailing line breaks are rejected with the exact paramete
 });
 
 test("the defensive complete-name check retains every known field/index", () => {
-  const question = { agent: "BAD", question_id: `q_${"a".repeat(32)}`, answer: "Continue" };
+  const question = { agent: "BAD", question_id: `q_${"a".repeat(32)}`, instruction: "Continue" };
   for (const [name, schema, raw, parameter] of [
     ["agent_spawn", spawnSchema, { ...base, agent: "BAD" }, "agent"],
     ["agent_wait", waitSchema, { agents: ["a", "BAD"] }, "agents.1"],
@@ -173,33 +173,33 @@ test("enum failures expose bounded schema values, never the raw choice", () => {
 });
 
 test("bounds use schema limits and safe counts without echoing values", () => {
-  const minItems = failure(spawnSchema, { ...base, dispatch: { inputs: [] } });
-  assert.equal(minItems.details.key, "dispatch.inputs");
+  const minItems = failure(spawnSchema, { ...base, dispatch: { required_paths: [] } });
+  assert.equal(minItems.details.key, "dispatch.required_paths");
   assert.match(minItems.details.resolution, /at least 1 item/);
   assert.match(minItems.details.resolution, /it has 0/);
-  const maxInputs = spawnSchema.properties.dispatch.properties.inputs.maxItems;
+  const maxInputs = spawnSchema.properties.dispatch.properties.required_paths.maxItems;
   const maxItems = failure(spawnSchema, {
     ...base,
-    dispatch: { inputs: Array.from({ length: maxInputs + 1 }, (_, i) => `/in${i}`) },
+    dispatch: { required_paths: Array.from({ length: maxInputs + 1 }, (_, i) => `/in${i}`) },
   });
-  assert.equal(maxItems.details.key, "dispatch.inputs");
+  assert.equal(maxItems.details.key, "dispatch.required_paths");
   assert.match(maxItems.details.resolution, new RegExp(`at most ${maxInputs} items`));
   assert.match(maxItems.details.resolution, new RegExp(`it has ${maxInputs + 1}`));
   const tooLong = failure(spawnSchema, { ...base, label: "S".repeat(73) });
   assert.equal(tooLong.details.key, "label");
-  assert.match(tooLong.details.resolution, /at most 72 UTF-16 units/);
+  assert.match(tooLong.details.resolution, /at most 72 characters/);
   assert.match(tooLong.details.resolution, /it has 73/);
   noEcho(tooLong, "S".repeat(73));
   const shortId = failure(spawnSchema, {
     ...base,
-    return_to: { agent: "b", question_id: "q", answer: "a" },
+    return_to: { agent: "b", question_id: "q", instruction: "a" },
   });
   assert.equal(shortId.details.key, "return_to.question_id");
   assert.match(
     shortId.details.resolution,
     /exact pending question_id token copied from agent_wait or agent_read/,
   );
-  assert.doesNotMatch(shortId.details.resolution, /UTF-16|it has/);
+  assert.doesNotMatch(shortId.details.resolution, /UTF-16|it has|\d+ characters/);
   const minimum = failure(readSchema, { agent: "a", task: 0 });
   assert.equal(minimum.details.key, "task");
   assert.match(minimum.details.resolution, /at least 1/);
@@ -209,13 +209,13 @@ test("bounds use schema limits and safe counts without echoing values", () => {
 });
 
 test("uniqueItems and pattern failures stay generic", () => {
-  const duplicate = failure(spawnSchema, { ...base, dispatch: { inputs: ["/a", "/a"] } });
-  assert.equal(duplicate.details.key, "dispatch.inputs");
+  const duplicate = failure(spawnSchema, { ...base, dispatch: { required_paths: ["/a", "/a"] } });
+  assert.equal(duplicate.details.key, "dispatch.required_paths");
   assert.match(duplicate.details.resolution, /duplicate entries/);
-  const pattern = failure(spawnSchema, { ...base, dispatch: { inputs: ["/a*"] } });
-  assert.equal(pattern.details.key, "dispatch.inputs.0");
+  const pattern = failure(spawnSchema, { ...base, agent: "a*" });
+  assert.equal(pattern.details.key, "agent");
   assert.match(pattern.details.resolution, /required format/);
-  noEcho(pattern, "/a*");
+  noEcho(pattern, "a*");
   noEcho(pattern, "\\x00");
 });
 
@@ -242,9 +242,9 @@ test("array cardinality is diagnosed before invalid or unmappable individual ite
     const inputs = Array.from({ length }, (_, index) =>
       index === badIndex ? 42 : `input-${index}`,
     );
-    assert.equal(Check(spawnSchema, { ...base, dispatch: { inputs } }), false);
-    const error = failure(spawnSchema, { ...base, dispatch: { inputs } });
-    assert.equal(error.details.key, "dispatch.inputs");
+    assert.equal(Check(spawnSchema, { ...base, dispatch: { required_paths: inputs } }), false);
+    const error = failure(spawnSchema, { ...base, dispatch: { required_paths: inputs } });
+    assert.equal(error.details.key, "dispatch.required_paths");
     assert.match(error.details.resolution, new RegExp(`at most 32 items; it has ${length}`));
     noEcho(error, "input-");
   }
@@ -259,7 +259,7 @@ test("oversized duplicate-heavy arrays avoid TypeBox item and uniqueness diagnos
       throw new Error("diagnostics must not traverse this oversized array");
     },
   });
-  const raw = { ...base, dispatch: { inputs } };
+  const raw = { ...base, dispatch: { required_paths: inputs } };
   // The shortcut reads data descriptors only; it must not evaluate a sibling
   // accessor in order to locate the bounded input array.
   let getterReads = 0;
@@ -270,7 +270,7 @@ test("oversized duplicate-heavy arrays avoid TypeBox item and uniqueness diagnos
     },
   });
   const error = failure(spawnSchema, raw);
-  assert.equal(error.details.key, "dispatch.inputs");
+  assert.equal(error.details.key, "dispatch.required_paths");
   assert.match(error.details.resolution, /at most 32 items; it has 5000/);
   assert.equal(itemReads, 0);
   assert.equal(getterReads, 0);
@@ -307,7 +307,7 @@ test("minLength never labels TypeBox's grapheme-style count as UTF-16 units", ()
     [answerSchema, { agent: "a", question_id: token, answer: "Continue" }, "question_id"],
     [
       spawnSchema,
-      { ...base, return_to: { agent: "b", question_id: token, answer: "Continue" } },
+      { ...base, return_to: { agent: "b", question_id: token, instruction: "Continue" } },
       "return_to.question_id",
     ],
   ]) {
@@ -318,7 +318,7 @@ test("minLength never labels TypeBox's grapheme-style count as UTF-16 units", ()
       error.details.resolution,
       /exact pending question_id token copied from agent_wait or agent_read/,
     );
-    assert.doesNotMatch(error.details.resolution, /UTF-16|it has/);
+    assert.doesNotMatch(error.details.resolution, /UTF-16|it has|\d+ characters/);
     noEcho(error, token);
   }
   const generic = failure(Type.Object({ value: Type.String({ minLength: 3 }) }), {
@@ -326,7 +326,7 @@ test("minLength never labels TypeBox's grapheme-style count as UTF-16 units", ()
   });
   assert.equal(generic.details.key, "value");
   assert.match(generic.details.resolution, /minimum string-length requirement of 3/);
-  assert.doesNotMatch(generic.details.resolution, /UTF-16|it has/);
+  assert.doesNotMatch(generic.details.resolution, /UTF-16|it has|\d+ characters/);
 });
 
 test("question_id maxLength and pattern errors use the same copy-token guidance", () => {
@@ -335,7 +335,7 @@ test("question_id maxLength and pattern errors use the same copy-token guidance"
     assert.equal(error.details.key, "question_id");
     assert.match(error.details.resolution, /exact pending question_id token copied/);
     assert.match(error.details.resolution, /q_ followed by 32 lowercase hex digits/);
-    assert.doesNotMatch(error.details.resolution, /UTF-16|it has/);
+    assert.doesNotMatch(error.details.resolution, /UTF-16|it has|\d+ characters/);
     noEcho(error, token);
   }
 });
@@ -350,16 +350,21 @@ test("hostile extra keys are reported by object, never echoed", () => {
   noEcho(root, "SECRET_EXTRA_VALUE");
   const dispatch = failure(spawnSchema, { ...base, dispatch: { [hostile]: 1 } });
   assert.equal(dispatch.details.key, "dispatch");
-  assert.deepEqual(dispatch.details.allowed, ["inputs", "ownership", "tree", "checks"]);
+  assert.deepEqual(dispatch.details.allowed, [
+    "required_paths",
+    "ownership",
+    "build_dir",
+    "checks",
+  ]);
   assert.match(dispatch.details.resolution, /dispatch contains an undeclared field/);
   noEcho(dispatch, "evil");
   const questionId = `q_${"a".repeat(32)}`;
   const returnTo = failure(spawnSchema, {
     ...base,
-    return_to: { agent: "b", question_id: questionId, answer: "a", [hostile]: 1 },
+    return_to: { agent: "b", question_id: questionId, instruction: "a", [hostile]: 1 },
   });
   assert.equal(returnTo.details.key, "return_to");
-  assert.deepEqual(returnTo.details.allowed, ["agent", "question_id", "answer"]);
+  assert.deepEqual(returnTo.details.allowed, ["agent", "question_id", "instruction"]);
   assert.match(returnTo.details.resolution, /return_to contains an undeclared field/);
   noEcho(returnTo, "evil");
   const list = failure(listSchema, { [hostile]: 1 });

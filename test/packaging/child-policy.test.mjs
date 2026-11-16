@@ -29,7 +29,14 @@ test("orchestration guide lists the actual management tools and absent-only reso
     actual,
   );
   assert.match(readme, /seven files total/);
-  assert.match(readme, /Tasks have a turn limit.*not a wall-clock execution deadline/);
+  assert.match(
+    readme,
+    /Tasks have a soft turn budget \(default 256\), not a wall-clock execution deadline/,
+  );
+  assert.match(
+    readme,
+    /cooperative grace beyond `max_turns` is a configurable Owner limit, not a fixed `\+5` public contract/,
+  );
   assert.match(readme, /agent_answer.*settled pending question/);
 });
 
@@ -103,11 +110,29 @@ test("shared child prompt retains help-seeking and result-reporting guidance", (
     /ask_parent, explaining the blocker/,
     /independent work before asking when practical/,
     /without further parent input, report it/,
+    // Final result reporting is unconditional; failures/unknowns/limits still
+    // report, and the ask end-turn/no-repeat mechanics live only in the tool
+    // receipts.
+    /Distinguish observations from inference and completed work from unrun, blocked or interrupted work/,
   ])
     assert.match(common, fact);
+  const reporting = common
+    .trim()
+    .split(/\n\s*\n/)
+    .at(-1);
+  assert.match(
+    reporting,
+    /^Return concise results/,
+    "final result-reporting paragraph begins unconditionally with 'Return concise results'",
+  );
+  assert.match(
+    reporting,
+    /If reporting a failure, unknown or limit fulfills the assignment without further parent input, report it/,
+  );
+  assert.doesNotMatch(common, /For completed work/);
   assert.doesNotMatch(
     common,
-    /stop calling tools|Only the first question|returning a blocked result/,
+    /stop calling tools|Only the first question|returning a blocked result|do not repeat (?:it|the question) in your final reply|Exception:/,
   );
   assert.doesNotMatch(common, /\bd[1-5]\b/i, "help-seeking is not tied to a routing slot");
   const { agents } = renderWorkers();

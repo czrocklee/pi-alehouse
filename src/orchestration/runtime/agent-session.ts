@@ -74,7 +74,10 @@ export class ChildRunGate {
     });
     pi.on("tool_call", () => {
       if (!this.accepting || this.stopped)
-        return { block: true, reason: "Run is no longer accepting execution" };
+        return {
+          block: true,
+          reason: "This task is no longer accepting tool calls; end your turn.",
+        };
     });
   };
 }

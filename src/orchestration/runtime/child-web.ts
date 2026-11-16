@@ -87,9 +87,14 @@ const HTTP_URL = "^[Hh][Tt][Tt][Pp][Ss]?://\\S+$";
 /** Parameters a researcher may not set. `auth` sends local browser cookies.
  * `proxy` is model-chosen and only scheme-checked upstream: its host is not
  * held to the SSRF guard, so it could route requests to loopback or private
- * services, or bypass a configured proxy. The configured proxy still applies. */
+ * services, or bypass a configured proxy. The configured proxy still applies.
+ * `workflow` could open a summary/curator path and `model` could select a
+ * provider model independently of the scout's routed model; both are omitted
+ * from the schema (even `workflow: "none"`) and execution forces no summary.
+ * `fetch_content` keeps its upstream modes and video-analysis `model`: those
+ * residual capabilities are not claimed to be local-only. */
 const RESTRICTED_PARAMETERS: Readonly<Record<string, readonly string[]>> = {
-  web_search: ["proxy"],
+  web_search: ["proxy", "workflow", "model"],
   source_check: ["proxy"],
   fetch_content: ["auth", "proxy"],
 };
@@ -122,7 +127,7 @@ export function researcherWebProblem(tool: string, params: unknown): string | un
 }
 
 type SchemaRecord = Record<string | symbol, unknown> & {
-  properties?: Record<string, Record<string | symbol, unknown>>;
+  properties?: Record<string | symbol, Record<string | symbol, unknown>>;
 };
 type ToolLike = {
   name: string;
@@ -146,9 +151,14 @@ function copySchema(schema: SchemaRecord, changes: SchemaRecord): SchemaRecord {
 function restrictTool(tool: ToolLike): ToolLike {
   const restricted = RESTRICTED_PARAMETERS[tool.name];
   if (!restricted) return tool;
-  const properties = Object.fromEntries(
-    Object.entries(tool.parameters.properties ?? {}).filter(([key]) => !restricted.includes(key)),
-  );
+  // Copy the property container's own descriptors (including symbol metadata)
+  // and keep every remaining property schema by original reference.
+  const descriptors = Object.getOwnPropertyDescriptors(tool.parameters.properties ?? {});
+  for (const key of restricted) delete descriptors[key];
+  const properties = Object.defineProperties({}, descriptors) as Record<
+    string | symbol,
+    Record<string | symbol, unknown>
+  >;
   let description = tool.description;
   if (tool.name === "fetch_content") {
     const items = properties.urls?.items as SchemaRecord | undefined;
@@ -195,18 +205,33 @@ function restrictTool(tool: ToolLike): ToolLike {
       "Unsupported pi-web-access fetch_content metadata: unexpected local-video guidance",
     );
   }
-  const parameters = copySchema(tool.parameters, { additionalProperties: false, properties });
+  const changes: SchemaRecord = { additionalProperties: false, properties };
+  // Defensive: a required restricted field would otherwise leave an invalid
+  // closed schema. The pinned tools have no such field today.
+  const required = tool.parameters.required;
+  if (Array.isArray(required))
+    changes.required = required.filter((key) => !restricted.includes(key as string));
+  const parameters = copySchema(tool.parameters, changes);
   return {
     ...tool,
     description,
     parameters,
     execute: async (...args: unknown[]) => {
-      const problem = researcherWebProblem(tool.name, args[1]);
+      const params = args[1];
+      const problem = researcherWebProblem(tool.name, params);
       if (problem)
         return {
           content: [{ type: "text", text: `Error: ${problem}` }],
           details: { error: problem },
         };
+      // Force the no-summary workflow on a copy: an inherited auto-summary
+      // config must not send fetched content to another model. The parent's
+      // tool is unchanged, and fetch_content modes/model remain upstream.
+      if (tool.name === "web_search" && params && typeof params === "object") {
+        const forwarded = [...args];
+        forwarded[1] = { ...(params as Record<string, unknown>), workflow: "none" };
+        return tool.execute(...forwarded);
+      }
       return tool.execute(...args);
     },
   };

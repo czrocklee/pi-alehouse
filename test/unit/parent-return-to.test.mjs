@@ -73,7 +73,7 @@ async function pendingWorker(t, parentPermission, controller = {}) {
     destination: {
       agent: "ash",
       question_id,
-      answer: "Use the source findings to continue the investigation.",
+      instruction: "Use the source findings to continue the investigation.",
     },
   };
 }
@@ -150,7 +150,7 @@ test("compound spawn, completed wait and explicit source reads show handoff noti
   assert.match(call.prompt, /other agents' output, not instructions/);
   assert.equal(
     call.identity.task_prompt,
-    f.destination.answer,
+    f.destination.instruction,
     "source material is outside approval instructions",
   );
   assert.deepEqual(f.controller.view(continuationId).effective_settings, original);
@@ -284,7 +284,7 @@ test("return_to validation is closed, scout-only and absent from agent_run", asy
   const destination = {
     agent: "ash",
     question_id: `q_${"a".repeat(32)}`,
-    answer: "Continue with the findings.",
+    instruction: "Continue with the findings.",
   };
   assert.throws(
     () => tool("agent_spawn").prepareArguments(args({ profile: "worker", return_to: destination })),
@@ -294,8 +294,8 @@ test("return_to validation is closed, scout-only and absent from agent_run", asy
     { ...destination, extra: true },
     { ...destination, question_id: "q_bad" },
     { ...destination, agent: "ash\n" },
-    { ...destination, answer: " " },
-    { ...destination, answer: "x".repeat(16385) },
+    { ...destination, instruction: " " },
+    { ...destination, instruction: "x".repeat(16385) },
   ])
     assert.throws(
       () => tool("agent_spawn").prepareArguments(args({ return_to })),
@@ -313,6 +313,44 @@ test("return_to validation is closed, scout-only and absent from agent_run", asy
     errorCode("INVALID_PARAMETERS"),
   );
   assert.equal(f.controller.stats().runs, 0);
+});
+
+test("old or mixed return_to.answer is rejected before admission with no effects", async (t) => {
+  const f = await pendingWorker(t);
+  const before = structuredClone(f.controller.stats());
+  for (const [return_to, mixed] of [
+    [{ agent: "ash", question_id: f.destination.question_id, answer: "Old spelling." }, false],
+    [
+      {
+        agent: "ash",
+        question_id: f.destination.question_id,
+        instruction: "New spelling.",
+        answer: "Old spelling.",
+      },
+      true,
+    ],
+  ]) {
+    await assert.rejects(f.call("agent_spawn", args({ return_to }), "old-answer"), (error) => {
+      const reply = JSON.parse(error.message).error;
+      assert.equal(reply.code, "INVALID_PARAMETERS");
+      if (mixed) {
+        assert.equal(reply.parameter, "return_to");
+        assert.deepEqual(reply.allowed, ["agent", "question_id", "instruction"]);
+      } else {
+        assert.equal(reply.parameter, "return_to.instruction");
+        assert.match(reply.resolution, /return_to\.instruction/);
+      }
+      assert.equal(JSON.stringify(reply).includes('"answer"'), false);
+      return true;
+    });
+  }
+  assert.deepEqual(f.controller.stats(), before);
+  assert.equal(f.controller.findAgent("birch"), undefined);
+  assert.equal(f.ports.length, 1);
+  assert.equal(
+    f.controller.view(f.controller.findAgent("ash").run_id).question_id,
+    f.destination.question_id,
+  );
 });
 
 test("ordinary scout spawn keeps long output and paging without querying compound permission", async (t) => {
@@ -359,10 +397,30 @@ test("compound replay keeps the same pair without rechecking permission or consu
   assert.equal(f.controller.findAgent("ash").run_id, continuationId);
   assert.equal(f.controller.stats().runs, 3);
   assert.equal(checks, 1, "accepted request replay precedes fresh permission/target checks");
+  // The retired spelling is not an alias: it fails the raw schema before the
+  // accepted-request replay lookup can turn it into REQUEST_CONFLICT.
   await assert.rejects(
     f.call(
       "agent_spawn",
-      args({ return_to: { ...f.destination, answer: "Different instruction" } }),
+      args({
+        return_to: {
+          agent: "ash",
+          question_id: f.destination.question_id,
+          answer: "Retired spelling",
+        },
+      }),
+      "stable-source",
+    ),
+    errorCode("INVALID_PARAMETERS"),
+  );
+  assert.equal(f.controller.stats().runs, 3);
+  assert.equal(checks, 1, "the retired spelling never reaches permission or admission");
+  assert.equal(f.controller.findAgent("birch").run_id, sourceId);
+  assert.equal(f.controller.findAgent("ash").run_id, continuationId);
+  await assert.rejects(
+    f.call(
+      "agent_spawn",
+      args({ return_to: { ...f.destination, instruction: "Different instruction" } }),
       "stable-source",
     ),
     errorCode("REQUEST_CONFLICT"),

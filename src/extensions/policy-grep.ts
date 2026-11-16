@@ -13,6 +13,7 @@ const BATCH_BYTES = 4 * 1024 * 1024;
 const TOTAL_BYTES = 256 * 1024 * 1024;
 const RESULT_BYTES = 50 * 1024;
 const MAX_FILES = 100_000;
+const MAX_LIMIT = 500;
 const WORK_MS = 30_000;
 
 function inside(path: string, directory: string): boolean {
@@ -93,7 +94,7 @@ function registerPolicyGrep(pi: ExtensionAPI): () => boolean {
     ...original,
     parameters,
     description:
-      "Search permitted text files recursively. Directory searches skip .git, node_modules, symlinks, binary files, files over 2 MiB and deny/ask descendants. Ignore-files are not read; narrow with path/glob. Results describe exclusions and limits.",
+      "Search permitted text files recursively. Directory searches skip .git, node_modules, symlinks, binary files, files over 2 MiB and deny/ask descendants. Ignore-files are not read; narrow with path/glob. Caps: a finite limit is floored and clamped to 1-500 (default 100); a finite context is floored and clamped to 0-10 (default 0); results are capped at 50 KiB; the whole search shares a 30 second work budget. Results state the effective values when requested limit/context values are normalized, and name which cap was reached.",
     promptSnippet: "Search permitted project text files recursively",
     async execute(_toolCallId, params, outerSignal, _onUpdate, ctx) {
       const abort = new AbortController();
@@ -104,7 +105,8 @@ function registerPolicyGrep(pi: ExtensionAPI): () => boolean {
       let inputBytes = 0;
       let matches = 0;
       let outputBytes = 0;
-      let incomplete = false;
+      let scanIncomplete = false;
+      let matchLimitReached = false;
       let resultLimitReached = false;
       const output: string[] = [];
       try {
@@ -138,12 +140,19 @@ function registerPolicyGrep(pi: ExtensionAPI): () => boolean {
         };
         const limit = Math.max(
           1,
-          Math.min(500, Math.floor(Number.isFinite(params.limit) ? params.limit! : 100)),
+          Math.min(MAX_LIMIT, Math.floor(Number.isFinite(params.limit) ? params.limit! : 100)),
         );
         const context = Math.max(
           0,
           Math.min(10, Math.floor(Number.isFinite(params.context) ? params.context! : 0)),
         );
+        // Only finite requested values are "changed" by normalization; absent or
+        // non-finite values simply fall back to the documented defaults.
+        const normalized: string[] = [];
+        if (Number.isFinite(params.limit) && limit !== params.limit)
+          normalized.push(`limit ${limit} (requested ${params.limit})`);
+        if (Number.isFinite(params.context) && context !== params.context)
+          normalized.push(`context ${context} (requested ${params.context})`);
         const flags = ["--json", "--color=never"];
         if (params.ignoreCase) flags.push("--ignore-case");
         if (params.literal) flags.push("--fixed-strings");
@@ -159,7 +168,7 @@ function registerPolicyGrep(pi: ExtensionAPI): () => boolean {
             .slice(0, listed.output.lastIndexOf("\0") + 1)
             .split("\0")
             .filter(Boolean);
-          incomplete = listed.limited || names.length > MAX_FILES;
+          scanIncomplete ||= listed.limited || names.length > MAX_FILES;
           names = names.slice(0, MAX_FILES);
         }
         let batch: Segment[] = [];
@@ -184,7 +193,7 @@ function registerPolicyGrep(pi: ExtensionAPI): () => boolean {
               batchBytes,
             ),
           );
-          incomplete ||= result.limited;
+          scanIncomplete ||= result.limited;
           searched += batch.length;
           const records: Array<{ file: Segment; number: number; match: boolean; text: string }> =
             [];
@@ -196,7 +205,7 @@ function registerPolicyGrep(pi: ExtensionAPI): () => boolean {
               event = JSON.parse(line);
             } catch {
               if (result.limited) {
-                incomplete = true;
+                scanIncomplete = true;
                 break;
               }
               throw new Error("Invalid ripgrep JSON result");
@@ -210,7 +219,7 @@ function registerPolicyGrep(pi: ExtensionAPI): () => boolean {
             if (!file || number < file.first) throw new Error("Invalid search source mapping");
             if (event.type === "match") matches += 1;
             if (matches > limit) {
-              incomplete = true;
+              matchLimitReached = true;
               break;
             }
             const raw =
@@ -252,7 +261,6 @@ function registerPolicyGrep(pi: ExtensionAPI): () => boolean {
             );
             // Admit a group header only together with its first result line.
             if (outputBytes + firstSize > RESULT_BYTES) {
-              incomplete = true;
               resultLimitReached = true;
               break;
             }
@@ -261,7 +269,6 @@ function registerPolicyGrep(pi: ExtensionAPI): () => boolean {
             for (const line of group.slice(1)) {
               const size = Buffer.byteLength(line) + 1;
               if (outputBytes + size > RESULT_BYTES) {
-                incomplete = true;
                 resultLimitReached = true;
                 break;
               }
@@ -276,10 +283,8 @@ function registerPolicyGrep(pi: ExtensionAPI): () => boolean {
         };
         for (const path of names) {
           aborted(signal);
-          if (matches > limit || resultLimitReached) {
-            incomplete = true;
-            break;
-          }
+          if (matches > limit) matchLimitReached = true;
+          if (matchLimitReached || resultLimitReached) break;
           const lexical = directory ? resolve(root, relative(canonicalRoot, path)) : root;
           if (directory && !inside(path, canonicalRoot)) {
             skipped.unavailable += 1;
@@ -349,7 +354,7 @@ function registerPolicyGrep(pi: ExtensionAPI): () => boolean {
           if (!data) continue;
           inputBytes += data.length;
           if (inputBytes > TOTAL_BYTES) {
-            incomplete = true;
+            scanIncomplete = true;
             break;
           }
           if (data.includes(0)) {
@@ -364,10 +369,8 @@ function registerPolicyGrep(pi: ExtensionAPI): () => boolean {
           let lines = 0;
           for (const byte of data) if (byte === 10) lines += 1;
           if (batchBytes + data.length > BATCH_BYTES) await flush();
-          if (matches > limit || resultLimitReached) {
-            incomplete = true;
-            break;
-          }
+          if (matches > limit) matchLimitReached = true;
+          if (matchLimitReached || resultLimitReached) break;
           batch.push({ path, first: nextLine, lines, bytes: data });
           nextLine += lines;
           batchBytes += data.length;
@@ -376,12 +379,29 @@ function registerPolicyGrep(pi: ExtensionAPI): () => boolean {
         if (matches <= limit && !resultLimitReached) await flush();
         const notes = [
           `Searched ${searched} permitted text files.`,
+          ...(normalized.length ? [`Requested limits normalized: ${normalized.join("; ")}.`] : []),
           `Skipped: permission=${skipped.permission}, size=${skipped.tooLarge}, binary=${skipped.binary}, unavailable=${skipped.unavailable}, explicit-symlink=${skipped.symlink}.`,
           directory
             ? "Directory scope excludes .git, node_modules and symlinks; ignore-files are not read. Use path/glob to narrow the scope."
             : "Explicit file scope; directory grants are not used for descendants.",
-          ...(incomplete
-            ? ["Search incomplete: a work/output limit was reached; narrow path/glob."]
+          ...(matchLimitReached
+            ? [
+                `Search incomplete: match limit ${limit} reached; additional matches were not returned. ${
+                  limit < MAX_LIMIT
+                    ? `Raise limit (caps at ${MAX_LIMIT}) or narrow the search.`
+                    : `The limit is already at the maximum of ${MAX_LIMIT}; narrow path/glob.`
+                }`,
+              ]
+            : []),
+          ...(resultLimitReached
+            ? [
+                "Search incomplete: output cap reached; results were truncated at 50 KiB; narrow path/glob.",
+              ]
+            : []),
+          ...(scanIncomplete
+            ? [
+                "Search incomplete: a scan limit was reached (file count, scanned bytes or ripgrep output cap); narrow path/glob.",
+              ]
             : []),
           ...(searched === 0 && skipped.permission
             ? [
@@ -403,7 +423,7 @@ function registerPolicyGrep(pi: ExtensionAPI): () => boolean {
             searchedFiles: searched,
             skippedFiles: Object.values(skipped).reduce((a, b) => a + b, 0),
             skipped,
-            incomplete,
+            incomplete: scanIncomplete || matchLimitReached || resultLimitReached,
           },
         };
       } finally {

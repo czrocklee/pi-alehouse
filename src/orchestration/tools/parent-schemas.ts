@@ -2,7 +2,7 @@ import { Type, type Static, type TObject } from "typebox";
 import { Check } from "typebox/value";
 import { validDifficulty } from "../core/contracts.ts";
 import { isModelAgentName, MODEL_AGENT_NAME_PATTERN } from "../core/communication-envelope.ts";
-import { DISPATCH_LIMITS, validateDispatch } from "../core/dispatch.ts";
+import { DISPATCH_LIMITS, validatePublicDispatch } from "../core/dispatch.ts";
 import { OrchestrationError } from "../core/ports.ts";
 import { QUESTION_ID_PATTERN } from "../core/question-id.ts";
 import { invalidDifficultyResolution } from "../routing.ts";
@@ -30,28 +30,35 @@ const optional = Type.Optional;
 export const AGENT_NAME_PATTERN = MODEL_AGENT_NAME_PATTERN;
 const agentName = (description?: string) =>
   Type.String({ pattern: AGENT_NAME_PATTERN, ...(description ? { description } : {}) });
-const agentNames = (maxItems: number, description: string) =>
-  Type.Array(agentName(), { minItems: 1, maxItems, description });
-const waitMs = (description: string) => Type.Integer({ minimum: 0, maximum: 300000, description });
+const agentNames = (maxItems: number, description: string, unique = false) =>
+  Type.Array(agentName(), {
+    minItems: 1,
+    maxItems,
+    description,
+    ...(unique ? { uniqueItems: true } : {}),
+  });
+const waitMs = (description: string, defaultValue = 0) =>
+  Type.Integer({ minimum: 0, maximum: 300000, default: defaultValue, description });
 
 const labelField = text(
   MODEL_TASK_TITLE_UNITS,
-  `Concise 3–8 word task title, not instructions or background; max ${MODEL_TASK_TITLE_UNITS} UTF-16 units.`,
+  `Short task title in the task's language, not instructions or background; at most ${MODEL_TASK_TITLE_UNITS} characters.`,
 );
 const afterField = optional(
   agentNames(
     4,
-    "Wait for each named Agent's current or latest task, fixed at this call, to reach completed; any other final status fails the dependency. Results become reference context. Does not follow later tasks or answers: wait until agent_answer returns before naming its Agent here.",
+    "Bind each Agent's current or latest task now; wait for completed and pass its result as reference. Other final statuses fail; completed with limit_reached still passes. Later tasks/answers are not followed: wait until agent_answer returns before naming that Agent.",
+    true,
   ),
 );
 const waitField = optional(
-  waitMs("Wait for task/events; default 0 returns now. Timeout/abort never stops work."),
+  waitMs("Wait for events; default 0 returns now. Timeout/abort never stops work."),
 );
 const dispatchPath = (description: string) =>
   Type.String({
     minLength: 1,
     maxLength: DISPATCH_LIMITS.stringUnits,
-    pattern: "^(?![~@])(?=.*\\S)[^\\x00-\\x1f\\x7f*?[\\]{}'\"`$\\\\]+(?![\\s\\S])",
+    pattern: "^(?=.*\\S)[^\\x00-\\x1f\\x7f]+(?![\\s\\S])",
     description,
   });
 const dispatchPaths = (maxItems: number, description: string) =>
@@ -63,10 +70,10 @@ const dispatchPaths = (maxItems: number, description: string) =>
 const dispatchField = optional(
   Type.Object(
     {
-      inputs: optional(
+      required_paths: optional(
         dispatchPaths(
           DISPATCH_LIMITS.inputs,
-          "If set: preflight prerequisites; must exist. Other refs: prompt.",
+          "File/directory prerequisites must exist at execution preflight. Put optional references in prompt; no content injection or read grants.",
         ),
       ),
       ownership: optional(
@@ -75,9 +82,9 @@ const dispatchField = optional(
           "File/directory to edit or create; needs write permission, one editor per shared file. Omit for read-only tasks.",
         ),
       ),
-      tree: optional(
+      build_dir: optional(
         dispatchPath(
-          "Build/test output directory; needs write permission and, if it exists, must be a directory. Declarations that overlap another Agent's conflict within this session; other sessions are only advised, not excluded.",
+          "Build/test output directory, not a checkout. Needs write permission; if it exists, must be a directory. Claims conflict within this session; other sessions are only advised.",
         ),
       ),
       checks: optional(
@@ -87,7 +94,7 @@ const dispatchField = optional(
             maxLength: DISPATCH_LIMITS.stringUnits,
             pattern: "^(?=.*\\S)[^\\x00-\\x1f\\x7f]+(?![\\s\\S])",
             description:
-              "A check for this task to run now: an identifier, not a command (globs allowed); not one awaiting a later go-ahead.",
+              "Checks to run now, by name or target, not shell command. Test globs are allowed. Omit checks awaiting a later go-ahead.",
           }),
           { minItems: 1, maxItems: DISPATCH_LIMITS.checks, uniqueItems: true },
         ),
@@ -96,31 +103,29 @@ const dispatchField = optional(
     {
       additionalProperties: false,
       description:
-        "Task scope and planned checks, not permissions or execution evidence. Use literal paths without padding, globs or shell expansion. Relative paths resolve from the inherited parent cwd; absolute paths keep their meaning. Assign full-suite validation to one designated Agent after shared source is stable.",
+        "Task scope and planned checks, not permissions or execution evidence. Use literal paths relative to parent cwd or absolute: no padding, globs, shell quotes, backslash, $, leading ~ or @. Put unsupported refs in prompt. Assign one full-suite owner after shared source is stable.",
     },
   ),
 );
 const returnToField = optional(
   Type.Object(
     {
-      agent: agentName(
-        "Existing worker whose task ended with a question that is still unanswered.",
-      ),
+      agent: agentName("Worker with a settled, unanswered question."),
       question_id: Type.String({
         minLength: 34,
         maxLength: 34,
         pattern: QUESTION_ID_PATTERN,
-        description: "Exact pending question_id returned by wait/read for that worker.",
+        description: "Exact pending question_id copied from wait/read.",
       }),
-      answer: text(
-        PARENT_TEXT_LIMITS.answer,
-        "Your instruction for continuing the worker's task, written before the findings exist: say how to proceed for each outcome you expect. Scout findings are attached separately as untrusted reference material.",
+      instruction: text(
+        PARENT_TEXT_LIMITS.instruction,
+        "Worker continuation instructions, written before the findings exist. Say how to proceed for each expected outcome; findings arrive separately as untrusted reference.",
       ),
     },
     {
       additionalProperties: false,
       description:
-        "Scout only: answer a worker's pending question with this scout's findings. The worker resumes automatically once the scout completes, findings attached; you do not read or relay them. The worker receives only the first 16384 characters, which the scout is told. wait_ms waits for the worker. The scout is released once its whole result is delivered; otherwise read it and kill it yourself. Needs agent_answer already approved for you; otherwise the error says what to do.",
+        "Scout only: continue a worker's pending question with findings; the worker resumes automatically. You do not read or relay them. The scout is told the worker receives the first 16384 characters. wait_ms waits for the worker. Full delivery releases the scout; otherwise read it and kill it yourself. Needs agent_answer already approved; errors explain fallback.",
     },
   ),
 );
@@ -147,8 +152,9 @@ export const spawnSchema = Type.Object(
     return_to: returnToField,
     inherit_context: optional(
       Type.Boolean({
+        default: false,
         description:
-          "true: the Agent first receives this conversation's text so far (no tool calls/results, max 64 KiB). Use when the task depends on discussion you would otherwise restate in prompt. Default false.",
+          "Default false. Include this conversation's text before the task (no tool calls/results, max 64 KiB). Use when prompt would otherwise repeat needed discussion.",
       }),
     ),
     dispatch: dispatchField,
@@ -159,7 +165,8 @@ export const spawnSchema = Type.Object(
         minimum: 1,
         maximum: 10000,
         description:
-          "First task's turn limit and Agent default; default 256. No task wall-clock deadline. May leave partial results.",
+          "First task's soft turn budget and Agent default (default 256). Requests wrap-up with configurable grace before cooperative hard stop. No task wall-clock deadline; may leave partial results.",
+        default: 256,
       }),
     ),
   },
@@ -170,7 +177,7 @@ export const runSchema = Type.Object(
     agent: agentName("An existing, idle Agent."),
     continues: text(
       PARENT_TEXT_LIMITS.continues,
-      "The specific earlier work of this Agent being continued; not sent to it. If you cannot name one, use agent_spawn (with after if only its output is needed).",
+      "Name the specific earlier work this Agent is continuing; not sent to it. If none, use agent_spawn (with after if only its output is needed).",
     ),
     prompt: text(
       PARENT_TEXT_LIMITS.prompt,
@@ -185,7 +192,7 @@ export const runSchema = Type.Object(
         minimum: 1,
         maximum: 10000,
         description:
-          "Per-task override; omit for spawn default, not last override. May leave partial results.",
+          "Per-task override of the soft turn budget; omit for spawn default, not last override. Configurable grace allows wrap-up before cooperative hard stop; may leave partial results.",
       }),
     ),
   },
@@ -230,7 +237,7 @@ export const waitSchema = Type.Object(
     agents: optional(
       agentNames(
         16,
-        `Wait on each named Agent's task, fixed at this call: its active (running/queued) task, else its pending question, else its latest finished task. Alerts span those Agents. Omit to wait on unfinished tasks, answerable questions and all Agents' alerts.`,
+        `Bind now: each Agent's active (running/queued) task, else pending question, else latest finished task. Duplicate names are ignored. Alerts span those Agents. Omit for unfinished tasks, answerable questions and all Agents' alerts.`,
       ),
     ),
     mode: optional(
@@ -240,7 +247,7 @@ export const waitSchema = Type.Object(
           "all (default): every selected task ends; any: one ends. Other events may return earlier.",
       }),
     ),
-    wait_ms: optional(waitMs("Wait duration; default 300000 ms. 0 checks once.")),
+    wait_ms: optional(waitMs("Wait duration; default 300000 ms. 0 checks once.", 300000)),
   },
   { additionalProperties: false },
 );
@@ -267,7 +274,9 @@ export const readSchema = Type.Object(
       Type.Integer({
         minimum: 1,
         maximum: 16384,
-        description: "Page size, default/max 16384 characters; reply limits may shorten it.",
+        default: 16384,
+        description:
+          "Result page size; default/max 16384 characters. Reply limits may shorten it; the recorded question is returned separately.",
       }),
     ),
   },
@@ -282,15 +291,15 @@ export const agentRunDescription =
 export const agentSendDescription =
   "Add instructions to the Agent's current task, fixed at this call, not an answer or new task. delivery: joined=added to prompt, steered=sent while running, not_delivered=nothing sent. Delivery does not prove action.";
 export const agentAnswerDescription =
-  "Answer the exact pending question_id and submit a continuation. First wait for status=\"needs_input\" and a current question_id from agent_wait or agent_read; historical text alone cannot be answered. Keeps fixed settings and the asking task's label/dispatch. Turn cap: Agent default, not the asking task's override.";
-export const agentWaitDescription = `Wait for selected tasks; questions, issues or alerts return early. Prefer long waits to polling. Questions stay pending; name other Agents to defer one. Nothing pending returns now; timeout/abort never stops work.`;
-export const agentReadDescription = `Read a task's result/question and this Agent's alerts, including after reuse or kill. Prioritizes the full question. next_cursor means more of that result remains: pass it back to continue the original task.`;
+  "Answer the exact pending question_id and submit a continuation. First wait for status=\"needs_input\" and a current question_id from agent_wait or agent_read; historical text alone cannot be answered. Keeps fixed settings and the asking task's label/dispatch. Soft turn budget: Agent default, not the asking task's override.";
+export const agentWaitDescription = `Wait for selected tasks; questions, issues or alerts return early. Prefer long waits to polling. Questions stay pending; name other Agents to defer one. Returns immediately if nothing is pending; timeout/abort never stops work. Consumes only alerts and Owner-wide completion notices shown in this reply.`;
+export const agentReadDescription = `Read a task's result/question and this Agent's alerts, including after reuse or kill. Prioritizes the full question. next_cursor means more of that result remains: pass it back to continue the original task. Consumes only this Agent's alerts and Owner-wide completion notices shown in this reply.`;
 export const agentInterruptDescription =
-  "Request a stop; the task has stopped only once wait/read shows a final status. An already ending task keeps its outcome. Keeps the conversation for follow-ups; consumes no alerts.";
+  "Request a stop; the task has stopped only once wait/read shows a final status. An already ending task keeps its outcome. Keeps the conversation for follow-ups; consumes no alerts or completion notices.";
 export const agentKillDescription =
-  "Permanently end an Agent, requesting stop of its task. exiting or cleanup_uncertain does not confirm release. Name stays taken, results stay readable; consumes no alerts.";
+  "Permanently end an Agent, requesting stop of its task. agent_status=exiting or cleanup_uncertain does not confirm release; released does. Name stays taken, results stay readable; consumes no alerts or completion notices.";
 export const agentListDescription =
-  "Read-only roster with current/latest task labels. Get pending questions through wait/read. Consumes no alerts or completion notices.";
+  "Read-only roster with current/latest task labels. released lists up to 32 newest-created released Agents, not release order. Get pending questions through wait/read. Consumes no alerts or completion notices.";
 
 /** Schema and name checks shared by prepare and execute. Hooks can mutate
  * arguments, so execution repeats this rather than trusting preparation. */
@@ -344,7 +353,7 @@ export function checkParentToolArguments<S extends TObject>(
     });
   if ((name === "agent_spawn" || name === "agent_run") && fields.dispatch !== undefined) {
     try {
-      validateDispatch(fields.dispatch);
+      validatePublicDispatch(fields.dispatch);
     } catch (error) {
       if (error instanceof OrchestrationError && error.code === "INVALID_DISPATCH") {
         const { key, index } = error.details;

@@ -21,6 +21,11 @@ import { OrchestrationError } from "../../dist/orchestration/core/ports.js";
 import { boundedOutput } from "../../dist/orchestration/core/result-text.js";
 import { ObservationScheduler } from "../../dist/orchestration/core/observation-scheduler.js";
 import { packCommunication } from "../../dist/orchestration/core/communication-packer.js";
+import {
+  modelOutcomeReason,
+  modelTaskStatus,
+} from "../../dist/orchestration/core/communication-envelope.js";
+import { terminal } from "../../dist/orchestration/core/contracts.js";
 import { managedBlockToolNames } from "../../src/shared/managed-block-tools.mjs";
 import { taskMetadata } from "../../dist/orchestration/core/task-metadata.js";
 
@@ -47,6 +52,7 @@ function originalRun(
     finished_presented = false,
     settled_seq,
     limit_reached = false,
+    reason,
   } = {},
 ) {
   return {
@@ -61,7 +67,7 @@ function originalRun(
       status,
       phase,
       execution_exited,
-      outcome: { limit_reached },
+      outcome: { limit_reached, ...(reason !== undefined ? { reason } : {}) },
     },
     question,
     finished_presented,
@@ -111,17 +117,25 @@ const ownerScope = { kind: "owner" };
 const agentScope = (run) => ({ kind: "agents", agent_ids: [run.record.agent_id] });
 const runScope = (run) => ({ kind: "run", run });
 
-// Public statuses are projections, not another task record.
+// Public statuses are projections, not another task record. Same rule as
+// owner-projection.communicationRow: an exited non-terminal Run is finishing,
+// then cancellation wording applies, so commit recomputation agrees.
 function thinRow(run, runs) {
   const status =
-    run.record.status === "cancelled"
-      ? "interrupted"
-      : run.record.status === "cancelling"
-        ? "interrupting"
-        : run.record.phase === "finalizing"
-          ? "finishing"
-          : run.record.status;
-  return { agent: run.record.name, task: taskOrdinal(run, runs), status };
+    run.record.execution_exited && !terminal(run.record.status)
+      ? "finishing"
+      : modelTaskStatus(run.record.status);
+  // Same shared projection rule as owner-projection.communicationRow: only a
+  // truly settled terminal Run may carry its bounded outcome reason.
+  const outcome_reason = isSettledRecord(run.record)
+    ? modelOutcomeReason(run.record.outcome?.reason)
+    : undefined;
+  return {
+    agent: run.record.name,
+    task: taskOrdinal(run, runs),
+    status,
+    ...(outcome_reason ? { outcome_reason } : {}),
+  };
 }
 function capture(state, options = {}) {
   const { scope = ownerScope, targets = [], reason = "snapshot" } = options;
@@ -1556,6 +1570,161 @@ test("cancelled original Run is explicitly presented as interrupted and commits 
   commit(state, snapshot, publication);
   assert.equal(cancelled.finished_presented, true);
   assert.equal(live.finished_presented, false);
+});
+
+function outcomeReasonFixture(reason, status = "failed") {
+  const run = settledRun("otter", 1, { status, ...(reason !== undefined ? { reason } : {}) }),
+    state = { pending: [], runs: [run], blocked: undefined, reportedBlock: undefined };
+  return { run, state, snapshot: capture(state, { targets: [run] }) };
+}
+
+test("a settled terminal Run's outcome reason is a required original fact on its bound and finished rows", () => {
+  for (const [reason, projected] of [
+    ["execution_error", "execution_error"],
+    ["dependency_not_completed", "dependency_not_completed"],
+    ["finalization_failed", "finalization_failed"],
+    ["unknown historical fault", "other"],
+  ]) {
+    const { run, state, snapshot } = outcomeReasonFixture(reason);
+    assert.equal(snapshot.data.tasks[0].row.outcome_reason, projected);
+    const packed = packCommunication(snapshot.data);
+    assert.equal(packed.envelope.tasks[0].outcome_reason, projected);
+    assert.equal(packed.envelope.finished, undefined, "the bound row presents it");
+    commit(state, snapshot, packed);
+    assert.equal(run.finished_presented, true);
+  }
+  // A reasonless settled Run commits without the field, including empty text.
+  for (const reason of [undefined, ""]) {
+    const { run, state, snapshot } = outcomeReasonFixture(reason);
+    assert.equal(Object.hasOwn(snapshot.data.tasks[0].row, "outcome_reason"), false);
+    const packed = packCommunication(snapshot.data);
+    assert.equal(Object.hasOwn(packed.envelope.tasks[0], "outcome_reason"), false);
+    commit(state, snapshot, packed);
+    assert.equal(run.finished_presented, true);
+  }
+});
+
+for (const [description, forge] of [
+  [
+    "forged known reason",
+    (rows) => {
+      for (const row of rows) row.outcome_reason = "turn_limit";
+    },
+  ],
+  [
+    "forged other",
+    (rows) => {
+      for (const row of rows) row.outcome_reason = "other";
+    },
+  ],
+  [
+    "omitted reason",
+    (rows) => {
+      for (const row of rows) delete row.outcome_reason;
+    },
+  ],
+])
+  test(`snapshot/body agreement cannot forge the original outcome reason (${description})`, () => {
+    const { run, state, snapshot } = outcomeReasonFixture("execution_error");
+    forge([snapshot.data.tasks[0].row, snapshot.data.finished[0].row]);
+    const packed = packCommunication(snapshot.data);
+    assert.equal(
+      packed.envelope.tasks[0].outcome_reason,
+      snapshot.data.tasks[0].row.outcome_reason,
+    );
+    unchanged(state, () => commit(state, snapshot, packed), "INVALID_COMMUNICATION_COMMIT");
+    assert.equal(run.finished_presented, false);
+  });
+
+for (const [description, forge] of [
+  [
+    "body strips a real reason",
+    (packed) => {
+      delete packed.envelope.tasks[0].outcome_reason;
+    },
+  ],
+  [
+    "body rewrites the reason",
+    (packed) => {
+      packed.envelope.tasks[0].outcome_reason = "turn_limit";
+    },
+  ],
+])
+  test(`a correct captured reason cannot be altered in the final body (${description})`, () => {
+    const { run, state, snapshot } = outcomeReasonFixture("execution_error");
+    const packed = packCommunication(snapshot.data);
+    forge(packed);
+    unchanged(state, () => commit(state, snapshot, packed), "INVALID_COMMUNICATION_COMMIT");
+    assert.equal(run.finished_presented, false);
+  });
+
+test("a reasonless settled original Run cannot acquire an outcome reason from any projection layer", () => {
+  const run = settledRun("otter", 1, { status: "failed" }),
+    state = { pending: [], runs: [run], blocked: undefined, reportedBlock: undefined },
+    snapshot = capture(state, { targets: [run] });
+  // Forged snapshot AND final body agree: only the authoritative original rejects.
+  snapshot.data.tasks[0].row.outcome_reason = "execution_error";
+  snapshot.data.finished[0].row.outcome_reason = "execution_error";
+  const agreed = packCommunication(snapshot.data);
+  assert.equal(agreed.envelope.tasks[0].outcome_reason, "execution_error");
+  unchanged(state, () => commit(state, snapshot, agreed), "INVALID_COMMUNICATION_COMMIT");
+  // A body-only addition disagrees with its own captured row and also rejects.
+  delete snapshot.data.tasks[0].row.outcome_reason;
+  delete snapshot.data.finished[0].row.outcome_reason;
+  const packed = packCommunication(snapshot.data);
+  packed.envelope.tasks[0].outcome_reason = "execution_error";
+  unchanged(state, () => commit(state, snapshot, packed), "INVALID_COMMUNICATION_COMMIT");
+  assert.equal(run.finished_presented, false);
+});
+
+test("a finalizing Run's installed outcome is not yet a terminal fact and cannot be shown early", () => {
+  const run = originalRun("otter", 1, {
+      status: "cancelling",
+      phase: "finalizing",
+      execution_exited: true,
+      reason: "execution_error",
+    }),
+    state = { pending: [], runs: [run], blocked: undefined, reportedBlock: undefined };
+  const snapshot = capture(state, { targets: [run] });
+  assert.equal(snapshot.data.tasks[0].row.status, "finishing");
+  assert.equal(Object.hasOwn(snapshot.data.tasks[0].row, "outcome_reason"), false);
+  const honest = body(snapshot);
+  assert.deepEqual(honest.envelope.tasks, [{ agent: "otter", task: 1, status: "finishing" }]);
+  commit(state, snapshot, honest);
+  const early = body(snapshot, {
+    taskRows: [{ ...snapshot.data.tasks[0].row, outcome_reason: "execution_error" }],
+  });
+  unchanged(state, () => commit(state, snapshot, early), "INVALID_COMMUNICATION_COMMIT");
+});
+
+test("mixed bound states commit each row's own terminal and scheduling facts", () => {
+  const queued = originalRun("heron", 1, {
+      status: "queued",
+      phase: "queued",
+      settled_seq: undefined,
+    }),
+    running = originalRun("otter", 2),
+    failed = settledRun("seal", 3, { status: "failed", reason: "dependency_not_completed" }),
+    done = settledRun("orca", 4, { status: "completed" }),
+    state = {
+      pending: [],
+      runs: [queued, running, failed, done],
+      blocked: undefined,
+      reportedBlock: undefined,
+    };
+  const snapshot = capture(state, { targets: [queued, running, failed, done] }),
+    packed = packCommunication(snapshot.data);
+  assert.deepEqual(packed.envelope.tasks, [
+    { agent: "heron", task: 1, status: "queued" },
+    { agent: "otter", task: 1, status: "running" },
+    { agent: "seal", task: 1, status: "failed", outcome_reason: "dependency_not_completed" },
+    { agent: "orca", task: 1, status: "completed" },
+  ]);
+  commit(state, snapshot, packed);
+  assert.equal(failed.finished_presented, true);
+  assert.equal(done.finished_presented, true);
+  assert.equal(queued.finished_presented, false);
+  assert.equal(running.finished_presented, false);
 });
 
 test("currentBlocked vs snapshot validates broadcast A/B; another successful reporter is not a stale-ref failure", () => {

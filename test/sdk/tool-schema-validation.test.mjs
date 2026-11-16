@@ -156,7 +156,7 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
   assert.equal(spawn.parameters.properties.dispatch.additionalProperties, false);
   const returnTo = spawn.parameters.properties.return_to;
   assert.equal(returnTo.additionalProperties, false);
-  assert.deepEqual(returnTo.required.toSorted(), ["agent", "answer", "question_id"]);
+  assert.deepEqual(returnTo.required.toSorted(), ["agent", "instruction", "question_id"]);
   const prepared = spawn.prepareArguments(spawnArgs());
   assert.equal(prepared.profile, "worker", "the TypeBox Check layer accepts its local enum values");
   assert.equal(spawn.prepareArguments(spawnArgs({ profile: "scout" })).profile, "scout");
@@ -186,10 +186,10 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
     return_to: {
       agent: "otter",
       question_id: `q_${"a".repeat(32)}`,
-      answer: "Use the attached findings.",
+      instruction: "Use the attached findings.",
     },
   });
-  assert.equal(spawn.prepareArguments(routed).return_to.answer, "Use the attached findings.");
+  assert.equal(spawn.prepareArguments(routed).return_to.instruction, "Use the attached findings.");
   assert.equal((await invoke(schemaProbe, routed)).isError, false);
   assert.equal(captured.length, 2);
   for (const args of [
@@ -200,14 +200,15 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
     spawnArgs({ workspace: "elsewhere" }),
     spawnArgs({ extra: true }),
     spawnArgs({ dispatch: { ownership: ["src/orchestration"], extra: true } }),
-    spawnArgs({ dispatch: { ownership: ["src/orchestration/*"] } }),
     spawnArgs({ prompt: "" }),
     { ...routed, return_to: { ...routed.return_to, extra: true } },
     { ...routed, return_to: { ...routed.return_to, question_id: "q_bad" } },
     { ...routed, return_to: { ...routed.return_to, agent: "Not A Name" } },
-    { ...routed, return_to: { ...routed.return_to, answer: " " } },
-    { ...routed, return_to: { ...routed.return_to, answer: "x".repeat(16385) } },
+    { ...routed, return_to: { ...routed.return_to, instruction: " " } },
+    { ...routed, return_to: { ...routed.return_to, instruction: "x".repeat(16385) } },
     { ...routed, return_to: { agent: "otter", question_id: routed.return_to.question_id } },
+    // The retired answer spelling is not an alias for instruction.
+    { ...routed, return_to: { ...routed.return_to, answer: "Retired spelling" } },
   ]) {
     isToolError(await invoke(schemaProbe, args));
     assert.equal(captured.length, 2, "invalid model arguments cannot reach tool execution");
@@ -237,6 +238,20 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
   // Profile/difficulty precedence is unchanged by the field-specific schema
   // diagnostics: these remain their own errors, not generic parameter failures.
   const errorCode = (response) => JSON.parse(response.result.content[0].text).error.code;
+  // Literal-path syntax is enforced by the production raw check, not by the
+  // intentionally narrower wire shape. Bypassing prepare here must not be
+  // mistaken for the real tool admitting this declaration.
+  const literalPath = spawnArgs({ dispatch: { ownership: ["src/orchestration/*"] } });
+  assert.equal((await invoke(schemaProbe, literalPath)).isError, false);
+  assert.equal(captured.length, 3);
+  const rejectedPath = await invoke(spawn, literalPath, rawInputContext);
+  isToolError(rejectedPath);
+  assert.equal(errorCode(rejectedPath), "INVALID_DISPATCH");
+  assert.equal(
+    JSON.parse(rejectedPath.result.content[0].text).error.parameter,
+    "dispatch.ownership.0",
+  );
+  assert.deepEqual(fixture.actionEffects, { lookup: 0, delivery: 0, answer: 0, publication: 0 });
   assert.equal(
     errorCode(await invoke(spawn, spawnArgs({ profile: "editor" }), rawInputContext)),
     "INVALID_PROFILE",
@@ -327,10 +342,10 @@ test("real SDK parent preparation and post-hook execution enforce every UTF-16 t
       "agent_spawn",
       spawnArgs({
         profile: "scout",
-        return_to: { agent: "otter", question_id: `q_${"a".repeat(32)}`, answer: "yes" },
+        return_to: { agent: "otter", question_id: `q_${"a".repeat(32)}`, instruction: "yes" },
       }),
-      "return_to.answer",
-      PARENT_TEXT_LIMITS.answer,
+      "return_to.instruction",
+      PARENT_TEXT_LIMITS.instruction,
     ],
     ["agent_read", { agent: "otter", cursor: "cursor" }, "cursor", PARENT_TEXT_LIMITS.cursor],
   ];
@@ -350,7 +365,7 @@ test("real SDK parent preparation and post-hook execution enforce every UTF-16 t
     assert.equal(detail.code, "INVALID_PARAMETERS");
     assert.equal(detail.parameter, path);
     assert.equal(Object.hasOwn(detail, "path"), false);
-    assert.match(detail.resolution, new RegExp(`${limit} UTF-16 units`));
+    assert.match(detail.resolution, new RegExp(`${limit} characters`));
     if (path === "label")
       assert.match(
         detail.resolution,
@@ -577,11 +592,11 @@ test("real SDK 1.5 bounds dispatch declarations and reports safe field-specific 
     const tool = fixture.tools.find((value) => value.name === name);
     const dispatchSchema = tool.parameters.properties.dispatch;
     assert.equal(dispatchSchema.additionalProperties, false);
-    assert.equal(dispatchSchema.properties.inputs.maxItems, 32);
+    assert.equal(dispatchSchema.properties.required_paths.maxItems, 32);
     assert.equal(dispatchSchema.properties.ownership.maxItems, 16);
     assert.equal(dispatchSchema.properties.checks.maxItems, 16);
-    assert.equal(dispatchSchema.properties.tree.maxLength, 512);
-    for (const field of ["inputs", "ownership", "checks"]) {
+    assert.equal(dispatchSchema.properties.build_dir.maxLength, 512);
+    for (const field of ["required_paths", "ownership", "checks"]) {
       assert.equal(dispatchSchema.properties[field].minItems, 1);
       assert.equal(dispatchSchema.properties[field].uniqueItems, true);
       assert.equal(dispatchSchema.properties[field].items.maxLength, 512);
@@ -615,7 +630,7 @@ test("real SDK 1.5 bounds dispatch declarations and reports safe field-specific 
       let hookCalls = 0;
       assertDetail(
         detailOf(
-          await invoke(probe, args({ inputs: ["input-0.txt"] }), fixture.context, {
+          await invoke(probe, args({ required_paths: ["input-0.txt"] }), fixture.context, {
             beforeToolCall({ args: validated }) {
               hookCalls++;
               validated.dispatch = structuredClone(dispatch);
@@ -630,16 +645,16 @@ test("real SDK 1.5 bounds dispatch declarations and reports safe field-specific 
 
     // The documented bounds are accepted by preparation, the pinned SDK schema
     // and the repeated post-hook raw check.
-    await accepted({ inputs: paths("input", 32) });
+    await accepted({ required_paths: paths("input", 32) });
     await accepted({ ownership: paths("output", 16) });
     await accepted({ checks: checks(16) });
-    await accepted({ inputs: ["input-0.txt"], tree: "build-tree" });
+    await accepted({ required_paths: ["input-0.txt"], build_dir: "build-tree" });
 
     await rejected(
-      { inputs: paths("input", 33) },
+      { required_paths: paths("input", 33) },
       {
         code: "INVALID_PARAMETERS",
-        parameter: "dispatch.inputs",
+        parameter: "dispatch.required_paths",
         resolution: [/at most 32/, /it has 33/],
         absent: [/input-32/],
       },
@@ -665,36 +680,36 @@ test("real SDK 1.5 bounds dispatch declarations and reports safe field-specific 
     // Declared array bounds are preflighted before per-item schema errors, so a
     // count failure wins and never names an item index or raw value.
     await rejected(
-      { inputs: ["*.bad", ...paths("input", 32)] },
+      { required_paths: ["*.bad", ...paths("input", 32)] },
       {
         code: "INVALID_PARAMETERS",
-        parameter: "dispatch.inputs",
+        parameter: "dispatch.required_paths",
         resolution: [/at most 32/, /it has 33/],
-        absent: [/dispatch\.inputs\.0/, /\*\.bad/],
+        absent: [/dispatch\.required_paths\.0/, /\*\.bad/],
       },
     );
     await rejected(
       {
-        inputs: Array.from({ length: 200 }, (_, index) =>
+        required_paths: Array.from({ length: 200 }, (_, index) =>
           index === 150 ? "*.bad" : `input-${index}.txt`,
         ),
       },
       {
         code: "INVALID_PARAMETERS",
-        parameter: "dispatch.inputs",
+        parameter: "dispatch.required_paths",
         resolution: [/at most 32/, /it has 200/],
-        absent: [/dispatch\.inputs\.150/, /\*\.bad/],
+        absent: [/dispatch\.required_paths\.150/, /\*\.bad/],
       },
     );
     // TypeBox 1.3.27 maxLength uses approximate grapheme segmentation, so this
     // ASCII string fails the schema and the model-facing raw check names the
     // exact field/index and the 512 UTF-16-unit bound without echoing the value.
     await rejected(
-      { inputs: ["a".repeat(513)] },
+      { required_paths: ["a".repeat(513)] },
       {
         code: "INVALID_PARAMETERS",
-        parameter: "dispatch.inputs.0",
-        resolution: [/at most 512/, /UTF-16/, /it has 513/],
+        parameter: "dispatch.required_paths.0",
+        resolution: [/at most 512/, /characters/, /it has 513/],
         absent: [/a{32}/],
       },
     );
@@ -702,31 +717,40 @@ test("real SDK 1.5 bounds dispatch declarations and reports safe field-specific 
     // the UTF-16-unit bound; core dispatch validation rejects with the exact
     // field/index parameter and no raw value.
     await rejected(
-      { inputs: ["🚀".repeat(512)] },
+      { required_paths: ["🚀".repeat(512)] },
       {
         code: "INVALID_DISPATCH",
-        parameter: "dispatch.inputs.0",
-        resolution: [/dispatch\.inputs\.0/, /at most 512/, /UTF-16/, /received 1024/],
+        parameter: "dispatch.required_paths.0",
+        resolution: [/dispatch\.required_paths\.0/, /at most 512/, /characters/, /received 1024/],
         absent: [/🚀/],
       },
     );
-    // Padding is not a glob/quote/control-character schema error; core dispatch
-    // validation owns it and the model tool qualifies the exact field/index.
     await rejected(
-      { inputs: [" input-0.txt"] },
+      { ownership: ["src/orchestration/*"] },
       {
         code: "INVALID_DISPATCH",
-        parameter: "dispatch.inputs.0",
-        resolution: [/dispatch\.inputs\.0/, /padding/, /(leading|trailing)/i],
+        parameter: "dispatch.ownership.0",
+        resolution: [/literal path/, /globs/],
+        absent: [/src\/orchestration/],
+      },
+    );
+    // Padding and glob/quote restrictions are checked by core dispatch
+    // validation; the wire schema still rejects control characters.
+    await rejected(
+      { required_paths: [" input-0.txt"] },
+      {
+        code: "INVALID_DISPATCH",
+        parameter: "dispatch.required_paths.0",
+        resolution: [/dispatch\.required_paths\.0/, /padding/, /(leading|trailing)/i],
         absent: [/input-0/],
       },
     );
     await rejected(
-      { tree: " build-tree" },
+      { build_dir: " build-tree" },
       {
         code: "INVALID_DISPATCH",
-        parameter: "dispatch.tree",
-        resolution: [/dispatch\.tree/, /padding/, /(leading|trailing)/i],
+        parameter: "dispatch.build_dir",
+        resolution: [/dispatch\.build_dir/, /padding/, /(leading|trailing)/i],
         absent: [/build-tree/],
       },
     );
@@ -746,7 +770,7 @@ test("real SDK 1.5 bounds dispatch declarations and reports safe field-specific 
       {
         code: "INVALID_DISPATCH",
         parameter: "dispatch.checks.0",
-        resolution: [/dispatch\.checks\.0/, /at most 512/, /UTF-16/, /received 1024/],
+        resolution: [/dispatch\.checks\.0/, /at most 512/, /characters/, /received 1024/],
         absent: [/🚀/],
       },
     );
@@ -754,7 +778,7 @@ test("real SDK 1.5 bounds dispatch declarations and reports safe field-specific 
     // their names or values.
     const hostile = "hostile_unknown_field";
     await rejected(
-      { inputs: ["input-0.txt"], [hostile]: "hostile-value" },
+      { required_paths: ["input-0.txt"], [hostile]: "hostile-value" },
       {
         code: "INVALID_PARAMETERS",
         parameter: "dispatch",
@@ -762,6 +786,37 @@ test("real SDK 1.5 bounds dispatch declarations and reports safe field-specific 
         absent: [new RegExp(hostile), /hostile-value/],
       },
     );
+    // Retired internal dispatch keys are undeclared, not aliases. A hook that
+    // swaps a valid public declaration for one must have no action or admission
+    // effects, just like any other post-preparation mutation.
+    for (const retired of [{ inputs: ["old.txt"] }, { tree: "old-build" }]) {
+      await rejected(retired, {
+        code: "INVALID_PARAMETERS",
+        parameter: "dispatch",
+        resolution: [/undeclared field/],
+        absent: [/old\.txt|old-build/],
+      });
+      const before = executions.length;
+      let hookCalls = 0;
+      assertDetail(
+        detailOf(
+          await invoke(probe, args({ required_paths: ["input-0.txt"] }), fixture.context, {
+            beforeToolCall({ args: validated }) {
+              hookCalls++;
+              validated.dispatch = structuredClone(retired);
+            },
+          }),
+        ),
+        {
+          code: "INVALID_PARAMETERS",
+          parameter: "dispatch",
+          resolution: [/undeclared field/],
+          absent: [/old\.txt|old-build/],
+        },
+      );
+      assert.equal(hookCalls, 1, "the valid public declaration reached the SDK hook");
+      assert.equal(executions.length, before, "a retired hook shape reaches no action");
+    }
     // Required fields name the missing known field, not the whole schema.
     const missingAgent = name === "agent_spawn" ? spawnArgs() : followup();
     delete missingAgent.agent;
@@ -817,7 +872,7 @@ test("real SDK 1.5 rejects combining question_id tokens with copy-token guidance
   const routed = (question_id) =>
     spawnArgs({
       profile: "scout",
-      return_to: { agent: "otter", question_id, answer: "yes" },
+      return_to: { agent: "otter", question_id, instruction: "yes" },
     });
   const detailOf = (response) => {
     isToolError(response);

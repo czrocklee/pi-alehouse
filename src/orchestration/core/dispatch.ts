@@ -17,6 +17,15 @@ export interface Dispatch {
   tree?: string;
   checks?: string[];
 }
+/** Model-facing tool-argument vocabulary only. Converted to Dispatch before
+ * any core effect; records, receipts and every internal field name stay as-is.
+ * Old or mixed internal keys are undeclared fields here, never aliases. */
+export interface PublicDispatch {
+  required_paths?: string[];
+  ownership?: string[];
+  build_dir?: string;
+  checks?: string[];
+}
 export interface DispatchPath {
   path: string;
   canonical: string;
@@ -74,7 +83,34 @@ export interface DispatchPort {
   ): Promise<DispatchObservation>;
 }
 
-export function validateDispatch(value: unknown): asserts value is Dispatch {
+/** Slot ids stay internal in both vocabularies; only the model-facing field
+ * names differ. One shared shape validator keeps semantics, bounds and details
+ * from drifting between the internal record contract and the public args. */
+interface DispatchNames {
+  readonly inputs: string;
+  readonly ownership: string;
+  readonly checks: string;
+  readonly tree: string;
+  readonly keys: readonly string[];
+}
+const INTERNAL_DISPATCH_NAMES: DispatchNames = Object.freeze({
+  inputs: "inputs",
+  ownership: "ownership",
+  checks: "checks",
+  tree: "tree",
+  keys: ["inputs", "ownership", "tree", "checks"],
+});
+const PUBLIC_DISPATCH_NAMES: DispatchNames = Object.freeze({
+  inputs: "required_paths",
+  ownership: "ownership",
+  checks: "checks",
+  tree: "build_dir",
+  keys: ["required_paths", "ownership", "build_dir", "checks"],
+});
+
+/** Throws INVALID_DISPATCH with the vocabulary's bare field name as `key`
+ * (index separate). Reads only: no input value or path text is rewritten. */
+function validateDispatchShape(value: unknown, names: DispatchNames): void {
   const fail = (resolution: string, key?: string, index?: number): never => {
     throw new OrchestrationError("INVALID_DISPATCH", {
       ...(key === undefined ? {} : { key }),
@@ -83,18 +119,27 @@ export function validateDispatch(value: unknown): asserts value is Dispatch {
     });
   };
   if (!value || typeof value !== "object" || Array.isArray(value))
-    fail("dispatch must be an object with only inputs, ownership, tree and checks.");
+    fail(
+      `dispatch must be an object with only ${names.inputs}, ownership, ${names.tree} and checks.`,
+    );
   const fields = value as Record<string, unknown>;
-  if (Object.keys(fields).some((key) => !["inputs", "ownership", "tree", "checks"].includes(key)))
-    fail("Remove undeclared dispatch fields; use only inputs, ownership, tree and checks.");
-  const word = (item: unknown, key: "inputs" | "ownership" | "checks" | "tree", index?: number) => {
+  if (Object.keys(fields).some((key) => !names.keys.includes(key)))
+    fail(
+      `Remove undeclared dispatch fields; use only ${names.inputs}, ownership, ${names.tree} and checks.`,
+    );
+  const word = (
+    item: unknown,
+    slot: "inputs" | "ownership" | "checks" | "tree",
+    index?: number,
+  ) => {
+    const key = names[slot];
     const parameter = `dispatch.${key}${index === undefined ? "" : `.${index}`}`;
     if (typeof item !== "string" || !item.trim())
       fail(`${parameter} must be a nonblank string.`, key, index);
     const text = item as string;
     if (text.length > DISPATCH_LIMITS.stringUnits)
       fail(
-        `${parameter} must contain at most ${DISPATCH_LIMITS.stringUnits} UTF-16 units; received ${text.length}.`,
+        `${parameter} must contain at most ${DISPATCH_LIMITS.stringUnits} characters; received ${text.length}.`,
         key,
         index,
       );
@@ -102,7 +147,7 @@ export function validateDispatch(value: unknown): asserts value is Dispatch {
     if (/[\x00-\x1f\x7f]/.test(text))
       fail(`${parameter} must not contain ASCII control characters.`, key, index);
     if (
-      key !== "checks" &&
+      slot !== "checks" &&
       (text !== text.trim() || /[*?[\]{}'"`$\\]/.test(text) || /^[~@]/.test(text))
     )
       fail(
@@ -111,22 +156,90 @@ export function validateDispatch(value: unknown): asserts value is Dispatch {
         index,
       );
   };
-  for (const key of ["inputs", "ownership", "checks"] as const) {
+  for (const slot of ["inputs", "ownership", "checks"] as const) {
+    const key = names[slot];
     const items = fields[key];
     if (items === undefined) continue;
     if (!Array.isArray(items)) fail(`dispatch.${key} must be an array.`, key);
     const entries = items as unknown[];
     if (!entries.length) fail(`dispatch.${key} must contain at least 1 item.`, key);
-    if (entries.length > DISPATCH_LIMITS[key])
+    if (entries.length > DISPATCH_LIMITS[slot])
       fail(
-        `dispatch.${key} accepts at most ${DISPATCH_LIMITS[key]} items; received ${entries.length}.`,
+        `dispatch.${key} accepts at most ${DISPATCH_LIMITS[slot]} items; received ${entries.length}.`,
         key,
       );
-    Array.from(entries).forEach((item, index) => word(item, key, index));
+    Array.from(entries).forEach((item, index) => word(item, slot, index));
     if (new Set(entries).size !== entries.length)
       fail(`dispatch.${key} must contain unique entries; remove duplicates.`, key);
   }
-  if (fields.tree !== undefined) word(fields.tree, "tree");
+  if (fields[names.tree] !== undefined) word(fields[names.tree], "tree");
+}
+
+export function validateDispatch(value: unknown): asserts value is Dispatch {
+  validateDispatchShape(value, INTERNAL_DISPATCH_NAMES);
+}
+/** Public tool-argument shape: strict public keys only. The model never sees
+ * an internal field name in `key` or resolution text. */
+export function validatePublicDispatch(value: unknown): asserts value is PublicDispatch {
+  validateDispatchShape(value, PUBLIC_DISPATCH_NAMES);
+}
+
+/** Public spelling of internal dispatch error codes for newly authored live
+ * diagnostic text and model-facing errors: an exact-match map, never a decoder,
+ * prefix rule or text substitution. Internal machine codes, field names and
+ * existing record bytes stay unchanged; this is neither a record projection nor
+ * a promise that all record content is unchanged. */
+const PUBLIC_DISPATCH_ERROR_CODES: Readonly<Record<string, string>> = Object.freeze({
+  BUILD_TREE_BUSY: "BUILD_DIR_BUSY",
+  DISPATCH_TREE_TYPE: "DISPATCH_BUILD_DIR_TYPE",
+  DISPATCH_TREE_INSPECTION_FAILED: "DISPATCH_BUILD_DIR_INSPECTION_FAILED",
+  DISPATCH_INPUT_MISSING: "DISPATCH_REQUIRED_PATH_MISSING",
+  DISPATCH_INPUT_TYPE: "DISPATCH_REQUIRED_PATH_TYPE",
+  DISPATCH_INPUT_INSPECTION_FAILED: "DISPATCH_REQUIRED_PATH_INSPECTION_FAILED",
+});
+export function publicDispatchErrorCode(code: string): string {
+  const mapped = Object.hasOwn(PUBLIC_DISPATCH_ERROR_CODES, code)
+    ? PUBLIC_DISPATCH_ERROR_CODES[code]
+    : undefined;
+  return mapped ?? code;
+}
+
+/** Public spelling of internal dispatch field names in error key/parameter
+ * details: bare or dispatch-qualified inputs/tree slots, each optionally
+ * carrying one numeric index suffix. These are typed error parameter slots,
+ * never user pathname strings. Anchored recognition only: any other value,
+ * including path text and unrecognized spellings, passes through byte-literal;
+ * there is no substring substitution. */
+const PUBLIC_DISPATCH_PARAMETER_FIELDS: Readonly<Record<string, string>> = Object.freeze({
+  inputs: "required_paths",
+  tree: "build_dir",
+});
+const DISPATCH_PARAMETER_SLOT = /^(dispatch\.)?(inputs|tree)(\.\d+)?$/;
+export function publicDispatchParameter(parameter: string): string {
+  const slot = DISPATCH_PARAMETER_SLOT.exec(parameter);
+  if (!slot?.[2] || slot[0] !== parameter) return parameter;
+  return `${slot[1] ?? ""}${PUBLIC_DISPATCH_PARAMETER_FIELDS[slot[2]]}${slot[3] ?? ""}`;
+}
+
+/** Pure vocabulary conversion of a validatePublicDispatch-checked value:
+ * copies arrays, mutates nothing, validates nothing, and keeps every path
+ * string byte-literal. */
+export function publicDispatchToInternal(value: PublicDispatch): Dispatch {
+  return {
+    ...(value.required_paths === undefined ? {} : { inputs: [...value.required_paths] }),
+    ...(value.ownership === undefined ? {} : { ownership: [...value.ownership] }),
+    ...(value.build_dir === undefined ? {} : { tree: value.build_dir }),
+    ...(value.checks === undefined ? {} : { checks: [...value.checks] }),
+  };
+}
+/** Fresh model-facing projection for dispatchText only; never a record shape. */
+function publicDispatchOf(dispatch: Dispatch): PublicDispatch {
+  return {
+    ...(dispatch.inputs === undefined ? {} : { required_paths: [...dispatch.inputs] }),
+    ...(dispatch.ownership === undefined ? {} : { ownership: [...dispatch.ownership] }),
+    ...(dispatch.tree === undefined ? {} : { build_dir: dispatch.tree }),
+    ...(dispatch.checks === undefined ? {} : { checks: [...dispatch.checks] }),
+  };
 }
 export function pathsOverlap(left: DispatchPath, right: DispatchPath): boolean {
   const within = (base: string, path: string): boolean => {
@@ -143,7 +256,7 @@ export function pathsOverlap(left: DispatchPath, right: DispatchPath): boolean {
 export function dispatchText(dispatch: Dispatch | undefined, cwd: string): string {
   return dispatch === undefined
     ? ""
-    : `Parent dispatch (coordination scope and planned checks, not permissions or execution evidence):\nExecution cwd: ${JSON.stringify(cwd)}\nRelative inputs, ownership, and tree paths resolve from this cwd; declarations grant no permissions.\n${JSON.stringify(dispatch)}\n--- End of dispatch declarations ---`;
+    : `Parent dispatch (coordination scope and planned checks, not permissions or execution evidence):\nExecution cwd: ${JSON.stringify(cwd)}\nRelative required_paths, ownership, and build_dir paths resolve from this cwd; declarations grant no permissions.\n${JSON.stringify(publicDispatchOf(dispatch))}\n--- End of dispatch declarations ---`;
 }
 export function validSourceState(value: unknown): value is SourceState {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;

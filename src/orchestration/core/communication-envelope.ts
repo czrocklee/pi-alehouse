@@ -54,6 +54,44 @@ export const DELEGATION_OFF =
  * projections add `finishing` separately, based on confirmed execution exit. */
 export const modelTaskStatus = (status: RunStatus): Exclude<TaskStatus, "finishing"> =>
   status === "cancelled" ? "interrupted" : status === "cancelling" ? "interrupting" : status;
+/** Single runtime source of the current core outcome-reason vocabulary. The
+ * projected type, the admission predicate, the mapper and the conservative
+ * fixture's longest value all derive from this one tuple, so a new reason can
+ * never silently invalidate the proved byte bound. A raw historical reason
+ * never resurrects a retired decoder or record schema. */
+const CORE_OUTCOME_REASONS = [
+  "turn_limit",
+  "output_limit",
+  "context_change_failed",
+  "dependency_not_completed",
+  "dependency_input_missing",
+  "dispatch_preflight_failed",
+  "unexpected_abort",
+  "execution_error",
+  "finalization_failed",
+  "input_not_observed",
+] as const;
+export type OutcomeReason = (typeof CORE_OUTCOME_REASONS)[number] | "other";
+const MODEL_OUTCOME_REASONS: ReadonlySet<string> = new Set<string>([
+  ...CORE_OUTCOME_REASONS,
+  "other",
+]);
+/** Bounded admission predicate for the projected vocabulary, including the
+ * `other` bucket; raw historical reason strings are not members. */
+export const isOutcomeReason = (value: unknown): value is OutcomeReason =>
+  typeof value === "string" && MODEL_OUTCOME_REASONS.has(value);
+/** Shared projection/admission rule for terminal outcome reasons, reused by
+ * parent list/interrupt projections. Not a historical-reason decoder: any
+ * other nonempty reason projects to `other`, and absent/empty/non-string
+ * values project to no fact. */
+export const modelOutcomeReason = (value: unknown): OutcomeReason | undefined =>
+  typeof value !== "string" || !value ? undefined : isOutcomeReason(value) ? value : "other";
+/** Longest current vocabulary value, derived so a longer future reason grows
+ * the conservative proof and fails its exact byte assertions instead of
+ * silently under-reserving the envelope. */
+const LONGEST_OUTCOME_REASON = CORE_OUTCOME_REASONS.reduce((longest, reason) =>
+  reason.length > longest.length ? reason : longest,
+);
 export type CommunicationReason =
   | "snapshot"
   | "aborted"
@@ -65,13 +103,21 @@ export type CommunicationReason =
   | "nothing_pending"
   | "timeout";
 
-/** Dispatch notes the parent can act on: tree_shared means another session
- * holds the declared build tree. Lock and source-capture uncertainty stay
- * host diagnostics on the Run. Each final serializer filters before fitting,
- * so a hidden note never spends envelope bytes or sets response_limit_reached. */
+/** Dispatch notes the parent can act on: raw tree_shared means another session
+ * holds the declared build tree. The public model wording is build_dir_shared;
+ * the private Run vocabulary and its runtime producer keep tree_shared, and
+ * unknown notes are omitted exactly as before. Lock and source-capture
+ * uncertainty stay host diagnostics on the Run. Each final serializer filters
+ * and maps before fitting, so a hidden note never spends envelope bytes or
+ * sets response_limit_reached. */
 const MODEL_DISPATCH_NOTES: ReadonlySet<string> = new Set(["tree_shared"]);
+const MODEL_DISPATCH_NOTE_WORDING: Readonly<Record<string, string>> = {
+  tree_shared: "build_dir_shared",
+};
 export const modelDispatchNotes = (notes: readonly string[] | undefined): string[] | undefined => {
-  const shown = notes?.filter((note) => MODEL_DISPATCH_NOTES.has(note));
+  const shown = notes
+    ?.filter((note) => MODEL_DISPATCH_NOTES.has(note))
+    .map((note) => MODEL_DISPATCH_NOTE_WORDING[note]!);
   return shown?.length ? shown : undefined;
 };
 
@@ -83,6 +129,10 @@ export interface ThinTaskEntry {
   readonly status: TaskStatus;
   /** Queued rows only. Mandatory when set: packing must not yield it. */
   readonly queued_for?: QueueWait;
+  /** True settled terminal rows only; never with queued_for or a nonterminal
+   * status. Required when the authoritative settled Run carries a nonempty
+   * outcome reason; packing reserves it and can never yield it. */
+  readonly outcome_reason?: OutcomeReason;
   readonly has_question?: true;
   readonly limit_reached?: true;
   readonly unavailable?: true;
@@ -94,8 +144,10 @@ export interface ThinTaskEntry {
 
 /** Optional text/metadata can yield to the retained control layer when packing. */
 export interface TaskEntry extends ThinTaskEntry, Partial<TaskMetadata> {
-  /** Explicit human Stop provenance; optional metadata may yield at saturation. */
-  readonly cancellation_source?: CancellationSource;
+  /** Explicit human Stop provenance in its fixed public wording; the private
+   * capture and core domain keep cancellation_source. Optional metadata may
+   * yield at saturation. */
+  readonly interrupted_by?: CancellationSource;
   /** The user messaged this task directly, so its result may deliberately differ
    * from the brief. Admission only; optional metadata may yield at saturation. */
   readonly human_steered?: true;
@@ -136,8 +188,9 @@ export interface AlertEntry {
 export interface FinishedEntry extends ThinTaskEntry {
   /** Optional independently of the thin row and its presentation commit. */
   readonly label?: string;
-  /** May yield independently of the finished row and its presentation commit. */
-  readonly cancellation_source?: CancellationSource;
+  /** May yield independently of the finished row and its presentation commit.
+   * Fixed public wording; the private capture keeps cancellation_source. */
+  readonly interrupted_by?: CancellationSource;
   readonly human_steered?: true;
 }
 
@@ -214,6 +267,7 @@ export interface RetainedEnvelopeBound extends Omit<RetainedEnvelope, "action" |
     readonly delivery: "not_delivered";
   };
   readonly tasks: readonly (ThinTaskEntry & {
+    readonly outcome_reason: OutcomeReason;
     readonly question_id?: QuestionId;
     readonly question?: string;
     readonly next_cursor?: string;
@@ -222,13 +276,17 @@ export interface RetainedEnvelopeBound extends Omit<RetainedEnvelope, "action" |
 
 /** Fresh pure proof data, with one complete alert and every bounded control
  * at its maximum, including the fixed feedback source tag even for a worst-escaped
- * child-sized body. Five flags coexist conservatively with queued_for:"provider_capacity"
- * on the longest non-queued status; that pairing is a byte ceiling, not a
- * legal packed row. No stored Owner/Run state.
+ * child-sized body. Five flags coexist conservatively with the longest outcome
+ * reason (derived from the single vocabulary tuple) on the longest terminal
+ * status; that pairing is a byte ceiling, not a
+ * legal packed row. This terminal outcome shape is also the ceiling for the
+ * nonterminal scheduling shape: a maximal row's outcome_reason (49 double-JSON
+ * bytes) exceeds its queued_for (37) plus the 1-byte longer nonterminal status,
+ * so queued_for never coexists here with a terminal cause. No stored Owner/Run state.
  * The bound excludes any redundant pending-name array. Every reply
  * carries a reason; this fixture reserves the longest one. Including
  * all question IDs/cursors/empty question fields and an 8192-NUL alert costs
- * 64891 double-JSON bytes (645 spare).
+ * 65067 double-JSON bytes (469 spare).
  * The proof depends on these exact keys and bounds, not arbitrary JSON data. */
 export function retainedEnvelopeFixture(
   message: string,
@@ -243,8 +301,8 @@ export function retainedEnvelopeFixture(
     tasks: Array.from({ length: COMMUNICATION_LIMITS.agents }, () => ({
       agent: name,
       task: max,
-      status: "interrupting",
-      queued_for: "provider_capacity",
+      status: "interrupted",
+      outcome_reason: LONGEST_OUTCOME_REASON,
       has_question: true,
       limit_reached: true,
       unavailable: true,

@@ -53,7 +53,7 @@ test("spawn and reuse dispatch relative paths from the inherited parent cwd", as
     },
   });
   const { tool, call } = toolsFor(f),
-    args = create({ agent: "wren", dispatch: { tree: "build" } });
+    args = create({ agent: "wren", dispatch: { build_dir: "build" } });
   assert.deepEqual(tool("agent_spawn").prepareArguments(args), args);
   assert.equal(creates, 0);
   assert.equal(prepares, 0, "schema preparation does no dispatch IO");
@@ -67,7 +67,7 @@ test("spawn and reuse dispatch relative paths from the inherited parent cwd", as
   await settle(f, "wren");
   const follow = await call(
     "agent_run",
-    run("wren", { dispatch: { tree: "build" } }),
+    run("wren", { dispatch: { build_dir: "build" } }),
     "tree-followup",
   );
   assert.deepEqual(follow.action, { type: "agent_run", agent: "wren", task: 2 });
@@ -87,7 +87,7 @@ test("spawn and reuse dispatch relative paths from the inherited parent cwd", as
   await settle(f, "wren");
   assert.deepEqual(await call("agent_kill", { agent: "wren" }), {
     agent: "wren",
-    status: "killed",
+    agent_status: "released",
     label: "task",
   });
   assert.equal((await call("agent_read", { agent: "wren", task: 1 })).tasks[0].status, "completed");

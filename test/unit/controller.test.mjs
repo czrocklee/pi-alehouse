@@ -554,7 +554,7 @@ test("an unrecovered model output limit fails without becoming a turn limit or p
   assert.equal(c.getResult(limited.run_id).text, "useful partial");
   assert.equal(view.resumable, true);
   assert.equal(
-    taskReply(view, () => "").reason,
+    taskReply(view, () => "").outcome_reason,
     "output_limit",
     "the model sees the outcome, not the provider stop reason",
   );

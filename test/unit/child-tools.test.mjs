@@ -48,16 +48,36 @@ test("children expose exactly two closed communication tools, without notificati
     assert.equal(tool.parameters.properties[key].minLength, 1);
     assert.equal(tool.parameters.properties[key].maxLength, 8192);
     assert.equal(tool.parameters.properties[key].pattern, "\\S");
+    assert.match(
+      tool.parameters.properties[key].description,
+      /1-8192 characters of nonblank text/,
+      `${tool.name}: field description states the exact bound`,
+    );
+    assert.doesNotMatch(
+      tool.parameters.properties[key].description,
+      /UTF-16|do not repeat/i,
+      `${tool.name}: field description states the model-facing bound and leaves end mechanics to receipts`,
+    );
   }
   const [alert, ask] = tools;
+  // Exact signatures and end-turn mechanics live in tool metadata, not shared
+  // prompt text; alert never claims the parent read it.
+  assert.match(alert.description, /^alert_parent\(\{message: string\}\) — /);
+  assert.match(alert.description, /Queued does not mean read or acknowledged/);
+  assert.match(alert.description, /no new parent turn/);
   assert.equal(
-    alert.description,
-    "Queue a decision-relevant fact, then continue. Queued does not mean read; no new parent turn.",
+    alert.promptSnippet,
+    "Queue a decision-relevant fact for the parent, then continue.",
   );
-  assert.equal(
+  assert.match(ask.description, /^ask_parent\(\{question: string\}\) — /);
+  assert.match(ask.description, /stop calling tools and end your turn/);
+  assert.match(ask.description, /Only the first question is kept/);
+  assert.doesNotMatch(
     ask.description,
-    "Record a blocking question for the parent, then stop calling tools and end your turn so the task can settle for an answer. Only the first question is kept.",
+    /do not repeat|UTF-16/i,
+    "the no-repeat instruction stays in the receipts, not the tool description",
   );
+  assert.equal(ask.promptSnippet, "Ask the parent a blocking question, then end your turn.");
 });
 
 for (const [name, key] of [
@@ -89,7 +109,15 @@ for (const [name, key] of [
       const args = { [key]: "valid before SDK tool_call" };
       assert(Check(tool.parameters, args));
       args[key] = value;
-      await assert.rejects(tool.execute("mutated", args), { code: "INVALID_PARAMETERS" });
+      await assert.rejects(tool.execute("mutated", args), (error) => {
+        assert.equal(error.code, "INVALID_PARAMETERS");
+        assert.equal(
+          error.message,
+          `INVALID_PARAMETERS: Provide exactly one nonblank "${key}" string of 1-8192 characters.`,
+        );
+        assert.deepEqual(error.details, {});
+        return true;
+      });
     }
     await assert.rejects(tool.execute("extra", { [key]: "valid", extra: true }), {
       code: "INVALID_PARAMETERS",
@@ -119,7 +147,14 @@ for (const [name, key] of [
       const tool = toolsFor(current, gate).find((entry) => entry.name === name);
       const args = { [key]: "valid" };
       assert(Check(tool.parameters, args));
-      await assert.rejects(tool.execute("after-hooks", args), { code: "RUN_INPUT_CLOSED" });
+      await assert.rejects(tool.execute("after-hooks", args), (error) => {
+        assert.equal(error.code, "RUN_INPUT_CLOSED");
+        assert.equal(
+          error.message,
+          "RUN_INPUT_CLOSED: This task is no longer accepting tool calls; end your turn.",
+        );
+        return true;
+      });
     }
     const gate = { accepting: true, stopped: false };
     const tool = toolsFor(callbacks, gate).find((entry) => entry.name === name);
@@ -166,12 +201,16 @@ test("question receipts distinguish first recording from first-write-wins accept
   assert.equal(original, "Which factor?");
   assert.equal(
     first.content[0].text,
-    "Question recorded. Stop calling tools and end your turn now.",
+    "Question recorded. Stop calling tools and end your turn now. Do not repeat the question in your final reply.",
   );
   assert.equal(
     second.content[0].text,
-    "This task already has a question; it was not replaced. Stop calling tools and end your turn now.",
+    "This task already has a question; it was not replaced. Stop calling tools and end your turn now. Do not repeat the question in your final reply.",
   );
+  for (const receipt of [first, second]) {
+    assert.doesNotMatch(receipt.content[0].text, /sent|acknowledged|delivered|read by parent/i);
+    assert.match(receipt.content[0].text, /Do not repeat the question in your final reply\./);
+  }
   assert.notEqual(first.content[0].text, second.content[0].text);
   await assert.rejects(tool.execute("invalid-repeat", { question: " " }), {
     code: "INVALID_PARAMETERS",
@@ -270,10 +309,113 @@ test("queue rejection never stringifies malformed scope/limit or forwards arbitr
   }
 });
 
-test("non-queue alert failures and all question failures preserve original error identity without false acceptance", async () => {
+test("closed known codes project fixed child wording on both alert and question paths without core details, resolution IDs, stack or cause", async () => {
+  const secret = "PRIVATE-DETAIL".repeat(8192);
+  const expectedText = (code, key) => {
+    switch (code) {
+      case "INVALID_PARAMETERS":
+        return `INVALID_PARAMETERS: Provide exactly one nonblank "${key}" string of 1-8192 characters.`;
+      case "INVALID_QUESTION":
+        return "INVALID_QUESTION: Provide one nonblank question of 1-8192 characters.";
+      case "INVALID_ALERT":
+        return "INVALID_ALERT: Provide one nonblank message of 1-8192 characters.";
+      case "RUN_INPUT_CLOSED":
+        return "RUN_INPUT_CLOSED: This task is no longer accepting tool calls; end your turn.";
+      case "ALERT_TOO_LARGE":
+        return "ALERT_TOO_LARGE: The message was not queued. Shorten it substantially and retry once, or keep it in your final result.";
+      case "ALERT_QUEUE_FULL":
+        return `ALERT_QUEUE_FULL (scope=agent, limit=16): ${queueResolution}`;
+      default:
+        assert.fail(`unexpected closed code ${code}`);
+    }
+  };
+  for (const code of [
+    "INVALID_PARAMETERS",
+    "INVALID_QUESTION",
+    "INVALID_ALERT",
+    "RUN_INPUT_CLOSED",
+    "ALERT_TOO_LARGE",
+    // Separate quota tests cover only the alert path; include queue-full here
+    // so both callbacks are exercised.
+    "ALERT_QUEUE_FULL",
+  ]) {
+    const details = {
+      limit: code === "ALERT_QUEUE_FULL" ? 16 : 8192,
+      ...(code === "ALERT_QUEUE_FULL" ? { scope: "agent" } : {}),
+      resolution: secret,
+      owner_id: secret,
+      run_id: secret,
+      prompt: secret,
+      nested: {
+        toJSON() {
+          assert.fail("arbitrary details must never be serialized");
+        },
+      },
+    };
+    const failure = new OrchestrationError(code, details);
+    failure.message = "PRIVATE-MESSAGE";
+    failure.cause = new Error("PRIVATE-CAUSE");
+    for (const [name, key] of [
+      ["alert_parent", "message"],
+      ["ask_parent", "question"],
+    ]) {
+      const tool = toolsFor({
+        alert() {
+          throw failure;
+        },
+        question() {
+          throw failure;
+        },
+      }).find((entry) => entry.name === name);
+      await assert.rejects(tool.execute(name, { [key]: "not accepted" }), (error) => {
+        assert(error instanceof OrchestrationError);
+        assert.notEqual(
+          error,
+          failure,
+          `${name}/${code}: known closed codes receive a child-boundary projection`,
+        );
+        assert.equal(error.code, code);
+        assert.equal(error.message, expectedText(code, key));
+        assert.deepEqual(
+          error.details,
+          code === "ALERT_QUEUE_FULL"
+            ? { scope: "agent", limit: 16, resolution: queueResolution }
+            : {},
+        );
+        assert.equal(error.cause, undefined);
+        assert.doesNotMatch(error.message, /PRIVATE/);
+        assert.doesNotMatch(String(error.stack), /PRIVATE/);
+        assert(error.message.length < 512);
+        return true;
+      });
+    }
+    assert.equal(failure.message, "PRIVATE-MESSAGE");
+    assert.equal(failure.details, details);
+  }
+});
+
+test("closed Run projection tells the child to end its turn without instructing parent services", async () => {
+  for (const [name, key] of [
+    ["alert_parent", "message"],
+    ["ask_parent", "question"],
+  ]) {
+    const tool = toolsFor(undefined).find((entry) => entry.name === name);
+    await assert.rejects(tool.execute("closed", { [key]: "valid" }), (error) => {
+      assert.equal(error.code, "RUN_INPUT_CLOSED");
+      assert.match(error.message, /end your turn/);
+      assert.doesNotMatch(
+        error.message,
+        /ask_parent|alert_parent|agent_wait|agent_read|parent/i,
+        "a closed Run never points the child at a parent service",
+      );
+      return true;
+    });
+  }
+});
+
+test("unknown errors preserve original identity without false acceptance", async () => {
   for (const failure of [
-    new OrchestrationError("RUN_INPUT_CLOSED"),
-    new OrchestrationError("ALERT_TOO_LARGE", { limit: 8192 }),
+    new OrchestrationError("SOMETHING_UNKNOWN", { secret: "PRIVATE" }),
     new Error("ALERT_QUEUE_FULL"),
     new Error("unrelated failure"),
   ]) {
@@ -294,14 +436,4 @@ test("non-queue alert failures and all question failures preserve original error
       (error) => error === failure,
     );
   }
-  const failure = new OrchestrationError("ALERT_QUEUE_FULL", { scope: "agent", limit: 16 });
-  const tool = toolsFor({
-    question() {
-      throw failure;
-    },
-  })[1];
-  await assert.rejects(
-    tool.execute("question", { question: "decide?" }),
-    (error) => error === failure,
-  );
 });

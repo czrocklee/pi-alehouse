@@ -1,6 +1,7 @@
 import {
   COMMUNICATION_LIMITS,
   alertAdmissionBudget,
+  modelOutcomeReason,
   modelTaskStatus,
   type CommunicationEnvelope,
   type ThinTaskEntry,
@@ -31,7 +32,7 @@ export interface CommunicationRun {
     readonly status: RunStatus;
     readonly phase: Phase;
     readonly execution_exited: boolean;
-    readonly outcome?: { readonly limit_reached: boolean };
+    readonly outcome?: { readonly limit_reached: boolean; readonly reason?: string };
   };
   question?: string;
   readonly quarantine?: string;
@@ -416,8 +417,12 @@ const sameRow = (a: ThinTaskEntry, b: ThinTaskEntry): boolean =>
   a.agent === b.agent &&
   a.task === b.task &&
   a.status === b.status &&
-  a.queued_for === b.queued_for;
-/** Compare a projection with a KNOWN original, never discover identity from it. */
+  a.queued_for === b.queued_for &&
+  a.outcome_reason === b.outcome_reason;
+/** Compare a projection with a KNOWN original, never discover identity from it.
+ * The bounded outcome reason is recomputed from the authoritative original Run:
+ * a settled Run's nonempty reason is REQUIRED on its terminal row, and no other
+ * row (finishing, queued, or a reasonless original) may claim one. */
 const matchesRun = <Run extends CommunicationRun>(
   run: Run,
   row: ThinTaskEntry,
@@ -428,7 +433,15 @@ const matchesRun = <Run extends CommunicationRun>(
     record.execution_exited && !terminal(record.status)
       ? "finishing"
       : modelTaskStatus(record.status);
-  return record.name === row.agent && ordinals.get(run) === row.task && status === row.status;
+  const outcome_reason = isSettledRecord(record)
+    ? modelOutcomeReason(record.outcome?.reason)
+    : undefined;
+  return (
+    record.name === row.agent &&
+    ordinals.get(run) === row.task &&
+    status === row.status &&
+    outcome_reason === row.outcome_reason
+  );
 };
 
 const originalMetadata = (run: CommunicationRun): TaskMetadata => taskMetadata(run.record);

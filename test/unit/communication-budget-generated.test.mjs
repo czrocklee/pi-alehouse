@@ -81,10 +81,10 @@ const name = (index) => `a${String(index).padStart(2, "0")}${"x".repeat(21)}`;
 // independently serialized fragments (commas and both escaping layers count).
 // Preconditions: 16 rows; one full 8192-unit alert; max-safe task/count/offset;
 // max 24-unit names / 120-unit alert label; all optional controls coexist.
-// Deliberately impossible action and wait/status pairing are a ceiling only.
+// Deliberately impossible action and reason/status pairing are a ceiling only.
 // Arbitrary optional labels/diagnostics and finished rows are NOT
 // promised alongside this ceiling; the real packer must make them yield.
-test("budget contribution ledger reconstructs the 64891-byte conservative envelope from actual fields", () => {
+test("budget contribution ledger reconstructs the 65067-byte conservative envelope from actual fields", () => {
   const proof = retainedEnvelopeFixture("\0".repeat(8192), true, true);
   const value = { tasks: [] },
     contributions = { empty_reply_with_tasks: bytes(value) };
@@ -103,7 +103,7 @@ test("budget contribution ledger reconstructs the 64891-byte conservative envelo
     "unavailable",
     "question_truncated",
     "result_truncated",
-    "queued_for",
+    "outcome_reason",
     "question_id",
     "question",
     "next_cursor",
@@ -133,26 +133,45 @@ test("budget contribution ledger reconstructs the 64891-byte conservative envelo
       value.alerts[0][field] = proof.alerts[0][field];
     });
   assert.deepEqual(value, proof);
-  assert.equal(contributions.sixteen_queued_for, 16 * 37);
+  assert.equal(contributions.sixteen_outcome_reason, 16 * 49);
   assert.equal(contributions.sixteen_question_id, 880);
   assert.equal(contributions.first_alert_label, 120 * 7);
   assert.equal(contributions.first_alert_source, 23);
   assert.equal(contributions.first_alert_message, 8192 * 7);
   assert.equal(
     Object.values(contributions).reduce((sum, cost) => sum + cost, 0),
-    64891,
+    65067,
   );
-  assert.equal(bytes(value), 64891);
+  assert.equal(bytes(value), 65067);
   assert.equal(communicationEnvelopeBytes(value), bytes(value));
-  assert.equal(65536 - bytes(value), 645);
+  assert.equal(65536 - bytes(value), 469);
 });
 
+const outcomeReasons = [
+  "turn_limit",
+  "output_limit",
+  "context_change_failed",
+  "dependency_not_completed",
+  "dependency_input_missing",
+  "dispatch_preflight_failed",
+  "unexpected_abort",
+  "execution_error",
+  "finalization_failed",
+  "input_not_observed",
+  "other",
+];
 function generatedSnapshot(seed, scenario) {
   const next = random(seed),
     reasons = ["alert", "question", "snapshot", "aborted"];
   const tasks = Array.from({ length: 16 }, (_, index) => {
     const pending = index % 4 === 0;
-    const status = pending ? "queued" : index % 4 === 1 ? "running" : "needs_input";
+    const status = pending
+      ? "queued"
+      : index % 4 === 1
+        ? "running"
+        : index % 4 === 2
+          ? "needs_input"
+          : "failed";
     const row = {
       agent: name(index),
       task: Number.MAX_SAFE_INTEGER - index,
@@ -161,8 +180,11 @@ function generatedSnapshot(seed, scenario) {
       limit_reached: true,
       unavailable: true,
       ...(pending ? { queued_for: index % 8 ? "provider_capacity" : "dependencies" } : {}),
+      ...(status === "failed"
+        ? { outcome_reason: outcomeReasons[(index + scenario) % outcomeReasons.length] }
+        : {}),
     };
-    const settled = status === "needs_input";
+    const settled = status === "needs_input" || status === "failed";
     // A mix of at-EOF captured pages and windows whose tail is not captured.
     const text = unicode(next, [1, 8192, 16384, 20000][(index + scenario) % 4]);
     const offset = next(100),
@@ -272,10 +294,17 @@ for (const seed of seeds)
           assert.equal(row.next_cursor, undefined, "live previews and EOF do not invent locators");
         if (!original.settled && window.offset + shown.length < window.retained_chars)
           assert.equal(row.result_truncated, true);
-        // Optional summary fields yield whole, never as clipped facts.
-        for (const field of ["label", "cancellation_source"])
-          if (Object.hasOwn(row, field))
-            assert.deepEqual(row[field], original[field], `${field} must remain exact`);
+        // Optional summary fields yield whole, never as clipped facts. The
+        // private cancellation_source capture is emitted as interrupted_by.
+        if (Object.hasOwn(row, "label"))
+          assert.deepEqual(row.label, original.label, "label must remain exact");
+        if (Object.hasOwn(row, "interrupted_by"))
+          assert.deepEqual(
+            row.interrupted_by,
+            original.cancellation_source,
+            "projected Stop attribution must remain exact",
+          );
+        assert.equal(Object.hasOwn(row, "cancellation_source"), false);
       }
       assert.deepEqual(
         references.alerts,

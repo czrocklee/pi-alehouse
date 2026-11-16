@@ -1883,3 +1883,56 @@ test("accepted spawn/run/send retries replay action facts but never cached consu
   assert.equal(nextRetried.alerts, undefined);
   assert.equal(c.stats().runs, 2);
 });
+
+test("terminal outcome reasons are original settled facts on finished and bound rows", async (t) => {
+  const { c, ports } = await ownerFixture(t, { controller: { grace_turns: 0 } });
+  const failed = await started(c, ports, "provider error", "otter");
+  failed.port.finish("partial error", "error", "provider unavailable");
+  await settled(c, failed.run);
+  const aborted = await started(c, ports, "unexpected abort", "seal");
+  aborted.port.finish("never asked to stop", "aborted");
+  await settled(c, aborted.run);
+  const limited = await started(c, ports, "turn limit", "heron", { max_turns: 1 });
+  limited.port.callbacks.turnStart();
+  limited.port.finish("partial", "aborted");
+  await settled(c, limited.run);
+  const done = await started(c, ports, "completed", "orca");
+  done.port.finish("result");
+  await settled(c, done.run);
+  for (const [run, reason] of [
+    [failed.run, "execution_error"],
+    [aborted.run, "unexpected_abort"],
+    [limited.run, "turn_limit"],
+  ])
+    assert.equal(c.view(run.run_id).outcome.reason, reason);
+  // Waiting on the completed Agent presents the unpresented failed originals
+  // through their finished rows, each with its own bounded reason.
+  const unbound = await wait(c, [done.run.agent_id]);
+  assert.equal(unbound.reason, "done");
+  assert.deepEqual(
+    unbound.finished.map((row) => [row.agent, row.status, row.outcome_reason]),
+    [
+      ["otter", "failed", "execution_error"],
+      ["seal", "failed", "unexpected_abort"],
+      ["heron", "failed", "turn_limit"],
+    ],
+  );
+  // A bound wait shows the same original reasons on the task rows themselves,
+  // and a completed row never invents one.
+  const bound = await wait(
+    c,
+    [failed.run, aborted.run, limited.run, done.run].map((run) => run.agent_id),
+  );
+  assert.equal(bound.reason, "task_issue");
+  const byAgent = Object.fromEntries(bound.tasks.map((row) => [row.agent, row]));
+  assert.equal(byAgent.otter.outcome_reason, "execution_error");
+  assert.equal(byAgent.seal.outcome_reason, "unexpected_abort");
+  assert.equal(byAgent.heron.outcome_reason, "turn_limit");
+  assert.equal(Object.hasOwn(byAgent.orca, "outcome_reason"), false);
+  assert.equal(bound.finished, undefined);
+  const page = await read(c, failed.run);
+  assert.equal(page.tasks[0].status, "failed");
+  assert.equal(page.tasks[0].outcome_reason, "execution_error");
+  // The finished bits were consumed by the first publication; nothing repeats.
+  assert.equal((await wait(c, [done.run.agent_id])).finished, undefined);
+});

@@ -65,9 +65,9 @@ test("queued human Stop creates no session and exposes optional provenance in wa
   );
   assert.equal(waited.reason, "task_issue");
   assert.equal(waited.tasks[0].status, "interrupted");
-  assert.equal(waited.tasks[0].cancellation_source, "human");
+  assert.equal(waited.tasks[0].interrupted_by, "human");
   assert.equal(c.runs.get(queued.run_id).finished_presented, true);
-  assert.equal((await read(c, queued)).tasks[0].cancellation_source, "human");
+  assert.equal((await read(c, queued)).tasks[0].interrupted_by, "human");
   unattributed(c.view(active.run_id));
 });
 
@@ -94,7 +94,7 @@ test("running human Stop retains the live execution slot and first provenance ac
   assert.equal(ports.length, 1);
   const projected = await read(c, run);
   assert.equal(projected.tasks[0].status, "interrupting");
-  assert.equal(projected.tasks[0].cancellation_source, "human");
+  assert.equal(projected.tasks[0].interrupted_by, "human");
   ports[0].finish("partial", "aborted");
   await ended(c, run);
   assert.equal(c.view(run.run_id).status, "cancelled");
@@ -347,7 +347,7 @@ test("Off still accepts explicit human Stop, while default shutdown stays unattr
   c.cancel(run.run_id, human);
   const projected = await read(c, run);
   assert.match(projected.delegation_off, /^Ask the user to enable delegation/);
-  assert.equal(projected.tasks[0].cancellation_source, "human");
+  assert.equal(projected.tasks[0].interrupted_by, "human");
   ports[0].finish("partial", "aborted");
   assert.equal((await c.shutdown(3000)).closed, true);
   attributed(c.view(run.run_id));
@@ -360,23 +360,23 @@ test("list/interrupt projection and an original finished reminder retain human o
   const original = await c.submit("original", task("original", { name: "otter" }));
   await until(() => ports[0]?.streaming);
   c.cancel(original.run_id, human);
-  assert.equal(taskReply(c.view(original.run_id), () => "otter").cancellation_source, "human");
+  assert.equal(taskReply(c.view(original.run_id), () => "otter").interrupted_by, "human");
   ports[0].finish("partial", "aborted");
   await ended(c, original);
   const roster = c.list()[0];
-  assert.equal(agentRow(roster, () => "otter").cancellation_source, "human");
+  assert.equal(agentRow(roster, () => "otter").interrupted_by, "human");
   const next = await c.submit("next", { resume: original.agent_id, prompt: "next" });
   await until(() => ports[0].calls.length === 2);
   const projected = await read(c, next);
   assert.equal(projected.tasks[0].task, 2);
-  assert.equal(projected.tasks[0].cancellation_source, undefined);
+  assert.equal(projected.tasks[0].interrupted_by, undefined);
   assert.equal(projected.finished[0].task, 1);
-  assert.equal(projected.finished[0].cancellation_source, "human");
+  assert.equal(projected.finished[0].interrupted_by, "human");
   assert.equal(c.runs.get(original.run_id).finished_presented, true);
   ports[0].finish("next result");
   await ended(c, next);
   unattributed(c.view(next.run_id));
-  assert.equal(taskReply(c.view(next.run_id), () => "otter").cancellation_source, undefined);
+  assert.equal(taskReply(c.view(next.run_id), () => "otter").interrupted_by, undefined);
 });
 
 const snapshot = (rest = {}) => ({
@@ -463,13 +463,17 @@ test("provenance is optional bounded task/finished metadata, never a new thin co
     ],
   });
   const packed = packCommunication(input);
-  assert.equal(packed.envelope.tasks[0].cancellation_source, "human");
-  assert.equal(packed.envelope.finished[0].cancellation_source, "human");
+  // The raw capture keeps cancellation_source; the public rows carry only the
+  // fixed interrupted_by wording, with no legacy output alias.
+  assert.equal(packed.envelope.tasks[0].interrupted_by, "human");
+  assert.equal(Object.hasOwn(packed.envelope.tasks[0], "cancellation_source"), false);
+  assert.equal(packed.envelope.finished[0].interrupted_by, "human");
+  assert.equal(Object.hasOwn(packed.envelope.finished[0], "cancellation_source"), false);
   assert.deepEqual(packed.references.finished, [0, 1]);
   assert.equal(
     communicationEnvelopeBytes(retainedEnvelopeFixture("\0".repeat(8192), true, true)),
-    64891,
-    "the retained shape reserves task controls and cursors, not human provenance",
+    65067,
+    "the retained shape reserves task controls, outcome reasons and cursors, not human provenance",
   );
   const absent = snapshot({ tasks: [{ row: row(), settled: true }] });
   const explicitUndefined = structuredClone(absent);
@@ -523,7 +527,7 @@ test("human provenance is attempted before result bodies and spends no text unit
   const packed = packCommunication(input);
   assert.equal(packed.envelope.tasks[0].result.length, 16384);
   assert.equal(packed.envelope.tasks[0].next_cursor.length, 37);
-  assert.equal(packed.envelope.tasks[1].cancellation_source, "human");
+  assert.equal(packed.envelope.tasks[1].interrupted_by, "human");
   assert.equal(packed.envelope.response_limit_reached, true);
   assert.deepEqual(packed.references.finished, [0]);
 });
@@ -547,19 +551,19 @@ test("task provenance yields whole at exact byte saturation without changing con
     ...baseline.envelope,
     response_limit_reached: true,
     tasks: baseline.envelope.tasks.map((entry, index) =>
-      index === 0 ? { ...entry, cancellation_source: "human" } : entry,
+      index === 0 ? { ...entry, interrupted_by: "human" } : entry,
     ),
   };
   const cost = communicationEnvelopeBytes(withSource) - 65536;
   input.tasks[0].question = input.tasks[0].question.slice(0, -cost);
   assert.equal(
-    packCommunication(input).envelope.tasks[0].cancellation_source,
+    packCommunication(input).envelope.tasks[0].interrupted_by,
     "human",
     "whole field fits at the byte boundary",
   );
   input.tasks[0].question += "q";
   assert.equal(
-    packCommunication(input).envelope.tasks[0].cancellation_source,
+    packCommunication(input).envelope.tasks[0].interrupted_by,
     undefined,
     "one byte less room omits the whole field",
   );

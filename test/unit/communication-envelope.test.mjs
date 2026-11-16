@@ -25,8 +25,11 @@ function expectedRetainedShape(message) {
     tasks: Array.from({ length: 16 }, () => ({
       agent: "a".repeat(24),
       task: Number.MAX_SAFE_INTEGER,
-      status: "interrupting",
-      queued_for: "provider_capacity",
+      status: "interrupted",
+      // Independent transcription of the fixture's derived LONGEST_OUTCOME_REASON:
+      // a longer future vocabulary value must update this shape and the exact
+      // byte proofs together, never silently under-reserve the envelope.
+      outcome_reason: "dispatch_preflight_failed",
       has_question: true,
       limit_reached: true,
       unavailable: true,
@@ -97,13 +100,15 @@ test("model bounds are frozen separately from general-purpose core capacity", ()
 test("retained proof fixes every control key and 16 complete rows without a pending array", () => {
   const value = retainedEnvelopeFixture("");
   assert.deepEqual(value, expectedRetainedShape(""));
-  assert.equal(communicationEnvelopeBytes(value), 5451);
-  assert.equal(independentBytes(value), 5451);
-  assert(5451 <= 65536 - 8192 * 7);
+  assert.equal(communicationEnvelopeBytes(value), 5627);
+  assert.equal(independentBytes(value), 5627);
+  assert(5627 <= 65536 - 8192 * 7);
   for (const row of value.tasks) {
     assert.equal(row.agent.length, 24);
     assert.equal(row.task, Number.MAX_SAFE_INTEGER);
-    assert.equal(row.queued_for, "provider_capacity");
+    assert.equal(row.status, "interrupted");
+    assert.equal(row.outcome_reason, "dispatch_preflight_failed");
+    assert.equal(row.queued_for, undefined);
     for (const flag of [
       "has_question",
       "limit_reached",
@@ -121,14 +126,14 @@ test("retained proof fixes every control key and 16 complete rows without a pend
 });
 
 for (const [name, message, bytes] of [
-  ["NUL", "\u0000".repeat(8192), 62795],
-  ["lone high surrogate", "\ud800".repeat(8192), 62795],
-  ["lone low surrogate", "\udfff".repeat(8192), 62795],
-  ["quote", '"'.repeat(8192), 38219],
-  ["backslash", "\\".repeat(8192), 38219],
-  ["ASCII", "a".repeat(8192), 13643],
-  ["CJK", "字".repeat(8192), 30027],
-  ["surrogate pairs", "😀".repeat(4096), 21835],
+  ["NUL", "\u0000".repeat(8192), 62971],
+  ["lone high surrogate", "\ud800".repeat(8192), 62971],
+  ["lone low surrogate", "\udfff".repeat(8192), 62971],
+  ["quote", '"'.repeat(8192), 38395],
+  ["backslash", "\\".repeat(8192), 38395],
+  ["ASCII", "a".repeat(8192), 13819],
+  ["CJK", "字".repeat(8192), 30203],
+  ["surrogate pairs", "😀".repeat(4096), 22011],
 ])
   test(`maximal retained controls deliver one complete 8192-unit ${name} alert`, () => {
     const value = retainedEnvelopeFixture(message);
@@ -137,7 +142,7 @@ for (const [name, message, bytes] of [
     assert.equal(communicationEnvelopeBytes(value), bytes);
     assert.equal(independentBytes(value), bytes);
     assert(bytes <= 65536);
-    assert(bytes - 5451 <= 8192 * 7);
+    assert(bytes - 5627 <= 8192 * 7);
     const parsed = JSON.parse(
       JSON.parse(JSON.stringify({ content: [{ type: "text", text: JSON.stringify(value) }] }))
         .content[0].text,
@@ -155,14 +160,14 @@ for (const [name, message, bytes] of [
 test("all 16 question IDs fit alongside worst-case controls and the whole alert", () => {
   const value = retainedEnvelopeFixture("\u0000".repeat(8192), true);
   for (const row of value.tasks) assert.equal(row.question_id, "q_" + "f".repeat(32));
-  assert.equal(communicationEnvelopeBytes(value), 63675);
-  assert.equal(independentBytes(value), 63675);
-  assert.equal(65536 - communicationEnvelopeBytes(value), 1861);
+  assert.equal(communicationEnvelopeBytes(value), 63851);
+  assert.equal(independentBytes(value), 63851);
+  assert.equal(65536 - communicationEnvelopeBytes(value), 1685);
   assert.equal(communicationTextUnits(value), 8192, "labels and question IDs are not body text");
 });
 
 for (const message of ["\0".repeat(8192), "\ud800".repeat(8192), "\udfff".repeat(8192)])
-  test(`64891-byte retained proof includes fixed-width cursors and empty questions (${message.charCodeAt(0)})`, () => {
+  test(`65067-byte retained proof includes fixed-width cursors and empty questions (${message.charCodeAt(0)})`, () => {
     const value = retainedEnvelopeFixture(message, true, true);
     for (const row of value.tasks) {
       assert.match(row.next_cursor, /^r1_[A-Za-z0-9_-]{22}\.2gosa7pa2gv$/);
@@ -170,22 +175,27 @@ for (const message of ["\0".repeat(8192), "\ud800".repeat(8192), "\udfff".repeat
       assert.equal(row.question, "");
     }
     assert.equal(value.alerts[0].source, "managed");
-    assert.equal(communicationEnvelopeBytes(value), 64891);
-    assert.equal(independentBytes(value), 64891);
-    assert.equal(65536 - independentBytes(value), 645);
+    assert.equal(communicationEnvelopeBytes(value), 65067);
+    assert.equal(independentBytes(value), 65067);
+    assert.equal(65536 - independentBytes(value), 469);
     const untagged = structuredClone(value);
     delete untagged.alerts[0].source;
     assert.equal(
       independentBytes(untagged),
-      64868,
+      65044,
       "the source tag costs exactly 23 double-JSON bytes",
     );
-    const withoutWait = structuredClone(value);
-    for (const row of withoutWait.tasks) delete row.queued_for;
-    assert.equal(independentBytes(value) - independentBytes(withoutWait), 16 * 37);
+    const withoutReason = structuredClone(value);
+    for (const row of withoutReason.tasks) delete row.outcome_reason;
+    assert.equal(independentBytes(value) - independentBytes(withoutReason), 16 * 49);
+    for (const row of value.tasks)
+      assert(
+        !Object.hasOwn(row, "queued_for"),
+        "a terminal cause never coexists with a queue-wait reason",
+      );
     assert.deepEqual(alertAdmissionBudget(message), {
       text_units: 8192,
-      envelope_bytes: 64891,
+      envelope_bytes: 65067,
       fits: true,
     });
     assert.equal(communicationTextUnits(value), 8192);
@@ -208,7 +218,7 @@ test("admission measures a complete retained envelope, not message-only JSON", (
     communicationEnvelopeBytes(retainedEnvelopeFixture(message, true, true)),
   );
   assert(admitted.envelope_bytes > communicationEnvelopeBytes({ message }));
-  assert.deepEqual(alertAdmissionBudget("x"), { text_units: 1, envelope_bytes: 7548, fits: true });
+  assert.deepEqual(alertAdmissionBudget("x"), { text_units: 1, envelope_bytes: 7724, fits: true });
   assert.equal(alertAdmissionBudget("").fits, false);
   assert.equal(alertAdmissionBudget("a".repeat(8193)).fits, false);
   assert.equal(alertAdmissionBudget("\u0000".repeat(16384)).fits, false);

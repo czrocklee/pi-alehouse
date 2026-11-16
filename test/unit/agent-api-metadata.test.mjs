@@ -130,7 +130,7 @@ test("ordinary lifecycle retains the original cwd, lean replies and historical t
   assert.equal(old.tasks[0].label, "Inspect first");
   assert.deepEqual(await call("agent_kill", { agent: "pine" }), {
     agent: "pine",
-    status: "killed",
+    agent_status: "released",
     label: "Second inspection",
   });
   const retained = (await call("agent_read", { agent: "pine", task: 1 })).tasks[0];

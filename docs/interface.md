@@ -331,8 +331,11 @@ Outside confirmation, `✕` only closes the pane, and `Esc` leaves a draft or th
 Info page before it closes the pane.
 
 The first accepted explicit human stop carries `cancellation_source: "human"` in
-live state and the recorded outcome. Parent tool projections attempt this bounded
-optional metadata; byte pressure may omit it. The host also attempts a visible
+live state and the recorded outcome. Model task/finished rows project this as
+`interrupted_by: "human"`; internal records, snapshots and history retain
+`cancellation_source`. Attribution records the first accepted stop request, not
+proof that the task stopped. Model projection attempts this bounded optional
+metadata; byte pressure may omit it. The host also attempts a visible
 `alehouse:human-cancellation:v1` parent message without triggering a new model turn,
 asking the model not to repeat the task automatically. Neither queuing a message
 nor displaying a notice proves model receipt. An earlier model/budget stop or an
@@ -557,7 +560,8 @@ tool facts, phase, full cumulative usage split, one-row active-tool argument
 summaries (one per tool, with paths shortened to retain their filename), separate
 `thinking` and ordinary-prose `draft` previews for the current assistant message,
 a separate `preparing` tool field, and every dispatch note (the parent model sees
-only `tree_shared`). Context occupancy is separate from cumulative billed usage
+only the outward `build_dir_shared`; internal UI/Run note names remain
+`tree_shared`). Context occupancy is separate from cumulative billed usage
 (`≈231k/272k tokens · 84.9%`); unknown occupancy remains unknown. Commands and
 all previews are clipped to the actual remaining width before styling and never
 wrap into extra rows; full streamed content remains in the native transcript.

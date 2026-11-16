@@ -209,7 +209,7 @@ test("a loader that collapses the instance query fails closed", async () => {
   await assert.rejects(modules.acquire(), /Scout web module is not an isolated instance/);
 });
 
-test("the real schemas reject auth, proxy and non-http(s) URLs before any prompt", async () => {
+test("the real schemas reject auth, proxy, workflow, model and non-http(s) URLs before any prompt", async () => {
   const { factory } = await new ChildWebModules(entry, load).acquire();
   const { api, tools } = recordingApi();
   await childWebExtension(factory)(api);
@@ -251,6 +251,18 @@ test("the real schemas reject auth, proxy and non-http(s) URLs before any prompt
   ]) {
     assert.throws(() => validate("fetch_content", args), /Validation failed/, JSON.stringify(args));
   }
+  const search = tools.get("web_search");
+  // workflow could open a summary/curator path and model could select a
+  // provider model; neither is exposed, not even workflow "none".
+  for (const key of ["proxy", "workflow", "model"])
+    assert.equal(key in search.parameters.properties, false, `web_search.${key}`);
+  for (const args of [
+    { query: "pi", workflow: "none" },
+    { query: "pi", workflow: "auto-summary" },
+    { query: "pi", model: "openai/gpt" },
+    { query: "pi", proxy: "socks5h://10.0.0.1:1080" },
+  ])
+    assert.throws(() => validate("web_search", args), /Validation failed/, JSON.stringify(args));
   for (const [name, args] of [
     ["web_search", { query: "pi" }],
     ["source_check", { claim: "pi" }],
@@ -328,7 +340,11 @@ test("adapted web metadata preserves concise upstream metadata and configured ca
       for (const name of ["web_search", "source_check", "fetch_content"]) {
         const raw = original.get(name),
           adapted = tools.get(name);
-        const removed = name === "fetch_content" ? ["auth", "proxy"] : ["proxy"];
+        const removed = {
+          web_search: ["proxy", "workflow", "model"],
+          source_check: ["proxy"],
+          fetch_content: ["auth", "proxy"],
+        }[name];
         assert.deepEqual(
           Object.keys(adapted.parameters.properties),
           Object.keys(raw.parameters.properties).filter((key) => !removed.includes(key)),
@@ -356,13 +372,32 @@ test("adapted web metadata preserves concise upstream metadata and configured ca
       assert.equal(search.promptSnippet, rawSearch.promptSnippet);
       if (settings.tools) assert.doesNotMatch(search.description, /responseId/);
       else assert.match(search.description, /responseId/);
-      for (const key of ["query", "queries", "workflow", "provider"]) {
+      for (const key of ["query", "queries", "provider"]) {
         assert.equal(
           search.parameters.properties[key],
           rawSearch.parameters.properties[key],
           `${key}: unchanged schema and descriptors`,
         );
       }
+      // Restricted keys stay in the upstream factory schema, untouched; only
+      // the child copy omits them. `model` is configuration-dependent upstream.
+      for (const key of ["proxy", "workflow"])
+        assert.equal(key in rawSearch.parameters.properties, true, `upstream web_search.${key}`);
+      for (const key of ["proxy", "workflow", "model"])
+        assert.equal(key in search.parameters.properties, false, `scout web_search.${key}`);
+      for (const key of Object.getOwnPropertyNames(rawSearch.parameters))
+        if (key !== "properties")
+          assert.deepEqual(
+            Object.getOwnPropertyDescriptor(search.parameters, key),
+            Object.getOwnPropertyDescriptor(rawSearch.parameters, key),
+            `web_search.${key}: root metadata preserved`,
+          );
+      for (const symbol of Object.getOwnPropertySymbols(rawSearch.parameters))
+        assert.deepEqual(
+          Object.getOwnPropertyDescriptor(search.parameters, symbol),
+          Object.getOwnPropertyDescriptor(rawSearch.parameters, symbol),
+          "web_search: root symbol metadata preserved",
+        );
       for (const name of ["web_search", "source_check"]) {
         const schema = tools.get(name).parameters.properties.provider;
         assert.equal(
@@ -638,6 +673,113 @@ test("the researcher wrapper keeps the boundary even past schema validation", as
     undefined,
   );
   assert.equal(researcherWebProblem("get_search_content", { proxy: "x" }), undefined);
+});
+
+test("web_search copies params with workflow none, rejects explicit workflow/model after validation and never mutates upstream", async () => {
+  const config = join(process.env.PI_CODING_AGENT_DIR, "web-search.json");
+  mkdirSync(dirname(config), { recursive: true });
+  const kind = Symbol("kind");
+  const searchSchema = {
+    [kind]: "Object",
+    type: "object",
+    properties: {
+      query: { [kind]: "String", type: "string" },
+      workflow: {
+        [kind]: "String",
+        type: "string",
+        enum: ["none", "summary-review", "auto-summary"],
+      },
+      model: { [kind]: "String", type: "string" },
+      proxy: { [kind]: "String", type: "string" },
+    },
+  };
+  const schemaDescriptors = Object.getOwnPropertyDescriptors(searchSchema);
+  const propertiesDescriptors = Object.getOwnPropertyDescriptors(searchSchema.properties);
+  const workflowDescriptors = Object.getOwnPropertyDescriptor(searchSchema.properties, "workflow");
+  const executed = [];
+  const factory = (pi) => {
+    for (const name of webToolNames)
+      pi.registerTool({
+        name,
+        description: name === "fetch_content" ? fetchDescription : undefined,
+        parameters:
+          name === "web_search"
+            ? searchSchema
+            : name === "fetch_content"
+              ? {
+                  type: "object",
+                  properties: {
+                    url: { type: "string" },
+                    urls: { type: "array", items: { type: "string" } },
+                  },
+                }
+              : { type: "object", properties: {} },
+        execute: async (_id, params) => {
+          executed.push([name, params]);
+          return { content: [] };
+        },
+      });
+  };
+  const { api, tools } = recordingApi();
+  try {
+    // An inherited auto-summary config must not open a summary path in a child.
+    for (const settings of [{}, { workflow: "auto-summary" }]) {
+      writeFileSync(config, JSON.stringify(settings));
+      executed.length = 0;
+      await childWebExtension(factory)(api);
+      const search = tools.get("web_search");
+      assert.equal(search.parameters[kind], "Object");
+      for (const key of ["proxy", "workflow", "model"])
+        assert.equal(
+          key in search.parameters.properties,
+          false,
+          `${JSON.stringify(settings)}: ${key}`,
+        );
+      assert.deepEqual(Object.getOwnPropertyDescriptors(searchSchema), schemaDescriptors);
+      assert.deepEqual(
+        Object.getOwnPropertyDescriptors(searchSchema.properties),
+        propertiesDescriptors,
+      );
+      assert.deepEqual(
+        Object.getOwnPropertyDescriptor(searchSchema.properties, "workflow"),
+        workflowDescriptors,
+        "upstream workflow schema is not mutated",
+      );
+      for (const args of [
+        { query: "q", workflow: "none" },
+        { query: "q", workflow: "auto-summary" },
+        { query: "q", model: "openai/gpt" },
+      ])
+        assert.throws(
+          () =>
+            validateToolArguments(search, {
+              type: "toolCall",
+              id: "t",
+              name: "web_search",
+              arguments: args,
+            }),
+          /Validation failed/,
+          JSON.stringify(args),
+        );
+      const input = { query: "q" };
+      assert.deepEqual(await search.execute("t", input), { content: [] });
+      assert.deepEqual(executed, [["web_search", { query: "q", workflow: "none" }]]);
+      assert.deepEqual(input, { query: "q" }, "the caller's params are never mutated");
+      // Defense in depth: bypass schema validation and call execution directly.
+      for (const [args, expected] of [
+        [{ query: "q", workflow: "none" }, "workflow is unavailable to scout Agents."],
+        [{ query: "q", workflow: "auto-summary" }, "workflow is unavailable to scout Agents."],
+        [{ query: "q", model: "openai/gpt" }, "model is unavailable to scout Agents."],
+      ]) {
+        executed.length = 0;
+        const outcome = await search.execute("t", args);
+        assert.equal(outcome.details.error, expected, JSON.stringify(args));
+        assert.deepEqual(executed, [], "a rejected call never reaches the upstream executor");
+      }
+    }
+  } finally {
+    rmSync(config, { force: true });
+  }
 });
 
 test("renamed, disabled or unexpected web tools fail researcher assembly", async () => {

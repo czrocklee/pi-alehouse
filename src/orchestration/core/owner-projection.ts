@@ -1,4 +1,8 @@
-import { modelTaskStatus, type ThinTaskEntry } from "./communication-envelope.ts";
+import {
+  modelOutcomeReason,
+  modelTaskStatus,
+  type ThinTaskEntry,
+} from "./communication-envelope.ts";
 import type { TaskSnapshot } from "./communication-snapshot.ts";
 import { isSettledRecord, type CommunicationAgent } from "./communication-state.ts";
 import { terminal, type RunView } from "./contracts.ts";
@@ -137,6 +141,11 @@ export function communicationRow(
   const record = run.record;
   const unavailable =
     !healthy || !agent.resident || !!agent.unavailable || !!agent.exiting || !!run.quarantine;
+  // True settlement only: a finalizing Run may already hold its Outcome, but
+  // its row is not terminal until the Owner installs the settled phase.
+  const outcome_reason = isSettledRecord(record)
+    ? modelOutcomeReason(record.outcome?.reason)
+    : undefined;
   return {
     agent: record.name,
     task,
@@ -145,6 +154,7 @@ export function communicationRow(
       record.execution_exited && !terminal(record.status)
         ? "finishing"
         : modelTaskStatus(record.status),
+    ...(outcome_reason ? { outcome_reason } : {}),
     ...(agent.question?.run_id === record.run_id ? { has_question: true } : {}),
     ...(record.limit_reached ? { limit_reached: true } : {}),
     ...(unavailable ? { unavailable: true } : {}),
@@ -184,7 +194,7 @@ export function communicationTask(
 
 /** Caller resolves the sticky exact continuation, never an Agent's latest Run.
  * Input entry is permanent delivery evidence, even after later failure/kill.
- * `omitted` counts retained source characters the delivered handoff left out.
+ * `omitted` counts retained source UTF-16 units the delivered handoff left out.
  * readable: an explicit read returns the retained result, because the worker
  * never received it or the bounded handoff omitted retained text. */
 export function returnToNotice(
@@ -197,7 +207,7 @@ export function returnToNotice(
   omitted: number,
 ): { text: string; readable: boolean } {
   const destination = `${continuation.name} (task ${task})`,
-    read = `agent_read ${source} task ${sourceTask}`;
+    read = `agent_read({ agent: ${JSON.stringify(source)}, task: ${sourceTask} })`;
   if (continuation.input_entered)
     return omitted > 0
       ? {

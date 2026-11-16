@@ -223,11 +223,11 @@ test("pinned SDK exposes Agent16 queue rejection across reused Runs and preserve
   assert.equal(second.isError, false);
   assert.equal(
     first.result.content[0].text,
-    "Question recorded. Stop calling tools and end your turn now.",
+    "Question recorded. Stop calling tools and end your turn now. Do not repeat the question in your final reply.",
   );
   assert.equal(
     second.result.content[0].text,
-    "This task already has a question; it was not replaced. Stop calling tools and end your turn now.",
+    "This task already has a question; it was not replaced. Stop calling tools and end your turn now. Do not repeat the question in your final reply.",
   );
   sameFIFO(c, accepted);
   port.finish("awaiting decision");
@@ -294,4 +294,32 @@ test("pinned SDK exposes Owner64 before Agent16, denies a fifth Agent without re
   assert.equal(c.alerts.length, 0);
   await acceptAlert(toolsFor(newcomer.port), "capacity released by publication");
   assert.equal(c.view(newcomer.run.run_id).pending_messages, 1);
+});
+
+test("SDK-visible child declarations state character bounds without the receipt-only no-repeat instruction", () => {
+  const tools = wrapToolDefinitions(
+    createChildTools(
+      () => ({
+        alert() {},
+        question() {
+          return "recorded";
+        },
+      }),
+      { accepting: true, stopped: false },
+    ),
+  );
+  assert.deepEqual(
+    tools.map((tool) => tool.name),
+    ["alert_parent", "ask_parent"],
+  );
+  for (const tool of tools) {
+    const key = tool.name === "alert_parent" ? "message" : "question";
+    assert.equal(tool.parameters.properties[key].maxLength, 8192, "the hard limit stays UTF-16");
+    assert.match(
+      tool.parameters.properties[key].description,
+      /1-8192 characters of nonblank text\./,
+    );
+    assert.doesNotMatch(tool.parameters.properties[key].description, /UTF-16|repeat/i);
+    assert.doesNotMatch(tool.description, /do not repeat|UTF-16/i);
+  }
 });

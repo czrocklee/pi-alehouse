@@ -109,6 +109,7 @@ import {
 import {
   dispatchText,
   pathsOverlap,
+  publicDispatchErrorCode,
   validateDispatch,
   validSourceState,
   type Dispatch,
@@ -612,7 +613,10 @@ export class OwnerController {
         new Set(ids).size !== ids.length ||
         ids.some((id) => typeof id !== "string" || !id)
       )
-        throw new OrchestrationError("INVALID_PARAMETER", { key: "after" });
+        throw new OrchestrationError("INVALID_PARAMETER", {
+          key: "after",
+          resolution: `after must contain 1-${DEPENDENCY_LIMIT} unique task dependencies; remove duplicate entries.`,
+        });
       for (const id of ids) this.plannedRun(id, staged);
     }
   }
@@ -1293,27 +1297,48 @@ export class OwnerController {
       stable({ ownership: right.ownership, tree: right.tree })
     );
   }
+  /** Prestart dispatch failure, reached only from the pump's non-deferred
+   * recheck before executeRun can call history.begin. The Run therefore has no
+   * history_ref, even when a reused Agent's session already exists, so finish()
+   * appends no child alehouse:run-end (that append requires history_ref &&
+   * session.history). The public-prefix text below stays live in outcome.error
+   * and projects to UI/model rows; a parent tool result may still persist it in
+   * that transcript. Existing record bytes are never rewritten, but this is not
+   * a claim that all history is unaffected. */
   private dispatchFailure(run: ManagedRun, error: unknown): void {
     const code = error instanceof OrchestrationError ? error.code : undefined;
     let detail = errorText(error);
     if (error instanceof OrchestrationError) {
       const { path, agent, surface } = error.details;
       const where = typeof path === "string" ? ` (${JSON.stringify(path)})` : "";
+      // Rewrites only this newly authored live diagnostic text with the public
+      // code/field vocabulary. Internal machine codes, outcome reasons, field
+      // names and existing record bytes stay unchanged; it is not a record
+      // projection and does not claim all record content is unchanged.
+      const publicCode = publicDispatchErrorCode(error.code);
       if (code === "DISPATCH_INPUT_MISSING")
-        detail = `${code}: Declared input is missing${where}. Verify the input or its producing task.`;
+        detail = `${publicCode}: Declared required path is missing${where}. Verify the path or its producing task.`;
+      else if (code === "DISPATCH_INPUT_INSPECTION_FAILED")
+        detail = `${publicCode}: Declared required path could not be inspected${where}.`;
+      else if (code === "DISPATCH_TREE_INSPECTION_FAILED")
+        detail = `${publicCode}: Declared build_dir could not be inspected${where}.`;
       else if (code === "PREFLIGHT_DENIED")
         detail =
-          `${code}: ` +
+          `${publicCode}: ` +
           (typeof error.details.reason === "string"
             ? error.details.reason
             : `Permission policy denied this declaration${where}` +
               (typeof surface === "string" ? ` on ${surface}` : "")) +
           "; this is not a missing-file or model-execution failure. Report the restriction; do not bypass it.";
       else if (code === "DISPATCH_TREE_TYPE" || code === "DISPATCH_INPUT_TYPE")
-        detail = `${code}: Declared ${code === "DISPATCH_TREE_TYPE" ? "tree must be a directory" : "input must be a file or directory"}${where}.`;
+        detail = `${publicCode}: Declared ${
+          code === "DISPATCH_TREE_TYPE"
+            ? "build_dir must be a directory"
+            : "required path must be a file or directory"
+        }${where}.`;
       else if (code === "RESOURCE_OWNED" || code === "BUILD_TREE_BUSY")
         detail =
-          `${code}: The resolved resource${where} conflicts with another unfinished task` +
+          `${publicCode}: The resolved resource${where} conflicts with another unfinished task` +
           (typeof agent === "string" ? ` on Agent ${JSON.stringify(agent)}` : "") +
           ". Inspect its task; resolve a pending question or wait for confirmed release before submitting a follow-up.";
     }

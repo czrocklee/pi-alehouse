@@ -1068,7 +1068,7 @@ try {
     "identity",
     "new Agent at the same slot inherits parent off; the old fixed Agent retains its original resolution",
   );
-  assert.equal((await invoke("agent_kill", { agent: "inherit" })).status, "killed");
+  assert.equal((await invoke("agent_kill", { agent: "inherit" })).agent_status, "released");
   const resetAudit = selectedEntries().length;
   presetSelections.push({
     target: "entry-fixture",
@@ -1138,7 +1138,7 @@ try {
   assert(cacheWarming.parent_refreshes > 0, "parent warming evidence is missing");
   assert.equal(inheritedMode, "idle", "child must not persistently change global policy");
   settings.setCacheWarmingMode("off"); // Fixture-only in-memory parent; rest of the smoke need not warm.
-  assert.equal((await invoke("agent_kill", { agent: "entry" })).status, "killed");
+  assert.equal((await invoke("agent_kill", { agent: "entry" })).agent_status, "released");
   // No residents is still an open Owner: the actual SDK replacement route must
   // remain blocked without implicitly closing the Owner or changing its parent.
   await parent.prompt("/alehouse-status");

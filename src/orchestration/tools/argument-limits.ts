@@ -9,6 +9,7 @@ export const PARENT_TEXT_LIMITS = Object.freeze({
   continues: 512,
   message: 16384,
   answer: 16384,
+  instruction: 16384,
   cursor: 1024,
 });
 
@@ -24,7 +25,7 @@ const fieldsByTool: Readonly<Record<string, readonly TextField[]>> = {
 /** Parent-authored text that reaches a child. Only the detail pane's human
  * input may carry the human steering lead, so the parent cannot present its
  * own text as the user's. */
-const childFacing: ReadonlySet<TextField> = new Set(["prompt", "continues", "message", "answer"]);
+const childFacing: ReadonlySet<TextField> = new Set(["prompt", "message", "answer", "instruction"]);
 
 function checkText(value: unknown, field: TextField, path: string = field): void {
   const limit = PARENT_TEXT_LIMITS[field];
@@ -40,8 +41,8 @@ function checkText(value: unknown, field: TextField, path: string = field): void
     key: path,
     resolution:
       field === "label"
-        ? `${value === undefined ? "label is required: supply a" : "label must be a"} nonblank task title of at most ${limit} UTF-16 units (JavaScript .length), not instructions or background.`
-        : `${path} must be a nonblank string of at most ${limit} UTF-16 units (JavaScript .length).`,
+        ? `${value === undefined ? "label is required: supply a" : "label must be a"} nonblank task title of at most ${limit} characters, not instructions or background.`
+        : `${path} must be a nonblank string of at most ${limit} characters.`,
   });
 }
 
@@ -60,5 +61,9 @@ export function checkParentTextArguments(name: string, raw: unknown): void {
     typeof fields.return_to === "object" &&
     !Array.isArray(fields.return_to)
   )
-    checkText((fields.return_to as Record<string, unknown>).answer, "answer", "return_to.answer");
+    checkText(
+      (fields.return_to as Record<string, unknown>).instruction,
+      "instruction",
+      "return_to.instruction",
+    );
 }

@@ -55,6 +55,44 @@ test("the same host call ID replays accepted work; a fresh call cannot duplicate
   await settle(f, "orca");
 });
 
+test("a retired dispatch spelling with the same call ID is a parameter error, not a replay conflict", async (t) => {
+  const f = await fixture(t, { controller: { dispatch: literalDispatch } }),
+    { call } = toolsFor(f);
+  const args = create({
+    dispatch: { required_paths: ["input.txt"], build_dir: "build" },
+  });
+  const first = await call("agent_spawn", args, "stable-dispatch");
+  assert.deepEqual(first.action, { type: "agent_spawn", agent: "orca", task: 1 });
+  assert.deepEqual(await call("agent_spawn", args, "stable-dispatch"), first);
+  assert.equal(f.controller.stats().runs, 1);
+  const ports = f.ports.length;
+  // The raw old shape fails the closed public schema before the accepted-request
+  // replay lookup can turn it into REQUEST_CONFLICT.
+  await assert.rejects(
+    call(
+      "agent_spawn",
+      create({ dispatch: { inputs: ["input.txt"], tree: "build" } }),
+      "stable-dispatch",
+    ),
+    code("INVALID_PARAMETERS"),
+  );
+  assert.equal(f.controller.stats().runs, 1);
+  assert.equal(f.ports.length, ports, "the retired spelling starts no session");
+  // A changed valid public declaration under the same ID is still a conflict.
+  await assert.rejects(
+    call(
+      "agent_spawn",
+      create({ dispatch: { required_paths: ["other.txt"], build_dir: "build" } }),
+      "stable-dispatch",
+    ),
+    code("REQUEST_CONFLICT"),
+  );
+  assert.equal(f.controller.stats().runs, 1);
+  await until(() => f.ports[0]?.streaming);
+  f.ports[0].finish();
+  await settle(f, "orca");
+});
+
 test("reasoning_difficulty cannot change an accepted Agent on reuse", async (t) => {
   const f = await fixture(t),
     { tool, call } = toolsFor(f);
@@ -282,7 +320,7 @@ test("an aborted wait is not an interrupt; kill ends a busy Agent and frees its 
   const killing = call("agent_kill", { agent: "one" });
   await until(() => f.ports[0].stopped === 2);
   f.ports[0].finish("partial again", "aborted");
-  assert.deepEqual(await killing, { agent: "one", status: "killed", label: "task" });
+  assert.deepEqual(await killing, { agent: "one", agent_status: "released", label: "task" });
   const kept = await call("agent_read", { agent: "one" });
   assert.equal(kept.tasks[0].result, "partial again");
   assert.equal(kept.tasks[0].status, "interrupted");
@@ -295,7 +333,7 @@ test("an aborted wait is not an interrupt; kill ends a busy Agent and frees its 
     list.agents.map((row) => row.agent),
     ["two"],
   );
-  assert.deepEqual(list.killed, ["one"]);
+  assert.deepEqual(list.released, ["one"]);
   f.ports[1].finish("done");
   await settle(f, "two");
 });
@@ -426,7 +464,7 @@ test("uncertain release remains an explicit negative receipt through the tool ad
   f.ports[0].dispose = async () => ({ shutdownExited: false, errors: ["unknown"] });
   assert.deepEqual(await call("agent_kill", { agent: "orca" }), {
     agent: "orca",
-    status: "cleanup_uncertain",
+    agent_status: "cleanup_uncertain",
     label: "task",
     resolution: "Cleanup unconfirmed; tell the user, do not retry.",
   });
@@ -439,7 +477,7 @@ test("uncertain release remains an explicit negative receipt through the tool ad
   );
 });
 
-test("the roster lists resident busy, queued, idle and question Agents and only names killed ones", async (t) => {
+test("the roster lists resident busy, queued, idle and question Agents and only names released ones", async (t) => {
   const f = await fixture(t),
     { call } = toolsFor(f);
   for (let i = 0; i < 12; i++) {
@@ -452,7 +490,7 @@ test("the roster lists resident busy, queued, idle and question Agents and only 
   const empty = await call("agent_list", {});
   assert.deepEqual(empty.agents, []);
   assert.deepEqual(
-    empty.killed,
+    empty.released,
     Array.from({ length: 12 }, (_, i) => `old${i}`),
   );
   await call("agent_spawn", create({ agent: "busy" }), "busy");
@@ -579,10 +617,10 @@ test("a pending kill remains in the resident list until cleanup confirms release
       ["orca"],
     );
     gate.resolve();
-    assert.equal((await releasing).status, "killed");
+    assert.equal((await releasing).agent_status, "released");
     const after = await call("agent_list", {});
     assert.deepEqual(after.agents, []);
-    assert.deepEqual(after.killed, ["orca"]);
+    assert.deepEqual(after.released, ["orca"]);
   } finally {
     gate.resolve();
   }
@@ -960,7 +998,7 @@ test("model reads omit context_tokens across reuse, history and kill while core 
   assert.equal(older.context_tokens, undefined, "historical reads also omit context telemetry");
   await call("agent_kill", { agent: "orca" });
   assert.equal(
-    row(await call("agent_read", { agent: "orca" }, "killed")).context_tokens,
+    row(await call("agent_read", { agent: "orca" }, "interrupted")).context_tokens,
     undefined,
     "kill does not make context telemetry public",
   );
@@ -1154,11 +1192,11 @@ test("a kill earlier in the same parallel batch frees its slot for a later spawn
   await settle(f, "one");
   await settle(f, "two");
   // Like Pi's parallel batch: both execute() calls start in order in one tick.
-  const [killed, spawned] = await Promise.all([
+  const [released, spawned] = await Promise.all([
     call("agent_kill", { agent: "one" }, "kill"),
     call("agent_spawn", create({ agent: "three" }), "three"),
   ]);
-  assert.equal(killed.status, "killed");
+  assert.equal(released.agent_status, "released");
   assert.deepEqual(spawned.action, { type: "agent_spawn", agent: "three", task: 1 });
   await until(() => f.ports[2]?.streaming);
   f.ports[2].finish();
@@ -1179,7 +1217,7 @@ test("a kill earlier in the same parallel batch frees a questioned Agent's claim
   f.ports[0].callbacks.question("Which layout?");
   f.ports[0].finish("need a layout");
   await settle(f, "asker");
-  const [killed, spawned] = await Promise.all([
+  const [released, spawned] = await Promise.all([
     call("agent_kill", { agent: "asker" }, "kill"),
     call(
       "agent_spawn",
@@ -1187,7 +1225,7 @@ test("a kill earlier in the same parallel batch frees a questioned Agent's claim
       "fixer",
     ),
   ]);
-  assert.equal(killed.status, "killed");
+  assert.equal(released.agent_status, "released");
   assert.deepEqual(spawned.action, { type: "agent_spawn", agent: "fixer", task: 1 });
   assert.deepEqual(
     [...f.controller.claims].map((claim) => claim.agent_id),
@@ -1264,15 +1302,16 @@ test("a conflict no release resolves is reported at once, even beside a release 
   } finally {
     hold.resolve();
   }
-  assert.equal((await killing).status, "killed");
+  assert.equal((await killing).agent_status, "released");
 });
 
-for (const held of ["ownership", "tree"])
-  for (const requested of ["ownership", "tree"])
+for (const held of ["ownership", "build_dir"])
+  for (const requested of ["ownership", "build_dir"])
     test(`${requested} against ${held} reports the requested field without internal IDs`, async (t) => {
       const f = await fixture(t, { controller: { dispatch: literalDispatch } }),
         { call } = toolsFor(f);
-      const declaration = (key) => (key === "tree" ? { tree: "out" } : { ownership: ["out"] });
+      const declaration = (key) =>
+        key === "build_dir" ? { build_dir: "out" } : { ownership: ["out"] };
       await call(
         "agent_spawn",
         create({ agent: "holder", profile: "worker", dispatch: declaration(held) }),
@@ -1289,7 +1328,10 @@ for (const held of ["ownership", "tree"])
         (error) => {
           const result = JSON.parse(error.message).error;
           assert.deepEqual(result, {
-            code: held === "tree" && requested === "tree" ? "BUILD_TREE_BUSY" : "RESOURCE_OWNED",
+            code:
+              held === "build_dir" && requested === "build_dir"
+                ? "BUILD_DIR_BUSY"
+                : "RESOURCE_OWNED",
             agent: "holder",
             parameter: requested,
             path: "out",
@@ -1353,7 +1395,7 @@ for (const transition of ["off", "off-on", "shutdown"])
       hold.resolve();
     }
     await rejected;
-    assert.equal((await killing).status, "killed");
+    assert.equal((await killing).agent_status, "released");
     if (closing) assert.equal((await closing).closed, true);
     assert.equal(f.controller.stats().runs, 1);
     assert.equal(f.controller.findAgent("two"), undefined);
@@ -1393,7 +1435,7 @@ test("admission waits for a release under way only within its bound, and an abor
   await assert.rejects(aborted, code("TOOL_INTERRUPTED"));
   assert.equal(f.controller.stats().runs, 1, "neither rejected spawn allocated a task");
   hold.resolve();
-  assert.equal((await killing).status, "killed");
+  assert.equal((await killing).agent_status, "released");
   assert.equal((await call("agent_spawn", create({ agent: "two" }), "now")).action.agent, "two");
   await until(() => f.ports[1]?.streaming);
   f.ports[1].finish();
@@ -1553,7 +1595,7 @@ test("failed model errors retain diagnostics but omit recovery_hint without extr
     await call("agent_interrupt", { agent: "orca" }),
   ]) {
     assert.equal(projected.status, "failed");
-    assert.equal(projected.reason, "execution_error");
+    assert.equal(projected.outcome_reason, "execution_error");
     assert.equal(Object.hasOwn(projected, "recovery_hint"), false);
     assert.equal(projected.error, raw, "raw error remains a separate untrusted diagnostic");
     assert.equal(
@@ -1772,7 +1814,7 @@ test("independent roster pressure drops optional fields in order, preserving eve
     assert.equal(row.status, "queued");
     assert.equal(row.queued_for, "dependencies");
     assert.equal(row.label, "\0".repeat(120));
-    assert.equal(row.cancellation_source, "human");
+    assert.equal(row.interrupted_by, "human");
   }
   assert(
     reply.agents.some((row) => row.error === undefined),

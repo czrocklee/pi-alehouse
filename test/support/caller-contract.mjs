@@ -92,9 +92,10 @@ export function assertCallerTools(tools) {
   assert.equal(fields.label.minLength, 1);
   assert.equal(fields.label.maxLength, 72);
   assert.equal(fields.label.pattern, "\\S");
-  assert.match(fields.label.description, /[Cc]oncise 3–8 word task title/);
+  assert.match(fields.label.description, /Short task title in the task's language/);
+  assert.doesNotMatch(fields.label.description, /3[–-]8 word/);
   assert.match(fields.label.description, /not instructions or background/);
-  assert.match(fields.label.description, /72 UTF-16 units/);
+  assert.match(fields.label.description, /72 characters/);
   assert.doesNotMatch(fields.label.description, /default|first nonblank line/);
   assert.deepEqual(fields.profile.enum, ["worker", "scout"]);
   assert.equal(fields.profile.enum.includes("researcher"), false);
@@ -129,22 +130,25 @@ export function assertCallerTools(tools) {
   );
   assert.equal(fields.return_to.type, "object");
   assert.equal(fields.return_to.additionalProperties, false);
-  assert.deepEqual(fields.return_to.required.toSorted(), ["agent", "answer", "question_id"]);
+  assert.deepEqual(fields.return_to.required.toSorted(), ["agent", "instruction", "question_id"]);
   assert.equal(fields.return_to.properties.agent.pattern, fields.agent.pattern);
   assert.equal(fields.return_to.properties.question_id.pattern, "^q_[0-9a-f]{32}$");
-  assert.equal(fields.return_to.properties.answer.maxLength, 16384);
+  assert.equal(fields.return_to.properties.instruction.maxLength, 16384);
   for (const fact of [
     /Scout only/,
     /worker's pending question/,
     /resumes automatically/,
     /do not read or relay/,
-    /receives only the first 16384 characters, which the scout is told/,
+    /scout is told the worker receives the first 16384 characters/,
     /wait_ms waits for the worker/,
-    /released once its whole result is delivered; otherwise read it and kill it yourself/,
-    /Needs agent_answer already approved for you; otherwise the error says what to do/,
+    /Full delivery releases the scout; otherwise read it and kill it yourself/,
+    /Needs agent_answer already approved; errors explain fallback/,
   ])
     assert.match(fields.return_to.description, fact);
-  assert.match(fields.return_to.properties.answer.description, /written before the findings exist/);
+  assert.match(
+    fields.return_to.properties.instruction.description,
+    /written before the findings exist/,
+  );
   assert(!spawn.parameters.required.includes("return_to"));
   assert.equal(Object.hasOwn(fields, "workspace"), false);
   assert.equal(fields.reasoning_difficulty.type, "integer");
@@ -234,9 +238,9 @@ export function assertCallerTools(tools) {
   assert.equal(runFields.continues.maxLength, 512);
   assert.equal(runFields.continues.pattern, "\\S");
   for (const fact of [
-    /specific earlier work of this Agent/,
+    /specific earlier work this Agent/,
     /not sent/,
-    /cannot name one, use agent_spawn/,
+    /If none, use agent_spawn/,
     /after if only its output/,
   ])
     assert.match(runFields.continues.description, fact);
@@ -271,10 +275,10 @@ export function assertCallerTools(tools) {
     assert.equal(after.items.pattern, fields.agent.pattern);
     for (const fact of [
       /current or latest task/,
-      /fixed at this call/,
-      /reach completed/,
-      /other final status fails/,
-      /reference context/,
+      /Bind each Agent's.*now/,
+      /wait for completed/,
+      /Other final statuses fail/,
+      /result as reference/,
       /until agent_answer returns/,
     ])
       assert.match(after.description, fact);
@@ -282,21 +286,21 @@ export function assertCallerTools(tools) {
     assert.equal(dispatch.additionalProperties, false);
     assert(!tool.parameters.required.includes("dispatch"));
     assert.deepEqual(Object.keys(dispatch.properties).sort(), [
+      "build_dir",
       "checks",
-      "inputs",
       "ownership",
-      "tree",
+      "required_paths",
     ]);
     for (const fact of [
       /not permissions or execution evidence/,
       /literal paths/,
-      /Relative paths resolve from the inherited parent cwd/,
-      /absolute paths keep their meaning/,
-      /one designated Agent after shared source is stable/,
+      /literal paths relative to parent cwd or absolute/,
+      /no padding, globs, shell quotes/,
+      /one full-suite owner after shared source is stable/,
     ])
       assert.match(dispatch.description, fact);
     for (const [field, limit] of [
-      ["inputs", 32],
+      ["required_paths", 32],
       ["ownership", 16],
       ["checks", 16],
     ]) {
@@ -309,19 +313,22 @@ export function assertCallerTools(tools) {
       assert.equal(array.items.maxLength, 512);
       assert.equal(typeof array.items.pattern, "string");
     }
-    assert.equal(dispatch.properties.tree.type, "string");
-    assert.equal(dispatch.properties.tree.minLength, 1);
-    assert.equal(dispatch.properties.tree.maxLength, 512);
-    assert.match(dispatch.properties.tree.description, /write permission/);
-    assert.match(dispatch.properties.tree.description, /if it exists, must be a directory/);
-    assert.match(dispatch.properties.tree.description, /conflict within this session/);
-    assert.match(dispatch.properties.tree.description, /other sessions are only advised/);
-    assert.doesNotMatch(dispatch.properties.tree.description, /Owner/);
-    // The field is optional; when set, inputs are prerequisites preflighted
-    // before execution, not references or grants.
+    assert.equal(dispatch.properties.build_dir.type, "string");
+    assert.equal(dispatch.properties.build_dir.minLength, 1);
+    assert.equal(dispatch.properties.build_dir.maxLength, 512);
+    assert.match(dispatch.properties.build_dir.description, /write permission/);
+    assert.match(dispatch.properties.build_dir.description, /if it exists, must be a directory/);
+    assert.match(dispatch.properties.build_dir.description, /conflict within this session/);
+    assert.match(dispatch.properties.build_dir.description, /other sessions are only advised/);
+    assert.doesNotMatch(dispatch.properties.build_dir.description, /Owner/);
+    // The field is optional; when set, required_paths are prerequisites
+    // preflighted before execution, not references or grants.
     for (const fact of [/prerequisites/i, /preflight/i, /must (already )?exist/])
-      assert.match(dispatch.properties.inputs.items.description, fact);
-    assert.doesNotMatch(dispatch.properties.inputs.items.description, /required/i);
+      assert.match(dispatch.properties.required_paths.items.description, fact);
+    assert.match(
+      dispatch.properties.required_paths.items.description,
+      /optional references in prompt/,
+    );
     for (const fact of [
       /edit or create/,
       /write permission/,
@@ -329,8 +336,11 @@ export function assertCallerTools(tools) {
       /[Oo]mit for read-only/,
     ])
       assert.match(dispatch.properties.ownership.items.description, fact);
-    assert.match(dispatch.properties.checks.items.description, /globs allowed/);
-    assert.match(dispatch.properties.checks.items.description, /not one awaiting a later go-ahead/);
+    assert.match(dispatch.properties.checks.items.description, /globs are allowed/);
+    assert.match(
+      dispatch.properties.checks.items.description,
+      /Omit checks awaiting a later go-ahead/,
+    );
   }
   const send = byName.get("agent_send"),
     sendFields = send.parameters.properties;
@@ -370,7 +380,7 @@ export function assertCallerTools(tools) {
     /historical text alone cannot be answered/,
     /fixed settings/,
     /label\/dispatch/,
-    /Turn cap: Agent default, not the asking task's override/,
+    /Soft turn budget: Agent default, not the asking task's override/,
   ])
     assert.match(answer.description, fact);
   // A delegation_off reply carries its own guidance; descriptions do not repeat it.
@@ -396,9 +406,9 @@ export function assertCallerTools(tools) {
   assert.equal(waitFields.wait_ms.maximum, 300000);
   assert.match(waitFields.wait_ms.description, /default 300000/);
   for (const fact of [
-    /active \(running\/queued\) task, else its pending question, else its latest finished task/,
-    /fixed at this call/,
-    /Omit to wait on unfinished tasks/,
+    /active \(running\/queued\) task, else pending question, else latest finished task/,
+    /Bind now/,
+    /Omit for unfinished tasks/,
     /all Agents' alerts/,
   ])
     assert.match(waitFields.agents.description, fact);
@@ -409,7 +419,7 @@ export function assertCallerTools(tools) {
     /long waits/,
     /Questions stay pending/,
     /defer one/,
-    /Nothing pending/,
+    /Returns immediately if nothing is pending/,
     /never stops work/,
   ])
     assert.match(wait.description, fact);

@@ -151,22 +151,22 @@ for (const name of ["agent_spawn", "agent_run"]) {
     assert.equal(dispatch.additionalProperties, false);
     assert(!schema.required.includes("dispatch"));
     assert.deepEqual(Object.keys(dispatch.properties).sort(), [
+      "build_dir",
       "checks",
-      "inputs",
       "ownership",
-      "tree",
+      "required_paths",
     ]);
     assert.equal(DISPATCH_LIMITS.inputs, 32);
-    assert.equal(dispatch.properties.tree.maxLength, DISPATCH_LIMITS.stringUnits);
-    for (const [field, count] of [
-      ["inputs", 32],
-      ["ownership", 16],
-      ["checks", 16],
+    assert.equal(dispatch.properties.build_dir.maxLength, DISPATCH_LIMITS.stringUnits);
+    for (const [field, count, internal] of [
+      ["required_paths", 32, "inputs"],
+      ["ownership", 16, "ownership"],
+      ["checks", 16, "checks"],
     ]) {
       const array = dispatch.properties[field];
       assert.equal(array.minItems, 1);
       assert.equal(array.maxItems, count);
-      assert.equal(array.maxItems, DISPATCH_LIMITS[field]);
+      assert.equal(array.maxItems, DISPATCH_LIMITS[internal]);
       assert.equal(array.uniqueItems, true);
       assert.equal(array.items.type, "string");
       assert.equal(array.items.minLength, 1);
@@ -174,14 +174,18 @@ for (const name of ["agent_spawn", "agent_run"]) {
     }
     for (const declaration of [
       {},
-      { inputs: ["input/space name.txt"] },
+      { required_paths: ["input/space name.txt"] },
       {
-        inputs: Array.from({ length: 32 }, (_, i) => `input-${i}`),
+        required_paths: Array.from({ length: 32 }, (_, i) => `input-${i}`),
         ownership: Array.from({ length: 16 }, (_, i) => `output-${i}`),
-        tree: "new/build-tree",
+        build_dir: "new/build-tree",
         checks: Array.from({ length: 16 }, (_, i) => `test/${i}/**/*.test.mjs`),
       },
-      { ownership: ["x".repeat(512)], tree: "t".repeat(512), checks: ["c".repeat(512)] },
+      {
+        ownership: ["x".repeat(512)],
+        build_dir: "t".repeat(512),
+        checks: ["c".repeat(512)],
+      },
     ]) {
       const raw = a.args(name, { dispatch: declaration });
       assert(
@@ -192,7 +196,8 @@ for (const name of ["agent_spawn", "agent_run"]) {
       assert.deepEqual(prepared, raw);
       assert.notEqual(prepared, raw);
       assert.notEqual(prepared.dispatch, declaration);
-      if (declaration.inputs) assert.notEqual(prepared.dispatch.inputs, declaration.inputs);
+      if (declaration.required_paths)
+        assert.notEqual(prepared.dispatch.required_paths, declaration.required_paths);
     }
   });
 
@@ -204,24 +209,32 @@ for (const name of ["agent_spawn", "agent_run"]) {
       "path",
       [],
       { unknown: "field" },
-      { inputs: [] },
+      { required_paths: [] },
       { ownership: [] },
       { checks: [] },
-      { inputs: ["same", "same"] },
-      { tree: "" },
-      { tree: " " },
-      { tree: 4 },
-      { inputs: "not-array" },
+      { required_paths: ["same", "same"] },
+      { build_dir: "" },
+      { build_dir: " " },
+      { build_dir: 4 },
+      { required_paths: "not-array" },
       { checks: [4] },
-      { inputs: Array.from({ length: 33 }, (_, i) => `i${i}`) },
+      { required_paths: Array.from({ length: 33 }, (_, i) => `i${i}`) },
       { ownership: Array.from({ length: 17 }, (_, i) => `o${i}`) },
       { checks: Array.from({ length: 17 }, (_, i) => `c${i}`) },
-      ...["inputs", "ownership", "checks"].map((key) => ({ [key]: ["x".repeat(513)] })),
-      { tree: "x".repeat(513) },
+      ...["required_paths", "ownership", "checks"].map((key) => ({
+        [key]: ["x".repeat(513)],
+      })),
+      { build_dir: "x".repeat(513) },
       { checks: ["test\nname"] },
       { checks: ["test\n"] },
       { checks: ["\0"] },
+      // The retired internal vocabulary is not an alias, alone or mixed.
+      { inputs: ["old.txt"] },
+      { tree: "old-build" },
+      { required_paths: ["new.txt"], inputs: ["old.txt"] },
+      { build_dir: "new-build", tree: "old-build" },
     ];
+    const schemaRejected = new Set(declarations);
     const forbiddenPaths = [
       "*.ts",
       "src/?",
@@ -241,14 +254,20 @@ for (const name of ["agent_spawn", "agent_run"]) {
       "a\x7fb",
     ];
     for (const path of forbiddenPaths)
-      for (const field of ["inputs", "ownership", "tree"])
-        declarations.push({ [field]: field === "tree" ? path : [path] });
+      for (const field of ["required_paths", "ownership", "build_dir"]) {
+        const declaration = { [field]: field === "build_dir" ? path : [path] };
+        declarations.push(declaration);
+        // Shape, blank and control checks remain in the schema. Literal path
+        // restrictions get the more specific validateDispatch diagnostic.
+        if ([...path].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127))
+          schemaRejected.add(declaration);
+      }
     for (const dispatch of declarations) {
       const raw = a.args(name, { dispatch });
       assert.equal(
         Check(a.tool(name).parameters, raw),
-        false,
-        "provider-visible schema rejects this malformed declaration too",
+        !schemaRejected.has(dispatch),
+        "literal-path errors reach precise validation; malformed shapes stay schema-rejected",
       );
       assert.throws(() => a.tool(name).prepareArguments(raw), invalid, JSON.stringify(dispatch));
       await assert.rejects(a.execute(name, raw), invalid, JSON.stringify(dispatch));
@@ -260,16 +279,28 @@ for (const name of ["agent_spawn", "agent_run"]) {
     const a = adapter();
     for (const [dispatch, parameter, resolution] of [
       [
-        { inputs: Array.from({ length: 33 }, (_, i) => `private-input-${i}`) },
-        "dispatch.inputs",
+        { required_paths: Array.from({ length: 33 }, (_, i) => `private-input-${i}`) },
+        "dispatch.required_paths",
         /32.*33/,
       ],
-      [{ tree: "🚀".repeat(257) }, "dispatch.tree", /512 UTF-16 units.*514/],
-      [{ inputs: [" private-input"] }, "dispatch.inputs.0", /literal path.*padding/],
-      [{ inputs: ["private-input "] }, "dispatch.inputs.0", /literal path.*padding/],
-      [{ inputs: ["valid", "private-input "] }, "dispatch.inputs.1", /literal path.*padding/],
-      [{ inputs: ["a".repeat(513)] }, "dispatch.inputs.0", /512 UTF-16 units.*513/],
-      [{ checks: ["🚀".repeat(257)] }, "dispatch.checks.0", /512 UTF-16 units.*514/],
+      [{ build_dir: "🚀".repeat(257) }, "dispatch.build_dir", /512 characters.*514/],
+      [
+        { required_paths: [" private-input"] },
+        "dispatch.required_paths.0",
+        /literal path.*padding/,
+      ],
+      [
+        { required_paths: ["private-input "] },
+        "dispatch.required_paths.0",
+        /literal path.*padding/,
+      ],
+      [
+        { required_paths: ["valid", "private-input "] },
+        "dispatch.required_paths.1",
+        /literal path.*padding/,
+      ],
+      [{ required_paths: ["a".repeat(513)] }, "dispatch.required_paths.0", /512 characters.*513/],
+      [{ checks: ["🚀".repeat(257)] }, "dispatch.checks.0", /512 characters.*514/],
     ]) {
       const raw = a.args(name, { dispatch });
       const matches = (error) => {
@@ -285,9 +316,9 @@ for (const name of ["agent_spawn", "agent_run"]) {
       await assert.rejects(a.execute(name, raw), matches);
     }
     assert.deepEqual(a.submissions, [], "bad declarations never reach admission");
-    for (const field of ["inputs", "ownership", "checks", "tree"]) {
+    for (const field of ["required_paths", "ownership", "checks", "build_dir"]) {
       const boundary = "🚀".repeat(256);
-      const dispatch = { [field]: field === "tree" ? boundary : [boundary] };
+      const dispatch = { [field]: field === "build_dir" ? boundary : [boundary] };
       assert.deepEqual(
         a.tool(name).prepareArguments(a.args(name, { dispatch })).dispatch,
         dispatch,
@@ -298,20 +329,22 @@ for (const name of ["agent_spawn", "agent_run"]) {
   test(`${name} accepts the formerly rejected nine-path review declaration`, async () => {
     const a = adapter();
     // Preserve the failing shape, not private transcript paths or task text.
-    const inputs = Array.from({ length: 9 }, (_, i) => `source/component-${i}.ts`);
-    const raw = a.args(name, { dispatch: { inputs } });
+    const required_paths = Array.from({ length: 9 }, (_, i) => `source/component-${i}.ts`);
+    const raw = a.args(name, { dispatch: { required_paths } });
     const prepared = a.tool(name).prepareArguments(raw);
     await a.execute(name, prepared);
-    assert.deepEqual(a.submissions[0].request.dispatch.inputs, inputs);
+    assert.deepEqual(a.submissions[0].request.dispatch.inputs, required_paths);
   });
 
   test(`${name} revalidates dispatch after hooks mutate prepared arguments`, async () => {
     const a = adapter(),
-      raw = a.args(name, { dispatch: { inputs: ["ordinary.txt"], checks: ["test/**/*.mjs"] } });
+      raw = a.args(name, {
+        dispatch: { required_paths: ["ordinary.txt"], checks: ["test/**/*.mjs"] },
+      });
     const prepared = a.tool(name).prepareArguments(raw);
-    prepared.dispatch.inputs[0] = "*.secret";
+    prepared.dispatch.required_paths[0] = "*.secret";
     await assert.rejects(a.execute(name, prepared), invalid);
-    assert.equal(raw.dispatch.inputs[0], "ordinary.txt", "prepare owns a detached copy");
+    assert.equal(raw.dispatch.required_paths[0], "ordinary.txt", "prepare owns a detached copy");
     const changed = a.tool(name).prepareArguments(raw);
     changed.dispatch.unknown = "injected";
     await assert.rejects(a.execute(name, changed), invalid);
@@ -321,9 +354,9 @@ for (const name of ["agent_spawn", "agent_run"]) {
   test(`${name} forwards detached dispatch to SubmitRequest and returns the exact prepacked optional diagnostics`, async () => {
     const a = adapter({ notes: true }),
       declaration = {
-        inputs: ["ordinary.txt"],
+        required_paths: ["ordinary.txt"],
         ownership: ["new/output"],
-        tree: "build",
+        build_dir: "build",
         checks: ["test/**/*.mjs"],
       };
     const raw = a.args(name, { dispatch: declaration });
@@ -336,12 +369,17 @@ for (const name of ["agent_spawn", "agent_run"]) {
     assert(Object.isFrozen(result));
     assert.equal(a.state.active, false, "context became stale inside observation");
     assert.equal(a.submissions.length, 1);
-    assert.deepEqual(a.submissions[0].request.dispatch, declaration);
+    assert.deepEqual(a.submissions[0].request.dispatch, {
+      inputs: ["ordinary.txt"],
+      ownership: ["new/output"],
+      tree: "build",
+      checks: ["test/**/*.mjs"],
+    });
     assert.notEqual(a.submissions[0].request.dispatch, declaration);
     const parsed = JSON.parse(result.content[0].text);
     assert.equal(Object.hasOwn(parsed.tasks[0], "time_wrapped"), false);
-    assert.deepEqual(parsed.tasks[0].dispatch_notes, ["tree_shared"]);
-    declaration.inputs.push("late-mutation");
+    assert.deepEqual(parsed.tasks[0].dispatch_notes, ["build_dir_shared"]);
+    declaration.required_paths.push("late-mutation");
     assert.deepEqual(a.submissions[0].request.dispatch.inputs, ["ordinary.txt"]);
   });
 

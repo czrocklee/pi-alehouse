@@ -287,7 +287,8 @@ for (const [profile, publicProfile] of [
               projected.reason,
               `Permission policy denied path_write for profile ${publicProfile} on this declared path; this is a permission decision, not a missing or wrong-type filesystem result.`,
             );
-            assert.equal(projected.parameter, "tree");
+            // Internal throw key `tree` projects to the public field name.
+            assert.equal(projected.parameter, "build_dir");
             assert.equal(projected.requested, "new-tree");
             assert.doesNotMatch(modelJSON, /editor|researcher/);
             return true;

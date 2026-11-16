@@ -15,18 +15,18 @@ except the scout `return_to` example. The
 [task dispatch](task-dispatch.md) owns paths, claims and validation. [Security](security.md), [limitations](limitations.md)
 and [development](development.md) own authority, support and implementation/checks.
 
-| Need                                                          | Tool                                                                                           |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| New work or review, even on a related topic                   | `agent_spawn` (creates Agent + submits first task; may queue)                                  |
-| Continue this Agent's own specific earlier work               | `agent_run` (required `continues`; fixed settings/conversation; optional per-task `max_turns`) |
-| Correct an unfinished task                                    | `agent_send` (delivery is not action)                                                          |
-| Answer a settled pending question                             | `agent_answer`                                                                                 |
-| Answer a settled worker question using a new scout's findings | `agent_spawn` with scout `return_to`, or scout spawn then `agent_answer`                       |
-| Wait for events/end                                           | `agent_wait` (`all`/`any`; prefer long waits)                                                  |
-| Read results, old task or next page                           | `agent_read`                                                                                   |
-| Request task stop, retain conversation                        | `agent_interrupt`, then wait/read for settlement                                               |
-| Permanently end Agent                                         | `agent_kill` (not deletion; exiting/cleanup_uncertain is not release)                          |
-| Inspect roster without consuming alerts/finished reminders    | `agent_list`                                                                                   |
+| Need                                                          | Tool                                                                                                                                   |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| New work or review, even on a related topic                   | `agent_spawn` (creates Agent + submits first task; may queue)                                                                          |
+| Continue this Agent's own specific earlier work               | `agent_run` (required `continues`, request identity not sent to the Agent; fixed settings/conversation; optional per-task `max_turns`) |
+| Correct an unfinished task                                    | `agent_send` (delivery is not action)                                                                                                  |
+| Answer a settled pending question                             | `agent_answer`                                                                                                                         |
+| Answer a settled worker question using a new scout's findings | `agent_spawn` with scout `return_to`, or scout spawn then `agent_answer`                                                               |
+| Wait for events/end                                           | `agent_wait` (`all`/`any`; prefer long waits)                                                                                          |
+| Read results, old task or next page                           | `agent_read`                                                                                                                           |
+| Request task stop, retain conversation                        | `agent_interrupt`, then wait/read for settlement                                                                                       |
+| Permanently end Agent                                         | `agent_kill` (not deletion; `agent_status` released confirms release, exiting/cleanup_uncertain does not)                              |
+| Inspect roster without consuming alerts/finished reminders    | `agent_list`                                                                                                                           |
 
 The JSON below lists **tool calls**, not tool returns or a batch API. Names and
 paths are illustrative; adapt them to the assigned task. Each section is a
@@ -38,10 +38,10 @@ returns; no example claims a real provider result or improved model choices.
 
 ## 1. Independent work → wait → collect
 
-Every spawn/run needs a `label`: a concise 3–8 word task title, not instructions
-or background (1--72 nonblank UTF-16 units). It is used verbatim; there is no
-prompt-derived default. Word counts are guidance, so CJK titles are allowed.
-Historical labels remain unchanged.
+Every spawn/run needs a `label`: a concise task title in the task's language,
+not instructions or background (1--72 nonblank UTF-16 units). It is used
+verbatim; there is no prompt-derived default and no word-count guidance, so any
+language is allowed. Historical labels remain unchanged.
 
 Submit the two independent tasks (they may run concurrently), then wait. Do not
 repeat an uncertain spawn: inspect `agent_list` first. A wait can return early
@@ -80,7 +80,9 @@ send an answer through `agent_send` or bypass it with `agent_run`.
 Wait for `agent_answer` to **return before** submitting beta; never rely on order
 within a parallel batch. `after` binds alpha's current or latest task once, passes
 its output as reference, and never follows future tasks/answers. Every dependency
-must reach `completed`; needs_input/failed/interrupted cannot satisfy it.
+must reach `completed`; a `completed` task with `limit_reached` still satisfies
+it (inspect its result for completeness), while
+`needs_input`/`failed`/`interrupted` cannot.
 
 ## 3. Reuse → read an older task → page that same result
 
@@ -89,9 +91,9 @@ restarts that retained task at page one. The example uses task 1 because this
 separate workflow creates exactly one task before its follow-up. The first
 result is assumed long enough to return a cursor; if none is returned, omit the
 last call. Never combine `task` and `cursor`, and never move a cursor to another
-Agent. Both remain Owner-local, not restart recovery. Optional `max_turns` caps
-only that new follow-up; omit it to use the spawn default, not the previous
-task's cap.
+Agent. Both remain Owner-local, not restart recovery. Optional `max_turns` sets
+the soft turn budget for only that new follow-up; omit it to use the spawn
+default, not the previous task's budget.
 
 ```json
 [
@@ -112,30 +114,31 @@ or proof that a check ran.
 
 ```json
 [
-  {"tool":"agent_spawn","arguments":{"agent":"alpha","profile":"worker","reasoning_difficulty":2,"label":"Fix and verify parser","prompt":"Fix src/parser.ts and run only the assigned parser unit check. Report the exact command, result, platform/tool versions and any unrun checks. Do not install dependencies; if unavailable, report the blocker.","dispatch":{"inputs":["src/parser.ts"],"ownership":["src/parser.ts"],"tree":"build","checks":["parser unit check"]}}},
+  {"tool":"agent_spawn","arguments":{"agent":"alpha","profile":"worker","reasoning_difficulty":2,"label":"Fix and verify parser","prompt":"Fix src/parser.ts and run only the assigned parser unit check. Report the exact command, result, platform/tool versions and any unrun checks. Do not install dependencies; if unavailable, report the blocker.","dispatch":{"required_paths":["src/parser.ts"],"ownership":["src/parser.ts"],"build_dir":"build","checks":["parser unit check"]}}},
   {"tool":"agent_wait","arguments":{"agents":["alpha"],"wait_ms":300000}},
   {"tool":"agent_read","arguments":{"agent":"alpha"}}
 ]
 ```
 
-Coordinate concurrent edits and Git writes explicitly. A declared tree is not
-exclusive across Owners and does not grant write access.
+Coordinate concurrent edits and Git writes explicitly. A declared `build_dir`
+is not exclusive across Owners and does not grant write access.
 
 ## Illustration: scout return_to
 
 This is not a fifth JSON workflow. The four fenced `json` examples above remain
 the executable call set. Use `return_to` only after wait/read has returned the
-worker's exact settled `question_id`. Put that value in `questionId`; do not
+worker's exact settled `question_id`. Put that value in `question_id`; do not
 invent an id or send a placeholder. One spawn admits the scout and the worker
-continuation, or neither. `answer` is the worker's next instruction, not a
-message to the scout. Do not put `return_to` on `agent_run`, and do not wait for
+continuation, or neither. `instruction` is the worker's conditional continuation
+instruction, written before the scout's findings exist; it is not a preknown
+answer or the scout's prompt. Do not put `return_to` on `agent_run`, and do not wait for
 a future question. The spawn reply's action is `agent_spawn` for the scout; its
 rows are the scout and the continuation. All parent-model result observations
 of the source, including spawn/send/wait and explicit `agent_read` by name/task/cursor,
 show a short orchestration-authored handoff notice instead of raw source text, raw
 paging/omission flags or source cursors. It identifies the source and exact
 original worker continuation name/task: pending until its `input_entered`,
-delivered only afterward, or not delivered if it ended before input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted characters. Later worker
+delivered only afterward, or not delivered if it ended before input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted UTF-16 units. Later worker
 failure/kill does not undo observed delivery. The exact link stays sticky after
 either Agent's reuse/kill or Off. Scouts without `return_to` keep normal output
 and paging. Internal `getResult`, dependency handoff, human UI and history retain
@@ -148,11 +151,12 @@ the worker observes the continuation, not a second admission; but if the
 continuation failed before input, the original question is reopened and that
 wait reports it with the same `question_id`. If prepare is not your effective
 `agent_answer` allow, spawn the scout and call `agent_answer` separately. Stopping the worker does not stop the scout.
-The scout is told that the worker receives only the first 16384 characters of its
-result. Once the worker has taken the whole result the scout is released without a
+The scout is told that the worker receives only the first 16384 characters of its result
+(character counts use the UTF-16 unit defined in the [tool contract](tool-contract.md)). Once the worker has taken the whole result the scout is released without a
 kill; if the handoff cut it, or it was not delivered, read the scout and kill it
-yourself. `answer` is written before the findings exist, so say how to proceed
-for each outcome you expect. This illustration is not feature-test evidence.
+yourself. `instruction` is written before the findings exist, so say how to
+proceed for each outcome you expect. This illustration is not feature-test
+evidence.
 
 ```ts
 const questionId = /* exact question_id from agent_wait or agent_read */;
@@ -165,7 +169,7 @@ await agent_spawn({
   return_to: {
     agent: "alpha",
     question_id: questionId,
-    answer: "Use the existing format; preserve compatibility.",
+    instruction: "Use the cited findings to verify the existing format. If they establish a compatible fix, implement it; otherwise ask_parent with the unresolved choice and evidence.",
   },
 });
 ```
@@ -181,14 +185,20 @@ await agent_spawn({
   permission grant. Ask uses ordinary scout spawn plus `agent_answer` instead.
 - Default waits repeat pending questions. To defer one, explicitly wait on other
   Agents; this narrows alerts too. Timeout/abort of a wait never stops child work.
-- Ownership/tree claims coordinate declared overlapping resources in one Owner;
-  cross-Owner tree locks are advisory, not global exclusivity or a full-suite lock.
-  Inputs are revalidated, not held locks. Assign one full-gate validation owner
+- Ownership/build-directory claims coordinate declared overlapping resources in
+  one Owner; cross-Owner build-directory locks are advisory, not global
+  exclusivity or a full-suite lock. Required paths are revalidated, not held
+  locks. Assign one full-gate validation owner
   only after shared source is stable; other Agents run assigned focused checks.
 - Provider slots free on execution exit; resident reservations/claims/leases have
   separate finalization/cleanup boundaries. Interrupting/exiting is not confirmed
   release. For cleanup uncertainty or Owner fault, tell the user; no force release,
   automatic retry or difficulty change repairs authority.
+- Every task row, including list/interrupt, may carry a bounded
+  `outcome_reason` such as `turn_limit`, `output_limit` or
+  `dependency_not_completed`; it is omitted when no reason is retained and
+  unknown reasons map to `other`. The top-level observation `reason` and
+  `error.reason` are separate and unchanged.
 - Optional labels can yield under the reply cap. Real retained result pages use
   cursor paging; handoff notices pack whole or yield with `response_limit_reached`.
   `max_chars` applies to raw pages, not bounded notices. There is no metadata-only/details mode. Alerts are queued, not acknowledged by

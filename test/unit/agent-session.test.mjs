@@ -96,6 +96,33 @@ test("the child warming veto is unconditional in every Run state, and touches no
   assert.equal(gate.tickets.size, 0);
 });
 
+test("the child tool_call gate blocks with task-facing end-turn wording", () => {
+  const gate = new RunInputGate(),
+    handlers = new Map();
+  gate.extension({
+    on: (name, handler) => {
+      handlers.set(name, handler);
+    },
+  });
+  const toolCall = handlers.get("tool_call");
+  assert.equal(typeof toolCall, "function");
+  for (const [accepting, stopped] of [
+    [false, false],
+    [true, true],
+    [false, true],
+  ]) {
+    gate.accepting = accepting;
+    gate.stopped = stopped;
+    assert.deepEqual(toolCall({ toolName: "read" }), {
+      block: true,
+      reason: "This task is no longer accepting tool calls; end your turn.",
+    });
+  }
+  gate.accepting = true;
+  gate.stopped = false;
+  assert.equal(toolCall({ toolName: "read" }), undefined);
+});
+
 const silentCallbacks = () => ({
   inputEntered() {},
   outputDelta() {},

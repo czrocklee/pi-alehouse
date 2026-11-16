@@ -408,6 +408,11 @@ The orchestration layer enforces the rest:
   Upstream checks only its scheme, not its host, so a model-chosen proxy could
   reach loopback or private services, or bypass the configured proxy. A proxy
   configured in `web-search.json` still applies.
+- Child `web_search` has no `workflow` or `model` parameter. Those explicit keys
+  are rejected, and execution copies `workflow: "none"` even when
+  `web-search.json` would inherit `summary-review`; a scout search therefore
+  never opens the curator or calls a summary model. The parent's web tools keep
+  the upstream workflow/model controls unchanged.
 - These three schemas are closed (`get_search_content` is left as upstream
   registers it): violations fail validation before any permission prompt, and
   execution checks again.
@@ -419,8 +424,9 @@ The orchestration layer enforces the rest:
 - Curator review has no UI in a child and resolves to no curator.
 
 One approved call can still do more than fetch a page. These are upstream
-pi-web-access behaviors the orchestration layer does not restrict; the approval prompt
-shows only the tool input:
+pi-web-access behaviors the orchestration layer does not restrict beyond the
+child `web_search` and fetch URL boundaries above; the approval prompt shows
+only the tool input:
 
 - A `github.com` repository URL is cloned (by default when the repository is
   small, always with `forceClone`) with `gh repo clone`, using the user's
@@ -432,12 +438,11 @@ shows only the tool input:
 - YouTube URLs run `yt-dlp`/`ffmpeg`. If `allowBrowserCookies` (or
   `PI_ALLOW_BROWSER_COOKIES=1`) is set, the Gemini Web path reads local Chrome
   cookies for Google origins; removing `auth` does not remove this path.
-- `mode: "answer"` with `answerModel`, video/YouTube analysis, and summary
-  workflows send fetched content to another configured model, outside the
+- `fetch_content` `mode: "answer"` with `answerModel` and video/YouTube
+  analysis send fetched content to another configured model, outside the
   child's routed model and its accounting. Opt-in `mode: "extract"` with
   `fields` sends fetched page text and field instructions to Cloudflare Clairic
-  using host Cloudflare credentials. A `web_search` `model` override can also
-  select its search provider's model independently of the scout's routed model.
+  using host Cloudflare credentials.
 - Configured `fetchContent.curl` runs an external fetch command; configured
   remote fetch providers and PDF extraction endpoints can receive page URLs
   or document content. These are upstream configuration-controlled effects,
@@ -468,7 +473,9 @@ actual match values and execution/boundary paths.
 ## Dispatch preflight and validation observations
 
 [Task dispatch](task-dispatch.md) performs read-only preflight against the target
-profile, including path and canonical-alias external-directory surfaces. Known
+profile, including path and canonical-alias external-directory surfaces. Model
+`dispatch.required_paths`/`build_dir` map to internal `inputs`/`tree`;
+validation receipts and history retain `tree`. Known
 deny rejects before extra input-classification stat; ask/unknown is not approval
 or a grant. Permission lookup may itself canonicalize. Interface failures are
 not policy unknown. Claims detect declared lexical/canonical overlap, not opaque
@@ -487,8 +494,9 @@ Fixed `--untracked-files=normal` includes non-ignored untracked entries despite
 configured suppression; ignores/indexes/Git semantics still apply. Global LFS
 clean/process keys and configured fsmonitor=false still withhold known state;
 this conservative guard is not narrowed.
-Unknown capture does not authorize anything. Tree leases coordinate only the
-same host/agentDir/canonical tree and are advisory; synchronous flock can still
+Unknown capture does not authorize anything. Internal tree leases (model
+`build_dir`) coordinate only the same host/agentDir/canonical tree and are
+advisory; synchronous flock can still
 delay event-loop cancellation. Source Git subprocess probes are asynchronous,
 with per-probe 2-second/4 MiB and aggregate 8-second/8 MiB limits, not
 hard-realtime bounds or guaranteed cancellation/kill. Receipts are bounded trusted history/offline
@@ -499,7 +507,9 @@ append failures remain strict, with no retry.
 
 Runs have no wall-clock execution deadline or timed wrap-up input. The retained
 turn-wrap `soft_budget` input invalidates the automatic-approval witness and
-emits `pi-alehouse:approval:invalidated`. This is not merely a harmless reminder
+emits `pi-alehouse:approval:invalidated`; the cooperative grace beyond
+`max_turns` is a configurable Owner limit, not a fixed `+5` model contract.
+This is not merely a harmless reminder
 or a guarantee that a model received it. Historical `deadline` outcomes remain
 readable without restoring their retired execution mechanism; retired
 `time_wrapped` facts are no longer interpreted by the current codec. Worker
@@ -766,7 +776,11 @@ an admission gate. Send never creates an answer continuation; run cannot bypass
 a pending question. Child messages are data, not permission grants.
 
 Optional scout `agent_spawn.return_to` admits that same continuation from the
-parent spawn, not a child tool and not an authority bypass. Protected prepare
+parent spawn, not a child tool and not an authority bypass. `return_to.instruction`
+is the worker's conditional continuation instruction, written before the scout's
+findings exist; it is not a preknown answer or the scout's prompt.
+`agent_answer.answer` remains the explicit answer field; model `instruction`
+maps to the internal core `answer` field. Protected prepare
 calls `requireParentAnswerPermission(service, ctx)` on the live parent permission
 service (`OwnerToolsOptions.parentPermission`) with the parent's own tool-call
 context. The helper does not resolve a principal. It asks the authority for
@@ -790,7 +804,7 @@ and explicit `agent_read` by name/task/cursor, replace raw source text with a
 short orchestration-authored notice naming the source and exact original worker
 continuation name/task, without raw paging/omission flags or source cursors.
 The notice says pending before that continuation's `input_entered`, delivered
-only after it, or not delivered if it ended before input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted characters. Later failure/kill
+only after it, or not delivered if it ended before input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted UTF-16 units. Later failure/kill
 does not undo observed delivery; the exact link stays sticky after either
 Agent's reuse/kill or Off. Ordinary scouts without `return_to` retain normal
 output/paging. Internal `getResult`, dependency handoff, human UI and history

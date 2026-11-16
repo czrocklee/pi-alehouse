@@ -513,7 +513,8 @@ test("eight-row finished prefix is independent of bound presentation, including 
   assert.equal(reminder.envelope.reason, "nothing_pending");
   assert.deepEqual(reminder.envelope.tasks, []);
   assert.equal(reminder.envelope.finished[0].label, "finished task");
-  assert.equal(reminder.envelope.finished[0].cancellation_source, "human");
+  assert.equal(reminder.envelope.finished[0].interrupted_by, "human");
+  assert.equal(Object.hasOwn(reminder.envelope.finished[0], "cancellation_source"), false);
   assert.deepEqual(reminder.references.finished, [0]);
   assert.equal(reminder.envelope.finished_pending, undefined);
   const { input: full } = byteSaturatedSnapshot(),
@@ -1011,6 +1012,134 @@ test("queued wait is mandatory whole control metadata, never provider telemetry 
   assert.equal(envelope.response_limit_reached, true);
 });
 
+const allOutcomeReasons = [
+  "turn_limit",
+  "output_limit",
+  "context_change_failed",
+  "dependency_not_completed",
+  "dependency_input_missing",
+  "dispatch_preflight_failed",
+  "unexpected_abort",
+  "execution_error",
+  "finalization_failed",
+  "input_not_observed",
+  "other",
+];
+
+test("terminal outcome reasons are reserved thin controls on task and finished rows", () => {
+  for (const status of ["completed", "needs_input", "failed", "interrupted"])
+    for (const reason of allOutcomeReasons) {
+      const entry = row("otter", 1, status, { outcome_reason: reason });
+      const packed = pack(snapshot({ tasks: [task(entry)] }));
+      assert.equal(packed.envelope.tasks[0].outcome_reason, reason);
+      const listed = pack(snapshot({ finished: [{ row: entry }] }));
+      assert.equal(listed.envelope.finished[0].outcome_reason, reason);
+    }
+  // Mixed states keep each row's own controls without cross-state bleed.
+  const queued = row("heron", 1, "queued", { queued_for: "dependencies" }),
+    running = row("otter", 2, "running"),
+    failed = row("seal", 3, "failed", { outcome_reason: "dependency_not_completed" }),
+    done = row("orca", 4, "completed");
+  const { envelope } = pack(
+    snapshot({ tasks: [task(queued), task(running), task(failed), task(done)] }),
+  );
+  assert.deepEqual(envelope.tasks, [queued, running, failed, done]);
+});
+
+test("outcome_reason cannot yield at byte saturation and never displaces an accepted alert", () => {
+  const tasks = Array.from({ length: 16 }, (_, index) =>
+    task(
+      row(
+        `a${String(index).padStart(2, "0")}${"x".repeat(21)}`,
+        Number.MAX_SAFE_INTEGER,
+        "failed",
+        {
+          ...controls,
+          outcome_reason: "dispatch_preflight_failed",
+        },
+      ),
+      {
+        question_id: questionId(index + 1),
+        question: "Q".repeat(8192),
+        diagnostics: { error: "\0".repeat(513) },
+      },
+    ),
+  );
+  const { envelope } = pack(
+    snapshot({
+      reason: "alert",
+      delegation_off: true,
+      tasks,
+      alerts: [alert("\0".repeat(8192), Number.MAX_SAFE_INTEGER, "a".repeat(24), "\0".repeat(120))],
+    }),
+  );
+  assert.equal(envelope.alerts[0].message.length, 8192);
+  assert(
+    envelope.tasks.every(
+      (entry) => entry.outcome_reason === "dispatch_preflight_failed" && entry.status === "failed",
+    ),
+  );
+  assert(envelope.tasks.every((entry) => entry.question_id !== undefined));
+  assert(
+    envelope.tasks.some((entry) => entry.question.length < 8192),
+    "question bodies yield while every outcome reason is retained",
+  );
+  assert.equal(envelope.response_limit_reached, true);
+  assert(bytes(envelope) <= 65536);
+});
+
+for (const status of ["queued", "running", "interrupting", "finishing"])
+  for (const reason of allOutcomeReasons)
+    test(`nonterminal ${status} row cannot carry an outcome reason (${reason})`, () => {
+      assert.throws(
+        () =>
+          packCommunication(
+            snapshot({ tasks: [task(row("otter", 1, status, { outcome_reason: reason }))] }),
+          ),
+        { code: "INVALID_COMMUNICATION_SNAPSHOT" },
+      );
+    });
+
+for (const value of [
+  "deadline",
+  "length",
+  "EXECUTION_ERROR",
+  "turn_limit ",
+  " other",
+  "other\u0000",
+  42,
+  null,
+  true,
+  {},
+  [],
+])
+  test(`raw or malformed outcome reason rejects before publication (${JSON.stringify(value)})`, () => {
+    for (const malformed of [
+      snapshot({ tasks: [task(row("otter", 1, "failed", { outcome_reason: value }))] }),
+      snapshot({ finished: [{ row: row("otter", 1, "failed", { outcome_reason: value }) }] }),
+    ])
+      assert.throws(() => packCommunication(malformed), {
+        code: "INVALID_COMMUNICATION_SNAPSHOT",
+      });
+  });
+
+test("a queued wait reason and a terminal outcome cause never coexist on one row", () => {
+  for (const reason of allOutcomeReasons)
+    assert.throws(
+      () =>
+        packCommunication(
+          snapshot({
+            tasks: [
+              task(
+                row("otter", 1, "failed", { queued_for: "dependencies", outcome_reason: reason }),
+              ),
+            ],
+          }),
+        ),
+      { code: "INVALID_COMMUNICATION_SNAPSHOT" },
+    );
+});
+
 test("host-only telemetry is never projected, even if supplied by a stale structural snapshot", () => {
   const plain = snapshot({
     tasks: [
@@ -1050,7 +1179,7 @@ test("host-only telemetry is never projected, even if supplied by a stale struct
   }
 });
 
-test("only actionable tree_shared notes are shown, before serialization and without hidden-note packing loss", () => {
+test("raw tree_shared notes are shown publicly as build_dir_shared, without hidden-note packing loss", () => {
   const plain = pack(snapshot({ tasks: [task(row())] }));
   for (const notes of [
     [],
@@ -1063,9 +1192,11 @@ test("only actionable tree_shared notes are shown, before serialization and with
     tasks: [task(row(), { dispatch_notes: ["source_state_unknown", "tree_shared"] })],
   });
   const packed = pack(input);
-  assert.deepEqual(packed.envelope.tasks[0].dispatch_notes, ["tree_shared"]);
+  // The private Run vocabulary stays tree_shared; only the model-visible
+  // wording is the fixed public build_dir_shared.
+  assert.deepEqual(packed.envelope.tasks[0].dispatch_notes, ["build_dir_shared"]);
   assert.deepEqual(JSON.parse(packed.result.content[0].text).tasks[0].dispatch_notes, [
-    "tree_shared",
+    "build_dir_shared",
   ]);
   assert.notEqual(packed.envelope.tasks[0].dispatch_notes, input.tasks[0].dispatch_notes);
   const { input: full, complete } = byteSaturatedSnapshot(),
@@ -1119,8 +1250,11 @@ test("whole summary fields and human cancellation detach from input and yield in
   const metadata = { label: "\ud800".repeat(120), cancellation_source: "human" };
   const input = snapshot({ tasks: [task(row(), metadata)] }),
     packed = pack(input);
-  for (const field of ["label", "cancellation_source"])
-    assert.deepEqual(packed.envelope.tasks[0][field], metadata[field]);
+  // The private capture key stays cancellation_source; the public row shows
+  // the fixed interrupted_by wording and never a legacy output alias.
+  assert.deepEqual(packed.envelope.tasks[0].label, metadata.label);
+  assert.equal(packed.envelope.tasks[0].interrupted_by, "human");
+  assert.equal(Object.hasOwn(packed.envelope.tasks[0], "cancellation_source"), false);
   assert.equal(bodyUnits(packed.envelope), 0);
   assert.equal(packed.envelope.response_limit_reached, undefined);
   const { input: full, complete } = byteSaturatedSnapshot(),

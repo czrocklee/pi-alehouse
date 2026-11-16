@@ -5,6 +5,7 @@ import {
   communicationTextUnits,
   isModelAgentName as validName,
   DELEGATION_OFF,
+  isOutcomeReason,
   isQueueWait,
   modelDispatchNotes,
   type CommunicationAction,
@@ -94,6 +95,17 @@ const flags = [
   "result_truncated",
 ] as const;
 const diagnostics = ["error", "owner_error", "unavailable_reason"] as const;
+/** Private captured summary fields -> fixed public output keys. The private
+ * core-domain vocabulary (cancellation_source) is validated as captured and
+ * never emitted as a legacy output alias. */
+const summaryFields: readonly {
+  readonly captured: "cancellation_source" | "human_steered" | "label";
+  readonly shown: "interrupted_by" | "human_steered" | "label";
+}[] = [
+  { captured: "cancellation_source", shown: "interrupted_by" },
+  { captured: "human_steered", shown: "human_steered" },
+  { captured: "label", shown: "label" },
+];
 const statuses: Readonly<Record<TaskStatus, true>> = {
   queued: true,
   running: true,
@@ -136,15 +148,35 @@ function copyRow(row: ThinTaskEntry): MutableRow {
     !Object.hasOwn(statuses, row.status)
   )
     invalid("Invalid thin task identity or status");
-  const allowed: readonly string[] = ["agent", "task", "status", "queued_for", ...flags];
+  const allowed: readonly string[] = [
+    "agent",
+    "task",
+    "status",
+    "queued_for",
+    "outcome_reason",
+    ...flags,
+  ];
   if (Object.keys(row).some((key) => !allowed.includes(key))) invalid("Unexpected thin task field");
   const result: MutableRow = { agent: row.agent, task: row.task, status: row.status };
-  // Mandatory thin control, not optional metadata: a present reason is reserved
-  // before any body or diagnostic can yield. Provider ids and counts are not keys.
+  // Mandatory thin control, not optional metadata: a present wait reason is
+  // reserved before any body or diagnostic can yield. Provider ids and counts
+  // are not keys.
   if (row.queued_for !== undefined) {
     if (row.status !== "queued" || !isQueueWait(row.queued_for))
       invalid("Invalid queued wait reason");
     result.queued_for = row.queued_for;
+  }
+  // A terminal outcome reason is equally mandatory thin control: reserved
+  // with the row, never yielded for budget, and only for true terminal shapes.
+  // A raw unprojected reason string is not a valid value here.
+  if (row.outcome_reason !== undefined) {
+    if (
+      row.queued_for !== undefined ||
+      !terminalStatus(row.status) ||
+      !isOutcomeReason(row.outcome_reason)
+    )
+      invalid("Invalid terminal outcome reason");
+    result.outcome_reason = row.outcome_reason;
   }
   for (const key of flags) {
     if (row[key] !== undefined && row[key] !== true) invalid(`Invalid ${key} control flag`);
@@ -504,11 +536,14 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
   }
 
   // Bounded labels and Stop attribution retain their priority.
-  for (const field of ["cancellation_source", "human_steered", "label"] as const) {
+  for (const field of summaryFields) {
     for (let index = 0; index < snapshot.tasks.length; index++) {
-      const value = snapshot.tasks[index]![field];
+      const value = snapshot.tasks[index]![field.captured];
       if (value === undefined) continue;
-      const candidate = replaceRow(envelope, index, { ...envelope.tasks[index]!, [field]: value });
+      const candidate = replaceRow(envelope, index, {
+        ...envelope.tasks[index]!,
+        [field.shown]: value,
+      });
       if (communicationBudget(candidate).fits) envelope = candidate;
       else limited = true;
     }
@@ -621,10 +656,10 @@ export function packCommunication(snapshot: CommunicationSnapshot): PackedCommun
       // present/commit that original Run; no second reminder/ACK is invented.
       let row: FinishedEntry = finished[index]!;
       envelope = candidate;
-      for (const field of ["cancellation_source", "human_steered", "label"] as const) {
-        const value = snapshot.finished[index]![field];
+      for (const field of summaryFields) {
+        const value = snapshot.finished[index]![field.captured];
         if (value === undefined) continue;
-        const attributed = { ...row, [field]: value };
+        const attributed = { ...row, [field.shown]: value };
         const withMetadata = { ...envelope, finished: [...listed, attributed] };
         if (communicationBudget(withMetadata).fits) {
           envelope = withMetadata;

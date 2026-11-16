@@ -14,29 +14,31 @@ with this contract; documentation alone is not acceptance evidence.
 
 ```ts
 dispatch?: {
-  inputs?: string[];    // at most 32 literal input paths
-  ownership?: string[]; // at most 16 literal output/resource paths
-  tree?: string;        // one literal build-tree root
-  checks?: string[];    // at most 16 parent-declared check identifiers
+  required_paths?: string[]; // at most 32 literal required paths
+  ownership?: string[];      // at most 16 literal output/resource paths
+  build_dir?: string;        // one literal build-output directory
+  checks?: string[];         // at most 16 parent-declared check identifiers
 }
 ```
 
+These are the model and child-brief names. Internal `Dispatch`, validation-receipt
+and history fields remain `inputs`/`tree`; historical records stay byte-literal.
 Supplied arrays must be nonempty and contain unique entries. Each entry and
-`tree` is bounded to 512 UTF-16 units. `checks` describes the
+`build_dir` is bounded to 512 UTF-16 units. `checks` describes the
 parent's planned checks (for example test-file/glob identifiers or platform),
 not executable shell commands, evidence they ran or permission to execute them.
 It is not a full/focused scheduler enum. There is no dispatch override that
 bypasses a resource conflict.
 
-When supplied, `inputs` declares required file/directory prerequisites Alehouse
-must preflight before task execution: existence, file-or-dir type and
+When supplied, `required_paths` declares required file/directory prerequisites
+Alehouse must preflight before task execution: existence, file-or-dir type and
 known policy deny refusal. Optional references belong in the prompt, not
-`inputs`; a reading list is not categorically disallowed when its entries are
-genuinely mandatory inputs. `inputs` provide no content injection, allowlist,
-access grant or input locks, and preflight performs no recursive directory
-scan; declared paths stay visible to the child in the task preface. For an
-`after` task, admission defers input existence and file-or-dir type
-classification to the pump recheck; path interpretation and known policy
+`required_paths`; a reading list is not categorically disallowed when its
+entries are genuinely mandatory. Required paths provide no content injection,
+allowlist, access grant or input locks, and preflight performs no recursive
+directory scan; declared paths stay visible to the child in the task preface.
+For an `after` task, admission defers required-path existence and file-or-dir
+type classification to the pump recheck; path interpretation and known policy
 denials are still checked at admission. The bound of 32 is a pragmatic bounded
 engineering default, not a measured safety or performance threshold and not a
 byte cap. Omitting dispatch adds no dispatch claim or
@@ -46,10 +48,16 @@ Path fields are literal relative/absolute filesystem paths, not shell words or
 shell globs. No expansion is performed. Reject leading/trailing whitespace,
 glob syntax, control characters,
 shell quoting, `$`, backslash and leading `~` or `@`; do not wrap a path in shell
-quotes to express spaces. Raw model-tool schema and `INVALID_DISPATCH`
+quotes to express spaces. The raw schema keeps the nonblank, 512-unit and ASCII
+control-character bounds, but no longer enforces the literal restriction;
+`validateDispatch` enforces it as `INVALID_DISPATCH`. Removing it from the
+schema does not relax the restriction: such paths still fail. Unsupported
+spellings belong in the prompt as optional references, not in dispatch, and do
+not become valid prerequisites. Raw model-tool schema
+and `INVALID_DISPATCH`
 validation diagnostics name the qualified known field/index parameter (for
-example `dispatch.inputs.0`; whole-array and `tree` fields stay
-`dispatch.inputs`/`dispatch.tree`) with bounded resolution, without copying
+example `dispatch.required_paths.0`; whole-array and build-directory fields stay
+`dispatch.required_paths`/`dispatch.build_dir`) with bounded resolution, without copying
 unknown property names or user values into error details. Within raw schema
 diagnostics, declared array length bounds are checked first, so count errors
 take priority over item errors at any sizes; mapping then reports the first
@@ -66,10 +74,10 @@ and symlink aliases. Prefix overlap uses directory separator boundaries, not
 arbitrary string prefixes. It is not hardlink/inode tracking, a TOCTOU barrier
 or a filesystem snapshot.
 
-Only `inputs` must already exist as ordinary files/directories. `ownership` and
-`tree` may name new outputs; an existing `tree` must be a directory. Missing
-inputs, invalid types, permission denials and path-resolution/IO failures are
-not interchangeable diagnoses.
+Only `required_paths` must already exist as ordinary files/directories.
+`ownership` and `build_dir` may name new outputs; an existing `build_dir` must
+be a directory. Missing required paths, invalid types, permission denials and
+path-resolution/IO failures are not interchangeable diagnoses.
 
 ## Preflight and admission
 
@@ -77,8 +85,8 @@ The synchronous read-only host preflight uses the target internal permission
 **profile**, not the Agent nickname. New model choices are `worker` (mapped to
 stable `editor`) and `scout` (mapped to stable `researcher`). Checked surfaces are:
 
-- inputs: `path_read`;
-- ownership/tree: `path_write`;
+- required paths: `path_read`;
+- ownership/build directory: `path_write`;
 - paths outside cwd, including canonical aliases: additionally the corresponding
   `external_directory_read` or `external_directory_write` surface.
 
@@ -88,23 +96,35 @@ reports the target `profile` and checked permission `surface`; it is not a
 missing-directory/type result. Worker supports project edits/builds under normal
 permission; scout has no model-facing Bash/edit/write. See
 [researcher web access](security.md#researcher-web-access).
-A `tree` declaration does not create a profile or output-root exception. Policy
-ask/unknown does not trigger approval and may pass this approximate preflight.
-It is **not a grant**: child per-session rules and ordinary tool gates still
-apply. A missing/throwing/invalid port is an interface failure, not a policy
-unknown to silently admit. Immediate missing inputs use
-`DISPATCH_INPUT_MISSING`. Preparation has no claim-installation side effects;
-core finally rechecks and atomically installs the accepted claim. Accepted
-request replay returns the original Run without new claims or observations.
-Same-Owner overlapping ownership declarations reject with `RESOURCE_OWNED`;
-a conflicting build tree rejects with `BUILD_TREE_BUSY`. Lexical and canonical
-aliases participate. Declared ownership is not inferred from observed edits
+A `build_dir` declaration does not create a profile or output-root exception.
+Policy ask/unknown does not trigger approval and may pass this approximate
+preflight. It is **not a grant**: child per-session rules and ordinary tool
+gates still apply. A missing/throwing/invalid port is an interface failure, not
+a policy unknown to silently admit. Immediate missing required paths use
+`DISPATCH_REQUIRED_PATH_MISSING`. Preparation has no claim-installation side
+effects; core finally rechecks and atomically installs the accepted claim.
+Accepted request replay returns the original Run without new claims or
+observations. Same-Owner overlapping ownership declarations reject with
+`RESOURCE_OWNED`; a conflicting build directory rejects with `BUILD_DIR_BUSY`.
+Model-facing dispatch errors use `DISPATCH_REQUIRED_PATH_MISSING`,
+`DISPATCH_REQUIRED_PATH_TYPE`, `DISPATCH_REQUIRED_PATH_INSPECTION_FAILED`,
+`DISPATCH_BUILD_DIR_TYPE`, `DISPATCH_BUILD_DIR_INSPECTION_FAILED` and
+`BUILD_DIR_BUSY`; internal codes remain `DISPATCH_INPUT_*`,
+`DISPATCH_TREE_*` and `BUILD_TREE_BUSY`. Newly authored prestart failure text
+uses the public spelling in the live `outcome.error`; the structured error code,
+`outcome.reason` and declaration fields remain internal. These failures settle
+before the Run establishes its history boundary, including on a reused Agent,
+so no child `alehouse:run-end:v1` record or validation receipt is fabricated.
+The text may still appear in a parent-session tool result. Diagnostic prefixes
+are prose, not stable machine-readable codes; existing recorded bytes are not
+rewritten. Lexical and canonical aliases participate. Declared ownership is not inferred from observed edits
 and does not detect every opaque Bash effect. Undeclared work is not automatically serialized.
 
 Dispatch facts enter both the actual child task and the parent-authored
-instructions bound by the approval witness. The child-visible preface names
-cwd as the relative-path base. An ownership declaration is visible
-to that review, but cannot widen authority. Delivery/validation discipline
+instructions bound by the approval witness. The child-visible preface uses the
+model names `required_paths`/`build_dir` and names cwd as the relative-path
+base. An ownership declaration is visible to that review, but cannot widen
+authority. Delivery/validation discipline
 belongs in the worker guidance, not a second permission mechanism.
 
 ## Dependencies, claims and continuations
@@ -132,18 +152,22 @@ successor's reservation does not block answer or new admission. Its `after`
 stays bound to the original Run IDs; the model adapter rejects naming a task
 that has already settled without completing instead of accepting it.
 
+A dependency that settles `completed` with `limit_reached` still satisfies
+`after`, so inspect its result for completeness; only `needs_input`, `failed`
+or `interrupted` is non-completing.
 Every dispatched Run is rechecked by pump before execution: permission/path
-interpretation, inputs and claimed resources must still qualify. This occurs
-when pump can progress; no free slot on that Run's own provider means no guarantee
-of immediate diagnosis. Failing a doomed dependent needs no slot/session.
+interpretation, required paths (internal `inputs`) and claimed resources must
+still qualify. This occurs when pump can progress; no free slot on that Run's own
+provider means no guarantee of immediate diagnosis. Failing a doomed dependent needs no slot/session.
 Missing deferred input settles as `dependency_input_missing`; other deferred
 preflight failures use `dispatch_preflight_failed`. Pump failures allocate no
 session/slot. Ordinary predecessor failure remains `dependency_not_completed`.
 
-Pump/answer rechecks strictly compare all ownership/tree resources. Inputs are
-not held resource locks and are revalidated for real path, permission and
-existence each time (a predecessor may produce an input symlink). Every prepared
-field must correspond to its literal declaration.
+Pump/answer rechecks strictly compare all ownership/build-directory (internal
+tree) resources. Required paths are not held resource locks and are revalidated
+for real path, permission and existence each time (a predecessor may produce a
+required-path symlink). Every prepared field must correspond to its literal
+declaration.
 
 Explicit `agent_answer` inherits dispatch and reuses the same claim lineage in
 the answer-admission transaction. If a pre-`inputEntered` continuation is
@@ -156,7 +180,13 @@ unaccepted rollback; replay still identifies it.
 Optional scout `return_to` installs that same continuation in the spawn
 admission, not a later answer call. The continuation is preadmitted `after` the
 exact new source Run and keeps the original `answer_to`, dispatch and claim
-lineage, with the Agent's fixed settings and Agent-default turn limit as `agent_answer` uses. The worker continuation uses that Agent default; `return_to` itself has no turn-cap override. Source dispatch is a separate scout
+lineage, with the Agent's fixed settings and Agent-default soft turn budget as
+`agent_answer` uses. The worker continuation uses that Agent default;
+`return_to` itself has no soft-budget override. `return_to.instruction` is the
+worker's conditional continuation instruction, written before the scout's
+findings exist; it is not a preknown answer or the scout's prompt.
+`agent_answer.answer` remains the explicit answer field; model `instruction`
+maps to the internal core `answer` field. Source dispatch is a separate scout
 declaration and does not alter the inherited claim. Preflight of both sides is
 all-or-none: a scout path denial, a lost or changed inherited claim, or any
 other admission failure installs neither Run. Existing predecessor exemption and
@@ -183,10 +213,10 @@ are Owner-memory state, not persisted locks, grants or restart hydration.
 
 ## Execution limits
 
-Runs have a turn limit, not a wall-clock execution deadline or timer. Spawn
-`max_turns` is the first-task cap and Agent default; optional `agent_run.max_turns`
+Runs have a soft turn budget, not a wall-clock execution deadline or timer. Spawn
+`max_turns` is the first-task soft budget and Agent default; optional `agent_run.max_turns`
 applies only to that new task, and omission uses the spawn default, not the last
-task's cap. Field rules are in the [tool contract](tool-contract.md#run-send-and-explicit-answer).
+task's budget. Field rules are in the [tool contract](tool-contract.md#run-send-and-explicit-answer).
 `agent_answer` and the worker continuation from `return_to` use the Agent default;
 `return_to` itself has no override. `max_duration_ms`
 is retired and rejected at admission; no hard execution timer or timed
@@ -195,11 +225,19 @@ answer continuation. Long tool calls cannot consume a queued steering reminder
 until they return, and elapsed time alone is not evidence of a hung command.
 
 Turn wrap still uses `soft_budget`, invalidates the automatic-approval witness
-and emits `pi-alehouse:approval:invalidated`. The turn-limit grace and hard stop,
+and emits `pi-alehouse:approval:invalidated`. The cooperative grace beyond
+`max_turns` is a configurable Owner limit, not a fixed `+5` public contract; the
+soft-budget grace and hard stop,
 manual interruption, human Stop and Owner shutdown remain cooperative. These
 operations do not guarantee remote process exit or roll back effects.
 Observation waits, command/request-specific timeouts and stop/cleanup bounds
-remain separate and unchanged.
+remain separate and unchanged. Every task row, including list/interrupt, may
+carry a bounded `outcome_reason` (`turn_limit`, `output_limit`,
+`context_change_failed`, `dependency_not_completed`,
+`dependency_input_missing`, `dispatch_preflight_failed`, `unexpected_abort`,
+`execution_error`, `finalization_failed`, `input_not_observed`, `other`); it is
+omitted when no reason is retained, unknown reasons map to `other`, and the
+top-level observation `reason` and `error.reason` are separate and unchanged.
 
 Historical `deadline` outcomes remain readable without rewriting existing
 journals. Retired `time_wrapped` facts are no longer interpreted by the current
@@ -240,17 +278,18 @@ failures are advisory. Git subprocess probes are asynchronous, with per-probe
 hard-realtime bounds, immediate cancellation or guaranteed process-exit/kill
 proof; filesystem interpretation and tree flock remain synchronous.
 
-Only declared `tree` acquires a tree lease. Local coordination covers the same
-host, same agentDir and same canonical tree identity, under private
-`<agentDir>/alehouse-trees/<sha256(canonical tree)>/`, not files in the user tree.
-Reuse the trusted flock/identity checks and retain lock files for inode identity.
-True contention yields `tree_shared`; handshake/identity uncertainty yields
-`tree_lock_unknown`. If the start observation itself fails, the Run notes what
-it left unconfirmed: `tree_lock_unknown` when no lease is held, and
+Only a declared `build_dir` (internal `tree`) acquires a tree lease. Local
+coordination covers the same host, same agentDir and same canonical tree
+identity, under private `<agentDir>/alehouse-trees/<sha256(canonical tree)>/`,
+not files in the user tree. Reuse the trusted flock/identity checks and retain
+lock files for inode identity. True contention yields internal `tree_shared`,
+projected outward as `build_dir_shared`; handshake/identity uncertainty yields
+internal `tree_lock_unknown`. If the start observation itself fails, the Run
+notes what it left unconfirmed: `tree_lock_unknown` when no lease is held, and
 `source_state_unknown` (with source state `capture_failed`) when checks were
-declared. Notes are advisory, not dispatch rejection or exclusivity
-proof. Only `tree_shared` reaches the parent model; the absence of that note is
-not proof that a tree is free. Nonblocking flock contention does not mean
+declared. Notes are advisory, not dispatch rejection or exclusivity proof. Only
+internal `tree_shared` (outward `build_dir_shared`) reaches the parent model;
+the absence of that note is not proof that a build directory is free. Nonblocking flock contention does not mean
 asynchronous IO: synchronous flock still blocks the Node event loop. Different agentDirs, hosts and distinct
 nested roots are not automatically coordinated.
 
@@ -258,9 +297,10 @@ nested roots are not automatically coordinated.
 
 `dispatch_notes` is bounded to at most two notes of 120 UTF-16 units each.
 The Run keeps every note, and the Agent detail pane shows them all. Model
-serializers filter them to `tree_shared` before budget fitting; `tree_lock_unknown`
-and `source_state_unknown` give the parent nothing to act on, and receipts
-already stay out of its context. Notes are memory-only: the run-end journal
+serializers filter them to internal `tree_shared`, projected outward as
+`build_dir_shared`, before budget fitting; `tree_lock_unknown` and
+`source_state_unknown` stay internal and give the parent nothing to act on, and
+receipts already stay out of its context. Notes are memory-only: the run-end journal
 append does not record them.
 Public notes are optional, yielding projections, not reserved thin controls.
 Construct them through the unified snapshot/packer/final ToolResult path before
@@ -287,7 +327,8 @@ identity/boundary/outcome/output/usage validation, diagnostic-port failures and
 append failures remain strict; no retry or repair append. Existing record
 names/types stay compatible.
 
-Receipts relate declared checks/tree, source observation and the final outcome;
+Receipts relate declared checks/build directory (internal `tree`), source
+observation and the final outcome;
 platform, tool versions and relevant configuration are child-reported evidence,
 not automatically captured facts. They are consumed through trusted bounded
 history and offline audit, **not automatically injected into the parent model**
@@ -317,13 +358,14 @@ L2 is outside this implementation.
 Only the **single explicitly delegated validation owner** runs the full gate
 after shared source is frozen. Other tasks stay within their assigned focused
 checks; approval of a tool is not authorization for a wider gate. `checks` and
-tree leases do not mechanically enforce this discipline. A check that cannot run
-yet (no tree, a busy tree, shared source not yet ready for that check, or an
-instruction to wait) is reported as unrun with its command and reason, not asked
-about; missing inputs or a decision that changes what is implemented still need
-the parent. Workers do not announce a declared tree as released: its claim ends
-with the task, or after a question with its resolution. Omitting `tree` neither
-forbids building nor makes a shared tree safe. Helpers return concise findings,
+build-directory leases do not mechanically enforce this discipline. A check that
+cannot run yet (no build directory, a busy build directory, shared source not
+yet ready for that check, or an instruction to wait) is reported as unrun with
+its command and reason, not asked about; missing required paths or a decision
+that changes what is implemented still need the parent. Workers do not announce
+a declared `build_dir` as released: its claim ends with the task, or after a
+question with its resolution. Omitting `build_dir`
+neither forbids building nor makes a shared build directory safe. Helpers return concise findings,
 changes, actual check commands/results and unfinished or blocked work. The
 explicit validation owner additionally reports evidence paths and relevant
 platform/tool-version/configuration context, including zero-match checks; these

@@ -108,7 +108,7 @@ const notices = {
   pending: "Result from pine is assigned to cedar (task 2); handoff is pending.",
   delivered: "Result from pine has been returned to cedar (task 2).",
   not_delivered:
-    "Result from pine was not returned to cedar (task 2): the worker continuation ended before receiving input; agent_read pine task 1 shows the result.",
+    'Result from pine was not returned to cedar (task 2): the worker continuation ended before receiving input; agent_read({ agent: "pine", task: 1 }) shows the result.',
 };
 function notice(row, state = "delivered") {
   assert.equal(row.result, notices[state]);
@@ -696,7 +696,7 @@ test("a delivered handoff that omitted retained text says so; only an explicit r
   await tick();
   assert.equal(c.agents.get(source.agent_id).resident, true, "a cut result stays for the parent");
   assert.equal(c.agents.get(source.agent_id).unavailable, undefined);
-  const partial = `Result from pine has been returned to cedar (task 2), but the handoff omitted its last ${tail.length} characters; agent_read pine task 1 shows the retained result.`;
+  const partial = `Result from pine has been returned to cedar (task 2), but the handoff omitted its last ${tail.length} characters; agent_read({ agent: "pine", task: 1 }) shows the retained result.`;
   for (const result of [await action(c, source), await wait(c, [source.agent_id])]) {
     assert.equal(result.tasks.find((row) => row.agent === "pine").result, partial);
     assert.doesNotMatch(JSON.stringify(result), new RegExp(tail));
@@ -738,7 +738,7 @@ test("output beyond the retention cap is a cut handoff: the scout stays for the 
   const row = (await action(c, source)).tasks.find((task) => task.agent === "pine");
   assert.equal(
     row.result,
-    "Result from pine has been returned to cedar (task 2), but the handoff omitted its last 14 characters; agent_read pine task 1 shows the retained result.",
+    'Result from pine has been returned to cedar (task 2), but the handoff omitted its last 14 characters; agent_read({ agent: "pine", task: 1 }) shows the retained result.',
   );
   await c.kill(source.agent_id, 1000);
 });

@@ -208,7 +208,7 @@ test("spawn/run require short task titles before preparation and execution, with
     assert.equal(COMMUNICATION_LIMITS.label_units, 120);
     assert.match(
       current.parameters.properties.label.description,
-      new RegExp(`${MODEL_TASK_TITLE_UNITS} UTF-16 units`),
+      new RegExp(`${MODEL_TASK_TITLE_UNITS} characters`),
     );
     const { label: _label, ...missing } = args;
     for (const invalid of [
@@ -224,8 +224,8 @@ test("spawn/run require short task titles before preparation and execution, with
         assert.match(
           detail.resolution,
           invalid.label === undefined
-            ? /label is required.*nonblank task title.*72 UTF-16 units/
-            : /label must be a nonblank task title.*72 UTF-16 units/,
+            ? /label is required.*nonblank task title.*72 characters/
+            : /label must be a nonblank task title.*72 characters/,
         );
         return true;
       };
@@ -274,10 +274,10 @@ const textCases = () => [
     "agent_spawn",
     create({
       profile: "scout",
-      return_to: { agent: "orca", question_id: `q_${"a".repeat(32)}`, answer: "yes" },
+      return_to: { agent: "orca", question_id: `q_${"a".repeat(32)}`, instruction: "yes" },
     }),
-    "return_to.answer",
-    PARENT_TEXT_LIMITS.answer,
+    "return_to.instruction",
+    PARENT_TEXT_LIMITS.instruction,
   ],
   ["agent_read", { agent: "orca", cursor: "cursor" }, "cursor", PARENT_TEXT_LIMITS.cursor],
 ];
@@ -295,7 +295,7 @@ const textError = (path, limit) => (error) => {
   assert.equal(detail.code, "INVALID_PARAMETERS");
   assert.equal(detail.parameter, path);
   assert.equal(Object.hasOwn(detail, "path"), false);
-  assert.match(detail.resolution, new RegExp(`${path}.*nonblank.*${limit} UTF-16 units`));
+  assert.match(detail.resolution, new RegExp(`${path}.*nonblank.*${limit} characters`));
   return true;
 };
 
@@ -360,16 +360,17 @@ test("parent text that reaches a child cannot carry the human steering lead", as
     assert.match(detail.resolution, /human steering lead/);
     return true;
   };
-  const childFacing = textCases().filter(([, , path]) => !["label", "cursor"].includes(path));
+  const childFacing = textCases().filter(
+    ([, , path]) => !["label", "cursor", "continues"].includes(path),
+  );
   assert.deepEqual(
     childFacing.map(([name, , path]) => `${name}.${path}`),
     [
       "agent_spawn.prompt",
       "agent_run.prompt",
-      "agent_run.continues",
       "agent_send.message",
       "agent_answer.answer",
-      "agent_spawn.return_to.answer",
+      "agent_spawn.return_to.instruction",
     ],
   );
   for (const [name, args, path] of childFacing) {
@@ -658,7 +659,7 @@ test("spawn creates and send addresses: each rejects the other's names with a po
   await assert.rejects(call("agent_wait", { agents: ["ghost"] }), code("AGENT_NOT_FOUND"));
   assert.deepEqual(await call("agent_kill", { agent: "orca" }), {
     agent: "orca",
-    status: "killed",
+    agent_status: "released",
     label: "task",
   });
   await assert.rejects(call("agent_run", run("orca"), "released-reuse"), (error) => {
@@ -671,7 +672,7 @@ test("spawn creates and send addresses: each rejects the other's names with a po
   await assert.rejects(
     call("agent_spawn", create(), "released-name"),
     code("AGENT_EXISTS"),
-    "a killed name stays taken",
+    "a released name stays taken",
   );
 });
 
@@ -728,7 +729,7 @@ test("agent_run max_turns is an optional raw integer; invalid values and closed 
       "agent_spawn",
       create({
         profile: "scout",
-        return_to: { agent: "orca", question_id, answer: "yes", max_turns: 3 },
+        return_to: { agent: "orca", question_id, instruction: "yes", max_turns: 3 },
       }),
     ],
   ]) {

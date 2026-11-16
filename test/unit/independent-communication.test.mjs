@@ -17,7 +17,7 @@ test("independent packing preserves complete replies and never mutates captured 
     { agent: "otter", task: 1, status: "interrupting", label: "Stop requested" },
     {
       agents: [{ agent: "otter", task: 1, status: "queued", queued_for: "provider_capacity" }],
-      killed: ["badger"],
+      released: ["badger"],
     },
     {
       agent: "otter",
@@ -46,7 +46,7 @@ test("independent roster uses deterministic whole-field omission without droppin
       error: "\0".repeat(20000),
       label: "fixture",
     })),
-    killed: ["badger"],
+    released: ["badger"],
   };
   const before = structuredClone(captured);
   freeze(captured);
@@ -55,7 +55,7 @@ test("independent roster uses deterministic whole-field omission without droppin
   assert(bytes(result) <= 65536);
   assert.equal(reply.response_limit_reached, true);
   assert.equal(reply.agents.length, 16);
-  assert.deepEqual(reply.killed, ["badger"]);
+  assert.deepEqual(reply.released, ["badger"]);
   for (const [index, row] of reply.agents.entries()) {
     for (const field of ["agent", "task", "status", "queued_for"])
       assert.equal(row[field], before.agents[index][field]);

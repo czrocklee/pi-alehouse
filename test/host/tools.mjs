@@ -729,7 +729,7 @@ try {
     "steered",
   );
   await invoke("agent_spawn", newTask("TRY_PARENT_CONTROL", "worker"), { error: "RESIDENT_LIMIT" });
-  assert.equal((await invoke("agent_kill", { agent: "orca" })).status, "killed");
+  assert.equal((await invoke("agent_kill", { agent: "orca" })).agent_status, "released");
   const orcaId = controller.findAgent("orca").agent_id;
   const releasedRuns = [...controller.runs.values()].filter(
     (run) => run.record.agent_id === orcaId,
@@ -760,7 +760,8 @@ try {
     listed.agents.map((row) => row.agent),
     ["block-for-cancel", "try-parent-control"],
   );
-  assert.deepEqual(listed.killed, ["orca"]);
+  assert.deepEqual(listed.released, ["orca"]);
+  assert.equal(listed.killed, undefined);
   const batch = await invoke("agent_wait", {
     agents: ["orca", "block-for-cancel", "try-parent-control"],
   });

@@ -220,14 +220,19 @@ function checkSchemas(request) {
   assert(spawn.return_to, "agent_spawn publishes return_to");
   assert.deepEqual(Object.keys(spawn.return_to.properties).sort(), [
     "agent",
-    "answer",
+    "instruction",
     "question_id",
   ]);
   assert.deepEqual([...(spawn.return_to.required ?? [])].sort(), [
     "agent",
-    "answer",
+    "instruction",
     "question_id",
   ]);
+  assert.equal(
+    JSON.stringify(spawn.return_to).includes('"answer"'),
+    false,
+    "the retired answer spelling is not published as an alias",
+  );
   assert.equal(run.return_to, undefined, "agent_run has no return_to");
   assert.equal(JSON.stringify(tools.agent_run.parameters).includes('"return_to"'), false);
   assert.equal(
@@ -285,7 +290,7 @@ function parentResponse(request) {
       profile: "scout",
       reasoning_difficulty: scoutDifficulty,
       wait_ms: waitMs,
-      return_to: { agent: worker, question_id: questionId, answer: parentInstruction },
+      return_to: { agent: worker, question_id: questionId, instruction: parentInstruction },
     });
   }
   if (phase === "returned") {
@@ -368,6 +373,8 @@ function parentResponse(request) {
     );
     assert.equal(reply.agents[0].status, "needs_input");
     assert.equal(reply.agents[0].has_question, true);
+    assert.equal(reply.released, undefined);
+    assert.equal(reply.released_omitted, undefined);
     assert.equal(reply.killed, undefined);
     phase = "retained";
     return call("read-retained-question", "agent_read", { agent: worker });
@@ -607,7 +614,7 @@ try {
   assert.deepEqual(parentCalls[1].args.return_to, {
     agent: worker,
     question_id: questionId,
-    answer: parentInstruction,
+    instruction: parentInstruction,
   });
   assert.equal(parentCalls[1].args.wait_ms, waitMs);
   assert.equal(

@@ -116,8 +116,10 @@ host's post-guard input boundary is not atomic; see
 [limitations](limitations.md).
 
 A Run goes through initialization, prompt/input dispatch, adapter drain,
-history finalization, and child cleanup. Execution has a turn limit, not a
-wall-clock deadline or timed wrap-up message. Cancellation and turn-limit stops
+history finalization, and child cleanup. Execution has a soft turn budget, not a
+wall-clock deadline or timed wrap-up message; the cooperative grace beyond
+`max_turns` is a configurable Owner limit, not a fixed `+5` public contract.
+Cancellation and soft-budget stops
 only request the existing cooperative stop path. On actual
 execution exit, the Controller frees that **execution slot** and can schedule a
 queued peer before history finalization completes. The Run's **Agent
@@ -177,7 +179,8 @@ historical journals are not migrated or removed.
 
 ## Task dispatch boundary
 
-[Task dispatch](task-dispatch.md) adds optional inputs/ownership/tree/checks
+[Task dispatch](task-dispatch.md) adds optional model
+`required_paths`/`ownership`/`build_dir`/`checks` (internal `inputs`/`tree`)
 without moving lifecycle authority out of core. Synchronous read-only runtime
 preflight returns ordinary data for the target profile and lexical/canonical
 path identities; core finally validates and atomically installs claims. Claims
@@ -244,7 +247,9 @@ valid. Routing records without difficulty or thinking resolution are no longer
 interpreted by the current codec: they read as explicitly unavailable, never
 inferred, fabricated or silently converted. None of this routing detail reaches model-facing parent-tool replies.
 New run-end outcomes may carry `cancellation_source: "human"`; older records
-without it remain unattributed, never inferred or rewritten.
+without it remain unattributed, never inferred or rewritten. Model task/finished
+rows project this as `interrupted_by: "human"`; the internal record, snapshot
+and history field remains `cancellation_source`.
 
 `/alehouse-history` reads links from the current parent and an optional Run in
 pages no larger than 16384 UTF-16 output units. Default per-file cap is 8 MiB;

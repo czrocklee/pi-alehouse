@@ -19,31 +19,43 @@ publication. Initial `off` hides all nine; after accepted work it retains only
 New tasks, steering and answers remain admission/revision-gated, even through
 cached tool handles. Accepted child work may continue to alert or ask while Off.
 
-Parent text inputs are nonblank strings measured explicitly in UTF-16 units
-(JavaScript `.length`), not code points, graphemes or UTF-8 bytes. Raw checks run
+Model-facing descriptions, receipts and length guidance use **characters** for
+readability. In these text limits, one character means one UTF-16 code unit,
+not a Unicode code point or visible grapheme; the implementation still measures
+string length in UTF-16 units. This wording does not make model length estimates
+reliable: validation enforces the limits. `max_chars`, `lost_chars` and handoff
+counts use the same unit; byte/KiB limits remain byte-based.
+
+Parent text inputs are nonblank strings measured explicitly in UTF-16 units,
+not code points, graphemes or UTF-8 bytes. Raw checks run
 before cloning/action in both preparation and execution, including after hooks:
 spawn/run `prompt` ≤131072, `label` ≤72; run `continues` ≤512; send `message`,
-answer `answer` and spawn `return_to.answer` ≤16384; supplied read `cursor` ≤1024.
+answer `answer` and spawn `return_to.instruction` ≤16384; supplied read `cursor` ≤1024.
 Values are preserved verbatim, not trimmed or truncated. Missing/blank/overlong
 titles fail `INVALID_PARAMETERS` naming public parameter `label` and its required
 72-unit guidance; other text failures name the exact field/path and limit.
 Identifiable schema failures name a qualified known field/index parameter (for
-example `dispatch.inputs.0`; whole-array and `tree` fields stay
-`dispatch.inputs`/`dispatch.tree`) with bounded resolution, without copied
+example `dispatch.required_paths.0`; whole-array and build-directory fields stay
+`dispatch.required_paths`/`dispatch.build_dir`) with bounded resolution, without copied
 user values or unknown property names; see
 [task dispatch](task-dispatch.md) for the diagnostic ordering rule. Spawn
 profile/difficulty errors retain precedence, as do the UTF-16 unit bounds.
 Schema-engine length diagnostics may count approximate graphemes, not code
 points; they are not a public length contract, and public text limits remain
 the UTF-16 bounds enforced independently. Dispatch keeps its separate
-literal-path checks.
+literal-path checks: the raw schema enforces the nonblank, 512-unit and ASCII
+control-character bounds, while padding, globs, shell quoting/expansion and a
+leading `~`/`@` are rejected by `validateDispatch` as `INVALID_DISPATCH` with a
+qualified field/index. Removing the schema's literal-path restriction does
+not relax those restrictions.
 
 The model addresses an **Agent** by name, not an internal Run UUID. A **task**
 is a Run's 1-based rank among that Agent's Runs ordered by enqueue sequence,
 derived for presentation and accepted only as a read-only `agent_read` selector,
-never as a command target. Spawn/run require a concise 3–8 word task title in
-`label` (1--72 nonblank UTF-16 units), not instructions or background. Word counts
-are guidance, not validation; CJK titles are allowed. Labels are auxiliary,
+never as a command target. Spawn/run require a concise task title in `label`
+(1--72 nonblank UTF-16 units), in the task's language, not instructions or
+background. There is no word-count validation, so any language is allowed.
+Labels are auxiliary,
 never a substitute for task identity. The model communication projection retains
 `COMMUNICATION_LIMITS.label_units` at 120; generic core Run descriptions retain
 their separate 4096-unit bound. Historical labels remain byte-literal.
@@ -70,6 +82,16 @@ journals may still display it. Supported profile IDs, `alehouse:*` records, conf
 lifecycle events and `Symbol.for` keys remain compatibility surface, including
 internal `cancelling`/`cancelled` statuses. Reader runtime support and its
 private capability keys are retired; existing records remain literal.
+
+The model-name revision has no old-name aliases or historical decoder:
+`return_to.instruction`, `dispatch.required_paths`, `dispatch.build_dir`,
+`outcome_reason`, `interrupted_by`, `agent_status` and list
+`released`/`released_omitted` replace the former model names. Internal
+`Dispatch`, validation-receipt and history fields keep `inputs`/`tree` and
+`cancellation_source`; the internal core `return_to.answer` field also remains,
+and historical records stay byte-literal. Close the
+Owner and start a new matched process; absent-only init does not overwrite,
+migrate or deploy existing sessions.
 
 `agent_spawn` carries the one policy no schema expresses: the user's
 [delegation mode](routing.md#delegation-mode), as a Pi `promptGuidelines` bullet.
@@ -136,41 +158,49 @@ from easiest to hardest). Worker maps to stable internal `editor`; scout maps
 to stable internal `researcher`. The public name `researcher` is unsupported,
 not an alias. Accepted Agents are not renamed. Reasoning difficulty is
 independent of profile.
-Optional fields are `inherit_context`, `after` (1--4 other names),
-`wait_ms` (0--300000), `max_turns` (integer 1--10000, default 256), plus optional
-`dispatch` and, on spawn only, `return_to`. Spawn `max_turns` caps the first
-task and is the Agent default for later tasks that omit a per-task cap. Task
+Optional fields are `inherit_context` (default false), `after` (1--4 unique
+other names), `wait_ms` (0--300000), `max_turns` (integer 1--10000, default
+256), plus optional `dispatch` and, on spawn only, `return_to`. Only spawn's
+`max_turns` carries a schema default of 256; `agent_run.max_turns` has no
+default of its own because it inherits the Agent default. Spawn `max_turns` is
+the first task's soft turn budget and the Agent default for later tasks that
+omit a per-task budget. Task
 execution has no wall-clock deadline, timer or timed wrap-up. The retired
 `max_duration_ms` parameter is rejected, not ignored.
 `return_to` is specified under [Scout return_to](#scout-return_to); on
 `agent_run` it is rejected, not ignored. Optional `agent_run.max_turns` is
 specified under [Run, send and explicit answer](#run-send-and-explicit-answer).
 
-Spawn/run `dispatch` is closed plain data: `inputs` ≤32 paths, `ownership` ≤16
-paths, `tree` one build-root path and `checks` ≤16 parent-declared identifiers;
-supplied arrays are nonempty with unique entries, and each string is bounded
-to 512 UTF-16 units. When supplied, `inputs` declares required file/directory
-prerequisites Alehouse preflights before task execution; optional
-references belong in the prompt, and inputs are not content injection,
-allowlists, access grants or locks. Paths have no leading/trailing whitespace
-and are literal, not shell globs or expansions. See
-[task dispatch](task-dispatch.md) for exact path language, full input semantics
-and the bound rationale, profile/external preflight, claims, after rechecks and
+Spawn/run `dispatch` is closed plain data: `required_paths` ≤32 paths,
+`ownership` ≤16 paths, `build_dir` one build-output path and `checks` ≤16
+parent-declared identifiers; supplied arrays are nonempty with unique entries,
+and each string is bounded to 512 UTF-16 units. When supplied, `required_paths`
+declares required file/directory prerequisites Alehouse preflights before task
+execution; optional references belong in the prompt, and required paths are not
+content injection, allowlists, access grants or locks. Paths have no
+leading/trailing whitespace and are literal, not shell globs or expansions; the
+raw schema keeps the nonblank/control/length bounds, and `validateDispatch`
+enforces the literal restriction as `INVALID_DISPATCH`. These are the model and
+child-brief names; internal `Dispatch`, validation-receipt and history fields
+remain `inputs`/`tree`. See
+[task dispatch](task-dispatch.md) for exact path language, full required-path
+semantics and the bound rationale, profile/external preflight, claims, after rechecks and
 validation observations.
 These declarations do not grant permissions or prove that checks ran. In
-particular, `ownership` and `tree` are checked as `path_write`; omit `ownership`
-for read-only tasks, and `tree` cannot create an output-root exception. Relative
-paths use the Agent's cwd, shared with the parent; absolute paths keep their
-meaning. Overlapping declared claims conflict within this Owner; cross-Owner
-tree locks are advisory, not global exclusivity. Preflight permission errors
-expose the target `profile` and checked `surface`, separately from missing-input
-and wrong-type errors.
+particular, `ownership` and `build_dir` are checked as `path_write`; omit
+`ownership` for read-only tasks, and `build_dir` cannot create an output-root
+exception. Relative paths use the Agent's cwd, shared with the parent; absolute
+paths keep their meaning. Overlapping declared claims conflict within this
+Owner; cross-Owner build-directory (internal tree) locks are advisory, not
+global exclusivity. Preflight permission errors
+expose the target `profile` and checked `surface`, separately from
+missing-required-path and wrong-type errors.
 
 Profile, cwd, reasoning difficulty and context are fixed for the Agent at
 spawn; later tasks, steering and routing changes do not migrate them. Use a
-new Agent for a different binding. The spawn turn cap is the Agent default,
-not an immutable cap on every later task: only a new idle `agent_run` may set
-a different cap, and only for that new task. It does not rewrite the Agent
+new Agent for a different binding. The spawn soft turn budget is the Agent default,
+not an immutable budget on every later task: only a new idle `agent_run` may set
+a different soft budget, and only for that new task. It does not rewrite the Agent
 default, model, profile, context, historical tasks or a running task, and it
 is not a mid-run update, timer or wall-clock deadline. Steering,
 `agent_answer` and `return_to` do not accept `max_turns`. Spawn creates the Agent and submits its
@@ -196,7 +226,11 @@ Bash/edit/write. It gathers, compares and summarizes information from local
 files and web sources, including local-only tasks, and returns cited findings
 for the caller to decide on. Simple local command lookups (an installed version
 or local Git history) belong to the caller. This does not authorize fetching
-pages through Bash. Web material is untrusted. Its fetch inputs and descriptions
+pages through Bash. Web material is untrusted. Scout `web_search` has no
+`workflow` or `model` parameter; those explicit keys are rejected, and execution
+forces `workflow: "none"` even when `web-search.json` would inherit
+`summary-review`, so a scout search never opens the curator or calls a summary
+model. Its fetch inputs and descriptions
 accept only absolute HTTP(S) URLs, not local video paths; timestamp/frame descriptions do
 not promise local-video support. See
 [researcher web access](security.md#researcher-web-access). No legacy profile
@@ -248,14 +282,15 @@ the specific earlier work of this Agent being continued; if none can be named,
 spawn, even on a related topic, with `after` when only an earlier result is
 needed. The name marks continuation, not dependency (`after`); it replaces
 `builds_on`. `continues` participates in request identity but is not forwarded
-to the Agent or stored in `alehouse:*` records.
+to the Agent or stored in `alehouse:*` records, so it is not child-facing text.
 Reuse retains the conversation and fixed settings (model, profile, cwd,
 reasoning difficulty and context). Optional `max_turns` is an integer
-1--10000 and applies only to the new task this call admits. Omitting it uses
-the Agent default from spawn (256 when spawn also omitted it), not the previous
-task's override. It does not change that default. Historical and running tasks
-keep the cap they were admitted with; `agent_send` cannot replace a running
-task's cap. For capacity, kill finished
+1--10000 soft turn budget and applies only to the new task this call admits.
+Omitting it uses the Agent default from spawn (256 when spawn also omitted it),
+not the previous task's override. It has no schema default of its own and does not change the
+Agent default. Historical and running tasks
+keep the soft budget they were admitted with; `agent_send` cannot replace a running
+task's budget. For capacity, kill finished
 Agents whose work is accepted before workers still needed for validation.
 
 `agent_send({agent, message, wait_ms?})` takes 1--16384 nonblank units and binds
@@ -279,12 +314,12 @@ agent_answer({ agent, question_id, answer, wait_ms? })
 ```
 
 Answer is 1--16384 nonblank UTF-16 units. No profile, cwd,
-reasoning_difficulty, turn limit (`max_turns`), label or after is accepted. The original task must already be truly settled
+reasoning_difficulty, soft turn budget (`max_turns`), label or after is accepted. The original task must already be truly settled
 `needs_input`, still pending and unreserved, with no current Run and a healthy,
 reusable Agent/Owner. Answer does not wait and then silently answer a future
 question. It reserves the original question and admits a continuation with the
-Agent's fixed settings and Agent-default turn limit (spawn `max_turns`, not the
-asking task's cap when that task overrode it) and the asking task's label and dispatch. Its
+Agent's fixed settings and Agent-default soft turn budget (spawn `max_turns`, not the
+asking task's budget when that task overrode it) and the asking task's label and dispatch. Its
 resource claim lineage remains held across the pending question; pre-input
 rollback that reopens the question also restores that claim, including any
 existing tree lease. Final termination/required cleanup, not a stop request,
@@ -332,10 +367,13 @@ not a delayed or hidden answer.
 
 `after` binds each named Agent's current or latest task at acceptance, once. It never follows a later answer
 continuation; to wait for one, name the Agent after `agent_answer` returns, not
-in the same tool batch. Naming a task that has already settled without
-completing (needs-input, failed or interrupted) is rejected with
-`DEPENDENCY_NOT_COMPLETED`, carrying that Agent and its status as `reason`,
-before any Agent, name or task is allocated. Queued tasks hold no execution slot;
+in the same tool batch. A dependency that settles `completed` with
+`limit_reached` reached its soft turn budget but still settled `completed`; it
+satisfies `after`, so inspect its result for completeness. Naming a task that
+has already settled without completing (`needs_input`, `failed` or
+`interrupted`) is rejected with `DEPENDENCY_NOT_COMPLETED`, carrying that Agent
+and its projected status as `reason`, before any Agent, name or task is
+allocated. Queued tasks hold no execution slot;
 `waiting_for` names unsettled
 dependencies. They still count toward queue capacity, and their Agents toward
 resident capacity. Active work is capped at four Runs per admitted provider
@@ -356,25 +394,30 @@ execution. Inputs for after tasks defer existence checks; all dispatched tasks
 recheck at pump when it can progress. Missing dependency input produces
 `dependency_input_missing`; other deferred preflight failures produce
 `dispatch_preflight_failed`. Pump failures use no session/slot. Inputs are
-revalidated rather than locked; ownership/tree claims retain strict equality.
+revalidated rather than locked; ownership/build-directory (internal tree) claims
+retain strict equality.
 
 Retained final output of dependencies shares a 16384-unit handoff budget, with
-Agent/label/status and never-retained character count. It is framed as reference,
+Agent/label/status and never-retained UTF-16 unit count. It is framed as reference,
 not instructions, and is not parent-authored approval witness text. It is not
 verified. This permits queuing an author/reviewer without re-pasting results.
 
 ## Scout return_to
 
-Optional closed `agent_spawn.return_to` is `{agent, question_id, answer}`, all
-required if present. Omitting it leaves the default one-Run spawn. It is not an
-`agent_answer` alias, a delayed admission, a new tool or a child capability.
+Optional closed `agent_spawn.return_to` is `{agent, question_id, instruction}`,
+all required if present. Omitting it leaves the default one-Run spawn. It is not
+an `agent_answer` alias, a delayed admission, a new tool or a child capability.
 The public object is exactly those three fields. Source `profile` must be
 `scout` (internal `researcher`); `agent` must name a healthy reusable `worker`
 (internal `editor`) whose exact current question is already settled and
 actionable: `needs_input`, pending, unreserved, no current Run. A non-scout
 source or non-worker target fails closed (`INVALID_RETURN_TO` /
 `INVALID_RETURN_TO_PROFILE`). `question_id` is the same `^q_[0-9a-f]{32}$` token.
-`answer` is required parent text, 1--16384 nonblank UTF-16 units. Prepare maps
+`instruction` is required parent text, 1--16384 nonblank UTF-16 units. It is the
+worker's conditional continuation instruction, written before the scout's
+findings exist; it is not a preknown answer or the scout's prompt.
+`agent_answer.answer` remains the explicit answer field. Model `instruction`
+maps to the internal core `answer` field. Prepare maps
 `agent` to internal `agent_id` before core admission. The source may still use
 its own `after`; an already settled non-completed dependency is rejected before
 install. One call does not recurse, reserve a capacity pool, start a service,
@@ -383,12 +426,12 @@ arm a lifecycle deadline or write an external store.
 Coordinator admission installs two ordinary Runs or neither. The source is the
 new scout Run. The worker continuation is preadmitted `after` that exact source
 Run, with the original `answer_to`, dispatch and claim, and the Agent's fixed
-settings and Agent-default turn limit exactly as `agent_answer` admits them
+settings and Agent-default soft turn budget exactly as `agent_answer` admits them
 (not a last-task override; `return_to` has no `max_turns`).
-`return_to.answer` is the continuation `task_prompt` and parent-authored witness
-text. Source output crosses only by the existing handoff prefix, shared
+`return_to.instruction` is the continuation `task_prompt` and parent-authored
+witness text. Source output crosses only by the existing handoff prefix, shared
 16384-unit budget and untrusted framing, outside `task_prompt`. Every `return_to`-specific
-refusal (shape, profiles, token, answer, an already settled non-completed source
+refusal (shape, profiles, token, instruction, an already settled non-completed source
 dependency) precedes shared capacity, so it is never reported as `QUEUE_FULL` or
 `OWNER_HISTORY_LIMIT`. Those core refusals carry `parameter` and a resolution;
 argument-schema rejections of malformed input come earlier and, when
@@ -406,8 +449,9 @@ From admission, all parent-model result observations of the source, including
 spawn/send/wait and explicit `agent_read` by name, task or cursor, replace its
 raw body with a short orchestration-authored human-readable handoff notice. The notice
 identifies the source and the exact original worker continuation by Agent name
-and task. It says pending until that continuation's `input_entered`, delivered
-only after that boundary, or not delivered if it ended before input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted characters. Later worker
+and task, and includes an exact `agent_read` call for the source. It says
+pending until that continuation's `input_entered`, delivered
+only after that boundary, or not delivered if it ended before input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted UTF-16 units. Later worker
 failure or kill does not undo observed input delivery. The sticky exact link
 survives reuse or kill of either Agent and delegation Off; it never retargets.
 No raw source paging/omission flags or source result cursors are exposed. No new
@@ -442,7 +486,7 @@ older Runs of either Agent. Readiness (question, task issue and `done`) uses
 the continuation only. A scout that fails, asks or is interrupted fails the
 continuation, so the reply returns `task_issue` only once that continuation has
 settled, never showing a doomed continuation as queued; the scout row still
-carries its status and any question. A turn-limited but completed scout hands
+carries its status and any question. A soft-budget-stopped but completed scout hands
 off normally and does not end the wait. A reopened original question is not added to them; wait or read the
 worker. Caller abort or timeout cancels the observation, not the accepted Runs.
 The caller request replays the source Run. Internal `return_to_run_id` on that
@@ -486,7 +530,7 @@ telling the user and not retrying. These are orchestration/session faults, not
 provider/model availability evidence.
 
 A new spawn/run/answer rejected with `RESIDENT_LIMIT`, `RESOURCE_OWNED` or
-`BUILD_TREE_BUSY` only by Agents whose explicit kill/release is already under
+`BUILD_DIR_BUSY` only by Agents whose explicit kill/release is already under
 way waits for such a release outside the submit queue, at most 10 s from the
 call (abortable), then repeats the whole admission. Resource conflicts are
 checked before capacity, and a conflicting holder that is not being released is
@@ -495,18 +539,20 @@ rejection unchanged. Only a release
 already under way when admission rejects is waited for: parallel tool-batch
 order is not a guarantee, and a later kill is not anticipated.
 
-Execution has a per-admitted-task turn limit but no wall-clock deadline, timer
+Execution has a per-admitted-task soft turn budget but no wall-clock deadline, timer
 or timed wrap-up input;
 see [execution limits](task-dispatch.md#execution-limits). Turn wrap still uses
 `soft_budget` and invalidates the approval witness
-(`pi-alehouse:approval:invalidated`). Elapsed time remains an observation, not a
-stop condition. Historical `deadline` outcomes remain literal and readable,
+(`pi-alehouse:approval:invalidated`); the cooperative grace beyond `max_turns`
+is a configurable Owner limit, not a fixed `+5` model contract. Elapsed time
+remains an observation, not a stop condition. Historical `deadline` outcomes remain literal and readable,
 never restored as active timers or injected reminders; retired `time_wrapped`
 facts are no longer interpreted by the current codec.
 
 `agent_wait({agents?, mode?, wait_ms?})` accepts `mode: "all" | "any"`
-(default `all`): all selected tasks must end, or any one must end. Questions,
-issues and scoped alerts can return earlier in either mode.
+(default `all`): all selected tasks must end, or any one must end. Duplicate
+Agent names are ignored. Questions, issues and scoped alerts can return earlier
+in either mode.
 
 Optional observation time starts at registration **after** command acceptance/preparation
 and any lifecycle settle. All wait_ms are 0--300000; commands default to zero,
@@ -560,7 +606,9 @@ command waits use this priority:
 
 Reason is the primary trigger, not task status. Every reply carries it, so a
 missing reason never has to be decoded from task statuses; done does not mean
-the inbox is empty. Faults broadcast to
+the inbox is empty. Completion rows are Owner-wide and shown-row-only: every
+observation may show the oldest unpresented settled Runs, not only its bound
+tasks, and only rows actually shown are consumed. Faults broadcast to
 observers already registered before the edge;
 successful reporting commits its marker. One reporter does not disqualify its
 concurrent peers, while later waits do not repeat a reported edge. Readiness
@@ -604,22 +652,37 @@ Each task row retains `{agent, task, status}` and applicable boolean
 `has_question`, `limit_reached`, `unavailable`; diagnostics use
 `unavailable_reason`, `error`, `owner_error`. Statuses include queued, running,
 finishing, needs_input, completed, failed, interrupting and interrupted.
-Optional `cancellation_source: "human"` on task/finished rows and list/interrupt
-projections identifies the first accepted explicit human Stop. It is bounded
-metadata, not a thin control, and may yield under envelope pressure. Default
-model interruption, shutdown, and budget stops do not fabricate human origin;
-a repeated Stop does not relabel an earlier request. The same source is retained
-in new run-end outcomes for cold inspection. A separate best-effort
-`alehouse:human-cancellation:v1` parent custom message requests no automatic retry
-and does not trigger a model turn; publication is not model acknowledgement.
+Every task row, including list/interrupt, may carry a bounded `outcome_reason`
+from the closed set `turn_limit`, `output_limit`, `context_change_failed`,
+`dependency_not_completed`, `dependency_input_missing`,
+`dispatch_preflight_failed`, `unexpected_abort`, `execution_error`,
+`finalization_failed`, `input_not_observed` and `other`. It is omitted when the
+Run has no retained reason, and a settled row whose authoritative Run has a
+nonempty reason must show it. Unknown internal reasons map to `other`, and it is
+a nonyieldable retained control. Finishing rows have no cause; historical
+records stay byte-literal. The top-level observation `reason` and `error.reason`
+are separate and unchanged.
+Optional `interrupted_by: "human"` on model task/finished rows identifies the
+first accepted explicit human Stop request. It is attribution, not proof that
+the task stopped. Internal records, snapshots and history retain
+`cancellation_source`; model rows do not expose that internal name. It is
+bounded metadata, not a thin control, and may yield under envelope pressure.
+Default model interruption, shutdown, and budget stops do not fabricate human
+origin; a repeated Stop does not relabel an earlier request. The same internal
+source is retained in new run-end outcomes for cold inspection. A separate
+best-effort `alehouse:human-cancellation:v1` parent custom message requests no
+automatic retry and does not trigger a model turn; publication is not model
+acknowledgement.
 Optional `human_steered: true` on task/finished rows and list projections says
 the user sent that task a direct message from the detail pane, so its result may
 deliberately differ from the brief. It records admission only: no text, count or
 delivery claim, no parent message and no run-end outcome field. It yields under
-envelope pressure like `cancellation_source`; model `agent_send` never sets it.
-Parent text that reaches a child (`prompt`, `continues`, `message`, `answer`,
-`return_to.answer`) is rejected with `INVALID_PARAMETERS` when it contains the
+envelope pressure like `interrupted_by`; model `agent_send` never sets it.
+Parent text that reaches a child (`prompt`, `message`, `answer`,
+`return_to.instruction`) is rejected with `INVALID_PARAMETERS` when it contains the
 human steering lead, so the parent cannot present its own words as the user's.
+`continues` is request identity and is never forwarded, so it is not in that
+set.
 Queued rows retain `queued_for: "dependencies" | "provider_capacity"` when that scheduling
 condition applies; it is a mandatory bounded control, including in list/interrupt
 projections, not optional diagnostic text. Dependency names remain in the roster's
@@ -651,8 +714,8 @@ mutually exclusive. Unknown ordinals fail `TASK_NOT_FOUND`; they are not targets
 for send/answer/interrupt/kill/run. With neither selector, read chooses current,
 else pending-question, else latest task. No new tool or registry is introduced.
 
-For raw result pages, read requests `max_chars` (1--16384, default 16384); it
-does not shorten a bounded handoff notice. A cursor
+For raw result pages, read requests `max_chars` (1--16384 UTF-16 units, default
+16384); it does not shorten a bounded handoff notice. A cursor
 pins its original task even after reuse and fails `INVALID_CURSOR` on another
 Agent. A page may exceed its request by one unit to avoid a split surrogate.
 Read prioritizes the entire recorded question; alerts may stay pending when
@@ -694,9 +757,9 @@ labels, tokens, controls and diagnostics are outside that text budget but
 inside the final **65536-byte** double-JSON UTF-8 content envelope. `max_chars`
 does not override this cap. The conservative retained-envelope fixture is
 bounded below the cap with maximal control rows/counts, action/disabled/limit
-fields, queue-wait reasons, result cursors, question IDs, empty question fields
-and a complete worst-case tagged alert. It excludes the removed pending-name
-array and depends on these exact fields and bounds.
+fields, the longer of queue-wait and terminal outcome reasons, result cursors,
+question IDs, empty question fields and a complete worst-case tagged alert. It excludes
+the removed pending-name array and depends on these exact fields and bounds.
 
 Real result page text yields before its reserved cursor; packing-omitted pages
 keep their original offset, partial pages advance by shown units, and EOF needs
@@ -712,7 +775,9 @@ eight finished rows use the remaining budget. There is no separate metadata
 retrieval mode.
 
 `dispatch_notes` (at most 2 × 120 units) remain optional. Model projections show
-only `tree_shared`; other notes stay on the Run and detail pane. Legacy warning
+only `build_dir_shared`, the outward name for internal `tree_shared`; internal
+UI/Run note names stay `tree_shared`, `tree_lock_unknown` and
+`source_state_unknown`. Other notes stay on the Run and detail pane. Legacy warning
 facts and other host telemetry do not enter parent-model replies. Validation receipts
 stay in trusted history/offline audit; see
 [notes and receipts](task-dispatch.md#notes-receipts-and-coverage).
@@ -757,19 +822,22 @@ interruption of parent Bash. See [limitations](limitations.md).
 
 Each original Run retains finished_presented=false and receives an Owner-local
 monotonic settled_seq only on true settlement. Unpresented settled Runs are
-considered oldest first; at most eight convenience rows fit. No secondary
+considered Owner-wide, not only within the observation's bound tasks, and
+oldest first; at most eight convenience rows fit. No secondary
 finished log/cursor/unshown queue is maintained. `finished_pending` is the
 positive remaining unpresented count, omitted at zero, not historical loss.
 
 Only a successful publication explicitly showing that **original task** with
-its terminal status in agents or finished sets its bit. Finished rows may carry
+its terminal status in agents or finished sets its bit; nothing is consumed
+silently. A read or wait that does not show a settled row leaves it pending for
+a later observation. Finished rows may carry
 a whole optional label validated against that original Run. Label omission does
 not delay consumption, reset the bit or create another reminder. Private
 original-Run references establish row identity; equal names, per-Agent task ordinals and
 statuses never prove that two rows represent the same Run. Bound rows use
 explicit original-Run links; convenience rows are the oldest-first prefix after
 excluding those bound originals. A current running row,
-Agent name alone, an alert source, list/killed names, UI or count does not.
+Agent name alone, an alert source, list/released names, UI or count does not.
 Result/history stay rereadable; questions remain level-triggered and can reopen
 without resetting the bit. Interrupt/kill/list have independent replies and
 consume neither alerts nor finished reminders.
@@ -777,27 +845,30 @@ consume neither alerts nor finished reminders.
 ## Interrupt, kill and list
 
 Interrupt requests stop; wait for settlement, not just an interrupting status.
-A task that already settled, already exited, or is already stopping for its
-turn limit keeps that outcome (completed, failed or needs_input);
+A task that already settled, already exited, or is already stopping at its
+soft turn budget keeps that outcome (completed, failed or needs_input);
 only a stop this call records settles interrupted.
 The Agent keeps its conversation for a later run. Even a first task stopped or
 failed before session creation leaves an Agent whose next task can create it.
 
 Kill is permanent: idle releases immediately, busy interrupts then releases
 after settlement. A single 10 s deadline covers stopping/cleanup. Beyond it,
-status is exiting while tracked cleanup continues; cleanup_uncertain retains
-reservations, with no force-release/retry/eviction. Admissions blocked only by a
+`agent_status` is `exiting` while tracked cleanup continues;
+`cleanup_uncertain` retains reservations, with no
+force-release/retry/eviction. Admissions blocked only by a
 release under way wait for it within their own bound (see acceptance above).
-Kill's independent reply includes lifecycle status and consumes no
-communication. Retained results remain readable with `agent_read`, including
+Kill's independent reply carries `agent_status` (`released`, `exiting` or
+`cleanup_uncertain`) and retains its resolution; `released` confirms release,
+while `exiting` and `cleanup_uncertain` do not. It consumes no communication. Retained results remain readable with `agent_read`, including
 historical task selection, within this Owner. Cleanup diagnostics do not rewrite historical
 outcomes. Lifecycle waits share the drain but have no model validator/publisher
 or presentation commit. Shutdown
 still waits for actual execution/cleanup promises, not an empty observer set.
 
 List is a read-only roster with `profile`/`reasoning_difficulty`, label/task
-projection and `has_question`. Killed names
-include newest 32 plus killed_omitted; use named/task read for retained results.
+projection and `has_question`. `released` names include the newest-created 32
+plus `released_omitted`, not release order; this is a bounded projection, not
+extra core state. Use named/task read for retained results.
 After a parent compaction, while an Owner-scope `agent_wait` would still
 present something, one `alehouse:compaction-reminder:v1` parent custom message
 with fixed text says delegated work was still outstanding; idle, fully
@@ -836,6 +907,11 @@ ask_parent({ question: string })
 Both closed schemas require 1--8192 nonblank UTF-16 units and revalidate after
 SDK hooks against current Run/generation, accepting gate and stop/exit state.
 Closed callbacks fail explicitly (`RUN_INPUT_CLOSED`), never report acceptance.
+Known admission failures are projected through a fixed closed code whitelist
+(`INVALID_PARAMETERS`, `INVALID_QUESTION`, `INVALID_ALERT`, `RUN_INPUT_CLOSED`,
+`ALERT_TOO_LARGE`, `ALERT_QUEUE_FULL`) with bounded child-facing wording; other
+errors keep their identity and are not rewritten with arbitrary core details or
+resolutions.
 All nine management tools and retired names are excluded/denied in children.
 Only scout (internal `researcher`) receives web tools, with its own instance; worker has no web
 tool table. See
@@ -860,13 +936,21 @@ information in the final result and continue possible work; if a parent decision
 is essential, ask_parent and end. The child SDK-visible error text includes the code, scope, limit and this
 recovery advice—not just inaccessible exception details. Shared SDK-free byte
 admission checks the retained envelope shape before enqueue (ALERT_TOO_LARGE on failure), not message
-JSON alone. Rejected calls are not accepted-message loss; there is no drop counter.
+JSON alone. Its fixed size-error guidance permits one substantially shortened
+retry or retaining the information in the final result; this is not permission
+to retry a deny, a closed gate or a full queue. Rejected calls are not
+accepted-message loss; there is no drop counter.
 
 Ask is immutable **first-write-wins on the original Run**: first valid call
 records the question; later valid calls succeed with already_recorded, explicitly
 saying it was not replaced and the child must stop calling tools and end its
-turn so the task can settle for an answer. The first successful call gives the
-same end-turn instruction. No body comparison. Invalid
+turn so the task can settle for an answer. The first successful call's receipt
+says the question was recorded and gives the same end-turn instruction; both
+receipts tell the child not to repeat the question in its final reply. That
+instruction is kept in the receipt, not duplicated in the argument description,
+tool description or shared prompt. Shared result guidance also covers failed,
+unknown, limited, unrun, blocked and interrupted work; it is not restricted to
+completed work. No body comparison. Invalid
 input/closed gates still fail, with no truncation. Ask itself neither declares
 settlement nor forces suspension; only normal true needs-input settlement may
 make it answerable. Cancelled/failed questions remain historical text,
