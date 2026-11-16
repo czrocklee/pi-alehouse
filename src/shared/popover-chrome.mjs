@@ -343,3 +343,27 @@ export function popoverChromeLayout(options = {}) {
     footerFromBottom: bottomBand.rows - bottomBand.labelY,
   };
 }
+
+/** The text rectangle inside a framed panel, excluding its chrome and gutters.
+ * Callers can reserve extra body rows, or a plain one-row bottom edge, without
+ * duplicating the shared border-label geometry. Invalid/empty paints publish no
+ * selection region. Coordinates and dimensions are terminal cells.
+ * @param {number} width
+ * @param {number} height
+ * @param {{ inset?: number, top?: number, bottom?: number }} [options]
+ * @returns {{ x: number, y: number, width: number, height: number } | undefined}
+ */
+export function popoverTextRect(width, height, options = {}) {
+  const layout = popoverChromeLayout({ framed: true });
+  const { inset = 1, top = layout.top.rows, bottom = layout.bottom.rows } = options;
+  if (
+    ![width, height, inset, top, bottom].every((value) => Number.isInteger(value) && value >= 0) ||
+    inset < 1 ||
+    top < 1 ||
+    bottom < 1 ||
+    width <= inset * 2 ||
+    height <= top + bottom
+  )
+    return undefined;
+  return { x: inset, y: top, width: width - inset * 2, height: height - top - bottom };
+}

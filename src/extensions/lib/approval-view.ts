@@ -7,10 +7,12 @@ import {
   onBorderLabelsChange,
   popoverChromeCloseHit,
   popoverChromeLayout,
+  popoverTextRect,
   popoverTitleRows,
 } from "../../shared/popover-chrome.mjs";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
+import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import type { PersistentScope } from "../../shared/settings-store.mjs";
 import type { JudgeState } from "./approval-protocol.ts";
 import { CONFIRM_ROWS, currentChoice, type Choice, type ChoiceId } from "./approval-selection.ts";
@@ -66,6 +68,11 @@ export class ApprovalPopover implements Component {
   private suppressClick = false;
   private disposed = false;
   private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
+  /** Body-local text selection. Registers the painted body only; the helper
+   * binds the host's own selection gesture, so no mouse path here. */
+  private readonly selection: ReturnType<typeof createPopoverTextSelection>;
+  /** Advances when the painted rows change; never reallocated per paint. */
+  private selectionVersion = 0;
   private readonly unwatchBorderLabels: () => void;
   private readonly rowTargets = new Map<number, number | PersistentScope>();
 
@@ -76,6 +83,7 @@ export class ApprovalPopover implements Component {
       host: options.tui,
       requestRender: options.requestRender,
     });
+    this.selection = createPopoverTextSelection({ host: options.tui, component: this });
     this.unwatchBorderLabels = onBorderLabelsChange(() => {
       if (this.disposed) return;
       this.invalidate();
@@ -144,8 +152,8 @@ export class ApprovalPopover implements Component {
     this.rowTargets.clear();
     if (this.disposed) return [];
     const closeVisible = width >= 12 && !!popoverChromeCloseHit(width);
-    const lines =
-      width < 12 ? [] : this.layout(width, popoverChromeLayout({ framed: true }).top.rows);
+    const headerRows = popoverChromeLayout({ framed: true }).top.rows;
+    const lines = width < 12 ? [] : this.layout(width, headerRows);
     this.closeHover.paint(width, closeVisible, lines.length);
     this.paintedWidth = closeVisible ? width : 0;
     // Publish actual height before styling the translated title, without
@@ -161,6 +169,15 @@ export class ApprovalPopover implements Component {
       );
       lines.splice(0, title.length, ...title);
     }
+    // Selectable text is the choice/detail/warning prose between the top band
+    // and the bottom rule, never the frame or the gutter. Row presses stay
+    // with the existing controls: the helper binds only unhandled presses.
+    this.selection.paint(
+      lines.length
+        ? popoverTextRect(width, lines.length, { inset: 1, top: headerRows, bottom: 1 })
+        : undefined,
+      this.selectionVersion,
+    );
     this.options.onRender?.(lines.length);
     return lines;
   }
@@ -168,6 +185,7 @@ export class ApprovalPopover implements Component {
   /** Presentation-only cleanup never disarms or moves the keyboard choice. */
   resetPointer(): void {
     this.closeHover.reset(false);
+    this.selection.reset();
     this.paintedWidth = 0;
     this.rowTargets.clear();
     if (this.pointerPressed) this.suppressClick = true;
@@ -182,6 +200,7 @@ export class ApprovalPopover implements Component {
     this.unwatchBorderLabels();
     this.invalidate();
     this.closeHover.dispose();
+    this.selection.dispose();
   }
 
   private close(): void {
@@ -196,7 +215,16 @@ export class ApprovalPopover implements Component {
     this.selected = next;
     // Arming is for the row it was given on; moving away disarms.
     this.armed = undefined;
+    this.retireSelection();
     this.options.requestRender();
+  }
+
+  /** A painted-row change retires the bound native selection immediately, not
+   * only at the next paint, so a stale highlight cannot outlive the row it
+   * was taken from. */
+  private retireSelection(): void {
+    this.selectionVersion++;
+    this.selection.reset();
   }
 
   private saveDefault(scope: PersistentScope): void {
@@ -212,6 +240,7 @@ export class ApprovalPopover implements Component {
     this.selected = index;
     if (this.options.warning(choice.id) && this.armed !== index) {
       this.armed = index;
+      this.retireSelection();
       this.options.requestRender();
       return;
     }

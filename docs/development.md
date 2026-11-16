@@ -48,8 +48,18 @@ cross-bundle border-label preference there, not copied into individual panels.
 The single `ui.borderLabels` switch applies to every Alehouse panel; consumers
 provide label content and derive their viewport/hit offsets from the shared
 bands. Dispose appearance subscriptions with their panels and retire painted
-controls on a live layout change. Permission/policy code lives in `src/authority`,
-outside `src/orchestration`.
+controls on a live layout change.
+
+Floating text selection uses the shared `popover-text-selection.mjs` adapter:
+register the exact mounted component, publish its painted body via
+`paint(rect, viewportKey)`, retire it on navigation or pointer invalidation, and
+dispose it with the panel. Derive body geometry from
+`popoverTextRect`/`popoverChromeLayout`; keep all native selection hooks in the
+shared adapter, not panel-specific patches. Preserve native press/release/click
+synthesis for controls outside the text body as well as the host clipboard path,
+and cancel stale owned selection before any highlight/copy.
+
+Permission/policy code lives in `src/authority`, outside `src/orchestration`.
 
 The build generates `generated/agents/{editor,researcher,Explore,Plan,general-purpose}.md`,
 `generated/worker-policy.json`, `generated/extensions/`, `generated/shared/`, and a **private

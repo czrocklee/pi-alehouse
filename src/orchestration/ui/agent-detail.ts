@@ -1,9 +1,11 @@
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
+import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import {
   onBorderLabelsChange,
   popoverChromeCloseHit,
   popoverChromeLayout,
+  popoverTextRect,
 } from "../../shared/popover-chrome.mjs";
 import {
   compositeTuiLine,
@@ -246,8 +248,10 @@ export class DetailPane {
   private renderedRevision: unknown;
   private readonly timer: ReturnType<typeof setInterval>;
   private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
+  private readonly textSelection: ReturnType<typeof createPopoverTextSelection>;
 
   constructor(private readonly options: DetailPaneOptions) {
+    this.textSelection = createPopoverTextSelection({ host: options.tui, component: this });
     this.selected = options.initial;
     this.layout = popoverChromeLayout({ framed: !!options.frame });
     const draft = options.draft;
@@ -309,6 +313,7 @@ export class DetailPane {
   }
   /** Move the selection, resetting everything that described the old one. */
   private adopt(agent_id: string): void {
+    this.textSelection.reset();
     this.selected = agent_id;
     this.scrollOffset = 0;
     this.followTail = true;
@@ -363,6 +368,7 @@ export class DetailPane {
 
   /** Permission yield can hide the mounted pane without disposing it. */
   resetCloseHover(render = true): void {
+    this.textSelection.reset();
     this.actionsMenu = undefined;
     this.menuPaint = undefined;
     this.menuDismissPress = false;
@@ -665,6 +671,7 @@ export class DetailPane {
 
   handleInput(data: string): void {
     if (this.closed) return;
+    this.textSelection.reset();
     if (this.options.visible?.() === false) {
       this.actionsMenu = undefined;
       this.menuPaint = undefined;
@@ -927,6 +934,7 @@ export class DetailPane {
       return { handled: true };
     }
     if (event.type !== "wheel" || !event.wheelDelta || this.painted === 0) return undefined;
+    this.textSelection.reset();
     this.resetStopInteraction();
     const { viewportHeight, maxScroll } = this.bounds(this.painted);
     if (viewportHeight === 0) return { handled: true };
@@ -1268,7 +1276,21 @@ export class DetailPane {
       width,
       inner,
       gutter,
-      { from: back.length, height: viewportHeight, offset: start, total },
+      {
+        from: back.length,
+        height: viewportHeight,
+        offset: start,
+        total,
+        key: JSON.stringify([
+          owner_id,
+          generation,
+          agent_id,
+          run_id,
+          this.info,
+          this.toolsExpanded,
+          start,
+        ]),
+      },
     );
   }
 
@@ -1284,6 +1306,7 @@ export class DetailPane {
     this.closed = true;
     this.unwatchBorderLabels();
     this.closeHover.dispose();
+    this.textSelection.dispose();
     this.resetStopInteraction();
     clearInterval(this.timer);
     this.chromePaint = undefined;
@@ -1364,6 +1387,7 @@ export class DetailPane {
 
   private dismissMenu(): void {
     if (!this.actionsMenu) return;
+    this.textSelection.reset();
     this.actionsMenu = undefined;
     this.chromePaint = undefined;
     this.options.tui.requestRender();
@@ -1378,6 +1402,7 @@ export class DetailPane {
     )?.input.view;
     if (this.geometryChanged(paint.dimensions) || !sameRun(paint.target, view)) return;
     this.resetStopInteraction();
+    this.textSelection.reset();
     this.actionsMenu = { ...paint, selected: 0 };
     this.chromePaint = undefined;
     this.options.tui.requestRender();
@@ -1408,8 +1433,22 @@ export class DetailPane {
     width: number,
     inner: number,
     gutter = 0,
-    scroll?: { from: number; height: number; offset: number; total: number },
+    scroll?: { from: number; height: number; offset: number; total: number; key?: string },
   ): string[] {
+    this.textSelection.paint(
+      this.options.frame && !this.actionsMenu
+        ? popoverTextRect(width, body.length + this.layout.rows, {
+            inset: 1 + gutter,
+            ...(scroll
+              ? {
+                  top: this.layout.bodyY + scroll.from,
+                  bottom: this.layout.bottom.rows + body.length - scroll.from - scroll.height,
+                }
+              : {}),
+          })
+        : undefined,
+      scroll?.key,
+    );
     this.closeHover.paint(
       width,
       !!this.options.frame && this.options.visible?.() !== false,

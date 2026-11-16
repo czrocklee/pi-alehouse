@@ -10,9 +10,11 @@ import {
   onBorderLabelsChange,
   popoverChromeCloseHit,
   popoverChromeLayout,
+  popoverTextRect,
 } from "../../shared/popover-chrome.mjs";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
+import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import {
   POPOVER_DOCK_ROWS,
   focusOrigin,
@@ -67,6 +69,9 @@ export function createFooterPanels(options: {
   let breakdownPressed = false;
   let suppressBreakdownClick = false;
   let breakdownHover: ReturnType<typeof createPopoverCloseControl> | undefined;
+  /** One helper per pinned breakdown lifetime: created with the panel and
+   * disposed with it, so a repeated show/hide never leaves a restored bridge. */
+  let breakdownSelection: ReturnType<typeof createPopoverTextSelection> | undefined;
   const maxBreakdownRows = () =>
     (member?.available() ?? tui.terminal.rows - POPOVER_DOCK_ROWS) - breakdownChromeRows();
   /** The smallest complete frame this table can paint. ON keeps the shared
@@ -86,6 +91,8 @@ export function createFooterPanels(options: {
     const pinned = member !== undefined || overlay !== undefined;
     breakdownHover?.dispose();
     breakdownHover = undefined;
+    breakdownSelection?.dispose();
+    breakdownSelection = undefined;
     overlay?.hide();
     overlay = undefined;
     member?.leave();
@@ -96,6 +103,7 @@ export function createFooterPanels(options: {
   const breakdown = {
     resetPointer() {
       breakdownHover?.reset(false);
+      breakdownSelection?.reset();
       paintedWidth = 0;
       if (breakdownPressed) suppressBreakdownClick = true;
     },
@@ -116,6 +124,13 @@ export function createFooterPanels(options: {
       paintedWidth = closable ? width : 0;
       breakdownPlacement = member && placement(member);
       member?.measure(lines.length);
+      // Selectable text is the table body between the title band and the plain
+      // bottom rule, inset past the frame and its gutter. The pinned panel has
+      // no page or scroll state, so its viewport key is constant and the
+      // helper retires on the painted geometry instead.
+      breakdownSelection?.paint(
+        lines.length ? popoverTextRect(width, lines.length, { inset: 2, bottom: 1 }) : undefined,
+      );
       return lines;
     },
     handleMouse(event: TuiMouseEvent) {
@@ -181,6 +196,7 @@ export function createFooterPanels(options: {
       host: tui,
       requestRender: () => tui.requestRender(),
     });
+    breakdownSelection = createPopoverTextSelection({ host: tui, component: breakdown });
     mountBreakdown(member);
   };
   // Cooperatively step aside during agent panel settlement, then return

@@ -98,3 +98,11 @@ export function popoverChromeCloseHit(
 /** Chrome row budgets for a framed or unframed panel. The shared switch
  * chooses the placement; there is no per-chrome override. */
 export function popoverChromeLayout(options?: { framed?: boolean }): ChromeLayout;
+
+/** Painted text cells inside the shared frame, excluding chrome and gutters.
+ * Invalid/empty geometry has no selection region. */
+export function popoverTextRect(
+  width: number,
+  height: number,
+  options?: { inset?: number; top?: number; bottom?: number },
+): { x: number; y: number; width: number; height: number } | undefined;

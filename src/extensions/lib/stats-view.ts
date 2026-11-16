@@ -15,10 +15,12 @@ import {
   popoverChromeLayout,
   popoverInlayWidth,
   popoverInsetLabelRows,
+  popoverTextRect,
   popoverTitleRows,
 } from "../../shared/popover-chrome.mjs";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
+import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import { formatTokenCount } from "../../shared/token-format.mjs";
 import type {
   SessionErrorStats,
@@ -628,6 +630,13 @@ export class StatsView {
   private readonly offsets: [number, number, number] = [0, 0, 0];
   private disposed = false;
   private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
+  /** Body-local text selection. Registers the painted text viewport only; the
+   * helper binds the host's own selection gesture, so no mouse path here. */
+  private readonly selection: ReturnType<typeof createPopoverTextSelection>;
+  /** Last painted tab/scroll pair, so the viewport key is not reallocated. */
+  private selectionTab = -1;
+  private selectionOffset = -1;
+  private selectionVersion = 0;
   private readonly unwatchBorderLabels: () => void;
   /** Shared label metrics: the chrome helpers clip and measure inset labels. */
   private readonly labelMetrics = {
@@ -648,6 +657,7 @@ export class StatsView {
       host: options.tui,
       requestRender: () => options.tui.requestRender(),
     });
+    this.selection = createPopoverTextSelection({ host: options.tui, component: this });
     // A border-label switch is a geometry change: retire painted hit geometry
     // and request a repaint so input cannot act on the retired layout.
     this.unwatchBorderLabels = onBorderLabelsChange(() => this.retirePaintedGeometry());
@@ -740,6 +750,7 @@ export class StatsView {
     this.paintedViewport = this.paintedMaxScroll = 0;
     if (columns === 0 || budget === 0) {
       this.closeHover.paint(columns, false, 0);
+      this.selection.paint(undefined);
       return [];
     }
     if (budget < chrome + 1) return this.compact(columns, budget);
@@ -783,12 +794,32 @@ export class StatsView {
           {},
         ),
       );
+    // Selectable text is the scroll viewport under the tab row and its
+    // divider, above the bottom band: never the frame, gutter or footer. The
+    // key advances only when the painted tab or scroll position changes.
+    if (this.tab !== this.selectionTab || offset !== this.selectionOffset) {
+      this.selectionTab = this.tab;
+      this.selectionOffset = offset;
+      this.selectionVersion++;
+    }
+    this.selection.paint(
+      popoverTextRect(columns, lines.length, {
+        inset: 2,
+        top: tabRow + 2,
+        bottom: layout.bottom.rows,
+      }),
+      this.selectionVersion,
+    );
     return lines.map((line) => this.fit(line, columns));
   }
 
-  /** Pi calls this on theme/data invalidation; refresh ownership remains outside. */
+  /** Pi calls this on theme/data invalidation; refresh ownership remains outside.
+   * A palette change repaints the same rows, so the bound selection is retired
+   * here exactly as ContextView's invalidate path does. Painted hit geometry
+   * stays with `retirePaintedGeometry`, which owns the tab/scroll retirement. */
   invalidate(): void {
     this.closeHover.reset(false);
+    this.selection.reset();
     if (!this.disposed) this.options.tui.requestRender();
   }
 
@@ -796,6 +827,7 @@ export class StatsView {
     this.disposed = true;
     this.unwatchBorderLabels();
     this.closeHover.dispose();
+    this.selection.dispose();
     this.tabTargets = [];
     this.paintedViewport = 0;
     this.paintedMaxScroll = 0;
@@ -804,6 +836,7 @@ export class StatsView {
   /** Retires painted hit geometry without touching retained tab/scroll state. */
   private retirePaintedGeometry(): void {
     this.closeHover.reset(false);
+    this.selection.reset();
     this.tabTargets = [];
     this.paintedTabRow = -1;
     this.paintedViewport = 0;
@@ -950,6 +983,8 @@ export class StatsView {
   }
 
   private compact(width: number, budget: number): string[] {
+    // No scroll viewport is painted here, so there is no selectable body.
+    this.selection.paint(undefined);
     const labels = borderLabelsEnabled();
     // Border labels off, below room for both shared inset bands: a readonly
     // minimal frame, never a partial inset. No close glyph is painted, so the

@@ -250,13 +250,25 @@ test("a mid-gesture page transition voids the painted chrome target", (t) => {
 
 test("plain transcript presses keep ordinary SDK text selection", (t) => {
   const h = chromeFixture(t, { frame: true, transcript: true });
-  const screen = h.paint();
-  const y = screen.findIndex((line) => /ROW\d+/.test(line));
-  assert.ok(y >= 0, "transcript body is shown");
-  h.send(2, y, false);
-  h.drag(2, y + 2);
-  h.send(2, y + 2, true);
+  // Locate the actual text cells: the framed pane has a width-dependent
+  // gutter, and starting in that gutter intentionally starts no selection.
+  const { x, y } = h.locate("ROW");
+  h.send(x, y, false);
+  h.drag(x, y + 2);
+  h.send(x, y + 2, true);
   assert.equal(h.tui.hasActiveSelection(), true, "a transcript drag still selects text");
+  assert.deepEqual(h.selections, []);
+  assert.deepEqual(h.clicks, []);
+});
+
+test("a framed transcript gutter press never starts a whole-screen selection", (t) => {
+  const h = chromeFixture(t, { frame: true, transcript: true });
+  const { x, y } = h.locate("ROW");
+  assert.ok(x > 1, "the framed transcript has a gutter before its text");
+  h.send(x - 1, y, false);
+  h.drag(x, y + 2);
+  h.send(x, y + 2, true);
+  assert.equal(h.tui.hasActiveSelection(), false, "gutter presses are not text-body presses");
   assert.deepEqual(h.selections, []);
   assert.deepEqual(h.clicks, []);
 });

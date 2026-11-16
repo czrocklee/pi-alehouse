@@ -816,6 +816,46 @@ close/keyboard events, but cannot observe native interruptions that never reach
 the component. That unsupported-host fallback is not an OS focus/capture
 guarantee or real-terminal acceptance.
 
+Fullscreen Alehouse panels share a body-only text-selection adapter in
+`src/shared/popover-text-selection.mjs`. It constrains Pi's native selection
+points and column ranges, so highlighting and clipboard extraction use the same
+rectangle; it does not add mouse capture, a separate clipboard implementation,
+or terminal/OS selection control. The adapter observes the host's private
+`handleSelectionMouseEvent`, `getSelectionPoint`, `getWordSelection`,
+`getLineSelection`, `getSelectionColumns`, `getSelectionBounds`, and rendered
+overlay membership/geometry. It also reads private `selectionAnchor` and relies
+on native word/line ranges preserving an enumerable symbol when copying a point
+(e.g. `{ ...point, col }`). These are tested Pi 1.5.2 compatibility seams, not
+public SDK guarantees. The `pi-tui` peer range is `*`, not a compatibility matrix
+or a runtime version allowlist: callable-method and basic shape checks do not
+prove semantic signatures. Changed point construction can lose the marker and
+fall back to unbounded native selection; changed column signatures can instead
+suppress or empty copies. Missing/nonreplaceable support leaves native selection
+unchanged. Only registered, painted floating panels
+participate; regular/docked UI, native dialogs and inline widgets remain native.
+A hidden, moved, covered, resized, reset or disposed panel cancels its owned
+native selection before highlight/copy rather than dropping its clip onto the
+background. Healthy chrome presses bind an owned empty domain: native
+press/release/click synthesis stays active, including rapid clicks, while
+word/line ranges, highlight and copy stay empty. An empty chrome gesture checks
+coverage of its pressed cell, not the body; an unpainted overlay has no native
+mouse hit yet. Stale geometry cancels rather than admitting a delayed control
+click when the host's native reset succeeds. If both live and captured resets
+fail, text-copy suppression remains, but cancellation of native delayed clicks
+is not guaranteed. A rendered zero-area overlay covers nothing; an overlay with
+no known rendered geometry is treated conservatively as possibly covering body
+text. New background/control selections
+are not constrained by an old panel. Body edges clamp the drag; selection-driven
+edge auto-scroll is not added. Streaming within an unchanged viewport keeps
+Pi's live-frame semantics; following a growing Agent tail moves that viewport
+and can cancel a drag. Scroll up to stop tail following before selecting.
+This does not freeze a transcript or promise logical-line reflow on copy.
+`copyOnSelect: false` disables automatic copying; this adapter does not route the
+editor's `app.message.copy` action into a focused panel, whose keyboard handler
+may consume the key or clear the selection.
+Synthetic SDK tests establish only their declared selection/copy paths, not
+human-terminal or multiplexer acceptance.
+
 Fullscreen alternate-screen rendering is required for floating worker panels and
 click input. Regular mode deliberately docks the detail/picker to avoid
 scrollback contamination; its footer retains totals but does not open the usage

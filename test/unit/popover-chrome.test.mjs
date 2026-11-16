@@ -11,6 +11,7 @@ import {
   popoverInsetLabelRows,
   popoverLabelRows,
   popoverTitleRows,
+  popoverTextRect,
   setBorderLabelsEnabled,
 } from "../../src/shared/popover-chrome.mjs";
 import { popoverCloseHit, popoverRule, popoverTitleRow } from "../../src/shared/popover-frame.mjs";
@@ -120,6 +121,39 @@ test("popoverChromeLayout follows the global switch for framed chrome", () => {
     bodyY: 3,
     footerFromBottom: 2,
   });
+});
+
+test("popoverTextRect shares border-label bands and excludes gutters", () => {
+  setBorderLabelsEnabled(true);
+  assert.deepEqual(popoverTextRect(40, 12), { x: 1, y: 1, width: 38, height: 10 });
+  setBorderLabelsEnabled(false);
+  assert.deepEqual(popoverTextRect(40, 12), { x: 1, y: 3, width: 38, height: 6 });
+  assert.deepEqual(popoverTextRect(40, 12, { inset: 2, bottom: 1 }), {
+    x: 2,
+    y: 3,
+    width: 36,
+    height: 8,
+  });
+  assert.deepEqual(popoverTextRect(40, 12, { inset: 3, top: 4, bottom: 2 }), {
+    x: 3,
+    y: 4,
+    width: 34,
+    height: 6,
+  });
+});
+
+test("popoverTextRect refuses empty, fractional and unverifiable geometry", () => {
+  for (const value of [NaN, Infinity, -1, 0, 0.5]) {
+    assert.equal(popoverTextRect(value, 12), undefined);
+    assert.equal(popoverTextRect(40, value), undefined);
+    for (const key of ["inset", "top", "bottom"])
+      assert.equal(popoverTextRect(40, 12, { [key]: value }), undefined);
+  }
+  assert.equal(popoverTextRect(2, 12), undefined);
+  assert.equal(popoverTextRect(40, 2), undefined);
+  assert.equal(popoverTextRect(40, 12, { inset: 20 }), undefined);
+  assert.equal(popoverTextRect(40, 12, { top: 11 }), undefined);
+  assert.equal(popoverTextRect(40, 12, { bottom: 11 }), undefined);
 });
 
 test("popoverChromeLayout ignores unexpected borderLabels overrides", () => {

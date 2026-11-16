@@ -290,6 +290,40 @@ discarding pending writes or removing an override does not undo the live
 choice. Startup does not write settings, and manual file edits require a fresh
 process rather than live-Owner `/reload`.
 
+### Panel text selection
+
+In fullscreen mode, dragging from the painted text body of an Alehouse panel
+keeps both the highlight and copied text inside that panel's body. Borders,
+gutters, titles and footer controls are not included. This shared behavior
+covers Agents, Delegation, model selection, Context, Stats, Approval and Usage;
+controls keep their existing click/drag behavior, including controls that handle
+only the released click rather than the initial press. In Agents,
+the selectable region is the transcript/Info viewport, not its observation dock
+or message composer. Other panels declare their reading/table body. An unhandled
+press on a panel's title, border, gutter or footer starts no text selection,
+but an unmoved release still delivers the native click to its controls.
+
+Selection still uses Pi's native word/line selection, Unicode cell handling,
+links and clipboard path. With **copy on select** enabled, releasing a body
+selection uses Pi's normal automatic copy path. With it disabled, the selection
+is not copied automatically; the editor's `app.message.copy` shortcut is not
+guaranteed to reach a focused panel, and keyboard input can clear the selection.
+This adapter does not add a panel-specific copy shortcut. Moving,
+hiding, covering or closing the panel, resizing it, or navigating to a different
+page/viewport cancels its text selection rather than copying newly exposed
+background text. Dragging past an edge stops at the body boundary; it does not
+add selection-driven auto-scroll. Ordinary wheel/key scrolling is unchanged.
+Keyboard interaction can also retire a selection even when the key does not
+change the viewport. Streaming text in an unchanged viewport remains live, as in
+Pi's native selection. When Agents follows the latest output, arriving lines can
+move the viewport and cancel a selection mid-drag. Scroll up first to stop
+following the tail before selecting text from a running Agent.
+
+This is a compatibility adapter for Pi's fullscreen renderer, not terminal-native
+selection clipping. Unsupported hosts and regular-mode/docked panels retain
+native selection behavior. Native Pi dialogs, third-party UI and the inline
+Agent roster are not Alehouse floating panels and are not changed.
+
 ## Agent detail and transcript
 
 `Alt+A` opens the Agent detail pane. A row click opens it, selects a different
@@ -1297,8 +1331,8 @@ forwarded child permission dialog until the queue's ten-minute stall handling,
 which can surface to a child as denial. The orchestration layer observes synchronous
 `permissions:ui_prompt` before dialog construction and yields immediately:
 
-- a floating pane hides through its overlay handle and retains selection,
-  transcript, and scroll position;
+- a floating pane hides through its overlay handle and retains the selected
+  Agent, transcript, and scroll position (not an active text selection);
 - a docked pane is closed and rebuilt only after approval completion and old teardown;
 - an opening request that is still queued records cancellation and settles
   without mounting when dequeued;

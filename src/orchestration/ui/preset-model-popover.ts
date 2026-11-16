@@ -1,6 +1,7 @@
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
-import { onBorderLabelsChange } from "../../shared/popover-chrome.mjs";
+import { onBorderLabelsChange, popoverTextRect } from "../../shared/popover-chrome.mjs";
+import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   Text,
@@ -86,6 +87,7 @@ export class PresetModelPopover implements Component, Focusable {
   private closePainted = false;
   private closed = false;
   private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
+  private readonly selection: ReturnType<typeof createPopoverTextSelection>;
   private readonly unsubscribeChrome: () => void;
   private targets = new Map<number, Target>();
   private selectedVisible = false;
@@ -112,6 +114,7 @@ export class PresetModelPopover implements Component, Focusable {
       cancel(): void;
     },
   ) {
+    this.selection = createPopoverTextSelection({ host: options.tui, component: this });
     this.closeHover = createPopoverCloseControl({
       createHover: createPopoverCloseHover,
       closeHit: popoverChromeCloseHit,
@@ -119,8 +122,9 @@ export class PresetModelPopover implements Component, Focusable {
       requestRender: () => options.tui?.requestRender(),
     });
     // One process-wide appearance switch: close-hit row and body budget move
-    // together, so retire stale hits/capture and request one repaint.
+    // together, so retire stale hits/selection/capture and request one repaint.
     this.unsubscribeChrome = onBorderLabelsChange(() => {
+      this.selection.reset();
       this.closeHover.reset(false);
       this.options.tui?.requestRender();
     });
@@ -189,9 +193,14 @@ export class PresetModelPopover implements Component, Focusable {
     return this.selectionIssue(model) === undefined;
   }
   handleInput(data: string): void {
-    if (!this.closed) this.options.native.handleInput?.(data);
+    if (this.closed) return;
+    // Native input can scroll or refilter the list: a bound selection must
+    // not outlive the rows it was anchored to.
+    this.selection.reset();
+    this.options.native.handleInput?.(data);
   }
   invalidate(): void {
+    this.selection.reset();
     this.closeHover.reset();
     this.options.native.invalidate();
   }
@@ -200,6 +209,7 @@ export class PresetModelPopover implements Component, Focusable {
     this.unsubscribeChrome();
     this.closed = true;
     this.closeHover.dispose();
+    this.selection.dispose();
     this.targets.clear();
     this.selectedVisible = false;
     this.visibleModel = undefined;
@@ -236,7 +246,12 @@ export class PresetModelPopover implements Component, Focusable {
       this.closePainted = closable;
       this.closeHover.paint(width, closable);
     }
-    if (!closable) return [truncateToWidth("Too small · Esc to cancel", width)];
+    if (!closable) {
+      // Degenerate paints retire admission; the dry recheck layout never
+      // disturbs the host's painted registration.
+      if (paintClose) this.selection.reset();
+      return [truncateToWidth("Too small · Esc to cancel", width)];
+    }
     const models = this.options.models().filter((model) => model.api !== "pi-virtual");
     const rows = this.nativeRows(inner, models).filter(
       ({ plain }) => plain.trim() && !/^─+$/u.test(plain),
@@ -250,14 +265,15 @@ export class PresetModelPopover implements Component, Focusable {
     if (paintClose) this.closeHover.paint(width, true, body.length + context.length + frameRows);
     const complete = (group: Group): boolean =>
       body.filter((row) => row.group === group).length === group.size;
+    const titleRows = popoverTitleRows(
+      this.options.theme,
+      width,
+      this.options.title,
+      true,
+      this.closeHover.hovered,
+    );
     const result = [
-      ...popoverTitleRows(
-        this.options.theme,
-        width,
-        this.options.title,
-        true,
-        this.closeHover.hovered,
-      ),
+      ...titleRows,
       ...context.map((text) => popoverRow(this.options.theme, text, inner)),
     ];
     for (const row of body) {
@@ -280,6 +296,12 @@ export class PresetModelPopover implements Component, Focusable {
       result.push(painted);
     }
     result.push(...bottomRows);
+    // The selectable body between the title band and the labeled bottom: the
+    // wrapper's note, the native search input and every native list row;
+    // gutters stay excluded. Only a real paint admits; geometry changes
+    // cancel through the rect itself.
+    if (paintClose)
+      this.selection.paint(popoverTextRect(width, result.length, { top: titleRows.length }));
     return result;
   }
 
@@ -412,7 +434,7 @@ export class PresetModelPopover implements Component, Focusable {
     return [...head, ...list.slice(start, start + count), ...tail];
   }
 
-  handleMouse(event: TuiMouseEvent): TuiMouseEventResult {
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     const close = this.closeHover.mouse(
       event,
       !this.closed &&
@@ -425,16 +447,28 @@ export class PresetModelPopover implements Component, Focusable {
       if (close.close) this.options.cancel();
       return { handled: true };
     }
-    if (event.type === "click" && event.button === "left") {
-      const target = this.targets.get(event.y);
-      if (target && event.x >= target.start && event.x < target.end) {
+    // The wrapper has no native wheel API; keep a wheel over this overlay out
+    // of the transcript behind it.
+    if (event.type === "wheel") return { handled: true };
+    // Middle/right events stay consumed exactly as before: a fall-through
+    // right-click could invoke the parent's paste behind the chooser.
+    if (event.button === "middle" || event.button === "right") return { handled: true };
+    if (event.button === "left" && (event.type === "press" || event.type === "click")) {
+      const target = this.targets.get(event.y),
+        hit = target && event.x >= target.start && event.x < target.end ? target : undefined;
+      // A press on a painted model item is claimed so the SDK counts the
+      // click by component/position and text selection never starts on a
+      // control; every other body press stays unhandled for the shared
+      // native text-selection bridge.
+      if (event.type === "press") return hit ? { handled: true } : undefined;
+      if (hit) {
         // A pointer may choose any complete visible item, not just the native
         // keyboard arrow. Repaint at the current viewport and require the
         // same item under this click; stale rows must not choose replacements.
         const current = this.recheck().targets.get(event.y);
         if (
-          current?.provider === target.provider &&
-          current.id === target.id &&
+          current?.provider === hit.provider &&
+          current.id === hit.id &&
           event.x >= current.start &&
           event.x < current.end
         ) {
@@ -443,13 +477,19 @@ export class PresetModelPopover implements Component, Focusable {
             .filter(
               (model) =>
                 model.api !== "pi-virtual" &&
-                model.provider === target.provider &&
-                model.id === target.id,
+                model.provider === hit.provider &&
+                model.id === hit.id,
             );
           if (models.length === 1) this.options.select(models[0]!);
         }
       }
+      return { handled: true, focus: true };
     }
-    return { handled: true, ...(event.type === "click" ? { focus: true } : {}) };
+    // Some native releases synthesize a buttonless click. It may focus the
+    // chooser, as before, but must not apply a model without a left click.
+    if (event.type === "click") return { handled: true, focus: true };
+    // Primary drags and releases (including buttonless ones) stay unhandled
+    // so they can complete native text selection.
+    return undefined;
   }
 }

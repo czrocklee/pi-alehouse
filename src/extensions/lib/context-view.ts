@@ -22,9 +22,11 @@ import {
   popoverChromeLayout,
   popoverInlayWidth,
   popoverInsetLabelRows,
+  popoverTextRect,
 } from "../../shared/popover-chrome.mjs";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
+import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import { formatTokenCount } from "../../shared/token-format.mjs";
 import type { ContextCategory, ContextItem, ContextSnapshot } from "./context-stats.ts";
 
@@ -92,6 +94,9 @@ const pad = (text: string, width: number, right = false): string => {
 export class ContextView {
   private disposed = false;
   private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
+  /** Body-local text selection. Registers the painted text viewport only; the
+   * helper binds the host's own selection gesture, so no mouse path here. */
+  private readonly selection: ReturnType<typeof createPopoverTextSelection>;
   private readonly unwatchBorderLabels: () => void;
   /** Shared label metrics: the chrome helpers clip and measure inset labels. */
   private readonly labelMetrics = {
@@ -131,6 +136,7 @@ export class ContextView {
       host: options.tui,
       requestRender: options.requestRender,
     });
+    this.selection = createPopoverTextSelection({ host: options.tui, component: this });
     // A border-label switch is a geometry change: retire painted targets and
     // request a repaint so input cannot act on the retired layout.
     this.unwatchBorderLabels = onBorderLabelsChange(() => this.invalidate());
@@ -151,6 +157,7 @@ export class ContextView {
     const snapshot = this.read();
     if (!columns || !height) {
       this.closeHover.paint(columns, false, 0);
+      this.selection.paint(undefined);
       return this.finishPaint([], columns);
     }
     if (!snapshot || columns < MIN_WIDTH || height < MIN_ROWS + layout.rows - 2) {
@@ -168,6 +175,7 @@ export class ContextView {
       this.closeHover.paint(columns, false, compact.length);
       // No close/tab/row/footer hit areas in a readonly fallback, even if a
       // previous paint had them. Esc remains the keyboard escape hatch.
+      this.selection.paint(undefined);
       return this.finishPaint(compact, columns);
     }
 
@@ -237,6 +245,19 @@ export class ContextView {
     }
     while (lines.length < height - layout.bottom.rows) lines.push(this.row("", columns));
     lines.push(...this.bottomRows(columns, height, snapshot, layout.footerFromBottom));
+    // Selectable text is the body between the bands, never the frame, the
+    // gutter or the pager edge. The totals/bar row is chrome, so skip it; the
+    // remaining rows are the table header plus its scroll viewport, or the
+    // detail/note title plus its wrapped lines. `epoch` already advances on
+    // every tab, page, row and note change, so it is the stable viewport key.
+    this.selection.paint(
+      popoverTextRect(columns, height, {
+        inset: 2,
+        top: layout.top.rows + 1,
+        bottom: layout.bottom.rows,
+      }),
+      this.epoch,
+    );
     return this.finishPaint(lines, columns);
   }
 
@@ -249,6 +270,7 @@ export class ContextView {
   /** Stack movement retires pointer targets, not the last valid keyboard layout. */
   resetPointer(): void {
     this.closeHover.reset(false);
+    this.selection.reset();
     this.pointerReady = false;
     this.targets = [];
     if (this.pointerPressed) this.suppressClick = true;
@@ -342,6 +364,7 @@ export class ContextView {
     this.clearGeometry();
     this.unwatchBorderLabels();
     this.closeHover.dispose();
+    this.selection.dispose();
   }
 
   private read(): ContextSnapshot | undefined {

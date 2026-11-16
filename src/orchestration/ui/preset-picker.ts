@@ -1,6 +1,7 @@
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
-import { onBorderLabelsChange } from "../../shared/popover-chrome.mjs";
+import { onBorderLabelsChange, popoverTextRect } from "../../shared/popover-chrome.mjs";
+import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import type { PersistentScope } from "../../shared/settings-store.mjs";
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type Component, type TUI } from "@earendil-works/pi-tui";
@@ -129,10 +130,12 @@ export class PresetPicker implements Component {
   private readonly delegation: PresetDelegation;
   private readonly effort: PresetEffortEditor;
   private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
+  private readonly textSelection: ReturnType<typeof createPopoverTextSelection>;
   private readonly unsubscribeChrome: () => void;
 
   constructor(private readonly options: PresetPickerOptions) {
     this.options = { ...options, presets: [...options.presets] };
+    this.textSelection = createPopoverTextSelection({ host: options.tui, component: this });
     this.closeHover = createPopoverCloseControl({
       createHover: createPopoverCloseHover,
       closeHit: popoverChromeCloseHit,
@@ -353,8 +356,35 @@ export class PresetPicker implements Component {
     }
     this.paint = page.paint;
     this.pointerWidth = this.layoutWidth;
+    // Body-only admission: the framed prose between the shared title band and
+    // the bare one-row bottom rule. Pointer-disabled, docked and degenerate
+    // renders retire admission; route changes cancel through the stable
+    // primitive key, so no key object is allocated per paint. Controls keep
+    // their handled presses; the shared bridge binds only unhandled ones.
+    if (closable && page.lines.length)
+      this.textSelection.paint(
+        popoverTextRect(width, page.lines.length, { bottom: 1 }),
+        this.selectionKey(),
+      );
+    else this.textSelection.reset();
     this.options.onRender?.(page.lines.length);
     return page.lines;
+  }
+
+  /** Stable primitive viewport key for the shared selection bridge: list vs
+   * effort route, highlight, slot and delegation state. Pure geometry changes
+   * cancel through the rect itself; this key covers content-only routes. */
+  private selectionKey(): string {
+    let delegation = "-";
+    if (this.options.delegation) {
+      try {
+        const current = this.options.delegation.current();
+        delegation = `${current.mode}:${current.eagerness}`;
+      } catch {
+        delegation = "?";
+      }
+    }
+    return `${this.editing ? "effort" : "list"}:${this.selected}:${this.slotIndex}:${delegation}`;
   }
 
   private layout(width: number, maxLines: number) {
@@ -401,6 +431,7 @@ export class PresetPicker implements Component {
     this.paint = EMPTY_PAINT;
     if (this.pointerPressed) this.suppressClick = true;
     this.delegation.interrupt(false);
+    this.textSelection.reset();
     this.resetCloseHover();
   }
   invalidate(): void {
@@ -410,6 +441,7 @@ export class PresetPicker implements Component {
     this.unsubscribeChrome();
     this.closed = true;
     this.closeHover.dispose();
+    this.textSelection.dispose();
   }
 
   private rowBudget(): number {
