@@ -1,5 +1,6 @@
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { PersistentScope } from "../../shared/settings-store.mjs";
+import { shortcutHint } from "../../shared/shortcut-hint.mjs";
 import {
   isOffPreset,
   strengths,
@@ -29,7 +30,11 @@ const GUIDELINE_ROWS = 3;
 
 export type PickerAction =
   "edit" | "reset" | "back" | "settings" | "create" | "editPreset" | "saveGlobal" | "saveWorkspace";
-export type ActionLabel = { kind: PickerAction; label: string };
+/** `label` is the exact plain text painted for the action; `at` is its plain
+ * string offset when a caller composed the row itself. */
+export type ActionLabel = { kind: PickerAction; label: string; at?: number };
+/** One painted row segment: styled text plus the action it advertises. */
+export type ActionPart = { text: string; action?: { kind: PickerAction; label: string } };
 export type ModeTarget = { mode: DelegationMode; start: number; end: number };
 export type StepTarget = { kind: "mode" | "eagerness"; direction: -1 | 1; x: number };
 
@@ -79,53 +84,96 @@ export class PresetPage {
     return workerSlotDisplayOrder.slice(start, start + size);
   }
 
+  /** Highlight one mnemonic inline when the label contains it; otherwise the
+   * key stays an explicit prefix. An omitted key is click-only. `label` is the
+   * painted plain text, which is what hit geometry must match. */
+  hint(label: string, key?: string, color = "dim"): { text: string; label: string } {
+    const text = shortcutHint(this.options.theme, label, key, { color });
+    return { text, label: stripTerminalSequences(text) };
+  }
+
+  /** A key-only legend such as `Tab` or `↑↓`; the helper accents and bolds it
+   * without inventing a label. */
+  key(key: string, color = "dim"): { text: string; label: string } {
+    return this.hint("", key, color);
+  }
+
+  /** Compose styled segments while recording each action's plain offset, so a
+   * later clip can never turn a partial label into a click target. */
+  compose(parts: ActionPart[]): { text: string; actions: ActionLabel[] } {
+    let text = "",
+      plain = "";
+    const actions: ActionLabel[] = [];
+    for (const part of parts) {
+      if (part.action) actions.push({ ...part.action, at: plain.length });
+      text += part.text;
+      plain += stripTerminalSequences(part.text);
+    }
+    return { text, actions };
+  }
+
   addAction(lines: string[], inner: number, text: string, actions: ActionLabel[]): void {
     // Only whole surviving labels may be hit, never a clipped edge label.
     const painted = truncateToWidth(text, inner, "…");
+    const plain = stripTerminalSequences(painted);
+    let cursor = 0;
     this.paint.actions.set(
       lines.length,
       actions
-        .map(({ kind, label }) => {
-          const start = painted.indexOf(label) + 1;
-          return { kind, start, end: start + label.length };
+        .map(({ kind, label, at }) => {
+          const index = at ?? plain.indexOf(label, cursor);
+          if (index < 0 || plain.slice(index, index + label.length) !== label) return undefined;
+          cursor = index + label.length;
+          const start = 1 + visibleWidth(plain.slice(0, index));
+          return { kind, start, end: start + visibleWidth(label) };
         })
-        .filter(({ start, end }) => start > 0 && end <= inner + 1),
+        .filter(
+          (range): range is { kind: PickerAction; start: number; end: number } =>
+            range !== undefined && range.start > 0 && range.end <= inner + 1,
+        ),
     );
-    lines.push(this.row(this.options.theme.fg("dim", text), inner));
+    lines.push(this.row(painted, inner));
   }
 
   saveLabels(inner: number, reserve = 0): { text: string; actions: ActionLabel[] } | undefined {
     const workspace = this.state.canSave("workspace");
+    const theme = this.options.theme;
     const variants = [
       {
-        global: "[G] Save as global default",
-        workspace: workspace
-          ? "[W] Save as project default"
-          : "[W] Project default (trust required)",
+        global: "Save as global default",
+        workspace: workspace ? "Save as workspace default" : "Workspace default (trust required)",
         suffix: " (on exit)",
       },
       {
-        global: "[G] Global default",
-        workspace: workspace ? "[W] Project default" : "[W] Project (trust required)",
+        global: "Global default",
+        workspace: workspace ? "Workspace default" : "Workspace (trust required)",
         suffix: " (on exit)",
       },
       {
-        global: "G global",
-        workspace: workspace ? "W project" : "W trust required",
+        global: "global",
+        workspace: workspace ? "workspace" : "trust required",
         suffix: " · on exit",
       },
-      { global: "G global", workspace: workspace ? "W project" : "W trust", suffix: "" },
-      { global: "G", workspace: workspace ? "W" : "W trust", suffix: "", prefix: " " },
-      { global: "G", workspace: "W", suffix: "", prefix: " " },
+      { global: "global", workspace: workspace ? "workspace" : "trust", suffix: "" },
+      { global: "G", workspace: workspace ? "W" : "trust", suffix: "", prefix: " " },
+      ...(!workspace ? [{ global: "G", workspace: "", suffix: "", prefix: " " }] : []),
     ];
     for (const variant of variants) {
-      const text = `${variant.prefix ?? " Save: "}${variant.global} · ${variant.workspace}${variant.suffix}`;
+      const global = this.hint(variant.global, "G");
+      // An untrusted workspace label is not a working save target, so it must
+      // not advertise a key that the input handler would ignore.
+      const ws = this.hint(variant.workspace, workspace ? "W" : undefined);
+      const text =
+        theme.fg("dim", variant.prefix ?? " Save: ") +
+        global.text +
+        (ws.text ? theme.fg("dim", " · ") + ws.text : "") +
+        theme.fg("dim", variant.suffix);
       if (visibleWidth(text) + reserve > inner) continue;
       return {
         text,
         actions: [
-          { kind: "saveGlobal", label: variant.global },
-          ...(workspace ? [{ kind: "saveWorkspace" as const, label: variant.workspace }] : []),
+          { kind: "saveGlobal", label: global.label },
+          ...(workspace ? [{ kind: "saveWorkspace" as const, label: ws.label }] : []),
         ],
       };
     }
@@ -388,14 +436,21 @@ class PresetListPage extends PresetPage {
     return row;
   }
 
-  private managementLabels(): ActionLabel[] {
+  private managementLabels(): {
+    kind: PickerAction;
+    key: string;
+    text: string;
+    label: string;
+  }[] {
     const management = this.options.management;
     if (!management) return [];
-    const labels: ActionLabel[] = [];
-    if (management.settings) labels.push({ kind: "settings", label: "P Settings" });
+    const labels: { kind: PickerAction; key: string; text: string; label: string }[] = [];
+    if (management.settings)
+      labels.push({ kind: "settings", key: "P", ...this.hint("Settings", "P") });
     if (management.presets) {
-      labels.push({ kind: "create", label: "N New" });
-      if (this.state.canEditPreset) labels.push({ kind: "editPreset", label: "C Edit" });
+      labels.push({ kind: "create", key: "N", ...this.hint("New", "N") });
+      if (this.state.canEditPreset)
+        labels.push({ kind: "editPreset", key: "C", ...this.hint("Edit", "C") });
     }
     return labels;
   }
@@ -410,109 +465,398 @@ class PresetListPage extends PresetPage {
   }
 
   private controls(lines: string[], inner: number, compact: boolean, saveShown: boolean): void {
+    const theme = this.options.theme;
+    const dim = (text: string) => theme.fg("dim", text);
+    const key = (value: string): ActionPart => ({ text: this.key(value).text });
+    const legend = (label: string, value: string): ActionPart => ({
+      text: this.hint(label, value).text,
+    });
     if (!saveShown && this.state.canSave("global")) {
       if (compact && inner < 12) {
-        this.addAction(lines, inner, "GW Tab", [
-          { kind: "saveGlobal", label: "G" },
+        const global = this.hint("G", "G"),
+          workspace = this.hint("W", "W");
+        const parts: ActionPart[] = [
+          { text: global.text, action: { kind: "saveGlobal", label: global.label } },
           ...(this.state.canSave("workspace")
-            ? [{ kind: "saveWorkspace" as const, label: "W" }]
+            ? [
+                {
+                  text: workspace.text,
+                  action: { kind: "saveWorkspace" as const, label: workspace.label },
+                },
+              ]
             : []),
-        ]);
+          { text: dim(" ") },
+          key("Tab"),
+        ];
+        const composed = this.compose(parts);
+        this.addAction(lines, inner, composed.text, composed.actions);
         return;
       }
       const edit = this.state.canEdit;
-      const minimumHint =
-        compact && this.options.delegation ? ` · Tab · ←→ ⇧←→${edit ? " · E" : ""}` : " · Tab";
+      const effort = this.effortHint(inner, compact);
+      const effortPart = edit
+        ? { text: effort.text, action: { kind: "edit" as const, label: effort.label } }
+        : undefined;
+      const tab = [{ text: dim(" · ") }, key("Tab")];
+      const delegationHints = compact
+        ? this.delegationHintParts().map((parts) => [
+            ...tab,
+            ...parts,
+            ...(effortPart ? [{ text: dim(" · ") }, effortPart] : []),
+          ])
+        : [];
+      // Reserve the shortest actual delegation variant, including the effort
+      // label when present. Its width changes from `E` to `Edit effort`.
+      const hintWidth = (parts: ActionPart[]): number =>
+        visibleWidth(parts.map(({ text }) => text).join(""));
+      const tabWidth = hintWidth(tab);
+      const reserve = delegationHints.length
+        ? Math.min(...delegationHints.map(hintWidth))
+        : tabWidth;
       const saving =
-        this.saveLabels(inner, compact ? visibleWidth(minimumHint) : 0) ??
-        this.saveLabels(inner, compact ? visibleWidth(" · Tab") : 0);
+        this.saveLabels(inner, compact ? reserve : 0) ??
+        (compact && reserve > tabWidth ? this.saveLabels(inner, tabWidth) : undefined);
       if (saving) {
-        let text = saving.text;
-        const hints = compact
+        const hints: ActionPart[][] = compact
           ? [
-              ...this.delegationHints().map((hint) => ` · Tab${hint}${edit ? " · E" : ""}`),
+              ...delegationHints,
               ...(edit
                 ? [
-                    " · Tab slots · E effort · ↑↓↵ Esc",
-                    " · Tab · E ↑↓↵ Esc",
-                    " · Tab · E",
-                    " · Tab",
+                    [
+                      { text: dim(" · ") },
+                      legend("slots", "Tab"),
+                      { text: dim(" · ") },
+                      effortPart!,
+                      { text: dim(" · ") },
+                      key("↑↓"),
+                      key("↵"),
+                      { text: dim(" ") },
+                      key("Esc"),
+                    ],
+                    [
+                      { text: dim(" · ") },
+                      key("Tab"),
+                      { text: dim(" · ") },
+                      effortPart!,
+                      { text: dim(" ") },
+                      key("↑↓"),
+                      key("↵"),
+                      { text: dim(" ") },
+                      key("Esc"),
+                    ],
+                    [...tab, { text: dim(" · ") }, effortPart!],
+                    tab,
                   ]
-                : [" · Tab slots · ↑↓↵ Esc", " · Tab · ↵ Esc", " · Tab"]),
+                : [
+                    [
+                      { text: dim(" · ") },
+                      legend("slots", "Tab"),
+                      { text: dim(" · ") },
+                      key("↑↓"),
+                      key("↵"),
+                      { text: dim(" ") },
+                      key("Esc"),
+                    ],
+                    [
+                      { text: dim(" · ") },
+                      key("Tab"),
+                      { text: dim(" · ") },
+                      key("↵"),
+                      { text: dim(" ") },
+                      key("Esc"),
+                    ],
+                    tab,
+                  ]),
             ]
           : edit
-            ? [" · E effort · ↑↓↵ Esc", " · E ↑↓↵ Esc", " · E"]
-            : [" · ↑↓↵ Esc", " · ↵ Esc"];
-        const hint = hints.find((each) => visibleWidth(text) + visibleWidth(each) <= inner);
-        if (hint) text += hint;
-        this.addAction(lines, inner, text, [
-          ...saving.actions,
-          ...(edit && hint?.includes(" · E") ? [{ kind: "edit" as const, label: "E" }] : []),
-        ]);
+            ? [
+                [
+                  { text: dim(" · ") },
+                  effortPart!,
+                  { text: dim(" · ") },
+                  key("↑↓"),
+                  key("↵"),
+                  { text: dim(" ") },
+                  key("Esc"),
+                ],
+                [
+                  { text: dim(" · ") },
+                  effortPart!,
+                  { text: dim(" ") },
+                  key("↑↓"),
+                  key("↵"),
+                  { text: dim(" ") },
+                  key("Esc"),
+                ],
+                [{ text: dim(" · ") }, effortPart!],
+              ]
+            : [
+                [{ text: dim(" · ") }, key("↑↓"), key("↵"), { text: dim(" ") }, key("Esc")],
+                [{ text: dim(" · ") }, key("↵"), { text: dim(" ") }, key("Esc")],
+              ];
+        for (const hintParts of hints) {
+          const composed = this.compose([{ text: saving.text }, ...hintParts]);
+          if (visibleWidth(composed.text) <= inner) {
+            this.addAction(lines, inner, composed.text, [...saving.actions, ...composed.actions]);
+            return;
+          }
+        }
+        this.addAction(lines, inner, saving.text, saving.actions);
         return;
       }
     }
     const labels = this.managementLabels();
-    let text = this.controlText(inner, compact);
+    const parts = this.controlText(inner, compact);
     if (compact) {
-      const hint = this.delegationHints().find(
-        (each) => visibleWidth(text) + visibleWidth(each) <= inner,
+      const hintParts = this.delegationHintParts().find(
+        (each) => visibleWidth(this.compose([...parts, ...each]).text) <= inner,
       );
-      if (hint) text += hint;
+      if (hintParts) parts.push(...hintParts);
     }
     if (labels.length) {
-      const full = labels.map(({ label }) => ` · ${label}`).join("");
-      if (visibleWidth(text) + visibleWidth(full) <= inner) text += full;
-      else {
-        const min = ` · ${labels.map(({ label }) => label.slice(0, 1)).join(" ")}`;
-        if (visibleWidth(text) + visibleWidth(min) <= inner) {
-          text += min;
-          for (const label of labels) label.label = label.label.slice(0, 1);
-        }
+      const fullParts: ActionPart[] = [];
+      for (const entry of labels)
+        fullParts.push(
+          { text: dim(" · ") },
+          { text: entry.text, action: { kind: entry.kind, label: entry.label } },
+        );
+      if (visibleWidth(this.compose([...parts, ...fullParts]).text) <= inner) {
+        parts.push(...fullParts);
+      } else {
+        const minParts: ActionPart[] = [{ text: dim(" · ") }];
+        labels.forEach((entry, index) => {
+          if (index) minParts.push({ text: dim(" ") });
+          const keyOnly = this.key(entry.key);
+          minParts.push({ text: keyOnly.text, action: { kind: entry.kind, label: entry.key } });
+        });
+        if (visibleWidth(this.compose([...parts, ...minParts]).text) <= inner)
+          parts.push(...minParts);
       }
     }
     if (this.state.canPickModels) {
-      for (const hint of [" · 1/2/3/4/5 model", " · 12345"])
-        if (visibleWidth(text) + visibleWidth(hint) <= inner) {
-          text += hint;
+      const modelHints: ActionPart[][] = [
+        [{ text: dim(" · ") }, { text: this.hint("model", "1/2/3/4/5").text }],
+        [{ text: dim(" · ") }, { text: this.key("12345").text }],
+      ];
+      for (const hintParts of modelHints)
+        if (visibleWidth(this.compose([...parts, ...hintParts]).text) <= inner) {
+          parts.push(...hintParts);
           break;
         }
     }
-    this.addAction(lines, inner, text, [
-      ...(this.state.canEdit
-        ? [{ kind: "edit" as const, label: this.effortLabel(inner, compact) }]
-        : []),
-      ...labels,
-    ]);
+    const composed = this.compose(parts);
+    this.addAction(lines, inner, composed.text, composed.actions);
   }
 
   private effortLabel(inner: number, compact: boolean): string {
     return inner < (compact ? 46 : 22) ? "E" : "Edit effort";
   }
-  private delegationHints(): readonly string[] {
-    return this.options.delegation
-      ? [" · ←→ mode · ⇧←→ eagerness", " · ←→ mode · ⇧←→ eager", " · ←→ ⇧←→"]
-      : [];
+  private effortHint(inner: number, compact: boolean): { text: string; label: string } {
+    return this.hint(this.effortLabel(inner, compact), "E");
   }
-  private controlText(inner: number, compact: boolean): string {
-    const effortLabel = this.effortLabel(inner, compact),
+  private delegationHintParts(): ActionPart[][] {
+    const dim = (text: string) => this.options.theme.fg("dim", text);
+    if (!this.options.delegation) return [];
+    const mode = this.hint("mode", "←→");
+    return [
+      [
+        { text: dim(" · ") },
+        { text: mode.text },
+        { text: dim(" · ") },
+        { text: this.hint("eagerness", "⇧←→").text },
+      ],
+      [
+        { text: dim(" · ") },
+        { text: mode.text },
+        { text: dim(" · ") },
+        { text: this.hint("eager", "⇧←→").text },
+      ],
+      [
+        { text: dim(" · ") },
+        { text: this.key("←→").text },
+        { text: dim(" ") },
+        { text: this.key("⇧←→").text },
+      ],
+    ];
+  }
+  private controlText(inner: number, compact: boolean): ActionPart[] {
+    const dim = (text: string) => this.options.theme.fg("dim", text);
+    const key = (value: string): ActionPart => ({ text: this.key(value).text });
+    const legend = (label: string, value: string): ActionPart => ({
+      text: this.hint(label, value).text,
+    });
+    const effort = this.effortHint(inner, compact),
       edit = this.state.canEdit;
+    const effortPart = edit
+      ? { text: effort.text, action: { kind: "edit" as const, label: effort.label } }
+      : undefined;
     if (compact) {
-      if (inner < 12) return " Tab↑↓";
-      if (inner < 22) return ` Alt+S Tab ↑↓${edit ? ` ${effortLabel}` : ""}↵`;
-      if (inner < 46) return ` Alt+S · Tab slots · ↑↓${edit ? ` ${effortLabel}` : ""} ↵ Esc`;
-      return ` Alt+S · Tab slots · ↑↓ preset${edit ? ` · E ${effortLabel}` : ""} · Enter Esc`;
+      if (inner < 12) return [{ text: dim(" ") }, key("Tab"), key("↑↓")];
+      if (inner < 22)
+        return [
+          { text: dim(" ") },
+          key("Alt+S"),
+          { text: dim(" ") },
+          key("Tab"),
+          { text: dim(" ") },
+          key("↑↓"),
+          ...(effortPart ? [{ text: dim(" ") }, effortPart] : []),
+          key("↵"),
+        ];
+      if (inner < 46)
+        return [
+          { text: dim(" ") },
+          key("Alt+S"),
+          { text: dim(" · ") },
+          legend("slots", "Tab"),
+          { text: dim(" · ") },
+          key("↑↓"),
+          ...(effortPart ? [{ text: dim(" ") }, effortPart] : []),
+          { text: dim(" ") },
+          key("↵"),
+          { text: dim(" ") },
+          key("Esc"),
+        ];
+      return [
+        { text: dim(" ") },
+        key("Alt+S"),
+        { text: dim(" · ") },
+        legend("slots", "Tab"),
+        { text: dim(" · ") },
+        key("↑↓"),
+        { text: dim(" preset") },
+        ...(effortPart ? [{ text: dim(" · ") }, effortPart] : []),
+        { text: dim(" · ") },
+        key("Enter"),
+        { text: dim(" ") },
+        key("Esc"),
+      ];
     }
     if (this.options.delegation) {
       if (inner >= 70)
-        return ` ←→ mode · ⇧←→ eagerness · ↑↓ preset${edit ? " · Edit effort" : ""} · Enter · Esc`;
-      if (inner >= 46) return ` ←→ mode · ⇧←→ eager · ↑↓${edit ? " · Edit effort" : ""} · ↵ · Esc`;
-      if (inner >= 22) return edit ? " ←→ ⇧←→ ↑↓ E Edit effort ↵" : " ←→ ⇧←→ ↑↓ ↵ Esc";
+        return [
+          { text: dim(" ") },
+          legend("mode", "←→"),
+          { text: dim(" · ") },
+          legend("eagerness", "⇧←→"),
+          { text: dim(" · ") },
+          key("↑↓"),
+          { text: dim(" preset") },
+          ...(effortPart ? [{ text: dim(" · ") }, effortPart] : []),
+          { text: dim(" · ") },
+          key("Enter"),
+          { text: dim(" · ") },
+          key("Esc"),
+        ];
+      if (inner >= 46)
+        return [
+          { text: dim(" ") },
+          legend("mode", "←→"),
+          { text: dim(" · ") },
+          legend("eager", "⇧←→"),
+          { text: dim(" · ") },
+          key("↑↓"),
+          ...(effortPart ? [{ text: dim(" · ") }, effortPart] : []),
+          { text: dim(" · ") },
+          key("↵"),
+          { text: dim(" · ") },
+          key("Esc"),
+        ];
+      if (inner >= 22)
+        return edit
+          ? [
+              { text: dim(" ") },
+              key("←→"),
+              { text: dim(" ") },
+              key("⇧←→"),
+              { text: dim(" ") },
+              key("↑↓"),
+              { text: dim(" ") },
+              effortPart!,
+              { text: dim(" ") },
+              key("↵"),
+            ]
+          : [
+              { text: dim(" ") },
+              key("←→"),
+              { text: dim(" ") },
+              key("⇧←→"),
+              { text: dim(" ") },
+              key("↑↓"),
+              { text: dim(" ") },
+              key("↵"),
+              { text: dim(" ") },
+              key("Esc"),
+            ];
     }
-    if (inner < 22) return edit ? "Alt+S E ↑↓↵ Esc" : " Alt+S ↑↓ ↵ Esc";
-    if (inner < 46) return edit ? " Alt+S ↑↓ E Edit effort ↵ Esc" : " Alt+S close · ↑↓ Enter Esc";
+    if (inner < 22)
+      return edit
+        ? [
+            key("Alt+S"),
+            { text: dim(" ") },
+            effortPart!,
+            { text: dim(" ") },
+            key("↑↓"),
+            key("↵"),
+            { text: dim(" ") },
+            key("Esc"),
+          ]
+        : [
+            { text: dim(" ") },
+            key("Alt+S"),
+            { text: dim(" ") },
+            key("↑↓"),
+            { text: dim(" ") },
+            key("↵"),
+            { text: dim(" ") },
+            key("Esc"),
+          ];
+    if (inner < 46)
+      return edit
+        ? [
+            { text: dim(" ") },
+            key("Alt+S"),
+            { text: dim(" ") },
+            key("↑↓"),
+            { text: dim(" ") },
+            effortPart!,
+            { text: dim(" ") },
+            key("↵"),
+            { text: dim(" ") },
+            key("Esc"),
+          ]
+        : [
+            { text: dim(" ") },
+            legend("close", "Alt+S"),
+            { text: dim(" · ") },
+            key("↑↓"),
+            { text: dim(" ") },
+            key("Enter"),
+            { text: dim(" ") },
+            key("Esc"),
+          ];
     return edit
-      ? " Alt+S close · E Edit effort · ↑↓ navigate · Enter apply · Esc"
-      : " Alt+S close · ↑↓ navigate · Enter apply · Esc cancel";
+      ? [
+          { text: dim(" ") },
+          legend("close", "Alt+S"),
+          { text: dim(" · ") },
+          effortPart!,
+          { text: dim(" · ") },
+          legend("navigate", "↑↓"),
+          { text: dim(" · ") },
+          legend("apply", "Enter"),
+          { text: dim(" · ") },
+          key("Esc"),
+        ]
+      : [
+          { text: dim(" ") },
+          legend("close", "Alt+S"),
+          { text: dim(" · ") },
+          legend("navigate", "↑↓"),
+          { text: dim(" · ") },
+          legend("apply", "Enter"),
+          { text: dim(" · ") },
+          legend("cancel", "Esc"),
+        ];
   }
 }

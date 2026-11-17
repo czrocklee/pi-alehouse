@@ -206,28 +206,29 @@ for (const frame of [false, true]) {
   });
 
   for (const fits of [false, true]) {
-    // A lone Agent's edge needs only the 50-column confirmation (+6 framed).
-    const width = (frame ? 56 : 50) - (fits ? 0 : 1);
+    // A lone Agent's edge needs only the 48-column confirmation (+6 framed).
+    const width = (frame ? 54 : 48) - (fits ? 0 : 1);
     test(`context never displaces protected Stop confirmation (frame=${frame}, width=${width})`, (t) => {
       const stopped = [];
       const h = paneFixture(t, frame, { width, onStop: (id) => stopped.push(id) });
       const initial = h.paint();
       assert.ok(initial.every((line) => visibleWidth(line) <= width));
-      assert.match(initial.at(-2), /⠋ (?:running|run)/, "the dock carries the live status");
+      assert.match(initial.at(-2), /⠋ · /, "the dock carries the live glyph");
+      assert.doesNotMatch(initial.at(-2), /running/, "normal running work is glyph-only");
       if (!fits) {
-        assert.doesNotMatch(initial.at(-1), /\[S Stop\]/);
+        assert.doesNotMatch(initial.at(-1), /\bstop\b/);
         h.pane.handleInput("s");
         h.paint();
         h.pane.handleInput("\x13");
         assert.deepEqual(stopped, []);
         return;
       }
-      assert.match(initial.at(-1), /\[S Stop\]/);
+      assert.match(initial.at(-1), /\bstop\b/);
       h.pane.handleInput("s");
       const armed = h.paint();
       assert.equal(armed.length, initial.length);
-      assert.match(armed.at(-2), /⠋ (?:running|run)/, "the sticky dock keeps the live status");
-      assert.match(armed.at(-1), /best-effort · Ctrl\+S · Esc cancel · \[Confirm stop\]/);
+      assert.match(armed.at(-2), /⠋ · /, "the sticky dock keeps the live glyph");
+      assert.match(armed.at(-1), /best-effort · Ctrl\+S · Esc cancel · confirm stop/);
       assert.doesNotMatch(armed.at(-1), /ctx|agents|lines/);
       assert.ok(armed.every((line) => visibleWidth(line) <= width));
       h.pane.handleInput("\x13");

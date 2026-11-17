@@ -3,11 +3,10 @@ import test from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { createJiti } from "jiti";
 
-// Direct source tests for the framed agent tabs' separator: joins are a
-// literal ASCII pipe (U+007C) painted with the muted border token, never the
-// rule chrome a popover frame uses. Docked joins stay empty. Geometry, hit
-// ranges and selection styling hold around it. These hold the contract at the
-// helper seam, without a build.
+// Direct source tests for the agent tabs' separator: every edge uses the tabs'
+// own padding, never an ASCII pipe or the rule chrome a popover frame uses.
+// Geometry, hit ranges and selection styling hold around it. These hold the
+// contract at the helper seam, without a build.
 const jiti = createJiti(import.meta.url, { fsCache: false });
 const { renderDetailAgentStrip } = await jiti.import(
   "../../src/orchestration/ui/agent-detail-fields.ts",
@@ -71,7 +70,6 @@ const strip = (overrides = {}) =>
 const pipes = (text) => [...text].filter((ch) => ch === "|").length;
 const fgCall = (calls, color, text) =>
   calls.some(([kind, c, t]) => kind === "fg" && c === color && t === text);
-const items = (text) => text.split("|").length;
 
 /** Records every theme call, so token usage is provable, not assumed. */
 const recording = () => {
@@ -93,21 +91,21 @@ const noBg = (calls, where) =>
     `${where}: the render never asks for a background fill`,
   );
 
-test("framed tabs join by literal ASCII pipes, never rule chrome", () => {
+test("framed tabs are separated by their own padding, never a pipe or rule", () => {
   const rec = recording();
   const { text } = strip({ framed: true, theme: rec.theme });
-  // Exactly one pipe per join: N-1 for N tabs.
-  assert.equal(pipes(text), 2, text);
-  assert.ok(text.includes("|"), text);
-  // The literal U+007C code point, not a lookalike box glyph.
+  // No separator is painted at all: each tab's padding does the work.
+  assert.equal(pipes(text), 0, text);
+  assert.ok(!text.includes("|"), text);
   assert.ok(!text.includes("\u2502"), "never U+2502");
   assert.ok(!text.includes("\u2500"), "never the rule glyph the frame draws");
   assert.ok(text.includes(POPOVER.h) === false, "never POPOVER.h");
-  // The divider is the only borderMuted-styled fragment, and the rule token
-  // and colour are never asked for.
+  // Two spaces between adjacent tab labels: the trailing and leading padding.
+  assert.match(text, /✓ aspen {2}✓ birch {2}✓ cedar/, text);
+  // No divider is styled, because none is painted.
   assert.deepEqual(
-    rec.calls.filter(([kind, , t]) => kind === "fg" && t === "|"),
-    [["fg", "borderMuted", "|"]],
+    rec.calls.filter(([, , t]) => t === "|"),
+    [],
     JSON.stringify(rec.calls),
   );
   assert.ok(
@@ -119,10 +117,10 @@ test("framed tabs join by literal ASCII pipes, never rule chrome", () => {
   noBg(rec.calls, "strip");
 });
 
-test("arrows keep their flush joins: no pipe beside ‹ or ›", () => {
+test("arrows sit flush against the padded tabs, with no separator", () => {
   const rec = recording();
   const { text } = strip({ framed: true, arrows: true, theme: rec.theme });
-  assert.equal(pipes(text), 2, text);
+  assert.equal(pipes(text), 0, text);
   assert.doesNotMatch(text, /‹\|/, text);
   assert.doesNotMatch(text, /\|›/, text);
   // The step controls are dim chrome of their own, never muted-border joins.
@@ -130,7 +128,7 @@ test("arrows keep their flush joins: no pipe beside ‹ or ›", () => {
   assert.ok(!fgCall(rec.calls, "borderMuted", "›"), JSON.stringify(rec.calls));
 });
 
-test("click ranges cover the padded tabs and never the pipe", () => {
+test("click ranges cover the padded tabs and never a separator", () => {
   const { text, items } = strip({ framed: true });
   assert.equal(items.length, 3, text);
   for (const [index, item] of items.entries()) {
@@ -138,13 +136,12 @@ test("click ranges cover the padded tabs and never the pipe", () => {
     // Each range is the tab's own padding, whole.
     assert.ok(own.startsWith(" ") && own.endsWith(" "), JSON.stringify(own));
     assert.ok(!own.includes("|"), JSON.stringify(own));
-    // A pipe separates on the outside of every range, never inside one.
-    if (index > 0) assert.equal(text[item.from - 1], "|", text);
-    if (index < items.length - 1) assert.equal(text[item.to], "|", text);
+    // No separator sits between adjacent ranges: the padding is adjacent.
+    if (index > 0) assert.equal(item.from, items[index - 1].to, text);
   }
 });
 
-test("the selected tab's style is intact: the pipe is styled by nothing else", () => {
+test("the selected tab's style is intact: no separator joins its underline", () => {
   const sgr = {
     fg: (_color, text) => text,
     bold: (text) => `\u001b[1m${text}\u001b[22m`,
@@ -163,9 +160,8 @@ test("the selected tab's style is intact: the pipe is styled by nothing else", (
     "birch",
     "only the selected nickname is underlined",
   );
-  // The wrapped span is the nickname alone: the divider never joins it.
+  // No selection styling or accent reaches a separator, because none exists.
   assert.ok(!text.slice(open, close).includes("|"), text);
-  // No selection styling or accent reaches the divider.
   assert.ok(!fgCall(rec.calls, "accent", "|"), JSON.stringify(rec.calls));
   assert.ok(!fgCall(rec.calls, "borderAccent", "|"), JSON.stringify(rec.calls));
   assert.deepEqual(
@@ -180,7 +176,7 @@ test("the selected tab's style is intact: the pipe is styled by nothing else", (
   );
 });
 
-test("hidden peers still summarize +N with attention counts beside the pipe joins", () => {
+test("hidden peers still summarize +N with attention counts beside the padding", () => {
   const entries = [
     questioned("q1"),
     warned("w1"),
@@ -192,15 +188,13 @@ test("hidden peers still summarize +N with attention counts beside the pipe join
   const { text } = strip({ entries, selected: "sel", width: 22, framed: true });
   assert.ok(visibleWidth(text) <= 22, text);
   assert.match(text, /sel/, text);
-  // Two questions and three warnings behind one summary, joined to the
-  // selected tab by the same single pipe.
-  assert.match(text, / \+5 \?2 !3 \|/, text);
-  // The summary is one element like a tab: the join count still matches the
-  // painted elements minus one.
-  assert.equal(pipes(text), items(text) - 1, text);
+  // Two questions and three warnings behind one summary, separated from the
+  // selected tab by the same padding alone.
+  assert.match(text, / \+5 \?2 !3 /, text);
+  assert.equal(pipes(text), 0, text);
 });
 
-test("docked tabs keep their empty separator and adjacency", () => {
+test("docked tabs keep the same padding-only adjacency", () => {
   const rec = recording();
   const { text, items: ranges } = strip({ framed: false, theme: rec.theme });
   assert.ok(!text.includes("|"), text);
@@ -211,7 +205,7 @@ test("docked tabs keep their empty separator and adjacency", () => {
     [],
     JSON.stringify(rec.calls),
   );
-  // Join allocation stays 0: the tabs' own padding separates them.
+  // The tabs' own padding separates them: ranges are adjacent.
   assert.equal(ranges.length, 3);
   for (let i = 1; i < ranges.length; i++) assert.equal(ranges[i].from, ranges[i - 1].to, text);
 });
@@ -239,7 +233,7 @@ test("every width 1..200 fits ASCII, CJK and ANSI nicknames", () => {
     for (const item of ranges)
       assert.ok(item.from >= 0 && item.to <= visibleWidth(text), `${at} ${JSON.stringify(item)}`);
     if (width >= fullFit) {
-      assert.equal(pipes(text), 3, at);
+      assert.equal(pipes(text), 0, at);
       for (const name of names) assert.ok(text.includes(name), at);
     }
   }

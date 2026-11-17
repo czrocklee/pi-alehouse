@@ -137,7 +137,7 @@ for (const count of [0, 1, 4])
     assert.equal(short.length, before.length, "opening a composer retains outer height");
     assert(short.at(-2).includes("› draft"), short.join("\n"));
     assert(short.at(-3).includes("Enter send"));
-    assert(short.at(-1).includes("[Stop]"));
+    assert(short.at(-1).includes("stop"));
     f.source.count = 200;
     const grown = f.paint();
     assert(grown.at(-2).includes("› draft"));
@@ -268,23 +268,23 @@ test("an open Info page keeps the hidden count on the footer cue, and Esc return
 });
 
 for (const height of [12, 40])
-  test(`Info keeps the hidden-note count without offering I info at height ${height}`, (t) => {
+  test(`Info keeps the hidden-note count without offering its key hint at height ${height}`, (t) => {
     const f = fixture(t, {
       height,
       current: view({ cleanup_errors: ["first fault", "second fault", "third fault"] }),
     });
     assert(
-      f.paint().some((line) => line.includes("I info")),
+      f.paint().some((line) => /· info\b/.test(line)),
       f.paint().join("\n"),
     );
     f.pane.handleInput("i");
     const info = f.paint();
     const flat = info.join("\n");
-    assert.doesNotMatch(flat, /I info\b/, "Info is already open: no redundant key hint");
+    assert.doesNotMatch(flat, /· info\b/, "Info is already open: no redundant key hint");
     assert.match(flat, /\+\d|!\d/, `the omitted notes stay counted: ${flat}`);
     assert.doesNotMatch(flat, /Transcript · Info/, "no constant page row");
     f.pane.handleInput("i");
-    assert(f.paint().some((line) => line.includes("I info")));
+    assert(f.paint().some((line) => /· info\b/.test(line)));
   });
 
 test("Info lists the human-steer admission the attention rows count", () => {
@@ -411,7 +411,7 @@ test("compact drafts skip hidden tabs while keeping visible bottom metrics", (t)
   // The bottom metrics now survive this height; tabs still ride the edge.
   const before = f.paint();
   assert.match(before.at(-1), /cobalt/);
-  assert.match(before.at(-2), /running/);
+  assert.match(before.at(-2), /^⠋ · /);
   assert.ok(modelReads > 0, "the visible summary is formatted");
   // A compact draft owns that edge: only the hidden tabs skip formatting.
   f.pane.handleInput("m");
@@ -420,7 +420,7 @@ test("compact drafts skip hidden tabs while keeping visible bottom metrics", (t)
   const composing = f.paint();
   assert.match(composing.at(-1), /^› /);
   assert.doesNotMatch(composing.at(-1), /cobalt/);
-  assert.match(composing.at(-2), /running/);
+  assert.match(composing.at(-2), /^⠋ · /);
   assert.ok(modelReads > previousReads, "the summary remains visible beside a compact draft");
 });
 

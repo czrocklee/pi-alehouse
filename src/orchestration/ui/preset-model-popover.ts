@@ -1,4 +1,5 @@
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
+import { shortcutHint } from "../../shared/shortcut-hint.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import { onBorderLabelsChange, popoverTextRect } from "../../shared/popover-chrome.mjs";
 import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
@@ -230,12 +231,13 @@ export class PresetModelPopover implements Component, Focusable {
     if (this.closed) return [];
     const height = Math.max(1, this.options.height());
     const inner = width - 2;
-    const bottomRows = popoverLabelRows(
-      this.options.theme,
-      width,
-      this.options.theme.fg("muted", "↑↓ choose · Enter apply · Esc cancel"),
-      "bottom",
-    );
+    const bottomLabel =
+      shortcutHint(this.options.theme, "choose", "↑↓", { color: "muted" }) +
+      this.options.theme.fg("muted", " · ") +
+      shortcutHint(this.options.theme, "apply", "Enter", { color: "muted" }) +
+      this.options.theme.fg("muted", " · ") +
+      shortcutHint(this.options.theme, "cancel", "Esc", { color: "muted" });
+    const bottomRows = popoverLabelRows(this.options.theme, width, bottomLabel, "bottom");
     // Chrome row counts are independent of hover and the close control; the
     // emitted title below is rebuilt with both once eligibility is settled.
     const frameRows =
@@ -250,7 +252,13 @@ export class PresetModelPopover implements Component, Focusable {
       // Degenerate paints retire admission; the dry recheck layout never
       // disturbs the host's painted registration.
       if (paintClose) this.selection.reset();
-      return [truncateToWidth("Too small · Esc to cancel", width)];
+      return [
+        truncateToWidth(
+          this.options.theme.fg("muted", "Too small · ") +
+            shortcutHint(this.options.theme, "to cancel", "Esc", { color: "muted" }),
+          width,
+        ),
+      ];
     }
     const models = this.options.models().filter((model) => model.api !== "pi-virtual");
     const rows = this.nativeRows(inner, models).filter(

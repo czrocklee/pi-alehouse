@@ -127,8 +127,8 @@ for (const frame of [false, true])
   test(`message mode sends one typed line to the painted Run (frame=${frame})`, (t) => {
     const f = paneFixture(t, { frame });
     const before = f.pane.render(120);
-    assert.match(stripTerminalSequences(before.at(-1)), /M message/);
-    assert.match(stripTerminalSequences(before.at(-1)), /\[S Stop\]/);
+    assert.match(stripTerminalSequences(before.at(-1)), /message/);
+    assert.match(stripTerminalSequences(before.at(-1)), /stop/);
     f.pane.handleInput("m");
     const composing = f.pane.render(120);
     assert.equal(composing.length, before.length, "message mode does not resize the pane");
@@ -144,16 +144,16 @@ for (const frame of [false, true])
     // While composing, the draft owns the keyboard: the heading above names
     // its own Enter/Esc, and the edge offers no key the input would swallow --
     // no ←/→ arrows, M or Esc -- while Stop stays clickable, without its S key.
-    assert.doesNotMatch(f.footer(), /M message|[‹›]|Esc|Enter|\[S Stop\]/);
-    assert.match(f.footer(), /\[Stop\](?: ─╯)?$/);
+    assert.doesNotMatch(f.footer(), /message|[‹›]|Esc|Enter/);
+    assert.match(f.footer(), /stop(?: ─╯)?$/);
     // Keys that navigate, stop or close outside message mode are plain text here.
     f.type("skip hls 别动 config");
     assert.match(f.draftRow(), /› skip hls 别动 config/);
     assert.deepEqual(f.sent, []);
     f.pane.handleInput(ENTER);
     assert.deepEqual(f.sent, [["run-a", "skip hls 别动 config"]]);
-    assert.match(f.footer(), /\[S Stop\]/);
-    assert.match(f.footer(), /M message/, "an accepted message leaves message mode");
+    assert.match(f.footer(), /stop/);
+    assert.match(f.footer(), /message/, "an accepted message leaves message mode");
     assert.equal(f.drafts.at(-1), undefined);
     assert.equal(f.closes, 0);
   });
@@ -167,7 +167,7 @@ test("Esc discards the draft first and only then closes the pane", (t) => {
   f.pane.handleInput(ESC);
   assert.equal(f.closes, 0);
   assert.equal(f.drafts.at(-1), undefined);
-  assert.match(f.footer(), /M message/);
+  assert.match(f.footer(), /message/);
   f.pane.handleInput(ENTER);
   assert.deepEqual(f.sent, []);
   f.pane.handleInput(ESC);

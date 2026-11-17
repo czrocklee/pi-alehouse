@@ -706,7 +706,7 @@ replace a later fresh launch cap, and consent dialogs wait until startup complet
 Only an explicit approval choice or explicit remember operation stages an
 approval preference; startup restoration, `/tree`, and judge-observer updates
 do not write preferences. With a persistent save scope, choosing an approval
-mode stages that live choice. The approval menu's **Save as global/project
+mode stages that live choice. The approval menu's **Save as global/workspace
 default** and `/approval save [global|workspace]` instead show the target and
 current value for explicit confirmation, then stage the preference without
 changing the live mode or save scope. Saving a default never enables an armed

@@ -17,7 +17,7 @@ const theme = { fg: (_color, text) => text, bold: (text) => text };
 const live = { active_tools: [], tool_uses: 0, preview: "" };
 // Raw Ctrl+S works without Kitty; plain CR/LF must never substitute for it.
 const CONFIRM = "\x13";
-const CONFIRM_HINT = "best-effort · Ctrl+S · Esc cancel · [Confirm stop]";
+const CONFIRM_HINT = "best-effort · Ctrl+S · Esc cancel · confirm stop";
 function monotonicClock(t, initial = 1000) {
   let now = initial;
   t.mock.method(performance, "now", () => now);
@@ -102,6 +102,9 @@ function clickLabel(pane, lines, label, offset = 0, clickCount) {
   const footer = lines.at(-1),
     at = footer.indexOf(label);
   assert(at >= 0, `expected painted ${label}`);
+  // The normal control is bare `stop`; a confirmation is `confirm stop`. Keep
+  // the two distinct so a normal-Stop click can never land on a confirmation.
+  if (label === "stop") assert(!footer.includes("confirm stop"), "normal Stop, not confirmation");
   return pane.handleMouse({
     type: "click",
     button: "left",
@@ -121,13 +124,15 @@ function assertInlineConfirmation(before, after) {
     stripTerminalSequences(after.at(-1)).includes(CONFIRM_HINT),
     "the complete best-effort and cancellation hint is painted",
   );
-  assert.doesNotMatch(after.at(-1), /\[S Stop\]/);
+  // Arming hides the menu and message controls: no normal footer remains.
+  assert.doesNotMatch(after.at(-1), /\. more/);
 }
 function assertRightmostLabel(lines, label, width, frame) {
   assert(lines.every((line) => visibleWidth(line) <= width));
   const footer = stripTerminalSequences(lines.at(-1)),
     at = footer.indexOf(label);
   assert(at >= 0, `expected painted ${label}`);
+  if (label === "stop") assert(!footer.includes("confirm stop"), "normal Stop, not confirmation");
   assert.equal(
     visibleWidth(footer.slice(0, at)) + visibleWidth(label),
     width - (frame ? 3 : 0),
@@ -144,9 +149,11 @@ function assertRightmostLabel(lines, label, width, frame) {
   // has no status to paint, and then claims none.
   const dock = stripTerminalSequences(lines.at(-2) ?? "");
   if (lineHasStatus(dock))
+    // Normal running/completed work leads with its glyph alone; ambiguous
+    // states keep a readable label.
     assert.match(
       dock,
-      /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◦] (?:running|queued)/,
+      /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◦✓✗■?](?: [a-z]+)? ·/,
       "the dock keeps the live status above the footer action",
     );
 }
@@ -155,7 +162,7 @@ function assertRightmostLabel(lines, label, width, frame) {
 const lineHasStatus = (line) => /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◦✓✗■?] /.test(line) && line.includes(" · ");
 function arm(pane, width = 120, key = "s") {
   const before = pane.render(width);
-  assert.match(before.at(-1), /\[S Stop\]/);
+  assert.match(stripTerminalSequences(before.at(-1)), /\. more .*stop/);
   pane.handleInput(key);
   const lines = pane.render(width);
   assertInlineConfirmation(before, lines);
@@ -183,7 +190,7 @@ for (const frame of [false, true])
       assert.deepEqual(stopped, [], "unpainted confirmation is not actionable");
       const lines = h.pane.render(120);
       assertInlineConfirmation(before, lines);
-      assertRightmostLabel(lines, "[Confirm stop]", 120, frame);
+      assertRightmostLabel(lines, "confirm stop", 120, frame);
       for (const input of ["s", "S", "\r", "\n", "\x1b[13;5u", "sure", "please"])
         h.pane.handleInput(input);
       assert.deepEqual(stopped, [], "printing and Enter never execute Stop");
@@ -198,7 +205,7 @@ for (const frame of [false, true])
       const after = h.pane.render(120);
       assert.match(after.at(-2), /cancelling/, "the dock reports the cancellation");
       assert.doesNotMatch(after[0], /cancelling/, "the title carries no lifecycle status");
-      assert.doesNotMatch(after.at(-1), /\[S Stop\]/);
+      assert.doesNotMatch(after.at(-1), /\. more .*stop/);
       h.pane.handleInput(key);
       h.pane.handleInput(CONFIRM);
       assert.deepEqual(stopped, ["run-a"], "already-stopping work is not stopped again");
@@ -239,35 +246,35 @@ for (const frame of [false, true])
       for (const edge of ["first", "last"]) {
         const lines = h.pane.render(width),
           before = stopped.length;
-        assertRightmostLabel(lines, "[S Stop]", width, frame);
+        assertRightmostLabel(lines, "stop", width, frame);
         const footer = lines.at(-1),
-          x = visibleWidth(footer.slice(0, footer.indexOf("[S Stop]"))),
+          x = visibleWidth(footer.slice(0, footer.indexOf("stop"))),
           y = lines.length - 1;
         assert.equal(h.pane.handleMouse({ type: "click", button: "right", x, y }), undefined);
         assert.equal(h.pane.handleMouse({ type: "click", button: "left", x, y: y - 1 }), undefined);
-        for (const offset of [-1, "[S Stop]".length]) {
-          assert.equal(clickLabel(h.pane, lines, "[S Stop]", offset), undefined);
+        for (const offset of [-1, "stop".length]) {
+          assert.equal(clickLabel(h.pane, lines, "stop", offset), undefined);
           assert.doesNotMatch(
             h.pane.render(width).at(-1),
-            /\[Confirm stop\]/,
+            /confirm stop/,
             "adjacent columns do not arm intent",
           );
         }
         // Docked there is no close control, so its Esc hint precedes Stop;
         // framed, the close control replaces it.
         if (frame) assert.doesNotMatch(footer, /Esc/, "the close control replaces Esc");
-        else assert.match(footer, /Esc.*\[S Stop\]/, "navigation precedes Stop");
+        else assert.match(footer, /Esc.*\. more .*stop/, "navigation precedes Stop");
         assert.deepEqual(
-          clickLabel(h.pane, lines, "[S Stop]", edge === "first" ? 0 : "[S Stop]".length - 1),
+          clickLabel(h.pane, lines, "stop", edge === "first" ? 0 : "stop".length - 1),
           { handled: true },
         );
-        clickLabel(h.pane, lines, "[S Stop]");
+        clickLabel(h.pane, lines, "stop");
         h.pane.handleInput(CONFIRM);
         assert.equal(stopped.length, before, "first click and unpainted input only arm intent");
         const confirmation = h.pane.render(width);
         assertInlineConfirmation(lines, confirmation);
-        assertRightmostLabel(confirmation, "[Confirm stop]", width, frame);
-        const confirmX = width - (frame ? 3 : 0) - "[Confirm stop]".length;
+        assertRightmostLabel(confirmation, "confirm stop", width, frame);
+        const confirmX = width - (frame ? 3 : 0) - "confirm stop".length;
         assert.equal(
           h.pane.handleMouse({ type: "click", button: "right", x: confirmX, y }),
           undefined,
@@ -276,8 +283,8 @@ for (const frame of [false, true])
           h.pane.handleMouse({ type: "click", button: "left", x: confirmX, y: y - 1 }),
           undefined,
         );
-        for (const offset of [-1, "[Confirm stop]".length]) {
-          assert.equal(clickLabel(h.pane, confirmation, "[Confirm stop]", offset), undefined);
+        for (const offset of [-1, "confirm stop".length]) {
+          assert.equal(clickLabel(h.pane, confirmation, "confirm stop", offset), undefined);
         }
         assert.equal(
           clickLabel(h.pane, confirmation, "Ctrl+S"),
@@ -289,13 +296,13 @@ for (const frame of [false, true])
           clickLabel(
             h.pane,
             confirmation,
-            "[Confirm stop]",
-            edge === "first" ? 0 : "[Confirm stop]".length - 1,
+            "confirm stop",
+            edge === "first" ? 0 : "confirm stop".length - 1,
           ),
           { handled: true },
         );
         h.pane.handleInput(CONFIRM);
-        clickLabel(h.pane, confirmation, "[Confirm stop]");
+        clickLabel(h.pane, confirmation, "confirm stop");
         assert.equal(
           stopped.length,
           before + 1,
@@ -333,11 +340,11 @@ for (const frame of [false, true])
         if (position === "scrolled") h.pane.handleInput("\x1b[5~");
         const before = h.pane.render(120);
         if (position === "scrolled") assert(!before.some((line) => line.includes("transcript-99")));
-        if (pointer) clickLabel(h.pane, before, "[S Stop]");
+        if (pointer) clickLabel(h.pane, before, "stop");
         else h.pane.handleInput("s");
         const confirmation = h.pane.render(120);
         assertInlineConfirmation(before, confirmation);
-        assertRightmostLabel(confirmation, "[Confirm stop]", 120, frame);
+        assertRightmostLabel(confirmation, "confirm stop", 120, frame);
         for (const input of ["s", "S", "\r", "\n", "sure", "please"]) h.pane.handleInput(input);
         assertInlineConfirmation(before, h.pane.render(120));
         count++;
@@ -364,7 +371,7 @@ for (const frame of [false, true])
           grown.slice(1, -1),
           "scrolling still moves the normal transcript window",
         );
-        assertRightmostLabel(scrolled, "[S Stop]", 120, frame);
+        assertRightmostLabel(scrolled, "stop", 120, frame);
         h.pane.handleInput(CONFIRM);
         const rearmed = arm(h.pane);
         assert.deepEqual(rearmed.slice(0, -1), scrolled.slice(0, -1));
@@ -376,7 +383,7 @@ for (const frame of [false, true])
           scrolled.slice(0, -1),
           "cancel preserves the new scroll window too",
         );
-        assertRightmostLabel(cancelled, "[S Stop]", 120, frame);
+        assertRightmostLabel(cancelled, "stop", 120, frame);
         h.pane.handleInput(CONFIRM);
         h.pane.handleInput("\x1b");
         assert.equal(h.closes, 1, "second Esc closes only after cancelling intent");
@@ -390,10 +397,10 @@ for (const frame of [false, true])
       const h = paneFixture(t, { frame, onStop: (id) => stopped.push(id) });
       const confirmation = arm(h.pane);
       const oldFooter = confirmation.at(-1),
-        oldX = oldFooter.indexOf("[Confirm stop]");
+        oldX = oldFooter.indexOf("confirm stop");
       const lines = h.pane.render(width);
       assert(lines.every((line) => visibleWidth(line) <= width));
-      assert(!lines.some((line) => line.includes("[Confirm stop]")));
+      assert(!lines.some((line) => line.includes("confirm stop")));
       h.pane.handleInput(CONFIRM);
       h.pane.handleMouse({ type: "click", button: "left", x: oldX, y: confirmation.length - 1 });
       h.pane.render(120);
@@ -413,7 +420,7 @@ for (const frame of [false, true])
           const stopped = [];
           const h = paneFixture(t, { frame, onStop: (id) => stopped.push(id) });
           const lines = stage === "confirmation" ? arm(h.pane) : h.pane.render(120);
-          const label = stage === "confirmation" ? "[Confirm stop]" : "[S Stop]";
+          const label = stage === "confirmation" ? "confirm stop" : "stop";
           if (change === "invalidate") h.pane.invalidate();
           else h.terminal[change] = change === "rows" ? 4 : 12;
           // No render between changing the terminal/invalidation and old input.
@@ -426,7 +433,7 @@ for (const frame of [false, true])
           h.pane.handleInput(CONFIRM);
           assert.doesNotMatch(
             h.pane.render(120).at(-1),
-            /\[Confirm stop\]/,
+            /confirm stop/,
             "restored dimensions and repaint cannot resurrect old intent",
           );
           h.pane.handleInput(CONFIRM);
@@ -444,7 +451,7 @@ for (const change of ["columns", "rows"])
     arm(h.pane);
     h.terminal[change]++;
     // The new terminal still has room, but its old confirmation intent is stale.
-    assert.doesNotMatch(h.pane.render(120).at(-1), /\[Confirm stop\]/);
+    assert.doesNotMatch(h.pane.render(120).at(-1), /confirm stop/);
     h.terminal.columns = 120;
     h.terminal.rows = 40;
     h.pane.render(120);
@@ -464,9 +471,9 @@ for (const frame of [false, true])
           { columns: 120, rows: 40 },
           "terminal dimensions did not change",
         );
-        assert.doesNotMatch(repainted.at(-1), /\[Confirm stop\]/);
-        assertRightmostLabel(repainted, "[S Stop]", width, frame);
-        if (pointer) clickLabel(h.pane, old, "[Confirm stop]");
+        assert.doesNotMatch(repainted.at(-1), /confirm stop/);
+        assertRightmostLabel(repainted, "stop", width, frame);
+        if (pointer) clickLabel(h.pane, old, "confirm stop");
         else h.pane.handleInput(CONFIRM);
         assert.deepEqual(
           stopped,
@@ -477,7 +484,7 @@ for (const frame of [false, true])
         h.pane.handleInput(CONFIRM);
         assert.doesNotMatch(
           h.pane.render(120).at(-1),
-          /\[Confirm stop\]/,
+          /confirm stop/,
           "restoring paint width cannot restore intent",
         );
         assert.deepEqual(stopped, []);
@@ -494,13 +501,13 @@ for (const frame of [false, true])
     const beyond = h.pane.render(h.terminal.columns + 1);
     assert(beyond.length > 0, "the body still renders wider than the terminal");
     assert(
-      !beyond.some((line) => line.includes("[S Stop]")),
+      !beyond.some((line) => line.includes("stop")),
       "an unrenderable paint cannot arm cancellation",
     );
     h.pane.handleInput("s");
     h.pane.handleInput(CONFIRM);
     assert.deepEqual(stopped, []);
-    assertRightmostLabel(h.pane.render(120), "[S Stop]", 120, frame);
+    assertRightmostLabel(h.pane.render(120), "stop", 120, frame);
   });
 
 for (const change of ["columns", "rows"])
@@ -614,18 +621,18 @@ test("an unpainted Stop hint disables S, even when the body is renderable", (t) 
   const h = paneFixture(t, { frame: true, onStop: () => assert.fail("Stop hint is not painted") });
   const lines = h.pane.render(14);
   assert(lines.length > 0);
-  assert.doesNotMatch(lines.at(-1), /\[S Stop\]/);
+  assert.doesNotMatch(lines.at(-1), /\. more .*stop/);
   h.pane.handleInput("s");
   h.pane.render(120);
   h.pane.handleInput(CONFIRM);
-  assert.doesNotMatch(h.pane.render(120).at(-1), /\[Confirm stop\]/);
+  assert.doesNotMatch(h.pane.render(120).at(-1), /confirm stop/);
 });
 
 function assertNoStopAction(h, width) {
   const lines = h.pane.render(width);
   assert(lines.length > 0, "the pane still renders when Stop does not fit");
   assert(lines.every((line) => visibleWidth(line) <= width));
-  assert(!lines.some((line) => line.includes("[S Stop]") || line.includes("[Confirm stop]")));
+  assert(!lines.some((line) => line.includes("stop") || line.includes("confirm stop")));
   h.pane.handleInput("s");
   h.pane.handleInput("S");
   h.pane.handleInput(CONFIRM);
@@ -635,14 +642,14 @@ function assertNoStopAction(h, width) {
   h.pane.handleMouse({ type: "click", button: "left", x: Math.max(0, width - 1), y });
   assert.equal(h.closes, 0);
   const again = h.pane.render(width);
-  assert(!again.some((line) => line.includes("[S Stop]") || line.includes("[Confirm stop]")));
+  assert(!again.some((line) => line.includes("stop") || line.includes("confirm stop")));
   h.pane.handleInput(CONFIRM);
 }
 function assertStopFits(h, width, stopped, run_id = "run-a") {
   const before = h.pane.render(width);
-  assertRightmostLabel(before, "[S Stop]", width, h.frame);
+  assertRightmostLabel(before, "stop", width, h.frame);
   const lines = arm(h.pane, width);
-  assertRightmostLabel(lines, "[Confirm stop]", width, h.frame);
+  assertRightmostLabel(lines, "confirm stop", width, h.frame);
   // pi-tui's truncateToWidth inserts SGR resets around ellipses even with this
   // plain theme. Permit only those exact markers, never arbitrary ANSI; the
   // title can be truncated. All else stays plain.
@@ -658,11 +665,11 @@ function assertStopFits(h, width, stopped, run_id = "run-a") {
   assert.deepEqual(stopped, [run_id]);
 }
 
-// Reserve the full 50-column hint; a lone Agent has no tab beside it, and the
+// Reserve the full 48-column hint; a lone Agent has no tab beside it, and the
 // live status lives in the dock rather than this edge. Framed chrome is
-// width-6: Stop starts at docked 50 / framed 56.
+// width-6: Stop starts at docked 48 / framed 54.
 for (const frame of [false, true]) {
-  const minimum = frame ? 56 : 50;
+  const minimum = frame ? 54 : 48;
   for (const width of [24, 40, 46, minimum - 1]) {
     test(`unfittable inline hint/status is not offered (frame=${frame}, width=${width})`, (t) => {
       const h = paneFixture(t, {
@@ -713,7 +720,7 @@ for (const frame of [false, true]) {
 for (const frame of [false, true])
   for (const fits of [false, true]) {
     // Queued work shares the running boundary: no status rides in the footer.
-    const width = (frame ? 56 : 50) - (fits ? 0 : 1);
+    const width = (frame ? 54 : 48) - (fits ? 0 : 1);
     test(`queued Stop shares the running confirmation boundary (frame=${frame}, width=${width})`, (t) => {
       const stopped = [];
       const h = paneFixture(t, {
@@ -822,7 +829,7 @@ for (const frame of [false, true])
         expected,
         "armed and ordinary panes perform the same scroll, including follow-tail state",
       );
-      assertRightmostLabel(actual, "[S Stop]", 120, frame);
+      assertRightmostLabel(actual, "stop", 120, frame);
       armed.pane.handleInput(CONFIRM);
     });
 
@@ -837,7 +844,7 @@ for (const frame of [false, true])
     h.pane.handleInput(CONFIRM);
     const after = h.pane.render(120);
     assert.deepEqual(after.slice(0, -1), before.slice(0, -1));
-    assertRightmostLabel(after, "[S Stop]", 120, frame);
+    assertRightmostLabel(after, "stop", 120, frame);
   });
 
 for (const frame of [false, true])
@@ -850,13 +857,12 @@ for (const frame of [false, true])
         const confirmation = arm(h.pane);
         clock.advance(elapsed);
         // Old painted geometry/input is deliberately used without a render.
-        if (pointer)
-          clickLabel(h.pane, confirmation, "[Confirm stop]", "[Confirm stop]".length - 1);
+        if (pointer) clickLabel(h.pane, confirmation, "confirm stop", "confirm stop".length - 1);
         else h.pane.handleInput(CONFIRM);
         assert.deepEqual(stopped, elapsed < 10000 ? ["run-a"] : []);
         if (elapsed >= 10000) {
           h.pane.handleInput(CONFIRM);
-          assertRightmostLabel(h.pane.render(120), "[S Stop]", 120, frame);
+          assertRightmostLabel(h.pane.render(120), "stop", 120, frame);
           h.pane.handleInput(CONFIRM);
           assert.deepEqual(stopped, [], "repaint does not restore expired intent");
           arm(h.pane);
@@ -878,15 +884,15 @@ for (const frame of [false, true])
       const h = paneFixture(t, { frame, onStop: (id) => stopped.push(id) });
       const lines = arm(h.pane);
       clock.advance(10000);
-      if (event === "render") assertRightmostLabel(h.pane.render(120), "[S Stop]", 120, frame);
+      if (event === "render") assertRightmostLabel(h.pane.render(120), "stop", 120, frame);
       else if (event === "s") h.pane.handleInput("s");
       else {
         const footer = lines.at(-1),
-          x = visibleWidth(footer.slice(0, footer.indexOf("[Confirm stop]")));
+          x = visibleWidth(footer.slice(0, footer.indexOf("confirm stop")));
         h.pane.handleMouse({ type: "press", button: "left", x, y: lines.length - 1 });
       }
       h.pane.handleInput(CONFIRM);
-      assertRightmostLabel(h.pane.render(120), "[S Stop]", 120, frame);
+      assertRightmostLabel(h.pane.render(120), "stop", 120, frame);
       assert.deepEqual(stopped, []);
     });
   }
@@ -902,7 +908,7 @@ for (const frame of [false, true])
     h.pane.handleInput("s");
     clock.advance(10000);
     h.pane.handleInput(CONFIRM);
-    assertRightmostLabel(h.pane.render(120), "[S Stop]", 120, frame);
+    assertRightmostLabel(h.pane.render(120), "stop", 120, frame);
   });
 
 for (const frame of [false, true])
@@ -918,14 +924,14 @@ for (const frame of [false, true])
     h.pane.handleInput("s");
     h.pane.handleInput("S");
     assert(
-      h.pane.render(120).at(-1).includes("[Confirm stop]"),
+      h.pane.render(120).at(-1).includes("confirm stop"),
       "wall time does not expire monotonic intent early",
     );
     wall = -1_000_000_000;
     clock.advance(1);
     h.pane.handleInput(CONFIRM);
     assert.deepEqual(stopped, [], "S, repaint and a backward wall clock cannot renew the deadline");
-    assertRightmostLabel(h.pane.render(120), "[S Stop]", 120, frame);
+    assertRightmostLabel(h.pane.render(120), "stop", 120, frame);
   });
 
 for (const frame of [false, true])
@@ -938,7 +944,7 @@ for (const frame of [false, true])
     assert.equal(h.closes, 0, "first Esc cancels even after the unpainted deadline");
     const after = h.pane.render(120);
     assert.deepEqual(after.slice(0, -1), before.slice(0, -1));
-    assertRightmostLabel(after, "[S Stop]", 120, frame);
+    assertRightmostLabel(after, "stop", 120, frame);
     h.pane.handleInput("\x1b");
     assert.equal(h.closes, 1);
   });
@@ -961,7 +967,7 @@ for (const frame of [false, true])
         assert(h.renders > renders, "the timer requests a repaint for stale confirmation");
         assert.equal(h.closes, 0, "a timer cannot close the pane");
         if (repaint) {
-          assertRightmostLabel(h.pane.render(120), "[S Stop]", 120, frame);
+          assertRightmostLabel(h.pane.render(120), "stop", 120, frame);
           h.pane.handleInput("\x1b");
           assert.equal(h.closes, 1, "after repaint removes confirmation, Esc closes normally");
         } else {
@@ -971,7 +977,7 @@ for (const frame of [false, true])
             0,
             "before repaint, first Esc cancels the still-visible confirmation",
           );
-          assertRightmostLabel(h.pane.render(120), "[S Stop]", 120, frame);
+          assertRightmostLabel(h.pane.render(120), "stop", 120, frame);
           h.pane.handleInput("\x1b");
           assert.equal(h.closes, 1, "the next Esc closes the pane");
         }
@@ -985,7 +991,7 @@ for (const frame of [false, true])
         const stopped = [];
         const h = paneFixture(t, { frame, onStop: (id) => stopped.push(id) });
         const lines = confirming ? arm(h.pane) : h.pane.render(120);
-        const label = confirming ? "[Confirm stop]" : "[S Stop]";
+        const label = confirming ? "confirm stop" : "stop";
         const footer = lines.at(-1),
           x = visibleWidth(footer.slice(0, footer.indexOf(label))),
           y = lines.length - 1;
@@ -997,10 +1003,10 @@ for (const frame of [false, true])
         const single = count === undefined || count === 1;
         assert.deepEqual(stopped, confirming && single ? ["run-a"] : []);
         const repainted = h.pane.render(120);
-        if (!confirming) assert.equal(repainted.at(-1).includes("[Confirm stop]"), single);
+        if (!confirming) assert.equal(repainted.at(-1).includes("confirm stop"), single);
         else if (!single)
           assert(
-            repainted.at(-1).includes("[Confirm stop]"),
+            repainted.at(-1).includes("confirm stop"),
             "multi-clicks do not consume confirmation either",
           );
       });
@@ -1026,16 +1032,18 @@ for (const frame of [false, true])
     };
     const h = paneFixture(t, { frame, paneTheme, onStop() {} });
     h.pane.render(120);
-    assert(colors.some(({ color, text }) => color === "dim" && text.includes("[S Stop]")));
-    assert(!colors.some(({ color, text }) => color === "warning" && text.includes("[S Stop]")));
-    assert(!bold.some((text) => text.includes("[S Stop]")));
+    // The normal control is dim with its `s` mnemonic accented inline: the
+    // body never repeats the key, and nothing is warning-coloured yet.
+    assert(colors.some(({ color, text }) => color === "dim" && text.includes("top")));
+    assert(colors.some(({ color, text }) => color === "accent" && text.includes("s")));
+    assert(!colors.some(({ color, text }) => color === "warning" && text.includes("stop")));
+    assert(bold.some((text) => text === "s"));
+    assert(!bold.some((text) => text.includes("stop")));
     colors.length = 0;
     bold.length = 0;
     const confirmation = arm(h.pane);
-    assert(
-      colors.some(({ color, text }) => color === "warning" && text.includes("[Confirm stop]")),
-    );
-    assert(bold.some((text) => text.includes("[Confirm stop]")));
+    assert(colors.some(({ color, text }) => color === "warning" && text.includes("confirm stop")));
+    assert(bold.some((text) => text.includes("confirm stop")));
     assert(stripTerminalSequences(confirmation.at(-1)).includes(CONFIRM_HINT));
   });
 
@@ -1271,9 +1279,9 @@ for (const frame of [false, true])
     h.terminal.rows = frame ? 5 : 7;
     assertNoStopAction(h, 120);
     h.terminal.rows = 40;
-    assert.match(h.pane.render(120).at(-1), /\[S Stop\]/);
+    assert.match(h.pane.render(120).at(-1), /\. more .*stop/);
     h.pane.handleInput(CONFIRM);
-    assert.doesNotMatch(h.pane.render(120).at(-1), /\[Confirm stop\]/);
+    assert.doesNotMatch(h.pane.render(120).at(-1), /confirm stop/);
   });
 
 for (const overrides of [
@@ -1290,7 +1298,7 @@ for (const overrides of [
       views: [view("a", overrides)],
       onStop: () => assert.fail("no live execution to stop"),
     });
-    assert.doesNotMatch(h.pane.render(120).at(-1), /\[S Stop\]/);
+    assert.doesNotMatch(h.pane.render(120).at(-1), /\. more .*stop/);
     h.pane.handleInput("s");
     h.pane.handleInput(CONFIRM);
   });
@@ -1312,7 +1320,7 @@ for (const stage of ["intent", "confirmation"])
       const stopped = [];
       const h = paneFixture(t, { views: [view("a"), view("b")], onStop: (id) => stopped.push(id) });
       const lines = stage === "confirmation" ? arm(h.pane) : h.pane.render(120);
-      const label = stage === "confirmation" ? "[Confirm stop]" : "[S Stop]";
+      const label = stage === "confirmation" ? "confirm stop" : "stop";
       if (change === "new-run") h.views[0].run_id = "new-run-a";
       else if (change === "owner") h.views[0].owner_id = "replacement-owner";
       else if (change === "generation") h.views[0].generation = "replacement-generation";
@@ -1339,7 +1347,7 @@ test("empty roster with Stop handler and read-only panes offer no Stop", (t) => 
     { onStop: undefined },
   ]) {
     const h = paneFixture(t, options);
-    assert.doesNotMatch(h.pane.render(120).at(-1), /\[S Stop\]/);
+    assert.doesNotMatch(h.pane.render(120).at(-1), /\. more .*stop/);
     h.pane.handleInput("s");
     h.pane.handleInput(CONFIRM);
     h.pane.handleInput("\x1b");
@@ -1496,7 +1504,7 @@ for (const queued of [false, true])
       "Stop is not Agent kill or Owner shutdown",
     );
     assert.equal(f.controller.stats().closed, false);
-    assert.doesNotMatch(h.pane.render(120).at(-1), /\[S Stop\]/);
+    assert.doesNotMatch(h.pane.render(120).at(-1), /\. more .*stop/);
     h.panels.dispose();
     await opening;
   });
@@ -1525,7 +1533,7 @@ for (const brokenNotify of [false, true])
       const opening = h.open(),
         lines = arm(h.pane);
       assert.doesNotThrow(() =>
-        pointer ? clickLabel(h.pane, lines, "[Confirm stop]") : h.pane.handleInput(CONFIRM),
+        pointer ? clickLabel(h.pane, lines, "confirm stop") : h.pane.handleInput(CONFIRM),
       );
       h.pane.handleInput(CONFIRM);
       assert.equal(stops, 1);

@@ -2,6 +2,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { validDifficulty, type RunView } from "../core/contracts.ts";
 import { reported, type UsageComponent } from "../core/usage-ledger.ts";
 import { formatTokenCount } from "../../shared/token-format.mjs";
+import { shortcutHint } from "../../shared/shortcut-hint.mjs";
 import { profileLabel } from "../tools/tool-names.ts";
 import type { ActiveTool, GenerationPreview } from "../runtime/activity-types.ts";
 import { singleLineToolArgumentDisplay } from "../presentation/tool-argument-text.ts";
@@ -27,14 +28,13 @@ import { isObservedCost, widgetCost } from "./widget-cost.ts";
 
 /** Label column, so every field's value starts at the same place. */
 const LABEL = 10;
-const STOP_LABEL = "[S Stop]";
-/** While composing, S is draft text: the control stays clickable, keyless. */
-const STOP_CLICK_LABEL = "[Stop]";
-const CONFIRM_LABEL = "[Confirm stop]";
+/** Plain control bodies: the shortcut helper paints the key inline. */
+const STOP_PLAIN = "stop";
+const CONFIRM_PLAIN = "confirm stop";
 const CONFIRM_HELP = "best-effort · Ctrl+S · Esc cancel";
-const CONFIRM_HINT = `${CONFIRM_HELP} · ${CONFIRM_LABEL}`;
+const CONFIRM_HINT = `${CONFIRM_HELP} · ${CONFIRM_PLAIN}`;
 /** The pane's actions menu control, painted before Message and Stop. */
-const MENU_LABEL = "[⋯]";
+const MENU_PLAIN = ". more";
 /** A shortened model name never drops below a readable fragment: four
  * literal cells beside the ellipsis. */
 const MODEL_FLOOR = 5;
@@ -337,7 +337,8 @@ export function renderDetailFields(
     notes.push([
       "pending",
       "warning",
-      `${view.pending_messages} alert(s) from this Run awaiting local presentation`,
+      `${view.pending_messages} pending alert${view.pending_messages === 1 ? "" : "s"}` +
+        " from this Run awaiting local presentation",
     ]);
   for (const note of view.cleanup_errors) notes.push(["cleanup", "error", note]);
   for (const note of view.discarded_inputs) notes.push(["discarded", "warning", note]);
@@ -352,38 +353,31 @@ export function renderDetailFields(
 }
 
 /** The live-turn clock in whole, floored seconds: `18s`, `1m02s`. One spelling
- * per magnitude keeps every tick the same shape, so the dock never re-decides
- * its row between a tenth and a whole second. */
+ * per magnitude keeps every tick the same shape. */
 const turnClockText = (ms: number): string => {
   const seconds = Math.floor(Math.max(0, ms) / 1000);
   return seconds < 60
     ? `${seconds}s`
     : `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, "0")}s`;
 };
-/** The clock's cell reservation while a turn is live: the widest spelling in
- * its magnitude, `(9m59s)` below ten minutes, so ordinary second ticks never
- * re-decide the row. Minute-count digit growth at 10m/100m/… adds one cell. */
-const turnClockReserve = (ms: number): number => {
-  const minutes = Math.floor(Math.max(0, ms) / 60_000);
-  return visibleWidth("(9m59s)") + (minutes < 10 ? 0 : String(minutes).length - 1);
-};
-
 interface DockSegment {
-  key: "status" | "model" | "turns" | "context" | "usage" | "cost" | "total";
+  key: "status" | "model" | "turns" | "context" | "usage" | "cost" | "elapsed" | "clock";
   /** Plain visible text, kept for re-clipping: only the model shortens. */
   plain: string;
   /** Painted text. */
   text: string;
-  /** Cells the layout reserves; a live clock reserves ahead of its ticks. */
+  /** Painted cells. The trailing clock reserves nothing after it. */
   width: number;
 }
 
-/** Compact live metrics for the pane's bottom dock: exactly one metrics row,
- * led by the lifecycle status with the current-turn clock appended while the
- * Run is actually running (not finishing, not exited). The task lives in the
- * title, so it is not repeated here. Figures drop from the least urgent end
- * when the row is narrow; a figure some response left out stays a floor (`≥`)
- * or unknown (`?`), never zero, and no numeric fact is clipped mid-figure.
+/** Compact live metrics for the pane's bottom dock: exactly one metrics row.
+ * Normal running/completed work leads with its lifecycle glyph alone; an
+ * ambiguous state keeps a readable label. The live current-turn clock closes
+ * the row after the bare cumulative elapsed time, while the Run is actually
+ * running (not finishing, not exited). The task lives in the title, so it is
+ * not repeated here. Figures drop from the least urgent end when the row is
+ * narrow; a figure some response left out stays a floor (`≥`) or unknown
+ * (`?`), never zero, and no numeric fact is clipped mid-figure.
  * `options.activity === true` adds the bounded activity row back for callers
  * that still allocate one; the default dock is the metrics row alone. */
 export function renderDetailSummary(
@@ -402,14 +396,6 @@ export function renderDetailSummary(
     view.status === "running" && !view.finalization_pending && !view.execution_exited
       ? view.turn_elapsed_ms
       : undefined;
-  const clock =
-    clockMs === undefined
-      ? undefined
-      : {
-          text: `(${turnClockText(clockMs)})`,
-          color: clockMs >= 60_000 ? "warning" : "dim",
-          reserve: turnClockReserve(clockMs),
-        };
   // The main widget spells a pending question humanely; the dock shares
   // that wording instead of the raw status key. Every other status keeps the
   // shared runPresentation labels.
@@ -417,32 +403,24 @@ export function renderDetailSummary(
   const label =
     view.status === "needs_input" ? (asked ? "needs answer" : "needs input") : state.label;
   const compact = view.status === "needs_input" ? (asked ? "answer?" : "input?") : state.compact;
-  const status = (label: string): DockSegment => {
-    const head = `${state.glyph} ${label}`;
-    const plain = clock ? `${head} ${clock.text}` : head;
-    return {
-      key: "status",
-      plain,
-      text: theme.fg(state.color, head) + (clock ? ` ${theme.fg(clock.color, clock.text)}` : ""),
-      width: visibleWidth(head) + (clock ? 1 + clock.reserve : 0),
-    };
-  };
-  const glyphStatus = (withClock: boolean): DockSegment => {
-    const plain = withClock && clock ? `${state.glyph} ${clock.text}` : state.glyph;
-    return {
-      key: "status",
-      plain,
-      text:
-        theme.fg(state.color, state.glyph) +
-        (withClock && clock ? ` ${theme.fg(clock.color, clock.text)}` : ""),
-      width: visibleWidth(state.glyph) + (withClock && clock ? 1 + clock.reserve : 0),
-    };
-  };
+  // Normal running/completed work is unambiguous from its glyph alone; every
+  // ambiguous lifecycle state keeps a readable label.
+  const normal =
+    view.status === "completed" ||
+    (view.status === "running" && !view.finalization_pending && !view.execution_exited);
+  const status = (text: string): DockSegment => ({
+    key: "status",
+    plain: text,
+    text: theme.fg(state.color, text),
+    width: visibleWidth(text),
+  });
+  const labelledStatus = (text: string): DockSegment => status(`${state.glyph} ${text}`);
+  const glyphStatus = (): DockSegment => status(state.glyph);
   const segments: DockSegment[] = [];
   const push = (key: DockSegment["key"], plain: string, color: string): void => {
     segments.push({ key, plain, text: theme.fg(color, plain), width: visibleWidth(plain) });
   };
-  segments.push(status(label));
+  segments.push(normal ? glyphStatus() : labelledStatus(label));
   const model = [singleLineText(s.model), singleLineText(s.thinking)].filter(Boolean).join("/");
   if (model) push("model", model, "dim");
   push(
@@ -498,7 +476,23 @@ export function renderDetailSummary(
   const spent = reported(view.usage, "cost");
   if (spent !== undefined && isObservedCost(spent))
     push("cost", widgetCost(spent, view.usage?.partial.includes("cost") ?? false), "dim");
-  push("total", `total ${formatMs(view.elapsed_ms)}`, "dim");
+  // Bare cumulative elapsed time: the label and parentheses are retired.
+  push("elapsed", formatMs(view.elapsed_ms), "dim");
+  // The live turn clock closes the row. It is last, so nothing after it needs
+  // a reservation: its own ticks never leave a trailing hole.
+  const clockSegment: DockSegment | undefined =
+    clockMs === undefined
+      ? undefined
+      : (() => {
+          const plain = `turn ${turnClockText(clockMs)}`;
+          return {
+            key: "clock",
+            plain,
+            text: theme.fg(clockMs >= 60_000 ? "warning" : "dim", plain),
+            width: visibleWidth(plain),
+          };
+        })();
+  if (clockSegment) segments.push(clockSegment);
 
   const SEP = 3;
   const total = (list: readonly DockSegment[]): number =>
@@ -525,14 +519,14 @@ export function renderDetailSummary(
       );
     }
   }
-  // Whole figures then yield, least urgent first: the total time, the cache
-  // percentage, the usage group, cost, turns (elevated turn pressure lasts
-  // longer), the shortened model, and finally the context. Status degrades
-  // through its compact label, glyph-with-clock and bare glyph before the
-  // context ever yields -- the window is essential. Once the context must
-  // yield, the freed row takes back the most readable status that fits it;
-  // the live clock outlasts the total time and every routine figure.
-  if (!fits()) drop("total");
+  // Whole figures then yield, least urgent first: the cumulative elapsed time,
+  // the cache percentage, the usage group, cost, turns (elevated turn pressure
+  // lasts longer), the shortened model, and finally the context. Ambiguous
+  // status wording compacts to its glyph before the context ever yields -- the
+  // window is essential. The live clock outlasts every routine figure, then
+  // yields before the context; once the context must yield, the freed row
+  // takes back the most readable status that fits, and the clock beside it.
+  if (!fits()) drop("elapsed");
   if (!fits()) {
     const plain = usageText(false);
     if (plain)
@@ -549,23 +543,32 @@ export function renderDetailSummary(
   if (!fits() && !elevatedTurns) drop("turns");
   if (!fits()) drop("model");
   if (!fits()) drop("turns");
-  if (!fits()) replace("status", status(compact));
-  if (!fits()) replace("status", glyphStatus(true));
-  if (!fits()) replace("status", glyphStatus(false));
+  if (!fits() && !normal) {
+    for (const form of [labelledStatus(compact), glyphStatus()]) {
+      replace("status", form);
+      if (fits()) break;
+    }
+  }
+  if (!fits()) drop("clock");
   if (!fits()) {
     drop("context");
-    // No status form could hold the context: the freed row takes back the
-    // most readable status that fits it, never a needless glyph alone.
-    replace(
-      "status",
-      [status(label), status(compact), glyphStatus(true), glyphStatus(false)].find(
-        (candidate) => candidate.width <= room,
-      ) ?? glyphStatus(false),
-    );
+    // No status form could hold the context: the freed row takes back the most
+    // readable status that fits it, never a needless glyph alone, and brings
+    // the live clock back when both still fit.
+    const statusForms = normal
+      ? [glyphStatus()]
+      : [labelledStatus(label), labelledStatus(compact), glyphStatus()];
+    const rest = kept.filter((segment) => segment.key !== "status");
+    const candidates: DockSegment[][] = [];
+    for (const form of statusForms) {
+      if (clockSegment) candidates.push([form, ...rest, clockSegment]);
+      candidates.push([form, ...rest]);
+    }
+    kept = candidates.find((candidate) => total(candidate) <= room) ?? [glyphStatus(), ...rest];
   }
   // Dropping whole figures can free more than the initial model shortening
   // needed. Give those cells back to a surviving model, without restoring any
-  // dropped field or borrowing from the live clock's reserved width.
+  // dropped field or borrowing from the live clock.
   const keptModel = kept.find((segment) => segment.key === "model");
   if (keptModel && fits()) {
     const modelRoom = Math.min(visibleWidth(model), keptModel.width + room - total(kept));
@@ -577,17 +580,10 @@ export function renderDetailSummary(
       width: visibleWidth(plain),
     });
   }
-  // Each retained segment is padded to its reserved width, so a live clock's
-  // ticks never shift the figures after it: the reservation and the paint
-  // agree on every column, ANSI included.
-  const pad = (segment: DockSegment): string => {
-    const painted = visibleWidth(segment.text);
-    return painted < segment.width
-      ? segment.text + " ".repeat(segment.width - painted)
-      : segment.text;
-  };
+  // No segment reserves trailing cells: the clock is last, so its ticks only
+  // change its own painted width and never leave a hole.
   const metrics = fits()
-    ? kept.map(pad).join(theme.fg("dim", " · "))
+    ? kept.map((segment) => segment.text).join(theme.fg("dim", " · "))
     : theme.fg(state.color, clipPlainText(state.glyph, room));
   const out = [metrics];
   if (options.activity !== true) return out;
@@ -697,7 +693,7 @@ export function getDetailAttentionNotes(input: DetailInput): readonly DetailAtte
       priority: 9,
       glyph: "!",
       color: "warning",
-      text: `${view.pending_messages} alert(s) awaiting presentation`,
+      text: `${view.pending_messages} pending alert${view.pending_messages === 1 ? "" : "s"}`,
       severity: "warning",
     });
   for (const note of view.dispatch_notes ?? [])
@@ -767,6 +763,8 @@ export function renderDetailAttention(
   const hidden = ordered.length - shown.length;
   if (!shown.length) return [];
   const plain = (note: DetailAttentionNote): string => singleLineText(`${note.glyph} ${note.text}`);
+  // The inline key is the same shortcut styling the footer controls use.
+  const info = shortcutHint(theme, "info", "I", { color: "dim" });
   return shown.map((note, index) => {
     const last = index === shown.length - 1;
     // The hidden-note counter yields its wording before the note text does,
@@ -774,16 +772,20 @@ export function renderDetailAttention(
     const suffixes =
       hidden > 0 && last
         ? [
-            ...(!options.info ? [` · +${hidden} · I info`, ` +${hidden} · I info`] : []),
-            ` · +${hidden}`,
-            ` +${hidden}`,
+            ...(!options.info
+              ? [
+                  theme.fg("dim", ` · +${hidden} · `) + info,
+                  theme.fg("dim", ` +${hidden} · `) + info,
+                ]
+              : []),
+            theme.fg("dim", ` · +${hidden}`),
+            theme.fg("dim", ` +${hidden}`),
             "",
           ]
         : [""];
     for (const suffix of suffixes) {
       const room = width - visibleWidth(suffix);
-      if (room >= 4)
-        return theme.fg(note.color, clipPlainText(plain(note), room)) + theme.fg("dim", suffix);
+      if (room >= 4) return theme.fg(note.color, clipPlainText(plain(note), room)) + suffix;
     }
     return theme.fg(note.color, clipPlainText(plain(note), width));
   });
@@ -847,8 +849,8 @@ const TAB_LABEL_MAX = 16;
 /**
  * The agent tabs, painted only when there is more than one agent. Each tab is
  * padded by a space on either side, and its click range includes that padding.
- * On a frame edge the tabs are joined by muted ASCII pipes; docked their
- * padding alone separates them. The selected tab is always visible, with an accent, bold,
+ * That padding alone separates neighbours on every edge: there is no ASCII
+ * pipe join. The selected tab is always visible, with an accent, bold,
  * optionally underlined nickname and no background fill; hidden peers are
  * summarized as clickable `+N` with
  * attention counts, and optional `‹ ›` step to the previous/next Agent. Hit
@@ -860,7 +862,7 @@ export function renderDetailAgentStrip(input: {
   width: number;
   spinnerFrame: number;
   theme: Theme;
-  /** On a border the joins are muted ASCII pipes; docked, padding separates them. */
+  /** Kept for callers that distinguish the edge; joins are padding either way. */
   framed?: boolean;
   /** Paint `‹ ›` previous/next controls at the ends. */
   arrows?: boolean;
@@ -876,7 +878,9 @@ export function renderDetailAgentStrip(input: {
     // a draining or errored peer can never lose its `!` to predicate drift.
     const notes = getDetailAttentionNotes(entry.input);
     const question = notes.some((note) => note.severity === "question");
-    const warning = notes.some((note) => note.severity === "error" || note.severity === "warning");
+    const error = notes.some((note) => note.severity === "error");
+    const warning = notes.some((note) => note.severity === "warning");
+    const selectedHere = entry.agent_id === selected;
     return {
       agent_id: entry.agent_id,
       glyph: state.glyph,
@@ -886,9 +890,13 @@ export function renderDetailAgentStrip(input: {
         TAB_LABEL_MAX,
       ),
       question,
+      error,
       warning,
-      marker: (question ? "?" : "") + (warning ? "!" : ""),
-      selected: entry.agent_id === selected,
+      // A completed peer with nothing to flag is ordinary background: its
+      // glyph dims. Selection or any attention keeps the lifecycle colour.
+      dimGlyph: !selectedHere && view.status === "completed" && !question && !error && !warning,
+      marker: (question ? "?" : "") + (error || warning ? "!" : ""),
+      selected: selectedHere,
     };
   });
   type Tab = (typeof tabs)[number];
@@ -902,16 +910,15 @@ export function renderDetailAgentStrip(input: {
   const widths = tabs.map((tab) => visibleWidth(unit(tab)));
   const summary = (hidden: readonly Tab[]): string => {
     const questions = hidden.filter((tab) => tab.question).length;
-    const warnings = hidden.filter((tab) => tab.warning).length;
+    const warnings = hidden.filter((tab) => tab.error || tab.warning).length;
     return ` +${hidden.length}${questions ? ` ?${questions}` : ""}${warnings ? ` !${warnings}` : ""} `;
   };
-  const join = input.framed ? 1 : 0;
   const arrows = input.arrows ? 2 : 0;
   const windowWidth = (start: number, end: number): number => {
     const parts = widths.slice(start, end + 1);
     if (start > 0) parts.push(visibleWidth(summary(tabs.slice(0, start))));
     if (end < n - 1) parts.push(visibleWidth(summary(tabs.slice(end + 1))));
-    return parts.reduce((sum, part) => sum + part, 0) + join * (parts.length - 1) + arrows;
+    return parts.reduce((sum, part) => sum + part, 0) + arrows;
   };
   const found = (() => {
     if (input.collapse)
@@ -935,9 +942,13 @@ export function renderDetailAgentStrip(input: {
   // Glyph-only clipping still identifies the selection without repainting its
   // lifecycle color. Markers and padding never inherit the name's underline.
   const paintGlyph = (tab: Tab, selectedOnly = false): string => {
-    const glyph = theme.fg(tab.color, tab.glyph);
+    const glyph = theme.fg(tab.dimGlyph ? "dim" : tab.color, tab.glyph);
     return selectedOnly && tab.selected ? selectedText(glyph) : glyph;
   };
+  // `?` is a question (warning); `!` is an actual error, else a warning.
+  const paintMarker = (tab: Tab): string =>
+    (tab.question ? theme.fg("warning", "?") : "") +
+    (tab.error || tab.warning ? theme.fg(tab.error ? "error" : "warning", "!") : "");
   if (!found) {
     // Not even the selected tab fits whole beside its summaries: clip it alone,
     // and keep its hit range inside what was actually painted. The glyph
@@ -945,18 +956,22 @@ export function renderDetailAgentStrip(input: {
     // remain: a question or warning outranks the nickname, so the clipped
     // tab keeps the cue the footer's `!N` suppression counts on. The marker
     // keeps the whole strip's semantics -- `?` warning-coloured, `!`
-    // error-coloured -- so neither the glyph's lifecycle colour nor the
-    // selected nickname's accent can repaint a warning as success.
+    // error-coloured, or warning-coloured for an ordinary warning -- so
+    // neither the glyph's lifecycle colour nor the selected nickname's accent
+    // can repaint a warning as success.
     const tab = tabs[selectedIndex]!;
     const marker = tab.marker ? ` ${tab.marker}` : "";
     // Styled only where it is painted, so an unpainted marker styles nothing.
-    const markerStyled = (): string =>
-      ` ${tab.question ? theme.fg("warning", "?") : ""}${
-        tab.warning ? theme.fg("error", "!") : ""
-      }`;
+    const markerStyled = (): string => ` ${paintMarker(tab)}`;
     const budget = Math.max(0, width - 2);
     const markerWidth = visibleWidth(marker);
     const labelRoom = budget - 2 - markerWidth;
+    // When even the complete marker cannot fit, keep the glyph's priority
+    // order and paint only the marker cells that do, each in its own colour.
+    const clippedMarker = tab.marker.slice(0, Math.max(0, budget - 1));
+    const clippedMarkerStyled = (): string =>
+      (clippedMarker.includes("?") ? theme.fg("warning", "?") : "") +
+      (clippedMarker.includes("!") ? theme.fg(tab.error ? "error" : "warning", "!") : "");
     // The glyph is a fixed, single-cell lifecycle symbol. Split only that
     // known plain prefix, after cell-aware clipping, to preserve every old
     // padding/hit column while styling the nickname separately.
@@ -964,7 +979,6 @@ export function renderDetailAgentStrip(input: {
     const tail = unmarked.slice(tab.glyph.length);
     const space = tail.startsWith(" ") ? " " : "";
     const label = tail.slice(space.length);
-    const tiny = clipPlainText(`${tab.glyph}${marker}`, budget);
     const text =
       width < 4
         ? paintGlyph(tab, true)
@@ -974,13 +988,15 @@ export function renderDetailAgentStrip(input: {
             ? ` ${paintGlyph(tab)} ${paintName(tab, clipPlainText(tab.label, labelRoom))}${markerStyled()} `
             : budget >= 1 + markerWidth
               ? ` ${paintGlyph(tab, true)}${markerStyled()} `
-              : ` ${paintGlyph(tab, true)}${theme.fg(tab.color, tiny.slice(tab.glyph.length))} `;
+              : ` ${paintGlyph(tab, true)}${clippedMarkerStyled()} `;
     return {
       text,
       items: text ? [{ agent_id: tab.agent_id, from: 0, to: visibleWidth(text) }] : [],
       clipped: true,
       padded: width >= 4,
-      markerVisible: !!marker && width >= 4 && budget >= 1 + markerWidth,
+      // A complete marker is the bare `?`/`!` cells after the glyph; the
+      // leading space above is layout padding, not part of the marker itself.
+      markerVisible: !!tab.marker && width >= 4 && budget >= 1 + tab.marker.length,
     };
   }
   const elements: { text: string; agent_id: string }[] = [];
@@ -997,11 +1013,7 @@ export function renderDetailAgentStrip(input: {
         paintGlyph(tab) +
         " " +
         paintName(tab, tab.label) +
-        (tab.marker
-          ? " " +
-            (tab.question ? theme.fg("warning", "?") : "") +
-            (tab.warning ? theme.fg("error", "!") : "")
-          : "") +
+        (tab.marker ? " " + paintMarker(tab) : "") +
         " ",
       agent_id: tab.agent_id,
     });
@@ -1021,17 +1033,10 @@ export function renderDetailAgentStrip(input: {
       agent_id: tabs[(selectedIndex + 1) % n]!.agent_id,
     });
   }
-  const separator = input.framed ? theme.fg("borderMuted", "|") : "";
   const items: DetailAgentStripItem[] = [];
   let text = "";
   let offset = 0;
-  for (const [index, element] of elements.entries()) {
-    // The arrows sit flush against the padded tabs beside them.
-    const arrow = input.arrows && (index === 1 || index === elements.length - 1);
-    if (index && !arrow) {
-      text += separator;
-      offset += join;
-    }
+  for (const element of elements) {
     const from = offset;
     text += element.text;
     offset += visibleWidth(element.text);
@@ -1062,7 +1067,7 @@ export interface DetailFooterFrame {
   text: string;
   action?: DetailFooterAction;
   messageAction?: DetailFooterMessageAction;
-  /** The optional actions menu `[⋯]`, painted before Message and Stop. */
+  /** The optional actions menu `. more`, painted before Message and Stop. */
   menu?: { from: number; to: number };
   /** Agent tabs, `+N` summaries and `‹ ›`, each naming the Agent a click selects. */
   tabs?: DetailAgentStripItem[];
@@ -1096,17 +1101,42 @@ export function renderComposeFooter(input: {
       ? th.fg("warning", clipPlainText(`!${input.hiddenNotes}`, Math.max(0, width - 2))) + " "
       : "";
   const available = width - visibleWidth(cue);
+  const refused = !input.sendable || !!input.empty || !!input.tooLong;
+  const color = refused ? "warning" : "dim";
+  const join = th.fg(color, " · ");
+  const body = (text: string): string => th.fg(color, text);
+  const chord = (label: string, key: string): string => shortcutHint(th, label, key, { color });
+  const keyOnly = (key: string): string => shortcutHint(th, "", key, { color });
   const hints =
     input.unavailable === "geometry"
-      ? ["pane too small · Esc discard", "too small · Esc", ""]
+      ? [
+          `${body("pane too small")}${join}${chord("discard", "Esc")}`,
+          `${body("too small")}${join}${keyOnly("Esc")}`,
+          "",
+        ]
       : !input.sendable
-        ? ["task no longer running · Esc cancel", "not running · Esc", ""]
+        ? [
+            `${body("task no longer running")}${join}${chord("cancel", "Esc")}`,
+            `${body("not running")}${join}${keyOnly("Esc")}`,
+            "",
+          ]
         : input.tooLong
-          ? ["message too long · Esc cancel", "too long · Esc", "too long"]
+          ? [
+              `${body("message too long")}${join}${chord("cancel", "Esc")}`,
+              `${body("too long")}${join}${keyOnly("Esc")}`,
+              body("too long"),
+            ]
           : input.empty
-            ? ["message is empty · Esc cancel", "empty · Esc", "empty"]
-            : ["Enter send · Esc cancel", "Enter · Esc", ""];
-  const refused = !input.sendable || !!input.empty || !!input.tooLong;
+            ? [
+                `${body("message is empty")}${join}${chord("cancel", "Esc")}`,
+                `${body("empty")}${join}${keyOnly("Esc")}`,
+                body("empty"),
+              ]
+            : [
+                `${chord("send", "Enter")}${join}${chord("cancel", "Esc")}`,
+                `${keyOnly("Enter")}${join}${keyOnly("Esc")}`,
+                "",
+              ];
   const hint =
     hints.find(
       (text) =>
@@ -1114,7 +1144,7 @@ export function renderComposeFooter(input: {
     ) ?? "";
   const room = hint ? available - visibleWidth(hint) - 2 : available;
   const row = cue + input.input(room);
-  return hint ? `${row}  ${th.fg(refused ? "warning" : "dim", hint)}` : row;
+  return hint ? `${row}  ${hint}` : row;
 }
 
 /** The compose heading row above the input: who is being steered, and what
@@ -1135,33 +1165,48 @@ export function renderDetailComposeHeading(input: {
   const task = input.task;
   const marker =
     typeof task === "number" && Number.isSafeInteger(task) && task > 0 ? ` #${task}` : "";
+  const color = input.sendable && !input.empty && !input.tooLong ? "dim" : "warning";
+  const join = th.fg(color, " · ");
+  const body = (text: string): string => th.fg(color, text);
+  const chord = (label: string, key: string): string => shortcutHint(th, label, key, { color });
+  const keyOnly = (key: string): string => shortcutHint(th, "", key, { color });
   const hints = !input.sendable
-    ? ["task ended · Esc discard", "ended · Esc", "Esc"]
+    ? [
+        `${body("task ended")}${join}${chord("discard", "Esc")}`,
+        `${body("ended")}${join}${keyOnly("Esc")}`,
+        keyOnly("Esc"),
+      ]
     : input.tooLong
-      ? ["message too long · Esc discard", "too long · Esc", "too long"]
+      ? [
+          `${body("message too long")}${join}${chord("discard", "Esc")}`,
+          `${body("too long")}${join}${keyOnly("Esc")}`,
+          body("too long"),
+        ]
       : input.empty
-        ? ["message is empty · Esc discard", "empty · Esc", "empty"]
-        : ["Enter send · Esc discard", "Enter · Esc", ""];
+        ? [
+            `${body("message is empty")}${join}${chord("discard", "Esc")}`,
+            `${body("empty")}${join}${keyOnly("Esc")}`,
+            body("empty"),
+          ]
+        : [
+            `${chord("send", "Enter")}${join}${chord("discard", "Esc")}`,
+            `${keyOnly("Enter")}${join}${keyOnly("Esc")}`,
+            "",
+          ];
   const hint = hints.find((text) => width - visibleWidth(text) - 2 >= 8) ?? hints.at(-1)!;
   const room = width - visibleWidth(hint) - 2;
   const left =
     room >= 8 + visibleWidth(marker) + Math.min(visibleWidth(name), 32)
       ? `${th.fg("dim", "Steer")} ${th.bold(name)}${marker ? th.fg("dim", marker) : ""}`
       : th.fg("dim", clipPlainText(`Steer ${name}${marker}`, Math.max(1, room)));
-  return spanRow(
-    left,
-    th.fg(input.sendable && !input.empty && !input.tooLong ? "dim" : "warning", hint),
-    width,
-    th,
-    false,
-  );
+  return spanRow(left, hint, width, th, false);
 }
 
 /** Pure bottom-edge layout. Confirmation lifetime and painted hit geometry stay with the pane.
  *
  * The edge is the pane's navigation and action bar in one row: agent tabs at
  * the left, and at the right the jump back to the tail (`↓ N more`), then the
- * optional `[⋯]` actions menu, `[M message]` and `[S Stop]`, Stop always
+ * optional `. more` actions menu, `message` and `stop`, Stop always
  * outermost. An armed Stop confirmation hides the menu and the message, so
  * only the final row changes. Counters, the scroll
  * position, following and the static key legend are not repeated here: the
@@ -1170,7 +1215,7 @@ export function renderDetailComposeHeading(input: {
  *
  * Under width pressure the parts yield in a fixed order: peer tabs fold into
  * `+N` first, then the `‹ ›` arrows, then the tail cue (framed, where the
- * scrollbar also shows position) or `[M message]` (docked, where the cue is
+ * scrollbar also shows position) or `message` (docked, where the cue is
  * the only position left), and finally the other of those two. The selected
  * tab and an available Stop/confirmation never yield. Every hit range is in
  * pane columns, including the frame's `╰─ ` offset.
@@ -1190,7 +1235,7 @@ export function renderDetailFooter(input: {
   messaging?: boolean;
   /** A draft owns the keyboard: M/S/←/→ are text, so only clicks remain. */
   composing?: boolean;
-  /** Paint the `[⋯]` actions menu before Message/Stop. An armed Stop
+  /** Paint the `. more` actions menu before Message/Stop. An armed Stop
    * confirmation hides it; only the final row changes. */
   menu?: boolean;
   /** Attention notes hidden because no attention row could present them. The
@@ -1241,24 +1286,35 @@ export function renderDetailFooter(input: {
   // The live status needs no room here: the bottom metrics row keeps it.
   const TAB_FLOOR = multi ? 1 + 4 : 0;
   const canStop = available && !!view && visibleWidth(CONFIRM_HINT) + TAB_FLOOR <= width;
-  const action = canStop
+  const stopKind = canStop
     ? confirming
-      ? CONFIRM_LABEL
+      ? ("confirm" as const)
       : composing
-        ? STOP_CLICK_LABEL
-        : STOP_LABEL
-    : "";
-  const armed = confirming && !!action;
+        ? ("click" as const)
+        : ("stop" as const)
+    : undefined;
+  const armed = stopKind === "confirm";
   const esc = !framed && !composing && !armed ? "Esc" : "";
+  const keyOnly = (key: string, color = "dim"): string => shortcutHint(th, "", key, { color });
+  // The confirmation legend keeps its exact wording while the explicit
+  // chords use the shared shortcut emphasis.
+  const confirmHelp =
+    th.fg("dim", "best-effort") +
+    th.fg("dim", " · ") +
+    keyOnly("Ctrl+S") +
+    th.fg("dim", " · ") +
+    shortcutHint(th, "cancel", "Esc", { color: "dim" });
   type Piece = { text: string; width: number; kind?: "tail" | "message" | "action" | "menu" };
   const assemble = (tailForm: number, messageForm: number): Piece[] => {
     const groups: Piece[][] = [];
     if (armed) {
       groups.push([
-        { text: th.fg("dim", `${CONFIRM_HELP} · `), width: visibleWidth(CONFIRM_HELP) + 3 },
+        { text: `${confirmHelp}${th.fg("dim", " · ")}`, width: visibleWidth(CONFIRM_HELP) + 3 },
         {
-          text: th.bold(th.fg("warning", CONFIRM_LABEL)),
-          width: visibleWidth(CONFIRM_LABEL),
+          // Click-only label beside the explicit Ctrl+S chord: plain S only
+          // arms the confirmation, so the label never advertises it.
+          text: th.bold(shortcutHint(th, CONFIRM_PLAIN, undefined, { color: "warning" })),
+          width: visibleWidth(CONFIRM_PLAIN),
           kind: "action",
         },
       ]);
@@ -1277,26 +1333,35 @@ export function renderDetailFooter(input: {
       // before it ever does, and it is never clipped to a partial label.
       if (menu)
         actions.push({
-          text: th.fg("dim", MENU_LABEL),
-          width: visibleWidth(MENU_LABEL),
+          text: shortcutHint(th, "more", ".", { color: "dim" }),
+          width: visibleWidth(MENU_PLAIN),
           kind: "menu",
         });
-      const message = offerMessage ? ["[M message]", "[M msg]", ""][messageForm]! : "";
+      const message = offerMessage ? ["message", "msg", ""][messageForm]! : "";
       if (message) {
         if (actions.length) actions.push({ text: " ", width: 1 });
         actions.push({
-          text: th.fg("muted", message),
+          text: shortcutHint(th, message, "m"),
           width: visibleWidth(message),
           kind: "message",
         });
       }
-      if (action) {
+      if (stopKind) {
         if (actions.length) actions.push({ text: " ", width: 1 });
-        actions.push({ text: th.fg("dim", action), width: visibleWidth(action), kind: "action" });
+        actions.push({
+          // While composing, S is draft text: the control stays clickable,
+          // keyless.
+          text:
+            stopKind === "click"
+              ? shortcutHint(th, STOP_PLAIN, undefined, { color: "dim" })
+              : shortcutHint(th, STOP_PLAIN, "s", { color: "dim" }),
+          width: visibleWidth(STOP_PLAIN),
+          kind: "action",
+        });
       }
       // Docked there is no close control: `Esc` precedes the actions, so
       // Stop stays outermost in every form.
-      if (esc) groups.push([{ text: th.fg("dim", esc), width: visibleWidth(esc) }]);
+      if (esc) groups.push([{ text: keyOnly(esc), width: visibleWidth(esc) }]);
       if (actions.length) groups.push(actions);
     }
     const out: Piece[] = [];

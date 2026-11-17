@@ -339,7 +339,8 @@ preferences. The preferences store reads these two locations:
 `<agentDir>` is Pi's `getAgentDir()` location (normally
 `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}`). The workspace path is based only on
 the current working directory, not a Git-root search, and is loaded or written
-only when Pi trusts that project. The global layer loads regardless of project
+only when Pi trusts that project. Workspace is only this configuration scope:
+no managed workspace or worktree feature exists. The global layer loads regardless of project
 trust. A fresh session starts with save scope `session`; choosing global or
 workspace requires confirmation. Merely changing scope copies or writes
 nothing.
@@ -453,19 +454,19 @@ latest file; a changed dirty leaf rejects that whole scope. Publication uses
 atomic rename and refuses symlink or read-only replacement. This is not a hard
 filesystem timeout or a crash-durability guarantee.
 
-The Delegation panel's **Save as global default** (`G`) and **Save as project
+The Delegation panel's **Save as global default** (`G`) and **Save as workspace
 default** (`W`) remember the live worker preset/delegation/effort snapshot after
 confirmation, without changing the live choices or future save scope. Highlighted
 presets, slider previews and unconfirmed custom-preset drafts are not saved.
-G/W work from either the list or effort page; successful effort edits are already live. Project saving
-requires trust. The full target and every intermediate patch are validated before
+G/W work from either the list or effort page; successful effort edits are already live. Workspace saving
+requires project trust. The full target and every intermediate patch are validated before
 any snapshot fields are staged; a changed worker snapshot or retired session
 cannot reuse pending consent.
 
 `/alehouse-settings` or **P Settings** opens the scope and save menu. **Remember
 current worker settings** uses the same exact-patch/destination confirmation;
 it remembers worker preset/delegation/effort settings, not `childSkills`, the beer-mug
-appearance or approval (use the approval menu's **Save as global/project default** or
+appearance or approval (use the approval menu's **Save as global/workspace default** or
 `/approval save`). **Save pending now**, **Discard pending writes**,
 **Remove a saved override**, and **Show paths and pending changes** are explicit
 menu actions. Workspace writes require project trust. See the

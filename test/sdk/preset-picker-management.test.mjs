@@ -23,7 +23,7 @@ import { createPresetModelSelector } from "../../dist/orchestration/runtime/pres
 import { strengths } from "../../dist/orchestration/routing.js";
 import { HIDE_TRANSIENT_OVERLAYS_EVENT } from "../../src/shared/overlay-protocol.mjs";
 
-test("editor save controls preserve seven-row budgeting and hit only visible G/W labels", () => {
+test("editor save controls preserve seven-row budgeting and hit only visible G/workspace labels", () => {
   for (const rows of [8, 10, 12, 24])
     for (const width of [8, 18, 34, 76, 120]) {
       for (const [key, scope] of [
@@ -39,11 +39,25 @@ test("editor save controls preserve seven-row budgeting and hit only visible G/W
         });
         h.picker.handleInput("e");
         const lines = painted(h.picker, width),
-          y = lines.findIndex((line) => line.includes("G") && line.includes("W"));
+          y = lines.findIndex(
+            (line) =>
+              (line.includes("G") || /global/i.test(line)) &&
+              (/workspace/i.test(line) || line.includes("W")),
+          );
         assert(lines.length <= Math.max(7, Math.floor(rows * 0.8)));
         assert(lines.every((line) => visibleWidth(line) <= width));
-        assert(y >= 0);
-        h.picker.handleMouse(mouse("click", lines[y].indexOf(key), y));
+        assert(y >= 0, `${rows}x${width}: no save row in\n${lines.join("\n")}`);
+        // Both mnemonics are inline in their words at roomy widths and key-only
+        // at the floor; either point is inside the painted range.
+        const x =
+          key === "G"
+            ? lines[y].includes("G")
+              ? lines[y].indexOf("G")
+              : lines[y].toLowerCase().indexOf("global")
+            : lines[y].includes("W")
+              ? lines[y].indexOf("W")
+              : lines[y].toLowerCase().indexOf("workspace");
+        h.picker.handleMouse(mouse("click", x, y));
         assert.deepEqual(h.result, [{ action: "save-default", scope }]);
       }
     }
@@ -131,16 +145,12 @@ test("off highlights keep Enter, but create works and edit-preset does not", () 
 test("management labels are clickable and scoped to the labels actually painted", () => {
   const wide = fixture({ pointer: true, management: managementOption() });
   let lines = painted(wide.picker, 100);
-  assert.match(
-    lines.join("\n"),
-    /P Settings · N New · C Edit/,
-    "full labels when the row has room",
-  );
+  assert.match(lines.join("\n"), /P Settings · New · C Edit/, "full labels when the row has room");
   clickText(wide.picker, "P Settings", 100);
   assert.deepEqual(wide.result, [{ action: "settings" }]);
 
   const created = fixture({ pointer: true, management: managementOption() });
-  clickText(created.picker, "N New", 100);
+  clickText(created.picker, "New", 100);
   assert.deepEqual(created.result, [{ action: "create-preset" }]);
 
   const edited = fixture({ pointer: true, management: managementOption() });
@@ -175,7 +185,7 @@ test("management labels are clickable and scoped to the labels actually painted"
   offLabels.picker.handleInput("\u001b[A");
   lines = painted(offLabels.picker, 100);
   assert(!lines.some((line) => line.includes("C Edit")), lines.join("\n"));
-  clickText(offLabels.picker, "N New", 100);
+  clickText(offLabels.picker, "New", 100);
   assert.deepEqual(offLabels.result, [{ action: "create-preset" }]);
 });
 
@@ -303,7 +313,7 @@ test("saving during a slider press cancels its preview without applying it", () 
   assert.deepEqual(h.result, [{ action: "save-default", scope: "global" }]);
 });
 
-test("global/project save labels remain painted, clickable and bounded at full, compact and minimum sizes", () => {
+test("global/workspace save labels remain painted, clickable and bounded at full, compact and minimum sizes", () => {
   for (const rows of [8, 10, 12, 14, 15, 24, 40])
     for (const width of [7, 8, 18, 34, 56, 76, 120]) {
       for (const withMode of [false, true])
@@ -327,9 +337,21 @@ test("global/project save labels remain painted, clickable and bounded at full, 
             assert.deepEqual(lines, []);
             continue;
           }
-          const y = lines.findIndex((line) => line.includes("G"));
+          const y = lines.findIndex((line) => line.includes("G") || /global/i.test(line));
+          if (!trusted && y < 0) {
+            // The untrusted workspace label cannot shrink to a non-actionable
+            // `w`, so at the 8-column floor the save row itself does not fit.
+            assert(
+              !lines.some((line) => /G · W|W · G/.test(line)),
+              `${rows}x${width}: no dead W without trust\n${lines.join("\n")}`,
+            );
+            continue;
+          }
           assert(y >= 0, `${rows}x${width}: global save remains discoverable\n${lines.join("\n")}`);
-          h.picker.handleMouse(mouse("click", lines[y].indexOf("G"), y));
+          const gx = lines[y].includes("G")
+            ? lines[y].indexOf("G")
+            : lines[y].toLowerCase().indexOf("global");
+          h.picker.handleMouse(mouse("click", gx, y));
           assert.deepEqual(
             h.result,
             [{ action: "save-default", scope: "global" }],
@@ -341,15 +363,35 @@ test("global/project save labels remain painted, clickable and bounded at full, 
             management: savingOption(trusted),
             ...(withMode ? { delegation: delegationState().option } : {}),
           });
-          const projectLines = painted(project.picker, width),
-            projectY = projectLines.findIndex((line) => line.includes("G") && line.includes("W"));
-          assert(projectY >= 0);
-          project.picker.handleMouse(mouse("click", projectLines[projectY].indexOf("W"), projectY));
-          assert.deepEqual(
-            project.result,
-            trusted ? [{ action: "save-default", scope: "workspace" }] : [],
-            `${rows}x${width}: painted W (mode=${withMode}, trusted=${trusted})`,
-          );
+          const projectLines = painted(project.picker, width);
+          if (trusted) {
+            const projectY = projectLines.findIndex(
+              (line) =>
+                (line.includes("G") || /global/i.test(line)) &&
+                (/workspace/i.test(line) || line.includes("W")),
+            );
+            assert(
+              projectY >= 0,
+              `${rows}x${width} mode=${withMode}: no workspace save row\n${projectLines.join("\n")}`,
+            );
+            const projectX = projectLines[projectY].includes("W")
+              ? projectLines[projectY].indexOf("W")
+              : projectLines[projectY].toLowerCase().indexOf("workspace");
+            project.picker.handleMouse(mouse("click", projectX, projectY));
+            assert.deepEqual(
+              project.result,
+              [{ action: "save-default", scope: "workspace" }],
+              `${rows}x${width}: painted workspace key (mode=${withMode})`,
+            );
+          } else {
+            // Without trust the workspace save is not a target: no key is
+            // advertised, and the compact row drops the label entirely.
+            assert(
+              !projectLines.some((line) => /G · W|W · G|W · trust/.test(line)),
+              `${rows}x${width} mode=${withMode}: no key without trust\n${projectLines.join("\n")}`,
+            );
+            assert.deepEqual(project.result, []);
+          }
           if (width >= 18 && Math.floor(rows * 0.8) >= 9 + (withMode ? 1 : 0))
             for (const slot of strengths) assert(lines.some((line) => line.includes(slot)));
         }
@@ -361,7 +403,7 @@ test("global/project save labels remain painted, clickable and bounded at full, 
   });
   assert.match(
     painted(normal.picker).join("\n"),
-    /\[G\] Save as global default · \[W\] Save as project default \(on exit\)/,
+    /Save as global default · Save as workspace default \(on exit\)/,
   );
 });
 
@@ -377,9 +419,9 @@ test("workspace save is inert without trust or its host capability, including a 
     management: managementOption({ saveDefaults: true, canSaveWorkspace: () => trusted }),
   });
   const lines = painted(stale.picker),
-    y = lines.findIndex((line) => line.includes("[W]"));
+    y = lines.findIndex((line) => /workspace/i.test(line));
   trusted = false;
-  stale.picker.handleMouse(mouse("click", lines[y].indexOf("[W]"), y));
+  stale.picker.handleMouse(mouse("click", lines[y].toLowerCase().indexOf("workspace"), y));
   stale.picker.handleInput("w");
   assert.deepEqual(stale.result, [], "a painted button cannot reuse stale trust");
   const legacy = fixture({ management: managementOption() }),

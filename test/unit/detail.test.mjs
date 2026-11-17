@@ -495,7 +495,7 @@ test("warnings the operator must not miss are all listed, never summarised away"
     /dispatch\s+future_note/,
     /owner\s+flock lost/,
     /history\s+disk full/,
-    /pending\s+2 alert\(s\) from this Run awaiting local presentation/,
+    /pending\s+2 pending alerts from this Run awaiting local presentation/,
     /cleanup\s+child did not exit/,
     /discarded\s+stale steer/,
   ])
@@ -686,7 +686,8 @@ test("the transcript opens under the header and the dock closes the body, with n
   );
   // The one dock row and its plain separator close the body.
   assert.match(lines.at(-2), /↻3\/256/, "the dock carries the turns ratio");
-  assert.match(lines.at(-2), /total 1m33s/, "and the elapsed total");
+  assert.match(lines.at(-2), /· 1m33s ·/, "and the bare elapsed total");
+  assert.ok(!lines.at(-2).includes("total"), "the total label is retired");
   assert.match(lines.at(-3), /^─+$/);
   assert.ok(!lines.at(-3).includes("Transcript"), "the separator carries no page labels");
 });
@@ -892,23 +893,28 @@ for (const frame of [false, true])
       colors.length = 0;
       const lines = p.render(80),
         badge = `${icon} ${label}`;
+      // Normal running/completed work is unambiguous from its glyph alone;
+      // every ambiguous lifecycle state keeps a readable label.
+      const normal = status === "completed" || (status === "running" && !pending);
       // The one dock row carries the status; the title never repeats it and the
       // footer stays navigation/actions only. Docked the footer keeps the close
       // hint, framed the close control on the title replaces it.
-      assert(lines.at(-2).includes(badge), lines.at(-2));
+      assert(lines.at(-2).includes(normal ? icon : badge), lines.at(-2));
+      if (normal) assert(!lines.at(-2).includes(label), lines.at(-2));
       assert(!lines[0].includes(label), lines[0]);
       assert(!lines.at(-1).includes(label), lines.at(-1));
       if (frame) assert.match(lines[0], / ✕ ─╮$/, "the title ends at the close control");
       else assert.match(lines.at(-1), /Esc/);
-      // The dock paints the glyph and its label together in the lifecycle colour.
+      // The dock paints the glyph and, when shown, its label in the lifecycle colour.
       assert(
         colors.some(([used, text]) => used === color && text.includes(icon)),
         `the dock paints ${icon} in ${color}`,
       );
-      assert(
-        colors.some(([used, text]) => used === color && text.includes(label)),
-        `the dock paints ${label} in ${color}`,
-      );
+      if (!normal)
+        assert(
+          colors.some(([used, text]) => used === color && text.includes(label)),
+          `the dock paints ${label} in ${color}`,
+        );
     }
   });
 
@@ -991,8 +997,9 @@ test("an empty roster never retains the previous Agent's status", (t) => {
 test("the edge counts the transcript rows below the viewport, never a position counter", (t) => {
   const p = pane(40);
   t.after(() => p.dispose());
-  // At the tail there is nothing below: no cue and no `n/m` counters.
-  assert.doesNotMatch(p.render(80).at(-1), /more|\d+\/\d+/);
+  // At the tail there is nothing below: no `↓ N more` cue and no `n/m`
+  // counters. The `. more` actions control is not a position counter.
+  assert.doesNotMatch(p.render(80).at(-1), /↓\s*\d+\s*more|\d+\/\d+/);
   p.handleInput("\u001b[H"); // home
   const lines = p.render(80);
   // The count is the transcript's own rows: the full fields live on the Info
@@ -1000,7 +1007,7 @@ test("the edge counts the transcript rows below the viewport, never a position c
   const shown = lines.filter((line) => /^T\d+$/.test(line)).length;
   assert.match(lines.at(-1), new RegExp(`↓ ${40 - shown} more`));
   p.handleInput("\u001b[F"); // end
-  assert.doesNotMatch(p.render(80).at(-1), /more/);
+  assert.doesNotMatch(p.render(80).at(-1), /↓\s*\d+\s*more/);
 });
 
 test("a pane row drops the terminal's turn markers but keeps hyperlinks and colour", () => {
@@ -1124,7 +1131,7 @@ test("a floating pane spends its larger height budget on chrome, never on rows",
   assert.match(b[0], /reviewer \(scout\/d5\)/);
   assert.doesNotMatch(b[0], /researcher/);
   assert.match(b.at(-1), /^╰─.*╯$/, "the bottom border closes the frame");
-  assert.ok(b.at(-1).includes("[⋯]"), "the actions menu rides the bottom edge");
+  assert.ok(b.at(-1).includes(". more"), "the actions menu rides the bottom edge");
   // Riding on the border does not open it: what the inlay does not use is rule.
   assert.doesNotMatch(b[0], / {3}/, `top border left open: ${JSON.stringify(b[0])}`);
   assert.doesNotMatch(b[0], / {2}✕/, `extra space before close: ${JSON.stringify(b[0])}`);

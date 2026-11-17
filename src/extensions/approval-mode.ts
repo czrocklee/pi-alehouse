@@ -188,7 +188,7 @@ export default function approvalMode(pi: ExtensionAPI): void {
       store.stage(scope, ["approval"], choice);
       notify(
         ctx,
-        `Approval: ${choice} will be the ${scope === "global" ? "global" : "project"} default after normal exit.`,
+        `Approval: ${choice} will be the ${scope === "global" ? "global" : "workspace"} default after normal exit.`,
         "info",
       );
     } catch (error) {
@@ -549,13 +549,13 @@ export default function approvalMode(pi: ExtensionAPI): void {
     let scope = wanted;
     if (!scope) {
       const selected = await context.ui.select("Save approval default for", [
-        "All projects",
-        "This project",
+        "All workspaces",
+        "This workspace",
       ]);
       scope =
-        selected === "All projects"
+        selected === "All workspaces"
           ? "global"
-          : selected === "This project"
+          : selected === "This workspace"
             ? "workspace"
             : (selected ?? "");
       if (!currentContext(at, context) || sharedStore() !== store) return;
@@ -573,15 +573,15 @@ export default function approvalMode(pi: ExtensionAPI): void {
       choice = actualChoice(),
       revision = choiceRevision;
     const accepted = await context.ui.confirm(
-      `Save ${choice} as ${scope === "global" ? "global" : "project"} approval default?`,
+      `Save ${choice} as ${scope === "global" ? "global" : "workspace"} approval default?`,
       `approval: ${choice}\nFile: ${path}\nSaved on normal exit.\n\n` +
         "New sessions use this default; existing sessions keep their recorded choices. Other settings stay unchanged.\n" +
         "This saves a preference, not permission. Wider judge modes need confirmation at startup; " +
         "yolo always needs a new explicit confirmation in every session.\n" +
         (scope === "workspace"
-          ? "Saving may create a project config file visible to Git and cause a project-trust prompt in a future Pi session. " +
-            "Saving a preference does not grant project trust."
-          : "Project defaults can still override this here."),
+          ? "Saving may create a workspace config file visible to Git and cause a Pi project-trust prompt in a future session. " +
+            "Saving a preference does not grant Pi project trust."
+          : "Workspace defaults can still override this here."),
     );
     if (!currentContext(at, context) || sharedStore() !== store || accepted !== true) return;
     if (

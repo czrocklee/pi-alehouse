@@ -21,6 +21,7 @@ import {
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
+import { shortcutHint } from "../../shared/shortcut-hint.mjs";
 import { formatTokenCount } from "../../shared/token-format.mjs";
 import type {
   SessionErrorStats,
@@ -36,7 +37,7 @@ export interface StatsDashboardSnapshot extends SessionStatsSnapshot {
 }
 
 /** The small structural subset of Pi's theme the view needs. */
-type StatsTheme = Pick<Theme, "fg" | "bold" | "bg">;
+type StatsTheme = Pick<Theme, "fg" | "bold" | "bg"> & Partial<Pick<Theme, "underline">>;
 
 type StatsTui = {
   readonly terminal: { readonly rows: number };
@@ -69,6 +70,40 @@ const BLOCK_GAP = 4;
 /** A table gives up its least useful columns before names get narrower than this. */
 const MIN_KEY = 20;
 const LEGEND = "— not reported · 0 observed zero · * partial";
+/** Footer hint ladders as label/key pairs: an empty label is a bare chord or
+ * arrow key. The plain form drives fitting; the styled form paints helper
+ * fragments, so no outer fg wraps the whole hint and resets a nested key. */
+type HintPiece = readonly [label: string, key: string];
+const SCROLL_HINTS: readonly (readonly HintPiece[])[] = [
+  [
+    ["view", "1-3/Tab"],
+    ["scroll", "↑↓ PgUp/PgDn"],
+    ["close", "Esc"],
+  ],
+  [
+    ["", "Tab"],
+    ["", "↑↓"],
+    ["", "Esc"],
+  ],
+  [["", "Esc"]],
+];
+const STATIC_HINTS: readonly (readonly HintPiece[])[] = [
+  [
+    ["view", "1-3/Tab"],
+    ["close", "Esc"],
+  ],
+  [
+    ["", "Tab"],
+    ["", "Esc"],
+  ],
+  [["", "Esc"]],
+];
+const plainHint = (pieces: readonly HintPiece[]): string =>
+  pieces.map(([label, key]) => (label ? `${key} ${label}` : key)).join(" · ");
+const styledHint = (theme: StatsTheme, pieces: readonly HintPiece[]): string =>
+  pieces
+    .map(([label, key]) => shortcutHint(theme, label, key, { color: "dim" }))
+    .join(theme.fg("dim", " · "));
 /** Recent errors: the message is why anyone looks, so it gets the room. */
 const ERROR_ROWS = 5;
 const ERROR_LINES = 3;
@@ -1063,17 +1098,24 @@ export class StatsView {
     let used = 0;
     const pieces: string[] = [];
     this.paintedTabRow = y;
+    // Bold each selected fragment on its own. The helper's key-only hook
+    // adds underline, rather than introducing a nested bold reset.
+    const selectedTheme = {
+      fg: (color: ThemeColor, text: string) => theme.fg(color, theme.bold(text)),
+      bold: (text: string) => theme.underline?.(text) ?? text,
+    };
+    const marker = (text: string): string => selectedTheme.fg("accent", text);
     for (let index = 0; index < choices.length; index++) {
       const label = choices[index]!;
       const tab = index as Tab;
-      const raw = tab === this.tab ? `›${label}‹` : ` ${label} `;
+      const selected = tab === this.tab;
+      const hinted = shortcutHint(selected ? selectedTheme : theme, label, String(index + 1), {
+        color: selected ? "accent" : "muted",
+      });
+      const raw = selected ? marker("›") + hinted + marker("‹") : ` ${hinted} `;
       const segmentWidth = visibleWidth(raw);
       if (used + segmentWidth > inner) break;
-      const styled =
-        tab === this.tab
-          ? (theme.bg?.("selectedBg", theme.fg("accent", theme.bold(raw))) ??
-            theme.fg("accent", theme.bold(raw)))
-          : theme.fg("muted", raw);
+      const styled = selected ? (theme.bg?.("selectedBg", raw) ?? raw) : raw;
       pieces.push(styled);
       // Content starts after the side border and its one-column pad.
       this.tabTargets.push({ start: 2 + used, end: 2 + used + segmentWidth, tab });
@@ -1118,14 +1160,13 @@ export class StatsView {
     const capacity = popoverInlayWidth(width, "bottom");
     const scrollable = total > viewport && viewport > 0;
     const right = scrollable ? `${Math.min(total, offset + viewport)}/${total} lines` : "";
-    const hints = scrollable
-      ? ["1-3/Tab view · ↑↓ PgUp/PgDn scroll · Esc close", "Tab · ↑↓ · Esc", "Esc"]
-      : ["1-3/Tab view · Esc close", "Tab · Esc", "Esc"];
     const rightWidth = visibleWidth(right);
-    const hint = hints.find((text) => visibleWidth(text) + rightWidth <= capacity);
+    const hint = (scrollable ? SCROLL_HINTS : STATIC_HINTS).find(
+      (pieces) => visibleWidth(plainHint(pieces)) + rightWidth <= capacity,
+    );
     if (hint === undefined) return rightWidth <= capacity ? theme.fg("dim", right) : "";
-    const fill = Math.max(0, capacity - visibleWidth(hint) - rightWidth);
-    return theme.fg("dim", hint) + (right ? " ".repeat(fill) + theme.fg("dim", right) : "");
+    const fill = Math.max(0, capacity - visibleWidth(plainHint(hint)) - rightWidth);
+    return styledHint(theme, hint) + (right ? " ".repeat(fill) + theme.fg("dim", right) : "");
   }
 
   /**
@@ -1141,16 +1182,15 @@ export class StatsView {
     // Room for the hint between `╰─` and `─╯`: its two pads and at least one rule column.
     const room = (): number => width - 4 - visibleWidth(right) - 3;
     if (right && room() < 3) right = "";
-    const hints = scrollable
-      ? ["1-3/Tab view · ↑↓ PgUp/PgDn scroll · Esc close", "Tab · ↑↓ · Esc", "Esc"]
-      : ["1-3/Tab view · Esc close", "Tab · Esc", "Esc"];
-    const hint = hints.find((text) => visibleWidth(text) <= room());
-    const left = hint ? ` ${hint} ` : "";
+    const hint = (scrollable ? SCROLL_HINTS : STATIC_HINTS).find(
+      (pieces) => visibleWidth(plainHint(pieces)) <= room(),
+    );
+    const left = hint ? theme.fg("dim", " ") + styledHint(theme, hint) + theme.fg("dim", " ") : "";
     const fill = Math.max(0, width - 4 - visibleWidth(left) - visibleWidth(right));
     const edge = (text: string): string => theme.fg("borderAccent", text);
     return (
       edge(POPOVER.bl + POPOVER.h) +
-      theme.fg("dim", left) +
+      left +
       edge(POPOVER.h.repeat(fill)) +
       theme.fg("dim", right) +
       edge(POPOVER.h + POPOVER.br)

@@ -9,7 +9,7 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 // warning on a short pane. Direct source via Jiti, no build.
 const jiti = createJiti(import.meta.url, { fsCache: false });
 const { DetailPane } = await jiti.import("../../src/orchestration/ui/agent-detail.ts");
-const { renderDetailAgentStrip, renderDetailFooter } = await jiti.import(
+const { renderDetailAgentStrip, renderDetailAttention, renderDetailFooter } = await jiti.import(
   "../../src/orchestration/ui/agent-detail-fields.ts",
 );
 
@@ -89,9 +89,9 @@ test("a clipped selected tab keeps its warning on the shortest framed pane", (t)
   );
   const edge = painted.at(-1);
   // The warning rides the clipped tab itself, beside the real lifecycle glyph.
-  // The footer's own actions and menu share the row, so the nickname may be
+  // The footer's own controls share the row, so the nickname may be fully
   // ellipsized: the marker and the lifecycle glyph are what must survive.
-  assert.match(edge, /✓ asp/, edge);
+  assert.match(edge, /✓/, edge);
   assert.match(edge, /!/, "the warning marker survives the narrower tab");
   assert.doesNotMatch(edge, /✗/, "a warning is not turned into a failure");
   assert.doesNotMatch(edge, /!\d/, "the marker it carries suppresses the !N cue");
@@ -104,7 +104,7 @@ test("a clipped selected tab keeps its warning on the shortest docked pane", (t)
   ];
   const p = pane(t, { width: 20, rows: 8, frame: false, entries, chosen: "aspen" });
   const edge = plain(p, 20).at(-1);
-  assert.match(edge, /✓ aspen !/, edge);
+  assert.match(edge, /✓ .*!/, edge);
   assert(visibleWidth(edge) <= 20, edge);
 });
 
@@ -137,7 +137,7 @@ test("arming Stop never erases every warning beside its whole confirmation", (t)
   );
   const p = pane(t, { width: 61, entries, chosen: "aspen", onStop() {} });
   const before = plain(p, 61).at(-1);
-  assert.match(before, /⠋ aspen ! \| ⠋ cedar !/, before);
+  assert.match(before, /⠋ aspen ! {2}⠋ cedar !/, before);
   p.handleInput("s");
   const painted = plain(p, 61);
   assert(
@@ -145,13 +145,14 @@ test("arming Stop never erases every warning beside its whole confirmation", (t)
     painted.join("\n"),
   );
   const edge = painted.at(-1);
-  // The clipped tab is too narrow for its marker (room 4), so the required
-  // `!N` cue leads the edge instead: at least one of the two is always shown.
-  assert.match(edge, /╰─ !1 ⠋/, edge);
+  // The selected tab keeps its own marker beside the whole confirmation, so
+  // the footer's `!N` cue would only repeat it.
+  assert.match(edge, /╰── ⠋ ! ─/, edge);
   assert.match(edge, /⠋/, "the real lifecycle glyph stays");
-  assert.match(edge, /best-effort · Ctrl\+S · Esc cancel · \[Confirm stop\]/, edge);
+  assert.doesNotMatch(edge, /!1/, "the painted marker suppresses the cue");
+  assert.match(edge, /best-effort · Ctrl\+S · Esc cancel · confirm stop/, edge);
   assert.ok(
-    edge.includes("best-effort · Ctrl+S · Esc cancel · [Confirm stop]"),
+    edge.includes("best-effort · Ctrl+S · Esc cancel · confirm stop"),
     "the confirmation stays complete",
   );
 });
@@ -169,7 +170,7 @@ test("a non-ASCII nickname cannot clip the warning away", (t) => {
   );
   // The footer's own controls share the row, so the nickname may be
   // ellipsized: the lifecycle glyph and the marker are what must survive.
-  assert.match(painted.at(-1), /✓ 审查员/, painted.at(-1));
+  assert.match(painted.at(-1), /✓ 审查/, painted.at(-1));
   assert.match(painted.at(-1), /!/, painted.at(-1));
 });
 
@@ -184,7 +185,7 @@ test("a question keeps its `?` through a clipped tab as well", (t) => {
   ];
   const p = pane(t, { width: 20, entries, chosen: "aspen" });
   const edge = plain(p, 20).at(-1);
-  assert.match(edge, /✓ asp/, edge);
+  assert.match(edge, /✓/, edge);
   assert.match(edge, /\?/, "the question marker survives the narrower tab");
   assert.doesNotMatch(edge, /✗/, "a question is not turned into a failure");
 });
@@ -206,6 +207,35 @@ const recording = () => {
 };
 const fgCall = (calls, color, text) =>
   calls.some(([kind, c, t]) => kind === "fg" && c === color && t === text);
+
+test("attention overflow dims its separators and accents only the info key", () => {
+  const { theme, calls } = recording();
+  const input = entry(view("aspen", { history_error: "unavailable", pending_messages: 1 })).input;
+  const [row] = renderDetailAttention(input, theme, 72, { maxRows: 1 });
+  assert.match(row, / · \+1 · info$/);
+  assert.ok(fgCall(calls, "dim", " · +1 · "));
+  assert.ok(fgCall(calls, "dim", "nfo"));
+  assert.ok(fgCall(calls, "accent", "i"));
+});
+
+test("the detail menu hint dims its label without dimming its shortcut", () => {
+  const { theme, calls } = recording();
+  const { text } = renderDetailFooter({
+    entries: [],
+    selected: "",
+    width: 48,
+    below: 0,
+    available: false,
+    confirming: false,
+    menu: true,
+    spinnerFrame: 0,
+    theme,
+    framed: true,
+  });
+  assert.match(text, /\. more$/);
+  assert.ok(fgCall(calls, "dim", "more"));
+  assert.ok(fgCall(calls, "accent", "."));
+});
 
 test("in a clipped tab the marker outranks the nickname, not the lifecycle glyph", () => {
   // The selected tab alone needs 11 columns; summaries do not fit beside it.
@@ -263,7 +293,7 @@ test("a whole selected tab carries its marker, so the footer cue stays suppresse
 
 test("a clipped tab without its marker forces the footer's required cue", () => {
   const frame = renderDetailFooter({
-    width: 55,
+    width: 3,
     entries: warned.map((e) =>
       entry(
         view(e.agent_id, {
@@ -282,22 +312,22 @@ test("a clipped tab without its marker forces the footer's required cue", () => 
       phase: "executing",
       execution_exited: false,
     }),
-    available: true,
-    confirming: true,
+    available: false,
+    confirming: false,
+    messaging: false,
     hiddenNotes: 1,
     spinnerFrame: 0,
     theme,
     framed: true,
   });
-  // The armed edge leaves the tab 4 columns: the glyph fits, the marker does
-  // not, so the cue is laid out again with the `!N` forced.
-  assert.match(frame.text, /^!1 /, frame.text);
-  assert.match(frame.text, /⠋/, frame.text);
-  assert.match(frame.text, /\[Confirm stop\]/, frame.text);
-  assert(visibleWidth(frame.text) <= 55, frame.text);
+  // The strip has no room for a complete marker, so the cue is laid out again
+  // with the `!N` forced; the cue is the only thing that still fits.
+  assert.match(frame.text, /^!1$/, frame.text);
+  assert.doesNotMatch(frame.text, /⠋ !/, frame.text);
+  assert(visibleWidth(frame.text) <= 3, frame.text);
 });
 
-test("a clipped marker keeps the strip's colours: ? warning, ! error, never the lifecycle colour", () => {
+test("a clipped marker keeps the strip's colours: ? warning, ! warning/error, never the lifecycle colour", () => {
   // completed + warning: the `!` must not wear the completed tab's success
   // colour -- the bug painted the whole clipped body in one lifecycle colour.
   const done = recording();
@@ -311,7 +341,7 @@ test("a clipped marker keeps the strip's colours: ? warning, ! error, never the 
   });
   assert.equal(stripDone.markerVisible, true);
   assert.ok(fgCall(done.calls, "success", "✓"), JSON.stringify(done.calls));
-  assert.ok(fgCall(done.calls, "error", "!"), JSON.stringify(done.calls));
+  assert.ok(fgCall(done.calls, "warning", "!"), JSON.stringify(done.calls));
   assert.ok(!fgCall(done.calls, "success", "!"), "a warning marker is never repainted as success");
   // running + question: the glyph keeps its accent, the `?` is warning-coloured.
   const running = (id, extra = {}) =>
@@ -364,7 +394,7 @@ test("a clipped marker keeps the strip's colours: ? warning, ! error, never the 
   assert.equal(stripBoth.markerVisible, true);
   assert.match(stripBoth.text, /✓ aspen \?!/);
   assert.ok(fgCall(both.calls, "warning", "?"), JSON.stringify(both.calls));
-  assert.ok(fgCall(both.calls, "error", "!"), JSON.stringify(both.calls));
+  assert.ok(fgCall(both.calls, "warning", "!"), JSON.stringify(both.calls));
 });
 
 test("a partially clipped label keeps the marker's own colours", () => {
@@ -382,9 +412,9 @@ test("a partially clipped label keeps the marker's own colours", () => {
   assert.match(strip.text, /✓ curre… !/);
   assert.ok(fgCall(rec.calls, "success", "✓"), JSON.stringify(rec.calls));
   assert.ok(fgCall(rec.calls, "accent", "curre…"), JSON.stringify(rec.calls));
-  assert.ok(fgCall(rec.calls, "error", "!"), JSON.stringify(rec.calls));
-  // Too narrow for the marker at all: nothing is painted beside the glyph,
-  // so the footer's forced cue is the only warning left.
+  assert.ok(fgCall(rec.calls, "warning", "!"), JSON.stringify(rec.calls));
+  // At four columns the glyph and the single-cell marker both fit whole, so
+  // the marker is painted and the footer cue can stay suppressed.
   const tiny = recording();
   const stripTiny = renderDetailAgentStrip({
     entries: warned,
@@ -394,14 +424,32 @@ test("a partially clipped label keeps the marker's own colours", () => {
     theme: tiny.theme,
     framed: true,
   });
-  assert.equal(stripTiny.markerVisible, false);
-  assert.ok(!tiny.calls.some(([, , text]) => text === "!"), JSON.stringify(tiny.calls));
+  assert.equal(stripTiny.markerVisible, true);
+  assert.ok(fgCall(tiny.calls, "warning", "!"), JSON.stringify(tiny.calls));
+  // Below four columns even the glyph stands alone: nothing is painted beside
+  // it, so the footer's forced cue is the only warning left.
+  for (const width of [3, 2, 1]) {
+    const none = recording();
+    const stripNone = renderDetailAgentStrip({
+      entries: warned,
+      selected: "aspen",
+      width,
+      spinnerFrame: 0,
+      theme: none.theme,
+      framed: true,
+    });
+    assert.equal(stripNone.markerVisible, false, `${width}`);
+    assert.ok(
+      !none.calls.some(([, , text]) => text === "!"),
+      `${width}: ${JSON.stringify(none.calls)}`,
+    );
+  }
 });
 
 test("the forced cue keeps its warning colour when the marker cannot fit", () => {
   const rec = recording();
   const frame = renderDetailFooter({
-    width: 55,
+    width: 3,
     entries: ["aspen", "cedar"].map((id) =>
       entry(
         view(id, {
@@ -420,8 +468,9 @@ test("the forced cue keeps its warning colour when the marker cannot fit", () =>
       phase: "executing",
       execution_exited: false,
     }),
-    available: true,
-    confirming: true,
+    available: false,
+    confirming: false,
+    messaging: false,
     hiddenNotes: 1,
     spinnerFrame: 0,
     theme: rec.theme,
@@ -432,7 +481,7 @@ test("the forced cue keeps its warning colour when the marker cannot fit", () =>
     !rec.calls.some(([, , text]) => text === "!"),
     "no marker was painted beside the forced cue",
   );
-  assert.match(frame.text, /^!1 /);
+  assert.match(frame.text, /^!1$/);
 });
 
 test("an unmarked selected tab never grew a marker to keep the cue suppressed", () => {

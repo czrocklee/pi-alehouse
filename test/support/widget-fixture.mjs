@@ -148,11 +148,13 @@ export const mounted = (initial = [], residentLimit = 8) => {
 
 export const headingClick = { type: "click", button: "left", x: 0, y: 0 };
 
+// Click-only pagination paints `Prev N/M Next`; Next stays painted (dim) on the
+// last page, so the row is findable from every page.
 export const pageClick = (h, direction = "Next") => {
   const lines = h.lines(),
-    y = lines.findIndex((line) => line.includes("[Next]"));
+    y = lines.findIndex((line) => /\d+\/\d+ Next/.test(line));
   assert(y >= 0, "page controls must be painted");
-  return h.component().handleMouse({ ...headingClick, y, x: lines[y].indexOf(`[${direction}]`) });
+  return h.component().handleMouse({ ...headingClick, y, x: lines[y].indexOf(direction) });
 };
 
 export function refreshFixture(t, status = "running") {

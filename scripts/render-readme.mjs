@@ -261,8 +261,10 @@ for (const [rowIndex, row] of crop.entries()) {
     if (run.bg !== palette.background) {
       contents += `<rect x="${(left + run.start * cellWidth).toFixed(1)}" y="${y - 19}" width="${((run.end - run.start) * cellWidth).toFixed(1)}" height="${lineHeight}" fill="${run.bg}"/>`;
     }
+  // Keep whitespace-only style runs too: an inline shortcut can leave the
+  // separating space in its own run, and SVG text extraction must retain it.
   for (const run of runs)
-    if (run.text.trim()) {
+    if (run.text) {
       contents += `<text x="${(left + run.start * cellWidth).toFixed(1)}" y="${y}" xml:space="preserve" fill="${run.fg}"${run.bold ? ' font-weight="700"' : ""}${run.italic ? ' font-style="italic"' : ""}>${escapeXml(run.text)}</text>`;
     }
 }

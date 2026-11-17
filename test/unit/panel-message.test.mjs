@@ -317,9 +317,9 @@ for (const keybindings of [undefined, null])
     // S arms only from painted geometry, and the fixture's requestRender is a
     // no-op, so the post-send paint -- which must offer Stop again once
     // message mode ends -- is also what makes arming possible.
-    assert.match(h.footer(), /\[S Stop\]/);
+    assert.match(h.footer(), /\bstop\b/);
     h.pane().handleInput("s");
-    assert.match(h.footer(), /\[Confirm stop\]/);
+    assert.match(h.footer(), /confirm stop/);
     h.pane().handleInput("\x1b");
     assert.deepEqual(h.stopped, []);
     assert.equal(h.pane().isOpen(), true);

@@ -183,10 +183,12 @@ test("the lifecycle glyph and attention markers keep their own colours", () => {
     theme: rec.theme,
   });
   assert.match(text, /✓ aspen \?!/, text);
-  // The glyph keeps its lifecycle colour; the markers keep theirs.
+  // The glyph keeps its lifecycle colour; a question is warning-coloured and
+  // an ordinary warning `!` is warning-coloured too.
   assert.ok(fgCall(rec.calls, "success", "✓"), JSON.stringify(rec.calls));
   assert.ok(fgCall(rec.calls, "warning", "?"), JSON.stringify(rec.calls));
-  assert.ok(fgCall(rec.calls, "error", "!"), JSON.stringify(rec.calls));
+  assert.ok(fgCall(rec.calls, "warning", "!"), JSON.stringify(rec.calls));
+  assert.ok(!fgCall(rec.calls, "error", "!"), "a warning is not painted as an error");
   // Selection styling touches the nickname alone: the markers are neither
   // underlined, bolded nor repainted with the selection's accent.
   assert.deepEqual(styledTexts(rec.calls, "underline"), ["aspen"]);
@@ -195,6 +197,54 @@ test("the lifecycle glyph and attention markers keep their own colours", () => {
   assert.ok(!fgCall(rec.calls, "accent", "!"), JSON.stringify(rec.calls));
   assert.ok(!fgCall(rec.calls, "success", "aspen"), "the name is not repainted as success");
   noBg(rec.calls, "strip");
+});
+
+test("an actual error `!` is error-coloured, a warning `!` is warning-coloured", () => {
+  const error = recording();
+  renderDetailAgentStrip({
+    entries: [entry("aspen", { cleanup_errors: ["boom"] }), entry("birch")],
+    selected: "aspen",
+    width: 40,
+    spinnerFrame: 0,
+    theme: error.theme,
+  });
+  assert.ok(fgCall(error.calls, "error", "!"), JSON.stringify(error.calls));
+  const warning = recording();
+  renderDetailAgentStrip({
+    entries: [entry("aspen", { history_error: "x" }), entry("birch")],
+    selected: "aspen",
+    width: 40,
+    spinnerFrame: 0,
+    theme: warning.theme,
+  });
+  assert.ok(fgCall(warning.calls, "warning", "!"), JSON.stringify(warning.calls));
+  assert.ok(!fgCall(warning.calls, "error", "!"), JSON.stringify(warning.calls));
+});
+
+test("an unselected completed tab dims its glyph unless it has attention", () => {
+  const clean = recording();
+  renderDetailAgentStrip({
+    entries: [entry("aspen"), entry("birch")],
+    selected: "birch",
+    width: 40,
+    spinnerFrame: 0,
+    theme: clean.theme,
+  });
+  // `aspen` is completed, unselected and unmarked: its glyph is background,
+  // while the selected `birch` keeps the lifecycle colour.
+  assert.ok(fgCall(clean.calls, "dim", "✓"), JSON.stringify(clean.calls));
+  assert.ok(fgCall(clean.calls, "success", "✓"), JSON.stringify(clean.calls));
+  // Attention keeps the lifecycle colour even when unselected.
+  const marked = recording();
+  renderDetailAgentStrip({
+    entries: [entry("aspen", { history_error: "x" }), entry("birch")],
+    selected: "birch",
+    width: 40,
+    spinnerFrame: 0,
+    theme: marked.theme,
+  });
+  assert.ok(fgCall(marked.calls, "success", "✓"), JSON.stringify(marked.calls));
+  assert.ok(!fgCall(marked.calls, "dim", "✓"), JSON.stringify(marked.calls));
 });
 
 test("narrow clipped tabs stay safe: bounded widths, semantic markers, no fill", () => {
@@ -218,7 +268,8 @@ test("narrow clipped tabs stay safe: bounded widths, semantic markers, no fill",
     assert.ok(fgCall(rec.calls, "success", "✓"), `${width}: ${JSON.stringify(rec.calls)}`);
     assert.ok(!fgCall(rec.calls, "accent", "✓"), `${width}: the glyph keeps its colour`);
     if (painted.markerVisible) {
-      assert.ok(fgCall(rec.calls, "error", "!"), `${width}: ${JSON.stringify(rec.calls)}`);
+      assert.ok(fgCall(rec.calls, "warning", "!"), `${width}: ${JSON.stringify(rec.calls)}`);
+      assert.ok(!fgCall(rec.calls, "error", "!"), `${width}: a warning is not an error`);
       assert.ok(!fgCall(rec.calls, "accent", "!"), `${width}: the marker keeps its colour`);
     }
     // Selection styling wraps only what is painted of the name -- a prefix,
@@ -276,27 +327,19 @@ test("hidden peers keep their +N, ?q and !w counts, unstyled and exact", () => {
   noBg(rec.calls, "strip");
 });
 
-test("the framed divider is a muted ASCII pipe, styled by nothing else", () => {
-  const rec = recording();
-  const { text } = strip({ framed: true, theme: rec.theme });
-  // One join, one literal U+007C: never the rule chrome the frame draws.
-  assert.equal([...text].filter((ch) => ch === "|").length, 1, text);
-  assert.ok(!text.includes("\u2502") && !text.includes("\u2500"), text);
-  assert.deepEqual(
-    rec.calls.filter(([kind, , t]) => kind === "fg" && t === "|"),
-    [["fg", "borderMuted", "|"]],
-    JSON.stringify(rec.calls),
-  );
-  noBg(rec.calls, "strip");
-  // Docked, nothing is painted between the tabs' own padding.
-  const docked = recording();
-  const plainDocked = strip({ framed: false, theme: docked.theme }).text;
-  assert.ok(!plainDocked.includes("|"), plainDocked);
-  assert.deepEqual(
-    docked.calls.filter(([, , t]) => t === "|"),
-    [],
-    JSON.stringify(docked.calls),
-  );
+test("neither edge paints a divider between the tabs' own padding", () => {
+  for (const framed of [true, false]) {
+    const rec = recording();
+    const { text } = strip({ framed, theme: rec.theme });
+    assert.ok(!text.includes("|"), `${framed}: ${text}`);
+    assert.ok(!text.includes("\u2502") && !text.includes("\u2500"), text);
+    assert.deepEqual(
+      rec.calls.filter(([, , t]) => t === "|"),
+      [],
+      `${framed}: ${JSON.stringify(rec.calls)}`,
+    );
+    noBg(rec.calls, `${framed}`);
+  }
 });
 
 test("a theme without an underline helper degrades to accent+bold", () => {

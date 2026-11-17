@@ -700,9 +700,9 @@ test("explicit save displays exact destination, actual choice and new-session pr
   await f.run("yolo");
   await f.run("save workspace");
   assert(f.dialogs.at(-1).text.includes(store.paths.workspace));
-  assert.match(f.dialogs.at(-1).text, /project config file visible to Git/);
-  assert.match(f.dialogs.at(-1).text, /project-trust prompt in a future Pi session/);
-  assert.match(f.dialogs.at(-1).text, /does not grant project trust/);
+  assert.match(f.dialogs.at(-1).text, /workspace config file visible to Git/);
+  assert.match(f.dialogs.at(-1).text, /Pi project-trust prompt in a future session/);
+  assert.match(f.dialogs.at(-1).text, /does not grant Pi project trust/);
   assert.equal(store.stages.at(-1).value, "yolo");
   assert.equal(store.scope, "session");
 });
@@ -711,7 +711,7 @@ test("save accepts scope selection, refuses invalid scope, unavailable UI and un
   const store = fakeStore({ trusted: false });
   const f = fixture(t, {
     store,
-    select: (_title, options) => options.find((label) => label === "All projects"),
+    select: (_title, options) => options.find((label) => label === "All workspaces"),
   });
   await f.start();
   await f.run("save");
@@ -766,7 +766,7 @@ test("scope picker epoch is checked after await", async (t) => {
   await f.start();
   const pending = f.run("save");
   await f.start({ store: fakeStore() });
-  answer.resolve("All projects");
+  answer.resolve("All workspaces");
   await pending;
   assert.deepEqual(store.stages, []);
   assert.equal(f.dialogs.length, 0);
@@ -1009,11 +1009,11 @@ function clickPopoverRow(component, pattern) {
 
 for (const action of [
   { key: "g", scope: "global", label: "global default" },
-  { key: "w", scope: "workspace", label: "project default" },
+  { key: "w", scope: "workspace", label: "workspace default" },
   { key: "G", scope: "global", label: "global default" },
-  { key: "W", scope: "workspace", label: "project default" },
+  { key: "W", scope: "workspace", label: "workspace default" },
   { scope: "global", label: "global default" },
-  { scope: "workspace", label: "project default" },
+  { scope: "workspace", label: "workspace default" },
 ]) {
   test(`fullscreen narrowing leaves the same menu ready to remember ${action.scope} via ${action.key ?? "click"}`, async (t) => {
     const store = fakeStore(),
@@ -1023,8 +1023,8 @@ for (const action of [
     const component = openApprovalPopover(f),
       mounts = f.host.mounts;
     const menu = component.render(60).join("\n");
-    assert(menu.includes("[G] Save as global default"));
-    assert(menu.includes("[W] Save as project default"));
+    assert(menu.includes("Save as global default"));
+    assert(menu.includes("Save as workspace default"));
     assert(menu.includes("Mode changes: this session only"));
     clickPopoverRow(component, /^│. [○●] manual\s/);
     assert.equal(f.choice, "approval: manual");
@@ -1047,7 +1047,7 @@ for (const action of [
     );
     assert.equal(
       dialog.title,
-      `Save manual as ${action.scope === "global" ? "global" : "project"} approval default?`,
+      `Save manual as ${action.scope === "global" ? "global" : "workspace"} approval default?`,
     );
     assert.match(dialog.text, /approval: manual/);
     assert(dialog.text.includes(store.paths[action.scope]));
@@ -1055,9 +1055,9 @@ for (const action of [
     assert.match(dialog.text, /preference, not permission/);
     assert.match(dialog.text, /yolo always needs a new explicit confirmation in every session/);
     if (action.scope === "workspace") {
-      assert.match(dialog.text, /project config file visible to Git/);
-      assert.match(dialog.text, /project-trust prompt in a future Pi session/);
-      assert.match(dialog.text, /does not grant project trust/);
+      assert.match(dialog.text, /workspace config file visible to Git/);
+      assert.match(dialog.text, /Pi project-trust prompt in a future session/);
+      assert.match(dialog.text, /does not grant Pi project trust/);
     }
     assert.deepEqual(store.stages, [], "nothing is staged before deliberate confirmation");
     answer.resolve(true);
@@ -1074,7 +1074,7 @@ for (const action of [
       f.notices.some(
         ({ message }) =>
           message ===
-          `Approval: manual will be the ${action.scope === "global" ? "global" : "project"} default after normal exit.`,
+          `Approval: manual will be the ${action.scope === "global" ? "global" : "workspace"} default after normal exit.`,
       ),
     );
   });
@@ -1128,14 +1128,14 @@ for (const scope of ["global", "workspace"]) {
   });
 }
 
-test("untrusted fullscreen project remembering is disabled for shortcut and click, not global", async (t) => {
+test("untrusted fullscreen workspace remembering is disabled for shortcut and click, not global", async (t) => {
   const store = fakeStore({ trusted: false });
   const f = fixture(t, { store, fullscreen: true });
   await f.start();
   const component = openApprovalPopover(f);
   clickPopoverRow(component, /^│. [○●] manual\s/);
   component.handleInput("w");
-  clickPopoverRow(component, "project default");
+  clickPopoverRow(component, /Workspace default/);
   await tick();
   assert.equal(f.host.component, component, "disabled action does not dismiss the live menu");
   assert.deepEqual(f.dialogs, []);
@@ -1157,7 +1157,7 @@ for (const leave of ["switch", "shutdown", "choice", "trust", "store replacement
     const component = openApprovalPopover(f);
     clickPopoverRow(component, /^│. [○●] manual\s/);
     const replayGlobalClick = capturePopoverRowClick(component, "global default"),
-      replayProjectClick = capturePopoverRowClick(component, "project default");
+      replayProjectClick = capturePopoverRowClick(component, "workspace default");
     component.handleInput("w");
     assert.equal(f.host.component, undefined);
     assert.equal(f.dialogs[0].popoverVisible, false);
@@ -1199,13 +1199,13 @@ for (const scope of ["global", "workspace"]) {
     assert.equal(f.choice, "approval: jev+sub");
     assert.equal(sessionYoloSet().has(f.id), false);
     if (scope === "global") component.handleInput("g");
-    else clickPopoverRow(component, "project default");
+    else clickPopoverRow(component, "workspace default");
     assert.equal(component.isArmed(), false, "memory action disarms the unaccepted mode");
     assert.equal(f.host.component, undefined);
     assert.equal(f.dialogs[0].popoverVisible, false);
     assert.equal(
       f.dialogs[0].title,
-      `Save judge+sub as ${scope === "global" ? "global" : "project"} approval default?`,
+      `Save judge+sub as ${scope === "global" ? "global" : "workspace"} approval default?`,
     );
     assert.match(f.dialogs[0].text, /approval: judge\+sub/);
     answer.resolve(true);
@@ -1259,7 +1259,7 @@ test("ordinary Pi has no memory menu or shortcuts and mode choices still close t
   const component = openApprovalPopover(f),
     menu = component.render(60).join("\n");
   assert(!menu.includes("global default"));
-  assert(!menu.includes("project default"));
+  assert(!menu.includes("workspace default"));
   component.handleInput("g");
   component.handleInput("w");
   assert.equal(f.host.component, component);
@@ -1345,7 +1345,7 @@ for (const scope of ["global", "workspace"]) {
     assert.equal(f.dialogs.length, 1);
     assert.equal(
       f.dialogs[0].title,
-      `Save manual as ${scope === "global" ? "global" : "project"} approval default?`,
+      `Save manual as ${scope === "global" ? "global" : "workspace"} approval default?`,
     );
     assert.match(f.dialogs[0].text, /approval: manual/);
     assert(f.dialogs[0].text.includes(store.paths[scope]));
@@ -1392,11 +1392,11 @@ test("/approval save scope selection and UI/trust guards retain the explicit-sav
   const store = fakeStore({ trusted: false });
   const f = fixture(t, {
     store,
-    select: (_title, options) => options.find((label) => label === "All projects"),
+    select: (_title, options) => options.find((label) => label === "All workspaces"),
   });
   await f.start();
   await f.run("save");
-  assert.deepEqual(f.selects[0].choices, ["All projects", "This project"]);
+  assert.deepEqual(f.selects[0].choices, ["All workspaces", "This workspace"]);
   assert.deepEqual(store.stages, [{ scope: "global", path: ["approval"], value: "judge+sub" }]);
   await f.run("save workspace");
   await f.run("save session");
@@ -1418,12 +1418,12 @@ test("/approval save dismisses an open popover before confirmation and retires i
     store,
     fullscreen: true,
     confirm: () => answer.promise,
-    select: (_title, options) => options.find((label) => label === "All projects"),
+    select: (_title, options) => options.find((label) => label === "All workspaces"),
   });
   await f.start();
   const oldMenu = openApprovalPopover(f),
     replayGlobalClick = capturePopoverRowClick(oldMenu, "global default"),
-    replayProjectClick = capturePopoverRowClick(oldMenu, "project default");
+    replayProjectClick = capturePopoverRowClick(oldMenu, "workspace default");
   let settled = false;
   const pending = f.run("save").then(() => {
     settled = true;

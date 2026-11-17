@@ -314,7 +314,7 @@ test("theme replacement retires page controls immediately and preserves roster e
   old.handleMouse(headingClick);
   const lines = old.render(120),
     y = lines.length - 1,
-    x = lines[y].indexOf("[Next]");
+    x = lines[y].indexOf("Next");
   assert.deepEqual(old.handleMouse({ ...headingClick, y, x }), { handled: true, render: true });
   assert.match(old.render(120)[1], /idle4 /);
   old.invalidate();

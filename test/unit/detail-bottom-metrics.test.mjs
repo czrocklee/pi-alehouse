@@ -80,18 +80,19 @@ const row = (v = {}, width = 120, options = {}) =>
 
 // ---- The bottom dock: one status-led metrics row ----
 
-test("the dock is one status-led row: model, turns, context, usage, cost, total", () => {
+test("the dock is one glyph-led row: model, turns, context, usage, cost, elapsed, turn clock", () => {
   const rows = renderDetailSummary(input(), theme, 120);
   assert.equal(rows.length, 1, "the default dock is exactly one row");
   const text = rows[0];
   const order = [
-    /⠋ running \(1s\)/,
+    /^⠋ · /,
     /claude-opus-5\/medium/,
     /↻3\/256/,
     /ctx ≈59k\/500k/,
     /↑80k \(75\.0%\) ↓5\.0k/,
     /\$1\.23/,
-    /total 1m33s/,
+    /1m33s/,
+    /turn 1s$/,
   ];
   let at = -1;
   for (const pattern of order) {
@@ -100,25 +101,26 @@ test("the dock is one status-led row: model, turns, context, usage, cost, total"
     at += found + 1;
   }
   assert.ok(visibleWidth(text) <= 120, text);
-  // The context keeps its own `ctx` label; no context percent, no tool-call
-  // count, no ≤ turns form, no "turn" wording, and the task stays in the title.
-  for (const retired of [/≈\S+ \d+%/, /▸/, /≤/, /turn/, /Review the lifecycle contract/])
+  // Normal running work is glyph-only at the metrics start; the context keeps
+  // its own `ctx` label, the elapsed time is bare, and the live turn clock is
+  // last. No context percent, tool-call count, ≤ turns form or task repetition.
+  assert.doesNotMatch(text, /running/, "a normal running status needs no label");
+  for (const retired of [/≈\S+ \d+%/, /▸/, /≤/, /total/, /\(1s\)/, /Review the lifecycle contract/])
     assert.doesNotMatch(text, retired, `${retired}: ${text}`);
   assert.ok(text.includes(widgetCost(1.234)), "cost reuses the widget's exact cents");
   assert.equal(renderDetailSummary(input(), theme, 120, { activity: false }).length, 1);
-  // The complete row reserves 108 cells: model and effort joined by one slash.
 });
 
-test("the current-turn clock is whole, floored seconds", () => {
-  assert.match(row({ turn_elapsed_ms: 18_000 }), /\(18s\)/);
-  assert.match(row({ turn_elapsed_ms: 1_100 }), /\(1s\)/);
-  assert.match(row({ turn_elapsed_ms: 62_000 }), /\(1m02s\)/);
-  assert.match(row({ turn_elapsed_ms: 59_900 }), /\(59s\)/);
-  assert.match(row({ turn_elapsed_ms: 900 }), /\(0s\)/);
+test("the current-turn clock is whole, floored seconds at the very end", () => {
+  assert.match(row({ turn_elapsed_ms: 18_000 }), /turn 18s$/);
+  assert.match(row({ turn_elapsed_ms: 1_100 }), /turn 1s$/);
+  assert.match(row({ turn_elapsed_ms: 62_000 }), /turn 1m02s$/);
+  assert.match(row({ turn_elapsed_ms: 59_900 }), /turn 59s$/);
+  assert.match(row({ turn_elapsed_ms: 900 }), /turn 0s$/);
   // No decimal tenth survives the floor, at any magnitude: one spelling per
   // magnitude, so a tick never changes the clock's own shape.
   for (const ms of [1_100, 9_900, 59_900, 60_500, 599_900])
-    assert.doesNotMatch(row({ turn_elapsed_ms: ms }), /\(\d+(?:m\d{2})?\.\d+s\)/);
+    assert.doesNotMatch(row({ turn_elapsed_ms: ms }), /turn \d+(?:m\d{2})?\.\d+s/);
 });
 
 test("the clock rides only an actually live running turn", () => {
@@ -130,8 +132,8 @@ test("the clock rides only an actually live running turn", () => {
     ["settled", { status: "completed", execution_exited: true }],
   ]) {
     const text = row(overrides);
-    assert.doesNotMatch(text, /\(\d+(?:m\d{2})?s\)/, `${label}: ${text}`);
-    assert.doesNotMatch(text, /turn/, `${label}: no turn wording anywhere`);
+    assert.doesNotMatch(text, /turn \d/, `${label}: ${text}`);
+    assert.doesNotMatch(text, /\(\d+(?:m\d{2})?s\)/, `${label}: no parenthesized clock`);
   }
 });
 
@@ -139,60 +141,54 @@ test("a minute-long turn tints the clock as a warning, presentation only", () =>
   const quickPaint = recorder();
   renderDetailSummary(input(), quickPaint.theme, 120, { activity: false });
   assert.ok(
-    quickPaint.calls.some(([color, text]) => color === "dim" && text === "(1s)"),
+    quickPaint.calls.some(([color, text]) => color === "dim" && text === "turn 1s"),
     "a sub-minute clock stays dim",
   );
   const slow = recorder();
   renderDetailSummary(input({ turn_elapsed_ms: 62_000 }), slow.theme, 120, { activity: false });
   assert.ok(
-    slow.calls.some(([color, text]) => color === "warning" && text === "(1m02s)"),
+    slow.calls.some(([color, text]) => color === "warning" && text === "turn 1m02s"),
     "a minute-long clock is a warning cue",
   );
 });
 
-test("the clock reserves ahead of its ticks, so second ticks never re-decide the row", () => {
-  const parts = [
-    "running",
-    "claude-opus-5",
-    "↻3/256",
-    "ctx ≈59k/500k",
-    "↑80k (75.0%) ↓5.0k",
-    "$1.23",
-    "total 1m33s",
-  ];
-  for (const width of [108, 107]) {
-    for (const ms of [900, 9_000, 30_000, 59_900, 300_000, 599_900]) {
-      const text = row({ turn_elapsed_ms: ms }, width);
-      assert.ok(visibleWidth(text) <= width, `${width} ${ms}: ${text}`);
-      for (const part of parts)
-        assert.ok(text.includes(part), `${width} ${ms}: ${part} missing from ${text}`);
-    }
+test("the trailing clock reserves nothing after it", () => {
+  // No trailing padding: the painted row ends at the clock's own last cell.
+  for (const ms of [900, 9_000, 30_000, 59_900, 300_000, 599_900]) {
+    const text = row({ turn_elapsed_ms: ms }, 120);
+    assert.equal(text, text.trimEnd(), `${ms}: no trailing reservation hole`);
+    assert.match(text, /turn \d+(?:m\d{2})?s$/, `${ms}: the clock closes the row`);
   }
-  // 108 holds the whole row through the reservation; the reservation, not the
-  // painted clock, decided that, so the layout never reorders between ticks.
-  assert.ok(row({ turn_elapsed_ms: 900 }, 108).endsWith("total 1m33s"));
-  // One reservation covers every spelling below ten minutes, so a clock that
-  // crosses the minute boundary does not shift the figures after it.
-  for (const ms of [59_900, 60_000, 61_000, 599_000])
-    assert.equal(row({ turn_elapsed_ms: ms }).indexOf("claude-opus-5"), 20, `${ms}`);
-  // Ten and a hundred minutes each add one reserved digit, and only then.
-  for (const [ms, clock, shift] of [
-    [600_000, "(10m00s)", 1],
-    [6_000_000, "(100m00s)", 2],
+  // The clock's own growth never shifts the figures before it: they are all
+  // painted before the last segment, so no reservation is needed.
+  const prefix = (ms) => {
+    const text = row({ turn_elapsed_ms: ms }, 120);
+    return text.slice(0, text.indexOf(" · turn "));
+  };
+  const base = prefix(900);
+  for (const ms of [900, 9_000, 59_900, 60_000, 599_000, 600_000, 6_000_000])
+    assert.equal(prefix(ms), base, `${ms}: preceding figures hold their columns`);
+  // Ten and a hundred minutes each add one clock cell, only at the end.
+  for (const [ms, clock] of [
+    [600_000, "turn 10m00s"],
+    [6_000_000, "turn 100m00s"],
   ]) {
     const text = row({ turn_elapsed_ms: ms });
-    assert.ok(text.includes(clock), `${ms}: ${text}`);
+    assert.ok(text.endsWith(clock), `${ms}: ${text}`);
     assert.ok(visibleWidth(text) <= 120, `${ms}: ${text}`);
-    assert.equal(text.indexOf("claude-opus-5"), 20 + shift, `${ms}: only the reserved digit`);
   }
 });
 
-test("the figures after the status hold their columns while the clock ticks", () => {
-  for (const ms of [1_100, 9_900, 10_000, 18_000, 59_900, 60_000, 599_000]) {
+test("the figures before the clock hold their columns while it ticks", () => {
+  const prefix = (ms) => {
     const text = row({ turn_elapsed_ms: ms }, 120);
-    assert.equal(text.indexOf("claude-opus-5"), 20, `${ms}: ${text}`);
-    assert.equal(visibleWidth(text), 108, `${ms}: the row keeps one stable width`);
-  }
+    return text.slice(0, text.indexOf(" · turn "));
+  };
+  const base = prefix(1_100);
+  for (const ms of [1_100, 9_900, 10_000, 18_000, 59_900, 60_000, 599_000])
+    assert.equal(prefix(ms), base, `${ms}: the prefix is stable`);
+  // The row is not padded to a reserved width: the clock is the last cell.
+  assert.ok(!row({ turn_elapsed_ms: 1_100 }, 120).includes("  "), "no reserved gap");
 });
 
 test("the status glyph follows the caller's spinner frame", () => {
@@ -272,63 +268,51 @@ test("cost reuses the widget's cents exactly, with floors for partial spend", ()
   assert.match(row({ usage: undefined }), /↻3\/256/, "turns remain real telemetry");
 });
 
-test("the Run's total time keeps its label", () => {
-  assert.match(row(), /total 1m33s/);
-  assert.match(row({ elapsed_ms: 4_000 }), /total 4\.0s/);
+test("the cumulative elapsed time is bare and precedes the live clock", () => {
+  assert.match(row(), /· 1m33s · turn 1s$/);
+  assert.doesNotMatch(row(), /total/);
+  assert.doesNotMatch(row(), /\(1m33s\)/);
+  assert.match(row({ elapsed_ms: 4_000 }), /· 4\.0s · turn 1s$/);
 });
 
 // ---- The adaptive ladder: what yields, and in which order ----
 
 test("the model shortens first; whole figures then yield least urgent first", () => {
-  // One cell short: only the model shortens, nothing is dropped.
-  const almost = row({}, 107);
-  assert.match(almost, /total 1m33s/);
-  assert.match(almost, /↑80k \(75\.0%\)/);
-  assert.match(almost, /claude-opus-5\/medi…/);
-  assert.doesNotMatch(almost, /medium$/);
-  // The readable floor: "clau…" is the last model spelling.
-  assert.match(row({}, 93), /clau…/);
-  assert.match(row({}, 93), /total 1m33s/);
-  // The total time is the least priority: it drops first.
-  const noTotal = row({}, 92);
-  assert.doesNotMatch(noTotal, /total 1m33s/);
-  assert.match(noTotal, /↑80k \(75\.0%\)/);
-  assert.match(noTotal, /\$1\.23/);
-  assert.match(noTotal, /claude-opus-5\/med…/, "the model reuses the total's released cells");
-  assert.equal(visibleWidth(noTotal), 92);
+  // One cell short of the full row: only the model shortens, nothing drops.
+  assert.equal(
+    row({}, 95),
+    "⠋ · claude-opus-5/medi… · ↻3/256 · ctx ≈59k/500k · ↑80k (75.0%) ↓5.0k · $1.23 · 1m33s · turn 1s",
+  );
+  assert.equal(
+    row({}, 93),
+    "⠋ · claude-opus-5/me… · ↻3/256 · ctx ≈59k/500k · ↑80k (75.0%) ↓5.0k · $1.23 · 1m33s · turn 1s",
+  );
+  // The cumulative elapsed time is the least priority: it drops first.
+  assert.equal(
+    row({}, 80),
+    "⠋ · claude-opus… · ↻3/256 · ctx ≈59k/500k · ↑80k (75.0%) ↓5.0k · $1.23 · turn 1s",
+  );
   // Then the cache percentage yields, while the token figures stay.
-  const noRatio = row({}, 78);
-  assert.match(noRatio, /↑80k ↓5\.0k/);
-  assert.doesNotMatch(noRatio, /%\)/);
-  // Then the whole usage group.
-  const noUsage = row({}, 70);
-  assert.doesNotMatch(noUsage, /↑/);
-  assert.match(noUsage, /\$1\.23/);
-  // Then cost, then routine turns.
-  const noCost = row({}, 57);
-  assert.doesNotMatch(noCost, /\$/);
-  assert.match(noCost, /↻3\/256/);
-  const noTurns = row({}, 49);
-  assert.doesNotMatch(noTurns, /↻/);
-  assert.match(noTurns, /claude-opus-…/, "the remaining model reuses spare cells");
-  assert.equal(visibleWidth(noTurns), 49);
-  assert.match(noTurns, /ctx ≈59k\/500k/);
-  assert.match(noTurns, /running/);
-  // Then the shortened model: status and context are essential.
-  const noModel = row({}, 40);
-  assert.doesNotMatch(noModel, /claude-opus-5/);
-  assert.equal(noModel.trimEnd(), "⠋ running (1s)    · ctx ≈59k/500k");
-  // Status compacts to keep the context, then the context yields.
-  assert.equal(row({}, 32).trimEnd(), "⠋ run (1s)    · ctx ≈59k/500k");
-  assert.equal(row({}, 25).trimEnd(), "⠋ (1s)    · ctx ≈59k/500k");
-  // The window outlasts every status wording: even the bare glyph holds it.
-  assert.equal(row({}, 17).trimEnd(), "⠋ · ctx ≈59k/500k");
-  // Once the context yields, the most readable status that fits returns.
-  assert.equal(row({}, 16).trimEnd(), "⠋ run (1s)");
-  // The glyph and the clock outlast everything but the last cell.
-  assert.equal(row({}, 12).trimEnd(), "⠋ (1s)");
-  assert.match(row({}, 8), /^⠋$/);
-  assert.match(row({}, 1), /^⠋$/);
+  assert.equal(
+    row({}, 70),
+    "⠋ · claude-op… · ↻3/256 · ctx ≈59k/500k · ↑80k ↓5.0k · $1.23 · turn 1s",
+  );
+  // Then the whole usage group, then cost, then routine turns.
+  assert.equal(row({}, 57), "⠋ · claude-op… · ↻3/256 · ctx ≈59k/500k · $1.23 · turn 1s");
+  assert.equal(row({}, 49), "⠋ · claude-op… · ↻3/256 · ctx ≈59k/500k · turn 1s");
+  // Routine turns yield before the live clock; the model reclaims their cells.
+  assert.equal(row({}, 44), "⠋ · clau… · ↻3/256 · ctx ≈59k/500k · turn 1s");
+  assert.equal(row({}, 43), "⠋ · claude-opus-… · ctx ≈59k/500k · turn 1s");
+  // Then the shortened model: the glyph, context and live clock are essential.
+  assert.equal(row({}, 32), "⠋ · ctx ≈59k/500k · turn 1s");
+  // The clock outlasts every routine figure, then yields before the context.
+  assert.equal(row({}, 26), "⠋ · ctx ≈59k/500k");
+  assert.equal(row({}, 17), "⠋ · ctx ≈59k/500k");
+  // Once the context yields, the live clock returns beside the bare glyph.
+  assert.equal(row({}, 16), "⠋ · turn 1s");
+  assert.equal(row({}, 12), "⠋ · turn 1s");
+  assert.equal(row({}, 10), "⠋");
+  assert.equal(row({}, 1), "⠋");
   assert.equal(row({}, 0), "");
 });
 
@@ -337,19 +321,20 @@ test("elevated turn pressure outlasts the shortened model", () => {
   assert.match(elevated, /↻205\/256/);
   assert.doesNotMatch(elevated, /claude-opus-5/);
   assert.match(elevated, /≈59k\/500k/);
+  assert.match(elevated, /turn 1s$/);
   const routine = row({}, 45);
-  assert.doesNotMatch(routine, /↻/);
-  assert.match(routine, /claude-o…/, "routine turns yield and the remaining model reclaims room");
+  assert.match(routine, /↻3\/256/, "routine turns still fit at this width");
+  assert.match(routine, /claud…/, "the remaining model reclaims room");
 });
 
-test("a pending question spells the dock's status like the main widget", () => {
+test("ambiguous lifecycle states keep readable labels; normal work is glyph-only", () => {
   const asked = row({
     status: "needs_input",
     outcome: { status: "needs_input", question: "Which branch?", limit_reached: false },
   });
-  assert.match(asked, /\? needs answer/);
+  assert.match(asked, /^\? needs answer · /);
   const plain = row({ status: "needs_input" });
-  assert.match(plain, /\? needs input/);
+  assert.match(plain, /^\? needs input · /);
   assert.doesNotMatch(plain, /needs_input/);
   // The compact spellings match the widget's header too.
   assert.equal(
@@ -363,27 +348,42 @@ test("a pending question spells the dock's status like the main widget", () => {
     "? answer?",
   );
   assert.equal(row({ status: "needs_input" }, 12).trimEnd(), "? input?");
-  // Every other status keeps the shared runPresentation labels.
-  assert.match(row({ status: "completed", execution_exited: true }), /✓ completed/);
-  assert.match(row({ status: "queued" }), /◦ queued/);
+  // Every other ambiguous status keeps the shared runPresentation label.
+  assert.match(row({ status: "queued" }), /^◦ queued · /);
+  assert.match(row({ status: "cancelling" }), /^⠋ cancelling · /);
+  assert.match(row({ status: "failed" }), /^✗ failed · /);
+  assert.match(row({ status: "cancelled" }), /^■ cancelled · /);
+  assert.match(row({ finalization_pending: true }), /^⠋ finishing · /);
+  // Normal running and completed work start with the glyph alone.
+  assert.match(row(), /^⠋ · /);
+  assert.match(row({ status: "completed", execution_exited: true }), /^✓ · /);
+  assert.doesNotMatch(row({ status: "completed", execution_exited: true }), /completed/);
 });
 
-test("the context pair is retained whenever any status form can hold it", () => {
-  // Status widths with the live clock's reservation: full 17, compact 13,
-  // glyph+clock 9, bare glyph 1; the labelled context pair needs 7 more
-  // (separator plus `ctx `) beside each.
-  const forms = [17, 13, 9, 1].map((status) => status + 7 + 9);
+test("a running Run whose execution already exited keeps its readable label and no clock", () => {
+  // `running` with `execution_exited` is ambiguous: the glyph alone would
+  // claim live work. Keep the label, and never revive the live turn clock.
+  const text = row({ execution_exited: true, turn_elapsed_ms: 1_100 });
+  assert.match(text, /^⠋ running · /, text);
+  assert.doesNotMatch(text, /turn \d/, text);
+  assert.doesNotMatch(text, /\(\d+(?:m\d{2})?s\)/, text);
+  assert.notEqual(text, row(), "only a live, unambiguous running turn is glyph-only");
+});
+
+test("the context pair is retained whenever the glyph and clock can hold it", () => {
+  // The bare glyph plus the labelled context pair needs 17 cells; the live
+  // clock needs 11. Context outlasts the clock, then the clock returns.
   for (let width = 0; width <= 40; width++) {
     const text = row({}, width);
-    if (forms.some((need) => need <= width))
-      assert.ok(text.includes("ctx ≈59k/500k"), `${width}: ${text}`);
+    if (width >= 17) assert.ok(text.includes("ctx ≈59k/500k"), `${width}: ${text}`);
     else assert.doesNotMatch(text, /≈59k/, `${width}: ${text}`);
   }
-  // Once the context yields, the freed row takes back its most readable
-  // status: the clock returns at 9..12 cells, never a needless bare glyph.
-  assert.equal(row({}, 12).trimEnd(), "⠋ (1s)");
-  assert.equal(row({}, 9).trimEnd(), "⠋ (1s)");
-  assert.match(row({}, 8), /^⠋$/);
+  // Once the context yields, the freed row takes back the live clock at
+  // 11..16 cells, never a needless bare glyph.
+  assert.equal(row({}, 16).trimEnd(), "⠋ · turn 1s");
+  assert.equal(row({}, 12).trimEnd(), "⠋ · turn 1s");
+  assert.equal(row({}, 11).trimEnd(), "⠋ · turn 1s");
+  assert.match(row({}, 10), /^⠋$/);
 });
 
 test("every width fits, and numeric facts are never clipped mid-figure", () => {
@@ -405,11 +405,11 @@ test("CJK and ANSI content is measured in cells, never code points", () => {
     const bare = stripTerminalSequences(text);
     assert.doesNotMatch(bare, /\p{Cc}/u, `${width}: no raw control reaches the dock`);
   }
-  // Dropping total gives the wide model back its room; the last wide glyph
-  // still yields whole to an ellipsis rather than exceeding the cell budget.
+  // A shortened wide model still yields whole glyphs to an ellipsis rather
+  // than exceeding the cell budget.
   const shortened = renderDetailSummary(cjk, theme, 84, { activity: false })[0];
-  assert.ok(shortened.includes("測試模型/…"), `${shortened}: whole glyphs survive reclamation`);
-  assert.equal(visibleWidth(shortened), 84);
+  assert.ok(shortened.includes("測試模…"), `${shortened}: whole glyphs survive reclamation`);
+  assert.ok(visibleWidth(shortened) <= 84, shortened);
 });
 
 test("the activity row is opt-in compatibility; the dock itself is one row", () => {
@@ -606,42 +606,39 @@ const slice = (frame, range, offset = 0) =>
 test("the actions menu is an optional control before Message, Stop rightmost", () => {
   assert.equal(footer().menu, undefined, "the control is opt-in");
   assert.equal(footer({ menu: false }).menu, undefined);
-  assert.ok(!footer().text.includes("[⋯]"));
+  assert.ok(!footer().text.includes(". more"));
   const frame = footer({ menu: true });
   assert.ok(frame.menu, "menu: true paints the control");
-  assert.equal(slice(frame, frame.menu), "[⋯]");
-  assert.match(frame.text, /\[⋯\] \[M message\] \[S Stop\]$/);
+  assert.equal(slice(frame, frame.menu), ". more");
+  assert.match(frame.text, /\. more message stop$/);
   assert.ok(
-    frame.text.indexOf("[⋯]") < frame.text.indexOf("[M message]"),
+    frame.text.indexOf(". more") < frame.text.indexOf("message"),
     "the menu precedes Message",
   );
-  assert.ok(
-    frame.text.indexOf("[M message]") < frame.text.indexOf("[S Stop]"),
-    "Stop stays rightmost",
-  );
+  assert.ok(frame.text.indexOf("message") < frame.text.indexOf("stop"), "Stop stays rightmost");
   // Without Message the menu still precedes Stop.
   const noMessage = footer({ menu: true, messaging: false });
-  assert.match(noMessage.text, /\[⋯\] \[S Stop\]$/);
+  assert.match(noMessage.text, /\. more stop$/);
   assert.ok(noMessage.menu);
   // Framed ranges are pane columns, past the frame's `╰─ ` offset.
   const framed = footer({ menu: true, framed: true });
   assert.ok(framed.menu.from >= 3, JSON.stringify(framed.menu));
-  assert.equal(slice(framed, framed.menu, 3), "[⋯]");
+  assert.equal(slice(framed, framed.menu, 3), ". more");
   assert.equal(framed.action.to, 3 + 120, "Stop stays flush at the right edge");
   // A draft owns the keyboard: the menu stays clickable, M does not.
   const drafting = footer({ menu: true, composing: true });
   assert.ok(drafting.menu);
   assert.equal(drafting.messageAction, undefined);
-  assert.match(drafting.text, /\[⋯\] \[Stop\]$/);
+  assert.match(drafting.text, /\. more stop$/);
 });
 
 test("an armed confirmation hides the menu: only the final row changes", () => {
   const armed = footer({ menu: true, confirming: true });
   assert.equal(armed.menu, undefined);
   assert.equal(armed.messageAction, undefined);
-  assert.doesNotMatch(armed.text, /⋯|\[M/);
-  assert.match(armed.text, /best-effort · Ctrl\+S · Esc cancel · \[Confirm stop\]$/);
-  assert.equal(slice(armed, armed.action), "[Confirm stop]");
+  assert.doesNotMatch(armed.text, /more|message/);
+  assert.match(armed.text, /best-effort · Ctrl\+S · Esc cancel · confirm stop$/);
+  assert.equal(slice(armed, armed.action), "confirm stop");
   // Arming folds the peers into +N by design; the menu and message are gone.
   assert.match(armed.text, /\+2/);
 });
@@ -651,7 +648,7 @@ test("the menu is reserved: it yields whole, never clipped, under width pressure
   for (let width = 20; width <= 120; width++) {
     const frame = footer({ menu: true, width });
     assert.ok(visibleWidth(frame.text) <= width, `${width}: ${frame.text}`);
-    if (frame.menu) assert.equal(slice(frame, frame.menu), "[⋯]", `${width}`);
+    if (frame.menu) assert.equal(slice(frame, frame.menu), ". more", `${width}`);
     if (frame.menu && !frame.messageAction) menuWithoutMessage = true;
     if (frame.action) assert.ok(frame.action.to <= width, `${width}: Stop stays inside`);
   }

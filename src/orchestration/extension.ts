@@ -1030,7 +1030,7 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
       });
       if (!ctx.isProjectTrusted())
         ctx.ui.notify(
-          "Workspace preferences are not loaded or writable until this project is trusted.",
+          "Workspace preferences are not loaded or writable until Pi trusts this workspace.",
           "info",
         );
       const current = router.current();

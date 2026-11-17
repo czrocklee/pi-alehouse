@@ -14,6 +14,7 @@ import { createPopoverCloseControl } from "../../shared/popover-close-control.mj
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import type { PersistentScope } from "../../shared/settings-store.mjs";
+import { shortcutHint } from "../../shared/shortcut-hint.mjs";
 import type { JudgeState } from "./approval-protocol.ts";
 import { CONFIRM_ROWS, currentChoice, type Choice, type ChoiceId } from "./approval-selection.ts";
 
@@ -287,15 +288,20 @@ export class ApprovalPopover implements Component {
         ),
       );
       this.rowTargets.set(lines.length, "global");
-      lines.push(row(theme.fg("accent", " [G] Save as global default (on exit)")));
+      // Inline key letter, no keycap brackets: `g` inside "global".
+      lines.push(row(" " + shortcutHint(theme, "Save as global default (on exit)", "g")));
       this.rowTargets.set(lines.length, "workspace");
       const trusted = this.options.canSaveWorkspace?.() === true;
+      // Both scope names contain their mnemonic. An unavailable workspace
+      // save has no keyboard emphasis.
       lines.push(
         row(
-          theme.fg(
-            trusted ? "accent" : "dim",
-            " [W] Save as project default" + (trusted ? " (on exit)" : " (trust required)"),
-          ),
+          " " +
+            (trusted
+              ? shortcutHint(theme, "Save as workspace default (on exit)", "W")
+              : shortcutHint(theme, "Workspace default (trust required)", undefined, {
+                  color: "dim",
+                })),
         ),
       );
       lines.push(popoverRule(theme, width, "divider"));
@@ -305,12 +311,18 @@ export class ApprovalPopover implements Component {
     if (warning) {
       for (const line of warning.slice(0, CONFIRM_ROWS)) lines.push(row(theme.fg("warning", line)));
     } else {
+      // Explicit chords keep their wording; only the styling is the helper's.
+      const dim = (text: string): string => theme.fg("dim", text);
       lines.push(
         row(
-          theme.fg(
-            "dim",
-            (this.options.save ? " ● active ·" : "") + " ↑↓ choose · Enter apply · Esc close",
-          ),
+          dim(" ") +
+            (this.options.save ? dim("● active · ") : "") +
+            shortcutHint(theme, "choose", "↑↓", { color: "dim" }) +
+            dim(" · ") +
+            shortcutHint(theme, "apply", "Enter", { color: "dim" }) +
+            dim(" · ") +
+            shortcutHint(theme, "close", "Esc", { color: "dim" }) +
+            dim(" "),
         ),
       );
     }

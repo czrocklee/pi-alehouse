@@ -118,7 +118,9 @@ test("floating detail width is capped without relying on an unsupported maxWidth
 test("observations stay pinned while only the transcript scrolls", (t) => {
   const f = setup(t, { views: [view("amber", { outcome: { question: "Which branch?" } })] });
   const tail = f.paint();
-  assert(tail.at(-2).includes("running"), tail.at(-2));
+  // Normal running work leads the dock with its lifecycle glyph alone.
+  assert(tail.at(-2).includes("⠋"), tail.at(-2));
+  assert(!tail.at(-2).includes("running"), tail.at(-2));
   assert(tail.some((line) => line.includes("Which branch?")));
   assert.equal(transcriptRows(tail).at(-1), "T499");
   f.pane.handleInput(HOME);
@@ -182,8 +184,14 @@ for (const frame of [false, true])
     f.pane.handleInput("\x1b[200~check alpha\nbeta\x1b[201~");
     const composing = f.paint();
     assert.equal(composing.length, before.length);
-    assert(composing.at(-1).includes("[Stop]"));
-    assert(!composing.at(-1).includes("[S Stop]"), "S types into the draft");
+    assert(composing.at(-1).includes("stop"));
+    // While composing S is draft text, never the Stop shortcut: typing it
+    // appends to the draft and leaves no armed confirmation.
+    f.pane.handleInput("s");
+    assert(f.paint().at(-2).includes("check alpha betas"));
+    assert(!f.paint().at(-1).includes("confirm stop"));
+    f.pane.handleInput("\x7f");
+    assert(f.paint().at(-2).includes("check alpha beta"));
     assert(composing.at(-3).includes("Enter send"));
     assert(composing.at(-2).includes("› check alpha beta"));
     assert.equal(transcriptRows(composing).length, transcriptRows(before).length - 2);
@@ -201,15 +209,15 @@ test("Stop confirmation in a composer never consumes or submits its draft", (t) 
   f.pane.handleInput("m");
   f.pane.handleInput("keep draft");
   let lines = f.paint();
-  assert.deepEqual(click(f.pane, lines, "[Stop]"), { handled: true });
+  assert.deepEqual(click(f.pane, lines, "stop"), { handled: true });
   lines = f.paint();
-  assert(lines.at(-1).includes("[Confirm stop]"));
+  assert(lines.at(-1).includes("confirm stop"));
   assert(lines.at(-2).includes("keep draft"));
   f.pane.handleInput(ESC);
   assert(f.paint().at(-2).includes("keep draft"));
   assert.deepEqual(f.sent, []);
   assert.deepEqual(f.stops, []);
-  click(f.pane, f.paint(), "[Stop]");
+  click(f.pane, f.paint(), "stop");
   f.paint();
   f.pane.handleInput("\x13");
   assert.deepEqual(f.stops, ["run-amber"]);
@@ -221,10 +229,10 @@ test("compaction cannot silently retire Stop confirmation over an open draft", (
   f.paint();
   f.pane.handleInput("m");
   f.pane.handleInput("draft");
-  click(f.pane, f.paint(), "[Stop]");
-  assert(f.paint().at(-1).includes("[Confirm stop]"));
+  click(f.pane, f.paint(), "stop");
+  assert(f.paint().at(-1).includes("confirm stop"));
   f.source.count = 1;
-  assert(f.paint().at(-1).includes("[Confirm stop]"));
+  assert(f.paint().at(-1).includes("confirm stop"));
   f.pane.handleInput("\x13");
   assert.deepEqual(f.stops, ["run-amber"]);
   assert.deepEqual(f.sent, []);
@@ -236,7 +244,7 @@ test("Enter over Stop confirmation only cancels intent, never submits the draft"
   f.paint();
   f.pane.handleInput("m");
   f.pane.handleInput("draft");
-  click(f.pane, f.paint(), "[Stop]");
+  click(f.pane, f.paint(), "stop");
   f.source.count = 1;
   f.paint();
   f.pane.handleInput("\r");
@@ -250,8 +258,8 @@ test("paste chunks remain data even if the pointer arms Stop between chunks", (t
   f.paint();
   f.pane.handleInput("m");
   f.pane.handleInput("\x1b[200~");
-  click(f.pane, f.paint(), "[Stop]");
-  assert(f.paint().at(-1).includes("[Confirm stop]"));
+  click(f.pane, f.paint(), "stop");
+  assert(f.paint().at(-1).includes("confirm stop"));
   for (const chunk of ["\x13", "\x1b", "\r"]) f.pane.handleInput(chunk);
   assert.deepEqual(f.stops, []);
   assert.deepEqual(f.sent, []);
@@ -259,7 +267,7 @@ test("paste chunks remain data even if the pointer arms Stop between chunks", (t
   assert(f.paint().at(-2).includes("\\x13"), "control bytes were sanitized into draft text");
   assert.deepEqual(f.stops, []);
   assert.deepEqual(f.sent, []);
-  assert(!f.paint().at(-1).includes("[Confirm stop]"));
+  assert(!f.paint().at(-1).includes("confirm stop"));
 });
 
 test("the host tools-expand key aliases T, including a custom binding", (t) => {
@@ -279,7 +287,7 @@ test("the host tools-expand key aliases T, including a custom binding", (t) => {
 test("clickable message and agent tabs use painted text coordinates", (t) => {
   const f = setup(t, { views: [view(), view("cobalt")] });
   let lines = f.paint();
-  const messageLabel = lines.at(-1).includes("[M message]") ? "[M message]" : "[M msg]";
+  const messageLabel = lines.at(-1).includes("message") ? "message" : "msg";
   assert.deepEqual(click(f.pane, lines, messageLabel), { handled: true });
   assert(f.paint().at(-3).includes("Steer amber"));
   f.pane.handleInput(ESC);

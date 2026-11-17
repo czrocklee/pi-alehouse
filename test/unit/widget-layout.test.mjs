@@ -176,7 +176,7 @@ for (const beerMugs of [false, true])
         for (let y = 0; y < lines.length; y++) {
           if (/^[├└]─ ✓/.test(lines[y])) assert.deepEqual(h.pointer(frame, y), { handled: true });
         }
-        const y = lines.findIndex((line) => line.includes("[Next]"));
+        const y = lines.findIndex((line) => /\d+\/\d+ Next/.test(line));
         assert(
           y >= 0 && y < box.clip.height,
           "page controls must be inside the allocated wrapper viewport",
@@ -184,10 +184,10 @@ for (const beerMugs of [false, true])
         const [, current, total] = lines[y].match(/(\d+)\/(\d+)/);
         pageCount++;
         if (current === total) {
-          assert.equal(h.pointer(frame, y, lines[y].indexOf("[Next]")), undefined);
+          assert.equal(h.pointer(frame, y, lines[y].indexOf("Next")), undefined);
           break;
         }
-        assert.deepEqual(h.pointer(frame, y, lines[y].indexOf("[Next]")), {
+        assert.deepEqual(h.pointer(frame, y, lines[y].indexOf("Next")), {
           handled: true,
           render: true,
         });
@@ -417,11 +417,11 @@ test("real SDK diagnostic rows stay clickable without inflating resident summary
   frame = h.paint();
   lines = h.linesOf(frame);
   const arrow = lines[heading].indexOf("▾"),
-    next = lines.findIndex((line) => line.includes("[Next]"));
+    next = lines.findIndex((line) => /\d+\/\d+ Next/.test(line));
   assert.equal(arrow, 0);
   assert(next >= 0);
   assert(!lines.some((line) => line.includes("released diagnostic")));
-  assert.deepEqual(h.pointer(frame, next, lines[next].indexOf("[Next]")), {
+  assert.deepEqual(h.pointer(frame, next, lines[next].indexOf("Next")), {
     handled: true,
     render: true,
   });
@@ -461,8 +461,8 @@ test("shrinking the real dock retires old page coordinates before they can act",
   );
   frame = h.paint();
   lines = h.linesOf(frame);
-  const y = lines.findIndex((line) => line.includes("[Next]")),
-    x = lines[y].indexOf("[Next]");
+  const y = lines.findIndex((line) => /\d+\/\d+ Next/.test(line)),
+    x = lines[y].indexOf("Next");
   h.terminal.rows = 9;
   assert.equal(
     h.pointer(frame, y, x),
@@ -475,12 +475,12 @@ test("shrinking the real dock retires old page coordinates before they can act",
     undefined,
     "clipped/absent page controls are not forwarded by the wrapper",
   );
-  assert(!h.linesOf(tiny).some((line) => line.includes("[Next]")));
+  assert(!h.linesOf(tiny).some((line) => /\d+\/\d+ Next/.test(line)));
   h.terminal.rows = 18;
   const restored = h.paint(),
     restoredLines = h.linesOf(restored);
   assert.match(
-    restoredLines.find((line) => line.includes("[Next]")),
+    restoredLines.find((line) => /\d+\/\d+ Next/.test(line)),
     /1\//,
   );
   assert.deepEqual(h.opened, []);

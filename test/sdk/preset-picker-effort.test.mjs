@@ -19,6 +19,14 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { strengths } from "../../dist/orchestration/routing.js";
 import { workerSlotDisplayOrder } from "../../dist/orchestration/ui/preset-picker.js";
 
+// `preset` contains `reset`, so locate the editor's own word, not the header.
+const clickReset = (picker) => {
+  const lines = painted(picker),
+    y = lines.findIndex((line) => /\breset\b/.test(line));
+  assert(y >= 0, `missing reset: ${lines.join("\n")}`);
+  picker.handleMouse(mouse("click", lines[y].indexOf("reset"), y));
+};
+
 test("routing and effort rows paint hardest first without changing canonical or numeric slot identity", () => {
   assert.deepEqual(strengths, ["d1", "d2", "d3", "d4", "d5"]);
   assert.deepEqual(workerSlotDisplayOrder, descendingSlots);
@@ -120,7 +128,7 @@ test("legacy hosts remain read-only, while arrows immediately publish immutable 
   for (const extra of [{}, { efforts: effortCaps, setEffort: undefined }]) {
     const legacy = fixture({ presets: [selected], ...extra });
     legacy.picker.handleInput("e");
-    assert.doesNotMatch(painted(legacy.picker).join("\n"), /Effort ·|R reset/);
+    assert.doesNotMatch(painted(legacy.picker).join("\n"), /Effort ·|\breset\b/);
     legacy.picker.handleInput("\r");
     assert.deepEqual(legacy.result, ["alpha"]);
   }
@@ -159,7 +167,7 @@ test("pointer arrows and reset publish immediately; inactive editing is a confir
     y = lines.findIndex((line) => line.includes("‹d1:high›"));
   h.picker.handleMouse(mouse("click", lines[y].indexOf("‹"), y));
   assert.deepEqual(h.applied.at(-1).effort_overrides, { d1: "medium" });
-  clickText(h.picker, "R reset");
+  clickReset(h.picker);
   assert.deepEqual(h.applied.at(-1).effort_overrides, {});
   lines = painted(h.picker);
   y = lines.findIndex((line) => line.includes("‹d1:default›"));
@@ -167,7 +175,7 @@ test("pointer arrows and reset publish immediately; inactive editing is a confir
   assert.equal(h.applied.length, 2, "value/label clicks only select the slot");
   h.picker.handleMouse(mouse("click", lines[y].indexOf("›", lines[y].indexOf("‹")), y));
   assert.deepEqual(h.applied.at(-1).effort_overrides, { d1: "inherit" });
-  clickText(h.picker, "R reset");
+  clickReset(h.picker);
   assert.deepEqual(h.applied.at(-1).effort_overrides, {});
   clickText(h.picker, "Esc back");
   assert.deepEqual(h.result, []);
@@ -265,7 +273,7 @@ test("clipped effort arrows never create invisible pointer controls at narrow wi
 test("Off has no effort editor; Alt+S closes without undoing live changes", () => {
   const off = fixture({ presets: [offPreset()], activeName: "off", efforts: effortCaps });
   off.picker.handleInput("e");
-  assert.doesNotMatch(painted(off.picker).join("\n"), /Apply & enable|R reset/);
+  assert.doesNotMatch(painted(off.picker).join("\n"), /Apply & enable|\breset\b/);
   off.picker.handleInput("\r");
   assert.deepEqual(off.result, ["off"]);
 
@@ -281,18 +289,18 @@ test("Off has no effort editor; Alt+S closes without undoing live changes", () =
 test("a stale editor paints as the list without mutating picker state; the next input settles it", () => {
   const f = fixture({ presets: [effortPreset()], efforts: effortCaps });
   f.picker.handleInput("e");
-  assert.match(painted(f.picker).join("\n"), /R reset/);
+  assert.match(painted(f.picker).join("\n"), /\breset\b/);
   // Host rebase between paints: the edited selection becomes Off.
   f.picker.options.presets = [offPreset()];
   const renders = f.tui.renders;
   for (let paint = 0; paint < 2; paint++) {
-    assert.doesNotMatch(painted(f.picker).join("\n"), /R reset/);
+    assert.doesNotMatch(painted(f.picker).join("\n"), /\breset\b/);
     assert.equal(f.picker.editing, true, "render never closes the editor");
     assert.equal(f.tui.renders, renders, "render never requests another render");
   }
   f.picker.handleInput("\u001b[B");
   assert.equal(f.picker.editing, false, "input settles the stale editor");
-  assert.doesNotMatch(painted(f.picker).join("\n"), /R reset/);
+  assert.doesNotMatch(painted(f.picker).join("\n"), /\breset\b/);
 });
 
 test("default and explicit inherit remain distinct even when default is literal inherit", () => {
@@ -447,8 +455,17 @@ test("compact effort click targets use the exact visible short or long label, in
     });
     const lines = painted(h.picker, width),
       y = lines.length - 2,
-      x = lines[y].indexOf(" · E") + 3;
-    assert(x > 0 && lines[y][x] === "E", lines.join("\n"));
+      row = lines[y],
+      label = row.includes("Edit effort") ? "Edit effort" : row.includes(" · E") ? "E" : undefined;
+    if (!label) {
+      // The descriptive save labels win this compact row; the keyboard route
+      // still opens the editor.
+      h.picker.handleInput("e");
+      assert.match(painted(h.picker, width).join("\n"), /Effort/);
+      continue;
+    }
+    const x = label === "E" ? row.indexOf(" · E") + 3 : row.indexOf(label);
+    assert(x > 0 && row.slice(x, x + label.length) === label, lines.join("\n"));
     h.picker.handleMouse(mouse("click", x, y));
     assert.match(painted(h.picker, width).join("\n"), /Effort/);
     assert.deepEqual(h.result, [], "effort entry is not a save route");
@@ -471,9 +488,14 @@ test("compact controls restore mode and eagerness hints where they fit without d
         assert.equal(lines.length, 7);
         assert(lines.every((line) => visibleWidth(line) <= width));
         assert.match(controls, /Tab/);
-        assert.match(controls, /←→.*⇧←→/, `${width}, save=${saving}, edit=${edit}: ${controls}`);
-        if (width === 120) assert.match(controls, /mode.*eagerness/);
-        if (saving) assert(controls.includes("G") && controls.includes("W"));
+        if (controls.includes("←→")) {
+          assert.match(controls, /←→.*⇧←→/, `${width}, save=${saving}, edit=${edit}: ${controls}`);
+          if (width === 120) assert.match(controls, /mode.*eagerness/);
+        } else {
+          // The save row and Edit effort used this compact row's cells.
+          assert.match(controls, /Edit effort/, `${width}, save=${saving}, edit=${edit}`);
+        }
+        if (saving) assert(/workspace/i.test(controls) && /global|G/.test(controls));
       }
 });
 

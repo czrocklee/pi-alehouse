@@ -37,9 +37,9 @@ without Jev/checkpoint review.
 
 Esc interrupts the parent's wait, not child work. In Agent details each press
 leaves one layer: the actions menu, then an armed Stop confirmation, then a
-message draft, then Info, and finally the pane. **S** / the bottom-right, rightmost **[S Stop]** arms confirmation in the
+message draft, then Info, and finally the pane. **S** / the bottom-right, rightmost **stop** label (inline **s** shortcut) arms confirmation in the
 footer without replacing the title/body/transcript or changing scroll or height.
-The footer shows `best-effort · Ctrl+S · Esc cancel · [Confirm stop]`, with the
+The footer shows `best-effort · Ctrl+S · Esc cancel · confirm stop`, with the
 warning-colored bold action rightmost (ordinary Stop is dim);
 **Ctrl+S** or a separate single click then requests cooperative cancellation through
 the Owner; rapid double/triple clicks do not confirm. Initial Stop requires the
@@ -755,16 +755,20 @@ font support. Its 60-second tint is only a presentation cue, not a hung-tool
 diagnosis or lifecycle timer. In Agent details the metrics moved to one bottom
 info row above the Agent-tab footer, under a plain separator that carries no
 text, controls or hit targets; there is no merged toolbar and no labeled section
-rule. Its live-turn clock is floored to whole seconds uniformly, while the
-60-second tint still reads the raw unrounded observation. The figures keep a
+rule. Running/completed use a lifecycle glyph alone; other states keep readable
+labels. Bare Run elapsed time precedes the final `turn 1s` live clock, which is
+floored to whole seconds uniformly, while the 60-second tint still reads the raw
+unrounded observation. Exited/finishing execution has no live turn clock. The figures keep a
 fixed display order but yield separately under width pressure: the model text
-shortens first, then the total, cache percentage, whole usage group, cost and
-routine turns drop. The shortened model yields before elevated turns, and the
-status compacts before context yields; numeric figures are never clipped
-mid-figure and only the model text may be shortened. A shortened model that
+shortens first, then the cumulative elapsed time, cache percentage, whole usage
+group, cost and routine turns drop. The shortened model yields before elevated
+turns, and the status compacts before context yields. The live clock yields
+before context; after context yields, readable status and the clock return
+when they fit. Numeric figures are never clipped mid-figure and only the model
+text may be shortened. A shortened model that
 survives that ladder regains leftover cells only after the optional fields have
 dropped; regained width never reintroduces a dropped field or reorders the
-yield priority. The row reserves the
+yield priority. The row prioritizes the
 critical ones (lifecycle status, its turn clock, elevated context/turn
 pressure); no completeness ratio is invented, an unknown share is omitted rather
 than rendered as zero, and a partial cost keeps its `≥` floor. The title's
@@ -772,7 +776,7 @@ identity tag needs the nickname to fit whole or keep three terminal cells
 including its ellipsis, and the tag-less task title requires that same
 nickname floor; where the task and a recognizable name cannot fit, the nickname
 plus its Run cue wins over a bare ellipsis name. Page and tool controls live in the footer's actions menu
-and their keys. That `[⋯]` control is reserved in the footer, so optional peers,
+and their keys. That `. more` control is reserved in the footer, so optional peers,
 message and tail forms yield before it; it is absent when no Agent is selected
 or the caller's minimum width, current geometry or two-option menu viewport
 cannot fit it. The menu is an overlay: it changes neither the pane's height nor the scroll
@@ -795,6 +799,13 @@ The selected Agent tab uses accent/bold and optional host underline, not a solid
 background fill; terminal transparency and underline appearance remain host
 properties. Normal `agent_busy` is not a session-error or attention cue, without
 changing core resumability or admission. Genuine diagnostics retain their cues.
+Tabs use spacing rather than vertical separators; warnings use warning-colored
+markers and only actual errors use red markers. Completed, unselected peers
+without attention use dim glyphs. Pending alerts remain observation-only (`1
+pending alert` / `N pending alerts`); painting them consumes nothing.
+Alehouse-owned shortcuts highlight a matching letter inline without keycaps;
+nonmatching letters, named keys and chords stay explicit. Click-only controls
+advertise no keyboard mnemonic. Native/third-party UI is unchanged.
 Timer comparisons may reuse a detached frame for the next actual paint;
 unpainted geometry is never activated as a click target or command evidence.
 

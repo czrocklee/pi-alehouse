@@ -63,7 +63,7 @@ outcome rows age out. Click anywhere on the heading to expand the whole inspecta
 roster or return to the automatic compact view. Its leading marker is `▸` when
 collapsed and `▾` when expanded; there is no separate trailing disclosure arrow. Expansion shows the whole roster
 when it fits, otherwise pages through idle residents and individually listed
-queued Agents using **[Prev]** / **[Next]**; Agent rows still open their details.
+queued Agents using the click-only **Prev** / **Next** labels; Agent rows still open their details.
 The widget uses at most thirteen lines (a heading plus twelve settled Agents) and at
 most one third of the terminal height (six lines if host height is unknown),
 and additionally reserves normal SDK input chrome and transcript space rather
@@ -338,6 +338,22 @@ selection clipping. Unsupported hosts and regular-mode/docked panels retain
 native selection behavior. Native Pi dialogs, third-party UI and the inline
 Agent roster are not Alehouse floating panels and are not changed.
 
+## Shortcut hint appearance
+
+Alehouse-owned UI uses inline mnemonics: the accepted single-letter key is
+accented and bold within the action word, without square keycaps or a repeated
+letter (`message`, `stop`, `reset`, `Info`, `Expand tools`). The same rule
+highlights `g` in `global default` and `w` in `workspace default`. Labels keep
+natural spelling/case; key bindings are unchanged. A key absent from its label stays explicit
+(`P Settings`, `C Edit`), as do punctuation, named keys and chords
+(`. more`, `Esc close`, `Enter apply`, `Ctrl+S`). Compact key-only legends remain
+explicit. Click-only or currently unavailable keyboard actions have no mnemonic
+emphasis; a draft therefore leaves `stop` clickable without advertising **S**.
+Styling adds no visible columns, and click ranges derive from the text actually
+painted. This convention covers Alehouse-owned panels (detail, Delegation,
+effort, model selection, approval, Context and Usage/Stats) and roster controls,
+not host/native or third-party UI.
+
 ## Agent detail and transcript
 
 `Alt+A` opens the Agent detail pane. A row click opens it, selects a different
@@ -346,14 +362,15 @@ Agent, or closes it when clicking the selected Agent. `←`/`→` choose an Agen
 layer at a time: an armed Stop, then a message draft, then the Info page, and
 only then closes the pane. The pane keeps focus: unbound printable input does
 not dismiss it.
-The dim **[S Stop]** is the rightmost action at the footer's bottom-right. **S** or a
+The dim **stop** label is the rightmost action at the footer's bottom-right, with
+its **s** highlighted inline. **S** or a
 click arms confirmation in place (while a message draft is open, **S** is draft
-text and the control reads **[Stop]**, click only): the footer shows
-`best-effort · Ctrl+S · Esc cancel · [Confirm stop]`, with warning-colored,
-bold **[Confirm stop]** rightmost.
+text and **stop** loses its shortcut emphasis, click only): the footer shows
+`best-effort · Ctrl+S · Esc cancel · confirm stop`, with warning-colored,
+bold **confirm stop** rightmost.
 Arming changes only the footer row: it does not replace the title, body or
 transcript, change the scroll position, or resize the pane, and the footer's
-actions menu is not offered while confirmation is armed. Only **Ctrl+S** or a separate single click on **[Confirm stop]**
+actions menu is not offered while confirmation is armed. Only **Ctrl+S** or a separate single click on **confirm stop**
 then requests cooperative cancellation; rapid double/triple clicks do not confirm.
 **Esc** cancels confirmation; subsequent presses leave any draft and Info page
 before closing details. Ordinary typing, plain `Enter` and repeated **S** never
@@ -399,8 +416,8 @@ back to the previous one-line composer in the footer row
 (`› … Enter send · Esc cancel`), which then replaces the tabs. While typing, the
 tray's heading names only sending and discarding the draft, and a stale target
 is not offered Enter send. The footer drops every key the draft would swallow
-(the `‹ ›` arrows, `[M message]` and the docked `Esc` hint) and the body controls
-drop their key accents. Tabs, **[Stop]**, page/tool labels and the tail cue stay
+(the `‹ ›` arrows, `message` and the docked `Esc` hint) and the body controls
+drop their key accents. Tabs, click-only **stop**, page/tool labels and the tail cue stay
 clickable when painted. While Stop confirmation is armed, Enter only
 cancels that intent; it does not send the draft. If compaction leaves no room
 for the tray, confirmation temporarily occupies the footer without discarding
@@ -408,7 +425,7 @@ the draft. `↑`/`↓`/PageUp/PageDown and the wheel still scroll. **Enter** sub
 the Run the draft was started for; **Esc** discards the draft, then leaves an
 open Info page before closing details. **M** acts only while the selected task
 is running with no stop requested and its painted geometry fits a known
-viewport. The optional `[M message]` hint may yield under width pressure without
+viewport. The optional inline `message` hint may yield under width pressure without
 disabling that shortcut; it still requires a visibly painted original Run and
 fresh target validation. Queued, stopping and settled tasks have no message
 mode, and it never starts a continuation. Starting a draft
@@ -478,9 +495,12 @@ never shifts the name.
 
 The footer, or the bottom edge of a floating pane, is the pane's navigation and
 action bar. Agent tabs sit at its left when more than one Agent exists, each
-showing its status glyph and `?`/`!` attention markers. Framed tabs use muted
-ASCII `|` separators; docked tabs retain spacing-only separation. Outer frame
-rules and the `‹ ›` navigation joins are unchanged. The selected nickname
+showing its status glyph and `?`/`!` attention markers. Framed and docked tabs
+use spacing-only separation. Unselected completed Agents without attention use
+a dim success glyph; selected or attention-bearing Agents keep their lifecycle
+color. Warning `!` markers are warning-colored, and actual errors alone use red
+`!`; question markers retain their warning color. Outer frame rules and the
+`‹ ›` navigation joins are unchanged. The selected nickname
 uses accent, bold and the host theme's optional underline, without a background
 fill; structural themes without underline retain accent and bold. Status glyphs
 and attention markers keep their own semantic colors, and neither the padding
@@ -491,16 +511,17 @@ clickable `+N` summaries with their attention counts, and `‹ ›` step to the
 previous/next Agent. At its right, `↓ N more` counts rows below the viewport on
 the current page, Transcript or Info. It is accented while a live transcript
 keeps growing; a click or **End** goes to the current page's end, resuming live
-tail following on Transcript. Next come `[M message]` and `[S Stop]`, Stop always
-outermost. Docked panes, which have no `✕`, keep an `Esc` hint before the
-actions. The footer also carries a `[⋯]` actions control (keyboard `.`) that
+tail following on Transcript. Next come `message` and `stop`, with **m** and
+**s** highlighted inline, Stop always outermost. Docked panes, which have no
+`✕`, keep an `Esc` hint before the actions. The footer also carries a `. more`
+actions control (keyboard `.`) that
 opens the pane's actions menu; it is not offered while a draft is composed or a
 stop confirmation is armed. The footer does not repeat counters, status, context
 or a key legend; the title, the bottom info row and the body carry the current
 Agent's information. Framed panes additionally show a scrollbar.
 Under width pressure peer tabs fold first, then the arrows, then `↓ N more`
-(framed, where the scrollbar also shows position) or `[M message]` (docked, where
-the cue is the only position left). The `[⋯]` control is reserved: those
+(framed, where the scrollbar also shows position) or `message` (docked, where
+the cue is the only position left). The `. more` control is reserved: those
 optional peers, message and tail forms yield before it ever does. It is absent
 when no Agent is selected or the caller's minimum width, current geometry or
 two-option menu viewport cannot fit it, never as an arbitrary optional yield. An armed Stop
@@ -537,7 +558,7 @@ remain visible.
 At most two highest-priority attention rows are pinned just above the separator
 when height permits; when height permits only one, its overflow count still
 includes every omitted note. When at least one note row is painted, notes beyond
-the shown rows are counted as `· +N · I info` on the last painted note row and
+the shown rows are counted as `· +N · info` (inline **i**) on the last painted note row and
 as ` +N` on the footer menu's Info item. The footer's `!N` cue is only the
 no-note-row fallback -- when no note row could be painted at all -- so a partial
 overflow is never duplicated there. When no note row fits, the selected tab's
@@ -547,29 +568,33 @@ suppresses the last warning/question cue. **I**
 exposes all diagnostics, including the human-steer admission fact.
 
 The single bottom info row sits directly above the Agent-tab footer and carries
-the selected Run's lifecycle status plus its adaptive metrics. The status keeps
-its spinner or outcome glyph; while a turn is running, the current-turn elapsed
-follows in parentheses as `(18s)`, with no `turn` word, and exited or finishing
-execution shows no turn clock. The live clock is uniformly floored to whole
-seconds (`1.1s` reads `(1s)`), while its 60-second warning tint still reads the
-raw unrounded observation, so flooring never moves the tint boundary. The
-figures have a fixed display order -- status, `model/effort`, `↻turns/max`,
-context, usage, cost, total -- separate from the order in which they yield.
+the selected Run's lifecycle status plus its adaptive metrics. Ordinary running
+and completed states use their spinner or outcome glyph alone; ambiguous or
+exceptional states retain their text labels. While a turn is running, its elapsed
+time is the final segment, `turn 18s`, after the bare Run elapsed time, for example
+`2m42s · turn 1s`. Exited or finishing execution shows no turn clock. The live
+clock is uniformly floored to whole seconds (`1.1s` reads `turn 1s`), while its
+60-second warning tint still reads the raw unrounded observation, so flooring
+never moves the tint boundary. The figures have a fixed display order -- status,
+`model/effort`, `↻turns/max`, context, usage, cost, elapsed, live turn clock --
+separate from the order in which they yield. No clock padding hole is reserved
+before the model or other metrics.
 Under width pressure the model text shortens first, never below a readable
-fragment; then the total, the cache percentage, the whole usage group, cost and
-routine turns drop. The shortened model then yields; elevated turn pressure
-keeps its turns until after that model has gone. The status compacts through its short label and
-glyph forms before context ever yields; once context must yield, the most
-readable status that fits is restored. A model that survives the yield ladder
+fragment; then the cumulative elapsed time, the cache percentage, the whole
+usage group, cost and routine turns drop. The shortened model then yields;
+elevated turn pressure keeps its turns until after that model has gone. The
+status compacts through its short label and glyph forms before context ever
+yields; the live clock yields before context. Once context must yield, the most
+readable status that fits is restored, with the live clock when both fit. A model that survives the yield ladder
 reclaims any leftover cells up to its full text; this never reintroduces dropped
-fields or consumes the live clock's reserved width. Numeric fields are never
+fields or borrows from the live clock. Numeric fields are never
 clipped mid-figure; only the model text may be shortened. The figures themselves are
 model and creation-time effort as `model/effort`; `↻turns/max` in the widget's
 own compact form; context occupancy as `ctx ≈59k/500k` without a percent,
 unknown occupancy staying unknown rather than zero; the current Run's cumulative
 usage as `↑input (cache%) ↓output` with the footer's compact counts; observed
 cost in the widget's rounded-cents form, a partial observation keeping its `≥`
-floor; and the Run total as `total 2m48s`. No completeness ratio is invented: an
+floor; and the Run elapsed time as `2m48s`. No completeness ratio is invented: an
 unknown share is omitted, never rendered as zero.
 
 Height pressure prioritizes the info row: diagnostic rows yield first, then the
@@ -797,12 +822,12 @@ Model-facing roster replies report only `profile` and
 resumed, and steered work while accepted work continues, instead of showing
 model slots. It appears as `off` in the footer; activity remains visible in
 the existing widget rather than a duplicate roster. Choosing a model preset
-enables new work again. **Save as global default** (`G`) and **Save as project
+enables new work again. **Save as global default** (`G`) and **Save as workspace
 default** (`W`) remember the current applied worker settings, just like the
 approval menu's save controls. They save the live preset, mode/eagerness and
-active effort overrides—not the highlighted preset or slider preview. Project saving requires trust. Save labels shorten on narrow panels;
+active effort overrides—not the highlighted preset or slider preview. Workspace saving requires project trust. Save labels shorten on narrow panels;
 at minimum height they replace verbose navigation hints rather than adding rows.
-**P Settings** routes to preferences; **N New** and
+**P Settings** routes to preferences; **New** (inline **N**) and
 **C Edit** route to custom model-preset editing (C is unavailable on `off`).
 Click a slot's model text, or press **1 / 2 / 3 / 4 / 5** for `d1`–`d5`,
 to edit only that model. Digits address slot IDs, not row positions: **1** still
@@ -847,7 +872,7 @@ accepted running, queued, idle and resumed Agents keep their original allocation
   `inherit` slots are saved without resolving current parent thinking.
 - `Enter` or `Esc` returns to the list without undoing changes. `Alt+S`, the
   footer toggle, `✕` or a permission dialog closes the picker, also without undo.
-- `G` / `W` offers the same confirmed global/project snapshot saving on either page.
+- `G` / `W` offers the same confirmed global/workspace snapshot saving on either page.
 
 There is no effort draft or Apply step. Successful changes update the footer;
 `preset*` means an applied session override. Each preset remembers its own
@@ -876,7 +901,8 @@ only a persistent save scope queues its preference. Choosing global or
 workspace as the future scope requires a
 confirmation; changing scope alone copies and writes nothing. Workspace scope
 is available only for a trusted project and targets the current working
-directory, not a discovered Git root.
+directory, not a discovered Git root; it is a configuration scope only, with no
+managed workspace or worktree feature.
 
 **Agent skills** defaults to **on**. New worker and scout sessions discover skills
 through Pi's normal trusted resource configuration and read matching `SKILL.md`
@@ -892,7 +918,7 @@ session-only; choose and confirm a persistent scope before toggling to queue
 removing an override leaves the live choice unchanged. The routing-only
 **Remember current worker settings** snapshot does not include this toggle.
 
-The Delegation panel's **Save as global/project default** (`G`/`W`) and
+The Delegation panel's **Save as global/workspace default** (`G`/`W`) and
 **Remember current worker settings** use the same snapshot confirmation. The
 picker closes before the dialog opens; the dialog shows the exact patch and
 destination. Saving changes neither the live choices nor the future save scope.
@@ -921,8 +947,8 @@ Normal `session_shutdown` flushes pending writes, including ordinary `/new`,
 supported; see [session replacement](#session-replacement-confirmation) and
 [limitations](limitations.md).
 
-Use **N New** or `/alehouse-preset-edit` to create a user model preset; use **C
-Edit** on a highlighted preset or `/alehouse-preset-edit NAME` to edit it. The
+Use **New** (inline **N**) or `/alehouse-preset-edit` to create a user model
+preset; use **C Edit** on a highlighted preset or `/alehouse-preset-edit NAME` to edit it. The
 interactive editor reuses Pi's native `/model` selector, including fuzzy search
 and the active keybindings, separately for each slot in `d5`→`d1` order.
 This is editing order only: the reasoning score still increases from 1 (easiest)
@@ -978,23 +1004,23 @@ layering, and filesystem safeguards.
 
 Click the footer's approval indicator or run `/approval`. In fullscreen
 Alehouse, choose a mode; the menu stays open and `●` marks the live mode.
-Click **Save as global default** (`G`) or **Save as project default** (`W`) to
+Click **Save as global default** (`G`) or **Save as workspace default** (`W`) to
 use that live choice in future sessions. The confirmation shows the value and
 full destination path. Normal exit writes it; no separate settings menu or
 save-now action is required. Just closing the menu keeps a session-only choice
 unless a persistent save scope was explicitly selected in worker settings.
-Project saving requires project trust.
+Workspace saving requires project trust.
 
 Saving a default does not change the current live mode or the shared settings
 scope. It saves the live `●` choice, not a highlighted or first-click-armed
 mode. Wider judge defaults may need startup confirmation, and YOLO always needs
 fresh confirmation for each session. Existing sessions keep their branch
-choices; project defaults take precedence over global defaults. In ordinary Pi
+choices; workspace defaults take precedence over global defaults. In ordinary Pi
 without an Alehouse settings store the save controls do not appear and a mode
 choice still closes the menu.
 
 The command alternative is `/approval save [global|workspace]`; without a target
-it asks **All projects** or **This project**. Regular-renderer Pi uses standard
+it asks **All workspaces** or **This workspace**. Regular-renderer Pi uses standard
 dialogs rather than a floating menu.
 
 ## Session replacement confirmation

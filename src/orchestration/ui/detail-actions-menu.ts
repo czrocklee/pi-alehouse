@@ -1,4 +1,5 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { shortcutHint } from "../../shared/shortcut-hint.mjs";
 import { POPOVER } from "./popover.ts";
 import type { Theme } from "./format.ts";
 import { clipPlainText } from "./text.ts";
@@ -19,7 +20,7 @@ export type DetailActionsMenu = {
   from: number;
 };
 
-type DetailActionsTheme = Pick<Theme, "fg" | "bold">;
+type DetailActionsTheme = Pick<Theme, "fg" | "bold" | "underline">;
 
 const MIN_WIDTH = 16;
 const MIN_HEIGHT = 2;
@@ -29,26 +30,36 @@ const wholeCount = (value: unknown): number => {
   return value >= 1 ? Math.floor(value) : 0;
 };
 
-/** The first candidate bounded to `columns` cells wins; the bare base clips
- * only as an unreachable-at-valid-sizes last resort. All fitting measures
- * cells, never code points, so CJK and styled text keep their geometry. */
-const fitOption = (candidates: string[], base: string, columns: number): string =>
-  candidates.find((text) => visibleWidth(text) <= columns) ?? clipPlainText(base, columns);
+/** The first candidate whose hinted paint fits `columns` cells wins; the bare
+ * base clips only as an unreachable-at-valid-sizes last resort. All fitting
+ * measures cells, never code points, so CJK and styled text keep their
+ * geometry. */
+const fitHint = (
+  theme: DetailActionsTheme,
+  candidates: string[],
+  base: string,
+  key: string,
+  columns: number,
+): string =>
+  candidates.find((label) => visibleWidth(shortcutHint(theme, label, key)) <= columns) ??
+  clipPlainText(base, columns);
 
 /**
  * The detail pane's compact actions menu, anchored at the RIGHT of the
  * available content viewport. Two options: the page that is not shown
  * (`Info`, carrying ` +N` attention diagnostics when any exist, or
  * `Transcript` while the Info page is open; shortcut I) and the tools
- * toggle (`Expand tools` / `Collapse tools`; shortcut T). Each option ends
- * in a visible keyboard hint while the menu is open — ` [I]` / ` [T]` when
- * it fits, else `  I` / `  T` — and narrows by whole-word choice (never an
- * ellipsis) before any hint is lost, so the width floor keeps a readable
- * `Tools … T`. The numeric `+N` count is still dropped whole rather than
- * clipped into a partial fact. The selected row paints accent and bold; the
- * other is muted. With room for a frame (`height >= 4`) the menu is a
- * compact rounded box; below that it degrades to a borderless two-row menu
- * with safely bounded labels.
+ * toggle (`Expand tools` / `Collapse tools`; shortcut T). Each option paints
+ * its mnemonic inline when the label contains it (`Info`, `Transcript`,
+ * `Expand tools`), otherwise as an explicit key prefix; there is no bracket
+ * keycap or duplicated trailing letter. Narrowing drops whole words (never
+ * an ellipsis) before any hint is lost, so the width floor keeps a readable
+ * `Tools` option. The numeric `+N` count is still dropped whole rather than
+ * clipped into a partial fact. The selected row paints accent and bold and
+ * underlines its mnemonic when the host theme supports it; the other is muted
+ * with an accented mnemonic. With room for a frame
+ * (`height >= 4`) the menu is a compact rounded box; below that it degrades
+ * to a borderless two-row menu with safely bounded labels.
  *
  * Every returned row spans the full viewport width, left-padded with spaces;
  * `from` reports the popup's left edge (boxed: the box's left border,
@@ -81,32 +92,45 @@ export function renderDetailActionsMenu(input: {
   const { theme: th, info, toolsExpanded } = input;
   const hidden = wholeCount(input.hiddenNotes);
   const selected = input.selected === 1 ? 1 : 0;
-  const paint = (text: string, active: boolean): string =>
-    active ? th.bold(th.fg("accent", text)) : th.fg("muted", text);
-
   // Row 0 offers the page that is not shown; row 1 toggles tool expansion.
   // Only Info carries the attention count, and only when it is not shown.
   const page = info ? "Transcript" : "Info";
   const counted = page + (!info && hidden ? ` +${hidden}` : "");
   const tools = toolsExpanded ? "Collapse tools" : "Expand tools";
   const kinds: DetailActionsItem["kind"][] = [info ? "transcript" : "info", "tools"];
-  // Hinted options, widest (bracketed) first. Narrowing drops the cosmetic
-  // bracket, then whole words — the attention count only goes whole.
-  const pageOptions = [`${counted} [I]`, `${counted}  I`, `${page} [I]`, `${page}  I`];
-  const toolsOptions = [`${tools} [T]`, `${tools}  T`, "Tools [T]", "Tools  T"];
+  // Hinted options, widest first. The mnemonic is inline when the label owns
+  // it; otherwise it stays an explicit prefix. Narrowing drops whole words —
+  // the attention count only goes whole.
+  const pageOptions = [counted, page];
+  const toolsOptions = [tools, "Tools"];
+  const hintedWidth = (label: string, key: string): number =>
+    visibleWidth(shortcutHint(th, label, key));
+  // Keep the selected row accent/bold while its mnemonic stays identifiable:
+  // the body is bold, and the key adds underline when the host theme has it.
+  const selectedTheme = {
+    fg: (color: string, text: string) => th.bold(th.fg(color, text)),
+    bold: (text: string) => (th.underline ? th.bold(th.underline(text)) : th.bold(text)),
+  };
+  const paint = (label: string, key: string, active: boolean): string =>
+    active
+      ? shortcutHint(selectedTheme, label, key, { color: "accent", keyColor: "accent" })
+      : shortcutHint(th, label, key);
 
   const boxed = height >= 4;
   // The compact box hugs its widest hinted option; the viewport caps it.
   // Inside the box a one-cell pad separates each option from the border,
   // which never targets.
   const box = boxed
-    ? Math.min(width, Math.max(visibleWidth(pageOptions[0]!), visibleWidth(toolsOptions[0]!)) + 4)
+    ? Math.min(
+        width,
+        Math.max(hintedWidth(pageOptions[0]!, "I"), hintedWidth(toolsOptions[0]!, "T")) + 4,
+      )
     : width;
   const columns = box - (boxed ? 4 : 0);
   const options = [
-    fitOption(pageOptions, page, columns),
-    fitOption(toolsOptions, tools, columns),
-  ].map((option, index) => paint(option, index === selected));
+    paint(fitHint(th, pageOptions, page, "I", columns), "I", selected === 0),
+    paint(fitHint(th, toolsOptions, tools, "T", columns), "T", selected === 1),
+  ];
 
   const rows: string[] = [];
   const items: DetailActionsItem[] = [];

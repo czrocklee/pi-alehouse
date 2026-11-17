@@ -119,7 +119,14 @@ for (const frame of [false, true]) {
     test(`a lone ${status} keeps its bottom state at the old visibility boundary (frame=${frame})`, (t) => {
       const h = fixture(t, { frame, rows: frame ? 7 : 8, status });
       const lines = h.paint();
-      assert.match(lines.at(-2), new RegExp(`\\b${label}\\b`), lines.join("\n"));
+      // Normal running/completed work is unambiguous from its glyph alone;
+      // every ambiguous lifecycle state keeps a readable label.
+      if (status === "running" || status === "completed") {
+        assert.match(lines.at(-2), status === "running" ? /⠋/ : /✓/, lines.join("\n"));
+        assert.ok(!lines.at(-2).includes(label), lines.join("\n"));
+      } else {
+        assert.match(lines.at(-2), new RegExp(`\\b${label}\\b`), lines.join("\n"));
+      }
       assert.ok(!lines[0].includes(label), "the state stays out of the title");
       assert.ok(!lines.at(-1).includes(label), "a single Agent needs no status tab fallback");
       assert.equal(lines.length, 5);
@@ -146,7 +153,7 @@ for (const frame of [false, true]) {
       assert.ok(lines.every((line) => visibleWidth(line) <= 120));
       assert.match(lines.at(-2), /failed/, `rows=${rows}: state is the last body row`);
       if (budget < 5) {
-        assert.doesNotMatch(lines.at(-1), /\[⋯\]|\[S Stop\]|\[M message\]/);
+        assert.doesNotMatch(lines.at(-1), /\. more|\bstop\b|\bmessage\b/);
         h.pane.handleInput("s");
         h.pane.handleInput("\x13");
         h.pane.handleInput("m");
@@ -209,11 +216,11 @@ for (const frame of [false, true]) {
 
   test(`an emptied roster does not paint an inert menu control (frame=${frame})`, (t) => {
     const h = fixture(t, { frame, rows: 40 });
-    assert.match(h.paint().at(-1), /\[⋯\]/);
+    assert.match(h.paint().at(-1), /\. more/);
     h.state.entries.length = 0;
     const empty = h.paint();
     assert.ok(empty.some((line) => line.includes("No agents are available to inspect.")));
-    assert.doesNotMatch(empty.at(-1), /\[⋯\]/);
+    assert.doesNotMatch(empty.at(-1), /\. more/);
     h.pane.handleInput(".");
     assert.deepEqual(h.paint(), empty);
   });
@@ -224,8 +231,9 @@ for (const frame of [false, true]) {
     h.terminal.rows = frame ? 5 : 7; // four-row budget, below existing admission floor
     const lines = h.paint();
     assert.equal(lines.length, 4);
-    assert.match(lines.at(-2), /running/);
-    assert.doesNotMatch(lines.at(-1), /\[S Stop\]|\[M message\]|\[⋯\]/);
+    assert.match(lines.at(-2), /⠋/);
+    assert.ok(!lines.at(-2).includes("running"));
+    assert.doesNotMatch(lines.at(-1), /\bstop\b|\bmessage\b|\. more/);
     h.pane.handleInput("s");
     h.pane.handleInput("\x13");
     h.pane.handleInput("m");
@@ -234,6 +242,6 @@ for (const frame of [false, true]) {
     assert.deepEqual(h.stops, []);
     assert.deepEqual(h.sent, []);
     h.terminal.rows = 40;
-    assert.match(h.paint().at(-1), /\[S Stop\]/, "fresh full paint restores normal controls");
+    assert.match(h.paint().at(-1), /\bstop\b/, "fresh full paint restores normal controls");
   });
 }

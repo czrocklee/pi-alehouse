@@ -566,19 +566,19 @@ test("Stop bypasses presentation caches, and expiry is checked and repainted on 
   pane.handleInput("s");
   assert.doesNotMatch(
     pane.render(120).at(-1),
-    /Confirm stop/,
+    /confirm stop/,
     "stale running presentation is not authority",
   );
   assert.equal(freshReads, 1);
   fresh = view();
   pane.handleInput("s");
-  assert.match(pane.render(120).at(-1), /Confirm stop/);
+  assert.match(pane.render(120).at(-1), /confirm stop/);
   const held = renders;
   time.advance(10000);
   pane.handleInput("\x13");
   assert.equal(stops, 0);
   assert(renders > held, "expiry updates the visible hint even without a background repaint");
-  assert.match(pane.render(120).at(-1), /\[S Stop\]/);
+  assert.match(pane.render(120).at(-1), /\bstop\b/);
   pane.handleInput("s");
   pane.render(120);
   fresh = view({ run_id: "replacement" });

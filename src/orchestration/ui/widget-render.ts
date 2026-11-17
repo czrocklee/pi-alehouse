@@ -1,5 +1,6 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { terminal, type RunView } from "../core/contracts.ts";
+import { shortcutHint } from "../../shared/shortcut-hint.mjs";
 import { renderActivity, GLYPHS, withoutBreaks, type Theme } from "./format.ts";
 import { clipPlainText, singleLineText } from "./text.ts";
 import { activityPresentation, runPresentation } from "./run-presentation.ts";
@@ -247,7 +248,7 @@ export function renderWidget(params: {
   const bodyBudget = maxLines - chrome;
   const rosterCost = runs.reduce((sum, run) => sum + (live(run) ? 2 : 1), 0);
   const needsPages = rosterCost > bodyBudget;
-  const controlWidth = visibleWidth(`[Prev] ${runs.length}/${runs.length} [Next]`);
+  const controlWidth = visibleWidth(`Prev ${runs.length}/${runs.length} Next`);
   const inspectable =
     runs.length > 0 &&
     bodyBudget >= (needsPages ? 2 : 1) &&
@@ -271,7 +272,10 @@ export function renderWidget(params: {
   const warning = theme.fg("error", `owner blocked${ownerError ? `: ${ownerError}` : ""}`);
   // The leading marker never moves. Keep capacity before optional counts;
   // drop counts first, then compact capacity if needed.
-  const fallback = disclosure && runs.length && !canDisclose ? theme.fg("dim", " · Alt+A") : "";
+  const fallback =
+    disclosure && runs.length && !canDisclose
+      ? theme.fg("dim", " · ") + shortcutHint(theme, "", "Alt+A", { color: "dim" })
+      : "";
   const prefix = baseTitle + capacity;
   const title = prefix + (summary ? theme.fg("dim", " · ") + summary : "") + fallback;
   const shortTitle = baseTitle + (saturated ? theme.fg("warning", " full") : "") + fallback;
@@ -381,21 +385,29 @@ export function renderWidget(params: {
   if (expanded && inspectable) {
     rows.push(...shown.flatMap(paint));
     if (needsPages) {
-      const prefix = `[Prev] ${page + 1}/${pages.length} `;
+      // Pagination is click-only: no mnemonic emphasis may imply P/N keys.
+      const prev = shortcutHint(theme, "Prev", undefined, {
+        color: page > 0 ? "muted" : "dim",
+      });
+      const next = shortcutHint(theme, "Next", undefined, {
+        color: page + 1 < pages.length ? "muted" : "dim",
+      });
+      const prefix = prev + theme.fg("dim", ` ${page + 1}/${pages.length} `);
+      const nextFrom = visibleWidth(prefix);
       pagination = {
         page,
         pages: pages.length,
         row: rows.length,
-        ...(page > 0 ? { prev: [0, 6] as [number, number] } : {}),
+        ...(page > 0 ? { prev: [0, visibleWidth(prev)] as [number, number] } : {}),
         ...(page + 1 < pages.length
-          ? { next: [visibleWidth(prefix), visibleWidth(prefix) + 6] as [number, number] }
+          ? { next: [nextFrom, nextFrom + visibleWidth(next)] as [number, number] }
           : {}),
       };
-      rows.push({ line: theme.fg("dim", `${prefix}[Next]`) });
+      rows.push({ line: prefix + next });
     }
   } else if (expanded) {
     if (runs.length > 0 && bodyBudget > 0)
-      rows.push({ line: clip(theme.fg("dim", "Alt+A to inspect")) });
+      rows.push({ line: clip(shortcutHint(theme, "to inspect", "Alt+A", { color: "dim" })) });
   } else {
     rows.push(...shown.flatMap(paint));
     if (hidden.length) rows.push(renderOverflow(hidden, width, clip, theme));

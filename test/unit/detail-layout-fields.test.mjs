@@ -177,7 +177,8 @@ test("the summary packs status, turns, context, token flow, cost and the turn cl
   );
   assert.equal(rows.length, 1, "the bottom dock is exactly one row");
   const [row] = rows;
-  assert.match(row, /running/, "lifecycle status leads the dock, not the title");
+  assert.match(row, /^⠋ · /, "normal running work leads with its glyph alone");
+  assert.doesNotMatch(row, /running/, "the glyph needs no label");
   assert.match(row, /↻3\/256/, "turns use a slash, never the retired ≤ form");
   assert.doesNotMatch(row, /≤/, "the dock never paints the retired ≤ turn form");
   assert.doesNotMatch(row, /▸/, "the dock never counts tool calls");
@@ -187,26 +188,27 @@ test("the summary packs status, turns, context, token flow, cost and the turn cl
   assert.match(row, /↓/, "output flow closes the token segment");
   assert.match(row, /\(\s*\d+(?:\.\d+)?%\s*\)/, "the cache-hit share is parenthesized");
   assert.doesNotMatch(row, /\$/);
-  assert.match(row, /total 1m33s/, "elapsed is spelled out as a total");
-  assert.match(row, /\(1s\)/, "the current-turn clock is parenthesized");
+  assert.match(row, /1m33s/, "the cumulative elapsed time is bare");
+  assert.doesNotMatch(row, /total/);
+  assert.match(row, /turn 1s$/, "the live turn clock closes the row");
   assert(visibleWidth(row) <= 120, JSON.stringify(row));
 });
 
 test("the dock shows the current-turn clock only while a turn is timed", () => {
   const timed = renderDetailSummary(input(), theme, 120, { activity: false })[0];
-  assert.match(timed, /\(1s\)/, timed);
+  assert.match(timed, /turn 1s$/, timed);
   // Whole, floored seconds at every magnitude: no tenths survive the floor.
   for (const [ms, clock] of [
-    [18_000, "(18s)"],
-    [59_900, "(59s)"],
-    [62_000, "(1m02s)"],
-    [900, "(0s)"],
+    [18_000, "turn 18s"],
+    [59_900, "turn 59s"],
+    [62_000, "turn 1m02s"],
+    [900, "turn 0s"],
   ]) {
     const row = renderDetailSummary(input({ turn_elapsed_ms: ms }), theme, 120, {
       activity: false,
     })[0];
-    assert.ok(row.includes(clock), `${ms}: ${row}`);
-    assert.doesNotMatch(row, /\(\d+(?:m\d{2})?\.\d+s\)/, `${ms}: ${row}`);
+    assert.ok(row.endsWith(clock), `${ms}: ${row}`);
+    assert.doesNotMatch(row, /turn \d+(?:m\d{2})?\.\d+s/, `${ms}: ${row}`);
   }
   for (const [label, overrides] of [
     ["settled", { status: "completed", execution_exited: true }],
@@ -214,8 +216,7 @@ test("the dock shows the current-turn clock only while a turn is timed", () => {
     ["untimed", { turn_elapsed_ms: undefined }],
   ]) {
     const row = renderDetailSummary(input(overrides), theme, 120, { activity: false })[0];
-    // The usage ratio is parenthesized too: only a clock-shaped group counts.
-    assert.doesNotMatch(row, /\(\d+(?:m\d{2})?s\)/, `${label}: ${row}`);
+    assert.doesNotMatch(row, /turn \d/, `${label}: ${row}`);
   }
 });
 
@@ -258,13 +259,13 @@ test("the summary drops the least urgent figures first and never exceeds the wid
     const row = renderDetailSummary(base, theme, width, { activity: false })[0];
     assert(visibleWidth(row) <= width, `${width}: ${JSON.stringify(row)}`);
     if (width >= 64) assert.match(row, /↻3\/256/, `${width}: turns survive`);
-    if (width >= 64) assert.match(row, /running/, `${width}: the status outlasts routine figures`);
+    if (width >= 64) assert.match(row, /^⠋/, `${width}: the glyph outlasts routine figures`);
   }
-  // The total time is the first whole figure to yield, so it needs the full row.
+  // The cumulative elapsed time is the first whole figure to yield.
   assert.match(
     renderDetailSummary(base, theme, 120, { activity: false })[0],
-    /total 1m33s/,
-    "elapsed is spelled out only while the row holds it",
+    /1m33s/,
+    "elapsed is painted only while the row holds it",
   );
   // Elevated context pressure outlives routine turns/elapsed/cost figures.
   const hot = input({
@@ -272,7 +273,7 @@ test("the summary drops the least urgent figures first and never exceeds the wid
   });
   const row = renderDetailSummary(hot, theme, 40, { activity: false })[0];
   assert.match(row, /ctx ≈250k\/272k/, row);
-  assert.doesNotMatch(row, /total 1m33s|↻3\/256/, "routine figures yield before elevated context");
+  assert.doesNotMatch(row, /1m33s|↻3\/256/, "routine figures yield before elevated context");
 });
 
 test("the summary keeps one bounded activity row only when a caller allocates it", () => {
@@ -335,7 +336,7 @@ test("attention shows at most two rows ordered by what blocks progress soonest",
   assert.equal(rows.length, 2);
   assert.match(rows[0], /\? asked: Which branch\?/);
   assert.match(rows[1], /✗ error|✗ owner/, "the next-highest severity follows");
-  assert.match(rows[1], /\+7 · I info/, "hidden notes are counted with their Info key");
+  assert.match(rows[1], /\+7 · info/, "hidden notes are counted with their Info key");
   for (const line of rows) assert(visibleWidth(line) <= 100, JSON.stringify(line));
 });
 
@@ -591,14 +592,14 @@ const slice = (frame, range, offset = 0) =>
 test("the edge is tabs and actions only: no counters, status, context or key legend", () => {
   const frame = footer();
   assert.match(frame.text, /^‹ ⠋ a {2}⠋ b {2}⠋ c ›/);
-  assert.match(frame.text, /Esc {2}\[M message\]$/);
+  assert.match(frame.text, /Esc {2}message$/);
   for (const repeated of [
     /agents/,
     /lines/,
     /\d+\/\d+/,
     /ctx/,
     /running/,
-    /I info/,
+    /info/,
     /T tools/,
     /←→/,
     /following/,
@@ -617,15 +618,15 @@ test("the edge is tabs and actions only: no counters, status, context or key leg
   ]);
 });
 
-test("framed tabs use ASCII pipes while the corner pad keeps its rule", () => {
+test("framed tabs are space-separated while the corner pad keeps its rule", () => {
   const frame = footer({ framed: true, messaging: false, below: 0 });
-  assert.match(frame.text, /^‹ ⠋ a \| ⠋ b \| ⠋ c ›$/);
+  assert.match(frame.text, /^‹ ⠋ a {2}⠋ b {2}⠋ c ›$/);
   assert.equal(frame.flush?.start, false, "an arrow keeps the corner's pad");
   assert.equal(frame.flush?.end, false);
   // Hit ranges are pane columns: past the frame's `╰─ ` offset.
   for (const tab of frame.tabs) assert.ok(tab.from >= 3, JSON.stringify(tab));
   const confirming = footer({ framed: true, available: true, confirming: true });
-  assert.match(confirming.text, /^ ⠋ a \| \+2 /, confirming.text);
+  assert.match(confirming.text, /^ ⠋ a {2}\+2 /, confirming.text);
   assert.equal(confirming.flush?.start, true, "a padded tab meets the corner's rule");
   const lone = renderDetailFooter({
     width: 60,
@@ -642,7 +643,7 @@ test("framed tabs use ASCII pipes while the corner pad keeps its rule", () => {
   assert.equal(lone.text, "", "an edge with nothing on it is plain border");
 });
 
-test("the [M message] control is a hit range inside the painted row, offset by the frame", () => {
+test("the message control is a hit range inside the painted row, offset by the frame", () => {
   for (const [framed, offset] of [
     [false, 0],
     [true, 3],
@@ -651,36 +652,33 @@ test("the [M message] control is a hit range inside the painted row, offset by t
     assert.ok(frame.messageAction, "messaging offers the message control");
     const { from, to } = frame.messageAction;
     assert.ok(from >= offset && to <= offset + 120, JSON.stringify(frame));
-    assert.equal(slice(frame, frame.messageAction, offset), "[M message]");
+    assert.equal(slice(frame, frame.messageAction, offset), "message");
   }
 });
 
 test("Stop stays outermost, after the docked Esc hint, with its fit safety and offsets", () => {
   const frame = footer({ available: true });
   assert.equal(frame.action.kind, "stop");
-  assert.match(frame.text, /Esc {2}\[M message\] \[S Stop\]$/);
+  assert.match(frame.text, /Esc {2}message stop$/);
   assert.equal(frame.action.to, 120);
-  assert.equal(frame.action.from, 120 - "[S Stop]".length);
+  assert.equal(frame.action.from, 120 - "stop".length);
   const framed = footer({ available: true, framed: true });
-  assert.equal(framed.action.from, 3 + 120 - "[S Stop]".length);
+  assert.equal(framed.action.from, 3 + 120 - "stop".length);
   assert.doesNotMatch(framed.text, /Esc/, "framed, the close control replaces the hint");
   // The whole confirmation must fit beside a minimal selected tab.
-  assert.equal(footer({ available: true, width: 54 }).action, undefined);
-  assert.equal(footer({ available: true, width: 55 }).action?.to, 55);
+  assert.equal(footer({ available: true, width: 52 }).action, undefined);
+  assert.equal(footer({ available: true, width: 53 }).action?.to, 53);
   assert.equal(footer({ available: true, width: 20 }).action, undefined);
 });
 
 test("the actions menu is an optional footer control before Message and Stop", () => {
   const frame = footer({ menu: true, available: true });
   assert.ok(frame.menu, "menu: true paints the control");
-  assert.equal(slice(frame, frame.menu), "[⋯]");
-  const at = frame.text.indexOf("[⋯]");
+  assert.equal(slice(frame, frame.menu), ". more");
+  const at = frame.text.indexOf(". more");
   assert.ok(at >= 0, frame.text);
-  assert.ok(at < frame.text.indexOf("[M message]"), "the menu precedes Message");
-  assert.ok(
-    frame.text.indexOf("[M message]") < frame.text.indexOf("[S Stop]"),
-    "Stop stays rightmost",
-  );
+  assert.ok(at < frame.text.indexOf("message"), "the menu precedes Message");
+  assert.ok(frame.text.indexOf("message") < frame.text.indexOf("stop"), "Stop stays rightmost");
   assert.equal(footer().menu, undefined, "the control is opt-in");
   assert.equal(footer({ menu: false }).menu, undefined);
   // The caller decides: the pane suppresses the menu while a draft owns the
@@ -690,12 +688,12 @@ test("the actions menu is an optional footer control before Message and Stop", (
   // Framed, the range is offset by the frame's side and pad.
   const framed = footer({ menu: true, framed: true });
   assert.ok(framed.menu.from >= 3, JSON.stringify(framed.menu));
-  assert.equal(slice(framed, framed.menu, 3), "[⋯]");
+  assert.equal(slice(framed, framed.menu, 3), ". more");
   // It yields whole under width pressure, never as a clipped label.
   for (let width = 20; width <= 120; width++) {
     const narrow = footer({ menu: true, width });
     assert(visibleWidth(narrow.text) <= width, `${width}: ${narrow.text}`);
-    if (narrow.menu) assert.equal(slice(narrow, narrow.menu), "[⋯]", `${width}`);
+    if (narrow.menu) assert.equal(slice(narrow, narrow.menu), ". more", `${width}`);
   }
 });
 
@@ -710,7 +708,7 @@ test("the tail cue counts the rows below and jumps back to them", () => {
     },
   };
   const frame = footer({ below: 37, live: true, theme: recording, available: true });
-  assert.match(frame.text, /↓ 37 more {2}Esc {2}\[M message\] \[S Stop\]$/);
+  assert.match(frame.text, /↓ 37 more {2}Esc {2}message stop$/);
   assert.equal(slice(frame, frame.tail), "↓ 37 more");
   assert.ok(colors.some(([color, text]) => color === "accent" && text === "↓ 37 more"));
   colors.length = 0;
@@ -745,7 +743,7 @@ test("under width pressure peers fold first, then arrows, then the tail (framed)
       const folded = /\+\d/.test(frame.text);
       const arrows = /[‹›]/.test(frame.text);
       const tail = /↓ 120 more/.test(frame.text) ? 2 : /↓120/.test(frame.text) ? 1 : 0;
-      const message = /\[M message\]/.test(frame.text) ? 2 : /\[M msg\]/.test(frame.text) ? 1 : 0;
+      const message = / message/.test(frame.text) ? 2 : / msg/.test(frame.text) ? 1 : 0;
       if (!arrows) assert.ok(folded, `${at}: arrows yield only after peers fold`);
       if (framed) {
         if (tail < 2) assert.ok(!arrows, `${at}: the tail cue yields after the arrows`);
@@ -760,23 +758,22 @@ test("under width pressure peers fold first, then arrows, then the tail (framed)
 test("while composing, the edge drops every key the draft would swallow", () => {
   const frame = footer({ composing: true, available: true, below: 4 });
   assert.match(frame.text, /⠋ a {2}⠋ b {2}⠋ c/, "tabs stay clickable");
-  for (const lie of [/[‹›]/, /\[M/, /Esc/, /Enter/, /\[S Stop\]/])
-    assert.doesNotMatch(frame.text, lie);
+  for (const lie of [/[‹›]/, /\bmessage\b/, /Esc/, /Enter/]) assert.doesNotMatch(frame.text, lie);
   assert.equal(frame.messageAction, undefined, "M is suppressed while typing");
-  assert.match(frame.text, /↓ 4 more {2}\[Stop\]$/, "scrolling still works beside the draft");
+  assert.match(frame.text, /↓ 4 more {2}stop$/, "scrolling still works beside the draft");
   assert.equal(frame.action.kind, "stop");
-  assert.equal(frame.action.from, 120 - "[Stop]".length);
+  assert.equal(frame.action.from, 120 - "stop".length);
 });
 
 test("an armed Stop folds every peer and keeps its whole hint", () => {
   for (const composing of [false, true]) {
     const frame = footer({ confirming: true, available: true, composing, below: 9 });
     assert.match(frame.text, /^ ⠋ a {2}\+2 /, frame.text);
-    assert.match(frame.text, /best-effort · Ctrl\+S · Esc cancel · \[Confirm stop\]$/);
-    assert.doesNotMatch(frame.text, /[‹›]|↓|\[M/);
+    assert.match(frame.text, /best-effort · Ctrl\+S · Esc cancel · confirm stop$/);
+    assert.doesNotMatch(frame.text, /[‹›]|↓|message/);
     assert.equal(frame.action.kind, "confirm");
     assert.equal(frame.messageAction, undefined);
-    assert.equal(slice(frame, frame.action), "[Confirm stop]");
+    assert.equal(slice(frame, frame.action), "confirm stop");
   }
 });
 
@@ -815,7 +812,7 @@ test("hidden attention rides the selected tab's marker, else a !N cue leads the 
     assert.match(narrow.text, /^!5/, `${width}: the cue is never silently dropped`);
   }
   const stop = lone(56, { available: true, hiddenNotes: 9 });
-  assert.match(stop.text, /^!9 .*\[S Stop\]$/);
+  assert.match(stop.text, /^!9 .*stop$/);
   assert.equal(stop.action.to, 56);
   const tiny = lone(20, { hiddenNotes: 1_234_567 });
   assert.match(tiny.text, /!/);
@@ -1060,7 +1057,7 @@ test("attention notes are one pure collection shared by rows and tab markers", (
   assert.equal(rows.length, 2);
   assert.match(rows[0], /\? asked: Which branch\?/);
   assert.match(rows[1], /✗ owner: flock lost/);
-  assert.match(rows[1], /\+9 · I info/);
+  assert.match(rows[1], /\+9 · info/);
   // A draining peer carries the warning marker its attention rows claim.
   const strip = (overrides = {}) =>
     renderDetailAgentStrip({
@@ -1120,11 +1117,11 @@ test("attention takes the caller's final row budget and transient extra notes", 
   // The default two rows are unchanged.
   const rows = renderDetailAttention(base, theme, 100);
   assert.equal(rows.length, 2);
-  assert.match(rows.at(-1), /\+6 · I info/);
+  assert.match(rows.at(-1), /\+6 · info/);
   // maxRows is the FINAL budget: one row counts all seven hidden notes.
   const one = renderDetailAttention(base, theme, 100, { maxRows: 1 });
   assert.equal(one.length, 1);
-  assert.match(one[0], /\+7 · I info/);
+  assert.match(one[0], /\+7 · info/);
   // Zero rows paint none; the caller counts the collection itself.
   assert.deepEqual(renderDetailAttention(base, theme, 100, { maxRows: 0 }), []);
   assert.equal(getDetailAttentionNotes(base).length, 8);
@@ -1132,7 +1129,7 @@ test("attention takes the caller's final row budget and transient extra notes", 
   const three = renderDetailAttention(base, theme, 100, { maxRows: 3 });
   assert.equal(three.length, 3);
   assert.doesNotMatch(three[0], /\+\d/);
-  assert.match(three.at(-1), /\+5 · I info/);
+  assert.match(three.at(-1), /\+5 · info/);
   // Transient facts join the collection instead of pushing raw rows.
   const accepted = {
     key: "recent-steer",
@@ -1143,13 +1140,13 @@ test("attention takes the caller's final row budget and transient extra notes", 
   };
   const withExtra = renderDetailAttention(base, theme, 100, { extraNotes: [accepted] });
   assert.equal(withExtra.length, 2);
-  assert.match(withExtra.at(-1), /\+7 · I info/, "the transient note is counted too");
+  assert.match(withExtra.at(-1), /\+7 · info/, "the transient note is counted too");
   // A high-priority transient tops the order.
   const urgent = renderDetailAttention(base, theme, 100, {
     extraNotes: [{ ...accepted, key: "accepted", priority: 0, text: "Steer accepted" }],
   });
   assert.match(urgent[0], /✓ Steer accepted/);
-  assert.match(urgent.at(-1), /\+7 · I info/);
+  assert.match(urgent.at(-1), /\+7 · info/);
   // An already-collected base collection renders without rebuilding.
   assert.deepEqual(
     renderDetailAttention(base, theme, 100, { notes }),

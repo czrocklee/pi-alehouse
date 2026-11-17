@@ -285,14 +285,16 @@ test("the default pane has no constant toolbar: one info row under a plain separ
     assert.ok(!flat.includes(retired), `no constant ${retired} row: ${flat}`);
   assert.match(lines.at(-3), /^─+$/, "a plain separator above the dock");
   assert.equal(lines.filter((line) => /^─+$/.test(line)).length, 1, "exactly one separator");
-  assert.match(lines.at(-2), /running/, "one info row sits directly above the footer");
+  // Normal running work leads the dock with its lifecycle glyph alone.
+  assert.match(lines.at(-2), /⠋/, "one info row sits directly above the footer");
+  assert.ok(!lines.at(-2).includes("running"));
   for (const x of [0, 40, 119]) {
     assert.equal(h.press({ x, y: lines.length - 3 }), undefined, `separator press at ${x}`);
     assert.equal(h.click({ x, y: lines.length - 3 }), undefined, `separator click at ${x}`);
   }
   const footer = lines.at(-1);
-  assert.ok(footer.includes("[⋯]"), `the footer carries the menu control: ${footer}`);
-  assert.ok(footer.indexOf("[⋯]") < footer.indexOf("[S Stop]"), "Stop stays outermost");
+  assert.ok(footer.includes(". more"), `the footer carries the menu control: ${footer}`);
+  assert.ok(footer.indexOf(". more") < footer.indexOf("stop"), "Stop stays outermost");
 });
 
 test("the . key opens the menu only from a painted footer", (t) => {
@@ -305,10 +307,10 @@ test("the . key opens the menu only from a painted footer", (t) => {
   assertMenu(h.paint());
 });
 
-test("the [⋯] control opens the same menu, and a press alone never activates", (t) => {
+test("the . more control opens the same menu, and a press alone never activates", (t) => {
   const h = paneFixture(t);
   const before = h.paint();
-  const control = h.locate("[⋯]", before);
+  const control = h.locate(". more", before);
   assert.deepEqual(h.press(control), { handled: true }, "the press is claimed");
   assert.deepEqual(h.paint(), before, "a press alone never toggles the menu");
   assert.deepEqual(h.click(control), { handled: true });
@@ -424,29 +426,29 @@ test("Esc closes the menu before the Info page, the draft and the pane", (t) => 
 
 test("the footer omits the menu while composing or while Stop is armed", (t) => {
   const h = paneFixture(t, { current: running(), onStop() {}, onSteer() {} });
-  assert.ok(h.paint().at(-1).includes("[⋯]"));
+  assert.ok(h.paint().at(-1).includes(". more"));
   h.pane.handleInput("m");
   h.pane.handleInput(".");
   const composing = h.paint();
-  assert.ok(!composing.at(-1).includes("[⋯]"), "a draft owns the row");
+  assert.ok(!composing.at(-1).includes(". more"), "a draft owns the row");
   assert.ok(
     composing.some((line) => line.includes("› .")),
     "the dot is draft text",
   );
   assertNoMenu(composing);
   h.pane.handleInput(ESC);
-  assert.ok(h.paint().at(-1).includes("[⋯]"), "discarding the draft restores the control");
+  assert.ok(h.paint().at(-1).includes(". more"), "discarding the draft restores the control");
 
   h.paint();
   h.pane.handleInput("s");
   const armed = h.paint();
-  assert.match(armed.at(-1), /\[Confirm stop\]/);
-  assert.ok(!armed.at(-1).includes("[⋯]"), "a confirmation owns the row");
+  assert.match(armed.at(-1), /confirm stop/);
+  assert.ok(!armed.at(-1).includes(". more"), "a confirmation owns the row");
   h.pane.handleInput(".");
   assertNoMenu(h.paint());
-  assert.match(h.paint().at(-1), /\[Confirm stop\]/, "no menu over a confirmation");
+  assert.match(h.paint().at(-1), /confirm stop/, "no menu over a confirmation");
   h.pane.handleInput(ESC);
-  assert.ok(h.paint().at(-1).includes("[⋯]"));
+  assert.ok(h.paint().at(-1).includes(". more"));
 });
 
 test("the menu overlays the last viewport rows without changing height or scroll", (t) => {
@@ -659,12 +661,12 @@ test("an outside press closes the menu and claims its paired click", (t) => {
   h.paint();
   h.pane.handleInput(".");
   const opened = h.paint();
-  const stop = h.locate("[S Stop]", opened);
+  const stop = h.locate("stop", opened);
   assert.deepEqual(h.press(stop), { handled: true });
   assertNoMenu(h.paint(), "the press closed the menu");
   assert.deepEqual(h.click(stop), { handled: true });
   const after = h.paint();
-  assert.doesNotMatch(after.at(-1), /Confirm stop/, "the paired click never reached Stop");
+  assert.doesNotMatch(after.at(-1), /confirm stop/, "the paired click never reached Stop");
   assert.deepEqual(h.stops, []);
 
   h.pane.handleInput(".");
@@ -678,9 +680,9 @@ test("an outside press closes the menu and claims its paired click", (t) => {
   );
 
   h.paint();
-  const fresh = h.locate("[S Stop]", h.paint());
+  const fresh = h.locate("stop", h.paint());
   assert.deepEqual(h.click(fresh), { handled: true });
-  assert.match(h.paint().at(-1), /Confirm stop/, "a fresh gesture still arms Stop");
+  assert.match(h.paint().at(-1), /confirm stop/, "a fresh gesture still arms Stop");
 });
 
 test("a double click while the menu is open never arms or confirms Stop", (t) => {
@@ -688,14 +690,14 @@ test("a double click while the menu is open never arms or confirms Stop", (t) =>
   h.paint();
   h.pane.handleInput(".");
   assertMenu(h.paint());
-  const stop = h.locate("[S Stop]", h.paint());
+  const stop = h.locate("stop", h.paint());
   assert.deepEqual(h.press(stop), { handled: true });
   assert.deepEqual(h.click(stop, 2), { handled: true });
-  assert.doesNotMatch(h.paint().at(-1), /Confirm stop/);
+  assert.doesNotMatch(h.paint().at(-1), /confirm stop/);
   h.paint();
-  const fresh = h.locate("[S Stop]", h.paint());
+  const fresh = h.locate("stop", h.paint());
   assert.deepEqual(h.click(fresh, 2), { handled: true });
-  assert.doesNotMatch(h.paint().at(-1), /Confirm stop/, "a multi-click gesture never arms");
+  assert.doesNotMatch(h.paint().at(-1), /confirm stop/, "a multi-click gesture never arms");
   assert.deepEqual(h.stops, []);
 });
 
@@ -711,13 +713,13 @@ test("after the menu closes, arming Stop changes only the footer row", (t) => {
     before.slice(0, -2),
     "closing the menu changes no body or separator row",
   );
-  assert.doesNotMatch(closed.at(-1), /Confirm stop/, "closing the menu never arms Stop");
+  assert.doesNotMatch(closed.at(-1), /confirm stop/, "closing the menu never arms Stop");
   h.pane.handleInput("s");
   const armed = h.paint();
   assert.equal(armed.length, closed.length, "arming does not resize the pane");
   assert.deepEqual(armed.slice(0, -2), closed.slice(0, -2), "only the footer row changes");
-  assert.match(armed.at(-1), /\[Confirm stop\]/);
-  assert.doesNotMatch(armed.at(-1), /\[⋯\]/);
+  assert.match(armed.at(-1), /confirm stop/);
+  assert.doesNotMatch(armed.at(-1), /\. more/);
 });
 
 test("I, T and the host's tools key keep working while the menu is open", (t) => {
@@ -748,7 +750,7 @@ test("I, T and the host's tools key keep working while the menu is open", (t) =>
 
 test("a narrow, short pane keeps a borderless two-row menu", (t) => {
   const h = paneFixture(t, { width: 16, rows: 8 });
-  assert.ok(h.paint().at(-1).includes("[⋯]"), h.paint().at(-1));
+  assert.ok(h.paint().at(-1).includes(". more"), h.paint().at(-1));
   h.pane.handleInput(".");
   const opened = h.paint();
   assertMenu(opened);
@@ -778,7 +780,9 @@ test("the menu closes inherited SGR and OSC 8 at both of its edges", (t) => {
   // italic and a hyperlink open across it. The overlay must close all four
   // before its own cells and before the pane's right gutter/frame/scrollbar,
   // while leaving the transcript's own styling intact on the left.
-  const row = (index) => `${link}\x1b[41;1;3mROW${index} ${"-".repeat(100)}`;
+  // The styled row must reach past the (now narrower) menu edge so the
+  // preserved-prefix comparison covers painted transcript, not row padding.
+  const row = (index) => `${link}\x1b[41;1;3mROW${index} ${"-".repeat(120)}`;
   for (const [frame, rows, boxed] of [
     [false, 40, true],
     [false, 8, false],
@@ -908,16 +912,16 @@ test("a fully pinned or absent attention set adds no overflow count", (t) => {
       `${where}: every note is pinned`,
     );
     const menu = lines.find((line) => line.includes("Info"));
-    assert.ok(menu?.includes("Info [I]"), `${where}: the menu offers Info: ${menu}`);
+    assert.ok(menu?.includes("Info"), `${where}: the menu offers Info: ${menu}`);
     assert.ok(!menu.includes("+"), `${where}: no overflow count: ${menu}`);
     assert.doesNotMatch(lines.at(-1), /!\d/, `${where}: no footer count`);
   }
 });
 
-test("a narrow menu drops an oversized attention count whole", (t) => {
-  // The count is a fact, never a clipped prefix: at the 16-column floor the
-  // box has 12 option cells, so a four-digit count cannot fit and is dropped
-  // whole instead of becoming a partial `+99`.
+test("a narrow menu keeps an attention count whole, never clipped", (t) => {
+  // The count is a fact, never a clipped prefix. The inline mnemonic leaves
+  // the 16-column floor's 12 option cells enough for this four-digit count,
+  // so it is shown whole; the helper test covers a count that must drop.
   const cleanup_errors = Array.from({ length: 10_000 }, (_, index) => `e${index}`);
   const h = paneFixture(t, { width: 16, rows: 40, current: view("amber", { cleanup_errors }) });
   h.paint();
@@ -925,8 +929,8 @@ test("a narrow menu drops an oversized attention count whole", (t) => {
   const lines = h.paint();
   const info = h.locate("Info", lines);
   const label = lines[info.y].slice(info.x);
-  assert.ok(label.startsWith("Info"), label);
-  assert.ok(!label.includes("+"), `the count is dropped whole, not clipped: ${label}`);
+  assert.ok(label.startsWith("Info +9998"), label);
+  assert.ok(!label.includes("+999 "), `the count is whole, not clipped: ${label}`);
   assert.ok(
     lines.some((line) => line.includes("+9998")),
     "the pinned rows still count what they hide",
@@ -1003,30 +1007,30 @@ test("no menu control is painted where the menu could not be painted", (t) => {
   // The baseline: the same fixture at a supported geometry paints it, so the
   // absences below are the availability guard, not a blanket omission.
   const supported = paneFixture(t);
-  assert.ok(supported.paint().at(-1).includes("[⋯]"), "a supported geometry paints it");
+  assert.ok(supported.paint().at(-1).includes(". more"), "a supported geometry paints it");
 
   // A docked pane below the menu's 16-column floor.
   const narrow = paneFixture(t, { width: 15 });
-  assert.ok(!narrow.paint().at(-1).includes("[⋯]"), "no inert control below the floor");
+  assert.ok(!narrow.paint().at(-1).includes(". more"), "no inert control below the floor");
   narrow.pane.handleInput(".");
   assertNoMenu(narrow.paint());
 
   // A viewport that cannot fit the pane's own rows.
   const short = paneFixture(t, { rows: 7 });
-  assert.ok(!short.paint().at(-1).includes("[⋯]"), "no control without a fitting viewport");
+  assert.ok(!short.paint().at(-1).includes(". more"), "no control without a fitting viewport");
   short.pane.handleInput(".");
   assertNoMenu(short.paint());
 
   // A paint wider than the terminal it claims.
   const wide = paneFixture(t);
-  assert.ok(!wide.paint(121).at(-1).includes("[⋯]"), "no control past the terminal's columns");
+  assert.ok(!wide.paint(121).at(-1).includes(". more"), "no control past the terminal's columns");
   wide.pane.handleInput(".");
   assertNoMenu(wide.paint(121));
 
   // Non-finite terminal geometry cannot own a painted control.
   const invalid = paneFixture(t);
   invalid.terminal.columns = Number.NaN;
-  assert.ok(!invalid.paint(120).at(-1).includes("[⋯]"), "no control for invalid geometry");
+  assert.ok(!invalid.paint(120).at(-1).includes(". more"), "no control for invalid geometry");
   invalid.pane.handleInput(".");
   assertNoMenu(invalid.paint(120));
 });

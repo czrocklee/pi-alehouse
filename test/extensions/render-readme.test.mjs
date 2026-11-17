@@ -147,6 +147,25 @@ test("panel export excludes background and OSC payloads while retaining real tex
     assert.doesNotMatch(result.svg, /PRIVATE_|file:\/\/|href=|<script|foreignObject/);
   }));
 
+test("panel export retains a whitespace-only run between an explicit key and its action body", () =>
+  fixture((execute) => {
+    // Three distinct truecolor runs: key, a separately styled space, body.
+    // The converter must keep the whitespace-only run so the concatenated SVG
+    // text still reads `Esc back`, while text outside the frame stays out.
+    const result = execute(
+      frame(["\x1b[38;2;1;2;3mEsc\x1b[39m\x1b[38;2;4;5;6m \x1b[39m\x1b[38;2;7;8;9mback\x1b[39m"], {
+        prefix: "PRIVATE_SIDE ",
+      }),
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const text = [...result.svg.matchAll(/<text\b[^>]*>([\s\S]*?)<\/text>/g)]
+      .map((match) => match[1])
+      .join("");
+    assert.match(text, /Esc back/, text);
+    assert.match(result.svg, />Esc<\/text>[\s\S]*> <\/text>[\s\S]*>back<\/text>/);
+    assert.doesNotMatch(result.svg, /PRIVATE_|file:\/\/|href=|<script|foreignObject/);
+  }));
+
 test("panel redaction removes original field values and wrapped continuation before serialization", () =>
   fixture((execute) => {
     const result = execute(

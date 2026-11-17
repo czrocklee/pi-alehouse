@@ -107,97 +107,72 @@ const title = (overrides, width) =>
 
 // ---- The dock: a surviving model/effort reclaims cells freed by drops ----
 
-test("the model/effort text reclaims cells freed by a dropped total", () => {
-  // The total drops at 92; the model then grows back into every freed cell,
-  // stopping at the full original text rather than at the old five-cell floor.
+test("the model/effort text reclaims cells freed by a dropped elapsed time", () => {
+  // The bare elapsed time drops at 80; the model then grows back into every
+  // freed cell, stopping at the full original text rather than at the floor.
   for (const [width, model] of [
-    [92, "claude-opus-5/med…"],
-    [91, "claude-opus-5/me…"],
-    [80, "claud…"],
-    [79, "clau…"],
+    [80, "claude-opus…"],
+    [79, "claude-opu…"],
+    [78, "claude-op…"],
+    [70, "claude-op…"],
+    [57, "claude-op…"],
   ]) {
     const text = plain(row({}, width));
-    assert.equal(visibleWidth(text), width, `${width}: maximal fit: ${text}`);
+    assert.ok(visibleWidth(text) <= width, `${width}: fits: ${text}`);
     assert.ok(text.includes(` · ${model} · `), `${width}: ${text}`);
-    assert.doesNotMatch(text, /total/, `${width}: the total stays dropped`);
+    assert.doesNotMatch(text, /1m33s/, `${width}: the elapsed time stays dropped`);
   }
 });
 
 test("reclaim never reintroduces a dropped metric or reorders the ladder", () => {
-  const cases = [
-    {
-      width: 92,
-      model: "claude-opus-5/med…",
-      absent: [/total/],
-      present: [/↻3\/256/, /ctx ≈59k\/500k/, /↑80k \(75\.0%\) ↓5\.0k/, /\$1\.23/],
-    },
-    {
-      width: 78,
-      model: "claude-opus…",
-      absent: [/total/, /%\)/],
-      present: [/↻3\/256/, /ctx ≈59k\/500k/, /↑80k ↓5\.0k/, /\$1\.23/],
-    },
-    {
-      width: 70,
-      model: "claude-opus-5/me…",
-      absent: [/total/, /%\)/, /↑/],
-      present: [/↻3\/256/, /ctx ≈59k\/500k/, /\$1\.23/],
-    },
-    {
-      width: 57,
-      model: "claude-opus…",
-      absent: [/total/, /%\)/, /↑/, /\$/],
-      present: [/↻3\/256/, /ctx ≈59k\/500k/],
-    },
-    {
-      width: 49,
-      model: "claude-opus-…",
-      absent: [/total/, /%\)/, /↑/, /\$/, /↻/],
-      present: [/ctx ≈59k\/500k/],
-    },
-  ];
-  for (const { width, model, absent, present } of cases) {
+  // Exact rows at each rung: elapsed, then the cache ratio, then the usage
+  // group, cost, routine turns, the model, and finally the clock/context.
+  for (const [width, expected] of [
+    [80, "⠋ · claude-opus… · ↻3/256 · ctx ≈59k/500k · ↑80k (75.0%) ↓5.0k · $1.23 · turn 1s"],
+    [78, "⠋ · claude-op… · ↻3/256 · ctx ≈59k/500k · ↑80k (75.0%) ↓5.0k · $1.23 · turn 1s"],
+    [72, "⠋ · claude-opus… · ↻3/256 · ctx ≈59k/500k · ↑80k ↓5.0k · $1.23 · turn 1s"],
+    [65, "⠋ · clau… · ↻3/256 · ctx ≈59k/500k · ↑80k ↓5.0k · $1.23 · turn 1s"],
+    [52, "⠋ · clau… · ↻3/256 · ctx ≈59k/500k · $1.23 · turn 1s"],
+    [43, "⠋ · claude-opus-… · ctx ≈59k/500k · turn 1s"],
+    [32, "⠋ · ctx ≈59k/500k · turn 1s"],
+  ]) {
     const text = plain(row({}, width));
-    assert.equal(visibleWidth(text), width, `${width}: maximal fit: ${text}`);
-    assert.ok(text.includes(` · ${model} · `), `${width}: ${text}`);
-    for (const pattern of absent) assert.doesNotMatch(text, pattern, `${width}: ${pattern}`);
-    for (const pattern of present) assert.match(text, pattern, `${width}: ${pattern}`);
+    assert.ok(visibleWidth(text) <= width, `${width}: fits: ${text}`);
+    assert.equal(text, expected, `${width}: ${text}`);
   }
 });
 
-test("reclaim respects the clock's reserved cells at ticks and minute boundaries", () => {
-  // The clock reserves its widest same-magnitude spelling, so ordinary ticks
-  // and the minute boundary leave the model's reclaimed cells unchanged. Only
-  // a new minute digit adds one reserved cell and shortens the model by one.
-  for (const [ms, clock, model] of [
-    [59_900, "(59s)", "claude-opus-5/med…"],
-    [60_000, "(1m00s)", "claude-opus-5/med…"],
-    [62_000, "(1m02s)", "claude-opus-5/med…"],
-    [600_000, "(10m00s)", "claude-opus-5/me…"],
-    [6_000_000, "(100m00s)", "claude-opus-5/m…"],
+test("the trailing clock absorbs its own growth at the end", () => {
+  // No reservation follows the clock: a growing tick shortens the model, but
+  // never pushes the row over its width or leaves trailing padding.
+  for (const [ms, clock] of [
+    [59_900, "turn 59s"],
+    [60_000, "turn 1m00s"],
+    [62_000, "turn 1m02s"],
+    [600_000, "turn 10m00s"],
+    [6_000_000, "turn 100m00s"],
   ]) {
     const text = plain(row({ turn_elapsed_ms: ms }, 92));
-    assert.equal(visibleWidth(text), 92, `${ms}: ${text}`);
-    assert.ok(text.includes(clock), `${ms}: ${text}`);
-    assert.ok(text.includes(` · ${model} · `), `${ms}: ${text}`);
-    assert.doesNotMatch(text, /total/, `${ms}: the total stays dropped`);
+    assert.ok(visibleWidth(text) <= 92, `${ms}: ${text}`);
+    assert.ok(text.endsWith(clock), `${ms}: ${text}`);
+    assert.ok(text.includes(" · ctx ≈59k/500k · "), `${ms}: context stays protected`);
+    assert.equal(text, text.trimEnd(), `${ms}: no trailing reservation hole`);
   }
 });
 
 test("CJK, emoji and ANSI reclaim terminal cells without splitting graphemes", () => {
   for (const [model, width, expected] of [
     ["測試模型", 92, "測試模型/medium"],
-    ["測試模型", 49, "測試模型/med…"],
-    ["測試模型", 45, "測試模型…"],
+    ["測試模型", 49, "測試模型/…"],
+    ["測試模型", 45, "測試…"],
     ["👩‍💻👩‍💻👩‍💻", 92, "👩‍💻👩‍💻👩‍💻/medium"],
-    ["👩‍💻👩‍💻👩‍💻", 49, "👩‍💻👩‍💻👩‍💻/medium"],
-    ["👩‍💻👩‍💻👩‍💻", 45, "👩‍💻👩‍💻👩‍💻/m…"],
+    ["👩‍💻👩‍💻👩‍💻", 49, "👩‍💻👩‍💻👩‍💻/me…"],
+    ["👩‍💻👩‍💻👩‍💻", 45, "👩‍💻👩‍💻…"],
   ]) {
     const overrides = { effective_settings: settings({ model }) };
     const text = plain(row(overrides, width));
     assert.ok(visibleWidth(text) <= width, `${model} ${width}: ${text}`);
     assert.ok(text.includes(` · ${expected} · `), `${model} ${width}: ${text}`);
-    assert.doesNotMatch(text, /total/, `${model} ${width}: the total stays dropped`);
     assert.doesNotMatch(text, /\p{Cc}/u, `${model} ${width}: no raw control reaches the dock`);
     // ANSI paint must measure by terminal cells, not escape bytes.
     assert.equal(
@@ -221,7 +196,8 @@ test("a shortened model keeps its floor, and a full model is never padded to it"
   const full = plain(row({ effective_settings: settings({ model: "m", thinking: "medium" }) }, 92));
   assert.match(full, / · m\/medium · /, full);
   assert.doesNotMatch(full, /total/, full);
-  assert.equal(visibleWidth(full), 82, full);
+  assert.ok(visibleWidth(full) <= 92, full);
+  assert.equal(full, full.trimEnd(), "no trailing padding");
 });
 
 // ---- The title: an untagged name keeps the tagged name floor ----

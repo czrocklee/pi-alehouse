@@ -1,4 +1,5 @@
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { shortcutHint } from "../../shared/shortcut-hint.mjs";
 import {
   isOffPreset,
   strengths,
@@ -12,7 +13,7 @@ import {
   type ThinkingLevel,
 } from "../routing.ts";
 import type { PresetPickerOptions } from "./preset-picker.ts";
-import { workerSlotDisplayOrder, type PresetPage } from "./preset-list-page.ts";
+import { workerSlotDisplayOrder, type ActionPart, type PresetPage } from "./preset-list-page.ts";
 
 const defaultEffort = (preset: PresetSnapshot, slot: Strength): Effort =>
   preset.effort_defaults?.[slot] ?? "inherit";
@@ -237,6 +238,16 @@ function editorControls(
   saveShown: boolean,
   windowed: boolean,
 ): void {
+  const theme = page.options.theme;
+  const dim = (text: string) => theme.fg("dim", text);
+  const hint = (label: string, key: string) => {
+    const text = shortcutHint(theme, label, key, { color: "dim" });
+    return { text, label: stripTerminalSequences(text) };
+  };
+  const key = (value: string): ActionPart => ({ text: page.key(value).text });
+  const legend = (label: string, value: string): ActionPart => ({
+    text: page.hint(label, value).text,
+  });
   const navigation = !windowed
     ? ""
     : inner >= 27
@@ -244,40 +255,120 @@ function editorControls(
       : inner >= 14
         ? " · ↑↓/1–5"
         : " ↑↓";
+  const navigationParts = (trimmed = false): ActionPart[] => {
+    if (!windowed) return [];
+    if (inner >= 27) return [{ text: dim(trimmed ? "· " : " · ") }, legend("slot", "↑↓/1–5")];
+    if (inner >= 14) return [{ text: dim(trimmed ? "· " : " · ") }, key("↑↓/1–5")];
+    return [{ text: dim(trimmed ? "" : " ") }, key("↑↓")];
+  };
+  // Windowed and very narrow footers keep the old single-cell R: the full
+  // word would crowd out the Esc control beside it.
+  const reset = windowed || inner < 14 ? page.key("R") : hint("reset", "R");
   if (!saveShown && page.state.canSave("global")) {
     const saving = page.saveLabels(inner, visibleWidth(navigation));
     if (saving) {
-      const hints = [navigation + " · R reset · Esc back", navigation + " · R Esc", navigation];
-      const hint = hints.find((each) => visibleWidth(saving.text) + visibleWidth(each) <= inner);
-      page.addAction(lines, inner, saving.text + (hint ?? ""), [
-        ...saving.actions,
-        ...(hint?.includes("R") ? [{ kind: "reset" as const, label: "R" }] : []),
-        ...(hint?.includes("Esc") ? [{ kind: "back" as const, label: "Esc" }] : []),
-      ]);
+      const hints: ActionPart[][] = [
+        [
+          ...navigationParts(),
+          { text: dim(" · ") },
+          { text: reset.text, action: { kind: "reset", label: reset.label } },
+          { text: dim(" · ") },
+          { text: hint("back", "Esc").text, action: { kind: "back", label: "Esc back" } },
+        ],
+        [
+          ...navigationParts(),
+          { text: dim(" · ") },
+          { text: reset.text, action: { kind: "reset", label: reset.label } },
+          { text: dim(" ") },
+          { text: page.key("Esc").text, action: { kind: "back", label: "Esc" } },
+        ],
+        navigationParts(),
+      ];
+      for (const hintParts of hints) {
+        const composed = page.compose([{ text: saving.text }, ...hintParts]);
+        if (visibleWidth(composed.text) <= inner) {
+          page.addAction(lines, inner, composed.text, [...saving.actions, ...composed.actions]);
+          return;
+        }
+      }
+      page.addAction(lines, inner, saving.text, saving.actions);
       return;
     }
-    const tight = `GW${navigation.trim()}`;
-    if (navigation && page.state.canSave("workspace") && visibleWidth(tight) <= inner) {
-      page.addAction(lines, inner, tight, [
-        { kind: "saveGlobal", label: "G" },
-        { kind: "saveWorkspace", label: "W" },
+    if (navigation && page.state.canSave("workspace")) {
+      const global = hint("G", "G"),
+        workspace = hint("W", "W");
+      const composed = page.compose([
+        { text: global.text, action: { kind: "saveGlobal", label: global.label } },
+        { text: workspace.text, action: { kind: "saveWorkspace", label: workspace.label } },
+        ...navigationParts(true),
       ]);
-      return;
+      if (visibleWidth(composed.text) <= inner) {
+        page.addAction(lines, inner, composed.text, composed.actions);
+        return;
+      }
     }
   }
-  const controls = windowed
+  const back = (label: string): ActionPart => ({
+    text: page.key(label).text,
+    action: { kind: "back", label },
+  });
+  const parts: ActionPart[] = windowed
     ? inner < 14
-      ? " ↑↓ R Esc"
+      ? [
+          { text: dim(" ") },
+          key("↑↓"),
+          { text: dim(" ") },
+          { text: reset.text, action: { kind: "reset", label: reset.label } },
+          { text: dim(" ") },
+          back("Esc"),
+        ]
       : inner < 23
-        ? " ↑↓/1–5 · R Esc"
-        : " ↑↓/1–5 slot · ←→ · R Esc"
+        ? [
+            { text: dim(" ") },
+            key("↑↓/1–5"),
+            { text: dim(" · ") },
+            { text: reset.text, action: { kind: "reset", label: reset.label } },
+            { text: dim(" ") },
+            back("Esc"),
+          ]
+        : [
+            { text: dim(" ") },
+            legend("slot", "↑↓/1–5"),
+            { text: dim(" · ") },
+            key("←→"),
+            { text: dim(" · ") },
+            { text: reset.text, action: { kind: "reset", label: reset.label } },
+            { text: dim(" ") },
+            back("Esc"),
+          ]
     : inner < 14
-      ? " R Esc"
+      ? [
+          { text: dim(" ") },
+          { text: reset.text, action: { kind: "reset", label: reset.label } },
+          { text: dim(" ") },
+          back("Esc"),
+        ]
       : inner < 23
-        ? " R reset · Esc"
-        : " R reset · Enter/Esc back · Alt+S close · ←→ adjust · ↑↓/1–5 slot";
-  page.addAction(lines, inner, controls, [
-    { kind: "reset", label: windowed || inner < 14 ? "R" : "R reset" },
-    { kind: "back", label: windowed || inner < 23 ? "Esc" : "Esc back" },
-  ]);
+        ? [
+            { text: dim(" ") },
+            { text: reset.text, action: { kind: "reset", label: reset.label } },
+            { text: dim(" · ") },
+            back("Esc"),
+          ]
+        : [
+            { text: dim(" ") },
+            { text: reset.text, action: { kind: "reset", label: reset.label } },
+            { text: dim(" · ") },
+            key("Enter"),
+            { text: dim("/") },
+            { text: hint("back", "Esc").text, action: { kind: "back", label: "Esc back" } },
+            { text: dim(" · ") },
+            legend("close", "Alt+S"),
+            { text: dim(" · ") },
+            legend("adjust", "←→"),
+            { text: dim(" · ") },
+            legend("slot", "↑↓/1–5"),
+          ];
+  const composed = page.compose(parts);
+  page.addAction(lines, inner, composed.text, composed.actions);
 }

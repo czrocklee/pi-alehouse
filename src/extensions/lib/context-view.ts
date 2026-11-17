@@ -27,6 +27,7 @@ import {
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
+import { shortcutHint } from "../../shared/shortcut-hint.mjs";
 import { formatTokenCount } from "../../shared/token-format.mjs";
 import type { ContextCategory, ContextItem, ContextSnapshot } from "./context-stats.ts";
 
@@ -742,10 +743,12 @@ export class ContextView {
       canNext = offset + this.viewport < total;
     let x = origin;
     let text = "";
-    const add = (piece: string, action?: () => void, reserve = 0): void => {
+    // `styled` pieces already carry helper fragment colors; wrapping them in
+    // one outer fg would reset the body tone after a nested key.
+    const add = (piece: string, action?: () => void, reserve = 0, styled = false): void => {
       if (x + visibleWidth(piece) > edge - reserve) return;
       const start = x;
-      text += this.fg(action ? "accent" : "dim", piece);
+      text += styled ? piece : this.fg(action ? "accent" : "dim", piece);
       x += visibleWidth(piece);
       if (action) this.target(start, x, y, action);
     };
@@ -761,10 +764,21 @@ export class ContextView {
     );
     if (canPrev) add(prev, () => this.page(-1), reserve + (canNext ? visibleWidth(next) : 0));
     if (canNext) add(next, () => this.page(1), reserve);
+    // Explicit chords and arrows keep their wording; the helper owns the
+    // styling, and the note mnemonic is highlighted inside its own word.
+    const theme = this.options.theme;
     const hint = this.options.isFocused?.()
       ? this.textPage()
-        ? "Esc back"
-        : `${this.rows.length > 1 ? "↑↓ · " : ""}${this.rows.length ? "Enter · " : ""}${this.tabs.length ? "Tab · " : ""}N note · Esc`
+        ? shortcutHint(theme, "back", "Esc", { color: "dim" })
+        : [
+            this.rows.length > 1 ? shortcutHint(theme, "", "↑↓") : "",
+            this.rows.length ? shortcutHint(theme, "", "Enter") : "",
+            this.tabs.length ? shortcutHint(theme, "", "Tab") : "",
+            shortcutHint(theme, "note", "n", { color: "dim" }),
+            shortcutHint(theme, "", "Esc"),
+          ]
+            .filter(Boolean)
+            .join(this.fg("dim", " · "))
       : "";
     const scaling = `raw ${count(snapshot.rawTokens)} → SDK ${count(snapshot.usage.tokens)}`;
     const estimate =
@@ -773,16 +787,22 @@ export class ContextView {
         : this.estimates(snapshot);
     // The entire qualifier is a note-page target, including in narrow layouts.
     // Never truncate figures or infer allocation/completeness from English note.
-    const caveats = [
-      ...(hint ? [` · ${estimate} · ${hint} `] : []),
-      ` · ${estimate} `,
-      ...(hint ? [` · ${this.estimates(snapshot)} · ${hint} `] : []),
-      ` · ${this.estimates(snapshot)} `,
-      compact,
+    const tone: Tone = this.showingNote ? "dim" : "accent";
+    const withHint = (qualifier: string): string =>
+      this.fg(tone, ` · ${qualifier} · `) + hint + this.fg(tone, " ");
+    const caveats: { text: string; styled: boolean }[] = [
+      ...(hint ? [{ text: withHint(estimate), styled: true }] : []),
+      { text: ` · ${estimate} `, styled: false },
+      ...(hint ? [{ text: withHint(this.estimates(snapshot)), styled: true }] : []),
+      { text: ` · ${this.estimates(snapshot)} `, styled: false },
+      { text: compact, styled: false },
     ];
+    const caveat = caveats.find(({ text }) => visibleWidth(text) <= edge - x);
     add(
-      caveats.find((piece) => visibleWidth(piece) <= edge - x) ?? "",
+      caveat?.text ?? "",
       this.showingNote ? undefined : () => this.openNote(),
+      0,
+      caveat?.styled,
     );
     return { text, end: x };
   }

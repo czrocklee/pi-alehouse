@@ -112,6 +112,13 @@ function chromeFixture(
     assert.ok(y >= 0, `missing ${label}`);
     return { x: visibleWidth(screen[y].slice(0, screen[y].indexOf(label))), y };
   };
+  // The normal control is bare `stop`; a confirmation is `confirm stop`.
+  const locateNormalStop = (screen = paint()) => {
+    const y = screen.findIndex((line) => line.includes("stop") && !line.includes("confirm stop"));
+    assert.ok(y >= 0, "missing normal Stop");
+    const at = screen[y].lastIndexOf("stop");
+    return { x: visibleWidth(screen[y].slice(0, at)), y };
+  };
   const send = (x, y, release) => {
     const raw = tui.parseSgrMouseEvent(`\x1b[<0;${x + 1};${y + 1}${release ? "m" : "M"}`);
     assert(raw);
@@ -136,6 +143,7 @@ function chromeFixture(
     stopped,
     paint,
     locate,
+    locateNormalStop,
     send,
     drag,
     click,
@@ -204,9 +212,9 @@ for (const frame of [false, true]) {
 
   test(`rapid Stop clicks still only arm; chrome claiming never confirms (frame=${frame})`, (t) => {
     const h = chromeFixture(t, { frame });
-    const stop = h.locate("[S Stop]");
+    const stop = h.locateNormalStop();
     h.click(stop.x, stop.y);
-    const confirmation = h.locate("[Confirm stop]");
+    const confirmation = h.locate("confirm stop");
     assert.equal(confirmation.y, stop.y);
     assert.deepEqual(h.stopped, [], "the initial click only arms confirmation");
     for (let repeat = 0; repeat < 2; repeat++) {
@@ -217,7 +225,7 @@ for (const frame of [false, true]) {
     assert.deepEqual(h.stopped, [], "double and triple clicks never confirm");
     assert.deepEqual(h.clicks, [1, 2, 3]);
     h.advance(501);
-    const armed = h.locate("[Confirm stop]");
+    const armed = h.locate("confirm stop");
     h.click(armed.x, armed.y);
     assert.deepEqual(h.stopped, ["run-peer0"]);
   });
@@ -284,9 +292,9 @@ for (const frame of [false, true]) {
     const height = h.pane.render(120).length;
     const bodyY = screen.findIndex((line) => /ROW\d+/.test(line));
 
-    // The footer's [⋯] opens the compact actions menu over the bottom of the
+    // The footer's . more opens the compact actions menu over the bottom of the
     // viewport: no pane row and no scroll position changes.
-    const trigger = h.locate("[⋯]");
+    const trigger = h.locate(". more");
     h.click(trigger.x, trigger.y);
     screen = h.paint();
     assert.equal(h.pane.render(120).length, height, "the menu costs no pane row");
@@ -312,7 +320,7 @@ for (const frame of [false, true]) {
       "activating an item closes the menu",
     );
 
-    const reopen = h.locate("[⋯]");
+    const reopen = h.locate(". more");
     h.click(reopen.x, reopen.y);
     assert.ok(
       h.paint().some((line) => line.includes("Collapse tools")),
@@ -325,7 +333,7 @@ for (const frame of [false, true]) {
       "collapsing keeps the body",
     );
 
-    const infoTrigger = h.locate("[⋯]");
+    const infoTrigger = h.locate(". more");
     h.click(infoTrigger.x, infoTrigger.y);
     const info = h.locate("Info");
     h.click(info.x, info.y);
@@ -339,12 +347,12 @@ for (const frame of [false, true]) {
 
     h.pane.handleInput("\x1b[A"); // Scroll one row away from the live tail.
     screen = h.paint();
-    const tailY = screen.findIndex((line) => line.includes("more"));
+    const tailY = screen.findIndex((line) => /↓\s*\d+\s*more/.test(line));
     assert.ok(tailY >= 0, "the tail cue appears after scrolling away");
-    const tailX = visibleWidth(screen[tailY].slice(0, screen[tailY].indexOf("more")));
+    const tailX = visibleWidth(screen[tailY].slice(0, screen[tailY].indexOf("↓")));
     h.click(tailX, tailY);
     assert.ok(
-      !h.paint().some((line) => line.includes("more")),
+      !h.paint().some((line) => /↓\s*\d+\s*more/.test(line)),
       "the tail click jumps back and resumes following",
     );
   });
@@ -392,7 +400,7 @@ test("a stale terminal geometry cannot open the actions menu", (t) => {
 test("a menu press claims without opening; a moved release never opens it", (t) => {
   const h = chromeFixture(t, { frame: false, transcript: true });
   h.paint();
-  const trigger = h.locate("[⋯]");
+  const trigger = h.locate(". more");
   h.send(trigger.x, trigger.y, false);
   assert.ok(
     !h.paint().some((line) => line.includes("Expand tools")),
@@ -404,7 +412,7 @@ test("a menu press claims without opening; a moved release never opens it", (t) 
     !h.paint().some((line) => line.includes("Expand tools")),
     "a moved release never opens the menu",
   );
-  const fresh = h.locate("[⋯]");
+  const fresh = h.locate(". more");
   h.click(fresh.x, fresh.y);
   assert.ok(
     h.paint().some((line) => line.includes("Expand tools")),

@@ -837,7 +837,7 @@ test("passive native overlay never steals focus or advertises keys, including de
   handle = tui.showOverlay(m.view, { width: 96, nonCapturing: true });
   overlays(tui);
   assert.equal(tui.getFocusedComponent(), editor);
-  assert.doesNotMatch(text(m), /↑↓|Enter|Tab|Esc|N note/);
+  assert.doesNotMatch(text(m), /↑↓|Enter|Tab|Esc|\bnote\b/);
   tui.handleTerminalInput("\x1b");
   editor.setText("synthetic draft");
   tui.handleTerminalInput("\r");
@@ -870,7 +870,7 @@ test("passive native overlay never steals focus or advertises keys, including de
   tui.handleTerminalInput("\x1b");
   overlays(tui);
   assert.equal(m.view.detail, undefined);
-  assert.match(text(m), /↑↓.*Enter.*Tab.*N note.*Esc/);
+  assert.match(text(m), /↑↓.*Enter.*Tab.*\bnote\b.*Esc/);
   handle.hide();
   m.view.dispose();
 });

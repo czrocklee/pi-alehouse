@@ -178,9 +178,38 @@ test("widths 80–240 keep painted rows and pagination geometry inside the viewp
       if (pagination) {
         assert.ok(pagination.pages >= 2, `${mode} pages at width ${width}`);
         assert.ok(pagination.row < result.lines.length, `${mode} pagination row at width ${width}`);
-        assert.match(stripTerminalSequences(result.lines[pagination.row]), /\[Next\]/);
+        assert.match(stripTerminalSequences(result.lines[pagination.row]), /\d+\/\d+ Next/);
         if (pagination.next) assert.ok(pagination.next[1] <= width, `${mode} next at ${width}`);
       }
     }
   }
+});
+
+test("click-only pagination paints plain labels and visibleWidth hit ranges under ANSI", () => {
+  const tints = { dim: "\x1b[2m", muted: "\x1b[36m" };
+  const tinted = {
+    fg: (color, text) => `${tints[color] ?? "\x1b[32m"}${text}\x1b[0m`,
+    bold: (text) => text,
+  };
+  const roster = Array.from({ length: 9 }, (_, i) => run(`p${i}`));
+  const options = { width: 80, maxLines: 7, expanded: true, theme: tinted };
+  const first = frame(roster, options);
+  assert.equal(first.pagination.pages, 2);
+  const row = first.lines[first.pagination.row];
+  assert.equal(
+    stripTerminalSequences(row),
+    "Prev 1/2 Next",
+    "click-only controls carry no bracket mnemonics",
+  );
+  assert.ok(row.includes(`${tints.dim}Prev`), "the disabled Prev stays dim");
+  assert.ok(row.includes(`${tints.muted}Next`), "the active Next is muted");
+  assert.equal(first.pagination.prev, undefined, "page 0 paints no Prev hit range");
+  assert.deepEqual(first.pagination.next, [9, 13], "Next starts past the visible prefix");
+  const last = frame(roster, { ...options, page: 1 });
+  const lastRow = last.lines[last.pagination.row];
+  assert.equal(stripTerminalSequences(lastRow), "Prev 2/2 Next");
+  assert.deepEqual(last.pagination.prev, [0, 4], "Prev owns the leading columns");
+  assert.equal(last.pagination.next, undefined, "the last page paints no Next hit range");
+  assert.ok(lastRow.includes(`${tints.muted}Prev`), "the active Prev is muted");
+  assert.ok(lastRow.includes(`${tints.dim}Next`), "the disabled Next stays dim");
 });

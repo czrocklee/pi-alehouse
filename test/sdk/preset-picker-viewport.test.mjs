@@ -257,16 +257,18 @@ test("eight-column compact save controls keep Tab and exact G/W click targets wi
             management,
             ...(withMode ? { delegation: delegationState().option } : {}),
           });
+        // Without trust the compact row drops the non-actionable W key.
+        const saveRow = trusted ? "│GW Tab│" : "│G Tab │";
         const h = make();
         let lines = painted(h.picker, 8),
-          y = lines.findIndex((line) => line === "│GW Tab│");
+          y = lines.findIndex((line) => line === saveRow);
         assert(y > 0, `${rows}, trusted=${trusted}, mode=${withMode}: ${lines.join("\n")}`);
         assert(lines.every((line) => visibleWidth(line) <= 8));
         assert(lines.length <= Math.max(7, Math.floor(rows * 0.8)));
         assert(lines.some((line) => line.includes("›d5")));
         for (let index = 0; index < 4; index++) h.picker.handleInput("\t");
         lines = painted(h.picker, 8);
-        y = lines.findIndex((line) => line === "│GW Tab│");
+        y = lines.findIndex((line) => line === saveRow);
         assert(
           lines.some((line) => line.includes("›d1")),
           "Tab still reaches the easiest slot",
@@ -280,14 +282,12 @@ test("eight-column compact save controls keep Tab and exact G/W click targets wi
 
         const project = make(),
           projectLines = painted(project.picker, 8);
-        const projectY = projectLines.findIndex((line) => line === "│GW Tab│");
-        project.picker.handleMouse(mouse("click", projectLines[projectY].indexOf("W"), projectY));
-        assert.deepEqual(
-          project.result,
-          trusted ? [{ action: "save-default", scope: "workspace" }] : [],
-          "a painted locked W remains inert",
-        );
-        if (!trusted) {
+        const projectY = projectLines.findIndex((line) => line === saveRow);
+        if (trusted) {
+          project.picker.handleMouse(mouse("click", projectLines[projectY].indexOf("W"), projectY));
+          assert.deepEqual(project.result, [{ action: "save-default", scope: "workspace" }]);
+        } else {
+          assert(!projectLines[projectY].includes("W"), "no dead W key is painted");
           project.picker.handleInput("w");
           assert.deepEqual(project.result, []);
           assert.equal(project.picker.isOpen(), true);

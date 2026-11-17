@@ -110,9 +110,9 @@ const agentClick = { ...headingClick, y: 1 };
 const click = (h, event = agentClick) => h.component().handleMouse(event);
 
 function nextClick(lines) {
-  const y = lines.findIndex((line) => line.includes("[Next]"));
+  const y = lines.findIndex((line) => /\d+\/\d+ Next/.test(line));
   assert(y >= 0, "pagination is visible");
-  return { ...headingClick, y, x: lines[y].indexOf("[Next]") };
+  return { ...headingClick, y, x: lines[y].indexOf("Next") };
 }
 
 test("a changed animation tick and actual paint compute one frame without fresh Owner reads", (t) => {

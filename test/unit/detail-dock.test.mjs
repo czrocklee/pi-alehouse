@@ -10,7 +10,7 @@ import { createJiti } from "jiti";
 // The pane's bottom dock is one summary row under a plain separator, and the
 // transcript window begins immediately after the header. There is no constant
 // Transcript/Info/Tools row on either page: I/T stay keys, the footer carries an
-// optional `[⋯]` menu, and Info offers a page-local `← Transcript` link.
+// optional `. more` menu, and Info offers a page-local `← Transcript` link.
 //
 // HOME and the XDG dirs are owned temp paths set before the SDK and source
 // imports: pi-tui reads user configuration while its module initializes. The
@@ -222,19 +222,21 @@ test("the dock carries status and the current-turn clock, the title never does",
   const h = paneFixture(t);
   const lines = h.paint();
   assert.doesNotMatch(lines[0], /running/);
-  assert.match(lines.at(-2), /running/, lines.at(-2));
+  assert.match(lines.at(-2), /^│? {0,2}⠋ · /, lines.at(-2));
+  assert.doesNotMatch(lines.at(-2), /running/, "normal running work is glyph-only");
   assert.match(
     lines.at(-2),
-    /\(1s\)/,
+    /turn 1s/,
     "the current-turn clock rides the dock, floored to whole seconds",
   );
-  // A settled Run keeps its status but has no current turn to time.
+  // A settled Run keeps its status glyph but has no current turn to time.
   h.current.status = "completed";
   h.current.execution_exited = true;
   h.current.turn_elapsed_ms = undefined;
   const settled = h.paint();
-  assert.match(settled.at(-2), /completed/, settled.at(-2));
-  assert.doesNotMatch(settled.at(-2), /\(\s*\d/, settled.at(-2));
+  assert.match(settled.at(-2), /✓ · /, settled.at(-2));
+  assert.doesNotMatch(settled.at(-2), /completed/, "completed is glyph-only too");
+  assert.doesNotMatch(settled.at(-2), /turn \d/, settled.at(-2));
 });
 
 test("Info opens from I with a page-local back link on the first body row", (t) => {
@@ -291,21 +293,21 @@ test("short panes drop the back link before I and Esc stop working", (t) => {
 test("the footer offers the actions menu only outside a draft or confirmation", (t) => {
   const h = paneFixture(t, { onStop() {} });
   const lines = h.paint();
-  assert.ok(lines.at(-1).includes("[⋯]"), lines.at(-1));
-  assert.ok(lines.at(-1).indexOf("[⋯]") < lines.at(-1).indexOf("[M message]"));
-  assert.match(lines.at(-1), /\[S Stop\](?: ─╯)?$/, "Stop stays rightmost");
+  assert.ok(lines.at(-1).includes(". more"), lines.at(-1));
+  assert.ok(lines.at(-1).indexOf(". more") < lines.at(-1).indexOf("message"));
+  assert.match(lines.at(-1), /stop(?: ─╯)?$/, "Stop stays rightmost");
   // A draft owns the keyboard: no menu control, and `.` is draft text.
   h.pane.handleInput("m");
   h.pane.handleInput("a.b");
-  assert.ok(!h.paint().at(-1).includes("[⋯]"), "composing drops the menu control");
+  assert.ok(!h.paint().at(-1).includes(". more"), "composing drops the menu control");
   assert.match(h.paint().at(-2), /› a\.b/, "the dot is text while composing");
   h.pane.handleInput("\x1b");
   // An armed Stop owns the whole row.
   h.paint();
   h.pane.handleInput("s");
-  assert.ok(!h.paint().at(-1).includes("[⋯]"), "confirmation drops the menu control");
+  assert.ok(!h.paint().at(-1).includes(". more"), "confirmation drops the menu control");
   h.pane.handleInput("\x1b");
-  assert.ok(h.paint().at(-1).includes("[⋯]"));
+  assert.ok(h.paint().at(-1).includes(". more"));
 });
 
 test("the actions menu overlays the bottom viewport without height or scroll change", (t) => {
@@ -325,15 +327,15 @@ test("the actions menu overlays the bottom viewport without height or scroll cha
   assert.equal(h.pane.isOpen(), true, "closing the menu never closes the pane");
 });
 
-test("the [⋯] control opens the same menu as the . key", (t) => {
+test("the . more control opens the same menu as the . key", (t) => {
   const h = paneFixture(t);
   const before = h.paint();
-  assert.deepEqual(h.click("[⋯]", before), { handled: true });
+  assert.deepEqual(h.click(". more", before), { handled: true });
   const opened = h.paint();
   assert.notDeepEqual(opened, before);
   assert.equal(opened.length, before.length);
   // The control stays painted and closes it again.
-  assert.deepEqual(h.click("[⋯]", opened), { handled: true });
+  assert.deepEqual(h.click(". more", opened), { handled: true });
   assert.deepEqual(h.paint(), before);
 });
 
@@ -359,8 +361,8 @@ test("arming Stop changes only the final row, never the dock or the window", (t)
       before.slice(0, -1),
       `frame=${frame}: only the edge changes`,
     );
-    assert.match(armed.at(-1), /\[Confirm stop\]/);
-    assert.doesNotMatch(armed.at(-1), /\[S Stop\]/);
+    assert.match(armed.at(-1), /confirm stop/);
+    assert.doesNotMatch(armed.at(-1), /\. more|message/);
   }
 });
 

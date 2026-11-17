@@ -118,7 +118,7 @@ test("DetailPane hover affects only close chrome, never Stop intent or selection
   hover(t, f, f.pane);
   f.pane.handleInput("s");
   const armed = f.pane.render(80);
-  assert(stripTerminalSequences(armed.at(-1)).includes("[Confirm stop]"));
+  assert(stripTerminalSequences(armed.at(-1)).includes("confirm stop"));
   f.tui.handleViewportInput(move());
   const hovered = f.pane.render(80);
   assert.deepEqual(hovered.slice(1), armed.slice(1), "hover does not cancel or confirm Stop");

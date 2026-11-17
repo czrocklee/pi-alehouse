@@ -305,8 +305,8 @@ test("appearance changes retire heading, Agent and page hits without Owner reads
   h.component().handleMouse(headingClick);
   for (const enabled of [true, false, true]) {
     const lines = h.lines(),
-      y = lines.findIndex((line) => line.includes("[Next]")),
-      x = lines[y].indexOf("[Next]");
+      y = lines.findIndex((line) => /\d+\/\d+ Next/.test(line)),
+      x = lines[y].indexOf("Next");
     const held = {
       reads: h.reads(),
       stats: h.statsReads(),
@@ -719,7 +719,7 @@ test("page geometry is paint-local across resizing, page changes and roster shri
   h.component().handleMouse(headingClick);
   const first = h.lines(),
     y = first.length - 1,
-    x = first[y].indexOf("[Next]");
+    x = first[y].indexOf("Next");
   assert.equal(first.length, 6);
   h.tui.terminal.rows = 9;
   assert.equal(
@@ -783,7 +783,8 @@ test("twelve idle residents have a compact heading and a bounded complete static
   assert.equal(h.lines().length, 13);
   assert.match(h.lines()[0], /^▾ Subagents/);
   for (let i = 0; i < idle.length; i++) assert(h.lines()[i + 1].includes(`✓ idle${i} `));
-  assert.doesNotMatch(h.lines().join("\n"), /\[Prev\]|\[Next\]/);
+  // Click-only controls are plain text; the full roster paints no pagination row.
+  assert.doesNotMatch(h.lines().join("\n"), /\d+\/\d+ Next/);
   const held = { renders: h.renders(), reads: h.reads() };
   t.mock.timers.tick(10000);
   assert.deepEqual(
@@ -1502,7 +1503,9 @@ test("a real Controller's automatic release frees capacity but retains clickable
   assert.doesNotMatch(runningPane[0], /running/, "the title carries no lifecycle");
   const runningDock = runningPane.findLastIndex((row) => /^─+$/.test(row));
   assert.ok(runningDock >= 0, "the bottom dock separator is painted");
-  assert.match(runningPane[runningDock + 1], /running/, "the bottom dock carries the live state");
+  // Normal running work leads the dock with its lifecycle glyph alone.
+  assert.match(runningPane[runningDock + 1], /⠋/, "the bottom dock carries the live state");
+  assert.ok(!runningPane[runningDock + 1].includes("running"));
   ports[0].calls[0].done.reject(new SessionUnavailableError("sdk_error", new Error("SDK broke")));
   await ended(controller, run);
   widget.update();

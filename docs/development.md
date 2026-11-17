@@ -48,7 +48,13 @@ cross-bundle border-label preference there, not copied into individual panels.
 The single `ui.borderLabels` switch applies to every Alehouse panel; consumers
 provide label content and derive their viewport/hit offsets from the shared
 bands. Dispose appearance subscriptions with their panels and retire painted
-controls on a live layout change.
+controls on a live layout change. Shortcut presentation is shared through
+`src/shared/shortcut-hint.mjs`: use inline emphasis for matching single-letter
+mnemonics, explicit notation for named keys/chords or unmatched keys, and no
+mnemonic for click-only controls. Supply the actual accepted key, not one
+inferred from a label. Measure styled labels in visible cells and derive click
+ranges from their painted plain projection; ANSI string offsets are not columns.
+Host/native and third-party UI remain outside this appearance convention.
 
 Floating text selection uses the shared `popover-text-selection.mjs` adapter:
 register the exact mounted component, publish its painted body via

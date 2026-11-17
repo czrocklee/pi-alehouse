@@ -78,6 +78,14 @@ function mouseFixture(t, frame, width, { status = "running" } = {}) {
     assert(y >= 0, `missing ${label}`);
     return { x: visibleWidth(screen[y].slice(0, screen[y].indexOf(label))), y };
   };
+  // The normal control is bare `stop`; a confirmation is `confirm stop`.
+  const locateNormalStop = () => {
+    const screen = paint(),
+      y = screen.findIndex((line) => line.includes("stop") && !line.includes("confirm stop"));
+    assert(y >= 0, "missing normal Stop");
+    const at = screen[y].lastIndexOf("stop");
+    return { x: visibleWidth(screen[y].slice(0, at)), y };
+  };
   const send = (x, y, release) => {
     const raw = tui.parseSgrMouseEvent(`\x1b[<0;${x + 1};${y + 1}${release ? "m" : "M"}`);
     assert(raw);
@@ -93,6 +101,7 @@ function mouseFixture(t, frame, width, { status = "running" } = {}) {
     clicks,
     paint,
     locate,
+    locateNormalStop,
     send,
     click,
     advance: (ms) => {
@@ -103,18 +112,18 @@ function mouseFixture(t, frame, width, { status = "running" } = {}) {
 
 for (const frame of [false, true])
   for (const width of [80, 120])
-    for (let offset = 0; offset < "[S Stop]".length; offset++) {
+    for (let offset = 0; offset < "stop".length; offset++) {
       test(`rapid clicks cannot confirm Stop through the SDK (frame=${frame}, width=${width}, offset=${offset})`, (t) => {
         const h = mouseFixture(t, frame, width),
-          initial = h.locate("[S Stop]");
+          initial = h.locateNormalStop();
         const x = initial.x + offset,
           y = initial.y;
         h.click(x, y);
         assert.deepEqual(h.stopped, [], "the initial click only arms confirmation");
-        const confirmation = h.locate("[Confirm stop]");
+        const confirmation = h.locate("confirm stop");
         assert.equal(confirmation.y, y);
         assert(
-          x >= confirmation.x && x < confirmation.x + "[Confirm stop]".length,
+          x >= confirmation.x && x < confirmation.x + "confirm stop".length,
           "the original click lies in the new action",
         );
         h.advance(50);
@@ -149,28 +158,26 @@ for (const frame of [false, true])
 for (const frame of [false, true])
   for (const status of ["running", "queued"])
     for (const fits of [false, true]) {
-      // Only the 50-column confirmation is reserved (+6 framed): the title row,
+      // Only the 48-column confirmation is reserved (+6 framed): the title row,
       // not the footer, keeps the live status, so queued shares the boundary.
-      const minimum = frame ? 56 : 50;
+      const minimum = frame ? 54 : 48;
       const width = minimum - (fits ? 0 : 1);
       test(`SDK footer honors the complete best-effort hint boundary (frame=${frame}, status=${status}, width=${width})`, (t) => {
         const h = mouseFixture(t, frame, width, { status });
         if (!fits) {
-          assert(
-            !h.paint().some((line) => line.includes("[S Stop]") || line.includes("[Confirm stop]")),
-          );
+          assert(!h.paint().some((line) => line.includes("stop") || line.includes("confirm stop")));
           h.pane.handleInput("s");
           h.pane.handleInput("\x13");
           assert.deepEqual(h.stopped, []);
           return;
         }
-        const initial = h.locate("[S Stop]");
-        assert.equal(initial.x + "[S Stop]".length, width - (frame ? 3 : 0));
-        h.click(initial.x + "[S Stop]".length - 1, initial.y);
-        const confirmation = h.locate("[Confirm stop]");
-        assert.equal(confirmation.x + "[Confirm stop]".length, width - (frame ? 3 : 0));
+        const initial = h.locateNormalStop();
+        assert.equal(initial.x + "stop".length, width - (frame ? 3 : 0));
+        h.click(initial.x + "stop".length - 1, initial.y);
+        const confirmation = h.locate("confirm stop");
+        assert.equal(confirmation.x + "confirm stop".length, width - (frame ? 3 : 0));
         assert(
-          h.paint()[confirmation.y].includes("best-effort · Ctrl+S · Esc cancel · [Confirm stop]"),
+          h.paint()[confirmation.y].includes("best-effort · Ctrl+S · Esc cancel · confirm stop"),
         );
         h.advance(501);
         h.click(confirmation.x, confirmation.y);
@@ -182,21 +189,21 @@ for (const frame of [false, true])
   for (const elapsed of [9999, 10000]) {
     test(`real SDK gesture cannot execute an expired unpainted confirmation (frame=${frame}, elapsed=${elapsed})`, (t) => {
       const h = mouseFixture(t, frame, 120),
-        initial = h.locate("[S Stop]");
+        initial = h.locateNormalStop();
       h.click(initial.x, initial.y);
-      const confirmation = h.locate("[Confirm stop]");
+      const confirmation = h.locate("confirm stop");
       h.advance(elapsed);
       // No intervening SDK render: press/release must reject stale action paint.
-      h.click(confirmation.x + "[Confirm stop]".length - 1, confirmation.y);
+      h.click(confirmation.x + "confirm stop".length - 1, confirmation.y);
       assert.deepEqual(h.stopped, elapsed < 10000 ? ["run-a"] : []);
       if (elapsed === 10000) {
-        assert(h.paint().some((line) => line.includes("[S Stop]")));
+        assert(h.paint().some((line) => line.includes("stop") && !line.includes("confirm stop")));
         h.pane.handleInput("\x13");
         assert.deepEqual(h.stopped, []);
-        const fresh = h.locate("[S Stop]");
+        const fresh = h.locateNormalStop();
         h.advance(501);
         h.click(fresh.x, fresh.y);
-        const armed = h.locate("[Confirm stop]");
+        const armed = h.locate("confirm stop");
         h.advance(501);
         h.click(armed.x, armed.y);
         assert.deepEqual(
@@ -211,28 +218,24 @@ for (const frame of [false, true])
 for (const frame of [false, true]) {
   test(`a held or moved Stop press does not arm confirmation (frame=${frame})`, (t) => {
     const h = mouseFixture(t, frame, 120),
-      { x, y } = h.locate("[S Stop]");
+      { x, y } = h.locateNormalStop();
     assert.equal(
       h.pane.handleMouse({ type: "press", button: "left", x: x - 1, y }),
       undefined,
       "text beside the button retains ordinary selection behavior",
     );
     h.send(x, y, false);
-    assert(
-      h.paint().some((line) => line.includes("[S Stop]")),
-      "press alone does not arm",
-    );
+    const normalStop = (lines) =>
+      lines.some((line) => line.includes("stop") && !line.includes("confirm stop"));
+    assert(normalStop(h.paint()), "press alone does not arm");
     h.send(x + 1, y, true);
-    assert(
-      h.paint().some((line) => line.includes("[S Stop]")),
-      "a moved release does not arm",
-    );
+    assert(normalStop(h.paint()), "a moved release does not arm");
     assert.deepEqual(h.clicks, []);
     assert.deepEqual(h.stopped, []);
     h.advance(501);
     h.click(x, y);
     assert(
-      h.paint().some((line) => line.includes("[Confirm stop]")),
+      h.paint().some((line) => line.includes("confirm stop")),
       "a later unmoved gesture still works",
     );
   });
@@ -241,7 +244,7 @@ for (const frame of [false, true]) {
     const h = mouseFixture(t, frame, 120);
     h.paint();
     h.pane.handleInput("s");
-    const { x, y } = h.locate("[Confirm stop]");
+    const { x, y } = h.locate("confirm stop");
     h.click(x, y);
     assert.deepEqual(h.stopped, ["run-a"]);
     h.paint();

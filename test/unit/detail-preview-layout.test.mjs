@@ -524,7 +524,7 @@ for (const frame of [false, true])
     h.pane.render(width);
     h.pane.handleInput("\x1b[5~");
     const before = h.pane.render(width);
-    assert.match(before.at(-1), /\[S Stop\]/);
+    assert.match(before.at(-1), /stop/);
     h.pane.handleInput("s");
     const armed = h.pane.render(width);
     assert.deepEqual(armed.slice(0, -1), before.slice(0, -1));
@@ -532,7 +532,7 @@ for (const frame of [false, true])
     const changed = h.pane.render(width);
     assert.equal(changed.length, armed.length);
     assert.deepEqual(body(changed), body(armed));
-    assert.match(changed.at(-1), /best-effort · Ctrl\+S · Esc cancel · \[Confirm stop\]/);
+    assert.match(changed.at(-1), /best-effort · Ctrl\+S · Esc cancel · confirm stop/);
     h.pane.handleInput("\x13");
     h.pane.handleInput("\x13");
     assert.deepEqual(h.stopped, ["run-a"], "only the originally painted target is cancelled, once");

@@ -96,7 +96,7 @@ test("off keeps a clean frame, moving both label bands and close inside", (t) =>
   assert.match(lines[2], /^├─+┤$/);
   assert.match(lines.at(-3), /^├─+┤$/);
   assert.match(lines[1], /amber.*Inspect.*#1/);
-  assert.match(lines.at(-2), /amber.*birch.*\[S Stop\]/);
+  assert.match(lines.at(-2), /amber.*birch.*stop/);
   assert.doesNotMatch(lines.at(-2), /─/);
   assert.deepEqual(h.locate("✕", lines), { x: 116, y: 1 });
   assert.ok(lines.every((line) => visibleWidth(line) === 120));
@@ -130,11 +130,11 @@ test("a narrow empty footer keeps its reserved inset band without hidden control
 test("the shared switch updates a mounted pane and retires old command evidence", (t) => {
   const h = fixture(t, { enabled: true });
   const before = h.paint();
-  const stop = h.locate("[S Stop]", before);
+  const stop = h.locate("stop", before);
   const close = h.locate("✕", before);
   assert.equal(close.y, 0);
   h.pane.handleInput("s");
-  assert.match(h.paint().at(-1), /Confirm stop/);
+  assert.match(h.paint().at(-1), /confirm stop/);
   setBorderLabelsEnabled(false);
   h.click(close);
   h.click(stop);
@@ -143,9 +143,9 @@ test("the shared switch updates a mounted pane and retires old command evidence"
   assert.deepEqual(h.closes, []);
   const after = h.paint();
   assert.match(after[0], /^╭─+╮$/);
-  assert.doesNotMatch(after.at(-2), /Confirm stop/);
-  h.click(h.locate("[S Stop]", after));
-  const confirm = h.locate("[Confirm stop]");
+  assert.doesNotMatch(after.at(-2), /confirm stop/);
+  h.click(h.locate("stop", after));
+  const confirm = h.locate("confirm stop");
   assert.equal(confirm.y, h.paint().length - 2);
   h.click(confirm);
   assert.deepEqual(h.stops, ["run-amber"]);
@@ -153,7 +153,7 @@ test("the shared switch updates a mounted pane and retires old command evidence"
 
 test("off menu items and the Info return link follow the shared body origin", (t) => {
   const h = fixture(t);
-  h.click(h.locate("[⋯]"));
+  h.click(h.locate(". more"));
   h.click(h.locate("Info"));
   const lines = h.paint();
   const back = h.locate("← Transcript", lines);

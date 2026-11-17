@@ -88,8 +88,12 @@ function fixture(t, { rows = 40 } = {}) {
   paint();
   pane.handleInput("\x1b[H");
   const initial = paint();
-  assert.doesNotMatch(initial.at(-1), /\[M/, "the hint is omitted, not an unavailable geometry");
-  assert.match(initial.at(-1), /\[S Stop\]$/);
+  assert.doesNotMatch(
+    initial.at(-1),
+    /\bmessage\b|\bmsg\b/,
+    "the hint is omitted, not an unavailable geometry",
+  );
+  assert.match(initial.at(-1), /\bstop$/);
   return {
     pane,
     views,
@@ -159,13 +163,13 @@ test("Esc unwinds confirmation, draft, Info and pane as separate layers", (t) =>
   type(f.pane, "Held draft");
   const composing = f.paint();
   const y = composing.length - 1;
-  const index = composing[y].indexOf("[Stop]");
+  const index = composing[y].indexOf("stop");
   assert(index >= 0);
   const x = visibleWidth(composing[y].slice(0, index));
   assert.deepEqual(f.pane.handleMouse({ type: "click", button: "left", x, y, clickCount: 1 }), {
     handled: true,
   });
-  assert.match(f.paint().at(-1), /\[Confirm stop\]$/);
+  assert.match(f.paint().at(-1), /confirm stop$/);
   f.pane.handleInput("\x1b");
   assert.match(f.paint().at(-2), /› Held draft/);
   assert(f.pane.isOpen());

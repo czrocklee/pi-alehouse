@@ -117,7 +117,7 @@ export class PreferencesControls {
       `${description}\n\n${store.paths[scope]}\n` +
         "Only explicit changes are queued; the file is created or updated on normal exit (or Save now). " +
         (scope === "workspace"
-          ? "This is a project file: it may appear in Git and be shared if committed. Pi may ask for project trust next time. Saving does not grant trust."
+          ? "This is a workspace file: it may appear in Git and be shared if committed. Pi may ask for project trust next time. Saving does not grant trust."
           : "Workspace overrides can still replace these defaults. Existing sessions keep their recorded choices."),
     );
     this.assertLive();
