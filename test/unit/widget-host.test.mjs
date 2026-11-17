@@ -54,7 +54,7 @@ for (const [waiting_for, label] of [
 
 test("resident summaries keep disclosure stable and retain released diagnostic clicks", (t) => {
   const idle = viewOf("idle", "completed");
-  const failed = { ...viewOf("released", "failed"), resident: false };
+  const failed = { ...viewOf("released", "failed"), enqueue_sequence: 1, resident: false };
   const h = mounted([idle, failed]),
     opened = [];
   t.after(() => h.widget.dispose());
@@ -111,7 +111,7 @@ test("resident summaries keep disclosure stable and retain released diagnostic c
   assert.equal(compact, "▸ Subagents (full)");
 });
 
-test("priority reordering opens the painted immutable identity and retires earlier coordinates", (t) => {
+test("recency reordering opens the painted immutable identity and retires earlier coordinates", (t) => {
   const views = [
     { ...viewOf("done", "completed"), name: "same-label" },
     { ...viewOf("busy", "running"), name: "same-label" },
@@ -125,27 +125,85 @@ test("priority reordering opens the painted immutable identity and retires earli
   h.widget.onOpen((id) => opened.push(id));
   h.widget.wake();
   const compact = h.lines();
-  assert.match(compact[1], /needs input/);
+  assert.match(compact[1], /^├─ ✓ same-label/);
   assert.match(compact[2], /^├─ [\u2800-\u28ff] same-label/u);
   h.component().handleMouse({ ...headingClick, y: 1 });
   h.component().handleMouse({ ...headingClick, y: 2 });
-  assert.deepEqual(opened, ["question", "busy"]);
+  assert.deepEqual(opened, ["done", "busy"]);
   h.component().handleMouse(headingClick);
   assert.equal(h.component().handleMouse({ ...headingClick, y: 1 }), undefined);
   const expanded = h.lines();
   const queued = expanded.findIndex((line) => /◦ same-label/.test(line));
   assert(queued > 2);
   h.component().handleMouse({ ...headingClick, y: queued });
-  assert.deepEqual(opened, ["question", "busy", "queued"]);
-  h.set(views.map((view) => (view.agent_id === "done" ? { ...view, pending_messages: 1 } : view)));
+  assert.deepEqual(opened, ["done", "busy", "queued"]);
+  h.set(
+    views.map((view) =>
+      view.agent_id === "failed" ? { ...view, run_id: "failed-2", enqueue_sequence: 1 } : view,
+    ),
+  );
   h.widget.wake();
   assert.equal(h.component().handleMouse({ ...headingClick, y: 1 }), undefined);
   const reordered = h.lines();
-  assert.match(reordered[1], /needs input/);
-  assert.match(reordered[2], /^├─ [\u2800-\u28ff] same-label/u);
-  assert.match(reordered[4], /1 pending/);
-  h.component().handleMouse({ ...headingClick, y: 4 });
-  assert.deepEqual(opened, ["question", "busy", "queued", "done"]);
+  assert.match(reordered[1], /^├─ ✗ same-label/);
+  h.component().handleMouse({ ...headingClick, y: 1 });
+  assert.deepEqual(opened, ["done", "busy", "queued", "failed"]);
+});
+
+test("a reserved older question opens its painted Agent identity", (t) => {
+  const views = [
+    { ...viewOf("question-id", "needs_input"), name: "old-question", enqueue_sequence: 1 },
+    ...Array.from({ length: 5 }, (_, i) => ({
+      ...viewOf(`done-${i}`, "completed"),
+      name: `done${i}`,
+      enqueue_sequence: i + 2,
+    })),
+  ];
+  const h = mounted(views);
+  const opened = [];
+  h.tui.terminal.rows = 18;
+  t.after(() => h.widget.dispose());
+  h.widget.onOpen((id) => opened.push(id));
+  h.widget.wake();
+  const lines = h.lines();
+  const y = lines.findIndex((line) => line.includes("old-question"));
+  assert(y > 0, "the older question is painted despite newer finished rows");
+  assert.match(lines.at(-1), /\+2 more \(2 finished\)$/);
+  assert.deepEqual(h.component().handleMouse({ ...headingClick, y }), { handled: true });
+  assert.deepEqual(opened, ["question-id"]);
+});
+
+test("mounted reservation uses the current question, not a newer cleared outcome", (t) => {
+  const pending = {
+    ...viewOf("pending-id", "needs_input"),
+    name: "pending-question",
+    enqueue_sequence: 1,
+    outcome: { status: "needs_input", question: "Pending?" },
+  };
+  const live = { ...viewOf("live-id", "running"), name: "live", enqueue_sequence: 2 };
+  const cleared = {
+    ...viewOf("cleared-id", "needs_input"),
+    name: "cleared-question",
+    enqueue_sequence: 3,
+    has_question: false,
+    outcome: { status: "needs_input", question: "Already cleared?" },
+  };
+  const h = mounted([pending, live, cleared]);
+  const opened = [];
+  h.tui.terminal.rows = 15;
+  t.after(() => h.widget.dispose());
+  h.widget.onOpen((id) => opened.push(id));
+  h.widget.wake();
+  let lines = h.lines();
+  assert.match(lines[1], /pending-question/);
+  assert.match(lines[2], /\+2 more \(1 needs input, 1 running\)$/);
+  assert.deepEqual(h.component().handleMouse({ ...headingClick, y: 1 }), { handled: true });
+  assert.deepEqual(opened, ["pending-id"]);
+  h.set([{ ...pending, has_question: false }, live, cleared]);
+  h.widget.wake();
+  lines = h.lines();
+  assert.match(lines[1], /live/);
+  assert.match(lines[2], /\+2 more \(2 needs input\)$/);
 });
 
 test("resuming updates per-Agent prices without adding spend to the heading", (t) => {
@@ -1339,7 +1397,7 @@ test("expansion does not resurrect released successes or extend released failure
   assert.deepEqual(h.widget.agents(), []);
 });
 
-test("a priority released failure expires without reviving its old hit or extending linger", (t) => {
+test("a recent released failure expires without reviving its old hit or extending linger", (t) => {
   const idle = Array.from({ length: 12 }, (_, i) => ({
     ...viewOf(`id-${i}`, "completed"),
     name: `idle${i}`,
@@ -1349,6 +1407,7 @@ test("a priority released failure expires without reviving its old hit or extend
         ...idle,
         {
           ...viewOf("failed", "failed"),
+          enqueue_sequence: 1,
           resident: false,
           outcome: { status: "failed", error: "expired diagnostic" },
         },
@@ -1368,7 +1427,7 @@ test("a priority released failure expires without reviving its old hit or extend
   assert.doesNotMatch(
     h.lines().join("\n"),
     /expired diagnostic/,
-    "priority diagnostics are on the first page",
+    "the most recently submitted diagnostic is on the first page",
   );
   pageClick(h, "Prev");
   assert.match(h.lines()[1], /expired diagnostic/);

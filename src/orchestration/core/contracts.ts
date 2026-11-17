@@ -163,6 +163,8 @@ export interface RunView {
   pending_messages: number;
   dispatch?: Dispatch;
   dispatch_notes?: string[];
+  /** Immutable Owner-local Run admission order; never a model address. */
+  enqueue_sequence: number;
   elapsed_ms: number;
   execution_elapsed_ms?: number;
   turn_elapsed_ms?: number;

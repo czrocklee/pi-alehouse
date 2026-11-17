@@ -696,13 +696,24 @@ them; absent context observations remain a bare right-aligned dash.
 Optional model/ordinary metrics yield before essential facts, bounded causes and
 the preferred title allocation; the 24-cell title preference excludes the suffix
 width. Tight rows retain compact facts in the trailing task field, never a separate
-attention prefix. Questions precede live execution, then attention/queued/recent
-failed and finished tasks, stably
-within each group. Only unanswered questions and pending messages bypass normal
-finished-row linger; historical warnings and reached turn limits do not keep old
-rows permanently visible. Released diagnostics still expire. Compact overflow
-reserves a live identity when header space permits, drops previews before Agent
-identities, and counts hidden attention. Compact columns use only individually
+attention prefix. Compact and expanded rosters follow each Agent's latest Run
+admission, newest first, by the Owner's monotonic enqueue sequence, independent
+of wall-clock ties or rollback. New Runs can move Agents there; output, elapsed
+time and lifecycle changes do not. Detail tabs and left/right navigation retain
+Agent creation order even on reuse, with selection kept by Agent ID. Status and
+attention are markers rather than sorting groups; the model-facing `agent_list`
+also keeps Agent creation order. Needs-input Runs and pending messages bypass
+normal finished-row linger, even if a historical needs-input status outlives the
+current question during release. Historical warnings and reached turn limits do
+not keep old rows permanently visible. Released diagnostics still expire.
+Within the compact identity budget, one unanswered question is reserved first,
+then one live identity if a second slot fits; the rest use MRU membership.
+Selected rows retain MRU order. Previews yield before identities. Overflow
+counts each hidden Agent in one category: needs input, live, failed, attention,
+queued or finished. Needs-input, live and failed categories precede attention,
+which precedes queued and finished. These totals do not independently count every
+hidden warning or pending message. With no identity
+slots, only the bounded heading/overflow summaries remain. Compact columns use only individually
 painted Agent headers: neither collapsed queued records nor overflow-only records
 contribute columns or padding. Expanded pages share their complete eligible
 roster's geometry; resident heading counts retain their full scope. Pending,

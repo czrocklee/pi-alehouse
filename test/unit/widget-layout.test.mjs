@@ -398,6 +398,7 @@ for (const beerMugs of [false, true])
 
 test("real SDK diagnostic rows stay clickable without inflating resident summary counts", (t) => {
   const h = layoutFixture(t, 60, false);
+  // Fixture views all have sequence 0, so their supplied order breaks the artificial tie.
   h.views.push({ ...idle(12), status: "failed", resident: false, name: "released diagnostic" });
   h.widget.wake();
   let frame = h.paint(),
@@ -419,14 +420,7 @@ test("real SDK diagnostic rows stay clickable without inflating resident summary
     next = lines.findIndex((line) => line.includes("[Next]"));
   assert.equal(arrow, 0);
   assert(next >= 0);
-  assert.deepEqual(
-    h.pointer(
-      frame,
-      lines.findIndex((line) => line.includes("✗ released diagnostic")),
-    ),
-    { handled: true },
-    "expanded priority diagnostics remain on the first page",
-  );
+  assert(!lines.some((line) => line.includes("released diagnostic")));
   assert.deepEqual(h.pointer(frame, next, lines[next].indexOf("[Next]")), {
     handled: true,
     render: true,
@@ -435,9 +429,17 @@ test("real SDK diagnostic rows stay clickable without inflating resident summary
   lines = h.linesOf(frame);
   assert.equal(lines[heading].indexOf("▾"), arrow);
   assert.equal(lines[heading], "▾ Subagents (full) · ✓12");
+  assert.deepEqual(
+    h.pointer(
+      frame,
+      lines.findIndex((line) => line.includes("✗ released diagnostic")),
+    ),
+    { handled: true },
+    "the expanded diagnostic remains clickable on its recency-order page",
+  );
   assert(
-    !lines.some((line) => line.includes("released diagnostic")),
-    "the later page contains ordinary terminal rows",
+    lines.some((line) => line.includes("released diagnostic")),
+    "the later page also contains the retained diagnostic",
   );
   assert.deepEqual(
     h.pointer(

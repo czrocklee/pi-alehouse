@@ -24,7 +24,7 @@ test("an empty, unblocked owner renders nothing at all", () => {
   );
 });
 
-test("the body is ordered running, queued, ordinary terminal and the tree closes exactly once", () => {
+test("the body follows input order and the tree closes exactly once", () => {
   const lines = render(
     [
       run("q", { status: "queued" }),
@@ -34,9 +34,9 @@ test("the body is ordered running, queued, ordinary terminal and the tree closes
     { owner: { ...owner, resident: 3 } },
   );
   assert.equal(lines[0], "▸ Subagents · ▹1 ◦1 ✓1");
-  assert.match(lines[1], /^├─ ⠋ worker/);
-  assert.match(lines[2], /^│ {4}⎿ {2}0\.9s thinking…$/);
-  assert.match(lines[3], /^├─ ◦ 1 queued$/);
+  assert.match(lines[1], /^├─ ◦ 1 queued$/);
+  assert.match(lines[2], /^├─ ⠋ worker/);
+  assert.match(lines[3], /^│ {4}⎿ {2}0\.9s thinking…$/);
   assert.match(lines[4], /^└─ ✓ done/);
   assert.equal(lines.filter((line) => line.startsWith("└─")).length, 1);
 });
@@ -98,7 +98,7 @@ test("optional activity yields when the complete compact roster can fit", () => 
   assert.doesNotMatch(lines.join("\n"), /\+\d+ more/);
 });
 
-test("compact and expanded rosters share a stable question, live, attention, queued, failure, finished order", () => {
+test("compact and expanded rosters preserve input order across lifecycle states", () => {
   const rows = [
     run("done", { status: "completed" }),
     run("busy-a", { status: "running" }),
@@ -110,7 +110,6 @@ test("compact and expanded rosters share a stable question, live, attention, que
     run("pending", { status: "completed", pending_messages: 2 }),
     run("cancelled", { status: "cancelled" }),
   ];
-  const expected = ["question", "busy-a", "busy-b", "warned", "pending"];
   for (const expanded of [false, true]) {
     const seen = [];
     for (let page = 0, pages = 1; page < pages; page++) {
@@ -129,19 +128,19 @@ test("compact and expanded rosters share a stable question, live, attention, que
       for (const id of frame.hits.filter(Boolean)) if (!seen.includes(id)) seen.push(id);
       if (!expanded) {
         const queued = frame.lines.findIndex((line) => /1 queued$/.test(line));
-        const terminal = frame.hits.indexOf("done");
-        assert(queued > frame.hits.lastIndexOf("busy-b"));
-        assert(terminal > queued);
+        const failed = frame.hits.indexOf("failed");
+        const warned = frame.hits.indexOf("warned");
+        assert(failed >= 0);
+        assert(warned >= 0);
+        assert(queued > failed);
+        assert(queued < warned);
         assert.equal(frame.hits[queued], undefined, "the compact queued count stays inert");
       }
     }
-    assert.deepEqual(seen, [
-      ...expected,
-      ...(expanded ? ["queued"] : []),
-      "failed",
-      "done",
-      "cancelled",
-    ]);
+    assert.deepEqual(
+      seen,
+      rows.filter((row) => expanded || row.agent_id !== "queued").map((row) => row.agent_id),
+    );
   }
 });
 
@@ -164,7 +163,7 @@ test("only questions and pending alerts bypass terminal ageing; queued alerts re
     spinnerFrame: 0,
     shouldShowFinished: () => false,
   });
-  assert.deepEqual(frame.hits.filter(Boolean), ["asked", "pending", "queued-alert"]);
+  assert.deepEqual(frame.hits.filter(Boolean), ["pending", "asked", "queued-alert"]);
   assert.doesNotMatch(frame.lines.slice(1).join("\n"), /run warning|turn limit/);
   assert.match(frame.lines[frame.hits.indexOf("queued-alert")], /◦ alerted .*1 pending/);
   const aggregate = frame.lines.findIndex((line) => /1 queued$/.test(line));
@@ -172,7 +171,7 @@ test("only questions and pending alerts bypass terminal ageing; queued alerts re
   assert.equal(frame.hits[aggregate], undefined);
 });
 
-test("overflow sacrifices previews before attention or active identities and accounts for every hidden row", () => {
+test("overflow sacrifices previews before recent identities and accounts for every hidden row", () => {
   const rows = [
     run("done", { status: "completed" }),
     run("busy-a", { status: "running" }),
@@ -191,9 +190,9 @@ test("overflow sacrifices previews before attention or active identities and acc
     spinnerFrame: 0,
     shouldShowFinished: () => true,
   });
-  assert.deepEqual(frame.hits.filter(Boolean), ["question", "busy-a", "busy-b", "busy-c"]);
+  assert.deepEqual(frame.hits.filter(Boolean), ["done", "busy-a", "question", "busy-b"]);
   assert(frame.lines.some((line) => /1 queued$/.test(line)));
-  assert.match(frame.lines.at(-1), /\+2 more \(1 failed, 1 finished\)$/);
+  assert.match(frame.lines.at(-1), /\+2 more \(1 running, 1 failed\)$/);
   assert.match(frame.lines[0], /\?1 ▹3 ◦1 ✓1 ✗1/);
   assert.equal(frame.hits.at(-1), undefined);
   assert.equal(frame.lines.length, 7);
@@ -218,11 +217,95 @@ test("overflow labels hidden questions, failures and attention rather than calli
     spinnerFrame: 0,
     shouldShowFinished: () => true,
   });
-  assert.deepEqual(frame.hits, [undefined, "busy", undefined]);
+  assert.deepEqual(frame.hits, [undefined, "asked-a", undefined]);
   assert.match(
     frame.lines[2],
-    /\+6 more \(2 needs input, 1 attention, 1 queued, 1 failed, 1 finished\)$/,
+    /\+6 more \(1 needs input, 1 running, 1 attention, 1 queued, 1 failed, 1 finished\)$/,
   );
+});
+
+test("compact overflow reserves the most recent question and live identity within the MRU order", () => {
+  const done = (id) => run(id, { status: "completed" });
+  const question = (id) => run(id, { status: "needs_input", question: true });
+  const options = {
+    owner,
+    theme,
+    width: 160,
+    spinnerFrame: 0,
+    shouldShowFinished: () => true,
+  };
+  const finishes = Array.from({ length: 5 }, (_, i) => done(`done-${i}`));
+  for (const disclosure of [false, true]) {
+    const frame = renderWidget({
+      ...options,
+      runs: [...finishes, question("old-question")],
+      maxLines: 6,
+      disclosure,
+    });
+    assert.deepEqual(frame.hits.filter(Boolean), ["done-0", "done-1", "done-2", "old-question"]);
+    assert.match(frame.lines.at(-1), /\+2 more \(2 finished\)$/);
+    assert.equal(frame.hits.at(-1), undefined);
+  }
+  const rows = [
+    done("newest"),
+    run("live", { status: "running" }),
+    done("middle"),
+    question("q-new"),
+    question("q-old"),
+    done("oldest"),
+  ];
+  const both = renderWidget({ ...options, runs: rows, maxLines: 5 });
+  assert.deepEqual(both.hits.filter(Boolean), ["newest", "live", "q-new"]);
+  assert.match(both.lines.at(-1), /\+3 more \(1 needs input, 2 finished\)$/);
+  const two = renderWidget({ ...options, runs: rows, maxLines: 4 });
+  assert.deepEqual(two.hits.filter(Boolean), ["live", "q-new"]);
+  assert.match(two.lines.at(-1), /\+4 more \(1 needs input, 3 finished\)$/);
+  const single = renderWidget({ ...options, runs: rows, maxLines: 3 });
+  assert.deepEqual(single.hits, [undefined, "q-new", undefined]);
+  assert.match(single.lines.at(-1), /\+5 more \(1 needs input, 1 running, 3 finished\)$/);
+  const liveOnly = renderWidget({
+    ...options,
+    runs: [done("a"), done("b"), done("c"), run("live", { status: "running" })],
+    maxLines: 3,
+  });
+  assert.deepEqual(liveOnly.hits, [undefined, "live", undefined]);
+  assert.match(liveOnly.lines.at(-1), /\+3 more \(3 finished\)$/);
+  const zero = renderWidget({ ...options, runs: rows, maxLines: 2 });
+  assert.deepEqual(zero.hits, [undefined, undefined]);
+  assert.match(zero.lines.at(-1), /\+6 more \(2 needs input, 1 running, 3 finished\)$/);
+});
+
+test("a cleared historical question cannot take the pending question's reserved slot", () => {
+  const frame = renderWidget({
+    runs: [
+      run("cleared", { status: "needs_input", question: true, has_question: false }),
+      run("live", { status: "running" }),
+      run("pending", { status: "needs_input", question: true }),
+    ],
+    owner,
+    theme,
+    width: 160,
+    maxLines: 3,
+    spinnerFrame: 0,
+    shouldShowFinished: () => true,
+  });
+  assert.deepEqual(frame.hits, [undefined, "pending", undefined]);
+  assert.match(frame.lines.at(-1), /\+2 more \(1 needs input, 1 running\)$/);
+  const noPending = renderWidget({
+    runs: [
+      run("cleared", { status: "needs_input", question: true, has_question: false }),
+      run("live", { status: "running" }),
+      run("done", { status: "completed" }),
+    ],
+    owner,
+    theme,
+    width: 160,
+    maxLines: 3,
+    spinnerFrame: 0,
+    shouldShowFinished: () => true,
+  });
+  assert.deepEqual(noPending.hits, [undefined, "live", undefined]);
+  assert.match(noPending.lines.at(-1), /\+2 more \(1 needs input, 1 finished\)$/);
 });
 
 test("40-column overflow preserves every hidden attention category without ellipsis", () => {
@@ -608,7 +691,7 @@ test("expanded rendering pages every projected Agent within the bounded budget",
     assert.doesNotMatch(frame.lines.join("\n"), /\+\d+ more/);
     assert(frame.lines.every((line) => visibleWidth(line) <= 120));
   }
-  assert.deepEqual([...seen], ["busy", ...finished.map((row) => row.agent_id)]);
+  assert.deepEqual([...seen], [...finished.map((row) => row.agent_id), "busy"]);
 });
 
 test("expanded queued Agents each have their own clickable identity instead of an aggregate", () => {
@@ -722,7 +805,7 @@ test("the current-turn clock prefixes activity, while total duration remains in 
   const queued = render([
     run("a", { status: "queued", name: "solo" }),
     run("b", { status: "running" }),
-  ])[3];
+  ])[1];
   assert.match(queued, /1 queued$/);
 });
 

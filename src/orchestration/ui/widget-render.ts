@@ -23,7 +23,7 @@ const ROW_ELLIPSIS = "…";
 const attention = (run: WidgetRun): boolean =>
   run.has_run_warnings || run.pending_messages > 0 || run.limit_reached;
 const live = (run: WidgetRun): boolean => active(run) && run.status !== "queued";
-// One order and vocabulary for grouping, allocation and truthful overflow counts.
+// Fixed vocabulary for truthful overflow counts, not Agent display order.
 const ROW_STATES = [
   { state: "needs input", short: "input", signal: "?" },
   { state: "running", short: "run" },
@@ -41,9 +41,6 @@ function stateOf(run: WidgetRun): RowState {
   if (attention(run)) return "attention";
   return run.status === "queued" ? "queued" : "finished";
 }
-const priority = (state: RowState): number =>
-  ROW_STATES.findIndex((entry) => entry.state === state);
-
 export function renderFinishedLine(
   run: WidgetRun,
   theme: Theme,
@@ -165,6 +162,7 @@ export interface WidgetFrame {
 
 /** Pure body rendering. Returns the rows to display, already clipped to width. */
 export function renderWidget(params: {
+  /** Latest Run admission first, by the Owner's immutable enqueue sequence. */
   runs: readonly WidgetRun[];
   owner: WidgetOwner;
   spinnerFrame: number;
@@ -205,8 +203,7 @@ export function renderWidget(params: {
         run.pending_messages > 0 ||
         shouldShowFinished(run.agent_id, run.status),
     )
-    .map((run): RowGroup => ({ run, state: stateOf(run), count: 1, activity: live(run) }))
-    .toSorted((a, b) => priority(a.state) - priority(b.state));
+    .map((run): RowGroup => ({ run, state: stateOf(run), count: 1, activity: live(run) }));
   const hasActive = runs.some(active);
   // A full roster is itself the news: the next delegation will be refused, and
   // the heading carrying "(full)" is the only place that is visible.
@@ -422,20 +419,28 @@ function fitGroups(
   if (maxBody <= 0) return { shown: [], hidden: [] };
   const overflow = groups.length > maxBody;
   const slots = Math.max(0, maxBody - (overflow ? 1 : 0));
-  const selected = groups.slice(0, slots);
-  // Even many unanswered questions must not hide every executing identity when
-  // there is room for a header and an honest hidden-state summary.
-  if (slots > 0 && !selected.some((group) => group.activity)) {
-    const executing = groups.find((group) => group.activity);
-    if (executing) selected[selected.length - 1] = executing;
+  // Newer ordinary rows must not hide all blocked questions or live work.
+  // A question wins the only slot; with two slots both identities are reserved.
+  const reserved = [
+    groups.find((group) => group.state === "needs input" && group.run?.has_question),
+    groups.find((group) => group.activity),
+  ]
+    .filter((group): group is RowGroup => group !== undefined)
+    .slice(0, slots);
+  const selected = new Set(reserved);
+  for (const group of groups) {
+    if (selected.size >= slots) break;
+    selected.add(group);
   }
-  const selectedSet = new Set(selected);
-  const hidden = groups.filter((group) => !selectedSet.has(group));
-  let activityRoom = maxBody - selected.length - (hidden.length ? 1 : 0);
-  const shown = selected.map((group) => ({
-    group,
-    activity: group.activity && activityRoom-- > 0,
-  }));
+  const hidden = groups.filter((group) => !selected.has(group));
+  let activityRoom = maxBody - selected.size - (hidden.length ? 1 : 0);
+  // Reservation changes membership, never the MRU order of the painted rows.
+  const shown = groups
+    .filter((group) => selected.has(group))
+    .map((group) => ({
+      group,
+      activity: group.activity && activityRoom-- > 0,
+    }));
   return { shown, hidden };
 }
 

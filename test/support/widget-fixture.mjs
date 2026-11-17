@@ -34,6 +34,7 @@ export const run = (id, overrides) => ({
   ...base,
   agent_id: id,
   run_id: `${id}-run`,
+  has_question: overrides?.status === "needs_input",
   ...overrides,
 });
 
@@ -55,9 +56,11 @@ export const tool = (name, detail) => ({ name, detail });
 export const viewOf = (agent_id, status, run_id = `${agent_id}-1`) => ({
   run_id,
   agent_id,
+  enqueue_sequence: 0,
   name: "",
   description: "Task",
   status,
+  has_question: status === "needs_input",
   phase: status === "running" ? "streaming" : "settled",
   execution_exited: false,
   finalization_pending: false,

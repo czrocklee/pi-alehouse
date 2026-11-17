@@ -46,6 +46,7 @@ interface ViewSource {
     | "history_error"
     | "turns"
     | "max_turns"
+    | "enqueue_sequence"
     | "stop_reason"
     | "model_stop_reason"
     | "outcome"
@@ -103,6 +104,7 @@ export function projectRun(run: ViewSource, facts: RunProjectionFacts): RunView 
     unavailable_reason: facts.unavailable_reason,
     owner_error: facts.owner_error,
     owner_blocked: facts.owner_blocked,
+    enqueue_sequence: record.enqueue_sequence,
     elapsed_ms: facts.elapsed_ms,
     turn_elapsed_ms: facts.turn_elapsed_ms,
     turns: record.turns,

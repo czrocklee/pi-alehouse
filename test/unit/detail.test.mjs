@@ -560,16 +560,16 @@ test("a click on an Agent row resolves to that Agent, and chrome rows resolve to
   });
   assert.equal(lines.length, hits.length, "every painted line must answer who it belongs to");
   assert.equal(hits[0], undefined, "the heading belongs to no Agent");
-  assert.equal(hits[1], "r", "active identity precedes queued and ordinary terminal rows");
-  assert.match(lines[1], /^├─ ⠋ /);
+  assert.equal(hits[1], undefined, "the aggregate queued row names no single Agent");
+  assert.match(lines[1], /^├─ ◦ 1 queued$/);
+  assert.equal(hits[2], "r", "active identity follows the earlier queued row");
+  assert.match(lines[2], /^├─ ⠋ /);
   assert.equal(
-    hits[2],
+    hits[3],
     "r",
     "and its ⎿ activity row, so clicking the tool line opens the Agent running it",
   );
-  assert.match(lines[2], /⎿/);
-  assert.equal(hits[3], undefined, "the aggregate queued row names no single Agent");
-  assert.match(lines[3], /^├─ ◦ 1 queued$/);
+  assert.match(lines[3], /⎿/);
   assert.equal(hits[4], "f", "ordinary terminal identity follows the queued aggregate");
   assert.match(lines[4], /^└─ ✓ /);
 });

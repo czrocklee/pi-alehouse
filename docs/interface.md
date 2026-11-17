@@ -70,11 +70,25 @@ and additionally reserves normal SDK input chrome and transcript space rather
 than growing the input dock without limit. Owner-blocked diagnostics sit above
 the paginated body, or take the sole widget line at minimum height. Very small
 viewports suppress the widget or expansion controls; use `Alt+A` for inspection
-instead. Compact view retains
-its activity/attention priority within the same height budget.
+instead. Compact and expanded views follow each Agent's latest Run admission,
+newest first, using the Owner's monotonic enqueue sequence rather than wall time.
+New Runs change the overview order; output, elapsed time and status changes do not.
+Agent detail tabs and left/right navigation instead keep Agent creation order,
+so reuse does not change neighbors or move the selected Agent. The model-facing
+`agent_list` also retains Agent creation order.
+
+Compact view keeps its eligibility and queue aggregation within the same height
+budget. After heading, Owner-warning and overflow space, it reserves one identity
+slot for the most recent unanswered question, then one for live work if
+another slot fits. A single identity slot goes to the question. Remaining slots
+follow MRU order, and all selected rows are painted in that order, not grouped
+by status. Other hidden rows are summarized by category in overflow, not by
+independent warning/message counts. Tiny budgets may leave only heading/overflow
+summaries rather than clickable rows.
 In regular/unknown renderer modes there is no mouse-only disclosure arrow, and
-ordinary idle headings disappear once outcome rows age out. Full capacity,
-owner-blocked diagnostics and attention rows remain visible within the budget;
+ordinary idle headings disappear once outcome rows age out. Full capacity and
+Owner-blocked diagnostics remain eligible within the budget; compact question
+reservation and hidden-row summaries use the same rules in either mode.
 `Alt+A` remains the inspection entry. Expansion is presentation-only and does
 not restart work or reset retention.
 

@@ -92,7 +92,7 @@ test("overflow reserves a live identity despite arbitrarily many questions and p
     ),
     run("live", { status: "running", name: "live-identity", turn_elapsed_ms: 60_000 }),
   ];
-  for (const maxLines of [3, 4, 6]) {
+  for (const maxLines of [4, 6]) {
     const result = frame(rows, { maxLines, shouldShowFinished: () => false });
     assert(result.hits.includes("live"), result.lines.join("\n"));
     assert.match(result.lines[result.hits.indexOf("live")], /live-identity.*1m00s/);
@@ -102,6 +102,9 @@ test("overflow reserves a live identity despite arbitrarily many questions and p
     assert.equal(result.hits.at(-1), undefined);
     assert.equal(result.lines.length, maxLines);
   }
+  const single = frame(rows, { maxLines: 3, shouldShowFinished: () => false });
+  assert.deepEqual(single.hits, [undefined, "question-0", undefined]);
+  assert.match(single.lines.at(-1), /\+11 more \(7 needs input, 1 running, 3 attention\)$/);
 });
 
 test("turn-limit observations coexist with every lifecycle status, including real failures", () => {

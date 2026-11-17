@@ -49,6 +49,8 @@ export interface WidgetRun extends GenerationPreview {
   drain?: RunView["drain"];
   tool_uses: number;
   active_tools: readonly ActiveTool[];
+  /** Current Owner question, distinct from historical outcome text. */
+  has_question: boolean;
   question: boolean;
   limit_reached: boolean;
   error?: string;
@@ -242,7 +244,7 @@ export class AgentWidget {
   tuiMode(): string | undefined {
     return this.mount?.instance?.tui.mode ?? this.lastMode;
   }
-  /** Resident Agents plus released failures still in their diagnostic linger. */
+  /** Inspectable Agents in creation order, independent of widget recency. */
   agents(): AgentDetail[] {
     return this.details(this.views());
   }
@@ -355,9 +357,9 @@ export class AgentWidget {
   }
 
   private lingering(agent_id: string, status: RunView["status"]): boolean {
-    // `needs_input` is terminal but not finished: the Run is blocked on an
-    // answer only the parent can give, and the widget is where that is noticed.
-    // Ageing it out hides the one row whose absence stalls everything.
+    // Keep needs-input Runs inspectable beyond normal linger. Historical status
+    // can outlive a pending question during release; only the current
+    // has_question fact earns the renderer's compact question-slot reservation.
     if (status === "needs_input") return true;
     const limit = status === "failed" ? AgentWidget.LINGER.error : AgentWidget.LINGER.normal;
     return (this.age.get(agent_id)?.turns ?? 0) < limit;
@@ -390,6 +392,7 @@ export class AgentWidget {
           }
         : undefined,
       drain: view.drain ? { ...view.drain } : undefined,
+      has_question: view.has_question,
       question: !!view.outcome?.question,
       limit_reached: !!view.outcome?.limit_reached,
       error: view.outcome?.error,
@@ -418,6 +421,7 @@ export class AgentWidget {
         this.age.set(view.agent_id, { run_id: view.run_id, turns: 0 });
       }
     }
+    // Preserve the Owner's Agent creation order for stable detail navigation.
     const views = all.filter(
       (view) =>
         view.resident ||
@@ -432,7 +436,9 @@ export class AgentWidget {
     return views;
   }
   private rows(): { runs: WidgetRun[]; owner: WidgetOwner } {
-    const views = this.views();
+    // Only the overview follows recent Runs. Owner admission sequence is exact
+    // even with equal or backward wall clocks; do not reorder the detail cache.
+    const views = this.views().toSorted((a, b) => b.enqueue_sequence - a.enqueue_sequence);
     const stats = this.controller.stats();
     const error =
       stats.parent_error ??
