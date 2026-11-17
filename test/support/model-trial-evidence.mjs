@@ -121,10 +121,14 @@ export function dialogueFailures(evidence, { modelSpec, parentThinking, thinking
   ) {
     failures.push(inconsistentReference);
   }
+  // Model observations address names, but the controller's Run views certify
+  // that both tasks belong to the very same Agent.
   const answerRun =
-    question &&
+    typeof question?.agent_id === "string" &&
+    question.agent_id.trim().length > 0 &&
     runStates.find(
       (run) =>
+        run.agent_id === question.agent_id &&
         run.name === question.name &&
         run.run_id !== question.run_id &&
         run.task === question.task + 1,

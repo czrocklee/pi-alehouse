@@ -599,8 +599,7 @@ for (const slot of strengths) {
           (snapshot) => audits.push(snapshot),
           selected.effort_overrides,
         );
-        f.store.stage("global", ["presets", name], definition);
-        stageWorkerSelection(f.store, next, previous, false);
+        stageWorkerSelection(f.store, next, previous, false, undefined, definition);
       },
     });
     const editing = c.ui.editModel("team", slot);

@@ -278,7 +278,7 @@ export { STATIC_ALLOW_EXCLUSION_EVIDENCE } from "#src/presentation/static-allow-
     // in private provenance and bound to this input's real execution text,
     // never from a model-suppliable field or the trimmed shell projection.
     const requested = shell
-      ? requestedBashCommand(tcc.input as Record<string, unknown>, shell.command)
+      ? requestedBashCommand(tcc.input, shell.command)
       : undefined;
     const forwardable =
       requested !== undefined && requested.length <= STATIC_ALLOW_REQUEST_LIMIT

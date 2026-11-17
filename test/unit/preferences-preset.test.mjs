@@ -383,7 +383,7 @@ test("one pending worker save owns its dialog and releases after cancellation", 
   assert.equal(f.store.get("workspace").preset, "off");
 });
 
-test("worker snapshot preflight prevents partially queued saves at the single-file byte cap", async (t) => {
+test("an oversized worker snapshot leaves pending settings unchanged", async (t) => {
   const f = await fixture(t),
     document = nearLimitPreferences({ version: 2 }, 30);
   f.store.stage("global", ["presets"], document.presets);
@@ -395,7 +395,7 @@ test("worker snapshot preflight prevents partially queued saves at the single-fi
   assert.equal(f.store.get("global").preset, undefined);
 });
 
-test("a final-fitting worker snapshot cannot partially stage an overflowing intermediate prefix", async (t) => {
+test("a final-fitting worker snapshot queues despite an oversized intermediate prefix", async (t) => {
   const f = await fixture(t),
     document = nearLimitPreferences(
       {
@@ -416,18 +416,17 @@ test("a final-fitting worker snapshot cannot partially stage an overflowing inte
     256 * 1024 - 1,
     "the final document fits by one byte",
   );
-  const pending = f.store.pending(),
-    c = controls(f, [], [true]);
-  await assert.rejects(c.ui.saveDefault("global"), /document exceeds/);
-  assert.deepEqual(
-    f.store.pending(),
-    pending,
-    "preset must not queue before the larger mode patch fails",
-  );
-  assert.equal(f.store.get("global").preset, "a");
+  const prefix = { ...final, delegation: { ...document.delegation, mode: f.delegation.mode } };
+  assert(Buffer.byteLength(JSON.stringify(prefix)) + 1 > 256 * 1024);
+  const c = controls(f, [], [true]);
+  await c.ui.saveDefault("global");
+  assert.deepEqual(f.store.get("global"), final);
+  await assert.rejects(readFile(f.store.paths.global), { code: "ENOENT" });
+  assert.deepEqual(f.store.flush(), [{ scope: "global", path: f.store.paths.global }]);
+  assert.deepEqual(JSON.parse(await readFile(f.store.paths.global, "utf8")), final);
 });
 
-test("toString effort preflight respects the byte cap and leaves built-ins and pending patches untouched", async (t) => {
+test("oversized toString effort save leaves built-ins and pending patches untouched", async (t) => {
   const f = await fixture(t),
     before = Object.getOwnPropertyDescriptors(Object.prototype.toString);
   f.config.presets.toString = team();

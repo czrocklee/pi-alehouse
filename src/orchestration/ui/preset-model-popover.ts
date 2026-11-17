@@ -1,6 +1,5 @@
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { shortcutHint } from "../../shared/shortcut-hint.mjs";
-import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import { onBorderLabelsChange, popoverTextRect } from "../../shared/popover-chrome.mjs";
 import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -117,7 +116,6 @@ export class PresetModelPopover implements Component, Focusable {
   ) {
     this.selection = createPopoverTextSelection({ host: options.tui, component: this });
     this.closeHover = createPopoverCloseControl({
-      createHover: createPopoverCloseHover,
       closeHit: popoverChromeCloseHit,
       host: options.tui,
       requestRender: () => options.tui?.requestRender(),

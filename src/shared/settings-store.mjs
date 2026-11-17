@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, join, parse, resolve, sep } from "node:path";
+import { types } from "node:util";
 
 /** @typedef {"session" | "global" | "workspace"} SettingsScope */
 /** @typedef {Exclude<SettingsScope, "session">} PersistentScope */
@@ -30,6 +31,7 @@ import { dirname, join, parse, resolve, sep } from "node:path";
  * eagerness?: "reserved" | "balanced" | "eager"}, effort?: EffortPolicy, approval?: ApprovalPreference,
  * presets?: Record<string, PresetDefinition>, ui?: {beerMugs?: boolean, borderLabels?: boolean},
  * childSkills?: boolean}} SettingsDocument */
+/** @typedef {{path: readonly string[], value: unknown}} SettingsChange */
 /** @typedef {{scope: PersistentScope, path: string[], value: unknown}} Patch */
 /** @typedef {{scope: PersistentScope, path: string, error?: string}} FlushResult */
 /** @typedef {import("node:fs").Stats} Stat */
@@ -67,7 +69,7 @@ function safeError(error) {
 }
 /** @param {unknown} value @param {string} at @returns {Record<string, unknown>} */
 function record(value, at) {
-  if (!value || typeof value !== "object" || Array.isArray(value))
+  if (!value || typeof value !== "object" || types.isProxy(value) || Array.isArray(value))
     invalid(`${at} must be a plain record`);
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) invalid(`${at} must be a plain record`);
@@ -250,7 +252,7 @@ function persistentScope(scope) {
 /** Deepest accepted leaf is presets/<name>/slots/<slot>/effort or model.
  * @param {readonly string[]} path */
 function validatePath(path) {
-  if (!Array.isArray(path) || path.length === 0 || path.length > 5)
+  if (types.isProxy(path) || !Array.isArray(path) || path.length === 0 || path.length > 5)
     invalid("patch path must have 1 to 5 safe, bounded string keys");
   const result = [];
   for (let index = 0; index < path.length; index++) {
@@ -310,6 +312,24 @@ function applyPatch(document, path, value) {
   const key = /** @type {string} */ (path.at(-1));
   if (value === undefined) delete target[key];
   else target[key] = value;
+}
+/** When an earlier patch owns the whole subtree, fold a later descendant edit
+ * into it without mutating caller data or reading an accessor. Only the touched
+ * parents are copied; the final validation detaches the whole document.
+ * @param {unknown} previous @param {readonly string[]} path @param {unknown} value @returns {unknown} */
+function updateStagedValue(previous, path, value) {
+  const [key, ...rest] = path;
+  if (key === undefined) return value;
+  if (previous === undefined && value === undefined) return undefined;
+  const parent = previous === undefined ? {} : { ...record(previous, "patch parent") };
+  const child = updateStagedValue(
+    Object.hasOwn(parent, key) ? parent[key] : undefined,
+    rest,
+    value,
+  );
+  if (child === undefined) delete parent[key];
+  else parent[key] = child;
+  return parent;
 }
 /** @param {SettingsDocument} baseline @param {readonly Patch[]} patches */
 function patched(baseline, patches) {
@@ -621,30 +641,51 @@ export class SettingsStore {
 
   /** @param {PersistentScope} scope @param {readonly string[]} path @param {unknown} value */
   stage(scope, path, value) {
+    this.stageBatch(scope, [{ path, value }]);
+  }
+
+  /** Atomically stage ordered changes in one scope; only the final document is
+   * schema/size checked. Overlaps coalesce at the shortest explicit path.
+   * @param {PersistentScope} scope @param {readonly SettingsChange[]} changes */
+  stageBatch(scope, changes) {
     if (this.#sealed) throw new SettingsError("Settings store is sealed after shutdown");
     persistentScope(scope);
     if (scope === "workspace" && !this.#trusted)
       throw new SettingsError("Workspace settings require explicit project trust");
-    path = validatePath(path);
-    // Validate before copying any unknown input: JSON.stringify/structuredClone
-    // of an accessor or custom prototype must never execute it on our behalf.
-    const candidate = /** @type {Record<string, unknown>} */ (this.get(scope));
-    applyPatch(candidate, path, value);
-    const validated = validateSettings(candidate);
-    const existing = this.#patches[scope];
-    const ancestor = existing.find((patch) => prefix(patch.path, path));
-    const dirtyPath = ancestor?.path ?? [...path];
-    const stagedLeaf = leaf(validated, dirtyPath),
-      original = leaf(this.#layers[scope], dirtyPath);
-    const remaining = existing.filter((patch) => !prefix(dirtyPath, patch.path));
-    if (stagedLeaf.present !== original.present || !equal(stagedLeaf.value, original.value)) {
-      remaining.push({
-        scope,
-        path: [...dirtyPath],
-        value: stagedLeaf.present ? structuredClone(stagedLeaf.value) : undefined,
-      });
+    if (types.isProxy(changes) || !Array.isArray(changes)) invalid("patch batch must be an array");
+    if (changes.length === 0) return;
+
+    let pending = this.#patches[scope];
+    for (let index = 0; index < changes.length; index++) {
+      const entry = Object.getOwnPropertyDescriptor(changes, index);
+      if (!entry || !Object.hasOwn(entry, "value"))
+        invalid("patch batch must contain data entries");
+      const change = record(entry.value, "patch change");
+      exactKeys(change, ["path", "value"], "patch change");
+      if (!Object.hasOwn(change, "path") || !Object.hasOwn(change, "value"))
+        invalid("patch change requires path and value");
+      const path = validatePath(/** @type {readonly string[]} */ (change.path));
+      const ancestor = pending.find((patch) => prefix(patch.path, path));
+      const dirtyPath = ancestor?.path ?? path;
+      const value = ancestor
+        ? updateStagedValue(ancestor.value, path.slice(dirtyPath.length), change.value)
+        : change.value;
+      pending = pending.filter((patch) => !prefix(dirtyPath, patch.path));
+      pending.push({ scope, path: dirtyPath, value });
     }
-    this.#patches[scope] = remaining;
+
+    // Start from the original scope layer, not effective or defaulted values.
+    // Only detached, validated data enters the queue, and nothing is published
+    // until the entire batch has succeeded.
+    const baseline = this.#layers[scope];
+    const validated = patched(baseline, pending);
+    this.#patches[scope] = pending.flatMap(({ path }) => {
+      const staged = leaf(validated, path),
+        original = leaf(baseline, path);
+      return staged.present === original.present && equal(staged.value, original.value)
+        ? []
+        : [{ scope, path, value: staged.value }];
+    });
   }
 
   /** @param {PersistentScope} scope @returns {SettingsDocument} */

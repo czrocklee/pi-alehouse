@@ -1,4 +1,4 @@
-import type { createPopoverCloseHover } from "./popover-close-hover.mjs";
+import type { PopoverCloseMouseEvent } from "./popover-close-hover.mjs";
 
 /** Presentation-only close control: forgiving press/release gesture plus hover.
  * Unsupported hosts retain ordinary close controls, but cannot observe native
@@ -11,13 +11,15 @@ export interface PopoverCloseControl {
   paint(width: number, enabled?: boolean, paintedHeight?: number): void;
   /** Track one gesture on the painted close hit. Returns `{ handled: true }`
    * for a claimed or consumed event, with `close` true only when the caller
-   * should close now; `active` false cancels and consumes an old gesture but
-   * never activates one. Every fresh press ends prior ownership; only left can
-   * arm close. An undelivered native dispatch retires ownership without claiming
-   * an unrelated selection's release, while consuming the next left click at
-   * any coordinates in case native capture survived the interruption. */
+   * should close now. When supplied, event width must agree with the paint
+   * for both hover and gestures. `active` false clears hover and cancels and
+   * consumes an old gesture without activating one. Every fresh press ends
+   * prior ownership; only left can arm close. An undelivered native dispatch
+   * retires ownership without claiming an unrelated selection's release, while
+   * consuming the next left click at any coordinates in case native capture
+   * survived the interruption. */
   mouse(
-    event: { type: string; button?: string; x?: number; y?: number; width?: number },
+    event: PopoverCloseMouseEvent,
     active?: boolean,
   ): { handled: true; close: boolean } | undefined;
   /** Retire geometry until the next paint, including during a temporary hide.
@@ -31,8 +33,6 @@ export interface PopoverCloseControl {
 export function createPopoverCloseControl(options: {
   host?: object;
   requestRender(): void;
-  /** Hover/gesture adapter factory, injected to keep this module a leaf. */
-  createHover: typeof createPopoverCloseHover;
-  /** Shared frame hit test, injected so the control remains dependency-free. */
+  /** Shared frame hit test used for both hover and gestures. */
   closeHit(width: number): { x: number; width: number; y?: number } | undefined;
 }): PopoverCloseControl;

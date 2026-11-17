@@ -10,6 +10,12 @@ export function applyRedirectArgvPatch(root, patch) {
     join(packageRoot, "src/authority/managed-redirect-argv.ts"),
     join(root, "src/access-intent/bash/managed-redirect-argv.ts"),
   );
+  patch("src/access-intent/bash/parser.ts", [
+    [
+      "  readonly childCount: number;",
+      "  readonly childCount: number;\n  /** The immediate enclosing node, or null for a root or detached view. */\n  readonly parent: TSNode | null;",
+    ],
+  ]);
   patch("src/access-intent/bash/token-collection.ts", [
     [
       'import { managedInspectionEffect } from "./managed-read-policy";',

@@ -19,7 +19,6 @@ import {
   popoverTitleRows,
 } from "../../shared/popover-chrome.mjs";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
-import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import { shortcutHint } from "../../shared/shortcut-hint.mjs";
 import { formatTokenCount } from "../../shared/token-format.mjs";
@@ -687,7 +686,6 @@ export class StatsView {
 
   constructor(private readonly options: StatsViewOptions) {
     this.closeHover = createPopoverCloseControl({
-      createHover: createPopoverCloseHover,
       closeHit: popoverChromeCloseHit,
       host: options.tui,
       requestRender: () => options.tui.requestRender(),

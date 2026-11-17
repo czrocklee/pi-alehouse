@@ -6,8 +6,6 @@
 import { ARG_NODE_TYPES } from "./node-text";
 import type { TSNode } from "./parser";
 
-type Linked = TSNode & { readonly parent?: TSNode | null };
-const parentOf = (node: TSNode): TSNode | null | undefined => (node as Linked).parent;
 const REDIRECT_TYPES = new Set(["file_redirect", "heredoc_redirect", "herestring_redirect"]);
 const SEQUENCE_TYPES = new Set(["list", "pipeline", "redirected_statement"]);
 const TAIL_TYPES = new Set([
@@ -44,7 +42,7 @@ export function redirectTail(redirect: TSNode): TSNode[] {
 /** The command whose argv a statement-level redirect's tail continues: the
  * last element of the redirected body, only when that element is a command. */
 export function redirectTailOwner(redirect: TSNode): TSNode | undefined {
-  const statement = parentOf(redirect);
+  const statement = redirect.parent;
   if (statement?.type !== "redirected_statement" || !REDIRECT_TYPES.has(redirect.type)) return;
   let node: TSNode | undefined = statement;
   for (let depth = 0; node && depth < 128; depth++) {
@@ -65,9 +63,9 @@ export function redirectTailOwner(redirect: TSNode): TSNode | undefined {
 export function ownedRedirectTails(command: TSNode): TSNode[] {
   const tails: TSNode[] = [];
   for (
-    let node = parentOf(command), depth = 0;
+    let node = command.parent, depth = 0;
     node && SEQUENCE_TYPES.has(node.type) && depth < 128;
-    node = parentOf(node), depth++
+    node = node.parent, depth++
   ) {
     if (node.type !== "redirected_statement") continue;
     for (let i = 0; i < node.childCount; i++) {
@@ -96,6 +94,7 @@ export function completedCommandView(command: TSNode): TSNode | undefined {
     childCount: children.length,
     isNamed: command.isNamed,
     hasError: command.hasError,
+    parent: null,
     previousSibling: command.previousSibling,
     child: (index) => children[index] ?? null,
   };

@@ -33,6 +33,7 @@ export type SettingsDocument = {
   /** Omitted stays absent; consumers enable skills unless explicitly false. */
   childSkills?: boolean;
 };
+export type SettingsChange = { path: readonly string[]; value: unknown };
 export type SettingsPatch = { scope: PersistentScope; path: string[]; value: unknown };
 export type SettingsFlushResult = { scope: PersistentScope; path: string; error?: string };
 
@@ -50,6 +51,9 @@ export class SettingsStore {
   canWriteWorkspace(): boolean;
   /** Explicit path patch of 1 to 5 keys. undefined deletes the key; unchanged values are clean. */
   stage(scope: PersistentScope, path: readonly string[], value: unknown): void;
+  /** Atomically stage ordered changes in one scope, validating the final document only.
+   * Overlaps coalesce at the shortest explicit path; undefined deletes a key. */
+  stageBatch(scope: PersistentScope, changes: readonly SettingsChange[]): void;
   get(scope: PersistentScope): SettingsDocument;
   /** Global then trusted workspace; delegation/ui merge by leaf, preset bodies replace by name. */
   effective(): SettingsDocument;

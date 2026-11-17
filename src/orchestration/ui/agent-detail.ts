@@ -1,5 +1,4 @@
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
-import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import {
   onBorderLabelsChange,
@@ -262,7 +261,6 @@ export class DetailPane {
       else options.onDraft?.(undefined);
     }
     this.closeHover = createPopoverCloseControl({
-      createHover: createPopoverCloseHover,
       closeHit: popoverChromeCloseHit,
       host: options.tui,
       requestRender: () => options.tui.requestRender(),

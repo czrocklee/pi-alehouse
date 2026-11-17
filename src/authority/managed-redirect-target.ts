@@ -132,6 +132,7 @@ export function redirectArgumentNode(node: TSNode): TSNode {
     childCount: 0,
     isNamed: true,
     hasError: node.hasError,
+    parent: null,
     previousSibling: node.previousSibling,
     child: () => null,
   };

@@ -1,5 +1,4 @@
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
-import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import { onBorderLabelsChange, popoverTextRect } from "../../shared/popover-chrome.mjs";
 import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import type { PersistentScope } from "../../shared/settings-store.mjs";
@@ -137,7 +136,6 @@ export class PresetPicker implements Component {
     this.options = { ...options, presets: [...options.presets] };
     this.textSelection = createPopoverTextSelection({ host: options.tui, component: this });
     this.closeHover = createPopoverCloseControl({
-      createHover: createPopoverCloseHover,
       closeHit: popoverChromeCloseHit,
       host: options.tui,
       requestRender: () => options.tui.requestRender(),

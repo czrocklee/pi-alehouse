@@ -222,7 +222,8 @@ decisions.
 Requested failure, unknown or limit findings remain normal results when no
 further parent input is needed. Child tool descriptions own question recording
 and end-turn mechanics rather than repeating that guidance. This is not progress
-detection or enforcement; prompt tests check wording, not model behavior.
+detection or enforcement; tests check prompt assembly and the tool and
+permission tables, not model behavior.
 [Runtime feedback](runtime-feedback.md) adds partial exact-tool block summaries,
 not a semantic denial counter or availability diagnosis. The explicitly assigned
 validation owner must report actual comparisons, platform/configuration,
@@ -632,8 +633,10 @@ vendored runtime specifiers in the generator, never in generated output by hand.
 
 ## Static quality gate
 
-Root `npm run check` runs lint, typecheck, package tests and the portable
-policy suite. `npm run test:policy` is independently invocable;
+Root `npm run check` runs lint, builds one matched runtime, typechecks its
+extensions and authority entry, then runs package tests and the portable policy
+suite on that same build. The build itself typechecks orchestration. Standalone
+`npm test` and `npm run test:policy` each build their own inputs;
 `npm run test:integration` invokes a separate controlled host collector, not a
 release or live-model gate. Record command output, counts and review outcomes
 outside source; keep reusable contracts and test obligations here. See
@@ -642,8 +645,11 @@ Check exact script behavior and test counts before reporting a new result. ESLin
 with zero warnings and no autofix. The orchestration TS check retains strict and
 `noUncheckedIndexedAccess`/unused binding checks; the shared `.mjs`/`.d.mts`
 checker checks actual JS bodies and declarations in separate temporary trees
-without executing helpers. The extension type gate checks a bounded existing
-diagnostic baseline but rejects other diagnostics or abnormal termination.
+without executing helpers. The extension type gate compiles the actual generated
+authority entry and its imports against the pinned SDK, without a diagnostic
+baseline. For a standalone no-emit `npm run typecheck`, first build the current
+source: a missing authority entry fails the check, and stale generated output
+would not check the current source.
 This static analysis does not prove accounting arithmetic, permission semantics
 or provider behavior. Preserve explicit Promise ownership and fail-closed error
 paths. Node 22.19+ (or 24+) is needed by ESLint 10.
@@ -663,8 +669,10 @@ requires an explicit discovery update. Preserve sequential cases and per-file
 process isolation where fixtures mutate environment, timers or listeners.
 Policy checker entrypoints retain their existing names and one initialization
 per process; their internal modules do not create additional gates or authorize
-live/replay/corpus workflows. `npm run typecheck` is the sole aggregate type
-entrypoint, including the self-contained shared-library/extension checker once.
+live/replay/corpus workflows. `npm run typecheck` is the standalone aggregate
+type entrypoint. After a fresh build, `npm run typecheck:extensions` checks the
+remaining shared, extension and authority code without recompiling the root
+orchestration project.
 
 The built npm tarball excludes regression suites and maintainer-only check
 scripts, including the static-guard self-test in `scripts/checks/`; the

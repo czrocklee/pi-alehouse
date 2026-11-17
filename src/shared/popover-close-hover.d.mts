@@ -1,12 +1,23 @@
-/** Optional presentation adapter; unsupported hosts retain ordinary close controls. */
+export interface PopoverCloseMouseEvent {
+  type: string;
+  button?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+}
+
+/** Single painted hit for gestures and optional native hover feedback. */
 export interface PopoverCloseHover {
   readonly hovered: boolean;
-  /** Publish actual close visibility; geometry changes silently clear hover.
-   * Omitted height preserves the previous value during preliminary layout. */
-  paint(width: number, enabled?: boolean, paintedHeight?: number): void;
-  /** Observe without consuming, focusing, capturing or activating any control.
-   * Every event acknowledges delivery within the current native dispatch. */
-  mouse(event: { type: string; button?: string; x?: number; y?: number }): void;
+  /** Publish actual close visibility; return true if geometry changed or is
+   * unavailable. Clear hover silently on change. Omitted height preserves the
+   * previous value during preliminary layout. */
+  paint(width: number, enabled?: boolean, paintedHeight?: number): boolean;
+  /** Acknowledge every delivered event without consuming, focusing or capturing.
+   * Return whether an active event matches the live painted hit, including width
+   * when supplied. Only button-free moves can show native hover feedback, and
+   * missing native support does not affect the returned hit. */
+  mouse(event: PopoverCloseMouseEvent, active?: boolean): boolean;
   /** Observe native dispatch even without hover. A dispatch not delivering a
    * mouse event to this tracker calls onGestureInterrupted. No raw input parsing
    * or additional global input listener is installed. */

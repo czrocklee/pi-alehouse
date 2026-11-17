@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createRequire } from "node:module";
 import {
   cpSync,
   mkdirSync,
@@ -65,11 +64,10 @@ try {
   // the checked declarations; copy JS/declaration pairs verbatim, not inferred
   // replacement declarations. Runtime code loads source/generated assets only.
   const compiled = join(stage, ".compiled");
-  const require = createRequire(import.meta.url);
   execFileSync(
     process.execPath,
     [
-      require.resolve("typescript/bin/tsc"),
+      join(packageRoot, "node_modules/typescript/bin/tsc"),
       "-p",
       join(packageRoot, "tsconfig.json"),
       "--outDir",

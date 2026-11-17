@@ -2,6 +2,7 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import {
   type PersistentScope,
   type PresetDefinition,
+  type SettingsChange,
   type SettingsStore,
   type SettingsDocument,
   validateSettings,
@@ -390,7 +391,7 @@ export class PreferencesControls {
     const path = store.paths[scope],
       selection = this.workerSnapshot(router);
     const snapshot = JSON.stringify(selection);
-    const patches: { path: string[]; value: unknown }[] = [
+    const patches: SettingsChange[] = [
       { path: ["preset"], value: selection.preset },
       { path: ["delegation", "mode"], value: selection.delegation!.mode },
       { path: ["delegation", "eagerness"], value: selection.delegation!.eagerness },
@@ -421,20 +422,7 @@ export class PreferencesControls {
     }
     if (scope === "workspace" && !store.canWriteWorkspace())
       throw new OrchestrationError("PROJECT_NOT_TRUSTED");
-    // Validate every staging prefix, not only the final target: a growing
-    // field can exceed the cap before a later shrinking field makes room.
-    // These paths and detached records are our schema-validated worker data.
-    const candidate: Record<string, unknown> = store.get(scope);
-    for (const patch of patches) {
-      let parent = candidate;
-      for (const key of patch.path.slice(0, -1)) {
-        if (!Object.hasOwn(parent, key)) parent[key] = {};
-        parent = parent[key] as Record<string, unknown>;
-      }
-      parent[patch.path.at(-1)!] = patch.value;
-      validateSettings(candidate);
-    }
-    for (const patch of patches) store.stage(scope, patch.path, patch.value);
+    store.stageBatch(scope, patches);
     ctx.ui.notify(
       `Worker defaults queued for ${scope} on normal exit; current choices and save scope are unchanged. ` +
         "Save approval defaults from the approval menu (/approval save).",
@@ -607,22 +595,28 @@ export class PreferencesControls {
   }
 }
 
-/** Map a successfully committed selection to only the explicitly changed
- * preference fields. `null` masks a lower-layer pin with the catalogue default. */
+/** Queue the definition, if needed, and explicitly changed selection fields
+ * together. `null` masks a lower-layer pin with the catalogue default. */
 export function stageWorkerSelection(
   store: SettingsStore,
   selection: PresetSelection,
   previous: PresetSelection,
   changedEfforts: boolean,
   previousEfforts: EffortOverrides = {},
+  rememberedDefinition?: PresetDefinition,
 ): void {
-  if (store.scope === "session") return;
-  if (selection.name !== previous.name) store.stage(store.scope, ["preset"], selection.name);
+  const scope = store.scope;
+  if (scope === "session") return;
+  const changes: SettingsChange[] = [];
+  if (rememberedDefinition)
+    changes.push({ path: ["presets", selection.name], value: rememberedDefinition });
+  if (selection.name !== previous.name) changes.push({ path: ["preset"], value: selection.name });
   if (changedEfforts && !isOffPreset(selection))
     for (const slot of strengths) {
       const before = previousEfforts[slot];
       const after = selection.effort_overrides[slot];
       if (before !== after)
-        store.stage(store.scope, ["effort", selection.name, slot], after ?? null);
+        changes.push({ path: ["effort", selection.name, slot], value: after ?? null });
     }
+  if (changes.length > 0) store.stageBatch(scope, changes);
 }

@@ -2,6 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { createJiti } from "jiti";
+import {
+  detailEntry,
+  detailView,
+  fgCall,
+  plainTheme as theme,
+  recordingTheme as recording,
+  sgrTheme,
+} from "../support/detail-fixture.mjs";
 
 // Direct source tests for the agent tabs' separator: every edge uses the tabs'
 // own padding, never an ASCII pipe or the rule chrome a popover frame uses.
@@ -13,45 +21,7 @@ const { renderDetailAgentStrip } = await jiti.import(
 );
 const { POPOVER } = await jiti.import("../../src/shared/popover-frame.mjs");
 
-const theme = { fg: (_color, text) => text, bold: (text) => text };
-const view = (id, extra = {}) => ({
-  owner_id: "owner",
-  generation: "generation",
-  agent_id: id,
-  run_id: `run-${id}`,
-  name: id,
-  task: 1,
-  description: "Current task",
-  status: "completed",
-  phase: "settled",
-  execution_exited: true,
-  finalization_pending: false,
-  resident: true,
-  resumable: false,
-  pending_messages: 0,
-  elapsed_ms: 1000,
-  turns: 1,
-  max_turns: 80,
-  cleanup_errors: [],
-  discarded_inputs: [],
-  effective_settings: {
-    profile: "editor",
-    model: "model",
-    thinking: "high",
-    parent_thinking: "high",
-    thinking_resolution: "identity",
-    preset: "default",
-    preset_version: "v1",
-    strength: "d3",
-    difficulty: 3,
-    tools: ["read"],
-    cwd: "/workspace",
-    context_mode: "none",
-  },
-  ...extra,
-});
-const live = { active_tools: [], tool_uses: 0, preview: "" };
-const entry = (id, extra = {}) => ({ agent_id: id, input: { view: view(id, extra), live } });
+const entry = (id, extra) => detailEntry(detailView(id, extra));
 const warned = (id) => entry(id, { history_error: "x" });
 const questioned = (id) =>
   entry(id, {
@@ -68,22 +38,6 @@ const strip = (overrides = {}) =>
     ...overrides,
   });
 const pipes = (text) => [...text].filter((ch) => ch === "|").length;
-const fgCall = (calls, color, text) =>
-  calls.some(([kind, c, t]) => kind === "fg" && c === color && t === text);
-
-/** Records every theme call, so token usage is provable, not assumed. */
-const recording = () => {
-  const calls = [];
-  return {
-    calls,
-    theme: {
-      fg: (color, text) => (calls.push(["fg", color, text]), text),
-      bold: (text) => (calls.push(["bold", text]), text),
-      underline: (text) => (calls.push(["underline", text]), text),
-      bg: (color, text) => (calls.push(["bg", color, text]), text),
-    },
-  };
-};
 const noBg = (calls, where) =>
   assert.deepEqual(
     calls.filter(([kind]) => kind === "bg"),
@@ -142,15 +96,10 @@ test("click ranges cover the padded tabs and never a separator", () => {
 });
 
 test("the selected tab's style is intact: no separator joins its underline", () => {
-  const sgr = {
-    fg: (_color, text) => text,
-    bold: (text) => `\u001b[1m${text}\u001b[22m`,
-    underline: (text) => `\u001b[4m${text}\u001b[24m`,
-  };
   const rec = recording();
   // The SGR theme proves the painted spans; the recording theme proves the
   // styling calls. One render each, same geometry.
-  const { text } = strip({ framed: true, theme: sgr });
+  const { text } = strip({ framed: true, theme: sgrTheme });
   strip({ framed: true, theme: rec.theme });
   const open = text.indexOf("\u001b[4m");
   const close = text.indexOf("\u001b[24m", open);

@@ -551,6 +551,80 @@ test("stage coalesces overlapping patches and compares original, not pending, va
   ]);
 });
 
+test("stageBatch validates an ordered final document and detaches overlapping edits", (t) => {
+  const f = fixture(t),
+    store = f.store();
+  const { d5, ...slots } = definition().slots;
+  const body = Object.freeze({ version: "v1", slots: Object.freeze(slots) });
+  const path = ["presets", "base", "slots", "d5"];
+  const changes = [
+    { path: ["presets", "base"], value: body },
+    { path, value: d5 },
+    { path: ["approval"], value: "judge" },
+    { path: ["approval"], value: undefined },
+  ];
+  assert.throws(() => store.stage("global", ["presets", "base"], body), /all five slots/);
+  store.stageBatch("global", changes);
+  path[1] = "changed";
+  d5.model = "changed/model";
+  assert.equal(Object.hasOwn(body.slots, "d5"), false);
+  assert.deepEqual(store.get("global"), { version: 2, presets: { base: definition() } });
+  assert.deepEqual(store.pending(), [
+    { scope: "global", path: ["presets", "base"], value: definition() },
+  ]);
+  assert.deepEqual(readdirSync(f.root), [], "staging performs no file writes");
+  assert.deepEqual(store.flush(), [{ scope: "global", path: f.paths.global }]);
+  assert.deepEqual(read(f.paths.global), { version: 2, presets: { base: definition() } });
+});
+
+test("a rejected batch changes neither layer nor pending patches and never calls accessors", (t) => {
+  const f = fixture(t),
+    store = f.store();
+  store.stage("global", ["approval"], "judge");
+  store.stage("workspace", ["childSkills"], false);
+  const pending = store.pending();
+  let invoked = 0;
+  const getter = { enumerable: true, get: () => invoked++ };
+  const path = Object.defineProperty([], "0", getter);
+  const change = Object.defineProperty({ path: ["approval"] }, "value", getter);
+  const body = Object.defineProperty({}, "mode", getter);
+  const valid = { path: ["approval"], value: "manual" };
+  const trapped = {
+    get() {
+      invoked++;
+      throw new Error("proxy trap should not run");
+    },
+    getPrototypeOf() {
+      invoked++;
+      throw new Error("proxy trap should not run");
+    },
+  };
+  for (const changes of [
+    [valid, { path: ["childSkills"], value: "invalid" }],
+    Object.defineProperty([valid], "1", getter),
+    Object.assign(new Array(2), { 0: valid }),
+    [valid, change],
+    [valid, { path, value: "judge" }],
+    [valid, { path: ["delegation"], value: body }],
+    [valid, { path: ["delegation"], value: body }, { path: ["delegation", "mode"], value: "lead" }],
+    new Proxy([valid], trapped),
+    [valid, new Proxy(valid, trapped)],
+    [valid, { path: new Proxy(["childSkills"], trapped), value: false }],
+    [valid, { path: ["delegation"], value: new Proxy({}, trapped) }],
+  ]) {
+    assert.throws(() => store.stageBatch("global", changes), /Invalid settings/);
+    assert.deepEqual(store.pending(), pending);
+    assert.deepEqual(store.get("global"), { version: 2, approval: "judge" });
+    assert.deepEqual(store.get("workspace"), { version: 2, childSkills: false });
+  }
+  assert.equal(invoked, 0);
+  assert.throws(() => store.stageBatch("session", []), /persistent scope/);
+  assert.throws(() => fixture(t, false).store().stageBatch("workspace", []), /project trust/);
+  store.seal();
+  assert.throws(() => store.stageBatch("global", [valid]), /sealed/);
+  assert.deepEqual(store.pending(), pending);
+});
+
 test("discard can reset one scope or both, without writing", (t) => {
   const f = fixture(t),
     store = f.store();
@@ -614,8 +688,10 @@ test("concurrent unrelated scalar and nested leaf edits survive and become the n
   });
   const first = f.store(),
     second = f.store();
-  first.stage("global", ["delegation", "mode"], "lead");
-  first.stage("global", ["effort", "base", "d1"], "high");
+  first.stageBatch("global", [
+    { path: ["delegation", "mode"], value: "lead" },
+    { path: ["effort", "base", "d1"], value: "high" },
+  ]);
   second.stage("global", ["delegation", "eagerness"], "eager");
   second.stage("global", ["effort", "base", "d5"], "max");
   second.stage("global", ["approval"], "judge");
@@ -639,8 +715,10 @@ test("same-leaf concurrent edits reject the entire scope and retain all dirty pa
   f.put("global", { version: 2, approval: "manual" });
   const first = f.store(),
     second = f.store();
-  first.stage("global", ["approval"], "judge");
-  first.stage("global", ["preset"], "off");
+  first.stageBatch("global", [
+    { path: ["approval"], value: "judge" },
+    { path: ["preset"], value: "off" },
+  ]);
   second.stage("global", ["approval"], "yolo");
   assert(!second.flush()[0].error);
   const result = first.flush();

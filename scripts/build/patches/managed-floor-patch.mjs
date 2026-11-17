@@ -12,7 +12,9 @@ export function applyManagedAgentWriteFloorPatch(root, patch) {
       "    const composedRules = composeRuleset(",
       `    const agentWriteFloor: Ruleset = [];
     for (const [origin, scope] of [["agent", agentConfig], ["project-agent", projectAgentConfig]] as const) {
-      const rules = normalizeFlatConfig({ path_write: scope.permission?.path_write });
+      const pathWrite = scope.permission?.path_write;
+      if (pathWrite === undefined) continue;
+      const rules = normalizeFlatConfig({ path_write: pathWrite });
       const catchAll = rules.find((rule) => rule.pattern === "*" && rule.action === "deny");
       if (catchAll && rules.every((rule) => rule.action === "deny")) {
         agentWriteFloor.push({ ...catchAll, layer: "config", origin });

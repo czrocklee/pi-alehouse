@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as pause } from "node:timers/promises";
-import type { AgentSession, EventBus, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentSession,
+  AgentSessionEventListener,
+  EventBus,
+  ExtensionFactory,
+} from "@earendil-works/pi-coding-agent";
 import type { DrainWait, ExecutionFacts, Output } from "../core/contracts.ts";
 import {
   SessionUnavailableError,
@@ -303,7 +308,7 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
 
   /** Execution and drain failures share one exit, including both diagnostics
    * when cleanup fails after the SDK already rejected the prompt. */
-  private quarantine(reason: string, cause: unknown): void {
+  private quarantine(reason: string, cause: unknown): SessionUnavailableError {
     cause = printableFailure(cause);
     try {
       this.history?.invalidate(cause);
@@ -327,6 +332,7 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
     );
     this.options.gate.accepting = false;
     this.options.gate.stopped = true;
+    return this.unavailable;
   }
 
   async run(prompt: string, callbacks: RunCallbacks): Promise<ExecutionFacts> {
@@ -338,9 +344,6 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
     let revision = 0;
     let output: Output = { text: "", total_chars: 0, truncated: false, revision };
     let stream = new OutputBuffer(cap, revision);
-    this.active = true;
-    gate.accepting = true;
-    gate.stopped = false;
     let lastReason: string | undefined, lastError: string | undefined;
     let inputEntered = false,
       sawAssistant = false;
@@ -417,7 +420,11 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
         this.abortTracked();
       }
     };
-    const unsubscribe = session.subscribe((event) => {
+    let unsubscribe: (() => void) | undefined;
+    const onEvent: AgentSessionEventListener = (event) => {
+      // A failed registration might have retained this listener without
+      // returning its removal handle. Keep it inert unless registration succeeded.
+      if (!unsubscribe) return;
       if (event.type === "compaction_start") {
         // SDK summary usage does not expose responseModel. Use an explicit
         // operation/requested-model bucket, never pretend it is a routed model.
@@ -544,7 +551,30 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
         ].includes(event.type)
       )
         publish();
-    });
+    };
+    this.active = true;
+    gate.accepting = false;
+    gate.stopped = false;
+    try {
+      const remove = session.subscribe(onEvent);
+      if (typeof remove !== "function") throw new Error("SDK_SUBSCRIBE_NO_UNSUBSCRIBE");
+      unsubscribe = remove;
+    } catch (caught) {
+      try {
+        let failure = this.quarantine("sdk_subscribe_failed", caught);
+        try {
+          this.options.invalidateApproval?.();
+        } catch (error) {
+          failure = this.quarantine("approval_revocation_failed", error);
+        }
+        // Registration alone does not dispatch a prompt. Do not retry it or
+        // enter the prompt drain; disposal still requires SDK idle confirmation.
+        throw failure;
+      } finally {
+        this.active = false;
+      }
+    }
+    gate.accepting = !gate.stopped;
     try {
       publish();
       await this.send(
@@ -643,8 +673,10 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
           retrying = false;
           publish();
         }
+        const remove = unsubscribe;
+        unsubscribe = undefined;
         try {
-          unsubscribe();
+          remove();
         } catch (caught) {
           this.quarantine("sdk_unsubscribe_failed", caught);
         } finally {

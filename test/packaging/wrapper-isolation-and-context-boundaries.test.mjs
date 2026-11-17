@@ -136,8 +136,8 @@ const scriptCases = [
   ["checks/check-pi-sdk-history.sh", [], ["host/sdk-history.mjs"]],
   ...collectorScripts.map((script) => [script, ["--all"], [], true]),
 ];
-for (const [script, options, entries, lintFails = false] of scriptCases)
-  test(`${script} ${options.join(" ")} ${lintFails ? "stops on lint failure before SDK/PTY probes" : "strips hints and enforces shadow before Node/PTY entrypoints"}`, (t) => {
+for (const [script, options, entries, packageGateFails = false] of scriptCases)
+  test(`${script} ${options.join(" ")} ${packageGateFails ? "stops on a failed package gate before SDK/PTY probes" : "strips hints and enforces shadow before Node/PTY entrypoints"}`, (t) => {
     const collector = collectorScripts.includes(script);
     const root = mkdtempSync(join(tmpdir(), "pi-alehouse-env-")),
       bin = join(root, "bin"),
@@ -151,7 +151,7 @@ for (const [script, options, entries, lintFails = false] of scriptCases)
       `#!/usr/bin/env bash
 set -euo pipefail
 printf 'npm %s\\n' "$*" >> "$ALEHOUSE_TEST_ENV_PROBE_LOG"
-if [[ "$1" == run && "$2" == lint ]]; then exit "\${ALEHOUSE_TEST_LINT_EXIT:-0}"; fi
+if [[ "$1" == run && "$2" == check:package ]]; then exit "\${ALEHOUSE_TEST_PACKAGE_EXIT:-0}"; fi
 `,
       { mode: 0o700 },
     );
@@ -208,39 +208,23 @@ printf '%s\\n' "$*" >> "$ALEHOUSE_TEST_ENV_PROBE_LOG"
           PI_JEV_APPROVAL_MODE: "enforce-subagents",
           ...(collector ? { PI_JEV_API_KEY_FILE: "/synthetic/do-not-read-real-key" } : {}),
           ALEHOUSE_TEST_ENV_PROBE_LOG: log,
-          ALEHOUSE_TEST_LINT_EXIT: lintFails ? "73" : "0",
+          ALEHOUSE_TEST_PACKAGE_EXIT: packageGateFails ? "73" : "0",
           ALEHOUSE_TEST_FLOCK: flock,
         },
       },
     );
-    assert.equal(output.status, lintFails ? 73 : 0, `${output.error ?? ""}\n${output.stderr}`);
+    assert.equal(
+      output.status,
+      packageGateFails ? 73 : 0,
+      `${output.error ?? ""}\n${output.stderr}`,
+    );
     const calls = readFileSync(log, "utf8").trimEnd().split("\n");
-    if (lintFails) {
-      assert.equal(
-        calls.length,
-        1,
-        "a lint failure must prevent typecheck, SDK, PTY and permission preparation",
-      );
-      assert.match(calls[0], /^npm run lint --prefix /);
+    if (collector) assert.match(calls[0], /^npm run check:package --prefix /);
+    if (packageGateFails) {
+      assert.equal(calls.length, 1, "a failed package gate must prevent host probes");
       return;
     }
     if (collector) {
-      const lint = calls.findIndex((call) => call.startsWith("npm run lint --prefix "));
-      const types = calls.findIndex((call) => call.startsWith("npm run typecheck --prefix "));
-      const tests = calls.findIndex((call) => call.startsWith("npm test --prefix "));
-      assert.equal(calls.filter((call) => call.startsWith("npm run lint --prefix ")).length, 1);
-      assert.equal(
-        calls.filter((call) => call.startsWith("npm run typecheck --prefix ")).length,
-        1,
-      );
-      assert(
-        !calls.some((call) => call.includes("/scripts/checks/check-pi-types.mjs ")),
-        "the canonical typecheck already includes extensions and must not be repeated",
-      );
-      assert(
-        lint >= 0 && types > lint && tests > types,
-        "collector must preserve local gate ordering",
-      );
       const policyHelper = fileURLToPath(new URL("../support/release-policy.mjs", import.meta.url));
       const reporting = calls.filter((call) => call.startsWith(`${policyHelper} `));
       const scope =

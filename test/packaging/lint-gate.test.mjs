@@ -124,12 +124,8 @@ test("JS fixtures and shared leaves use real lint rules, not a silently ignored 
   }
 });
 
-test("local check command is fail-fast lint, typecheck, then tests, without autofix", () => {
+test("lint does not autofix and orchestration retains its strict compiler settings", () => {
   const pkg = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
-  assert.equal(
-    pkg.scripts.check,
-    "npm run lint && npm run typecheck && npm test && npm run test:policy",
-  );
   assert.match(pkg.scripts.lint, /--max-warnings 0/);
   assert.doesNotMatch(pkg.scripts.lint, /--fix/);
   const { compilerOptions } = JSON.parse(readFileSync(join(repo, "tsconfig.json"), "utf8"));

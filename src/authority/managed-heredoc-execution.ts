@@ -5,7 +5,6 @@ import type { TSNode } from "./parser.ts";
 
 type Tree = { rootNode: TSNode; delete(): void };
 type Parser = { parse(source: string): Tree | null; delete(): void };
-type LinkedNode = TSNode & { parent: LinkedNode | null };
 type Position = (index: number) => number;
 type Entry = { node: TSNode; position: Position; depth: number };
 const MAX_SUBSTITUTIONS = 256;
@@ -171,6 +170,7 @@ function correctedTree(tree: Tree, parser: Parser): Tree {
           endIndex: span.length,
           isNamed: true,
           hasError: inner.rootNode.hasError,
+          parent: null,
           previousSibling: null,
           childCount: 0,
           child: () => null,
@@ -210,12 +210,12 @@ function correctedTree(tree: Tree, parser: Parser): Tree {
     node: TSNode,
     position: Position,
     depth: number,
-    parent: LinkedNode | null,
-    previousSibling: LinkedNode | null,
+    parent: TSNode | null,
+    previousSibling: TSNode | null,
     expand = false,
-  ): LinkedNode => {
-    const children: LinkedNode[] = [];
-    const result: LinkedNode = {
+  ): TSNode => {
+    const children: TSNode[] = [];
+    const result: TSNode = {
       type: node.type,
       text: node.text,
       startIndex: position(node.startIndex),

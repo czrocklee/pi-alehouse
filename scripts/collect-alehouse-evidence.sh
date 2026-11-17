@@ -80,10 +80,8 @@ if [[ ! -x "$ROOT_DIR/node_modules/.bin/tsc" || ! -x "$ROOT_DIR/node_modules/.bi
 fi
 # Isolate before ALL npm / Node entrypoints, not only SDK probes.
 export HOME="$scratch/home" PI_CODING_AGENT_DIR="$RESOURCE_DIR" PI_OFFLINE=1 PI_TELEMETRY=0
-npm run lint --prefix "$ROOT_DIR"
-# The canonical type gate includes orchestration, shared JS/declarations and extensions.
-npm run typecheck --prefix "$ROOT_DIR"
-npm test --prefix "$ROOT_DIR"
+# Use the same matched generation and package checks as CI, before any host probe.
+npm run check:package --prefix "$ROOT_DIR"
 render_resources() {
     local target="$1" stage_output="$2" permissions_only="$3" jev_only="$4"
     mkdir -p "$target" "$stage_output"

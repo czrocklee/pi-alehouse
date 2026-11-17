@@ -18,7 +18,7 @@ observations into public evidence.
 
 | Lane                                                                                                     | Intended evidence                                                                                                                                                                               | Not established                                                                        |
 | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Root `npm ci --ignore-scripts && npm run build && npm run check`                                         | Lockfile installation, matched generated runtime, lint/type checks, package unit/SDK/packaging tests and portable policy checks when scripts pass                                               | Real provider quality, deployability, human UI, fresh host compatibility               |
+| Root `npm ci --ignore-scripts && npm run check`                                                          | Lockfile installation, matched generated runtime, lint/type checks, package unit/SDK/packaging tests and portable policy checks when scripts pass                                               | Real provider quality, deployability, human UI, fresh host compatibility               |
 | Portable policy suite (separate from package tests)                                                      | Generated worker definitions, static guard, policy-aware grep and patched permission authority under synthetic controlled calls                                                                 | OS sandboxing, arbitrary scripts/paths or live human authorization                     |
 | Controlled host integration suite (explicit invocation)                                                  | Built entrypoint, actual host SDK/loader, child tool allowlist, parent/scout web isolation (internal `researcher`), footer/Stats/UI registration, lease and shutdown with synthetic provider/UI | Remote model use, safe reload, transactionally atomic cancellation or durable recovery |
 | Optional Jev controlled lane                                                                             | Review provenance and forwarded asks with fabricated responses in isolated process; defer and no-key paths                                                                                      | Human authorization, calibrated judgments, permission grants for other contexts        |
@@ -33,8 +33,7 @@ From the repository root of a Linux checkout:
 
 ```sh
 npm ci --ignore-scripts
-npm run build
-npm run check          # lint, types, package tests, then the portable policy gates
+npm run check          # lint, matched build, types, package tests, then portable policy
 npm run test:policy    # the portable policy gates alone
 ```
 

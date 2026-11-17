@@ -1,4 +1,8 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ToolResultEvent,
+} from "@earendil-works/pi-coding-agent";
 import {
   constants,
   closeSync,
@@ -18,6 +22,14 @@ const ENTRY_TYPE = "managed-scratch-created";
 const MAX_JOURNAL_BYTES = 16 * 1024 * 1024;
 const MAX_JOURNAL_LINES = 10_000;
 const CLOCK_SLOP_NS = 2_000_000_000n;
+
+// The SDK's custom-tool variant overlaps built-in names, so narrow by the
+// same discriminator as its runtime guard without requiring a host export.
+function isBashResult(
+  event: ToolResultEvent,
+): event is Extract<ToolResultEvent, { toolName: "bash" }> {
+  return event.toolName === "bash";
+}
 
 type ScratchRecord = ManagedScratchRoot & {
   readonly version: 1;
@@ -303,7 +315,7 @@ export function installManagedScratch(pi: ExtensionAPI, harden: Harden): void {
     pending.delete(event.toolCallId);
     if (
       !item ||
-      event.toolName !== "bash" ||
+      !isBashResult(event) ||
       event.isError ||
       event.input !== item.input ||
       event.input.command !== "mktemp -d" ||

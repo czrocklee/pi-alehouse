@@ -2,6 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createJiti } from "jiti";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  detailEntry as entry,
+  detailView as view,
+  fgCall,
+  plainTheme as theme,
+  recordingTheme,
+} from "../support/detail-fixture.mjs";
 
 // The footer suppresses its `!N` cue while the selected tab's own `?`/`!`
 // marker is painted. These regressions hold that contract at the extremes:
@@ -13,45 +20,6 @@ const { renderDetailAgentStrip, renderDetailAttention, renderDetailFooter } = aw
   "../../src/orchestration/ui/agent-detail-fields.ts",
 );
 
-const theme = { fg: (_color, text) => text, bold: (text) => text };
-const view = (id, extra = {}) => ({
-  owner_id: "owner",
-  generation: "generation",
-  agent_id: id,
-  run_id: `run-${id}`,
-  name: id,
-  task: 1,
-  description: "Current task",
-  status: "completed",
-  phase: "settled",
-  execution_exited: true,
-  finalization_pending: false,
-  resident: true,
-  resumable: false,
-  pending_messages: 0,
-  elapsed_ms: 1000,
-  turns: 1,
-  max_turns: 80,
-  cleanup_errors: [],
-  discarded_inputs: [],
-  effective_settings: {
-    profile: "editor",
-    model: "model",
-    thinking: "high",
-    parent_thinking: "high",
-    thinking_resolution: "identity",
-    preset: "default",
-    preset_version: "v1",
-    strength: "d3",
-    difficulty: 3,
-    tools: ["read"],
-    cwd: "/workspace",
-    context_mode: "none",
-  },
-  ...extra,
-});
-const live = { active_tools: [], tool_uses: 0, preview: "" };
-const entry = (v) => ({ agent_id: v.agent_id, input: { view: v, live } });
 const transcript = () => ({
   lineCount: () => 3,
   slice: (_width, from, take) =>
@@ -194,19 +162,7 @@ test("a question keeps its `?` through a clipped tab as well", (t) => {
 
 const warned = ["aspen", "cedar"].map((id) => entry(view(id, { history_error: "x" })));
 
-/** A theme that records every fg/bold call, for exact colour assertions. */
-const recording = () => {
-  const calls = [];
-  return {
-    calls,
-    theme: {
-      fg: (color, text) => (calls.push(["fg", color, text]), text),
-      bold: (text) => (calls.push(["bold", text]), text),
-    },
-  };
-};
-const fgCall = (calls, color, text) =>
-  calls.some(([kind, c, t]) => kind === "fg" && c === color && t === text);
+const recording = () => recordingTheme({ tabStyles: false });
 
 test("attention overflow dims its separators and accents only the info key", () => {
   const { theme, calls } = recording();

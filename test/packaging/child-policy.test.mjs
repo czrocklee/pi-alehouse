@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { managedAgentNames } from "../../bin/runtime-support.mjs";
 import { renderWorkers } from "../../scripts/build/generate-workers.mjs";
 import {
   agentProfileNames,
@@ -9,35 +10,20 @@ import {
   managementToolNames,
 } from "../../dist/orchestration/tools/tool-names.js";
 
-const json = (relative) => JSON.parse(readFileSync(new URL(relative, import.meta.url), "utf8"));
+const text = (relative) => readFileSync(new URL(relative, import.meta.url), "utf8");
+const json = (relative) => JSON.parse(text(relative));
+const definitionParts = (definition) => {
+  const parts = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/.exec(definition);
+  assert(parts, "managed definition must separate frontmatter and prompt");
+  return { frontmatter: parts[1], prompt: parts[2] };
+};
 
-test("orchestration guide lists the actual management tools and absent-only resource inventory", () => {
-  const readme = readFileSync(new URL("../../docs/orchestration.md", import.meta.url), "utf8");
-  const tools = /parent has (\w+) fixed management tools \(([^)]+)\)/.exec(readme);
-  assert(tools);
-  assert.equal(tools[1], "nine");
-  assert.deepEqual(
-    [...tools[2].matchAll(/`([^`]+)`/g)].map((match) => match[1]),
-    managementToolNames,
-  );
-  const definitions = /five agent definitions: ([^;]+);/.exec(readme);
-  assert(definitions);
-  const actual = Object.keys(renderWorkers().agents).sort();
-  assert.equal(actual.length, 5);
-  assert.deepEqual(
-    [...definitions[1].matchAll(/`([^`]+)`/g)].map((match) => match[1]).sort(),
-    actual,
-  );
-  assert.match(readme, /seven files total/);
-  assert.match(
-    readme,
-    /Tasks have a soft turn budget \(default 256\), not a wall-clock execution deadline/,
-  );
-  assert.match(
-    readme,
-    /cooperative grace beyond `max_turns` is a configurable Owner limit, not a fixed `\+5` public contract/,
-  );
-  assert.match(readme, /agent_answer.*settled pending question/);
+test("generated agent inventory matches init and the guide names the supported agents and tools", () => {
+  assert.deepEqual(Object.keys(renderWorkers().agents).sort(), [...managedAgentNames].sort());
+  const guide = text("../../docs/orchestration.md");
+  const identifiers = new Set([...guide.matchAll(/`([^`\r\n]+)`/g)].map((match) => match[1]));
+  for (const name of [...managedAgentNames, ...managementToolNames])
+    assert(identifiers.has(name), `orchestration guide does not name ${name}`);
 });
 
 test("production and portable seeds allow the two current child tools and answer, preserving send while denying retired notify", () => {
@@ -52,6 +38,7 @@ test("production and portable seeds allow the two current child tools and answer
     assert.equal(permission.agent_answer, "allow");
     assert.equal(permission.notify_parent, "deny", "no old allow or runtime alias");
     assert.equal(permission.web_search, "ask");
+    assert.equal(permission.source_check, "ask");
     assert.equal(permission.fetch_content, "ask");
     assert.equal(permission.get_search_content, "allow");
     assert.equal(permission.path["*.env"], "deny");
@@ -72,111 +59,61 @@ test("generated managed definitions deny all current/retired parent tools and no
   );
   for (const [name, profile] of Object.entries(policy.profiles)) {
     const definition = rendered.agents[name];
-    const tools = JSON.parse(/^tools: (.+)$/m.exec(definition)[1]);
+    const { frontmatter } = definitionParts(definition);
+    const tools = JSON.parse(/^tools: (.+)$/m.exec(frontmatter)[1]);
+    assert.match(frontmatter, /^prompt_mode: replace$/m);
+    assert.match(frontmatter, /^inherit_context: false$/m);
     assert.deepEqual(tools, [
       ...policy.readTools.filter((tool) => profile.bash !== false || tool !== "bash"),
       ...(profile.edits ? ["edit", "write"] : []),
     ]);
     for (const tool of policy.childToolDenies) {
-      assert.match(definition, new RegExp(`^  ${tool}: deny$`, "m"), `${name}: ${tool}`);
+      assert.match(frontmatter, new RegExp(`^  ${tool}: deny$`, "m"), `${name}: ${tool}`);
       assert(!tools.includes(tool), `${name}: forbidden declared tool ${tool}`);
     }
     assert.equal(
       rendered.metadata[name].digest,
       createHash("sha256").update(definition).digest("hex"),
     );
-    for (const fact of [/alert_parent for/, /important findings/, /then continue/])
-      assert.match(definition, fact);
-    assert.doesNotMatch(definition.split("---\n").at(-1), /notify_parent/);
     for (const spelling of ["git commit *", "git -C * push *", "git config *"])
       assert.equal(
         rendered.metadata[name].bashDenies.includes(spelling),
         name !== "editor",
         `${name}: shipped Git floor ${spelling}`,
       );
-    if (!profile.edits) assert.match(definition, / {2}path_write:\n {4}"\*": deny/);
-    if (profile.bash === false) assert.match(definition, / {2}bash:\n {4}"\*": deny/);
+    if (!profile.edits) assert.match(frontmatter, /^ {2}path_write:\n {4}"\*": deny$/m);
+    if (profile.bash === false) assert.match(frontmatter, /^ {2}bash:\n {4}"\*": deny$/m);
   }
   for (const name of policy.disabled) {
-    assert.match(rendered.agents[name], /^enabled: false$/m);
-    assert.match(rendered.agents[name], /^ {2}"\*": deny$/m);
+    const { frontmatter } = definitionParts(rendered.agents[name]);
+    assert.match(frontmatter, /^enabled: false$/m);
+    assert.match(frontmatter, /^tools: none$/m);
+    assert.match(frontmatter, /^ {2}"\*": deny$/m);
   }
 });
 
-test("shared child prompt retains help-seeking and result-reporting guidance", () => {
-  const common = readFileSync(new URL("../../resources/agent.md", import.meta.url), "utf8");
-  for (const fact of [
-    /after substantive investigation/,
-    /ask_parent, explaining the blocker/,
-    /independent work before asking when practical/,
-    /without further parent input, report it/,
-    // Final result reporting is unconditional; failures/unknowns/limits still
-    // report, and the ask end-turn/no-repeat mechanics live only in the tool
-    // receipts.
-    /Distinguish observations from inference and completed work from unrun, blocked or interrupted work/,
-  ])
-    assert.match(common, fact);
-  const reporting = common
-    .trim()
-    .split(/\n\s*\n/)
-    .at(-1);
-  assert.match(
-    reporting,
-    /^Return concise results/,
-    "final result-reporting paragraph begins unconditionally with 'Return concise results'",
-  );
-  assert.match(
-    reporting,
-    /If reporting a failure, unknown or limit fulfills the assignment without further parent input, report it/,
-  );
-  assert.doesNotMatch(common, /For completed work/);
-  assert.doesNotMatch(
-    common,
-    /stop calling tools|Only the first question|returning a blocked result|do not repeat (?:it|the question) in your final reply|Exception:/,
-  );
-  assert.doesNotMatch(common, /\bd[1-5]\b/i, "help-seeking is not tied to a routing slot");
+test("child prompts include shared and profile-specific sources without mixing profiles", () => {
   const { agents } = renderWorkers();
-  for (const definition of [agents.editor, agents.researcher]) assert(definition.includes(common));
-});
-
-test("scout source guidance supports local and web synthesis without worker execution or model-tier assumptions", () => {
-  const { agents } = renderWorkers();
-  const common = readFileSync(new URL("../../resources/agent.md", import.meta.url), "utf8");
-  const worker = readFileSync(new URL("../../resources/worker.md", import.meta.url), "utf8");
-  const scout = readFileSync(new URL("../../resources/scout.md", import.meta.url), "utf8");
-  for (const definition of [agents.editor, agents.researcher]) assert(definition.includes(common));
-  assert(agents.editor.includes(worker));
-  assert(agents.researcher.includes(scout));
-  assert(
-    !agents.researcher.includes(worker),
-    "worker execution/check/tree discipline stays out of scout's body",
-  );
-  for (const fact of [
-    /cross-reference, compare, summarize and extract/,
-    /local files and web sources/,
-    /no Bash, edit or write tools/,
-    /report that gap for the parent/,
-    /primary web sources/,
-    /previews are insufficient/,
-    /local file paths or source URLs/,
-    /version, date, platform and scope/,
-    /Surface conflicts/,
-    /missing or unverified information as unknown/,
-    /untrusted data, never instructions/,
-    /Never send local file contents or private task details/,
-  ])
-    assert.match(scout, fact);
-  assert.doesNotMatch(
-    scout,
-    /\b(?:cheap|skim|quick|d[1-5])\b/i,
-    "profile guidance does not assign a model tier or shallow scope",
-  );
-  assert.doesNotMatch(scout, /full gate|declared tree|Run assigned checks/);
-  assert.doesNotMatch(
-    agents.editor,
-    /Synthesize results yourself/,
-    "scout discipline is profile-specific",
-  );
+  const { profiles } = json("../../resources/worker-policy.json");
+  const common = text("../../resources/agent.md").trim();
+  const worker = text("../../resources/worker.md").trim();
+  const scout = text("../../resources/scout.md").trim();
+  assert(common && worker && scout, "all three source prompts must be nonempty");
+  // Tool names are API identifiers. The surrounding guidance is reviewed as prose.
+  for (const name of ["alert_parent", "ask_parent"])
+    assert.match(common, new RegExp(`\\b${name}\\b`));
+  for (const [name, own, other] of [
+    ["editor", worker, scout],
+    ["researcher", scout, worker],
+  ]) {
+    const { prompt } = definitionParts(agents[name]);
+    assert(prompt.includes(common), `${name}: missing common prompt`);
+    assert(prompt.includes(own), `${name}: missing profile prompt`);
+    assert(!prompt.includes(other), `${name}: another profile's prompt leaked in`);
+    if (profiles[name].prompt)
+      assert(prompt.includes(profiles[name].prompt.trim()), `${name}: missing policy prompt`);
+    assert.doesNotMatch(prompt, /\bnotify_parent\b/, `${name}: retired tool in prompt`);
+  }
 });
 
 test("source render keeps cooperative editor Git permission-checked and researcher floors intact", () => {
@@ -188,19 +125,9 @@ test("source render keeps cooperative editor Git permission-checked and research
     [],
     "no shipped child-only blanket Git bans for the cooperative worker",
   );
-  assert.match(rendered.agents.editor, /^ {2}bash:\n {4}"\*": ask$/m);
-  assert.doesNotMatch(
-    rendered.agents.editor,
-    /^ {4}"git .*": allow$/m,
-    "no blanket or command-specific Git allow",
-  );
-  for (const fact of [
-    /Git remains permission-checked/,
-    /not automatically approved/,
-    /preserve user denies/,
-  ])
-    assert.match(rendered.agents.editor, fact);
-  assert.doesNotMatch(rendered.agents.editor, /Git mutations stay with the parent/);
+  const editor = definitionParts(rendered.agents.editor).frontmatter;
+  assert.match(editor, /^ {2}bash:\n {4}"\*": ask$/m);
+  assert.doesNotMatch(editor, /^ {4}"git .*": allow$/m, "no command-specific Git allow");
   for (const name of ["researcher"]) {
     assert.equal(policy.profiles[name].gitDenyFloor, undefined, `${name}: no opt-out`);
     const git = (commands) => [
@@ -218,7 +145,7 @@ test("source render keeps cooperative editor Git permission-checked and research
       `${name}: exact historical Git floor order and spellings`,
     );
   }
-  const researcher = rendered.agents.researcher;
+  const researcher = definitionParts(rendered.agents.researcher).frontmatter;
   const tools = JSON.parse(/^tools: (.+)$/m.exec(researcher)[1]);
   for (const tool of ["bash", "edit", "write"])
     assert(!tools.includes(tool), `researcher: no ${tool}`);

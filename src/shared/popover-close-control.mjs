@@ -3,50 +3,34 @@
  * painted close hit: a left press inside the hit claims the press (never
  * closes), a left or buttonless release inside the same hit closes, and the
  * release and native synthetic click of a cancelled gesture are consumed so
- * they can neither close twice nor fall through into body controls. Consumers
- * inject the hover factory and shared frame's hit test, keeping this an
- * SDK-free, dependency-free leaf without duplicating geometry constants. */
+ * they can neither close twice nor fall through into body controls. The shared
+ * SDK-free tracker owns the painted hit for both feedback and activation. */
+
+import { createPopoverCloseHover } from "./popover-close-hover.mjs";
 
 /** @typedef {{ host?: object, requestRender(): void,
- * closeHit(width: number): {x: number, width: number, y?: number} | undefined,
- * createHover: typeof import("./popover-close-hover.mjs").createPopoverCloseHover }} ControlOptions */
-/** @typedef {{ type: string, button?: string, x?: number, y?: number,
- * width?: number }} ControlMouseEvent */
+ * closeHit(width: number): {x: number, width: number, y?: number} | undefined }} ControlOptions */
+/** @typedef {import("./popover-close-hover.mjs").PopoverCloseMouseEvent} ControlMouseEvent */
 /** One gesture in flight: "armed" claimed a press inside the hit, "spent" was
  * claimed but permanently cancelled, "closed" already closed on release, and
  * "outside" observed a fresh press that was not ours to claim. "interrupted"
  * no longer owns releases, but suppresses one potentially captured old click.
  * @typedef {"armed" | "spent" | "closed" | "outside" | "interrupted"} Gesture */
 
-/** @param {object | undefined} host @returns {unknown[]} */
-function dimensions(host) {
-  const terminal = /** @type {{terminal?: {columns?: unknown, rows?: unknown}} | undefined} */ (
-    host
-  )?.terminal;
-  return [terminal?.columns, terminal?.rows];
-}
-
 /** One instance per visible panel, not per paint. No timers or model/session IO.
- * `paint` publishes actual close visibility exactly like the composed hover; a
+ * `paint` publishes actual close visibility through the shared tracker. A
  * geometry change also cancels an armed gesture and suppresses its stale
  * release/click. `mouse` returns `{ handled: true, close }` for a claimed or
  * consumed event and undefined otherwise; `close` is true only when the caller
- * should close now. `active` false cancels and consumes an old gesture but
- * never activates one. Dispose at final teardown, reset when hiding/yielding.
+ * should close now. `active` false clears hover and cancels and consumes an
+ * old gesture without activating one. Dispose at final teardown, reset when hiding/yielding.
  * @param {ControlOptions} options
  */
 export function createPopoverCloseControl(options) {
   let disposed = false;
-  let paintedWidth = 0;
-  /** @type {{x: number, width: number, y?: number} | undefined} */
-  let paintedHit;
-  /** @type {number | undefined} */
-  let paintedHeight;
-  /** @type {unknown[]} */
-  let paintedDimensions = [];
   /** @type {Gesture | undefined} */
   let gesture;
-  const hover = options.createHover({
+  const hover = createPopoverCloseHover({
     host: options.host,
     requestRender: options.requestRender,
     closeHit: options.closeHit,
@@ -66,47 +50,12 @@ export function createPopoverCloseControl(options) {
   }
   /** @param {boolean} close @returns {{ handled: true, close: boolean }} */
   const claim = (close) => ({ handled: true, close });
-  /** The hit exactly as last painted, and only while that paint is still the
-   * live geometry. event.width, when the host provides it, must agree with the
-   * painted width; it never creates or widens the hit itself.
-   * @param {ControlMouseEvent} event */
-  const insideHit = (event) => {
-    if (
-      paintedWidth <= 0 ||
-      event.y !== (paintedHit?.y ?? 0) ||
-      event.x === undefined ||
-      !Number.isFinite(event.x) ||
-      !Number.isFinite(event.y) ||
-      (event.width !== undefined && event.width !== paintedWidth)
-    )
-      return false;
-    const hit = options.closeHit(paintedWidth);
-    if (
-      !hit ||
-      !paintedHit ||
-      hit.x !== paintedHit.x ||
-      hit.width !== paintedHit.width ||
-      (hit.y ?? 0) !== (paintedHit.y ?? 0) ||
-      event.x < hit.x ||
-      event.x >= hit.x + hit.width
-    )
-      return false;
-    const current = dimensions(options.host);
-    return current.every((value, index) => value === paintedDimensions[index]);
-  };
   const cancel = () => {
     if (gesture === "armed") setGesture("spent");
   };
-  const retire = () => {
-    paintedWidth = 0;
-    paintedHit = undefined;
-    paintedHeight = undefined;
-    paintedDimensions = [];
-    cancel();
-  };
   /** @param {boolean} [render] */
   const reset = (render = true) => {
-    retire();
+    cancel();
     hover.reset(render);
   };
   return {
@@ -115,42 +64,14 @@ export function createPopoverCloseControl(options) {
     },
     /** @param {number} width @param {boolean} [enabled] @param {number} [height] */
     paint(width, enabled = true, height) {
-      if (disposed) return;
-      try {
-        const next = dimensions(options.host);
-        const hit = options.closeHit(width);
-        const valid =
-          enabled &&
-          Number.isInteger(width) &&
-          !!hit &&
-          Number.isInteger(hit.y ?? 0) &&
-          (hit.y ?? 0) >= 0 &&
-          (height === undefined || (Number.isInteger(height) && height > (hit.y ?? 0)));
-        if (
-          !valid ||
-          width !== paintedWidth ||
-          hit?.x !== paintedHit?.x ||
-          hit?.width !== paintedHit?.width ||
-          (hit?.y ?? 0) !== (paintedHit?.y ?? 0) ||
-          (height !== undefined && height !== paintedHeight) ||
-          next.some((value, index) => value !== paintedDimensions[index])
-        )
-          cancel(); // Geometry moved: the armed gesture dies, its events stay consumed.
-        paintedWidth = valid ? width : 0;
-        paintedHit = valid && hit ? { ...hit } : undefined;
-        if (height !== undefined) paintedHeight = height;
-        paintedDimensions = next;
-        hover.paint(width, enabled, height);
-      } catch {
-        reset(false);
-      }
+      if (hover.paint(width, enabled, height)) cancel();
     },
     /** @param {ControlMouseEvent} event @param {boolean} [active]
      * @returns {{ handled: true, close: boolean } | undefined} */
     mouse(event, active = true) {
       try {
-        hover.mouse(event); // Acknowledge every delivered mouse event, not just hover.
-        const live = active && !disposed;
+        // Observe every delivered event, including those that cannot activate close.
+        const insideHit = hover.mouse(event, active);
         if (!active) cancel();
         if (event.type === "press") {
           // Every fresh press ends previous ownership, including another
@@ -163,13 +84,13 @@ export function createPopoverCloseControl(options) {
           }
           // A fresh left press always replaces that tombstone; body input is
           // ordinary again, and only a live press inside the hit can arm close.
-          setGesture(live && insideHit(event) ? "armed" : "outside");
+          setGesture(insideHit ? "armed" : "outside");
           return gesture === "armed" ? claim(false) : undefined;
         }
         if (event.type === "release") {
           if (event.button !== "left" && event.button !== "none") return undefined;
           if (gesture === "armed") {
-            if (live && insideHit(event)) {
+            if (insideHit) {
               setGesture("closed"); // The native synthetic click must not reclose.
               return claim(true);
             }
@@ -181,7 +102,7 @@ export function createPopoverCloseControl(options) {
         if (event.type === "click" && event.button === "left") {
           if (gesture === "armed") {
             // Structural hosts press and then click without any release.
-            if (live && insideHit(event)) {
+            if (insideHit) {
               setGesture(undefined);
               return claim(true);
             }
@@ -194,13 +115,13 @@ export function createPopoverCloseControl(options) {
           }
           if (gesture === "outside") {
             setGesture(undefined);
-            return live && insideHit(event) ? claim(false) : undefined;
+            return insideHit ? claim(false) : undefined;
           }
-          return live && insideHit(event) ? claim(true) : undefined;
+          return insideHit ? claim(true) : undefined;
         }
         if ((event.type === "move" || event.type === "drag") && gesture === "armed") {
           // Leaving the hit cancels permanently: moving back cannot revive it.
-          if (!insideHit(event)) setGesture("spent");
+          if (!insideHit) setGesture("spent");
         }
         return undefined;
       } catch {
@@ -211,7 +132,7 @@ export function createPopoverCloseControl(options) {
     reset,
     dispose() {
       disposed = true;
-      retire();
+      cancel();
       // Detach observation, but retain the tombstone for a trailing synthetic
       // click already captured by the native host before synchronous teardown.
       hover.watchGesture(false);

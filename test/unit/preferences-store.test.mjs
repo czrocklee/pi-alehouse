@@ -223,6 +223,39 @@ test("applied changes stage only explicit fields; reset masks pins and Off prese
   assert.equal(store.get("workspace").effort.team.d1, null);
 });
 
+test("applied preset definition, name and changed effort queue together or not at all", async (t) => {
+  const f = await fixture(t);
+  const body = team("custom");
+  const previous = f.router.current();
+  const selection = f.router.apply(f.router.prepare({ custom: body }), "custom", () => {}, {
+    d1: "high",
+  });
+  f.store.setScope("global");
+  // Leave room for the remembered definition alone, but not for the full selection.
+  const spare = Buffer.byteLength(JSON.stringify({ custom: body })) - 1;
+  const { presets } = nearLimitPreferences({ version: 2, approval: "manual" }, spare);
+  f.store.stage("global", ["presets"], presets);
+  f.store.stage("global", ["approval"], "manual");
+  const pending = f.store.pending();
+  assert.throws(
+    () => stageWorkerSelection(f.store, selection, previous, true, {}, body),
+    /document exceeds/,
+  );
+  assert.deepEqual(f.store.pending(), pending);
+  assert.deepEqual(
+    f.router.current(),
+    selection,
+    "a queue failure does not roll back the live selection",
+  );
+  f.store.discard("global");
+  stageWorkerSelection(f.store, selection, previous, true, {}, body);
+  assert.deepEqual(f.store.pending(), [
+    { scope: "global", path: ["presets", "custom"], value: body },
+    { scope: "global", path: ["preset"], value: "custom" },
+    { scope: "global", path: ["effort", "custom", "d1"], value: "high" },
+  ]);
+});
+
 test("beer mugs toggles live on/off with dynamic labels; session choices never stage or create config", async (t) => {
   const f = await fixture(t),
     before = f.router.current();

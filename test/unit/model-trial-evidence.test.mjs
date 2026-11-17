@@ -517,6 +517,31 @@ test("ordinary parent clarification uses agent_run and still requires whole firs
     "parent did not retrieve the first task's output before asking the user",
   ]);
 });
+for (const followup of ["agent_answer", "agent_run"]) {
+  test(`${followup}: same name and consecutive tasks still require a real, matching Agent ID`, () => {
+    const valid = evidence();
+    if (followup === "agent_run") ordinaryFollowup(valid);
+    assert.deepEqual(dialogueFailures(valid, expected), []);
+
+    const replaced = structuredClone(valid);
+    replaced.runStates[1].agent_id = "replacement-worker-id";
+    assert.deepEqual(dialogueFailures(replaced, expected), noAnswer, "same-name replacement");
+
+    for (const id of [undefined, "", " ", 1]) {
+      const copy = structuredClone(valid);
+      // Even equality at both sites cannot certify an absent or invalid ID.
+      for (const run of [...copy.first.runStates, ...copy.runStates]) {
+        if (id === undefined) delete run.agent_id;
+        else run.agent_id = id;
+      }
+      assert.deepEqual(
+        dialogueFailures(copy, expected),
+        noAnswer,
+        `invalid ID: ${JSON.stringify(id)}`,
+      );
+    }
+  });
+}
 test("an alert alone does not certify question retrieval before a later wait", () => {
   const copy = evidence().first,
     full = copy.calls[0];

@@ -13,7 +13,6 @@ import {
   popoverTextRect,
 } from "../../shared/popover-chrome.mjs";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
-import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import {
   POPOVER_DOCK_ROWS,
@@ -191,7 +190,6 @@ export function createFooterPanels(options: {
     breakdownPressed = suppressBreakdownClick = false;
     member = joinPopoverStack(tui);
     breakdownHover = createPopoverCloseControl({
-      createHover: createPopoverCloseHover,
       closeHit: popoverChromeCloseHit,
       host: tui,
       requestRender: () => tui.requestRender(),

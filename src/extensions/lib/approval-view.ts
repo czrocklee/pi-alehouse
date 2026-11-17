@@ -11,7 +11,6 @@ import {
   popoverTitleRows,
 } from "../../shared/popover-chrome.mjs";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
-import { createPopoverCloseHover } from "../../shared/popover-close-hover.mjs";
 import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import type { PersistentScope } from "../../shared/settings-store.mjs";
 import { shortcutHint } from "../../shared/shortcut-hint.mjs";
@@ -79,7 +78,6 @@ export class ApprovalPopover implements Component {
 
   constructor(private readonly options: ApprovalPopoverOptions) {
     this.closeHover = createPopoverCloseControl({
-      createHover: createPopoverCloseHover,
       closeHit: popoverChromeCloseHit,
       host: options.tui,
       requestRender: options.requestRender,

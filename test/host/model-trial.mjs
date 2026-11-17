@@ -80,8 +80,16 @@ assert(
   controlled || (typeof requestedModel === "string" && /^[^/\s]+\/[^\s]+$/.test(requestedModel)),
   "Live trials require an explicit PROVIDER/MODEL; no provider or model is selected by default",
 );
-const { sdk, ai, permission, permissionEntry, authority, versions } = await loadHost(piExecutable);
-const { Type: T } = ai;
+const {
+  sdk,
+  ai,
+  permission,
+  permissionEntry,
+  authority,
+  versions,
+  require: hostRequire,
+} = await loadHost(piExecutable);
+const { Type: T } = hostRequire("typebox");
 assert(T?.Object, "Host TypeBox export missing");
 if (!controlled) {
   const resources = JSON.parse(readFileSync(resourceSource, "utf8"));
@@ -960,6 +968,12 @@ try {
         (copy) => {
           const call = answerCall(copy);
           call.args.agent = call.value.action.agent = "otter";
+        },
+      ],
+      "same-name-different-agent-id": [
+        noAnswer,
+        (copy) => {
+          copy.runStates[1].agent_id = `${copy.runStates[0].agent_id}-replacement`;
         },
       ],
       "stale-question-reference": [

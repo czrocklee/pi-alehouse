@@ -1,143 +1,122 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
-const typeGate = fileURLToPath(new URL("../../scripts/checks/check-pi-types.mjs", import.meta.url));
-const baseline = "ext/policy-grep.ts(1,1): error TS2322: existing intentional file/code baseline";
-const fakeTsc = `#!/usr/bin/env node
-const fixture = JSON.parse(process.env.PI_TYPEGATE_FIXTURE);
-if (process.argv.includes("--version")) {
-  process.stdout.write(fixture.version ?? "Version fixture-5.9.3\\n");
-  process.stderr.write(fixture.versionError ?? "");
-  process.exit(fixture.versionStatus ?? 0);
+const root = fileURLToPath(new URL("../../", import.meta.url));
+const gate = join(root, "scripts/checks/check-pi-types.mjs");
+function temporary(t) {
+  const cwd = mkdtempSync(join(tmpdir(), "alehouse-type-gate-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  return cwd;
 }
-if (!process.argv.includes("--pretty") || !process.argv.includes("false")) throw new Error("expected plain diagnostics");
-if (JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).type !== "module") throw new Error("type gate must preserve the source ESM boundary");
-process.stdout.write(fixture.stdout);
-process.stderr.write(fixture.stderr ?? "");
-if (fixture.signal) process.kill(process.pid, "SIGTERM");
-if (fixture.crash) throw new Error("synthetic compiler exception");
-process.exit(fixture.status ?? 2);
-`;
-
-function runGate(t, overrides = {}) {
-  const root = mkdtempSync(join(tmpdir(), "pi-type-gate-regression-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const repo = join(root, "repo"),
-    agent = join(root, "agent"),
-    scratch = join(root, "scratch");
-  for (const directory of [
-    "scripts/checks",
-    "src/extensions",
-    "src/shared",
-    "test/support",
-    "node_modules/.bin",
-    "node_modules/@earendil-works",
-    "node_modules/@types",
-    "node_modules/typebox",
-    "node_modules/@gotgenes/pi-permission-system",
-  ])
-    mkdirSync(join(repo, directory), { recursive: true });
-  mkdirSync(join(agent, "npm/node_modules/@gotgenes/pi-permission-system"), { recursive: true });
-  mkdirSync(scratch);
-  writeFileSync(join(repo, "package.json"), "{}\n");
-  writeFileSync(
-    join(repo, "test/support/shared-library-types.mjs"),
-    "// unrelated shared checker fixture\n",
+function put(cwd, name, text) {
+  const path = join(cwd, name);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, text);
+}
+function checkFixture(t, files, overrides = {}) {
+  const cwd = temporary(t);
+  for (const file of files) cpSync(join(root, file), join(cwd, file), { recursive: true });
+  symlinkSync(join(root, "node_modules"), join(cwd, "node_modules"), "dir");
+  // Exercise the real npm aggregate. Don't recursively run unrelated suites;
+  // the policy stand-in records the actual arguments npm forwarded to it.
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  Object.assign(pkg.scripts, {
+    lint: "true",
+    "test:built": "true",
+    "test:policy": "node policy.mjs",
+    ...overrides,
+  });
+  put(cwd, "package.json", JSON.stringify(pkg));
+  put(
+    cwd,
+    "policy.mjs",
+    'import {writeFileSync} from "node:fs"; writeFileSync("policy-args.json", JSON.stringify(process.argv.slice(2)));',
   );
-  const compiler = join(repo, "node_modules/.bin/tsc");
-  writeFileSync(
-    compiler,
-    overrides.startFailure ? "#!/nonexistent/pi-typegate-interpreter\n" : fakeTsc,
-  );
-  chmodSync(compiler, 0o755);
-  const result = spawnSync(process.execPath, [typeGate, repo, agent], {
+  return cwd;
+}
+function check(cwd) {
+  const result = spawnSync("npm", ["--offline", "--silent", "run", "check"], {
+    cwd,
     encoding: "utf8",
-    timeout: 30_000,
-    env: {
-      ...process.env,
-      TMPDIR: scratch,
-      PI_TYPEGATE_FIXTURE: JSON.stringify({ stdout: `${baseline}\n`, ...overrides }),
-    },
+    env: { ...process.env, npm_config_cache: join(cwd, ".npm-cache") },
   });
-  assert(!result.error, result.error?.message);
+  assert.ifError(result.error);
   assert.equal(result.signal, null);
-  assert.deepEqual(readdirSync(scratch), [], "all handled outcomes remove scratch state");
-  return result;
+  return { status: result.status, output: result.stdout + result.stderr };
 }
 
-test("extension type gate accepts the single known file/code baseline and its continuation", (t) => {
-  const result = runGate(t, {
-    stdout: `${baseline}\n  Continuation of the accepted diagnostic.\n`,
-  });
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /PASS: Pi extensions typecheck.*fixture-5\.9\.3, 1 baselined/);
+test("a missing generation is an error, not a narrower successful typecheck", (t) => {
+  const checked = spawnSync(process.execPath, [gate, temporary(t)], { encoding: "utf8" });
+  assert.equal(checked.status, 1);
+  assert.match(checked.stderr, /Missing generated authority entry/);
 });
 
-for (const [name, diagnostic, expected] of [
-  [
-    "extension",
-    "ext/other.ts(2,3): error TS2339: extra extension failure",
-    /ext\/other\.ts:2:3: error TS2339/,
-  ],
-  [
-    "relative dependency",
-    "node_modules/package/index.ts(1,1): error TS2345: dependency failure",
-    /node_modules\/package\/index\.ts:1:1/,
-  ],
-  [
-    "absolute dependency",
-    "/tmp/project (fixture)/node_modules/package/index.ts(1,1): error TS2345: external failure",
-    /\/tmp\/project \(fixture\)\/node_modules/,
-  ],
-  ["global", "error TS2688: missing synthetic type definition", /<global>: error TS2688/],
-  ["warning", "ext/policy-grep.ts(1,1): warning TS2322: not an accepted error", /warning TS2322/],
-])
-  test(`extension type gate rejects an additional ${name} diagnostic`, (t) => {
-    const result = runGate(t, { stdout: `${baseline}\n${diagnostic}\n` });
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, expected);
-    assert.doesNotMatch(result.stdout, /PASS: Pi extensions/);
-  });
+test("an ancestor compiler cannot silently stand in for a missing checkout dependency", (t) => {
+  const parent = temporary(t);
+  const cwd = join(parent, "checkout");
+  put(parent, "node_modules/typescript/bin/tsc", "process.exit(0);");
+  put(cwd, "generated/authority/index.ts", "export {};");
+  put(cwd, "test/support/shared-library-types.mjs", "export {};");
+  const checked = spawnSync(process.execPath, [gate, cwd], { encoding: "utf8" });
+  assert.equal(checked.status, 1);
+  assert.match(checked.stderr, /Missing checkout-local TypeScript/);
+});
 
-for (const [name, overrides, expected] of [
-  ["missing baseline", { stdout: "", status: 0 }, /Baseline entry no longer occurs/],
-  [
-    "duplicate baseline",
-    { stdout: `${baseline}\n${baseline}\n` },
-    /Baseline expects 1 x TS2322.*found 2/,
-  ],
-  ["signal", { signal: true }, /tsc terminated by signal SIGTERM/],
-  ["compiler exception", { crash: true }, /synthetic compiler exception/],
-  ["unexpected status", { status: 17 }, /tsc exited abnormally: expected 2.*got 17/],
-  ["zero status with error", { status: 0 }, /tsc exited abnormally: expected 2.*got 0/],
-  ["compiler launch failure", { startFailure: true }, /tsc failed to run/],
-  [
-    "unrecognized output",
-    { stdout: `${baseline}\nunknown compiler failure\n` },
-    /Unrecognized tsc output/,
-  ],
-  [
-    "stderr without stdout newline",
-    { stdout: baseline, stderr: "error TS2688: separate error\n" },
-    /<global>: error TS2688/,
-  ],
-  ["indented stderr", { stderr: "  unexpected stderr failure\n" }, /Unrecognized tsc output/],
-  ["version failure", { versionStatus: 17 }, /tsc --version exited abnormally/],
-  [
-    "version stderr",
-    { versionError: "unexpected warning\n" },
-    /tsc --version wrote unexpected stderr/,
-  ],
-  ["version format", { version: "unknown version\n" }, /Unexpected tsc --version output/],
-])
-  test(`extension type gate rejects ${name}`, (t) => {
-    const result = runGate(t, overrides);
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, expected);
-    assert.doesNotMatch(result.stdout, /PASS: Pi extensions/);
-  });
+test("check rejects an orchestration type error without publishing the failed build", (t) => {
+  const cwd = checkFixture(t, [
+    "bin",
+    "scripts/build",
+    "resources",
+    "src/authority",
+    "src/extensions",
+    "src/shared",
+    "tsconfig.json",
+  ]);
+  put(cwd, "src/orchestration/probe.ts", "export const x: string = 42;");
+  const result = check(cwd);
+  assert.notEqual(result.status, 0, result.output);
+  assert.match(result.output, /src\/orchestration\/probe\.ts[^\n]*TS2322/);
+  for (const file of ["dist", "generated", "policy-args.json"])
+    assert(!existsSync(join(cwd, file)), file);
+});
+
+test("check follows generated authority imports and only hands a passing build to policy", (t) => {
+  const cwd = checkFixture(
+    t,
+    [
+      "scripts/checks/check-pi-types.mjs",
+      "scripts/checks/tsconfig.extensions.json",
+      "test/support/shared-library-types.mjs",
+    ],
+    { build: "true" },
+  );
+  put(cwd, "src/shared/one.mjs", "export const one = 1;");
+  put(cwd, "src/shared/one.d.mts", "export declare const one: 1;");
+  put(cwd, "src/composition.ts", "export {};");
+  put(cwd, "generated/authority/index.ts", 'import "./vendor/leaf.ts";');
+  const leaf = "generated/authority/vendor/leaf.ts";
+  put(cwd, leaf, "export const x: string = 42;");
+  const broken = check(cwd);
+  assert.notEqual(broken.status, 0, broken.output);
+  assert.match(broken.output, /generated\/authority\/vendor\/leaf\.ts[^\n]*TS2322/);
+  assert(!existsSync(join(cwd, "policy-args.json")));
+
+  put(cwd, leaf, 'export const x: string = "fixed";');
+  const fixed = check(cwd);
+  assert.equal(fixed.status, 0, fixed.output);
+  assert.deepEqual(JSON.parse(readFileSync(join(cwd, "policy-args.json"), "utf8")), ["--built"]);
+});

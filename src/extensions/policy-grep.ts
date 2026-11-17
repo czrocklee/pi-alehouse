@@ -4,7 +4,11 @@ import { constants } from "node:fs";
 import { open, readlink, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { createGrepToolDefinition, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  createGrepToolDefinition,
+  type ExtensionAPI,
+  type GrepToolDetails,
+} from "@earendil-works/pi-coding-agent";
 import type { PermissionsService } from "@gotgenes/pi-permission-system";
 import { activeAgent, policyGrepRegistry } from "./static-safety-guard.ts";
 
@@ -85,12 +89,22 @@ async function runGrep(
 
 type Segment = { path: string; first: number; lines: number; bytes: Buffer };
 
+// The inherited SDK renderer can read its optional fields; the policy tool
+// reports its own counts in details and explains all caps in the text result.
+interface PolicyGrepDetails extends GrepToolDetails {
+  policyFiltered: true;
+  searchedFiles: number;
+  skippedFiles: number;
+  skipped: Record<"permission" | "tooLarge" | "binary" | "unavailable" | "symlink", number>;
+  incomplete: boolean;
+}
+
 function registerPolicyGrep(pi: ExtensionAPI): () => boolean {
   const original = createGrepToolDefinition(process.cwd());
   // Pi exposes the winning tool's schema by reference, including SDK custom
   // overrides. Own a unique schema so merely running this factory proves nothing.
   const parameters = { ...original.parameters };
-  pi.registerTool({
+  pi.registerTool<typeof parameters, PolicyGrepDetails | undefined>({
     ...original,
     parameters,
     description:

@@ -471,6 +471,65 @@ test("spend is attributed to the model that answered, not to the alias asked for
   assert.equal(summed, facts.usage.total.cost);
 });
 
+test("a throwing SDK subscription quarantines before dispatch without wedging teardown", async () => {
+  const session = stubSession([]);
+  const gate = new RunInputGate();
+  const failure = new Error("subscription failed after registration");
+  const calls = [];
+  const subscribe = session.subscribe;
+  let listener, remove, acceptingDuringSubscribe;
+  session.subscribe = (onEvent) => {
+    calls.push("subscribe");
+    acceptingDuringSubscribe = gate.accepting;
+    listener = onEvent;
+    remove = subscribe(listener);
+    throw failure;
+  };
+  session.prompt = async () => calls.push("prompt");
+  session.waitForIdle = async () => calls.push("waitForIdle");
+  session.extensionRunner = {
+    onError: () => () => {},
+    emit: async () => calls.push("shutdown"),
+  };
+  session.dispose = () => {
+    calls.push("dispose");
+    remove();
+  };
+  const port = new SdkRunPort({
+    session,
+    parentBus: { emit() {} },
+    gate,
+    readiness() {},
+    invalidateApproval: () => calls.push("revoke"),
+  });
+  await assert.rejects(
+    port.run("go", { ...silentCallbacks(), turnStart: () => calls.push("turn") }),
+    (error) => {
+      assert.ok(error instanceof SessionUnavailableError);
+      assert.equal(error.reason, "sdk_subscribe_failed");
+      assert.equal(error.cause, failure);
+      return true;
+    },
+  );
+  assert.equal(acceptingDuringSubscribe, false);
+  assert.equal(gate.accepting, false);
+  assert.equal(gate.stopped, true);
+  assert.equal(port.canInput(), false);
+  assert.throws(() => port.clearInputs(), SessionUnavailableError, "not the active guard");
+  await assert.rejects(port.run("again", silentCallbacks()), SessionUnavailableError);
+  assert.equal(session.listenerCount(), 1, "the adapter did not receive a removal handle");
+  listener({ type: "turn_start" });
+  assert.deepEqual(calls, ["subscribe", "revoke"], "no dispatch, drain or stale listener callback");
+
+  session.isIdle = false;
+  await assert.rejects(port.dispose(), /EXECUTION_NOT_EXITED/);
+  assert.deepEqual(calls, ["subscribe", "revoke"], "no teardown without SDK idle");
+  session.isIdle = true;
+  assert.deepEqual(await port.dispose(), { shutdownExited: true, errors: [] });
+  assert.deepEqual(calls, ["subscribe", "revoke", "shutdown", "dispose"]);
+  assert.equal(session.listenerCount(), 0);
+});
+
 /**
  * The drain in `finally` can fail. If it takes the rest of the block with it,
  * the port never unsubscribes and never stops calling itself active, so every

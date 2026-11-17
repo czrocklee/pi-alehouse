@@ -75,6 +75,7 @@ import {
   SettingsStore,
   registerSettingsStore,
   type PresetDefinition,
+  type SettingsChange,
   type SettingsDocument,
 } from "../shared/settings-store.mjs";
 import { managedBlockToolNames } from "../shared/managed-block-tools.mjs";
@@ -470,36 +471,32 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
       appendAudit: (record) => pi.appendEntry(presetEntry, record),
     });
     sessionDefinitions = committed.nextDefinitions;
+    const { selection } = committed.publication;
     if (settingsStore)
       stageSettings(() => {
         const store = settingsStore!;
         // A remembered name must not depend on a session-only or workspace-only
         // definition absent from its target scope on the next fresh startup.
         const definitions = router!.customPresets();
-        const rememberedDefinition = Object.hasOwn(definitions, name)
-          ? definitions[name]
+        const rememberedDefinition = Object.hasOwn(definitions, selection.name)
+          ? definitions[selection.name]
           : undefined;
-        if (rememberedDefinition && store.scope !== "session")
-          store.stage(store.scope, ["presets", name], rememberedDefinition);
         stageWorkerSelection(
           store,
-          committed.publication.selection,
+          selection,
           committed.previous,
           effort_overrides !== undefined,
           committed.previousEfforts,
+          rememberedDefinition,
         );
       }, ctx);
     // Tool exposure is not the execution gate. A stale SDK tool handle still
     // reaches the Controller's current selection/disable-revision checks.
     presentPresetSelection({
-      snapshot: committed.publication.selection,
+      snapshot: selection,
       delegation,
       syncTools: syncWorkerTools,
-      setStatus: () =>
-        ctx.ui.setStatus(
-          "alehouse-preset",
-          delegationStatus(committed.publication.selection, delegation),
-        ),
+      setStatus: () => ctx.ui.setStatus("alehouse-preset", delegationStatus(selection, delegation)),
       notify: (message, level) => ctx.ui.notify(message, level),
     });
     return committed.publication;
@@ -535,11 +532,14 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
     if (settingsStore && settingsStore.scope !== "session")
       stageSettings(() => {
         const store = settingsStore!;
-        if (store.scope === "session") return;
+        const scope = store.scope;
+        if (scope === "session") return;
+        const changes: SettingsChange[] = [];
         if (previous.mode !== setting.mode)
-          store.stage(store.scope, ["delegation", "mode"], setting.mode);
+          changes.push({ path: ["delegation", "mode"], value: setting.mode });
         if (previous.eagerness !== setting.eagerness)
-          store.stage(store.scope, ["delegation", "eagerness"], setting.eagerness);
+          changes.push({ path: ["delegation", "eagerness"], value: setting.eagerness });
+        store.stageBatch(scope, changes);
       }, ctx);
     // A failure here is retried on the next reselect and before each run.
     presentDelegationChange({

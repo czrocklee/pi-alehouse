@@ -200,11 +200,10 @@ export function captureRequestedBashCommand(input: Record<string, unknown>): voi
  * for this same input. Without any capture layer (direct gate use), an input
  * no hardener touched is its own original. Only text is retained.
  */
-export function requestedBashCommand(
-  input: Record<string, unknown>,
-  fallback?: string,
-): string | undefined {
-  const executed = typeof input.command === "string" ? input.command : undefined;
+export function requestedBashCommand(input: unknown, fallback?: string): string | undefined {
+  if (typeof input !== "object" || input === null) return;
+  const command = "command" in input ? input.command : undefined;
+  const executed = typeof command === "string" ? command : undefined;
   const requested = requestedCommands.get(input);
   const hardened = originals.get(input);
   if (requested === undefined) return hardened ? undefined : (executed ?? fallback);
@@ -213,18 +212,19 @@ export function requestedBashCommand(
 }
 
 // Provenance requires the same input object and unchanged hardened command.
-export function originalGitCommands(input: Record<string, unknown>): string[] | undefined {
+function originalForExecution(input: unknown) {
+  if (typeof input !== "object" || input === null) return;
   const original = originals.get(input);
-  return original?.command === input.command ? original.units : undefined;
+  if (original && "command" in input && original.command === input.command) return original;
 }
 
-export function managedStaticFileScope(
-  input: Record<string, unknown>,
-): ManagedStaticFileScope | undefined {
-  const original = originals.get(input);
-  return original?.command === input.command && original.fileScope?.command === input.command
-    ? original.fileScope
-    : undefined;
+export function originalGitCommands(input: unknown): string[] | undefined {
+  return originalForExecution(input)?.units;
+}
+
+export function managedStaticFileScope(input: unknown): ManagedStaticFileScope | undefined {
+  const original = originalForExecution(input);
+  if (original && original.fileScope?.command === original.command) return original.fileScope;
 }
 
 // A file scope proves one invocation, never reuse across executions/sessions.

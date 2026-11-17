@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createPopoverCloseControl } from "../../src/shared/popover-close-control.mjs";
-import { createPopoverCloseHover } from "../../src/shared/popover-close-hover.mjs";
 import { popoverCloseHit } from "../../src/shared/popover-frame.mjs";
 
 /** A painted control at a fixed width, on either a viewport-capable host or a
@@ -14,12 +13,19 @@ function fixture({
   viewport = true,
   replaceable = true,
   painted = true,
-  createHover = createPopoverCloseHover,
   closeHit = popoverCloseHit,
 } = {}) {
   const host = {
     terminal: { columns, rows },
-    ...(viewport ? { handleViewportInput() {} } : {}),
+    ...(viewport
+      ? {
+          handleViewportInput(event) {
+            // Structural native dispatch: pass normalized events to the panel,
+            // but leave other native input undelivered to the close control.
+            if (event && typeof event === "object") return control.mouse(event);
+          },
+        }
+      : {}),
   };
   if (viewport && !replaceable)
     Object.defineProperty(host, "handleViewportInput", {
@@ -29,7 +35,6 @@ function fixture({
     });
   let renders = 0;
   const control = createPopoverCloseControl({
-    createHover,
     host,
     requestRender: () => renders++,
     closeHit,
@@ -69,8 +74,20 @@ const click = (x, { y = 0, button = "left", width } = {}) => ({
   y,
   ...(width === undefined ? {} : { width }),
 });
-const move = (x, { y = 0, button = "none" } = {}) => ({ type: "move", button, x, y });
-const drag = (x, { y = 0 } = {}) => ({ type: "drag", button: "left", x, y });
+const move = (x, { y = 0, button = "none", width } = {}) => ({
+  type: "move",
+  button,
+  x,
+  y,
+  ...(width === undefined ? {} : { width }),
+});
+const drag = (x, { y = 0, width } = {}) => ({
+  type: "drag",
+  button: "left",
+  x,
+  y,
+  ...(width === undefined ? {} : { width }),
+});
 const claimed = { handled: true, close: false };
 const closing = { handled: true, close: true };
 
@@ -231,6 +248,39 @@ test("event.width must agree with the painted width and never widens the hit", (
   assert.deepEqual(narrow.control.mouse(click(8, { width: 12 })), closing); // agreeing width
 });
 
+test("a width mismatch clears hover without fabricating a new painted hit", () => {
+  const { control, host, renders } = fixture();
+  const original = host.handleViewportInput;
+  assert.equal(control.mouse(move(36, { width: 41 })), undefined);
+  assert.equal(control.hovered, false, "a stale move cannot start hover at the painted cell");
+  assert.equal(control.mouse(move(37, { width: 41 })), undefined);
+  assert.equal(control.hovered, false, "an event cannot create its own close cell");
+  assert.equal(renders(), 0);
+  control.mouse(move(36, { width: 40 }));
+  assert.equal(control.hovered, true);
+  control.mouse(move(36, { width: 41 }));
+  assert.equal(control.hovered, false, "a stale move clears existing hover at the same cell");
+  assert.equal(renders(), 2);
+  assert.equal(host.handleViewportInput, original, "cleared hover leaves no idle observer");
+  control.mouse(move(36));
+  assert.equal(control.hovered, true, "an omitted width still uses the unmodified paint");
+  control.dispose();
+});
+
+for (const stale of [move, drag])
+  test(`a width mismatch during ${stale.name} cancels an armed gesture without falling through`, () => {
+    const { control, host } = fixture();
+    assert.deepEqual(control.mouse(press(36, { width: 40 })), claimed);
+    assert.equal(host.handleViewportInput(stale(36, { width: 41 })), undefined);
+    assert.equal(control.hovered, false);
+    assert.deepEqual(control.mouse(release(36, { width: 40 })), claimed);
+    assert.deepEqual(control.mouse(click(12, { width: 41 })), claimed);
+    assert.equal(control.mouse(click(12, { width: 40 })), undefined);
+    assert.deepEqual(control.mouse(press(36, { width: 40 })), claimed);
+    assert.deepEqual(control.mouse(release(36, { width: 40 })), closing);
+    control.dispose();
+  });
+
 test("unpainted, tiny and disposed controls never arm or close", () => {
   const unpainted = fixture({ painted: false });
   assert.equal(unpainted.control.mouse(click(36)), undefined);
@@ -268,8 +318,12 @@ test("non-finite coordinates never close, arm or keep a gesture armed", () => {
   assert.deepEqual(control.mouse(release(36)), claimed);
 });
 
-test("active=false cancels and consumes the old gesture but never activates a new one", () => {
+test("active=false clears hover and cancels the old gesture without activating a new one", () => {
   const { control } = fixture();
+  control.mouse(move(36));
+  assert.equal(control.hovered, true);
+  assert.equal(control.mouse(move(36), false), undefined);
+  assert.equal(control.hovered, false);
   assert.deepEqual(control.mouse(press(36), true), claimed);
   assert.deepEqual(control.mouse(release(36), false), claimed); // cancelled and consumed
   assert.deepEqual(control.mouse(click(36), false), claimed);
@@ -378,32 +432,22 @@ for (const render of [false, true])
     control.dispose();
   });
 
-test("the injected hover factory receives the host, hit test, render and interruption callback", () => {
-  let options;
-  const { control, host, renders } = fixture({
-    createHover: (received) => {
-      options = received;
-      return createPopoverCloseHover(received);
+test("hover and an armed gesture share one hit sample per paint or motion", () => {
+  const widths = [];
+  const { control } = fixture({
+    closeHit: (width) => {
+      widths.push(width);
+      return popoverCloseHit(width);
     },
   });
-  assert(options, "the control must use the injected factory");
-  assert.equal(options.host, host);
-  assert.equal(options.closeHit, popoverCloseHit);
-  assert.equal(typeof options.onGestureInterrupted, "function");
-  const before = renders();
-  options.requestRender();
-  assert.equal(renders(), before + 1);
-  control.mouse(press(36));
-  options.onGestureInterrupted();
-  assert.equal(control.mouse(release(36)), undefined);
-  assert.deepEqual(control.mouse(click(36)), claimed);
+  assert.deepEqual(widths, [40], "one painted hit is shared");
+  assert.deepEqual(control.mouse(press(36)), claimed);
+  assert.deepEqual(widths, [40, 40]);
+  assert.equal(control.mouse(move(36)), undefined);
+  assert.equal(control.hovered, true);
+  assert.deepEqual(widths, [40, 40, 40], "one live hit drives both hover and gesture");
+  assert.deepEqual(control.mouse(release(36)), closing);
   control.dispose();
-  const disposedRenders = renders();
-  options.onGestureInterrupted(); // a late adapter notification cannot revive disposal
-  assert.equal(control.mouse(drag(36)), undefined);
-  assert.equal(control.mouse(press(36)), undefined);
-  assert.equal(control.mouse(click(36)), undefined);
-  assert.equal(renders(), disposedRenders);
 });
 
 test("an inset close control uses its painted row, including hover", () => {

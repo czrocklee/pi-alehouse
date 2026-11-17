@@ -29,10 +29,6 @@ test("format scripts are explicit, Prettier is a pinned dev dependency, and chec
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   assert.equal(pkg.scripts.format, "prettier --write .");
   assert.equal(pkg.scripts["format:check"], "prettier --check .");
-  assert.equal(
-    pkg.scripts.check,
-    "npm run lint && npm run typecheck && npm test && npm run test:policy",
-  );
   assert.doesNotMatch(pkg.scripts.check, /prettier|format/);
   assert.doesNotMatch(pkg.scripts["format:check"], /--write/);
   assert.equal(pkg.devDependencies.prettier, "3.9.10");

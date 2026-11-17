@@ -7,9 +7,9 @@ before changing contracts.
 
 - One root package that builds without Nix; `flake.nix` and `nix/` are
   optional packaging, never npm build inputs.
-- Dev: `npm ci --ignore-scripts` (includes the pinned dev Pi SDK),
-  `npm run build`, `npm run check`. Policy and controlled host suites run
-  separately.
+- Dev: `npm ci --ignore-scripts` (includes the pinned dev Pi SDK), then
+  `npm run check` (one matched build, package checks and portable policy).
+  `npm run build` also works standalone. Controlled host suites run separately.
 - Production installs only a verified built tarball with
   `--omit=dev --legacy-peer-deps --ignore-scripts`, so peers cannot pull in a
   second Pi runtime; the host supplies Pi.

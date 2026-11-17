@@ -2,6 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createJiti } from "jiti";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  detailEntry,
+  detailView as view,
+  fgCall,
+  plainTheme as theme,
+  recordingTheme as recording,
+  sgrTheme,
+} from "../support/detail-fixture.mjs";
 
 // Direct source tests for the selected agent tab's style: selection is the
 // nickname's own accent+bold+underline -- never a background fill -- while
@@ -13,45 +21,7 @@ const { renderDetailAgentStrip, renderDetailFooter } = await jiti.import(
   "../../src/orchestration/ui/agent-detail-fields.ts",
 );
 
-const theme = { fg: (_color, text) => text, bold: (text) => text };
-const view = (id, extra = {}) => ({
-  owner_id: "owner",
-  generation: "generation",
-  agent_id: id,
-  run_id: `run-${id}`,
-  name: id,
-  task: 1,
-  description: "Current task",
-  status: "completed",
-  phase: "settled",
-  execution_exited: true,
-  finalization_pending: false,
-  resident: true,
-  resumable: false,
-  pending_messages: 0,
-  elapsed_ms: 1000,
-  turns: 1,
-  max_turns: 80,
-  cleanup_errors: [],
-  discarded_inputs: [],
-  effective_settings: {
-    profile: "editor",
-    model: "model",
-    thinking: "high",
-    parent_thinking: "high",
-    thinking_resolution: "identity",
-    preset: "default",
-    preset_version: "v1",
-    strength: "d3",
-    difficulty: 3,
-    tools: ["read"],
-    cwd: "/workspace",
-    context_mode: "none",
-  },
-  ...extra,
-});
-const live = { active_tools: [], tool_uses: 0, preview: "" };
-const entry = (id, extra = {}) => ({ agent_id: id, input: { view: view(id, extra), live } });
+const entry = (id, extra) => detailEntry(view(id, extra));
 const strip = (overrides = {}) =>
   renderDetailAgentStrip({
     entries: [entry("aspen"), entry("birch")],
@@ -62,22 +32,6 @@ const strip = (overrides = {}) =>
     ...overrides,
   });
 
-/** Records every theme call. `bg` records too, so one assertion proves the
- * render never asks for a background even when the theme offers one. */
-const recording = () => {
-  const calls = [];
-  return {
-    calls,
-    theme: {
-      fg: (color, text) => (calls.push(["fg", color, text]), text),
-      bold: (text) => (calls.push(["bold", text]), text),
-      underline: (text) => (calls.push(["underline", text]), text),
-      bg: (color, text) => (calls.push(["bg", color, text]), text),
-    },
-  };
-};
-const fgCall = (calls, color, text) =>
-  calls.some(([kind, c, t]) => kind === "fg" && c === color && t === text);
 const styledTexts = (calls, kind) =>
   calls.filter((call) => call[0] === kind).map((call) => call.at(-1));
 const noBg = (calls, where) =>
@@ -131,12 +85,7 @@ test("the selected tab never asks the theme for a background, even one it has", 
 });
 
 test("selection underlines the nickname alone, closed inside the tab's own columns", () => {
-  const sgr = {
-    fg: (_color, text) => text,
-    bold: (text) => `\u001b[1m${text}\u001b[22m`,
-    underline: (text) => `\u001b[4m${text}\u001b[24m`,
-  };
-  const styled = strip({ theme: sgr });
+  const styled = strip({ theme: sgrTheme });
   const plain = strip({ theme });
   // Styling adds zero columns: the tabs keep their exact padding and width,
   // and a theme without the helpers stays pure text with no ANSI at all.

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Hermetic integrated policy gate. No installed agent files, Nix, or real models.
 set -euo pipefail
+if (( $# > 1 )) || [[ $# == 1 && $1 != --built ]]; then
+    echo "Usage: $0 [--built]" >&2
+    exit 2
+fi
 if ! PI_EXECUTABLE="${PI_TEST_EXECUTABLE:-$(command -v pi || true)}" || [[ -z "$PI_EXECUTABLE" ]]; then
     echo "Pi is not installed or is not on PATH." >&2
     exit 1
@@ -20,7 +24,7 @@ unset PI_AGENT_ROUTER_PARENT_SESSION_ID PI_SUBAGENT_PARENT_SESSION \
 export HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/home/.config" \
     PI_CODING_AGENT_DIR="$scratch/agent" PI_CODING_AGENT_SESSION_DIR="$scratch/sessions" \
     PI_JEV_APPROVAL_MODE=shadow PI_OFFLINE=1 PI_TELEMETRY=0
-node "$ROOT_DIR/scripts/build/index.mjs"
+if [[ ${1:-} != --built ]]; then node "$ROOT_DIR/scripts/build/index.mjs"; fi
 node "$ROOT_DIR/scripts/checks/check-render-fixture.mjs" "$ROOT_DIR" "$scratch/agent" "$scratch/evidence" jev
 node "$ROOT_DIR/test/support/managed-authority.mjs" "$ROOT_DIR" "$scratch/agent" "$scratch/evidence"
 export PI_MANAGED_PERMISSIONS_ROOT="$ROOT_DIR/generated/authority/vendor"

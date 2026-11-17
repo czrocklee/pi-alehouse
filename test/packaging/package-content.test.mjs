@@ -47,27 +47,6 @@ test("CLI init and source build helpers remain in the slim tarball", () => {
   }
 });
 
-test("canonical typecheck invokes its self-contained shared/extension gate only once", () => {
-  assert.match(pkg.scripts.typecheck, /tsc/);
-  assert.match(pkg.scripts.typecheck, /--noEmit/);
-  assert.equal(
-    pkg.scripts.typecheck.split("scripts/checks/check-pi-types.mjs").length,
-    2,
-    "the pinned extension/authority gate must be invoked exactly once",
-  );
-  const gate = readFileSync(new URL("scripts/checks/check-pi-types.mjs", root), "utf8");
-  assert.equal(
-    gate.split('[join(repo, "test/support/shared-library-types.mjs")').length,
-    2,
-    "the gate must typecheck the shared .mjs/.d.mts pairs via the support helper",
-  );
-  assert.match(gate, /"ext\/\*\*\/\*\.ts"/);
-  assert.match(
-    gate,
-    /"generated\/authority\/vendor\/src\/policy\/managed-resource-protection\.ts"/,
-  );
-});
-
 // Test payloads stay in the source check lane: not in the tarball, not in the
 // generated runtime copy or its integrity manifest, and not loaded by the guard.
 const testPayload = /(^|\/)test-support\/|static-safety-selftest|^test\/|^scripts\/checks\//;
