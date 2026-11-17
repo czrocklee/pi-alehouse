@@ -80,6 +80,27 @@ test("word wrapping prefers latin spaces but keeps every grapheme indivisible", 
   }
 });
 
+test("a separator run consumed by a soft wrap cannot split the next word", () => {
+  for (const [input, width, expected] of [
+    ["a    abc", 3, ["a", "abc"]],
+    ["abc    def", 3, ["abc", "def"]],
+    ["é\t \u00a0 abc", 3, ["é", "abc"]],
+    ["\x1b[31mé\x1b[0m    👩‍💻b", 3, ["é", "👩‍💻b"]],
+    ["a      \u0301b", 3, ["a", " \u0301b"]],
+    ["  a  b    c  ", 6, ["  a  b", "c  "]],
+    ["  é  b    文  ", 6, ["  é  b", "文  "]],
+    ["  ab", 3, ["  a", "b"]],
+    ["  éb", 3, ["  é", "b"]],
+    ["  b  \n   ", 5, ["  b  ", "   "]],
+    ["a      \n\n  b  ", 5, ["a", "", "  b  "]],
+    ["é       \n\n  文  ", 6, ["é", "", "  文  "]],
+  ]) {
+    const rows = wrapPlainText(input, width);
+    assert.deepEqual(rows, expected, `${JSON.stringify(input)} @${width}`);
+    assert(rows.every((row) => visibleWidth(row) <= width));
+  }
+});
+
 test("whole-candidate wrapping stays bounded without phantom empty rows", () => {
   const samples = [
     "👩‍💻♥️e\u0301漢字",
@@ -110,7 +131,7 @@ test("whole-candidate wrapping stays bounded without phantom empty rows", () => 
 });
 
 test("grapheme-width fast wrapping preserves the whole-candidate boundary contract", () => {
-  // Deliberately unoptimized oracle: the prior whole-candidate algorithm.
+  // Deliberately unoptimized oracle: measure the whole candidate each time.
   const reference = (text, width) =>
     plainText(text)
       .split("\n")
@@ -124,11 +145,16 @@ test("grapheme-width fast wrapping preserves the whole-candidate boundary contra
           const row = parts.slice(0, end).join("");
           if (row) out.push(row);
         };
-        for (const { segment } of segmenter.segment(paragraph)) {
+        const parts = Array.from(segmenter.segment(paragraph), ({ segment }) => segment);
+        for (let at = 0; at < parts.length; at++) {
+          const segment = parts[at];
           const cluster = visibleWidth(segment) > width ? "…" : segment;
           let separator = false;
           while (visibleWidth(line.join("") + cluster) > width) {
             if (cluster === " ") {
+              if (line.some((part) => part !== " ")) {
+                while (parts[at + 1] === " ") at++;
+              }
               emit(line);
               line = [];
               separator = true;
@@ -152,6 +178,10 @@ test("grapheme-width fast wrapping preserves the whole-candidate boundary contra
       });
   const samples = [
     "  alpha   beta  gamma ",
+    "a narrow row\n\n  indented   text with trailing spaces     \n",
+    "         a         b          ",
+    "01234".repeat(31),
+    "  A\tB\r\nC\x1b[31mstyle\x1b[0mD",
     "a \u0301b",
     "👩‍💻♥️e\u0301漢字",
     "🇺🇸🇨🇦🇫🇷🇯",

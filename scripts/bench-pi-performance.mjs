@@ -60,8 +60,10 @@ for (const width of [60, 120, 200]) {
 }
 
 if (!flags.has("--core-only")) {
-  // Only the pure projection/token-estimation method is borrowed; a fake
-  // receiver and an explicitly in-memory SessionManager supply all its data.
+  // A fake token-estimation receiver and an in-memory SessionManager supply
+  // all SDK data, including the branch for the final-message lookup.
+  const { finalMessage, historyTypes } =
+    await import("../dist/orchestration/history/run-journal.js");
   const { AgentSession, SessionManager, buildContextEntries, sessionEntryToContextMessages } =
     await import("@earendil-works/pi-coding-agent");
   for (const count of [10_000, 30_000]) {
@@ -107,6 +109,13 @@ if (!flags.has("--core-only")) {
       },
       21,
     );
+    const start = manager.appendCustomEntry(historyTypes.start, {});
+    const through = manager.appendMessage({ role: "assistant", content: [], timestamp: 0 });
+    const boundary = manager.appendCustomEntry(historyTypes.end, {});
+    measure("journal_final_message", { prior_entries: count, run_entries: 3, lookups: 32 }, () => {
+      for (let i = 0; i < 32; i++)
+        assert.equal(finalMessage(manager, start, through, boundary)?.id, through);
+    });
   }
 }
 console.log(

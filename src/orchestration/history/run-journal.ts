@@ -130,19 +130,27 @@ export const finalMessage = (
   through: string,
   boundary = through,
 ) => {
-  const branch = manager.getBranch(boundary),
-    index = branch.findIndex((e) => e.id === start);
-  const exit = branch.findIndex((e) => e.id === through);
-  if (
-    index < 0 ||
-    exit < index ||
-    branch.slice(index + 1).some((e) => e.type === "custom" && e.customType === historyTypes.start)
-  )
-    invalidHistory();
-  return branch
-    .slice(index + 1, exit + 1)
-    .filter((e) => e.type === "message" && e.message.role === "assistant")
-    .at(-1);
+  // Reused sessions may have a long history before this Run. Follow the same
+  // branch backwards, checking even the entries between seal and finish, but
+  // never materialize unrelated ancestors or accept a cross-branch boundary.
+  const seen = new Set<string>();
+  let sealed = false;
+  let final: SessionEntry | undefined;
+  for (let id: string | null = boundary; id !== null;) {
+    const entry: SessionEntry | undefined = manager.getEntry(id);
+    if (!entry || entry.id !== id || seen.has(id)) break;
+    seen.add(id);
+    if (id === through) sealed = true;
+    if (id === start) {
+      if (sealed) return final;
+      break;
+    }
+    if (entry.type === "custom" && entry.customType === historyTypes.start) break;
+    if (sealed && !final && entry.type === "message" && entry.message.role === "assistant")
+      final = entry;
+    id = entry.parentId;
+  }
+  return invalidHistory();
 };
 export const textOf = (entry: SessionEntry | undefined): string =>
   entry?.type === "message" && entry.message.role === "assistant"

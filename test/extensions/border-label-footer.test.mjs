@@ -1,20 +1,38 @@
-// Source-loaded border-label regressions: no generated runtime, sessions,
-// providers, host UI, network or publication. The shared chrome module owns the
-// process switch; tests only drive it and observe these panels' source output.
+// Source-loaded panel regressions: no generated runtime, sessions, providers,
+// host UI, network or publication.
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import { stripVTControlCharacters as plain } from "node:util";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import * as tuiSdk from "@earendil-works/pi-tui";
 import { createJiti } from "jiti";
 
-// One module cache for the whole file so the panels and this test share the
-// exact same process-wide border-label switch instance.
-const jiti = createJiti(import.meta.url, { fsCache: false, moduleCache: true });
+const { visibleWidth } = tuiSdk;
+let finalFits;
+// Use the normal source loader, observing only the SDK boundary. The final
+// row fit uses an empty ellipsis; title/key fits use a nonempty one.
+const jiti = createJiti(import.meta.url, {
+  fsCache: false,
+  moduleCache: true,
+  virtualModules: {
+    "@earendil-works/pi-tui": {
+      ...tuiSdk,
+      truncateToWidth(input, width, ellipsis, pad) {
+        const fitted = tuiSdk.truncateToWidth(input, width, ellipsis, pad);
+        if (ellipsis === "") finalFits?.push({ input, width, fitted });
+        return fitted;
+      },
+    },
+  },
+});
 const { ApprovalPopover } = await jiti.import("../../src/extensions/lib/approval-view.ts");
-const { breakdownChromeRows, breakdownFrame, breakdownTable, breakdownTitle } = await jiti.import(
-  "../../src/extensions/lib/footer-layout.ts",
-);
+const {
+  breakdownChromeRows,
+  breakdownFrame,
+  breakdownTable,
+  breakdownTitle,
+  createBreakdownFramePainter,
+} = await jiti.import("../../src/extensions/lib/footer-layout.ts");
 const { createFooterPanels } = await jiti.import("../../src/extensions/lib/footer-panels.ts");
 const { default: approvalMode } = await jiti.import("../../src/extensions/approval-mode.ts");
 const { borderLabelsEnabled, popoverChromeCloseHit, setBorderLabelsEnabled } = await jiti.import(
@@ -221,7 +239,7 @@ test("narrow widths keep exact line widths in both modes", (t) => {
   }
 });
 
-function footerFixture(spend = [spendRow]) {
+function footerFixture(spend = [spendRow], panelTheme = theme) {
   let renders = 0;
   const events = new EventEmitter();
   const listeners = new EventEmitter();
@@ -253,7 +271,7 @@ function footerFixture(spend = [spendRow]) {
     pi: { events: { on: on(events) }, on: on(listeners) },
     ctx: { hasUI: true, ui: {} },
     tui,
-    theme,
+    theme: panelTheme,
     spend: () => spend,
     contextSnapshot,
     compaction: () => undefined,
@@ -266,8 +284,8 @@ function footerFixture(spend = [spendRow]) {
     get renders() {
       return renders;
     },
-    paint() {
-      return overlays.length ? overlays.at(-1).component.render(80) : [];
+    paint(width = 80) {
+      return overlays.length ? overlays.at(-1).component.render(width) : [];
     },
   };
 }
@@ -293,6 +311,201 @@ test("footer usage panel re-budgets and repaints on a live switch flip", (t) => 
   const afterDispose = h.renders;
   withBorderLabels(true);
   assert.equal(h.renders, afterDispose, "footer teardown unsubscribes its listener");
+});
+
+test("repeated usage paints preserve exact styled bytes and follow live changes", (t) => {
+  t.after(() => setBorderLabelsEnabled(true));
+  withBorderLabels(true);
+  const spend = Array.from({ length: 8 }, (_, index) => ({
+    ...spendRow,
+    key: `fixture/\x1b]8;;https://example.invalid/\x1b\\模型 e\u0301 ${index} long label\x1b]8;;\x1b\\`,
+  }));
+  let accent = 36;
+  const liveTheme = {
+    ...theme,
+    fg: (tone, text) =>
+      tone === "accent" ? `\x1b[${accent}m${text}\x1b[0m` : theme.fg(tone, text),
+  };
+  const h = footerFixture(spend, liveTheme);
+  t.after(() => h.panels.dispose(() => {}));
+  h.panels.toggleBreakdown();
+  const { component, options } = h.overlays[0];
+  const checkPaint = () => {
+    assert(options.visible());
+    const { columns, rows } = h.tui.terminal;
+    const width = Math.min(columns, options.width);
+    const expected = breakdownFrame(
+      breakdownTable(spend, rows - 1 - breakdownChromeRows()),
+      liveTheme,
+      width,
+    );
+    const actual = component.render(width);
+    assert.deepEqual(actual, expected, "memoized paint must byte-match a fresh SDK fit");
+    return actual;
+  };
+  const first = checkPaint();
+  assert.notEqual(checkPaint(), first, "the returned render arrays are not reused");
+  first[1] = "caller mutation";
+  checkPaint();
+
+  const oldTheme = checkPaint();
+  accent = 35;
+  assert.notDeepEqual(checkPaint(), oldTheme, "same theme object can produce new styling");
+  const oldCost = checkPaint();
+  spend[0].cost = 9.876;
+  const newCost = checkPaint();
+  assert.notDeepEqual(newCost, oldCost);
+  assert.match(newCost.map(plain).join("\n"), /9\.876/);
+
+  h.tui.terminal.columns = 25;
+  h.tui.terminal.rows = 11;
+  withBorderLabels(false);
+  const small = checkPaint();
+  assert.match(small.map(plain).join("\n"), /\+6 more/);
+  assert(small.every((line) => visibleWidth(line) <= 25));
+});
+
+function traceFinalFits(paint) {
+  const fits = [];
+  finalFits = fits;
+  try {
+    return { lines: paint(), fits };
+  } finally {
+    finalFits = undefined;
+  }
+}
+
+const linked = (text, path = "") =>
+  `\x1b]8;;https://example.invalid/${path}\x1b\\${text}\x1b]8;;\x1b\\`;
+
+test("usage panel clips styled overflow on a miss and reuses those exact bytes on a hit", (t) => {
+  t.after(() => setBorderLabelsEnabled(true));
+  withBorderLabels(true);
+  const spend = [{ ...spendRow, key: "fixture/e\u0301" }];
+  const linkedTheme = {
+    ...theme,
+    fg: (tone, text) => (tone === "warning" ? linked(theme.fg(tone, text)) : theme.fg(tone, text)),
+  };
+  const h = footerFixture(spend, linkedTheme);
+  t.after(() => h.panels.dispose(() => {}));
+  h.tui.terminal.columns = 8;
+  h.panels.toggleBreakdown();
+  const paint = () => traceFinalFits(() => h.paint(h.tui.terminal.columns));
+
+  const table = breakdownTable(spend, 20);
+  const narrow = traceFinalFits(() => breakdownFrame(table, linkedTheme, 8));
+  const model = narrow.fits[2];
+  assert(visibleWidth(model.input) > 8, "the mandatory cost column overflows the raw row");
+  assert.notEqual(model.fitted, model.input, "final clipping must actually change the bytes");
+  assert.equal(visibleWidth(model.fitted), 8);
+
+  assert.deepEqual(paint(), narrow, "cold paint uses the exact SDK fit");
+  const warm = paint();
+  assert.deepEqual(
+    warm.lines,
+    narrow.lines,
+    "a cache hit must return the clipped bytes, not raw input",
+  );
+  assert.deepEqual(warm.fits, [], "an identical short frame skips all final fits");
+
+  const wider = traceFinalFits(() => breakdownFrame(table, linkedTheme, 9));
+  assert.equal(wider.fits[2].input, model.input, "resize leaves the raw model row unchanged");
+  assert.notEqual(
+    wider.lines[2],
+    narrow.lines[2],
+    "the same raw row clips differently at the new width",
+  );
+  h.tui.terminal.columns = 9;
+  assert.deepEqual(paint(), wider, "resize refits even identical raw rows");
+});
+
+test("usage painter only reuses the first 32 rows of a stable frame", (t) => {
+  t.after(() => setBorderLabelsEnabled(true));
+  withBorderLabels(true);
+  const spend = Array.from({ length: 36 }, (_, i) => ({ ...spendRow, key: `fixture/model-${i}` }));
+  const table = breakdownTable(spend, spend.length);
+  const painter = createBreakdownFramePainter();
+  const expected = traceFinalFits(() => breakdownFrame(table, theme, 80));
+  assert(expected.fits.length > 32);
+  assert(expected.fits.every(({ input, fitted }) => input.length <= 2048 && fitted.length <= 2048));
+  assert.deepEqual(
+    traceFinalFits(() => painter.paint(table, theme, 80)),
+    expected,
+  );
+
+  const warm = traceFinalFits(() => painter.paint(table, theme, 80));
+  assert.deepEqual(warm.lines, expected.lines, "uncached tail rows are still drawn normally");
+  assert.deepEqual(
+    warm.fits,
+    expected.fits.slice(32),
+    "index 31 is reused and index 32 is refitted",
+  );
+});
+
+test("usage painter bounds both raw and fitted strings at 2048 UTF-16 units", (t) => {
+  t.after(() => setBorderLabelsEnabled(true));
+  withBorderLabels(true);
+  const table = breakdownTable([{ ...spendRow, key: "fixture/a" }], 1);
+  const modelRow = 2;
+  for (const [bounded, other, width] of [
+    ["input", "fitted", 8],
+    ["fitted", "input", 11],
+  ]) {
+    // To isolate the raw limit, put the long OSC bytes past the clip. To
+    // isolate the fitted limit, keep the OSC bytes and clip just one plain
+    // cell: the SDK appends a reset, so the fitted string actually grows.
+    const paddedTheme = (path) => ({
+      bold: (text) => text,
+      fg(tone, text) {
+        if (tone !== "warning") return text;
+        return bounded === "input" ? text + linked("", path) : linked(text, path);
+      },
+    });
+    const base = traceFinalFits(() => breakdownFrame(table, paddedTheme(""), width)).fits[modelRow];
+    for (const units of [2048, 2049]) {
+      const extra = units - base[bounded].length;
+      const path = "😀".repeat(Math.floor(extra / 2)) + "a".repeat(extra % 2);
+      const decorated = paddedTheme(path);
+      const expected = traceFinalFits(() => breakdownFrame(table, decorated, width));
+      const target = expected.fits[modelRow];
+      const label = `${bounded} at ${units} units`;
+      assert.equal(target[bounded].length, units, label);
+      assert(target[other].length <= 2048, `${label}: only one bound is under test`);
+
+      const painter = createBreakdownFramePainter();
+      assert.deepEqual(
+        traceFinalFits(() => painter.paint(table, decorated, width)),
+        expected,
+        label,
+      );
+      const warm = traceFinalFits(() => painter.paint(table, decorated, width));
+      assert.deepEqual(warm.lines, expected.lines, `${label}: retention must not change display`);
+      assert.deepEqual(warm.fits, units === 2048 ? [] : [target], `${label}: final refits`);
+    }
+  }
+});
+
+test("usage panel explicitly invalidates before repainting an unchanged frame", (t) => {
+  t.after(() => setBorderLabelsEnabled(true));
+  withBorderLabels(true);
+  const h = footerFixture();
+  t.after(() => h.panels.dispose(() => {}));
+  h.panels.toggleBreakdown();
+  const paint = () => traceFinalFits(() => h.paint());
+  const initial = paint();
+  assert.equal(initial.fits.length, initial.lines.length);
+  assert.deepEqual(paint().fits, []);
+
+  // Do not paint between flips: the next raw frame matches the cached one,
+  // so a refit proves explicit invalidation, not a changed cache key.
+  withBorderLabels(false);
+  withBorderLabels(true);
+  assert.deepEqual(paint(), initial, "the chrome listener clears a byte-identical frame");
+  assert.deepEqual(paint().fits, []);
+
+  h.panels.toggleBreakdown();
+  h.panels.toggleBreakdown();
+  assert.deepEqual(paint(), initial, "closing the panel clears its cache before reopening");
 });
 
 test("usage tiny OFF hides the breakdown rather than clipping its bottom", (t) => {

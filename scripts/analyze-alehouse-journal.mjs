@@ -89,20 +89,34 @@ function ledger(value, allowEmptyFloor = false) {
   }
   return { total, partial: COMPONENTS.filter((key) => partial.has(key)), byModel };
 }
-function merge(left, right) {
+function mergeUsage(left, right) {
   if (!right) return left;
-  if (!left) return structuredClone(right);
-  const byModel = Object.assign(Object.create(null), left.byModel),
-    partial = new Set([...left.partial, ...right.partial]);
+  if (!left) return { first: right };
+  // Copy the first ledger only when a second one arrives; the run-end ledger
+  // can also be used by other groups. Later merges touch only incoming shares.
+  if (left.first)
+    left = {
+      byModel: Object.assign(Object.create(null), structuredClone(left.first.byModel)),
+      partial: new Set(left.first.partial),
+    };
+  for (const key of right.partial) left.partial.add(key);
   for (const [model, share] of Object.entries(right.byModel)) {
-    const sum = { ...(byModel[model] ?? zero()) };
+    const sum = (left.byModel[model] ??= zero());
     for (const key of COMPONENTS) {
       sum[key] += share[key];
       assert(finite(sum[key]), "usage overflow");
     }
-    byModel[model] = sum;
   }
-  return ledger({ byModel, partial: [...partial] });
+  return left;
+}
+function finishUsage(usage) {
+  if (!usage) return undefined;
+  if (usage.first) return structuredClone(usage.first);
+  // Sum once in the same object key order as ledger() did after every merge.
+  // Shares only grow, and new keys never reorder existing keys relative to each
+  // other. Nonnegative addition is monotone, so checking the last total also
+  // detects overflow in any earlier total (including within each group).
+  return ledger({ byModel: usage.byModel, partial: [...usage.partial] });
 }
 function outcomeOf(value) {
   // Current outcome codec: a closed field set with current optionality. Retired
@@ -416,24 +430,27 @@ export async function analyzeJournals(files) {
     receiptGaps = [];
   let usage,
     endCount = 0,
-    missingUsage = 0;
+    missingUsage = 0,
+    boundaryMismatch = false;
   const groupUsage = (group, end) => {
     group.runs++;
     if (!end.usage) group.runs_without_usage++;
-    group.usage = merge(group.usage, end.usage);
+    group.usage = mergeUsage(group.usage, end.usage);
   };
   for (const run of runs.values()) {
     const { start, end, links } = run,
       link = [...links.values()][0];
     const boundaries = [start, end, link].filter(Boolean);
-    assert(
-      boundaries.every(
+    if (
+      !boundaries.every(
         (boundary) =>
           boundary.session_id === boundaries[0].session_id &&
           boundary.start_entry_id === boundaries[0].start_entry_id,
-      ),
-      "run boundary mismatch",
-    );
+      )
+    ) {
+      boundaryMismatch = true;
+      break;
+    }
     const missing = [];
     if (!start) missing.push("start_not_in_inputs");
     if (!end) missing.push("end_not_in_inputs");
@@ -441,7 +458,7 @@ export async function analyzeJournals(files) {
     if (missing.length) gaps.push({ ...run.identity, missing });
     if (!end) continue;
     endCount++;
-    usage = merge(usage, end.usage);
+    usage = mergeUsage(usage, end.usage);
     if (!end.usage) missingUsage++;
     if (end.validation_receipt_error) receiptGaps.push({ ...run.identity, error: RECEIPT_ERROR });
     const reason = end.outcome.reason ?? null,
@@ -470,6 +487,12 @@ export async function analyzeJournals(files) {
       groupUsage(declarations.get(key), end);
     }
   }
+  // Preserve error order: overflow from earlier runs wins over a boundary
+  // mismatch, but the mismatched run itself never contributes usage.
+  usage = finishUsage(usage);
+  for (const groups of [statusReasons, declarations])
+    for (const group of groups.values()) group.usage = finishUsage(group.usage);
+  assert(!boundaryMismatch, "run boundary mismatch");
   return {
     files: paths,
     limits: LIMITS,

@@ -6,72 +6,82 @@ import test from "node:test";
 import { checkLibraryPairs, readLibraryPairs } from "../support/shared-library-types.mjs";
 
 const pairs = readLibraryPairs();
-const mutate = (name, field, from, to) =>
-  pairs.map((pair) => {
-    if (pair.name !== name) return pair;
-    assert(pair[field].includes(from), `mutation target disappeared: ${name} ${from}`);
-    return { ...pair, [field]: pair[field].replace(from, to) };
-  });
+function mutate(fixture, name, field, from, to) {
+  const pair = pairs.find((candidate) => candidate.name === name);
+  assert(pair?.[field].includes(from), `mutation target disappeared: ${name} ${from}`);
+  const fixtureName = `contract-probe-${fixture}`;
+  assert(!pairs.some((candidate) => candidate.name === fixtureName), fixtureName);
+  return { ...pair, name: fixtureName, [field]: pair[field].replace(from, to) };
+}
 
 test("all shared JS bodies and their separately resolved declarations agree", () => {
   assert(pairs.some((pair) => pair.name === "usage-attribution"));
   assert.deepEqual(checkLibraryPairs(pairs), []);
 });
 
-for (const [name, module, field, from, to] of [
-  ["accounting output type", "usage-attribution", "declaration", "cost: number", "cost: string"],
-  [
-    "reader input type",
-    "usage-attribution",
-    "declaration",
-    "readUsageAttribution(usage: unknown)",
-    "readUsageAttribution(usage: number)",
-  ],
-  [
-    "any return escape",
-    "usage-attribution",
-    "declaration",
-    "usageTotals(usage: unknown): UsageTotals",
-    "usageTotals(usage: unknown): any",
-  ],
-  [
-    "optional option drift",
-    "token-format",
-    "declaration",
-    "trimKZero?: boolean;",
-    "trimKZero?: boolean; minDigits?: number;",
-  ],
-  [
-    "literal protocol drift",
-    "overlay-protocol",
-    "implementation",
-    "pi-alehouse:hide-transient-overlays",
-    "fixture:overlay-drift",
-  ],
-  [
-    "undeclared runtime export",
-    "overlay-protocol",
-    "implementation",
-    "export const HIDE",
-    "export const extra = 1;\nexport const HIDE",
-  ],
-])
-  test(`shared declaration guard rejects ${name}`, () => {
-    const failures = checkLibraryPairs(mutate(module, field, from, to));
-    assert(
-      failures.some((failure) => /contracts\.mts.*TS2344/.test(failure)),
-      failures.join("\n"),
+test("shared declaration guard rejects each independent contract and JavaScript body mutation", () => {
+  // One compiler program loads the ambient types once. Each mutation gets its
+  // own module pair; any sibling imports still see the unmodified library.
+  const contracts = [
+    mutate("output-type", "usage-attribution", "declaration", "cost: number", "cost: string"),
+    mutate(
+      "reader-input",
+      "usage-attribution",
+      "declaration",
+      "readUsageAttribution(usage: unknown)",
+      "readUsageAttribution(usage: number)",
+    ),
+    mutate(
+      "any-return",
+      "usage-attribution",
+      "declaration",
+      "usageTotals(usage: unknown): UsageTotals",
+      "usageTotals(usage: unknown): any",
+    ),
+    mutate(
+      "optional-option",
+      "token-format",
+      "declaration",
+      "trimKZero?: boolean;",
+      "trimKZero?: boolean; minDigits?: number;",
+    ),
+    mutate(
+      "protocol-literal",
+      "overlay-protocol",
+      "implementation",
+      "pi-alehouse:hide-transient-overlays",
+      "fixture:overlay-drift",
+    ),
+    mutate(
+      "extra-export",
+      "overlay-protocol",
+      "implementation",
+      "export const HIDE",
+      "export const extra = 1;\nexport const HIDE",
+    ),
+  ];
+  const body = mutate("body-return", "token-format", "implementation", 'return "?";', "return 17;");
+  const failures = checkLibraryPairs([...pairs, ...contracts, body]);
+  for (const { name } of contracts) {
+    assert.equal(
+      failures.filter(
+        (failure) =>
+          /contracts\.mts.*TS2344/.test(failure) &&
+          failure.includes(`typeof import("./implementation/${name}.mjs")`),
+      ).length,
+      1,
+      `Expected a contract mismatch for ${name}:\n${failures.join("\n")}`,
     );
-  });
-
-test("checkJs inspects the actual body even when its JSDoc and declaration still agree", () => {
-  const failures = checkLibraryPairs(
-    mutate("token-format", "implementation", 'return "?";', "return 17;"),
-  );
-  assert(
-    failures.some((failure) => /implementation\/token-format\.mjs.*TS2322/.test(failure)),
+  }
+  assert.equal(
+    failures.filter((failure) =>
+      /implementation\/contract-probe-body-return\.mjs.*TS2322/.test(failure),
+    ).length,
+    1,
     failures.join("\n"),
   );
+  // The body-only probe must fail checkJs without also mismatching its API.
+  assert.equal(failures.length, contracts.length + 1, failures.join("\n"));
 });
 
 test("module discovery fails on missing or orphan declarations instead of skipping a pair", (t) => {

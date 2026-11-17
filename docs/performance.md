@@ -15,6 +15,8 @@ Full-output ports and final snapshots still undergo monotonic-prefix validation.
 Materializing text compacts the retained chunk list to that same memoized string;
 it does not keep the complete old chunk list alongside a second joined prefix.
 This releases buffer references, not a promised heap/RSS ratio or immediate GC.
+Whole deltas that fit do not need a truncated-prefix calculation. A trailing high
+surrogate is still held back even when the buffer is exactly at its cap.
 Split surrogate pairs, retained-prefix limits, total observed UTF-16 units and
 callback failures retain their existing meanings.
 
@@ -30,6 +32,12 @@ request replay, pending questions, handoffs and stateless result cursors depend
 on retained Runs. Hitting the admission cap still requires closing the Owner and
 starting fresh; an SDK journal is not a transparent replacement for that state.
 Result limits are not a heap/RSS limit.
+
+Final-message lookup in the SDK journal follows parent IDs from the finish
+boundary back to the Run start. It checks that the sealed entry is on that
+path, rejects intervening Run starts, and ignores assistant messages after the
+seal. This avoids reading earlier Runs in a reused session; it is not a cache
+and does not remove the cold reader’s whole-file snapshot validation.
 
 ## UI and permission caches
 
@@ -48,6 +56,17 @@ finished facts, and never authorize a Stop or another model command. Explicit
 fresh inspection also supplies the next detached pane snapshot instead of
 immediately repeating that read. Ordinary transcript invalidation preserves
 settled components; real theme replacement must still repaint correctly.
+
+The fullscreen Usage-by-model panel still reads spend and rebuilds its layout
+and styling on every paint. Only the final SDK clip for an exact styled row at
+the same position and width can be reused: at most 32 rows from the last paint,
+with both input and clipped strings limited to 2048 UTF-16 units per cached row.
+Oversize rows are drawn normally, not shortened to make them cacheable.
+
+Plain paragraphs are sanitized before wrapping. For printable ASCII, each unit
+is one cell and one grapheme, so a width-sized slice can find the last usable
+space directly. Non-ASCII paragraphs still use the original grapheme and SDK
+width logic, including the whole-candidate fallback.
 
 Styled transcript rows always pass the final terminal-protocol filter before
 width fitting. Sanitized ASCII rows that already fit can retain their exact
@@ -107,6 +126,14 @@ runtime migration. Never use an environment flag as proof that an integrity
 check can be skipped. Package changes still require a matched build,
 a verified built tarball and a fresh Pi process, not a live-Owner reload.
 
+## Offline journal analysis
+
+The Run journal analyzer aggregates validated model shares separately for the
+whole report, each outcome and each check declaration. It updates only the
+incoming shares and computes the totals from each group's final model order
+once. Adding per-Run totals instead would change floating-point results. Overflow
+in any group still fails the batch before it can return a partial report.
+
 ## Reproducible offline measurements
 
 After the normal dependency installation and build, run from the root:
@@ -115,17 +142,27 @@ After the normal dependency installation and build, run from the root:
 node scripts/bench-pi-performance.mjs
 ```
 
-Use `--core-only` to omit the development-SDK reference measurements. The script
+Use `--core-only` to omit the history lookup and development-SDK references. The script
 prints JSON to stdout; capture evidence outside source. It uses built
 orchestration JS and synthetic in-memory data only: no saved journals, credentials,
 model requests, host CLI, approval interaction or network. It does not build or
 install anything implicitly.
 
 The default measures bounded streaming append plus one final materialization,
-plain-text wrapping, and uncached SDK context/transcript reference operations.
+plain-text wrapping, final-message lookup for a short Run after 10k/30k prior
+entries (32 lookups per sample), and uncached SDK context/transcript reference operations.
 The uncached references
 explain the cost avoided by presentation caches; they are not timings of the
 cached footer or an end-to-end child session.
+
+For the fullscreen Usage panel, run `node scripts/bench-footer-breakdown.mjs`
+(or pass a checkout with the pinned dependencies). The synthetic compositor
+repeats visibility, width and paint operations for wide and narrow viewports,
+including one with changing usage. Before timing, the benchmark compares every
+variant's complete styled rows with a fresh uncached frame. Each workload's
+`frameSha256` covers those full frames in variant order; compare it across
+checkouts before comparing medians. Verification and hashing are outside the
+timed samples. The output includes the target checkout's Pi TUI version.
 
 Record Node/SDK versions, CPU, sizes, delta granularity, cache conditions and
 actual commands with observations. Prefer regression assertions about data

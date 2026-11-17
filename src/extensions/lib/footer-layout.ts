@@ -201,11 +201,11 @@ export function breakdownTitle(theme: Theme, width: number, closeHovered = false
   );
 }
 
-export function breakdownFrame(
+function breakdownLines(
   table: BreakdownTable,
   theme: Theme,
   width: number,
-  closeHovered = false,
+  closeHovered: boolean,
 ): string[] {
   const inner = Math.max(1, width - 4);
   // A narrow terminal gives up the least interesting columns before it starts
@@ -275,7 +275,61 @@ export function breakdownFrame(
     }
   }
   lines.push(rule("bottom"));
-  return lines.map((line) => truncateToWidth(line, width, ""));
+  return lines;
+}
+
+export function breakdownFrame(
+  table: BreakdownTable,
+  theme: Theme,
+  width: number,
+  closeHovered = false,
+): string[] {
+  return breakdownLines(table, theme, width, closeHovered).map((line) =>
+    truncateToWidth(line, width, ""),
+  );
+}
+
+const BREAKDOWN_FIT_ROWS = 32;
+const BREAKDOWN_FIT_UNITS = 2048;
+
+/** Reuse only the final SDK clipping of identical, fully styled rows. Rebuild
+ * the frame (including theme and live usage) normally; neither a plain-width
+ * estimate nor previous placement is evidence that a styled row fits. */
+export function createBreakdownFramePainter() {
+  let previousWidth: number | undefined;
+  const previous: ({ input: string; fitted: string } | undefined)[] = [];
+  const clear = () => {
+    previousWidth = undefined;
+    previous.length = 0;
+  };
+  return {
+    clear,
+    paint(table: BreakdownTable, theme: Theme, width: number): string[] {
+      const lines = breakdownLines(table, theme, width, false);
+      if (width !== previousWidth) clear();
+      previousWidth = width;
+      previous.length = Math.min(lines.length, BREAKDOWN_FIT_ROWS);
+      for (let index = 0; index < lines.length; index++) {
+        const input = lines[index]!;
+        const cached = previous[index];
+        if (cached?.input === input) {
+          lines[index] = cached.fitted;
+          continue;
+        }
+        const fitted = truncateToWidth(input, width, "");
+        // A single frame's short rows only. Oversize rows still use the exact
+        // same fitter; this is a retention bound, not a display limit.
+        if (index < previous.length) {
+          previous[index] =
+            input.length <= BREAKDOWN_FIT_UNITS && fitted.length <= BREAKDOWN_FIT_UNITS
+              ? { input, fitted }
+              : undefined;
+        }
+        lines[index] = fitted;
+      }
+      return lines;
+    },
+  };
 }
 
 /** Corner position of a pinned indicator, or -1 for an ordinary status. */

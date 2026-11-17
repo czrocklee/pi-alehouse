@@ -437,7 +437,8 @@ test("retiring Stop state does not retire still-painted tabs", (t) => {
 });
 
 test("stable Info paragraphs reuse wrapping across spinner/clock paints", (t) => {
-  const text = "INFO_WRAP_SENTINEL ".repeat(150);
+  // Count actual grapheme wraps. Printable ASCII now uses a cell-slice path.
+  const text = "INFO_WRAP_SENTINEL 測 ".repeat(150);
   const original = graphemes.segment;
   let paragraphs = 0;
   t.mock.method(graphemes, "segment", function (value) {

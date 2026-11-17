@@ -27,11 +27,11 @@ import type { ContextSnapshot } from "./context-stats.ts";
 import type { ModelSpend } from "./session-spend.ts";
 import {
   breakdownChromeRows,
-  breakdownFrame,
   breakdownTable,
   breakdownTitle,
   breakdownWidth,
   contextSummary,
+  createBreakdownFramePainter,
 } from "./footer-layout.ts";
 
 /** Private footer panels only; lifecycle and accounting stay with the caller. */
@@ -71,6 +71,7 @@ export function createFooterPanels(options: {
   /** One helper per pinned breakdown lifetime: created with the panel and
    * disposed with it, so a repeated show/hide never leaves a restored bridge. */
   let breakdownSelection: ReturnType<typeof createPopoverTextSelection> | undefined;
+  const breakdownPainter = createBreakdownFramePainter();
   const maxBreakdownRows = () =>
     (member?.available() ?? tui.terminal.rows - POPOVER_DOCK_ROWS) - breakdownChromeRows();
   /** The smallest complete frame this table can paint. ON keeps the shared
@@ -92,6 +93,7 @@ export function createFooterPanels(options: {
     breakdownHover = undefined;
     breakdownSelection?.dispose();
     breakdownSelection = undefined;
+    breakdownPainter.clear();
     overlay?.hide();
     overlay = undefined;
     member?.leave();
@@ -107,6 +109,7 @@ export function createFooterPanels(options: {
       if (breakdownPressed) suppressBreakdownClick = true;
     },
     invalidate() {
+      breakdownPainter.clear();
       breakdown.resetPointer();
     },
     // Share the leaf/revision-keyed data with every stacked width getter;
@@ -114,7 +117,7 @@ export function createFooterPanels(options: {
     render: (width: number): string[] => {
       const closable = width > 0 && !!popoverChromeCloseHit(width);
       const table = breakdownTable(spend(), maxBreakdownRows());
-      const lines = width > 0 ? breakdownFrame(table, theme, width) : [];
+      const lines = width > 0 ? breakdownPainter.paint(table, theme, width) : [];
       breakdownHover?.paint(width, closable, lines.length);
       if (lines.length) {
         const title = breakdownTitle(theme, width, breakdownHover?.hovered);

@@ -538,6 +538,86 @@ test("dedup uses the full owner/generation/agent/run identity and missing usage 
   );
 });
 
+test("usage rollups preserve model key order, floating sums, partials and independent groups", async (t) => {
+  const { save, make } = await fixture(t),
+    owner = randomUUID();
+  const runs = [make(owner, "/cwd"), make(owner, "/cwd"), make(owner, "/other")];
+  const cost = (value) => ({ ...zero, cost: value });
+  runs[0].end.data.usage = {
+    byModel: { "p/b": cost(1e16), "p/a": cost(1) },
+    partial: ["output"],
+  };
+  runs[1].end.data.usage = {
+    byModel: { "p/a": cost(1), 2: cost(3) },
+    partial: ["cache_write"],
+  };
+  runs[2].end.data.usage = {
+    byModel: { "p/a": cost(1), ["__proto__"]: { ...cost(1), input: "invalid" } },
+  };
+  const files = await Promise.all(runs.map((r, i) => save(`${i}.jsonl`, r.child)));
+  const copy = await save("copy.jsonl", runs[1].child);
+  const result = await analyzeJournals([...files, copy]);
+  const total = result.observed_run_end_usage;
+  // Sum merged model shares in JS object key order, not by adding run totals.
+  assert.deepEqual(Object.keys(total.byModel), ["2", "p/b", "p/a", "__proto__"]);
+  assert.equal(total.byModel["p/a"].cost, 3);
+  assert.deepEqual(total.byModel["__proto__"], cost(1));
+  assert.equal(total.total.cost, 1e16 + 8);
+  assert.deepEqual(total.partial, ["input", "output", "cache_write"]);
+  assert.deepEqual(result.status_reasons[0].usage, total);
+  const [first, second] = result.declared_check_attempts;
+  assert.equal(first.runs, 2);
+  assert.equal(first.usage.total.cost, 1e16 + 6);
+  assert.equal(first.usage.byModel["p/a"].cost, 2);
+  assert.deepEqual(first.usage.partial, ["output", "cache_write"]);
+  assert.equal(second.usage.total.cost, 2);
+  assert.deepEqual(second.usage.partial, ["input"]);
+  assert.equal(result.duplicate_run_ends, 1);
+});
+
+test("usage overflow remains strict, with earlier overflow preceding a boundary mismatch", async (t) => {
+  const { save, make } = await fixture(t),
+    owner = randomUUID();
+  const first = make(owner, "/cwd", undefined, 1e308),
+    second = make(owner, "/cwd", undefined, 1e308),
+    wrong = make(owner, "/cwd", undefined, 1);
+  wrong.ref.start_entry_id = "dddddddd";
+  const a = await save("first.jsonl", first.child),
+    b = await save("same-model.jsonl", second.child),
+    mismatch = await save("mismatch.jsonl", wrong.child);
+  second.end.data.usage.byModel = { "p/other": { ...zero, cost: 1e308 } };
+  const c = await save("other-model.jsonl", second.child);
+  await assert.rejects(analyzeJournals([a, b]), { message: "usage overflow" });
+  await assert.rejects(analyzeJournals([a, c, mismatch]), { message: "usage overflow" });
+  await assert.rejects(analyzeJournals([a, mismatch, c]), { message: "run boundary mismatch" });
+});
+
+test("a declaration rollup can overflow even when the global model key order stays finite", async (t) => {
+  const { save, make } = await fixture(t),
+    owner = randomUUID();
+  const seed = make(owner, "/other", undefined, 0, false),
+    first = make(owner, "/cwd"),
+    second = make(owner, "/cwd");
+  const small = { ...zero, cost: 2 ** 969 };
+  seed.end.data.usage = { byModel: { large: zero } };
+  first.end.data.usage = { byModel: { small1: small } };
+  second.end.data.usage = {
+    byModel: { small2: small, large: { ...zero, cost: Number.MAX_VALUE } },
+  };
+  const a = await save("seed.jsonl", seed.child),
+    b = await save("first.jsonl", first.child),
+    c = await save("with-receipt.jsonl", second.child);
+  delete second.end.data.validation_receipt;
+  const d = await save("without-receipt.jsonl", second.child);
+  // The global order adds each small value separately to MAX_VALUE (both
+  // round away). The declaration adds them together first and overflows.
+  assert.equal(
+    (await analyzeJournals([a, b, d])).observed_run_end_usage.total.cost,
+    Number.MAX_VALUE,
+  );
+  await assert.rejects(analyzeJournals([a, b, c]), { message: "usage overflow" });
+});
+
 test("bounded explicit inputs reject directories, leaf symlinks and oversized/invalid-UTF8 journals", async (t) => {
   const { root, save } = await fixture(t),
     file = await save("one.jsonl", [header(randomUUID())]);

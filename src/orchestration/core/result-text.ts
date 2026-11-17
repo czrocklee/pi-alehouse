@@ -53,17 +53,19 @@ export class OutputBuffer implements Output {
     const chunk = this.pendingHigh + delta;
     const last = chunk.charCodeAt(chunk.length - 1);
     this.pendingHigh = last >= 0xd800 && last <= 0xdbff ? chunk.slice(-1) : "";
-    const bounded = boundedOutput(
-      chunk.slice(0, chunk.length - this.pendingHigh.length),
-      this.cap - this.retained,
-    );
-    if (bounded.text.length) {
-      this.chunks.push(bounded.text);
-      this.retained += bounded.text.length;
+    let kept = this.pendingHigh ? chunk.slice(0, -1) : chunk;
+    const remaining = this.cap - this.retained;
+    // Whole deltas already fit. Only the first overflow needs a pair-safe cut.
+    if (kept.length > remaining) {
+      kept = boundedOutput(kept, remaining).text;
+      this.closed = true;
+      this.pendingHigh = "";
+    }
+    if (kept.length) {
+      this.chunks.push(kept);
+      this.retained += kept.length;
       this.joined = undefined;
     }
-    this.closed = bounded.truncated;
-    if (this.closed) this.pendingHigh = "";
   }
   get text(): string {
     if (this.joined === undefined) {

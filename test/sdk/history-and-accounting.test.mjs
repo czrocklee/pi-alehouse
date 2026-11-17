@@ -14,6 +14,7 @@ import {
 import { historicalRunsCommand } from "../../dist/orchestration/history/history-command.js";
 import {
   PiRunJournal as SdkRunHistory,
+  finalMessage,
   historyTypes,
   validRouting,
 } from "../../dist/orchestration/history/run-journal.js";
@@ -28,6 +29,64 @@ const ledger = () =>
     { input: 10, output: 2, cache_read: 0, cache_write: 0, cost: 0.25 },
     "p/m",
   );
+test("final message walks only the bound Run, including seal-to-finish validation", () => {
+  const session = SessionManager.inMemory();
+  const old = session.appendCustomEntry("older", {});
+  const start = session.appendCustomEntry(historyTypes.start, {});
+  const assistant = () => session.appendMessage({ role: "assistant", content: [], timestamp: 0 });
+  const reply = assistant();
+  const through = session.appendCustomEntry("seal", {});
+  const later = assistant();
+  const reads = [];
+  const manager = {
+    getEntry(id) {
+      reads.push(id);
+      return session.getEntry(id);
+    },
+  };
+  assert.equal(finalMessage(manager, start, through, later)?.id, reply);
+  assert.deepEqual(reads, [later, through, reply, start]);
+  assert.equal(finalMessage(manager, start, start, later), undefined);
+  const invalid = { code: "INVALID_SDK_HISTORY" };
+  assert.throws(() => finalMessage(manager, start, old, later), invalid);
+  const intervening = session.appendCustomEntry(historyTypes.start, {});
+  assert.throws(() => finalMessage(manager, start, through, intervening), invalid);
+  session.branch(reply);
+  const sibling = assistant();
+  assert.throws(() => finalMessage(manager, start, through, sibling), invalid);
+  assert.throws(() => finalMessage(manager, start, through, "missing"), invalid);
+  assert.throws(
+    () => finalMessage({ getEntry: (id) => ({ id, parentId: id }) }, start, through),
+    invalid,
+  );
+});
+
+test("final message rejects Run starts strictly inside either bound interval", () => {
+  const session = SessionManager.inMemory();
+  const start = session.appendCustomEntry(historyTypes.start, {});
+  const reply = session.appendMessage({ role: "assistant", content: [], timestamp: 0 });
+  const through = session.appendCustomEntry("seal", {});
+  const boundary = session.appendCustomEntry("finish", {});
+  assert.equal(finalMessage(session, start, through, boundary)?.id, reply);
+
+  session.branch(start);
+  const innerStart = session.appendCustomEntry(historyTypes.start, {});
+  const innerThrough = session.appendCustomEntry("seal", {});
+  const innerBoundary = session.appendCustomEntry("finish", {});
+  assert.equal(new Set([start, innerStart, innerThrough, innerBoundary]).size, 4);
+  assert.throws(() => finalMessage(session, start, innerThrough, innerBoundary), {
+    code: "INVALID_SDK_HISTORY",
+  });
+
+  session.branch(through);
+  const laterStart = session.appendCustomEntry(historyTypes.start, {});
+  const laterBoundary = session.appendCustomEntry("finish", {});
+  assert.equal(new Set([start, through, laterStart, laterBoundary]).size, 4);
+  assert.throws(() => finalMessage(session, start, through, laterBoundary), {
+    code: "INVALID_SDK_HISTORY",
+  });
+});
+
 test("child runtime overrides bound native retries without changing compaction token budgets", () => {
   const manager = SettingsManager.inMemory({
     compaction: { enabled: false, reserveTokens: 2048, keepRecentTokens: 512 },
