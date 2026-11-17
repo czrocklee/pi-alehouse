@@ -1,95 +1,35 @@
-# Offline session analysis
+# Inspect history and usage
 
-Analyze explicit local SDK JSONL files without SDK/model calls, directory scans,
-linked-file reads or transcript text output. Keep transcripts and reports private.
+Use `/alehouse-history` in Pi to inspect Run links in the current parent session. For batch analysis, use the tools below from a **source checkout**. Both read only the SDK JSONL files you name. Neither scans directories, follows paths recorded in a journal, calls a model, repairs a journal or prints conversation text. Supply child files yourself. Keep even aggregate reports private; they can identify models, files or workspaces.
+
+## How much activity and spend was recorded?
 
 ```sh
-node scripts/analyze-pi-session.mjs [--json] [--since ISO] [--until ISO] JOURNAL.jsonl ...
+node scripts/analyze-pi-session.mjs parent.jsonl child.jsonl
+node scripts/analyze-pi-session.mjs --json \
+  --since 2026-01-01T00:00:00Z --until 2026-01-01T23:59:59.999Z parent.jsonl child.jsonl
 ```
 
-The single-file form still works, including invocation through a symlinked
-script path. Importing the module does not run the CLI. Text mode summarizes;
-`--json` retains full counters, accounting diagnostics and inference limits.
-Inputs must be regular files. Recorded `session_file`, `parentSession` and Run links are data, never
-paths to follow; supply child journals explicitly. This differs from the
-[Run/receipt audit](development.md#task-floor-and-validation-ownership).
+Text mode gives a summary; JSON includes counters and coverage. `--since` and `--until` are inclusive on **entry timestamps**, not file mtimes or task completion. Specify seconds, timezone and at most three fractional digits. Records outside the window are still checked and can identify an in-window result's tool call or session.
 
-## Window and identity
+| Report field   | Interpretation                                                                                                                                       |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `raw_usage`    | Recorded assistant, compaction, standalone usage and branch-summary observations, once per session/entry identity.                                   |
+| `parent`       | Assistant usage from parent **and unclassified** sessions; excludes identified children.                                                             |
+| `non_additive` | Usage attached to tool results, Run ends and unreported-usage checkpoints can overlap raw observations and each other. **Do not add them together.** |
 
-- Bounds are optional and inclusive on persisted **entry.timestamp**, not mtime,
-  header/nested-message timestamps or Run completion. Use ISO date-times with
-  seconds, explicit `Z`/numeric timezone and at most three fractional digits.
-- All supplied records are validated and used for classification/correlation;
-  only selected entries contribute usage/counts. An in-window result can use
-  call arguments recorded before the window.
-- Entry identity is session + entry ID. Repeated file arguments and identical
-  overlapping entries count once; conflicting copies fail. Reused tool-call IDs
-  in distinct entries stay counted, but argument correlation becomes ambiguous.
-  Call IDs are session-scoped. Fork/clone histories under different session IDs
-  are **not** deduplicated, even when they copy provider operations.
-- `alehouse:*` owner/session records classify parent/child/unknown, using records
-  outside the window too. Missing/conflicting evidence is unknown; header
-  ancestry alone may describe a fork, not a child.
-- `user_messages` counts user-role records, not human requests. Parent records
-  are only candidates; child task prompts and unknown sessions remain separate.
+`null` means no numeric observation; zero is a reported value. Aborted or errored assistant records can carry SDK-initialized zeros and are marked partial. Assistant usage is attributed to the responding model when known; summary usage may name the requested model. This is not a provider bill.
 
-Coverage stops at supplied persisted records. Missing journals, unrecorded
-activity and failed summaries cannot be reconstructed. Zero selected entries
-proves nothing about work or spend outside the inputs/window.
+Identical entries under the same session and entry IDs count once; conflicting copies fail. A fork with a different session ID counts separately. Reused call IDs make argument correlation ambiguous, not zero. `user_messages` counts user-role records, including child task prompts, not distinct human requests. A short wait requires a correlated explicit `wait_ms <= 1000`; a timeout is not a worker failure.
 
-## Accounting
+The analyzer uses two streaming passes with content-hash checks. Use stable copies. Limits are 128 file arguments, 4 GiB per pass, 16 MiB per line, 2 million unique entries and 2 million call observations, JSON depth 128 and 4096 tool/model groups. These are not process-memory limits.
 
-| Report         | Meaning                                                                                                                                                                                                       |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `raw_usage`    | Assistant, compaction, standalone usage and branch-summary observations, added once per entry identity. Source/model groups remain separate.                                                                  |
-| `parent`       | Assistant usage from parent **and unknown** sessions, excluding identified children.                                                                                                                          |
-| `non_additive` | `tool_result_attached` (all tool-result attached usage, not just orchestration children) and Run-end/unreported-usage projections may overlap raw child/nested calls and each other; never add them together. |
+## Which Runs and declared checks were observed?
 
-Assistant attribution uses `responseModel ?? model`; summary metadata may name
-the requested rather than responding model. Attached usage may cover absent
-nested calls or work outside the window reported inside it. Raw totals therefore
-are not complete parent/child/nested spend or provider billing/payments.
+```sh
+node scripts/analyze-alehouse-journal.mjs parent.jsonl child.jsonl
+```
 
-Numeric zero is observed; `null` means no numeric observation. Missing, invalid
-and partial components remain explicit. Partial markers include `partial`,
-`alehousePartial` and `alehouseModels[].partial`; attribution rows are not added
-again to flat totals. Assistant `error`/`aborted` records increment
-`error_or_aborted_records` and mark all components partial: SDK-initialized zeros
-may lack a provider usage frame. Numeric floors and actual record counts remain.
-Cache hit rates are withheld for incomplete inputs or invalid denominators.
+This separate audit emits JSON (`--json` is optional). It correlates start, end and parent link records; counts usage once per observed Run end; reports missing boundaries, invalid-receipt markers and grouped check declarations. An unreported-usage checkpoint is a non-additive snapshot. Missing journals or receipts are coverage gaps, and a declaration is **not proof a check ran or passed**. See [dispatch receipts](task-dispatch.md).
 
-## Orchestration counters
-
-All nine management tools, including `agent_answer`, are recognized. Send
-results are classified only by their recorded `action.delivery`.
-
-Management-only turns contain no other tools; the compatibility count includes
-parent/unknown sessions, not children. Coordination is not necessarily waste.
-`ok` counts non-error replies; `finished_seen` counts presented rows. Neither
-proves task quality or validation; `completed` and declared checks do not either.
-
-Wait counts use selected tool-result timestamps. `calls` excludes errors;
-`calls_including_errors` and `short_wait_le_1s` include them. Short waits require
-correlated explicit `wait_ms <= 1000`; `short_timeout_le_1s` counts the non-error
-timeout subset. Missing/ambiguous arguments are unknown,
-not zero. Timeouts/questions, management tool errors and assistant error stops
-remain separate; none is automatically a provider failure. Error text is not
-mined for permission-denial or model-quality scores.
-
-## Input limits and failures
-
-Two streaming passes retain hashes, identities and compact call metadata, not
-transcript bodies. Limits: 128 file arguments, 4 GiB per pass, 16 MiB per line,
-2M unique entries/call observations, JSON depth 128 and 4096 tool/model groups.
-These bound input/metadata, **not RSS**. Reports include limits and selected/
-duplicate counts. One fatal UTF-8 decoder is reused per file/pass. Second-pass
-content hashes bind reread entries to first-pass classification and correlation
-metadata, including duplicates and out-of-window entries; stat checks do not
-replace that content check. Neither hashing nor file stat checks establish an
-atomic snapshot or durability; analyze stable copies.
-
-Invalid CLI/options/bounds exit **2**. Malformed JSON/UTF-8, missing identities or
-timestamps, conflicting copies, changed files and exceeded limits fail the batch
-with **1**, no partial success report or salvage. Diagnostics identify file/line,
-not transcript contents. Read-only analysis grants no permissions or deployment,
-release or model-quality acceptance.
+Its limits differ from the session analyzer's: up to 64 file arguments, 8 MiB per file, 64 MiB total, 250,000 lines and 1 MiB per line. Both tools reject malformed input rather than salvage a partial report. Invalid command-line usage exits 2; a failed analysis exits 1. No selected entries or no observed usage is not evidence of zero cost elsewhere.

@@ -1,78 +1,64 @@
-# Portable validation scope
+# Validation scope and evidence
 
-This page states what each validation lane can and cannot establish. It is
-**not public release acceptance**: [limitations](limitations.md) and
-[release-policy.json](../release-policy.json) remain PENDING, and no inherited
-test baseline, fixture exit code or local observation grants acceptance.
-
-It deliberately holds no run log. Record each run in the commit that changes
-the validated code or pins, so the record stays tied to the exact tree it
-observed: command, exit code, Node/Pi versions, source revision,
-generated-runtime hash, test counts (passed, failed, skipped) and every lane or
-gate left unrun. Earlier per-upgrade records remain in git history. Zero
-matched tests is not success. Do not migrate private acceptance reports,
-session fingerprints, transcripts, authorization packets, or unrelated personal
-observations into public evidence.
+Public release remains **PENDING** in [release-policy.json](../release-policy.json).
+A passing check describes only the lane, revision and environment exercised.
+It is not approval to publish, deploy, activate a generation or run live trials.
+See [limitations](limitations.md) for the supported operating boundaries.
 
 ## Lanes
 
-| Lane                                                                                                     | Intended evidence                                                                                                                                                                               | Not established                                                                        |
-| -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Root `npm ci --ignore-scripts && npm run check`                                                          | Lockfile installation, matched generated runtime, lint/type checks, package unit/SDK/packaging tests and portable policy checks when scripts pass                                               | Real provider quality, deployability, human UI, fresh host compatibility               |
-| Portable policy suite (separate from package tests)                                                      | Generated worker definitions, static guard, policy-aware grep and patched permission authority under synthetic controlled calls                                                                 | OS sandboxing, arbitrary scripts/paths or live human authorization                     |
-| Controlled host integration suite (explicit invocation)                                                  | Built entrypoint, actual host SDK/loader, child tool allowlist, parent/scout web isolation (internal `researcher`), footer/Stats/UI registration, lease and shutdown with synthetic provider/UI | Remote model use, safe reload, transactionally atomic cancellation or durable recovery |
-| Optional Jev controlled lane                                                                             | Review provenance and forwarded asks with fabricated responses in isolated process; defer and no-key paths                                                                                      | Human authorization, calibrated judgments, permission grants for other contexts        |
-| PTY/history probes                                                                                       | Selected terminal and journal behavior, negative reload/IO observations                                                                                                                         | Human-TUI acceptance, fsync/power-loss guarantees                                      |
-| Built tarball install (`--omit=dev --legacy-peer-deps --ignore-scripts`) and installed-tarball RPC smoke | The package carries no Pi SDK/runtime and its CLI can open, status and close an Owner against a separately supplied host Pi without a model request                                             | Editing, human rendering, web requests, billing or live-provider behavior              |
+| Lane                         | What a pass can establish                                                                                                        | What it does not establish                                                            |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Portable package             | Locked source dependencies, lint/types, a matched build, and local unit, pinned-SDK, packaging and scripted composition checks.  | Compatibility with an arbitrary installed host, or behavior of an installed artifact. |
+| Portable policy              | Matched generated definitions, managed permission authority, guard/search and controlled policy checks.                          | OS isolation, arbitrary shell effects or live human approval.                         |
+| Controlled host and PTY      | Selected loading, tools, permission forwarding, lifecycle and terminal behavior on the exact supplied host with synthetic IO.    | Real providers, human UI acceptance, or atomic input/cancellation.                    |
+| Optional Jev and SDK history | Fabricated review and defer/forwarding behavior, or bounded SDK journal observations, respectively.                              | Reviewer calibration, human consent, crash durability or restart recovery.            |
+| Installed tarball            | Exact artifact contents and production dependency tree; a separate RPC smoke can show startup, status and closure using host Pi. | Human rendering, live work or billing. `--help` alone isn't an RPC smoke.             |
+| Nix and Home Manager         | Flake build, or inspection and controlled loading of a specified prebuilt generation, when separately run.                       | Activation, settings migration on a real profile, or the npm artifact's behavior.     |
 
-Keep fixtures offline and output outside the checkout; never make real-model calls or copy Pi auth/session data into public reports. A controlled provider reports synthetic behavior only. In particular, SDK post-guard queue/message acceptance and unsupported live-Owner `/reload` must be tested as limitations, not relabelled safe because a selected schedule produced no post-cancel provider call. Only an actual controlled run can record an outcome. Permission authority selection must use the **built matched patched runtime**; a mutable global install or missing fixture is not a pass. A test report should distinguish failures, skipped checks and suites that matched zero tests.
+A negative assertion about unsupported live-Owner reload or an SDK post-guard
+race is evidence of that limit. It isn't a fix or authorization to try the
+operation on a user's session. A matched portable build is not an installed
+runtime swap.
 
 ## Running the lanes
 
-From the repository root of a Linux checkout:
+The [single validation owner](development.md#task-floor-and-validation-ownership)
+coordinates the portable build and gate. Use the
+[source prerequisites and commands](development.md#commands-repository-root)
+for `npm ci --ignore-scripts`, `npm run check` or the standalone
+`npm run test:policy`. The latter rebuilds unless given `--built` with current
+matched inputs. If a user namespace obscures audit path ownership, record
+that limit; see [Jev audit ownership](development.md#jev-audit-ownership-in-user-namespaces).
+
+Controlled collectors are separately authorized. From a Linux source checkout
+with locked development dependencies and the [test prerequisites](development.md#tests-and-scope)
+(including Python 3 for PTY), use fresh evidence paths outside source:
 
 ```sh
-npm ci --ignore-scripts
-npm run check          # lint, matched build, types, package tests, then portable policy
-npm run test:policy    # the portable policy gates alone
+reports=$(mktemp -d)
+PI_TEST_EXECUTABLE=/absolute/path/to/pi bash scripts/collect-alehouse-evidence.sh --all --output "$reports/host"
+PI_TEST_EXECUTABLE=/absolute/path/to/pi bash scripts/collect-alehouse-evidence.sh --jev-only --output "$reports/jev"
+bash scripts/checks/check-pi-sdk-history.sh --output "$reports/history"
 ```
 
-`PI_TEST_EXECUTABLE` selects the Pi CLI the policy gates use (otherwise `pi`
-on PATH); pointing it at the development CLI in `node_modules/.bin/pi` checks
-the pinned SDK rather than whatever host Pi is installed. Supply trusted
-absolute `flock` and Git paths and owned HOME/state directories as described in
-[tests and scope](development.md#tests-and-scope). Jev audit tests reject log
-directories whose ancestors appear owned by an unmapped UID, as in some
-sandboxes; see
-[Jev audit ownership in user namespaces](development.md#jev-audit-ownership-in-user-namespaces).
-Such a run has unrun coverage, not a pass.
+`npm run test:integration` is the `--all` collector with a default temporary
+output path. The host/Jev collectors run `check:package` first; the SDK-history
+probe expects a fresh matched build and takes `pi` from PATH. Keep the fixtures
+offline and isolated. Use the [tarball](development.md#build-and-verify-a-tarball)
+and [Nix](development.md#nix-packaging) instructions for those separate lanes.
 
-Controlled host lanes need separate authorization and write evidence outside
-the checkout:
+## Evidence and gaps
 
-```sh
-npm run test:integration
-./scripts/collect-alehouse-evidence.sh --jev-only --output NEW_DIR
-./scripts/checks/check-pi-sdk-history.sh --output ANOTHER_NEW_DIR
-```
+Keep raw outputs outside source. Tie a concise record to the commit or change
+that it validates: source revision and dirty diff state, lockfile and generated
+manifest hashes, artifact/generation identity if relevant, platform/Node/npm/Pi
+versions, key configuration, commands, exit codes, test counts and evidence
+paths. State explicitly what passed, failed, skipped, was blocked, interrupted,
+matched zero tests, or wasn't run. A zero match isn't a pass, and an old run
+isn't evidence for new source. Don't publish private transcripts, credentials,
+session fingerprints or approval packets.
 
-The production tarball install and its checks are described under
-[commands](development.md#commands-repository-root).
-
-## Existing contract regressions to preserve
-
-- Core: Owner FIFO/idempotence, four executing per admitted provider/twelve Owner-wide resident reservations, result budgets and paging, Off with retained work, cleanup quarantine, non-regressing usage floor and unreported residue. These are the current regression targets.
-- SDK/host: verified capabilities, controlled prompt/input races, natural-finish steer fallback, real SDK replacement confirmation, worker web exclusion, scout isolation (internal `researcher`) and parent tool visibility.
-- Security: `editor` guarded writes, shell ask behavior, static guard and policy search, approval provenance/defer, and failure-closed readiness against the matched generated authority.
-- UI: permission dialog yield, widget/detail/picker/footer/Stats projection, overlay protocol, and non-atomic replacement warnings; scripted UI is not a person.
-- Negative/optional: unsafe-live-reload assertions and separately invoked Jev tests. A passed _negative_ assertion documents an unsupported operation; it does not authorize that operation.
-
-## Current evidence and gaps
-
-Recorded runs are limited observations, not a completed public acceptance
-review. No run establishes npm publication, live-provider trials, external
-reviewer calibration, human approval acceptance, complete billing, general
-cross-version support, atomic cancellation, safe reload or end-to-end recovery.
-Do not reuse a prior local GO as a deployment gate. See
-[development](development.md) for commands and [security](security.md) for what
-permission tests cannot prove.
+No routine lane establishes real-provider quality, complete billing, human
+approval, safe live reload, forced exit or end-to-end recovery. Those gaps
+remain visible; this page records no run outcomes or public acceptance.

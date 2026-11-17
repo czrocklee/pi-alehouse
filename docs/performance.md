@@ -1,178 +1,89 @@
 # Performance and safe cache boundaries
 
-Performance work preserves the [tool contract](tool-contract.md),
-[authority boundaries](security.md), and [support limits](limitations.md).
-Caches are implementation details, not admission evidence or permission grants.
-Generated `generated/` files are built output, never the place to apply fixes.
+A faster projection must not change the [tool contract](tool-contract.md),
+[permission decision](security.md) or [support limits](limitations.md).
+Measure source changes; never patch generated output. Use the
+[single validation owner](development.md#task-floor-and-validation-ownership)
+for any shared build and gate work.
 
 ## Streaming and Owner projections
 
-The SDK adapter and Owner use an internal append/reset output seam. The Owner
-retains bounded chunks and joins them only when a text reader or final result
-needs a string. A new assistant attempt resets the candidate: tool commentary,
-failed attempts and retries are not concatenated into the final result.
-Full-output ports and final snapshots still undergo monotonic-prefix validation.
-Materializing text compacts the retained chunk list to that same memoized string;
-it does not keep the complete old chunk list alongside a second joined prefix.
-This releases buffer references, not a promised heap/RSS ratio or immediate GC.
-Whole deltas that fit do not need a truncated-prefix calculation. A trailing high
-surrogate is still held back even when the buffer is exactly at its cap.
-Split surrogate pairs, retained-prefix limits, total observed UTF-16 units and
-callback failures retain their existing meanings.
+The SDK adapter and Owner use an append/reset output seam. Retain bounded chunks
+and materialize text only for readers and final results. A new assistant attempt
+resets the candidate, so commentary and failed attempts don't become part of
+the final result. Preserve prefix checks at full-output ports, Unicode boundary
+handling and observed versus retained lengths. Retention limits aren't heap or
+RSS limits and don't imply immediate garbage collection.
 
-Immutable inherited-context digests and byte counts are computed independently
-of repeated roster projections. A presentation revision can invalidate UI data,
-but does not certify lease health, current policy, task ordinals or admission.
-Independent commands and explicit inspection must continue checking fresh facts.
-Communication indexes are local to a projection/validation pass and preserve
-original Run references rather than creating a second authority registry.
+Cache immutable facts or reuse projections within a known revision. Do not
+cache admission, lease health, task ordinals or original-Run validation across
+independent reads. Retained Runs still support replay, questions and cursors;
+there is no automatic eviction or journal-backed replacement. Faster history
+lookup must find the seal on the path back to the Run start, reject intervening Run starts and exclude messages after the seal. Cold reads still validate the journal snapshot.
 
-History remains bounded and **not automatically evicted**. Results, task ranks,
-request replay, pending questions, handoffs and stateless result cursors depend
-on retained Runs. Hitting the admission cap still requires closing the Owner and
-starting fresh; an SDK journal is not a transparent replacement for that state.
-Result limits are not a heap/RSS limit.
-
-Final-message lookup in the SDK journal follows parent IDs from the finish
-boundary back to the Run start. It checks that the sealed entry is on that
-path, rejects intervening Run starts, and ignores assistant messages after the
-seal. This avoids reading earlier Runs in a reused session; it is not a cache
-and does not remove the cold reader’s whole-file snapshot validation.
+The offline Run journal analyzer accumulates model shares per group, then computes totals in model order. Adding pre-summed Run totals changes floating-point results. Overflow in any group still fails the batch.
 
 ## UI and permission caches
 
-Animation must not force a fresh historical projection just to change a glyph.
-Detached roster snapshots, stable transcript projections and footer context
-values can be reused only while their source identity/revision remains valid.
-Lifecycle, branch, model, compaction, theme and width changes still invalidate
-relevant presentation. Whole-session spend uses count-verified append traversal
-where the host exposes the optional public count API. Without a reliable whole-
-journal count/revision it reads fresh, even when the branch leaf is unchanged:
-an unobserved A→B→A navigation can still add billed usage on B. The regular footer uses a synchronous render token instead of a
-marker search; only short-viewport padding needs a detached reference copy.
-Missing host capabilities retain a fresh fallback rather than inventing a
-reliable cache key. UI caches never acknowledge alerts or
-finished facts, and never authorize a Stop or another model command. Explicit
-fresh inspection also supplies the next detached pane snapshot instead of
-immediately repeating that read. Ordinary transcript invalidation preserves
-settled components; real theme replacement must still repaint correctly.
+Animation can reuse detached display data without reprojecting history. Model,
+branch, compaction, theme, width and lifecycle changes invalidate affected views.
+Without a reliable whole-journal count or revision, footer spend falls back to
+fresh reads; a stable branch leaf doesn't prove nothing was spent elsewhere.
+The fullscreen Usage panel still reads spend and rebuilds layout and styling;
+only fitting an identical styled row at the same position and width can be
+reused. Preserve the terminal-protocol filter and Unicode width behavior; an
+ASCII fast path is not valid for all styled text. UI caches don't authorize a
+Stop or acknowledge a notification.
 
-The fullscreen Usage-by-model panel still reads spend and rebuilds its layout
-and styling on every paint. Only the final SDK clip for an exact styled row at
-the same position and width can be reused: at most 32 rows from the last paint,
-with both input and clipped strings limited to 2048 UTF-16 units per cached row.
-Oversize rows are drawn normally, not shortened to make them cacheable.
+Permission caches are for pure computations with complete semantic keys (e.g.
+identical config contents or a wildcard with the same path semantics). Keep
+original-request and hardened-request checks distinct. Do not reuse policy,
+filesystem or identity samples across an approval wait or another call. A
+watcher is a wake-up hint, not a freshness proof. Jev still revalidates after
+asynchronous review and requires synchronous audit confirmation for automatic
+allows. See [security](security.md) and [audit recovery](jev-audit-recovery.md)
+for the authority and lock boundaries.
 
-Plain paragraphs are sanitized before wrapping. For printable ASCII, each unit
-is one cell and one grapheme, so a width-sized slice can find the last usable
-space directly. Non-ASCII paragraphs still use the original grapheme and SDK
-width logic, including the whole-candidate fallback.
-
-Styled transcript rows always pass the final terminal-protocol filter before
-width fitting. Sanitized ASCII rows that already fit can retain their exact
-bytes without SDK truncation: length suffices for plain text, while styled
-rows use the public width API when needed. Unicode and overflowing rows keep
-the original SDK truncation path. Do not generalize the shortcut to Unicode:
-removing ANSI before measuring can join graphemes that the truncator observes
-as separate runs. This adds no renderer cache or callback-state change and
-never shortens recorded results to manufacture a speedup.
-
-Grok billing remains opt-in. Refresh attempts are throttled and final dirty
-activity is coalesced; leaving the applicable provider retires delayed work.
-The display distinguishes pending/failed data and the last successful refresh;
-the minimum attempt interval is not a maximum data-age guarantee.
-
-Permission optimizations favor bounded caches of pure computations, such as
-compiled wildcard expressions and parsing identical configuration contents.
-Cache keys must include every semantic input (including HOME expansion and path
-flavor). Original-request and hardened-request checks remain distinct.
-Filesystem/policy samples must not be reused across an approval wait or another
-invocation: denies, workspace releases and symlink targets may change then.
-Forwarding watcher registration failures use bounded backoff independently of
-the unchanged 250 ms response/liveness polling; a watch is only a wake-up hint.
-Jev continues revalidating current policy, action, user authorization, loaded
-restrictions, Run witnesses, mode and script evidence after its asynchronous
-review; leaf/entry counts alone are not a freshness proof.
-
-Jev keeps synchronous audit confirmation: a failed append, rotation or lock
-release cannot produce an automatic allow. It retains a kernel `flock` on the
-persistent regular `.<log basename>.lock` inode; process death releases the OFD
-lock, and normal cleanup never unlinks the lock file. The short contention wait
-is followed by complete synchronous approval revalidation before writing an
-allow, not a cached decision or a network/model retry.
-
-Successful appends keep the active JSONL file within 1 MiB. Rotation uses a fresh
-private container under `<log path>.archives` and atomic rename to its empty
-slot, avoiding the former link/unlink interruption window without overwriting
-archives. **Total audit disk usage is still unbounded.** Shared logs-directory
-modes such as safe owned 0750 are preserved; audit files and containers remain
-private. A symlink layout needs a startup-fixed canonical binding and immutable
-protection for the exact active/lock files and archive root, not all unrelated
-extensions' shared logs.
-
-Legacy directory locks, old extra hard links and unterminated active tails still
-fail closed with specific diagnostics. They require explicit offline recovery;
-bytes are never silently repaired, truncated or discarded. See
-[Jev audit recovery](jev-audit-recovery.md) for dry-run inspection, writer-stop
-requirements, mixed-version restrictions and preserved evidence. Linux procfs
-and trusted util-linux flock remain required. This audit lock is distinct from
-the Owner lease and is not fsync/crash-durability evidence.
-
-Startup optimizations must preserve host SDK export identity, parent/child web
-instance isolation, factory ordering, early immutable-resource protection and
-both preflight boundaries. Explicit source specifiers avoid suffix probing, but
-jiti still transpiles TypeScript on a cold cache; this is not a full precompiled
-runtime migration. Never use an environment flag as proof that an integrity
-check can be skipped. Package changes still require a matched build,
-a verified built tarball and a fresh Pi process, not a live-Owner reload.
-
-## Offline journal analysis
-
-The Run journal analyzer aggregates validated model shares separately for the
-whole report, each outcome and each check declaration. It updates only the
-incoming shares and computes the totals from each group's final model order
-once. Adding per-Run totals instead would change floating-point results. Overflow
-in any group still fails the batch before it can return a partial report.
+Startup changes must preserve the host SDK export identity, parent/child web
+instance isolation, integrity checks and early resource protection. Cold
+TypeScript loading still uses jiti; this isn't a precompiled runtime. A new
+runtime needs a [matched build and fresh process](development.md#matched-resource-migration),
+not hot reload. Warm/cold startup measurements need a controlled host and
+extension-readiness checks; an RPC reply alone doesn't prove initialization.
 
 ## Reproducible offline measurements
 
-After the normal dependency installation and build, run from the root:
+From the source root with locked development dependencies and a fresh
+`npm run build` (including for `--core-only`):
 
 ```sh
 node scripts/bench-pi-performance.mjs
+node scripts/bench-pi-performance.mjs --core-only
 ```
 
-Use `--core-only` to omit the history lookup and development-SDK references. The script
-prints JSON to stdout; capture evidence outside source. It uses built
-orchestration JS and synthetic in-memory data only: no saved journals, credentials,
-model requests, host CLI, approval interaction or network. It does not build or
-install anything implicitly.
+`--core-only` skips the journal lookup and uncached SDK reference measurements.
+The default measures bounded stream append plus final materialization, wrapping,
+Run-local lookup after 10k/30k earlier entries and uncached SDK
+context/transcript work. The SDK measurements are references, not timings of the
+cached UI or a child session. The script builds nothing.
 
-The default measures bounded streaming append plus one final materialization,
-plain-text wrapping, final-message lookup for a short Run after 10k/30k prior
-entries (32 lookups per sample), and uncached SDK context/transcript reference operations.
-The uncached references
-explain the cost avoided by presentation caches; they are not timings of the
-cached footer or an end-to-end child session.
+For the fullscreen Usage panel, install locked development dependencies in
+both the runner and any target checkout. No generated runtime is needed:
 
-For the fullscreen Usage panel, run `node scripts/bench-footer-breakdown.mjs`
-(or pass a checkout with the pinned dependencies). The synthetic compositor
-repeats visibility, width and paint operations for wide and narrow viewports,
-including one with changing usage. Before timing, the benchmark compares every
-variant's complete styled rows with a fresh uncached frame. Each workload's
-`frameSha256` covers those full frames in variant order; compare it across
-checkouts before comparing medians. Verification and hashing are outside the
-timed samples. The output includes the target checkout's Pi TUI version.
+```sh
+node scripts/bench-footer-breakdown.mjs
+node scripts/bench-footer-breakdown.mjs /path/to/other/checkout
+```
 
-Record Node/SDK versions, CPU, sizes, delta granularity, cache conditions and
-actual commands with observations. Prefer regression assertions about data
-identity, call counts, bounded retention and invalidation to flaky wall-time
-thresholds. Warm/cold startup needs its own controlled readiness and module-
-identity evidence; an RPC response alone does not prove successful extension
-initialization. Do not add unrelated historical measurements as current
-acceptance or sum independent ablations into a promised launch latency.
+The synthetic compositor measures stable and changing spend in wide and tight
+viewports. Before timing, it checks complete styled rows against uncached
+frames. Each workload's `frameSha256` covers those full frames in variant order.
+Compare the hashes between revisions before comparing medians; describe any
+intentional render change separately. Verification and hashing aren't timed.
 
-Use the unique validation owner and separate portable/controlled-host lanes in
-[development](development.md#task-floor-and-validation-ownership). Offline
-microbenchmarks are not host compatibility, human-TUI acceptance, OS isolation,
-real-model quality, durable history or public release evidence.
+Both scripts emit JSON; save it outside the checkout. Record revisions, commands,
+Node and SDK/TUI versions, CPU, workload sizes and cache conditions. Prefer
+regressions for data identity, invalidation and bounded retention to wall-time
+thresholds. These synthetic inputs use no saved sessions, credentials, host
+CLI or network. They cannot establish end-to-end latency, live model quality,
+human UI acceptance or public release readiness.

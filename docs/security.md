@@ -1,983 +1,329 @@
 # Security and authority boundaries
 
-Pi Alehouse's orchestration layer composes authority; it does not replace it.
-The patched permission-system 32.0.3 authority, generated worker definitions,
-static safety guard, search policy, and optional Jev review policy remain
-outside the internal orchestration layer and are loaded by the trusted
-`pi-alehouse` launcher. A task prompt, profile name, model choice,
-or UI state cannot grant a new permission or weaken a path/tool restriction.
+Pi Alehouse runs cooperative Agents under the host Pi process and user account.
+The patched permission authority, static guard and profile tool tables enforce
+specific boundaries on model tool calls. They are **not an OS sandbox**, a
+network firewall or protection from opaque programs or trusted in-process code.
+Do not delegate work that requires those guarantees.
 
 ## Explicit process and tool boundary
 
-The root manifest has `pi.extensions: []`: neither the source `src/composition.ts`
-nor the launcher is automatically loaded by Pi or installed as an extension via
-`pi install`. The CLI starts host Pi with `--no-extensions -e` and an explicit
-absolute `src/composition.ts` path, rejecting additional extension paths. It supplies
-matched generated authority/policy paths and an absolute trusted util-linux
-`flock`; direct orchestration extension loading without the launcher fails rather than
-guessing paths. Parent web integration uses package-local pinned `pi-web-access`
-0.47.0; only scout children (internal `researcher`; [below](#researcher-web-access)) receive web tools. The CLI does not make a temporary npm install,
-copy authentication, overwrite existing user resources, or enable arbitrary
-extension discovery. Explicit initialization creates only absent resources;
-the neutral routing catalogue defaults to `off`. Install a **built tarball** with
-`--omit=dev --legacy-peer-deps --ignore-scripts` to avoid pulling a second Pi
-SDK/runtime through dependency peer auto-installation; the host Pi is separate.
+- **Trust the installation and host.** `pi-alehouse` starts host Pi with
+  `--no-extensions -e` and the package's absolute composition path. It rejects
+  additional extension paths, checks for matched generated resources and uses
+  trusted absolute util-linux `flock`. Plain `pi` does not load Alehouse; the
+  package is not a `pi install` extension. See [installation](getting-started.md#2-install-the-launcher).
+- **Own the configuration.** `pi-alehouse init` creates only missing resources,
+  with routing Off. It does not repair an existing definition or merge a new
+  permission seed into your policy. Inspect your actual settings and rules
+  before enabling work.
+- **Choose the smallest suitable tool table.** A profile is not a model tier,
+  grant or separate account. Both profiles work in the parent's admitted
+  directory, under the same project-trust settings. There is no private child
+  checkout, and review-only instructions do not make a worker read-only.
 
-The parent's four web tools stay subject to the global permission policy, and
-autonomous delegation hides them ([below](#parent-web-access)).
-Children receive only their profile's local `read`/Bash/search/edit tools as
-filtered by the orchestration layer, plus fixed `alert_parent`/`ask_parent`. `notify_parent`
-is retired and explicitly denied, not a runtime alias. They receive
-no parent management tools, no nested delegation and no arbitrary extensions.
-Worker (`editor` internally) receives no web tool table. Absence of those
-tools is not network isolation. Tool availability is never network
-authorization. Plain `pi` has no delegation tools at all.
+| Profile                         | Enforced model-facing tools                                             | What that does not enforce                                                        |
+| ------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `worker` (internal `editor`)    | Local read/search, edit/write and Bash, subject to policy; no web tools | No network isolation; ordinary Bash includes Git and builds.                      |
+| `scout` (internal `researcher`) | `read`, `grep`, `find`, `ls` and web; no Bash, edit or write            | Web tools can still invoke helpers, read credentials, send data and write caches. |
 
-New model requests select `worker` or `scout`. Worker maps to the stable
-internal `editor` profile ID; scout maps to the stable internal `researcher`
-ID. Generated filenames, config paths, historical records and
-`#researcher-web-access` keep that internal ID. The former public name
-`researcher` is unsupported, not an alias for scout. There is no live session
-migration: accepted Agents keep their admitted profile, and the new public
-name requires a new Agent after matched resources and a fresh process. No
-legacy profile aliases or capabilities are supported. Both profiles use the
-parent's working directory. Reasoning difficulty is independent of profile;
-scout is not a cheaper, shallower or quicker tier.
-
-| Public profile | Internal ID  | Capability                                                                   | Meaning                                                                                                                                                                   |
-| -------------- | ------------ | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `worker`       | `editor`     | local read/edit/write/Bash/Git/builds; no web tools                          | local diagnosis, code review, design, implementation and verification under normal permission; no web is not network isolation, and review-only is not a readonly promise |
-| `scout`        | `researcher` | read, grep, find, ls and the four web tools; no model-facing Bash/edit/write | gather, compare and summarize information from local files and web sources, including local-only tasks; return cited findings; web material is untrusted                  |
-
-Worker has no extra child-only blanket Git mutation ban and no automatic Git
-allow. Review-only work is a task instruction. User-configured command/path denies and base credential/resource/high-risk
-protections remain; generated policy never overwrites live user configuration.
+Both have `alert_parent` and `ask_parent`, not the parent's management tools or
+nested delegation. `notify_parent` is denied, not an alias. Use `scout` in new
+requests; `researcher` remains the on-disk and internal ID, not a public alias.
 
 ### Skill discovery and permissions
 
-Child skill discovery is enabled by default for both profiles and can be turned
-off with **Agent skills** (`childSkills` in scoped preferences). The launch flags
-`--no-skills` / `-ns` also suppress child discovery for that launch and cannot be
-overridden by the menu or a saved `true`; they never change saved preferences.
-Newly created sessions use SDK discovery under the same cwd, agent directory and
-project-trust settings; resource exclusions still apply. Already-created child
-sessions retain their resources on reuse. Queued Agents without a session use
-the choice at first session creation, not at admission. No arbitrary extension
-discovery is enabled.
+Both profiles discover skill metadata by default. Turn off **Agent skills**
+(`childSkills`) in [scoped preferences](routing.md#scoped-user-preferences), or
+launch with `--no-skills` / `-ns` to force it off for that launch. The setting is
+sampled when a child session is created, not when an Agent is queued; existing
+sessions keep their loaded resources. Discovery grants neither tools nor access.
 
-Discovery advertises skill metadata, not full instructions or executable tools.
-Reading instructions and running any suggested commands retain ordinary
-permissions and profile ceilings. Skills are prompt input, not permission
-grants; review unfamiliar skills. A scout does not acquire Bash/edit/write just
-because skill instructions mention them.
+`permission.skill` filters the advertised catalogue and gates `read` calls to
+matching active entries and their directories. It does **not** protect every
+skill file or every access surface. Turning discovery off reduces exposure, not
+permission to read known files. Use file/path policy for that. The init seed
+allows skills; an existing policy without a skill rule uses its ordinary `*`
+fallback. Jev does not automatically approve skill asks. Treat instructions
+from skills as input, not as authority.
 
-The singular `skill` permission surface controls advertised skill use. Configure
-`permission.skill` in the normal policy scopes; agent-definition frontmatter can
-also carry `permission.skill` for the internal `editor` / `researcher` identities.
-Managed definitions still require deliberate matched reconciliation; do not edit
-generated output or silently rewrite installed policies. With an existing policy
-that omits `skill`, its ordinary `"*"` fallback applies. An `ask` can introduce
-additional human approvals in manual/Jev modes: Jev never auto-allows the skill
-surface. Existing allows and ordinary yolo keep their normal behavior. The init
-seed explicitly allows skills but initializes only missing files, so it does
-not update an existing policy.
+## Model tool policy
 
-Skill-name checks are catalog-dependent: the authority filters denied entries
-from the advertised catalog and adds a skill gate to matching `read` calls for
-active entries and their directories. Hidden/unadvertised entries, unmatched
-paths or other tool surfaces are not a universal skill-name file gate. Turning
-discovery off reduces automatic exposure but does not prohibit known-file reads;
-even with discovery on, a skill deny is not a general file-access deny. Use
-ordinary tool/path permissions for file-access control. Neither setting provides
-an OS sandbox or guarantees protection from malicious instructions.
+Alehouse uses one patched permission-system authority (32.0.3), with a separate
+hard-deny guard and permission-aware search. Tool visibility is not permission.
+Project, profile and session rules can affect ordinary checks; do not assume
+that a global rule always wins ordinary scope composition. Live rules need not
+match the seed. Changing a prompt, UI mode or model cannot override an enforced
+deny or profile ceiling.
 
-### Cooperative Git commands
+| Decision                        | What happens                                                                                                                                                            |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Existing effective allow        | Runs without human or Jev review of that check; independent path, tool and safety checks still apply.                                                                   |
+| Ordinary ask                    | Follows the approval mode. Session yolo satisfies ordinary asks for that session and covered in-process descendants, without Jev or its checkpoints.                    |
+| Final deny or fail-closed floor | Grants and yolo cannot set aside a final deny or automatically satisfy a fail-closed ask. Report a hard refusal; do not rephrase or wrap the command to get it through. |
 
-Repository queries and writes use ordinary Bash permission. With the neutral
-seed, `git status --short`, `git log -1` and `git diff --stat` ask for both
-parent and worker; only bounded literal version queries can qualify for the
-automatic fixed-query lane. Existing broad user allows keep their ordinary
-scope, so an allowed pattern never reaches Jev or its hard checkpoints.
-Session yolo satisfies ordinary asks — including worker Git mutations — and
-skips Jev review and its checkpoints; the deny-only static guard
-([hard denies only](#static-guard-static-allow-exclusion-and-redirect-targets)),
-selected configured denies and fail-closed floors still apply. Selected
-PATH/loader/helper prefixes requested by the model retain a deny-only guard:
-the inventory includes EDITOR, VISUAL and GIT_PROXY_COMMAND as well as
-Git-specific editor, pager and transport helpers, and examines requested
-prefixes, not inherited environment. Other assignment-bearing Git asks and
-selected destructive Git asks have Jev hard checkpoints, not an additional
-per-operation permission system; checkpoints defer eligible asks to ordinary
-human approval and do not run for an existing allow or under yolo.
-
-The current contract is [literal Git restrictions](git-read-proof.md): no Git
-subprocess probing or historical file-provenance claim. Raw configured Bash
-denies/specific asks, explicit path/output facts and actual redirects remain
-independent. Worker Git mutations do not receive a readonly shortcut.
-
-There is no complete historical-content separation promise for a worker with
-ordinary Git access. Literal path denies remain useful protection, not a data
-taint tracker for repository objects. A selected configured deny survives session
-grants/yolo; ordinary asks keep ordinary approval, and invalid configuration
-still fails closed. Scout (internal `researcher`) has no model-facing Bash tool and keeps its profile ceiling. That does not remove upstream web subprocess or file effects; see [below](#researcher-web-access).
-
-Git commands are never silently rewritten. Native index cache writes and locks
-remain possible; separate worktrees reduce same-index contention but share
-objects, most refs and configuration. No zero-write, automatic retry, safe lock
-removal or freedom-from-conflicts claim is made. Ordinary Git is not
-reauthorized through a second per-operation effect matrix.
+Check the effective rules in both the parent and child before relying on
+approval as a control. The seed denies many known secret paths and writes to
+Pi and Git configuration; it normally asks for external directories. Review
+exceptions and add rules for your own sensitive paths. Broad Bash allows and
+yolo can admit more than you intend. See [Git policy](git-read-proof.md) for
+repository commands.
 
 ### Configured privilege-command denies
 
-The authority adds a narrow deny-only floor for literal `sudo`, `doas` and `su`
-executions. It evaluates the complete ordered **global Bash rules** before
-project/profile/session composition and yolo; a selected deny retains its
-configured pattern and reason. A higher-scope catch-all or allow, a session
-grant, yolo, and an authorizer cannot override that selected privilege deny.
-The floor is not a new blanket command ban: absent a selected global Bash deny,
-normal permission applies, and same-global-scope rule ordering and exceptions
-remain intact in the authority. The separate static guard retains its own
-literal declarative-deny checks.
+For recognized literal `sudo`, `doas` and `su` executions, the authority first
+checks the ordered global Bash rules. A selected global deny survives
+project/profile rules, session grants, yolo and authorizers. Same-global-scope
+exceptions still count. This is not a blanket ban and does not change scope
+precedence for other commands.
 
-Detection uses actual parsed command nodes, including command substitutions in
-expanding heredocs, backquotes, subshells and process substitutions. Literal
-quoted, concatenated, escaped and path-qualified executable names are recognized,
-as are bounded, understood executable wrappers such as `env`, `command`, `exec`
-and `timeout`. The pinned parser omits some heredoc backquote execution nodes.
-AST-confirmed expanding heredoc substitutions are reparsed under their actual
-quoting context before shared command and path enumeration; a nested `$()`
-inside a backquote's single-quoted argument is data, not a separate execution.
-Delimiter-quoted bodies and escaped substitution delimiters are not expanded.
-Recovery is bounded: an incomplete shared heredoc inventory produces a
-fail-closed ask that yolo cannot satisfy, even without a privilege deny rule;
-a serving parent rejects it before authorizer escalation or session recording.
-This is an inspection failure, not an invented command-specific deny.
-Wrapper display metadata is not permission evidence. Heredoc prose, quoted
-heredoc bodies, comments, ordinary arguments and quoted interpreter
-source are not treated as shell commands merely because they contain `sudo`.
-
-A serving parent parses the complete requested command and applies its own
-privilege floor before granting a forwarded Bash request. If that inspection
-requires a missing full source or an unavailable parser, the parent refuses the
-request before authorizer escalation or session recording; it does not infer a
-safe whole program from a child-selected fragment. Advisory permission
-queries keep their synchronous API: after parser warm-up they use the same
-parsed-unit checks; while the parser or complete source is unavailable and a
-privilege floor needs inspection, they cannot report an automatic grant. The
-conservative result is a fail-closed ask, which yolo cannot satisfy, unless a
-literal privilege invocation already proves the configured deny.
-
-This fixes the known expanding-heredoc plus session-grant/yolo bypass without
-changing ordinary non-privilege scope precedence or making every configured
-Bash deny globally monotonic. It is not executable attestation, an OS sandbox,
-or inspection of arbitrary scripts, opaque shell payloads, generated executable
-names or unknown wrapper grammars. Those retain the normal permission boundary.
-
-### Shared working directory
-
-Children use the parent's admitted cwd for tools and resource discovery,
-including project instructions, settings, permissions and trust. There is no
-alternate-checkout policy binding or worktree allocation/cleanup authority.
-The orchestration layer does not isolate shared files, indexes or Git state. Ordinary Git
-workflow remains the main agent's responsibility and subject to normal gates.
-Existing user worktrees and historical records are never migrated or deleted.
-
-### Redirect-buried argv and home `cd`
-
-The pinned parser buries words after a redirect destination (`cmd 2>/dev/null
-a b`, `cmd <<EOF a`) in the redirect node, while Bash passes them to the
-command. They take the owning command's token roles and effect over its
-completed argv; the real destination keeps its redirect effect. The completed
-spelling is classified afresh and can add a command-rule ask or deny, never an
-allow or floor exemption, so a truncated exact allow cannot approve hidden
-argv. Only the last command of the redirected body owns a tail; a tail after a
-compound command keeps the destination effect. Literal Git argv roles do not
-grant permission or globally relabel unknown commands as reads. The speculative
-login-home `cd ~` stability inference is retired. Dynamic `cd` targets leave
-relative paths at an unknown base: an ordinary external ask,
-which yolo can satisfy. This is deliberately not an arbitrary-shell guarantee.
+The floor uses parsed executions, including recognized wrappers and shell
+substitutions, not mentions in comments, arguments or quoted data. It does not
+inspect arbitrary scripts or attest executable identity. Incomplete inspection
+can fail closed: an advisory query cannot claim an automatic grant when it
+needs source or parser evidence it lacks, and the serving parent refuses a
+forwarded request it cannot inspect as required.
 
 ### Static guard, static-allow exclusion and redirect targets
 
-The deny-only static guard keeps only hard denies, which session approvals,
-yolo and the model authorizer cannot override: an unverifiable tool-call
-principal, `file:` URLs on path tools, unbound permission-aware grep, `cd -`
-and `cd` option forms, requested PATH/loader/helper-execution prefixes on Git,
-declarative Bash denies after literal normalization (including the original
-command before managed hardening), and an unavailable or undeterminable deny
-policy. Its refusals say they are final and never suggest rephrasing or
-wrapping the command; the model stops and reports to the user (a subagent uses
-`ask_parent`).
+- **Hard guard:** denies invalid principals, `file:` URLs on path tools,
+  unbound permission-aware grep, `cd -` and `cd` option forms, selected
+  requested Git execution-environment prefixes, and detectable declarative
+  Bash denies.
+  An unavailable or indeterminate deny policy fails closed. The guard does not
+  issue allows.
+- **Static-allow exclusion:** dynamic file operands or redirects, indirect
+  file lists, expanding heredocs and inline environment assignments can make
+  an otherwise applicable Bash allow unusable. The authority evaluates with
+  all Bash allows and session grants set aside and retains stricter full-policy
+  restrictions. An ordinary ask can still be satisfied by yolo; a deny default
+  can still deny. Human approval of an excluded ask is one-time, not a session
+  grant. This changes who approves, not what shell effects can be seen.
 
-Shapes a static Bash allow cannot prove safe are not guard refusals. Dynamic
-operands of file readers (`$X`, globs, braces, `~`), dynamic redirect targets
-of an allowed command, indirect file lists (`sha256sum -c`,
-`wc --files0-from`), printf/sha256sum outside their literal form, ripgrep
-outside its literal non-recursive form, expanding heredocs feeding an allowed
-command, and inline environment assignments before an allowed command make up
-the **static-allow exclusion**. For such a program no allow rule may cover the
-Bash command gate: every configured scope (global, project, agent) and every
-session grant is set aside before the yolo rewrite. Setting allows aside
-changes control flow (a wrapper's inner rules are consulted only while the
-wrapper itself resolves to allow), so the program is resolved twice, with
-allows set aside and in full, and the stricter answer wins (deny, then ask,
-then allow; ties keep the allow-free answer). Every restriction the full policy
-finds therefore survives: with `cat *: deny`, `FOO=1 env cat README` is still
-denied, with or without yolo. The result is the remaining policy, normally the
-catch-all ask, so Jev or a human approves it, and yolo satisfies it as it
-would any ordinary ask (including the synthesized default ask). A deny default
-with an allowlist (`"*": "deny"` plus `"cat *": "allow"`) resolves an excluded
-program to deny, not ask: that is the remaining policy, kept deliberately
-conservative. Deny rules and the invalid-config fail-closed floor still hold.
-The managed read and file-effect lanes are not allow rules and are unaffected.
+The exclusion uses the original tool request, not a model-supplied description
+or a truncated command. For forwarded Bash asks, the serving authority checks
+its own rules and grants against the original request and honors the child's
+exclusion. It refuses missing or malformed access facts; path and external
+asks keep their actual surfaces. Use matched parent/child resources. Advisory
+checks do not grant or record permission.
 
-The decision uses the complete requested command, captured in private
-provenance at the authority entry before the first managed hardener (and before
-the original-command deny), never a model-suppliable input field. Upstream
-command units strip leading assignments, so this text is the only place
-`LD_PRELOAD=…` remains visible. The capture binds to the input's own `command`
-byte for byte, not to the trimmed shell projection, so trailing newlines and
-spaces are not drift. A capture that no longer binds to the execution text
-(neither the requested text nor the exact text a managed hardener recorded for
-the same input), or a requested command over 1 MiB, counts as an exclusion
-(`unverified-original`). Only text is retained; no decision is cached.
+#### Redirect-buried argv and home `cd`
 
-An excluded ask offers a one-time approval only: no session suggestion, no
-"for this session"/both-directions option in the dialog or the inline prompt
-(`s`/`b` select nothing), and neither node records a grant. The next identical
-call asks again. The prompt evidence names the trigger (`static allow not
-applied`). Advisory Bash queries through the permission service answer the
-same way, including yolo.
-
-A worker cannot see its parent's allows or session grants, so every forwarded
-Bash ask carries the complete requested command (`requestedCommand`) and, when
-the worker excluded it, the exclusion fact. The serving parent evaluates the
-exclusion again against its own allows and session grants: a parent-only
-`python3 *` grant does not cover `LD_PRELOAD=./x.so python3 --version`, and a
-parent-only `echo *` allow does not cover `echo hi > $OUT`. An excluded request
-resolves with no allow rule (its own config and session grants alike), then
-the parent applies its own effective yolo exactly as its gate runner would; a
-parent deny stays automatic and the fail-closed floor is never satisfied by
-yolo. The parent's approval is one-time: it offers no session option, a wider
-choice is reduced to a plain approval, and neither node records a grant. The
-requested command is used for that evaluation only and is not projected to
-the parent's authorizer facts. A parent-computed exclusion adds the same bounded
-trigger evidence as a local exclusion, without duplicating evidence already
-sent by the child. Every forwarded request must carry well-formed current
-access facts: a missing, null or otherwise malformed intent is refused before
-policy resolution, authorizer escalation or session-grant recording. A Bash
-intent carrying neither fact, a malformed fact or command, or either one on a
-non-Bash surface is likewise refused rather than dropped. A Bash tool's path
-and external-directory requests retain their actual path surfaces; those
-requests do not need a Bash requested-command field. Requester and serving
-authority are the same build (the existing new-process contract); there is no
-older wire shape to tolerate.
-
-This tightens three things relative to the former guard: project/agent-scope
-allows and session grants are now covered; without yolo every excluded call
-needs its own approval; and the redirect fix below can turn a former allow
-into an ask or deny.
-
-Literal file-redirect targets (`>`, `>>`, `>|`, `&>`, `&>>`, `<`, `<>`, and
-`>&file`) reach both path projections by syntax: no generic argument-shape
-filter and no existence probe decides whether they are paths. A new bare
-target, an option- or assignment-shaped target (`-d/x`, `NAME=d/x`) and a new
-`./x` after a literal `cd` outside the working directory are path-checked like
-any other write; after a dynamic `cd` a relative target is conservatively
-external. A literal target is decoded as the shell would open it: Unicode,
-`!`, backslash escapes (`new\ name.env` is `new name.env`; backslash-newline
-is a continuation), single quotes and double quotes (where only `\$`,
-`` \` ``, `\"`, `\\` and backslash-newline are escapes). Once decoded, a
-filename is a filesystem literal, not another tool-input spelling: leading or
-trailing whitespace, quotes, `@`, and literal `~`/`$HOME` are preserved, not
-trimmed, stripped or expanded again. Known bases retain absolute, cwd-relative
-and canonical aliases for policy and immutable-resource checks; unknown relative
-bases retain only literal values and conservative external-directory handling.
-Ordinary path-tool input normalization is unchanged. A target with an
-unescaped `$`, backquote, glob or brace character, parentheses, or a leading
-`~` is not literal. A number names a descriptor only after `>&` or `<&`:
-`>123`, `<123` and `&>1` open files called `123` and `1`, both for the path
-projections and for the wrapper-floor write check. Effects stay as the
-operator proved them. A recovered `<>` parse checks only its first word, as
-both read and write; later words stay ordinary argv (the unparsed redirect
-still asks). Descriptor duplication and closing (`2>&1`, `>&2`, `>&-`),
-here-strings, heredoc bodies and non-literal targets keep upstream handling;
-a dynamic target before an allowed command is a static-allow exclusion. Main
-sessions and workers are covered identically.
-
-### Parent web access
-
-In Co-worker, Lead and Supervisor, scouts handle all web research, even small
-lookups, regardless of eagerness. The parent's direct web tools are hidden and
-calls refused. Web pages are untrusted input; the parent holds the widest
-authority (Bash, edits, every Agent) in the longest-lived context. Scouts return
-cited findings to reduce direct exposure, not guarantee raw-page exclusion or
-prevent prompt injection. Findings remain untrusted; history, quotations and
-Bash can still put page text in the parent's context. Scouts retain local reads
-plus outbound web requests.
-
-Composition records every tool the parent's pi-web-access registers, under its
-configured names. While an autonomous mode and a preset are active:
-
-- With `agent_spawn` active, its native `prepareLoadout` hides the web tools,
-  keeping the SDK's structured prompt tool list aligned.
-- The always-registered `context_with_system` also filters web-tool add/remove
-  deltas from each request's system messages, independently of `agent_spawn`.
-  If spawn is excluded or withheld, canonical SDK prompt sections can still
-  list web tools, but the wire projection omits their declarations.
-- `before_agent_start` supplies the complete registered web-name set, not just
-  active names, as `hiddenTools` to the patched authority's forced tool-list
-  renderer. It omits those names even if permission relaxation restores a tool
-  later in the event. SDK loadout preparation may overwrite `hiddenTools`;
-  the request filter is independent of that handoff.
-- `tool_call` refuses hidden web calls before permission prompts, since the
-  tools remain active.
-
-Canonical tool declarations are preserved: the orchestration layer neither mutates the
-active set nor records durable web-tool removals. Manual and Off therefore
-restore pi-web-access's upstream selection (eager tools or the `web_enable`
-loader); resuming a session does not inherit an orchestration removal.
-
-This is not network isolation. The parent can still reach the network through
-Bash (`curl`, package managers, Git); the guideline forbids fetching pages that
-way, but nothing enforces it. Simple local command lookups belong to the caller,
-not scouts. Commands the user runs from pi-web-access are unaffected. Denying
-`agent_spawn` need not stop an already accepted scout. If no usable scout is
-available, the user must choose Manual or Off for direct web access.
-
-### Researcher web access
-
-This heading and `#researcher-web-access` stay for compatibility. The public
-name is `scout`; the internal profile ID and generated `researcher.md` stay
-`researcher`.
-
-Scout is the only profile with web tools. It has no model-facing Bash, edit or
-write tools. That is not a claim that web tools have no subprocess or file
-effects. Upstream pi-web-access can still clone repositories, run helper
-programs, read cookies, send content to another model, and write a shared
-cache. Those residuals are independent of the public name and are listed
-below. No OS sandbox is provided.
-
-The four web tools keep the global permission rules: the seeded policy asks
-for `web_search`, `source_check` and `fetch_content` and allows
-`get_search_content`. Its generated definition adds no web rule. Forwarded
-child asks reach the parent's human approval, or Jev where the approval mode
-enables it for subagents; Jev never auto-allows `fetch_content`. Local reads
-keep the normal secret-path denies and external-directory asks.
-
-pi-web-access itself limits fetches to `http(s)`, blocks loopback, private,
-link-local (including cloud metadata), CGNAT and multicast targets after DNS
-resolution, revalidates every redirect, restricts `auth` to configured
-per-host profiles, and replaces inline `data:` payloads in fetched text. It
-does not inspect what a URL or query carries.
-
-The residual risk is deliberate: a scout reads both project files and
-untrusted pages, and a URL or query can carry data out to any public host.
-Keep `fetch_content` approval human, or do not use scout on projects whose
-contents must not reach the network. pi-web-access's
-`fetchContent.domainPolicy.allow` in `web-search.json` limits `fetch_content`
-to listed hosts for the parent and every scout alike; the orchestration layer does not
-set it. Source hygiene in `resources/scout.md` treats web content as data, not
-instructions, and forbids putting local contents into URLs or queries. That
-text moves out of the researcher `profile.prompt`; it is guidance, not
-enforcement. Treat web-derived results as untrusted. A citation does not
-make a claim safe.
-
-The orchestration layer enforces the rest:
-
-- The child loads its own pi-web-access instance (a query-keyed ESM import of
-  the launcher-verified entry, checked to differ from the parent's). Upstream
-  now scopes result ownership and pending fetches per factory session; Alehouse
-  retains separate module instances as a conservative isolation boundary.
-  Instances are reused only after a confirmed child shutdown.
-- A native import bypasses the host's extension loader, and production installs
-  omit the Pi SDK. The entry's own imports of the Pi SDK and TypeBox therefore
-  resolve, through a process-wide Node module hook, to the modules the host
-  supplied to the orchestration layer (the same export values, re-exported); any other host
-  module fails the import. The
-  hook only acts on imports from an entry the orchestration layer tagged (its URL carries
-  `alehouse-host=<generation>`); it stays installed for the process.
-- `fetch_content` has no `auth` (browser-cookie) parameter and accepts only
-  absolute `http(s)` URLs. Upstream accepts local video paths (by extension,
-  default 50 MB) and uploads them for analysis or extracts frames, outside the
-  path permission gates; a scout cannot. Its adapted fetch description and
-  URL/timestamp/frame parameter descriptions do not promise local-video access.
-  Assembly rejects drift in the required upstream local-video description
-  rewrite; URL/schema and execution checks enforce the input boundary separately.
-- `web_search`, `source_check` and `fetch_content` have no `proxy` parameter.
-  Upstream checks only its scheme, not its host, so a model-chosen proxy could
-  reach loopback or private services, or bypass the configured proxy. A proxy
-  configured in `web-search.json` still applies.
-- Child `web_search` has no `workflow` or `model` parameter. Those explicit keys
-  are rejected, and execution copies `workflow: "none"` even when
-  `web-search.json` would inherit `summary-review`; a scout search therefore
-  never opens the curator or calls a summary model. The parent's web tools keep
-  the upstream workflow/model controls unchanged.
-- These three schemas are closed (`get_search_content` is left as upstream
-  registers it): violations fail validation before any permission prompt, and
-  execution checks again.
-- All four child web tools are registered as direct and active, even when the
-  upstream config requests deferred exposure. The dynamic `web_enable` loader
-  is not registered, so the admitted child tool table cannot change;
-  background-fetch notices never start a model turn outside a Run. Renamed or
-  disabled web tools fail researcher assembly.
-- Curator review has no UI in a child and resolves to no curator.
-
-One approved call can still do more than fetch a page. These are upstream
-pi-web-access behaviors the orchestration layer does not restrict beyond the
-child `web_search` and fetch URL boundaries above; the approval prompt shows
-only the tool input:
-
-- A `github.com` repository URL is cloned (by default when the repository is
-  small, always with `forceClone`) with `gh repo clone`, using the user's
-  stored `gh` credentials, or `git clone`, into `/tmp/pi-github-repos`; issue
-  and pull-request URLs are read with `gh`. A private repository the user can
-  access is therefore readable, and outside the path permission gates.
-  `githubClone.enabled: false` in `web-search.json` turns cloning off for the
-  parent and every scout. The internal profile ID remains `researcher`.
-- YouTube URLs run `yt-dlp`/`ffmpeg`. If `allowBrowserCookies` (or
-  `PI_ALLOW_BROWSER_COOKIES=1`) is set, the Gemini Web path reads local Chrome
-  cookies for Google origins; removing `auth` does not remove this path.
-- `fetch_content` `mode: "answer"` with `answerModel` and video/YouTube
-  analysis send fetched content to another configured model, outside the
-  child's routed model and its accounting. Opt-in `mode: "extract"` with
-  `fields` sends fetched page text and field instructions to Cloudflare Clairic
-  using host Cloudflare credentials.
-- Configured `fetchContent.curl` runs an external fetch command; configured
-  remote fetch providers and PDF extraction endpoints can receive page URLs
-  or document content. These are upstream configuration-controlled effects,
-  not mediated child Bash calls.
-- Fetched pages are cached for an hour in `<agent dir>/web-search-cache`,
-  shared by the parent and every scout and kept after the session ends.
-- SSRF checks resolve the host before connecting and the connection resolves it
-  again, so a rebinding DNS record can pass validation and reach a private
-  address.
-- The launcher checks the pinned pi-web-access version and location, not a
-  digest of its code.
-
-The profiles express enforced capabilities, not model tiers or permission
-grants. They do not pin a model, thinking, turn budget or context
-inheritance. Shared prompt text is `resources/agent.md` (lifecycle, scope,
-permission communication and results). Worker execution guidance stays in
-`resources/worker.md`; scout source hygiene stays in `resources/scout.md`.
-The generator composes common text, the profile body, and any optional
-existing `profile.prompt`. Generated profile integrity and static Bash denies
-are checked by the external authority. Existing sensitive paths, external
-writes, subprocess restrictions, Git configuration protections, and
-permission-search rules continue to apply. Opaque Bash programs can perform
-internal IO that the classifier cannot see, so this is not an OS sandbox.
-Upstream web features can do the same outside the Bash classifier.
-Forwarded asks must retain the requesting child's edge-stamped principal,
-actual match values and execution/boundary paths.
-
-## Dispatch preflight and validation observations
-
-[Task dispatch](task-dispatch.md) performs read-only preflight against the target
-profile, including path and canonical-alias external-directory surfaces. Model
-`dispatch.required_paths`/`build_dir` map to internal `inputs`/`tree`;
-validation receipts and history retain `tree`. Known
-deny rejects before extra input-classification stat; ask/unknown is not approval
-or a grant. Permission lookup may itself canonicalize. Interface failures are
-not policy unknown. Claims detect declared lexical/canonical overlap, not opaque
-program effects or OS isolation, and remain through pending questions/answer
-rollback until final termination and necessary cleanup are confirmed.
-
-Checks-only execution-start source capture observes the actual child cwd, not
-an assertion that the source checkout was tested. This bounded runtime metadata
-capture is separate from model Git command classification, which has no
-provenance probes. Capture uses trusted absolute Git, never
-project PATH, with isolated redirection/config/executable/trace environment,
-helper/partial configuration guards before status overrides, and disabled lazy
-fetch/locks/paging/replacements. Fixed `--ignore-submodules=all` makes this
-superproject-only partial metadata, not whole-tree clean or content identity.
-Fixed `--untracked-files=normal` includes non-ignored untracked entries despite
-configured suppression; ignores/indexes/Git semantics still apply. Global LFS
-clean/process keys and configured fsmonitor=false still withhold known state;
-this conservative guard is not narrowed.
-Unknown capture does not authorize anything. Internal tree leases (model
-`build_dir`) coordinate only the same host/agentDir/canonical tree and are
-advisory; synchronous flock can still
-delay event-loop cancellation. Source Git subprocess probes are asynchronous,
-with per-probe 2-second/4 MiB and aggregate 8-second/8 MiB limits, not
-hard-realtime bounds or guaranteed cancellation/kill. Receipts are bounded trusted history/offline
-observations with valid boundary/end coverage, not grant or gate-skip tokens.
-Invalid optional receipts are locally dropped with a bounded end marker/live
-cleanup diagnostic and cold-reader warning; mandatory history validation and
-append failures remain strict, with no retry.
-
-Runs have no wall-clock execution deadline or timed wrap-up input. The retained
-turn-wrap `soft_budget` input invalidates the automatic-approval witness and
-emits `pi-alehouse:approval:invalidated`; the cooperative grace beyond
-`max_turns` is a configurable Owner limit, not a fixed `+5` model contract.
-This is not merely a harmless reminder
-or a guarantee that a model received it. Historical `deadline` outcomes remain
-readable without restoring their retired execution mechanism; retired
-`time_wrapped` facts are no longer interpreted by the current codec. Worker
-same-class denied-operation escalation remains guidance. [Runtime feedback](runtime-feedback.md)
-observes actual managed blocks through session/service-bound leases, not UI
-decisions or inferred reasons. It attempts one structurally tagged orchestration
-alert per Run with independent bounded quota, not a child-authored alert. It grants no
-permission, automatic action or delivery guarantee.
+Literal redirects are checked by direction, even for new files. Filenames
+are decoded once and checked as filesystem literals, not normalized again as
+model tool inputs. Other arguments keep their own roles; recovered arguments
+can add restrictions, never an allow. A dynamic `cd` leaves the base unknown,
+so relative paths can require external-directory approval. Dynamic targets
+and opaque programs' internal IO are not fully visible to the classifier.
 
 ## Immutable resource floor in writable installations
 
-The private 32.0.3 permission-system patch installs a deny-only, process-local
-snapshot before Jev captures and removes its key-file path from the environment.
-The snapshot write-protects the executable Pi Alehouse package/source and generated
-runtime, dependency and host Pi code roots, and the selected Pi agent directory.
-It read- **and** write-protects exact auth and web configuration files and the
-configured Jev key file, using lexical and canonical path aliases. Its
-`PermissionManager.buildCheckResult` floor applies **after** composed
-project/profile/session/yolo rules; neither project overrides, human session
-grants nor yolo can widen it. Writes to a protected directory's ancestors are
-also conservatively denied because deletion or rename could remove a protected
-descendant; siblings remain usable. Audit active/lock files and the dedicated
-archive root have their own lexical/canonical entries, so a supported external
-logs symlink does not leave current audit artifacts unprotected or make every
-unrelated shared log a protected resource. Archive-root symlinks are rejected
-rather than silently widening that root to an unrelated tree. Existing files
-and user configuration are not overwritten. Internal children require the same snapshot, and attempting
-to load a different unprotected runtime generation requires a fresh Pi process.
+The launcher and composition establish a process-local deny-only snapshot for
+both parent and children. It protects identifiable writes into the Alehouse
+package, generated runtime, dependency and host code, and selected Pi agent
+directory. It also protects writes to ancestors when removal or renaming
+could remove protected descendants. Exact Pi auth files, web configuration and
+the configured Jev key file have **read and write** protection through lexical
+and canonical aliases. The snapshot also covers aliases of individual trust
+inputs and exact Jev audit artifacts, including a supported external logs
+symlink's target files. Unrelated logs are not swept into that protection;
+the dedicated archive root must not be a symlink.
 
-This addresses detectable path effects in writable source/npm installs, where
-code and policy are not inherently OS read-only. It is **not** an OS sandbox,
-inode or hardlink tracker, opaque-program write detector, atomic cancellation
-barrier, or protection from arbitrary trusted in-process extensions. A shell
-ask for an opaque program can still be approved and perform effects the path
-classifier cannot see. To edit Alehouse's own source with model tools, run a
-**separately installed** CLI; launching from the same checkout protects that
-checkout and will deny its own source writes, including under `editor`.
-
-## Permission readiness and provenance
-
-Startup requires the generated definitions. Child assembly checks the admitted
-profile digest and tool table against that startup snapshot, then binds them to
-the child session. Parent-tool and assembly boundaries resolve the public parent
-permission service; child Run/input boundaries require the child's public service
-and synchronous static-guard acknowledgement for its session/profile/digest.
-Missing readiness or mismatched bound identity blocks that boundary, rather than
-merely requesting manual permission.
-
-The guard and the authority share one principal source: the guard queries the
-permission service's read-only `getToolCallAgentName` — the same principal the
-authority's own tool gate binds — and never reads the system prompt. The
-authority resolves that principal from the session's recorded `active_agent`
-entry, falling back to its existing remembered name when a turn has no current
-record; that cache is record-origin, never a prompt tag. Ordinary root
-documents are data: complete, plural or fenced marker examples in AGENTS.md or
-any other file never select a profile or cause a false identity block. With an
-authority present, a missing or invalid principal API fails closed to an
-explicit identity block on every tool call; a standalone deny-only guard
-without an authority falls back to record-only lookup and grants nothing.
-Child readiness binds an expected principal (profile plus instance) through
-the existing nonce handshake; a missing raw `active_agent` record, a wrong
-profile or a service without the binding API fails closed with no readiness
-acknowledgement. Binding only narrows — it never supplies a missing identity
-or creates a grant — and is released by the matching shutdown and cleared on
-session reset. Scratch journal authentication uses the same actual gate
-principal through the service; it does not guess a principal from a session
-branch, and a missing API or error leaves persistent provenance unrecovered
-rather than guessed. The forwarding edge also queries the actual local gate
-principal. Its wire format requires a named principal: a missing API, invalid
-answer or unscoped root is rejected before forwarding IO, never represented by
-a guessed `unknown` profile. This does not prevent ordinary unscoped root tool
-calls from using their normal global permission gates.
-
-These readiness checks do not reread managed definition files or freeze the
-whole live permission configuration. Removing/changing a definition after
-startup is not an orchestration fail-stop condition. Trusted project overrides and
-human session grants retain the normal permission chain, but cannot widen the
-separate immutable resource floor, the selected global privilege-command deny
-floor, or a profile's whole-surface write ceiling; otherwise they need not
-monotonically restrict the global definition.
-Jev can disqualify changed definitions/overrides from automatic
-approval and defer, but defer does not turn an existing configured allow into ask.
-See [limitations](limitations.md) for what the permission chain does not cover.
-
-Separately, the orchestration layer records an optional Run approval witness at admission
-and at the child SDK's real prompt boundary. The child loads only that small
-observer; it never loads a second reviewer. The witness is invalidated by
-cancellation, steering, budget input, extra child input, Run exit, or a later
-direct user message. Resume needs a fresh binding. It is in memory and audit
-records avoid prompt text. Asynchronous review is revalidated after the
-verdict. Missing/stale provenance, invalid tool observation, or a leftover
-witness disables automatic approval for that Run while preserving normal human
-forwarding through the existing authority.
-
-Jev is the only model judge. Its static checkpoints
-(`src/extensions/lib/hard-checkpoint.ts`) run before any model call. The launch
-default for Jev is `enforce-subagents` (or explicit
-`PI_JEV_APPROVAL_MODE=shadow`). This is not a claim that automated review is
-available, calibrated, or authorized for every request. Without a protected
-`PI_JEV_API_KEY_FILE` **path** (not a key in an environment variable), review
-defers to ordinary human permission handling; stale/incomplete provenance,
-project-rule omissions, and over-limit material also defer. When configured
-and invoked, Jev sends bounded action and relevant review context (including
-potentially sensitive instructions/prompt material) to
-`https://api.typesafe.ai/v1/systemone` using fixed `jev-1.13.0`. Transport uses
-a private TypeSafe provider from the host Pi 1.0 classifier API, not the shared
-model/auth registry. The protected key-file is read lazily; environment keys
-and provider fallbacks are not used. Automatic allows still require a successful
-synchronous private audit append. The active audit file rotates at 1 MiB without
-deleting historical archives; total disk use remains unbounded. The Linux writer
-requires `/proc/self/fd` and a launcher-verified absolute util-linux flock. It
-holds the same open-file-description kernel lock after the short helper exits;
-normal cleanup never removes that regular lock inode. A short bounded kernel
-contention wait is followed by fresh policy/action/authorization/restriction/Run/
-mode/script validation before an allow line is written. IO, unsafe identities,
-failed validation or uncertain cleanup still defer. Rotation renames into an
-exclusive private archive container, not a link/unlink pair or an existing slot.
-
-Audit ownership checks require the canonical log directory to appear owned by
-the current UID and all ancestors by the current UID or root, in addition to
-permission/sticky-directory checks. In user namespaces with incomplete UID/GID
-mappings, host-root ancestors may appear as an overflow UID such as 65534
-(`nobody`). Their actual ownership cannot be established from that value, so
-Jev audit and recovery reject them as `untrusted_directory_owner` even if the
-leaf log directory is healthy. Do not whitelist an overflow UID as a substitute
-for verified root/current-user ownership. This fail-closed environment limit
-can disable Jev automatic allows without disabling ordinary human handling or
-existing policy allows; it is not evidence of a bad audit lock. See the
-[namespace limit](jev-audit-recovery.md#user-namespace-ownership-limit).
-
-Process death releases this audit kernel lock, not an Owner reservation or an
-incomplete audit record. Legacy directory locks, extra hard links and incomplete
-active tails require [explicit offline recovery](jev-audit-recovery.md), with
-all writers stopped and evidence preserved. No TTL/PID-only stealing, silent
-truncation, automatic archive deletion or live migration is supported. The
-original unlocked writer cannot safely coexist with the kernel-lock writer;
-all old Pi processes sharing the audit sink must stop before upgrade/rollback.
-Safe owned shared-directory permissions are preserved rather than chmodded on
-each append. Supported symlink layouts pin/protect the exact canonical audit
-artifacts before the immutable floor freezes and reject later retargeting.
-These are not OS-sandbox, fsync or power-loss durability guarantees. TypeSafe
-transport requests retain a two-second cancellation budget, no retries and
-exact-endpoint/no-redirect checks. Independent judge
-backpressure allows four root and eight distinct subagent reviews in flight;
-excess requests defer as `review_overloaded` to normal human handling, while
-identical in-flight packets coalesce. This is not tied to resident worker count:
-a worker may issue parallel tool calls. Raising worker capacity does not widen
-this automated-review budget. Native boolean answers
-are validated and converted to the existing policy verdict inputs; native
-transport does not confer approval authority.
-Opt in only after evaluating that data handling. Never reinterpret the orchestration profile or
-Run identity as the retired subagents authorization protocol to obtain a grant.
-
-`PI_JEV_APPROVAL_MODE` is only each session's launch mode. The footer's
-approval indicator (`approval-mode.ts`) changes the current session at runtime:
-manual (shadow), Jev for the root, Jev for the root and forwarded subagent
-asks, or session yolo. Any change that widens what is approved without a human
-takes a second, deliberate choice or Pi's confirm dialog; narrowing takes one.
-Yolo always requires confirmation when enabled. A change retires every
-in-flight review (a monotonic mode revision, so a round trip back to the same
-mode still invalidates it) but keeps human denials, retry pauses and the denial
-fuse, which only new direct input reopens. Jev announces each change.
-
-A run started by a custom message (`pi.sendMessage(..., { triggerTurn: true })`,
-whose `before_agent_start` carries `messageType: "custom"` and no prompt) is not
-a turn boundary. Only a `before_agent_start` event with `messageType: "user"`
-and a prompt string binds live input; `custom` starts are normal and draw no
-warning. Missing, unknown or malformed events clear pending state without
-binding live input or reopening anything, and draw a once-per-session
-diagnostic with a fixed reason and fixed text that never includes the event's
-prompt content. Reopening the denial fuse is provenance-bound: only an actual
-bound message resets it; a user-tagged event without bound direct input does
-not, and same-text concurrent sources are not origin-authenticated beyond that
-provenance binding. The child approval witness
-fails closed on such a run, and children never start one: their `triggerTurn`
-is forced off.
-
-The current choice is recorded in the session under its own session id. An
-explicit choice records evidence even when equal to the launch mode. On
-resume, that same-session branch record wins over a saved preference. The judge
-mode is restored no wider than the session's launch mode; yolo is offered again
-behind confirmation, never silently resumed. A fork or clone does not inherit
-a record for the former session id. If there is no valid same-session record,
-an optional saved approval preference may seed startup: a judge preference at
-or below the launch cap may apply, one wider than the cap requires confirmation,
-and yolo always requires explicit confirmation in a UI. Without UI, a judge
-preference above the launch cap cannot widen the mode and yolo cannot be enabled.
-If no judge is loaded, a saved judge preference is not applied and is reported.
-A saved preference is a request, not permission authority. Startup narrowing
-is applied synchronously when the judge binds. Ambiguous cached same-session
-state is provisionally clamped to manual before startup returns; this does not
-replace a later fresh launch cap, and consent dialogs wait until startup completes.
-
-Only an explicit approval choice or explicit remember operation stages an
-approval preference; startup restoration, `/tree`, and judge-observer updates
-do not write preferences. With a persistent save scope, choosing an approval
-mode stages that live choice. The approval menu's **Save as global/workspace
-default** and `/approval save [global|workspace]` instead show the target and
-current value for explicit confirmation, then stage the preference without
-changing the live mode or save scope. Saving a default never enables an armed
-popover choice; only the actual live mode is saved. Workspace saving requires
-project trust. A pending save dialog owns its entry: the approval popover cannot
-reopen over it, and obsolete callbacks cannot save for a later session. This storage never grants a permission rule; the
-approval extension enforces the launch cap, and the managed authority still
-enforces explicit denies, the static guard and fail-closed floor.
-
-Session yolo lives in the managed permission authority, not in a judge: for
-the session and its ancestors in the in-process permission subagent registry,
-asks become allows without reaching Jev or a human. Explicit denies, the static
-safety guard and the fail-closed floor (allows clamped to ask by an invalid
-config scope, which this build keeps as asks under any yolo) still hold. A
-child not in that registry is not covered and keeps asking.
-
-## Scoped settings and trust
-
-Optional version-2 user preferences are read from `<agentDir>/extensions/pi-alehouse/config.json`
-and, only for a trusted project, `<current-cwd>/.pi/extensions/pi-alehouse/config.json`.
-The workspace lookup is the current working directory only, not a Git-root
-search. It contains user-selected routing, delegation, effort, approval,
-appearance, and custom model definitions; it is not a credential store and does not change the
-required, read-only-to-the-UI base `alehouse-presets.json` catalogue. Valid
-read-only settings can load. Invalid settings fail visibly and are not
-replaced. Startup/restoration makes no configuration writes; persistent
-changes are queued only by explicit user actions. The settings writer uses a
-cooperative lock, leaf-conflict rejection per scope, and atomic rename, refuses
-symlink/read-only replacement, and reports failures. These safeguards do not
-provide a hard filesystem timeout or crash-durability guarantee. The preset
-editor's native `/model` selector uses the already-acquired parent model runtime,
-not another runtime or copied credentials. Its model queries and scoped list
-exclude virtual models. The scoped list comes directly from the session's
-read-only `ctx.scopedModels` snapshot; no separate settings/trust lookup or
-scope mutation occurs. Its callbacks neither switch the main model nor set Pi's
-model defaults. Appearance saves report when a workspace leaf shadows a global
-default, including a no-op global save. Discarding queued writes or removing a
-saved override does not silently roll back the live appearance or delete the
-higher-priority workspace choice. Native catalogue refresh is preserved: opening the selector can use
-provider network access, rotate OAuth credentials, and update the host's model
-cache, independently of the preference writer. See
-[routing](routing.md#scoped-user-preferences) for the schema and paths.
-
-## Communication observation and admission
-
-The [tool contract](tool-contract.md) has nine parent tools, including
-explicit `agent_answer`; child delegation remains excluded/denied for all nine
-and all retired names. Initial Off hides all nine. After accepted work, only
-wait/read/interrupt/kill/list remain visible. Off gates new tasks, steering and
-answers, not accepted child alert/ask callbacks or inspection. Observations carry
-`delegation_off` (whose value states the guidance) separately from Owner faults; asking the user to enable
-delegation is required before answering, not calling a hidden cached answer tool.
-
-Questions are immutable first-write-wins per original Run. Only a truly settled,
-current pending, unreserved needs-input question on a healthy reusable Agent
-with no current Run receives a token. Off does not erase its identity but still
-forbids answer admission. `question_id` is q_ plus the first 128 bits of a SHA256
-digest over the version tag, Owner ID, generation and original Run ID (34-character
-lowercase form). It rejects stale/cross-generation references, not a permission
-credential or collision-free proof. Answer reserves/admit atomically through
-normal context/revision/approval checks. Before real `inputEntered`, failed or
-cancelled continuations can release reservation if the Agent stays reusable;
-after it, they cannot reopen the old question. Kill/quarantine/Owner loss never
-restore authority. A new answer checks sticky Owner availability before token
-eligibility and after preparation; the non-latching read-only lease probe is not
-an admission gate. Send never creates an answer continuation; run cannot bypass
-a pending question. Child messages are data, not permission grants.
-
-Optional scout `agent_spawn.return_to` admits that same continuation from the
-parent spawn, not a child tool and not an authority bypass. `return_to.instruction`
-is the worker's conditional continuation instruction, written before the scout's
-findings exist; it is not a preknown answer or the scout's prompt.
-`agent_answer.answer` remains the explicit answer field; model `instruction`
-maps to the internal core `answer` field. Protected prepare
-calls `requireParentAnswerPermission(service, ctx)` on the live parent permission
-service (`OwnerToolsOptions.parentPermission`) with the parent's own tool-call
-context. The helper does not resolve a principal. It asks the authority for
-`checkToolCallPermission("agent_answer", ctx)`, a read-only method added by the
-managed patch: the authority binds exactly the principal its own tool gate binds
-for that call (a recorded `active_agent`, else its existing record-origin
-remembered name), never a name inferred from prompt text or substituted from
-the target scout/worker profile. An unscoped parent remains a valid root
-principal for this local check. The query does not update the remembered name. An authority without that
-method is unavailable, not a guess. The decision includes session always-allow
-and managed yolo; a selected deny still survives yolo. `getToolPermission` does
-not include those rules and is not used. Only an exact synchronous
-`state: "allow"` proceeds. Deny, ask, unknown and
-unavailable reject as `RETURN_TO_PERMISSION_DENIED` before either Run is
-installed. The helper does not prompt and does not record a grant. Deny means
-report the denial and do not bypass it. Any other rejection uses ordinary
-separate `agent_spawn` and `agent_answer` under their normal gates. Child
-output, handoff text and `return_to` grant no path, tool or profile authority.
-All parent-model result observations of that source, including spawn/send/wait
-and explicit `agent_read` by name/task/cursor, replace raw source text with a
-short orchestration-authored notice naming the source and exact original worker
-continuation name/task, without raw paging/omission flags or source cursors.
-The notice says pending before that continuation's `input_entered`, delivered
-only after it, or not delivered if it ended before input. Once not delivered, or delivered with retained text omitted from the bounded handoff, an explicit `agent_read` of the source returns its real retained result pages with normal cursors; other observations' notice says so and counts any omitted UTF-16 units. Later failure/kill
-does not undo observed delivery; the exact link stays sticky after either
-Agent's reuse/kill or Off. Ordinary scouts without `return_to` retain normal
-output/paging. Internal `getResult`, dependency handoff, human UI and history
-retain true raw source text unchanged. Alerts, questions and labels remain
-visible: this is not an OS sandbox or zero-information-flow guarantee, and adds
-no model-visible flag, read mode or permission.
-The handoff moves exposure rather than removing it: scout findings, including
-summarized web text, reach a worker that has Bash/edit/write without the parent
-model reading them first. They stay framed as untrusted reference outside the
-parent-authored witness, and the worker's ordinary permission gates still apply;
-no review step is claimed. The length sentence appended to the scout's task and
-the release of a fully delivered scout grant nothing: the release is the
-existing explicit-release path and keeps its `cleanup_uncertain` fail-closed outcome.
-`return_to_run_id` is live Owner metadata for the current Owner only.
-It is not a persisted or recoverable journal field. Existing journal names and
-data stay literal; restart does not hydrate a compound pair or restore
-answerability.
-This observed query behavior is not full feature validation.
-
-Alerts are accepted only at an open Run/generation gate, after parameter, quota
-and SDK-free retained-envelope byte checks. A single FIFO preserves order across
-child and orchestration sources, including historical/killed sources. Child allowances
-remain Owner 64 / Agent 16; orchestration feedback has separate Owner 16 / Agent one
-pending allowances, for at most 80 entries total. Child tools cannot supply the
-structural `source: "managed"` tag, which commit validates against the original queued
-entry. Full allowances reject new messages without evicting accepted ones; only
-successful scoped publication releases quota. No deny, Git/path/web boundary, immutable resource floor or lease
-rule is relaxed. Task-condition targets bind once; alert scopes are separately
-typed Owner/Agents/Run. Result read spans one Agent's pending alerts independently
-of its task/page selector.
-Inline command observations see only their bound Run, except scout `return_to`,
-whose spawn observation is exactly the source and continuation Runs, with
-readiness from the continuation alone.
-
-Entry/default-admission validation, return validation, publication and every
-Owner/tree lease probe are synchronous read-only phases. A lease adapter that
-reenters an Owner effect fails that probe exactly as a failed lease check at the
-same site would, so no decision made before the probe is committed. Supported Owner effecting entries reject reentrancy
-before any mutation or async enqueue, even if a guarded getter catches the
-nested error. Invalid/throwing/asynchronous admission readers reject observations
-without publication; only a valid enabled=false state represents Off. Command
-admission remains fail-closed and accepted-request replay is preserved.
-Real abort/timer signals only latch and defer the shared drain.
-Plain snapshots are projected and byte-checked before all reference validation
-and a callback-free all-or-none commit. Task ordinals, labels and original object
-membership are checked against retained Run authority, not snapshot/body agreement.
-Compact result cursors bind Owner/generation/Run/version using a domain-separated
-128-bit digest and exact offset; they are locators, not permission credentials.
-Lookup derives from retained Runs, rejects ambiguous/foreign matches, and grants
-no restart hydration or additional access. Read-only task ordinals select only
-that named Agent's retained Runs, never command targets. Task and cursor are
-mutually exclusive. There is no metadata-only view or metadata cursor. Whole
-optional summary fields/finished labels
-never weaken thin controls or original-Run provenance checks; omitted labels do
-not defer/reset finished consumption. One failed observer rejects and cleans
-itself without consuming alerts/finished/fault facts, rejecting accepted child
-callbacks, stalling lifecycle settlement or latching an Owner fault. Lifecycle
-observations share the drain, not model validation/publication; shutdown still
-needs actual execution/cleanup evidence.
-
-This phase gate protects supported orchestration entrypoints, not trusted code that
-mutates internals directly, bypasses wrappers or never returns. It is not an OS
-sandbox or forced interruption. Successful publication proves only local final
-content construction before consumption: not SDK persistence, later hook fidelity,
-model receipt, user ACK or crash recovery. Usage may be appended in tool_result
-without body changes; it is accounting, not a message acknowledgement.
-
-Matched migration must reconcile existing managed definitions/permission sources
-manually and start a new Pi process; absent-only init does not replace files or
-resolve digest mismatch. Historical notify/progress/send-answered journals are
-read-only display, never pending-state hydration. See
-[matched resource migration](development.md#matched-resource-migration).
+Project rules, human grants and yolo cannot widen this floor. It is not inode
+or hardlink tracking, filesystem isolation, or interception of a script's
+internal IO. Trusted host services can still update their own files. Edit
+protected policy or configuration deliberately outside the model tools. To
+edit Alehouse's source with model tools, use a **separately installed** CLI:
+launching from the checkout protects that checkout. Start a fresh process for
+a different protected runtime generation.
 
 ## Context, identity, and data handling
 
-The parent tool captures the real `ExtensionContext`; all relevant identity is
-rechecked after preparation/awaits and before publication commit, never by a
-success wrapper after consumption. A parent-tool caller may choose `profile`
-and `reasoning_difficulty`,
-but cannot choose the concrete provider/model/thinking resolution, arbitrary
-parent/child cwd, owner, generation, session ID, history path, or profile tool
-table. Children use the parent's admitted working directory.
-Optional inherited context is a bounded 64 KiB text snapshot with an aggregate
-digest, not a history fork or tool/settings transfer. It uses the SDK's
-model-visible projection, respecting context omissions/replacements and compaction
-rather than restoring raw failed attempts. Oversized snapshots fail before child
-creation. Approval provenance separately binds the loaded project
-instructions; a copied conversation is not authority.
+- **Host credentials:** children reuse the host model runtime and existing
+  authentication; Alehouse does not copy credentials into child settings,
+  snapshots or journals. A real SDK call or a native model catalogue refresh
+  can contact providers, refresh OAuth and update host files. Opening the
+  native model selector is not necessarily offline.
+- **Prompt data:** opt-in context inheritance copies at most 64 KiB of the
+  model-visible conversation as text, not a session fork, permission transfer
+  or tool/settings copy. Oversized snapshots fail before child creation.
+  Prompts, child findings and files can contain sensitive or untrusted data.
+- **History:** journals, thinking, diagnostics, cached pages and results are
+  not redacted evidence. Keep them private. Cold history uses only SDK-derived
+  links for the parent, with bounded read-only, no-follow access under the
+  trusted session root. Historical identity grants no live authority.
+- **Optional footer network:** publishing quota data requires explicit
+  `AGENT_DASHBOARD_URL`; there is no implicit local endpoint. Grok billing
+  credential reads and requests require `PI_ALEHOUSE_GROK_BILLING=1`.
+  That integration uses Pi's actual agent directory for `auth.json`, can fall
+  back to Grok's own auth, and sends the token to the billing service selected
+  by `GROK_CLI_CHAT_PROXY_BASE_URL` (or the built-in service). Review the
+  destination before enabling it. Ordinary quota header display needs neither opt-in.
 
-History readers accept only SDK-derived parent/child paths under the trusted
-session root, use no-follow read-only access, and enforce explicit file caps.
-They cannot browse arbitrary files, repair records, or turn historical data into
-execution. Results and live state are Owner-local. Cold history is scoped to
-the current parent's recorded links, including older generations; it grants no
-live-Owner authority. Parent and child journals can contain sensitive model
-content, including thinking, and private transcripts must not be published as
-evidence. Controlled fixtures intentionally save synthetic logs/reports with
-their scope and provenance instead.
+## Scoped settings and trust
 
-The orchestration layer reuses the host model runtime and existing authentication. It does
-not copy credentials into child configuration, prompt snapshots, event payloads,
-or logs. A real host SDK call can refresh the selected Pi auth file; real-provider
-trials therefore require separate authorization. The footer's ordinary quota
-header display/accounting does not require a network publishing opt-in.
-Quota-dashboard HTTP POST requires explicit `AGENT_DASHBOARD_URL` (no implicit
-localhost endpoint). Grok billing network/auth reads require
-`PI_ALEHOUSE_GROK_BILLING=1`; the optional `GROK_CLI_CHAT_PROXY_BASE_URL`
-selects its external billing proxy, otherwise the built-in endpoint is used
-_only when billing is enabled_. The billing integration reads `auth.json` under
-Pi's actual `getAgentDir()` location, not an assumed HOME path. Neither opt-in
-changes ordinary quota-header display/accounting. Only enable these integrations
-deliberately.
+Use the required `alehouse-presets.json` catalogue and
+[scoped preferences](routing.md#scoped-user-preferences) for routing, not for
+credentials. Optional workspace preferences load or save only for the current
+trusted cwd, not an inferred Git root. Versioned configuration and saved
+selections are checked against current catalogue and host model metadata, not
+provider authentication or availability. A model caller can request a profile
+and difficulty, not resolve arbitrary providers, cwd, identities or tool
+registries. Routing choices grant no permission.
 
-## Leases, cleanup, and cancellation
+Startup and restoration do not save preferences. Explicit persistent edits use
+a cooperative lock, reject a conflicting leaf for that scope and publish by
+atomic rename; the writer refuses symlink or read-only replacement. Invalid
+configuration is reported, not overwritten. Inspect a failed save before
+retrying; see the linked settings guide for uncertain write/lock recovery.
 
-Public Owner admission and child-input faults share recovery guidance:
-closed/closing Owners cannot reopen through routing or a new Agent; tell the
-user and use a fresh session only after confirmed closure. Cleanup uncertainty
-has no retry or force release. Internal faults and unavailable parent history
-writers likewise require telling the user, not retrying or diagnosing a model.
+## Parent web access
 
-A private local `FileOwnerLease` plus absolute util-linux `flock` serializes an
-Owner for its parent session. It is not an OS sandbox, distributed lock, or
-proof that child/provider activity stopped. Lock files are intentionally kept
-for inode identity; manual removal while a process may hold one is unsafe.
+Both parent and scout use the package-local pin of `pi-web-access`
+0.47.0. The launcher checks its location and version, not a digest of its code.
 
-Rendering is read-only with respect to Owner lifecycle. Explicit human input may
-submit a confirmed intent bound to the originally displayed Run; the host invokes
-the same core cancel path, including approval-witness invalidation. This narrowing
-action remains available while delegation is Off; it grants no tool/path authority.
-A retired host/pane or a target that changed while confirmation was visible cannot
-redirect the intent. First-accepted human provenance is an observation, not an
-approval credential or a durable notification guarantee.
+With an enabled preset in Co-worker, Lead or Supervisor, the parent web tools
+are hidden from model requests and calls are refused, even if host exclusions
+or permissions withhold `agent_spawn`. The filter uses every registered web
+name, including the loader or configured names. The tools are not durably
+removed; a stored prompt or history may still mention them. Manual and Off
+restore the upstream selection and normal parent permission checks. If a scout
+is unavailable, the user can choose Manual or Off for direct web access.
 
-Cancellation, turn-limit stop, and explicit shutdown seal the orchestration gate and
-request the existing SDK stop path. They do not roll back file or provider
-effects. Switch/fork guards require confirmed closure: an unused Owner starts
-shutdown before its first await, while a used Owner requires literal `true` from a
-live UI confirmation before shutdown starts. Refusal, unavailable/throwing UI,
-concurrent target while confirmation/drain is pending, or shutdown uncertainty
-cancels without granting replacement; the pending decision cannot be reused.
-After closure, the host SDK does not serialize downstream hooks, teardown, target
-loading, or replacement construction, so this is not an atomic close-and-replace
-transaction; wait for each replacement operation to finish. `/tree` changes the
-session in place, so it never auto-closes and retains the explicit
-`/alehouse-close` gate. A child that crosses a guard boundary is quarantined and
-not reused. The execution slot is freed after actual execution exit, while the Agent reservation and Owner lease remain through finalization
-and confirmed cleanup; uncertain cleanup blocks closure/reuse rather than being
-force-unlocked. The host SDK has known input-admission/reload gaps, so do not
-claim atomic cancellation or reload safety; see [limitations](limitations.md)
-and the controlled observations in [validation evidence](validation-evidence.md).
+This reduces exposure of the longest-lived model context to raw pages. It does
+not prevent prompt injection, remove page text from history or quotations, or
+block Bash network access. The instruction not to fetch web pages through Bash
+is guidance only. Treat scout findings as untrusted even when cited.
 
-## Event compatibility
+## Researcher web access
 
-These literal event names are integration surface:
+Scout (internal `researcher`) is the only child profile with web access. It has
+a separate web instance and four fixed direct tools; there is no `web_enable`
+loader or background-triggered child turn. Keep all four upstream tools enabled
+under their default names, or scout assembly fails. The init seed asks for
+`web_search`, `source_check` and `fetch_content`, and allows
+`get_search_content`; check your live policy. Child asks can be forwarded;
+Jev does not automatically approve `fetch_content` asks.
 
-- child lifecycle: `subagents:child:session-created`, `subagents:child:bound`,
-  `subagents:child:disposed`;
-- delegation approval witness: `pi-alehouse:approval:admitted`,
-  `pi-alehouse:approval:invalidated`, `pi-alehouse:approval:started`,
-  `pi-alehouse:approval:finished`, `pi-alehouse:approval:witness-invalidated`
-- managed guard readiness/probe: `pi-alehouse:static-guard:ready`,
-  `pi-alehouse:static-guard:probe`;
-- permission UI bridge: `permissions:ui_prompt`, `permissions:decision`;
-- overlay coordination: `pi-alehouse:hide-transient-overlays`.
+**Enforced in the scout:** `fetch_content` accepts only absolute HTTP(S) URLs,
+not local video paths, and has no per-call browser-cookie `auth` parameter.
+Fetch, search and source-check have no per-call `proxy`. Search has no
+`workflow` or `model` override and always runs without a summary workflow or
+curator; fetch modes retain upstream behavior. The three adapted tools validate
+these restrictions at input and execution. Host-configured proxies still apply.
 
-Compatibility with event vocabulary does not mean the retired backend is loaded
-or that its old privilege model applies.
+**Still trusted upstream:** URL and redirect checks reject private/internal
+addresses by default on the guarded fetch paths. DNS preflight does not pin the
+actual connection address or guarantee protection against rebinding. Proxy and
+network exceptions or remote providers can change where requests go. Use
+`fetchContent.domainPolicy.allow` in `web-search.json` to restrict fetch hosts
+for both parent and scouts; it is not a search or general egress policy. Neither
+URL nor query checks prevent disclosure of project data.
 
-`pi-alehouse:approval:witness-invalidated` is a child-reported diagnostic only:
-it emits no started event, authorizes nothing, and the witness is already
-invalid. It is accepted only with a fixed-vocabulary reason and live runtime
-facts owned by the current session (matching parent session and orchestration Run
-owner); each session draws at most one warning and audit entry per scope, and
-unrecognized reasons are ignored outright. Unsupported-start diagnostics never
-carry prompt content, and `custom` starts are normal, not warnings.
+- **GitHub:** repository and issue/PR handling can use stored `gh` credentials,
+  including for private content. Clones write outside the child path gates.
+  Review account access; `githubClone.enabled: false` and
+  `githubPrIssue.enabled: false` disable their respective special handlers,
+  not ordinary URL fetches.
+- **Video and cookies:** video handling can launch `yt-dlp`/`ffmpeg`.
+  Gemini Web can read browser cookies when `allowBrowserCookies` or
+  `PI_ALLOW_BROWSER_COOKIES=1` is enabled, even without a scout `auth` input.
+  Leave browser-cookie access off unless authorized for the host.
+- **Additional destinations:** fetch answer and video modes can send content to
+  another model; field extraction can send it to Cloudflare Clairic.
+  Configured external fetch commands, hosted providers and PDF endpoints can
+  receive URLs or content. A tool approval does not list every downstream
+  action or cost; review provider, helper and credential settings.
+- **Shared cache:** upstream stores fetched content on disk, by default in
+  `web-search-cache` below the web config directory. Its one-hour lifetime and
+  size limits do not imply deletion at session close. Review the location
+  (`PI_WEB_ACCESS_CACHE_ROOT` can relocate it) and keep it private.
+
+Scout source-hygiene instructions prohibit sending local contents in queries or
+URLs, but the tools cannot enforce that. Keep web calls under human control or
+avoid scout web access for projects with sensitive data; use actual host egress
+controls for any mandatory separation.
+
+## Permission readiness and provenance
+
+Child assembly checks the admitted profile digest and tool table, and child
+input requires its bound permission service and static-guard acknowledgement.
+Missing or mismatched readiness blocks the operation; it is not a human ask.
+The guard and forwarding edge use the same session-record principal as the
+actual tool gate, never profile markers in prompts or files. Forwarded asks
+must have a named, bound requester and real access facts; ordinary unscoped
+parent calls still use normal global gates. Startup integrity checks do not
+continuously reread definitions or freeze live policy.
+
+### Jev review and audit
+
+Jev is the only model judge. Launch defaults to `PI_JEV_APPROVAL_MODE=enforce-subagents`
+(parent and eligible forwarded asks); `shadow` is manual approval with no
+Jev automatic allows, not a privacy/offline mode. Existing allows and ordinary
+yolo asks never reach Jev. Hard checkpoints defer eligible requests to human
+approval before the classifier; incomplete provenance, unsupported policy or
+unavailable review also defer. A Run's in-memory witness binds real input;
+steering, budget input, cancellation or stale session/mode can invalidate it.
+A verdict is checked again before it can allow work.
+
+If configured with a protected `PI_JEV_API_KEY_FILE` path, invoked review can
+send bounded action and relevant instructions/prompt context to
+`https://api.typesafe.ai/v1/systemone` (`jev-1.13.0`), using the host TypeSafe
+classifier with a private key source, not the model registry or an environment
+API key. Review the disclosure before configuring the key. Without it, the
+ordinary permission path remains. Transport has a two-second cancellation
+budget and no retries; four root and eight distinct subagent reviews can be
+in flight, independently of Agent capacity. Identical in-flight packets
+coalesce; overload defers to human handling.
+
+The [approval menu](interface.md#approval-menu) changes live mode. Widening
+requires confirmation; changing modes invalidates pending reviews. A saved
+preference is a request, not an allow rule. A same-session record takes
+precedence over preferences; on resume judge mode cannot exceed the launch
+cap, and yolo is never silently restored. A wider saved mode needs UI consent;
+headless startup cannot use a preference to widen the launch mode. Save
+explicitly if you want a default.
+
+Automatic allows require a synchronous private audit append after fresh
+validation. The Linux writer needs `/proc/self/fd`, verified util-linux flock,
+and trustworthy directory ownership. Unsafe or uncertain audit state defers.
+In a user namespace, `untrusted_directory_owner` can mean an unmapped ancestor,
+not a stale lock; see the [ownership limit](jev-audit-recovery.md#user-namespace-ownership-limit).
+Rotation at 1 MiB does not bound archives or guarantee durability. Never delete
+a possibly held lock. Stop all writers before upgrade, rollback or
+[offline audit recovery](jev-audit-recovery.md); never mix old unlocked writers
+with the current protocol. The recovery utility is maintainer-checkout only,
+not shipped in the production tarball.
+
+## Communication observation and admission
+
+An `ask_parent` question or an `agent_read` cursor refers to retained Owner
+state, not a transferable credential. Off prevents new tasks, steering and
+answers, not inspection or accepted child callbacks. See the
+[tool contract](tool-contract.md) for observation, answer and handoff rules.
+
+For [scout `return_to`](tool-contract.md#scout-return_to), compound admission
+needs an exact synchronous `allow` from the parent's read-only
+`checkToolCallPermission("agent_answer", ctx)` for its real tool-call principal.
+The decision includes applicable session grants/yolo, records no grant, and
+never prompts or invokes the authorizer chain. An ask, deny or unavailable
+check installs neither Run. Denies remain final; ordinary separate operations
+have their normal gates. The handoff can put untrusted scout text directly into
+a worker with Bash/edit/write before the parent model sees it. It is framed as
+reference, not parent-authored approval context. The parent-model notice is
+not redaction: history and the human UI still retain the source text.
+
+## Recovery and operational boundaries
+
+[Dispatch preflight](task-dispatch.md#preflight-and-admission) can reject known
+path denies, but ask/unknown is not a grant. Claims, build-directory leases and
+validation observations coordinate declared work only, not arbitrary IO.
+[Runtime feedback](runtime-feedback.md) is a partial view of managed blocks;
+silence is not permission or evidence that work stopped.
+
+For an unavailable Owner, inspect `/alehouse-status` and follow the
+[close and replacement procedure](limitations.md#lifecycle-and-cancellation).
+Do not force-unlock, assume rollback, or reload an open Owner. For definition
+mismatches, [reconcile matched resources](development.md#matched-resource-migration)
+manually and start a fresh process; init does not overwrite existing files.
+Historical records never recover pending work or old permission authority.

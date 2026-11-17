@@ -1,40 +1,44 @@
-# Pi Alehouse orchestration
+# Agents, tasks and sessions
 
-The orchestration layer is Pi Alehouse's internal, opt-in Owner-local worker backend, not another npm package or a separate Pi runtime. Launch through the explicit built `pi-alehouse` CLI, not direct extension discovery: root `pi.extensions: []` intentionally prevents source composition autoload or `pi install` extension loading. The CLI supplies `--no-extensions -e <absolute src/composition.ts>`. It uses the host Pi SDK and the matched generated permission authority and worker definitions. Ordinary `pi` is unchanged; this launcher does not copy authentication or rewrite Pi settings.
+Use a new Agent for independent work and a follow-up task when its existing conversation matters. For example, a worker that diagnosed a failing test can use that same context to fix it. If another Agent needs only the findings, pass the result as a dependency instead of reusing the conversation. See the [worked tool calls](agent-tools-quickstart.md).
 
-**Release acceptance remains PENDING.** Portable package/policy checks, controlled full/readonly, Jev and SDK-history lanes, and installed-tarball RPC smokes establish only their declared scopes; run records live with the commits they validated. The inherited cooperative-local operating contract documents limitations, not public acceptance. See [limitations](limitations.md), [release policy](../release-policy.json) and [validation scope](validation-evidence.md).
+## What lives how long?
 
-## Operate
+| Object      | Lifetime and address                                                                                                                                                                              |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Owner**   | One controller for one live parent Pi session and generation. Owns admission, execution slots, retained results and the local lease. No cross-session lookup.                                     |
+| **Agent**   | A named reservation for one profile, model, thinking setting and working directory. Reusing a healthy Agent reuses its child conversation. A name is unique within its Owner, even after release. |
+| **Run**     | One task on an Agent. A follow-up gets a new Run and a new 1-based `task` number. That number selects a past task for reading; it cannot target a command at old work.                            |
+| **Session** | Pi's conversation state. Parent and child have separate SDK sessions. Persisted journals can be inspected after restart; they do not restore a live Owner, queued work or pending questions.      |
 
-1. Build the root package and generate matching `generated/` resources (agents, worker policy, extensions, shared helpers, authority, seeds and manifest). Run `node bin/pi-alehouse.mjs init` from the repository root to create **only absent** resources (five agent definitions: `editor`, `researcher`, `Explore`, `Plan`, `general-purpose`; one routing catalogue and one managed permission config—**seven files total**). Existing personal files stay intact. The neutral version-3 `alehouse-presets.json` defaults to `off`; configure your own exact registered provider/model IDs before enabling workers. See [getting started](getting-started.md) and [routing configuration](routing.md#preset-configuration).
-2. Start a **fresh** `pi-alehouse` process. Select the parent model normally, and the delegation mode and a model preset independently via `Alt+S` (or `/alehouse-mode` and `/alehouse-preset`). `off` blocks new delegation, not already accepted tasks. When enabled, the parent has nine fixed management tools (`agent_spawn`, `agent_run`, `agent_send`, `agent_answer`, `agent_wait`, `agent_read`, `agent_interrupt`, `agent_kill`, `agent_list`) and addresses Agents by name. Use `agent_answer` for a settled pending question; `agent_send` only joins/steers work. Kill finished Agents whose work is accepted when capacity is needed.
-3. Before exit, use `/alehouse-close` and wait for **confirmed** Owner closure. A never-used Owner closes automatically before session replacement; a used Owner needs literal **Yes** from Pi's UI. `/tree` always needs explicit close because it changes the current session in place. Do not `/reload` with an open Owner. Once a replacement guard returns after closure, Pi does not atomically serialize later teardown/hooks/target loading: finish each replacement before starting another. Unconfirmed drain does not prove execution exit.
+Both profiles use the parent's current working directory as admitted, including uncommitted changes and build outputs. Alehouse does not isolate files or Git state. Use [dispatch](task-dispatch.md) to coordinate edits and reserve build directories. Neither declaration grants permission.
 
-Off leaves accepted queued/running work and result/cleanup tools available. A fresh initially Off conversation has no management tool schemas or orchestration reminder; turning Off later cannot remove historical model context. See [Off](routing.md#off).
+## Pick a profile
 
-The parent retains normal footer/title, approval queue, health/Stats, and pinned `pi-web-access` 0.47.0 tools; Co-worker, Lead and Supervisor hide and refuse those web tools regardless of eagerness, assigning even small web lookups to scouts. Manual and Off restore the upstream web-tool selection. Child sessions have no nested delegation. New requests use public `worker` (internal `editor`, no web tools) or `scout` (internal `researcher`; read/grep/find/ls and web tools, no model-facing Bash/edit/write; its `web_search` has no `workflow`/`model` and always resolves `workflow: "none"`). Workers handle local diagnosis, code review, design, implementation and verification with read/edit/write/Bash/Git/build tools under normal permission. Scouts gather, compare and summarize information from local files and web sources, including local-only tasks, and return cited findings. Web material is untrusted. No web tools is not network isolation. Jev is the only model judge. See [security](security.md). Leaving this launcher and starting ordinary `pi` does not retroactively stop its children; close the Owner first.
+- **Worker** (`editor` internally): local reads, Bash, edits and writes under the applicable policy. Suitable for diagnosis, design, review, implementation or testing. A review-only prompt is not a read-only restriction. No web tools does not mean no network access.
+- **Scout** (`researcher` internally): local read/search/list tools and the four tools supplied by `pi-web-access` 0.47.0; no model-facing Bash, edit or write. Use a scout for cited findings, including local-only research. Local files and web access together can expose data; see [security](security.md).
 
-## Limits at a glance
+Only `worker` and `scout` are accepted in `agent_spawn`. `init` installs their two managed definitions and disables the built-in `Explore`, `Plan` and `general-purpose` definitions. Profile is independent of difficulty: [routing](routing.md) chooses the model and effort. An optional inherited context snapshot is bounded text for the first Run, not a fork of the parent session.
 
-- Four execution slots per admitted provider (models share that provider's cap); twelve resident Agent reservations, including queued/busy/uncertain-cleanup reservations. `agent_kill` is permanent.
-- Tasks have a soft turn budget (default 256), not a wall-clock execution deadline or timed wrap-up reminder. The cooperative grace beyond `max_turns` is a configurable Owner limit, not a fixed `+5` public contract, and a `completed` task with `limit_reached` still satisfies `after`. Turn-limit stops and cancellation are cooperative, not forced exit, rollback, or guaranteed zero later provider activity. Command/request-specific timeouts and stop/cleanup bounds remain separate.
-- `wait_ms` on `agent_spawn`/`agent_run`/`agent_send`/`agent_answer`/`agent_wait` bounds only the parent's observation wait (five minutes max); Esc interrupts waiting, not worker work.
-- Owner-local result retention is bounded to 512 cumulative Runs and 64 Mi UTF-16 result units (including reservations for unsettled Runs); this is not a total heap/RSS cap or a durable store.
-- Child usage is observed conservatively and handed to the next parent tool result if available. Spend settling after the last result remains unmerged residue, not fabricated into Pi totals.
+## Work through a task
 
-## Contract references
+| Situation                              | Parent tool                                                                                                                                          |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Delegate independent work              | `agent_spawn` creates a named Agent and its first task.                                                                                              |
+| Continue an Agent's earlier work       | `agent_run` starts a new task on an idle, reusable Agent.                                                                                            |
+| Add information while work is pending  | `agent_send` joins or steers the bound task; it is not an answer to a settled question.                                                              |
+| A child needs a decision               | `agent_answer` supplies the answer with the exact pending question ID. The continuation is a new Run.                                                |
+| Wait for a change or retrieve a result | `agent_wait` observes; a timeout or Esc ends the wait, not the work. `agent_read` reads the bound task or pages a retained result.                   |
+| Inspect, stop or release               | `agent_list` shows the roster; `agent_interrupt` requests a cooperative stop; `agent_kill` permanently releases the Agent once cleanup is confirmed. |
 
-| Concern                                                    | Reference                                                         |
-| ---------------------------------------------------------- | ----------------------------------------------------------------- |
-| Ownership, lifecycle, SDK adapters, history and accounting | [Architecture](architecture.md)                                   |
-| Owner / Agent / Run / Session vocabulary                   | [Concepts](concepts.md)                                           |
-| Nine parent tools and two child tools                      | [Tool contract](tool-contract.md)                                 |
-| Slots, effort, Off, version-3 configuration                | [Routing](routing.md)                                             |
-| Widget, panels, footer and Stats                           | [Interface](interface.md)                                         |
-| Permission, provenance, leases and data handling           | [Security](security.md)                                           |
-| Layout and quality gates                                   | [Development](development.md)                                     |
-| Supported/unsupported behavior                             | [Limitations](limitations.md)                                     |
-| Test scope and evidence gaps                               | [Validation evidence](validation-evidence.md)                     |
-| Package ownership rationale                                | [Organization decision](decisions/001-organization-boundaries.md) |
+A child can `alert_parent` with information or `ask_parent` with a question. Neither starts a parent model turn. Children cannot delegate. Consult the [tool contract](tool-contract.md) for question handling, scout-to-worker handoff, replay and what a successful tool reply actually confirms.
 
-Child tool names, profile IDs, config path, `alehouse:*` records, event names and cross-extension symbols remain compatibility surface. See the [root third-party notices](../THIRD_PARTY_NOTICES.md) and [integration rationale](third-party-integrations.md).
+## When a task looks stuck
+
+An executing task holds one of four slots for its admitted provider; different models on that provider share the limit. An idle Agent still holds one of twelve resident reservations. A queued task may be waiting for a dependency or a provider slot. A finishing task has exited execution but may still be draining inputs, releasing resources or recording history. Do not assume it is reusable or forcibly remove a lease.
+
+Press **Alt+A** or run `/alehouse-status` to inspect progress. Check for an unanswered question before waiting again. A Run has a soft turn budget but no wall-clock execution deadline. A partial result can still be useful even if the task failed; a `completed` task with `limit_reached` is not proof that all requested work was done.
+
+## Close or switch sessions
+
+Turning the preset Off blocks new work but does not stop accepted tasks. Killing all Agents is not the same as closing the Owner. Use `/alehouse-close` and wait for confirmed closure before exit, `/tree` or upgrading. Do not `/reload` with an open Owner. A used Owner needs confirmation before a session replacement; an unused one can close automatically. If cleanup is uncertain, a timeout does not establish that the children have stopped. See [support limits](limitations.md).
