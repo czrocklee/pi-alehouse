@@ -30,7 +30,7 @@ manifest in `generated/`. The CLI loads the source composition and generated
 resources, not `dist/`. Patch the source or generator, not built files. Keep the
 private patched permission-system 32.0.3 copy's upstream LICENSE and runtime
 assets. All consumers use the single generated authority entry. Web access uses
-the package-local pinned `pi-web-access` 0.47.0, not a global extension.
+the package-local pinned `pi-web-access` 0.48.0, not a global extension.
 Development pins Pi/AI/TUI 1.5.2 and TypeBox 1.3.27. These are not a production
 host version lock or support matrix.
 

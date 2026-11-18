@@ -180,7 +180,7 @@ retrying; see the linked settings guide for uncertain write/lock recovery.
 ## Parent web access
 
 Both parent and scout use the package-local pin of `pi-web-access`
-0.47.0. The launcher checks its location and version, not a digest of its code.
+0.48.0. The launcher checks its location and version, not a digest of its code.
 
 With an enabled preset in Co-worker, Lead or Supervisor, the parent web tools
 are hidden from model requests and calls are refused, even if host exclusions
@@ -229,15 +229,19 @@ URL nor query checks prevent disclosure of project data.
   Gemini Web can read browser cookies when `allowBrowserCookies` or
   `PI_ALLOW_BROWSER_COOKIES=1` is enabled, even without a scout `auth` input.
   Leave browser-cookie access off unless authorized for the host.
-- **Additional destinations:** fetch answer and video modes can send content to
+- **Additional destinations:** fetch answer (including fetched images and video
+  frames) and video modes can send content to
   another model; field extraction can send it to Cloudflare Clairic.
   Configured external fetch commands, hosted providers and PDF endpoints can
   receive URLs or content. A tool approval does not list every downstream
   action or cost; review provider, helper and credential settings.
-- **Shared cache:** upstream stores fetched content on disk, by default in
-  `web-search-cache` below the web config directory. Its one-hour lifetime and
+- **Shared cache and state:** upstream stores fetched content on disk, by default
+  in `web-search-cache` below the web config directory. Its one-hour lifetime and
   size limits do not imply deletion at session close. Review the location
-  (`PI_WEB_ACCESS_CACHE_ROOT` can relocate it) and keep it private.
+  (`PI_WEB_ACCESS_CACHE_ROOT` can relocate it) and keep it private. DuckDuckGo
+  searches also share bot-check cooldown timestamps across the parent, scouts
+  and other Pi processes via `duckduckgo-cooldown.json` in the web config
+  directory.
 
 Scout source-hygiene instructions prohibit sending local contents in queries or
 URLs, but the tools cannot enforce that. Keep web calls under human control or

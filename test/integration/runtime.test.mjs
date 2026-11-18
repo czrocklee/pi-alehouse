@@ -504,14 +504,14 @@ test("web dependency lookup supports npm-hoisted production installs", (t) => {
   mkdirSync(root, { recursive: true });
   writeFileSync(
     join(root, "package.json"),
-    '{"name":"pi-alehouse","dependencies":{"pi-web-access":"0.47.0"}}',
+    '{"name":"pi-alehouse","dependencies":{"pi-web-access":"0.48.0"}}',
   );
   const web = join(install, "node_modules/pi-web-access");
   mkdirSync(join(web, "dist"), { recursive: true });
   const manifest = join(web, "package.json");
   writeFileSync(
     manifest,
-    '{"name":"pi-web-access","version":"0.47.0","pi":{"extensions":["./dist"]}}',
+    '{"name":"pi-web-access","version":"0.48.0","pi":{"extensions":["./dist"]}}',
   );
   writeFileSync(join(web, "dist/index.js"), "export default () => {};");
   assert.equal(webEntry(root), join(web, "dist/index.js"));
@@ -519,7 +519,7 @@ test("web dependency lookup supports npm-hoisted production installs", (t) => {
     manifest,
     '{"name":"pi-web-access","version":"0.35.0","pi":{"extensions":["./dist"]}}',
   );
-  assert.throws(() => webEntry(root), /Package-local pi-web-access must be pinned to 0\.47\.0/);
+  assert.throws(() => webEntry(root), /Package-local pi-web-access must be pinned to 0\.48\.0/);
 });
 
 test(

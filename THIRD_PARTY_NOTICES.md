@@ -14,9 +14,9 @@ applied after composed permission rules. Retain the upstream `LICENSE` in its
 generated vendor artifact; this notice does not replace that file or change
 upstream attribution.
 
-## pi-web-access 0.47.0
+## pi-web-access 0.48.0
 
-Parent and isolated researcher integration use pinned `pi-web-access` 0.47.0
+Parent and isolated researcher integration use pinned `pi-web-access` 0.48.0
 (https://github.com/nicobailon/pi-web-access). Its installed `package.json`
 declares MIT; the text below is from its installed `LICENSE`. Local workers
 (public `worker`, internal `editor`) do not receive web tools.

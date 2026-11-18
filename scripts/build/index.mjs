@@ -97,7 +97,7 @@ try {
   rmSync(join(packageRoot, "generated"), { recursive: true, force: true });
   renameSync(stage, join(packageRoot, "generated"));
   console.log(
-    "Generated private Alehouse runtime (permission authority 32.0.3; web access 0.47.0)",
+    "Generated private Alehouse runtime (permission authority 32.0.3; web access 0.48.0)",
   );
 } finally {
   rmSync(stage, { recursive: true, force: true });

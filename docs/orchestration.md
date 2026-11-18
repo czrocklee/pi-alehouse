@@ -16,7 +16,7 @@ Both profiles use the parent's current working directory as admitted, including 
 ## Pick a profile
 
 - **Worker** (`editor` internally): local reads, Bash, edits and writes under the applicable policy. Suitable for diagnosis, design, review, implementation or testing. A review-only prompt is not a read-only restriction. No web tools does not mean no network access.
-- **Scout** (`researcher` internally): local read/search/list tools and the four tools supplied by `pi-web-access` 0.47.0; no model-facing Bash, edit or write. Use a scout for cited findings, including local-only research. Local files and web access together can expose data; see [security](security.md).
+- **Scout** (`researcher` internally): local read/search/list tools and the four tools supplied by `pi-web-access` 0.48.0; no model-facing Bash, edit or write. Use a scout for cited findings, including local-only research. Local files and web access together can expose data; see [security](security.md).
 
 Only `worker` and `scout` are accepted in `agent_spawn`. `init` installs their two managed definitions and disables the built-in `Explore`, `Plan` and `general-purpose` definitions. Profile is independent of difficulty: [routing](routing.md) chooses the model and effort. An optional inherited context snapshot is bounded text for the first Run, not a fork of the parent session.
 
