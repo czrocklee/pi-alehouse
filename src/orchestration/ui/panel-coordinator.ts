@@ -578,6 +578,7 @@ export class PanelCoordinator {
                 tui,
                 cwd: agent.cwd,
                 markdownTheme,
+                theme,
                 source: {
                   messages: () => cache.messages(currentAgents.get(id)),
                   inFlight: () => currentAgents.get(id)?.inFlight(),

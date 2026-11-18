@@ -956,7 +956,6 @@ export class DetailPane {
     this.bodyFloor = MIN_VIEWPORT;
     this.hiddenNotes = 0;
     this.animating = false;
-    // The text gutter aligns the transcript with the title/footer inlays.
     const inner = this.options.frame ? width - 2 : width;
     const chrome = this.options.frame ? inner - 4 : inner;
     if (
@@ -974,7 +973,7 @@ export class DetailPane {
       this.painted = 0;
       return [];
     }
-    const gutter = this.options.frame ? (inner >= 72 ? 2 : 1) : 0;
+    const gutter = this.options.frame ? 1 : 0;
     const contentWidth = inner - gutter * 2;
     // Framed, the title shares the top edge with the close control.
     const titleWidth = this.options.frame ? popoverInlayWidth(width, "top", true) : chrome;

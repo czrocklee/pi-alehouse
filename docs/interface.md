@@ -86,8 +86,12 @@ The transcript uses Pi's own views, including recorded tools, retries and
 compaction summaries. A tool can fall back to a raw card if its renderer is no
 longer available. `From user` identifies direct live steering, `From parent`
 the dispatched envelope, and `Alehouse input` internal input; an older `Input`
-label need not establish authorship. An alert or question card shows what was
-recorded, not that the parent read it. See [UI limits](limitations.md#ui-scope).
+label need not establish authorship. Messages from the parent sit on the left;
+alerts and questions to the parent sit on the right, with their receipts on the
+same side outside the card. Cards shrink to fit short messages. The body text
+uses the active theme's `accent` and `customMessageLabel` colors respectively;
+the layout still distinguishes direction if those colors match. An alert or
+question card shows what was recorded, not that the parent read it. See [UI limits](limitations.md#ui-scope).
 
 Use **Info** for the original route and effort source, full diagnostics,
 current tool observations and usage. Context occupancy is not cumulative

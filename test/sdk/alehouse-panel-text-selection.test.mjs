@@ -178,6 +178,12 @@ for (const kind of ["Agents", "Delegation", "Model"])
   for (const borderLabels of [true, false])
     test(`${kind}: shared body selection bounds native highlight and copy (labels=${borderLabels})`, async (t) => {
       const h = fixture(t, kind, borderLabels);
+      if (kind === "Agents")
+        assert.equal(
+          h.start.x,
+          h.bounds.col + 2,
+          "transcript begins after frame and one gutter cell",
+        );
       h.pointer("press", h.start);
       h.pointer("drag", h.end);
       h.paint();

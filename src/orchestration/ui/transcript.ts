@@ -15,11 +15,11 @@
  * tool cards default collapsed (active/incomplete and failed ones stay
  * expanded, and `setToolsExpanded()` is a presentation-only toggle);
  * `alert_parent`/`ask_parent` calls with exactly their one recorded string
- * argument get an Input-style body with a right-aligned title above its
- * background and a separate receipt instead of raw JSON; user messages carry
- * neutral labels unless the runtime recorded a confirmed origin for that exact
- * message, with the human steering lead shown only as the qualified label it
- * itself declares when no origin was recorded.
+ * argument get a right-anchored communication card with a separate receipt
+ * instead of raw JSON; only confirmed parent user messages get a left-anchored
+ * card. User messages carry neutral labels unless the runtime recorded a
+ * confirmed origin for that exact message, with the human steering lead shown
+ * only as the qualified label it itself declares when no origin was recorded.
  */
 
 import {
@@ -30,14 +30,17 @@ import {
   parseSkillBlock,
   SkillInvocationMessageComponent,
   UserMessageComponent,
+  type Theme,
   type ToolRenderers,
   type sessionEntryToContextMessages,
 } from "@earendil-works/pi-coding-agent";
 import {
   Box,
   Container,
+  Markdown,
   Spacer,
   Text,
+  TruncatedText,
   visibleWidth,
   type Component,
   type MarkdownTheme,
@@ -51,7 +54,14 @@ import { toolArgumentText } from "../presentation/tool-argument-text.ts";
 import { blockedDelegationToolNames } from "../tools/tool-names.ts";
 import { paneRow, type TranscriptFrame, type TranscriptRows } from "./format.ts";
 import { plainText } from "./text.ts";
-import { CommunicationBubble } from "./communication-bubble.ts";
+import {
+  CommunicationBubble,
+  CommunicationCard,
+  CommunicationReceipt,
+  ParentCommunicationCard,
+  communicationLineWidth,
+  communicationPadding,
+} from "./communication-bubble.ts";
 import { detachedToolResult } from "./tool-result-projection.ts";
 import { TranscriptToolCard } from "./transcript-tool-card.ts";
 
@@ -77,6 +87,9 @@ export interface TranscriptOptions {
   tui: TUI;
   cwd: string;
   markdownTheme: MarkdownTheme;
+  /** Live theme from the detail factory. Structural hosts without these
+   * callbacks still get parent cards, but without the missing colors. */
+  theme?: Partial<Pick<Theme, "fg" | "bg">>;
   source: TranscriptSource;
 }
 
@@ -163,15 +176,15 @@ function sanitizedToolProjection(name: string, args: unknown): { name: string; a
 }
 
 /** A read-only message block for a well-formed `alert_parent`/`ask_parent`
- * call: a right-aligned neutral title above an Input-style body, then the
- * recorded result outside that background. Malformed arguments and retired
- * names stay raw; other tools keep their normal renderer selection. The block
- * only projects what the record says —
- * it hydrates nothing, acknowledges nothing, and a receipt line is the child's
- * own recorded output, never a claim the parent read it. The body uses faithful
- * tool-argument encoding, including visible tabs and protocol payloads. Receipts
- * retain the native-result-style plainText prose projection instead: recognized
- * protocols drop and whitespace normalizes. Neither path rewrites history. */
+ * call: a right-anchored title and Input-style body, then the recorded result
+ * on the same side but outside that background. Malformed arguments and retired names stay raw;
+ * other tools keep their normal renderer selection. The block only projects
+ * what the record says: it hydrates nothing and acknowledges nothing. A receipt
+ * line is the child's own recorded output, never a claim the parent read it.
+ * The body uses faithful tool-argument encoding, including visible tabs and
+ * protocol payloads. Receipts retain the native-result-style prose projection
+ * via plainText: recognized protocols drop and whitespace normalizes. Neither
+ * path rewrites history. */
 function communicationRenderers(name: string, args: unknown): ToolRenderers | undefined {
   const display = COMMUNICATION_DISPLAY[name as keyof typeof COMMUNICATION_DISPLAY];
   if (!display || typeof args !== "object" || args === null) return undefined;
@@ -194,6 +207,8 @@ function communicationRenderers(name: string, args: unknown): ToolRenderers | un
     !/\S/.test(text)
   )
     return undefined;
+  const encodedText = toolArgumentText(text);
+  const cardLineWidth = Math.max(visibleWidth(display.label), communicationLineWidth(encodedText));
   const resultText = (result: unknown): string => {
     const content = (result as { content?: unknown } | undefined)?.content;
     return (Array.isArray(content) ? content : [])
@@ -212,21 +227,27 @@ function communicationRenderers(name: string, args: unknown): ToolRenderers | un
     renderCall: (_args, theme, context) => {
       const view =
         context.lastComponent instanceof Container ? context.lastComponent : new Container();
-      const previousBubble = view.children[0];
+      const previousCard = view.children[0];
       const previousNote = view.children[1];
-      const note = previousNote instanceof Text ? previousNote : new Text("", 1, 0);
-      if (!(previousBubble instanceof CommunicationBubble) || note !== previousNote) {
+      const note =
+        previousNote instanceof CommunicationReceipt
+          ? previousNote
+          : new CommunicationReceipt(cardLineWidth);
+      if (!(previousCard instanceof CommunicationCard) || note !== previousNote) {
+        const card =
+          previousCard instanceof CommunicationCard
+            ? previousCard
+            : new CommunicationCard(
+                cardLineWidth,
+                new CommunicationBubble(display.label, encodedText, theme),
+              );
         view.clear();
-        view.addChild(
-          previousBubble instanceof CommunicationBubble
-            ? previousBubble
-            : new CommunicationBubble(display.label, toolArgumentText(text), theme),
-        );
+        view.addChild(card);
         view.addChild(note);
       }
       // This transcript applies only final recorded/synthetic results. Here
       // isPartial means no result record yet, not proof of live execution.
-      note.setText(context.isPartial ? theme.fg("dim", "No recorded result") : "");
+      note.setText(context.isPartial ? "No recorded result" : "", (row) => theme.fg("dim", row));
       return view;
     },
     renderResult: (result, _options, theme, context) => {
@@ -236,8 +257,10 @@ function communicationRenderers(name: string, args: unknown): ToolRenderers | un
       // text below the marker rather than erasing potentially visible ink.
       const output = needsMarker ? (recorded.trim() ? `Error\n${recorded}` : "Error") : recorded;
       const view =
-        context.lastComponent instanceof Text ? context.lastComponent : new Text("", 1, 0);
-      view.setText(output ? theme.fg(context.isError ? "error" : "dim", output) : "");
+        context.lastComponent instanceof CommunicationReceipt
+          ? context.lastComponent
+          : new CommunicationReceipt(cardLineWidth);
+      view.setText(output, (row) => theme.fg(context.isError ? "error" : "dim", row));
       return view;
     },
   };
@@ -797,21 +820,26 @@ export class TranscriptContent implements TranscriptRows {
       // rewrite the pane cannot prove which rendered user message was the
       // original task input, so it never claims one. The recorded steering lead
       // stays the only qualified fallback label.
-      block.container.addChild(this.userLabel(label ?? "Input"));
+      const fromParent = origin === "parent";
+      const view = fromParent ? new ParentCommunicationCard() : block.container;
+      view.addChild(
+        fromParent
+          ? new TruncatedText(this.options.markdownTheme.bold(ORIGIN_LABELS.parent), 1)
+          : this.userLabel(label ?? "Input"),
+      );
       const skill = parseSkillBlock(text);
       if (!skill) {
-        block.container.addChild(new UserMessageComponent(text, this.options.markdownTheme));
+        view.addChild(this.userBody(text, fromParent));
       } else {
         const invocation = new SkillInvocationMessageComponent(skill, this.options.markdownTheme);
         invocation.setExpanded(true);
-        block.container.addChild(invocation);
+        view.addChild(invocation);
         if (skill.userMessage) {
-          block.container.addChild(new Spacer(1));
-          block.container.addChild(
-            new UserMessageComponent(skill.userMessage, this.options.markdownTheme),
-          );
+          view.addChild(new Spacer(1));
+          view.addChild(this.userBody(skill.userMessage, fromParent));
         }
       }
+      if (fromParent) block.container.addChild(view);
     }
     this.visible = true;
   }
@@ -831,6 +859,37 @@ export class TranscriptContent implements TranscriptRows {
     } catch {
       return undefined;
     }
+  }
+
+  private userBody(text: string, fromParent: boolean): Component {
+    const { theme, markdownTheme } = this.options;
+    if (!fromParent) return new UserMessageComponent(text, markdownTheme);
+    // Keep Pi's user Markdown options and padding, but inject the parent
+    // palette from this pane. The same paneRow filter applies to both paths.
+    const markdown = (paddingX: number) =>
+      new Markdown(
+        text,
+        paddingX,
+        1,
+        markdownTheme,
+        {
+          color: (row) => theme?.fg?.("accent", row) ?? row,
+          bgColor: (row) => theme?.bg?.("userMessageBg", row) ?? row,
+        },
+        { preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
+      );
+    const body = markdown(1);
+    let compact: Markdown | undefined;
+    return {
+      // Markdown does not shrink its own margins. Leave room for wide
+      // graphemes when the card gets only a few cells.
+      render: (width) =>
+        (communicationPadding(width) ? body : (compact ??= markdown(0))).render(width),
+      invalidate: () => {
+        body.invalidate();
+        compact?.invalidate();
+      },
+    };
   }
 
   /** A user block's neutral label, aligned with the message's own padding. */

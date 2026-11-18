@@ -1,7 +1,7 @@
 /**
  * A child-to-parent communication message drawn as an Input-style background
  * block: the label sits right-aligned above the background, and the body uses
- * the host theme's `userMessageBg`/`userMessageText` tokens with its line breaks
+ * the host theme's `userMessageBg`/`customMessageLabel` tokens with its line breaks
  * preserved. No extra frame, border or tool-card chrome; the caller renders
  * any receipt outside this component.
  *
@@ -16,8 +16,17 @@
  * than split; every returned row fits the requested width.
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Box, sliceByColumn, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
-import { clipPlainText } from "./text.ts";
+import {
+  Box,
+  Container,
+  sliceByColumn,
+  stripTerminalSequences,
+  Text,
+  truncateToWidth,
+  visibleWidth,
+  type Component,
+} from "@earendil-works/pi-tui";
+import { clipPlainText, wrapPlainText } from "./text.ts";
 
 /** The host theme the render pipeline hands to tool renderers. */
 export type HostTheme = Theme;
@@ -28,6 +37,94 @@ export type HostTheme = Theme;
  * below this width the padding is canceled so the block keeps content space.
  */
 const MIN_PADDED_WIDTH = 4;
+
+export const communicationPadding = (width: number): number => (width >= MIN_PADDED_WIDTH ? 1 : 0);
+
+/** Normally reserve a fifth of the pane; in narrow panes keep a smaller gap. */
+function communicationCardWidth(available: number, natural = Infinity): number {
+  if (!Number.isInteger(available) || available <= 0) return 0;
+  const narrow = Math.min(24, available - 3);
+  const limit = Math.max(MIN_PADDED_WIDTH, narrow, Math.floor(available * 0.8));
+  return Math.min(available, limit, natural);
+}
+
+/** A native child may overshoot its budget (e.g. a table or very wide grapheme). */
+function fitRow(line: string, width: number): string {
+  return visibleWidth(line) > width ? truncateToWidth(line, width, "…") : line;
+}
+
+/** Markdown can add indentation, table borders or link text not present in
+ * the source. Measure its actual rows at the allowed width, then shrink-wrap
+ * at the painted right edge. Stay a Container so layout invalidation can walk
+ * native children without invoking e.g. SkillInvocationMessageComponent.invalidate(). */
+export class ParentCommunicationCard extends Container {
+  override render(width: number): string[] {
+    const cap = communicationCardWidth(width);
+    if (!cap) return [];
+    const rows = super.render(cap);
+    let fitted = 1;
+    for (const line of rows) {
+      const ink = stripTerminalSequences(line).trimEnd();
+      fitted = Math.max(fitted, visibleWidth(ink) + communicationPadding(cap));
+      if (fitted >= cap) return rows.map((row) => fitRow(row, cap));
+    }
+    // Re-render to let each native child close its own styles and hyperlinks
+    // at the narrower boundary, rather than slicing ANSI off its right edge.
+    return super.render(fitted).map((row) => fitRow(row, fitted));
+  }
+}
+
+/** Natural content width in terminal cells, before adding the one-cell insets. */
+export function communicationLineWidth(text: string): number {
+  return text.split("\n").reduce((longest, line) => Math.max(longest, visibleWidth(line)), 0);
+}
+
+/** Right-anchor the complete literal-text card, including its background. */
+export class CommunicationCard implements Component {
+  constructor(
+    private readonly lineWidth: number,
+    private readonly content: Component,
+  ) {}
+
+  render(width: number): string[] {
+    const cardWidth = communicationCardWidth(width, this.lineWidth + 2);
+    if (!cardWidth) return [];
+    const margin = " ".repeat(width - cardWidth);
+    return this.content.render(cardWidth).map((line) => margin + fitRow(line, cardWidth));
+  }
+
+  invalidate(): void {
+    this.content.invalidate();
+  }
+}
+
+/** Unbackgrounded metadata on the same side as the call. A longer receipt
+ * may widen leftward so it isn't squeezed into a short question's width. */
+export class CommunicationReceipt implements Component {
+  private text = "";
+  private lineWidth = 0;
+  private style = (row: string): string => row;
+
+  constructor(private readonly cardLineWidth: number) {}
+
+  setText(text: string, style: (row: string) => string): void {
+    if (text !== this.text) {
+      this.text = text;
+      this.lineWidth = communicationLineWidth(text);
+    }
+    this.style = style;
+  }
+
+  render(width: number): string[] {
+    const column = communicationCardWidth(width, Math.max(this.cardLineWidth, this.lineWidth) + 2);
+    if (!this.text || !column) return [];
+    const inset = communicationPadding(column);
+    const indent = " ".repeat(width - column + inset);
+    return wrapPlainText(this.text, column - inset * 2).map((row) => indent + this.style(row));
+  }
+
+  invalidate(): void {}
+}
 
 /** The label row: right-aligned above the body, truncated by cells. */
 class TitleLine implements Component {
@@ -94,7 +191,7 @@ export class CommunicationBubble implements Component {
     this.title = new TitleLine(label, theme);
     this.box = new Box(1, 1, (line) => theme.bg("userMessageBg", line));
     this.box.addChild(
-      new CellClipped(new Text(text, 0, 0), (row) => theme.fg("userMessageText", row)),
+      new CellClipped(new Text(text, 0, 0), (row) => theme.fg("customMessageLabel", row)),
     );
   }
 
@@ -105,7 +202,7 @@ export class CommunicationBubble implements Component {
     // narrower than four cells and starves the content below two cells. Drop
     // it there so the block keeps content space at extreme narrow widths
     // instead of pushing rows too wide or hiding double-cell graphemes.
-    const paddingX = width >= MIN_PADDED_WIDTH ? 1 : 0;
+    const paddingX = communicationPadding(width);
     if (paddingX !== this.paddingX) {
       this.paddingX = paddingX;
       this.box.setPaddingX(paddingX);

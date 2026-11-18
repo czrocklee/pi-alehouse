@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createJiti } from "jiti";
-import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
+import {
+  getMarkdownTheme,
+  initTheme,
+  SkillInvocationMessageComponent,
+} from "@earendil-works/pi-coding-agent";
+import { setCapabilityOverrides, visibleWidth } from "@earendil-works/pi-tui";
 
 // Load the production source, not a potentially stale dist build.
 const jiti = createJiti(import.meta.url, { fsCache: false });
@@ -10,8 +15,10 @@ const { humanSteerLead } = await jiti.import(
   "../../src/orchestration/presentation/human-steer-text.ts",
 );
 
-// Pi's components read a module-level theme singleton; no watcher in a test.
-initTheme(undefined, false);
+// Keep the SDK's native user body on a deterministic palette even on headless runners.
+setCapabilityOverrides({ trueColor: true });
+test.after(() => setCapabilityOverrides({}));
+initTheme("dark", false);
 
 const tui = { requestRender() {}, terminal: { columns: 80, rows: 24 } };
 const WIDTH = 200;
@@ -25,12 +32,44 @@ const LABELS = [
   "Steering input (human lead)",
 ];
 
+/** Capture the real host Theme via the public tool-renderer callback. */
+let hostTheme;
+{
+  const probe = new TranscriptContent({
+    tui,
+    cwd: "/w",
+    markdownTheme: getMarkdownTheme(),
+    source: {
+      messages: () => [
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "probe", name: "probe_theme", arguments: {} }],
+        },
+      ],
+      inFlight: () => undefined,
+      toolDefinition: () => ({
+        renderCall: (_args, theme) => {
+          hostTheme = theme;
+          return { render: () => ["PROBE"], invalidate() {} };
+        },
+      }),
+    },
+  });
+  try {
+    probe.slice(WIDTH, 0, probe.lineCount(WIDTH));
+  } finally {
+    probe.dispose();
+  }
+}
+
 /** A pane over a fixed message list, with an optional origin lookup. */
-const contentOver = (messages, inputOrigin) =>
+const contentOver = (messages, inputOrigin, theme = hostTheme) =>
   new TranscriptContent({
     tui,
     cwd: "/w",
     markdownTheme: getMarkdownTheme(),
+    theme,
     source: {
       messages: () => messages,
       inFlight: () => undefined,
@@ -43,12 +82,11 @@ const contentOver = (messages, inputOrigin) =>
 const SGR = /\x1b\[[0-9;]*m/g;
 const stripAnsi = (text) => text.replace(SGR, "");
 
+const styledRows = (content, width) => content.slice(width, 0, content.lineCount(width));
+
 /** The pane's rows, trimmed and free of styling, so labels compare literally. */
 const rowsOf = (content, width = WIDTH) =>
-  content
-    .slice(width, 0, content.lineCount(width))
-    .map(stripAnsi)
-    .map((row) => row.trim());
+  styledRows(content, width).map((row) => stripAnsi(row).trim());
 
 const paint = (content, width = WIDTH) => rowsOf(content, width).join("\n");
 
@@ -85,6 +123,110 @@ test("each confirmed origin gets its own label, with no content inference", () =
   } finally {
     content.dispose();
   }
+});
+
+test("only confirmed parent prose gets the left-aligned accent card", (t) => {
+  // Pi's stock dark theme aliases accent and customMessageLabel. Give accent
+  // a distinct color via the host Theme callbacks so using the wrong token
+  // can't pass just because those two stock colors match.
+  const parentFg = hostTheme.getFgAnsi("success");
+  const userFg = hostTheme.getFgAnsi("userMessageText");
+  const userBg = hostTheme.getBgAnsi("userMessageBg");
+  assert.notEqual(parentFg, userFg);
+  assert.notEqual(parentFg, hostTheme.getFgAnsi("customMessageLabel"));
+  const theme = {
+    fg: (token, text) => hostTheme.fg(token === "accent" ? "success" : token, text),
+    bg: hostTheme.bg.bind(hostTheme),
+  };
+  const prose = "PARENT PROSE 你好 👩‍💻";
+  const width = 60;
+  const message = user(prose);
+  const originCases = [
+    ["confirmed parent", () => "parent", "From parent"],
+    ["confirmed human", () => "human", "From user"],
+    ["confirmed orchestration", () => "orchestration", "Alehouse input"],
+    ["unknown", undefined, "Input"],
+  ];
+  const fgClose = "\x1b[39m";
+  const bgClose = "\x1b[49m";
+  for (const [name, origin, label] of originCases) {
+    const content = contentOver([message], origin, theme);
+    t.after(() => content.dispose());
+    assert.deepEqual(labelSequence(content, width), [label]);
+    const rows = styledRows(content, width);
+    const title = rows.find((row) => stripAnsi(row).trim() === label);
+    assert.ok(title && !title.includes(userBg), `${name}: label above the body background`);
+    assert.ok(stripAnsi(title).startsWith(` ${label}`), `${name}: label starts on the left`);
+    const bgRows = rows.filter((row) => row.includes(userBg));
+    assert.equal(bgRows.length, 3, `${name}: padding, body, padding`);
+    const fromParent = label === "From parent";
+    const coloredWidth = fromParent ? visibleWidth(prose) + 2 : width;
+    for (const row of bgRows) {
+      const start = row.indexOf(userBg);
+      const end = row.indexOf(bgClose, start + userBg.length);
+      assert.ok(end > start, `${name}: the background closes`);
+      assert.equal(visibleWidth(row.slice(0, start)), 0, `${name}: no left gap`);
+      assert.equal(visibleWidth(row.slice(start + userBg.length, end)), coloredWidth);
+      assert.match(stripAnsi(row.slice(end + bgClose.length)), /^ *$/, `${name}: no ink beyond BG`);
+      assert.ok(!row.slice(end + bgClose.length).includes(userBg), `${name}: the gap is unpainted`);
+    }
+    const body = bgRows[1];
+    assert.equal(stripAnsi(body).trim(), prose);
+    const ink = fromParent ? parentFg : userFg;
+    const fgStart = body.indexOf(ink);
+    const fgEnd = body.indexOf(fgClose, fgStart + ink.length);
+    assert.ok(fgStart >= 0 && fgEnd > fgStart, `${name}: foreground covers the prose`);
+    assert.equal(stripAnsi(body.slice(fgStart + ink.length, fgEnd)).trim(), prose);
+  }
+});
+
+const backgroundWidth = (row, bg) => {
+  const start = row.indexOf(bg) + bg.length;
+  return visibleWidth(row.slice(start, row.indexOf("\x1b[49m", start)));
+};
+
+test("parent Markdown keeps native indentation without filling the width cap", (t) => {
+  const width = 80;
+  const bg = hostTheme.getBgAnsi("userMessageBg");
+  for (const [name, markdown, expected] of [
+    ["fenced command", "```sh\nnpm run check\n```", [" ```sh", "   npm run check", " ```"]],
+    ["nested list", "- Heading\n  - **宽字符** 👩‍💻 tail", [" - Heading", "     - 宽字符 👩‍💻 tail"]],
+  ]) {
+    const content = contentOver([user(markdown)], () => "parent");
+    t.after(() => content.dispose());
+    const body = styledRows(content, width).filter((row) => row.includes(bg));
+    assert.deepEqual(
+      body.map((row) => stripAnsi(row).trimEnd()),
+      ["", ...expected, ""],
+      name,
+    );
+    const inkWidth = Math.max(...expected.map((line) => visibleWidth(line)));
+    assert.ok(
+      Math.max(...body.map((row) => backgroundWidth(row, bg))) <= inkWidth + 2,
+      `${name}: background stays compact around the rendered rows`,
+    );
+  }
+});
+
+test("long confirmed parent prose wraps within the card cap while unknown input keeps its native width", (t) => {
+  const width = 61;
+  const message = user("repeatable words ".repeat(9).trimEnd());
+  const bg = hostTheme.getBgAnsi("userMessageBg");
+  const withParent = contentOver([message], () => "parent");
+  const unknown = contentOver([message]);
+  t.after(() => withParent.dispose());
+  t.after(() => unknown.dispose());
+  const card = styledRows(withParent, width).filter((row) => row.includes(bg));
+  const wide = styledRows(unknown, width).filter((row) => row.includes(bg));
+  assert.ok(card.length > wide.length, "the narrower parent card wraps onto more rows");
+  assert.ok(Math.max(...card.map((row) => backgroundWidth(row, bg))) <= Math.floor(0.8 * width));
+  for (const row of wide) assert.equal(visibleWidth(row), width);
+  assert.equal(
+    rowsOf(withParent, width)
+      .join(" ")
+      .match(/repeatable/g)?.length,
+    9,
+  );
 });
 
 test("parent and orchestration text carrying the human lead is neither relabeled nor stripped", () => {
@@ -223,6 +365,7 @@ test("a compaction or branch rewrite re-reads each retained message's own origin
     tui,
     cwd: "/w",
     markdownTheme: getMarkdownTheme(),
+    theme: hostTheme,
     source: {
       messages: () => messages,
       inFlight: () => undefined,
@@ -294,7 +437,57 @@ test("origin labels rewrite no source bytes and keep skills/native bodies intact
   }
 });
 
-test("origin labels leave the pane's geometry and read anchor unchanged", () => {
+test("resizing a parent skill card retains its SDK view; full and theme invalidation refresh it", (t) => {
+  const skillText =
+    '<skill name="review" location="/skills/review.md">\n# SKILL_CONTENT\n\n' +
+    `${"reviewable words ".repeat(6).trimEnd()}\n</skill>\n\nSKILL_USER_MESSAGE`;
+  const messages = [user(skillText)];
+  const origin = () => "parent";
+  const content = contentOver(messages, origin);
+  t.after(() => {
+    content.dispose();
+    initTheme("dark", false);
+  });
+
+  const prototype = SkillInvocationMessageComponent.prototype;
+  const invalidations = t.mock.method(prototype, "invalidate");
+  const originalRender = prototype.render;
+  let skill, skillChild;
+  t.mock.method(prototype, "render", function (width) {
+    skill = this;
+    skillChild = this.children[0];
+    return originalRender.call(this, width);
+  });
+
+  const wide = styledRows(content, 80);
+  const initialSkill = skill;
+  const initialChild = skillChild;
+  assert.ok(initialChild, "the real SDK skill view rendered");
+  content.invalidateLayout();
+  const narrow = styledRows(content, 40);
+  assert.ok(narrow.length > wide.length, "skill content reflows at the new width");
+  assert.match(narrow.map(stripAnsi).join("\n"), /SKILL_CONTENT.*SKILL_USER_MESSAGE/s);
+  assert.equal(invalidations.mock.callCount(), 0, "layout skips the SDK skill invalidate override");
+  assert.equal(skill, initialSkill);
+  assert.equal(skillChild, initialChild, "layout does not rebuild the SDK skill view");
+
+  content.invalidate();
+  assert.deepEqual(styledRows(content, 40), narrow);
+  assert.equal(invalidations.mock.callCount(), 1, "full invalidation uses the SDK override");
+  assert.notEqual(skillChild, initialChild, "full invalidation rebuilds the SDK skill view");
+
+  initTheme("light", false);
+  content.setTheme(getMarkdownTheme());
+  const light = styledRows(content, 40);
+  assert.notEqual(skill, initialSkill, "palette replacement recreates the SDK skill component");
+  assert.notDeepEqual(light, narrow, "the real light palette changes the rendered ANSI");
+  assert.deepEqual(light.map(stripAnsi), narrow.map(stripAnsi));
+  const fresh = contentOver(messages, origin);
+  t.after(() => fresh.dispose());
+  assert.deepEqual(light, styledRows(fresh, 40), "palette replacement matches a fresh transcript");
+});
+
+test("a short parent card adds no chrome rows and keeps its read anchor", () => {
   const labeled = user("ANCHORED_LABELED_TEXT"),
     assistant = { role: "assistant", content: [{ type: "text", text: "ACK" }], stopReason: "stop" };
   const messages = [labeled, assistant];

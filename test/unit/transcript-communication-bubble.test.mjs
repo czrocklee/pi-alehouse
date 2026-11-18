@@ -1,8 +1,7 @@
 /**
- * The child-to-parent communication display: well-formed `alert_parent` /
- * `ask_parent` calls render as Input-style message blocks over the host
- * theme's real `userMessageBg`/`userMessageText` tokens, with the right-aligned
- * label above that background and the recorded receipt kept outside it.
+ * Well-formed `alert_parent` / `ask_parent` calls render as right-aligned
+ * cards, with a neutral title above the host's `userMessageBg`, message prose
+ * in `customMessageLabel`, and the right-side receipt outside any background.
  *
  * The production source is loaded through jiti (`fsCache: false`), never a
  * stale dist build. The host theme is the real SDK singleton, initialized
@@ -29,7 +28,7 @@ initTheme("dark", false);
 
 // Load the production source, not a potentially stale dist build.
 const jiti = createJiti(import.meta.url, { fsCache: false });
-const { CommunicationBubble } = await jiti.import(
+const { CommunicationBubble, CommunicationCard } = await jiti.import(
   "../../src/orchestration/ui/communication-bubble.ts",
 );
 const { TranscriptContent } = await jiti.import("../../src/orchestration/ui/transcript.ts");
@@ -44,7 +43,11 @@ const { humanSteerLead } = await jiti.import(
  * rows. Every style request is recorded. */
 const recordingTheme = () => {
   const calls = [];
-  const open = { userMessageText: "\u001b[31m", userMessageBg: "\u001b[41m" };
+  const open = {
+    userMessageText: "\u001b[31m",
+    customMessageLabel: "\u001b[35m",
+    userMessageBg: "\u001b[41m",
+  };
   const mark = (kind, close) => (color, text) => {
     calls.push([kind, color]);
     return `${open[color] ?? "\u001b[97m"}${text}${close}`;
@@ -66,11 +69,12 @@ const recordingTheme = () => {
 
 const BG = "\u001b[41m";
 const BG_CLOSE = "\u001b[49m";
-const FG = "\u001b[31m";
+const TITLE_FG = "\u001b[31m";
+const BODY_FG = "\u001b[35m";
 const FG_CLOSE = "\u001b[39m";
 const FAMILY = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
 
-test("the block paints exactly the user-message tokens with the title above, padded, framed nothing, closed per row", () => {
+test("the inner block paints a distinct title and body over its allocated width", () => {
   const theme = recordingTheme();
   const rows = new CommunicationBubble("Alert to parent", "BODY_TEXT", theme).render(60);
   assert.equal(
@@ -81,7 +85,7 @@ test("the block paints exactly the user-message tokens with the title above, pad
   // The title sits right-aligned ABOVE the background block: a one-cell inset
   // on each side keeps the body's inner edge and the old in-box right edge,
   // but the row carries no userMessageBg of its own.
-  assert.equal(rows[0], ` ${" ".repeat(43)}${FG}Alert to parent${FG_CLOSE} `);
+  assert.equal(rows[0], ` ${" ".repeat(43)}${TITLE_FG}Alert to parent${FG_CLOSE} `);
   // The whole padding/body row, inner-edge padding included, carries the
   // background, and every row closes it again so the color cannot bleed into
   // the transcript.
@@ -89,7 +93,7 @@ test("the block paints exactly the user-message tokens with the title above, pad
   assert.equal(rows[3], rows[1]);
   // The body's foreground opens and closes around the already-clipped,
   // content-padded row; the Box adds the last padding cell inside the background.
-  assert.equal(rows[2], `${BG} ${FG}BODY_TEXT${" ".repeat(49)}${FG_CLOSE} ${BG_CLOSE}`);
+  assert.equal(rows[2], `${BG} ${BODY_FG}BODY_TEXT${" ".repeat(49)}${FG_CLOSE} ${BG_CLOSE}`);
   for (const [index, row] of rows.entries()) {
     if (index === 0) {
       assert.ok(
@@ -105,15 +109,9 @@ test("the block paints exactly the user-message tokens with the title above, pad
     assert.equal(visibleWidth(row), 60);
     assert.doesNotMatch(row, /[─│┌┐└┘├┤┬┴┼═║╔╗╚╝]/, "no frame or border is drawn around the block");
   }
-  for (const [kind, color] of theme.calls)
-    assert.ok(
-      (kind === "fg" || kind === "bg") &&
-        (color === "userMessageText" || color === "userMessageBg"),
-      `only the user-message tokens are requested, not ${kind} ${color}`,
-    );
-  assert.ok(
-    !theme.calls.some(([kind]) => kind === "bold" || kind === "italic"),
-    "the title is plain text, not bold or italic",
+  assert.deepEqual(
+    new Set(theme.calls.map(([kind, color]) => `${kind}:${color}`)),
+    new Set(["fg:userMessageText", "fg:customMessageLabel", "bg:userMessageBg"]),
   );
 });
 
@@ -217,6 +215,7 @@ test("invalidate() drops caches without changing the block", () => {
  * open. Guards the self-closing styling order: the clip runs before the
  * foreground, the background wraps last, and neither a title truncator's
  * internal reset nor an extreme-narrow slice may break that. */
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 const sgrWalk = (row) => {
   const cells = [];
   let fg = null;
@@ -225,21 +224,34 @@ const sgrWalk = (row) => {
   // eslint-disable-next-line no-control-regex -- inspect trusted theme SGR spans
   const re = /\u001b\[([0-9;]*)m/g;
   const consume = (text) => {
-    for (const ch of text) cells.push({ ch, fg, bg });
+    for (const { segment } of graphemes.segment(text)) {
+      for (let i = 0; i < visibleWidth(segment); i++) cells.push({ ch: segment, fg, bg });
+    }
   };
   let last = 0;
   let match;
   while ((match = re.exec(row)) !== null) {
     consume(row.slice(last, match.index));
-    for (const param of match[1].split(";")) {
-      if (param === "" || param === "0") {
+    const params = match[1].split(";");
+    for (let i = 0; i < params.length; i++) {
+      const code = Number(params[i]);
+      if (code === 0) {
         sawReset = true;
         fg = null;
         bg = null;
-      } else if (param === "31" || param === "97") fg = `\u001b[${param}m`;
-      else if (param === "39") fg = null;
-      else if (param === "41") bg = BG;
-      else if (param === "49") bg = null;
+      } else if (code === 39) fg = null;
+      else if (code === 49) bg = null;
+      else if (code === 38 || code === 48) {
+        const end = i + (params[i + 1] === "2" ? 5 : 3);
+        const color = `\u001b[${params.slice(i, end).join(";")}m`;
+        if (code === 38) fg = color;
+        else bg = color;
+        i = end - 1;
+      } else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) {
+        fg = `\u001b[${code}m`;
+      } else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) {
+        bg = `\u001b[${code}m`;
+      }
     }
     last = re.lastIndex;
   }
@@ -264,7 +276,7 @@ test("a truncated title stays outside the background: no mid-row reset", () => {
     // The foreground paints exactly the clipped title, nothing more.
     assert.equal(
       walk.cells
-        .filter((cell) => cell.fg === FG)
+        .filter((cell) => cell.fg === TITLE_FG)
         .map((cell) => cell.ch)
         .join(""),
       titles[width],
@@ -318,6 +330,38 @@ test("an extreme-narrow clip still closes the body foreground inside the row", (
   }
 });
 
+test("right cards preserve readable content and safe cell bounds across narrow widths", () => {
+  const label = "Alert to parent";
+  const text = `你${FAMILY} LONG_MESSAGE_BODY`;
+  const bubble = new CommunicationBubble(label, text, recordingTheme());
+  const card = new CommunicationCard(Math.max(visibleWidth(label), visibleWidth(text)), bubble);
+  for (const width of [0, -1, 2.5]) assert.deepEqual(card.render(width), []);
+  for (const width of [1, 2, 3, 4, 5, 6, 7, 10, 25, 27]) {
+    const rows = card.render(width);
+    const backgroundRows = rows.filter((row) => row.includes(BG));
+    assert.ok(backgroundRows.length > 0, `width ${width}: still has a body`);
+    const plain = backgroundRows.map(stripTerminalSequences).join("\n");
+    assert.equal(plain.includes(FAMILY), width >= 2, `width ${width}: fits a whole grapheme`);
+    assert.match(plain, /L/, `width ${width}: prose is visible`);
+    for (const row of rows) assert.ok(visibleWidth(row) <= width);
+    for (const row of backgroundRows) {
+      const { cells, bg } = sgrWalk(row);
+      assert.equal(cells.length, width, "the body still reaches the right edge");
+      assert.equal(bg, null, "the right edge closes the background");
+      const gap = cells.findIndex((cell) => cell.bg === BG);
+      assert.ok(gap >= 0 && cells.slice(gap).every((cell) => cell.bg === BG));
+      assert.ok(cells.slice(0, gap).every((cell) => cell.ch === " " && cell.bg === null));
+      if (width >= 6) assert.ok(gap >= 2, `width ${width}: opposing gutter when feasible`);
+    }
+  }
+  // More generous than 80% on these narrow viewports: enough room for a
+  // short phrase instead of squashing an already narrow prose column.
+  for (const width of [25, 27]) {
+    const padding = card.render(width).find((row) => row.includes(BG));
+    assert.equal(sgrWalk(padding).cells.filter((cell) => cell.bg === BG).length, width - 3);
+  }
+});
+
 // ---- The pane integration, over the real SDK host theme ----
 
 const tui = { requestRender() {}, terminal: { columns: 80, rows: 24 } };
@@ -367,70 +411,146 @@ let hostTheme;
   capture.dispose();
 }
 const bubbleBg = hostTheme.getBgAnsi("userMessageBg");
-const bubbleBgClose = hostTheme
-  .bg("userMessageBg", "PROBE")
-  .slice(bubbleBg.length + "PROBE".length);
+const bubbleRows = (rows) => rows.filter((row) => row.includes(bubbleBg));
 
-test("well-formed alert and ask calls render as message blocks over the real userMessageBg", () => {
-  // The dark theme gives the token a concrete sequence, distinct from the
-  // generic card backgrounds, so the checks below recognize the actual
-  // userMessageBg rather than just any ANSI.
-  assert.ok(bubbleBg, "userMessageBg resolves to a concrete opening sequence");
-  assert.ok(bubbleBgClose, "theme.bg closes the background again");
-  assert.notEqual(bubbleBg, hostTheme.getBgAnsi("toolPendingBg"));
-  assert.notEqual(bubbleBg, hostTheme.getBgAnsi("toolSuccessBg"));
-  assert.notEqual(bubbleBg, hostTheme.getBgAnsi("toolErrorBg"));
+function assertRightBackground(row, paneWidth, cardWidth) {
+  const { cells, fg, bg } = sgrWalk(row);
+  assert.equal(cells.length, paneWidth, "the card reaches the right edge of the pane");
+  const gap = paneWidth - cardWidth;
+  assert.ok(gap >= 2, "at least two cells of breathing room on the opposite side");
+  assert.ok(
+    cells.slice(0, gap).every((cell) => cell.ch === " " && cell.bg === null),
+    "the opposite gap is outside the background",
+  );
+  assert.ok(
+    cells.slice(gap).every((cell) => cell.bg === bubbleBg),
+    "the whole card is painted",
+  );
+  assert.equal(fg, null, "the foreground does not leak past the row");
+  assert.equal(bg, null, "the background does not leak past the row");
+  return cells;
+}
 
+test("short alert and ask cards fit their widest line or title, with actual ink colors", () => {
+  const titleFg = hostTheme.getFgAnsi("userMessageText");
+  const bodyFg = hostTheme.getFgAnsi("customMessageLabel");
+  assert.notEqual(bodyFg, titleFg, "the real theme distinguishes title and communication prose");
+  for (const token of ["toolPendingBg", "toolSuccessBg", "toolErrorBg"]) {
+    assert.notEqual(bubbleBg, hostTheme.getBgAnsi(token));
+  }
+
+  // The alert's title decides its width. The ask's widest line decides its
+  // width in terminal cells, not in UTF-16 units or total paragraph length.
+  const alert = "ALERT";
+  const question = `QUESTION_你好你好你好${FAMILY}`;
   const messages = [
-    assistant([call("a1", "alert_parent", { message: "ALERT_BODY_TEXT" })]),
+    assistant([call("a1", "alert_parent", { message: alert })]),
     result("a1", "Alert queued. Continue working."),
-    assistant([call("q1", "ask_parent", { question: "QUESTION_BODY_TEXT" })]),
+    assistant([call("q1", "ask_parent", { question: `SHORT_LINE\n${question}` })]),
     result("q1", "Question recorded. End your turn now.", false, "ask_parent"),
   ];
   const content = contentOver(messages);
   try {
-    const rows = rowsAt(content);
-    const block = rows.filter((row) => row.startsWith(bubbleBg));
-    // Two calls, one block each: padding, body, padding — the title sits
-    // above its block, outside the background.
-    assert.equal(block.length, 6, JSON.stringify(rows));
-    for (const row of block) {
-      assert.ok(row.endsWith(bubbleBgClose), "every block row closes its background");
-      assert.equal(visibleWidth(row), 70, "the block spans the full pane width");
-      assert.doesNotMatch(row, /[─│┌┐└┘├┤┬┴┼═║╔╗╚╝]/, "no frame or border around the block");
-    }
-    for (const [label, body] of [
-      ["Alert to parent", "ALERT_BODY_TEXT"],
-      ["Question to parent", "QUESTION_BODY_TEXT"],
+    const width = 70;
+    const rows = rowsAt(content, width);
+    assert.equal(bubbleRows(rows).length, 7, "two blocks with padding and three body rows total");
+    for (const [label, lines, receipt] of [
+      ["Alert to parent", [alert], "Alert queued. Continue working."],
+      ["Question to parent", ["SHORT_LINE", question], "Question recorded. End your turn now."],
     ]) {
+      const cardWidth = Math.max(...[label, ...lines].map(visibleWidth)) + 2;
       const titleIndex = rows.findIndex((row) => stripTerminalSequences(row).endsWith(`${label} `));
-      assert.ok(titleIndex !== -1, `${label} is the right-aligned title of its block`);
-      const title = rows[titleIndex];
-      assert.match(
-        stripTerminalSequences(title),
-        new RegExp(`^ *${label} $`),
-        "the title row is an inset plus the label",
-      );
-      assert.ok(!title.startsWith(bubbleBg), `${label} sits above, outside the gray block`);
-      assert.equal(visibleWidth(title), 70, "the title spans the full pane width");
+      assert.notEqual(titleIndex, -1, `${label} reaches the card's right inset`);
+      const title = sgrWalk(rows[titleIndex]);
+      assert.equal(title.cells.length, width);
       assert.ok(
-        rows[titleIndex + 1].startsWith(bubbleBg),
-        "the background block starts directly below its title",
+        title.cells.every((cell) => cell.bg === null),
+        "the title stays above the BG",
       );
-      const bodyRow = rows.find((row) => stripTerminalSequences(row).startsWith(` ${body}`));
-      assert.ok(bodyRow, `${body} is left-aligned inside its block`);
-      assert.ok(bodyRow.startsWith(bubbleBg), "the body carries the block background");
-    }
-    for (const receipt of [
-      "Alert queued. Continue working.",
-      "Question recorded. End your turn now.",
-    ]) {
-      const row = rows.find((r) => stripTerminalSequences(r).includes(receipt));
-      assert.ok(row, `${receipt} is on screen`);
-      assert.ok(!row.startsWith(bubbleBg), "the receipt sits outside the message block");
+      assert.ok(title.cells.slice(-label.length - 1, -1).every((cell) => cell.fg === titleFg));
+      const block = rows.slice(titleIndex + 1, titleIndex + lines.length + 3);
+      for (const row of block) {
+        assertRightBackground(row, width, cardWidth);
+        assert.doesNotMatch(row, /[─│┌┐└┘├┤┬┴┼═║╔╗╚╝]/, "no border around the card");
+      }
+      for (const [index, line] of lines.entries()) {
+        const row = block[index + 1];
+        assert.ok(
+          stripTerminalSequences(row).startsWith(`${" ".repeat(width - cardWidth + 1)}${line}`),
+        );
+        const start = width - cardWidth + 1;
+        assert.ok(
+          sgrWalk(row)
+            .cells.slice(start, start + visibleWidth(line))
+            .every((cell) => cell.fg === bodyFg && cell.bg === bubbleBg),
+          "the actual body cells, including wide graphemes, carry the communication foreground",
+        );
+      }
+      const row = rows[titleIndex + lines.length + 3];
+      const indent = width - Math.max(cardWidth, visibleWidth(receipt) + 2) + 1;
+      assert.equal(stripTerminalSequences(row).trimEnd(), `${" ".repeat(indent)}${receipt}`);
+      const walk = sgrWalk(row);
+      assert.ok(
+        walk.cells.every((cell) => cell.bg === null),
+        "no background under the receipt",
+      );
     }
   } finally {
     content.dispose();
+  }
+});
+
+test("a wrapped multiline receipt uses one right-hand reading edge, even on narrow panes", (t) => {
+  const text = `FIRST row has words to wrap at narrow widths\n\n${FAMILY} 你好\nlast line`;
+  const content = contentOver([
+    assistant([call("wrapped", "ask_parent", { question: "SHORT_BODY" })]),
+    result("wrapped", text, true, "ask_parent"),
+  ]);
+  t.after(() => content.dispose());
+  const receiptRows = (rows) => rows.slice(rows.findLastIndex((row) => row.includes(bubbleBg)) + 1);
+  const width = 36;
+  const rows = rowsAt(content, width);
+  const cardGutter = sgrWalk(rows.find((row) => row.includes(bubbleBg))).cells.findIndex(
+    (cell) => cell.bg === bubbleBg,
+  );
+  const indent = width - Math.floor(width * 0.8) + 1;
+  assert.ok(
+    indent < cardGutter + 1,
+    "the receipt widens leftward instead of squeezing to the body",
+  );
+  assert.deepEqual(
+    receiptRows(rows).map((row) => stripTerminalSequences(row).trimEnd()),
+    ["FIRST row has words to", "wrap at narrow widths", "", `${FAMILY} 你好`, "last line"].map(
+      (line) => (line ? " ".repeat(indent) + line : ""),
+    ),
+    "wrapped fragments and original lines stay left-reading at a common gutter",
+  );
+
+  const errorFg = hostTheme.getFgAnsi("error");
+  for (const narrow of [1, 2, 3, 4, 5, 7, 18, 25, width, 70]) {
+    const allRows = rowsAt(content, narrow);
+    assert.ok(
+      allRows.every((row) => visibleWidth(row) <= narrow),
+      `every row fits width ${narrow}`,
+    );
+    const receipt = receiptRows(allRows);
+    const plain = receipt.map(stripTerminalSequences).join("\n");
+    assert.equal(plain.includes(FAMILY), narrow >= 2, `whole emoji at width ${narrow}`);
+    assert.equal(
+      plain.includes("\u{1F468}"),
+      plain.includes(FAMILY),
+      `no partial emoji at width ${narrow}`,
+    );
+    assert.match(plain.replace(/\s/gu, ""), /FIRSTrowhaswordstowrapatnarrowwidths.*lastline/);
+    for (const row of receipt) {
+      const walk = sgrWalk(row);
+      assert.ok(
+        walk.cells.every((cell) => cell.bg === null),
+        "no receipt background",
+      );
+      assert.ok(walk.cells.every((cell) => cell.ch === " " || cell.fg === errorFg));
+      assert.equal(walk.fg, null, "each wrapped row closes its error foreground");
+    }
   }
 });
 
@@ -470,6 +590,12 @@ test("receipts stay outside the block: dim when normal, red on error, never lost
       failed.includes(hostTheme.fg("error", "COMMAND_FAILED_MARKER")),
       "an error receipt is red",
     );
+    for (const body of ["EMPTY_ERROR_BODY", "EMPTY_STRING_BODY"]) {
+      const bodyIndex = rows.findIndex((row) => stripTerminalSequences(row).includes(body));
+      const indent = stripTerminalSequences(rows[bodyIndex]).indexOf(body);
+      const marker = stripTerminalSequences(rows[bodyIndex + 2]).trimEnd();
+      assert.equal(marker, `${" ".repeat(indent)}Error`, "short markers follow the card inset");
+    }
     // Each unreadable error result still says Error, once, in the error color;
     // a whitespace-only normal result invents no receipt text of its own.
     const errorRows = rows.filter((row) => stripTerminalSequences(row).includes("Error"));
@@ -513,7 +639,7 @@ test("a generation interrupted mid-call reports its failure clearly outside the 
       assert.ok(!receipt.includes(bubbleBg), `${text} sits outside the block`);
       assert.ok(receipt.includes(hostTheme.fg("error", text)), `${text} is red`);
       const bubble = rows.find((row) => stripTerminalSequences(row).includes(body));
-      assert.ok(bubble?.startsWith(bubbleBg), `${body} keeps its block`);
+      assert.ok(bubble?.includes(bubbleBg), `${body} keeps its block`);
     }
   } finally {
     content.dispose();
@@ -543,7 +669,7 @@ test("the tools-expanded toggle never hides a communication message or its recei
     }
     assert.equal(expanded, collapsed, "the block ignores the card expansion mode");
     assert.equal(
-      rowsAt(content).filter((row) => row.startsWith(bubbleBg)).length,
+      bubbleRows(rowsAt(content)).length,
       3,
       "the block is still painted after both toggles (title outside the background)",
     );
@@ -566,21 +692,21 @@ test("long CJK bodies wrap inside the block; control characters never reach the 
   const before = structuredClone(messages);
   const content = contentOver(messages);
   try {
-    const rows = rowsAt(content, 36);
-    for (const row of rows) assert.ok(visibleWidth(row) <= 36, "no row overflows the pane width");
-    const block = rows.filter((row) => row.startsWith(bubbleBg));
-    assert.ok(block.length > 4, "the long body wraps across several block rows");
-    for (const row of block) assert.ok(visibleWidth(row) === 36, "block rows fill the pane width");
+    const width = 36;
+    const rows = rowsAt(content, width);
+    for (const row of rows) assert.ok(visibleWidth(row) <= width, "no row overflows the pane");
+    const block = bubbleRows(rows);
+    assert.ok(block.length > 4, "the long bodies wrap across several block rows");
+    for (const row of block) assertRightBackground(row, width, Math.floor(0.8 * width));
     const stripped = rows.map(stripTerminalSequences).join("\n");
-    for (let i = 0; i < 6; i++)
-      assert.ok(stripped.includes("你"), "the CJK body survives wrapping");
+    assert.equal(stripped.match(/你/g)?.length, 6, "every CJK repetition survives wrapping");
     assert.equal(stripped.split(FAMILY).length - 1, 1, "the emoji cluster is never split");
     for (const raw of ["\x1b]52", "\x1b[2J", "\u2068", "\u2069"])
-      assert.ok(!stripped.includes(raw), `raw ${JSON.stringify(raw)} survived into the pane`);
+      assert.ok(!rows.some((row) => row.includes(raw)), `raw ${JSON.stringify(raw)} survived`);
     assert.ok(stripped.includes("\\u2068"), "bidi isolates are explicitly escaped");
     const receipt = rows.find((row) => stripTerminalSequences(row).includes("Wrapped receipt."));
     assert.ok(receipt, "the wrapped call's receipt is on screen");
-    assert.ok(!receipt.startsWith(bubbleBg), "outside the block");
+    assert.ok(!receipt.includes(bubbleBg), "outside the block");
     assert.deepEqual(messages, before, "rendering rewrites no recorded source byte");
   } finally {
     content.dispose();
@@ -599,11 +725,7 @@ test("malformed arguments and retired names keep the generic raw card, not the b
   try {
     const rows = rowsAt(content);
     const stripped = rows.map(stripTerminalSequences).join("\n");
-    assert.equal(
-      rows.filter((row) => row.startsWith(bubbleBg)).length,
-      0,
-      "no malformed or retired call gets the message block",
-    );
+    assert.equal(bubbleRows(rows).length, 0, "no malformed or retired call gets the message block");
     assert.doesNotMatch(stripped, /Alert to parent|Question to parent/);
     for (const literal of ["alert_parent", "message: 42", "extra", "notify_parent", "OLD_NOTICE"])
       assert.ok(stripped.includes(literal), `${literal} stays raw data`);

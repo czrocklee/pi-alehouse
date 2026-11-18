@@ -1137,7 +1137,7 @@ test("a floating pane spends its larger height budget on chrome, never on rows",
   assert.doesNotMatch(b[0], / {2}✕/, `extra space before close: ${JSON.stringify(b[0])}`);
   assert.doesNotMatch(b.at(-1), / {3}/, `bottom border left open: ${JSON.stringify(b.at(-1))}`);
   // The separator is a rule of the same row, so it reaches the frame it sits inside.
-  const rule = b.find((line) => /^│ {2}─+ {2}│$/.test(line));
+  const rule = b.find((line) => /^│ ─+ │$/.test(line));
   assert.ok(rule, "the floating body keeps its plain separator");
   assert.doesNotMatch(rule, / {3}/, `rule leaves the frame open: ${JSON.stringify(rule)}`);
   for (const line of b.slice(1, -1)) {

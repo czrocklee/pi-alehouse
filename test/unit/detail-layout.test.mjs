@@ -51,6 +51,7 @@ function setup(t, { frame = true, views = [view()], count = 500, rows = 40, expa
       return this.count;
     },
     slice(_width, from, take) {
+      this.sliceWidth = _width;
       return Array.from(
         { length: Math.max(0, Math.min(take, this.count - from)) },
         (_, i) => `T${from + i}`,
@@ -137,11 +138,28 @@ test("observations stay pinned while only the transcript scrolls", (t) => {
     ),
   );
   assert(head.every((line) => visibleWidth(line) <= 120));
-  assert(head.filter((line) => /T\d/.test(line)).every((line) => line.startsWith("│  ")));
+  assert(head.filter((line) => /T\d/.test(line)).every((line) => line.startsWith("│ T")));
   assert(
     head.some((line) => line.endsWith("┃")),
     "the border shows the scroll thumb",
   );
+});
+
+test("body gutters stay one cell framed at narrow and wide widths; docked has none", (t) => {
+  for (const frame of [true, false]) {
+    for (const width of [14, 40, 73, 74, 120]) {
+      const f = setup(t, { frame });
+      const lines = plain(f.pane.render(width));
+      const row = lines.find((line) => /T\d+/.test(line));
+      assert(row, `transcript row at width ${width}, frame=${frame}`);
+      assert.equal(f.source.sliceWidth, width - (frame ? 4 : 0));
+      if (frame) {
+        assert.equal(visibleWidth(row), width);
+        assert.match(row, /^│ T\d+/);
+        assert.match(row, / [│┃]$/);
+      } else assert.match(row, /^T\d+/);
+    }
+  }
 });
 
 test("info is a separate page and restores the held transcript position", (t) => {

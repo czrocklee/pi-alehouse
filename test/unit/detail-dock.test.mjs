@@ -94,16 +94,12 @@ const view = (extra = {}) => ({
 /** The pane's own content width for a pane width, frame side and gutter included. */
 const contentWidth = (width, frame) => {
   const inner = frame ? width - 2 : width;
-  const gutter = frame ? (inner >= 72 ? 2 : 1) : 0;
+  const gutter = frame ? 1 : 0;
   return inner - gutter * 2;
 };
 /** A plain separator row: docked it is the whole row, framed it sits between
  * the side, the gutter and the right border. */
-const separatorRow = (width, frame) => {
-  if (!frame) return /^─+$/;
-  const gutter = width - 2 >= 72 ? 2 : 1;
-  return new RegExp(`^│ {${gutter}}─+ {${gutter}}│$`);
-};
+const separatorRow = (frame) => (frame ? /^│ ─+ │$/ : /^─+$/);
 
 function paneFixture(
   t,
@@ -197,9 +193,9 @@ test("one summary row sits directly above the footer, below a plain separator", 
       `frame=${frame}: the 70% docked / 84% floating cap`,
     );
     assert.ok(lines.at(-2).includes(metrics), `frame=${frame}: the whole metrics row is kept`);
-    assert.match(lines.at(-3), separatorRow(120, frame), lines.at(-3));
+    assert.match(lines.at(-3), separatorRow(frame), lines.at(-3));
     assert.equal(
-      lines.filter((line) => separatorRow(120, frame).test(line)).length,
+      lines.filter((line) => separatorRow(frame).test(line)).length,
       1,
       "exactly one separator",
     );
@@ -342,8 +338,8 @@ test("the . more control opens the same menu as the . key", (t) => {
 test("the separator and dock keep the frame inset", (t) => {
   const h = paneFixture(t, { frame: true });
   const lines = h.paint();
-  assert.match(lines.at(-3), /^│ {2}─+ {2}│$/, lines.at(-3));
-  assert.match(lines.at(-2), /^│ {2}\S/, lines.at(-2));
+  assert.match(lines.at(-3), /^│ ─+ │$/, lines.at(-3));
+  assert.match(lines.at(-2), /^│ \S/, lines.at(-2));
   // The dock is padded to the frame's inner width, so the right border closes it.
   assert.equal(visibleWidth(lines.at(-2)), 120);
   assert.match(lines.at(-2), /│$/, lines.at(-2));

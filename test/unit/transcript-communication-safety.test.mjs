@@ -76,7 +76,8 @@ let hostTheme;
 const bubbleBg = hostTheme.getBgAnsi("userMessageBg");
 const pendingBg = hostTheme.getBgAnsi("toolPendingBg");
 const errorOpen = hostTheme.fg("error", "PROBE").split("PROBE")[0];
-const bubbleRows = (rows) => rows.filter((row) => row.startsWith(bubbleBg));
+// Right-aligned communication rows start with an unpainted pane gutter.
+const bubbleRows = (rows) => rows.filter((row) => row.includes(bubbleBg));
 const noResult = "No recorded result";
 const noticeRows = (rows) => rows.filter((row) => stripTerminalSequences(row).includes(noResult));
 const tools = [
@@ -124,16 +125,20 @@ for (const { label, tool, raw, expected } of bodyCases) {
     const content = pane(t, messages);
     const width = 160;
     const paneRows = rowsAt(content, width);
-    const block = plainRows(paneRows.filter((row) => row.startsWith(bubbleBg)));
+    const block = bubbleRows(paneRows);
     assert.equal(block.length, expected.length + 2, "padding, body paragraphs, padding");
     const title = paneRows.find((row) => stripTerminalSequences(row).endsWith(`${tool.title} `));
     assert.ok(title, "the right-aligned title renders above its block");
-    assert.ok(!title.startsWith(bubbleBg), "the title sits outside the body background");
-    assert.equal(visibleWidth(title), width, "the title spans the pane width");
+    assert.ok(!title.includes(bubbleBg), "the title sits outside the body background");
+    assert.equal(visibleWidth(title), width, "the title reaches the pane's right edge");
+    const gutter = width - Math.max(...[tool.title, ...expected].map(visibleWidth)) - 2;
     assert.deepEqual(
-      block.slice(1, -1),
-      expected.map((line) => ` ${line}${" ".repeat(width - visibleWidth(line) - 1)}`),
-      "only display escaping changes recorded body bytes",
+      plainRows(block.slice(1, -1)),
+      expected.map(
+        (line) =>
+          `${" ".repeat(gutter + 1)}${line}${" ".repeat(width - gutter - visibleWidth(line) - 1)}`,
+      ),
+      "within the card's indentation, only display escaping changes recorded body bytes",
     );
     assert.deepEqual(messages, before, "no source bytes are rewritten");
   });
@@ -358,6 +363,29 @@ test("F3: readable Unicode receipt is not rewritten to repair invisible neighbor
   assert.equal(noticeRows(rows).length, 0);
 });
 
+test("F3: aligned receipt prose still strips protocols and normalizes whitespace", (t) => {
+  const receipt = "RECEIPT\x1b]52;c;TEST_RECEIPT_PAYLOAD\x07\x1b[2J\ttext\r\n\u2068next";
+  const messages = [
+    assistant([call("prose", "alert_parent", { message: "PROSE_BODY" })]),
+    result("prose", receipt),
+  ];
+  const before = structuredClone(messages);
+  const rows = rowsAt(pane(t, messages));
+  const gutter = bubbleRows(rows)[0].indexOf(bubbleBg);
+  const expected = ["RECEIPT text", "\\u2068next"];
+  const receiptRows = rows.slice(rows.findLastIndex((row) => row.includes(bubbleBg)) + 1);
+  assert.deepEqual(
+    plainRows(receiptRows).map((row) => row.trimEnd()),
+    expected.map((row) => " ".repeat(gutter + 1) + row),
+  );
+  for (const [index, row] of receiptRows.entries()) {
+    assert.ok(row.includes(hostTheme.fg("dim", expected[index])));
+    assert.ok(!row.includes(bubbleBg));
+    assert.ok(!row.includes("\x1b]52") && !row.includes("\x1b[2J") && !row.includes("\u2068"));
+  }
+  assert.deepEqual(messages, before, "receipt projection does not rewrite the record");
+});
+
 test("F3: empty normal results invent neither success nor Error nor missing-result notices", (t) => {
   const messages = [];
   for (const [index, text] of [null, "", " \n\t", "\u200b"].entries()) {
@@ -435,17 +463,18 @@ for (const tool of tools) {
     for (const expanded of [false, true, false]) {
       content.setToolsExpanded(expanded);
       content.invalidateLayout();
-      const rows = rowsAt(content);
+      const width = 100;
+      const rows = rowsAt(content, width);
       const notices = noticeRows(rows);
       assert.equal(notices.length, 1, "expansion never hides or duplicates the neutral notice");
+      const block = bubbleRows(rows);
+      const indent = Math.min(block[0].indexOf(bubbleBg) + 1, width - visibleWidth(noResult) - 1);
+      assert.equal(rows.indexOf(notices[0]), rows.lastIndexOf(block.at(-1)) + 1);
+      assert.equal(stripTerminalSequences(notices[0]).trimEnd(), " ".repeat(indent) + noResult);
       assert.ok(notices[0].includes(hostTheme.fg("dim", noResult)));
       assert.ok(!notices[0].includes(bubbleBg));
       assert.ok(!notices[0].includes(pendingBg), "not generic pending-card styling");
-      assert.equal(
-        bubbleRows(rows).length,
-        3,
-        "padding plus body only; the title and the notice are not body rows",
-      );
+      assert.equal(block.length, 3, "padding plus body only; title and notice are not body rows");
       const generic = rows.find((row) =>
         stripTerminalSequences(row).includes("GENERIC_PENDING_ARGUMENT"),
       );
@@ -457,6 +486,27 @@ for (const tool of tools) {
     }
   });
 }
+
+test("F5: a narrow pane wraps the missing-result observation on the right without a background", (t) => {
+  const content = pane(t, [assistant([call("narrow", "ask_parent", { question: "BODY" })])]);
+  const width = 20;
+  const rows = rowsAt(content, width);
+  const notice = rows.slice(rows.findLastIndex((row) => row.includes(bubbleBg)) + 1);
+  assert.deepEqual(
+    plainRows(notice).map((row) => row.trimEnd()),
+    ["    No recorded", "    result"],
+  );
+  for (const [index, text] of ["No recorded", "result"].entries()) {
+    assert.ok(notice[index].includes(hostTheme.fg("dim", text)));
+    assert.ok(!notice[index].includes(bubbleBg) && !notice[index].includes(pendingBg));
+  }
+  for (const narrow of [1, 2, 3, 4, width]) {
+    const narrowRows = rowsAt(content, narrow);
+    assert.ok(narrowRows.every((row) => visibleWidth(row) <= narrow));
+    const lastBodyRow = narrowRows.findLastIndex((row) => row.includes(bubbleBg));
+    assert.equal(screen(narrowRows.slice(lastBodyRow + 1)).replace(/\s/gu, ""), "Norecordedresult");
+  }
+});
 
 for (const [label, text, isError] of [
   ["success", "RECORDED_RECEIPT", false],
