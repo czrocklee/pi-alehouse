@@ -113,8 +113,8 @@ function renderRunningActivity(
   return prefix + turn + activity;
 }
 
-// Heading + the default twelve-Agent roster, without a pagination row.
-const MAX_WIDGET_LINES = 13;
+// Allow extra activity lines on tall terminals without growing the dock unbounded.
+const MAX_WIDGET_LINES = 16;
 /**
  * Conservative fullscreen baseline, not a measurement of this host: widget
  * spacer 1 + editor minimum 3 + footer 2 + status 1 + one queued prompt 3
@@ -172,7 +172,7 @@ export function renderWidget(params: {
   shouldShowFinished: (agent_id: string, status: RunView["status"]) => boolean;
   /** Explicit inspection pages through the complete projected roster. */
   expanded?: boolean;
-  /** Total budget including heading, warning and controls; always capped at 13. */
+  /** Total budget including heading, warning and controls. */
   maxLines?: number;
   page?: number;
   /** Mouse inspection entry: regular/unknown modes need no ordinary idle heading. */

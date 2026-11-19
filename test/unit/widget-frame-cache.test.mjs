@@ -185,7 +185,11 @@ test("page changes discard an unchanged comparison without publishing its old ta
   assert.notEqual(second[1], first[1]);
   assert.match(second.at(-1), /2\/2/);
   assert.deepEqual(click(h), { handled: true });
-  assert.deepEqual(h.opens, ["queued-11"], "row target belongs to the newly painted page");
+  assert.deepEqual(
+    h.opens,
+    ["queued-14"],
+    "row target belongs to the newly painted page under the 16-line budget",
+  );
 });
 
 test("appearance and expansion changes cannot reuse a pending comparison", (t) => {

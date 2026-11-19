@@ -655,7 +655,7 @@ test("unreadable tiny controls refuse unseen actions, and extreme line budgets s
   );
   t.after(() => h.widget.dispose());
   // spacer 1 + editor 3 + footer 2 + status 1 + one queued prompt 3 + transcript 2.
-  const budget = (rows) => Math.max(0, Math.min(13, Math.floor(rows / 3), rows - 12));
+  const budget = (rows) => Math.max(0, Math.min(16, Math.floor(rows / 3), rows - 12));
   h.tui.terminal.rows = 9;
   h.widget.wake();
   h.widget.onTurnStart();
@@ -680,10 +680,10 @@ test("unreadable tiny controls refuse unseen actions, and extreme line budgets s
     h.tui.terminal.rows = rows;
     assert.deepEqual(h.lines(), [], `rows ${rows} stay inside the reserved chrome`);
   }
-  for (const rows of [13, 15, 16, 18, 36, 39, 300]) {
+  for (const rows of [13, 15, 16, 18, 36, 39, 48, 60, 300]) {
     h.tui.terminal.rows = rows;
     assert(h.lines().length <= budget(rows), `rows ${rows}`);
-    assert(h.lines().length <= Math.min(13, Math.floor(rows / 3)));
+    assert(h.lines().length <= Math.min(16, Math.floor(rows / 3)));
   }
   h.tui.terminal.rows = 18;
   h.tui.terminal.columns = 12;
@@ -824,18 +824,18 @@ test("nonfull idle rosters expand and every painted Agent row opens its immutabl
 });
 
 test("expanded queued rows open each Agent and toggles invalidate old row targets until repaint", (t) => {
-  const queued = Array.from({ length: 13 }, (_, i) => ({
+  const queued = Array.from({ length: 16 }, (_, i) => ({
     ...viewOf(`queued-id-${i}`, "queued"),
     name: "same-label",
   }));
-  const h = mounted(queued, 16),
+  const h = mounted(queued, 24),
     opened = [];
   t.after(() => h.widget.dispose());
   h.widget.onOpen((id) => {
     opened.push(id);
   });
   h.widget.wake();
-  assert.match(h.lines()[1], /13 queued$/);
+  assert.match(h.lines()[1], /16 queued$/);
   assert.equal(
     h.component().handleMouse({ ...headingClick, y: 1 }),
     undefined,
@@ -847,8 +847,8 @@ test("expanded queued rows open each Agent and toggles invalidate old row target
     undefined,
     "the old compact hits are discarded",
   );
-  assert.equal(h.lines().length, 13);
-  for (let y = 1; y <= 11; y++) h.component().handleMouse({ ...headingClick, y });
+  assert.equal(h.lines().length, 16, "the first inspection page fills the 16-line cap");
+  for (let y = 1; y <= 14; y++) h.component().handleMouse({ ...headingClick, y });
   assert.deepEqual(pageClick(h), { handled: true, render: true });
   assert.equal(
     h.component().handleMouse({ ...headingClick, y: 1 }),
@@ -864,12 +864,30 @@ test("expanded queued rows open each Agent and toggles invalidate old row target
   );
   h.component().handleMouse(headingClick);
   assert.equal(
-    h.component().handleMouse({ ...headingClick, y: 13 }),
+    h.component().handleMouse({ ...headingClick, y: 16 }),
     undefined,
     "a formerly expanded Agent row is not live before the compact repaint",
   );
-  assert.match(h.lines()[1], /13 queued$/);
+  assert.match(h.lines()[1], /16 queued$/);
   assert.equal(h.component().handleMouse({ ...headingClick, y: 1 }), undefined);
+});
+
+test("42-row terminals keep the mid-roster queue and six previews; 39 rows keep five", (t) => {
+  const live = (i) => ({ ...viewOf(`live-${i}`, "running"), name: `live${i}` });
+  const h = mounted([live(0), live(1), viewOf("q", "queued"), live(2), live(3), live(4), live(5)]);
+  t.after(() => h.widget.dispose());
+  h.widget.wake();
+  const previews = (lines) => lines.filter((line) => /⎿ {2}thinking…$/.test(line)).length;
+  h.tui.terminal.rows = 42;
+  let lines = h.lines();
+  assert.equal(lines.length, 14);
+  assert.equal(previews(lines), 6);
+  assert.match(lines[5], /1 queued$/);
+  assert.match(lines.at(-1), /thinking…$/);
+  h.tui.terminal.rows = 39;
+  lines = h.lines();
+  assert.equal(lines.length, 13);
+  assert.equal(previews(lines), 5);
 });
 
 test("a blocked but empty painted heading cannot toggle", (t) => {

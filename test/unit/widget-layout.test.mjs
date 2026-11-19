@@ -166,7 +166,7 @@ for (const beerMugs of [false, true])
           box.lines.length,
           "actual SDK wrapper, Agents and controls are not clipped",
         );
-        assert(box.lines.length - 1 <= Math.min(13, Math.floor(rows / 3), rows - 12));
+        assert(box.lines.length - 1 <= Math.min(16, Math.floor(rows / 3), rows - 12));
         assert(box.lines.every((line) => visibleWidth(line) <= h.terminal.columns));
         if (blocked) {
           const warning = lines.findIndex((line) => line.includes("owner blocked: BROKEN"));
@@ -234,7 +234,7 @@ for (const beerMugs of [false, true])
         box.lines.length,
         "the SDK wrapper and all Agent rows are unclipped",
       );
-      assert(box.lines.length - 1 <= Math.min(13, Math.floor(rows / 3), rows - 12));
+      assert(box.lines.length - 1 <= Math.min(16, Math.floor(rows / 3), rows - 12));
       assert(box.lines.every((line) => visibleWidth(line) <= h.terminal.columns));
       assert(
         frame.root.children[0].rect.height >= 2,
@@ -397,7 +397,8 @@ for (const beerMugs of [false, true])
   }
 
 test("real SDK diagnostic rows stay clickable without inflating resident summary counts", (t) => {
-  const h = layoutFixture(t, 60, false);
+  // 39 rows stay on the one-third 13-line budget, so 12 idle plus the diagnostic still paginate.
+  const h = layoutFixture(t, 39, false);
   // Fixture views all have sequence 0, so their supplied order breaks the artificial tie.
   h.views.push({ ...idle(12), status: "failed", resident: false, name: "released diagnostic" });
   h.widget.wake();

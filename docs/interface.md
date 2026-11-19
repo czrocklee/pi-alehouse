@@ -24,8 +24,10 @@ heading in fullscreen to expand or collapse the roster, and use **Prev** /
 **Next** if it spans pages. The overview puts Agents with newly accepted tasks
 first. When space is tight, the compact view reserves a row for one unanswered
 question (`?`) and, if space permits, one row with live activity. It fills any
-remaining rows with the most recently accepted tasks. Use `Alt+A` if the row
-or heading control you need isn't visible.
+remaining rows with the most recently accepted tasks. The widget uses at most
+a third of the terminal height, up to 16 lines. When an activity line doesn't
+fit, its turn clock moves to the Agent's main row. Use `Alt+A` if the row or
+heading control you need isn't visible.
 
 Read a row as **who** (nickname and `worker/dN` or `scout/dN`), **with what**
 (model and admitted effort, turns used/allowed, observed context, cost and Run
