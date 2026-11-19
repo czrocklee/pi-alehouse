@@ -30,12 +30,11 @@ import {
   codexCreditsFromHeaders,
   codexQuota,
   codexQuotasEqual,
+  createQuotaPublisher,
   isCodexQuotaSource,
-  publishQuota,
   quotaHeaders,
   quotaSnapshot,
   quotaSnapshotFromStream,
-  quotaSnapshotsEqual,
   type CodexCredits,
   type CodexQuota,
   type CodexQuotaSnapshot,
@@ -167,7 +166,7 @@ export default function (pi: ExtensionAPI) {
   const codexQuotas = new Map<string, CodexQuota>();
   const codexQuotaSnapshots = new Map<string, CodexQuotaSnapshot>();
   const codexCreditsByProvider = new Map<string, CodexCredits>();
-  let lastPublishedQuota: CodexQuotaSnapshot | undefined;
+  const publishQuota = createQuotaPublisher();
   let requestFooterRender: (() => void) | undefined;
   const billing = createGrokBilling(() => requestFooterRender?.());
   const compaction = new CompactionProgress(undefined, sharedCompactionHistory());
@@ -394,15 +393,10 @@ export default function (pi: ExtensionAPI) {
     if (!provider || !isCodexQuotaSource(ctx.model)) return;
     // Credit-only updates stay local; the dashboard payload remains quota-only.
     rememberCodexCredits(provider, codexCreditsFromHeaders(event.headers));
-    const headers = quotaHeaders(event.headers);
-    const snapshot = quotaSnapshot(headers);
+    const snapshot = quotaSnapshot(quotaHeaders(event.headers));
     if (!QUOTA_BUCKET_NAMES.some((bucket) => snapshot[bucket])) return;
+    publishQuota(provider, snapshot);
     rememberCodexQuota(provider, snapshot);
-    // The dashboard names no account: aliases must not overwrite openai-codex.
-    if (provider !== "openai-codex" || quotaSnapshotsEqual(lastPublishedQuota, snapshot)) return;
-    void publishQuota(headers).then((published) => {
-      if (published) lastPublishedQuota = snapshot;
-    });
   });
   pi.on("provider_stream_event", (event) => {
     if (!isCodexQuotaSource(event)) return;
@@ -411,12 +405,14 @@ export default function (pi: ExtensionAPI) {
     const limit = data.metered_limit_name ?? data.limit_name ?? "codex";
     if (typeof limit !== "string" || limit.trim().toLowerCase().replace(/-/g, "_") !== "codex")
       return;
-    // WebSocket windows and credits stay local, keyed by physical provider.
-    const snapshot = quotaSnapshotFromStream(
+    const update = quotaSnapshotFromStream(
       data.rate_limits,
       codexQuotaSnapshots.get(event.provider),
     );
-    if (snapshot) rememberCodexQuota(event.provider, snapshot);
+    if (update) {
+      if (update.observed) publishQuota(event.provider, update.snapshot);
+      rememberCodexQuota(event.provider, update.snapshot);
+    }
     rememberCodexCredits(event.provider, codexCredits(data.credits));
   });
   pi.on("after_provider_response", (_event, ctx) => billing.afterProviderResponse(ctx));

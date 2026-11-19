@@ -802,6 +802,36 @@ test(
   },
 );
 
+test(
+  "real Codex auto reuses WebSocket and reports quota after SSE fallback, loopback only",
+  { timeout: 30000 },
+  (t) => {
+    const dir = temporary(t);
+    const result = spawnSync(
+      process.execPath,
+      [join(packageRoot, "test/integration/fixtures/codex-websocket.mjs")],
+      {
+        env: {
+          HOME: dir,
+          PATH: process.env.PATH,
+          PI_CODING_AGENT_DIR: join(dir, "agent"),
+          PI_OFFLINE: "1",
+          NO_COLOR: "1",
+        },
+        encoding: "utf8",
+        timeout: 25000,
+      },
+    );
+    if (result.error) throw result.error;
+    if (result.status === 77) return t.skip("sandbox denied the loopback listener");
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(
+      result.stdout,
+      /Codex auto reuses WebSocket and publishes quota before and after SSE fallback, loopback only/,
+    );
+  },
+);
+
 test("build inputs contain no generated installed-profile hash fallback", () => {
   const source = readFileSync(join(packageRoot, "scripts/build/generate-workers.mjs"), "utf8");
   assert.doesNotMatch(source, /PI_CODING_AGENT_DIR|getAgentDir/);

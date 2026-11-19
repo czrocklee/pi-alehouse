@@ -62,7 +62,7 @@ export function quotaSnapshot(headers: Record<string, string>): CodexQuotaSnapsh
     const prefix = `x-codex-${bucket}-`;
     const usedPercent = numberHeader(headers, `${prefix}used-percent`);
     const windowMinutes = numberHeader(headers, `${prefix}window-minutes`);
-    if (usedPercent === undefined || windowMinutes === undefined || windowMinutes <= 0) continue;
+    if (usedPercent === undefined || windowMinutes === undefined || windowMinutes < 1) continue;
 
     const absoluteReset = numberHeader(headers, `${prefix}reset-at`);
     const resetAfter = numberHeader(headers, `${prefix}reset-after-seconds`);
@@ -73,7 +73,7 @@ export function quotaSnapshot(headers: Record<string, string>): CodexQuotaSnapsh
           ? nowSeconds + Math.max(0, Math.floor(resetAfter))
           : 0;
     snapshot[bucket] = {
-      usedPercent: Math.max(0, Math.min(100, Math.round(usedPercent))),
+      usedPercent: Math.max(0, Math.min(100, usedPercent)),
       // Rounding the displayed percentage to zero is not actual exhaustion.
       exhausted: usedPercent >= 100,
       resetsAt,
@@ -86,10 +86,11 @@ export function quotaSnapshot(headers: Record<string, string>): CodexQuotaSnapsh
 export function quotaSnapshotFromStream(
   value: unknown,
   previous: CodexQuotaSnapshot | undefined,
-): CodexQuotaSnapshot | undefined {
+): { snapshot: CodexQuotaSnapshot; observed: boolean } | undefined {
   const limits = asRecord(value);
   if (!limits) return undefined;
   const snapshot = { ...previous };
+  let observed = false;
   for (const bucket of QUOTA_BUCKET_NAMES) {
     if (!Object.hasOwn(limits, bucket)) continue;
     const data = asRecord(limits[bucket]);
@@ -115,10 +116,12 @@ export function quotaSnapshotFromStream(
         headers[`x-codex-${bucket}-${suffix}`] = String(number);
     }
     const next = quotaSnapshot(headers)[bucket];
-    if (next) snapshot[bucket] = next;
-    else delete snapshot[bucket];
+    if (next) {
+      snapshot[bucket] = next;
+      observed = true;
+    } else delete snapshot[bucket];
   }
-  return snapshot;
+  return { snapshot, observed };
 }
 
 export function quotaSnapshotsEqual(
@@ -131,7 +134,7 @@ export function quotaSnapshotsEqual(
     const rightBucket = right[bucket];
     if (!leftBucket || !rightBucket) return leftBucket === rightBucket;
     return (
-      leftBucket.usedPercent === rightBucket.usedPercent &&
+      Math.round(leftBucket.usedPercent) === Math.round(rightBucket.usedPercent) &&
       leftBucket.exhausted === rightBucket.exhausted &&
       leftBucket.windowMinutes === rightBucket.windowMinutes &&
       Math.abs(leftBucket.resetsAt - rightBucket.resetsAt) <= RESET_TIME_TOLERANCE_SECONDS
@@ -147,7 +150,7 @@ export function codexQuota(snapshot: CodexQuotaSnapshot): CodexQuota | undefined
     .sort((left, right) => left.windowMinutes - right.windowMinutes)[0];
   if (!weekly && !short) return undefined;
   const window = (bucket: CodexQuotaBucket): CodexWindowQuota => ({
-    remainingPercent: 100 - bucket.usedPercent,
+    remainingPercent: 100 - Math.round(bucket.usedPercent),
     exhausted: bucket.exhausted,
     resetsAt: bucket.resetsAt,
     windowMinutes: bucket.windowMinutes,
@@ -261,8 +264,19 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-export async function publishQuota(headers: Record<string, string>): Promise<boolean> {
-  if (!DASHBOARD_BASE_URL) return false;
+/** Serialize normalized windows as quota headers for both transports. */
+async function publishQuota(snapshot: CodexQuotaSnapshot): Promise<boolean> {
+  const headers: Record<string, string> = {};
+  for (const bucket of QUOTA_BUCKET_NAMES) {
+    const window = snapshot[bucket];
+    if (!window) continue;
+    const { usedPercent, windowMinutes, resetsAt } = window;
+    const prefix = `x-codex-${bucket}-`;
+    headers[`${prefix}used-percent`] = String(usedPercent);
+    headers[`${prefix}window-minutes`] = String(windowMinutes);
+    // Zero is our internal sentinel, not an observed reset time.
+    if (resetsAt > 0) headers[`${prefix}reset-at`] = String(resetsAt);
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
@@ -279,4 +293,32 @@ export async function publishQuota(headers: Record<string, string>): Promise<boo
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/** Share deduplication across transports and keep at most the latest pending
+ * snapshot. Requests never block provider events. */
+export function createQuotaPublisher() {
+  let lastPublished: CodexQuotaSnapshot | undefined;
+  let pending: CodexQuotaSnapshot | undefined;
+  let publishing = false;
+  const drain = async () => {
+    publishing = true;
+    try {
+      while (pending) {
+        const snapshot = pending;
+        pending = undefined;
+        if (!quotaSnapshotsEqual(lastPublished, snapshot) && (await publishQuota(snapshot)))
+          lastPublished = snapshot;
+      }
+    } finally {
+      publishing = false;
+    }
+  };
+  return (provider: string, snapshot: CodexQuotaSnapshot) => {
+    // The dashboard payload is account-less; aliases must stay local.
+    if (!DASHBOARD_BASE_URL || provider !== "openai-codex") return;
+    if (!QUOTA_BUCKET_NAMES.some((bucket) => snapshot[bucket])) return;
+    pending = snapshot;
+    if (!publishing) void drain();
+  };
 }

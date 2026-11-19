@@ -124,7 +124,9 @@ classification/tokenization, not full permission gates or Git execution.
 - **Portable package:** `test/unit`, `test/sdk`, `test/packaging`,
   `test/extensions` and the package-discovered `test/integration` tests.
   These include pinned-SDK tests and offline real-composition fixtures using
-  synthetic providers. `test/support` holds helpers, not a test lane. Default
+  synthetic providers. The Codex WebSocket/SSE test binds an ephemeral IPv4
+  loopback socket; it reports a skip if the sandbox denies that bind.
+  `test/support` holds helpers, not a test lane. Default
   test globs are one directory deep; update discovery explicitly when needed.
 - **Portable policy:** checks generated definitions and policy against the
   matched patched authority, not an ambient global install. It includes

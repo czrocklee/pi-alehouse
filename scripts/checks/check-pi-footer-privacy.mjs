@@ -35,7 +35,10 @@ let now = 0,
   holdBilling = mode === "billing",
   releaseBilling,
   billingOK = true,
-  billedPercent = 25;
+  billedPercent = 25,
+  holdDashboard = false,
+  releaseDashboard,
+  dashboardOK = true;
 const timers = new Map();
 const flush = () => new Promise((done) => realSetTimeout(done, 0));
 const advance = async (value) => {
@@ -76,8 +79,13 @@ globalThis.fetch = async (url, options) => {
     `Unexpected fixture network destination: ${url}`,
   );
   requests.push({ url: String(url), options });
+  const dashboard = String(url).endsWith("/api/usage/codex");
   const percent = billedPercent,
-    ok = billingOK;
+    ok = dashboard ? dashboardOK : billingOK;
+  if (dashboard && holdDashboard)
+    await new Promise((done) => {
+      releaseDashboard = done;
+    });
   if (holdBilling && String(url).includes("/billing?"))
     await new Promise((done) => {
       releaseBilling = done;
@@ -211,26 +219,30 @@ try {
     "openai-codex",
     "openai-codex-responses",
   );
-  for (const provider of ["openai-codex", "openai-codex-2"]) {
-    const data = {
-      type: "codex.rate_limits",
-      credits: { has_credits: true, unlimited: false, balance: "17.5" },
-      rate_limits: { primary: { used_percent: 90, window_minutes: 300, reset_at: 2000000000 } },
-    };
+  const credits = { has_credits: true, unlimited: false, balance: "17.5" };
+  const emitStream = async (data, provider = "openai-codex", api = "openai-codex-responses") => {
     const before = structuredClone(data);
     await emit(
       "provider_stream_event",
-      { provider, api: "openai-codex-responses", model: "synthetic-codex", data },
+      { provider, api, model: "synthetic-codex", data },
       "openai",
       "openai-responses",
     );
     assert.deepEqual(data, before, "raw stream payloads are not mutated");
-  }
+  };
+  const streamQuota = (rate_limits, extra = {}) =>
+    emitStream({ type: "codex.rate_limits", rate_limits, credits, ...extra });
+  const primary = { used_percent: 90.25, window_minutes: 300, reset_at: 2000000000 };
+  await streamQuota({ primary });
+  await emitStream(
+    { type: "codex.rate_limits", rate_limits: { primary: { ...primary, used_percent: 91 } } },
+    "openai-codex-2",
+  );
   await flush();
   assert.equal(
     requests.length,
-    requestCount,
-    "credits-only changes and stream updates never publish or fetch",
+    requestCount + (mode === "dashboard" ? 1 : 0),
+    "only the primary Codex quota change with a configured dashboard triggers a POST",
   );
   assert.equal(authReads.length, authReadCount, "paid credits never trigger an auth read");
   if (mode === "default") {
@@ -397,21 +409,125 @@ try {
     );
   }
   if (mode === "dashboard") {
-    assert.deepEqual(authReads, []);
-    assert.equal(requests.length, 1);
-    assert.equal(requests[0].url, "https://dashboard.invalid/api/usage/codex");
-    assert.equal(requests[0].options.method, "POST");
-    assert(!requests[0].options.headers.Authorization);
+    const postBody = (i) => JSON.parse(requests[i].options.body);
+    const primaryHeaders = (used) => ({
+      ...codexHeaders,
+      "x-codex-primary-used-percent": String(used),
+    });
+    assert.deepEqual(postBody(0), { headers: codexHeaders }, "SSE payload stays compatible");
+    assert.deepEqual(postBody(1), { headers: primaryHeaders(90.25) }, "WS keeps fractional usage");
+
+    // A duplicate from SSE fallback should not POST again. Empty, credit-only,
+    // non-Codex, and malformed updates aren't observations of a new quota.
+    await emit(
+      "after_provider_response",
+      { headers: primaryHeaders(90.25) },
+      "openai-codex",
+      "openai-codex-responses",
+    );
+    await streamQuota({});
+    await streamQuota({ primary: { ...primary, used_percent: 100 } }, { limit_name: "other" });
+    await emitStream(
+      { type: "codex.rate_limits", rate_limits: { primary: { ...primary, used_percent: 99 } } },
+      "openai-codex",
+      "openai-responses",
+    );
+    await flush();
+    assert.equal(requests.length, 2);
+
+    const secondary = { used_percent: 30, window_minutes: 10080, reset_at: 2000500000 };
+    holdDashboard = true;
+    await streamQuota({ secondary });
+    await streamQuota({ primary: { used_percent: 91 } });
+    await streamQuota({ primary: { used_percent: 92 } });
+    assert.equal(requests.length, 3, "only one dashboard POST can be in flight");
+    const weeklyHeaders = {
+      "x-codex-secondary-used-percent": "30",
+      "x-codex-secondary-window-minutes": "10080",
+      "x-codex-secondary-reset-at": "2000500000",
+    };
+    assert.deepEqual(postBody(2), { headers: { ...primaryHeaders(90.25), ...weeklyHeaders } });
+    holdDashboard = false;
+    releaseDashboard();
+    await flush();
+    assert.equal(requests.length, 4, "only the newest queued snapshot is posted");
+    assert.deepEqual(postBody(3), { headers: { ...primaryHeaders(92), ...weeklyHeaders } });
+
+    dashboardOK = false;
+    await streamQuota({ primary: { used_percent: 93 } });
+    await flush();
+    await streamQuota({ primary: { used_percent: "invalid" } });
+    await flush();
+    assert.equal(requests.length, 5, "a malformed event cannot replay a cached quota");
+    dashboardOK = true;
+    await streamQuota({ primary: { ...primary, used_percent: 93 } });
+    await flush();
+    assert.equal(requests.length, 6, "a valid report can retry an unsuccessful POST");
+    assert.deepEqual(postBody(5), { headers: { ...primaryHeaders(93), ...weeklyHeaders } });
+
+    const noReset = {
+      "x-codex-primary-used-percent": "94",
+      "x-codex-primary-window-minutes": "300",
+    };
+    await emit(
+      "after_provider_response",
+      { headers: { ...noReset, ...paidHeaders } },
+      "openai-codex",
+      "openai-codex-responses",
+    );
+    await flush();
+    assert.deepEqual(postBody(6), { headers: noReset }, "SSE omits an unknown reset");
+
+    // A WS bucket may arrive before its reset time is known. The SSE snapshot
+    // above only has primary, so secondary has no earlier reset to inherit.
+    const { reset_at: _reset, ...noResetWeekly } = secondary;
+    await streamQuota({ secondary: noResetWeekly });
+    await flush();
     assert.deepEqual(
-      JSON.parse(requests[0].options.body),
-      { headers: codexHeaders },
-      "dashboard receives quota headers only",
+      postBody(7),
+      {
+        headers: {
+          ...noReset,
+          "x-codex-secondary-used-percent": "30",
+          "x-codex-secondary-window-minutes": "10080",
+        },
+      },
+      "WS also omits unknown resets while publishing observed usage",
     );
-    assert.doesNotMatch(
-      requests[0].options.body,
-      /credits|123\.4500/,
-      "no paid-credit details cross the dashboard boundary",
+
+    const beforeRelative = Math.floor(Date.now() / 1000);
+    await emit(
+      "after_provider_response",
+      {
+        headers: {
+          ...noReset,
+          "x-codex-primary-window-minutes": "1.5",
+          "x-codex-primary-reset-after-seconds": "600",
+        },
+      },
+      "openai-codex",
+      "openai-codex-responses",
     );
+    const afterRelative = Math.floor(Date.now() / 1000);
+    await flush();
+    const normalizedReset = postBody(8).headers["x-codex-primary-reset-at"];
+    assert(Number(normalizedReset) >= beforeRelative + 600);
+    assert(Number(normalizedReset) <= afterRelative + 600);
+    assert.deepEqual(postBody(8), {
+      headers: {
+        ...noReset,
+        "x-codex-primary-window-minutes": "1",
+        "x-codex-primary-reset-at": normalizedReset,
+      },
+    });
+    assert.equal(requests.length, 9);
+    assert.deepEqual(authReads, []);
+    for (const { url, options } of requests) {
+      assert.equal(url, "https://dashboard.invalid/api/usage/codex");
+      assert.equal(options.method, "POST");
+      assert(!options.headers.Authorization);
+      assert.doesNotMatch(options.body, /credits|123\.4500|17\.5/);
+    }
   }
   await emit("session_shutdown");
   footer.dispose();

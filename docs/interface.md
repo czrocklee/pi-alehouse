@@ -303,8 +303,9 @@ terminal. A waiting Delegation panel can still be cancelled with `Alt+S`.
 
 Local Codex quota display needs neither opt-in. Grok billing is separate:
 
-- `AGENT_DASHBOARD_URL` supplies the dashboard base URL. HTTP quota-header
-  updates for `openai-codex` can POST there, without purchased credits. Unset,
+- `AGENT_DASHBOARD_URL` supplies the dashboard base URL. For `openai-codex`,
+  Alehouse can POST quota windows from HTTP response headers or WebSocket
+  rate-limit events. Other Codex slots and purchased credits stay local. Unset,
   there is no default dashboard POST.
 - `PI_ALEHOUSE_GROK_BILLING=1` enables Grok billing on relevant xAI activity.
   This can read Pi's `auth.json` in the actual agent directory or fall back to
