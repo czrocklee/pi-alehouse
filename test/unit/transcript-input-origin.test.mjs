@@ -156,11 +156,16 @@ test("only confirmed parent prose gets the left-aligned accent card", (t) => {
     const rows = styledRows(content, width);
     const title = rows.find((row) => stripAnsi(row).trim() === label);
     assert.ok(title && !title.includes(userBg), `${name}: label above the body background`);
-    assert.ok(stripAnsi(title).startsWith(` ${label}`), `${name}: label starts on the left`);
+    const fromParent = label === "From parent";
+    const pad = fromParent ? 2 : 1;
+    assert.equal(leadingSpaces(stripAnsi(title)), pad, `${name}: label inset`);
+    assert.ok(
+      stripAnsi(title).startsWith(`${" ".repeat(pad)}${label}`),
+      `${name}: label starts on the left`,
+    );
     const bgRows = rows.filter((row) => row.includes(userBg));
     assert.equal(bgRows.length, 3, `${name}: padding, body, padding`);
-    const fromParent = label === "From parent";
-    const coloredWidth = fromParent ? visibleWidth(prose) + 2 : width;
+    const coloredWidth = fromParent ? visibleWidth(prose) + pad * 2 : width;
     for (const row of bgRows) {
       const start = row.indexOf(userBg);
       const end = row.indexOf(bgClose, start + userBg.length);
@@ -172,6 +177,7 @@ test("only confirmed parent prose gets the left-aligned accent card", (t) => {
     }
     const body = bgRows[1];
     assert.equal(stripAnsi(body).trim(), prose);
+    assert.equal(leadingSpaces(stripAnsi(body)), pad, `${name}: body inset matches the label`);
     const ink = fromParent ? parentFg : userFg;
     const fgStart = body.indexOf(ink);
     const fgEnd = body.indexOf(fgClose, fgStart + ink.length);
@@ -185,12 +191,15 @@ const backgroundWidth = (row, bg) => {
   return visibleWidth(row.slice(start, row.indexOf("\x1b[49m", start)));
 };
 
+const leadingSpaces = (row) => row.match(/^ */)?.[0].length ?? 0;
+
 test("parent Markdown keeps native indentation without filling the width cap", (t) => {
   const width = 80;
+  const pad = 2;
   const bg = hostTheme.getBgAnsi("userMessageBg");
   for (const [name, markdown, expected] of [
-    ["fenced command", "```sh\nnpm run check\n```", [" ```sh", "   npm run check", " ```"]],
-    ["nested list", "- Heading\n  - **宽字符** 👩‍💻 tail", [" - Heading", "     - 宽字符 👩‍💻 tail"]],
+    ["fenced command", "```sh\nnpm run check\n```", ["  ```sh", "    npm run check", "  ```"]],
+    ["nested list", "- Heading\n  - **宽字符** 👩‍💻 tail", ["  - Heading", "      - 宽字符 👩‍💻 tail"]],
   ]) {
     const content = contentOver([user(markdown)], () => "parent");
     t.after(() => content.dispose());
@@ -201,25 +210,33 @@ test("parent Markdown keeps native indentation without filling the width cap", (
       name,
     );
     const inkWidth = Math.max(...expected.map((line) => visibleWidth(line)));
-    assert.ok(
-      Math.max(...body.map((row) => backgroundWidth(row, bg))) <= inkWidth + 2,
-      `${name}: background stays compact around the rendered rows`,
-    );
+    const cardWidth = inkWidth + pad;
+    assert.ok(cardWidth < width, `${name}: card is narrower than the pane`);
+    for (const row of body)
+      assert.equal(backgroundWidth(row, bg), cardWidth, `${name}: background hugs the ink`);
   }
 });
 
 test("long confirmed parent prose wraps within the card cap while unknown input keeps its native width", (t) => {
-  const width = 61;
-  const message = user("repeatable words ".repeat(9).trimEnd());
+  const width = 70;
+  const cap = 63;
   const bg = hostTheme.getBgAnsi("userMessageBg");
+  const message = user("repeatable words ".repeat(9).trimEnd());
   const withParent = contentOver([message], () => "parent");
   const unknown = contentOver([message]);
   t.after(() => withParent.dispose());
   t.after(() => unknown.dispose());
   const card = styledRows(withParent, width).filter((row) => row.includes(bg));
   const wide = styledRows(unknown, width).filter((row) => row.includes(bg));
-  assert.ok(card.length > wide.length, "the narrower parent card wraps onto more rows");
-  assert.ok(Math.max(...card.map((row) => backgroundWidth(row, bg))) <= Math.floor(0.8 * width));
+  // Width 70 caps the card at 63 (tenth gutter) and full native rows stay 70.
+  // Three phrases are 50 cells, so two-cell insets shrink-wrap to 54, not the cap.
+  const line = "  repeatable words repeatable words repeatable words  ";
+  assert.deepEqual(
+    card.map((row) => stripAnsi(row)),
+    [" ".repeat(54), line, line, line, " ".repeat(54)],
+    "parent prose paints the shrink-wrapped tenth-gutter card",
+  );
+  assert.equal(Math.max(...card.map((row) => backgroundWidth(row, bg))), 54);
   for (const row of wide) assert.equal(visibleWidth(row), width);
   assert.equal(
     rowsOf(withParent, width)
@@ -227,6 +244,45 @@ test("long confirmed parent prose wraps within the card cap while unknown input 
       .match(/repeatable/g)?.length,
     9,
   );
+
+  // Unlike spaced prose, a continuous run uses the whole content width and
+  // distinguishes the 90% ceiling from a wider (or unconstrained) card.
+  const capped = contentOver([user("x".repeat(width))], () => "parent");
+  t.after(() => capped.dispose());
+  const cappedRows = styledRows(capped, width).filter((row) => row.includes(bg));
+  assert.equal(Math.max(...cappedRows.map((row) => backgroundWidth(row, bg))), cap);
+});
+
+test("parent label and body share responsive horizontal padding", (t) => {
+  const prose = "Yo";
+  const bg = hostTheme.getBgAnsi("userMessageBg");
+  const content = contentOver([user(prose)], () => "parent");
+  t.after(() => content.dispose());
+  // One card, resized: wide inset, one-cell cap, unpadded floor, then restored.
+  const cases = [
+    [70, 2, visibleWidth("From parent") + 4],
+    [7, 1, 5],
+    [3, 0, 3],
+    [70, 2, visibleWidth("From parent") + 4],
+  ];
+  for (const [width, pad, cardWidth] of cases) {
+    const rows = styledRows(content, width);
+    const bgRows = rows.filter((row) => row.includes(bg));
+    const title = rows.find((row) => !row.includes(bg) && stripAnsi(row).trim());
+    const body = bgRows.find((row) => stripAnsi(row).includes(prose));
+    assert.ok(title && body, `rows at width ${width}`);
+    assert.equal(bgRows.length, 3, `vertical padding stays at ${width}`);
+    assert.equal(leadingSpaces(stripAnsi(title)), pad, `label inset at ${width}`);
+    assert.equal(leadingSpaces(stripAnsi(body)), pad, `body inset at ${width}`);
+    assert.equal(
+      stripAnsi(body).trimEnd(),
+      `${" ".repeat(pad)}${prose}`,
+      `body spacing at ${width}`,
+    );
+    for (const row of bgRows)
+      assert.equal(backgroundWidth(row, bg), cardWidth, `card width at ${width}`);
+    if (width >= 8) assert.ok(cardWidth < width, `card is not the full pane at ${width}`);
+  }
 });
 
 test("parent and orchestration text carrying the human lead is neither relabeled nor stripped", () => {
@@ -439,8 +495,8 @@ test("origin labels rewrite no source bytes and keep skills/native bodies intact
 
 test("resizing a parent skill card retains its SDK view; full and theme invalidation refresh it", (t) => {
   const skillText =
-    '<skill name="review" location="/skills/review.md">\n# SKILL_CONTENT\n\n' +
-    `${"reviewable words ".repeat(6).trimEnd()}\n</skill>\n\nSKILL_USER_MESSAGE`;
+    '<skill name="review" location="/skills/review.md">\n# 宽 SKILL_CONTENT\n\n' +
+    `宽字符 ${"reviewable words ".repeat(6).trimEnd()}\n</skill>\n\n宽 SKILL_USER_MESSAGE`;
   const messages = [user(skillText)];
   const origin = () => "parent";
   const content = contentOver(messages, origin);
@@ -471,6 +527,66 @@ test("resizing a parent skill card retains its SDK view; full and theme invalida
   assert.equal(skill, initialSkill);
   assert.equal(skillChild, initialChild, "layout does not rebuild the SDK skill view");
 
+  const skillBg = hostTheme.getBgAnsi("customMessageBg");
+  const userBg = hostTheme.getBgAnsi("userMessageBg");
+  assert.notEqual(skillBg, userBg);
+  // Width 70 shrink-wraps to 61 (cap is 63, pane is 70). Narrow caps are 5 and 3.
+  for (const [width, pad, cardWidth] of [
+    [70, 2, 61],
+    [7, 1, 5],
+    [3, 0, 3],
+    [70, 2, 61],
+  ]) {
+    const rows = styledRows(content, width);
+    assert.equal(skill, initialSkill, `same skill instance at ${width}`);
+    assert.equal(skillChild, initialChild, `same skill view at ${width}`);
+    const skillRows = rows.filter((row) => row.includes(skillBg));
+    const userRows = rows.filter((row) => row.includes(userBg));
+    assert.ok(
+      skillRows.some((row) => !stripAnsi(row).trim()),
+      `skill vertical padding stays at ${width}`,
+    );
+    assert.ok(
+      userRows.some((row) => !stripAnsi(row).trim()),
+      `user vertical padding stays at ${width}`,
+    );
+    for (const row of skillRows) assert.equal(backgroundWidth(row, skillBg), cardWidth);
+    for (const row of userRows) assert.equal(backgroundWidth(row, userBg), cardWidth);
+    const skillPlain = skillRows.map(stripAnsi);
+    const userPlain = userRows.map(stripAnsi);
+    const skillInk = skillPlain.map((row) => row.trim()).join("");
+    const userInk = userPlain.map((row) => row.trim()).join("");
+    assert.match(skillInk, /宽\s*SKILL_CONTENT/);
+    assert.match(skillInk, /宽字符/);
+    assert.match(userInk, /宽\s*SKILL_USER_MESSAGE/);
+    assert.equal(skillInk.split("宽").length, 3, "heading and body keep both CJK clusters");
+    assert.equal(userInk.split("宽").length, 2, "user prose keeps its CJK cluster");
+    if (width >= 70) {
+      assert.equal(
+        skillPlain.find((row) => row.includes("SKILL_CONTENT")).trimEnd(),
+        "  宽 SKILL_CONTENT",
+      );
+      assert.equal(
+        skillPlain.find((row) => row.includes("宽字符")).trimEnd(),
+        "  宽字符 reviewable words reviewable words reviewable words",
+      );
+      assert.equal(
+        userPlain.find((row) => row.includes("SKILL_USER_MESSAGE")).trimEnd(),
+        "  宽 SKILL_USER_MESSAGE",
+      );
+      assert.notEqual(cardWidth, 63);
+      assert.notEqual(cardWidth, width);
+    } else {
+      const clusters = [...skillPlain, ...userPlain].filter((row) => /[宽字符]/.test(row));
+      assert.deepEqual(
+        clusters.map((row) => row.trim()),
+        ["宽", "宽", "字", "符", "宽"],
+        `whole CJK clusters at ${width}`,
+      );
+      for (const row of clusters) assert.equal(leadingSpaces(row), pad, `CJK inset at ${width}`);
+    }
+  }
+
   content.invalidate();
   assert.deepEqual(styledRows(content, 40), narrow);
   assert.equal(invalidations.mock.callCount(), 1, "full invalidation uses the SDK override");
@@ -485,6 +601,12 @@ test("resizing a parent skill card retains its SDK view; full and theme invalida
   const fresh = contentOver(messages, origin);
   t.after(() => fresh.dispose());
   assert.deepEqual(light, styledRows(fresh, 40), "palette replacement matches a fresh transcript");
+  const native = contentOver(messages);
+  t.after(() => native.dispose());
+  const nativeHeading = styledRows(native, 70)
+    .map(stripAnsi)
+    .find((row) => row.includes("SKILL_CONTENT"));
+  assert.equal(leadingSpaces(nativeHeading), 1, "nonparent skill keeps the SDK one-cell inset");
 });
 
 test("a short parent card adds no chrome rows and keeps its read anchor", () => {

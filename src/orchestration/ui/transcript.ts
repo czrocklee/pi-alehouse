@@ -59,7 +59,7 @@ import {
   CommunicationCard,
   CommunicationReceipt,
   ParentCommunicationCard,
-  communicationLineWidth,
+  CommunicationLayout,
   communicationPadding,
 } from "./communication-bubble.ts";
 import { detachedToolResult } from "./tool-result-projection.ts";
@@ -208,7 +208,7 @@ function communicationRenderers(name: string, args: unknown): ToolRenderers | un
   )
     return undefined;
   const encodedText = toolArgumentText(text);
-  const cardLineWidth = Math.max(visibleWidth(display.label), communicationLineWidth(encodedText));
+  const layout = new CommunicationLayout(display.label, encodedText);
   const resultText = (result: unknown): string => {
     const content = (result as { content?: unknown } | undefined)?.content;
     return (Array.isArray(content) ? content : [])
@@ -232,13 +232,13 @@ function communicationRenderers(name: string, args: unknown): ToolRenderers | un
       const note =
         previousNote instanceof CommunicationReceipt
           ? previousNote
-          : new CommunicationReceipt(cardLineWidth);
+          : new CommunicationReceipt(layout);
       if (!(previousCard instanceof CommunicationCard) || note !== previousNote) {
         const card =
           previousCard instanceof CommunicationCard
             ? previousCard
             : new CommunicationCard(
-                cardLineWidth,
+                layout,
                 new CommunicationBubble(display.label, encodedText, theme),
               );
         view.clear();
@@ -259,7 +259,7 @@ function communicationRenderers(name: string, args: unknown): ToolRenderers | un
       const view =
         context.lastComponent instanceof CommunicationReceipt
           ? context.lastComponent
-          : new CommunicationReceipt(cardLineWidth);
+          : new CommunicationReceipt(layout);
       view.setText(output, (row) => theme.fg(context.isError ? "error" : "dim", row));
       return view;
     },
@@ -273,6 +273,21 @@ type Msg = ReturnType<typeof sessionEntryToContextMessages>[number];
 type MessageOf<Role extends Msg["role"]> = Extract<Msg, { role: Role }>;
 const role = (message: unknown): unknown =>
   message && typeof message === "object" ? (message as { role?: unknown }).role : undefined;
+
+/** Parent skills keep the SDK view. `setOutputPad` changes only the box inset
+ * and its render cache; it does not run `invalidate()`, which would rebuild the
+ * skill Markdown. Vertical padding stays the constructor's one row. */
+class ParentSkillInvocation extends SkillInvocationMessageComponent {
+  private inset = 1;
+  override render(width: number): string[] {
+    const paddingX = communicationPadding(width);
+    if (paddingX !== this.inset) {
+      this.inset = paddingX;
+      this.setOutputPad(paddingX);
+    }
+    return super.render(width);
+  }
+}
 
 /**
  * A child's transcript as renderable rows.
@@ -822,16 +837,14 @@ export class TranscriptContent implements TranscriptRows {
       // stays the only qualified fallback label.
       const fromParent = origin === "parent";
       const view = fromParent ? new ParentCommunicationCard() : block.container;
-      view.addChild(
-        fromParent
-          ? new TruncatedText(this.options.markdownTheme.bold(ORIGIN_LABELS.parent), 1)
-          : this.userLabel(label ?? "Input"),
-      );
+      view.addChild(fromParent ? this.parentLabel() : this.userLabel(label ?? "Input"));
       const skill = parseSkillBlock(text);
       if (!skill) {
         view.addChild(this.userBody(text, fromParent));
       } else {
-        const invocation = new SkillInvocationMessageComponent(skill, this.options.markdownTheme);
+        const invocation = fromParent
+          ? new ParentSkillInvocation(skill, this.options.markdownTheme)
+          : new SkillInvocationMessageComponent(skill, this.options.markdownTheme);
         invocation.setExpanded(true);
         view.addChild(invocation);
         if (skill.userMessage) {
@@ -861,33 +874,53 @@ export class TranscriptContent implements TranscriptRows {
     }
   }
 
+  /** Parent label, sharing the body's horizontal inset. Vertical padding stays
+   * off so the label remains one row above the card. */
+  private parentLabel(): Component {
+    const text = this.options.markdownTheme.bold(ORIGIN_LABELS.parent);
+    return this.responsiveInset((paddingX) => new TruncatedText(text, paddingX, 0));
+  }
+
   private userBody(text: string, fromParent: boolean): Component {
     const { theme, markdownTheme } = this.options;
     if (!fromParent) return new UserMessageComponent(text, markdownTheme);
-    // Keep Pi's user Markdown options and padding, but inject the parent
-    // palette from this pane. The same paneRow filter applies to both paths.
-    const markdown = (paddingX: number) =>
-      new Markdown(
-        text,
-        paddingX,
-        1,
-        markdownTheme,
-        {
-          color: (row) => theme?.fg?.("accent", row) ?? row,
-          bgColor: (row) => theme?.bg?.("userMessageBg", row) ?? row,
-        },
-        { preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
-      );
-    const body = markdown(1);
-    let compact: Markdown | undefined;
+    // Keep Pi's user Markdown options and vertical padding, but inject the
+    // parent palette. Horizontal inset follows the card width so a wide
+    // grapheme still fits when the card is only a few cells. Native
+    // non-parent messages keep UserMessageComponent's own padding.
+    return this.responsiveInset(
+      (paddingX) =>
+        new Markdown(
+          text,
+          paddingX,
+          1,
+          markdownTheme,
+          {
+            color: (row) => theme?.fg?.("accent", row) ?? row,
+            bgColor: (row) => theme?.bg?.("userMessageBg", row) ?? row,
+          },
+          { preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
+        ),
+    );
+  }
+
+  /** Markdown and TruncatedText bake horizontal padding into the instance.
+   * Parent cards change that inset with width (2/1/0), so keep one child per
+   * inset instead of shrinking a wider margin. */
+  private responsiveInset(create: (paddingX: number) => Component): Component {
+    const cached = new Map<number, Component>();
     return {
-      // Markdown does not shrink its own margins. Leave room for wide
-      // graphemes when the card gets only a few cells.
-      render: (width) =>
-        (communicationPadding(width) ? body : (compact ??= markdown(0))).render(width),
+      render: (width) => {
+        const paddingX = communicationPadding(width);
+        let child = cached.get(paddingX);
+        if (!child) {
+          child = create(paddingX);
+          cached.set(paddingX, child);
+        }
+        return child.render(width);
+      },
       invalidate: () => {
-        body.invalidate();
-        compact?.invalidate();
+        for (const child of cached.values()) child.invalidate();
       },
     };
   }

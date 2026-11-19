@@ -19,6 +19,7 @@ import {
   setCapabilityOverrides,
   stripTerminalSequences,
   visibleWidth,
+  wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 
 // Make token-color assertions deterministic: 256-color quantization can map
@@ -28,9 +29,13 @@ initTheme("dark", false);
 
 // Load the production source, not a potentially stale dist build.
 const jiti = createJiti(import.meta.url, { fsCache: false });
-const { CommunicationBubble, CommunicationCard } = await jiti.import(
-  "../../src/orchestration/ui/communication-bubble.ts",
-);
+const {
+  CommunicationBubble,
+  CommunicationCard,
+  CommunicationLayout,
+  CommunicationReceipt,
+  communicationPadding,
+} = await jiti.import("../../src/orchestration/ui/communication-bubble.ts");
 const { TranscriptContent } = await jiti.import("../../src/orchestration/ui/transcript.ts");
 const { humanSteerLead } = await jiti.import(
   "../../src/orchestration/presentation/human-steer-text.ts",
@@ -82,18 +87,18 @@ test("the inner block paints a distinct title and body over its allocated width"
     4,
     "the title above, then one backgrounded padding row above and below the body",
   );
-  // The title sits right-aligned ABOVE the background block: a one-cell inset
-  // on each side keeps the body's inner edge and the old in-box right edge,
-  // but the row carries no userMessageBg of its own.
-  assert.equal(rows[0], ` ${" ".repeat(43)}${TITLE_FG}Alert to parent${FG_CLOSE} `);
+  // The title sits right-aligned ABOVE the background block: a two-cell inset
+  // on each side keeps the body's inner edge, but the row carries no
+  // userMessageBg of its own. Vertical padding is still one row.
+  assert.equal(rows[0], `${" ".repeat(43)}${TITLE_FG}Alert to parent${FG_CLOSE}  `);
   // The whole padding/body row, inner-edge padding included, carries the
   // background, and every row closes it again so the color cannot bleed into
   // the transcript.
   assert.equal(rows[1], `${BG}${" ".repeat(60)}${BG_CLOSE}`);
   assert.equal(rows[3], rows[1]);
   // The body's foreground opens and closes around the already-clipped,
-  // content-padded row; the Box adds the last padding cell inside the background.
-  assert.equal(rows[2], `${BG} ${BODY_FG}BODY_TEXT${" ".repeat(49)}${FG_CLOSE} ${BG_CLOSE}`);
+  // content-padded row; the Box adds the two-cell inset inside the background.
+  assert.equal(rows[2], `${BG}  ${BODY_FG}BODY_TEXT${" ".repeat(47)}${FG_CLOSE}  ${BG_CLOSE}`);
   for (const [index, row] of rows.entries()) {
     if (index === 0) {
       assert.ok(
@@ -122,24 +127,26 @@ test("recorded line breaks survive; every paragraph keeps the block background",
     recordingTheme(),
   );
   assert.deepEqual(rows.render(20).map(stripTerminalSequences), [
-    `${" ".repeat(14)}Title `,
+    `${" ".repeat(13)}Title  `,
     " ".repeat(20),
-    ` line one${" ".repeat(11)}`,
-    ` line two${" ".repeat(11)}`,
+    `  line one${" ".repeat(10)}`,
+    `  line two${" ".repeat(10)}`,
     " ".repeat(20),
-    ` line four${" ".repeat(10)}`,
+    `  line four${" ".repeat(9)}`,
     " ".repeat(20),
   ]);
 });
 
 test("wrapping breaks between words and keeps each row a full block line", () => {
-  const rows = new CommunicationBubble("L", `a${FAMILY}b 你好`, recordingTheme()).render(6);
+  // Width 8 keeps four content cells under the two-cell inset, the old
+  // width-6 content width, so the word break itself is unchanged.
+  const rows = new CommunicationBubble("L", `a${FAMILY}b 你好`, recordingTheme()).render(8);
   assert.deepEqual(rows.map(stripTerminalSequences), [
-    "    L ",
-    " ".repeat(6),
-    ` a${FAMILY}b `,
-    " 你好 ",
-    " ".repeat(6),
+    "     L  ",
+    " ".repeat(8),
+    `  a${FAMILY}b  `,
+    "  你好  ",
+    " ".repeat(8),
   ]);
 });
 
@@ -189,9 +196,9 @@ test("the body is plain text, never markdown", () => {
 test("an overlong title truncates by cells and stays right-aligned", () => {
   const rows = new CommunicationBubble("A very long label that cannot fit", "x", recordingTheme());
   assert.deepEqual(rows.render(20).map(stripTerminalSequences), [
-    " A very long label… ",
+    "  A very long lab…  ",
     " ".repeat(20),
-    ` x${" ".repeat(18)}`,
+    `  x${" ".repeat(17)}`,
     " ".repeat(20),
   ]);
 });
@@ -260,7 +267,8 @@ const sgrWalk = (row) => {
 };
 
 test("a truncated title stays outside the background: no mid-row reset", () => {
-  const titles = { 8: "Alert…", 12: "Alert to …", 20: "Alert to parent" };
+  // Content width is the row minus the 2/1/0 inset, so these clips move with it.
+  const titles = { 8: "Ale…", 12: "Alert t…", 20: "Alert to parent" };
   for (const width of [8, 12, 20]) {
     const rows = new CommunicationBubble("Alert to parent", "BODY", recordingTheme()).render(width);
     const title = rows[0];
@@ -289,6 +297,88 @@ test("a truncated title stays outside the background: no mid-row reset", () => {
     assert.equal(walk.fg, null, `the title row leaves no foreground open at width ${width}`);
     assert.equal(walk.bg, null, `the title row leaves no background open at width ${width}`);
   }
+});
+
+test("horizontal padding is 2/1/0 at width >=6/>=4/<4, and vertical padding stays", () => {
+  const bubble = new CommunicationBubble("Alert to parent", "Hi", recordingTheme());
+  const at = (width) => bubble.render(width).map(stripTerminalSequences);
+  const wide = ["   Alert to parent  ", " ".repeat(20), `  Hi${" ".repeat(16)}`, " ".repeat(20)];
+  assert.equal(communicationPadding(6), 2);
+  assert.equal(communicationPadding(5), 1);
+  assert.equal(communicationPadding(4), 1);
+  assert.equal(communicationPadding(3), 0);
+  assert.deepEqual(at(20), wide);
+  assert.deepEqual(at(6), ["  A…  ", " ".repeat(6), "  Hi  ", " ".repeat(6)]);
+  assert.deepEqual(at(5), [" Al… ", " ".repeat(5), " Hi  ", " ".repeat(5)]);
+  assert.deepEqual(at(4), [" A… ", " ".repeat(4), " Hi ", " ".repeat(4)]);
+  assert.deepEqual(at(3), ["Al…", " ".repeat(3), "Hi ", " ".repeat(3)]);
+  // Same instance restores the two-cell inset, and still one blank row above
+  // and below the body.
+  assert.deepEqual(at(20), wide);
+  for (const width of [20, 6, 5, 4, 3]) {
+    const rows = at(width);
+    assert.equal(rows.length, 4, `vertical padding is unchanged at width ${width}`);
+    assert.equal(rows[1], " ".repeat(width));
+    assert.equal(rows.at(-1), " ".repeat(width));
+  }
+});
+
+test("tabs and CR/CRLF match the rendered text, and a one-cell card stays in the two-cell tier", () => {
+  const raw = "A\tB\r\nC\rD";
+  const rows = new CommunicationBubble("L", raw, recordingTheme()).render(30);
+  assert.deepEqual(rows.map((row) => stripTerminalSequences(row).trim()).filter(Boolean), [
+    "L",
+    "A   B",
+    "C",
+    "D",
+  ]);
+  assert.equal(new CommunicationLayout("L", raw).width(80), visibleWidth("A   B") + 4);
+  assert.equal(new CommunicationLayout("L", "A   B\nC\nD").width(80), visibleWidth("A   B") + 4);
+  // A CR must end the line before the tab expands, or this measures one wider row.
+  assert.equal(new CommunicationLayout("L", "A\r\tB").width(80), visibleWidth("   B") + 4);
+
+  for (const [label, text] of [
+    ["", ""],
+    ["X", ""],
+    ["", "Y"],
+    ["X", "Y"],
+  ]) {
+    assert.equal(
+      new CommunicationLayout(label, text).width(80),
+      6,
+      "a 0/1-cell message stays six columns wide so two-cell padding still applies",
+    );
+  }
+  assert.equal(communicationPadding(6), 2);
+  const empty = new CommunicationBubble("", "", recordingTheme()).render(80);
+  assert.ok(
+    empty.every((row) => !stripTerminalSequences(row).trim()),
+    "empty raw label and text paint no body ink",
+  );
+  assert.deepEqual(
+    new CommunicationBubble("X", "Y", recordingTheme()).render(6).map(stripTerminalSequences),
+    ["   X  ", " ".repeat(6), "  Y   ", " ".repeat(6)],
+  );
+});
+
+test("a CJK spacing-mark grapheme is not shrunk away while it still fits", () => {
+  const cluster = "你\u0903";
+  assert.equal(visibleWidth(cluster), 3);
+  const text = `${cluster} x`;
+  // Pane 10 can hold the cluster at the ceiling. The fit stops at its 3 cells
+  // rather than a width that would drop the grapheme whole.
+  assert.equal(new CommunicationLayout("L", text).width(10), 7);
+  const kept = new CommunicationBubble("L", text, recordingTheme())
+    .render(7)
+    .map(stripTerminalSequences)
+    .join("\n");
+  assert.ok(kept.includes(cluster));
+  const lost = new CommunicationBubble("L", text, recordingTheme())
+    .render(6)
+    .map(stripTerminalSequences)
+    .join("\n");
+  assert.ok(!lost.includes(cluster), "content width 2 drops the 3-cell grapheme");
+  assert.ok(!lost.includes("你"));
 });
 
 test("below four columns the title drops its inset instead of starving the row", () => {
@@ -334,7 +424,7 @@ test("right cards preserve readable content and safe cell bounds across narrow w
   const label = "Alert to parent";
   const text = `你${FAMILY} LONG_MESSAGE_BODY`;
   const bubble = new CommunicationBubble(label, text, recordingTheme());
-  const card = new CommunicationCard(Math.max(visibleWidth(label), visibleWidth(text)), bubble);
+  const card = new CommunicationCard(new CommunicationLayout(label, text), bubble);
   for (const width of [0, -1, 2.5]) assert.deepEqual(card.render(width), []);
   for (const width of [1, 2, 3, 4, 5, 6, 7, 10, 25, 27]) {
     const rows = card.render(width);
@@ -354,11 +444,12 @@ test("right cards preserve readable content and safe cell bounds across narrow w
       if (width >= 6) assert.ok(gap >= 2, `width ${width}: opposing gutter when feasible`);
     }
   }
-  // More generous than 80% on these narrow viewports: enough room for a
-  // short phrase instead of squashing an already narrow prose column.
+  // LONG_MESSAGE_BODY is 17 cells. The fit stops there instead of using the
+  // whole 90% ceiling (width - 3 at these panes).
   for (const width of [25, 27]) {
     const padding = card.render(width).find((row) => row.includes(BG));
-    assert.equal(sgrWalk(padding).cells.filter((cell) => cell.bg === BG).length, width - 3);
+    assert.equal(sgrWalk(padding).cells.filter((cell) => cell.bg === BG).length, 21);
+    assert.ok(21 < width - 3, `width ${width}: fitted card sits inside the ceiling`);
   }
 });
 
@@ -412,6 +503,24 @@ let hostTheme;
 }
 const bubbleBg = hostTheme.getBgAnsi("userMessageBg");
 const bubbleRows = (rows) => rows.filter((row) => row.includes(bubbleBg));
+/** 90% ceiling: at least a tenth of the pane and two columns, unless a four-column card would not fit. */
+const cardCeiling = (available) => {
+  const gutter = Math.max(2, Math.ceil(available / 10));
+  return Math.min(available, Math.max(4, available - gutter));
+};
+/** Background rows of the card whose title ends at this label, plus the following receipt. */
+function cardBlock(rows, title) {
+  const index = rows.findIndex((row) => stripTerminalSequences(row).trimEnd().endsWith(title));
+  if (index < 0) return { index: -1, block: [], receipt: [] };
+  const block = [];
+  let cursor = index + 1;
+  for (; cursor < rows.length && rows[cursor].includes(bubbleBg); cursor++)
+    block.push(rows[cursor]);
+  const receipt = [];
+  for (; cursor < rows.length && stripTerminalSequences(rows[cursor]).trim() !== ""; cursor++)
+    receipt.push(rows[cursor]);
+  return { index, block, receipt };
+}
 
 function assertRightBackground(row, paneWidth, cardWidth) {
   const { cells, fg, bg } = sgrWalk(row);
@@ -458,8 +567,12 @@ test("short alert and ask cards fit their widest line or title, with actual ink 
       ["Alert to parent", [alert], "Alert queued. Continue working."],
       ["Question to parent", ["SHORT_LINE", question], "Question recorded. End your turn now."],
     ]) {
-      const cardWidth = Math.max(...[label, ...lines].map(visibleWidth)) + 2;
-      const titleIndex = rows.findIndex((row) => stripTerminalSequences(row).endsWith(`${label} `));
+      // Ordinary cards use the two-cell inset; these lines fit under the ceiling.
+      const cardWidth = Math.max(...[label, ...lines].map(visibleWidth)) + 4;
+      assert.equal(communicationPadding(cardWidth), 2);
+      const titleIndex = rows.findIndex((row) =>
+        stripTerminalSequences(row).endsWith(`${label}  `),
+      );
       assert.notEqual(titleIndex, -1, `${label} reaches the card's right inset`);
       const title = sgrWalk(rows[titleIndex]);
       assert.equal(title.cells.length, width);
@@ -467,7 +580,7 @@ test("short alert and ask cards fit their widest line or title, with actual ink 
         title.cells.every((cell) => cell.bg === null),
         "the title stays above the BG",
       );
-      assert.ok(title.cells.slice(-label.length - 1, -1).every((cell) => cell.fg === titleFg));
+      assert.ok(title.cells.slice(-label.length - 2, -2).every((cell) => cell.fg === titleFg));
       const block = rows.slice(titleIndex + 1, titleIndex + lines.length + 3);
       for (const row of block) {
         assertRightBackground(row, width, cardWidth);
@@ -476,9 +589,9 @@ test("short alert and ask cards fit their widest line or title, with actual ink 
       for (const [index, line] of lines.entries()) {
         const row = block[index + 1];
         assert.ok(
-          stripTerminalSequences(row).startsWith(`${" ".repeat(width - cardWidth + 1)}${line}`),
+          stripTerminalSequences(row).startsWith(`${" ".repeat(width - cardWidth + 2)}${line}`),
         );
-        const start = width - cardWidth + 1;
+        const start = width - cardWidth + 2;
         assert.ok(
           sgrWalk(row)
             .cells.slice(start, start + visibleWidth(line))
@@ -487,7 +600,12 @@ test("short alert and ask cards fit their widest line or title, with actual ink 
         );
       }
       const row = rows[titleIndex + lines.length + 3];
-      const indent = width - Math.max(cardWidth, visibleWidth(receipt) + 2) + 1;
+      const cap = cardCeiling(width);
+      const column = Math.max(
+        cardWidth,
+        Math.min(cap, visibleWidth(receipt) + 2 * communicationPadding(cap)),
+      );
+      const indent = width - column + communicationPadding(column);
       assert.equal(stripTerminalSequences(row).trimEnd(), `${" ".repeat(indent)}${receipt}`);
       const walk = sgrWalk(row);
       assert.ok(
@@ -510,17 +628,20 @@ test("a wrapped multiline receipt uses one right-hand reading edge, even on narr
   const receiptRows = (rows) => rows.slice(rows.findLastIndex((row) => row.includes(bubbleBg)) + 1);
   const width = 36;
   const rows = rowsAt(content, width);
-  const cardGutter = sgrWalk(rows.find((row) => row.includes(bubbleBg))).cells.findIndex(
-    (cell) => cell.bg === bubbleBg,
-  );
-  const indent = width - Math.floor(width * 0.8) + 1;
+  const cap = cardCeiling(width);
+  const indent = width - cap + communicationPadding(cap);
+  assert.equal(indent, 6, "two-cell padding on the 90% receipt column");
+  const innerEdge = stripTerminalSequences(
+    rows.find((row) => stripTerminalSequences(row).includes("SHORT_BODY")),
+  ).indexOf("SHORT_BODY");
+  const receiptStart = stripTerminalSequences(receiptRows(rows)[0]).search(/\S/u);
   assert.ok(
-    indent < cardGutter + 1,
-    "the receipt widens leftward instead of squeezing to the body",
+    receiptStart < innerEdge,
+    "the receipt widens left of the card's inner edge instead of squeezing to the body",
   );
   assert.deepEqual(
     receiptRows(rows).map((row) => stripTerminalSequences(row).trimEnd()),
-    ["FIRST row has words to", "wrap at narrow widths", "", `${FAMILY} 你好`, "last line"].map(
+    ["FIRST row has words to wrap", "at narrow widths", "", `${FAMILY} 你好`, "last line"].map(
       (line) => (line ? " ".repeat(indent) + line : ""),
     ),
     "wrapped fragments and original lines stay left-reading at a common gutter",
@@ -552,6 +673,156 @@ test("a wrapped multiline receipt uses one right-hand reading edge, even on narr
       assert.equal(walk.fg, null, "each wrapped row closes its error foreground");
     }
   }
+});
+
+test("fitted prose gives back width without adding rows; receipts share that edge or widen", (t) => {
+  const awkward = "alpha bravo charlie delta echo foxtrot";
+  const shortReceipt = "Queued.";
+  const longReceipt = "This receipt is deliberately wider than the fitted question card.";
+  const content = contentOver([
+    assistant([call("fit", "alert_parent", { message: awkward })]),
+    result("fit", shortReceipt),
+    assistant([call("wide", "ask_parent", { question: awkward })]),
+    result("wide", longReceipt, false, "ask_parent"),
+  ]);
+  t.after(() => content.dispose());
+  const width = 40;
+  const cap = cardCeiling(width);
+  const room = cap - 2 * communicationPadding(cap);
+  const capLines = wrapTextWithAnsi(awkward, room);
+  const fitted = ["alpha bravo charlie", "delta echo foxtrot"];
+  assert.equal(capLines.length, fitted.length, "same row count as the 90% wrap");
+  assert.notDeepEqual(capLines, fitted, "words move between rows instead of only trimming slack");
+  assert.ok(capLines[0].includes("delta") && !fitted[0].includes("delta"));
+  assert.equal(cap, 36);
+  const rows = rowsAt(content, width);
+  for (const title of ["Alert to parent", "Question to parent"]) {
+    const { block } = cardBlock(rows, title);
+    assert.equal(block.length, fitted.length + 2, `${title}: padding plus the fitted body`);
+    for (const row of block) assertRightBackground(row, width, 23);
+    assert.deepEqual(
+      block.slice(1, -1).map((row) => stripTerminalSequences(row).trim()),
+      fitted,
+      `${title} redistributes onto the narrower card`,
+    );
+  }
+  const alert = cardBlock(rows, "Alert to parent");
+  const bodyStart = stripTerminalSequences(alert.block[1]).indexOf("alpha");
+  assert.equal(bodyStart, width - 23 + 2, "body ink starts at the fitted inner edge");
+  assert.equal(alert.receipt.length, 1);
+  assert.equal(stripTerminalSequences(alert.receipt[0]).indexOf(shortReceipt), bodyStart);
+  assert.ok(!alert.receipt[0].includes(bubbleBg), "the short receipt stays outside the card");
+  const question = cardBlock(rows, "Question to parent");
+  const longIndent = width - cap + communicationPadding(cap);
+  assert.equal(longIndent, 6);
+  assert.ok(longIndent < bodyStart, "the longer receipt widens leftward, as before");
+  assert.deepEqual(
+    question.receipt.map((row) => stripTerminalSequences(row).trimEnd()),
+    ["This receipt is deliberately", "wider than the fitted question", "card."].map(
+      (line) => " ".repeat(longIndent) + line,
+    ),
+  );
+  assert.ok(question.receipt.every((row) => !row.includes(bubbleBg)));
+});
+
+test("unicode prose keeps the fitted edge across resize", (t) => {
+  const text = `检查 ${FAMILY} alpha beta gamma delta epsilon zeta eta theta iota kappa`;
+  const content = contentOver([
+    assistant([call("uni", "ask_parent", { question: text })]),
+    result("uni", "Ok.", false, "ask_parent"),
+  ]);
+  t.after(() => content.dispose());
+  const paint = (width) => {
+    const rows = rowsAt(content, width);
+    const { block, receipt } = cardBlock(rows, "Question to parent");
+    const cap = cardCeiling(width);
+    const room = cap - 2 * communicationPadding(cap);
+    const { cells } = sgrWalk(block[0]);
+    const painted = cells.filter((cell) => cell.bg === bubbleBg).length;
+    return {
+      rows,
+      block,
+      painted,
+      cap,
+      body: block.slice(1, -1).map((row) => stripTerminalSequences(row).trim()),
+      capLines: wrapTextWithAnsi(text, room),
+      receipt: stripTerminalSequences(receipt[0] ?? ""),
+    };
+  };
+  const at40 = paint(40);
+  assert.equal(at40.painted, 28);
+  assert.ok(at40.painted < at40.cap, "the card is visibly inside the ceiling");
+  assert.equal(at40.body.length, at40.capLines.length);
+  assert.notDeepEqual(at40.body, at40.capLines);
+  assert.equal(at40.body.join("").includes(FAMILY), true);
+  assert.ok(at40.body.join("").includes("检查"));
+  const edge = stripTerminalSequences(at40.block[1]).search(/\S/u);
+  assert.equal(edge, 40 - at40.painted + communicationPadding(at40.painted));
+  assert.equal(at40.receipt.indexOf("Ok."), edge, "the short receipt shares the fitted inner edge");
+  assert.ok(!at40.receipt.includes(bubbleBg));
+  const at70 = paint(70);
+  assert.equal(at70.painted, 37);
+  assert.equal(at70.body.length, at70.capLines.length);
+  assert.equal(at70.receipt.indexOf("Ok."), 70 - 37 + communicationPadding(37));
+  const again = paint(40);
+  assert.deepEqual(
+    again.rows.map(stripTerminalSequences),
+    at40.rows.map(stripTerminalSequences),
+    "returning to the same width restores the fitted card",
+  );
+});
+
+test("the label and an unspaced token that fits at the cap set the card's floor", () => {
+  const label = "Question to parent";
+  const prose = "aa bb cc dd ee ff gg hh ii jj kk ll";
+  const labelCard = new CommunicationCard(
+    new CommunicationLayout(label, prose),
+    new CommunicationBubble(label, prose, recordingTheme()),
+  );
+  const labelRows = labelCard.render(40);
+  const labelBg = labelRows.find((row) => row.includes(BG));
+  assert.equal(sgrWalk(labelBg).cells.filter((cell) => cell.bg === BG).length, 22);
+  assert.equal(
+    stripTerminalSequences(labelRows[0]).trim(),
+    label,
+    "the title is not clipped to chase a tighter wrap",
+  );
+  assert.deepEqual(
+    labelRows
+      .filter((row) => row.includes(BG))
+      .slice(1, -1)
+      .map((row) => stripTerminalSequences(row).trim()),
+    ["aa bb cc dd ee ff", "gg hh ii jj kk ll"],
+  );
+
+  const token = "PATH_TOKEN_ABCDEFGHIJ";
+  const tokenText = `${token} xx yy zz ww vv uu`;
+  const tokenCard = new CommunicationCard(
+    new CommunicationLayout("Alert to parent", tokenText),
+    new CommunicationBubble("Alert to parent", tokenText, recordingTheme()),
+  );
+  const tokenRows = tokenCard.render(40);
+  const tokenBg = tokenRows.find((row) => row.includes(BG));
+  assert.equal(sgrWalk(tokenBg).cells.filter((cell) => cell.bg === BG).length, 25);
+  const tokenBody = tokenRows
+    .filter((row) => row.includes(BG))
+    .slice(1, -1)
+    .map((row) => stripTerminalSequences(row).trim());
+  assert.deepEqual(tokenBody, [token, "xx yy zz ww vv uu"]);
+  // Splitting the token would keep the ceiling's row count, so the floor is what stops it.
+  assert.equal(wrapTextWithAnsi(tokenText, 32).length, wrapTextWithAnsi(tokenText, 20).length);
+  assert.ok(
+    wrapTextWithAnsi(tokenText, 20).some((line) => line === "PATH_TOKEN_ABCDEFGHI"),
+    "a narrower wrap would split the token without adding a row",
+  );
+});
+
+test("a narrow communication receipt wraps before a word and styles complete rows", () => {
+  const receipt = new CommunicationReceipt(new CommunicationLayout("Q", "a"));
+  receipt.setText("a    abc", (row) => `\x1b[33m${row}\x1b[39m`);
+  const rows = receipt.render(7); // Five-cell card, one-cell insets, three content cells.
+  assert.deepEqual(rows, ["   \x1b[33ma\x1b[39m", "   \x1b[33mabc\x1b[39m"]);
+  assert(rows.every((row) => visibleWidth(row) <= 7));
 });
 
 test("receipts stay outside the block: dim when normal, red on error, never lost", () => {
@@ -697,7 +968,14 @@ test("long CJK bodies wrap inside the block; control characters never reach the 
     for (const row of rows) assert.ok(visibleWidth(row) <= width, "no row overflows the pane");
     const block = bubbleRows(rows);
     assert.ok(block.length > 4, "the long bodies wrap across several block rows");
-    for (const row of block) assertRightBackground(row, width, Math.floor(0.8 * width));
+    const alertBlock = cardBlock(rows, "Alert to parent").block;
+    const questionBlock = cardBlock(rows, "Question to parent").block;
+    assert.ok(alertBlock.length > 2, "the CJK alert wraps inside its fitted card");
+    // The alert gives space back under the ceiling. The payload is one unspaced
+    // token wider than the room, so that card stays at the ceiling.
+    for (const row of alertBlock) assertRightBackground(row, width, 28);
+    for (const row of questionBlock) assertRightBackground(row, width, cardCeiling(width));
+    assert.ok(28 < cardCeiling(width), "fitting gives the wrapped alert space back");
     const stripped = rows.map(stripTerminalSequences).join("\n");
     assert.equal(stripped.match(/你/g)?.length, 6, "every CJK repetition survives wrapping");
     assert.equal(stripped.split(FAMILY).length - 1, 1, "the emoji cluster is never split");

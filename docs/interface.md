@@ -88,7 +88,9 @@ longer available. `From user` identifies direct live steering, `From parent`
 the dispatched envelope, and `Alehouse input` internal input; an older `Input`
 label need not establish authorship. Messages from the parent sit on the left;
 alerts and questions to the parent sit on the right, with their receipts on the
-same side outside the card. Cards shrink to fit short messages. The body text
+same side outside the card. Cards hug short messages. For longer alerts and
+questions, 90% of the pane is a ceiling: if the text fits in the same number
+of lines at a narrower width, the card gives that space back. The body text
 uses the active theme's `accent` and `customMessageLabel` colors respectively;
 the layout still distinguishes direction if those colors match. An alert or
 question card shows what was recorded, not that the parent read it. See [UI limits](limitations.md#ui-scope).

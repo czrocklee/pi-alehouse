@@ -18,6 +18,9 @@ setCapabilityOverrides({ trueColor: true });
 initTheme("dark", false);
 const jiti = createJiti(import.meta.url, { fsCache: false });
 const { TranscriptContent } = await jiti.import("../../src/orchestration/ui/transcript.ts");
+const { communicationPadding } = await jiti.import(
+  "../../src/orchestration/ui/communication-bubble.ts",
+);
 const { COMMUNICATION_LIMITS } = await jiti.import(
   "../../src/orchestration/core/communication-envelope.ts",
 );
@@ -127,16 +130,17 @@ for (const { label, tool, raw, expected } of bodyCases) {
     const paneRows = rowsAt(content, width);
     const block = bubbleRows(paneRows);
     assert.equal(block.length, expected.length + 2, "padding, body paragraphs, padding");
-    const title = paneRows.find((row) => stripTerminalSequences(row).endsWith(`${tool.title} `));
+    const title = paneRows.find((row) => stripTerminalSequences(row).endsWith(`${tool.title}  `));
     assert.ok(title, "the right-aligned title renders above its block");
     assert.ok(!title.includes(bubbleBg), "the title sits outside the body background");
     assert.equal(visibleWidth(title), width, "the title reaches the pane's right edge");
-    const gutter = width - Math.max(...[tool.title, ...expected].map(visibleWidth)) - 2;
+    const gutter = width - Math.max(...[tool.title, ...expected].map(visibleWidth)) - 4;
+    assert.equal(communicationPadding(width - gutter), 2, "these cards use the two-cell inset");
     assert.deepEqual(
       plainRows(block.slice(1, -1)),
       expected.map(
         (line) =>
-          `${" ".repeat(gutter + 1)}${line}${" ".repeat(width - gutter - visibleWidth(line) - 1)}`,
+          `${" ".repeat(gutter + 2)}${line}${" ".repeat(width - gutter - visibleWidth(line) - 2)}`,
       ),
       "within the card's indentation, only display escaping changes recorded body bytes",
     );
@@ -374,9 +378,10 @@ test("F3: aligned receipt prose still strips protocols and normalizes whitespace
   const gutter = bubbleRows(rows)[0].indexOf(bubbleBg);
   const expected = ["RECEIPT text", "\\u2068next"];
   const receiptRows = rows.slice(rows.findLastIndex((row) => row.includes(bubbleBg)) + 1);
+  assert.equal(communicationPadding(100 - gutter), 2);
   assert.deepEqual(
     plainRows(receiptRows).map((row) => row.trimEnd()),
-    expected.map((row) => " ".repeat(gutter + 1) + row),
+    expected.map((row) => " ".repeat(gutter + 2) + row),
   );
   for (const [index, row] of receiptRows.entries()) {
     assert.ok(row.includes(hostTheme.fg("dim", expected[index])));
@@ -468,7 +473,26 @@ for (const tool of tools) {
       const notices = noticeRows(rows);
       assert.equal(notices.length, 1, "expansion never hides or duplicates the neutral notice");
       const block = bubbleRows(rows);
-      const indent = Math.min(block[0].indexOf(bubbleBg) + 1, width - visibleWidth(noResult) - 1);
+      const gutter = block[0].indexOf(bubbleBg);
+      const cardWidth = width - gutter;
+      const cap = Math.min(width, Math.max(4, width - Math.max(2, Math.ceil(width / 10))));
+      const column = Math.max(
+        cardWidth,
+        Math.min(cap, visibleWidth(noResult) + 2 * communicationPadding(cap)),
+      );
+      const indent = width - column + communicationPadding(column);
+      assert.equal(
+        communicationPadding(cardWidth),
+        2,
+        "the unresolved card uses the two-cell inset",
+      );
+      if (tool.name === "alert_parent") {
+        assert.equal(cardWidth, 19, "the alert hugs the label, not the 90% ceiling");
+        assert.ok(indent < gutter + 2, "the longer notice widens left of that card");
+      } else {
+        assert.equal(cardWidth, 22, "the question card keeps the label's minimum width");
+        assert.equal(indent, gutter + 2, "a notice that fits shares the card's inner edge");
+      }
       assert.equal(rows.indexOf(notices[0]), rows.lastIndexOf(block.at(-1)) + 1);
       assert.equal(stripTerminalSequences(notices[0]).trimEnd(), " ".repeat(indent) + noResult);
       assert.ok(notices[0].includes(hostTheme.fg("dim", noResult)));
