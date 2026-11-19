@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type { ProviderRequestRule } from "./provider-requests.ts";
 
 /**
  * Mistral-hosted Z.ai GLM constrains every tool's arguments once any tool in
@@ -78,14 +78,5 @@ export function orderFreeToolPayload(payload: unknown): unknown {
   return changed ? { ...payload, tools } : undefined;
 }
 
-/** Installed in the parent and in every child session. */
-export function registerOrderFreeToolSchemas(pi: ExtensionAPI): void {
-  pi.on("before_provider_request", (event, ctx) => {
-    const api: unknown = ctx.model?.api;
-    return typeof api === "string" && ORDERED_DECODING_APIS.has(api)
-      ? orderFreeToolPayload(event.payload)
-      : undefined;
-  });
-}
-
-export const orderFreeToolSchemaExtension: ExtensionFactory = registerOrderFreeToolSchemas;
+export const orderFreeToolSchemaRule: ProviderRequestRule = (model, payload) =>
+  ORDERED_DECODING_APIS.has(model.api) ? orderFreeToolPayload(payload) : undefined;

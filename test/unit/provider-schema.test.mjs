@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { providerRequestExtension } from "../../dist/orchestration/runtime/provider-requests.js";
 import {
   orderFreeSchema,
   orderFreeToolPayload,
-  orderFreeToolSchemaExtension,
+  orderFreeToolSchemaRule,
 } from "../../dist/orchestration/runtime/provider-schema.js";
 
 const fetchSchema = {
@@ -102,9 +103,11 @@ test("only non-strict tools change, and neither the payload nor its schemas are 
   assert.equal(orderFreeToolPayload(undefined), undefined);
 });
 
-test("the extension rewrites only Mistral chat requests", async () => {
+test("the shared extension rewrites only Mistral chat requests", async () => {
   const handlers = [];
-  await orderFreeToolSchemaExtension({ on: (event, handler) => handlers.push([event, handler]) });
+  await providerRequestExtension(orderFreeToolSchemaRule)({
+    on: (event, handler) => handlers.push([event, handler]),
+  });
   assert.deepEqual(
     handlers.map(([event]) => event),
     ["before_provider_request"],

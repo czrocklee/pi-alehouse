@@ -82,10 +82,12 @@ management tools check raw arguments before coercion and recheck at execution;
 child tools generally use Pi's coercion rules. TypeBox-only refinements are not
 Pi schema guarantees. For `mistral-conversations`, Alehouse sends a more
 permissive copy of non-strict schemas to avoid argument ordering constraints;
-registered validation is unchanged. The shim uses the visible API, so a
-virtual parent model routed to Mistral is not covered by that check. Child
-preset slots require physical models. See [routing](routing.md) for local
-resolution; a locally valid selection does not verify remote availability.
+registered validation is unchanged. This shim and [`/fast`](routing.md#fast-requests)
+see the session's selected model, not the resolved route of a virtual parent
+model. A virtual parent routed to Mistral or Codex therefore does not receive
+the corresponding rewrite. Child preset slots require physical models. See
+[routing](routing.md) for local resolution; a locally valid selection does
+not verify remote availability.
 
 ## Retention, history, and accounting
 

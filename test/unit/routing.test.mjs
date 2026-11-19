@@ -250,13 +250,12 @@ for (const scenario of [
       tools = [];
     orchestrationExtension({
       on(name, fn) {
-        // This startup-failure fixture expects one handler per event. Fail loudly
-        // if that changes rather than silently discarding an earlier handler.
-        assert(!handlers.has(name), `Duplicate fixture handler: ${name}`);
-        handlers.set(name, fn);
-        return () => {
-          if (handlers.get(name) === fn) handlers.delete(name);
-        };
+        // Pi runs every registered handler in order, including independent
+        // session_start handlers for the Fast switch and preset restoration.
+        const listeners = handlers.get(name) ?? new Set();
+        listeners.add(fn);
+        handlers.set(name, listeners);
+        return () => listeners.delete(fn);
       },
       registerCommand: (name, command) => commands.set(name, command),
       registerShortcut() {},
@@ -289,7 +288,9 @@ for (const scenario of [
         setStatus: (...args) => statuses.push(args),
       },
     };
-    const start = () => handlers.get("session_start")({}, ctx);
+    const start = async () => {
+      for (const handler of handlers.get("session_start")) await handler({}, ctx);
+    };
     if (scenario.throws) await assert.rejects(start, scenario.throws);
     else {
       await assert.doesNotReject(start);
@@ -328,8 +329,10 @@ for (const scenario of [
         assert.equal(readFileSync(path, "utf8"), scenario.content);
       } else assert.equal(failure.config_path, path);
     }
-    assert.equal(handlers.get("before_agent_start")?.({ systemPrompt: "base" }), undefined);
-    assert.equal(handlers.get("tool_call")({ toolName: "read" }).block, true);
+    for (const handler of handlers.get("before_agent_start") ?? [])
+      assert.equal(handler({ systemPrompt: "base" }), undefined);
+    const blockers = [...handlers.get("tool_call")].map((handler) => handler({ toolName: "read" }));
+    assert(blockers.some((result) => result?.block === true));
     // Repairing disk alone does not initialize the orchestration layer or authorize commands.
     await writeFile(path, JSON.stringify(config({})));
     for (const args of ["fixture-strong", "reload", ""]) {
@@ -339,7 +342,7 @@ for (const scenario of [
       assert.match(failure.resolution, /startup error.*restart Pi/);
     }
     assert.deepEqual(entries, []);
-    assert.deepEqual(statuses, []);
+    assert.deepEqual(statuses, [["alehouse-fast", undefined]], "only the Fast badge is cleared");
     assert.deepEqual(tools, []);
   });
 
@@ -2380,6 +2383,7 @@ test("child construction rejects a runtime model that is no longer physical", as
     settings() {
       throw new Error("settings unused");
     },
+    requestExtension() {},
     parentHistory: {},
     approvalBindings: {},
     activities: {},

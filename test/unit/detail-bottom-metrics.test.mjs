@@ -111,6 +111,29 @@ test("the dock is one glyph-led row: model, turns, context, usage, cost, elapsed
   assert.equal(renderDetailSummary(input(), theme, 120, { activity: false }).length, 1);
 });
 
+test("the Fast icon prefixes an intact model label without displacing other metrics", () => {
+  const data = input({
+    effective_settings: settings({
+      provider: "openai-codex",
+      model: "gpt-6.2-sol",
+      thinking: "xhigh",
+    }),
+  });
+  const paint = recorder();
+  const wide = renderDetailSummary(data, paint.theme, 120, { fastRequested: true })[0];
+  assert.match(wide, / · ⚡ gpt-6\.2-sol\/xhigh · /);
+  assert(paint.calls.some(([tone, text]) => tone === "warning" && text === "⚡"));
+  assert.doesNotMatch(renderDetailSummary(data, theme, 20, { fastRequested: true })[0], /⚡/);
+  for (let width = 12; width <= 120; width++) {
+    const ordinary = renderDetailSummary(data, ansi, width)[0];
+    const decorated = renderDetailSummary(data, ansi, width, { fastRequested: true })[0];
+    assert(visibleWidth(decorated) <= width);
+    const plain = stripTerminalSequences(decorated);
+    if (plain.includes("⚡")) assert.match(plain, /· ⚡ gpt-6\.2-sol\/xhigh(?: · |$)/);
+    assert.equal(plain.replace("⚡ ", ""), stripTerminalSequences(ordinary));
+  }
+});
+
 test("the current-turn clock is whole, floored seconds at the very end", () => {
   assert.match(row({ turn_elapsed_ms: 18_000 }), /turn 18s$/);
   assert.match(row({ turn_elapsed_ms: 1_100 }), /turn 1s$/);

@@ -201,6 +201,7 @@ try {
   const errors = [];
   await session.bindExtensions({ mode: "rpc", onError: ({ error }) => errors.push(error) });
   for (const turn of [1, 2, 3, 4]) {
+    if (turn === 2 || turn === 4) await session.prompt("/fast");
     await session.prompt(`Fixture prompt ${turn}`);
     assert.equal(session.getLastAssistantText(), `WS response ${turn}`);
   }
@@ -212,12 +213,12 @@ try {
   }
   assert.deepEqual(
     wsBodies.map((body) => body.service_tier),
-    [undefined, undefined, undefined, undefined],
+    [undefined, "priority", "priority", undefined],
   );
   assert.deepEqual(
     wsBodies.map((body) => body.previous_response_id),
-    [undefined, "resp_fixture_1", "resp_fixture_2", "resp_fixture_3"],
-    "later turns reuse the previous response",
+    [undefined, undefined, "resp_fixture_2", undefined],
+    "continuation is reused only while the tier is unchanged",
   );
 
   const [peer] = sockets.clients;
@@ -245,7 +246,7 @@ try {
   assert.deepEqual(errors, []);
   assert.deepEqual(unexpected, []);
   console.log(
-    "PASS: Codex auto reuses WebSocket and publishes quota before and after SSE fallback, loopback only",
+    "PASS: Codex auto reuses WebSocket across /fast changes and publishes quota before and after SSE fallback, loopback only",
   );
 } finally {
   try {

@@ -72,6 +72,7 @@ export interface HumanStopResult {
 export interface PanelCoordinatorOptions {
   pi: ExtensionAPI;
   widget: AgentWidget;
+  fastRequestedFor?: (provider: string, model: string) => boolean;
   ready(): boolean;
   router(): PresetRouter;
   publish(
@@ -554,6 +555,7 @@ export class PanelCoordinator {
                 input: { view: agent.view, live: agent.live } satisfies DetailInput,
               })),
             revision: () => this.options.widget.presentationVersion?.(),
+            fastRequestedFor: this.options.fastRequestedFor,
             visible: () => mountable(this.yielding, this.approvals.pending),
             invalidate: () => {
               const next = paletteGeneration();

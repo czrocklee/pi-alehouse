@@ -39,7 +39,8 @@ before changing contracts.
   projection only.
 - **Alehouse** for user-facing labels and `/alehouse-*` commands; plain labels
   (Settings, Agents, Usage) inside branded panels; the internal layer is
-  **orchestration**.
+  **orchestration**. `/fast` is an intentional exception for the single Codex
+  speed preference. Check it for collisions when upgrading Pi.
 - English first. Other languages only where behavior needs them: CJK/grapheme
   fixtures and non-English input matchers (e.g.
   `src/extensions/lib/jev-review-packet.ts`).

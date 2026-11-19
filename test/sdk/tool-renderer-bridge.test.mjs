@@ -227,6 +227,7 @@ async function fixture(t, { sentinelFor } = {}) {
     runtime,
     profiles,
     settings: () => sdk.SettingsManager.inMemory({}),
+    requestExtension() {},
     parentHistory: {
       getSessionId: () => "renderer-bridge-parent",
       isPersisted: () => false,
@@ -575,6 +576,7 @@ async function authorityFixture(t) {
     runtime: await syntheticRuntime(),
     profiles: { editor: { definition, body: frontmatter[2], tools } },
     settings: () => sdk.SettingsManager.inMemory({}),
+    requestExtension() {},
     parentHistory: {
       getSessionId: () => "renderer-authority-parent",
       isPersisted: () => false,

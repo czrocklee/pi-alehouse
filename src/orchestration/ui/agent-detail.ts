@@ -165,6 +165,8 @@ export interface DetailPaneOptions {
   freshSnapshot?: () => { agent_id: string; input: DetailInput }[];
   /** Cheap data invalidation hint, independent of animation and elapsed time. */
   revision?: () => unknown;
+  /** Live request preference, not a claim about the viewed Run's past usage. */
+  fastRequestedFor?: (provider: string, model: string) => boolean;
   visible?: () => boolean;
   invalidate?: () => void;
   /** One Agent's transcript rows, created once per Agent and reused; undefined
@@ -1065,6 +1067,14 @@ export class DetailPane {
     const summary = renderDetailSummary(entry.input, th, contentWidth, {
       activity: false,
       spinnerFrame: this.frame,
+      fastRequested:
+        (view.status === "queued" || view.status === "running") &&
+        !view.execution_exited &&
+        !view.finalization_pending &&
+        this.options.fastRequestedFor?.(
+          view.effective_settings.provider,
+          view.effective_settings.model,
+        ),
     });
     // Menu overflow and the footer's no-pinned-row fallback are different
     // facts: partial overflow belongs on Info, not an extra footer !N.

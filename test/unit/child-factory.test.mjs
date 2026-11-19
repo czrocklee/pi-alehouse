@@ -36,7 +36,6 @@ export const createChildToolRendererLookup = (session) => {
 };
 export const webProfileNames = ["researcher"];
 export const childWebExtension = (factory) => factory;
-export const orderFreeToolSchemaExtension = () => {};
 export class ChildRunGate { extension = () => {}; accepting = false; stopped = false; }
 export class ManagedBlockObserver {
   constructor(subscribe) { state.blockSubscribe = subscribe; }
@@ -181,6 +180,7 @@ function fixture(t, profile = "editor") {
     runtime: { getModel: () => model, getPhysicalModel: () => model },
     profiles: { [profile]: { definition, body: "Shared worker body.", tools } },
     settings: () => ({}),
+    requestExtension() {},
     parentHistory: {},
     parentPermission: () => ({}),
     getPermissionsService: () => undefined,
@@ -259,6 +259,7 @@ for (const profile of ["editor", "researcher"])
       const loader = seam.state.loaders[0].options;
       assert.equal(loader.noSkills, enabled === false);
       assert.equal(loader.noExtensions, true);
+      assert.equal(loader.extensionFactories[0], f.options.requestExtension);
       assert.equal(loader.noPromptTemplates, true);
       assert.equal(loader.noThemes, true);
       await port.dispose();

@@ -72,7 +72,10 @@ pressing and releasing on its `✕`; hover alone does nothing.
 `Alt+A` opens Agent details. In fullscreen, click a roster row to open/select
 it; click the selected row again to close. The title identifies the task with
 `#N` or a shortened Run ID. Tabs stay in Agent creation order even as the
-widget reorders for new work.
+widget reorders for new work. The bottom model label gets a **⚡** when
+[`/fast`](routing.md#fast-requests) is enabled for that Agent's model and the
+label fits. The icon applies to queued and active Runs, not finished history
+or confirmed provider routing.
 
 | Control                              | Action                                                                          |
 | ------------------------------------ | ------------------------------------------------------------------------------- |

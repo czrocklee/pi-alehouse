@@ -803,7 +803,34 @@ test(
 );
 
 test(
-  "real Codex auto reuses WebSocket and reports quota after SSE fallback, loopback only",
+  "real composition shares one parent /fast switch with existing and new Agents, offline",
+  { timeout: 30000 },
+  (t) => {
+    const dir = temporary(t);
+    const output = execFileSync(
+      process.execPath,
+      [join(packageRoot, "test/integration/fixtures/fast-mode.mjs")],
+      {
+        env: {
+          HOME: dir,
+          PATH: process.env.PATH,
+          PI_CODING_AGENT_DIR: join(dir, "agent"),
+          PI_OFFLINE: "1",
+          NO_COLOR: "1",
+        },
+        encoding: "utf8",
+        timeout: 25000,
+      },
+    );
+    assert.match(
+      output,
+      /one parent \/fast changes parent requests and serialized Codex requests from existing and new Agents, offline/,
+    );
+  },
+);
+
+test(
+  "real Codex auto reuses WebSocket across /fast and reports quota after SSE fallback, loopback only",
   { timeout: 30000 },
   (t) => {
     const dir = temporary(t);
@@ -827,7 +854,7 @@ test(
     assert.equal(result.status, 0, result.stderr);
     assert.match(
       result.stdout,
-      /Codex auto reuses WebSocket and publishes quota before and after SSE fallback, loopback only/,
+      /Codex auto reuses WebSocket across \/fast changes and publishes quota before and after SSE fallback, loopback only/,
     );
   },
 );

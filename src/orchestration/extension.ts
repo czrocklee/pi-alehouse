@@ -42,6 +42,7 @@ import { ChildWebModules, nativeWebLoader } from "./runtime/child-web.ts";
 import { configureChildRuntime } from "./runtime/execution-policy.ts";
 import type { ManagedBlockSubscription } from "./runtime/permission-blocks.ts";
 import { createDispatchRuntime } from "./runtime/dispatch-runtime.ts";
+import { registerFastMode } from "./runtime/fast-mode.ts";
 import { researcherHostModules } from "./runtime/host-modules.ts";
 import { requestHumanSteer } from "./runtime/human-steer.ts";
 import { requestHumanStop } from "./runtime/human-stop.ts";
@@ -55,7 +56,8 @@ import {
   workerEffortCapabilities,
 } from "./runtime/preset-publication.ts";
 import { restorePresetDefinitions, restorePresetRouter } from "./runtime/preset-restoration.ts";
-import { registerOrderFreeToolSchemas } from "./runtime/provider-schema.ts";
+import { providerRequestExtension } from "./runtime/provider-requests.ts";
+import { orderFreeToolSchemaRule } from "./runtime/provider-schema.ts";
 import { createPresetModelSelector } from "./runtime/preset-model-selector.ts";
 import { hostUsage } from "./runtime/tool-usage.ts";
 import { createOwnerTools } from "./tools/parent-tools.ts";
@@ -397,7 +399,9 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
   };
   let parentPermission: () => unknown = () => undefined;
   const residentLimit = DEFAULT_OWNER_LIMITS.resident;
-  registerOrderFreeToolSchemas(pi);
+  const fast = registerFastMode(pi);
+  const requestExtension = providerRequestExtension(orderFreeToolSchemaRule, fast.requestRule);
+  requestExtension(pi);
   historicalRunsCommand(pi);
   let delegation: DelegationSetting = { ...defaultDelegation };
   /** Autonomous modes route web research to scouts; Off and Manual keep the
@@ -574,6 +578,8 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
   const panels = new PanelCoordinator({
     pi,
     widget,
+    fastRequestedFor: (provider, model) =>
+      fast.requestedForModel(() => routingContext?.modelRegistry.find(provider, model)),
     ready: () => ready,
     router: requireRouter,
     publish: publishPreset,
@@ -921,6 +927,7 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
       profiles,
       settings,
       skillsEnabled: currentChildSkills,
+      requestExtension,
       parentHistory,
       approvalBindings,
       activities,

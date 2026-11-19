@@ -87,6 +87,7 @@ const ctx = {
   ui: {},
 };
 const handlers = new Map();
+const statuses = new Map();
 let footer;
 const theme = { fg: (_color, text) => text, bold: (text) => text };
 let renderRequests = 0;
@@ -116,7 +117,7 @@ extension({
 ctx.ui.setFooter = (factory) => {
   footer = factory(tui, theme, {
     getGitBranch: () => undefined,
-    getExtensionStatuses: () => [],
+    getExtensionStatuses: () => statuses,
     onBranchChange: () => () => {},
   });
 };
@@ -858,6 +859,22 @@ try {
     );
     assert.match(line(), /5h 0% W 0%/);
   }
+
+  useModel("openai-codex", "gpt-6.2-sol", { ...codexApi, thinkingLevel: "xhigh" });
+  const joinedBadge = / · ⚡ gpt-6\.2-sol \(xhigh\) · /;
+  statuses.set("alehouse-fast", "⚡");
+  for (const mode of ["regular", "fullscreen"]) {
+    tui.mode = mode;
+    assert.match(footer.render(160)[0], joinedBadge, `${mode}: badge directly prefixes the model`);
+    assert.equal(footer.render(20)[0].includes("⚡"), false, `${mode}: no orphaned badge`);
+    for (let width = 20; width <= 160; width++) {
+      const row = footer.render(width)[0];
+      assert(visibleWidth(row) <= width);
+      if (row.includes("⚡")) assert.match(row, joinedBadge);
+    }
+  }
+  statuses.delete("alehouse-fast");
+  assert.doesNotMatch(line(), /⚡/);
 
   assert.deepEqual(forbidden, []);
   assert.deepEqual(authReads, []);

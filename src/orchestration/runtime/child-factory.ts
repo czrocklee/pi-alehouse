@@ -8,6 +8,7 @@ import {
   type CreateAgentSessionOptions,
   type EventBus,
   type ExtensionContext,
+  type ExtensionFactory,
   type ModelRuntime,
   type SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -28,7 +29,6 @@ import { createChildToolRendererLookup } from "./child-tool-renderers.ts";
 import { assembleChildSession, disposeChildSession } from "./child-session.ts";
 import { childWebExtension, type ChildWebModules, type WebLease } from "./child-web.ts";
 import { digest } from "./context-snapshot.ts";
-import { orderFreeToolSchemaExtension } from "./provider-schema.ts";
 import { ManagedBlockObserver, type ManagedBlockSubscription } from "./permission-blocks.ts";
 import { WorkerStatsObserver } from "./worker-stats.ts";
 
@@ -51,6 +51,8 @@ export function createChildSessionFactory(options: {
   settings(): SettingsManager;
   /** Sampled at session creation, including queued Agents' first Runs; existing sessions keep resources. */
   skillsEnabled?(): boolean;
+  /** Trusted payload rules shared with this parent; not extension discovery. */
+  requestExtension: ExtensionFactory;
   parentHistory: ConstructorParameters<typeof PiRunJournal>[0]["parent"];
   approvalBindings: ApprovalBindings;
   activities: ChildActivityRegistry;
@@ -145,7 +147,7 @@ export function createChildSessionFactory(options: {
       // decision handler today; preserve this order so the veto remains final
       // for any handlers added beside it later.
       extensionFactories: [
-        orderFreeToolSchemaExtension,
+        options.requestExtension,
         ...(web ? [childWebExtension(web.factory)] : []),
         activity.extension,
         options.approvalBindings.childExtension(manager.getSessionId()),

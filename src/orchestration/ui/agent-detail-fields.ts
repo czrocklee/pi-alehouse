@@ -3,6 +3,7 @@ import { validDifficulty, type RunView } from "../core/contracts.ts";
 import { reported, type UsageComponent } from "../core/usage-ledger.ts";
 import { formatTokenCount } from "../../shared/token-format.mjs";
 import { shortcutHint } from "../../shared/shortcut-hint.mjs";
+import { FAST_MODEL_GLYPH } from "../../shared/overlay-protocol.mjs";
 import { profileLabel } from "../tools/tool-names.ts";
 import type { ActiveTool, GenerationPreview } from "../runtime/activity-types.ts";
 import { singleLineToolArgumentDisplay } from "../presentation/tool-argument-text.ts";
@@ -384,7 +385,7 @@ export function renderDetailSummary(
   input: DetailInput,
   theme: Theme,
   width: number,
-  options: { activity?: boolean; spinnerFrame?: number } = {},
+  options: { activity?: boolean; spinnerFrame?: number; fastRequested?: boolean } = {},
 ): string[] {
   const { view, live } = input;
   const s = view.effective_settings;
@@ -572,11 +573,18 @@ export function renderDetailSummary(
   const keptModel = kept.find((segment) => segment.key === "model");
   if (keptModel && fits()) {
     const modelRoom = Math.min(visibleWidth(model), keptModel.width + room - total(kept));
-    const plain = clipPlainText(model, modelRoom);
+    const label = clipPlainText(model, modelRoom);
+    const prefix =
+      options.fastRequested &&
+      label === model &&
+      total(kept) - keptModel.width + visibleWidth(`${FAST_MODEL_GLYPH} ${label}`) <= room
+        ? `${FAST_MODEL_GLYPH} `
+        : "";
+    const plain = prefix + label;
     replace("model", {
       ...keptModel,
       plain,
-      text: theme.fg("dim", plain),
+      text: (prefix ? `${theme.fg("warning", FAST_MODEL_GLYPH)} ` : "") + theme.fg("dim", label),
       width: visibleWidth(plain),
     });
   }

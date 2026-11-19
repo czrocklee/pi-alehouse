@@ -62,7 +62,10 @@ function bridgedAgent(registry, id, toolName) {
 }
 
 /** The full bridge: registry-backed widget, coordinator, captured pane factory. */
-function bridgedRoster(t, { ids = ["a", "b"], toolName = "bash", observe } = {}) {
+function bridgedRoster(
+  t,
+  { ids = ["a", "b"], toolName = "bash", observe, viewOverrides, fastRequestedFor } = {},
+) {
   const activities = new ChildActivityRegistry();
   const agents = ids.map((id) => bridgedAgent(activities, id, toolName));
   const observations = observe?.(agents) ?? activities.observations;
@@ -87,6 +90,7 @@ function bridgedRoster(t, { ids = ["a", "b"], toolName = "bash", observe } = {})
     cleanup_errors: [],
     discarded_inputs: [],
     effective_settings: settings,
+    ...viewOverrides?.(id),
   }));
   const widget = new AgentWidget(
     {
@@ -106,6 +110,7 @@ function bridgedRoster(t, { ids = ["a", "b"], toolName = "bash", observe } = {})
   const panels = new PanelCoordinator({
     pi: { events: bus, registerShortcut: (name, spec) => shortcuts.set(name, spec) },
     widget,
+    fastRequestedFor,
     ready: () => true,
     router() {
       throw new Error("unused");
@@ -167,6 +172,44 @@ test("the bridge renders the selected agent's registry renderer in the pane", as
     a.calls.some((entry) => entry.slot === "lookup" && entry.name === "bash"),
     "the live session registry was queried by name",
   );
+  h.pane().handleInput("\x1b");
+  await opening;
+});
+
+test("the pane shows the current Fast preference only for a live eligible Agent", async (t) => {
+  let fast = false;
+  const h = bridgedRoster(t, {
+    ids: ["a", "b", "c", "d"],
+    viewOverrides: (id) => ({
+      ...(id === "c"
+        ? {}
+        : { status: id === "d" ? "queued" : "running", execution_exited: false, resumable: false }),
+      effective_settings: {
+        ...settings,
+        ...(id === "b"
+          ? { provider: "mistral", model: "mistral-test" }
+          : { provider: "openai-codex-2", model: "gpt-6.2-sol", thinking: "xhigh" }),
+      },
+    }),
+    fastRequestedFor: (provider, model) =>
+      fast && provider === "openai-codex-2" && model === "gpt-6.2-sol",
+  });
+  const opening = h.open();
+  const paint = () => h.pane().render(120).map(stripTerminalSequences).join("\n");
+  const badge = / · ⚡ gpt-6\.2-sol\/xhigh · /;
+  assert.doesNotMatch(paint(), /⚡/);
+  fast = true;
+  assert.match(paint(), badge);
+  h.pane().activate("b");
+  assert.match(paint(), / · mistral-test\//);
+  assert.doesNotMatch(paint(), /⚡/);
+  h.pane().activate("c");
+  assert.match(paint(), / · gpt-6\.2-sol\/xhigh · /);
+  assert.doesNotMatch(paint(), /⚡/, "finished Run history does not acquire a live badge");
+  h.pane().activate("d");
+  assert.match(paint(), badge, "queued work shares the same switch");
+  fast = false;
+  assert.doesNotMatch(paint(), /⚡/);
   h.pane().handleInput("\x1b");
   await opening;
 });

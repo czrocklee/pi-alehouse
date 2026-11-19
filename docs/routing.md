@@ -72,6 +72,35 @@ reused. Use a new Agent to change the route. Routing and permission profiles
 are independent: the main model can choose `worker` or `scout` and a difficulty,
 not a model or effort. See [profile capabilities](security.md#explicit-process-and-tool-boundary).
 
+## Fast requests
+
+Run `/fast` in the parent to toggle Fast for this session, including its
+existing and future Agents. Use `/fast on` or `/fast off` to set it explicitly,
+or `/fast status` to check it without changing it. The switch starts off in
+new, resumed and forked sessions and is not saved. It applies when the next
+supported Codex request is built; it does not interrupt in-flight requests or
+change models, preset or effort. When the requested tier changes on a reused
+WebSocket, Pi resends the full context on the next request instead of using the
+previous response ID.
+
+Alehouse requests `service_tier: "priority"` for supported physical
+`openai-codex` models, including registered numbered Codex slots, without
+replacing an explicit service tier. Pi's model registry does not expose tier
+support, so Alehouse uses a local allowlist based on [OpenAI's Codex model
+catalog](https://github.com/openai/codex/blob/6c0cee502d215e5df2dd9a303cf2e252229c9e12/codex-rs/models-manager/models.json):
+GPT-5.6 Sol/Terra/Luna, GPT-6 Astra/Sol/Luna, GPT-6.1 Sol/Terra, and
+GPT-6.2 Sol/Astra. Unlisted IDs are skipped, including GPT-5.4 and GPT-5.5,
+which [retired from Codex with ChatGPT sign-in](https://learn.chatgpt.com/docs/models).
+Listed models still need to be registered in Pi and available to your account.
+In the official Codex CLI, type `/` to [check whether `/fast` is available](https://learn.chatgpt.com/docs/agent-configuration/speed#codex-cli-controls)
+for your selected model.
+
+When the switch is on, a **⚡** prefixes the selected model in the footer if
+that model supports Fast and the label fits. Switching to an unsupported model
+hides the icon without turning Fast off for eligible Agents. The icon does
+not confirm backend routing. Priority processing can use more of your quota;
+Pi's local cost estimate may not reflect the tier.
+
 ## Difficulty
 
 Rate the reasoning needed for the concrete task, not workload, urgency, cost,

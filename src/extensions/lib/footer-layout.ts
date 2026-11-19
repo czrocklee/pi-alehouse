@@ -3,6 +3,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatTokenCount } from "../../shared/token-format.mjs";
 import {
   APPROVAL_INDICATOR,
+  FAST_MODEL_INDICATOR,
   HEALTH_INDICATOR,
   PINNED_INDICATORS,
   WORKER_PRESET_INDICATOR,
@@ -493,9 +494,11 @@ export function paintFooter(input: FooterPaintInput): { row: string; hits: Foote
   const usageInput = `${value(formatTokens(totalInput))} (${cacheHitDisplay})`;
 
   const modelDisplay = modelLabel(input, theme, input.route);
-  const statuses = [...input.statuses]
-    // Subagent status belongs in its own widget, not in this footer.
-    .filter(([key]) => key !== "subagents")
+  const publishedStatuses = [...input.statuses];
+  const fastGlyph = publishedStatuses.find(([key]) => key === FAST_MODEL_INDICATOR)?.[1];
+  const statuses = publishedStatuses
+    // Fast prefixes the model; subagent status belongs in its own widget.
+    .filter(([key]) => key !== "subagents" && key !== FAST_MODEL_INDICATOR)
     .map(([key, text]) => ({
       key,
       text: indicatorValue(key, oneLine(text).replace(/ +/g, " ").trim()),
@@ -591,11 +594,22 @@ export function paintFooter(input: FooterPaintInput): { row: string; hits: Foote
     if (visibleWidth([...fittedQuota, part].join(" ")) <= prefixRoom) fittedQuota.push(part);
   }
   const quotaText = fittedQuota.join(" ");
-  const chrome = truncateToWidth(
-    oneLine([location, modelDisplay].join(FOOTER_SEPARATOR)),
-    Math.max(0, prefixRoom - visibleWidth(quotaText) - (quotaText ? FOOTER_SEPARATOR.length : 0)),
-    "…",
+  const chromeRoom = Math.max(
+    0,
+    prefixRoom - visibleWidth(quotaText) - (quotaText ? FOOTER_SEPARATOR.length : 0),
   );
+  const modelChrome = oneLine([location, modelDisplay].join(FOOTER_SEPARATOR));
+  const withFast =
+    fastGlyph && model
+      ? oneLine(
+          [location, `${theme.fg("warning", fastGlyph)} ${modelDisplay}`].join(FOOTER_SEPARATOR),
+        )
+      : undefined;
+  // Omit the prefix before clipping the model; never leave a detached bolt.
+  const chrome =
+    withFast && visibleWidth(withFast) <= chromeRoom
+      ? withFast
+      : truncateToWidth(modelChrome, chromeRoom, "…");
   const prefix =
     chrome && quotaText ? `${chrome}${FOOTER_SEPARATOR}${quotaText}` : chrome || quotaText;
   const contextX = prefix && contextDisplay ? visibleWidth(prefix) + FOOTER_SEPARATOR.length : 0;
