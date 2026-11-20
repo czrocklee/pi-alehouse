@@ -119,19 +119,22 @@ test("the Fast icon prefixes an intact model label without displacing other metr
       thinking: "xhigh",
     }),
   });
-  const paint = recorder();
-  const wide = renderDetailSummary(data, paint.theme, 120, { fastRequested: true })[0];
-  assert.match(wide, / · ⚡ gpt-6\.2-sol\/xhigh · /);
-  assert(paint.calls.some(([tone, text]) => tone === "warning" && text === "⚡"));
-  assert.doesNotMatch(renderDetailSummary(data, theme, 20, { fastRequested: true })[0], /⚡/);
-  for (let width = 12; width <= 120; width++) {
-    const ordinary = renderDetailSummary(data, ansi, width)[0];
-    const decorated = renderDetailSummary(data, ansi, width, { fastRequested: true })[0];
-    assert(visibleWidth(decorated) <= width);
-    const plain = stripTerminalSequences(decorated);
-    if (plain.includes("⚡")) assert.match(plain, /· ⚡ gpt-6\.2-sol\/xhigh(?: · |$)/);
-    assert.equal(plain.replace("⚡ ", ""), stripTerminalSequences(ordinary));
+  for (const glyph of ["⚡", "⚡⚡"]) {
+    const paint = recorder();
+    const wide = renderDetailSummary(data, paint.theme, 120, { modelSpeedGlyph: glyph })[0];
+    assert.ok(wide.includes(` · ${glyph} gpt-6.2-sol/xhigh · `));
+    assert(paint.calls.some(([tone, text]) => tone === "warning" && text === glyph));
+    assert.doesNotMatch(renderDetailSummary(data, theme, 20, { modelSpeedGlyph: glyph })[0], /⚡/);
+    for (let width = 0; width <= 120; width++) {
+      const ordinary = renderDetailSummary(data, ansi, width)[0];
+      const decorated = renderDetailSummary(data, ansi, width, { modelSpeedGlyph: glyph })[0];
+      assert(visibleWidth(decorated) <= width);
+      const plain = stripTerminalSequences(decorated);
+      if (plain.includes("⚡")) assert.ok(plain.includes(`· ${glyph} gpt-6.2-sol/xhigh`));
+      assert.equal(plain.replace(`${glyph} `, ""), stripTerminalSequences(ordinary));
+    }
   }
+  assert.doesNotMatch(renderDetailSummary(data, theme, 120)[0], /⚡/);
 });
 
 test("the current-turn clock is whole, floored seconds at the very end", () => {

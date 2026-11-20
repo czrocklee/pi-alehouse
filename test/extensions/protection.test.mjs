@@ -33,7 +33,12 @@ symlinkSync(sharedLogs, join(agentDir, "logs"));
 const auditActive = join(agentDir, "logs/jev-auto-approval.jsonl");
 const auditLock = join(agentDir, "logs/.jev-auto-approval.jsonl.lock");
 const auditArchives = join(agentDir, "logs/jev-auto-approval.jsonl.archives");
+const limitsPath = join(agentDir, "alehouse-codex-speeds.json");
+const limitsSource = join(dir, "personal-model-limits.json");
+writeFileSync(limitsSource, "{}");
+symlinkSync(limitsSource, limitsPath);
 const resources = protectionResources({ agentDir }, {});
+assert(resources.writeFiles.includes(limitsPath));
 assert(resources.writeFiles.includes(auditActive));
 assert(resources.writeFiles.includes(auditLock));
 assert(resources.writeRoots.includes(auditArchives));
@@ -45,7 +50,7 @@ assert.throws(() => protectionApi.requireManagedResourceProtection(), /must init
 const protection = protectionApi.initializeManagedResourceProtection({
   writeRoots: [root, auditArchives],
   readFiles: [credentials],
-  writeFiles: [auditActive, auditLock],
+  writeFiles: [auditActive, auditLock, limitsPath],
 });
 function resolver(yolo = false, explicitDeny = false) {
   const allow = {
@@ -112,6 +117,8 @@ for (const profile of [undefined, "editor", "researcher"])
         join(root, "index.ts"),
         "runtime-link/index.ts",
         "runtime[dev]/new.ts",
+        limitsSource,
+        limitsPath,
         "runtime[dev]",
         dir,
       ]) {

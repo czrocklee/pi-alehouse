@@ -17,6 +17,7 @@ export const FOOTER_INDICATOR_CLICK_EVENT = "pi-footer:indicator-click";
 /** A visual prefix of the current model, not a pinned or clickable control. */
 export const FAST_MODEL_INDICATOR = "alehouse-fast";
 export const FAST_MODEL_GLYPH = "⚡";
+export const ULTRAFAST_MODEL_GLYPH = "⚡⚡";
 /** Alehouse's worker-routing status, leftmost in the pinned corner group. */
 export const WORKER_PRESET_INDICATOR = "alehouse-preset";
 /** The approval indicator's status (approval-mode.ts). */

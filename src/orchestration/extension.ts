@@ -578,8 +578,8 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
   const panels = new PanelCoordinator({
     pi,
     widget,
-    fastRequestedFor: (provider, model) =>
-      fast.requestedForModel(() => routingContext?.modelRegistry.find(provider, model)),
+    modelSpeedGlyph: (provider, model) =>
+      fast.glyphForModel(() => routingContext?.modelRegistry.find(provider, model)),
     ready: () => ready,
     router: requireRouter,
     publish: publishPreset,

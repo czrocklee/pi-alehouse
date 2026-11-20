@@ -861,16 +861,18 @@ try {
   }
 
   useModel("openai-codex", "gpt-6.2-sol", { ...codexApi, thinkingLevel: "xhigh" });
-  const joinedBadge = / · ⚡ gpt-6\.2-sol \(xhigh\) · /;
-  statuses.set("alehouse-fast", "⚡");
-  for (const mode of ["regular", "fullscreen"]) {
-    tui.mode = mode;
-    assert.match(footer.render(160)[0], joinedBadge, `${mode}: badge directly prefixes the model`);
-    assert.equal(footer.render(20)[0].includes("⚡"), false, `${mode}: no orphaned badge`);
-    for (let width = 20; width <= 160; width++) {
-      const row = footer.render(width)[0];
-      assert(visibleWidth(row) <= width);
-      if (row.includes("⚡")) assert.match(row, joinedBadge);
+  for (const glyph of ["⚡", "⚡⚡"]) {
+    statuses.set("alehouse-fast", glyph);
+    for (const mode of ["regular", "fullscreen"]) {
+      tui.mode = mode;
+      const joinedBadge = ` · ${glyph} gpt-6.2-sol (xhigh) · `;
+      assert.ok(footer.render(160)[0].includes(joinedBadge), `${mode}: badge prefixes the model`);
+      assert.equal(footer.render(20)[0].includes("⚡"), false, `${mode}: no orphaned badge`);
+      for (let width = 20; width <= 160; width++) {
+        const row = footer.render(width)[0];
+        assert(visibleWidth(row) <= width);
+        if (row.includes("⚡")) assert.ok(row.includes(joinedBadge), `${mode}: ${width}: ${row}`);
+      }
     }
   }
   statuses.delete("alehouse-fast");

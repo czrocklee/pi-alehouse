@@ -1,74 +1,97 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { FAST_MODEL_GLYPH, FAST_MODEL_INDICATOR } from "../../shared/overlay-protocol.mjs";
+import {
+  getAgentDir,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import {
+  FAST_MODEL_GLYPH,
+  FAST_MODEL_INDICATOR,
+  ULTRAFAST_MODEL_GLYPH,
+} from "../../shared/overlay-protocol.mjs";
+import { loadSpeedLimits, type SpeedLimit, type SpeedLimits } from "./codex-speed-limits.ts";
 import type { ProviderRequestRule } from "./provider-requests.ts";
 
-const CODEX_PROVIDER = /^openai-codex(?:-(?:[2-9]|[1-9]\d+))?$/;
-// Fast (service_tiers[].id === "priority") in OpenAI's bundled Codex catalog:
-// https://github.com/openai/codex/blob/6c0cee502d215e5df2dd9a303cf2e252229c9e12/codex-rs/models-manager/models.json
-// Exclude internal models and those retired for Codex with ChatGPT sign-in.
-// Pi does not expose these capabilities; this is not an account entitlement check.
-const FAST_MODELS: ReadonlySet<string> = new Set([
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
-  "gpt-6-astra",
-  "gpt-6-sol",
-  "gpt-6-luna",
-  "gpt-6.1-sol",
-  "gpt-6.1-terra",
-  "gpt-6.2-sol",
-  "gpt-6.2-astra",
-]);
+const SPEEDS = {
+  fast: { name: "Fast", tier: "priority", glyph: FAST_MODEL_GLYPH },
+  ultrafast: { name: "Ultrafast", tier: "ultrafast", glyph: ULTRAFAST_MODEL_GLYPH },
+} as const;
 type ModelIdentity = { api: unknown; provider: string; id: string };
 
-function supportsFast(model: ModelIdentity | undefined): boolean {
-  return (
-    model?.api === "openai-codex-responses" &&
-    CODEX_PROVIDER.test(model.provider) &&
-    FAST_MODELS.has(model.id)
-  );
-}
-
-/** Register only on the parent. Request rules and UI use the same live switch. */
-export function registerFastMode(pi: ExtensionAPI) {
-  let enabled = false;
-  const requestedFor = (model: ModelIdentity | undefined) => enabled && supportsFast(model);
+/** One session ceiling; the parent and every child resolve it for their own physical model. */
+export function registerFastMode(
+  pi: ExtensionAPI,
+  readLimits = () => loadSpeedLimits(getAgentDir()),
+) {
+  let ceiling: SpeedLimit = "normal";
+  let limits: SpeedLimits | undefined;
+  const requestedFor = (model: ModelIdentity | undefined) => {
+    if (ceiling === "normal" || model?.api !== "openai-codex-responses") return undefined;
+    const max = limits?.limitFor(model.provider, model.id);
+    if (!max || max === "normal") return undefined;
+    return SPEEDS[ceiling === "ultrafast" ? max : "fast"];
+  };
   const publishIndicator = (ctx: ExtensionContext, model = ctx.model): void => {
-    if (ctx.hasUI)
-      ctx.ui.setStatus(FAST_MODEL_INDICATOR, requestedFor(model) ? FAST_MODEL_GLYPH : undefined);
+    if (ctx.hasUI) ctx.ui.setStatus(FAST_MODEL_INDICATOR, requestedFor(model)?.glyph);
   };
   pi.on("session_start", (_event, ctx) => {
-    enabled = false;
+    ceiling = "normal";
+    limits = readLimits();
     publishIndicator(ctx);
+    if (limits.warning && ctx.hasUI) ctx.ui.notify(limits.warning, "warning");
   });
   pi.on("model_select", (event, ctx) => publishIndicator(ctx, event.model));
   pi.registerCommand("fast", {
-    description: "Toggle, set, or check Codex Fast requests for this session and its Agents",
+    description:
+      "Set the Codex speed ceiling for this session and its Agents: /fast [on|off|ultrafast|status]",
     handler: async (args, ctx) => {
       const action = args.trim();
-      if (action !== "" && action !== "on" && action !== "off" && action !== "status") {
-        ctx.ui.notify("Usage: /fast [on|off|status]", "warning");
-        return;
+      let next: SpeedLimit;
+      switch (action) {
+        case "":
+          next = ceiling === "normal" ? "fast" : "normal";
+          break;
+        case "on":
+          next = "fast";
+          break;
+        case "off":
+          next = "normal";
+          break;
+        case "ultrafast":
+          next = "ultrafast";
+          break;
+        case "status":
+          next = ceiling;
+          break;
+        default:
+          ctx.ui.notify("Usage: /fast [on|off|ultrafast|status]", "warning");
+          return;
       }
-      if (action !== "status") {
-        const next = action === "" ? !enabled : action === "on";
-        if (next !== enabled) {
-          enabled = next;
-          publishIndicator(ctx);
-        }
+      const changed = next !== ceiling;
+      if (changed) {
+        ceiling = next;
+        publishIndicator(ctx);
       }
+      const planned = requestedFor(ctx.model)?.name ?? "Normal (no tier added)";
+      const notice =
+        ceiling === "normal"
+          ? "Fast is off for this session and its Agents."
+          : `Speed ceiling: ${SPEEDS[ceiling].name}. This model: ${planned}. Agents match their own model limits.`;
+      // Mention the cost even on a Normal parent if a child could make a faster request.
+      const costNote =
+        changed && ceiling !== "normal" && limits?.allowsAcceleration
+          ? " Requests above Normal can consume more of your included allowance."
+          : "";
       ctx.ui.notify(
-        enabled
-          ? "Fast is on for subsequent supported Codex requests from this session and its Agents. It may use more quota."
-          : "Fast is off for this session and its Agents.",
-        "info",
+        notice + costNote + (limits?.warning ? ` ${limits.warning}` : ""),
+        limits?.warning ? "warning" : "info",
       );
     },
   });
 
   const requestRule: ProviderRequestRule = (model, payload) => {
+    const choice = requestedFor(model);
     if (
-      !requestedFor(model) ||
+      !choice ||
       typeof payload !== "object" ||
       payload === null ||
       Array.isArray(payload) ||
@@ -77,12 +100,11 @@ export function registerFastMode(pi: ExtensionAPI) {
       ("service_tier" in payload && payload.service_tier !== undefined)
     )
       return undefined;
-    return { ...payload, service_tier: "priority" };
+    return { ...payload, service_tier: choice.tier };
   };
   return {
     requestRule,
-    // Skip the UI's model lookup entirely while Fast is disabled.
-    requestedForModel: (lookup: () => ModelIdentity | undefined) =>
-      enabled && supportsFast(lookup()),
+    glyphForModel: (lookup: () => ModelIdentity | undefined) =>
+      ceiling === "normal" ? undefined : requestedFor(lookup())?.glyph,
   };
 }

@@ -64,6 +64,10 @@ initialize({ agentDir });
 initTheme(undefined, false);
 // Pin the real child transport to fetch, never WebSocket. This is isolated fixture state.
 writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ transport: "sse" }));
+writeFileSync(
+  join(agentDir, "alehouse-codex-speeds.json"),
+  JSON.stringify({ [`${primary}/${modelId}`]: "ultrafast", [childModelId]: "fast" }),
+);
 const slot = { model: `${secondary}/${childModelId}`, effort: "off" };
 writeFileSync(
   join(agentDir, "alehouse-presets.json"),
@@ -106,12 +110,18 @@ assert(model);
 
 const cwd = join(home, "project"),
   sessions = join(home, "sessions");
-mkdirSync(cwd, { recursive: true });
+mkdirSync(join(cwd, ".pi"), { recursive: true });
+// Project-local speed settings are untrusted and must not override the global file.
+writeFileSync(
+  join(cwd, ".pi", "alehouse-codex-speeds.json"),
+  JSON.stringify({ [`${primary}/${modelId}`]: "fast", [childModelId]: "ultrafast" }),
+);
 const settingsManager = SettingsManager.inMemory({
   compaction: { enabled: false },
   retry: { enabled: false },
   cacheWarming: "off",
 });
+const compositionPath = join(packageRoot, "src/composition.ts");
 const loader = new DefaultResourceLoader({
   cwd,
   agentDir,
@@ -120,7 +130,7 @@ const loader = new DefaultResourceLoader({
   noSkills: true,
   noThemes: true,
   noPromptTemplates: true,
-  additionalExtensionPaths: [join(packageRoot, "src/composition.ts")],
+  additionalExtensionPaths: [compositionPath],
 });
 await loader.reload();
 assert.deepEqual(loader.getExtensions().errors, []);
@@ -137,7 +147,7 @@ const { session } = await createAgentSession({
 });
 const agentSessions = new Map();
 const errors = [];
-async function runTurn(turn, { agent, spawn, tier }) {
+async function runTurn(turn, { agent, spawn, tier, childTier = tier }) {
   const parentStart = parentWire.length,
     childStart = childWire.length;
   const tool = spawn ? "agent_spawn" : "agent_run";
@@ -172,8 +182,8 @@ async function runTurn(turn, { agent, spawn, tier }) {
   assert.equal(childRequests.length, 1);
   const { body, sessionId } = childRequests[0];
   assert.equal(body.model, childModelId, "the numbered slot sent a real Codex Astra body");
-  assert.equal(body.service_tier, tier);
-  assert.equal(Object.hasOwn(body, "service_tier"), tier !== undefined);
+  assert.equal(body.service_tier, childTier);
+  assert.equal(Object.hasOwn(body, "service_tier"), childTier !== undefined);
   assert(sessionId && sessionId !== session.sessionId);
   if (spawn) {
     assert(![...agentSessions.values()].includes(sessionId));
@@ -184,15 +194,33 @@ async function runTurn(turn, { agent, spawn, tier }) {
 }
 try {
   await session.bindExtensions({ mode: "rpc", onError: (error) => errors.push(error.error) });
+  // Pi can expose duplicate extension commands as /fast:1, /fast:2, etc.
+  assert.deepEqual(
+    session.extensionRunner
+      .getRegisteredCommands()
+      .filter(({ name, invocationName }) => name === "fast" || invocationName.startsWith("fast:"))
+      .map(({ name, invocationName, sourceInfo }) => [name, invocationName, sourceInfo.path]),
+    [["fast", "fast", compositionPath]],
+    "the real Alehouse composition owns the sole /fast registration, with no renamed conflicts",
+  );
   await runTurn(1, { agent: "swift", spawn: true });
   await session.prompt("/fast on");
   await session.prompt("/fast on");
   await session.prompt("/fast status");
   await runTurn(2, { agent: "swift", tier: "priority" });
   await runTurn(3, { agent: "tern", spawn: true, tier: "priority" });
+  await session.prompt("/fast ultrafast");
+  await runTurn(4, { agent: "swift", tier: "ultrafast", childTier: "priority" });
+  await runTurn(5, { agent: "lark", spawn: true, tier: "ultrafast", childTier: "priority" });
+  await session.prompt("/fast on");
+  await runTurn(6, { agent: "lark", tier: "priority" });
+  await session.prompt("/fast ultrafast");
   await session.prompt("/fast off");
   await session.prompt("/fast off");
-  await runTurn(4, { agent: "tern" });
+  await runTurn(7, { agent: "tern" });
+  await session.prompt("/fast ultrafast");
+  await session.prompt("/fast");
+  await runTurn(8, { agent: "lark" });
   assert.deepEqual(errors, []);
   assert.equal(unexpectedRequests, 0);
 } finally {

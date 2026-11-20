@@ -171,6 +171,10 @@ provider authentication or availability. A model caller can request a profile
 and difficulty, not resolve arbitrary providers, cwd, identities or tool
 registries. Routing choices grant no permission.
 
+The optional [Codex speed limits](routing.md#set-model-limits) are a read-only
+user-level table. A project cannot supply or merge limits. The table governs
+Alehouse's request hints, not account access, explicit tiers set elsewhere or billing.
+
 Startup and restoration do not save preferences. Explicit persistent edits use
 a cooperative lock, reject a conflicting leaf for that scope and publish by
 atomic rename; the writer refuses symlink or read-only replacement. Invalid

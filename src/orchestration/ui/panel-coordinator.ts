@@ -12,6 +12,7 @@ import {
   FOOTER_INDICATOR_CLICK_EVENT,
   WORKER_PRESET_INDICATOR,
   type FooterIndicatorClick,
+  type SpeedModelGlyph,
 } from "../../shared/overlay-protocol.mjs";
 import type { DelegationSetting } from "../delegation.ts";
 import { OrchestrationError } from "../core/ports.ts";
@@ -72,7 +73,7 @@ export interface HumanStopResult {
 export interface PanelCoordinatorOptions {
   pi: ExtensionAPI;
   widget: AgentWidget;
-  fastRequestedFor?: (provider: string, model: string) => boolean;
+  modelSpeedGlyph?: (provider: string, model: string) => SpeedModelGlyph | undefined;
   ready(): boolean;
   router(): PresetRouter;
   publish(
@@ -555,7 +556,7 @@ export class PanelCoordinator {
                 input: { view: agent.view, live: agent.live } satisfies DetailInput,
               })),
             revision: () => this.options.widget.presentationVersion?.(),
-            fastRequestedFor: this.options.fastRequestedFor,
+            modelSpeedGlyph: this.options.modelSpeedGlyph,
             visible: () => mountable(this.yielding, this.approvals.pending),
             invalidate: () => {
               const next = paletteGeneration();

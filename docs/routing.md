@@ -74,32 +74,69 @@ not a model or effort. See [profile capabilities](security.md#explicit-process-a
 
 ## Fast requests
 
-Run `/fast` in the parent to toggle Fast for this session, including its
-existing and future Agents. Use `/fast on` or `/fast off` to set it explicitly,
-or `/fast status` to check it without changing it. The switch starts off in
-new, resumed and forked sessions and is not saved. It applies when the next
-supported Codex request is built; it does not interrupt in-flight requests or
-change models, preset or effort. When the requested tier changes on a reused
-WebSocket, Pi resends the full context on the next request instead of using the
-previous response ID.
+`/fast` sets a **session ceiling**, not a guaranteed speed. For an eligible
+parent or Agent request, Alehouse takes the lower of the ceiling and the
+selected physical Codex model's configured limit: **Normal < Fast < Ultrafast**.
+The choice is made before sending; there is no entitlement probe, timing
+heuristic or retry at another tier.
 
-Alehouse requests `service_tier: "priority"` for supported physical
-`openai-codex` models, including registered numbered Codex slots, without
-replacing an explicit service tier. Pi's model registry does not expose tier
-support, so Alehouse uses a local allowlist based on [OpenAI's Codex model
-catalog](https://github.com/openai/codex/blob/6c0cee502d215e5df2dd9a303cf2e252229c9e12/codex-rs/models-manager/models.json):
-GPT-5.6 Sol/Terra/Luna, GPT-6 Astra/Sol/Luna, GPT-6.1 Sol/Terra, and
-GPT-6.2 Sol/Astra. Unlisted IDs are skipped, including GPT-5.4 and GPT-5.5,
-which [retired from Codex with ChatGPT sign-in](https://learn.chatgpt.com/docs/models).
-Listed models still need to be registered in Pi and available to your account.
-In the official Codex CLI, type `/` to [check whether `/fast` is available](https://learn.chatgpt.com/docs/agent-configuration/speed#codex-cli-controls)
-for your selected model.
+| Command           | Session ceiling / behavior                                             |
+| ----------------- | ---------------------------------------------------------------------- |
+| `/fast off`       | Normal: do not add `service_tier`.                                     |
+| `/fast on`        | At most Fast (`priority`), even on Ultrafast-capable models.           |
+| `/fast ultrafast` | Up to Ultrafast (`ultrafast`); Fast-only models request Fast.          |
+| `/fast status`    | Show the ceiling and the match for the parent without changing either. |
 
-When the switch is on, a **⚡** prefixes the selected model in the footer if
-that model supports Fast and the label fits. Switching to an unsupported model
-hides the icon without turning Fast off for eligible Agents. The icon does
-not confirm backend routing. Priority processing can use more of your quota;
-Pi's local cost estimate may not reflect the tier.
+Bare `/fast` toggles between off and ordinary Fast; from Ultrafast it turns
+off. New, resumed and forked sessions start off. Existing and new Agents
+follow on their next eligible request; in-flight work, model, preset and
+effort are unchanged. An explicit payload tier (including `null`) is never
+replaced. If a tier change affects a reused WebSocket, Pi resends full context.
+
+With a virtual parent model (`pi-virtual`), `/fast` still sets the ceiling for
+eligible Agent requests but never adds a tier to the parent's requests, even
+when Pi routes them to Codex. The request hook exposes the selected model and
+payload, not the routed provider slot. Alehouse does not guess the slot from
+the payload's model ID. Select a physical Codex model directly to use `/fast`
+for the parent.
+
+### Set model limits
+
+Create `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/alehouse-codex-speeds.json`.
+It is a **complete** manual table; unlisted models get Normal.
+Values are `normal`, `fast` or `ultrafast`. A bare model ID covers every
+registered physical Codex slot. An exact `provider/model` entry wins, including
+when it lowers the limit. For example:
+
+```json
+{
+  "gpt-6.2-sol": "fast",
+  "gpt-6.2-astra": "fast",
+  "openai-codex/gpt-6.2-sol": "ultrafast"
+}
+```
+
+With `/fast ultrafast` this requests Ultrafast for primary-slot Sol, Fast for
+numbered-slot Sol or any listed Astra, and no tier for any other model. If
+a slot's account changes, review its entry. The file is read only at session
+start; no project file is consulted and the command never writes the table.
+An invalid or unreadable file disables all added tiers rather than restoring
+more permissive defaults. `{}` explicitly disables all added tiers.
+
+With **no file**, the compatibility default allows at most Fast for ten
+physical Codex IDs from [OpenAI's pinned model catalog](https://github.com/openai/codex/blob/6c0cee502d215e5df2dd9a303cf2e252229c9e12/codex-rs/models-manager/models.json):
+GPT-5.6 Sol/Terra/Luna, GPT-6 Astra/Sol/Luna, GPT-6.1 Sol/Terra and GPT-6.2
+Sol/Astra. Ultrafast is never granted by default.
+
+The table states what you allow Alehouse to **request**, not what the account
+is entitled to or what the server actually used. Consult [Codex speed controls](https://learn.chatgpt.com/docs/agent-configuration/speed#codex-cli-controls)
+and [pricing](https://learn.chatgpt.com/docs/pricing#speed-multipliers) before
+granting Ultrafast: on GPT-6.2 it can use **6×** Standard included allowance
+(Fast: **2×**). Pi's local cost estimate may not reflect the tier.
+
+The footer and live Agent Details show the **matched** speed, not the session
+ceiling: **⚡** for Fast, **⚡⚡** for Ultrafast, nothing for Normal or when
+the label doesn't fit. These icons are not billing or historical indicators.
 
 ## Difficulty
 

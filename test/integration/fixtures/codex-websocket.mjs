@@ -1,7 +1,7 @@
 // Real SDK transport and composition against loopback only; no real account or endpoint.
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -141,6 +141,10 @@ globalThis.fetch = (url, init) => {
 let session;
 try {
   initialize({ agentDir });
+  writeFileSync(
+    join(agentDir, "alehouse-codex-speeds.json"),
+    JSON.stringify({ [`${provider}/${modelId}`]: "ultrafast" }),
+  );
   initTheme(undefined, false);
   const cwd = join(home, "project");
   mkdirSync(cwd, { recursive: true });
@@ -200,24 +204,26 @@ try {
   }));
   const errors = [];
   await session.bindExtensions({ mode: "rpc", onError: ({ error }) => errors.push(error) });
-  for (const turn of [1, 2, 3, 4]) {
-    if (turn === 2 || turn === 4) await session.prompt("/fast");
+  for (const turn of [1, 2, 3, 4, 5, 6, 7]) {
+    if (turn === 2 || turn === 7) await session.prompt("/fast");
+    if (turn === 4) await session.prompt("/fast ultrafast");
+    if (turn === 6) await session.prompt("/fast on");
     await session.prompt(`Fixture prompt ${turn}`);
     assert.equal(session.getLastAssistantText(), `WS response ${turn}`);
   }
-  assert.equal(upgrades, 1, "the four turns must reuse one actual WebSocket connection");
-  assert.equal(wsBodies.length, 4);
+  assert.equal(upgrades, 1, "the seven turns must reuse one actual WebSocket connection");
+  assert.equal(wsBodies.length, 7);
   for (const body of wsBodies) {
     assert.equal(body.type, "response.create");
     assert.equal(body.model, modelId);
   }
   assert.deepEqual(
     wsBodies.map((body) => body.service_tier),
-    [undefined, "priority", "priority", undefined],
+    [undefined, "priority", "priority", "ultrafast", "ultrafast", "priority", undefined],
   );
   assert.deepEqual(
     wsBodies.map((body) => body.previous_response_id),
-    [undefined, undefined, "resp_fixture_2", undefined],
+    [undefined, undefined, "resp_fixture_2", undefined, "resp_fixture_4", undefined, undefined],
     "continuation is reused only while the tier is unchanged",
   );
 
@@ -227,12 +233,13 @@ try {
   const closed = once(peer, "close");
   peer.close();
   await closed;
+  await session.prompt("/fast ultrafast");
   await session.prompt("Fixture fallback prompt");
   assert.equal(session.getLastAssistantText(), "SSE response");
   assert.equal(upgrades, 2, "auto tries a new WebSocket before falling back");
   assert.equal(sseBodies.length, 1);
   assert.equal(sseBodies[0].model, modelId);
-  assert(!Object.hasOwn(sseBodies[0], "service_tier"));
+  assert.equal(sseBodies[0].service_tier, "ultrafast");
 
   for (let attempt = 0; attempt < 100 && publications.length < 3; attempt++) await delay(10);
   assert.deepEqual(

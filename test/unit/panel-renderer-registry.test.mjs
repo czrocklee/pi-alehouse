@@ -64,7 +64,7 @@ function bridgedAgent(registry, id, toolName) {
 /** The full bridge: registry-backed widget, coordinator, captured pane factory. */
 function bridgedRoster(
   t,
-  { ids = ["a", "b"], toolName = "bash", observe, viewOverrides, fastRequestedFor } = {},
+  { ids = ["a", "b"], toolName = "bash", observe, viewOverrides, modelSpeedGlyph } = {},
 ) {
   const activities = new ChildActivityRegistry();
   const agents = ids.map((id) => bridgedAgent(activities, id, toolName));
@@ -110,7 +110,7 @@ function bridgedRoster(
   const panels = new PanelCoordinator({
     pi: { events: bus, registerShortcut: (name, spec) => shortcuts.set(name, spec) },
     widget,
-    fastRequestedFor,
+    modelSpeedGlyph,
     ready: () => true,
     router() {
       throw new Error("unused");
@@ -177,13 +177,18 @@ test("the bridge renders the selected agent's registry renderer in the pane", as
 });
 
 test("the pane shows the current Fast preference only for a live eligible Agent", async (t) => {
-  let fast = false;
+  let speedGlyph;
   const h = bridgedRoster(t, {
-    ids: ["a", "b", "c", "d"],
+    ids: ["a", "b", "c", "d", "e", "f"],
     viewOverrides: (id) => ({
       ...(id === "c"
         ? {}
-        : { status: id === "d" ? "queued" : "running", execution_exited: false, resumable: false }),
+        : {
+            status: id === "d" ? "queued" : "running",
+            execution_exited: id === "e",
+            finalization_pending: id === "f",
+            resumable: false,
+          }),
       effective_settings: {
         ...settings,
         ...(id === "b"
@@ -191,15 +196,17 @@ test("the pane shows the current Fast preference only for a live eligible Agent"
           : { provider: "openai-codex-2", model: "gpt-6.2-sol", thinking: "xhigh" }),
       },
     }),
-    fastRequestedFor: (provider, model) =>
-      fast && provider === "openai-codex-2" && model === "gpt-6.2-sol",
+    modelSpeedGlyph: (provider, model) =>
+      provider === "openai-codex-2" && model === "gpt-6.2-sol" ? speedGlyph : undefined,
   });
   const opening = h.open();
   const paint = () => h.pane().render(120).map(stripTerminalSequences).join("\n");
   const badge = / · ⚡ gpt-6\.2-sol\/xhigh · /;
   assert.doesNotMatch(paint(), /⚡/);
-  fast = true;
+  speedGlyph = "⚡";
   assert.match(paint(), badge);
+  speedGlyph = "⚡⚡";
+  assert.match(paint(), / · ⚡⚡ gpt-6\.2-sol\/xhigh · /);
   h.pane().activate("b");
   assert.match(paint(), / · mistral-test\//);
   assert.doesNotMatch(paint(), /⚡/);
@@ -207,8 +214,13 @@ test("the pane shows the current Fast preference only for a live eligible Agent"
   assert.match(paint(), / · gpt-6\.2-sol\/xhigh · /);
   assert.doesNotMatch(paint(), /⚡/, "finished Run history does not acquire a live badge");
   h.pane().activate("d");
-  assert.match(paint(), badge, "queued work shares the same switch");
-  fast = false;
+  assert.match(paint(), / · ⚡⚡ gpt-6\.2-sol\/xhigh · /, "queued work shares the same switch");
+  for (const id of ["e", "f"]) {
+    h.pane().activate(id);
+    assert.doesNotMatch(paint(), /⚡/, `${id}: exited or finalizing work has no live badge`);
+  }
+  h.pane().activate("d");
+  speedGlyph = undefined;
   assert.doesNotMatch(paint(), /⚡/);
   h.pane().handleInput("\x1b");
   await opening;

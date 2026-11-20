@@ -1,3 +1,4 @@
+import type { SpeedModelGlyph } from "../../shared/overlay-protocol.mjs";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import {
@@ -166,7 +167,7 @@ export interface DetailPaneOptions {
   /** Cheap data invalidation hint, independent of animation and elapsed time. */
   revision?: () => unknown;
   /** Live request preference, not a claim about the viewed Run's past usage. */
-  fastRequestedFor?: (provider: string, model: string) => boolean;
+  modelSpeedGlyph?: (provider: string, model: string) => SpeedModelGlyph | undefined;
   visible?: () => boolean;
   invalidate?: () => void;
   /** One Agent's transcript rows, created once per Agent and reused; undefined
@@ -1067,14 +1068,15 @@ export class DetailPane {
     const summary = renderDetailSummary(entry.input, th, contentWidth, {
       activity: false,
       spinnerFrame: this.frame,
-      fastRequested:
+      modelSpeedGlyph:
         (view.status === "queued" || view.status === "running") &&
         !view.execution_exited &&
-        !view.finalization_pending &&
-        this.options.fastRequestedFor?.(
-          view.effective_settings.provider,
-          view.effective_settings.model,
-        ),
+        !view.finalization_pending
+          ? this.options.modelSpeedGlyph?.(
+              view.effective_settings.provider,
+              view.effective_settings.model,
+            )
+          : undefined,
     });
     // Menu overflow and the footer's no-pinned-row fallback are different
     // facts: partial overflow belongs on Info, not an extra footer !N.

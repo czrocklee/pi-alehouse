@@ -336,6 +336,7 @@ export function protectionResources(paths = {}, env = process.env, root = packag
     "extensions/pi-permission-system/config.json",
     "extensions/pi-alehouse/config.json",
     "alehouse-presets.json",
+    "alehouse-codex-speeds.json",
     "managed-permissions.json",
     "settings.json",
     "models.json",
