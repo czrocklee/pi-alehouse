@@ -36,11 +36,11 @@ function synchronous(value: unknown): unknown {
   return value;
 }
 
-function lines(value: unknown): string[] {
+function lines(value: unknown): readonly string[] {
   const rows = synchronous(value);
-  if (!Array.isArray(rows) || rows.some((row) => typeof row !== "string"))
+  if (!Array.isArray(rows) || !rows.every((row) => typeof row === "string"))
     throw new Error("Invalid tool display rows");
-  return rows as string[];
+  return rows;
 }
 
 /** Owns the SDK component; the pane never invokes an unguarded custom tree. */
@@ -83,12 +83,12 @@ export class TranscriptToolCard implements Component {
     });
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     if (!Number.isInteger(width) || width <= 0) return [];
     if (!this.current()) return [];
     if (this.depth > 0) return [MARKER];
     const before = this.sdk;
-    let rendered = [MARKER];
+    let rendered: readonly string[] = [MARKER];
     this.run(() => {
       if (this.sdk) rendered = lines(this.sdk.render(width));
     });

@@ -48,6 +48,12 @@ probe expects a fresh matched build and takes `pi` from PATH. Keep the fixtures
 offline and isolated. Use the [tarball](development.md#build-and-verify-a-tarball)
 and [Nix](development.md#nix-packaging) instructions for those separate lanes.
 
+The separately authorized `scripts/run-alehouse-live-trial.sh` uses real auth.
+Its Codex parent and all children use their catalogue output limits. Other
+live trial parents retain the 2,048-token model override. For Codex, the
+per-response limit includes reasoning and visible output; it is not a budget
+for the trial as a whole. The JSON report records which limits were selected.
+
 ## Evidence and gaps
 
 Keep raw outputs outside source. Tie a concise record to the commit or change

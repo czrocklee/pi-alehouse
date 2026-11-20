@@ -68,7 +68,7 @@ writeFileSync(
   join(agentDir, "alehouse-codex-speeds.json"),
   JSON.stringify({ [`${primary}/${modelId}`]: "ultrafast", [childModelId]: "fast" }),
 );
-const slot = { model: `${secondary}/${childModelId}`, effort: "off" };
+const slot = { model: `${secondary}/${childModelId}`, effort: "high" };
 writeFileSync(
   join(agentDir, "alehouse-presets.json"),
   JSON.stringify({
@@ -84,12 +84,15 @@ const runtime = await ModelRuntime.create({
   modelsPath: join(agentDir, "models.json"),
   allowModelNetwork: false,
 });
+// Exercise the SDK's shipped GPT-6.2 capabilities, but never its remote endpoint.
+const astra = runtime.getModel(primary, childModelId);
+assert(astra && !ai.getSupportedThinkingLevels(astra).includes("off"));
 const fake = controlledProvider(ai);
 const parentWire = [];
 runtime.registerProvider(primary, {
-  ...fake.config,
+  baseUrl: fake.config.baseUrl,
+  apiKey: fake.config.apiKey,
   api: "openai-codex-responses",
-  models: [{ ...fake.config.models[0], id: modelId }],
   streamSimple(model, context, options) {
     const body = { model: model.id };
     parentWire.push({ body, result: options?.onPayload?.(body, model) });
@@ -103,7 +106,7 @@ runtime.registerProvider(secondary, {
   baseUrl: codexBase,
   apiKey: `fixture.${claims}.fixture`,
   api: "openai-codex-responses",
-  models: [{ ...fake.config.models[0], id: childModelId }],
+  models: [{ ...astra, baseUrl: codexBase }],
 });
 const model = runtime.getModel(primary, modelId);
 assert(model);
@@ -140,7 +143,7 @@ const { session } = await createAgentSession({
   resourceLoader: loader,
   modelRuntime: runtime,
   model,
-  thinkingLevel: "off",
+  thinkingLevel: "low",
   settingsManager,
   sessionManager: SessionManager.create(cwd, sessions),
   tools: ["agent_spawn", "agent_run"],
@@ -182,6 +185,12 @@ async function runTurn(turn, { agent, spawn, tier, childTier = tier }) {
   assert.equal(childRequests.length, 1);
   const { body, sessionId } = childRequests[0];
   assert.equal(body.model, childModelId, "the numbered slot sent a real Codex Astra body");
+  assert.equal(body.max_output_tokens, astra.maxTokens);
+  assert.equal(
+    body.input.findLast((item) => item.type === "configuration_update")?.reasoning.effort,
+    slot.effort,
+    "the Agent keeps its configured effort independently of parent speed and thinking",
+  );
   assert.equal(body.service_tier, childTier);
   assert.equal(Object.hasOwn(body, "service_tier"), childTier !== undefined);
   assert(sessionId && sessionId !== session.sessionId);

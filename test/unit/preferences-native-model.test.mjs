@@ -881,7 +881,7 @@ test("floating native selector retains rounded frame, IME search focus and nativ
   const namedLines = picker.component.render(74).map(stripTerminalSequences);
   assert(
     namedLines.some((line) => line.includes("heavy (Fixture Heavy) [fixture]")),
-    "the real Pi 1.5 selector paints a distinct model name before the provider",
+    "the native Pi selector paints a distinct model name before the provider",
   );
   assert.match(
     namedLines.join("\n"),
@@ -932,7 +932,7 @@ for (const input of ["keyboard", "continuation click"]) {
 }
 
 test(
-  "floating native mouse selection hits actual Pi 1.5 model-name text, never padding or stale rows",
+  "floating native mouse selection hits painted model-name text, never padding or stale rows",
   { timeout: 5000 },
   async (t) => {
     const f = await fixture(t);
@@ -947,7 +947,7 @@ test(
     assert.match(
       lines[oldRow],
       /heavy \(Fixture Heavy\) \[fixture\]/,
-      "the native row includes Pi 1.5's distinct name",
+      "the native row includes the model's distinct display name",
     );
     const oldX = lines[oldRow].indexOf("heavy");
     mouseClick(picker, width - 3, oldRow, width, lines.length);

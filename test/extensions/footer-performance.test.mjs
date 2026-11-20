@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createJiti } from "jiti";
 import { SessionManager, ExtensionRunner } from "@earendil-works/pi-coding-agent";
+import { Container, Text } from "@earendil-works/pi-tui";
 
 // Synthetic public SDK seam only; no build, providers, credentials or network.
 delete process.env.PI_ALEHOUSE_GROK_BILLING;
@@ -509,6 +510,49 @@ test("one footer frame captures one public source; independent context panels ca
     assert.equal(negative.reads.branch, before, "undefined physical route is a valid memo result");
   } finally {
     await negative.dispose();
+  }
+});
+
+test("bottom-footer stays padded across cached Container renders and follows footer changes", async () => {
+  const f = fixture();
+  try {
+    await f.emit("session_start");
+    f.tui.mode = "regular";
+    f.tui.terminal.rows = 4;
+    const width = 80;
+    const root = new Container();
+    const footerSlot = new Container();
+    root.addChild(new Text("body", 0, 0));
+    root.addChild(footerSlot);
+    let borrowed;
+    f.setBuffer((columns, footer) => {
+      if (!footerSlot.children.length) footerSlot.addChild(footer);
+      borrowed = root.render(columns);
+      return borrowed;
+    });
+
+    const first = f.tui.render(width);
+    const source = borrowed;
+    const body = "body".padEnd(width);
+    const blank = " ".repeat(width);
+    assert.match(source.at(-1), /10\/1\.0k/);
+    assert.deepEqual(first, [body, blank, blank, source[1]]);
+    assert.deepEqual(f.tui.render(width), first);
+    assert.equal(borrowed, source, "Pi reuses the same unpadded frame");
+    assert.deepEqual(source, [body, first.at(-1)]);
+
+    f.tui.terminal.rows = 2;
+    assert.equal(f.tui.render(width), source, "when no padding is needed, borrow the cache as is");
+    f.tui.terminal.rows = 4;
+    f.ctx.tokens = 20;
+    await f.emit("turn_end");
+    const next = f.tui.render(width);
+    assert.notEqual(borrowed, source, "a changed footer invalidates the cached frame");
+    assert.match(next.at(-1), /20\/1\.0k/);
+    assert.deepEqual(next, [body, blank, blank, borrowed[1]]);
+    assert.match(source.at(-1), /10\/1\.0k/, "previous frames stay unchanged");
+  } finally {
+    await f.dispose();
   }
 });
 

@@ -25,6 +25,7 @@ import {
   controlledProvider,
   loadHost,
   requestAbort,
+  trialParentModel,
 } from "../support/host.mjs";
 import {
   dialogueFailures,
@@ -185,10 +186,7 @@ const catalogModel = runtime.getModel(
 );
 assert(catalogModel, "Requested catalog model absent");
 assertThinkingSupported(catalogModel, parentThinking, ai.getSupportedThinkingLevels);
-// Preserve the trial baseline: parent-only model metadata override, not a
-// verified output/fee cap. In particular, the installed Codex request builder
-// does not send max_output_tokens. Children keep the catalogue metadata.
-const model = controlled ? catalogModel : { ...catalogModel, maxTokens: 2048 };
+const model = trialParentModel(catalogModel, controlled);
 const trialPreset = {
   name: controlled ? "controlled-trial" : "authorized-trial",
   version: "v1",
@@ -215,6 +213,7 @@ const report = {
   auto_approval_mode: process.env.PI_JEV_APPROVAL_MODE,
   output_limits: {
     parent_model_max_tokens: model.maxTokens,
+    parent_source: model === catalogModel ? "catalogue" : "trial_override",
     child_model_max_tokens: catalogModel.maxTokens,
     child_source: "catalogue",
     verified_hard_token_or_fee_cap: false,
@@ -238,7 +237,7 @@ const report = {
       : "One explicitly selected real provider/model; not a statistical usability benchmark",
     "No Bash, writes, reload, production admission, backend switch, private conversation, or deployment",
     "SDK catalogue membership is not authentication/availability proof",
-    "Parent-only maxTokens metadata is not a verified provider cap; child metadata comes from the catalogue; wall time is not a token/fee limit",
+    "Model maxTokens is per response, subject to the host adapter and remaining context; neither it nor wall time bounds total tokens or fees",
     "Alerts are bounded Owner-local pending facts consumed only after complete local presentation; no SDK persistence/model receipt/ACK guarantee",
     ...(!controlled
       ? [

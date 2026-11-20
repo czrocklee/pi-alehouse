@@ -279,7 +279,7 @@ const role = (message: unknown): unknown =>
  * skill Markdown. Vertical padding stays the constructor's one row. */
 class ParentSkillInvocation extends SkillInvocationMessageComponent {
   private inset = 1;
-  override render(width: number): string[] {
+  override render(width: number): readonly string[] {
     const paddingX = communicationPadding(width);
     if (paddingX !== this.inset) {
       this.inset = paddingX;

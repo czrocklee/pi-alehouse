@@ -62,6 +62,15 @@ export function assertHostCapabilities(sdk, permission, ai) {
   return capabilities;
 }
 
+// Codex counts reasoning and visible output against the same per-response limit.
+// Give a live Codex parent the same catalogue budget as its children; the 2048
+// override is only the historical baseline for other live trial parents.
+export function trialParentModel(catalogModel, controlled) {
+  return controlled || catalogModel.api === "openai-codex-responses"
+    ? catalogModel
+    : { ...catalogModel, maxTokens: 2048 };
+}
+
 export function assertThinkingSupported(model, thinking, getSupportedThinkingLevels) {
   const allowed = getSupportedThinkingLevels(model);
   assert(

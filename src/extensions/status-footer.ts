@@ -426,11 +426,11 @@ export default function (pi: ExtensionAPI) {
       // footer was its last row; nested renders cannot borrow a previous paint.
       let renderFrame: { row?: string } | undefined;
       const originalRender = tui.render.bind(tui);
-      const renderWithBottomFooter = (width: number): string[] => {
+      const renderWithBottomFooter = (width: number): readonly string[] => {
         const previous = renderFrame;
         const frame: { row?: string } = {};
         renderFrame = frame;
-        let rendered: string[];
+        let rendered: readonly string[];
         try {
           rendered = originalRender(width);
         } finally {

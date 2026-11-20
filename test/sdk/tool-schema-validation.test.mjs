@@ -1,4 +1,4 @@
-// The pinned SDK 1.5 validator (pi-schema + coercion) must preserve the
+// The pinned SDK validator (pi-schema + coercion) must preserve the
 // orchestration tools' closed schemas and constraints before any admission/callback.
 // Reads installed SDK package metadata only; no session, provider, credentials,
 // network or filesystem tool IO is used.
@@ -20,7 +20,7 @@ const corePackageURL = pathToFileURL(
 );
 const corePackage = JSON.parse(readFileSync(corePackageURL, "utf8"));
 assert.equal(corePackage.name, "@earendil-works/pi-agent-core");
-assert.equal(corePackage.version, "1.5.2");
+assert.equal(corePackage.version, "1.6.0");
 assert.equal(
   corePackage.exports["."].import,
   "./dist/index.js",
@@ -31,7 +31,7 @@ const { wrapToolDefinitions } = await import(
   new URL("core/tools/tool-definition-wrapper.js", sdkEntry)
 );
 const sdkVersion = JSON.parse(readFileSync(new URL("../package.json", sdkEntry), "utf8")).version;
-assert.equal(sdkVersion, "1.5.2");
+assert.equal(sdkVersion, "1.6.0");
 
 const usage = {
   input: 0,
@@ -133,7 +133,7 @@ const spawnArgs = (rest = {}) => ({
 });
 const isToolError = (result) => assert.equal(result.isError, true);
 
-test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire enums", async () => {
+test("real SDK validates parent TypeBox enum schemas as the same closed wire enums", async () => {
   const fixture = ownerToolFixture();
   const spawn = fixture.tools.find((tool) => tool.name === "agent_spawn");
   const wait = fixture.tools.find((tool) => tool.name === "agent_wait");
@@ -164,7 +164,7 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
 
   // Bypass only the orchestration prepareArguments layer to exercise the actual
   // SDK's pi-schema validator directly against the project's registered schema.
-  // A valid numeric string is coerced by 1.5; schema-invalid values never call
+  // The SDK coerces a valid numeric string; schema-invalid values never call
   // execute. The production adapter still performs its stricter raw-input check.
   const captured = [];
   const schemaProbe = {
@@ -263,7 +263,7 @@ test("real SDK 1.5 validates parent TypeBox enum schemas as the same closed wire
   assert.equal(fixture.admissionEffects, 0, "raw type/bound failures have no admission effects");
 });
 
-test("real SDK 1.5 requires short spawn/run titles and raw checks enforce UTF-16 bounds", async () => {
+test("real SDK requires short spawn/run titles and raw checks enforce UTF-16 bounds", async () => {
   const fixture = ownerToolFixture();
   for (const [name, args] of [
     ["agent_spawn", spawnArgs()],
@@ -427,7 +427,7 @@ test("real SDK parent preparation and post-hook execution enforce every UTF-16 t
   assert.deepEqual(fixture.actionEffects, { lookup: 0, delivery: 0, answer: 0, publication: 0 });
 });
 
-test("real SDK 1.5 accepts only a raw agent_run max_turns integer and forwards that override", async () => {
+test("real SDK accepts only a raw agent_run max_turns integer and forwards that override", async () => {
   const fixture = ownerToolFixture();
   const spawn = fixture.tools.find((tool) => tool.name === "agent_spawn");
   const run = fixture.tools.find((tool) => tool.name === "agent_run");
@@ -549,7 +549,7 @@ test("real SDK 1.5 accepts only a raw agent_run max_turns integer and forwards t
   assert.equal(fixture.actionEffects.publication, 0);
 });
 
-test("real SDK 1.5 bounds dispatch declarations and reports safe field-specific errors", async () => {
+test("real SDK bounds dispatch declarations and reports safe field-specific errors", async () => {
   const fixture = ownerToolFixture();
   const bound = bindParentToolContext({
     controller: fixture.controller,
@@ -857,7 +857,7 @@ test("real SDK 1.5 bounds dispatch declarations and reports safe field-specific 
   });
 });
 
-test("real SDK 1.5 rejects combining question_id tokens with copy-token guidance", async () => {
+test("real SDK rejects combining question_id tokens with copy-token guidance", async () => {
   const fixture = ownerToolFixture();
   const answer = fixture.tools.find((tool) => tool.name === "agent_answer");
   const spawn = fixture.tools.find((tool) => tool.name === "agent_spawn");
@@ -944,7 +944,7 @@ test("real SDK 1.5 rejects combining question_id tokens with copy-token guidance
   });
 });
 
-test("real SDK 1.5 rejects child schema violations before alert/question callbacks", async () => {
+test("real SDK rejects child schema violations before alert/question callbacks", async () => {
   const effects = [];
   const callbacks = {
     alert: (message) => effects.push(["alert", message]),

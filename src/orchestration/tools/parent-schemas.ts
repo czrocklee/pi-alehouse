@@ -19,7 +19,7 @@ import {
 
 const text = (maxLength: number, description?: string) =>
   Type.String({ minLength: 1, maxLength, pattern: "\\S", ...(description ? { description } : {}) });
-// Pi 1.5's pi-ai root StringEnum returns a pi-schema schema, while Pi's extension
+// Pi's pi-ai root StringEnum returns a pi-schema schema, while its extension
 // loader aliases that import to a TypeBox view. Keep local enums TypeBox-backed
 // for Static/Check under either resolution, with the same {type, enum} wire shape.
 const stringEnum = <T extends readonly string[]>(

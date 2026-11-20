@@ -162,7 +162,8 @@ than changing the original Agent's difficulty.
 Set `effort` to `inherit` (the default when omitted), or to a fixed Pi level:
 `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. A fixed level must be
 supported exactly by that model; it does not require or follow parent thinking.
-For example, a parent using `off` can still allocate a worker with fixed `high`.
+For example, Pi 1.6's GPT-6.2 Sol and Astra do not support `off`. A parent
+using `off` can still allocate either model with a fixed level such as `high`.
 
 In [Edit effort](interface.md#effort-editor), **preset default** removes an
 override; it does not mean `inherit` if the slot has a fixed default.

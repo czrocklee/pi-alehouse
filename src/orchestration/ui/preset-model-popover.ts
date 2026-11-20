@@ -360,7 +360,7 @@ export class PresetModelPopover implements Component, Focusable {
             )
               return false;
             const labels = [`${model.id} [${model.provider}]`];
-            // Pi 1.5 appends a distinct model name before the provider. Names
+            // Pi appends a distinct model name before the provider. Names
             // with controls can manufacture lookalike rows, so they cannot
             // authorize click or Enter through the model identity map.
             const name = model.name?.trim();

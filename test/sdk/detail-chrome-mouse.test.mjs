@@ -62,7 +62,8 @@ function chromeFixture(
   t.mock.method(performance, "now", () => now);
   const terminal = { columns: width, rows: 40, write() {}, hideCursor() {} };
   const tui = new TuiAltScreen(terminal, false, undefined, { copyOnSelect: false });
-  tui.requestRender = () => {};
+  // Keep requestRender's content invalidation; only suppress frame scheduling.
+  tui.requestViewRender = () => {};
   const selections = [],
     clicks = [],
     stopped = [];

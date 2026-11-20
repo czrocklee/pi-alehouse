@@ -25,19 +25,37 @@ MIT License
 
 Copyright (c) 2025 Nico Bailon
 
-## Pi 1.5.2 (`@earendil-works/*`)
+## Pi 1.6.0 (`@earendil-works/*`)
 
-Applies to the pinned `@earendil-works/pi-coding-agent` / SDK / TUI / AI /
-telemetry / schema **1.5.2**. Those packages declare `"license": "MIT"` in
-`package.json` but ship no top-level `LICENSE` file, so the text below is
-reproduced and verified against
-https://github.com/earendil-works/pi/blob/v1.5.2/LICENSE.
-`@earendil-works/pi-schema` additionally ships `THIRD_PARTY_NOTICES/typebox-LICENSE` for
-the TypeBox-derived code it bundles; that file travels with the package.
+The lockfile pins eight `@earendil-works` packages at **1.6.0**:
+`pi-agent-core`, `pi-ai`, `pi-codemode`, `pi-coding-agent`, `pi-mcp`,
+`pi-schema`, `pi-telemetry`, and `pi-tui`. Their installed `package.json`
+files declare `"license": "MIT"` but ship no top-level `LICENSE` file. The
+text below was reproduced and verified against
+https://github.com/earendil-works/pi/blob/v1.6.0/LICENSE.
+
+`pi-schema` additionally ships `THIRD_PARTY_NOTICES/typebox-LICENSE` for its
+bundled TypeBox-derived code; retain that file when distributing the package.
+Its copyright notice is also reproduced below under the shared MIT terms.
+`pi-mcp` ships `THIRD_PARTY_NOTICES/modelcontextprotocol-typescript-sdk.txt`;
+retain that file when distributing the package. Its copyright notice is also
+reproduced below under the shared MIT terms.
 
 MIT License
 
 Copyright (c) 2025 Mario Zechner
+
+### TypeBox (bundled in pi-schema)
+
+MIT License
+
+Copyright (c) 2017-2026 Haydn Paterson
+
+### Model Context Protocol TypeScript SDK (bundled in pi-mcp)
+
+MIT License
+
+Copyright (c) 2024 Anthropic, PBC
 
 ## pi-permission-system 32.0.3
 

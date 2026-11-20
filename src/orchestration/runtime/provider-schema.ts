@@ -2,8 +2,9 @@ import type { ProviderRequestRule } from "./provider-requests.ts";
 
 /**
  * Mistral-hosted Z.ai GLM constrains every tool's arguments once any tool in
- * the request is strict (Pi's built-in read/bash/edit/write are) or a call is
- * forced, including tools sent with `strict: false`. The constraint enforces the
+ * the request is strict or a call is forced, including tools sent with
+ * `strict: false`. Pi 1.6 defaults Mistral tools to non-strict unless the
+ * model opts into strict mode. Where active, the constraint enforces the
  * schema's declared property order and matches `pattern` against the whole
  * string. A model that writes a later-declared argument first can then no
  * longer write any earlier one: it is dropped silently (observed: fetch_content

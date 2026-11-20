@@ -69,7 +69,7 @@ inspect rather than treating replacement or restart as a repair.
 
 ## Host SDK and runtime scope
 
-The development SDK baseline is Pi/AI/TUI 1.5.2 and TypeBox 1.3.27. The installed
+The development SDK baseline is Pi/AI/TUI 1.6.0 and TypeBox 1.3.27. The installed
 host supplies the runtime; there is no version allowlist, legacy fallback or
 historical support matrix. Missing required API shapes block the affected
 boundary. The model bridge uses `ModelRegistry.runtime` and checks its required

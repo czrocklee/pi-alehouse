@@ -11,7 +11,7 @@ const { PresetModelPopover } = await jiti.import(
 );
 
 const ANCHOR_KEY = Symbol.for("pi-alehouse.popover-text-selection.anchor.v1");
-/** A small native-like host exposing the exact pi-tui 1.5.2 selection seams,
+/** A small native-like host exposing the pi-tui 1.6.0 selection seams,
  * so a fresh press exercises the same wrapper path as the real TUI. */
 function selectionHost() {
   const entry = { component: {}, hidden: false, options: {}, focusOrder: 1 };

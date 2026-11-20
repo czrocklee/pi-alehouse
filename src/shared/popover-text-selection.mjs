@@ -1,14 +1,14 @@
 /** Bounded body-text selection for fullscreen popovers.
  *
- * Pi 1.5's fullscreen TUI owns fallback mouse text selection. This
+ * Pi's fullscreen TUI owns fallback mouse text selection. This
  * adapter keeps that native selection (grapheme/word/line handling, OSC8 links,
  * copyOnSelect and the verified clipboard path) and only bounds it to the body
  * rectangle a panel actually painted. It is SDK-free and installs no input
  * listener, timer, clipboard fallback or raw-terminal parser.
  *
- * The six private pi-tui 1.5.2 seams used here are:
- * - handleSelectionMouseEvent: called only after every component left a raw
- *   primary press unhandled. A fresh press chooses the visually topmost native
+ * The six private seams verified against pi-tui 1.6.0 are:
+ * - handleSelectionMouseEvent: fallback after native mouse handling and viewport
+ *   dispatch. A fresh primary press chooses the visually topmost native
  *   overlay layout under the pointer; only that exact component's declared body
  *   rectangle may become the active domain.
  * - getSelectionPoint: clamps native screen points into the active body domain.

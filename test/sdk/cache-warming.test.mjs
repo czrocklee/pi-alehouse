@@ -21,7 +21,7 @@ const sdk = await import("@earendil-works/pi-coding-agent");
 const ai = await import("@earendil-works/pi-ai");
 const sdkEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
 const { version } = JSON.parse(await readFile(new URL("../package.json", sdkEntry), "utf8"));
-assert.equal(version, "1.5.2");
+assert.equal(version, "1.6.0");
 
 for (const configuredMode of [undefined, "streaming"]) {
   const mode = configuredMode ?? "idle";
@@ -82,7 +82,7 @@ for (const configuredMode of [undefined, "streaming"]) {
     child.onError((error) => errors.push(error));
     assert.equal(child.hasHandlers("cache_warming_decision"), true);
 
-    // Pi 1.5.2's CacheWarmingDecisionEvent has no mode field. Exercise both
+    // Pi 1.6.0's CacheWarmingDecisionEvent has no mode field. Exercise both
     // configured policies without inventing a field or running refresh timers.
     const decision = (action) => ({
       type: "cache_warming_decision",

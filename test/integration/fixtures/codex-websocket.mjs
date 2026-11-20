@@ -164,22 +164,10 @@ try {
   ).toString("base64");
   runtime.registerProvider(provider, {
     baseUrl: `${base}/backend-api`,
-    api: "openai-codex-responses",
     apiKey: `fixture.${claims}.fixture`,
-    models: [
-      {
-        id: modelId,
-        name: "Loopback Codex",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 1024,
-      },
-    ],
   });
   const model = runtime.getModel(provider, modelId);
-  assert(model);
+  assert.equal(model?.baseUrl, `${base}/backend-api`, "use Pi's bundled Sol on loopback only");
   const loader = new DefaultResourceLoader({
     cwd,
     agentDir,
@@ -198,7 +186,7 @@ try {
     resourceLoader: loader,
     modelRuntime: runtime,
     model,
-    thinkingLevel: "off",
+    thinkingLevel: "high",
     settingsManager,
     sessionManager: SessionManager.inMemory(cwd),
   }));
@@ -213,9 +201,18 @@ try {
   }
   assert.equal(upgrades, 1, "the seven turns must reuse one actual WebSocket connection");
   assert.equal(wsBodies.length, 7);
+  // A speed change must not lower the normal session's output or reasoning budget.
+  // A delta can inherit the effort from its previous response; a full request cannot.
+  const assertBudget = (body) => {
+    assert.equal(body.max_output_tokens, model.maxTokens);
+    const effort = body.input.findLast((item) => item.type === "configuration_update");
+    if (!body.previous_response_id || effort) assert.equal(effort?.reasoning.effort, "high");
+  };
+  assert(model.maxTokens > 2048);
   for (const body of wsBodies) {
     assert.equal(body.type, "response.create");
     assert.equal(body.model, modelId);
+    assertBudget(body);
   }
   assert.deepEqual(
     wsBodies.map((body) => body.service_tier),
@@ -240,6 +237,7 @@ try {
   assert.equal(sseBodies.length, 1);
   assert.equal(sseBodies[0].model, modelId);
   assert.equal(sseBodies[0].service_tier, "ultrafast");
+  assertBudget(sseBodies[0]);
 
   for (let attempt = 0; attempt < 100 && publications.length < 3; attempt++) await delay(10);
   assert.deepEqual(

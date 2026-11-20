@@ -1,5 +1,5 @@
 /** Painted hit and presentation-only hover for the shared single-cell close control.
- * Both hover and gestures use this one live hit. Pi 1.5's fullscreen listener
+ * Both hover and gestures use this one live hit. Pi's fullscreen listener
  * consumes mouse input before extension listeners, and components receive no
  * mouse-leave event. This optional adapter observes
  * the native viewport dispatch without parsing, consuming or retargeting input.

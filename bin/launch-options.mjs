@@ -1,4 +1,4 @@
-// Pi 1.5.2 dist/cli/args.js: these built-in options consume the next argv
+// Pi 1.6.0 dist/cli/args.js: these built-in options consume the next argv
 // token even when it looks like a flag or the -- separator. Keep this bounded
 // inventory in parity with the development SDK (test/packaging/launch-options.test.mjs).
 const valueOptions = new Set([

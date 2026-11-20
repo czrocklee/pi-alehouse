@@ -90,7 +90,7 @@ export function hostUsage(child: UsageLedger, prior?: HostUsage): HostUsage {
       ...cost,
       ...prior.cost,
       total: was(prior.cost?.total) + cost.total,
-      // The child ledger retains amounts, not Pi 1.5's billing-source flag.
+      // The child ledger retains amounts, not Pi's billing-source flag.
       // A provider-reported prior cannot certify the newly combined total.
       ...(prior.cost?.totalFromProvider !== undefined ? { totalFromProvider: false } : {}),
     },
