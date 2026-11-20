@@ -62,6 +62,15 @@ in {
       '';
     };
 
+    codexSpeedLimits = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = ''
+        Codex speed limits installed as `alehouse-codex-speeds.json`. When null,
+        the file stays user-owned.
+      '';
+    };
+
     jevApiKeyFile = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -108,6 +117,9 @@ in {
         agents))
         (lib.mkIf (cfg.presets != null) {
           "${agentDir}/alehouse-presets.json".source = cfg.presets;
+        })
+        (lib.mkIf (cfg.codexSpeedLimits != null) {
+          "${agentDir}/alehouse-codex-speeds.json".source = cfg.codexSpeedLimits;
         })
         # The permission settings UI rewrites this path atomically; force
         # restores the declarative policy on activation.
