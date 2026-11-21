@@ -700,8 +700,8 @@ export class TranscriptContent implements TranscriptRows {
    * own assistant component prints nothing for `aborted` or `error` when the
    * message carries tool calls -- it expects the cards to say it. So a card
    * left pending here would spin for the life of the pane AND swallow the only
-   * report of the failure. Finalize it the way Pi does instead. Children run
-   * with retry disabled, so there is no attempt count to put in the wording.
+   * report of the failure. Finalize this attempt's card without assuming
+   * whether the SDK will retry the request.
    */
   private static failureText(message: MessageOf<"assistant">): string | undefined {
     if (message.stopReason === "aborted") return "Operation aborted";

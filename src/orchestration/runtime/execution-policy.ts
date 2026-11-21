@@ -1,17 +1,17 @@
-import type { SettingsManager } from "@earendil-works/pi-coding-agent";
+import { SettingsManager, type RetrySettings } from "@earendil-works/pi-coding-agent";
 
-/** Child-local overrides only. Native SDK recovery, never a replay of a task.
- * Keep provider-internal retries off: those hide attempts from Run accounting.
- * Compaction token budgets/model overrides still come from the user's settings.
- */
-export function configureChildRuntime(manager: SettingsManager): void {
+export function configureChildRuntime(
+  manager: SettingsManager,
+  parentRetry: RetrySettings | undefined,
+): void {
+  // pi.getSettings() includes session overrides, but omits unset fields. Resolve
+  // them against SDK defaults, not the child's (possibly different) settings file.
+  const agentRetry = SettingsManager.inMemory({ retry: parentRetry }).getRetrySettings();
   manager.applyOverrides({
     compaction: { enabled: true },
     retry: {
-      enabled: true,
-      maxRetries: 1,
-      baseDelayMs: 1000,
-      maxAgentDelayMs: 5000,
+      ...agentRetry,
+      // Keep each attempt visible to Run accounting; do not inherit provider retries.
       provider: { timeoutMs: 600_000, maxRetries: 0, maxRetryDelayMs: 5000 },
     },
   });

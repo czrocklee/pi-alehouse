@@ -10,6 +10,7 @@ import {
   type ExtensionContext,
   type ExtensionFactory,
   type ModelRuntime,
+  type RetrySettings,
   type SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { AdmittedAgentConfig, RunIdentity } from "../core/contracts.ts";
@@ -29,6 +30,7 @@ import { createChildToolRendererLookup } from "./child-tool-renderers.ts";
 import { assembleChildSession, disposeChildSession } from "./child-session.ts";
 import { childWebExtension, type ChildWebModules, type WebLease } from "./child-web.ts";
 import { digest } from "./context-snapshot.ts";
+import { configureChildRuntime } from "./execution-policy.ts";
 import { ManagedBlockObserver, type ManagedBlockSubscription } from "./permission-blocks.ts";
 import { WorkerStatsObserver } from "./worker-stats.ts";
 
@@ -49,6 +51,7 @@ export function createChildSessionFactory(options: {
   runtime: ModelRuntime;
   profiles: Readonly<Record<string, ChildProfile>>;
   settings(): SettingsManager;
+  parentRetry(): RetrySettings | undefined;
   /** Sampled at session creation, including queued Agents' first Runs; existing sessions keep resources. */
   skillsEnabled?(): boolean;
   /** Trusted payload rules shared with this parent; not extension discovery. */
@@ -156,6 +159,8 @@ export function createChildSessionFactory(options: {
       ],
     });
     await loader.reload();
+    // The loader reloads the settings manager, discarding any earlier in-memory overrides.
+    configureChildRuntime(childSettings, options.parentRetry());
     manager.appendCustomEntry("active_agent", {
       name: agent.settings.profile,
       routing: {

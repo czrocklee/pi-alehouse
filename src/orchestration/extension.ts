@@ -39,7 +39,6 @@ import {
 import { ChildActivityRegistry } from "./runtime/activity-observer.ts";
 import { createChildSessionFactory } from "./runtime/child-factory.ts";
 import { ChildWebModules, nativeWebLoader } from "./runtime/child-web.ts";
-import { configureChildRuntime } from "./runtime/execution-policy.ts";
 import type { ManagedBlockSubscription } from "./runtime/permission-blocks.ts";
 import { createDispatchRuntime } from "./runtime/dispatch-runtime.ts";
 import { registerFastMode } from "./runtime/fast-mode.ts";
@@ -897,14 +896,8 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
     const runtime = requireHostModelRuntime(ctx);
     const profiles = loadAdmittedProfiles(agentDir);
     const web = openResearcherWeb();
-    const settings = () => {
-      const manager = SettingsManager.create(ctx.cwd, agentDir, {
-        projectTrusted: ctx.isProjectTrusted(),
-      });
-      // Native recovery remains inside the same Run and its accounting/drain.
-      configureChildRuntime(manager);
-      return manager;
-    };
+    const settings = () =>
+      SettingsManager.create(ctx.cwd, agentDir, { projectTrusted: ctx.isProjectTrusted() });
     const parentHistory = {
       getSessionId: () => parentId,
       isPersisted: () => !!ctx.sessionManager.getSessionFile(),
@@ -926,6 +919,7 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
       runtime,
       profiles,
       settings,
+      parentRetry: () => pi.getSettings().retry,
       skillsEnabled: currentChildSkills,
       requestExtension,
       parentHistory,

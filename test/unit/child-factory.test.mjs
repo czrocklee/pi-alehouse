@@ -24,6 +24,10 @@ import { createHash } from "node:crypto";
 export { SessionManager } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-coding-agent"))};
 export { SessionInitializationError } from ${JSON.stringify(portsUrl)};
 export const state = {};
+export const configureChildRuntime = (settings, retry) => {
+  if (!state.loadedSettings.has(settings)) throw new Error("Policy applied before settings reload");
+  state.retrySnapshots.push(retry);
+};
 export const digest = (text) => createHash("sha256").update(text).digest("hex");
 export const createEventBus = () => ({});
 export const createAgentSession = () => {};
@@ -56,6 +60,7 @@ export class DefaultResourceLoader {
   async reload() {
     state.prompts.push(this.options.appendSystemPromptOverride());
     if (state.loaderError) throw state.loaderError;
+    state.loadedSettings.add(this.options.settingsManager);
   }
 }
 export const assembleChildSession = async (input) => {
@@ -127,6 +132,8 @@ function fixture(t, profile = "editor") {
   for (const key of Object.keys(seam.state)) delete seam.state[key];
   Object.assign(seam.state, {
     loaders: [],
+    loadedSettings: new Set(),
+    retrySnapshots: [],
     prompts: [],
     assemblies: [],
     runs: [],
@@ -180,6 +187,7 @@ function fixture(t, profile = "editor") {
     runtime: { getModel: () => model, getPhysicalModel: () => model },
     profiles: { [profile]: { definition, body: "Shared worker body.", tools } },
     settings: () => ({}),
+    parentRetry: () => undefined,
     requestExtension() {},
     parentHistory: {},
     parentPermission: () => ({}),
@@ -249,6 +257,21 @@ test("SDK, loader, activity and approval all retain the original admitted cwd ac
   );
   await port.dispose();
 });
+
+for (const profile of ["editor", "researcher"])
+  test(`${profile} samples the current parent retry policy on creation, not on follow-up`, async (t) => {
+    const f = fixture(t, profile);
+    let retry = { enabled: false };
+    f.options.parentRetry = () => retry;
+    const create = createChildSessionFactory(f.options);
+    const first = await create(f.agent);
+    retry = { enabled: true, maxRetries: 2 };
+    await first.run("reuse", {}, { run_id: "reuse" });
+    const second = await create({ ...f.agent, agent_id: "another-agent", name: "another" });
+    assert.deepEqual(seam.state.retrySnapshots, [{ enabled: false }, retry]);
+    await first.dispose();
+    await second.dispose();
+  });
 
 for (const profile of ["editor", "researcher"])
   for (const enabled of [undefined, true, false])

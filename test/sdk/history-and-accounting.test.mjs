@@ -87,28 +87,41 @@ test("final message rejects Run starts strictly inside either bound interval", (
   });
 });
 
-test("child runtime overrides bound native retries without changing compaction token budgets", () => {
-  const manager = SettingsManager.inMemory({
+test("child inherits live parent retry settings without copying provider policy or changing stored settings", () => {
+  const settings = {
     compaction: { enabled: false, reserveTokens: 2048, keepRecentTokens: 512 },
-    retry: { enabled: false, maxRetries: 900, provider: { maxRetries: 900 } },
-  });
-  configureChildRuntime(manager);
+    retry: { enabled: false, maxRetries: 7, baseDelayMs: 1000, maxAgentDelayMs: 5000 },
+  };
+  const retry = { enabled: true, maxRetries: 2, baseDelayMs: 15, maxAgentDelayMs: 23 };
+  const parent = SettingsManager.inMemory(settings);
+  parent.applyOverrides({ retry: { ...retry, provider: { maxRetries: 4, timeoutMs: 77 } } });
+  const before = parent.getSettings();
+  const manager = SettingsManager.inMemory(settings);
+  configureChildRuntime(manager, parent.getSettings().retry);
+  assert.deepEqual(parent.getSettings(), before);
   assert.deepEqual(manager.getCompactionSettings(), {
     enabled: true,
     reserveTokens: 2048,
     keepRecentTokens: 512,
   });
-  assert.deepEqual(manager.getRetrySettings(), {
-    enabled: true,
-    maxRetries: 1,
-    baseDelayMs: 1000,
-    maxAgentDelayMs: 5000,
-  });
+  assert.deepEqual(manager.getRetrySettings(), retry);
+  assert.deepEqual(manager.getGlobalSettings(), settings);
   assert.deepEqual(manager.getProviderRetrySettings(), {
     timeoutMs: 600000,
     maxRetries: 0,
     maxRetryDelayMs: 5000,
   });
+});
+
+test("unset parent retry fields use Pi defaults, not stale child disk values", () => {
+  const defaults = SettingsManager.inMemory().getRetrySettings();
+  for (const retry of [undefined, { enabled: false, maxRetries: 0 }]) {
+    const manager = SettingsManager.inMemory({
+      retry: { enabled: false, maxRetries: 7, baseDelayMs: 1, maxAgentDelayMs: 2 },
+    });
+    configureChildRuntime(manager, retry);
+    assert.deepEqual(manager.getRetrySettings(), { ...defaults, ...retry });
+  }
 });
 
 test("parent orchestration appends after compaction; it never re-projects request context", () => {

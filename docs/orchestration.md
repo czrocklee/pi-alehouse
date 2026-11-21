@@ -39,6 +39,8 @@ An executing task holds one of four slots for its admitted provider; different m
 
 Press **Alt+A** or run `/alehouse-status` to inspect progress. Check for an unanswered question before waiting again. A Run has a soft turn budget but no wall-clock execution deadline. A partial result can still be useful even if the task failed; a `completed` task with `limit_reached` is not proof that all requested work was done.
 
+Each new worker or scout takes its agent-level retry settings from the **live parent session**, including in-memory overrides (`retry.enabled`, `retry.maxRetries`, `retry.baseDelayMs`, and `retry.maxAgentDelayMs`). Unset fields use Pi's defaults. An existing child keeps its settings across follow-up tasks. A transient error retries the model request within the same Run, not the whole task. With retries enabled and `maxRetries: 3`, that means at most four attempts including the first; cancellation or the Run's turn budget can stop it sooner. Alehouse sets `retry.provider.maxRetries` to `0` for the child so provider retries do not multiply those attempts. It does not change the parent's settings.
+
 ## Close or switch sessions
 
 Turning the preset Off blocks new work but does not stop accepted tasks. Killing all Agents is not the same as closing the Owner. Use `/alehouse-close` and wait for confirmed closure before exit, `/tree` or upgrading. Do not `/reload` with an open Owner. A used Owner needs confirmation before a session replacement; an unused one can close automatically. If cleanup is uncertain, a timeout does not establish that the children have stopped. See [support limits](limitations.md).

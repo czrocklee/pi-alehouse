@@ -1,6 +1,7 @@
-// Real Alehouse composition and child Codex transport; all responses are synthetic.
+// Shared offline fixture for /fast and child retry. Real composition and Codex
+// transport; only the responses are synthetic.
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import * as ai from "@earendil-works/pi-ai";
@@ -19,6 +20,24 @@ import { controlledProvider } from "../../support/host.mjs";
 const agentDir = process.env.PI_CODING_AGENT_DIR,
   home = process.env.HOME;
 assert(agentDir && home);
+const scenario = process.argv[2];
+const retryFixture = scenario !== undefined;
+assert(
+  scenario === undefined || scenario === "retry-disk-enabled" || scenario === "retry-disk-disabled",
+);
+if (retryFixture) {
+  assert.equal(process.env.ALEHOUSE_CHILD_RETRY_FIXTURE_HOME, home);
+  assert.equal(agentDir, join(home, "agent"));
+}
+const diskRetryEnabled = scenario === "retry-disk-enabled";
+const diskRetry = {
+  enabled: diskRetryEnabled,
+  maxRetries: diskRetryEnabled ? 3 : 5,
+  baseDelayMs: 30,
+  maxAgentDelayMs: 90,
+  provider: { maxRetries: 2 },
+};
+const overloaded = "503 overloaded synthetic retry";
 const modelId = "gpt-6.2-sol",
   childModelId = "gpt-6.2-astra",
   primary = "openai-codex",
@@ -38,6 +57,17 @@ globalThis.fetch = async (url, init) => {
       : init.body,
   );
   childWire.push({ body, sessionId: headers.get("session-id") });
+  if (retryFixture) {
+    // The real Codex transport can retry this HTTP failure internally. Make
+    // those unwanted retries fast too, so they fail the counts, not a watchdog.
+    return Response.json(
+      { error: { message: overloaded } },
+      {
+        status: 503,
+        headers: { "retry-after-ms": "0" },
+      },
+    );
+  }
   const id = childWire.length;
   const events = [
     {
@@ -63,7 +93,12 @@ globalThis.fetch = async (url, init) => {
 initialize({ agentDir });
 initTheme(undefined, false);
 // Pin the real child transport to fetch, never WebSocket. This is isolated fixture state.
-writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ transport: "sse" }));
+const settingsPath = join(agentDir, "settings.json");
+const userSettings = JSON.stringify({
+  transport: "sse",
+  ...(retryFixture && { retry: diskRetry, compaction: { enabled: false }, cacheWarming: "off" }),
+});
+writeFileSync(settingsPath, userSettings, { flag: "wx" });
 writeFileSync(
   join(agentDir, "alehouse-codex-speeds.json"),
   JSON.stringify({ [`${primary}/${modelId}`]: "ultrafast", [childModelId]: "fast" }),
@@ -95,18 +130,37 @@ runtime.registerProvider(primary, {
   api: "openai-codex-responses",
   streamSimple(model, context, options) {
     const body = { model: model.id };
-    parentWire.push({ body, result: options?.onPayload?.(body, model) });
+    parentWire.push({
+      body,
+      result: options?.onPayload?.(body, model),
+      maxRetries: options?.maxRetries,
+    });
     return fake.config.streamSimple(model, context, options);
   },
 });
 const claims = Buffer.from(
   JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "fixture" } }),
 ).toString("base64");
+const childAttempts = [];
+const codexStreamSimple = retryFixture
+  ? (await import("@earendil-works/pi-ai/api/openai-codex-responses")).streamSimple
+  : undefined;
 runtime.registerProvider(secondary, {
   baseUrl: codexBase,
   apiKey: `fixture.${claims}.fixture`,
   api: "openai-codex-responses",
   models: [{ ...astra, baseUrl: codexBase }],
+  ...(codexStreamSimple && {
+    streamSimple(model, context, options) {
+      childAttempts.push({
+        sessionId: options?.sessionId,
+        maxRetries: options?.maxRetries,
+      });
+      // Do not let an accidental transport change escape the fetch stub.
+      assert.equal(options?.transport, "sse");
+      return codexStreamSimple(model, context, options);
+    },
+  }),
 });
 const model = runtime.getModel(primary, modelId);
 assert(model);
@@ -119,11 +173,14 @@ writeFileSync(
   join(cwd, ".pi", "alehouse-codex-speeds.json"),
   JSON.stringify({ [`${primary}/${modelId}`]: "fast", [childModelId]: "ultrafast" }),
 );
-const settingsManager = SettingsManager.inMemory({
-  compaction: { enabled: false },
-  retry: { enabled: false },
-  cacheWarming: "off",
-});
+if (retryFixture) mkdirSync(join(cwd, ".git")); // Bound project discovery to the fixture.
+const settingsManager = retryFixture
+  ? SettingsManager.create(cwd, agentDir)
+  : SettingsManager.inMemory({
+      compaction: { enabled: false },
+      retry: { enabled: false },
+      cacheWarming: "off",
+    });
 const compositionPath = join(packageRoot, "src/composition.ts");
 const loader = new DefaultResourceLoader({
   cwd,
@@ -150,9 +207,7 @@ const { session } = await createAgentSession({
 });
 const agentSessions = new Map();
 const errors = [];
-async function runTurn(turn, { agent, spawn, tier, childTier = tier }) {
-  const parentStart = parentWire.length,
-    childStart = childWire.length;
+async function requestTask(turn, { agent, spawn }) {
   const tool = spawn ? "agent_spawn" : "agent_run";
   const args = { agent, prompt: `Fixture task ${turn}`, label: `Task ${turn}`, wait_ms: 60000 };
   fake.respond(async ({ context }) => {
@@ -173,7 +228,12 @@ async function runTurn(turn, { agent, spawn, tier, childTier = tier }) {
   await session.prompt(`Run fixture task ${turn}`, { expandPromptTemplates: false });
   const result = session.messages.findLast((message) => message.toolCallId === `fixture-${turn}`);
   assert.equal(result?.isError, false, JSON.stringify({ result, errors }));
-  const reply = JSON.parse(result.content[0].text);
+  return JSON.parse(result.content[0].text);
+}
+async function runTurn(turn, { agent, spawn, tier, childTier = tier }) {
+  const parentStart = parentWire.length,
+    childStart = childWire.length;
+  const reply = await requestTask(turn, { agent, spawn });
   assert.equal(reply.reason, "done", JSON.stringify(reply));
   assert.equal(reply.tasks[0].result, "child done");
   const parentRequests = parentWire.slice(parentStart);
@@ -201,8 +261,68 @@ async function runTurn(turn, { agent, spawn, tier, childTier = tier }) {
     assert.equal(sessionId, agentSessions.get(agent), "follow-up reuses the same child session");
   }
 }
-try {
-  await session.bindExtensions({ mode: "rpc", onError: (error) => errors.push(error.error) });
+async function assertRetryRun(turn, expectedAttempts, parentSettings) {
+  const attemptStart = childAttempts.length;
+  const wireStart = childWire.length;
+  const parentStart = parentWire.length;
+  const agent = `retry-worker-${turn}`;
+  const reply = await requestTask(turn, { agent, spawn: true });
+  const attempts = childAttempts.slice(attemptStart);
+  const requests = childWire.slice(wireStart);
+  assert(attempts.length > 0, "spawned worker reached the real Codex transport");
+  for (const { maxRetries } of attempts)
+    assert.equal(maxRetries, 0, "child transport retries must stay off after resource loading");
+  assert.equal(attempts.length, expectedAttempts, "initial attempt plus SDK agent retries");
+  assert.equal(requests.length, expectedAttempts, "one fetch per attempt; no transport retries");
+  const [{ sessionId: childId }] = attempts;
+  assert(childId && childId !== session.sessionId);
+  assert(![...agentSessions.values()].includes(childId), "the spawn created a fresh SDK session");
+  agentSessions.set(agent, childId);
+  assert(
+    attempts.every(({ sessionId }) => sessionId === childId),
+    "SDK retried one child",
+  );
+  assert(requests.every(({ sessionId }) => sessionId === childId));
+  assert.equal(reply.reason, "task_issue", JSON.stringify(reply));
+  assert.equal(reply.tasks.length, 1);
+  assert.equal(reply.tasks[0].status, "failed");
+  assert.match(reply.tasks[0].error, /503 overloaded synthetic retry/);
+  const parentBudget = parentSettings.retry.provider.maxRetries;
+  assert.deepEqual(
+    parentWire.slice(parentStart).map(({ maxRetries }) => maxRetries),
+    [parentBudget, parentBudget],
+    "the parent still uses its nonzero provider retry budget",
+  );
+  assert.deepEqual(
+    settingsManager.getSettings(),
+    parentSettings,
+    "child left parent memory intact",
+  );
+}
+
+let expectedParentSettings;
+async function runRetryCases() {
+  const diskSettings = settingsManager.getSettings();
+  assert.deepEqual(diskSettings.retry, diskRetry, "parent started with file settings");
+  if (diskRetryEnabled) await assertRetryRun(1, 4, diskSettings);
+
+  // Apply after loader.reload() and the real session bind. The next spawn must
+  // sample the live parent, not the file or a snapshot taken at parent startup.
+  const liveRetry = {
+    enabled: !diskRetryEnabled,
+    maxRetries: diskRetryEnabled ? 4 : 2,
+    baseDelayMs: 11,
+    maxAgentDelayMs: 19,
+    provider: { maxRetries: 4 },
+  };
+  settingsManager.applyOverrides({ retry: liveRetry });
+  expectedParentSettings = { ...diskSettings, retry: liveRetry };
+  assert.deepEqual(settingsManager.getSettings(), expectedParentSettings);
+  // Pi emits auto_retry_start only to AgentSession subscribers, not extensions.
+  // Assert request counts, not wall-clock timing; backoff policy is tested separately.
+  await assertRetryRun(2, diskRetryEnabled ? 1 : 3, expectedParentSettings);
+}
+async function runFastCases() {
   // Pi can expose duplicate extension commands as /fast:1, /fast:2, etc.
   assert.deepEqual(
     session.extensionRunner
@@ -230,12 +350,27 @@ try {
   await session.prompt("/fast ultrafast");
   await session.prompt("/fast");
   await runTurn(8, { agent: "lark" });
+}
+try {
+  await session.bindExtensions({ mode: "rpc", onError: (error) => errors.push(error.error) });
+  if (retryFixture) await runRetryCases();
+  else await runFastCases();
   assert.deepEqual(errors, []);
   assert.equal(unexpectedRequests, 0);
 } finally {
   await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
   session.dispose();
 }
-console.log(
-  "PASS: one parent /fast changes parent requests and serialized Codex requests from existing and new Agents, offline",
-);
+if (retryFixture) {
+  assert.deepEqual(
+    settingsManager.getSettings(),
+    expectedParentSettings,
+    "parent memory survives quit",
+  );
+  assert.equal(readFileSync(settingsPath, "utf8"), userSettings, "Pi settings stay unchanged");
+  console.log(`PASS: child ${scenario}, offline`);
+} else {
+  console.log(
+    "PASS: one parent /fast changes parent requests and serialized Codex requests from existing and new Agents, offline",
+  );
+}
