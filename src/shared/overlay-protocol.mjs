@@ -1,5 +1,5 @@
-/** Cross-extension settlement protocol. Keep the event name stable: the
- * independently bundled footer must step aside before an agent panel closes. */
+/** Request that transient overlays step aside for a coordinated settlement.
+ * Dismissing a single centered panel via its backdrop does not broadcast this. */
 export const HIDE_TRANSIENT_OVERLAYS_EVENT = "pi-alehouse:hide-transient-overlays";
 
 /** UI-only display hold for pinned popovers, not permission or Owner authority.

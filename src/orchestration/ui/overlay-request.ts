@@ -1,5 +1,5 @@
 /**
- * SDK-backed orchestration panels announce this channel before settling so
+ * SDK-backed orchestration panels can announce this channel before settling so
  * cooperating extensions can briefly step aside for presentation coordination.
  * Raw stacked pickers remove only their own handle, leaving sibling pins alone.
  * This originated as a workaround for older Pi global-stack completion; current
@@ -10,6 +10,9 @@
  * both consumers. The UI regression lane still tests their actual interaction.
  */
 export { HIDE_TRANSIENT_OVERLAYS_EVENT } from "../../shared/overlay-protocol.mjs";
+
+/** A centered backdrop dismissal is local: Pi removes the exact overlay handle. */
+export type OverlayCloseReason = "ordinary" | "backdrop";
 
 /**
  * One panel attempt, cancellable before its factory has a done handle.
@@ -27,21 +30,21 @@ export { HIDE_TRANSIENT_OVERLAYS_EVENT } from "../../shared/overlay-protocol.mjs
 export class OverlayRequest<T> {
   private cancelled = false;
   private cancellationNotified = false;
-  private finish?: (value: T) => void;
+  private finish?: (value: T, reason?: OverlayCloseReason) => void;
   private component?: { dispose(): void };
 
   constructor(
-    private readonly beforeSettle: () => void,
+    private readonly beforeSettle: (reason: OverlayCloseReason) => void,
     private readonly cancelValue: T,
   ) {}
 
-  readonly close = (): void => {
+  readonly close = (reason?: OverlayCloseReason): void => {
     this.cancelled = true;
     try {
-      if (this.finish) this.finish(this.cancelValue);
+      if (this.finish) this.finish(this.cancelValue, reason);
       else if (!this.cancellationNotified) {
         this.cancellationNotified = true;
-        this.beforeSettle();
+        this.beforeSettle("ordinary");
       }
     } finally {
       this.dispose();
@@ -79,11 +82,11 @@ export class OverlayRequest<T> {
    */
   protected attach(done: (value: T) => void, blocked: boolean, onBlocked?: () => void): boolean {
     let settled = false;
-    this.finish = (value) => {
+    this.finish = (value, reason = "ordinary") => {
       if (settled) return;
       settled = true;
       this.cancellationNotified = true;
-      this.beforeSettle();
+      this.beforeSettle(reason);
       done(value);
     };
     if (this.cancelled || blocked) {

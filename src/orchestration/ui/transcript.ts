@@ -896,7 +896,7 @@ export class TranscriptContent implements TranscriptRows {
           1,
           markdownTheme,
           {
-            color: (row) => theme?.fg?.("accent", row) ?? row,
+            color: (row) => theme?.fg?.("mdHeading", row) ?? row,
             bgColor: (row) => theme?.bg?.("userMessageBg", row) ?? row,
           },
           { preserveOrderedListMarkers: true, preserveBackslashEscapes: true },

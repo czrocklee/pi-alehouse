@@ -20,7 +20,7 @@ const model = { id: "model", name: "model", provider: "fixture", api: "test" };
 // Real pinned compositor and raw SGR input with a fake terminal and synthetic
 // panel data, not a started TTY/session/provider or real OS focus event. Keep
 // callbacks mounted so the actual synthetic-click dispatch can also be checked.
-function fixture(t, kind, { compose = false } = {}) {
+function fixture(t, kind, { compose = false, centered = false } = {}) {
   const terminal = { columns: 100, rows: 40, write() {}, hideCursor() {} };
   const tui = new TuiAltScreen(terminal, false, undefined, { copyOnSelect: false });
   tui.requestRender = () => {};
@@ -116,7 +116,11 @@ function fixture(t, kind, { compose = false } = {}) {
     events.push({ event, result });
     return result;
   };
-  const handle = tui.showOverlay(panel, { anchor: "top-left", row: 2, col: 5, width: 80 });
+  const handle = tui.showOverlay(
+    panel,
+    centered ? { anchor: "center", width: 80 } : { anchor: "top-left", row: 2, col: 5, width: 80 },
+  );
+  if (centered) panel.attachBackdrop(handle);
   tui.beforeTerminalStart();
   t.after(() => {
     panel.dispose();
@@ -390,6 +394,17 @@ for (const button of [1, 2])
     assert.equal(h.drafts[0].text, "synthetic unsent draft");
     freshClose(h);
   });
+
+test("Agents: clicking the backdrop discards the draft without sending or stopping", (t) => {
+  const h = fixture(t, "Agents", { compose: true, centered: true });
+  h.startDraft();
+  h.pointer("press", 0, 0);
+  assert.deepEqual(h.closes, []);
+  h.pointer("release", 0, 0);
+  assert.deepEqual(h.closes, [true]);
+  assert.equal(h.drafts.at(-1), undefined);
+  assertNoBodyAction(h);
+});
 
 test("Agents: a transcript selection without any earlier close press ends normally on the close cell", (t) => {
   const h = fixture(t, "Agents");

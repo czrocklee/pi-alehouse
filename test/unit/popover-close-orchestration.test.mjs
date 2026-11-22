@@ -416,6 +416,7 @@ for (const floating of [false, true]) {
       "select",
       "native-select",
       "native-cancel",
+      ...(floating ? ["close-button"] : []),
       "cancel",
       "host",
       "finally",
@@ -438,6 +439,10 @@ for (const floating of [false, true]) {
           f.callbacks.select(model);
         } else if (action.startsWith("native-")) {
           f.mounted.handleInput(action === "native-select" ? "enter" : "escape");
+        } else if (action === "close-button") {
+          f.tui.handleViewportInput({ ...move(), type: "press", button: "left" });
+          assert.deepEqual(f.closes, [], "press alone cannot invoke the close hook");
+          f.tui.handleViewportInput({ ...move(), type: "release", button: "left" });
         } else if (action === "cancel") {
           f.session.cancel();
           f.session.cancel();

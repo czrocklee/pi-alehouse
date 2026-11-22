@@ -45,7 +45,7 @@ export default function statsExtension(pi: ExtensionAPI): void {
   let stats: SessionStats | undefined;
   let workers: WorkerStats | undefined;
   let tui: TUI | undefined;
-  let open: { view: StatsView; handle: OverlayHandle } | undefined;
+  let open: { view: StatsView; handle: OverlayHandle; unwatchBackdrop?: () => void } | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let unbind: (() => void) | undefined;
   let off: (() => void)[] = [];
@@ -59,7 +59,11 @@ export default function statsExtension(pi: ExtensionAPI): void {
     try {
       previous.handle.hide();
     } finally {
-      previous.view.dispose();
+      try {
+        previous.view.dispose();
+      } finally {
+        previous.unwatchBackdrop?.();
+      }
     }
   };
   const snapshot = (main: SessionStats, group: WorkerStats | undefined): StatsDashboardSnapshot => {
@@ -151,7 +155,9 @@ export default function statsExtension(pi: ExtensionAPI): void {
         return context.ui.theme;
       },
       snapshot: () => snapshot(observed, group),
-      close,
+      close: () => {
+        if (open?.view === view) close();
+      },
     });
     try {
       // A separate, readable details surface. It is deliberately NOT another
@@ -166,9 +172,11 @@ export default function statsExtension(pi: ExtensionAPI): void {
         },
       });
       open = { view, handle };
+      open.unwatchBackdrop = view.attachBackdrop(handle);
       host.requestRender();
     } catch (error) {
-      view.dispose();
+      if (open?.view === view) close();
+      else view.dispose();
       throw error;
     }
   };

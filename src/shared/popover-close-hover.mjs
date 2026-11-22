@@ -8,6 +8,8 @@
  * Consumers provide the shared frame's hit test, so this SDK-free leaf need
  * not know the frame's geometry constants. */
 
+import { resolveTuiRenderer } from "./tui-renderer-identity.mjs";
+
 const REGISTRY_KEY = Symbol.for("pi-alehouse.popover-close-hover.v1");
 const METHOD = "handleViewportInput";
 
@@ -154,6 +156,10 @@ function dimensions(host) {
  * @param {HoverOptions} options
  */
 export function createPopoverCloseHover(options) {
+  const reference = options.host;
+  const renderer = resolveTuiRenderer(reference);
+  const isCurrent = () =>
+    !renderer || renderer === reference || resolveTuiRenderer(reference) === renderer;
   let disposed = false;
   /** @type {PaintedHit | undefined} */
   let painted;
@@ -163,7 +169,8 @@ export function createPopoverCloseHover(options) {
   let bridge;
   const redraw = () => {
     try {
-      options.requestRender();
+      // The injected callback may follow the stable reference to a new renderer.
+      if (isCurrent()) options.requestRender();
     } catch {
       // Pure feedback must never interfere with native input or close actions.
     }
@@ -174,7 +181,7 @@ export function createPopoverCloseHover(options) {
     if (!previous) return;
     previous.members.delete(member);
     if (previous.active === member) previous.active = undefined;
-    if (!previous.members.size && options.host) detach(options.host, previous);
+    if (!previous.members.size && renderer) detach(renderer, previous);
   };
   /** @type {Member} */
   const member = {
@@ -212,7 +219,7 @@ export function createPopoverCloseHover(options) {
       (event.width !== undefined && event.width !== width)
     )
       return false;
-    if (dimensions(options.host).some((value, index) => value !== snapshot.dimensions[index])) {
+    if (dimensions(renderer).some((value, index) => value !== snapshot.dimensions[index])) {
       reset(); // A live terminal resize needs a fresh paint, not just another event.
       return false;
     }
@@ -227,12 +234,12 @@ export function createPopoverCloseHover(options) {
       member.clear();
       return;
     }
-    if (!options.host) return;
-    if (bridge && Reflect.get(options.host, METHOD) !== bridge.wrapper) {
+    if (!renderer) return;
+    if (bridge && Reflect.get(renderer, METHOD) !== bridge.wrapper) {
       member.clear();
       return;
     }
-    bridge ??= join(options.host, member);
+    bridge ??= join(renderer, member);
     if (!bridge) return;
     if (bridge.active !== member) bridge.active?.clear();
     bridge.active = member;
@@ -249,8 +256,12 @@ export function createPopoverCloseHover(options) {
     /** @param {number} width @param {boolean} [enabled] @param {number} [height] */
     paint(width, enabled = true, height) {
       if (disposed) return false;
+      if (!isCurrent()) {
+        reset(false);
+        return true;
+      }
       try {
-        const next = dimensions(options.host);
+        const next = dimensions(renderer);
         const hit = options.closeHit(width);
         const y = hit?.y ?? 0;
         const valid =
@@ -292,8 +303,8 @@ export function createPopoverCloseHover(options) {
         return;
       }
       try {
-        if (!options.host) return;
-        bridge ??= join(options.host, member);
+        if (!renderer || !isCurrent()) return;
+        bridge ??= join(renderer, member);
         // A watch can begin inside native dispatch, after mouse() already
         // cleared its visual membership. That new watch belongs to this scope.
         member.gestureSeen = bridge?.token;
@@ -304,6 +315,15 @@ export function createPopoverCloseHover(options) {
     /** @param {PopoverCloseMouseEvent} event @param {boolean} [active] */
     mouse(event, active = true) {
       if (disposed) return false;
+      if (!isCurrent()) {
+        try {
+          member.interrupted?.();
+        } catch {
+          // Optional observation cannot interfere with the old native dispatch.
+        }
+        reset(false);
+        return false;
+      }
       // Every delivered event acknowledges the current native scope, even a
       // press, wheel or release that clears the presentation-only highlight.
       member.gestureSeen = bridge?.token;

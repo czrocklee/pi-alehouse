@@ -1,3 +1,4 @@
+import { createBackdropDismiss } from "../../shared/centered-dismiss.mjs";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { shortcutHint } from "../../shared/shortcut-hint.mjs";
 import { onBorderLabelsChange, popoverTextRect } from "../../shared/popover-chrome.mjs";
@@ -11,11 +12,13 @@ import {
   type Container,
   type Component,
   type Focusable,
+  type OverlayHandle,
   type OverlayOptions,
   type TUI,
   type TuiMouseEvent,
   type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
+import type { OverlayCloseReason } from "./overlay-request.ts";
 import type { ModelPickerPosition } from "./preset-picker.ts";
 import {
   popoverChromeCloseHit,
@@ -86,6 +89,8 @@ export class PresetModelPopover implements Component, Focusable {
   private width = 0;
   private closePainted = false;
   private closed = false;
+  private readonly backdrop = createBackdropDismiss();
+  private unwatchBackdrop: (() => void) | undefined;
   private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
   private readonly selection: ReturnType<typeof createPopoverTextSelection>;
   private readonly unsubscribeChrome: () => void;
@@ -111,7 +116,7 @@ export class PresetModelPopover implements Component, Focusable {
       currentWidth?(): number;
       models(): readonly Model[];
       select(model: Model): void;
-      cancel(): void;
+      cancel(reason?: OverlayCloseReason): void;
     },
   ) {
     this.selection = createPopoverTextSelection({ host: options.tui, component: this });
@@ -133,6 +138,7 @@ export class PresetModelPopover implements Component, Focusable {
     return this.options.native.focused;
   }
   set focused(value: boolean) {
+    this.backdrop.focused = value;
     this.options.native.focused = value;
   }
   get capturesViewportInput(): boolean {
@@ -203,10 +209,20 @@ export class PresetModelPopover implements Component, Focusable {
     this.closeHover.reset();
     this.options.native.invalidate();
   }
+  attachBackdrop(handle: OverlayHandle): void {
+    const { tui } = this.options;
+    if (!this.closed && tui && !this.unwatchBackdrop)
+      this.unwatchBackdrop = this.backdrop.attach(tui, handle, () =>
+        this.options.cancel("backdrop"),
+      );
+  }
+
   dispose(): void {
     if (this.closed) return;
     this.unsubscribeChrome();
     this.closed = true;
+    this.unwatchBackdrop?.();
+    this.unwatchBackdrop = undefined;
     this.closeHover.dispose();
     this.selection.dispose();
     this.targets.clear();

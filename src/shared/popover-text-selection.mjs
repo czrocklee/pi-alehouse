@@ -24,9 +24,11 @@
  *
  * Native word/line point copies must preserve the enumerable ownership symbol;
  * method/shape checks are not a promise of compatibility with other signatures.
- * Separately bundled imports share one registry per host. Only the final
- * member restores the method properties this bridge itself installed.
+ * Separately bundled imports share one registry per concrete renderer. Only
+ * the final member restores the method properties this bridge itself installed.
  */
+
+import { resolveTuiRenderer } from "./tui-renderer-identity.mjs";
 
 const REGISTRY_KEY = Symbol.for("pi-alehouse.popover-text-selection.v1");
 const ANCHOR_KEY = Symbol.for("pi-alehouse.popover-text-selection.anchor.v1");
@@ -49,7 +51,7 @@ const METHODS = [...HOOKS, "resetTextSelection"];
  * viewport?: Size, emptyPoint?: { row: number, col: number } }} Domain */
 /** @typedef {{ host?: object, component: object, token: object, rect?: Rect,
  * viewportKey?: unknown, viewport?: Size, bridge?: Bridge, disposed: boolean,
- * unsupported?: boolean }} Member */
+ * unsupported?: boolean, isCurrent(): boolean }} Member */
 /** @typedef {{ original: (...args: unknown[]) => unknown, descriptor?: PropertyDescriptor }} Method */
 /** @typedef {{ members: Set<Member>, active?: Member, domain?: Domain,
  * pending?: Domain, cancelling: boolean, blocked?: boolean, suppressed?: boolean,
@@ -308,8 +310,8 @@ function requestRender(host) {
   }
 }
 
-/** @param {Bridge} bridge @param {object} host */
-function cancel(bridge, host) {
+/** @param {Bridge} bridge @param {object} host @param {Member} [owner] */
+function cancel(bridge, host, owner = bridge.active) {
   if (bridge.cancelling) return false;
   bridge.cancelling = true;
   const reset = resetNative(host, bridge);
@@ -319,7 +321,8 @@ function cancel(bridge, host) {
   // Both reset paths failed: retain the domain as a tombstone so bounds/copy
   // stay suppressed until a fresh native press replaces the owned anchor.
   else bridge.blocked = true;
-  requestRender(host);
+  // Clear the old renderer's owned anchor, but don't repaint a retired renderer.
+  if (owner?.isCurrent() !== false) requestRender(host);
   return reset;
 }
 
@@ -415,7 +418,8 @@ function resolvePress(host, bridge, event) {
     if (!entryInStack(host, layout.entry) || !entryVisible(host, layout.entry)) return undefined;
     let painted = false;
     for (const member of bridge.members) {
-      if (member.disposed || member.component !== layout.entry.component) continue;
+      if (member.disposed || member.component !== layout.entry.component || !member.isCurrent())
+        continue;
       if (!validRect(member.rect)) continue;
       painted = true;
       const domain = bindLayout(host, member, layout, event);
@@ -480,7 +484,7 @@ function covered(host, domain, ownerIndex) {
 /** @param {object} host @param {Domain} domain */
 function validDomain(host, domain) {
   const member = domain.member;
-  if (member.disposed) return false;
+  if (member.disposed || !member.isCurrent()) return false;
   if (!sameSize(terminalSize(host), domain.viewport)) return false;
   if (!entryInStack(host, domain.entry) || !entryVisible(host, domain.entry)) return false;
   const found = findLayout(host, domain.entry);
@@ -840,18 +844,20 @@ function ensureBridge(member) {
  * @param {{ host?: object, component: object }} options
  */
 export function createPopoverTextSelection(options) {
-  const host = options?.host;
+  const reference = options?.host;
+  const host = resolveTuiRenderer(reference);
   /** @type {Member} */
   const member = {
     host,
     component: options?.component,
     token: {},
     disposed: false,
+    isCurrent: () => host === reference || resolveTuiRenderer(reference) === host,
   };
   const cancelOwned = () => {
     const bridge = member.bridge;
     if (!bridge || !isObject(host)) return;
-    if (ownsAnchor(member)) cancel(bridge, host);
+    if (ownsAnchor(member)) cancel(bridge, host, member);
     else if (bridge.active === member) clearActive(bridge);
   };
   if (isObject(host)) ensureBridge(member);
@@ -905,7 +911,7 @@ export function createPopoverTextSelection(options) {
       member.bridge = undefined;
       if (!bridge) return;
       let retained = false;
-      if (ownsAnchor(member)) retained = !cancel(bridge, host);
+      if (ownsAnchor(member)) retained = !cancel(bridge, host, member);
       else if (bridge.active === member) clearActive(bridge);
       if (!retained) bridge.members.delete(member);
       if (bridge.members.size === 0 && !retained) detach(host, bridge);

@@ -1,6 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import type { OverlayHandle, TuiMouseEvent } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
   POPOVER,
@@ -18,6 +18,7 @@ import {
   popoverTextRect,
   popoverTitleRows,
 } from "../../shared/popover-chrome.mjs";
+import { createBackdropDismiss } from "../../shared/centered-dismiss.mjs";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import { shortcutHint } from "../../shared/shortcut-hint.mjs";
@@ -663,6 +664,7 @@ export class StatsView {
   /** Per-tab positions survive refreshes and a trip through another tab. */
   private readonly offsets: [number, number, number] = [0, 0, 0];
   private disposed = false;
+  private readonly backdrop = createBackdropDismiss();
   private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
   /** Body-local text selection. Registers the painted text viewport only; the
    * helper binds the host's own selection gesture, so no mouse path here. */
@@ -722,6 +724,16 @@ export class StatsView {
       2 + visibleWidth(TITLE) + 2 + 1 + POPOVER_CLOSE_COLUMNS,
     );
     return Math.min(limit, this.wanted);
+  }
+
+  get focused(): boolean {
+    return this.backdrop.focused;
+  }
+  set focused(value: boolean) {
+    this.backdrop.focused = value;
+  }
+  attachBackdrop(handle: OverlayHandle): () => void {
+    return this.backdrop.attach(this.options.tui, handle, this.options.close);
   }
 
   handleInput(data: string): void {

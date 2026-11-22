@@ -1,5 +1,5 @@
 import type { EventBus } from "@earendil-works/pi-coding-agent";
-import { OverlayRequest } from "./overlay-request.ts";
+import { OverlayRequest, type OverlayCloseReason } from "./overlay-request.ts";
 
 /**
  * Watches the permission system's public broadcasts so the detail pane can get
@@ -114,7 +114,7 @@ export const mountable = (yielding: PaneYield, pending: number): boolean =>
 /** One ui.custom attempt for the detail pane. See `OverlayRequest` for the
  * settlement and overlay-coordination contract both orchestration panels share. */
 export class PaneRequest extends OverlayRequest<void> {
-  constructor(beforeSettle: () => void = () => {}) {
+  constructor(beforeSettle: (reason: OverlayCloseReason) => void = () => {}) {
     super(beforeSettle, undefined);
   }
 

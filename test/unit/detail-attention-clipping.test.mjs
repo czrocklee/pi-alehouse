@@ -299,7 +299,7 @@ test("a clipped marker keeps the strip's colours: ? warning, ! warning/error, ne
   assert.ok(fgCall(done.calls, "success", "✓"), JSON.stringify(done.calls));
   assert.ok(fgCall(done.calls, "warning", "!"), JSON.stringify(done.calls));
   assert.ok(!fgCall(done.calls, "success", "!"), "a warning marker is never repainted as success");
-  // running + question: the glyph keeps its accent, the `?` is warning-coloured.
+  // Running + question: only the `?` carries the warning colour.
   const running = (id, extra = {}) =>
     entry(
       view(id, {
@@ -327,7 +327,7 @@ test("a clipped marker keeps the strip's colours: ? warning, ! warning/error, ne
   assert.ok(fgCall(ask.calls, "warning", "?"), JSON.stringify(ask.calls));
   assert.ok(
     !fgCall(ask.calls, "accent", "?"),
-    "a question marker is never repainted as the running accent",
+    "a question marker is never repainted in the nickname's accent",
   );
   // both at once: `?!` keeps each marker its own colour.
   const both = recording();

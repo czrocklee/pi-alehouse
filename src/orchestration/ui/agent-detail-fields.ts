@@ -20,6 +20,7 @@ import {
   GLYPHS,
   renderActivity,
   shortDisplayPath,
+  SPINNER,
   type Theme,
 } from "./format.ts";
 import { POPOVER } from "./popover.ts";
@@ -948,10 +949,13 @@ export function renderDetailAgentStrip(input: {
   };
   const paintName = (tab: Tab, label: string): string =>
     !label ? "" : tab.selected ? selectedText(theme.fg("accent", label)) : theme.fg("muted", label);
-  // Glyph-only clipping still identifies the selection without repainting its
-  // lifecycle color. Markers and padding never inherit the name's underline.
+  // Motion alone marks an active peer; the selected spinner keeps its lifecycle colour.
+  // At glyph-only widths, bold/underline still identify the selected tab.
   const paintGlyph = (tab: Tab, selectedOnly = false): string => {
-    const glyph = theme.fg(tab.dimGlyph ? "dim" : tab.color, tab.glyph);
+    const glyph =
+      !tab.selected && SPINNER.includes(tab.glyph)
+        ? tab.glyph
+        : theme.fg(tab.dimGlyph ? "dim" : tab.color, tab.glyph);
     return selectedOnly && tab.selected ? selectedText(glyph) : glyph;
   };
   // `?` is a question (warning); `!` is an actual error, else a warning.

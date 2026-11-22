@@ -158,7 +158,28 @@ export class PanelCoordinator {
   constructor(private readonly options: PanelCoordinatorOptions) {
     this.yieldHandlers = paneYieldHandlers(this.yielding, {
       open: () => this.paneOpen,
-      overlay: () => this.paneOverlay,
+      overlay: () => {
+        const handle = this.paneOverlay;
+        if (!handle) return;
+        const pane = this.detailPane;
+        return {
+          setHidden: (hidden) => {
+            // The backdrop tracker already voids a press across hide and show.
+            // Unregistering as well leaves Pi's native mouse dispatch unwrapped
+            // while a permission dialog owns the screen; a reveal registers again.
+            if (hidden) pane?.detachBackdrop();
+            handle.setHidden(hidden);
+            if (
+              !hidden &&
+              this.paneOverlay === handle &&
+              this.detailPane === pane &&
+              pane?.isOpen() &&
+              mountable(this.yielding, this.approvals.pending)
+            )
+              pane.attachBackdrop(handle);
+          },
+        };
+      },
       close: () => this.closePane,
       pending: () => this.approvals.pending,
       reopen: () => {
@@ -501,15 +522,14 @@ export class PanelCoordinator {
       this.yieldTimer = undefined;
     }
     this.paneOpen = true;
-    const request = new PaneRequest(() =>
-      this.options.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {}),
-    );
+    const request = new PaneRequest((reason) => {
+      if (reason !== "backdrop") this.options.pi.events.emit(HIDE_TRANSIENT_OVERLAYS_EVENT, {});
+    });
     this.closePane = request.close;
     const mounts = createTranscriptMounts<TranscriptContent>();
     let currentAgents = new Map<string, AgentDetail>();
-    // Read-only columns of the exact TUI this mount receives, captured by the
-    // factory below and read per render by the overlay options; a stale or
-    // shared coordinator-level width is never consulted.
+    // Read columns from this mount's exact TUI, captured by the factory below.
+    // Pi resolves the overlay options at mount, not on each render.
     let paneColumns: (() => number) | undefined;
     try {
       const floating = this.floating();
@@ -751,7 +771,10 @@ export class PanelCoordinator {
                 minWidth: 40,
               }),
               onHandle: (handle) => {
+                const pane = this.detailPane;
+                if (this.closePane !== request.close || !pane?.isOpen()) return;
                 this.paneOverlay = handle;
+                pane.attachBackdrop(handle);
               },
             }
           : { overlay: false },
@@ -817,8 +840,9 @@ export class PanelCoordinator {
 
   private async activateFromWidget(agent_id: string): Promise<void> {
     if (this.paneOpen && agent_id) {
-      // An explicit row click selects another Agent or closes the current one;
-      // neither action may leave a host-held draft behind for a later mount.
+      // A normal centered backdrop click is consumed before it reaches the
+      // roster. If a row callback does arrive, the current row closes outright
+      // and another row selects it; either action discards the previous draft.
       this.paneDraft = undefined;
       if (this.detailPane) this.detailPane.activate(agent_id);
       else if (agent_id === this.paneAgent) this.closePane?.();

@@ -125,17 +125,17 @@ test("each confirmed origin gets its own label, with no content inference", () =
   }
 });
 
-test("only confirmed parent prose gets the left-aligned accent card", (t) => {
-  // Pi's stock dark theme aliases accent and customMessageLabel. Give accent
-  // a distinct color via the host Theme callbacks so using the wrong token
-  // can't pass just because those two stock colors match.
+test("only confirmed parent prose gets the left-aligned mdHeading card", (t) => {
+  // Give mdHeading a distinct color via the host Theme callbacks, so an
+  // accidental return to accent (or another stock alias) cannot pass.
   const parentFg = hostTheme.getFgAnsi("success");
   const userFg = hostTheme.getFgAnsi("userMessageText");
   const userBg = hostTheme.getBgAnsi("userMessageBg");
   assert.notEqual(parentFg, userFg);
   assert.notEqual(parentFg, hostTheme.getFgAnsi("customMessageLabel"));
+  assert.notEqual(parentFg, hostTheme.getFgAnsi("accent"));
   const theme = {
-    fg: (token, text) => hostTheme.fg(token === "accent" ? "success" : token, text),
+    fg: (token, text) => hostTheme.fg(token === "mdHeading" ? "success" : token, text),
     bg: hostTheme.bg.bind(hostTheme),
   };
   const prose = "PARENT PROSE 你好 👩‍💻";

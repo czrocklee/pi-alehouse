@@ -13,7 +13,7 @@ import {
 
 // Direct source tests for the selected agent tab's style: selection is the
 // nickname's own accent+bold+underline -- never a background fill -- while
-// the lifecycle glyph and the attention markers keep their semantic colours.
+// static lifecycle glyphs and attention markers keep their semantic colours.
 // Pane integration and clipped-warning regressions live in their own lanes;
 // these hold the style contract at the helper seam, without a build.
 const jiti = createJiti(import.meta.url, { fsCache: false });
@@ -146,6 +146,29 @@ test("the lifecycle glyph and attention markers keep their own colours", () => {
   assert.ok(!fgCall(rec.calls, "accent", "!"), JSON.stringify(rec.calls));
   assert.ok(!fgCall(rec.calls, "success", "aspen"), "the name is not repainted as success");
   noBg(rec.calls, "strip");
+});
+
+test("only the selected tab colours its spinner, including at glyph-only widths", () => {
+  for (const [state, color] of [
+    [{ status: "running" }, "accent"],
+    [{ status: "running", finalization_pending: true }, "dim"],
+    [{ status: "cancelling" }, "warning"],
+  ]) {
+    const entries = [entry("aspen", state), entry("birch")];
+    for (const [spinnerFrame, glyph] of ["⠋", "⠙"].entries()) {
+      for (const [selected, width] of [
+        ["aspen", 40],
+        ["birch", 40],
+        ["aspen", 1],
+      ]) {
+        const rec = recording();
+        const { text } = strip({ entries, selected, width, spinnerFrame, theme: rec.theme });
+        assert.ok(text.includes(glyph));
+        const paint = rec.calls.filter(([kind, , ink]) => kind === "fg" && ink.includes(glyph));
+        assert.deepEqual(paint, selected === "aspen" ? [["fg", color, glyph]] : []);
+      }
+    }
+  }
 });
 
 test("an actual error `!` is error-coloured, a warning `!` is warning-coloured", () => {

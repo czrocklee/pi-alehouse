@@ -277,6 +277,22 @@ it requires a source checkout and refuses existing npm overrides, project
 overrides require manual review; do not remove them to force an upgrade.
 Authority, Pi SDK, TypeBox and parser migrations stay manual.
 
+For a Pi upgrade, review and retest the fullscreen integration seams:
+
+- Check private `renderedOverlayLayouts` remains an array of painted bounds
+  (`row`, `col`, `width`, `height`), including empty rows/layouts. Check native
+  overlay hit dispatch and press/click capture cleanup, including cancellation.
+- Check the stable TUI reference still resolves to the active renderer and old
+  hooks detach from their original renderer after a switch. Verify that the
+  public `Focusable.focused` setter sees focus leave and return (open Pi's
+  transcript search and press `Esc` while holding a backdrop press).
+- Run the focused SDK tests `test/sdk/centered-dismiss.test.mjs`,
+  `test/sdk/panel-backdrop-mount.test.mjs`, `test/sdk/panel-close-gesture.test.mjs`,
+  `test/sdk/popover-close-hover.test.mjs` and `test/sdk/popover-text-selection.test.mjs`
+  against a matched build. Separately plan a physical-terminal smoke: select and
+  copy before, during and after an overlay, and check hover. Record the terminal,
+  host and results; automated SDK tests do not establish this manual result.
+
 Review upstream API, policy, license and lockfile changes. Run upgrades serially
 on a stable tree. `node scripts/upgrade-deps.mjs --verify` builds, runs the
 portable gate and checks production and full dependency audits. It needs the

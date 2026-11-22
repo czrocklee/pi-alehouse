@@ -6,6 +6,7 @@ import {
   TuiAltScreen,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import { createPopoverCloseControl } from "../../src/shared/popover-close-control.mjs";
 import { createPopoverCloseHover } from "../../src/shared/popover-close-hover.mjs";
 import {
   isPopoverCloseClick,
@@ -13,6 +14,13 @@ import {
   popoverRule,
   popoverTitleRow,
 } from "../../src/shared/popover-frame.mjs";
+
+const { createInteractiveTuiReference } = await import(
+  new URL(
+    "modes/interactive/tui-renderer.js",
+    import.meta.resolve("@earendil-works/pi-coding-agent"),
+  ).href
+);
 
 const theme = {
   fg(color, text) {
@@ -28,12 +36,19 @@ const metrics = { clip: truncateToWidth, width: visibleWidth };
 // listener, including its consuming mouse/focus/wheel paths.
 function fixture(
   t,
-  { overlap = false, bottomAnchored = false, otherFactory = createPopoverCloseHover } = {},
+  {
+    overlap = false,
+    bottomAnchored = false,
+    otherFactory = createPopoverCloseHover,
+    hostFor = (tui) => tui,
+    closeControl = false,
+  } = {},
 ) {
   let now = 1000;
   t.mock.method(Date, "now", () => now);
   const terminal = { columns: 80, rows: 40, write() {}, hideCursor() {} };
   const tui = new TuiAltScreen(terminal, false, undefined, { copyOnSelect: false });
+  const host = hostFor(tui);
   let renders = 0;
   tui.requestRender = () => renders++;
   tui.requestImmediateRender = () => renders++;
@@ -55,9 +70,9 @@ function fixture(
     let width = 24;
     let height = 3;
     const tracker = factory({
-      host: tui,
+      host,
       closeHit: popoverCloseHit,
-      requestRender: () => tui.requestRender(),
+      requestRender: () => host.requestRender(),
     });
     const panel = {
       render(columns) {
@@ -75,8 +90,12 @@ function fixture(
         keys.push(data);
       },
       handleMouse(event) {
-        tracker.mouse(event);
+        const result = tracker.mouse(event);
         events.push(event);
+        if (factory === createPopoverCloseControl) {
+          if (result?.close) clicks.push(event.type);
+          return result;
+        }
         if (isPopoverCloseClick(event, width)) {
           clicks.push(event.clickCount);
           return { handled: true };
@@ -93,7 +112,7 @@ function fixture(
         return undefined;
       },
     };
-    const handle = tui.showOverlay(panel, {
+    const handle = host.showOverlay(panel, {
       anchor,
       ...(anchor === "top-left" ? { row } : {}),
       col,
@@ -120,7 +139,7 @@ function fixture(
     "Agents",
     2,
     3,
-    createPopoverCloseHover,
+    closeControl ? createPopoverCloseControl : createPopoverCloseHover,
     bottomAnchored ? "bottom-left" : "top-left",
   );
   const b = overlay("Usage", overlap ? 2 : 10, overlap ? 14 : 40, otherFactory);
@@ -355,6 +374,96 @@ test("height-only growth retires hover when the SDK compositor moves a bottom-an
   assert(h.paint()[after.row].includes(theme.fg("accent", theme.bold("✕"))));
   h.send(35, h.a.x, after.row);
   assert.equal(h.renders, stationary, "stable actual height preserves stationary hover");
+});
+
+test("the pinned interactive reference clears real close hover and interrupts native gestures", (t) => {
+  const h = fixture(t, {
+    hostFor: (tui) => createInteractiveTuiReference(() => tui),
+    closeControl: true,
+  });
+  const { a } = h;
+  const idle = h.paint()[a.row];
+  h.move(a);
+  assert.notEqual(h.tui.handleViewportInput, h.original);
+  const hovered = h.paint()[a.row];
+  assert(hovered.includes(theme.fg("accent", theme.bold("✕"))));
+  assert.equal(stripTerminalSequences(hovered), stripTerminalSequences(idle));
+  const renders = h.renders;
+  h.move(a);
+  assert.equal(h.renders, renders);
+
+  const events = a.events.length;
+  h.send(35, 20, 30);
+  assert.equal(a.events.length, events, "native root motion never reaches the overlay");
+  assert.equal(h.rootEvents.at(-1).type, "move");
+  assert.equal(h.paint()[a.row], idle);
+  h.move(a);
+  h.tui.handleTerminalInput("\x1b[O");
+  assert.equal(h.paint()[a.row], idle, "native terminal focus loss retires the highlight");
+
+  a.handle.focus();
+  h.send(0, a.x, a.row);
+  h.tui.handleTerminalInput("q");
+  h.send(0, a.x, a.row, true);
+  assert.deepEqual(a.keys, ["q"]);
+  assert.deepEqual(
+    a.events.slice(-3).map((event) => event.type),
+    ["press", "release", "click"],
+  );
+  assert.deepEqual(a.clicks, [], "neither the old release nor its native click closes");
+
+  h.send(0, a.x, a.row);
+  h.tui.handleTerminalInput("\x1b[O");
+  h.send(0, a.x, a.row - 1, true);
+  h.send(0, 0, 1);
+  h.send(32, a.x, a.row);
+  h.send(0, a.x, a.row, true);
+  assert.deepEqual(a.clicks, [], "a root selection can end on the glyph without closing");
+  assert.equal(h.tui.selectionPressActive, false, "close did not steal the selection release");
+  assert.equal(h.tui.hasActiveSelection(), true);
+
+  h.send(0, a.x, a.row);
+  h.send(0, a.x, a.row, true);
+  assert.deepEqual(a.clicks, ["release"], "a fresh gesture still closes exactly once");
+});
+
+test("old hover cleanup cannot redraw or detach the replacement behind a stable reference", (t) => {
+  let current;
+  const ref = createInteractiveTuiReference(() => current);
+  const hostFor = (tui) => {
+    current = tui;
+    return ref;
+  };
+  const old = fixture(t, { hostFor, closeControl: true });
+  old.move(old.a);
+  old.move(old.b);
+  assert.notEqual(old.tui.handleViewportInput, old.original);
+  assert.equal(old.b.tracker.hovered, true);
+  assert.equal(Object.hasOwn(ref, "handleViewportInput"), false, "no inert proxy property");
+
+  const next = fixture(t, { hostFor });
+  assert.equal(ref.valueOf(), next.tui);
+  assert.equal(next.tui.handleViewportInput, next.original, "hover is not migrated");
+  next.move(next.a);
+  const nextWrapper = next.tui.handleViewportInput;
+  const renders = [old.renders, next.renders];
+
+  // Deliberately drive retired native input: its leave and any trailing close
+  // must not notify the replacement through the still-live proxy callback.
+  old.send(35, 20, 30);
+  assert.equal(old.b.tracker.hovered, false);
+  assert.equal(old.tui.handleViewportInput, old.original);
+  assert.equal(Object.hasOwn(old.tui, "handleViewportInput"), false);
+  assert.deepEqual([old.renders, next.renders], renders);
+  old.send(0, old.a.x, old.a.row);
+  old.send(0, old.a.x, old.a.row, true);
+  assert.deepEqual(old.a.clicks, []);
+  old.a.tracker.dispose();
+  old.b.tracker.dispose();
+  assert.equal(next.tui.handleViewportInput, nextWrapper);
+  assert(next.paint()[next.a.row].includes(theme.fg("accent", theme.bold("✕"))));
+  next.a.tracker.dispose();
+  assert.equal(next.tui.handleViewportInput, next.original);
 });
 
 test("last tracker disposal restores the original pinned SDK method", (t) => {

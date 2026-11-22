@@ -1,3 +1,4 @@
+import { createBackdropDismiss } from "../../shared/centered-dismiss.mjs";
 import type { SpeedModelGlyph } from "../../shared/overlay-protocol.mjs";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
@@ -15,9 +16,11 @@ import {
   sliceByColumn,
   truncateToWidth,
   visibleWidth,
+  type OverlayHandle,
 } from "@earendil-works/pi-tui";
 import type { RunView } from "../core/contracts.ts";
 import { HUMAN_STEER_MAX_UNITS } from "../presentation/human-steer-text.ts";
+import type { OverlayCloseReason } from "./overlay-request.ts";
 import { type Theme, type TranscriptFrame, type TranscriptRows } from "./format.ts";
 import { popoverBottom, popoverInlayWidth, popoverLabelRows, popoverSide } from "./popover.ts";
 import { plainText, wrapPlainText as wrapText } from "./text.ts";
@@ -174,7 +177,7 @@ export interface DetailPaneOptions {
    * when its child session has not started and there is nothing to render. */
   transcript: (agent_id: string) => TranscriptRows | undefined;
   initial: string;
-  done: () => void;
+  done: (reason?: OverlayCloseReason) => void;
   /** The Agent on screen changed. Lets a caller that reopens the pane -- after
    * yielding to a permission dialog -- come back to what was being watched. */
   onSelect?: (agent_id: string) => void;
@@ -249,6 +252,8 @@ export class DetailPane {
   private animating = false;
   private renderedRevision: unknown;
   private readonly timer: ReturnType<typeof setInterval>;
+  private readonly backdrop = createBackdropDismiss();
+  private unwatchBackdrop: (() => void) | undefined;
   private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
   private readonly textSelection: ReturnType<typeof createPopoverTextSelection>;
 
@@ -337,8 +342,8 @@ export class DetailPane {
     this.adopt(next.agent_id);
   }
 
-  /** A widget-row click is a direct selection, and clicking the selected row
-   * again is the mouse equivalent of Esc. */
+  /** A roster click selects an Agent; clicking the selected row again closes
+   * the pane outright. */
   activate(agent_id: string): void {
     if (this.closed) return;
     if (agent_id === this.selected) {
@@ -356,6 +361,36 @@ export class DetailPane {
 
   isOpen(): boolean {
     return !this.closed;
+  }
+
+  get focused(): boolean {
+    return this.backdrop.focused;
+  }
+  set focused(value: boolean) {
+    this.backdrop.focused = value;
+  }
+
+  attachBackdrop(handle: OverlayHandle): void {
+    if (this.closed || !this.options.frame || this.unwatchBackdrop) return;
+    this.unwatchBackdrop = this.backdrop.attach(this.options.tui, handle, () =>
+      this.dismiss("backdrop"),
+    );
+  }
+
+  detachBackdrop(): void {
+    const unwatch = this.unwatchBackdrop;
+    this.unwatchBackdrop = undefined;
+    unwatch?.();
+  }
+
+  /** Close glyph and backdrop both dismiss the whole pane, discarding any draft. */
+  private dismiss(reason: OverlayCloseReason = "ordinary"): void {
+    if (this.closed || this.options.visible?.() === false) return;
+    this.closed = true;
+    this.resetStopInteraction();
+    this.endCompose();
+    this.resetCloseHover();
+    this.options.done(reason);
   }
 
   /** Retire command evidence/Stop intent, not tabs or an existing sticky draft.
@@ -845,13 +880,7 @@ export class DetailPane {
         this.options.visible?.() !== false,
     );
     if (close?.handled) {
-      if (close.close) {
-        this.closed = true;
-        this.resetStopInteraction();
-        this.endCompose();
-        this.resetCloseHover();
-        this.options.done();
-      }
+      if (close.close) this.dismiss();
       return { handled: true };
     }
     if (this.closed) return undefined;
@@ -1322,6 +1351,7 @@ export class DetailPane {
     this.wrapped.clear();
     this.transcriptRead = undefined;
     this.pendingToolAnchor = undefined;
+    this.detachBackdrop();
   }
 
   // ---- Private ----

@@ -3,6 +3,7 @@ import { Text, type TUI } from "@earendil-works/pi-tui";
 import type { createPresetModelSelector } from "../runtime/preset-model-selector.ts";
 import { OrchestrationError } from "../core/ports.ts";
 import type { Strength } from "../routing.ts";
+import type { OverlayCloseReason } from "./overlay-request.ts";
 import type { ModelPickerPosition } from "./preset-picker.ts";
 import { modelPopoverOptions, PresetModelPopover } from "./preset-model-popover.ts";
 
@@ -61,12 +62,12 @@ export class ModelSelectionSession {
     const floating = this.options.modelPopover?.() === true;
     let picker: ReturnType<typeof createPresetModelSelector> | undefined, terminal: TUI | undefined;
     let view: PresetModelPopover | undefined,
-      finishRequest: (() => void) | undefined,
+      finishRequest: ((reason: OverlayCloseReason) => void) | undefined,
       cancelled = false;
     // Install ownership before enqueueing, not only after factory mount.
-    const ownedCancel = (): void => {
+    const ownedCancel = (reason: OverlayCloseReason = "ordinary"): void => {
       cancelled = true;
-      finishRequest?.();
+      finishRequest?.(reason);
     };
     this.cancelPicker = ownedCancel;
     let ownerDisposed = false;
@@ -88,14 +89,16 @@ export class ModelSelectionSession {
           const scopedModels = ctx.scopedModels;
           if (cancelled) throw new OrchestrationError("MODEL_SELECTION_CANCELLED");
           let settled = false;
-          const finish = (model?: RegistryModel): void => {
+          const finish = (model?: RegistryModel, reason?: OverlayCloseReason): void => {
             if (settled) return;
             settled = true;
             if (this.cancelPicker === ownedCancel) this.cancelPicker = undefined;
-            try {
-              this.options.beforeModelClose?.();
-            } catch {
-              /* UI cleanup must not block a permission ask. */
+            if (reason !== "backdrop") {
+              try {
+                this.options.beforeModelClose?.();
+              } catch {
+                /* UI cleanup must not block a permission ask. */
+              }
             }
             try {
               disposeOwned();
@@ -137,7 +140,7 @@ export class ModelSelectionSession {
           });
           assertLive();
           if (cancelled) throw new OrchestrationError("MODEL_SELECTION_CANCELLED");
-          finishRequest = () => finish();
+          finishRequest = (reason) => finish(undefined, reason);
           const native = picker;
           if (floating) {
             view = new PresetModelPopover({
@@ -178,7 +181,14 @@ export class ModelSelectionSession {
           };
         },
         floating
-          ? { overlay: true, overlayOptions: () => modelPopoverOptions(terminal, position) }
+          ? {
+              overlay: true,
+              overlayOptions: () => modelPopoverOptions(terminal, position),
+              onHandle: (handle) => {
+                if (modelPopoverOptions(terminal, position).anchor === "center")
+                  view?.attachBackdrop(handle);
+              },
+            }
           : undefined,
       );
       assertLive();

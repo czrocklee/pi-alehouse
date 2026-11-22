@@ -16,6 +16,7 @@ import { starterPath } from "../support/preset-config.mjs";
 import { emptyOwnerPanels } from "../support/preset-picker-fixture.mjs";
 import { PINNED_POPOVER_YIELD_EVENT } from "../../src/shared/overlay-protocol.mjs";
 import { joinPopoverStack } from "../../src/shared/popover-stack.mjs";
+import { popoverChromeCloseHit } from "../../src/shared/popover-chrome.mjs";
 import { PRESET_PICKER_MIN_ROWS } from "../../dist/orchestration/ui/preset-picker.js";
 
 initTheme(undefined, false);
@@ -589,6 +590,7 @@ function detailRosterPanels(
     open: () => shortcuts.get("alt+a").handler(),
     refresh: () => widget.wake(),
     render: (width = 120) => pane.render(width).join("\n"),
+    mouse: (event) => pane.handleMouse(event),
     get closes() {
       return closes;
     },
@@ -625,6 +627,18 @@ for (const mode of ["regular", "fullscreen"])
       assert.equal(h.mounts.length, 1, "empty-roster close must not reopen the pane");
     });
   }
+
+test("the centered Details close button still coordinates before settlement", async (t) => {
+  const h = detailRosterPanels(t, { mode: "fullscreen" }),
+    opening = h.open();
+  assert.match(h.render(80), /✕/u);
+  const { x, y } = popoverChromeCloseHit(80);
+  h.mouse({ type: "press", button: "left", x, y });
+  assert.deepEqual(h.settlements, []);
+  h.mouse({ type: "release", button: "left", x, y });
+  assert.deepEqual(h.settlements, ["hide-transient", "done"]);
+  await opening;
+});
 
 test("empty-roster auto-close contains a throwing close callback and a throwing error notifier", async (t) => {
   const h = detailRosterPanels(t, {

@@ -65,12 +65,27 @@ stop following live output before dragging; movement of the viewport can
 cancel the selection. Pi's **copy on select** controls automatic copying on
 release. Alehouse adds no copy shortcut to focused panels. Regular or
 unsupported hosts keep native selection behavior. Close a floating panel by
-pressing and releasing on its `✕`; hover alone does nothing.
+pressing and releasing on its `✕`.
+
+In fullscreen, an unmodified left click on the background closes only the
+focused centered panel (Agents, Stats or the centered model picker), without
+activating the link or control underneath or asking other popovers to step
+aside. As with `✕`, Agents discards an unsent draft without sending or requesting
+Stop; the model picker cancels without selecting a model. If the panel loses
+focus between press and release,
+even briefly to Pi's transcript search, click again to close it. `Esc` in Agents
+unwinds one layer at a time instead.
+
+A left drag starting on the background neither closes the panel nor starts a
+transcript selection. The wheel still scrolls normally, and other visible
+popovers remain clickable.
+Pi does not let you start dragging the main transcript scrollbar while an
+overlay is visible; use the wheel to scroll the background instead.
 
 ## Agent detail and transcript
 
-`Alt+A` opens Agent details. In fullscreen, click a roster row to open/select
-it; click the selected row again to close. The title identifies the task with
+`Alt+A` opens Agent details. In fullscreen, click a roster row to open its
+Agent, then use the tabs to switch Agents. The title identifies the task with
 `#N` or a shortened Run ID. Tabs stay in Agent creation order even as the
 widget reorders for new work. The bottom model label shows **⚡** for Fast or
 **⚡⚡** for Ultrafast when the label fits. It uses the [matched request tier](routing.md#fast-requests)
@@ -96,7 +111,7 @@ alerts and questions to the parent sit on the right, with their receipts on the
 same side outside the card. Cards hug short messages. For longer alerts and
 questions, 90% of the pane is a ceiling: if the text fits in the same number
 of lines at a narrower width, the card gives that space back. The body text
-uses the active theme's `accent` and `customMessageLabel` colors respectively;
+uses the active theme's `mdHeading` and `customMessageLabel` colors respectively;
 the layout still distinguishes direction if those colors match. An alert or
 question card shows what was recorded, not that the parent read it. See [UI limits](limitations.md#ui-scope).
 

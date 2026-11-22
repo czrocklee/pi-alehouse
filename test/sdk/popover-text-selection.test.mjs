@@ -8,6 +8,13 @@ import {
 } from "@earendil-works/pi-tui";
 import { createPopoverTextSelection } from "../../src/shared/popover-text-selection.mjs";
 
+const { createInteractiveTuiReference } = await import(
+  new URL(
+    "modes/interactive/tui-renderer.js",
+    import.meta.resolve("@earendil-works/pi-coding-agent"),
+  ).href
+);
+
 const BODY = [
   "alpha bravo charlie",
   "delta echo foxtrot",
@@ -33,14 +40,16 @@ function fixture(t, { copyOnSelect = true, columns = 80, rows = 30, rootLines } 
     },
     openUrl: (url) => opened.push(url),
   });
-  tui.requestRender = () => {};
-  tui.requestImmediateRender = () => {};
+  let renders = 0;
+  tui.requestRender = () => renders++;
+  tui.requestImmediateRender = () => renders++;
   const native = {
     handleSelectionMouseEvent: tui.handleSelectionMouseEvent,
     getSelectionPoint: tui.getSelectionPoint,
+    getWordSelection: tui.getWordSelection,
+    getLineSelection: tui.getLineSelection,
     getSelectionColumns: tui.getSelectionColumns,
     getSelectionBounds: tui.getSelectionBounds,
-    resetTextSelection: tui.resetTextSelection,
   };
   const resets = [];
   const nativeReset = tui.resetTextSelection.bind(tui);
@@ -58,7 +67,7 @@ function fixture(t, { copyOnSelect = true, columns = 80, rows = 30, rootLines } 
   };
   tui.setLayoutRoot(root);
   const overlays = [];
-  function overlay({ name, row, col, width, height, body = BODY, handled }) {
+  function overlay({ name, row, col, width, height, body = BODY, handled, host = tui }) {
     const events = [];
     let bodyRect = { x: 1, y: 1, width: width - 2, height: height - 2 };
     let viewportKey = `${name}:0`;
@@ -86,9 +95,9 @@ function fixture(t, { copyOnSelect = true, columns = 80, rows = 30, rootLines } 
       },
       handleInput() {},
     };
-    tracker = createPopoverTextSelection({ host: tui, component: panel });
+    tracker = createPopoverTextSelection({ host, component: panel });
     const options = { anchor: "top-left", row, col, width };
-    const handle = tui.showOverlay(panel, options);
+    const handle = host.showOverlay(panel, options);
     const result = {
       name,
       panel,
@@ -156,6 +165,9 @@ function fixture(t, { copyOnSelect = true, columns = 80, rows = 30, rootLines } 
     release,
     move,
     tick,
+    get renders() {
+      return renders;
+    },
     advance: (ms) => {
       now += ms;
     },
@@ -206,6 +218,84 @@ function highlighted(line) {
 function bodyPoint(panel, x, y) {
   return { x: panel.col + panel.bodyRect.x + x, y: panel.row + panel.bodyRect.y + y };
 }
+
+test("the pinned interactive reference bounds native highlight and copy to the popover body", async (t) => {
+  const h = fixture(t);
+  const ref = createInteractiveTuiReference(() => h.tui);
+  const p = h.overlay({ name: "A", row: 2, col: 5, width: 30, height: 8, host: ref });
+  for (const [method, native] of Object.entries(h.native)) {
+    assert.notEqual(h.tui[method], native, method);
+    assert.equal(Object.hasOwn(ref, method), false, `${method}: no inert proxy property`);
+  }
+  const start = bodyPoint(p, 0, 0);
+  for (const [x, y] of [
+    [p.col + p.width - 1, p.row + p.height - 1],
+    [40, 14],
+  ]) {
+    h.press(start.x, start.y);
+    h.drag(x, y);
+    const selected = h
+      .paint()
+      .map(highlighted)
+      .map((text) => text.trimEnd())
+      .filter(Boolean);
+    assert.deepEqual(selected, BODY, "native highlight excludes the frame and root");
+    h.release(x, y);
+    await h.tick();
+    assert.equal(h.copied.at(-1), BODY.join("\n"));
+    h.tui.flashes.dispose(); // Don't include the native copy toast in the next highlight.
+    h.paint();
+  }
+  assert.equal(h.copied.length, 2);
+  p.tracker.dispose();
+  assert.equal(h.tui.hasActiveSelection(), false);
+  for (const [method, native] of Object.entries(h.native)) {
+    assert.equal(h.tui[method], native, method);
+    assert.equal(Object.hasOwn(h.tui, method), false, `${method}: native descriptor restored`);
+  }
+});
+
+test("old selection reset and disposal are renderer-local after a stable reference swap", async (t) => {
+  const old = fixture(t, { copyOnSelect: false });
+  const next = fixture(t, { copyOnSelect: false });
+  let current = old.tui;
+  const ref = createInteractiveTuiReference(() => current);
+  const geometry = { name: "A", row: 2, col: 5, width: 30, height: 8, host: ref };
+  const a = old.overlay(geometry);
+  const start = bodyPoint(a, 0, 0);
+  const dragBody = (h) => {
+    h.press(start.x, start.y);
+    h.drag(40, 14);
+    assert.equal(h.tui.hasActiveSelection(), true);
+  };
+  dragBody(old);
+  current = next.tui;
+  assert.equal(ref.valueOf(), next.tui);
+  for (const [method, native] of Object.entries(next.native))
+    assert.equal(next.tui[method], native, `${method}: old hooks do not migrate`);
+  const b = next.overlay(geometry);
+  dragBody(next);
+  const nextHooks = Object.keys(next.native).map((method) => next.tui[method]);
+  const renders = [old.renders, next.renders];
+
+  a.tracker.reset();
+  assert.equal(old.resets.length, 1, "cleanup targets the old owned anchor");
+  assert.equal(old.tui.hasActiveSelection(), false);
+  a.tracker.dispose();
+  for (const [method, native] of Object.entries(old.native)) assert.equal(old.tui[method], native);
+  assert.deepEqual(
+    Object.keys(next.native).map((method) => next.tui[method]),
+    nextHooks,
+  );
+  assert.deepEqual([old.renders, next.renders], renders, "old cleanup asks neither TUI to paint");
+  assert.equal(next.resets.length, 0);
+  next.release(40, 14);
+  assert.equal(await next.tui.copyActiveSelectionToClipboard(), true);
+  assert.deepEqual(next.copied, [BODY.join("\n")]);
+  b.tracker.dispose();
+  for (const [method, native] of Object.entries(next.native))
+    assert.equal(next.tui[method], native);
+});
 
 test("multi-row selection highlights and copies only the painted body", async (t) => {
   const h = fixture(t);
