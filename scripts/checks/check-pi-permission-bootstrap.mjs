@@ -111,12 +111,6 @@ function fixture(name) {
   const dir = join(scratch, name);
   for (const sub of ["extensions/pi-permission-system", "npm/node_modules/@gotgenes"])
     fs.mkdirSync(join(dir, sub), { recursive: true });
-  // Installed entries are shims that import the store runtime by absolute path.
-  for (const name of ["static-safety-guard.ts", "policy-grep.ts"])
-    fs.symlinkSync(
-      fs.realpathSync(join(resources, "extensions", name)),
-      join(dir, "extensions", name),
-    );
   fs.copyFileSync(
     join(resources, "extensions/pi-permission-system/config.json"),
     join(dir, "extensions/pi-permission-system/config.json"),
@@ -130,6 +124,15 @@ function fixture(name) {
     }),
   );
   return dir;
+}
+function setManagedShims(dir, enable) {
+  // Home Manager owns these shims and the selector in the same generation.
+  // The public-only states must not include guard code from the managed runtime.
+  for (const name of ["static-safety-guard.ts", "policy-grep.ts"]) {
+    const entry = join(dir, "extensions", name);
+    if (enable) fs.symlinkSync(fs.realpathSync(join(resources, "extensions", name)), entry);
+    else fs.unlinkSync(entry);
+  }
 }
 function migrate(dir, source = bootstrapSource) {
   return spawnSync(process.execPath, [migration, join(dir, "settings.json"), source], {
@@ -234,14 +237,17 @@ try {
   const dir = fixture("round-trip");
   const runtime = await runtimeFor(dir);
   await protectedAndUsable(runtime, "legacy public");
+  setManagedShims(dir, true);
   fs.writeFileSync(selectorPath(dir), JSON.stringify(selection));
   install(dir);
   assert.equal((await runtime.newSession()).cancelled, false);
   await protectedAndUsable(runtime, "managed upgrade");
   await runtime.session.reload();
   await protectedAndUsable(runtime, "managed reload");
-  // HM removes its selector on rollback, but does not own this regular leaf.
+  // Rolling back to a generation without the module removes its links, but
+  // leaves the regular bootstrap file that is not owned by Home Manager.
   fs.rmSync(selectorPath(dir));
+  setManagedShims(dir, false);
   assert(fs.existsSync(bootstrapPath(dir)));
   assert(
     !fs.readFileSync(bootstrapPath(dir), "utf8").includes(dirname(selection.entryPoint)),
@@ -251,6 +257,13 @@ try {
   await protectedAndUsable(runtime, "rollback with migrated settings");
   await runtime.session.reload();
   await protectedAndUsable(runtime, "fallback reload");
+  // A stale managed guard alongside the public authority must block; there
+  // is no trusted managed principal API in the public fallback.
+  setManagedShims(dir, true);
+  await runtime.session.reload();
+  const mismatched = await call(runtime, "ordinary.txt");
+  assert.equal(mismatched?.block, true, "public fallback with stale managed shims");
+  assert.match(mismatched.reason, /Cannot verify the actual tool-call permission principal/);
   fs.writeFileSync(selectorPath(dir), JSON.stringify(selection));
   install(dir);
   await runtime.newSession();
@@ -346,12 +359,14 @@ try {
     const dir = fixture(`duplicate-${order}`);
     install(dir);
     let explicit;
-    if (order === "automatic-migration-window")
+    if (order === "automatic-migration-window") {
+      setManagedShims(dir, true);
+      fs.writeFileSync(selectorPath(dir), JSON.stringify(selection));
       fs.writeFileSync(
         join(dir, "settings.json"),
         JSON.stringify({ packages: ["npm:@gotgenes/pi-permission-system@32.0.3"] }),
       );
-    else
+    } else
       explicit =
         order === "before"
           ? [join(installed, "src/index.ts"), bootstrapPath(dir)]
