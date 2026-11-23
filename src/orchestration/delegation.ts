@@ -34,11 +34,10 @@ const manualText =
   "Answer, wait for and collect results from Agents already at work.";
 const modeText: Readonly<Record<Exclude<DelegationMode, "manual">, string>> = Object.freeze({
   "co-worker":
-    "Work alongside Agents: keep doing your own share of the task while they do theirs, rather than waiting on them.",
-  lead: "Lead the work: keep the critical path and key decisions yourself; Agents take the rest.",
+    "Work alongside Agents: take your own disjoint share of the task in parallel while they do theirs.",
+  lead: "Lead the work: own key decisions and core hands-on work; delegate separable diagnosis, implementation and verification.",
   supervisor:
-    "Supervise the work: split it into tasks for Agents, and spend your own effort on planning, " +
-    "answering their questions, and reviewing and integrating their results.",
+    "Supervise the work: delegate diagnosis, design, implementation and review to Agents; focus on framing, decisions, questions and integration.",
 });
 const eagernessText: Readonly<Record<Eagerness, string>> = Object.freeze({
   reserved:

@@ -112,7 +112,7 @@ export function assertCallerTools(tools) {
   ])
     assert.match(workerProfile, fact);
   for (const fact of [
-    /gather, compare and summarize/,
+    /gather, compare and synthesize/,
     /information from local files and web sources/,
     /return cited findings/,
     /no Bash\/edit\/write/,
@@ -154,33 +154,22 @@ export function assertCallerTools(tools) {
   assert.equal(fields.reasoning_difficulty.type, "integer");
   assert.equal(fields.reasoning_difficulty.minimum, 1);
   assert.equal(fields.reasoning_difficulty.maximum, 5);
+  const difficulty = fields.reasoning_difficulty.description;
+  // Rate the reasoning, not the task type. Level 5 also applies on the first
+  // attempt and does not require a separate Agent for implementation.
   for (const fact of [
-    /reasoning difficulty/,
-    /not workload\/cost/,
-    /1=.*checks/,
-    /2=.*fix/,
-    /3=.*design.*review.*plan/,
-    /4=.*hypotheses.*constraints/,
-    /5=.*approach/,
+    /not task kind, volume, cost, strictness, blockers or queueing/,
+    /1=[^;]*mechanical[^;]*specified/,
+    /2=[^;]*clear path[^;]*narrow scope/,
+    /3=[^;]*reasoning steps[^;]*clear boundaries/,
+    /4=[^;]*hypotheses[^;]*known patterns/,
+    /5=[^;]*first-principles[^;]*or a reasoning impasse/,
   ])
-    assert.match(fields.reasoning_difficulty.description, fact);
-  // Source work has its own rungs, so a lookup or summary is not scored as an investigation.
-  for (const fact of [
-    /1=[^;]*direct lookups;/,
-    /2=[^;]*summary of named sources;/,
-    /3=[^;]*reconciling conflicting sources;/,
-  ])
-    assert.match(fields.reasoning_difficulty.description, fact);
-  // Escalation addresses a reasoning impasse, not any failed command. A settled
-  // approach is handed off without assuming all remaining implementation is 3.
-  for (const fact of [
-    /5=[^;]*reasoning impasse after substantive investigation/,
-    /unresolved level-4 attempt/,
-    /A 5 decides or diagnoses/,
-    /once the approach is settled, hand implementation to a new Agent/,
-    /rated for the remaining work/,
-  ])
-    assert.match(fields.reasoning_difficulty.description, fact);
+    assert.match(difficulty, fact);
+  assert.doesNotMatch(
+    difficulty,
+    /level-4 attempt|after substantive investigation|hand implementation/,
+  );
   assert.equal(fields.inherit_context.type, "boolean");
   for (const fact of [/Default false/, /text/, /no tool calls\/results/, /64 KiB/])
     assert.match(fields.inherit_context.description, fact);
@@ -206,7 +195,6 @@ export function assertCallerTools(tools) {
   assert.match(spawn.description, /no nested delegation/);
   assert.match(spawn.description, /agent_list/);
   assert.match(spawn.description, /Queued work is accepted.*do not respawn/);
-  assert.match(fields.reasoning_difficulty.description, /Do not re-score to bypass capacity waits/);
 
   const run = byName.get("agent_run"),
     runFields = run.parameters.properties;
@@ -263,6 +251,7 @@ export function assertCallerTools(tools) {
     /idle Agent's own earlier work/,
     /re-reads its whole conversation/,
     /even on a related topic.*agent_spawn/,
+    /a reasoning impasse[^.]*agent_spawn/,
     /different profile\/reasoning_difficulty\/context/,
     /max_turns overrides this task only/,
     /pending question: agent_answer/,
@@ -292,6 +281,8 @@ export function assertCallerTools(tools) {
       "required_paths",
     ]);
     for (const fact of [
+      /Optional coordination/,
+      /omit if unneeded/,
       /not permissions or execution evidence/,
       /literal paths/,
       /literal paths relative to parent cwd or absolute/,
@@ -299,6 +290,7 @@ export function assertCallerTools(tools) {
       /one full-suite owner after shared source is stable/,
     ])
       assert.match(dispatch.description, fact);
+    assert(dispatch.description.includes("[]/{}"));
     for (const [field, limit] of [
       ["required_paths", 32],
       ["ownership", 16],
@@ -330,9 +322,9 @@ export function assertCallerTools(tools) {
       /optional references in prompt/,
     );
     for (const fact of [
-      /edit or create/,
-      /write permission/,
-      /one editor/,
+      /narrow edit\/create paths/,
+      /[Oo]verlap[^.]*ancestors[^.]*conflict only in this session/,
+      /after[^.]*queue until predecessors complete/,
       /[Oo]mit for read-only/,
     ])
       assert.match(dispatch.properties.ownership.items.description, fact);

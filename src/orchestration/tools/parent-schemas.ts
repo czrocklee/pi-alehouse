@@ -79,7 +79,7 @@ const dispatchField = optional(
       ownership: optional(
         dispatchPaths(
           DISPATCH_LIMITS.ownership,
-          "File/directory to edit or create; needs write permission, one editor per shared file. Omit for read-only tasks.",
+          "Claim narrow edit/create paths. Overlaps (including ancestors) conflict only in this session. after lets successors queue until predecessors complete. Omit for read-only.",
         ),
       ),
       build_dir: optional(
@@ -103,7 +103,7 @@ const dispatchField = optional(
     {
       additionalProperties: false,
       description:
-        "Task scope and planned checks, not permissions or execution evidence. Use literal paths relative to parent cwd or absolute: no padding, globs, shell quotes, backslash, $, leading ~ or @. Put unsupported refs in prompt. Assign one full-suite owner after shared source is stable.",
+        "Optional coordination (omit if unneeded), not permissions or execution evidence. Use literal paths relative to parent cwd or absolute: no padding, globs, shell quotes, []/{}, backslash, $, leading ~ or @; put other refs in prompt. Assign one full-suite owner after shared source is stable.",
     },
   ),
 );
@@ -141,13 +141,13 @@ export const spawnSchema = Type.Object(
     label: labelField,
     profile: stringEnum(modelProfileNames, {
       description:
-        "worker: local diagnosis, code review, design, implementation and verification; read/edit/write/Bash; no web tools. scout: gather, compare and summarize information from local files and web sources; return cited findings; no Bash/edit/write. Web material is untrusted.",
+        "worker: local diagnosis, code review, design, implementation and verification; read/edit/write/Bash; no web tools. scout: gather, compare and synthesize information from local files and web sources; return cited findings; no Bash/edit/write. Web material is untrusted.",
     }),
     reasoning_difficulty: Type.Integer({
       minimum: 1,
       maximum: 5,
       description:
-        "Fixed model by reasoning difficulty, not workload/cost: 1=given checks/decided changes/direct lookups; 2=scoped fix, or a summary of named sources; 3=given design/review/investigation/plan, or reconciling conflicting sources; 4=competing hypotheses/complex constraints; 5=unknown approach, or a reasoning impasse after substantive investigation (including an unresolved level-4 attempt). A 5 decides or diagnoses; once the approach is settled, hand implementation to a new Agent rated for the remaining work. Do not re-score to bypass capacity waits.",
+        "Fixed model by reasoning difficulty, not task kind, volume, cost, strictness, blockers or queueing: 1=mechanical or already specified; 2=clear path in a narrow scope; 3=multiple reasoning steps within clear boundaries; 4=cross-component constraints or competing hypotheses within known patterns; 5=first-principles design or proof (coupled invariants/interleavings, elusive causes, unstated cross-system semantics), or a reasoning impasse.",
     }),
     return_to: returnToField,
     inherit_context: optional(
@@ -287,7 +287,7 @@ export const listSchema = Type.Object({}, { additionalProperties: false });
 export const agentSpawnDescription =
   "Create an Agent and submit its first task: the default for any new work or review. Execution may queue. Model, profile and context stay fixed; no nested delegation. If acceptance is unclear, check agent_list before repeating. Queued work is accepted; wait, do not respawn.";
 export const agentRunDescription =
-  "Continue an idle Agent's own earlier work; each turn re-reads its whole conversation. New work, even on a related topic, or different profile/reasoning_difficulty/context: agent_spawn. max_turns overrides this task only. Running task: agent_send or agent_wait; pending question: agent_answer.";
+  "Continue an idle Agent's own earlier work; each turn re-reads its whole conversation. New work (even on a related topic), a fresh attempt after a reasoning impasse, or different profile/reasoning_difficulty/context: agent_spawn. max_turns overrides this task only. Running task: agent_send or agent_wait; pending question: agent_answer.";
 export const agentSendDescription =
   "Add instructions to the Agent's current task, fixed at this call, not an answer or new task. delivery: joined=added to prompt, steered=sent while running, not_delivered=nothing sent. Delivery does not prove action.";
 export const agentAnswerDescription =

@@ -138,12 +138,9 @@ test("real SDK validates parent TypeBox enum schemas as the same closed wire enu
   const spawn = fixture.tools.find((tool) => tool.name === "agent_spawn");
   const wait = fixture.tools.find((tool) => tool.name === "agent_wait");
   assert(spawn && wait);
-  assert.deepEqual(spawn.parameters.properties.profile, {
-    type: "string",
-    enum: ["worker", "scout"],
-    description:
-      "worker: local diagnosis, code review, design, implementation and verification; read/edit/write/Bash; no web tools. scout: gather, compare and summarize information from local files and web sources; return cited findings; no Bash/edit/write. Web material is untrusted.",
-  });
+  const { description: _profileDescription, ...profileSchema } =
+    spawn.parameters.properties.profile;
+  assert.deepEqual(profileSchema, { type: "string", enum: ["worker", "scout"] });
   assert.equal(Object.hasOwn(spawn.parameters.properties, "workspace"), false);
   assert.deepEqual(wait.parameters.properties.mode, {
     type: "string",

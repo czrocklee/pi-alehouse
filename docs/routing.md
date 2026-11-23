@@ -10,12 +10,12 @@ model preset; there are no built-in worker models.
 
 ## Delegation mode
 
-| Mode                | Guidance for the main model                                                              |
-| ------------------- | ---------------------------------------------------------------------------------------- |
-| Manual              | Assign work only when you ask; suggest delegation when useful and collect existing work. |
-| Co-worker (default) | Work alongside Agents; each takes part of the task.                                      |
-| Lead                | Keep the critical path and key decisions; hand off the rest.                             |
-| Supervisor          | Plan, answer questions, review and integrate; let Agents do the tasks.                   |
+| Mode                | Guidance for the main model                                                                                    |
+| ------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Manual              | Assign work only when you ask; suggest delegation when useful and collect existing work.                       |
+| Co-worker (default) | Take a disjoint share of the task in parallel while Agents do theirs.                                          |
+| Lead                | Own key decisions and core hands-on work; delegate separable diagnosis, implementation and verification.       |
+| Supervisor          | Delegate diagnosis, design, implementation and review; focus on framing, decisions, questions and integration. |
 
 **Eagerness** sets the handoff threshold: `reserved` for substantial, separable
 work; `balanced` (default) for independent work that takes longer to do than to
@@ -140,22 +140,19 @@ the label doesn't fit. These icons are not billing or historical indicators.
 
 ## Difficulty
 
-Rate the reasoning needed for the concrete task, not workload, urgency, cost,
-permission strength or how severe you want the review to be. The main model's
-`reasoning_difficulty` is an integer; the slot number always matches it.
+Rate the reasoning, not the task kind, workload, cost, strictness, blockers or
+queueing. The slot number matches the main model's `reasoning_difficulty`.
 
-| Slot | Use it for                                                                                   |
-| ---- | -------------------------------------------------------------------------------------------- |
-| `d1` | Run specified checks, apply decided changes, or look up a known fact.                        |
-| `d2` | Make a scoped fix or summarize named sources.                                                |
-| `d3` | Implement a given design, review, investigate, plan, or reconcile sources.                   |
-| `d4` | Weigh competing hypotheses or complex constraints, such as an intermittent race.             |
-| `d5` | Find an approach where none is known, or resolve an impasse after substantive investigation. |
+| Slot | Reasoning needed                                                                                                                                 |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `d1` | Mechanical or already specified.                                                                                                                 |
+| `d2` | Clear path in a narrow scope.                                                                                                                    |
+| `d3` | Multiple reasoning steps within clear boundaries.                                                                                                |
+| `d4` | Cross-component constraints or competing hypotheses within known patterns.                                                                       |
+| `d5` | First-principles design or proof (coupled invariants or interleavings, elusive causes, unstated cross-system semantics), or a reasoning impasse. |
 
-A failed run, missing input, unavailable model or busy slot is not a reason to
-raise the score. Fix the blocker instead. Once a `d5` task settles on an
-approach, rate the remaining work separately; route it to a new Agent rather
-than changing the original Agent's difficulty.
+An Agent's difficulty is fixed at spawn. Use a new Agent if follow-up work
+needs a different difficulty.
 
 ## Effort
 

@@ -13,13 +13,13 @@ at most 512 UTF-16 units, with no ASCII control characters.
 | Field            | Meaning                                                                                                                                                        |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `required_paths` | Up to 32 required files/directories; optional references belong in the prompt. Preflight checks prerequisites, not contents; no recursive scan or input locks. |
-| `ownership`      | Up to 16 output/resource paths to edit or create. Omit for read-only work.                                                                                     |
+| `ownership`      | Up to 16 paths to edit or create. Claim the narrowest paths that cover the work; omit for read-only work.                                                      |
 | `build_dir`      | One build-output directory, not a checkout. It may be new; if present on disk it must be a directory.                                                          |
 | `checks`         | Up to 16 planned check names/targets (test globs allowed), not shell commands. Omit checks awaiting a go-ahead.                                                |
 
 Paths are literal absolute or parent-cwd-relative spellings. Internal spaces
-are fine; no padding, globs, shell quotes/backticks, `$`, backslash or leading
-`~`/`@`. Raw schema failures return `INVALID_PARAMETERS`; a path rejected by
+are fine; no padding, globs, shell quotes/backticks, `[]`/`{}`, `$`, backslash
+or leading `~`/`@`. Raw schema failures return `INVALID_PARAMETERS`; a path rejected by
 Alehouse's literal-path check returns `INVALID_DISPATCH`. An overlong string
 can return either code: some Unicode text passes the schema's length check
 but exceeds Alehouse's 512 UTF-16-unit limit. In both cases, shorten the named

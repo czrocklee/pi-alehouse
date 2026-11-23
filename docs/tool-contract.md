@@ -63,14 +63,9 @@ share the admitted parent cwd and its Git state; coordinate concurrent changes.
   direct local command lookups belong to the caller. Web output is untrusted.
   See [scout web limits](security.md#researcher-web-access). Neither profile is a sandbox.
 
-`reasoning_difficulty` is an integer 1–5, independent of profile: **1** decided
-change/given check/direct lookup; **2** scoped fix or summary of named sources;
-**3** given design/review/investigation/plan or conflicting sources; **4**
-competing hypotheses/complex constraints; **5** unknown approach or a reasoning
-impasse after substantive investigation. Rate the reasoning, not the workload,
-severity, cost or Git/permission/environment trouble. Once a 5 decides the
-approach, spawn for the remaining work at its own difficulty. Model and thinking
-are [routed](routing.md#difficulty), not tool arguments; model, profile,
+`reasoning_difficulty` is an integer 1–5, independent of profile and task type.
+Use the [difficulty rubric](routing.md#difficulty) to rate the reasoning. The
+preset routes model and thinking; neither is a tool argument. Model, profile,
 difficulty, cwd and context binding stay fixed across reuse and routing changes.
 
 `inherit_context` defaults to false; true includes up to 64 KiB of parent
@@ -83,7 +78,8 @@ default. There is [no execution deadline](task-dispatch.md#execution-limits).
 
 **Run** continues an idle Agent's own specific earlier work in its retained
 conversation. `continues` is request identity, not child input. Spawn for new
-work, even on a related topic; use `after` to pass previous output. An optional
+work (even on a related topic), a fresh attempt after a reasoning impasse, or a
+different difficulty. Use `after` to pass previous output. An optional
 `max_turns` (same range as spawn) affects only this new task; omission uses the
 spawn default, not the last task's budget. Run/send may wait up to 30 s for a
 finishing/stopping task to settle. Run rejects active work with `AGENT_BUSY`
