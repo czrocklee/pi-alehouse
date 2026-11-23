@@ -181,6 +181,8 @@ export interface RunView {
   model_stop_reason?: ModelStopReason;
   outcome?: Outcome;
   usage?: UsageLedger;
+  /** Observed USD for this Agent through this Run, including live usage. */
+  agent_cost?: { amount: number; partial: boolean };
   result_ref?: ResultRef;
   cleanup_errors: string[];
   discarded_inputs: string[];

@@ -29,7 +29,9 @@ const at = (line, token, end = false) => {
 };
 // Identify the cost itself before elapsed/task, not an unrelated later dash.
 const costEnd = (line) => {
-  const match = /(—|\$\d+\.\d{2}) +(?:12\.4s|62m03s) {2}Review task$/.exec(line);
+  const match = /(—|(?:\$\d+\.\d{2}\/≥?|\?\/\$)\d+\.\d{2}) +(?:12\.4s|62m03s) {2}Review task$/.exec(
+    line,
+  );
   assert(match, `missing cost/elapsed/task suffix: ${line}`);
   return visibleWidth(line.slice(0, match.index)) + visibleWidth(match[1]);
 };
@@ -49,6 +51,7 @@ const roster = () => [
     turns: 23,
     max_turns: 65,
     cost: 0.27,
+    agent_cost: { amount: 1.25, partial: false },
     runtime: { activity: "idle", context: { tokens: 170, context_window: 1000 } },
   }),
   run("calm", {
@@ -58,6 +61,7 @@ const roster = () => [
     turns: 9,
     max_turns: 60,
     cost: 12.3,
+    agent_cost: { amount: 15, partial: true },
     elapsed_ms: 3723000,
     runtime: { activity: "idle", context: { tokens: 50, context_window: 1000 } },
   }),
@@ -66,6 +70,7 @@ const roster = () => [
     name: "unknown",
     description: "Review task",
     status: "completed",
+    agent_cost: { amount: 3, partial: false },
     runtime: { activity: "idle", context: { tokens: null, context_window: 1000 } },
   }),
 ];
@@ -124,7 +129,8 @@ test("metric labels align left and numbers right while extra width pads internal
       1,
       "unlabeled cost right-aligns and a missing cost keeps its dash",
     );
-    assert(at(busy, "$0.27") > at(calm, "$12.30"), "shorter cost pads on the left");
+    assert(at(busy, "$0.27/1.25") > at(calm, "$12.30/≥15.00"), "shorter pair pads on the left");
+    assert.match(unknown, /\?\/\$3\.00/);
     assert.equal(
       new Set(
         [busy, calm, mystery, unknown].map((line) =>

@@ -1415,13 +1415,14 @@ test("a long task yields to warnings and compact metrics at 120 and 160 columns"
     tool_uses: 77,
     description: "Review controller lifecycle and pending input ".repeat(10),
     cost: 0.5,
+    agent_cost: { amount: 1.25, partial: false },
     pending_messages: 3,
     has_run_warnings: true,
     runtime: { activity: "generating", context: { tokens: 231000, context_window: 272000 } },
   });
   for (const width of [120, 160]) {
     const lines = render([row], { width });
-    for (const text of ["reviewer", "run warning", "3 pending", "ctx 85%", "$0.50", "12.4s"]) {
+    for (const text of ["reviewer", "run warning", "3 pending", "ctx 85%", "$0.50/1.25", "12.4s"]) {
       assert.ok(lines[1].includes(text), `${width}: missing ${text}: ${lines[1]}`);
     }
     assert.equal(lines[1].includes("gpt-5.6-sol/high"), width === 160, `${width}: ${lines[1]}`);
@@ -1482,20 +1483,22 @@ test("long identities and diagnostics cannot hide warnings or pending alerts", (
   }
 });
 
-test("widget costs use cents while preserving missing, zero and partial observations", () => {
-  for (const [cost, cost_partial, expected] of [
-    [1.2345, false, "$1.23"],
-    [0.27, false, "$0.27"],
-    [0, false, "$0.00"],
-    [0.0042, false, "<$0.01"],
-    [0.27, true, "≥$0.27"],
+test("widget cost pairs use cents while preserving missing, zero and partial observations", () => {
+  for (const [cost, cost_partial, agent_cost, expected] of [
+    [0.396, false, { amount: 1.25, partial: false }, "$0.40/1.25"],
+    [0.396, false, { amount: 1.25, partial: true }, "$0.40/≥1.25"],
+    [0.27, false, undefined, "$0.27/?"],
+    [undefined, undefined, { amount: 0.5, partial: true }, "?/≥$0.50"],
+    [0, false, { amount: 0, partial: false }, "$0.00/0.00"],
+    [0.0042, false, { amount: 0.0042, partial: false }, "<$0.01/<0.01"],
+    [0.279, true, { amount: 1.259, partial: true }, "≥$0.27/1.25"],
   ]) {
-    const line = render([run("a", { status: "running", cost, cost_partial })])[1];
-    assert(line.includes(expected), line);
+    const line = render([run("a", { status: "running", cost, cost_partial, agent_cost })])[1];
+    assert(line.includes(`  ${expected}  `), line);
     assert.doesNotMatch(line, /\$\d+\.\d{3}/);
   }
   const unpriced = render([run("b", { status: "running" })])[1];
-  assert.ok(!unpriced.includes("$"), "an unpriced Run does not invent a measured zero");
+  assert.doesNotMatch(unpriced, /\$|\?\/\?|—/, "a wholly unknown cost needs no column");
 });
 
 test("wide roster columns align by terminal cells across variable, CJK and ANSI rows", () => {
@@ -1510,6 +1513,7 @@ test("wide roster columns align by terminal cells across variable, CJK and ANSI 
       max_turns: 256,
       tool_uses: 2,
       cost: 0.27,
+      agent_cost: { amount: 1.25, partial: false },
       elapsed_ms: 12400,
       runtime: { activity: "idle", context: { tokens: 267, context_window: 1000 } },
     }),
@@ -1525,6 +1529,7 @@ test("wide roster columns align by terminal cells across variable, CJK and ANSI 
       max_turns: 1024,
       tool_uses: 77,
       cost: 12.3,
+      agent_cost: { amount: 18.1, partial: false },
       elapsed_ms: 3723000,
       runtime: { activity: "idle", context: { tokens: 1000, context_window: 1000 } },
     }),
@@ -1538,6 +1543,7 @@ test("wide roster columns align by terminal cells across variable, CJK and ANSI 
       max_turns: 8,
       tool_uses: 1,
       cost: 0,
+      agent_cost: { amount: 0, partial: false },
       elapsed_ms: 1000,
       runtime: { activity: "idle", context: { tokens: 0, context_window: 1000 } },
     }),
@@ -1610,7 +1616,7 @@ test("wide roster columns align by terminal cells across variable, CJK and ANSI 
         );
       }
       const metrics = [
-        ["$0.27", "$12.30", "$0.00"],
+        ["$0.27/1.25", "$12.30/18.10", "$0.00/0.00"],
         ["12.4s", "62m03s", "1.0s"],
       ];
       for (const tokens of metrics)
@@ -1704,6 +1710,7 @@ test("pagination and missing observations preserve roster-wide column anchors wi
       max_turns: 256,
       tool_uses: index === 7 ? 77 : 2,
       cost: index === 0 ? undefined : index === 1 ? 0 : 0.27,
+      agent_cost: index === 0 ? undefined : { amount: index === 1 ? 0 : 1.25, partial: false },
       runtime:
         index === 0
           ? undefined
@@ -1741,7 +1748,7 @@ test("pagination and missing observations preserve roster-wide column anchors wi
         assert.doesNotMatch(line, /\$|ctx/, "missing observations are not measured zeroes");
         assert.match(line, /—/);
       }
-      if (id === "page-1") assert.match(line, /\$0\.00(?!\d)/);
+      if (id === "page-1") assert.match(line, /\$0\.00\/0\.00/);
       seen.push(id);
     }
   }
@@ -1769,6 +1776,7 @@ test("responsive columns shed model and context before useful trailing task spac
     max_turns: 256,
     tool_uses: 77,
     cost: 12.3,
+    agent_cost: { amount: 12.3, partial: false },
     elapsed_ms: 3723000,
     runtime: { activity: "idle", context: { tokens: 1000, context_window: 1000 } },
   });
@@ -1788,8 +1796,8 @@ test("responsive columns shed model and context before useful trailing task spac
       assert.match(line, /long-review-name {2}worker\/d3/);
       assert.match(line, /Review/);
       assert.match(line, /↻3\/256/);
-      assert.match(line, /\$12\.30/);
-      assert.match(line, /62m03s +Review/);
+      assert.match(line, /\$12\.30\/12\.30/);
+      assert.equal(line.includes("62m03s"), width > 83, "elapsed yields before the cost pair");
       assert.doesNotMatch(line, /[()[\]→]/);
       assert.equal(line.includes("fixture-long-model/xhigh"), width === 160);
       assert.doesNotMatch(line, /▸77/);
@@ -1820,6 +1828,7 @@ test("60-column rows retain a recognizable task and omit whole optional metrics 
         max_turns: 256,
         tool_uses: 777,
         cost: 0.27,
+        agent_cost: { amount: 1.25, partial: false },
         elapsed_ms: 12400,
         runtime: { activity: "generating", context: { tokens, context_window: 1000 } },
       });
@@ -1839,10 +1848,15 @@ test("60-column rows retain a recognizable task and omit whole optional metrics 
       if (line.includes("↻")) assert(line.includes(`↻${turns}/256`), line);
       assert.doesNotMatch(line, /▸777/);
       if (line.includes("ctx")) assert(line.includes(`ctx ${tokens / 10}%`), line);
-      if (line.includes("$")) assert.match(line, /\$0\.27(?!\d)/);
-      assert.doesNotMatch(line, /(?:↻\d*\/?\d*|▸\d*|ctx \d*%?|\$[\d.]*)…/);
+      if (turns === 3) assert.match(line, /\$0\.27\/1\.25(?= |$)/, line);
+      else assert.doesNotMatch(line, /\$/, "the whole cost pair yields to elevated metrics");
+      assert.doesNotMatch(line, /(?:↻\d*\/?\d*|▸\d*|ctx \d*%?|\$[\d./?≥<]*)…/);
       assert.equal(frame.hits[1], "tight-task");
       assert(frame.lines.every((text) => visibleWidth(text) <= 60));
+      const tiny = render([row], { width: 20, disclosure: false });
+      assert.match(tiny[1], /or(?:ca|…)/);
+      assert.doesNotMatch(tiny[1], /\$/, "tiny rows omit the entire pair");
+      assert(tiny.every((text) => visibleWidth(text) <= 20));
     }
 });
 
@@ -1897,16 +1911,26 @@ test("widget rounding does not change shared detail and accounting formatters", 
   ])[1];
   assert.match(line, /↻3\/256/);
   assert.match(line, /ctx 27%/);
-  assert.match(line, /\$0\.27(?!\d)/);
+  assert.match(line, /\$0\.27\/\?/);
 });
 
-test("headings omit all aggregate spend while per-Agent prices retain partial and unknown semantics", () => {
+test("headings omit spend while each row keeps its own Run and Agent prices", () => {
   const rows = [
-    run("a", { status: "running", cost: 0.12 }),
-    run("b", { status: "completed", cost: 0.15 }),
-    run("released", { status: "failed", resident: false, cost: 99 }),
-    run("partial", { status: "completed", cost: 0.279, cost_partial: true }),
-    run("zero", { status: "completed", cost: 0 }),
+    run("a", { status: "running", cost: 0.12, agent_cost: { amount: 0.68, partial: false } }),
+    run("b", { status: "completed", cost: 0.15, agent_cost: { amount: 3.15, partial: false } }),
+    run("released", {
+      status: "failed",
+      resident: false,
+      cost: 99,
+      agent_cost: { amount: 99, partial: false },
+    }),
+    run("partial", {
+      status: "completed",
+      cost: 0.279,
+      cost_partial: true,
+      agent_cost: { amount: 0.279, partial: true },
+    }),
+    run("zero", { status: "completed", cost: 0, agent_cost: { amount: 0, partial: false } }),
     run("unknown", { status: "completed" }),
   ];
   for (const expanded of [false, true]) {
@@ -1923,11 +1947,11 @@ test("headings omit all aggregate spend while per-Agent prices retain partial an
     assert.doesNotMatch(frame.lines[0], /latest|Σ|\$|lifetime/);
     assert.match(frame.lines[0], /▹1 ✓4/);
     for (const [id, price] of [
-      ["a", "$0.12"],
-      ["b", "$0.15"],
-      ["released", "$99.00"],
-      ["partial", "≥$0.27"],
-      ["zero", "$0.00"],
+      ["a", "$0.12/0.68"],
+      ["b", "$0.15/3.15"],
+      ["released", "$99.00/99.00"],
+      ["partial", "≥$0.27/0.27"],
+      ["zero", "$0.00/0.00"],
     ]) {
       assert(frame.lines[frame.hits.indexOf(id)].includes(price), id);
     }
@@ -1995,6 +2019,7 @@ test("fixed metadata precedes trailing labels without stretching to ultrawide te
       tool_uses: 999,
       cost: 1.159,
       cost_partial: true,
+      agent_cost: { amount: 2.09, partial: true },
       runtime: { activity: "idle", context: { tokens: 900, context_window: 1000 } },
     }),
     run("ascii", {
@@ -2004,6 +2029,7 @@ test("fixed metadata precedes trailing labels without stretching to ultrawide te
       turns: 0,
       max_turns: 8,
       cost: 0,
+      agent_cost: { amount: 5, partial: false },
       runtime: { activity: "idle", context: { tokens: 0, context_window: 1000 } },
     }),
   ];
@@ -2043,11 +2069,22 @@ test("fixed metadata precedes trailing labels without stretching to ultrawide te
                 "120/1024",
                 "ctx",
                 "90%",
-                "≥$1.15",
+                "≥$1.15/2.09",
                 "12.4s",
                 "核对任务",
               ]
-            : ["a", "worker/d3", "m/high", "↻", "0/8", "ctx", "0%", "$0.00", "12.4s", "Review"];
+            : [
+                "a",
+                "worker/d3",
+                "m/high",
+                "↻",
+                "0/8",
+                "ctx",
+                "0%",
+                "$0.00/5.00",
+                "12.4s",
+                "Review",
+              ];
         let after = 0;
         for (const token of tokens) {
           const at = line.indexOf(token, after);
@@ -2079,6 +2116,7 @@ test("long trailing labels use remaining width without an arbitrary label cap in
       description,
       cost: 0.279,
       cost_partial: true,
+      agent_cost: { amount: 1.279, partial: true },
     });
     const frame = renderWidget({
       runs: [row],

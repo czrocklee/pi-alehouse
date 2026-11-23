@@ -294,6 +294,24 @@ test("cost reuses the widget's cents exactly, with floors for partial spend", ()
   assert.match(row({ usage: undefined }), /↻3\/256/, "turns remain real telemetry");
 });
 
+test("dock pairs Run and Agent cost, preserving floors and unknowns", () => {
+  const usage = spend(1, 1, 0, 0, 0.4);
+  const partial = addToLedger(
+    usage,
+    { input: 0, output: 0, cache_read: 0, cache_write: 0, cost: null },
+    "anthropic/claude-opus-5",
+  );
+  for (const [u, total, expected] of [
+    [usage, { amount: 1.25, partial: false }, "$0.40/1.25"],
+    [partial, { amount: 1.25, partial: true }, "≥$0.40/1.25"],
+    [usage, { amount: 1.25, partial: true }, "$0.40/≥1.25"],
+    [undefined, { amount: 1.25, partial: false }, "?/$1.25"],
+    [usage, undefined, "$0.40/?"],
+  ])
+    assert.ok(row({ usage: u, agent_cost: total }).includes(expected), expected);
+  assert.doesNotMatch(row({ usage: undefined, agent_cost: undefined }), /\$/);
+});
+
 test("the cumulative elapsed time is bare and precedes the live clock", () => {
   assert.match(row(), /· 1m33s · turn 1s$/);
   assert.doesNotMatch(row(), /total/);
@@ -303,43 +321,45 @@ test("the cumulative elapsed time is bare and precedes the live clock", () => {
 
 // ---- The adaptive ladder: what yields, and in which order ----
 
+const pricedRow = (width) => row({ agent_cost: { amount: 12.45, partial: false } }, width);
+
 test("the model shortens first; whole figures then yield least urgent first", () => {
   // One cell short of the full row: only the model shortens, nothing drops.
   assert.equal(
-    row({}, 95),
-    "⠋ · claude-opus-5/medi… · ↻3/256 · ctx ≈59k/500k · ↑80k (75.0%) ↓5.0k · $1.23 · 1m33s · turn 1s",
+    pricedRow(101),
+    "⠋ · claude-opus-5/medi… · ↻3/256 · ctx ≈59k/500k · ↑80k (75.0%) ↓5.0k · $1.23/12.45 · 1m33s · turn 1s",
   );
   assert.equal(
-    row({}, 93),
-    "⠋ · claude-opus-5/me… · ↻3/256 · ctx ≈59k/500k · ↑80k (75.0%) ↓5.0k · $1.23 · 1m33s · turn 1s",
+    pricedRow(99),
+    "⠋ · claude-opus-5/me… · ↻3/256 · ctx ≈59k/500k · ↑80k (75.0%) ↓5.0k · $1.23/12.45 · 1m33s · turn 1s",
   );
   // The cumulative elapsed time is the least priority: it drops first.
   assert.equal(
-    row({}, 80),
-    "⠋ · claude-opus… · ↻3/256 · ctx ≈59k/500k · ↑80k (75.0%) ↓5.0k · $1.23 · turn 1s",
+    pricedRow(86),
+    "⠋ · claude-opus… · ↻3/256 · ctx ≈59k/500k · ↑80k (75.0%) ↓5.0k · $1.23/12.45 · turn 1s",
   );
   // Then the cache percentage yields, while the token figures stay.
   assert.equal(
-    row({}, 70),
-    "⠋ · claude-op… · ↻3/256 · ctx ≈59k/500k · ↑80k ↓5.0k · $1.23 · turn 1s",
+    pricedRow(76),
+    "⠋ · claude-op… · ↻3/256 · ctx ≈59k/500k · ↑80k ↓5.0k · $1.23/12.45 · turn 1s",
   );
   // Then the whole usage group, then cost, then routine turns.
-  assert.equal(row({}, 57), "⠋ · claude-op… · ↻3/256 · ctx ≈59k/500k · $1.23 · turn 1s");
-  assert.equal(row({}, 49), "⠋ · claude-op… · ↻3/256 · ctx ≈59k/500k · turn 1s");
+  assert.equal(pricedRow(63), "⠋ · claude-op… · ↻3/256 · ctx ≈59k/500k · $1.23/12.45 · turn 1s");
+  assert.equal(pricedRow(49), "⠋ · claude-op… · ↻3/256 · ctx ≈59k/500k · turn 1s");
   // Routine turns yield before the live clock; the model reclaims their cells.
-  assert.equal(row({}, 44), "⠋ · clau… · ↻3/256 · ctx ≈59k/500k · turn 1s");
-  assert.equal(row({}, 43), "⠋ · claude-opus-… · ctx ≈59k/500k · turn 1s");
+  assert.equal(pricedRow(44), "⠋ · clau… · ↻3/256 · ctx ≈59k/500k · turn 1s");
+  assert.equal(pricedRow(43), "⠋ · claude-opus-… · ctx ≈59k/500k · turn 1s");
   // Then the shortened model: the glyph, context and live clock are essential.
-  assert.equal(row({}, 32), "⠋ · ctx ≈59k/500k · turn 1s");
+  assert.equal(pricedRow(32), "⠋ · ctx ≈59k/500k · turn 1s");
   // The clock outlasts every routine figure, then yields before the context.
-  assert.equal(row({}, 26), "⠋ · ctx ≈59k/500k");
-  assert.equal(row({}, 17), "⠋ · ctx ≈59k/500k");
+  assert.equal(pricedRow(26), "⠋ · ctx ≈59k/500k");
+  assert.equal(pricedRow(17), "⠋ · ctx ≈59k/500k");
   // Once the context yields, the live clock returns beside the bare glyph.
-  assert.equal(row({}, 16), "⠋ · turn 1s");
-  assert.equal(row({}, 12), "⠋ · turn 1s");
-  assert.equal(row({}, 10), "⠋");
-  assert.equal(row({}, 1), "⠋");
-  assert.equal(row({}, 0), "");
+  assert.equal(pricedRow(16), "⠋ · turn 1s");
+  assert.equal(pricedRow(12), "⠋ · turn 1s");
+  assert.equal(pricedRow(10), "⠋");
+  assert.equal(pricedRow(1), "⠋");
+  assert.equal(pricedRow(0), "");
 });
 
 test("elevated turn pressure outlasts the shortened model", () => {
@@ -414,12 +434,15 @@ test("the context pair is retained whenever the glyph and clock can hold it", ()
 
 test("every width fits, and numeric facts are never clipped mid-figure", () => {
   for (let width = 0; width <= 120; width++) {
-    const text = row({}, width);
+    const text = pricedRow(width);
     assert.ok(visibleWidth(text) <= width, `${width}: ${JSON.stringify(text)}`);
     if (width >= 1) assert.match(text, /⠋/, `${width}: the glyph survives`);
     if (text.includes("↻")) assert.match(text, /↻\d+\/\d+/, `${width}: whole turns`);
     if (text.includes("↑"))
       assert.match(text, /↑\S+(?: \(\d+(?:\.\d)?%\))? ↓\S+/, `${width}: whole usage`);
+    // A surviving Agent amount without its Run side would have no currency sign.
+    const costs = text.split(" · ").filter((part) => /\$|^[\d./?…]+$/.test(part));
+    if (costs.length) assert.deepEqual(costs, ["$1.23/12.45"], `${width}: whole cost pair`);
   }
 });
 
@@ -433,9 +456,9 @@ test("CJK and ANSI content is measured in cells, never code points", () => {
   }
   // A shortened wide model still yields whole glyphs to an ellipsis rather
   // than exceeding the cell budget.
-  const shortened = renderDetailSummary(cjk, theme, 84, { activity: false })[0];
+  const shortened = renderDetailSummary(cjk, theme, 86, { activity: false })[0];
   assert.ok(shortened.includes("測試模…"), `${shortened}: whole glyphs survive reclamation`);
-  assert.ok(visibleWidth(shortened) <= 84, shortened);
+  assert.ok(visibleWidth(shortened) <= 86, shortened);
 });
 
 test("the activity row is opt-in compatibility; the dock itself is one row", () => {

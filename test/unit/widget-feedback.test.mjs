@@ -327,7 +327,7 @@ test("overflow-only metadata cannot add compact columns, while expanded pages sh
           ...row,
           name: "long-hidden-identity".repeat(3),
           model: "hidden-model".repeat(20),
-          cost: 0.29,
+          agent_cost: { amount: 0.29, partial: true },
           tool_uses: 9999,
           runtime: { activity: "idle", context: { tokens: 123456, context_window: 1000 } },
         },
@@ -358,10 +358,10 @@ test("overflow-only metadata cannot add compact columns, while expanded pages sh
       if (line.includes("⎿")) continue;
       seen.add(id);
       starts.add(visibleWidth(line.slice(0, line.indexOf("Review task"))));
-      const cost = line.match(/(?:\$0\.29|—)(?= +12\.4s +Review task$)/);
+      const cost = line.match(/(?:\?\/≥\$0\.29|—)(?= +12\.4s +Review task$)/);
       assert(cost, line);
       costEnds.add(visibleWidth(line.slice(0, cost.index + cost[0].length)));
-      if (id === "hidden") assert.match(line, /\$0\.29/);
+      if (id === "hidden") assert.equal(cost[0], "?/≥$0.29");
     }
     assert(result.lines.every((line) => visibleWidth(line) <= 180));
   }

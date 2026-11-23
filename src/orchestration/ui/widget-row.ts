@@ -4,7 +4,7 @@ import { contextPercent, formatMs, GLYPHS, type Theme } from "./format.ts";
 import { clipPlainText, singleLineText } from "./text.ts";
 import { runPresentation } from "./run-presentation.ts";
 import type { WidgetRun } from "./agent-widget.ts";
-import { isObservedCost, widgetCost } from "./widget-cost.ts";
+import { widgetCostPair } from "./widget-cost.ts";
 
 export interface HeaderState {
   text: string;
@@ -138,7 +138,6 @@ export function prepareWidgetRow(run: WidgetRun, headerClock = false): WidgetRow
           (shown, limit) => (context < limit && shown >= limit ? limit - 1 : shown),
           Math.round(context),
         );
-  const cost = run.cost;
   const state = headerState(run);
   const clock = headerClock ? turnClock(run) : undefined;
   return {
@@ -172,7 +171,7 @@ export function prepareWidgetRow(run: WidgetRun, headerClock = false): WidgetRow
                 : "dim",
       },
       cost: {
-        text: isObservedCost(cost) ? widgetCost(cost, run.cost_partial) : "",
+        text: widgetCostPair(run.cost, run.cost_partial, run.agent_cost),
         color: "dim",
       },
       elapsed: { text: formatMs(run.elapsed_ms), color: "dim" },

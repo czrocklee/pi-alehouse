@@ -206,7 +206,7 @@ test("mounted reservation uses the current question, not a newer cleared outcome
   assert.match(lines[2], /\+2 more \(2 needs input\)$/);
 });
 
-test("resuming updates per-Agent prices without adding spend to the heading", (t) => {
+test("resuming paints the live Run and cumulative Agent prices without adding spend to the heading", (t) => {
   const usage = (cost) =>
     addToLedger(
       undefined,
@@ -219,23 +219,39 @@ test("resuming updates per-Agent prices without adding spend to the heading", (t
       },
       "p/m",
     );
+  const released = {
+    ...viewOf("released", "failed"),
+    resident: false,
+    usage: usage(99),
+    agent_cost: { amount: 99, partial: false },
+  };
   const h = mounted([
-    { ...viewOf("a", "completed", "first"), usage: usage(0.5) },
-    { ...viewOf("released", "failed"), resident: false, usage: usage(99) },
+    {
+      ...viewOf("a", "completed", "first"),
+      usage: usage(0.5),
+      agent_cost: { amount: 0.5, partial: false },
+    },
+    released,
   ]);
   t.after(() => h.widget.dispose());
   h.widget.wake();
   assert.equal(h.lines()[0], "▸ Subagents · ✓1");
-  assert.match(h.lines().slice(1).join("\n"), /\$0\.50/);
-  h.set([
-    { ...viewOf("a", "running", "second"), usage: usage(0.12) },
-    { ...viewOf("released", "failed"), resident: false, usage: usage(99) },
-  ]);
+  assert.match(h.lines()[1], /\$0\.50\/0\.50/);
+  const current = {
+    ...viewOf("a", "running", "second"),
+    agent_cost: { amount: 0.5, partial: true },
+  };
+  h.set([current, released]);
   h.widget.wake();
   assert.equal(h.lines()[0], "▸ Subagents · ▹1");
-  const body = h.lines().slice(1).join("\n");
-  assert.match(body, /\$0\.12/);
-  assert.doesNotMatch(body, /\$0\.50|\$0\.62/);
+  assert.match(h.lines()[1], /\?\/≥\$0\.50/);
+  current.usage = usage(0.12);
+  current.agent_cost.amount = 0.62;
+  current.agent_cost.partial = false;
+  assert.match(h.lines()[1], /\?\/≥\$0\.50/, "roster painting reuses detached prices");
+  h.widget.wake();
+  assert.match(h.lines()[1], /\$0\.12\/0\.62/);
+  assert.doesNotMatch(h.lines()[1], /\$0\.50/);
   assert.doesNotMatch(h.lines()[0], /latest|Σ|\$/);
 });
 
@@ -419,20 +435,20 @@ test("resuming keeps who stable while changing what the widget says they are doi
 test("a painted row keeps cost but leaves cumulative tokens to the detail pane", (t) => {
   const spend = (input, output, cache_read, cache_write, cost) =>
     addToLedger(undefined, { input, output, cache_read, cache_write, cost }, "p/m");
-  const paint = (usage) => {
-    const h = mounted([{ ...viewOf("a", "running"), usage }]);
+  const paint = (usage, agent_cost) => {
+    const h = mounted([{ ...viewOf("a", "running"), usage, agent_cost }]);
     t.after(() => h.widget.dispose());
     h.widget.wake();
     return h.lines()[1] ?? "";
   };
-  const line = paint(spend(100, 20, 9000, 10, 0.0042));
-  assert.match(line, /<\$0\.01(?!\d)/, line);
+  const line = paint(spend(100, 20, 9000, 10, 0.0042), { amount: 0.0042, partial: false });
+  assert.match(line, /<\$0\.01\/<0\.01/, line);
   assert.doesNotMatch(line, /130|9\.1k|token/, "no cumulative token figure is painted");
   // Unknown and a reported zero are different facts, and the row says which.
   assert.ok(!paint(spend(100, 20, 0, 10, null)).includes("$"), "an unpriced Run shows no cost");
   assert.match(
-    paint(spend(100, 20, 0, 10, 0)),
-    /\$0\.00(?!\d)/,
+    paint(spend(100, 20, 0, 10, 0), { amount: 0, partial: false }),
+    /\$0\.00\/0\.00/,
     "a Run that reported zero says zero",
   );
   assert.ok(!paint(undefined).includes("token"), "a Run that reported nothing shows no figures");
@@ -452,13 +468,14 @@ test("painted Agent rows show the resolved model and current context, not cumula
       { input: 700000, output: 0, cache_read: 9000000, cache_write: 0, cost: 0.5 },
       "openai-codex/gpt-5.6-sol",
     );
+    view.agent_cost = { amount: 0.5, partial: false };
     const before = structuredClone(view);
     const h = mounted([view]);
     t.after(() => h.widget.dispose());
     h.widget.wake();
     const line = h.lines()[1];
     assert.match(line, /gpt-5\.6-sol\/off/);
-    assert.match(line, /ctx 85% {2,}\$0\.50(?!\d)/);
+    assert.match(line, /ctx 85% {2,}\$0\.50\/0\.50/);
     assert.doesNotMatch(line, /openai-codex|231k|272k|700|token/);
     assert.deepEqual(view, before, "presentation never changes routing or billing metadata");
   }

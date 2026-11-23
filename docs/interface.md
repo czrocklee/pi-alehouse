@@ -31,8 +31,18 @@ heading control you need isn't visible.
 
 Read a row as **who** (nickname and `worker/dN` or `scout/dN`), **with what**
 (model and admitted effort, turns used/allowed, observed context, cost and Run
-time), then **what** (the current task and any attention notes). In permission
-settings and records, `worker` corresponds to `editor` and `scout` to
+time), then **what** (the current task and any attention notes). In the list and
+Agent panel, `$0.40/1.25` means **this Run / this Agent's total** in USD. The
+total includes this Run and earlier Runs of the same Agent in this session.
+
+- `≥$0.40/1.25`: both amounts are lower bounds. `$0.40/≥1.25`: only the total is.
+- Known amounts round to the nearest display unit; lower bounds round down.
+  For example, if this Run reports `$0.259` and an earlier Run reported no price,
+  the compact display is `$0.26/≥0.25`.
+- `<` applies only to its side: `<$0.01/1.25` shows a nonzero Run below display
+  precision. `?` means unreported: `?/$1.25` shows only the known total.
+
+In permission settings and records, `worker` corresponds to `editor` and `scout` to
 `researcher`. A pending alert or question is shown, not acknowledged by opening
 the pane. A turn-limit note alone doesn't mean work stopped. Use **Info** for
 details when a row says `run warning`, `failed` or `draining`.
@@ -116,7 +126,8 @@ the layout still distinguishes direction if those colors match. An alert or
 question card shows what was recorded, not that the parent read it. See [UI limits](limitations.md#ui-scope).
 
 Use **Info** for the original route and effort source, full diagnostics,
-current tool observations and usage. Context occupancy is not cumulative
+current tool observations and usage. Info shows the same [Run / Agent cost pair](#agent-widget)
+as the roster, to three decimal places. Context occupancy is not cumulative
 billed tokens. Use `/alehouse-status` when checking capacity, what a stopping
 or draining task is waiting for, or whether cleanup is still pending. For saved
 records, use `/alehouse-history` to list recent linked Runs and

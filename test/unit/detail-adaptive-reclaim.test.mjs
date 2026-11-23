@@ -94,6 +94,7 @@ const view = (overrides = {}) => ({
   max_turns: 256,
   runtime: { activity: "generating", context: { tokens: 59_000, context_window: 500_000 } },
   usage: spend(20_000, 5_000, 60_000, 0, 1.234),
+  agent_cost: { amount: 3.456, partial: false },
   cleanup_errors: [],
   discarded_inputs: [],
   ...overrides,
@@ -108,14 +109,14 @@ const title = (overrides, width) =>
 // ---- The dock: a surviving model/effort reclaims cells freed by drops ----
 
 test("the model/effort text reclaims cells freed by a dropped elapsed time", () => {
-  // The bare elapsed time drops at 80; the model then grows back into every
+  // The bare elapsed time drops at 85; the model then grows back into every
   // freed cell, stopping at the full original text rather than at the floor.
   for (const [width, model] of [
-    [80, "claude-opus…"],
-    [79, "claude-opu…"],
-    [78, "claude-op…"],
-    [70, "claude-op…"],
-    [57, "claude-op…"],
+    [85, "claude-opus…"],
+    [84, "claude-opu…"],
+    [83, "claude-op…"],
+    [75, "claude-op…"],
+    [62, "claude-op…"],
   ]) {
     const text = plain(row({}, width));
     assert.ok(visibleWidth(text) <= width, `${width}: fits: ${text}`);
@@ -128,11 +129,11 @@ test("reclaim never reintroduces a dropped metric or reorders the ladder", () =>
   // Exact rows at each rung: elapsed, then the cache ratio, then the usage
   // group, cost, routine turns, the model, and finally the clock/context.
   for (const [width, expected] of [
-    [80, "⠋ · claude-opus… · ↻3/256 · ctx ≈59k/500k · ↑80k (75.0%) ↓5.0k · $1.23 · turn 1s"],
-    [78, "⠋ · claude-op… · ↻3/256 · ctx ≈59k/500k · ↑80k (75.0%) ↓5.0k · $1.23 · turn 1s"],
-    [72, "⠋ · claude-opus… · ↻3/256 · ctx ≈59k/500k · ↑80k ↓5.0k · $1.23 · turn 1s"],
-    [65, "⠋ · clau… · ↻3/256 · ctx ≈59k/500k · ↑80k ↓5.0k · $1.23 · turn 1s"],
-    [52, "⠋ · clau… · ↻3/256 · ctx ≈59k/500k · $1.23 · turn 1s"],
+    [85, "⠋ · claude-opus… · ↻3/256 · ctx ≈59k/500k · ↑80k (75.0%) ↓5.0k · $1.23/3.46 · turn 1s"],
+    [83, "⠋ · claude-op… · ↻3/256 · ctx ≈59k/500k · ↑80k (75.0%) ↓5.0k · $1.23/3.46 · turn 1s"],
+    [77, "⠋ · claude-opus… · ↻3/256 · ctx ≈59k/500k · ↑80k ↓5.0k · $1.23/3.46 · turn 1s"],
+    [70, "⠋ · clau… · ↻3/256 · ctx ≈59k/500k · ↑80k ↓5.0k · $1.23/3.46 · turn 1s"],
+    [57, "⠋ · clau… · ↻3/256 · ctx ≈59k/500k · $1.23/3.46 · turn 1s"],
     [43, "⠋ · claude-opus-… · ctx ≈59k/500k · turn 1s"],
     [32, "⠋ · ctx ≈59k/500k · turn 1s"],
   ]) {
@@ -162,10 +163,10 @@ test("the trailing clock absorbs its own growth at the end", () => {
 
 test("CJK, emoji and ANSI reclaim terminal cells without splitting graphemes", () => {
   for (const [model, width, expected] of [
-    ["測試模型", 92, "測試模型/medium"],
+    ["測試模型", 97, "測試模型/medium"],
     ["測試模型", 49, "測試模型/…"],
     ["測試模型", 45, "測試…"],
-    ["👩‍💻👩‍💻👩‍💻", 92, "👩‍💻👩‍💻👩‍💻/medium"],
+    ["👩‍💻👩‍💻👩‍💻", 97, "👩‍💻👩‍💻👩‍💻/medium"],
     ["👩‍💻👩‍💻👩‍💻", 49, "👩‍💻👩‍💻👩‍💻/me…"],
     ["👩‍💻👩‍💻👩‍💻", 45, "👩‍💻👩‍💻…"],
   ]) {

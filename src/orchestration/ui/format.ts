@@ -208,7 +208,7 @@ export function formatMs(ms: number): string {
 }
 export const formatDrain = (drain: NonNullable<RunView["drain"]>): string =>
   `draining ${formatMs(drain.elapsed_ms)} · awaiting ${drain.waiting_for === "sdk_idle" ? "SDK idle" : "tracked inputs/abort"}`;
-export const formatCost = (cost: number): string => `$${cost.toFixed(3)}`;
+export { formatCost } from "./widget-cost.ts";
 export const formatTurns = (turns: number, max: number): string => `${GLYPHS.turns}${turns}≤${max}`;
 
 /** The sole activity rendering path, shared by production and regression tests.

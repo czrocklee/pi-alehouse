@@ -436,8 +436,130 @@ test("mixed cumulative regressions preserve every model floor and partial throug
   await ended(c, run);
   assert.equal(c.view(run.run_id).usage.total.cost, 1.05);
   assert.deepEqual(c.view(run.run_id).usage.partial, ["cost"]);
+  assert.deepEqual(c.view(run.run_id).agent_cost, { amount: 1.05, partial: true });
   assert.equal(c.drainUsage().total.cost, 1.05);
   assert.equal(c.drainUsage(), undefined);
+});
+
+const observeCost = (port, cost) =>
+  port.callbacks.runtime({ activity: "generating", usage: { byModel: { "p/m": { cost } } } });
+
+test("Agent spend includes each Run once through the selected task, independent of other Agents and drains", async (t) => {
+  const { controller: c, ports } = await fixture(t);
+  const first = await c.submit("first", task("first", { name: "birch" }));
+  await until(() => ports[0]?.streaming);
+  assert.equal(c.view(first.run_id).agent_cost, undefined);
+  observeCost(ports[0], 0.75);
+  ports[0].finish();
+  await ended(c, first);
+  assert.equal(c.drainUsage().total.cost, 0.75);
+
+  const other = await c.submit("other", task("other", { name: "willow" }));
+  await until(() => ports[1]?.streaming);
+  observeCost(ports[1], 8);
+  const cancelled = await c.submit("cancel", { resume: first.agent_id, prompt: "still queued" });
+  assert.equal(cancelled.status, "queued");
+  c.cancel(cancelled.run_id);
+  await ended(c, cancelled);
+  assert.deepEqual(c.view(cancelled.run_id).agent_cost, { amount: 0.75, partial: false });
+  const next = await c.submit("next", { resume: first.agent_id, prompt: "another task" });
+  assert.equal(next.status, "queued");
+  assert.deepEqual(next.agent_cost, { amount: 0.75, partial: false });
+  ports[1].finish();
+  await ended(c, other);
+  await until(() => ports[0].streaming);
+  assert.deepEqual(c.view(next.run_id).agent_cost, { amount: 0.75, partial: true });
+  observeCost(ports[0], 0.25);
+  observeCost(ports[0], 0.5); // cumulative snapshot replaces 0.25
+  const check = () => {
+    const [birch, willow] = c.list();
+    assert.equal(birch.usage.total.cost, 0.5);
+    assert.deepEqual(birch.agent_cost, { amount: 1.25, partial: false });
+    assert.deepEqual(c.view(next.run_id).agent_cost, birch.agent_cost);
+    assert.deepEqual(c.view(first.run_id).agent_cost, { amount: 0.75, partial: false });
+    assert.deepEqual(willow.agent_cost, { amount: 8, partial: false });
+    const modelRow = agentRow(birch, () => "");
+    assert.equal(Object.hasOwn(modelRow, "agent_cost"), false);
+  };
+  check();
+  ports[0].finish();
+  await ended(c, next);
+  assert.equal(c.drainUsage().total.cost, 8.5);
+  check();
+  await c.release(first.agent_id);
+  assert.deepEqual(c.list({ include_released: true })[0].agent_cost, {
+    amount: 1.25,
+    partial: false,
+  });
+  assert.deepEqual(
+    c.list({ include_released: false }).map((v) => v.agent_id),
+    [other.agent_id],
+  );
+});
+
+test("initialization cancelled before session.run does not taint later Agent totals", async (t) => {
+  const pause = deferred();
+  let pauseBegin = false;
+  const { controller: c, ports } = await fixture(t, {
+    history: (point) => (point === "begin" && pauseBegin ? pause.promise : undefined),
+    beforeShutdown: () => pause.resolve(),
+  });
+  const first = await c.submit("priced", task("priced"));
+  await until(() => ports[0]?.streaming);
+  observeCost(ports[0], 0.75);
+  ports[0].finish();
+  await ended(c, first);
+
+  pauseBegin = true;
+  const pending = await c.submit("pause", {
+    resume: first.agent_id,
+    prompt: "cancel during begin",
+  });
+  const prior = { amount: 0.75, partial: false };
+  assert.equal(c.view(pending.run_id).phase, "initializing");
+  assert.deepEqual(c.list()[0].agent_cost, prior);
+  c.cancel(pending.run_id);
+  pause.resolve();
+  await ended(c, pending);
+  assert.equal(c.view(pending.run_id).status, "cancelled");
+  assert.deepEqual(c.view(pending.run_id).agent_cost, prior);
+  assert.equal(ports[0].calls.length, 1);
+
+  const next = await c.submit("follow-up", { resume: first.agent_id, prompt: "priced again" });
+  await until(() => ports[0].streaming);
+  observeCost(ports[0], 0.5);
+  assert.deepEqual(c.list()[0].agent_cost, { amount: 1.25, partial: false });
+  ports[0].finish();
+  await ended(c, next);
+});
+
+test("unrepresentable Agent total is unknown without hiding a finite Run cost", async (t) => {
+  const { controller: c, ports } = await fixture(t);
+  const first = await c.submit("first", task("first"));
+  await until(() => ports[0]?.streaming);
+  observeCost(ports[0], Number.MAX_VALUE);
+  ports[0].finish();
+  await ended(c, first);
+  c.drainUsage();
+  const next = await c.submit("next", { resume: first.agent_id, prompt: "another task" });
+  await until(() => ports[0].streaming);
+  observeCost(ports[0], Number.MAX_VALUE);
+  assert.deepEqual(c.view(first.run_id).agent_cost, { amount: Number.MAX_VALUE, partial: false });
+  assert.equal(c.view(next.run_id).usage.total.cost, Number.MAX_VALUE);
+  assert.equal(c.list()[0].agent_cost, undefined);
+});
+
+test("unpriced past Runs leave a floor on a later measured zero", async (t) => {
+  const { controller: c, ports } = await fixture(t);
+  const first = await c.submit("unknown", task("unknown"));
+  await until(() => ports[0]?.streaming);
+  ports[0].finish();
+  await ended(c, first);
+  const next = await c.submit("free", { resume: first.agent_id, prompt: "free" });
+  await until(() => ports[0].streaming);
+  observeCost(ports[0], 0);
+  assert.deepEqual(c.view(next.run_id).agent_cost, { amount: 0, partial: true });
+  assert.equal(c.view(first.run_id).agent_cost, undefined);
 });
 
 test("history capacity must fit one output reservation at construction", async () => {

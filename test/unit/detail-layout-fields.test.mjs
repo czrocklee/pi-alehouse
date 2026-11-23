@@ -375,6 +375,26 @@ test("attention renders drain and human-steer admission without acknowledging th
 
 // ---- Info: the complete fields view, two columns when wide ----
 
+test("info pairs Run and Agent cost with independent floors and unknowns", () => {
+  const usage = spend(1, 1, 0, 0, 0.4009);
+  const partial = addToLedger(
+    usage,
+    { input: 0, output: 0, cache_read: 0, cache_write: 0, cost: null },
+    "anthropic/claude-opus-5",
+  );
+  for (const [u, total, expected] of [
+    [usage, { amount: 1.2509, partial: false }, "$0.401/1.251"],
+    [partial, { amount: 1.2509, partial: true }, "≥$0.400/1.250"],
+    [usage, { amount: 1.2509, partial: true }, "$0.401/≥1.250"],
+    [undefined, { amount: 1.25, partial: false }, "?/$1.250"],
+    [usage, undefined, "$0.401/?"],
+    [undefined, undefined, "not reported"],
+  ]) {
+    const text = renderDetailInfo(input({ usage: u, agent_cost: total }), theme, 100).join("\n");
+    assert.ok(text.includes(expected), `${expected}: ${text}`);
+  }
+});
+
 test("info below the wide threshold is the existing single-column field view", () => {
   const narrow = renderDetailInfo(input(), theme, 100);
   assert.deepEqual(narrow, renderDetailFields(input(), theme, 100));

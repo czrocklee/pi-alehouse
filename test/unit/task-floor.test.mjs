@@ -964,6 +964,10 @@ test(
     });
     const first = await c.submit("first", task("first"));
     await until(() => ports[0]?.streaming);
+    ports[0].callbacks.runtime({
+      activity: "generating",
+      usage: { byModel: { "p/m": { cost: 0.75 } } },
+    });
     ports[0].finish("first done");
     await ended(c, first);
     assert.deepEqual(
@@ -1034,6 +1038,7 @@ test(
       "the stored live error keeps the public-prefix diagnostic",
     );
     assert.doesNotMatch(view.outcome.error, /DISPATCH_INPUT_MISSING/);
+    assert.deepEqual(view.agent_cost, { amount: 0.75, partial: false });
     assert.equal(view.history_ref, undefined, "no begin means no exposed ref");
     assert.equal(view.history_error, undefined);
     assert.equal(view.resident, true);

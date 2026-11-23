@@ -26,7 +26,7 @@ import {
 import { POPOVER } from "./popover.ts";
 import { clipPlainText, singleLineText, wrapPlainText as wrapText } from "./text.ts";
 import { activityPresentation, runPresentation } from "./run-presentation.ts";
-import { isObservedCost, widgetCost } from "./widget-cost.ts";
+import { widgetCostPair } from "./widget-cost.ts";
 
 /** Label column, so every field's value starts at the same place. */
 const LABEL = 10;
@@ -274,12 +274,10 @@ export function renderDetailFields(
   );
   // Observed spend reaches the host through a later tool_result usage hook.
   // Rendering neither drains that accounting nor acknowledges communication.
-  const spent = reported(u, "cost");
   field(
     "cost",
-    spent === undefined
-      ? "not reported"
-      : `${u?.partial.includes("cost") ? "≥ " : ""}${formatCost(spent)}`,
+    widgetCostPair(reported(u, "cost"), u?.partial.includes("cost"), view.agent_cost, formatCost) ||
+      "not reported",
   );
   field(
     "calls",
@@ -475,9 +473,12 @@ export function renderDetailSummary(
   };
   const usagePlain = usageText(true);
   if (usagePlain) push("usage", usagePlain, "dim");
-  const spent = reported(view.usage, "cost");
-  if (spent !== undefined && isObservedCost(spent))
-    push("cost", widgetCost(spent, view.usage?.partial.includes("cost") ?? false), "dim");
+  const cost = widgetCostPair(
+    reported(usage, "cost"),
+    usage?.partial.includes("cost"),
+    view.agent_cost,
+  );
+  if (cost) push("cost", cost, "dim");
   // Bare cumulative elapsed time: the label and parentheses are retired.
   push("elapsed", formatMs(view.elapsed_ms), "dim");
   // The live turn clock closes the row. It is last, so nothing after it needs

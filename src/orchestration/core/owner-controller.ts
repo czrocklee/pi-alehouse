@@ -94,8 +94,10 @@ import {
 import {
   communicationRow,
   communicationTask,
+  includeRun,
   projectRun,
   returnToNotice,
+  type AgentRunTotals,
 } from "./owner-projection.ts";
 import { sliceResultWindow, splitsSurrogatePair } from "./result-window.ts";
 import { isQuestionId } from "./question-id.ts";
@@ -202,6 +204,8 @@ interface ManagedRun {
   submittedMono: number;
   effectiveSettings: RunView["effective_settings"];
   executionStartedMono?: number;
+  /** Crossed the session.run boundary; missing usage can now hide spend. */
+  sessionRunAttempted?: true;
   prepared?: PreparedDispatch;
   claim?: ResourceClaim;
   turnStarted?: number;
@@ -1955,6 +1959,7 @@ export class OwnerController {
           first && run.record.settings.context_snapshot
             ? `${run.record.settings.context_snapshot}\n\n${task}`
             : task;
+        run.sessionRunAttempted = true;
         facts = await port.run(prompt, callbacks, {
           owner_id: run.record.owner_id,
           generation: run.record.generation,
@@ -2635,17 +2640,18 @@ export class OwnerController {
 
   view(run_id: string): RunView {
     const run = this.requireRun(run_id);
-    return this.projectRun(
-      run,
-      this.observationLeaseHeld(),
-      taskOrdinal(run, [...this.runs.values()]),
-      this.projectionActivity([run]),
-    );
+    const leaseHeld = this.observationLeaseHeld();
+    const totals: AgentRunTotals = { task: 0, partial: false };
+    for (const retained of this.runs.values()) {
+      if (retained.record.agent_id === run.record.agent_id) includeRun(totals, retained);
+      if (retained === run) break;
+    }
+    return this.projectRun(run, leaseHeld, totals, this.projectionActivity([run]));
   }
   private projectRun(
     run: ManagedRun,
     leaseHeld: boolean,
-    task: number,
+    totals: AgentRunTotals,
     providers: ProviderActivity,
   ): RunView {
     const record = run.record,
@@ -2681,7 +2687,11 @@ export class OwnerController {
         (run.executionStartedMono === undefined
           ? undefined
           : Math.max(0, this.clock.mono() - run.executionStartedMono)),
-      task,
+      task: totals.task,
+      agent_cost:
+        totals.cost !== undefined && Number.isFinite(totals.cost)
+          ? { amount: totals.cost, partial: totals.partial }
+          : undefined,
       has_question: agent.question?.run_id === run_id,
       question_id: actionableQuestionId(agent, run, this.communicationHealthy() && leaseHeld),
       pending_messages: this.alerts.filter((alert) => alert.run === run).length,
@@ -2740,13 +2750,15 @@ export class OwnerController {
   }
   list(options: { include_released?: boolean } = {}): RunView[] {
     const latest = new Map<string, ManagedRun>(),
-      ordinals = new Map<string, number>();
-    // Runs enter this map in enqueue order and are never evicted. Derive the
-    // latest ordinal per Agent in this projection only, including its history.
+      totals = new Map<string, AgentRunTotals>();
+    // Runs enter this map in enqueue order and are never evicted. Derive each
+    // Agent's latest ordinal and observed spend in the same history pass.
     for (const run of this.runs.values()) {
       const id = run.record.agent_id;
-      ordinals.set(id, (ordinals.get(id) ?? 0) + 1);
       if (options.include_released === false && !this.requireAgent(id).resident) continue;
+      const sum = totals.get(id) ?? { task: 0, partial: false };
+      includeRun(sum, run);
+      totals.set(id, sum);
       latest.set(id, run);
     }
     if (!latest.size) return [];
@@ -2756,7 +2768,7 @@ export class OwnerController {
     const leaseHeld = this.observationLeaseHeld(),
       providers = this.projectionActivity(latest.values());
     return [...latest.values()].map((run) =>
-      this.projectRun(run, leaseHeld, ordinals.get(run.record.agent_id)!, providers),
+      this.projectRun(run, leaseHeld, totals.get(run.record.agent_id)!, providers),
     );
   }
   stats() {

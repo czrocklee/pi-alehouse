@@ -67,35 +67,36 @@ const elapsedWidth = (runs, width = 157) => {
   assert(columns, "columns must fit the painted width");
   return columns.metrics.find((column) => column.key === "elapsed")?.width ?? 0;
 };
-const costToken = (cost) => `$${cost.toFixed(2)}`;
+const priced = (cost, amount = cost) => ({ cost, agent_cost: { amount, partial: false } });
+const costToken = (row) => `$${row.cost.toFixed(2)}/${row.agent_cost.amount.toFixed(2)}`;
 
 test("a lone 6m48s paints a 5-cell elapsed column with the ordinary two-space gap", () => {
-  const row = run("otter", { elapsed_ms: 408_000, cost: 1.45 });
+  const row = run("otter", { elapsed_ms: 408_000, ...priced(1.45, 4.75) });
   assert.equal(formatMs(row.elapsed_ms), "6m48s");
   assert.equal(elapsedWidth([row]), 5, "the column hugs the longest visible value");
   const line = header(frame([row]), "otter");
-  assert.equal(position(line, "6m48s") - position(line, "$1.45", true), 2);
-  assert.match(line, /\$1\.45 {2}6m48s/);
+  assert.equal(position(line, "6m48s") - position(line, "$1.45/4.75", true), 2);
+  assert.match(line, /\$1\.45\/4\.75 {2}6m48s/);
 });
 
 test("identical 5-cell elapsed rows share the column without phantom padding", () => {
   const rows = [
-    run("otter", { elapsed_ms: 408_000, cost: 1.45 }),
-    run("badger", { elapsed_ms: 408_000, cost: 12.3 }),
-    run("复核🦉", { elapsed_ms: 408_000, cost: 0 }),
+    run("otter", { elapsed_ms: 408_000, ...priced(1.45, 4.75) }),
+    run("badger", { elapsed_ms: 408_000, ...priced(12.3, 25) }),
+    run("复核🦉", { elapsed_ms: 408_000, ...priced(0) }),
   ];
   assert.equal(elapsedWidth(rows), 5);
   const result = frame(rows);
   for (const row of rows) {
     const line = header(result, row.agent_id);
-    assert.equal(position(line, "6m48s") - position(line, costToken(row.cost), true), 2, line);
+    assert.equal(position(line, "6m48s") - position(line, costToken(row), true), 2, line);
   }
 });
 
 test("mixed durations set one shared width from the longest visible value", () => {
   const durations = [0, 1_900, 59_900, 408_000, 600_000, 6_000_000];
   const rows = durations.map((elapsed_ms, index) =>
-    run(`agent-${index}`, { elapsed_ms, cost: 0.27 }),
+    run(`agent-${index}`, { elapsed_ms, ...priced(0.27, 1.25) }),
   );
   assert.equal(elapsedWidth(rows), 7, "100m00s is the longest visible value");
   const result = frame(rows);
@@ -104,11 +105,11 @@ test("mixed durations set one shared width from the longest visible value", () =
   );
   assert.equal(new Set(ends).size, 1, "numeric right ends share one column");
   const longest = header(result, "agent-5");
-  assert.equal(position(longest, "100m00s") - position(longest, "$0.27", true), 2);
+  assert.equal(position(longest, "100m00s") - position(longest, "$0.27/1.25", true), 2);
   // Short values may pad; they stay right-aligned instead of forcing a fixed
   // two-space gap per row.
   const shortest = header(result, "agent-0");
-  assert.equal(position(shortest, "0.0s") - position(shortest, "$0.27", true), 2 + (7 - 4));
+  assert.equal(position(shortest, "0.0s") - position(shortest, "$0.27/1.25", true), 2 + (7 - 4));
 });
 
 test("seconds-to-minute boundaries size the column from the actual value", () => {
@@ -127,7 +128,11 @@ test("seconds-to-minute boundaries size the column from the actual value", () =>
 
 test("CJK/emoji/ANSI themes do not shift the roster, the turn clock or hits", () => {
   const rows = [
-    run("复核🦉", { description: "复核路径规范化及 lint 修复", elapsed_ms: 408_000, cost: 1.45 }),
+    run("复核🦉", {
+      description: "复核路径规范化及 lint 修复",
+      elapsed_ms: 408_000,
+      ...priced(1.45, 4.75),
+    }),
     run("runner", {
       status: "running",
       elapsed_ms: 1_200_000,
@@ -161,7 +166,7 @@ test("widths 80–240 keep painted rows and pagination geometry inside the viewp
         active_tools: [],
       }),
     ),
-    ...["c1", "c2", "c3", "c4"].map((id) => run(id, { elapsed_ms: 600_000, cost: 12.3 })),
+    ...["c1", "c2", "c3", "c4"].map((id) => run(id, { elapsed_ms: 600_000, ...priced(12.3) })),
   ];
   for (let width = 80; width <= 240; width++) {
     for (const [mode, result] of [

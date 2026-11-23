@@ -445,9 +445,8 @@ test("a figure some response left out is shown as a floor, not as nothing", () =
     { input: 500, output: 50, cache_read: 0, cache_write: 0, cost: null },
     "anthropic/claude-opus-5",
   );
-  const text = joined({ usage: priced });
-  assert.match(text, /cost\s+≥ /, text);
-  assert.match(text, /\$2\.5/, text);
+  const text = joined({ usage: priced, agent_cost: { amount: 3.75, partial: true } });
+  assert.match(text, /cost\s+≥\$2\.500\/3\.750/, text);
   // Tokens every response did report carry no floor marker.
   assert.match(text, /tokens\s+in 1\.5k · out 150 /, text);
   // Nothing reported at all is still "?", which is not the same as a floor.

@@ -13,7 +13,7 @@ const wait = (c, runs, rest = {}) =>
   observe(c, { kind: "wait", agent_ids: runs.map((run) => run.agent_id), ...rest });
 const compact = (value) => {
   const forbidden =
-    /"(?:run_id|agent_id|owner_id|generation|phase|execution_exited|finalization_pending|history_ref|result_ref|cleanup_errors|effective_settings|outcome|snapshots|runtime|drain|resumable|model_stop_reason|max_duration_ms|settings|model|preset|cost_usd|cost_partial|idle_s|context_tokens|time_wrapped|recovery_hint|earlier_labels|touched|touched_omitted|elapsed_s|pending)"/;
+    /"(?:run_id|agent_id|owner_id|generation|phase|execution_exited|finalization_pending|history_ref|result_ref|cleanup_errors|effective_settings|outcome|snapshots|runtime|drain|resumable|model_stop_reason|max_duration_ms|settings|model|preset|agent_cost|cost_usd|cost_partial|idle_s|context_tokens|time_wrapped|recovery_hint|earlier_labels|touched|touched_omitted|elapsed_s|pending)"/;
   assert(!forbidden.test(JSON.stringify(value)), JSON.stringify(value));
 };
 
@@ -93,7 +93,7 @@ test("finalizing is finishing, has no stable result cursor and is not yet answer
   assert.equal((await read(c, a)).tasks[0].status, "needs_input");
 });
 
-test("runtime/drain/context/elapsed telemetry stays in core, not model replies", async (t) => {
+test("runtime/drain/context/elapsed and Agent cost telemetry stay in core, not model replies", async (t) => {
   let mono = 0;
   const { controller: c, ports } = await fixture(t, {
     controller: { clock: { wall: Date.now, mono: () => mono } },
@@ -103,21 +103,27 @@ test("runtime/drain/context/elapsed telemetry stays in core, not model replies",
   ports[0].callbacks.runtime({
     activity: "generating",
     context: { tokens: 20, context_window: 8192 },
+    usage: { byModel: { "fixture/controlled": { cost: 1.25 } } },
   });
   ports[0].callbacks.drain("sdk_idle");
   mono = 5000;
-  compact(await read(c, a));
-  compact(await wait(c, [a], { wait_ms: 0 }));
-  const view = c.view(a.run_id),
-    row = agentRow(view, namesOf(c));
-  compact(row);
+  const view = c.view(a.run_id);
   assert.equal(view.execution_elapsed_ms, 5000);
   assert.equal(view.runtime.context.tokens, 20);
   assert.equal(view.drain.waiting_for, "sdk_idle");
+  assert.deepEqual(view.agent_cost, { amount: 1.25, partial: false });
+  for (const reply of [await read(c, a), await wait(c, [a], { wait_ms: 0 })]) {
+    compact(reply);
+    assert.equal(reply.tasks[0].status, "running");
+  }
+  compact(agentRow(view, namesOf(c)));
+  compact(taskReply(view, namesOf(c)));
   ports[0].finish("done");
   await ended(c, a);
-  compact(agentRow(c.view(a.run_id), namesOf(c)));
-  assert.equal(c.view(a.run_id).runtime.context.tokens, 20);
+  const settled = c.view(a.run_id);
+  assert.deepEqual(settled.agent_cost, view.agent_cost);
+  assert.equal(settled.runtime.context.tokens, 20);
+  compact(agentRow(settled, namesOf(c)));
 });
 
 test("alerts live at envelope top level and can wake a still-running task before its later question", async (t) => {

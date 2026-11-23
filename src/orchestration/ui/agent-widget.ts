@@ -42,9 +42,11 @@ export interface WidgetRun extends GenerationPreview {
   max_turns: number;
   elapsed_ms: number;
   turn_elapsed_ms?: number;
-  /** Provider-reported spend in USD, or undefined when nothing was reported. */
+  /** Provider-reported Run spend in USD, or undefined when nothing was reported. */
   cost?: number;
   cost_partial?: boolean;
+  /** Observed Agent spend through the displayed Run. */
+  agent_cost?: RunView["agent_cost"];
   runtime?: RunView["runtime"];
   drain?: RunView["drain"];
   tool_uses: number;
@@ -385,6 +387,7 @@ export class AgentWidget {
       turn_elapsed_ms: view.turn_elapsed_ms,
       cost: reported(view.usage, "cost"),
       cost_partial: view.usage?.partial.includes("cost"),
+      agent_cost: view.agent_cost ? { ...view.agent_cost } : undefined,
       runtime: view.runtime
         ? {
             ...view.runtime,

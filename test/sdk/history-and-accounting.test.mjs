@@ -1342,6 +1342,7 @@ test("widget distinguishes compaction/retry from stale prose and shows incomplet
     preview: "old draft",
     cost: 0.25,
     cost_partial: true,
+    agent_cost: { amount: 1.259, partial: true },
   };
   assert.match(
     renderRunningLines({ ...run, runtime: { activity: "compacting" } }, 0, theme)[1],
@@ -1351,5 +1352,5 @@ test("widget distinguishes compaction/retry from stale prose and shows incomplet
     renderRunningLines({ ...run, runtime: { activity: "retrying" } }, 0, theme)[1],
     /retrying provider/,
   );
-  assert.match(renderRunningLines(run, 0, theme)[0], /≥\$0\.25(?!\d)/);
+  assert.match(renderRunningLines(run, 0, theme)[0], /(?:^| )≥\$0\.25\/1\.25(?= |$)/);
 });

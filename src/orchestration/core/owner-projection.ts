@@ -7,6 +7,7 @@ import type { TaskSnapshot } from "./communication-snapshot.ts";
 import { isSettledRecord, type CommunicationAgent } from "./communication-state.ts";
 import { terminal, type RunView } from "./contracts.ts";
 import { taskMetadata } from "./task-metadata.ts";
+import { reported } from "./usage-ledger.ts";
 
 /** Read-only structural inputs, not another Run store. The Owner resolves
  * originals, health, queue occupancy, lease and clocks before calling these
@@ -63,6 +64,28 @@ interface ViewSource {
   readonly effectiveSettings: RunView["effective_settings"];
   readonly runtime?: RunView["runtime"];
 }
+const usageOf = (run: ViewSource) => run.record.usage ?? run.runtime?.usage;
+
+/** One ephemeral, enqueue-ordered fold per Agent. A live cumulative snapshot
+ * and its settled replacement represent the same Run, not two charges. */
+export interface AgentRunTotals {
+  task: number;
+  cost?: number;
+  partial: boolean;
+}
+export function includeRun(
+  totals: AgentRunTotals,
+  run: ViewSource & { readonly sessionRunAttempted?: true },
+): void {
+  totals.task++;
+  const usage = usageOf(run);
+  const cost = reported(usage, "cost");
+  if (cost !== undefined) totals.cost = (totals.cost ?? 0) + cost;
+  // Queueing and initialization alone don't incur Run spend. Once the session
+  // has been invoked, silence isn't evidence of zero, even without inputEntered.
+  totals.partial ||= usage?.partial.includes("cost") ?? !!run.sessionRunAttempted;
+}
+
 /** Only already-derived view facts, never a generic Owner/private-state context. */
 type RunProjectionFacts = Pick<
   RunView,
@@ -75,6 +98,7 @@ type RunProjectionFacts = Pick<
   | "turn_elapsed_ms"
   | "execution_elapsed_ms"
   | "task"
+  | "agent_cost"
   | "has_question"
   | "question_id"
   | "pending_messages"
@@ -116,7 +140,8 @@ export function projectRun(run: ViewSource, facts: RunProjectionFacts): RunView 
     outcome: record.outcome,
     ...(record.cancellation_source ? { cancellation_source: record.cancellation_source } : {}),
     ...(record.human_steered ? { human_steered: true as const } : {}),
-    usage: record.usage ?? run.runtime?.usage,
+    usage: usageOf(run),
+    ...(facts.agent_cost ? { agent_cost: facts.agent_cost } : {}),
     result_ref: record.result,
     cleanup_errors: record.cleanup_errors,
     discarded_inputs: record.discarded_inputs,
