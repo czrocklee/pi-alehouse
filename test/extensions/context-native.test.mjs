@@ -10,12 +10,6 @@ test("Context native compositor preserves focus, yield lifecycle, route provenan
       cwd: fileURLToPath(new URL("../..", import.meta.url)),
       encoding: "utf8",
       timeout: 60000,
-      env: {
-        ...process.env,
-        AGENT_DASHBOARD_URL: "",
-        PI_ALEHOUSE_GROK_BILLING: "",
-        GROK_CLI_CHAT_PROXY_BASE_URL: "",
-      },
     },
   );
 });

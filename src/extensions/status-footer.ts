@@ -24,22 +24,17 @@ import {
 } from "../shared/overlay-protocol.mjs";
 import type { UsageTotals } from "../shared/usage-attribution.mjs";
 import {
-  QUOTA_BUCKET_NAMES,
-  codexCredits,
   codexCreditsEqual,
-  codexCreditsFromHeaders,
   codexQuota,
   codexQuotasEqual,
-  createQuotaPublisher,
   isCodexQuotaSource,
-  quotaHeaders,
-  quotaSnapshot,
-  quotaSnapshotFromStream,
+  mergeCodexDisplay,
+  type CodexDisplayUpdate,
   type CodexCredits,
   type CodexQuota,
   type CodexQuotaSnapshot,
 } from "./lib/codex-quota.ts";
-import { createGrokBilling } from "./lib/grok-billing.ts";
+import { installQuotaObserver } from "./lib/quota-observer.ts";
 import {
   presentationMemo,
   sessionSource,
@@ -166,9 +161,7 @@ export default function (pi: ExtensionAPI) {
   const codexQuotas = new Map<string, CodexQuota>();
   const codexQuotaSnapshots = new Map<string, CodexQuotaSnapshot>();
   const codexCreditsByProvider = new Map<string, CodexCredits>();
-  const publishQuota = createQuotaPublisher();
   let requestFooterRender: (() => void) | undefined;
-  const billing = createGrokBilling(() => requestFooterRender?.());
   const compaction = new CompactionProgress(undefined, sharedCompactionHistory());
   let compactionTimer: ReturnType<typeof setInterval> | undefined;
   let compactionUsage: ContextUsage | undefined;
@@ -370,11 +363,9 @@ export default function (pi: ExtensionAPI) {
       );
     },
   });
-  pi.on("before_agent_start", (_event, ctx) => billing.beforeAgentStart(ctx));
-  pi.on("model_select", (_event, ctx) => billing.modelSelect(ctx));
-  pi.on("session_shutdown", () => billing.shutdown());
 
-  const rememberCodexQuota = (provider: string, snapshot: CodexQuotaSnapshot) => {
+  const rememberCodexQuota = (provider: string, update: CodexDisplayUpdate) => {
+    const snapshot = mergeCodexDisplay(codexQuotaSnapshots.get(provider), update);
     codexQuotaSnapshots.set(provider, snapshot);
     const nextQuota = codexQuota(snapshot);
     if (codexQuotasEqual(codexQuotas.get(provider), nextQuota)) return;
@@ -387,39 +378,12 @@ export default function (pi: ExtensionAPI) {
     codexCreditsByProvider.set(provider, credits);
     requestFooterRender?.();
   };
-  pi.on("after_provider_response", (event, ctx) => {
-    // Codex quota headers belong to the Codex backend only, not ChatGPT auth.
-    const provider = ctx.model?.provider;
-    if (!provider || !isCodexQuotaSource(ctx.model)) return;
-    // Credit-only updates stay local; the dashboard payload remains quota-only.
-    rememberCodexCredits(provider, codexCreditsFromHeaders(event.headers));
-    const snapshot = quotaSnapshot(quotaHeaders(event.headers));
-    if (!QUOTA_BUCKET_NAMES.some((bucket) => snapshot[bucket])) return;
-    publishQuota(provider, snapshot);
-    rememberCodexQuota(provider, snapshot);
+  installQuotaObserver(pi, (provider, update, credits) => {
+    if (update) rememberCodexQuota(provider, update);
+    rememberCodexCredits(provider, credits);
   });
-  pi.on("provider_stream_event", (event) => {
-    if (!isCodexQuotaSource(event)) return;
-    const data = asRecord(event.data);
-    if (data?.type !== "codex.rate_limits") return;
-    const limit = data.metered_limit_name ?? data.limit_name ?? "codex";
-    if (typeof limit !== "string" || limit.trim().toLowerCase().replace(/-/g, "_") !== "codex")
-      return;
-    const update = quotaSnapshotFromStream(
-      data.rate_limits,
-      codexQuotaSnapshots.get(event.provider),
-    );
-    if (update) {
-      if (update.observed) publishQuota(event.provider, update.snapshot);
-      rememberCodexQuota(event.provider, update.snapshot);
-    }
-    rememberCodexCredits(event.provider, codexCredits(data.credits));
-  });
-  pi.on("after_provider_response", (_event, ctx) => billing.afterProviderResponse(ctx));
-  pi.on("agent_settled", (_event, ctx) => billing.agentSettled(ctx));
 
   pi.on("session_start", (_event, ctx) => {
-    billing.sessionStart(ctx);
     resetContext();
     ctx.ui.setFooter((tui, theme, footerData) => {
       // Pi's component tree has no flex spacer. Pad only when this render's
@@ -519,10 +483,8 @@ export default function (pi: ExtensionAPI) {
             statuses: footerData.getExtensionStatuses(),
             codex: provider && codexSource ? codexQuotas.get(provider) : undefined,
             credits: provider && codexSource ? codexCreditsByProvider.get(provider) : undefined,
-            grok: billing.snapshot(),
             progress: compaction.snapshot()?.text,
             nowSeconds: Date.now() / 1_000,
-            nowMs: performance.now(),
           });
           // Commit geometry and row from the same fitted synchronous paint.
           footerHits = paint.hits;

@@ -4,7 +4,7 @@
 // plus isUsingOAuth, with the verified kimi-coding API-key exception.
 // A virtual selection shows the latest settled physical assistant on the active
 // branch after that selection; failed, omitted, abandoned, and pre-selection
-// calls are not the current route. Codex quota headers stay on openai-codex.
+// calls are not the current route. Codex quota stays on the answering provider.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -18,9 +18,6 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 const directory = mkdtempSync(join(tmpdir(), "alehouse-footer-route-"));
 process.env.HOME = directory;
 process.env.PI_CODING_AGENT_DIR = join(directory, "custom-agent");
-delete process.env.AGENT_DASHBOARD_URL;
-delete process.env.PI_ALEHOUSE_GROK_BILLING;
-delete process.env.GROK_CLI_CHAT_PROXY_BASE_URL;
 
 const authReads = [];
 const requests = [];
@@ -41,6 +38,11 @@ const registryCalls = [];
 const oauthProviders = new Set();
 const providers = {};
 const registry = {
+  runtime: {
+    streamSimple(_model, _context, options) {
+      return options;
+    },
+  },
   isUsingOAuth(model) {
     registryCalls.push(["isUsingOAuth", model?.provider]);
     return oauthProviders.has(model?.provider);
@@ -114,6 +116,10 @@ extension({
     emit() {},
   },
 });
+ctx.ui.setStatus = (key, text) => {
+  if (text === undefined) statuses.delete(key);
+  else statuses.set(key, text);
+};
 ctx.ui.setFooter = (factory) => {
   footer = factory(tui, theme, {
     getGitBranch: () => undefined,
@@ -121,15 +127,22 @@ ctx.ui.setFooter = (factory) => {
     onBranchChange: () => () => {},
   });
 };
-const start = handlers.get("session_start") ?? [];
-assert.equal(start.length, 1);
-await start[0]({}, ctx);
-assert.equal(typeof footer?.render, "function");
-
-const line = () => footer.render(160)[0];
 const emit = async (event, payload) => {
   for (const handler of handlers.get(event) ?? []) await handler(payload, ctx);
 };
+await emit("session_start", {});
+assert.equal(typeof footer?.render, "function");
+
+const line = () => footer.render(160)[0];
+const dispatch = (model) =>
+  registry.runtime.streamSimple(
+    model,
+    {},
+    {
+      sessionId: ctx.sessionManager.getSessionId(),
+    },
+  );
+const headerResponse = (headers) => dispatch(ctx.model).onResponse?.({ headers }, ctx.model);
 const useModel = (provider, id, extra = {}) => {
   ctx.model = { provider, id, reasoning: true, ...extra };
   ctx.thinkingLevel = extra.thinkingLevel ?? "high";
@@ -344,15 +357,13 @@ try {
     "x-codex-primary-window-minutes": "10080",
     "x-codex-primary-reset-at": "2000000000",
   };
-  await emit("after_provider_response", { headers: weeklyHeaders });
+  await headerResponse(weeklyHeaders);
   assert.match(line(), /W 90%/, "openai-codex still displays its own weekly quota headers");
   // A provider alias cloning openai-codex is another account on the same API.
   useModel("openai-codex-2", "gpt-6.1-sol", codexApi);
   oauthProviders.add("openai-codex-2");
   assert.doesNotMatch(line(), /W \d+%/, "an account shows no quota before its own response");
-  await emit("after_provider_response", {
-    headers: { ...weeklyHeaders, "x-codex-primary-used-percent": "40" },
-  });
+  await headerResponse({ ...weeklyHeaders, "x-codex-primary-used-percent": "40" });
   assert.match(line(), /W 60%/, "a Codex provider alias displays its own weekly quota");
   useModel("openai-codex", "gpt-5.6-codex", codexApi);
   assert.match(line(), /W 90%/, "switching back shows the first account's quota, not the alias's");
@@ -366,7 +377,7 @@ try {
     "x-codex-secondary-reset-at": "2000000000",
   };
   useModel("openai-codex-2", "gpt-6.1-sol", codexApi);
-  await emit("after_provider_response", { headers: fiveHourHeaders });
+  await headerResponse(fiveHourHeaders);
   assert.match(
     line(),
     /5h 70% W 60%/,
@@ -375,16 +386,14 @@ try {
   useModel("openai-codex", "gpt-5.6-codex", codexApi);
   assert.doesNotMatch(line(), /5h/, "an account without a 5h window shows only its weekly quota");
   useModel("openai-codex-2", "gpt-6.1-sol", codexApi);
-  await emit("after_provider_response", {
-    headers: { ...fiveHourHeaders, "x-codex-primary-reset-at": "1000000000" },
-  });
+  await headerResponse({ ...fiveHourHeaders, "x-codex-primary-reset-at": "1000000000" });
   const lapsed = line();
   assert.match(lapsed, /W 60%/);
   assert.doesNotMatch(lapsed, /5h/, "a 5h window past its reset is not shown as current");
   useModel("openai", "gpt-5.6");
   oauthProviders.add("openai");
   providers.openai = providerAuth(true);
-  await emit("after_provider_response", { headers: weeklyHeaders });
+  await headerResponse(weeklyHeaders);
   const openaiLine = line();
   assert.match(openaiLine, /\$0\.000 sub\b/);
   assert.doesNotMatch(
@@ -400,9 +409,11 @@ try {
     ...(balance === undefined ? {} : { "x-codex-credits-balance": balance }),
     ...extra,
   });
-  const creditResponse = (headers) => emit("after_provider_response", { headers });
-  const creditStream = (data, provider = "openai-codex", api = codexApi.api) =>
-    emit("provider_stream_event", { provider, api, model: "synthetic-codex", data });
+  const creditResponse = headerResponse;
+  const creditStream = (data, provider = "openai-codex", api = codexApi.api) => {
+    const physical = { provider, api, id: "synthetic-codex" };
+    return dispatch(physical).onProviderStreamEvent?.(data, physical);
+  };
   const streamSnapshot = (balance, extra = {}) => ({
     type: "codex.rate_limits",
     credits: { has_credits: true, unlimited: false, ...(balance === undefined ? {} : { balance }) },
@@ -878,11 +889,21 @@ try {
   statuses.delete("alehouse-fast");
   assert.doesNotMatch(line(), /⚡/);
 
+  ctx.ui.setStatus("fixture-quota", "External quota 73%");
+  assert.match(line(), /5h 0% W 0%/);
+  assert.match(line(), /External quota 73%/, "ordinary statuses can appear beside Codex quota");
+  useModel("fixture", "unrelated-model", { api: "fixture-api" });
+  assert.doesNotMatch(line(), /(?:5h|W) \d+%/, "physical quota is not shared across providers");
+  assert.match(line(), /External quota 73%/, "ordinary statuses are not provider-gated");
+  ctx.ui.setStatus("fixture-quota", undefined);
+  assert.doesNotMatch(line(), /External quota/, "clearing an ordinary status removes it");
+
   assert.deepEqual(forbidden, []);
   assert.deepEqual(authReads, []);
   assert.deepEqual(requests, []);
   console.log("PASS: footer subscription route");
 } finally {
+  await emit("session_shutdown", {});
   footer?.dispose();
   fs.readFileSync = read;
   syncBuiltinESMExports();

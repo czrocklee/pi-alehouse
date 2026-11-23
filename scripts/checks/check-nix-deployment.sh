@@ -84,7 +84,7 @@ inspect(join(root, "node_modules"));
   try {
     const loaded = spawnSync(piExecutable, ["--no-extensions", ...policyExtensions.flatMap((name) => ["-e", join(resources, "extensions", `${name}.ts`)]), "--mode", "rpc", "--no-session"], {
       encoding: "utf8", timeout: 60_000, input: '{"type":"get_state","id":"load-check"}\n',
-      env: { PATH: process.env.PATH, HOME: scratch, PI_CODING_AGENT_DIR: join(scratch, "agent"), PI_TELEMETRY: "0", AGENT_DASHBOARD_URL: "", PI_ALEHOUSE_GROK_BILLING: "0" } });
+      env: { PATH: process.env.PATH, HOME: scratch, PI_CODING_AGENT_DIR: join(scratch, "agent"), PI_TELEMETRY: "0" } });
     assert(!/Failed to load extension/.test(`${loaded.stdout}${loaded.stderr}`), `Ordinary Pi could not load policy extensions:\n${loaded.stderr}`);
     assert(loaded.stdout.includes('"id":"load-check"'), `Ordinary Pi did not answer after loading policy extensions:\n${loaded.stderr || String(loaded.error)}`);
   } finally { rmSync(scratch, { recursive: true, force: true }); }
@@ -101,7 +101,7 @@ try {
   // Even a regressed override lookup must never find the real credentialed CLI.
   symlinkSync(host, join(scratch, "pi"));
   const probe = spawnSync(launcher, ["--mode", "rpc", "--no-session"], { encoding: "utf8", timeout: 30_000,
-    env: { PATH: scratch, HOME: scratch, PI_CODING_AGENT_DIR: agent, PI_ALEHOUSE_PI: host, RECORD: record, PI_TELEMETRY: "0", AGENT_DASHBOARD_URL: "", PI_ALEHOUSE_GROK_BILLING: "0" } });
+    env: { PATH: scratch, HOME: scratch, PI_CODING_AGENT_DIR: agent, PI_ALEHOUSE_PI: host, RECORD: record, PI_TELEMETRY: "0" } });
   assert.equal(probe.status, 0, probe.stderr || String(probe.error));
   const launch = JSON.parse(readFileSync(record));
   assert.deepEqual(launch, { argv: ["--no-extensions", "-e", join(root, "src/composition.ts"), "--mode", "rpc", "--no-session"], permission: join(generated, "authority"), policy: join(generated, "extensions"), jev: "enforce-subagents" });

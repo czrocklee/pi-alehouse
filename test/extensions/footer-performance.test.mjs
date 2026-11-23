@@ -5,8 +5,6 @@ import { SessionManager, ExtensionRunner } from "@earendil-works/pi-coding-agent
 import { Container, Text } from "@earendil-works/pi-tui";
 
 // Synthetic public SDK seam only; no build, providers, credentials or network.
-delete process.env.PI_ALEHOUSE_GROK_BILLING;
-delete process.env.AGENT_DASHBOARD_URL;
 globalThis.fetch = () => {
   throw new Error("Footer source regressions forbid network IO");
 };

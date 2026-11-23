@@ -13,6 +13,7 @@ import {
   type RetrySettings,
   type SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { childQuotaObserver } from "../../extensions/lib/quota-observer.ts";
 import type { AdmittedAgentConfig, RunIdentity } from "../core/contracts.ts";
 import {
   SessionInitializationError,
@@ -124,6 +125,12 @@ export function createChildSessionFactory(options: {
     const manager = SessionManager.create(cwd, options.ctx.sessionManager.getSessionDir(), {
       parentSession: options.ctx.sessionManager.getSessionFile(),
     });
+    let retireQuota: (() => void) | undefined;
+    const quotaExtension: ExtensionFactory = (pi) => {
+      childQuotaObserver(pi, (retire) => {
+        retireQuota = retire;
+      });
+    };
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir: options.agentDir,
@@ -146,15 +153,15 @@ export function createChildSessionFactory(options: {
       ],
       // The gate must stay LAST. Inline factories load after every path above,
       // and cache_warming_decision is last-writer-wins in the runner, so only
-      // the final handler's stop is authoritative. The activity observer has no
-      // decision handler today; preserve this order so the veto remains final
-      // for any handlers added beside it later.
+      // the final handler's stop is authoritative. Keep all observers before
+      // the gate so none can replace the veto.
       extensionFactories: [
         options.requestExtension,
         ...(web ? [childWebExtension(web.factory)] : []),
         activity.extension,
         options.approvalBindings.childExtension(manager.getSessionId()),
         stats.extension,
+        quotaExtension,
         gate.extension,
       ],
     });
@@ -205,6 +212,9 @@ export function createChildSessionFactory(options: {
       profile: agent.settings.profile,
       definitionDigest: agent.settings.definition_digest,
       getPermissionsService: options.getPermissionsService,
+    }).catch((error: unknown) => {
+      retireQuota?.();
+      throw error;
     });
     try {
       assert.equal(
@@ -294,10 +304,9 @@ export function createChildSessionFactory(options: {
         },
         clearInputs: () => port.clearInputs(),
         dispose: async () => {
-          // Unbind at dispose entry: session_shutdown retirement is only a
-          // backstop, since an earlier handler can block it. Renderer
-          // cleanup adds no step to and never reorders the existing
-          // callbacks/gates/webLease lifecycle below.
+          // Retire observations at dispose entry; a prior shutdown handler
+          // can block the observers' session_shutdown backstop.
+          retireQuota?.();
           unbindRenderers?.();
           blocks.end();
           const report = await port.dispose();
@@ -307,9 +316,8 @@ export function createChildSessionFactory(options: {
         },
       };
     } catch (error) {
-      // Failed handoff: unbind before child session disposal, for the same
-      // blocked-handler reason as the dispose entry. Nothing here affects the
-      // cleanup order below.
+      // Failed handoff: retire observations before child session disposal.
+      retireQuota?.();
       unbindRenderers?.();
       stats.dispose();
       // No prompt has started before handoff; disposal itself checks idle.

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,26 +51,3 @@ test("portable production seed preserves explicit secret/privilege denies and ne
   assert.equal(seed.permission.bash["*"], "ask");
   assert.equal(json(join(repo, "resources/alehouse-presets.json")).defaultPreset, "off");
 });
-
-for (const mode of ["default", "billing", "dashboard"])
-  test(`footer privacy: ${mode} uses no real auth or network`, (t) => {
-    const scratch = mkdtempSync(join(tmpdir(), "alehouse-footer-privacy-"));
-    t.after(() => rmSync(scratch, { recursive: true, force: true }));
-    const result = spawnSync(
-      process.execPath,
-      [join(repo, "scripts/checks/check-pi-footer-privacy.mjs"), mode, scratch],
-      {
-        env: {
-          ...process.env,
-          HOME: scratch,
-          PI_CODING_AGENT_DIR: join(scratch, "custom-agent"),
-          PI_OFFLINE: "1",
-        },
-        encoding: "utf8",
-        timeout: 30000,
-      },
-    );
-    assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /PASS: footer privacy/);
-  });

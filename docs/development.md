@@ -197,6 +197,41 @@ state. Do not add retired tool aliases or hydrate old Runs and approvals.
   checks completeness, not whether classifications or projections are correct;
   review those separately.
 
+### Quota reading callback
+
+A trusted extension may install one optional, synchronous function at
+`globalThis[Symbol.for('pi-alehouse:quota-reading:v1')]`. The observer checks for
+it when a reading arrives, not just at startup. The function receives:
+
+```ts
+type QuotaReading = {
+  provider: string; // Physical Codex provider ID captured at dispatch
+  responseProvider?: string; // HTTP callback provider ID, when it differs
+  observedAt: number; // Unix time in seconds; may be fractional
+  windows: {
+    pool: "codex";
+    window: "primary" | "secondary";
+    used_pct: number; // Percentage used, from 0 to 100
+    duration_s?: number;
+    resets_at?: number; // Unix time in seconds
+  }[];
+};
+```
+
+Alehouse parent and child sessions, and ordinary Pi with the footer loaded,
+can emit readings from Codex response headers and stream events. If the HTTP
+callback names a different provider from the physical dispatch, the reading
+carries both IDs without treating them as equivalent. Recipients must confirm
+that mapping independently or discard the reading. A differing WebSocket
+callback identity is not reported.
+
+Each callback contains only the valid windows measured in that response or
+event. The observer sends no cached snapshot and does not merge or deduplicate
+readings. There is no replay or acknowledgement. Keep the function brief: its
+result is ignored and throws do not affect the request or local display.
+Without the callback, local Codex quota display still works. The observer does
+not query providers or deliver readings over any transport.
+
 ### Build and verify a tarball
 
 In a source checkout with locked development inputs, finish the required

@@ -40,7 +40,12 @@ export const createChildToolRendererLookup = (session) => {
 };
 export const webProfileNames = ["researcher"];
 export const childWebExtension = (factory) => factory;
-export class ChildRunGate { extension = () => {}; accepting = false; stopped = false; }
+export const childQuotaObserver = (_pi, captureRetirement) => {
+  state.telemetryOrder.push("quota");
+  captureRetirement(() => { state.quotaRetirements++; });
+};
+export const gateExtension = () => { state.telemetryOrder.push("gate"); };
+export class ChildRunGate { extension = gateExtension; accepting = false; stopped = false; }
 export class ManagedBlockObserver {
   constructor(subscribe) { state.blockSubscribe = subscribe; }
   begin(id, callbacks, accepting) { state.blockRuns.push({ id, callbacks, accepting }); }
@@ -60,6 +65,7 @@ export class DefaultResourceLoader {
   async reload() {
     state.prompts.push(this.options.appendSystemPromptOverride());
     if (state.loaderError) throw state.loaderError;
+    for (const factory of this.options.extensionFactories) await factory({});
     state.loadedSettings.add(this.options.settingsManager);
   }
 }
@@ -72,6 +78,7 @@ export const assembleChildSession = async (input) => {
     getActiveToolNames: () => [...input.options.tools] } };
 };
 export const disposeChildSession = async () => {
+  state.quotaRetirementsAtCleanup = state.quotaRetirements;
   state.cleanups++;
   if (state.cleanupError) throw state.cleanupError;
   return state.cleanupReport;
@@ -135,6 +142,8 @@ function fixture(t, profile = "editor") {
     loadedSettings: new Set(),
     retrySnapshots: [],
     prompts: [],
+    telemetryOrder: [],
+    quotaRetirements: 0,
     assemblies: [],
     runs: [],
     cleanups: 0,
@@ -288,6 +297,18 @@ for (const profile of ["editor", "researcher"])
       await port.dispose();
     });
 
+for (const profile of ["editor", "researcher"])
+  test(`${profile} installs the quota observer before the final Run gate`, async (t) => {
+    const f = fixture(t, profile),
+      port = await f.create();
+    const { extensionFactories } = seam.state.loaders[0].options;
+    assert.equal(extensionFactories.at(-1), seam.gateExtension);
+    assert.deepEqual(seam.state.telemetryOrder, ["quota", "gate"]);
+    assert.equal(seam.state.quotaRetirements, 0);
+    await port.dispose();
+    assert.equal(seam.state.quotaRetirements, 1);
+  });
+
 test("skill preference is sampled for each new session without changing an existing Agent", async (t) => {
   const f = fixture(t);
   let enabled = true;
@@ -351,6 +372,7 @@ for (const failure of ["loaderError", "assemblyError"])
     await assert.rejects(f.create(), (error) => error === seam.state[failure]);
     assert.equal(f.webReleases.length, 1);
     if (failure === "loaderError") assert.equal(seam.state.assemblies.length, 0);
+    else assert.equal(seam.state.quotaRetirements, 1, "failed assembly retires the observer");
   });
 
 test("frozen SessionInitializationError preserves its causes and retains the web lease", async (t) => {
@@ -384,6 +406,7 @@ for (const uncertain of [false, true])
       return true;
     });
     assert.equal(seam.state.cleanups, 1);
+    assert.equal(seam.state.quotaRetirementsAtCleanup, 1, "failed handoff retires before cleanup");
     assert.equal(f.webReleases.length, uncertain ? 0 : 1);
   });
 
@@ -478,7 +501,7 @@ for (const failure of ["badThinking", "sessionIdOverride"])
   });
 
 for (const disposal of ["hanging", "throwing"])
-  test(`${disposal} port disposal still unbinds renderers at dispose entry`, async (t) => {
+  test(`${disposal} port disposal still retires observers at dispose entry`, async (t) => {
     const f = fixture(t, "researcher"),
       port = await f.create();
     assert.equal(seam.state.rendererUnbinds, 0);
@@ -489,12 +512,14 @@ for (const disposal of ["hanging", "throwing"])
       seam.state.disposal = deferred.promise;
       const pending = port.dispose();
       assert.equal(seam.state.rendererUnbinds, 1, "unbind precedes the disposal await");
+      assert.equal(seam.state.quotaRetirements, 1, "retirement precedes the disposal await");
       deferred.resolve(seam.state.cleanupReport);
       await pending;
     } else {
       seam.state.disposeError = new Error("synthetic disposal rejection");
       await assert.rejects(port.dispose(), /synthetic disposal rejection/);
       assert.equal(seam.state.rendererUnbinds, 1, "a throwing disposal still unbinds first");
+      assert.equal(seam.state.quotaRetirements, 1, "a throwing disposal still retires first");
     }
     assert.equal(seam.state.rendererBinds.length, 1);
   });

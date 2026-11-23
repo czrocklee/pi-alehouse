@@ -38,7 +38,6 @@ import {
   type CodexQuota,
   type CodexCredits,
 } from "./codex-quota.ts";
-import type { GrokBillingSnapshot } from "./grok-billing.ts";
 
 type ThemeColorName = Parameters<Theme["fg"]>[0];
 
@@ -82,7 +81,7 @@ function alignFooter(left: string, right: string, width: number): string {
 }
 
 export type PhysicalRoute = { id: string; thinkingLevel?: string };
-type FooterModel = { id: string; provider: string; reasoning?: boolean };
+type FooterModel = { id: string; reasoning?: boolean };
 
 function modelLabel(
   ctx: { model?: FooterModel; thinkingLevel?: string },
@@ -467,21 +466,17 @@ export type FooterPaintInput = {
   statuses: Iterable<readonly [string, string]>;
   codex: CodexQuota | undefined;
   credits: CodexCredits | undefined;
-  grok: GrokBillingSnapshot;
   progress: string | undefined;
   nowSeconds: number;
-  nowMs: number;
 };
 
 /** Pure synchronous paint: fitting, text and hit spans are one result. No host
  * reads, clock sampling, accounting traversal, network or UI mutation here. */
 export function paintFooter(input: FooterPaintInput): { row: string; hits: FooterHit[] } {
-  const { width, theme, totals, context, branch, model, subscription, codex, credits, grok } =
-    input;
+  const { width, theme, totals, context, branch, model, subscription, codex, credits } = input;
   const location = `${theme.fg("accent", formatCwd(input.cwd, input.home))}${
     branch ? ` ${theme.fg("success", `(${branch})`)}` : ""
   }`;
-  const provider = model?.provider;
   const totalInput = promptTokens(totals);
   const rate = cacheHitRate(totals);
   const cacheHitDisplay = theme.fg(hitRateColor(rate), formatHitRate(rate));
@@ -547,7 +542,6 @@ export function paintFooter(input: FooterPaintInput): { row: string; hits: Foote
     !subscriptionExhausted || wholeBalance === undefined
       ? undefined
       : `${label("Cr")} ${theme.fg(wholeBalance === "0" ? "error" : "text", wholeBalance)}`;
-  const grokWeekly = provider === "xai" ? current(grok.quota) : undefined;
   const codexParts = [
     ...(codexShort
       ? [remaining(quotaWindowLabel(codexShort.windowMinutes), codexShort.remainingPercent)]
@@ -561,36 +555,11 @@ export function paintFooter(input: FooterPaintInput): { row: string; hits: Foote
     // Never clip a credit balance into a different whole-credit value.
     if (visibleWidth(oneLine(throughCredits)) <= prefixRoom) codexParts.push(creditDisplay);
   }
-  const codexDisplay = codexParts.join(" ");
-  let grokDisplay: string | undefined;
-  if (provider === "xai" && grok.enabled) {
-    const pending = grok.pending;
-    const age =
-      grok.lastSuccessAt === undefined
-        ? undefined
-        : Math.max(0, Math.floor((input.nowMs - grok.lastSuccessAt) / 1000));
-    const stale =
-      grok.failed || !grokWeekly || (age !== undefined && age * 1000 >= grok.minIntervalMs);
-    const state = pending ? "pending" : stale ? "stale" : "";
-    const freshness =
-      age === undefined
-        ? pending
-          ? "pending"
-          : grok.failed
-            ? "unavailable"
-            : "not checked"
-        : `${state ? `${state}; ` : ""}updated ${age}s ago`;
-    grokDisplay =
-      `${grokWeekly ? remaining("W", grokWeekly.remainingPercent) : label("billing")} ` +
-      theme.fg(state || age === undefined ? "warning" : "dim", `[${freshness}]`);
-  }
-  const quotaDisplay = codexDisplay || grokDisplay;
 
   // Quota values are atomic: never turn W 12% into W 1…. Path/model
   // chrome gives way first; right-hand approval/health stay unchanged.
-  const quotaParts = codexDisplay ? codexParts : quotaDisplay ? [quotaDisplay] : [];
   const fittedQuota: string[] = [];
-  for (const part of quotaParts) {
+  for (const part of codexParts) {
     if (visibleWidth([...fittedQuota, part].join(" ")) <= prefixRoom) fittedQuota.push(part);
   }
   const quotaText = fittedQuota.join(" ");

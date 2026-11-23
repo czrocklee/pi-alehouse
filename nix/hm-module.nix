@@ -7,13 +7,7 @@
   cfg = config.programs.alehouse;
   agentDir = ".pi/agent";
 
-  environment =
-    lib.optionalAttrs (cfg.dashboardUrl != null) {AGENT_DASHBOARD_URL = cfg.dashboardUrl;}
-    // lib.optionalAttrs cfg.grokBilling {PI_ALEHOUSE_GROK_BILLING = "1";};
-  package = cfg.package.override {
-    inherit (cfg) jevApiKeyFile;
-    inherit environment;
-  };
+  package = cfg.package.override {inherit (cfg) jevApiKeyFile;};
   generated = "${package}/lib/node_modules/pi-alehouse/generated";
   bootstrap = pkgs.callPackage ./permission-bootstrap {alehouse = package;};
 
@@ -39,7 +33,7 @@ in {
       defaultText = lib.literalExpression "pkgs.callPackage ./nix/package.nix {}";
       description = ''
         Alehouse package built by `nix/package.nix`. It must accept `override`
-        for `jevApiKeyFile` and `environment`.
+        for `jevApiKeyFile`.
       '';
     };
 
@@ -81,19 +75,6 @@ in {
       '';
     };
 
-    dashboardUrl = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      example = "http://127.0.0.1:3030";
-      description = "Agent dashboard base URL for the status footer. Disabled when null.";
-    };
-
-    grokBilling = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-      description = "Whether the status footer queries xAI billing for Grok spend.";
-    };
-
     ordinaryPi.enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -109,7 +90,6 @@ in {
   config = lib.mkIf cfg.enable (lib.mkMerge [
     {
       home.packages = [package];
-      home.sessionVariables = environment;
 
       home.file = lib.mkMerge [
         (lib.listToAttrs (map (name:

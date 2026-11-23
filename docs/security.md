@@ -152,13 +152,14 @@ a different protected runtime generation.
   not redacted evidence. Keep them private. Cold history uses only SDK-derived
   links for the parent, with bounded read-only, no-follow access under the
   trusted session root. Historical identity grants no live authority.
-- **Optional footer network:** publishing quota data requires explicit
-  `AGENT_DASHBOARD_URL`; there is no implicit local endpoint. Grok billing
-  credential reads and requests require `PI_ALEHOUSE_GROK_BILLING=1`.
-  That integration uses Pi's actual agent directory for `auth.json`, can fall
-  back to Grok's own auth, and sends the token to the billing service selected
-  by `GROK_CLI_CHAT_PROXY_BASE_URL` (or the built-in service). Review the
-  destination before enabling it. Ordinary quota header display needs neither opt-in.
+- **Optional quota observation:** the [in-process callback](development.md#quota-reading-callback)
+  receives only Codex provider identity, observation time and measured quota
+  windows. If the HTTP callback provider differs from the dispatch provider,
+  recipients must confirm the mapping or discard the reading. They receive no
+  credentials, raw headers or events, response text, usage tokens or purchased
+  credits. Alehouse does not make network requests to report quota. An installed
+  callback is trusted extension code; review what it does with readings before
+  enabling it.
 
 ## Scoped settings and trust
 

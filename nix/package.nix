@@ -6,8 +6,6 @@
   gitMinimal,
   # Only the credential file path, never the credential, enters the wrapper/store.
   jevApiKeyFile ? null,
-  # Launcher defaults (`--set-default`); the caller's environment still wins.
-  environment ? {},
 }: let
   root = ../.;
   # Build inputs only: local dependencies/outputs and Nix packaging never enter
@@ -77,7 +75,6 @@ in
         --set PI_ALEHOUSE_FLOCK ${util-linux}/bin/flock \
         --set PI_ALEHOUSE_GIT ${gitMinimal}/bin/git \
         --set-default PI_JEV_APPROVAL_MODE enforce-subagents \
-        ${lib.concatStringsSep " " (lib.mapAttrsToList (name: value: "--set-default ${lib.escapeShellArg name} ${lib.escapeShellArg value}") environment)} \
         ${
         if jevApiKeyFile == null
         then "--unset PI_JEV_API_KEY_FILE"

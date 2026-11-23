@@ -293,7 +293,10 @@ Codex quota is separate from session spend. `5h` or `W` reports remaining quota
 for that provider account when available. `Cr` is the last reported purchased
 credit balance (whole credits or `∞`), not dollars. It is only shown with a
 current, actually exhausted quota window, not one that just rounds to `0%`.
-Codex headers and stream events can update local display without a billing call.
+Codex headers and stream events update the local display for the selected
+physical provider without an extra provider request. Other extensions can
+publish their own text using Pi's `ctx.ui.setStatus`; those values appear as
+ordinary footer statuses.
 
 ## Context popover
 
@@ -316,24 +319,6 @@ progress percentage is an estimate, not a deadline.
 In fullscreen, Context, Usage, Approval and Delegation share a column in
 opening order. If a later panel won't fit, close a lower one or enlarge the
 terminal. A waiting Delegation panel can still be cancelled with `Alt+S`.
-
-## Optional footer network integrations
-
-Local Codex quota display needs neither opt-in. Grok billing is separate:
-
-- `AGENT_DASHBOARD_URL` supplies the dashboard base URL. For `openai-codex`,
-  Alehouse can POST quota windows from HTTP response headers or WebSocket
-  rate-limit events. Other Codex slots and purchased credits stay local. Unset,
-  there is no default dashboard POST.
-- `PI_ALEHOUSE_GROK_BILLING=1` enables Grok billing on relevant xAI activity.
-  This can read Pi's `auth.json` in the actual agent directory or fall back to
-  the Grok CLI's auth file. It sends a bearer token to the billing endpoint.
-  Only set `GROK_CLI_CHAT_PROXY_BASE_URL` to a proxy you trust; otherwise the
-  built-in Grok proxy is used. With the dashboard also configured, successful
-  Grok billing can send billing configuration and subscription-tier data there.
-
-These opt-ins don't change Agent permissions. See
-[context, identity and data handling](security.md#context-identity-and-data-handling).
 
 ## Health and Stats
 

@@ -830,7 +830,7 @@ test(
 );
 
 test(
-  "real Codex auto reuses WebSocket across /fast and reports quota after SSE fallback, loopback only",
+  "real Codex auto reuses WebSocket across /fast and emits quota readings before and after SSE fallback, loopback only",
   { timeout: 30000 },
   (t) => {
     const dir = temporary(t);
@@ -852,10 +852,7 @@ test(
     if (result.error) throw result.error;
     if (result.status === 77) return t.skip("sandbox denied the loopback listener");
     assert.equal(result.status, 0, result.stderr);
-    assert.match(
-      result.stdout,
-      /Codex auto reuses WebSocket across \/fast changes and publishes quota before and after SSE fallback, loopback only/,
-    );
+    assert.match(result.stdout, /^PASS: Codex auto reuses WebSocket across \/fast changes\b/m);
   },
 );
 

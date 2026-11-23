@@ -22,7 +22,6 @@ Import `homeManagerModules.default` from the flake and enable `programs.alehouse
 | `permissions`, `presets`         | Optional source paths for `extensions/pi-permission-system/config.json` and `alehouse-presets.json`. With `null`, the files stay user-owned. Activation restores the declarative permission file if the settings UI replaced it. |
 | `codexSpeedLimits`               | Optional source path for `alehouse-codex-speeds.json`; defaults to `null`, leaving the file user-owned. See [model limits](routing.md#set-model-limits).                                                                         |
 | `jevApiKeyFile`                  | Runtime path of the Jev key. Supply the path, never its contents; do not store the key in Nix.                                                                                                                                   |
-| `dashboardUrl`, `grokBilling`    | Opt in to the footer's network integrations. Review [what is sent and where](interface.md#optional-footer-network-integrations) first.                                                                                           |
 | `ordinaryPi.enable`              | Defaults to `true`: ordinary `pi` loads the managed permission authority and selected UI/policy extensions, **not delegation**. Disabling this later is not an uninstall.                                                        |
 
 ### What survives rollback?

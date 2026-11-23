@@ -100,6 +100,11 @@ async function fixture(rows = 24, columns = 120) {
     thinkingLevel: "off",
     model: { id: "m", provider: "fixture", api: "openai-codex-responses", contextWindow: 500000 },
     modelRegistry: {
+      runtime: {
+        streamSimple(_model, _context, options) {
+          return options;
+        },
+      },
       isUsingOAuth: () => false,
       getProvider: () => undefined,
       getApiKeyAndHeaders() {
@@ -189,6 +194,11 @@ async function fixture(rows = 24, columns = 120) {
     ctx,
     pi,
     emit,
+    providerResponse(headers) {
+      const physical = { ...ctx.model };
+      const options = ctx.modelRegistry.runtime.streamSimple(physical, {}, { sessionId });
+      return options.onResponse({ status: 200, headers }, physical);
+    },
     broadcast,
     notifications,
     opened,
@@ -592,16 +602,20 @@ try {
   // Whole quota values only, across every integer width, plus exact Context formatting.
   {
     const h = await fixture();
-    await h.emit("after_provider_response", {
-      headers: {
-        "x-codex-primary-used-percent": "88",
-        "x-codex-primary-window-minutes": "10080",
-        "x-codex-secondary-used-percent": "20",
-        "x-codex-secondary-window-minutes": "300",
-        "x-codex-primary-reset-at": String(Math.floor(Date.now() / 1000) + 3600),
-        "x-codex-secondary-reset-at": String(Math.floor(Date.now() / 1000) + 3600),
-      },
+    const reset = String(Math.floor(Date.now() / 1000) + 3600);
+    await h.providerResponse({
+      "x-codex-primary-used-percent": "88",
+      "x-codex-primary-window-minutes": "10080",
+      "x-codex-secondary-used-percent": "20",
+      "x-codex-secondary-window-minutes": "300",
+      "x-codex-primary-reset-at": reset,
+      "x-codex-secondary-reset-at": reset,
     });
+    assert.match(
+      plain(h.footer.render(160)[0]),
+      /5h 80% W 12%/,
+      "both measured windows fit at wide width",
+    );
     for (let width = 20; width <= 160; width++) {
       const line = plain(h.footer.render(width)[0]);
       assert(visibleWidth(line) <= width);

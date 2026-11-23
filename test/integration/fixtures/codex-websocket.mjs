@@ -4,7 +4,6 @@ import { once } from "node:events";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { zstdDecompressSync } from "node:zlib";
 import {
   createAgentSession,
@@ -24,11 +23,11 @@ assert(agentDir && home);
 const provider = "openai-codex",
   modelId = "gpt-6.2-sol",
   codexPath = "/backend-api/codex/responses",
-  dashboardPath = "/api/usage/codex",
-  resetAt = 2000000000;
+  resetAt = Math.floor(Date.now() / 1_000) + 3600;
+const readingKey = Symbol.for("pi-alehouse:quota-reading:v1");
 const wsBodies = [],
   sseBodies = [],
-  publications = [],
+  readings = [],
   unexpected = [];
 let upgrades = 0,
   allowUpgrade = true;
@@ -61,13 +60,7 @@ const server = createServer((req, res) => {
   const chunks = [];
   req.on("data", (chunk) => chunks.push(chunk));
   req.on("end", () => {
-    if (req.method === "POST" && req.url === dashboardPath) {
-      publications.push({
-        body: JSON.parse(Buffer.concat(chunks)),
-        auth: req.headers.authorization,
-      });
-      res.writeHead(204).end();
-    } else if (req.method === "POST" && req.url === codexPath && !allowUpgrade) {
+    if (req.method === "POST" && req.url === codexPath && !allowUpgrade) {
       const raw = Buffer.concat(chunks);
       const body = req.headers["content-encoding"] === "zstd" ? zstdDecompressSync(raw) : raw;
       sseBodies.push(JSON.parse(body));
@@ -127,11 +120,9 @@ try {
   throw error;
 }
 const base = `http://127.0.0.1:${server.address().port}`;
-process.env.AGENT_DASHBOARD_URL = base;
 const fetchLoopback = globalThis.fetch;
 globalThis.fetch = (url, init) => {
-  const target = String(url);
-  if (target !== base + dashboardPath && target !== base + codexPath) {
+  if (String(url) !== base + codexPath) {
     unexpected.push(["fetch", "non-fixture endpoint"]);
     throw new Error("Attempted fetch outside the loopback fixture");
   }
@@ -192,6 +183,9 @@ try {
   }));
   const errors = [];
   await session.bindExtensions({ mode: "rpc", onError: ({ error }) => errors.push(error) });
+  globalThis[readingKey] = (reading) => {
+    readings.push(reading);
+  };
   for (const turn of [1, 2, 3, 4, 5, 6, 7]) {
     if (turn === 2 || turn === 7) await session.prompt("/fast");
     if (turn === 4) await session.prompt("/fast ultrafast");
@@ -239,19 +233,29 @@ try {
   assert.equal(sseBodies[0].service_tier, "ultrafast");
   assertBudget(sseBodies[0]);
 
-  for (let attempt = 0; attempt < 100 && publications.length < 3; attempt++) await delay(10);
   assert.deepEqual(
-    publications,
-    [10, 11, 12].map((percent) => ({
-      body: { headers: quotaHeaders(percent) },
-      auth: undefined,
+    readings.map(({ observedAt, ...reading }) => {
+      assert.ok(observedAt > resetAt - 3601 && observedAt < resetAt);
+      return reading;
+    }),
+    [10, 10, 11, 11, 11, 11, 11, 12].map((percent) => ({
+      provider,
+      windows: [
+        {
+          pool: "codex",
+          window: "primary",
+          used_pct: percent,
+          duration_s: 18000,
+          resets_at: resetAt,
+        },
+      ],
     })),
-    "the dashboard receives deduplicated quota from both transports, not credits or auth",
+    "the synchronous sink sees each real reading from either transport, not credits or auth",
   );
   assert.deepEqual(errors, []);
   assert.deepEqual(unexpected, []);
   console.log(
-    "PASS: Codex auto reuses WebSocket across /fast changes and publishes quota before and after SSE fallback, loopback only",
+    "PASS: Codex auto reuses WebSocket across /fast changes and emits quota readings before and after SSE fallback, loopback only",
   );
 } finally {
   try {
@@ -260,6 +264,8 @@ try {
       session.dispose();
     }
   } finally {
+    delete globalThis[readingKey];
+    globalThis.fetch = fetchLoopback;
     for (const peer of sockets.clients) peer.terminate();
     sockets.close();
     const closed = once(server, "close");

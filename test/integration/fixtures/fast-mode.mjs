@@ -44,6 +44,8 @@ const modelId = "gpt-6.2-sol",
   secondary = "openai-codex-2";
 const codexBase = "http://127.0.0.1:1/backend-api";
 const childWire = [];
+const readingKey = Symbol.for("pi-alehouse:quota-reading:v1");
+const readings = [];
 let unexpectedRequests = 0;
 globalThis.fetch = async (url, init) => {
   if (url !== `${codexBase}/codex/responses` || init?.method !== "POST") {
@@ -87,7 +89,11 @@ globalThis.fetch = async (url, init) => {
     },
   ];
   return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
-    headers: { "content-type": "text/event-stream" },
+    headers: {
+      "content-type": "text/event-stream",
+      "x-codex-primary-used-percent": String(id + 0.25),
+      "x-codex-primary-window-minutes": "300",
+    },
   });
 };
 initialize({ agentDir });
@@ -232,7 +238,8 @@ async function requestTask(turn, { agent, spawn }) {
 }
 async function runTurn(turn, { agent, spawn, tier, childTier = tier }) {
   const parentStart = parentWire.length,
-    childStart = childWire.length;
+    childStart = childWire.length,
+    readingStart = readings.length;
   const reply = await requestTask(turn, { agent, spawn });
   assert.equal(reply.reason, "done", JSON.stringify(reply));
   assert.equal(reply.tasks[0].result, "child done");
@@ -244,6 +251,21 @@ async function runTurn(turn, { agent, spawn, tier, childTier = tier }) {
   const childRequests = childWire.slice(childStart);
   assert.equal(childRequests.length, 1);
   const { body, sessionId } = childRequests[0];
+  assert.deepEqual(
+    readings.slice(readingStart).map(({ observedAt, ...reading }) => {
+      assert.ok(Number.isFinite(observedAt) && observedAt > 0);
+      return reading;
+    }),
+    [
+      {
+        provider: secondary,
+        windows: [
+          { pool: "codex", window: "primary", used_pct: childStart + 1.25, duration_s: 18_000 },
+        ],
+      },
+    ],
+    "exactly the physical worker, not the selected parent model, supplied this quota reading",
+  );
   assert.equal(body.model, childModelId, "the numbered slot sent a real Codex Astra body");
   assert.equal(body.max_output_tokens, astra.maxTokens);
   assert.equal(
@@ -354,10 +376,16 @@ async function runFastCases() {
 try {
   await session.bindExtensions({ mode: "rpc", onError: (error) => errors.push(error.error) });
   if (retryFixture) await runRetryCases();
-  else await runFastCases();
+  else {
+    globalThis[readingKey] = (reading) => {
+      readings.push(reading);
+    };
+    await runFastCases();
+  }
   assert.deepEqual(errors, []);
   assert.equal(unexpectedRequests, 0);
 } finally {
+  delete globalThis[readingKey];
   await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
   session.dispose();
 }
