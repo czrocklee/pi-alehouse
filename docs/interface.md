@@ -294,7 +294,10 @@ for that provider account when available. `Cr` is the last reported purchased
 credit balance (whole credits or `∞`), not dollars. It is only shown with a
 current, actually exhausted quota window, not one that just rounds to `0%`.
 Codex headers and stream events update the local display for the selected
-physical provider without an extra provider request. Other extensions can
+physical provider without an extra provider request. In plain Pi, if a provider
+alias reports only its underlying provider, the footer will not show quota from
+that response. A trusted adapter can restore the alias at the request boundary.
+Other extensions can
 publish their own text using Pi's `ctx.ui.setStatus`; those values appear as
 ordinary footer statuses.
 
