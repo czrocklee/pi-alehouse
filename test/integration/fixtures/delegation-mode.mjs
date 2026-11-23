@@ -161,38 +161,60 @@ const saved = (session) =>
     .getBranch()
     .filter((entry) => entry.type === "custom" && entry.customType === entryType)
     .map(({ data }) => `${data.mode}/${data.eagerness}`);
-const supervisorReserved = delegationGuideline({ mode: "supervisor", eagerness: "reserved" });
+const supervisorGuideline = delegationGuideline({ mode: "supervisor", eagerness: "reserved" });
 const leadEager = delegationGuideline({ mode: "lead", eagerness: "eager" });
 
 // 1. A fresh session starts from the file's defaultMode/defaultEagerness.
 let first = await parent(SessionManager.create(cwd, sessions));
 let file;
 try {
-  assert.equal(first.ui.statuses.at(-1), "delegation: supervisor·reserved/fixture");
+  assert.equal(first.ui.statuses.at(-1), "delegation: supervisor/fixture");
   assert(
-    (await first.ask("HELLO"))[0].includes(supervisorReserved),
+    (await first.ask("HELLO"))[0].includes(supervisorGuideline),
     "the configured default reaches the first request",
   );
+  // Eagerness edited in Supervisor stays dormant until a hybrid mode is chosen.
+  await first.session.prompt("/alehouse-mode eager");
+  assert.equal(
+    first.ui.notices.at(-1).message,
+    "Delegation: supervisor (eager saved for Co-worker/Lead)",
+  );
+  await first.session.prompt("/alehouse-mode");
+  assert.deepEqual(JSON.parse(first.ui.notices.at(-1).message), {
+    mode: "supervisor",
+    eagerness: "eager",
+    eagerness_active: false,
+    guideline: supervisorGuideline,
+  });
+  assert.equal(first.ui.statuses.at(-1), "delegation: supervisor/fixture");
+  assert((await first.ask("STILL_SUPERVISOR"))[0].includes(supervisorGuideline));
   // 2. While Off the mode changes and is audited, but the footer stays off and
-  // agent_spawn stays hidden; enabling again shows the new mode.
+  // agent_spawn stays hidden; enabling again shows the new mode with saved eagerness.
   await first.session.prompt("/alehouse-preset off");
   assert.equal(first.ui.statuses.at(-1), "delegation: off");
-  await first.session.prompt("/alehouse-mode lead eager");
+  await first.session.prompt("/alehouse-mode lead");
   assert.equal(first.ui.statuses.at(-1), "delegation: off");
   assert(
     !first.session.getActiveToolNames().includes("agent_spawn"),
     "a mode change never re-exposes delegation while Off",
   );
-  assert.deepEqual(saved(first.session), ["supervisor/reserved", "lead/eager"]);
+  assert.deepEqual(saved(first.session), ["supervisor/reserved", "supervisor/eager", "lead/eager"]);
   await first.session.prompt("/alehouse-preset fixture");
   assert.equal(first.ui.statuses.at(-1), "delegation: lead·eager/fixture");
+  await first.session.prompt("/alehouse-mode");
+  assert.deepEqual(JSON.parse(first.ui.notices.at(-1).message), {
+    mode: "lead",
+    eagerness: "eager",
+    eagerness_active: true,
+    guideline: leadEager,
+  });
   const enabled = await first.ask("AFTER_ENABLE");
-  assert(enabled[0].includes(leadEager) && !enabled[0].includes(supervisorReserved));
+  assert(enabled[0].includes(leadEager) && !enabled[0].includes(supervisorGuideline));
   await first.session.prompt("/alehouse-mode lead eager");
   assert.match(first.ui.notices.at(-1).message, /Delegation: lead·eager \(unchanged\)/);
   assert.deepEqual(
     saved(first.session),
-    ["supervisor/reserved", "lead/eager"],
+    ["supervisor/reserved", "supervisor/eager", "lead/eager"],
     "an unchanged selection writes no record",
   );
   file = first.session.sessionManager.getSessionFile();
@@ -207,7 +229,7 @@ try {
   assert.equal(second.ui.statuses.at(-1), "delegation: lead·eager/fixture");
   const restored = await second.ask("RESTORED");
   assert(
-    restored[0].includes(leadEager) && !restored[0].includes(supervisorReserved),
+    restored[0].includes(leadEager) && !restored[0].includes(supervisorGuideline),
     "the restored mode reaches the first request",
   );
   // 4a. A failed active-tool restore is retried on reselect. With the tool

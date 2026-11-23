@@ -4,7 +4,7 @@ import type { PresetSelection } from "./routing.ts";
 /** How Main divides work with Agents, ordered by how much it hands off. */
 export const delegationModes = ["manual", "co-worker", "lead", "supervisor"] as const;
 export type DelegationMode = (typeof delegationModes)[number];
-/** How small a piece is still worth handing off, and how many run at once. */
+/** How small a piece is still worth handing off in Co-worker and Lead, and how many run at once. */
 export const eagernessLevels = ["reserved", "balanced", "eager"] as const;
 export type Eagerness = (typeof eagernessLevels)[number];
 
@@ -26,25 +26,26 @@ export const modeLabels: Readonly<Record<DelegationMode, string>> = Object.freez
 });
 
 // Organization strategy only: what each tool does and accepts stays in its
-// schema. Each autonomous line is one division-of-work sentence plus one
-// eagerness sentence, so either axis reads the same in every combination,
-// then the fixed web sentence: these modes hide the parent's web tools.
+// schema. Manual and Supervisor fix their handoff boundaries; Co-worker and
+// Lead combine a division-of-work sentence with an eagerness threshold, and all
+// three autonomous modes append the fixed web-routing sentence.
 const manualText =
   "Start or assign Agent work only when the user asks for it; when delegation would clearly help, suggest it briefly. " +
-  "Answer, wait for and collect results from Agents already at work.";
-const modeText: Readonly<Record<Exclude<DelegationMode, "manual">, string>> = Object.freeze({
+  "Answer questions from Agents already at work, and wait for and collect their results.";
+const hybridModeText: Readonly<Record<"co-worker" | "lead", string>> = Object.freeze({
   "co-worker":
     "Work alongside Agents: take your own disjoint share of the task in parallel while they do theirs.",
-  lead: "Lead the work: own key decisions and core hands-on work; delegate separable diagnosis, implementation and verification.",
-  supervisor:
-    "Supervise the work: delegate diagnosis, design, implementation and review to Agents; focus on framing, decisions, questions and integration.",
+  lead: "Lead the work: own key decisions and core hands-on work; delegate separable diagnosis, implementation, verification and review.",
 });
+const supervisorText =
+  "Supervise the work: delegate diagnosis, design, implementation, verification and review rather than doing them yourself. " +
+  "When scope is unclear, delegate discovery first; run independent tasks in parallel, answer Agents' questions, close gaps with follow-up tasks, and synthesize results.";
 const eagernessText: Readonly<Record<Eagerness, string>> = Object.freeze({
   reserved:
     "Hand off only substantial, clearly separable work; keep small pieces, which cost more to delegate than to do.",
   balanced: "Hand off independent pieces that would take you longer to do than to explain.",
   eager:
-    "Hand off any piece that can proceed independently of your own work, even small ones, and keep several Agents running in parallel.",
+    "Hand off any separable piece that can proceed independently of your own work, even small ones, and keep several Agents running in parallel.",
 });
 /** Whatever the eagerness: the parent's web tools are hidden in these modes. */
 export const autonomousWebText =
@@ -52,13 +53,14 @@ export const autonomousWebText =
 
 /** The single line agent_spawn contributes to the parent system prompt. */
 export function delegationGuideline(setting: DelegationSetting): string {
-  return setting.mode === "manual"
-    ? manualText
-    : `${modeText[setting.mode]} ${eagernessText[setting.eagerness]} ${autonomousWebText}`;
+  if (setting.mode === "manual") return manualText;
+  if (setting.mode === "supervisor") return `${supervisorText} ${autonomousWebText}`;
+  return `${hybridModeText[setting.mode]} ${eagernessText[setting.eagerness]} ${autonomousWebText}`;
 }
 
 /** Whether eagerness changes anything in this mode. */
-export const usesEagerness = (mode: DelegationMode): boolean => mode !== "manual";
+export const usesEagerness = (mode: DelegationMode): boolean =>
+  mode === "co-worker" || mode === "lead";
 
 /** Compact label: the mode, plus eagerness only when it is not the default. */
 export function delegationLabel(setting: DelegationSetting): string {
@@ -73,6 +75,23 @@ export function delegationStatus(preset: PresetSelection, setting: DelegationSet
   if (!("models" in preset)) return "delegation: off";
   const marked = Object.keys(preset.effort_overrides).length > 0 ? "*" : "";
   return `delegation: ${delegationLabel(setting)}/${preset.name}${marked}`;
+}
+
+/** `/alehouse-mode` notice: notes when an explicit eagerness is stored for Co-worker/Lead. */
+export function delegationCommandNotice(
+  args: string,
+  setting: DelegationSetting,
+  changed: boolean,
+): string {
+  const namedEagerness = args
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .some((word) => (eagernessLevels as readonly string[]).includes(word));
+  if (usesEagerness(setting.mode) || !namedEagerness)
+    return `Delegation: ${delegationLabel(setting)}${changed ? "" : " (unchanged)"}`;
+  const note = `${setting.eagerness} saved for Co-worker/Lead`;
+  return `Delegation: ${delegationLabel(setting)} (${changed ? note : `unchanged; ${note}`})`;
 }
 
 export function isDelegationSetting(value: unknown): value is DelegationSetting {

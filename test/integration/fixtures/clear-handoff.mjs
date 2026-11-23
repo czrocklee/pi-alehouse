@@ -341,7 +341,7 @@ const replacedContext = async (previous) => {
 async function customHandoff() {
   const old = host.session;
   await bind(old);
-  assert.equal(statuses.get("alehouse-preset"), "delegation: supervisor·reserved/local*");
+  assert.equal(statuses.get("alehouse-preset"), "delegation: supervisor/local*");
   await command("/alehouse-mode lead eager");
   await settings("Beer mugs: off");
   await settings("Border labels: on (all Alehouse panels)");
@@ -401,7 +401,7 @@ async function customHandoff() {
   assert.deepEqual(await host.newSession(), { cancelled: false });
   const fresh = await replacedContext(afterClear);
   assert(!fresh.some((entry) => entry.customType === controlsEntry), "no second handoff record");
-  assert.equal(statuses.get("alehouse-preset"), "delegation: supervisor·reserved/saved");
+  assert.equal(statuses.get("alehouse-preset"), "delegation: supervisor/saved");
   await appearance("off", "on", "on");
   await spawn("after-new", "saved-worker", "low", true);
   assert.equal(rebinds.length, 3, "initial bind plus exactly one bind per replacement");
@@ -409,8 +409,9 @@ async function customHandoff() {
 
 async function mode(expected) {
   await command("/alehouse-mode");
-  const { mode, eagerness } = JSON.parse(notices.at(-1).message);
+  const { mode, eagerness, eagerness_active } = JSON.parse(notices.at(-1).message);
   assert.deepEqual({ mode, eagerness }, expected);
+  assert.equal(eagerness_active, expected.mode === "co-worker" || expected.mode === "lead");
 }
 
 function assertOldBaseRecord(branch) {
@@ -481,7 +482,7 @@ async function offTurn(tag) {
 async function baseHandoff() {
   const base = host.session;
   await bind(base);
-  assert.equal(statuses.get("alehouse-preset"), "delegation: supervisor·reserved/saved*");
+  assert.equal(statuses.get("alehouse-preset"), "delegation: supervisor/saved*");
   await mode(defaults.delegation);
   // No select, effort edit or mode change: startup alone pins both policies.
   assertOldBaseRecord(base.sessionManager.getBranch());
@@ -533,7 +534,7 @@ async function baseHandoff() {
   await spawn("new-default", "edited-worker", "low", true, 2);
 
   assertHistoricalWork(await resume(base.sessionManager), "startup-override");
-  assert.equal(statuses.get("alehouse-preset"), "delegation: supervisor·reserved/saved*");
+  assert.equal(statuses.get("alehouse-preset"), "delegation: supervisor/saved*");
   await mode(defaults.delegation);
   await appearance("off", "on", "on");
   await oldBaseRoutes("resume-startup", true);
@@ -542,7 +543,7 @@ async function baseHandoff() {
     await resume(cleared.sessionManager, { declineYolo: true }),
     "clear-base-override",
   );
-  assert.equal(statuses.get("alehouse-preset"), "delegation: supervisor·reserved/saved*");
+  assert.equal(statuses.get("alehouse-preset"), "delegation: supervisor/saved*");
   await mode(defaults.delegation);
   await appearance("off", "on", "on");
   await oldBaseRoutes("resume-clear", true);

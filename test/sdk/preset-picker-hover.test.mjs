@@ -29,7 +29,7 @@ function fixture(t, extra = {}) {
     delegated = [];
   let renders = 0,
     component;
-  let delegation = { mode: "manual", eagerness: "normal" };
+  let delegation = { mode: "manual", eagerness: "balanced" };
   const tui = extra.tui ?? {
     terminal: { columns: 100, rows: 40 },
     requestRender: () => renders++,

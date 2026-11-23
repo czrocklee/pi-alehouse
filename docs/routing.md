@@ -10,19 +10,21 @@ model preset; there are no built-in worker models.
 
 ## Delegation mode
 
-| Mode                | Guidance for the main model                                                                                    |
-| ------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Manual              | Assign work only when you ask; suggest delegation when useful and collect existing work.                       |
-| Co-worker (default) | Take a disjoint share of the task in parallel while Agents do theirs.                                          |
-| Lead                | Own key decisions and core hands-on work; delegate separable diagnosis, implementation and verification.       |
-| Supervisor          | Delegate diagnosis, design, implementation and review; focus on framing, decisions, questions and integration. |
+| Mode                | Guidance for the main model                                                                                                                     |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Manual              | Assign work only when you ask; suggest delegation when useful and collect existing work.                                                        |
+| Co-worker (default) | Take a disjoint share of the task in parallel while Agents do theirs.                                                                           |
+| Lead                | Own key decisions and core hands-on work; delegate separable diagnosis, implementation, verification and review.                                |
+| Supervisor          | Delegate discovery, diagnosis, design, implementation, verification and review; run parallel tasks, answer questions, follow up and synthesize. |
 
-**Eagerness** sets the handoff threshold: `reserved` for substantial, separable
-work; `balanced` (default) for independent work that takes longer to do than to
-explain; `eager` for even small independent pieces, with more work in parallel.
-It has no effect in Manual. For example, use `/alehouse-mode lead eager` to set
-both, `/alehouse-mode reserved` to change just the threshold, or bare
-`/alehouse-mode` to see the current values and guideline.
+**Eagerness** sets the handoff threshold in Co-worker and Lead: `reserved` for
+substantial, separable work; `balanced` (default) for independent work that
+takes longer to do than to explain; `eager` for even small separable pieces,
+with more work in parallel. It has no effect in Manual or Supervisor, though a
+stored value is remembered when switching back to Co-worker or Lead. For
+example, use `/alehouse-mode lead eager` to set both, `/alehouse-mode reserved`
+to change just the threshold, or bare `/alehouse-mode` to see the current
+values and guideline.
 
 The main model's next run gets the new guideline; an in-progress run keeps the
 prompt it started with. This is guidance, not a permission gate: Manual does

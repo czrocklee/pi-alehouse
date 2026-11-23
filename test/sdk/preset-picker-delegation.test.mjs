@@ -50,12 +50,26 @@ test("the mode slider paints four nodes, fits or clips the current guideline, an
   assert(delegationGuideline(state.current).startsWith(clipped.slice(0, -1).trimEnd()));
   for (const line of narrow) assert.equal(visibleWidth(line), 76, line);
 
-  picker.handleInput("\u001b[C"); // right
+  picker.handleInput("\u001b[C"); // right -> Lead
   assert.deepEqual(state.current, { mode: "lead", eagerness: "balanced" });
-  picker.handleInput("\u001b[1;2C"); // shift+right
+  picker.handleInput("\u001b[1;2C"); // shift+right -> eager
   assert.deepEqual(state.current, { mode: "lead", eagerness: "eager" });
   picker.handleInput("\u001b[1;2C");
   assert.equal(state.sets.length, 2, "clamped at the ends: no redundant apply");
+  picker.handleInput("\u001b[C"); // right -> Supervisor
+  assert.deepEqual(state.current, { mode: "supervisor", eagerness: "eager" });
+  picker.handleInput("\u001b[1;2D");
+  assert.equal(state.current.eagerness, "eager", "eagerness is inert in Supervisor");
+  lines = picker.render(76).map(stripTerminalSequences);
+  assert.match(lines[2], /not used in Supervisor/);
+  assert.match(
+    lines
+      .slice(3, 6)
+      .map((line) => line.slice(1, -1).trim())
+      .join(" "),
+    /delegate diagnosis, design, implementation, verification and review/,
+  );
+  assert(!lines.some((line) => line.includes("⇧←→")), "no inactive Shift+arrow hint in Supervisor");
   for (let i = 0; i < 5; i++) picker.handleInput("\u001b[D");
   assert.deepEqual(state.current, { mode: "manual", eagerness: "eager" });
   picker.handleInput("\u001b[1;2D");
@@ -63,6 +77,7 @@ test("the mode slider paints four nodes, fits or clips the current guideline, an
   lines = picker.render(76).map(stripTerminalSequences);
   assert.match(lines[2], /not used in Manual/);
   assert.match(lines[3], /Start or assign Agent work only when the user asks/);
+  assert(!lines.some((line) => line.includes("⇧←→")), "no inactive Shift+arrow hint in Manual");
   assert.deepEqual(result, [], "mode changes never close the panel or apply a preset");
 });
 
@@ -128,6 +143,16 @@ test("narrow or short panels keep a stepping mode row; Off dims the mode and say
     lines.join("\n"),
   );
   assert(lines.length <= Math.floor(12 * 0.8), "compact stays within its rows");
+  const shortSupervisor = fixture({
+    delegation: delegationState({ mode: "supervisor", eagerness: "eager" }).option,
+    rows: 12,
+  });
+  lines = shortSupervisor.picker.render(76).map(stripTerminalSequences);
+  assert(
+    lines.some((line) => line.includes("Mode ‹ Supervisor ›") && !line.includes("eager")),
+    lines.join("\n"),
+  );
+  assert(!lines.some((line) => line.includes("⇧←→")), lines.join("\n"));
 
   const off = fixture({
     delegation: delegationState().option,
@@ -152,7 +177,12 @@ test("without a delegation option the picker is unchanged apart from its title",
 
 test("pointer gestures end with any key or page switch; arrows edit effort, not mode, in the editor", () => {
   const state = delegationState();
+  const styledTheme = {
+    ...theme,
+    fg: (color, text) => (color === "dim" ? `\u001b[2m${text}\u001b[22m` : text),
+  };
   const { picker } = fixture({
+    theme: styledTheme,
     delegation: state.option,
     pointer: true,
     rows: 40,
@@ -162,7 +192,15 @@ test("pointer gestures end with any key or page switch; arrows edit effort, not 
   const supervisor = nodeColumn(lines[1], "○ Supervisor");
   picker.handleMouse(mouse("press", nodeColumn(lines[1], "○ Lead") + 1, 1));
   picker.handleMouse(mouse("drag", supervisor + 1, 1));
-  assert.match(picker.render(76).map(stripTerminalSequences)[2], /preview · Supervisor/);
+  const previewRow = picker.render(76)[2];
+  assert.match(stripTerminalSequences(previewRow), /preview · Supervisor/);
+  assert(previewRow.includes("\u001b[2m Eagerness"), "dragging onto Supervisor dims Eagerness");
+  picker.handleMouse(mouse("drag", nodeColumn(lines[1], "○ Lead") + 1, 1));
+  assert(
+    !picker.render(76)[2].includes("\u001b[2m Eagerness"),
+    "dragging back onto Lead restores active Eagerness styling",
+  );
+  picker.handleMouse(mouse("drag", supervisor + 1, 1));
   picker.handleInput("\u001b[B"); // down: any key cancels the drag and its preview
   assert.doesNotMatch(picker.render(76).map(stripTerminalSequences)[2], /preview/);
   picker.handleMouse(mouse("release", supervisor + 1, 1));

@@ -162,8 +162,8 @@ test("only agent_spawn carries the delegation guideline, as static text", async 
     }
   assert.equal(
     lines.size,
-    10,
-    "each autonomous mode × eagerness is distinct; Manual ignores eagerness",
+    8,
+    "Co-worker and Lead vary across eagerness; Manual and Supervisor ignore eagerness",
   );
 });
 

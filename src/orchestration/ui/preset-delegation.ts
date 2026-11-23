@@ -144,19 +144,20 @@ export class PresetDelegation {
       used = usesEagerness(current.mode);
     const box = `‹ ${current.eagerness} ›`,
       left = ` Eagerness  ${box}`;
-    const shown = this.previewMode ?? current.mode;
+    const shown = this.previewMode ?? current.mode,
+      shownUsed = usesEagerness(shown);
     const note =
       this.previewMode && this.previewMode !== current.mode
         ? `preview · ${modeLabels[this.previewMode]}`
         : used
           ? ""
-          : "not used in Manual";
+          : `not used in ${modeLabels[current.mode]}`;
     const painted = twoSides(
-      used ? tone(left) : theme.fg("dim", left),
+      shownUsed ? tone(left) : theme.fg("dim", left),
       theme.fg("dim", note),
       inner,
     );
-    if (used) {
+    if (used && !this.dragging) {
       const at = 1 + visibleWidth(" Eagerness  ");
       page.paint.steps.set(
         eagerY,

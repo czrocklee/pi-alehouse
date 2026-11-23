@@ -15,12 +15,14 @@ import {
 import { DEFAULT_OWNER_LIMITS, OwnerController } from "./core/owner-controller.ts";
 import {
   defaultDelegation,
+  delegationCommandNotice,
   delegationGuideline,
   delegationLabel,
   delegationStatus,
   isDelegationSetting,
   parseDelegation,
   restoreDelegation,
+  usesEagerness,
   type DelegationSetting,
 } from "./delegation.ts";
 import { OrchestrationError } from "./core/ports.ts";
@@ -684,10 +686,14 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
       try {
         requireRouter();
         if (!args.trim())
-          notice = JSON.stringify({ ...delegation, guideline: delegationGuideline(delegation) });
+          notice = JSON.stringify({
+            ...delegation,
+            eagerness_active: usesEagerness(delegation.mode),
+            guideline: delegationGuideline(delegation),
+          });
         else {
           const changed = publishDelegation(parseDelegation(args, delegation), ctx);
-          notice = `Delegation: ${delegationLabel(delegation)}${changed ? "" : " (unchanged)"}`;
+          notice = delegationCommandNotice(args, delegation, changed);
         }
       } catch (error) {
         showPresetError(error, ctx);

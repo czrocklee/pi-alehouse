@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   autonomousWebText,
   defaultDelegation,
+  delegationCommandNotice,
   delegationGuideline,
   delegationLabel,
   delegationModes,
@@ -29,7 +30,7 @@ const preset = (name, effort_overrides = {}) => ({
 });
 const off = { name: "off", version: "off-v1", digest: "f" };
 
-test("each autonomous guideline is one division sentence, one eagerness sentence and the web sentence; Manual stands alone", () => {
+test("Co-worker and Lead combine division, eagerness and web routing; Manual and Supervisor ignore eagerness", () => {
   for (const mode of delegationModes)
     for (const eagerness of eagernessLevels) {
       const line = delegationGuideline({ mode, eagerness });
@@ -37,10 +38,23 @@ test("each autonomous guideline is one division sentence, one eagerness sentence
         assert.equal(
           line,
           delegationGuideline({ mode, eagerness: "balanced" }),
-          "Manual ignores eagerness",
+          `${mode} ignores eagerness`,
         );
-        assert.match(line, /only when the user asks/);
-        assert.doesNotMatch(line, /web|scout/i, "Manual keeps the parent's web tools");
+        if (mode === "manual") {
+          assert.match(line, /only when the user asks/);
+          assert.doesNotMatch(line, /web|scout/i, "Manual keeps the parent's web tools");
+        } else {
+          assert.equal(mode, "supervisor");
+          assert(line.endsWith(` ${autonomousWebText}`), `${mode}/${eagerness}`);
+          assert.match(
+            line,
+            /delegate diagnosis, design, implementation, verification and review rather than doing them yourself/,
+          );
+          assert.match(line, /When scope is unclear, delegate discovery first/);
+          assert.match(line, /run independent tasks in parallel/);
+          assert.match(line, /answer Agents' questions, close gaps with follow-up tasks/);
+          assert.doesNotMatch(line, /\bdecisions\b|\bframing\b|\bintegration\b/);
+        }
         continue;
       }
       // Autonomous modes hide the parent's web tools, whatever the eagerness.
@@ -51,10 +65,14 @@ test("each autonomous guideline is one division sentence, one eagerness sentence
         "web routing overrides every eagerness threshold",
       );
       assert.match(autonomousWebText, /do not fetch pages through Bash/);
-      // The same eagerness sentence ends every mode; the same mode sentence starts every eagerness.
+      // The same eagerness sentence ends both hybrid modes.
       const tail = delegationGuideline({ mode: "co-worker", eagerness }).replace(/^[^.]+\. /, "");
       assert(line.endsWith(tail), `${mode}/${eagerness}`);
     }
+  assert.deepEqual(
+    delegationModes.filter((mode) => usesEagerness(mode)),
+    ["co-worker", "lead"],
+  );
   assert.deepEqual(defaultDelegation, { mode: "co-worker", eagerness: "balanced" });
 });
 
@@ -85,6 +103,11 @@ test("status is versionless `mode/preset`, adds eagerness only off its default, 
     delegationLabel({ mode: "manual", eagerness: "eager" }),
     "manual",
     "eagerness is meaningless in Manual",
+  );
+  assert.equal(
+    delegationLabel({ mode: "supervisor", eagerness: "reserved" }),
+    "supervisor",
+    "eagerness is not used in Supervisor",
   );
 });
 
@@ -128,6 +151,18 @@ test("command arguments take a mode, an eagerness, or one of each, in any order"
   for (const bad of ["", "boss", "lead manual", "eager reserved", "lead eager extra"]) {
     assert.throws(() => parseDelegation(bad, defaultDelegation), /INVALID_DELEGATION/, bad);
   }
+  assert.equal(
+    delegationCommandNotice("eager", { mode: "supervisor", eagerness: "eager" }, true),
+    "Delegation: supervisor (eager saved for Co-worker/Lead)",
+  );
+  assert.equal(
+    delegationCommandNotice("eager", { mode: "manual", eagerness: "eager" }, false),
+    "Delegation: manual (unchanged; eager saved for Co-worker/Lead)",
+  );
+  assert.equal(
+    delegationCommandNotice("supervisor", { mode: "supervisor", eagerness: "eager" }, true),
+    "Delegation: supervisor",
+  );
 });
 
 test("the preset file may set the fresh-session default mode and eagerness; invalid values fail the file", async (t) => {

@@ -8,7 +8,7 @@ import {
   type PresetSnapshot,
   type Strength,
 } from "../routing.ts";
-import type { DelegationMode } from "../delegation.ts";
+import { usesEagerness, type DelegationMode } from "../delegation.ts";
 import type { PresetPickerOptions } from "./preset-picker.ts";
 import type { PresetDelegation } from "./preset-delegation.ts";
 import { popoverChromeLayout } from "../../shared/popover-chrome.mjs";
@@ -658,6 +658,11 @@ class PresetListPage extends PresetPage {
     const dim = (text: string) => this.options.theme.fg("dim", text);
     if (!this.options.delegation) return [];
     const mode = this.hint("mode", "←→");
+    if (!usesEagerness(this.options.delegation.current().mode))
+      return [
+        [{ text: dim(" · ") }, { text: mode.text }],
+        [{ text: dim(" · ") }, { text: this.key("←→").text }],
+      ];
     return [
       [
         { text: dim(" · ") },
@@ -733,12 +738,12 @@ class PresetListPage extends PresetPage {
       ];
     }
     if (this.options.delegation) {
+      const eager = usesEagerness(this.options.delegation.current().mode);
       if (inner >= 70)
         return [
           { text: dim(" ") },
           legend("mode", "←→"),
-          { text: dim(" · ") },
-          legend("eagerness", "⇧←→"),
+          ...(eager ? [{ text: dim(" · ") }, legend("eagerness", "⇧←→")] : []),
           { text: dim(" · ") },
           key("↑↓"),
           { text: dim(" preset") },
@@ -752,8 +757,7 @@ class PresetListPage extends PresetPage {
         return [
           { text: dim(" ") },
           legend("mode", "←→"),
-          { text: dim(" · ") },
-          legend("eager", "⇧←→"),
+          ...(eager ? [{ text: dim(" · ") }, legend("eager", "⇧←→")] : []),
           { text: dim(" · ") },
           key("↑↓"),
           ...(effortPart ? [{ text: dim(" · ") }, effortPart] : []),
@@ -767,8 +771,7 @@ class PresetListPage extends PresetPage {
           ? [
               { text: dim(" ") },
               key("←→"),
-              { text: dim(" ") },
-              key("⇧←→"),
+              ...(eager ? [{ text: dim(" ") }, key("⇧←→")] : []),
               { text: dim(" ") },
               key("↑↓"),
               { text: dim(" ") },
@@ -779,8 +782,7 @@ class PresetListPage extends PresetPage {
           : [
               { text: dim(" ") },
               key("←→"),
-              { text: dim(" ") },
-              key("⇧←→"),
+              ...(eager ? [{ text: dim(" ") }, key("⇧←→")] : []),
               { text: dim(" ") },
               key("↑↓"),
               { text: dim(" ") },

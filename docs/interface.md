@@ -169,10 +169,10 @@ question or a continuation; have the parent use
 ## Delegation panel
 
 Open with `Alt+S`, bare `/alehouse-preset` or the footer's delegation control.
-Use `←` / `→` to change mode and `Shift+←` / `Shift+→` for eagerness. In
-fullscreen, click a mode or drag the slider and release to apply; eagerness has
-clickable arrows. Mode changes apply without selecting a preset. See
-[what the modes do](routing.md#delegation-mode).
+Use `←` / `→` to change mode, and `Shift+←` / `Shift+→` for eagerness in
+Co-worker and Lead. In fullscreen, click a mode or drag the slider and release
+to apply; eagerness has clickable arrows when active. Mode changes apply
+without selecting a preset. See [what the modes do](routing.md#delegation-mode).
 
 In **Model preset**, `↑` / `↓` and paging move the highlight. `Enter` or a click
 on a preset applies it; `Esc` cancels the list selection, not applied mode or
