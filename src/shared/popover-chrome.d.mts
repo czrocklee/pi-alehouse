@@ -1,3 +1,5 @@
+import type { FrameEdges } from "./popover-frame.mjs";
+
 export type BorderLabelPlacement = "border" | "inside" | "plain";
 
 /** Theme roles the shared chrome paints with. `bold` is required. */
@@ -44,7 +46,7 @@ export function popoverInlayWidth(
   closable?: boolean,
 ): number;
 
-/** Exact legacy inlay renderer, with terminal metrics injected. */
+/** Inlaid edge with legacy geometry and injected terminal metrics. */
 export function popoverInlay(
   theme: ChromeTheme,
   width: number,
@@ -54,6 +56,7 @@ export function popoverInlay(
   closable?: boolean,
   closeHovered?: boolean,
   flush?: InlayFlush,
+  edges?: FrameEdges,
 ): string;
 
 /** Three-row inset band used when the label is off the border. */
@@ -63,7 +66,7 @@ export function popoverInsetLabelRows(
   label: string,
   kind: "top" | "bottom",
   metrics: ChromeMetrics,
-  options?: { closable?: boolean; closeHovered?: boolean },
+  options?: { closable?: boolean; closeHovered?: boolean; edges?: FrameEdges },
 ): [string, string, string];
 
 /**
@@ -77,7 +80,7 @@ export function popoverLabelRows(
   styledLabel: string,
   kind: "top" | "bottom",
   metrics: ChromeMetrics,
-  options?: { closable?: boolean; closeHovered?: boolean; flush?: InlayFlush },
+  options?: { closable?: boolean; closeHovered?: boolean; flush?: InlayFlush; edges?: FrameEdges },
 ): string[];
 
 /** Title rows: legacy title primitive (one row) or shared inset band. */
@@ -88,6 +91,7 @@ export function popoverTitleRows(
   metrics: ChromeMetrics,
   closable?: boolean,
   hovered?: boolean,
+  edges?: FrameEdges,
 ): string[];
 
 /** Shared close hit with the row for the current placement. */

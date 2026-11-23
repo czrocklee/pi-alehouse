@@ -9,6 +9,7 @@
 import {
   POPOVER,
   POPOVER_CLOSE_COLUMNS,
+  frameGlyphs,
   popoverCloseHit,
   popoverCloseTail,
   popoverRule,
@@ -25,6 +26,8 @@ const REGISTRY_KEY = Symbol.for("pi-alehouse:border-labels:v1");
 /** @typedef {{ top: ChromeBand, bottom: ChromeBand, rows: number, bodyY: number, footerFromBottom: number }} ChromeLayout */
 /** @typedef {{ enabled: boolean, listeners: Set<() => void> }} BorderLabelState */
 /** @typedef {{ start?: boolean, end?: boolean }} InlayFlush */
+/** @typedef {import("./popover-frame.mjs").FrameEdges} FrameEdges */
+/** @typedef {{ closable?: boolean, closeHovered?: boolean, edges?: FrameEdges }} InsetOptions */
 
 /** @returns {BorderLabelState} */
 function borderLabelState() {
@@ -145,7 +148,7 @@ export function popoverInlayWidth(width, kind, closable = false) {
  * begins (`flush.start`) or ends (`flush.end`) in rule of its own has that
  * pad column drawn as rule too, so the edge meets the corner unbroken while
  * every inlay column stays put. Metrics are injected so this leaf has no SDK
- * dependency; the renderer itself is the exact legacy orchestration inlay.
+ * dependency; the renderer retains the legacy orchestration inlay geometry.
  * Below six columns the edge degrades to a bare `popoverRule` instead of
  * overflowing the corner chrome.
  * @param {ChromeTheme} theme
@@ -156,6 +159,7 @@ export function popoverInlayWidth(width, kind, closable = false) {
  * @param {boolean} [closable]
  * @param {boolean} [closeHovered]
  * @param {InlayFlush} [flush]
+ * @param {FrameEdges} [edges]
  * @returns {string}
  */
 export function popoverInlay(
@@ -167,37 +171,35 @@ export function popoverInlay(
   closable = false,
   closeHovered = false,
   flush = {},
+  edges,
 ) {
   const columns = normalizeWidth(width);
   // Below six columns even the corner/rule chrome cannot fit around a label;
   // degrade to the bare edge instead of the legacy six-column overflow.
-  if (columns < 6) return popoverRule(theme, columns, kind);
+  if (columns < 6) return popoverRule(theme, columns, kind, edges);
+  const { top, bottom, tl, tr, bl, br } = frameGlyphs(edges);
+  const rule = kind === "top" ? top : bottom;
   const chrome = popoverInlayWidth(columns, kind, closable);
   const text = clipped(metrics, typeof inlay === "string" ? inlay : "", chrome);
   const remaining = Math.max(0, chrome - measuredWidth(metrics, text));
   const options = flush ?? {};
   const left =
-    outer(theme, (kind === "top" ? POPOVER.tl : POPOVER.bl) + POPOVER.h) +
-    (options.start ? outer(theme, POPOVER.h) : " ") +
+    outer(theme, (kind === "top" ? tl : bl) + rule) +
+    (options.start ? outer(theme, rule) : " ") +
     text;
   if (inlayClosable(columns, kind, closable)) {
     // The close tail already starts with a space. Separate a short title from
     // the rule, but don't add another pad when the inlay fills its whole width.
     const fill =
       remaining >= 2
-        ? " " + outer(theme, POPOVER.h.repeat(remaining - 1))
-        : outer(theme, POPOVER.h.repeat(remaining));
-    return left + fill + popoverCloseTail(theme, closeHovered);
+        ? " " + outer(theme, rule.repeat(remaining - 1))
+        : outer(theme, rule.repeat(remaining));
+    return left + fill + popoverCloseTail(theme, closeHovered, edges);
   }
   return (
     left +
     (options.end ? "" : " ") +
-    outer(
-      theme,
-      POPOVER.h.repeat(remaining + (options.end ? 1 : 0)) +
-        POPOVER.h +
-        (kind === "top" ? POPOVER.tr : POPOVER.br),
-    )
+    outer(theme, rule.repeat(remaining + (options.end ? 1 : 0)) + rule + (kind === "top" ? tr : br))
   );
 }
 
@@ -214,14 +216,15 @@ export function popoverInlay(
  * @param {string} label
  * @param {"top" | "bottom"} kind
  * @param {ChromeMetrics} metrics
- * @param {{ closable?: boolean, closeHovered?: boolean }} [options]
+ * @param {InsetOptions} [options]
  * @returns {[string, string, string]}
  */
 export function popoverInsetLabelRows(theme, width, label, kind, metrics, options = {}) {
   const columns = normalizeWidth(width);
   const top = kind !== "bottom";
-  const edge = popoverRule(theme, columns, top ? "top" : "bottom");
-  const divider = popoverRule(theme, columns, "divider");
+  const edges = options?.edges;
+  const edge = popoverRule(theme, columns, top ? "top" : "bottom", edges);
+  const divider = popoverRule(theme, columns, "divider", edges);
   const body = insetBodyRow(theme, columns, label, top, metrics, options ?? {});
   /** @type {[string, string, string]} */
   const rows = top ? [edge, body, divider] : [divider, body, edge];
@@ -234,15 +237,16 @@ export function popoverInsetLabelRows(theme, width, label, kind, metrics, option
  * @param {string} label
  * @param {boolean} top
  * @param {ChromeMetrics} metrics
- * @param {{ closable?: boolean, closeHovered?: boolean }} options
+ * @param {InsetOptions} options
  * @returns {string}
  */
 function insetBodyRow(theme, width, label, top, metrics, options) {
   if (width <= 0) return "";
-  const side = popoverSide(theme);
-  if (width === 1) return side;
-  if (width === 2) return side + side;
-  if (width < 7) return side + " ".repeat(width - 2) + side;
+  const { edges } = options;
+  const left = popoverSide(theme, edges);
+  if (width === 1) return left;
+  const right = edges?.left === edges?.right ? left : popoverSide(theme, edges, "right");
+  if (width < 7) return left + " ".repeat(width - 2) + right;
   const closable = top && options.closable === true && !!popoverCloseHit(width);
   const capacity = width - (closable ? 8 : 6);
   const text = typeof label === "string" ? label : "";
@@ -257,9 +261,9 @@ function insetBodyRow(theme, width, label, top, metrics, options) {
     const hovered = options.closeHovered === true;
     const glyph = hovered ? theme.bold(POPOVER.close) : POPOVER.close;
     const close = theme.fg(hovered ? "accent" : "muted", glyph);
-    return side + "  " + clippedText + pad + " " + close + "  " + side;
+    return left + "  " + clippedText + pad + " " + close + "  " + right;
   }
-  return side + "  " + clippedText + pad + "  " + side;
+  return left + "  " + clippedText + pad + "  " + right;
 }
 
 /**
@@ -271,14 +275,18 @@ function insetBodyRow(theme, width, label, top, metrics, options) {
  * @param {string} styledLabel
  * @param {"top" | "bottom"} kind
  * @param {ChromeMetrics} metrics
- * @param {{ closable?: boolean, closeHovered?: boolean, flush?: InlayFlush }} [options]
+ * @param {InsetOptions & { flush?: InlayFlush }} [options]
  * @returns {string[]}
  */
 export function popoverLabelRows(theme, width, styledLabel, kind, metrics, options = {}) {
-  const { closable = false, closeHovered = false, flush = {} } = options ?? {};
+  const { closable = false, closeHovered = false, flush = {}, edges } = options ?? {};
   return borderLabelsEnabled()
-    ? [popoverInlay(theme, width, styledLabel, kind, metrics, closable, closeHovered, flush)]
-    : popoverInsetLabelRows(theme, width, styledLabel, kind, metrics, { closable, closeHovered });
+    ? [popoverInlay(theme, width, styledLabel, kind, metrics, closable, closeHovered, flush, edges)]
+    : popoverInsetLabelRows(theme, width, styledLabel, kind, metrics, {
+        closable,
+        closeHovered,
+        edges,
+      });
 }
 
 /**
@@ -291,15 +299,25 @@ export function popoverLabelRows(theme, width, styledLabel, kind, metrics, optio
  * @param {ChromeMetrics} metrics
  * @param {boolean} [closable]
  * @param {boolean} [hovered]
+ * @param {FrameEdges} [edges]
  * @returns {string[]}
  */
-export function popoverTitleRows(theme, width, title, metrics, closable = false, hovered = false) {
+export function popoverTitleRows(
+  theme,
+  width,
+  title,
+  metrics,
+  closable = false,
+  hovered = false,
+  edges,
+) {
   const columns = normalizeWidth(width);
   return borderLabelsEnabled()
-    ? [popoverTitleRow(theme, columns, title, metrics, closable, hovered)]
+    ? [popoverTitleRow(theme, columns, title, metrics, closable, hovered, edges)]
     : popoverInsetLabelRows(theme, columns, theme.fg("accent", theme.bold(title)), "top", metrics, {
         closable,
         closeHovered: hovered,
+        edges,
       });
 }
 

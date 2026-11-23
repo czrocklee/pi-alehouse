@@ -87,10 +87,10 @@ not require live provider calls.
 
 - `npm run build` creates a matched runtime using the installed development inputs.
 - `npm run lint` needs no build; it permits no warnings and does not autofix.
-  Its targets are `src/orchestration`, `src/shared`, and `test/unit`, `test/sdk`,
+  Its targets are `src/orchestration`, `src/shared`, the cross-panel adapter
+  `src/extensions/lib/centered-panel.ts`, and `test/unit`, `test/sdk`,
   `test/packaging`, `test/host`, `test/tui` and `test/support`. It does not
-  cover all source or tests: notably `src/authority`, `src/extensions`,
-  `test/extensions` and `test/integration` are outside that command. See
+  cover the other extensions, `src/authority`, `test/extensions` or `test/integration`. See
   `package.json` and `eslint.config.mjs` for targets and file rules.
 - After a fresh build, `npm run typecheck` checks orchestration, shared helpers,
   extensions and the generated authority. `npm run typecheck:extensions`

@@ -20,30 +20,60 @@ export const POPOVER_CLOSE_COLUMNS = 5;
  * hit. Titles and inlays share the bound so hit tests need not know which. */
 const MIN_CLOSABLE_WIDTH = 9;
 
+/** @typedef {Readonly<{ top: boolean, bottom: boolean, left: boolean, right: boolean }>} FrameEdges */
 /** @typedef {{ fg: (color: "borderAccent" | "borderMuted", text: string) => string }} FrameTheme */
 /** @typedef {{ fg: (color: "borderAccent" | "muted" | "accent", text: string) => string, bold?: (text: string) => string }} CloseTheme */
+
+/** @param {boolean | undefined} emphasized */
+const sideGlyph = (emphasized) => (emphasized ? "║" : POPOVER.v);
+
+/** Select only the glyphs owned by the frame. Corners match both adjacent
+ * edges; dividers join the sides but keep their own horizontal rule thin.
+ * @param {FrameEdges} [edges]
+ */
+export function frameGlyphs(edges) {
+  const { top, bottom, left, right } = edges ?? {};
+  return {
+    tl: top ? (left ? "╔" : "╒") : left ? "╓" : POPOVER.tl,
+    tr: top ? (right ? "╗" : "╕") : right ? "╖" : POPOVER.tr,
+    bl: bottom ? (left ? "╚" : "╘") : left ? "╙" : POPOVER.bl,
+    br: bottom ? (right ? "╝" : "╛") : right ? "╜" : POPOVER.br,
+    top: top ? "═" : POPOVER.h,
+    bottom: bottom ? "═" : POPOVER.h,
+    left: sideGlyph(left),
+    right: sideGlyph(right),
+    ml: left ? "╟" : POPOVER.ml,
+    mr: right ? "╢" : POPOVER.mr,
+  };
+}
 
 /**
  * @param {FrameTheme} theme
  * @param {number} width
  * @param {"top" | "bottom" | "divider"} kind
+ * @param {FrameEdges} [edges]
  */
-export function popoverRule(theme, width, kind) {
+export function popoverRule(theme, width, kind, edges) {
   if (width <= 0) return "";
-  /** @type {[string, string, "borderAccent" | "borderMuted"]} */
-  const [left, right, color] =
+  const { tl, tr, bl, br, top, bottom, ml, mr } = frameGlyphs(edges);
+  /** @type {[string, string, string, "borderAccent" | "borderMuted"]} */
+  const [left, rule, right, color] =
     kind === "top"
-      ? [POPOVER.tl, POPOVER.tr, "borderAccent"]
+      ? [tl, top, tr, "borderAccent"]
       : kind === "bottom"
-        ? [POPOVER.bl, POPOVER.br, "borderAccent"]
-        : [POPOVER.ml, POPOVER.mr, "borderMuted"];
-  if (width === 1) return theme.fg(color, POPOVER.h);
-  return theme.fg(color, left + POPOVER.h.repeat(Math.max(0, width - 2)) + right);
+        ? [bl, bottom, br, "borderAccent"]
+        : [ml, POPOVER.h, mr, "borderMuted"];
+  if (width === 1) return theme.fg(color, rule);
+  return theme.fg(color, left + rule.repeat(Math.max(0, width - 2)) + right);
 }
 
-/** @param {FrameTheme} theme */
-export function popoverSide(theme) {
-  return theme.fg("borderMuted", POPOVER.v);
+/**
+ * @param {FrameTheme} theme
+ * @param {FrameEdges} [edges]
+ * @param {"left" | "right"} [side]
+ */
+export function popoverSide(theme, edges, side = "left") {
+  return theme.fg("borderMuted", sideGlyph(edges?.[side]));
 }
 
 /**
@@ -62,14 +92,14 @@ export function popoverCloseHit(width) {
 /** The top edge's closing tail, ` ✕ ─╮`, exactly POPOVER_CLOSE_COLUMNS wide.
  * Hover changes only the glyph's emphasis, never the border or hit geometry.
  * @param {CloseTheme} theme
- * @param {boolean} [hovered] */
-export function popoverCloseTail(theme, hovered = false) {
+ * @param {boolean} [hovered]
+ * @param {FrameEdges} [edges]
+ */
+export function popoverCloseTail(theme, hovered = false, edges) {
+  const { top, tr } = frameGlyphs(edges);
   const glyph = hovered ? (theme.bold?.(POPOVER.close) ?? POPOVER.close) : POPOVER.close;
   return (
-    " " +
-    theme.fg(hovered ? "accent" : "muted", glyph) +
-    " " +
-    theme.fg("borderAccent", POPOVER.h + POPOVER.tr)
+    " " + theme.fg(hovered ? "accent" : "muted", glyph) + " " + theme.fg("borderAccent", top + tr)
   );
 }
 
@@ -83,6 +113,7 @@ export function popoverCloseTail(theme, hovered = false) {
  * @param {{clip: (text: string, columns: number) => string, width: (text: string) => number}} metrics
  * @param {boolean} [closable]
  * @param {boolean} [closeHovered]
+ * @param {FrameEdges} [edges]
  */
 export function popoverTitleRow(
   theme,
@@ -91,21 +122,23 @@ export function popoverTitleRow(
   metrics,
   closable = false,
   closeHovered = false,
+  edges,
 ) {
+  if (width <= 0) return "";
+  const { tl, tr, top } = frameGlyphs(edges);
   const close = closable && !!popoverCloseHit(width);
   const tailWidth = close ? POPOVER_CLOSE_COLUMNS : 1;
   if (width < tailWidth + 3) {
-    if (width <= 0) return "";
-    if (width === 1) return theme.fg("borderAccent", POPOVER.h);
-    return theme.fg("borderAccent", POPOVER.tl + POPOVER.h.repeat(width - 2) + POPOVER.tr);
+    if (width === 1) return theme.fg("borderAccent", top);
+    return theme.fg("borderAccent", tl + top.repeat(width - 2) + tr);
   }
   const room = width - 1 - tailWidth;
   const label = metrics.clip(` ${title} `, Math.max(1, room - 1));
   return (
-    theme.fg("borderAccent", POPOVER.tl + POPOVER.h) +
+    theme.fg("borderAccent", tl + top) +
     theme.fg("accent", theme.bold(label)) +
-    theme.fg("borderAccent", POPOVER.h.repeat(Math.max(0, room - metrics.width(label) - 1))) +
-    (close ? popoverCloseTail(theme, closeHovered) : theme.fg("borderAccent", POPOVER.tr))
+    theme.fg("borderAccent", top.repeat(Math.max(0, room - metrics.width(label) - 1))) +
+    (close ? popoverCloseTail(theme, closeHovered, edges) : theme.fg("borderAccent", tr))
   );
 }
 

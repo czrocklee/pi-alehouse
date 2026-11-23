@@ -81,6 +81,17 @@ for (const [name, code, rule] of [
     );
   });
 
+test("the centered-panel adapter is in the pre-build typed lint gate", async () => {
+  const path = "src/extensions/lib/centered-panel.ts";
+  const pkg = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
+  assert.ok(pkg.scripts.lint.split(" ").includes(path));
+  const [result] = await probe("export function f() { Promise.resolve(1); }", join(repo, path));
+  assert.equal(result.fatalErrorCount, 0);
+  assert.ok(
+    result.messages.some(({ ruleId }) => ruleId === "@typescript-eslint/no-floating-promises"),
+  );
+});
+
 test("typed lint accepts observed Promises and synchronous implementations of async ports", async () => {
   const [result] = await probe(`
 export async function port() { return 1; }

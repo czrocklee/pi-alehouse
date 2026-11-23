@@ -11,19 +11,23 @@ const unused = {
   ignoreRestSiblings: true,
 };
 
+// The Pi panel adapter is also part of orchestration's TS project. Other
+// extensions use the separate post-build extension typecheck.
+const typedSources = ["src/orchestration/**/*.ts", "src/extensions/lib/centered-panel.ts"];
+
 export default defineConfig(
   { basePath: import.meta.dirname, ignores: ["dist/**", "generated/**", "node_modules/**"] },
   { linterOptions: { reportUnusedDisableDirectives: "error" } },
   {
     basePath: import.meta.dirname,
-    files: ["test/**/*.mjs", "src/shared/**/*.mjs", "src/orchestration/**/*.ts"],
+    files: ["test/**/*.mjs", "src/shared/**/*.mjs", ...typedSources],
     extends: [js.configs.recommended],
     languageOptions: { globals: globals.nodeBuiltin },
     rules: { "no-unused-vars": ["error", unused] },
   },
   {
     basePath: import.meta.dirname,
-    files: ["src/orchestration/**/*.ts"],
+    files: typedSources,
     extends: [tseslint.configs.recommendedTypeChecked],
     languageOptions: {
       parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },

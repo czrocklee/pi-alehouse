@@ -7,6 +7,7 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
+import { centeredPanelOptions } from "../../extensions/lib/centered-panel.ts";
 import { popoverStackRoom } from "../../shared/popover-stack.mjs";
 import {
   FOOTER_INDICATOR_CLICK_EVENT,
@@ -25,7 +26,13 @@ import type {
   PresetSnapshot,
   Strength,
 } from "../routing.ts";
-import { DetailPane, type DetailDraft, type DetailInput } from "./agent-detail.ts";
+import {
+  DetailPane,
+  FLOATING_PANE_HEIGHT_PCT,
+  FLOATING_PANE_MIN_WIDTH,
+  type DetailDraft,
+  type DetailInput,
+} from "./agent-detail.ts";
 import { AgentWidget, type AgentDetail } from "./agent-widget.ts";
 import { HIDE_TRANSIENT_OVERLAYS_EVENT } from "./overlay-request.ts";
 import {
@@ -530,9 +537,10 @@ export class PanelCoordinator {
     this.closePane = request.close;
     const mounts = createTranscriptMounts<TranscriptContent>();
     let currentAgents = new Map<string, AgentDetail>();
-    // Read columns from this mount's exact TUI, captured by the factory below.
-    // Pi resolves the overlay options at mount, not on each render.
+    // Keep live getters on the options object: Pi calls the options factory
+    // only at mount but reads this object's dimensions on every paint.
     let paneColumns: (() => number) | undefined;
+    let mountedPane: DetailPane | undefined;
     try {
       const floating = this.floating();
       let markdownTheme = getMarkdownTheme();
@@ -753,6 +761,7 @@ export class PanelCoordinator {
                 }
               : {}),
             frame: floating,
+            centeredResize: floating,
             // Structural hosts may pass no keybinding registry at all; the
             // pane's own T binding must keep working without one.
             expandToolsKey: (data) =>
@@ -760,18 +769,20 @@ export class PanelCoordinator {
               typeof keybindings.matches === "function" &&
               keybindings.matches(data, "app.tools.expand"),
           });
-          this.detailPane = pane;
+          this.detailPane = mountedPane = pane;
           return request.own(pane);
         },
         floating
           ? {
               overlay: true,
-              overlayOptions: () => ({
-                anchor: "center",
-                width: floatingPaneWidth(paneColumns?.()),
-                maxHeight: "84%",
-                minWidth: 40,
-              }),
+              overlayOptions: () =>
+                centeredPanelOptions(() => mountedPane?.resize, {
+                  get width() {
+                    return floatingPaneWidth(paneColumns?.());
+                  },
+                  minWidth: FLOATING_PANE_MIN_WIDTH,
+                  maxHeight: `${FLOATING_PANE_HEIGHT_PCT}%`,
+                }),
               onHandle: (handle) => {
                 const pane = this.detailPane;
                 if (this.closePane !== request.close || !pane?.isOpen()) return;

@@ -151,6 +151,7 @@ export default function statsExtension(pi: ExtensionAPI): void {
     const host = tui;
     const view = new StatsView({
       tui: host,
+      centeredResize: true,
       get theme() {
         return context.ui.theme;
       },
@@ -160,17 +161,9 @@ export default function statsExtension(pi: ExtensionAPI): void {
       },
     });
     try {
-      // A separate, readable details surface. It is deliberately NOT another
-      // member of the small bottom-right popover column. Pi reads the width on
-      // every layout, so the box follows its tables and terminal resizes.
-      const handle = host.showOverlay(view, {
-        anchor: "center",
-        maxHeight: "75%",
-        minWidth: 40,
-        get width() {
-          return view.preferredWidth(Math.floor(host.terminal.columns * 0.85));
-        },
-      });
+      // A separate, centered details surface, not a member of the small
+      // bottom-right popover column. Pi reads its geometry on every layout.
+      const handle = host.showOverlay(view, view.overlayOptions());
       open = { view, handle };
       open.unwatchBackdrop = view.attachBackdrop(handle);
       host.requestRender();

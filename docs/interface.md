@@ -67,6 +67,33 @@ panel titles, tabs, close controls and action hints inside the frame. This
 applies to all Alehouse panels, not native Pi or third-party panels. The extra
 rows leave less room for content. This is the `ui.borderLabels` preference.
 
+### Resize a centered panel
+
+In fullscreen, **Agents, Stats and the centered model picker** can be resized
+without moving their center. Drag a bare left or right border to change width,
+a top or bottom border to change height, or a corner for both. Moving an edge
+one cell moves the opposite edge one cell too. Start on the frame itself, not
+on a label, button or scroll thumb. While the mouse is held, the grabbed edge
+turns double (both adjacent edges for a corner). Releasing restores the normal
+border; a press and release without movement does not change the size.
+
+- **Keyboard:** Press `F2`: the whole frame turns double and the title shows
+  the resize keys. Use `h`/`l` (or `←`/`→`) for
+  narrower/wider and `k`/`j` (or `↑`/`↓`) for shorter/taller. `z` previews
+  maximize/restore. `Enter` keeps the result; `Esc` or `F2` cancels without
+  closing the panel. Outside resize mode those letters keep their usual meaning.
+- **Mouse:** Click `□` to maximize with a one-cell margin. Click `▣` to restore.
+
+In **Agents**, adjusting only the width leaves an automatic height free to grow
+as transcript output arrives. Adjusting the height explicitly fixes it; changing
+only the height leaves an automatic width responsive to the terminal. **Stats**
+and the **model picker** keep the other dimension at its current size when you
+first resize them. Restoring from maximize returns to the previous sizing mode.
+
+The size belongs to the open panel, not to a saved preference. Reopening
+starts at its normal content size. Docked panels and a model picker opened
+at the pointer do not get these controls.
+
 ### Panel text selection
 
 With supported fullscreen mouse input, drag inside a panel's reading area to

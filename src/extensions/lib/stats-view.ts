@@ -1,12 +1,18 @@
 import { stripVTControlCharacters } from "node:util";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { OverlayHandle, TuiMouseEvent } from "@earendil-works/pi-tui";
+import type {
+  OverlayHandle,
+  OverlayOptions,
+  TuiMouseEvent,
+  TuiMouseEventResult,
+} from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
-  POPOVER,
+  frameGlyphs,
   POPOVER_CLOSE_COLUMNS,
   popoverRule,
   popoverSide,
+  type FrameEdges,
 } from "../../shared/popover-frame.mjs";
 import {
   borderLabelsEnabled,
@@ -19,6 +25,11 @@ import {
   popoverTitleRows,
 } from "../../shared/popover-chrome.mjs";
 import { createBackdropDismiss } from "../../shared/centered-dismiss.mjs";
+import {
+  centeredPanelOptions,
+  centeredPanelTitleWidth,
+  createCenteredPanel,
+} from "./centered-panel.ts";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import { shortcutHint } from "../../shared/shortcut-hint.mjs";
@@ -40,13 +51,15 @@ export interface StatsDashboardSnapshot extends SessionStatsSnapshot {
 type StatsTheme = Pick<Theme, "fg" | "bold" | "bg"> & Partial<Pick<Theme, "underline">>;
 
 type StatsTui = {
-  readonly terminal: { readonly rows: number };
+  readonly terminal: { readonly rows: number; readonly columns?: number };
   requestRender(): void;
 };
 
 export interface StatsViewOptions {
   tui: StatsTui;
   theme: StatsTheme;
+  /** Enabled only by the owner of the centered fullscreen overlay. */
+  centeredResize?: boolean;
   /** Read at paint time. The owner, rather than this component, owns refresh. */
   snapshot: () => StatsDashboardSnapshot;
   close: () => void;
@@ -58,10 +71,9 @@ type ThemeColor = Parameters<Theme["fg"]>[0];
 const TABS = ["Overview", "Models", "Tools"] as const;
 const TITLE = "Stats · main session + managed workers";
 
-/** Top edge, tab row, divider and the bottom edge, which carries the footer.
- * With border labels off, the shared chrome layout adds one inset band per
- * edge, so the frame budget grows by `layout.rows - 2` rows. */
-const CHROME_ROWS = 4;
+/** Tab row and divider, in addition to the shared top and bottom bands. */
+const TAB_ROWS = 2;
+const MIN_WIDTH = 40;
 /** Columns between table cells, and the indent of rows under a section title. */
 const GAP = 2;
 const INDENT = "  ";
@@ -666,6 +678,7 @@ export class StatsView {
   private disposed = false;
   private readonly backdrop = createBackdropDismiss();
   private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
+  private readonly resize?: ReturnType<typeof createCenteredPanel>;
   /** Body-local text selection. Registers the painted text viewport only; the
    * helper binds the host's own selection gesture, so no mouse path here. */
   private readonly selection: ReturnType<typeof createPopoverTextSelection>;
@@ -693,9 +706,39 @@ export class StatsView {
       requestRender: () => options.tui.requestRender(),
     });
     this.selection = createPopoverTextSelection({ host: options.tui, component: this });
+    if (options.centeredResize) {
+      this.resize = createCenteredPanel({
+        terminal: () => ({
+          columns: options.tui.terminal.columns ?? 0,
+          rows: options.tui.terminal.rows,
+        }),
+        host: options.tui,
+        theme: options.theme,
+        requestRender: () => options.tui.requestRender(),
+        minWidth: MIN_WIDTH,
+        get minHeight() {
+          return popoverChromeLayout({ framed: true }).rows + TAB_ROWS + 1;
+        },
+        changed: () => this.retirePaintedGeometry(),
+      });
+    }
     // A border-label switch is a geometry change: retire painted hit geometry
     // and request a repaint so input cannot act on the retired layout.
-    this.unwatchBorderLabels = onBorderLabelsChange(() => this.retirePaintedGeometry());
+    this.unwatchBorderLabels = onBorderLabelsChange(() => {
+      this.resize?.reset();
+      this.retirePaintedGeometry();
+    });
+  }
+
+  overlayOptions(): OverlayOptions {
+    const view = this;
+    return centeredPanelOptions(() => this.resize, {
+      get width() {
+        return view.preferredWidth(Math.floor((view.options.tui.terminal.columns ?? 0) * 0.85));
+      },
+      minWidth: MIN_WIDTH,
+      maxHeight: "75%",
+    });
   }
 
   /**
@@ -730,7 +773,9 @@ export class StatsView {
     return this.backdrop.focused;
   }
   set focused(value: boolean) {
+    const wasFocused = this.backdrop.focused;
     this.backdrop.focused = value;
+    if (wasFocused && !value) this.resize?.reset();
   }
   attachBackdrop(handle: OverlayHandle): () => void {
     return this.backdrop.attach(this.options.tui, handle, this.options.close);
@@ -738,6 +783,7 @@ export class StatsView {
 
   handleInput(data: string): void {
     if (this.disposed) return;
+    if (this.resize?.input(data)) return;
     if (matchesKey(data, "escape")) return this.finish();
     if (matchesKey(data, "1")) return this.select(0);
     if (matchesKey(data, "2")) return this.select(1);
@@ -757,7 +803,9 @@ export class StatsView {
       return this.scrollBy(this.paintedViewport);
   }
 
-  handleMouse(event: TuiMouseEvent): { handled: boolean } | undefined {
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    const resize = this.resize?.mouse(event);
+    if (resize) return resize;
     // Eligibility is a flag, not a gate: the control still observes the event
     // so it can cancel an in-progress gesture the view would reject.
     const close = this.closeHover.mouse(event, !this.disposed);
@@ -787,8 +835,11 @@ export class StatsView {
     // Budgets and label rows come from the shared chrome layout: with border
     // labels off, the title and footer each move into a three-row inset band.
     const layout = popoverChromeLayout({ framed: true });
-    const chrome = CHROME_ROWS + layout.rows - 2;
-    const budget = Math.floor(rows * 0.75);
+    const exactHeight = this.resize?.height;
+    // A very narrow top degrades to one rule row instead of an inset title.
+    const topRows = exactHeight !== undefined && columns < 4 ? 1 : layout.top.rows;
+    const chrome = topRows + TAB_ROWS + layout.bottom.rows;
+    const budget = exactHeight ?? Math.floor(rows * 0.75);
     this.closeHover.paint(columns, budget > 0 && !!popoverChromeCloseHit(columns));
     this.paintedTabRow = -1;
     this.tabTargets = [];
@@ -796,23 +847,27 @@ export class StatsView {
     if (columns === 0 || budget === 0) {
       this.closeHover.paint(columns, false, 0);
       this.selection.paint(undefined);
+      this.resize?.paint([], columns);
       return [];
     }
-    if (budget < chrome + 1) return this.compact(columns, budget);
+    if (budget < chrome + 1) {
+      this.resize?.paint([], columns);
+      return this.compact(columns, budget, exactHeight !== undefined);
+    }
 
     const snapshot = this.readSnapshot();
     const inner = Math.max(1, columns - 4);
-    // Sized to the longest tab, never a fixed reservation of blank rows, so
-    // the centered box neither jumps between tabs nor pads a short one to 75%.
-    const bodies = ([0, 1, 2] as const).map((tab) => {
+    const body = (tab: Tab): string[] => {
       const { figures, notes } = this.content(snapshot, tab, inner);
       return [...figures, ...this.notes(notes, inner)];
-    });
-    const content = bodies[this.tab];
-    const viewport = Math.max(
-      1,
-      Math.min(budget - chrome, Math.max(...bodies.map((body) => body.length))),
-    );
+    };
+    // An untouched box hugs its longest tab. A user-sized box instead fills
+    // its requested height even when every tab could fit in fewer rows.
+    const bodies = exactHeight === undefined ? ([0, 1, 2] as const).map(body) : undefined;
+    const content = bodies?.[this.tab] ?? body(this.tab);
+    const viewport = bodies
+      ? Math.max(1, Math.min(budget - chrome, Math.max(...bodies.map((lines) => lines.length))))
+      : budget - chrome;
     const maxScroll = Math.max(0, content.length - viewport);
     const offset = Math.min(this.offsets[this.tab], maxScroll);
     this.offsets[this.tab] = offset;
@@ -820,14 +875,23 @@ export class StatsView {
     this.paintedMaxScroll = maxScroll;
     this.closeHover.paint(columns, !!popoverChromeCloseHit(columns), viewport + chrome);
 
-    const lines = this.top(columns);
+    const edges = this.resize?.edges;
+    // Reserve the maximize cells before the shared resize painter composes
+    // them; fitting the title to the close tail alone can leave a cut word.
+    const titleBudget = this.resize ? centeredPanelTitleWidth(columns) : visibleWidth(TITLE);
+    const title =
+      visibleWidth(TITLE) <= titleBudget
+        ? TITLE
+        : truncateToWidth("Stats · main + workers", titleBudget, "…");
+    const lines = this.top(columns, edges, title);
     const tabRow = lines.length;
-    lines.push(this.tabs(columns, snapshot, tabRow));
-    lines.push(popoverRule(this.options.theme, columns, "divider"));
+    lines.push(this.tabs(columns, snapshot, tabRow, edges));
+    lines.push(popoverRule(this.options.theme, columns, "divider", edges));
     for (const line of content.slice(offset, offset + viewport))
-      lines.push(this.row(line, columns));
-    while (lines.length < tabRow + 2 + viewport) lines.push(this.row("", columns));
-    if (borderLabelsEnabled()) lines.push(this.bottom(columns, content.length, offset, viewport));
+      lines.push(this.row(line, columns, edges));
+    while (lines.length < tabRow + TAB_ROWS + viewport) lines.push(this.row("", columns, edges));
+    if (borderLabelsEnabled())
+      lines.push(this.bottom(columns, content.length, offset, viewport, edges));
     else
       lines.push(
         ...popoverInsetLabelRows(
@@ -836,7 +900,7 @@ export class StatsView {
           this.footerLabel(columns, content.length, offset, viewport),
           "bottom",
           this.labelMetrics,
-          {},
+          { edges },
         ),
       );
     // Selectable text is the scroll viewport under the tab row and its
@@ -847,15 +911,19 @@ export class StatsView {
       this.selectionOffset = offset;
       this.selectionVersion++;
     }
+    const fitted = lines.map((line) => this.fit(line, columns));
+    const frame = this.resize?.paint(fitted, columns, visibleWidth(title)) ?? fitted;
     this.selection.paint(
-      popoverTextRect(columns, lines.length, {
-        inset: 2,
-        top: tabRow + 2,
-        bottom: layout.bottom.rows,
-      }),
+      this.resize?.modal
+        ? undefined
+        : popoverTextRect(columns, lines.length, {
+            inset: 2,
+            top: tabRow + TAB_ROWS,
+            bottom: layout.bottom.rows,
+          }),
       this.selectionVersion,
     );
-    return lines.map((line) => this.fit(line, columns));
+    return frame;
   }
 
   /** Pi calls this on theme/data invalidation; refresh ownership remains outside.
@@ -869,7 +937,9 @@ export class StatsView {
   }
 
   dispose(): void {
+    if (this.disposed) return;
     this.disposed = true;
+    this.resize?.reset();
     this.unwatchBorderLabels();
     this.closeHover.dispose();
     this.selection.dispose();
@@ -1027,7 +1097,7 @@ export class StatsView {
     });
   }
 
-  private compact(width: number, budget: number): string[] {
+  private compact(width: number, budget: number, exactHeight: boolean): string[] {
     // No scroll viewport is painted here, so there is no selectable body.
     this.selection.paint(undefined);
     const labels = borderLabelsEnabled();
@@ -1071,37 +1141,50 @@ export class StatsView {
       lines.push(...bottomRows);
       return lines.map((line) => this.fit(line, width));
     }
-    const text = this.options.theme.fg("dim", "Terminal too short for Stats");
-    const lines =
-      budget >= 3
-        ? [
-            popoverRule(this.options.theme, width, "top"),
-            this.row(text, width),
-            popoverRule(this.options.theme, width, "bottom"),
-          ]
+    if (budget < 3) {
+      const text = this.options.theme.fg("dim", "Terminal too short for Stats");
+      return exactHeight && budget === 2
+        ? [this.fit(text, width), this.fit("", width)]
         : [this.fit(text, width)];
+    }
+    const lines = [popoverRule(this.options.theme, width, "top"), message];
+    // Even when the live terminal clamps a user-sized box below the full
+    // layout, keep its bottom edge at the requested height.
+    while (exactHeight && lines.length < budget - 1) lines.push(this.row("", width));
+    lines.push(popoverRule(this.options.theme, width, "bottom"));
     return lines.map((line) => this.fit(line, width));
   }
 
-  private top(width: number): string[] {
+  private top(width: number, edges?: FrameEdges, title = TITLE): string[] {
     if (width < 3)
-      return [this.fit(this.options.theme.fg("borderAccent", POPOVER.h.repeat(width)), width)];
+      return [
+        this.fit(
+          this.options.theme.fg("borderAccent", frameGlyphs(edges).top.repeat(width)),
+          width,
+        ),
+      ];
     const closable = !!popoverChromeCloseHit(width);
     const tailWidth = closable ? POPOVER_CLOSE_COLUMNS : 1;
     const room = width - 2 - tailWidth;
-    if (room < 1) return [popoverRule(this.options.theme, width, "top")];
+    if (room < 1) return [popoverRule(this.options.theme, width, "top", edges)];
     return popoverTitleRows(
       this.options.theme,
       width,
-      TITLE,
+      title,
       this.labelMetrics,
       closable,
       this.closeHover.hovered,
+      edges,
     );
   }
 
   /** Tabs on the left; on the right, what the dock indicator said, and for how long. */
-  private tabs(width: number, snapshot: StatsDashboardSnapshot | undefined, y: number): string {
+  private tabs(
+    width: number,
+    snapshot: StatsDashboardSnapshot | undefined,
+    y: number,
+    edges?: FrameEdges,
+  ): string {
     const theme = this.options.theme;
     const inner = Math.max(0, width - 4);
     const choices = this.tabLabels(inner);
@@ -1132,13 +1215,14 @@ export class StatsView {
       used += segmentWidth;
     }
     const left = pieces.join("");
-    if (!snapshot) return this.row(left, width);
+    if (!snapshot) return this.row(left, width, edges);
     const fits = (text: string): boolean => used + GAP + visibleWidth(text) <= inner;
     const full = this.status(snapshot);
     const right = fits(full) ? full : [this.status(snapshot, false)].find(fits);
     return this.row(
       right ? left + " ".repeat(inner - used - visibleWidth(right)) + right : left,
       width,
+      edges,
     );
   }
 
@@ -1184,9 +1268,16 @@ export class StatsView {
    * like the agent detail pane's, rather than spending a divider and a row.
    * It names only the keys that do something now and shortens before it clips.
    */
-  private bottom(width: number, total: number, offset: number, viewport: number): string {
+  private bottom(
+    width: number,
+    total: number,
+    offset: number,
+    viewport: number,
+    edges?: FrameEdges,
+  ): string {
     const theme = this.options.theme;
-    if (width < 8) return popoverRule(theme, width, "bottom");
+    if (width < 8) return popoverRule(theme, width, "bottom", edges);
+    const { bl, br, bottom } = frameGlyphs(edges);
     const scrollable = total > viewport && viewport > 0;
     let right = scrollable ? ` ${Math.min(total, offset + viewport)}/${total} lines ` : "";
     // Room for the hint between `╰─` and `─╯`: its two pads and at least one rule column.
@@ -1199,20 +1290,21 @@ export class StatsView {
     const fill = Math.max(0, width - 4 - visibleWidth(left) - visibleWidth(right));
     const edge = (text: string): string => theme.fg("borderAccent", text);
     return (
-      edge(POPOVER.bl + POPOVER.h) +
+      edge(bl + bottom) +
       left +
-      edge(POPOVER.h.repeat(fill)) +
+      edge(bottom.repeat(fill)) +
       theme.fg("dim", right) +
-      edge(POPOVER.h + POPOVER.br)
+      edge(bottom + br)
     );
   }
 
-  private row(content: string, width: number): string {
+  private row(content: string, width: number, edges?: FrameEdges): string {
     if (width < 4) return this.fit(content, width);
     const inner = width - 4;
     const clipped = truncateToWidth(content, inner, "…");
     const padded = clipped + " ".repeat(Math.max(0, inner - visibleWidth(clipped)));
-    return `${popoverSide(this.options.theme)} ${padded} ${popoverSide(this.options.theme)}`;
+    const theme = this.options.theme;
+    return `${popoverSide(theme, edges, "left")} ${padded} ${popoverSide(theme, edges, "right")}`;
   }
 
   private fit(line: string, width: number): string {

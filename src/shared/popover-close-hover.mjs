@@ -137,6 +137,49 @@ function join(host, member) {
   }
 }
 
+/** Observe the lifetime of one captured press on the same native dispatch
+ * bridge as close hover. Pi can discard capture (e.g. terminal focus-out)
+ * without sending a release to that target. No raw input is intercepted.
+ * @param {object | undefined} host @param {object} component @param {(redraw: boolean) => void} lost
+ */
+export function watchPopoverCapture(host, component, lost) {
+  const renderer = resolveTuiRenderer(host);
+  if (!renderer || !("mouseCapture" in renderer)) return;
+  const current = () => renderer === host || resolveTuiRenderer(host) === renderer;
+  const held = () => {
+    const target = Reflect.get(renderer, "mouseCapture");
+    return (
+      current() &&
+      typeof target === "object" &&
+      target !== null &&
+      Reflect.get(target, "component") === component
+    );
+  };
+  /** @type {Member} */
+  const member = {
+    hovered: false,
+    watching: true,
+    clear() {},
+    interrupted() {
+      // A key or wheel may miss the target without interrupting native capture.
+      // Inspect ownership *after* Pi dispatches, never parse or retarget its input.
+      if (!held()) lost(current());
+    },
+  };
+  const bridge = join(renderer, member);
+  if (!bridge) return;
+  member.gestureSeen = bridge.token; // Pi is still processing the starting press.
+  return {
+    current,
+    held,
+    dispose() {
+      member.watching = false;
+      bridge.members.delete(member);
+      if (!bridge.members.size) detach(renderer, bridge);
+    },
+  };
+}
+
 /** @param {object | undefined} host @returns {unknown[]} */
 function dimensions(host) {
   const terminal = /** @type {{terminal?: {columns?: unknown, rows?: unknown}} | undefined} */ (

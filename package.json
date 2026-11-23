@@ -37,7 +37,7 @@
     "prepack": "npm run build",
     "typecheck": "node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && npm run typecheck:extensions",
     "typecheck:extensions": "node scripts/checks/check-pi-types.mjs",
-    "lint": "eslint --max-warnings 0 src/orchestration src/shared test/unit test/sdk test/packaging test/host test/tui test/support",
+    "lint": "eslint --max-warnings 0 src/orchestration src/shared src/extensions/lib/centered-panel.ts test/unit test/sdk test/packaging test/host test/tui test/support",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "npm run check:package && npm run test:policy -- --built",

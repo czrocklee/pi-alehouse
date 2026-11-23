@@ -1,11 +1,20 @@
 import { createBackdropDismiss } from "../../shared/centered-dismiss.mjs";
+import {
+  centeredPanelTitleWidth,
+  createCenteredPanel,
+} from "../../extensions/lib/centered-panel.ts";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { shortcutHint } from "../../shared/shortcut-hint.mjs";
-import { onBorderLabelsChange, popoverTextRect } from "../../shared/popover-chrome.mjs";
+import {
+  onBorderLabelsChange,
+  popoverChromeLayout,
+  popoverTextRect,
+} from "../../shared/popover-chrome.mjs";
 import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   Text,
+  sliceByColumn,
   stripTerminalSequences,
   truncateToWidth,
   visibleWidth,
@@ -40,13 +49,24 @@ type Row = {
   first?: boolean;
 };
 type Target = { start: number; end: number; provider: string; id: string };
+type TerminalSize = Pick<TUI["terminal"], "columns" | "rows">;
 type SelectionProjection = {
   targets: Map<number, Target>;
   selectedVisible: boolean;
+  /** False when the public tree could not be identified; keyboard then remains
+   * available only while the native paint has a single, visible arrow. */
   structured: boolean;
+  /** An unidentified paint with several arrows: one may be lookalike text (a
+   * model name or error) standing in for a native selection cropped from view. */
   ambiguousArrow: boolean;
-  visibleModel: Group["target"];
+  visibleModel?: Group["target"];
 };
+const selectionProjection = (): SelectionProjection => ({
+  targets: new Map(),
+  selectedVisible: false,
+  structured: false,
+  ambiguousArrow: false,
+});
 type SelectionIssue = "closed" | "not_visible" | "identity_unverified";
 // eslint-disable-next-line no-control-regex -- model metadata must not manufacture terminal rows
 const hasTerminalControls = (value: string): boolean => /[\u0000-\u001f\u007f-\u009f]/u.test(value);
@@ -87,6 +107,7 @@ export function modelPopoverOptions(
  * selection/list fields or duplicated search/selection logic. */
 export class PresetModelPopover implements Component, Focusable {
   private width = 0;
+  private paintedViewport?: TerminalSize;
   private closePainted = false;
   private closed = false;
   private readonly backdrop = createBackdropDismiss();
@@ -94,15 +115,9 @@ export class PresetModelPopover implements Component, Focusable {
   private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
   private readonly selection: ReturnType<typeof createPopoverTextSelection>;
   private readonly unsubscribeChrome: () => void;
+  readonly resize?: ReturnType<typeof createCenteredPanel>;
+  private modelPress?: { target: Target; x: number; y: number };
   private targets = new Map<number, Target>();
-  private selectedVisible = false;
-  /** False when the public tree could not be identified; keyboard then remains
-   * available only while the native paint has a single, visible arrow. */
-  private structured = false;
-  /** An unidentified paint with several arrows: one may be lookalike text (a
-   * model name or error) standing in for a native selection cropped from view. */
-  private ambiguousArrow = false;
-  private visibleModel?: { provider: string; id: string };
 
   constructor(
     private readonly options: {
@@ -112,8 +127,11 @@ export class PresetModelPopover implements Component, Focusable {
       theme: PopoverTheme;
       title: string;
       height(): number;
-      /** Current overlay width. Absent callers use the last rendered width. */
+      /** Current automatic width. Absent callers use the last rendered width. */
       currentWidth?(): number;
+      /** Only provided for a centered fullscreen picker. */
+      resizeTerminal?: () => TerminalSize;
+      confirm?: { matches(data: string): boolean; warnHidden(): void };
       models(): readonly Model[];
       select(model: Model): void;
       cancel(reason?: OverlayCloseReason): void;
@@ -125,13 +143,51 @@ export class PresetModelPopover implements Component, Focusable {
       host: options.tui,
       requestRender: () => options.tui?.requestRender(),
     });
+    if (options.resizeTerminal) {
+      this.resize = createCenteredPanel({
+        terminal: options.resizeTerminal,
+        host: options.tui,
+        theme: options.theme,
+        requestRender: () => options.tui?.requestRender(),
+        minWidth: 32,
+        get minHeight() {
+          return popoverChromeLayout({ framed: true }).rows + 3;
+        },
+        changed: () => {
+          this.retireResizeHits();
+          options.tui?.requestRender();
+        },
+      });
+    }
     // One process-wide appearance switch: close-hit row and body budget move
     // together, so retire stale hits/selection/capture and request one repaint.
     this.unsubscribeChrome = onBorderLabelsChange(() => {
-      this.selection.reset();
-      this.closeHover.reset(false);
+      this.resize?.reset();
+      this.retireResizeHits();
       this.options.tui?.requestRender();
     });
+  }
+
+  private retireResizeHits(): void {
+    if (this.resize) {
+      this.paintedViewport = undefined;
+      this.targets.clear();
+      this.modelPress = undefined;
+    }
+    this.selection.reset();
+    this.closeHover.reset(false);
+  }
+
+  private get height(): number {
+    return Math.max(1, this.resize?.height ?? this.options.height());
+  }
+  private viewportStillPainted(): boolean {
+    const viewport = this.options.resizeTerminal?.();
+    return (
+      !viewport ||
+      (viewport.columns === this.paintedViewport?.columns &&
+        viewport.rows === this.paintedViewport?.rows)
+    );
   }
 
   get focused(): boolean {
@@ -140,6 +196,10 @@ export class PresetModelPopover implements Component, Focusable {
   set focused(value: boolean) {
     this.backdrop.focused = value;
     this.options.native.focused = value;
+    if (!value && this.resize) {
+      this.resize.reset();
+      this.retireResizeHits();
+    }
   }
   get capturesViewportInput(): boolean {
     return this.options.native.capturesViewportInput === true;
@@ -147,44 +207,23 @@ export class PresetModelPopover implements Component, Focusable {
   /** Never expand a hit map before the host paints that wider layout. A wider
    * dry layout could unwrap prose and move a click to another row. */
   private selectionWidth(): number {
-    return Math.min(this.width, this.options.currentWidth?.() ?? this.width);
+    return Math.min(this.width, this.resize?.width ?? this.options.currentWidth?.() ?? this.width);
   }
   /** A dry layout validates current eligibility, but must not replace the
    * host's last-painted hit map. Otherwise a rejected stale click could grant
    * a second click on an item the host has never painted. */
   private recheck(): SelectionProjection {
-    const painted = {
-      width: this.width,
-      targets: this.targets,
-      selectedVisible: this.selectedVisible,
-      structured: this.structured,
-      ambiguousArrow: this.ambiguousArrow,
-      visibleModel: this.visibleModel,
-    };
-    this.targets = new Map();
-    try {
-      this.layout(this.selectionWidth(), false);
-      return {
-        targets: this.targets,
-        selectedVisible: this.selectedVisible,
-        structured: this.structured,
-        ambiguousArrow: this.ambiguousArrow,
-        visibleModel: this.visibleModel,
-      };
-    } finally {
-      this.width = painted.width;
-      this.targets = painted.targets;
-      this.selectedVisible = painted.selectedVisible;
-      this.structured = painted.structured;
-      this.ambiguousArrow = painted.ambiguousArrow;
-      this.visibleModel = painted.visibleModel;
-    }
+    const projected = selectionProjection();
+    this.layout(this.selectionWidth(), projected, false);
+    return projected;
   }
   /** Recheck the current viewport and, when the tree is identified, the exact
    * submitted model. A caller can explain a rejection instead of silently
    * leaving a native selector waiting after it has disposed itself. */
   selectionIssue(model?: { provider: string; id: string }): SelectionIssue | undefined {
     if (this.closed) return "closed";
+    // After a resize, a dry layout cannot establish what Pi has painted.
+    if (this.resize?.modal || !this.viewportStillPainted()) return "not_visible";
     const current = this.recheck();
     if (current.ambiguousArrow) return "identity_unverified";
     if (!current.selectedVisible) return "not_visible";
@@ -198,7 +237,13 @@ export class PresetModelPopover implements Component, Focusable {
     return this.selectionIssue(model) === undefined;
   }
   handleInput(data: string): void {
-    if (this.closed) return;
+    if (this.closed || this.resize?.input(data)) return;
+    if (this.resize && !this.viewportStillPainted() && this.options.confirm?.matches(data)) {
+      // Native confirmation disposes the selector (including a pending
+      // refresh) before calling back. Let it keep running during repaint.
+      this.options.confirm.warnHidden();
+      return;
+    }
     // Native input can scroll or refilter the list: a bound selection must
     // not outlive the rows it was anchored to.
     this.selection.reset();
@@ -208,6 +253,13 @@ export class PresetModelPopover implements Component, Focusable {
     this.selection.reset();
     this.closeHover.reset();
     this.options.native.invalidate();
+  }
+  /** Pi retargets a captured click against the original press bounds. A
+   * mounted centered picker must match that press, not just the current paint.
+   * The backdrop disposer records handle attachment even when the hook is a
+   * no-op; anchored pickers and unmounted callers keep click-only admission. */
+  private get requiresModelPress(): boolean {
+    return this.resize !== undefined && this.unwatchBackdrop !== undefined;
   }
   attachBackdrop(handle: OverlayHandle): void {
     const { tui } = this.options;
@@ -221,51 +273,63 @@ export class PresetModelPopover implements Component, Focusable {
     if (this.closed) return;
     this.unsubscribeChrome();
     this.closed = true;
+    this.resize?.reset();
+    this.modelPress = undefined;
     this.unwatchBackdrop?.();
     this.unwatchBackdrop = undefined;
     this.closeHover.dispose();
     this.selection.dispose();
     this.targets.clear();
-    this.selectedVisible = false;
-    this.visibleModel = undefined;
     this.options.native.dispose();
   }
 
   render(width: number): string[] {
-    return this.layout(width, true);
+    return this.layout(width, selectionProjection(), true);
   }
 
-  private layout(width: number, paintClose: boolean): string[] {
-    this.width = width;
-    this.targets.clear();
-    this.selectedVisible = false;
-    this.structured = false;
-    this.ambiguousArrow = false;
-    this.visibleModel = undefined;
+  private layout(width: number, projected: SelectionProjection, publishPaint: boolean): string[] {
+    if (publishPaint) {
+      this.width = width;
+      this.targets = projected.targets;
+    }
     if (this.closed) return [];
-    const height = Math.max(1, this.options.height());
+    const height = this.height;
+    if (publishPaint && this.resize) {
+      if (!this.viewportStillPainted()) this.modelPress = undefined;
+      const viewport = this.options.resizeTerminal?.();
+      this.paintedViewport = viewport && { columns: viewport.columns, rows: viewport.rows };
+    }
     const inner = width - 2;
+    const edges = this.resize?.edges;
     const bottomLabel =
       shortcutHint(this.options.theme, "choose", "↑↓", { color: "muted" }) +
       this.options.theme.fg("muted", " · ") +
       shortcutHint(this.options.theme, "apply", "Enter", { color: "muted" }) +
       this.options.theme.fg("muted", " · ") +
       shortcutHint(this.options.theme, "cancel", "Esc", { color: "muted" });
-    const bottomRows = popoverLabelRows(this.options.theme, width, bottomLabel, "bottom");
-    // Chrome row counts are independent of hover and the close control; the
-    // emitted title below is rebuilt with both once eligibility is settled.
-    const frameRows =
-      popoverTitleRows(this.options.theme, width, this.options.title, false, false).length +
-      bottomRows.length;
+    const bottomRows = popoverLabelRows(
+      this.options.theme,
+      width,
+      bottomLabel,
+      "bottom",
+      false,
+      false,
+      undefined,
+      edges,
+    );
+    const { rows: frameRows } = popoverChromeLayout({ framed: true });
     const closable = Number.isFinite(width) && width >= 12 && height >= Math.max(5, frameRows + 1);
-    if (paintClose) {
+    if (publishPaint) {
       this.closePainted = closable;
       this.closeHover.paint(width, closable);
     }
     if (!closable) {
       // Degenerate paints retire admission; the dry recheck layout never
       // disturbs the host's painted registration.
-      if (paintClose) this.selection.reset();
+      if (publishPaint) {
+        this.selection.reset();
+        this.resize?.paint([], width);
+      }
       return [
         truncateToWidth(
           this.options.theme.fg("muted", "Too small · ") +
@@ -275,7 +339,7 @@ export class PresetModelPopover implements Component, Focusable {
       ];
     }
     const models = this.options.models().filter((model) => model.api !== "pi-virtual");
-    const rows = this.nativeRows(inner, models).filter(
+    const rows = this.nativeRows(inner, models, projected).filter(
       ({ plain }) => plain.trim() && !/^─+$/u.test(plain),
     );
     // Spacers and the native borders are redundant inside rounded chrome.
@@ -284,32 +348,40 @@ export class PresetModelPopover implements Component, Focusable {
       height >= 10 ? [this.options.theme.fg("muted", "New Agents only; main unchanged")] : [];
     const budget = height - frameRows - context.length;
     const body = this.fit(rows, budget);
-    if (paintClose) this.closeHover.paint(width, true, body.length + context.length + frameRows);
+    const padding = this.resize?.height === undefined ? 0 : Math.max(0, budget - body.length);
+    if (publishPaint)
+      this.closeHover.paint(width, true, body.length + padding + context.length + frameRows);
     const complete = (group: Group): boolean =>
       body.filter((row) => row.group === group).length === group.size;
+    // Leave room before composing the chrome; inserting maximize must not
+    // cut off the label's ellipsis or split a wide glyph.
+    const title = this.resize
+      ? truncateToWidth(this.options.title, centeredPanelTitleWidth(width), "…")
+      : this.options.title;
     const titleRows = popoverTitleRows(
       this.options.theme,
       width,
-      this.options.title,
+      title,
       true,
       this.closeHover.hovered,
+      edges,
     );
     const result = [
       ...titleRows,
-      ...context.map((text) => popoverRow(this.options.theme, text, inner)),
+      ...context.map((text) => popoverRow(this.options.theme, text, inner, edges)),
     ];
     for (const row of body) {
-      const painted = popoverRow(this.options.theme, row.text, inner);
+      const painted = popoverRow(this.options.theme, row.text, inner, edges);
       if (
         row.selected &&
         (!row.group || complete(row.group)) &&
-        stripTerminalSequences(painted).startsWith("│→ ")
+        sliceByColumn(stripTerminalSequences(painted), 1, 2, true) === "→ "
       ) {
-        this.selectedVisible = true;
-        if (row.group?.target) this.visibleModel = row.group.target;
+        projected.selectedVisible = true;
+        if (row.group?.target) projected.visibleModel = row.group.target;
       }
       if (row.group?.target && complete(row.group) && visibleWidth(row.plain) <= inner) {
-        this.targets.set(result.length, {
+        projected.targets.set(result.length, {
           start: row.first ? 5 : 1,
           end: 1 + visibleWidth(row.plain),
           ...row.group.target,
@@ -317,17 +389,29 @@ export class PresetModelPopover implements Component, Focusable {
       }
       result.push(painted);
     }
+    if (padding > 0)
+      result.push(...Array<string>(padding).fill(popoverRow(this.options.theme, "", inner, edges)));
     result.push(...bottomRows);
-    // The selectable body between the title band and the labeled bottom: the
-    // wrapper's note, the native search input and every native list row;
-    // gutters stay excluded. Only a real paint admits; geometry changes
-    // cancel through the rect itself.
-    if (paintClose)
-      this.selection.paint(popoverTextRect(width, result.length, { top: titleRows.length }));
-    return result;
+    // Only painted content admits text selection, not the padding added to
+    // reach a user height, the chrome or the modal resize preview.
+    if (!publishPaint) return result;
+    const lines = this.resize?.paint(result, width, visibleWidth(title)) ?? result;
+    this.selection.paint(
+      this.resize?.modal
+        ? undefined
+        : popoverTextRect(width, result.length, {
+            top: titleRows.length,
+            bottom: bottomRows.length + padding,
+          }),
+    );
+    return lines;
   }
 
-  private nativeRows(width: number, models: readonly Model[]): Row[] {
+  private nativeRows(
+    width: number,
+    models: readonly Model[],
+    projected: SelectionProjection,
+  ): Row[] {
     const painted = this.options.native.render(width);
     const row = (text: string): Row => ({
       text,
@@ -421,7 +505,7 @@ export class PresetModelPopover implements Component, Focusable {
       tree.every((line, index) => line.text === painted[index]) &&
       (tree.some((line) => line.model) || !painted.some(modelRow))
     ) {
-      this.structured = true;
+      projected.structured = true;
       return tree;
     }
     const rows = painted.map((text) => ({
@@ -429,7 +513,7 @@ export class PresetModelPopover implements Component, Focusable {
       model: modelRow(text),
       selected: stripTerminalSequences(text).startsWith("→ "),
     }));
-    this.ambiguousArrow = rows.filter((line) => line.selected).length > 1;
+    projected.ambiguousArrow = rows.filter((line) => line.selected).length > 1;
     return rows;
   }
 
@@ -457,14 +541,17 @@ export class PresetModelPopover implements Component, Focusable {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (this.closed) return { handled: true };
+    const resize = this.resize?.mouse(event);
+    if (resize) return resize;
+    const viewportStillPainted = this.viewportStillPainted();
     const close = this.closeHover.mouse(
       event,
-      !this.closed &&
-        this.closePainted &&
-        this.options.height() >= 5 &&
+      this.closePainted &&
+        viewportStillPainted &&
+        this.height >= 5 &&
         this.selectionWidth() === this.width,
     );
-    if (this.closed) return { handled: true };
     if (close?.handled) {
       if (close.close) this.options.cancel();
       return { handled: true };
@@ -476,14 +563,24 @@ export class PresetModelPopover implements Component, Focusable {
     // right-click could invoke the parent's paste behind the chooser.
     if (event.button === "middle" || event.button === "right") return { handled: true };
     if (event.button === "left" && (event.type === "press" || event.type === "click")) {
-      const target = this.targets.get(event.y),
+      const target = viewportStillPainted ? this.targets.get(event.y) : undefined,
         hit = target && event.x >= target.start && event.x < target.end ? target : undefined;
-      // A press on a painted model item is claimed so the SDK counts the
-      // click by component/position and text selection never starts on a
-      // control; every other body press stays unhandled for the shared
-      // native text-selection bridge.
-      if (event.type === "press") return hit ? { handled: true } : undefined;
-      if (hit) {
+      const requirePress = this.requiresModelPress;
+      if (event.type === "press") {
+        if (requirePress)
+          this.modelPress = hit ? { target: hit, x: event.screenX, y: event.screenY } : undefined;
+        return hit ? { handled: true } : undefined;
+      }
+      const press = this.modelPress;
+      this.modelPress = undefined;
+      if (
+        hit &&
+        (!requirePress ||
+          (press?.target.provider === hit.provider &&
+            press.target.id === hit.id &&
+            press.x === event.screenX &&
+            press.y === event.screenY))
+      ) {
         // A pointer may choose any complete visible item, not just the native
         // keyboard arrow. Repaint at the current viewport and require the
         // same item under this click; stale rows must not choose replacements.
@@ -505,11 +602,13 @@ export class PresetModelPopover implements Component, Focusable {
           if (models.length === 1) this.options.select(models[0]!);
         }
       }
-      return { handled: true, focus: true };
+      // Pi sets false then true even when refocusing the same pane. Avoid
+      // retiring a fresh centered paint because a stale click landed on it.
+      return { handled: true, focus: !this.resize || !this.focused };
     }
     // Some native releases synthesize a buttonless click. It may focus the
     // chooser, as before, but must not apply a model without a left click.
-    if (event.type === "click") return { handled: true, focus: true };
+    if (event.type === "click") return { handled: true, focus: !this.resize || !this.focused };
     // Primary drags and releases (including buttonless ones) stay unhandled
     // so they can complete native text selection.
     return undefined;

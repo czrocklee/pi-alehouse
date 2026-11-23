@@ -1,5 +1,6 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { popoverRule, popoverSide, popoverTitleRow } from "../../shared/popover-frame.mjs";
+import type { FrameEdges } from "../../shared/popover-frame.mjs";
 import {
   popoverInlay as sharedPopoverInlay,
   popoverInlayWidth as sharedPopoverInlayWidth,
@@ -9,10 +10,11 @@ import {
 
 export { POPOVER, popoverCloseHit, popoverSide } from "../../shared/popover-frame.mjs";
 export { popoverChromeCloseHit } from "../../shared/popover-chrome.mjs";
+export type { FrameEdges } from "../../shared/popover-frame.mjs";
 
 /**
- * Rounded chrome for every orchestration / status popover. Top and bottom edges are
- * `borderAccent`; sides and interior dividers are `borderMuted`; a simple title
+ * Rounded by default, with optional emphasis on selected outer edges. Top and
+ * bottom edges are `borderAccent`; sides and dividers are `borderMuted`. A title
  * is `accent` and bold. The floating detail pane inlays its own title/footer
  * into the same outer edge rather than spending extra rows on bare rules.
  * A popover the pointer can reach closes from its top chrome: the ` ✕ ─╮`
@@ -51,8 +53,9 @@ export function popoverTitle(
   title: string,
   closable = false,
   closeHovered = false,
+  edges?: FrameEdges,
 ): string {
-  return popoverTitleRow(theme, width, title, metrics, closable, closeHovered);
+  return popoverTitleRow(theme, width, title, metrics, closable, closeHovered, edges);
 }
 
 /**
@@ -67,21 +70,28 @@ export function popoverTitleRows(
   title: string,
   closable = false,
   closeHovered = false,
+  edges?: FrameEdges,
 ): string[] {
-  return sharedPopoverTitleRows(theme, width, title, metrics, closable, closeHovered);
+  return sharedPopoverTitleRows(theme, width, title, metrics, closable, closeHovered, edges);
 }
 
-export function popoverBottom(theme: PopoverTheme, width: number): string {
-  return popoverRule(theme, width, "bottom");
+export function popoverBottom(theme: PopoverTheme, width: number, edges?: FrameEdges): string {
+  return popoverRule(theme, width, "bottom", edges);
 }
 
-export function popoverDivider(theme: PopoverTheme, width: number): string {
-  return popoverRule(theme, width, "divider");
+export function popoverDivider(theme: PopoverTheme, width: number, edges?: FrameEdges): string {
+  return popoverRule(theme, width, "divider", edges);
 }
 
-export function popoverRow(theme: PopoverTheme, content: string, width: number): string {
-  const border = popoverSide(theme);
-  return border + truncateToWidth(content, Math.max(0, width), "…", true) + border;
+export function popoverRow(
+  theme: PopoverTheme,
+  content: string,
+  innerWidth: number,
+  edges?: FrameEdges,
+): string {
+  const left = popoverSide(theme, edges);
+  const right = edges?.left === edges?.right ? left : popoverSide(theme, edges, "right");
+  return left + truncateToWidth(content, Math.max(0, innerWidth), "…", true) + right;
 }
 
 /**
@@ -97,11 +107,13 @@ export function popoverLabelRows(
   closable = false,
   closeHovered = false,
   flush: { start?: boolean; end?: boolean } = {},
+  edges?: FrameEdges,
 ): string[] {
   return sharedPopoverLabelRows(theme, width, styledLabel, kind, inlayMetrics, {
     closable,
     closeHovered,
     flush,
+    edges,
   });
 }
 
@@ -111,8 +123,8 @@ export function popoverInlayWidth(width: number, kind: "top" | "bottom", closabl
 }
 
 /**
- * Top or bottom edge with chrome inlaid between the corners, exactly as
- * before the shared centralization. Unused columns are rule, so the box
+ * Top or bottom edge with chrome inlaid between the corners, with the same
+ * layout as the legacy inlay. Unused columns are rule, so the box
  * cannot trail off into the conversation behind it. A closable top edge
  * ends in the close control instead of `─╮`. An inlay that begins
  * (`flush.start`) or ends (`flush.end`) in rule of its own has that pad
@@ -127,6 +139,17 @@ export function popoverInlay(
   closable = false,
   closeHovered = false,
   flush: { start?: boolean; end?: boolean } = {},
+  edges?: FrameEdges,
 ): string {
-  return sharedPopoverInlay(theme, width, inlay, kind, inlayMetrics, closable, closeHovered, flush);
+  return sharedPopoverInlay(
+    theme,
+    width,
+    inlay,
+    kind,
+    inlayMetrics,
+    closable,
+    closeHovered,
+    flush,
+    edges,
+  );
 }

@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, type TUI } from "@earendil-works/pi-tui";
+import { centeredPanelOptions } from "../../extensions/lib/centered-panel.ts";
 import type { createPresetModelSelector } from "../runtime/preset-model-selector.ts";
 import { OrchestrationError } from "../core/ports.ts";
 import type { Strength } from "../routing.ts";
@@ -81,7 +82,7 @@ export class ModelSelectionSession {
     };
     try {
       const selected = await ctx.ui.custom<RegistryModel | undefined>(
-        (tui, theme, _keybindings, done) => {
+        (tui, theme, keybindings, done) => {
           assertLive();
           if (this.options.modelSelectionAllowed?.() === false) cancelled = true;
           if (cancelled) throw new OrchestrationError("MODEL_SELECTION_CANCELLED");
@@ -106,6 +107,15 @@ export class ModelSelectionSession {
               done(model);
             }
           };
+          const warnHiddenModel = (stale = false): void => {
+            ctx.ui.notify(
+              stale
+                ? "The selected model is not fully visible. Wait for the picker to repaint and try again; nothing changed."
+                : "The selected model is not fully visible. Enlarge the terminal or press Esc to cancel; nothing changed.",
+              "warning",
+            );
+            tui.requestRender();
+          };
           const select = (model: RegistryModel): void => {
             if (settled) return;
             if (!floating) return finish(model);
@@ -123,13 +133,7 @@ export class ModelSelectionSession {
               } finally {
                 finish();
               }
-            } else {
-              ctx.ui.notify(
-                "The selected model is not fully visible. Enlarge the terminal or press Esc to cancel; nothing changed.",
-                "warning",
-              );
-              tui.requestRender();
-            }
+            } else warnHiddenModel();
           };
           picker = createSelector({
             tui,
@@ -143,6 +147,10 @@ export class ModelSelectionSession {
           finishRequest = (reason) => finish(undefined, reason);
           const native = picker;
           if (floating) {
+            // Choose the interaction at mount. An anchored picker must not
+            // become resizable just because its origin later goes off-screen.
+            const centeredResize =
+              tui.mode === "fullscreen" && modelPopoverOptions(tui, position).anchor === "center";
             view = new PresetModelPopover({
               native,
               tui,
@@ -150,6 +158,15 @@ export class ModelSelectionSession {
               title: `${target}: ${slot} model`,
               height: () => Number(modelPopoverOptions(terminal, position).maxHeight),
               currentWidth: () => Number(modelPopoverOptions(terminal, position).width),
+              resizeTerminal: centeredResize ? () => tui.terminal : undefined,
+              confirm: {
+                // Native ModelSelector also accepts submit through the search Input.
+                matches: (data) =>
+                  data === "\n" ||
+                  keybindings?.matches?.(data, "tui.select.confirm") === true ||
+                  keybindings?.matches?.(data, "tui.input.submit") === true,
+                warnHidden: () => warnHiddenModel(true),
+              },
               models: () => ctx.modelRegistry.getAll(),
               select: finish,
               cancel: ownedCancel,
@@ -183,9 +200,22 @@ export class ModelSelectionSession {
         floating
           ? {
               overlay: true,
-              overlayOptions: () => modelPopoverOptions(terminal, position),
+              overlayOptions: () => {
+                if (!view?.resize) return modelPopoverOptions(terminal, position);
+                return centeredPanelOptions(() => view?.resize, {
+                  get width() {
+                    return modelPopoverOptions(terminal).width;
+                  },
+                  get maxHeight() {
+                    return modelPopoverOptions(terminal).maxHeight;
+                  },
+                  get margin() {
+                    return modelPopoverOptions(terminal).margin;
+                  },
+                });
+              },
               onHandle: (handle) => {
-                if (modelPopoverOptions(terminal, position).anchor === "center")
+                if (view?.resize || modelPopoverOptions(terminal, position).anchor === "center")
                   view?.attachBackdrop(handle);
               },
             }

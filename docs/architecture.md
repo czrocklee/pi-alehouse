@@ -27,7 +27,10 @@ SDK session or a second lifecycle. An explicit human Stop is routed to the
 Owner with the identity of the Run it targets; rendering cannot issue it.
 Runtime and UI can both use `presentation/`, but runtime must not import UI.
 The independently bundled footer uses `src/shared/` for common primitives,
-without importing orchestration.
+without importing orchestration. Centered panels use one Pi adapter in
+`src/extensions/lib/centered-panel.ts`. Its shared controller in
+`src/shared/centered-resize.mjs` owns frame hits, capture, keyboard sizing and
+restore state. Each panel retains its own content measurement and input guards.
 
 ## Ownership and lifecycle
 

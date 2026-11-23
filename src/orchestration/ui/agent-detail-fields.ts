@@ -2,6 +2,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { validDifficulty, type RunView } from "../core/contracts.ts";
 import { reported, type UsageComponent } from "../core/usage-ledger.ts";
 import { formatTokenCount } from "../../shared/token-format.mjs";
+import { frameGlyphs, type FrameEdges } from "../../shared/popover-frame.mjs";
 import { shortcutHint } from "../../shared/shortcut-hint.mjs";
 import type { SpeedModelGlyph } from "../../shared/overlay-protocol.mjs";
 import { profileLabel } from "../tools/tool-names.ts";
@@ -1261,6 +1262,7 @@ export function renderDetailFooter(input: {
   framed: boolean;
   /** A framed row can be interior chrome rather than an inlaid edge. */
   borderLabels?: boolean;
+  edges?: FrameEdges;
 }): DetailFooterFrame {
   const {
     width,
@@ -1280,6 +1282,7 @@ export function renderDetailFooter(input: {
   } = input;
   const base = framed ? 3 : 0;
   const inlaid = framed && input.borderLabels !== false;
+  const stroke = frameGlyphs(input.edges).bottom;
   const multi = entries.length > 1;
   const offerMessage = !!messaging && !composing && !confirming;
   const entry = entries.find((candidate) => candidate.agent_id === selected);
@@ -1383,7 +1386,7 @@ export function renderDetailFooter(input: {
       if (index)
         out.push(
           inlaid
-            ? { text: ` ${th.fg("borderAccent", POPOVER.h)} `, width: 3 }
+            ? { text: ` ${th.fg("borderAccent", stroke)} `, width: 3 }
             : { text: "  ", width: 2 },
         );
       out.push(...group);
@@ -1471,7 +1474,7 @@ export function renderDetailFooter(input: {
     ? ""
     : inlaid && gap - lead - trail >= 1
       ? " ".repeat(lead) +
-        th.fg("borderAccent", POPOVER.h.repeat(gap - lead - trail)) +
+        th.fg("borderAccent", stroke.repeat(gap - lead - trail)) +
         " ".repeat(trail)
       : " ".repeat(gap);
   const rightFrom = base + leftWidth + gap;

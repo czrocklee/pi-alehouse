@@ -1,3 +1,10 @@
+/** Best-effort native interruption observation for a captured press. */
+export function watchPopoverCapture(
+  host: object | undefined,
+  component: object,
+  lost: (redraw: boolean) => void,
+): { current(): boolean; held(): boolean; dispose(): void } | undefined;
+
 export interface PopoverCloseMouseEvent {
   type: string;
   button?: string;

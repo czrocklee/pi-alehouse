@@ -1,4 +1,9 @@
 import { createBackdropDismiss } from "../../shared/centered-dismiss.mjs";
+import {
+  centeredPanelTitleWidth,
+  createCenteredPanel,
+} from "../../extensions/lib/centered-panel.ts";
+import type { CenteredResize, ResizeMouse } from "../../shared/centered-resize.mjs";
 import type { SpeedModelGlyph } from "../../shared/overlay-protocol.mjs";
 import { createPopoverCloseControl } from "../../shared/popover-close-control.mjs";
 import { createPopoverTextSelection } from "../../shared/popover-text-selection.mjs";
@@ -139,7 +144,8 @@ const stoppable = (view: RunView): boolean =>
  * content row and a separator. The shared layout owns those row coordinates. */
 const MIN_VIEWPORT = 3;
 const DOCKED_HEIGHT_PCT = 70;
-const FLOATING_HEIGHT_PCT = 84;
+export const FLOATING_PANE_HEIGHT_PCT = 84;
+export const FLOATING_PANE_MIN_WIDTH = 40;
 const COMPOSE_ROWS = 2;
 
 /** Pads a styled row to `columns` display columns; ANSI has no width of its own. */
@@ -151,11 +157,7 @@ export interface PaneTui {
   requestRender(): void;
 }
 /** The pointer event as the pane reads it; a structural subset of pi-tui's. */
-export interface PaneMouseEvent {
-  type: string;
-  button?: string;
-  x?: number;
-  y?: number;
+export interface PaneMouseEvent extends ResizeMouse {
   wheelDelta?: number;
   /** Consecutive clicks reported by the host's normalized mouse dispatcher. */
   clickCount?: number;
@@ -200,6 +202,8 @@ export interface DetailPaneOptions {
    * already bound it, so a frame would cost columns for nothing.
    */
   frame?: boolean;
+  /** Only the coordinator's fullscreen centered mount enables resizing. */
+  centeredResize?: boolean;
 }
 
 /**
@@ -222,6 +226,9 @@ export class DetailPane {
   /** Width of the last framed paint; the close control's hit area follows it. */
   private paintedWidth = 0;
   private paintedHeight = 0;
+  private inlineComposePainted = false;
+  /** Visible tab cells remain protected even when the menu retires their actions. */
+  private paintedFooterTabs: DetailFooterFrame["tabs"];
   private layout = popoverChromeLayout();
   private readonly unwatchBorderLabels: () => void;
   private fixedHeight = 0;
@@ -256,6 +263,7 @@ export class DetailPane {
   private unwatchBackdrop: (() => void) | undefined;
   private readonly closeHover: ReturnType<typeof createPopoverCloseControl>;
   private readonly textSelection: ReturnType<typeof createPopoverTextSelection>;
+  readonly resize: CenteredResize | undefined;
 
   constructor(private readonly options: DetailPaneOptions) {
     this.textSelection = createPopoverTextSelection({ host: options.tui, component: this });
@@ -273,6 +281,28 @@ export class DetailPane {
       host: options.tui,
       requestRender: () => options.tui.requestRender(),
     });
+    if (options.frame && options.centeredResize) {
+      this.resize = createCenteredPanel({
+        terminal: () => options.tui.terminal,
+        host: options.tui,
+        theme: options.theme,
+        requestRender: () => options.tui.requestRender(),
+        minWidth: FLOATING_PANE_MIN_WIDTH,
+        independentAxes: true, // Widening a short live transcript must not cap its later growth.
+        get minHeight() {
+          // Keep the current chrome, three reading rows, and the pinned status;
+          // a border-labeled pane needs four fewer rows than an inset one.
+          return popoverChromeLayout({ framed: true }).rows + MIN_VIEWPORT + 1;
+        },
+        changed: () => {
+          this.resetPointerPaint(false);
+          this.resetStopInteraction();
+          this.painted = 0;
+          this.paintedHeight = 0;
+          options.tui.requestRender();
+        },
+      });
+    }
     this.unwatchBorderLabels = onBorderLabelsChange(() => {
       if (this.closed) return;
       this.layout = popoverChromeLayout({ framed: !!options.frame });
@@ -367,6 +397,7 @@ export class DetailPane {
     return this.backdrop.focused;
   }
   set focused(value: boolean) {
+    if (!value && this.backdrop.focused) this.resize?.reset();
     this.backdrop.focused = value;
   }
 
@@ -404,11 +435,18 @@ export class DetailPane {
 
   /** Permission yield can hide the mounted pane without disposing it. */
   resetCloseHover(render = true): void {
+    this.resize?.reset();
+    this.resetPointerPaint(render);
+  }
+
+  private resetPointerPaint(render: boolean): void {
     this.textSelection.reset();
     this.actionsMenu = undefined;
     this.menuPaint = undefined;
     this.menuDismissPress = false;
     this.paintedWidth = 0;
+    this.inlineComposePainted = false;
+    this.paintedFooterTabs = undefined;
     this.chromePaint = undefined;
     this.composePaint = undefined;
     this.messageAction = undefined;
@@ -716,10 +754,14 @@ export class DetailPane {
       return;
     }
     const compose = this.compose;
+    const pasteInFlight =
+      !!compose && (compose.paste !== undefined || compose.pastePrefix.length > 0);
+    // Resize mode owns new input, but a function-key sequence inside an
+    // in-flight paste is still draft data, not a request to resize.
+    if (!pasteInFlight && this.resize?.input(data)) return;
     if (
       compose &&
-      (compose.paste !== undefined ||
-        compose.pastePrefix.length > 0 ||
+      (pasteInFlight ||
         data.includes(PASTE_START) ||
         (data.length >= 2 && PASTE_START.startsWith(data)))
     ) {
@@ -871,20 +913,23 @@ export class DetailPane {
    * `wheelDelta` is already in logical lines and already carries the terminal's
    * own step -- Alt multiplies it by five upstream -- so it is used as given.
    */
-  handleMouse(event: PaneMouseEvent): { handled: boolean } | undefined {
+  handleMouse(event: PaneMouseEvent): { handled: boolean; capture?: boolean } | undefined {
+    const visible = this.options.visible?.() !== false;
+    if (this.resize) {
+      if (this.closed || !visible) this.resize.reset();
+      const sized = this.resize.mouse(event, !this.footerExcludesResize(event));
+      if (sized) return sized;
+    }
     const close = this.closeHover.mouse(
       event,
-      !this.closed &&
-        !!this.options.frame &&
-        this.paintedWidth > 0 &&
-        this.options.visible?.() !== false,
+      !this.closed && !!this.options.frame && this.paintedWidth > 0 && visible,
     );
     if (close?.handled) {
       if (close.close) this.dismiss();
       return { handled: true };
     }
     if (this.closed) return undefined;
-    if (this.options.visible?.() === false) {
+    if (!visible) {
       this.actionsMenu = undefined;
       this.menuPaint = undefined;
       this.chromePaint = undefined;
@@ -983,6 +1028,8 @@ export class DetailPane {
     this.menuPaint = undefined;
     this.chromePaint = undefined;
     this.paintedHeight = 0;
+    this.inlineComposePainted = false;
+    this.paintedFooterTabs = undefined;
     this.fixedHeight = 0;
     this.composeRows = 0;
     this.bodyFloor = MIN_VIEWPORT;
@@ -990,6 +1037,7 @@ export class DetailPane {
     this.animating = false;
     const inner = this.options.frame ? width - 2 : width;
     const chrome = this.options.frame ? inner - 4 : inner;
+    const budget = this.heightBudget();
     if (
       this.closed ||
       this.options.visible?.() === false ||
@@ -997,18 +1045,22 @@ export class DetailPane {
       width < 12 ||
       inner < 10 ||
       chrome < 8 ||
-      (Number.isFinite(this.options.tui.terminal.rows) &&
-        this.heightBudget() < this.layout.rows + 1)
+      (Number.isFinite(this.options.tui.terminal.rows) && budget < this.layout.rows + 1)
     ) {
       this.resetCloseHover(false);
       this.resetStopInteraction();
       this.painted = 0;
-      return [];
+      return this.resize?.paint([], width) ?? [];
     }
     const gutter = this.options.frame ? 1 : 0;
     const contentWidth = inner - gutter * 2;
-    // Framed, the title shares the top edge with the close control.
-    const titleWidth = this.options.frame ? popoverInlayWidth(width, "top", true) : chrome;
+    // Reserve the maximize cells before fitting the description, so they
+    // never cut the trailing Run cue. Leave the docked title at full width.
+    const titleWidth = this.resize
+      ? centeredPanelTitleWidth(width)
+      : this.options.frame
+        ? popoverInlayWidth(width, "top", true)
+        : chrome;
     this.paintedWidth = this.options.frame ? width : 0;
     const { entries, index } = this.current();
     const entry = entries[index];
@@ -1017,15 +1069,18 @@ export class DetailPane {
     if (!entry) {
       this.resetStopInteraction();
       this.painted = 0; // No visible body for keys/wheel to scroll against.
-      this.paintedHeight = this.layout.rows + 1;
+      const body = [
+        truncateToWidth(
+          this.options.theme.fg("dim", "No agents are available to inspect."),
+          contentWidth,
+        ),
+      ];
+      if (this.resize?.height !== undefined)
+        while (body.length + this.layout.rows < budget) body.push("");
+      this.paintedHeight = this.layout.rows + body.length;
       return this.dress(
         this.options.theme.fg("dim", "Agents"),
-        [
-          truncateToWidth(
-            this.options.theme.fg("dim", "No agents are available to inspect."),
-            contentWidth,
-          ),
-        ],
+        body,
         this.footer(chrome, [], 0, undefined, false, false, false),
         width,
         inner,
@@ -1067,7 +1122,6 @@ export class DetailPane {
         ]
       : collected;
     const noteCount = notes.length;
-    const budget = this.heightBudget();
     // Form depends on terminal space, never transcript length or arriving notes.
     // Reserve three dashboard rows before admitting a two-row composer tray.
     const trayRoom =
@@ -1180,34 +1234,37 @@ export class DetailPane {
           : undefined;
     }
     const compose = this.compose;
-    const footer: DetailFooterFrame =
-      compose && this.composeRows === 0 && !this.confirmation
-        ? {
-            text: renderComposeFooter({
-              width: chrome,
-              input: (room) => compose.input.render(room)[0] ?? "",
-              sendable: sameRun(compose.target, view) && steerable(view),
-              empty: compose.empty,
-              tooLong: overLimit(compose),
-              hiddenNotes: this.hiddenNotes,
-              unavailable: inputAvailable ? undefined : "geometry",
-              theme: this.options.theme,
-            }),
-          }
-        : this.footer(
-            chrome,
-            entries,
-            Math.max(0, total - (start + viewportHeight)),
-            view,
-            fits &&
-              Number.isFinite(this.options.tui.terminal.columns) &&
-              width <= this.options.tui.terminal.columns &&
-              !!this.options.onStop &&
-              stoppable(view),
-            !!this.confirmation,
-            canCompose,
-          );
+    if (compose && this.resize) compose.input.focused = this.focused && !this.resize.modal;
+    const inFooter = compose !== undefined && this.composeRows === 0 && !this.confirmation;
+    this.inlineComposePainted = inFooter;
+    const footer: DetailFooterFrame = inFooter
+      ? {
+          text: renderComposeFooter({
+            width: chrome,
+            input: (room) => compose.input.render(room)[0] ?? "",
+            sendable: sameRun(compose.target, view) && steerable(view),
+            empty: compose.empty,
+            tooLong: overLimit(compose),
+            hiddenNotes: this.hiddenNotes,
+            unavailable: inputAvailable ? undefined : "geometry",
+            theme: this.options.theme,
+          }),
+        }
+      : this.footer(
+          chrome,
+          entries,
+          Math.max(0, total - (start + viewportHeight)),
+          view,
+          fits &&
+            Number.isFinite(this.options.tui.terminal.columns) &&
+            width <= this.options.tui.terminal.columns &&
+            !!this.options.onStop &&
+            stoppable(view),
+          !!this.confirmation,
+          canCompose,
+        );
     this.paintedHeight = this.fixedHeight + viewportHeight + this.composeRows + this.layout.rows;
+    this.paintedFooterTabs = footer.tabs;
     const dimensions = {
       columns: this.options.tui.terminal.columns,
       rows: this.options.tui.terminal.rows,
@@ -1342,6 +1399,7 @@ export class DetailPane {
   }
   dispose(): void {
     this.closed = true;
+    this.resize?.reset();
     this.unwatchBorderLabels();
     this.closeHover.dispose();
     this.textSelection.dispose();
@@ -1365,6 +1423,23 @@ export class DetailPane {
       if (this.wrapped.size > 64) this.wrapped.delete(this.wrapped.keys().next().value!);
     }
     return rows;
+  }
+
+  /** An inlaid draft or tab nickname can contain a rule glyph. Their painted
+   * cells are not resize handles; the two corners remain part of the frame. */
+  private footerExcludesResize(event: PaneMouseEvent): boolean {
+    const { x, y } = event;
+    if (
+      event.type !== "press" ||
+      this.layout.bottom.placement !== "border" ||
+      y !== this.paintedHeight - this.layout.footerFromBottom ||
+      x === undefined ||
+      x <= 0 ||
+      x >= this.paintedWidth - 1
+    )
+      return false;
+    if (this.inlineComposePainted) return true;
+    return this.paintedFooterTabs?.some((tab) => x >= tab.from && x < tab.to) === true;
   }
 
   /** A chrome click: the same transitions as the keys that the chrome names. */
@@ -1475,7 +1550,7 @@ export class DetailPane {
     scroll?: { from: number; height: number; offset: number; total: number; key?: string },
   ): string[] {
     this.textSelection.paint(
-      this.options.frame && !this.actionsMenu
+      this.options.frame && !this.actionsMenu && !this.resize?.modal
         ? popoverTextRect(width, body.length + this.layout.rows, {
             inset: 1 + gutter,
             ...(scroll
@@ -1496,18 +1571,29 @@ export class DetailPane {
     if (!this.options.frame)
       return [title, ...body, footer.text].map((line) => truncateToWidth(line, width));
     const th = this.options.theme;
-    const side = popoverSide(th);
-    const top = popoverLabelRows(th, width, title, "top", true, this.closeHover.hovered);
+    const edges = this.resize?.edges;
+    const left = popoverSide(th, edges, "left");
+    const right = popoverSide(th, edges, "right");
+    const top = popoverLabelRows(
+      th,
+      width,
+      title,
+      "top",
+      true,
+      this.closeHover.hovered,
+      undefined,
+      edges,
+    );
     // Keep the reserved band when narrow-width labels yield completely:
     // content changes must not move the viewport or rebase painted controls.
     const bottom =
       footer.text || this.layout.bottom.placement === "inside"
-        ? popoverLabelRows(th, width, footer.text, "bottom", false, false, footer.flush)
-        : [popoverBottom(th, width)];
-    return [
+        ? popoverLabelRows(th, width, footer.text, "bottom", false, false, footer.flush, edges)
+        : [popoverBottom(th, width, edges)];
+    const lines = [
       ...top,
       ...body.map((line, i) => {
-        let edge = side;
+        let edge = right;
         if (
           scroll &&
           scroll.total > scroll.height &&
@@ -1522,7 +1608,7 @@ export class DetailPane {
             edge = th.fg("borderAccent", "┃");
         }
         return (
-          side +
+          left +
           " ".repeat(gutter) +
           padTo(truncateToWidth(line, inner - gutter * 2), inner - gutter * 2) +
           " ".repeat(gutter) +
@@ -1531,16 +1617,18 @@ export class DetailPane {
       }),
       ...bottom,
     ];
+    return this.resize?.paint(lines, width, visibleWidth(title)) ?? lines;
   }
 
   /** The one place a row count becomes a viewport, so `render` and `handleInput`
-   * cannot disagree about how far the pane scrolls. Content-sized and capped at
-   * a share of the terminal, never a fixed reservation of blank rows. */
+   * cannot disagree about how far the pane scrolls. An explicit size fills the
+   * viewport inside the frame; the automatic height remains content-sized. */
   private bounds(total: number): { viewportHeight: number; maxScroll: number; fits: boolean } {
     const budget = this.heightBudget();
+    const available = Math.max(0, budget - this.layout.rows - this.fixedHeight);
     const bodyHeight = Math.max(
       this.bodyFloor,
-      Math.min(total, Math.max(0, budget - this.layout.rows - this.fixedHeight)),
+      this.resize?.height === undefined ? Math.min(total, available) : available,
     );
     const viewportHeight = bodyHeight - this.composeRows;
     return {
@@ -1556,13 +1644,11 @@ export class DetailPane {
   }
 
   private heightBudget(): number {
+    const explicit = this.resize?.height;
+    if (explicit !== undefined) return explicit;
     const rows = this.options.tui.terminal.rows;
-    return Number.isFinite(rows)
-      ? Math.max(
-          0,
-          Math.floor((rows * (this.options.frame ? FLOATING_HEIGHT_PCT : DOCKED_HEIGHT_PCT)) / 100),
-        )
-      : 0;
+    const pct = this.options.frame ? FLOATING_PANE_HEIGHT_PCT : DOCKED_HEIGHT_PCT;
+    return Number.isFinite(rows) ? Math.max(0, Math.floor((rows * pct) / 100)) : 0;
   }
 
   /** Pure chrome layout. Only render publishes its optional painted action. */
@@ -1601,6 +1687,7 @@ export class DetailPane {
       theme: this.options.theme,
       framed: !!this.options.frame,
       borderLabels: this.layout.bottom.placement === "border",
+      edges: this.resize?.edges,
     });
   }
 }
