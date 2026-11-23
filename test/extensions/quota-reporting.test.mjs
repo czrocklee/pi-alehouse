@@ -10,7 +10,7 @@ const {
   codexDisplayFromStream,
   mergeCodexDisplay,
 } = await load("../../src/extensions/lib/codex-quota.ts");
-const { installQuotaObserver, childQuotaObserver } = await load(
+const { bindQuotaResponses, installQuotaObserver, childQuotaObserver } = await load(
   "../../src/extensions/lib/quota-observer.ts",
 );
 
@@ -257,6 +257,151 @@ test("parent and child share a runtime, attributing only bound physical dispatch
   assert.equal(runtime.streamSimple, wrapped);
   parent.end();
   assert.equal(runtime.streamSimple, original);
+});
+
+test("overlapping registrations restore the newest live listener without reviving old hooks", (t) => {
+  const setSink = useReadingSink(t);
+  const { runtime, dispatch, stream } = runtimeFixture();
+  const original = runtime.streamSimple;
+  const samples = [];
+  const displays = [];
+  setSink((sample) => samples.push(sample));
+  const firstModel = model("first");
+  const secondModel = model("second");
+  const latestModel = model("latest");
+  const releaseFirst = bindQuotaResponses(runtime, "same", {
+    display: (provider) => displays.push(["first", provider]),
+  });
+  t.after(releaseFirst);
+  const first = dispatch("same", firstModel);
+  const duplicate = { display: (provider) => displays.push(["duplicate", provider]) };
+  const releaseSecond = bindQuotaResponses(runtime, "same", duplicate);
+  t.after(releaseSecond);
+  const second = dispatch("same", secondModel);
+  const releaseLatest = bindQuotaResponses(runtime, "same", duplicate);
+  t.after(releaseLatest);
+  const latest = dispatch("same", latestModel);
+
+  assert.equal(first.onResponse(headerResponse, firstModel), stream);
+  assert.equal(second.onProviderStreamEvent(quotaEvent, secondModel), stream);
+  assert.deepEqual(samples, [], "covered requests are silent even with the same listener object");
+  releaseSecond();
+  releaseSecond();
+  assert.equal(latest.onResponse(headerResponse, latestModel), stream);
+  assert.deepEqual(samples, [reading("latest", headerRow)]);
+  releaseLatest();
+  assert.notEqual(runtime.streamSimple, original, "releasing the top must not drop live slots");
+  assert.equal(first.onResponse(headerResponse, firstModel), stream);
+  assert.equal(second.onProviderStreamEvent(quotaEvent, secondModel), stream);
+  assert.equal(latest.onResponse(headerResponse, latestModel), stream);
+  assert.deepEqual(samples, [reading("latest", headerRow)], "no old dispatch becomes current");
+  assert.equal(dispatch("same", firstModel).onResponse(headerResponse, firstModel), stream);
+  assert.deepEqual(samples, [reading("latest", headerRow), reading("first", headerRow)]);
+  assert.deepEqual(displays, [
+    ["duplicate", "latest"],
+    ["first", "first"],
+  ]);
+  releaseFirst();
+  assert.equal(runtime.streamSimple, original);
+});
+
+test("a covered runtime wrapper stays dormant and is reused through rebinds", (t) => {
+  const setSink = useReadingSink(t);
+  const { runtime, dispatch, stream } = runtimeFixture();
+  const original = runtime.streamSimple;
+  delete runtime.streamSimple;
+  Object.setPrototypeOf(runtime, { streamSimple: original });
+  const samples = [];
+  const outerCalls = [];
+  setSink((sample) => samples.push(sample));
+  const parent = session(t, installQuotaObserver, runtime, "parent");
+  const wrapped = runtime.streamSimple;
+  const wrap = (name, next) =>
+    function (...args) {
+      outerCalls.push(name);
+      return next.apply(this, args);
+    };
+  const outer = wrap("outer", wrap("inner", wrapped));
+  runtime.streamSimple = outer;
+  const physical = model(native);
+  const stale = dispatch("parent", physical);
+  parent.end();
+  assert.equal(runtime.streamSimple, outer, "release must preserve other wrappers");
+  const dormant = dispatch("parent", physical);
+  assert.equal(stale.onResponse(headerResponse, physical), stream);
+  assert.equal(dormant.onResponse(headerResponse, physical), stream);
+  assert.deepEqual(samples, []);
+
+  for (let i = 0; i < 2; i++) {
+    parent.start();
+    assert.equal(runtime.streamSimple, outer, "rebind must not add another wrapper");
+    assert.equal(stale.onResponse(headerResponse, physical), stream);
+    assert.equal(dormant.onResponse(headerResponse, physical), stream);
+    assert.equal(dispatch("parent", physical).onResponse(headerResponse, physical), stream);
+    assert.equal(samples.length, i + 1, "one observation for each fresh dispatch");
+    parent.end();
+  }
+  assert.deepEqual(samples, [reading(native, headerRow), reading(native, headerRow)]);
+  assert.deepEqual(outerCalls, [
+    "outer",
+    "inner",
+    "outer",
+    "inner",
+    "outer",
+    "inner",
+    "outer",
+    "inner",
+  ]);
+  // Simulate the outer wrappers being removed while the observer is active.
+  parent.start();
+  runtime.streamSimple = wrapped;
+  parent.end();
+  assert.equal(runtime.streamSimple, original);
+  assert.equal(Object.hasOwn(runtime, "streamSimple"), false);
+});
+
+test("a wrapper that cannot restore its method remains reusable", (t) => {
+  const setSink = useReadingSink(t);
+  const { runtime, dispatch, stream } = runtimeFixture();
+  const physical = model(native);
+  const samples = [];
+  setSink((sample) => samples.push(sample));
+  const parent = session(t, installQuotaObserver, runtime, "parent");
+  const wrapped = runtime.streamSimple;
+  const stale = dispatch("parent", physical);
+  Object.freeze(runtime);
+  parent.end();
+  parent.start();
+  assert.equal(runtime.streamSimple, wrapped);
+  assert.equal(stale.onResponse(headerResponse, physical), stream);
+  assert.equal(dispatch("parent", physical).onResponse(headerResponse, physical), stream);
+  assert.deepEqual(samples, [reading(native, headerRow)]);
+});
+
+test("borrowed calls keep their receiver and options without observation", (t) => {
+  const setSink = useReadingSink(t);
+  const runtime = {
+    streamSimple(...args) {
+      return { receiver: this, args };
+    },
+  };
+  session(t, installQuotaObserver, runtime, "parent");
+  const physical = model(native);
+  const context = {};
+  const options = { sessionId: "parent" };
+  const samples = [];
+  setSink((sample) => samples.push(sample));
+  const wrapped = runtime.streamSimple;
+  for (const receiver of [undefined, { streamSimple: wrapped }, new Proxy(runtime, {})]) {
+    const forwarded = wrapped.call(receiver, physical, context, options);
+    assert.equal(forwarded.receiver, receiver);
+    assert.equal(forwarded.args[2], options);
+  }
+  assert.deepEqual(samples, []);
+  const bound = runtime.streamSimple(physical, context, options);
+  assert.equal(bound.receiver, runtime);
+  bound.args[2].onResponse(headerResponse, physical);
+  assert.deepEqual(samples, [reading(native, headerRow)]);
 });
 
 test("optional observation failures and returned promises cannot change SDK callbacks", (t) => {

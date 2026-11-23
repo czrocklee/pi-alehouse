@@ -6,32 +6,72 @@
 // branch after that selection; failed, omitted, abandoned, and pre-selection
 // calls are not the current route. Codex quota stays on the answering provider.
 import assert from "node:assert/strict";
-import fs from "node:fs";
+import fs, { readFileSync } from "node:fs";
+import http, * as httpNamed from "node:http";
+import https, * as httpsNamed from "node:https";
 import { syncBuiltinESMExports } from "node:module";
-import { mkdtempSync } from "node:fs";
+import net, * as netNamed from "node:net";
 import { tmpdir } from "node:os";
-import { stripVTControlCharacters } from "node:util";
 import { join, resolve } from "node:path";
-import { createJiti } from "jiti";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import tls, * as tlsNamed from "node:tls";
+import { stripVTControlCharacters } from "node:util";
 
-const directory = mkdtempSync(join(tmpdir(), "alehouse-footer-route-"));
+const directory = fs.mkdtempSync(join(tmpdir(), "alehouse-footer-route-"));
 process.env.HOME = directory;
 process.env.PI_CODING_AGENT_DIR = join(directory, "custom-agent");
 
-const authReads = [];
-const requests = [];
-const read = fs.readFileSync;
-fs.readFileSync = function (path, ...args) {
-  if (String(path).endsWith("/auth.json") || String(path).endsWith("\\auth.json"))
-    authReads.push(String(path));
-  return read.call(this, path, ...args);
-};
+const ioAttempts = [];
+const restoreIO = [];
+const deniedMessage = (operation) => `footer route test must not use ${operation}`;
+function denyIO(operation) {
+  ioAttempts.push(operation);
+  throw new Error(deniedMessage(operation));
+}
+function intercept(owner, key, makeGuard) {
+  const original = owner[key];
+  const guard = makeGuard(original);
+  owner[key] = guard;
+  restoreIO.push(() => {
+    owner[key] = original;
+  });
+  return guard;
+}
+
+const probes = [];
+for (const [module, target, aliases, methods] of [
+  ["node:http", http, [httpNamed], ["request", "get"]],
+  ["node:https", https, [httpsNamed], ["request", "get"]],
+  ["node:net", net, [netNamed], ["connect", "createConnection"]],
+  ["node:tls", tls, [tlsNamed], ["connect"]],
+  [
+    "node:net.Socket.prototype",
+    net.Socket.prototype,
+    [netNamed.Socket.prototype, tls.TLSSocket.prototype, tlsNamed.TLSSocket.prototype],
+    ["connect"],
+  ],
+]) {
+  for (const method of methods) {
+    const operation = `${module}.${method}`;
+    const guard = intercept(target, method, () => () => denyIO(operation));
+    probes.push(() => {
+      for (const binding of [target, ...aliases]) {
+        // Check identity first: a broken probe must not fall through to real IO.
+        assert.equal(binding[method], guard, `${operation} binding is not guarded`);
+        assert.throws(() => binding[method](), { message: deniedMessage(operation) });
+        assert.deepEqual(ioAttempts.splice(0), [operation]);
+      }
+    });
+  }
+}
+const authRead = "node:fs.readFileSync(auth.json)";
+const guardedRead = intercept(fs, "readFileSync", (original) => {
+  return function (path, ...args) {
+    if (/(?:^|[/\\])auth\.json$/.test(String(path))) denyIO(authRead);
+    return original.call(this, path, ...args);
+  };
+});
+const guardedFetch = intercept(globalThis, "fetch", () => async () => denyIO("fetch"));
 syncBuiltinESMExports();
-globalThis.fetch = async (url, options) => {
-  requests.push({ url: String(url), options });
-  throw new Error(`footer route test must not fetch ${url}`);
-};
 
 const forbidden = [];
 const registryCalls = [];
@@ -102,20 +142,6 @@ const tui = {
   terminal: { rows: 24, columns: 120 },
 };
 
-const { default: extension } = await createJiti(import.meta.url).import(
-  join(resolve(import.meta.dirname, "../.."), "src/extensions/status-footer.ts"),
-);
-extension({
-  on(event, handler) {
-    handlers.set(event, [...(handlers.get(event) ?? []), handler]);
-  },
-  events: {
-    on() {
-      return () => {};
-    },
-    emit() {},
-  },
-});
 ctx.ui.setStatus = (key, text) => {
   if (text === undefined) statuses.delete(key);
   else statuses.set(key, text);
@@ -130,9 +156,6 @@ ctx.ui.setFooter = (factory) => {
 const emit = async (event, payload) => {
   for (const handler of handlers.get(event) ?? []) await handler(payload, ctx);
 };
-await emit("session_start", {});
-assert.equal(typeof footer?.render, "function");
-
 const line = () => footer.render(160)[0];
 const dispatch = (model) =>
   registry.runtime.streamSimple(
@@ -170,6 +193,39 @@ const replaceBranch = (entries) => {
 };
 
 try {
+  // Verify the sentinels before loading the footer; only these deliberate hits are cleared.
+  for (const probe of probes) probe();
+  assert.equal(fs.readFileSync, guardedRead);
+  assert.equal(readFileSync, guardedRead);
+  assert.throws(() => readFileSync(join(directory, "auth.json")), {
+    message: deniedMessage(authRead),
+  });
+  assert.deepEqual(ioAttempts.splice(0), [authRead]);
+  assert.equal(globalThis.fetch, guardedFetch);
+  await assert.rejects(globalThis.fetch("https://footer.invalid/"), {
+    message: deniedMessage("fetch"),
+  });
+  assert.deepEqual(ioAttempts.splice(0), ["fetch"]);
+
+  const { createJiti } = await import("jiti");
+  const { visibleWidth } = await import("@earendil-works/pi-tui");
+  const { default: extension } = await createJiti(import.meta.url).import(
+    join(resolve(import.meta.dirname, "../.."), "src/extensions/status-footer.ts"),
+  );
+  extension({
+    on(event, handler) {
+      handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+    },
+    events: {
+      on() {
+        return () => {};
+      },
+      emit() {},
+    },
+  });
+  await emit("session_start", {});
+  assert.equal(typeof footer?.render, "function");
+
   useModel("openai", "gpt-5.6");
   oauthProviders.add("openai");
   providers.openai = providerAuth(true);
@@ -897,15 +953,16 @@ try {
   assert.match(line(), /External quota 73%/, "ordinary statuses are not provider-gated");
   ctx.ui.setStatus("fixture-quota", undefined);
   assert.doesNotMatch(line(), /External quota/, "clearing an ordinary status removes it");
-
-  assert.deepEqual(forbidden, []);
-  assert.deepEqual(authReads, []);
-  assert.deepEqual(requests, []);
-  console.log("PASS: footer subscription route");
 } finally {
-  await emit("session_shutdown", {});
-  footer?.dispose();
-  fs.readFileSync = read;
-  syncBuiltinESMExports();
-  fs.rmSync(directory, { recursive: true, force: true });
+  try {
+    await emit("session_shutdown", {});
+    footer?.dispose();
+  } finally {
+    for (const restore of restoreIO.reverse()) restore();
+    syncBuiltinESMExports();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 }
+assert.deepEqual(forbidden, []);
+assert.deepEqual(ioAttempts, [], "footer must not attempt credential or network IO");
+console.log("PASS: footer subscription route");

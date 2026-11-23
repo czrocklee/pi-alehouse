@@ -225,6 +225,16 @@ carries both IDs without treating them as equivalent. Recipients must confirm
 that mapping independently or discard the reading. A differing WebSocket
 callback identity is not reported.
 
+Observation is scoped to the exact runtime receiver and the dispatch's session
+ID. Calls through a different receiver pass through unchanged; the observer
+never unwraps a proxy or substitutes the bound runtime. Only the newest live
+registration for that session observes new dispatches. Releasing it restores
+any previous live registration for future dispatches only; hooks captured
+before it was covered remain silent. If the observer cannot restore the runtime
+method on final release, it retains the dormant wrapper for rebind instead of
+layering on another wrapper. Other wrappers are left intact; observation resumes
+only if calls still reach the observer.
+
 Each callback contains only the valid windows measured in that response or
 event. The observer sends no cached snapshot and does not merge or deduplicate
 readings. There is no replay or acknowledgement. Keep the function brief: its

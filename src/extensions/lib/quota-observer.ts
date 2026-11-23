@@ -19,7 +19,8 @@ type Display = (
   credits?: CodexCredits,
 ) => void;
 type Listener = { display?: Display };
-type Binding = { listeners: Map<string, Listener>; detach: () => void };
+type Subscription = { listener: Listener; activation?: symbol };
+type Binding = { sessions: Map<string, Subscription[]>; detach: () => boolean };
 export type QuotaReading = {
   provider: string;
   /** Only for HTTP responses that name a different provider than the dispatch. */
@@ -81,7 +82,7 @@ export function bindQuotaResponses(runtime: ModelRuntime, sessionId: string, lis
   if (!binding) {
     const original = runtime.streamSimple;
     if (typeof original !== "function") return;
-    const listeners = new Map<string, Listener>();
+    const sessions = new Map<string, Subscription[]>();
     const ownMethod = Object.getOwnPropertyDescriptor(runtime, "streamSimple");
     const wrapped: ModelRuntime["streamSimple"] = function (
       this: ModelRuntime,
@@ -89,16 +90,19 @@ export function bindQuotaResponses(runtime: ModelRuntime, sessionId: string, lis
       context,
       options,
     ) {
-      const session = options?.sessionId;
-      const owner = session && listeners.get(session);
-      if (!owner || this !== runtime || !isCodexQuotaSource(model) || options?.disableContinuation)
+      // Session IDs are scoped to the bound runtime. A borrowed method keeps
+      // its original receiver and options, without observation.
+      const session = this === runtime ? options?.sessionId : undefined;
+      const owner = session ? sessions.get(session)?.at(-1) : undefined;
+      const activation = owner?.activation;
+      if (!owner || !activation || !isCodexQuotaSource(model) || options?.disableContinuation)
         return original.call(this, model, context, options);
       // Capture at physical dispatch before an alias can rewrite to the native
       // transport. Never identify a sample from credentials, context or UI.
       const { provider, id, api } = model;
       if (!validProvider(provider) || typeof id !== "string" || !id)
         return original.call(this, model, context, options);
-      const current = () => listeners.get(session) === owner;
+      const current = () => owner.activation === activation;
       return original.call(this, model, context, {
         ...options,
         onResponse(response, actual) {
@@ -117,8 +121,8 @@ export function bindQuotaResponses(runtime: ModelRuntime, sessionId: string, lis
                   () => quotaReadingsFromHeaders(response.headers, at),
                   matches ? undefined : reported,
                 );
-                if (matches)
-                  owner.display?.(
+                if (matches && current())
+                  owner.listener.display?.(
                     provider,
                     codexDisplayFromHeaders(response.headers, at),
                     codexCreditsFromHeaders(response.headers),
@@ -144,11 +148,12 @@ export function bindQuotaResponses(runtime: ModelRuntime, sessionId: string, lis
               if (limits) {
                 const at = Date.now() / 1_000;
                 publishReading(provider, at, () => quotaReadingsFromStream(limits.rate_limits, at));
-                owner.display?.(
-                  provider,
-                  codexDisplayFromStream(limits.rate_limits),
-                  codexCredits(limits.credits),
-                );
+                if (current())
+                  owner.listener.display?.(
+                    provider,
+                    codexDisplayFromStream(limits.rate_limits),
+                    codexCredits(limits.credits),
+                  );
               }
             }
           } catch {
@@ -160,24 +165,47 @@ export function bindQuotaResponses(runtime: ModelRuntime, sessionId: string, lis
     };
     runtime.streamSimple = wrapped;
     binding = {
-      listeners,
+      sessions,
       detach: () => {
-        if (runtime.streamSimple !== wrapped) return;
-        if (ownMethod) Object.defineProperty(runtime, "streamSimple", ownMethod);
-        else Reflect.deleteProperty(runtime, "streamSimple");
+        try {
+          if (
+            Object.getOwnPropertyDescriptor(runtime, "streamSimple")?.value !== wrapped ||
+            runtime.streamSimple !== wrapped
+          )
+            return false;
+          return ownMethod
+            ? Reflect.defineProperty(runtime, "streamSimple", ownMethod)
+            : Reflect.deleteProperty(runtime, "streamSimple");
+        } catch {
+          return false;
+        }
       },
     };
     runtimes.set(runtime, binding);
   }
-  const { listeners, detach } = binding;
-  listeners.set(sessionId, listener);
+  const { sessions, detach } = binding;
+  const subscriptions = sessions.get(sessionId) ?? [];
+  const covered = subscriptions.at(-1);
+  if (covered) covered.activation = undefined;
+  const subscription: Subscription = { listener, activation: Symbol() };
+  subscriptions.push(subscription);
+  sessions.set(sessionId, subscriptions);
   return () => {
-    if (listeners.get(sessionId) !== listener) return;
-    listeners.delete(sessionId);
-    if (listeners.size === 0) {
-      runtimes.delete(runtime);
-      detach();
+    const index = subscriptions.indexOf(subscription);
+    if (index === -1) return;
+    subscriptions.splice(index, 1);
+    if (!subscription.activation) return; // A covered subscription was released out of order.
+    subscription.activation = undefined;
+    const next = subscriptions.at(-1);
+    if (next) {
+      // Restore the listener only for new dispatches; old hooks keep their token.
+      next.activation = Symbol();
+      return;
     }
+    sessions.delete(sessionId);
+    // If an outer wrapper or property change blocks detach, reuse the dormant
+    // wrapper on rebind instead of inserting another layer.
+    if (sessions.size === 0 && detach()) runtimes.delete(runtime);
   };
 }
 
