@@ -50,7 +50,6 @@ const fixtures = [
   ["stats", "generated/extensions/stats.ts"],
   ["title", "generated/extensions/terminal-title-status.ts"],
   ["web", "web.ts"],
-  ["clear", "generated/extensions/clear.ts"],
 ];
 const registryKey = Symbol.for("@gotgenes/pi-permission-system:session-services");
 async function fixture(t, replacements = {}, initializeProtection = "") {
@@ -449,16 +448,10 @@ test("real pinned package factories load as one host extension with web_enable a
   assert(extension.commands.has("alehouse-status"));
   const clear = extension.commands.get("clear");
   assert(clear, "the Alehouse composition must register /clear without global discovery");
-  let newSessions = 0;
-  await clear.handler("", {
-    async newSession(options) {
-      assert.deepEqual(Object.keys(options), ["withSession"], "native defaults remain unchanged");
-      assert.equal(typeof options.withSession, "function", "feedback uses the fresh context");
-      newSessions++;
-      return { cancelled: true };
-    },
-  });
-  assert.equal(newSessions, 1, "a cancelled /clear must not retry session replacement");
+  await assert.rejects(
+    clear.handler("", { newSession: () => assert.fail("not ready: must not replace the session") }),
+    /No active Alehouse settings.*Use \/new/,
+  );
   assert(
     !extension.commands.has("auto-approval"),
     "the retired Luna judge's command must not return",

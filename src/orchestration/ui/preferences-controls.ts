@@ -362,10 +362,15 @@ export class PreferencesControls {
     });
   }
 
-  private workerSnapshot(router: PresetRouter): SettingsDocument {
-    const current = router.current(),
-      definitions = router.customPresets();
-    const body = Object.hasOwn(definitions, current.name) ? definitions[current.name] : undefined;
+  private workerSnapshot(router: PresetRouter, scope: PersistentScope): SettingsDocument {
+    const current = router.current();
+    const body = workerDefinitionForScope(
+      router,
+      this.options.store,
+      scope,
+      current.name,
+      "snapshot",
+    );
     return {
       version: 2,
       preset: current.name,
@@ -387,9 +392,9 @@ export class PreferencesControls {
     this.assertLive();
     const { ctx, store } = this.options;
     const router = this.options.router(),
-      revision = router.prepare().revision;
+      candidate = router.prepare();
     const path = store.paths[scope],
-      selection = this.workerSnapshot(router);
+      selection = this.workerSnapshot(router, scope);
     const snapshot = JSON.stringify(selection);
     const patches: SettingsChange[] = [
       { path: ["preset"], value: selection.preset },
@@ -410,8 +415,8 @@ export class PreferencesControls {
       return;
     if (
       this.options.router() !== router ||
-      router.prepare().revision !== revision ||
-      JSON.stringify(this.workerSnapshot(router)) !== snapshot ||
+      !router.isCurrent(candidate) ||
+      JSON.stringify(this.workerSnapshot(router, scope)) !== snapshot ||
       store.paths[scope] !== path
     ) {
       ctx.ui.notify(
@@ -485,12 +490,12 @@ export class PreferencesControls {
       )
         return;
       this.assertLive();
-      if (
-        this.options.router() !== router ||
-        router.prepare().revision !== originalCandidate.revision
-      )
+      if (this.options.router() !== router || !router.isCurrent(originalCandidate))
         throw new OrchestrationError("STALE_PRESET_SELECTION");
-      const candidate = router.prepare({ ...router.customPresets(), [name]: body });
+      const candidate = router.prepare(
+        { ...router.customPresets(), [name]: body },
+        { configuredOnly: true },
+      );
       this.options.publishDefinition(candidate, name, body);
     });
   }
@@ -587,12 +592,37 @@ export class PreferencesControls {
       )
         return;
       this.assertLive();
-      if (router.prepare().revision !== originalCandidate.revision)
+      if (this.options.router() !== router || !router.isCurrent(originalCandidate))
         throw new OrchestrationError("STALE_PRESET_SELECTION");
-      const candidate = router.prepare({ ...router.customPresets(), [target]: body });
+      const candidate = router.prepare(
+        { ...router.customPresets(), [target]: body },
+        { configuredOnly: true },
+      );
       this.options.publishDefinition(candidate, target, body);
     });
   }
+}
+
+/** A write may leave an earlier saved or pending same-name body in place.
+ * A workspace save also inherits any global body; globals can intentionally
+ * remain shadowed by more specific workspace preferences. */
+export function workerDefinitionForScope(
+  router: PresetRouter,
+  store: SettingsStore,
+  scope: PersistentScope,
+  name: string,
+  intent: "changes" | "snapshot" = "changes",
+): PresetDefinition | undefined {
+  const definitionIn = (layer: PersistentScope): PresetDefinition | undefined => {
+    const definitions = store.get(layer).presets;
+    return definitions && Object.hasOwn(definitions, name) ? definitions[name] : undefined;
+  };
+  const target = definitionIn(scope);
+  return router.rememberedDefinition(name, {
+    target,
+    inherited: !target && scope === "workspace" ? definitionIn("global") : undefined,
+    intent,
+  });
 }
 
 /** Queue the definition, if needed, and explicitly changed selection fields

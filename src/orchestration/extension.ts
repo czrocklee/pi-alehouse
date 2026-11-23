@@ -31,6 +31,8 @@ import {
   isOffPreset,
   presetLabel,
   PresetRouter,
+  selectPhysicalWorkerModel,
+  strengths,
   type EffortOverrides,
   type PresetCandidate,
   type PresetPublication,
@@ -38,6 +40,13 @@ import {
 } from "./routing.ts";
 import { ChildActivityRegistry } from "./runtime/activity-observer.ts";
 import { createChildSessionFactory } from "./runtime/child-factory.ts";
+import { clearControlsAtStart, registerClearCommand } from "./runtime/clear-session.ts";
+import {
+  delegationEntry,
+  delegationRecord,
+  presetEntry,
+  selectionRecord,
+} from "./runtime/routing-records.ts";
 import { ChildWebModules, nativeWebLoader } from "./runtime/child-web.ts";
 import type { ManagedBlockSubscription } from "./runtime/permission-blocks.ts";
 import { createDispatchRuntime } from "./runtime/dispatch-runtime.ts";
@@ -54,7 +63,7 @@ import {
   validateWorkerEfforts,
   workerEffortCapabilities,
 } from "./runtime/preset-publication.ts";
-import { restorePresetDefinitions, restorePresetRouter } from "./runtime/preset-restoration.ts";
+import { restorePresetState } from "./runtime/preset-restoration.ts";
 import { providerRequestExtension } from "./runtime/provider-requests.ts";
 import { orderFreeToolSchemaRule } from "./runtime/provider-schema.ts";
 import { createPresetModelSelector } from "./runtime/preset-model-selector.ts";
@@ -71,7 +80,11 @@ import {
 import { AgentWidget } from "./ui/agent-widget.ts";
 import { PanelCoordinator } from "./ui/panel-coordinator.ts";
 import { HIDE_TRANSIENT_OVERLAYS_EVENT } from "./ui/overlay-request.ts";
-import { PreferencesControls, stageWorkerSelection } from "./ui/preferences-controls.ts";
+import {
+  PreferencesControls,
+  stageWorkerSelection,
+  workerDefinitionForScope,
+} from "./ui/preferences-controls.ts";
 import {
   SettingsStore,
   registerSettingsStore,
@@ -90,8 +103,6 @@ export {
 export { restorePresetDefinitions, restorePresetRouter } from "./runtime/preset-restoration.ts";
 
 const localTools = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
-const presetEntry = "alehouse:preset-selection:v1";
-const delegationEntry = "alehouse:delegation-mode:v1";
 
 /** The already-loaded matched authority, supplied by the guarded composition.
  * Resolve session services per use; never cache an authority service here. */
@@ -153,9 +164,7 @@ function settingsLoadFailure(error: unknown, agentDir: string, cwd: string): Orc
 }
 
 function presetRestoreFailure(error: unknown, presetPath: string): OrchestrationError {
-  const savedRecord =
-    error instanceof OrchestrationError &&
-    (error.code === "INVALID_SAVED_PRESETS" || error.code === "INVALID_SAVED_EFFORT");
+  const savedRecord = error instanceof OrchestrationError && error.details.record === presetEntry;
   return new OrchestrationError(error instanceof OrchestrationError ? error.code : "PRESET_ERROR", {
     ...(error instanceof OrchestrationError
       ? error.details
@@ -478,12 +487,13 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
     if (settingsStore)
       stageSettings(() => {
         const store = settingsStore!;
-        // A remembered name must not depend on a session-only or workspace-only
-        // definition absent from its target scope on the next fresh startup.
-        const definitions = router!.customPresets();
-        const rememberedDefinition = Object.hasOwn(definitions, selection.name)
-          ? definitions[selection.name]
-          : undefined;
+        if (store.scope === "session") return;
+        const rememberedDefinition = workerDefinitionForScope(
+          router!,
+          store,
+          store.scope,
+          selection.name,
+        );
         stageWorkerSelection(
           store,
           selection,
@@ -528,7 +538,7 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
       return false;
     }
     auditDelegationSelection(controller, () =>
-      pi.appendEntry(delegationEntry, { ...setting, selected_at: Date.now() }),
+      pi.appendEntry(delegationEntry, delegationRecord(setting)),
     );
     const previous = delegation;
     delegation = setting;
@@ -625,6 +635,25 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
         };
       }
     },
+  });
+  registerClearCommand(pi, (ctx) => {
+    if (!ready || !router || routingContext?.sessionManager !== ctx.sessionManager)
+      throw new Error("No active Alehouse settings to carry. Use /new for a fresh session.");
+    const selection = router.current();
+    return {
+      selection,
+      // The snapshot pins every active route. Only a real session-local edit
+      // should also shadow configuration on an explicit preset reload.
+      definition: Object.hasOwn(sessionDefinitions, selection.name)
+        ? sessionDefinitions[selection.name]
+        : undefined,
+      delegation,
+      controls: {
+        childSkills: childSkillsEnabled,
+        beerMugs: widget.beerMugsEnabled,
+        borderLabels: borderLabelsEnabled(),
+      },
+    };
   });
   pi.registerCommand("alehouse-preset", {
     description: "Select a model preset, 'off' to disable new work, or 'reload' to reread presets",
@@ -837,7 +866,7 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
     handler: async (_args, ctx) =>
       ctx.ui.notify(JSON.stringify(controller?.stats() ?? { ready: false }), "info"),
   });
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     assert(!controller, "An Alehouse owner cannot be rebound to another parent");
     assert(
       !pi.getAllTools().some((tool) => blockedDelegationToolNames.includes(tool.name)),
@@ -854,6 +883,12 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
         projectTrusted: ctx.isProjectTrusted(),
       });
       preferences = settingsStore.effective();
+      const carried = clearControlsAtStart(event.reason, ctx);
+      if (carried) {
+        // Overlay the live startup view only, never the store or a save queue.
+        preferences.childSkills = carried.childSkills;
+        preferences.ui = { beerMugs: carried.beerMugs, borderLabels: carried.borderLabels };
+      }
       childSkillsEnabled = preferences.childSkills !== false;
       // Appearance is one cross-bundle process switch: every Alehouse panel
       // reads and subscribes to it, so no per-panel state is kept here.
@@ -863,21 +898,27 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
       // An unreadable/invalid layer must not inherit an earlier session-only
       // choice; refuse startup visibly while restoring the appearance default.
       setBorderLabelsEnabled(true);
-      showPresetError(settingsLoadFailure(error, agentDir, ctx.cwd), ctx);
+      showPresetError(
+        error instanceof OrchestrationError && error.code === "INVALID_CLEAR_CONTROLS"
+          ? error
+          : settingsLoadFailure(error, agentDir, ctx.cwd),
+        ctx,
+      );
       return;
     }
+    let hasExactSelection: boolean;
     try {
-      const selections = branchCustom(ctx, presetEntry);
-      sessionDefinitions = restorePresetDefinitions(selections);
-      router = restorePresetRouter(presetPath, selections, preferences);
+      const restored = restorePresetState(presetPath, branchCustom(ctx, presetEntry), preferences);
+      ({ router, definitions: sessionDefinitions, hasExactSelection } = restored);
     } catch (error) {
       // A bad branch record is not a defect in the base catalogue. Attaching
       // that file's path sends the operator to the wrong place to repair it.
       showPresetError(presetRestoreFailure(error, presetPath), ctx);
       return;
     }
+    const savedDelegation = branchCustom(ctx, delegationEntry);
     try {
-      delegation = restoreDelegation(branchCustom(ctx, delegationEntry), {
+      delegation = restoreDelegation(savedDelegation, {
         ...router.defaultDelegation,
         ...preferences.delegation,
       });
@@ -985,11 +1026,7 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
       // Panels always mount through the session-start context wrapped by the
       // prompt queue, and observe approvals on the parent bus.
       panels.attachHost(ctx, pi.events);
-      // Publish the worker selection only after initialization has completed.
-      // Agent activity and capacity stay in the widget.
-      ctx.ui.setStatus("alehouse-preset", delegationStatus(router.current(), delegation));
       routingContext = ctx;
-      ready = true;
       unregisterSettings = registerSettingsStore(parentId, settingsStore);
       settingsUi = new PreferencesControls({
         ctx,
@@ -1035,16 +1072,41 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
           "info",
         );
       const current = router.current();
-      if (!isOffPreset(current) && Object.keys(current.effort_overrides).length) {
-        // Fixed-policy model support may have changed since saving. Inherit
-        // remains spawn-time only, not a startup warning about parent thinking.
-        // Keep the explicit policy visible/editable; never clamp or erase it.
+      // Defaults are choices too: record the live baseline even when the user
+      // never opens the picker. /clear and fully recorded branches are already
+      // seeded. Use Pi's ordinary journal, not preference writes or a model turn.
+      if (!hasExactSelection) pi.appendEntry(presetEntry, selectionRecord(current));
+      if (!savedDelegation.length) pi.appendEntry(delegationEntry, delegationRecord(delegation));
+      ctx.ui.setStatus("alehouse-preset", delegationStatus(current, delegation));
+      ready = true;
+      if (!isOffPreset(current)) {
+        // All startup sources use the same local metadata checks. Check even
+        // inherited slots' model IDs, but leave inherited effort to admission.
+        let checkingModel: string | undefined;
         try {
-          validateWorkerEfforts(current, effortInputs());
+          const models = ctx.modelRegistry.getAll();
+          for (const slot of strengths) {
+            checkingModel = `${slot}: ${current.models[slot]}`;
+            selectPhysicalWorkerModel(models, current.models[slot], current);
+          }
+          checkingModel = undefined;
+          validateWorkerEfforts(current, {
+            models,
+            parentThinking: undefined,
+            supportedThinking: getSupportedThinkingLevels,
+          });
         } catch (error) {
           try {
+            let issue = checkingModel
+              ? `Model unavailable (${checkingModel}).`
+              : `${String(error)}.`;
+            if (!checkingModel && error instanceof OrchestrationError) {
+              const slot = strengths.find((slot) => slot === error.details.slot);
+              if (slot && typeof error.details.error === "string")
+                issue = `${slot}: ${current.models[slot]} (requested fixed effort: ${current.effort[slot]}). ${error.details.error}`;
+            }
             ctx.ui.notify(
-              `Saved worker effort needs attention: ${String(error)}. Open Alt+S to edit it; existing settings were not changed.`,
+              `Worker routing needs attention: ${issue} Select another preset with /alehouse-preset NAME or edit in Alt+S; existing settings were not changed.`,
               "warning",
             );
           } catch {

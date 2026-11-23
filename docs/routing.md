@@ -230,17 +230,22 @@ string of at most 64 characters and all five `slots`. Each slot accepts only
 
 ### Editing the base catalogue
 
-Edit the file directly and run `/alehouse-preset reload` to reread it **without
-switching the current name**. Changing `defaultPreset` or the catalogue mode
-defaults does not change the current session. To switch, use
-`/alehouse-preset my-crew` or the picker. If reload fails (for example, the
-active name was removed or the file is invalid), the live selection is left
-unchanged. Fix the file or explicitly select a name still defined in it.
+Edit the file directly and run `/alehouse-preset reload` to reread the current
+catalogue **without switching the current name**. Explicit
+`/alehouse-preset NAME` also resolves against the current catalogue, including
+ordinary branch custom edits. These explicit operations can replace a restored
+active pin. Opening the picker or editing the active preset's effort keeps its
+recorded models. Switching to another preset (including Off) releases that pin;
+selecting its name again uses the configured definition. Changing
+`defaultPreset` or the catalogue mode defaults does not change the current
+session. If reload fails (for example, the active name was removed or the file
+is invalid), live choices remain unchanged. Fix the file or explicitly select
+a name still defined in it.
 
 The UI can also [create or edit presets](interface.md#settings-and-preset-editor).
 Editing an existing preset there makes a custom definition of the **same name**;
 that definition shadows base-file edits, even on reload. Remove the saved
-override if present, then start a fresh session to use the base definition
+override if present, then use `/new` to start with the base definition
 without a branch override. Use a fresh process for manual edits to scoped
 preferences; do not use Pi's `/reload` under an open Owner.
 
@@ -276,24 +281,47 @@ workspace values override global values, including explicit `false`; missing
 leaves fall through. A globally saved preset or toggle can therefore still be
 shadowed locally.
 
+## Clear carryover
+
+`/clear` captures the active Alehouse settings when you issue the command,
+then starts a new session and Owner. It carries the selected preset (including
+Off), all five model IDs and effort policies for an enabled preset, delegation
+mode/eagerness, and any branch-local definition for that preset. Other presets'
+branch definitions and effort overrides stay in the old session. Child skills,
+beer mugs and border labels carry over only for the first start.
+
+The handoff does not copy Pi's main model or thinking level; those follow Pi's
+normal `/new` behavior. A worker slot set to `inherit` still follows the new
+parent at spawn time. Pending preference writes are not transferred; normal
+shutdown flush and Owner closure confirmation still apply.
+
+This is not a persistent default or a transfer of work or permissions. Startup
+permission and approval rules remain in force, and `/fast` starts off as for
+other new sessions. `/new` uses today's catalogue and scoped preference defaults.
+
 ## Selecting and persisting
 
 **To set future defaults**, open `/alehouse-settings` or **P Settings**. Use
 **Change save scope** to confirm `global` or trusted `workspace` _before_ making
 changes you want remembered. Changing scope copies and writes nothing on its
-own. Subsequent applied choices can queue preference changes in that scope.
+own. Subsequent edits queue only the settings you change. For example, changing
+one slot's effort in workspace scope does not copy the other slots' overrides
+or pin a custom preset definition that the workspace already inherits from
+global. A definition is included if needed to reproduce the selected route.
 
 To save a snapshot instead, use **Remember current worker settings** or `G` / `W`
 (**Save as global/workspace default**) from the picker or effort page. Confirm
 the destination and exact patch. This saves the live preset, any selected
-custom definition, mode/eagerness and the selected preset's effort choices,
-not a highlighted preset, slider preview, live parent thinking or unconfirmed
-draft. A changed snapshot or session requires fresh consent. This does not
+custom definition, mode/eagerness and the selected preset's effort choices.
+Unlike an incremental edit, `W` saves the selected custom definition in the
+workspace even if it is currently inherited from global. Neither action saves
+a highlighted preset, slider preview, live parent thinking or unconfirmed draft. A changed snapshot or session requires fresh consent. This does not
 change future save scope, approval, appearance or skill preferences.
 
 - **Show paths and pending changes** lists trust, destinations, pending edits
   and effective defaults. Use **Save pending now** to write now, or let normal
-  session shutdown flush the queue. Startup and restoration write nothing.
+  session shutdown flush the queue. Startup and restoration do not write
+  preference files; they can write missing initial journal baselines.
 - **Discard pending writes** drops the queue without undoing live or recorded
   choices. **Remove a saved override** queues removal of one value so a later
   startup can use the remaining layers. It does not undo the live choice, and
@@ -306,14 +334,26 @@ change future save scope, approval, appearance or skill preferences.
   be active. See [settings trust and write safeguards](security.md#scoped-settings-and-trust).
 
 **To know what will load**, start with the catalogue defaults, then global and
-trusted workspace preferences. A restored branch's recorded preset name,
-per-preset effort overrides, custom definitions and mode/eagerness take
-precedence where recorded. Appearance and skills are read from preferences at
-every startup, even on resume. The branch restores a preset **name**, not a
-permanent pin to old models: a same-name definition may now route differently.
-A missing saved name or an invalid settings file fails visibly rather than
-falling back. Fix the named configuration or, for an invalid branch record,
-start fresh or fork from before that record; do not rewrite the journal.
+trusted workspace preferences. New sessions record their initial route and mode
+even without a manual change. `/resume` restores the last recorded routing
+snapshot on that branch, including resolved model IDs, default effort policies,
+overrides, mode and eagerness, even if a same-name definition on disk changed
+or was removed. Valid configuration is still required. This restores effort
+policies, not the runtime per-Agent level previously resolved from `inherit`.
+Supported compact historical records with a name and explicit effort but no
+model tables resolve against the available catalogue, then record today's
+effective baseline; prior hidden models or choices cannot be reconstructed.
+At startup, Alehouse checks an enabled preset's model IDs and fixed effort
+against Pi's local registry, whether it loaded defaults or a branch snapshot.
+A missing physical model produces a warning naming the first affected slot;
+`inherit` does not resolve a thinking level yet. Admission checks the requested
+slot and never substitutes a different model. Appearance and skills come from startup preferences on
+resume; the `/clear` carryover applies only once. Resume does not restore
+live Agents, permission grants, `/fast` or UI state. Approval-mode preferences
+follow their own [consent rules](interface.md#approval-menu). Invalid configuration or branch
+records fail visibly rather than silently routing elsewhere. Correct the
+configuration or use `/new`, or fork from before an invalid record; do not
+rewrite the journal.
 
 A cancelled/stale picker or a validation error does not publish its candidate.
 If the parent-session record write itself failed with an uncertain outcome,

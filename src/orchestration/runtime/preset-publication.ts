@@ -1,4 +1,5 @@
 import type { OwnerController } from "../core/owner-controller.ts";
+import { selectionRecord } from "./routing-records.ts";
 import { OrchestrationError } from "../core/ports.ts";
 import {
   isOffPreset,
@@ -187,14 +188,7 @@ export function commitPresetSelection<
     // Full immutable slot selection is user audit metadata, never model context.
     // Success means this synchronous SDK call returned; it is not an fsync or
     // a rollback guarantee if the SDK itself throws after changing state.
-    audit: (selected) =>
-      input.appendAudit({
-        ...selected,
-        selected_at: Date.now(),
-        ...(Object.keys(nextDefinitions).length
-          ? { custom_presets: structuredClone(nextDefinitions) }
-          : {}),
-      }),
+    audit: (selected) => input.appendAudit(selectionRecord(selected, nextDefinitions)),
   });
   return {
     publication: { selection: snapshot, candidate: input.router.rebase(input.candidate) },

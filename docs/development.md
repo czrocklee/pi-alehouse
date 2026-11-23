@@ -174,8 +174,14 @@ state. Do not add retired tool aliases or hydrate old Runs and approvals.
 - **Journal records:** `src/orchestration/history/run-journal.ts` defines the
   `alehouse:run-link:v1`, `alehouse:run-start:v1` and `alehouse:run-end:v1`
   boundaries; `usage-audit.ts` in the same directory records `alehouse:unreported-usage:v1`.
-  `src/orchestration/extension.ts` defines `alehouse:preset-selection:v1` and
-  `alehouse:delegation-mode:v1`. The parent messages `alehouse:human-cancellation:v1`
+  New sessions record initial routing and mode even without a manual change.
+  `/clear` seeds `alehouse:preset-selection:v1` and `alehouse:delegation-mode:v1`
+  with the effective routing snapshot and `alehouse:clear-controls:v1` for
+  first-start skill/display toggles. Resume restores recorded branch routing,
+  not live Agents or per-Agent inherited effort resolution. Record names are
+  defined in `src/orchestration/runtime/routing-records.ts`; clear carryover is
+  handled in `src/orchestration/runtime/clear-session.ts`.
+  The parent messages `alehouse:human-cancellation:v1`
   and `alehouse:compaction-reminder:v1` come from `src/orchestration/runtime/`.
 - **Events:** `src/orchestration/runtime/child-session.ts` emits `subagents:child:*`
   for session creation, binding and disposal. Under `src/orchestration/permissions/`,
@@ -306,7 +312,7 @@ sharing the agent directory or canonical tree. Old and current lease paths do
 not coordinate, and an empty new directory doesn't prove closure. Preserve the
 old configuration and journals. Init won't convert the previous catalogue or
 record types. Reconcile `alehouse-presets.json` explicitly before enabling
-work and start a fresh session; old selection records cannot restore it.
+work and use `/new`; old selection records cannot restore it.
 
 ### Nix packaging
 

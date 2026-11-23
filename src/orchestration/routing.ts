@@ -105,11 +105,12 @@ type CandidateData = {
   owner: object;
   presets: Map<string, PresetSnapshot>;
   definitions: Record<string, PresetDefinition>;
+  restored?: PresetSnapshot;
 };
 const candidateData = new WeakMap<PresetCandidate, CandidateData>();
 
-/** Every model route comes from configuration; its version makes reloads
- * visible without special-casing any operator-chosen preset name. */
+/** Include the configured or recorded version without special-casing
+ * operator-chosen preset names. */
 export function presetLabel(preset: {
   name: string;
   version: string;
@@ -127,6 +128,8 @@ const fail = (message: string): never => {
 };
 const validName = (value: unknown): boolean =>
   typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value);
+const validEffort = (value: unknown): value is Effort =>
+  value === "inherit" || thinkingLevels.includes(value as ThinkingLevel);
 const validVersion = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 && value.length <= 64;
 const validModel = (value: unknown): value is string => {
@@ -192,6 +195,80 @@ const frozenSnapshot = (snapshot: PresetSnapshot): PresetSnapshot => {
   Object.freeze(snapshot.effort_overrides);
   return Object.freeze(snapshot);
 };
+/** Decode only the slot-bearing shape published by the router. The caller
+ * decides whether a slot-free record is a permitted compact selection. */
+export function decodeRecordedPreset(data: Record<string, unknown>): PresetSnapshot | undefined {
+  const invalid = (): never => {
+    throw new Error("Invalid recorded preset snapshot");
+  };
+  if (Object.hasOwn(data, "thinking")) invalid();
+  if (!["models", "effort_defaults", "effort"].some((key) => Object.hasOwn(data, key)))
+    return undefined;
+  const read = (record: object, key: string): unknown => {
+    const member = Object.getOwnPropertyDescriptor(record, key);
+    if (!member?.enumerable || !Object.hasOwn(member, "value")) return invalid();
+    return member.value;
+  };
+  const readSlots = <T>(
+    key: string,
+    valid: (value: unknown) => value is T,
+  ): Record<Strength, T> => {
+    const table = read(data, key);
+    if (!table || typeof table !== "object" || Array.isArray(table)) return invalid();
+    const prototype: unknown = Object.getPrototypeOf(table);
+    if (
+      (prototype !== null && prototype !== Object.prototype) ||
+      Reflect.ownKeys(table).length !== strengths.length
+    )
+      return invalid();
+    return Object.fromEntries(
+      strengths.map((slot) => {
+        const value = read(table, slot);
+        return valid(value) ? [slot, value] : invalid();
+      }),
+    ) as Record<Strength, T>;
+  };
+  const name = read(data, "name"),
+    version = read(data, "version"),
+    overrides = read(data, "effort_overrides");
+  if (
+    typeof name !== "string" ||
+    !validName(name) ||
+    RESERVED_NAMES.has(name) ||
+    !validVersion(version)
+  )
+    return invalid();
+  if (!validEffortOverrides(overrides)) return invalid();
+  const models = readSlots("models", validModel),
+    effort_defaults = readSlots("effort_defaults", validEffort),
+    effort = readSlots("effort", validEffort);
+  const snapshot = withOverrides({ name, version, models, effort_defaults }, overrides);
+  if (
+    snapshot.digest !== read(data, "digest") ||
+    strengths.some((slot) => snapshot.effort[slot] !== effort[slot])
+  )
+    return invalid();
+  return snapshot;
+}
+
+const toDefinition = (preset: PresetSnapshot): PresetDefinition => ({
+  version: preset.version,
+  slots: Object.fromEntries(
+    strengths.map((slot) => [
+      slot,
+      { model: preset.models[slot], effort: preset.effort_defaults[slot] },
+    ]),
+  ) as PresetDefinition["slots"],
+});
+const ownDefinition = (
+  definitions: Record<string, PresetDefinition>,
+  name: string,
+): PresetDefinition | undefined =>
+  Object.hasOwn(definitions, name) ? definitions[name] : undefined;
+const definitionDigest = (
+  name: string,
+  definition: PresetDefinition | undefined,
+): string | undefined => definition && canonical(name, definition).digest;
 const catalogue = (presets: Record<string, PresetBody>): Map<string, PresetSnapshot> =>
   new Map(Object.entries(presets).map(([name, body]) => [name, canonical(name, body)]));
 const offSelection: OffPresetSnapshot = Object.freeze({
@@ -201,10 +278,14 @@ const offSelection: OffPresetSnapshot = Object.freeze({
     .update(JSON.stringify({ name: "off", version: "off-v1" }))
     .digest("hex"),
 });
-const orderedNames = (presets: ReadonlyMap<string, PresetSnapshot>): string[] => [
-  "off",
-  ...[...presets.keys()].sort(),
-];
+const orderedNames = (
+  presets: ReadonlyMap<string, PresetSnapshot>,
+  restored?: PresetSnapshot,
+): string[] => {
+  const names = [...presets.keys()];
+  if (restored && !presets.has(restored.name)) names.push(restored.name);
+  return ["off", ...names.sort()];
+};
 const missing = (name: string, names: readonly string[]): OrchestrationError =>
   new OrchestrationError("PRESET_NOT_FOUND", {
     requested: bounded(name),
@@ -261,9 +342,9 @@ function parsePresetConfig(path: string): PresetConfig {
       if (!validModel(slot.model)) fail(`${at}.model must be an exact provider/model ID`);
       let effort: Effort | undefined;
       if (Object.hasOwn(slot, "effort")) {
-        if (slot.effort !== "inherit" && !thinkingLevels.includes(slot.effort as ThinkingLevel))
-          fail(`${at}.effort must be a Pi thinking level or inherit`);
-        effort = slot.effort as Effort;
+        if (!validEffort(slot.effort))
+          return fail(`${at}.effort must be a Pi thinking level or inherit`);
+        effort = slot.effort;
       }
       definitions[strength] = {
         model: slot.model as string,
@@ -297,10 +378,10 @@ function parsePresetConfig(path: string): PresetConfig {
   return { defaultPreset: root.defaultPreset, presets: parsed, delegation };
 }
 
-/** Trusted configuration is the sole model catalogue and startup default. Disk
- * reads are candidates: catalogue and selected name change together only after
- * commit succeeds. Accepted Agents retain their resolved AdmittedAgentConfig in
- * the OwnerController. */
+/** Trusted configuration supplies the model catalogue and startup default. A
+ * validated branch snapshot can pin only the active selection. Disk reads are
+ * candidates: catalogue and selection change together only after commit.
+ * Accepted Agents retain their resolved route in the OwnerController. */
 export class PresetRouter {
   private presets: Map<string, PresetSnapshot>;
   private overrides: Map<string, EffortOverrides>;
@@ -310,6 +391,7 @@ export class PresetRouter {
   private applying = false;
   private appliedCandidate: PresetCandidate | undefined;
   private definitions: Record<string, PresetDefinition>;
+  private restored: PresetSnapshot | undefined;
   /** The configured fresh-session delegation, read once at startup. */
   readonly defaultDelegation: Readonly<DelegationSetting>;
 
@@ -317,6 +399,8 @@ export class PresetRouter {
     readonly configPath: string,
     overrides: ReadonlyMap<string, EffortOverrides> = new Map(),
     definitions: Readonly<Record<string, PresetDefinition>> = {},
+    /** Trusted, canonical selection from branch restoration. */
+    restored?: PresetSnapshot,
   ) {
     const config = parsePresetConfig(configPath);
     // Two scoped preference layers plus explicit session-only definitions.
@@ -324,26 +408,43 @@ export class PresetRouter {
     this.definitions = validateSettings({ version: 2, presets: definitions }, 3).presets ?? {};
     this.defaultDelegation = Object.freeze(config.delegation);
     this.presets = catalogue({ ...config.presets, ...this.definitions });
-    this.activeName = config.defaultPreset;
+    this.restored = restored && frozenSnapshot(structuredClone(restored));
+    this.activeName = this.restored?.name ?? config.defaultPreset;
     this.overrides = new Map();
     for (const [name, slots] of overrides) {
       if (!validName(name) || name === "off" || name === "reload" || !validEffortOverrides(slots))
         fail(`Invalid effort overrides for preset ${bounded(name)}`);
       this.overrides.set(name, { ...slots });
     }
+    if (this.restored) this.overrides.set(this.restored.name, this.restored.effort_overrides);
   }
 
   prepare(
     definitions: Readonly<Record<string, PresetDefinition>> = this.definitions,
+    { configuredOnly = false }: { configuredOnly?: boolean } = {},
   ): PresetCandidate {
     const checked = validateSettings({ version: 2, presets: definitions }, 3).presets ?? {};
     const presets = catalogue({ ...parsePresetConfig(this.configPath).presets, ...checked });
+    const name = this.restored?.name;
+    // Use configured definitions on explicit reload/selection or replacement of
+    // this definition. Unrelated definitions and effort edits keep the pin.
+    const restored =
+      !configuredOnly &&
+      name !== undefined &&
+      definitionDigest(name, ownDefinition(checked, name)) ===
+        definitionDigest(name, ownDefinition(this.definitions, name))
+        ? this.restored
+        : undefined;
+    return this.makeCandidate({ owner: this, presets, definitions: checked, restored });
+  }
+
+  private makeCandidate(data: CandidateData): PresetCandidate {
     const candidate: PresetCandidate = Object.freeze({
       revision: this.revision,
       activeName: this.activeName,
-      names: Object.freeze(orderedNames(presets)),
+      names: Object.freeze(orderedNames(data.presets, data.restored)),
     });
-    candidateData.set(candidate, { owner: this, presets, definitions: checked });
+    candidateData.set(candidate, data);
     return candidate;
   }
 
@@ -352,18 +453,52 @@ export class PresetRouter {
     return structuredClone(this.definitions);
   }
 
+  private base(name: string): PresetSnapshot | undefined {
+    return this.restored?.name === name ? this.restored : this.presets.get(name);
+  }
+
   definition(name: string): PresetDefinition {
-    const preset = this.presets.get(name);
+    const preset = this.base(name);
     if (!preset) throw missing(name, this.names());
-    return structuredClone({
-      version: preset.version,
-      slots: Object.fromEntries(
-        strengths.map((slot) => [
-          slot,
-          { model: preset.models[slot], effort: preset.effort_defaults[slot] },
-        ]),
-      ) as PresetDefinition["slots"],
-    });
+    return toDefinition(preset);
+  }
+
+  /** Return a definition patch only if needed at the chosen save scope.
+   * Incremental changes keep following an equivalent inherited definition;
+   * an explicit snapshot pins a custom definition in the destination itself. */
+  rememberedDefinition(
+    name: string,
+    {
+      target,
+      inherited,
+      intent = "changes",
+    }: {
+      target?: PresetDefinition;
+      inherited?: PresetDefinition;
+      intent?: "changes" | "snapshot";
+    } = {},
+  ): PresetDefinition | undefined {
+    validateSettings({ version: 2, preset: name });
+    if (name === "off") return undefined;
+    const live = this.base(name);
+    if (!live) throw missing(name, this.names());
+    const digest = snapshotFor(live).digest;
+    const available = target ?? inherited;
+    if (available && definitionDigest(name, available) === digest)
+      return intent === "snapshot" && !target ? structuredClone(available) : undefined;
+
+    const custom = ownDefinition(this.definitions, name);
+    const liveCustom = custom && definitionDigest(name, custom) === digest ? custom : undefined;
+    if (!available && !(intent === "snapshot" && liveCustom)) {
+      const base = ownDefinition(parsePresetConfig(this.configPath).presets, name);
+      if (definitionDigest(name, base) === digest) return undefined;
+    }
+    if (liveCustom) return structuredClone(liveCustom);
+    // The base parser accepts some model/version spellings that the scoped
+    // settings schema cannot represent. Fail the save rather than alter them.
+    const body = toDefinition(live);
+    validateSettings({ version: 2, presets: { [name]: body } });
+    return body;
   }
 
   /** Read-only snapshots for a prepared catalogue. Inspecting never publishes
@@ -374,7 +509,7 @@ export class PresetRouter {
     return Object.freeze(
       candidate.names.map((name) => {
         if (name === "off") return offSelection;
-        const snapshot = data.presets.get(name);
+        const snapshot = data.restored?.name === name ? data.restored : data.presets.get(name);
         if (!snapshot) throw new OrchestrationError("INVALID_PRESET_CANDIDATE");
         return frozenSnapshot(snapshotFor(structuredClone(snapshot), this.overrides.get(name)));
       }),
@@ -403,8 +538,9 @@ export class PresetRouter {
         active: this.activeName,
         resolution: "Retry the command against the current preset catalogue.",
       });
-    if (!validName(name) || (name !== "off" && !data.presets.has(name)))
-      throw missing(name, candidate.names);
+    const restored = data.restored?.name === name ? data.restored : undefined;
+    const selected = restored ?? data.presets.get(name);
+    if (!validName(name) || (name !== "off" && !selected)) throw missing(name, candidate.names);
     if (overrides !== undefined && (name === "off" || !validEffortOverrides(overrides)))
       fail(
         name === "off"
@@ -418,7 +554,7 @@ export class PresetRouter {
     const snapshot: PresetSelection =
       name === "off"
         ? offSelection
-        : frozenSnapshot(snapshotFor(structuredClone(data.presets.get(name)!), selectedOverrides));
+        : frozenSnapshot(snapshotFor(structuredClone(selected!), selectedOverrides));
     this.applying = true;
     try {
       audit(isOffPreset(snapshot) ? snapshot : structuredClone(snapshot));
@@ -430,6 +566,7 @@ export class PresetRouter {
     this.definitions = data.definitions;
     if (overrides !== undefined) this.overrides.set(name, selectedOverrides);
     this.activeName = name;
+    this.restored = restored;
     this.appliedCandidate = candidate;
     this.revision++;
     if (wasEnabled && name === "off") this.disableRevision++;
@@ -456,13 +593,7 @@ export class PresetRouter {
         resolution: "Reopen the panel against the current selection.",
       });
     }
-    const continuation: PresetCandidate = Object.freeze({
-      revision: this.revision,
-      activeName: this.activeName,
-      names: candidate.names,
-    });
-    candidateData.set(continuation, data);
-    return continuation;
+    return this.makeCandidate({ ...data, restored: this.restored });
   }
 
   /** Core-only convenience for callers with no parent audit contract. The Pi
@@ -472,7 +603,7 @@ export class PresetRouter {
   }
 
   names(): string[] {
-    return orderedNames(this.presets);
+    return orderedNames(this.presets, this.restored);
   }
   activePresetName(): string {
     return this.activeName;
@@ -486,8 +617,9 @@ export class PresetRouter {
         resolution: "Wait for the current preset selection to finish, then retry.",
       });
     const names = this.names();
-    if (!validName(name) || (name !== "off" && !this.presets.has(name))) throw missing(name, names);
+    if (!validName(name) || (name !== "off" && !this.base(name))) throw missing(name, names);
     const wasEnabled = this.activeName !== "off";
+    if (name !== this.activeName) this.restored = undefined;
     this.activeName = name;
     this.appliedCandidate = undefined;
     this.revision++;
@@ -496,7 +628,7 @@ export class PresetRouter {
   }
   current(): PresetSelection {
     if (this.activeName === "off") return offSelection;
-    const preset = this.presets.get(this.activeName);
+    const preset = this.base(this.activeName);
     if (!preset) throw missing(this.activeName, this.names());
     return frozenSnapshot(
       snapshotFor(structuredClone(preset), this.overrides.get(this.activeName)),

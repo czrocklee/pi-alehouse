@@ -533,7 +533,10 @@ try {
     );
   assert.deepEqual(
     saved.map(({ data: { mode, eagerness } }) => ({ mode, eagerness })),
-    [{ mode: "lead", eagerness: "eager" }],
+    [
+      { mode: "co-worker", eagerness: "balanced" },
+      { mode: "lead", eagerness: "eager" },
+    ],
   );
   const before = parentPrompts.length;
   parentSteps.push(() => ({ text: "LEAD_DONE" }));

@@ -177,6 +177,41 @@ test("session effort replay is branch-local, per preset and resettable; enabled 
   );
 });
 
+test("only the branch's last selection pins its models; compact, Off and corrupt records never revive a prior snapshot", async (t) => {
+  const { path, router } = await fixture(t);
+  const full = router.current();
+  const changed = { ...team({ d2: "low" }), version: "changed" };
+  await writePresetConfig(path, { version: 3, defaultPreset: "team", presets: { team: changed } });
+  assert.deepEqual(restorePresetRouter(path, [full, { custom_presets: {} }]).current(), full);
+  const compact = { name: "team", effort_overrides: {} };
+  assert.equal(restorePresetRouter(path, [full, compact]).current().version, "changed");
+  assert.equal(restorePresetRouter(path, [full, { name: "off" }]).current().name, "off");
+  for (const record of [
+    { ...full, digest: "corrupt" },
+    { ...compact, models: full.models },
+  ]) {
+    assert.throws(() => restorePresetRouter(path, [full, record]), {
+      code: "INVALID_SAVED_SNAPSHOT",
+    });
+  }
+  assert.throws(() => restorePresetRouter(path, [{ models: full.models }]), {
+    code: "INVALID_SAVED_EFFORT",
+  });
+});
+
+test("a selected scoped preset restores its exact route without manufacturing a branch edit", async (t) => {
+  const { path } = await fixture(t);
+  const prefs = { version: 2, preset: "scoped", presets: { scoped: team({ d3: "medium" }) } };
+  const snapshot = restorePresetRouter(path, [], prefs).current();
+  const edited = team({ d3: "max" });
+  edited.slots.d3.model = "fixture/other";
+  const currentPrefs = { ...prefs, presets: { scoped: edited } };
+  const restored = restorePresetRouter(path, [snapshot], currentPrefs);
+  assert.deepEqual(restored.current(), snapshot);
+  assert.deepEqual(restored.customPresets(), currentPrefs.presets);
+  assert.equal(restorePresetRouter(path, [], currentPrefs).current().models.d3, "fixture/other");
+});
+
 test("malformed saved effort fails visibly without guessing; removed inactive presets don't block a valid selection", async (t) => {
   const { path } = await fixture(t);
   for (const effort_overrides of [

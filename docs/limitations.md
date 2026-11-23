@@ -167,8 +167,11 @@ coverage is not human-terminal or multiplexer acceptance.
 [Reconcile the package, generated resources and managed user definitions](development.md#matched-resource-migration)
 before upgrade or rollback. Absent-only init never repairs a digest mismatch,
 rewrites existing files or converts older catalogue/selection records. Back up
-user files and update them deliberately. If a restored selection is invalid,
-correct it or start a fresh session; do not silently route to another model.
+user files and update them deliberately. A resumed branch restores its recorded
+routing snapshot even if a same-name disk preset changed or was removed, but
+still requires valid configuration. Older branches may lack historical routing
+facts; do not guess them. If restoration is invalid, correct the configuration
+or use `/new`; do not silently route to another model.
 
 Close Owners and stop all affected Pi processes before changing generations.
 [Earlier lease namespaces](development.md#one-time-naming-cutover) do not

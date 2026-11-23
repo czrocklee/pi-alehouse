@@ -1,21 +1,20 @@
-// Offline source-extension tests: no host session, model, network or generated runtime.
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
 import test from "node:test";
-import { createJiti } from "jiti";
+import {
+  clearControlsAtStart,
+  registerClearCommand,
+} from "../../dist/orchestration/runtime/clear-session.js";
 
-const jiti = createJiti(import.meta.url, {
-  interopDefault: false,
-  moduleCache: false,
-  fsCache: false,
+const off = { name: "off", version: "off-v1", digest: "fixture" };
+const settings = () => ({
+  selection: { ...off },
+  delegation: { mode: "manual", eagerness: "reserved" },
+  controls: { beerMugs: true, borderLabels: false, childSkills: false },
 });
-const { default: clear } = await jiti.import(
-  resolve(import.meta.dirname, "../../src/extensions/clear.ts"),
-);
 
-function registration() {
+function registration(capture = settings) {
   const commands = [];
-  clear(
+  registerClearCommand(
     new Proxy(
       {
         registerCommand(name, options) {
@@ -29,6 +28,7 @@ function registration() {
         },
       },
     ),
+    capture,
   );
   assert.equal(commands.length, 1);
   return commands[0];
@@ -58,14 +58,72 @@ function context(newSession) {
 function assertReplacement(calls) {
   assert.equal(calls.length, 1, "one native new-session request, without idle wait or retries");
   assert.equal(calls[0].length, 1);
-  assert.deepEqual(Object.keys(calls[0][0]), ["withSession"]);
+  assert.deepEqual(Object.keys(calls[0][0]), ["setup", "withSession"]);
+  assert.equal(typeof calls[0][0].setup, "function");
   assert.equal(typeof calls[0][0].withSession, "function");
 }
 
-test("registers only /clear with its exact alias description", () => {
-  const { name, options } = registration();
+test("/clear seeds Off even if an enabled default exists, and detaches settings before replacement", async () => {
+  const entries = [];
+  const live = settings();
+  const { ctx } = context(async ({ setup }) => {
+    live.selection.name = "too-late";
+    live.controls.beerMugs = false;
+    await setup({
+      appendCustomEntry: (customType, data) => entries.push({ type: "custom", customType, data }),
+    });
+    return { cancelled: false };
+  });
+  const { name, options } = registration(() => live);
   assert.equal(name, "clear");
-  assert.equal(options.description, "Start a new session (alias for /new)");
+  await options.handler("", ctx);
+  assert.deepEqual(
+    entries.map((item) => item.customType),
+    ["alehouse:preset-selection:v1", "alehouse:delegation-mode:v1", "alehouse:clear-controls:v1"],
+  );
+  assert.deepEqual(entries[0].data, { ...off, selected_at: entries[0].data.selected_at });
+  const dest = { sessionManager: { getBranch: () => entries } };
+  assert.deepEqual(clearControlsAtStart("new", dest), settings().controls);
+  for (const reason of ["resume", "fork", "reload", "startup"])
+    assert.equal(clearControlsAtStart(reason, dest), undefined);
+  assert.equal(clearControlsAtStart("new", { sessionManager: { getBranch: () => [] } }), undefined);
+});
+
+test("new-session controls reject malformed or duplicate records without evaluating getters", () => {
+  const controls = settings().controls;
+  for (const records of [
+    [controls, controls],
+    [null],
+    [{ ...controls, approval: "yolo" }],
+    [Object.create(controls)],
+    [{ ...controls, beerMugs: "yes" }],
+    [
+      {
+        ...controls,
+        get childSkills() {
+          throw new Error("unexpected getter");
+        },
+      },
+    ],
+  ]) {
+    const branch = records.map((data) => ({
+      type: "custom",
+      customType: "alehouse:clear-controls:v1",
+      data,
+    }));
+    const ctx = { sessionManager: { getBranch: () => branch } };
+    assert.throws(() => clearControlsAtStart("new", ctx), { code: "INVALID_CLEAR_CONTROLS" });
+    assert.equal(clearControlsAtStart("resume", ctx), undefined);
+  }
+});
+
+test("an unavailable snapshot refuses /clear before replacing the session", async () => {
+  const { ctx, calls } = context(() => assert.fail("must not replace"));
+  const { options } = registration(() => {
+    throw new Error("not ready");
+  });
+  await assert.rejects(options.handler("", ctx), /not ready/);
+  assert.equal(calls.length, 0);
 });
 
 for (const hasUI of [true, false])

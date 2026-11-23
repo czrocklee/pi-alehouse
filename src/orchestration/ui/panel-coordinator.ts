@@ -370,15 +370,17 @@ export class PanelCoordinator {
 
   async selectPreset(requested: string, ctx: Pick<ExtensionContext, "ui" | "mode">): Promise<void> {
     try {
-      const router = this.options.router(),
-        candidate = router.prepare();
-      if (requested)
+      const router = this.options.router();
+      if (requested) {
+        // An explicit command adopts a configured definition. A picker or
+        // effort edit instead operates on the current restored selection.
+        const candidate = router.prepare(undefined, { configuredOnly: true });
         this.options.publish(
           candidate,
           requested === "reload" ? candidate.activeName : requested,
           ctx,
         );
-      else await this.pickPreset({ router, candidate }, ctx);
+      } else await this.pickPreset({ router, candidate: router.prepare() }, ctx);
     } catch (error) {
       this.options.showError(error, ctx);
     }

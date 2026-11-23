@@ -265,9 +265,14 @@ confirmation leaves the session in place. If opening the destination later
 fails, the old Owner can still be permanently closed; wait for one replacement
 to finish before starting another.
 
-`/clear` is an alias for `/new`, not a screen wipe; saved sessions remain
-available through `/resume`. `/tree` always requires explicit `/alehouse-close`
-first. Never use Pi's `/reload` with an open Owner. Off, an empty roster, and
+`/clear` starts a new session and a new Owner, not just a screen wipe. It
+carries the effective routing snapshot and display/skill toggles once into
+that session; it does not carry work or permission authority. `/new` uses
+today's defaults. `/resume` restores the branch's recorded routing snapshot,
+not live Agents, permission grants, `/fast` or UI state. Approval-mode
+preferences follow the [normal consent rules](#approval-menu).
+See [clear carryover](routing.md#clear-carryover). `/tree` always requires
+explicit `/alehouse-close` first. Never use Pi's `/reload` with an open Owner. Off, an empty roster, and
 an accepted stop are not confirmed closure. See [limits](limitations.md#lifecycle-and-cancellation).
 
 ## Footer and usage popover

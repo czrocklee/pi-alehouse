@@ -6,7 +6,7 @@ import test from "node:test";
 import { createJiti } from "jiti";
 import { ExtensionRunner, initTheme } from "@earendil-works/pi-coding-agent";
 import { fixture, task, until } from "../support/controller-fixture.mjs";
-import { writePresetConfig } from "../support/preset-config.mjs";
+import { presetConfig, writePresetConfig } from "../support/preset-config.mjs";
 
 // Install owned HOME/XDG before initTheme and the dynamic jiti extension graph
 // below, so resource discovery on those paths cannot use the operator's state.
@@ -64,7 +64,8 @@ async function ownerDirectory(t) {
   process.env.PI_ALEHOUSE_POLICY_ROOT = join(root, "unused-policy");
   process.env.PI_ALEHOUSE_FLOCK = "/unused-fixture-flock"; // The real fixture lease is injected below.
   await mkdir(join(agentDir, "agents"), { recursive: true });
-  await writePresetConfig(join(agentDir, "alehouse-presets.json"));
+  c.presetPath = join(agentDir, "alehouse-presets.json");
+  await writePresetConfig(c.presetPath);
   await mkdir(join(agentDir, "extensions/pi-alehouse"), { recursive: true });
   c.preferencesPath = join(agentDir, "extensions/pi-alehouse/config.json");
   c.root = root;
@@ -81,8 +82,8 @@ async function ownerDirectory(t) {
     join(permissionRoot, "index.ts"),
     'throw new Error("Orchestration must reuse the explicitly injected permission interface");\n',
   );
-  t.mock.method(globalThis, "fetch", () => {
-    assert.fail("border-label startup fixture attempted network IO");
+  c.fetch = t.mock.method(globalThis, "fetch", () => {
+    assert.fail("startup fixture attempted network IO");
   });
   // The jiti-loaded extension calls its own module graph's classes; mock those
   // exact objects, never a second class from a stale dist build. The mocks
@@ -155,12 +156,23 @@ async function startSession(t, c, preferences, options = {}) {
     mode: "tui",
     hasUI: true,
     isProjectTrusted: () => false,
+    thinkingLevel: "high",
     sessionManager: {
       getSessionId: () => h.owner_id,
-      getBranch: () => [],
+      getBranch: () => options.branch ?? [],
       getSessionFile: () => undefined,
     },
-    modelRegistry: { runtime: { getModel() {}, getPhysicalModel() {}, streamSimple() {} } },
+    modelRegistry: options.modelRegistry ?? {
+      runtime: { getModel() {}, getPhysicalModel() {}, streamSimple() {} },
+      getAll: () =>
+        ["fixture-light-model", "fixture-standard-model"].map((id) => ({
+          provider: "openai-codex",
+          id,
+          api: "openai-codex-responses",
+          reasoning: true,
+          thinkingLevelMap: { xhigh: "xhigh" },
+        })),
+    },
     ui: {
       async select(title, items) {
         selectCalls.push({ title, items: [...items] });
@@ -204,7 +216,7 @@ async function startSession(t, c, preferences, options = {}) {
     setActiveTools: (names) => {
       activeTools = [...names];
     },
-    appendEntry() {},
+    appendEntry: (type, data) => options.appendEntry?.(type, data),
   };
   const permission = {
     getPermissionsService: () => ({}),
@@ -221,7 +233,7 @@ async function startSession(t, c, preferences, options = {}) {
       isSessionBeforeEvent: () => false,
       emitError: (error) => errors.push(error.error),
     },
-    { type: "session_start" },
+    { type: "session_start", reason: options.reason ?? "startup" },
   );
   return {
     h,
@@ -243,6 +255,144 @@ async function startSession(t, c, preferences, options = {}) {
         await stop({ reason: "quit" }, ctx);
     },
   };
+}
+
+for (const failedRecord of ["alehouse:preset-selection:v1", "alehouse:delegation-mode:v1"]) {
+  test(`a failed ${failedRecord} baseline never publishes ready routing`, async (t) => {
+    const c = await ownerDirectory(t);
+    const writes = [];
+    const session = await startSession(
+      t,
+      c,
+      { version: 2 },
+      {
+        appendEntry(type) {
+          writes.push(type);
+          if (type === failedRecord) throw new Error("baseline append failed");
+        },
+      },
+    );
+    assert.equal(writes.at(-1), failedRecord);
+    assert(session.errors.some((error) => error.includes("baseline append failed")));
+    assert(!session.statusKeys.includes("alehouse-preset"));
+    assert.equal(session.h.controller.stats().closed, true);
+    await session.shutdown();
+  });
+}
+
+for (const [scenario, warning] of [
+  ["missing inherited model", /Model unavailable \(d5: startup-fixture\/missing\)/u],
+  ["virtual inherited model", /Model unavailable \(d5: startup-fixture\/virtual\)/u],
+  [
+    "unsupported fixed default",
+    /d5: startup-fixture\/physical \(requested fixed effort: high\)\. The worker model does not support this fixed effort/u,
+  ],
+  ["inherit with incompatible parent thinking"],
+  ["Off"],
+]) {
+  test(`real worker routing startup: ${scenario}`, async (t) => {
+    const c = await ownerDirectory(t);
+    const name = "startup-fixture";
+    const model = `${name}/physical`;
+    const off = scenario === "Off";
+    const slots = Object.fromEntries(["d1", "d2", "d3", "d4", "d5"].map((s) => [s, { model }]));
+    if (scenario === "missing inherited model" || off) slots.d5 = { model: `${name}/missing` };
+    if (scenario === "virtual inherited model") slots.d5 = { model: `${name}/virtual` };
+    if (scenario === "unsupported fixed default") slots.d5 = { model, effort: "high" };
+    await writePresetConfig(
+      c.presetPath,
+      presetConfig({ [name]: { version: "v1", slots } }, { defaultPreset: name }),
+    );
+    let capabilityReads = 0;
+    const models = [
+      {
+        provider: name,
+        id: "physical",
+        api: "openai-responses",
+        get reasoning() {
+          capabilityReads++;
+          return false; // The SDK supports only off, while the parent has high.
+        },
+      },
+      { provider: name, id: "virtual", api: "pi-virtual" },
+      { provider: "unrelated", id: "missing", api: "openai-responses" },
+    ];
+    const unexpectedRuntimeUse = t.mock.fn(() => assert.fail("startup used the request runtime"));
+    const modelRegistry = {
+      getAll: t.mock.fn(() => models),
+      runtime: {
+        getModel: unexpectedRuntimeUse,
+        getPhysicalModel: unexpectedRuntimeUse,
+        streamSimple: unexpectedRuntimeUse,
+      },
+    };
+    const presetType = "alehouse:preset-selection:v1";
+    const compact = [
+      { type: "custom", customType: presetType, data: { name, effort_overrides: {} } },
+    ];
+    const baseline = [],
+      cleared = [];
+    for (const [phase, reason, branch] of [
+      ["fresh", "new", []],
+      ...(!off ? [["compact", "resume", compact]] : []),
+      ["resume", "resume", baseline],
+      ["clear", "new", cleared],
+    ]) {
+      capabilityReads = 0;
+      modelRegistry.getAll.mock.resetCalls();
+      const writes = [];
+      const s = await startSession(
+        t,
+        c,
+        { version: 2, ...(off ? { preset: "off" } : {}) },
+        {
+          reason,
+          branch,
+          modelRegistry,
+          appendEntry: (customType, data) => writes.push({ type: "custom", customType, data }),
+        },
+      );
+      assert.deepEqual(s.errors, [], phase);
+      assert(s.statusKeys.includes("alehouse-preset"), phase);
+      assert.equal(s.handlers.get("tool_call")[0]({ toolName: "read" }, s.ctx), undefined, phase);
+      const diagnostics = s.notifications.filter(({ level }) => level !== "info");
+      assert.deepEqual(
+        diagnostics.map(({ level }) => level),
+        warning ? ["warning"] : [],
+        phase,
+      );
+      if (warning) assert.match(diagnostics[0].text, warning, phase);
+      assert.equal(modelRegistry.getAll.mock.callCount(), off ? 0 : 1, phase);
+      assert.equal(capabilityReads > 0, scenario === "unsupported fixed default", phase);
+      assert.equal(unexpectedRuntimeUse.mock.callCount(), 0, phase);
+      assert.equal(c.fetch.mock.callCount(), 0, phase);
+      if (phase === "fresh" || phase === "compact") {
+        const record = writes.find(({ customType }) => customType === presetType).data;
+        assert.equal(record.name, off ? "off" : name, phase);
+        if (!off) {
+          assert.equal(record.models.d5, slots.d5.model, phase);
+          assert.deepEqual(record.effort_overrides, {}, phase);
+          assert.equal(record.effort.d5, slots.d5.effort ?? "inherit", phase);
+        }
+      } else {
+        assert.deepEqual(writes, [], `${phase}: no replacement of recorded routing`);
+      }
+      if (phase === "fresh") {
+        baseline.push(...writes);
+        await s.commands.get("clear").handler("", {
+          ...s.ctx,
+          newSession: ({ setup }) =>
+            setup({
+              appendCustomEntry: (customType, data) =>
+                cleared.push({ type: "custom", customType, data }),
+            }),
+        });
+      }
+      await s.shutdown();
+      assert.equal(s.h.controller.stats().closed, true, phase);
+      await unchangedPreferences(c.preferencesPath, s.preferencesBytes, phase);
+    }
+  });
 }
 
 const unchangedPreferences = async (path, bytes, when) =>

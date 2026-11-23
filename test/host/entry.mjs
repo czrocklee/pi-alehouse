@@ -483,7 +483,7 @@ try {
     digest: "0".repeat(64),
   });
   parentManager.branch(rootEntry);
-  parentManager.appendCustomEntry(presetEntry, { name: "entry-other" });
+  parentManager.appendCustomEntry(presetEntry, { name: "entry-other", effort_overrides: {} });
   parentManager.branch(branchA);
   assert.equal(
     parentManager
@@ -726,8 +726,9 @@ try {
   );
 
   // The nonreasoning model in the installed registry supports only "off".
-  // D5 deliberately has an unresolved inherited model: it must not block
-  // saving another slot or warn on session restoration before any spawn.
+  // D5 deliberately has a missing model with inherited effort: it must not
+  // block saving another slot. Restoration warns about its model ID without
+  // resolving its inherited effort or blocking startup.
   // Arrows audit immediately; Esc returns without undoing, and Alt+S closes.
   // Editor Enter only returns to the list. List Enter still selects a name
   // rather than manufacturing an override record.
@@ -781,6 +782,7 @@ try {
     "switch-away/back remembers this preset's effort",
   );
   assert.deepEqual(selectedEntries().at(-1).data.effort_overrides, { d3: "off" });
+  const savedRoutingSelection = structuredClone(selectedEntries().at(-1).data);
 
   // A fresh unused Owner permits a real SDK InteractiveMode replacement. Fork
   // the persisted branch, not an in-memory copy or a synthetic session_start;
@@ -811,9 +813,11 @@ try {
   assert.equal(
     notices
       .slice(beforeEffortRestoreNotices)
-      .some((message) => message.includes("Saved worker effort needs attention")),
-    false,
-    "unresolved inherit is spawn-time validation, not a saved-policy warning",
+      .some((message) =>
+        message.includes("Model unavailable (d5: alehouse-fixture/missing-inherit-model)"),
+      ),
+    true,
+    "warn about the missing recorded model without substituting one or resolving inherited effort",
   );
   // Restore the controlled d5 model before later difficulty-5 work. This
   // rereads metadata without changing the successfully saved d3 override.
@@ -1303,25 +1307,19 @@ try {
   assert.deepEqual(errors, []);
   assert.equal(permission.getPermissionsService(parent.sessionId), undefined);
 
-  // Retain the enabled-selection restoration positive control as well as Off:
-  // the active branch wins, and current disk content replaces historical slots.
+  // The active branch restores its exact recorded routing, not a same-name
+  // replacement on disk or the abandoned branch's selection.
+  writePresets({ "entry-fixture": preset("v9"), "entry-other": preset("v6") });
   const restoreManager = sdk.SessionManager.create(cwd, join(outputRoot, "entry-restore-sessions"));
   const restoreRoot = restoreManager.appendCustomEntry("fixture:branch-root", {});
-  const restoreBranch = restoreManager.appendCustomEntry(presetEntry, {
-    name: "entry-fixture",
-    version: "historical-v0",
-    digest: "0".repeat(64),
-  });
+  const restoreBranch = restoreManager.appendCustomEntry(presetEntry, savedRoutingSelection);
   restoreManager.branch(restoreRoot);
   restoreManager.appendCustomEntry(presetEntry, {
     name: "entry-other",
     effort_overrides: { d5: "off" },
   });
   restoreManager.branch(restoreBranch);
-  restoreManager.appendCustomEntry(presetEntry, {
-    name: "entry-fixture",
-    effort_overrides: { d3: "off" },
-  });
+  restoreManager.appendCustomEntry(presetEntry, savedRoutingSelection);
   const restored = await createRuntime({
     cwd,
     sessionManager: restoreManager,
@@ -1335,9 +1333,24 @@ try {
     { d3: "off" },
     "active SDK branch must not replay the abandoned preset's effort",
   );
+  const restoredRun = await invoke("agent_spawn", {
+    agent: "restored",
+    profile: "worker",
+    reasoning_difficulty: 3,
+    prompt: "Read source.txt",
+    label: "Restored routing control",
+    max_turns: 4,
+    wait_ms: 60000,
+  });
+  assert.equal((await finish(restoredRun)).result, "ENTRY_READ_OK");
+  const restoredRouting = lastLink().data.routing;
+  assert.equal(restoredRouting.preset_version, savedRoutingSelection.version);
+  assert.equal(restoredRouting.selection_digest, savedRoutingSelection.digest);
+  assert.equal(restoredRouting.effort_source, "user_override");
   const restoredSelection = {
     status: presetStatus(),
-    saved_version: "historical-v0",
+    routing: restoredRouting,
+    saved_version: savedRoutingSelection.version,
     active_tools: restored.session.getActiveToolNames(),
   };
   const restoredCleanup = await disposeChild(restored.session, parentBus);
@@ -1494,7 +1507,7 @@ try {
           "Off blocks cached new/reused delegation and messages per Agent while inspection stays available",
           "tool-visibility failure cannot roll back Off or bypass admission; next-request reconciliation repairs exposure",
           "reenabling another preset preserves resident Agent settings",
-          "enabled active-branch selection restores current disk content rather than historical slots",
+          "enabled active-branch selection restores recorded routing despite differing disk content",
           "atomic preset typo/cancel/reload/removal/switch-away",
           "synchronous preset audit precedes live publication; ambiguous append latches owner",
           "successful selection survives footer paint failure with warning",

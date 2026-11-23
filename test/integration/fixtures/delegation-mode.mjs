@@ -183,14 +183,18 @@ try {
     !first.session.getActiveToolNames().includes("agent_spawn"),
     "a mode change never re-exposes delegation while Off",
   );
-  assert.deepEqual(saved(first.session), ["lead/eager"]);
+  assert.deepEqual(saved(first.session), ["supervisor/reserved", "lead/eager"]);
   await first.session.prompt("/alehouse-preset fixture");
   assert.equal(first.ui.statuses.at(-1), "delegation: lead·eager/fixture");
   const enabled = await first.ask("AFTER_ENABLE");
   assert(enabled[0].includes(leadEager) && !enabled[0].includes(supervisorReserved));
   await first.session.prompt("/alehouse-mode lead eager");
   assert.match(first.ui.notices.at(-1).message, /Delegation: lead·eager \(unchanged\)/);
-  assert.deepEqual(saved(first.session), ["lead/eager"], "an unchanged selection writes no record");
+  assert.deepEqual(
+    saved(first.session),
+    ["supervisor/reserved", "lead/eager"],
+    "an unchanged selection writes no record",
+  );
   file = first.session.sessionManager.getSessionFile();
   assert(file);
 } finally {
