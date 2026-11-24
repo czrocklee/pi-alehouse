@@ -189,7 +189,7 @@ export function assertCallerTools(tools) {
   assert.equal(Object.hasOwn(fields, "max_duration_ms"), false);
   assert.match(spawn.description, /submit its first task/);
   assert.match(spawn.description, /Execution may queue/);
-  assert.match(spawn.description, /default for any new work or review/);
+  assert.match(spawn.description, /default for any new work or independent review/);
   assert.match(spawn.description, /Model, profile and context stay fixed/);
   assert.doesNotMatch(spawn.description, /turn limit/);
   assert.match(spawn.description, /no nested delegation/);
@@ -226,10 +226,10 @@ export function assertCallerTools(tools) {
   assert.equal(runFields.continues.maxLength, 512);
   assert.equal(runFields.continues.pattern, "\\S");
   for (const fact of [
-    /specific earlier work this Agent/,
+    /[Ss]pecific earlier work in this Agent's context that this task builds on/,
     /not sent/,
     /If none, use agent_spawn/,
-    /after if only its output/,
+    /after if only output is needed/,
   ])
     assert.match(runFields.continues.description, fact);
   assert.equal(Object.hasOwn(runFields, "return_to"), false, "compound return is spawn-only");
@@ -248,9 +248,9 @@ export function assertCallerTools(tools) {
     assert.match(runFields.prompt.description, fact);
   assert.deepEqual(runFields.label, fields.label);
   for (const fact of [
-    /idle Agent's own earlier work/,
-    /re-reads its whole conversation/,
-    /even on a related topic.*agent_spawn/,
+    /Continue or iterate on an idle Agent's own earlier work/,
+    /re-reads its retained conversation/,
+    /even on a related topic or role.*agent_spawn/,
     /a reasoning impasse[^.]*agent_spawn/,
     /different profile\/reasoning_difficulty\/context/,
     /max_turns overrides this task only/,
@@ -284,12 +284,13 @@ export function assertCallerTools(tools) {
       /Optional coordination/,
       /omit if unneeded/,
       /not permissions or execution evidence/,
-      /literal paths/,
-      /literal paths relative to parent cwd or absolute/,
+      /[Ll]iteral paths/,
+      /[Ll]iteral paths relative to parent cwd or absolute/,
       /no padding, globs, shell quotes/,
-      /one full-suite owner after shared source is stable/,
+      /one full-suite task after shared source is stable/,
     ])
       assert.match(dispatch.description, fact);
+    assert.doesNotMatch(dispatch.description, /full-suite owner/);
     assert(dispatch.description.includes("[]/{}"));
     for (const [field, limit] of [
       ["required_paths", 32],
@@ -456,6 +457,11 @@ export function assertCallerTools(tools) {
   );
   assert.match(byName.get("agent_interrupt").description, /Keeps the conversation/);
   assert.match(byName.get("agent_kill").description, /Permanently end/);
+  assert.match(
+    byName.get("agent_kill").description,
+    /free its slot when no further follow-up is planned/,
+  );
+  assert.match(byName.get("agent_kill").description, /precede agent_spawn in the same batch/);
   assert.match(byName.get("agent_kill").description, /Name stays taken, results stay readable/);
   assert.match(
     byName.get("agent_kill").description,

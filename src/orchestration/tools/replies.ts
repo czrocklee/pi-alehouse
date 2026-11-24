@@ -1,5 +1,6 @@
 import { terminal, validDifficulty, type RunView } from "../core/contracts.ts";
 import {
+  COMMUNICATION_LIMITS,
   modelDispatchNotes,
   modelOutcomeReason,
   modelQueueWait,
@@ -117,6 +118,14 @@ export function errorReply(
         : typeof d.run_id === "string"
           ? safe(() => names?.run(d.run_id as string))
           : undefined;
+  const releasable =
+    Array.isArray(d.releasable_agent_ids) && names
+      ? d.releasable_agent_ids
+          .map((id) => (typeof id === "string" ? safe(() => names.agent(id)) : undefined))
+          .filter((value): value is string => typeof value === "string" && value.length > 0)
+          .slice(0, COMMUNICATION_LIMITS.agents)
+          .map((value) => utf16Prefix(value, 64))
+      : [];
   const internalParameter =
     typeof d.key === "string" ? d.key : typeof d.parameter === "string" ? d.parameter : undefined;
   const code = error.code ?? "TOOL_ERROR";
@@ -168,6 +177,7 @@ export function errorReply(
       ...(typeof d.requested === "string" ? { requested: utf16Prefix(d.requested, 128) } : {}),
       ...(validDifficulty(d.difficulty) ? { reasoning_difficulty: d.difficulty } : {}),
       ...allowedFields(d.allowed),
+      ...(releasable.length ? { releasable } : {}),
       ...(typeof d.parent_thinking === "string"
         ? { parent_thinking: utf16Prefix(d.parent_thinking, 32) }
         : {}),

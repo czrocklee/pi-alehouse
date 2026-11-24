@@ -52,7 +52,14 @@ test("Co-worker and Lead combine division, eagerness and web routing; Manual and
           );
           assert.match(line, /When scope is unclear, delegate discovery first/);
           assert.match(line, /run independent tasks in parallel/);
-          assert.match(line, /answer Agents' questions, close gaps with follow-up tasks/);
+          assert.match(line, /answer Agents' questions/);
+          assert.match(line, /iterate with the same Agent while its context helps/);
+          assert.doesNotMatch(
+            line,
+            /\brelease\b/i,
+            "Supervisor need not free idle slots by default",
+          );
+          assert.doesNotMatch(line, /follow-up tasks/);
           assert.doesNotMatch(line, /\bdecisions\b|\bframing\b|\bintegration\b/);
         }
         continue;

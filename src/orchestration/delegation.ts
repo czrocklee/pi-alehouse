@@ -39,7 +39,7 @@ const hybridModeText: Readonly<Record<"co-worker" | "lead", string>> = Object.fr
 });
 const supervisorText =
   "Supervise the work: delegate diagnosis, design, implementation, verification and review rather than doing them yourself. " +
-  "When scope is unclear, delegate discovery first; run independent tasks in parallel, answer Agents' questions, close gaps with follow-up tasks, and synthesize results.";
+  "When scope is unclear, delegate discovery first; run independent tasks in parallel, answer Agents' questions, iterate with the same Agent while its context helps, and synthesize results.";
 const eagernessText: Readonly<Record<Eagerness, string>> = Object.freeze({
   reserved:
     "Hand off only substantial, clearly separable work; keep small pieces, which cost more to delegate than to do.",

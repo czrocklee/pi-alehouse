@@ -35,7 +35,7 @@ A child can `alert_parent` with information or `ask_parent` with a question. Nei
 
 ## When a task looks stuck
 
-An executing task holds one of four slots for its admitted provider; different models on that provider share the limit. An idle Agent still holds one of twelve resident reservations. A queued task may be waiting for a dependency or a provider slot. A finishing task has exited execution but may still be draining inputs, releasing resources or recording history. Do not assume it is reusable or forcibly remove a lease.
+An executing task holds one of four slots for its admitted provider; different models on that provider share the limit. An idle Agent still holds one of sixteen resident reservations. A queued task may be waiting for a dependency or a provider slot. A finishing task has exited execution but may still be draining inputs, releasing resources or recording history. Do not assume it is reusable or forcibly remove a lease.
 
 Press **Alt+A** or run `/alehouse-status` to inspect progress. Check for an unanswered question before waiting again. A Run has a soft turn budget but no wall-clock execution deadline. A partial result can still be useful even if the task failed; a `completed` task with `limit_reached` is not proof that all requested work was done.
 

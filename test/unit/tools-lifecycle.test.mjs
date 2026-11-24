@@ -281,15 +281,19 @@ test("an aborted wait is not an interrupt; kill ends a busy Agent and frees its 
   await assert.rejects(call("agent_spawn", create({ agent: "two" }), "full"), (error) => {
     const result = JSON.parse(error.message).error;
     assert.equal(result.code, "RESIDENT_LIMIT");
+    assert.equal(result.releasable, undefined, "busy residents are not listed as releasable");
     assert.match(
       result.resolution,
-      /Kill a finished Agent.*agent_wait for one to finish, then retry this agent_spawn/,
-      "a full roster leads back to spawning, not reuse",
+      /Kill a finished Agent.*agent_wait for one to finish.*and kill it, then retry this agent_spawn/,
+      "a full roster leads back to spawning after releasing a slot, not reuse",
     );
+    assert.match(result.resolution, /resolve another Agent's pending question/);
+    assert.match(result.resolution, /until release completes/);
+    assert.match(result.resolution, /[Dd]o not switch new work to agent_run/);
     assert.doesNotMatch(
       result.resolution,
-      /new name|idle/,
-      "the rejected name was never taken; idle includes pending questions",
+      /new name|idle|reports killed/,
+      "the rejected name was never taken; idle includes pending questions; killed is not a status",
     );
     return true;
   });
@@ -1203,6 +1207,46 @@ test("a kill earlier in the same parallel batch frees its slot for a later spawn
   await settle(f, "three");
 });
 
+test("RESIDENT_LIMIT names only settled question-free Agents as releasable and retries with the same spawn name", async (t) => {
+  const f = await fixture(t, { controller: { resident_limit: 4, concurrency: 1 } }),
+    { call } = toolsFor(f);
+  await call("agent_spawn", create({ agent: "done-one" }), "d1");
+  await until(() => f.ports[0]?.streaming);
+  f.ports[0].finish("done");
+  await settle(f, "done-one");
+  await call("agent_spawn", create({ agent: "asking" }), "ask");
+  await until(() => f.ports[1]?.streaming);
+  f.ports[1].callbacks.question("Proceed?");
+  f.ports[1].finish("waiting");
+  await settle(f, "asking");
+  await call("agent_spawn", create({ agent: "busy" }), "busy");
+  await until(() => f.ports[2]?.streaming);
+  await call("agent_spawn", create({ agent: "queued" }), "queued");
+  assert.equal(viewOf(f, "queued").status, "queued");
+  // Resident slots hold: done-one (completed), asking (needs_input), busy (running), queued (queued).
+  await assert.rejects(call("agent_spawn", create({ agent: "fresh" }), "full"), (error) => {
+    const result = JSON.parse(error.message).error;
+    assert.equal(result.code, "RESIDENT_LIMIT");
+    assert.deepEqual(result.releasable, ["done-one"]);
+    return true;
+  });
+  const [released, retried] = await Promise.all([
+    call("agent_kill", { agent: "done-one" }, "free"),
+    call("agent_spawn", create({ agent: "fresh" }), "retry-fresh"),
+  ]);
+  assert.equal(released.agent_status, "released");
+  assert.deepEqual(retried.action, { type: "agent_spawn", agent: "fresh", task: 1 });
+  await call("agent_kill", { agent: "asking" }, "cleanup-ask");
+  f.ports[2].finish();
+  await until(() => f.ports[3]?.streaming);
+  f.ports[3].finish();
+  await until(() => f.ports[4]?.streaming);
+  f.ports[4].finish();
+  await settle(f, "busy");
+  await settle(f, "queued");
+  await settle(f, "fresh");
+});
+
 test("a kill earlier in the same parallel batch frees a questioned Agent's claim for a later spawn", async (t) => {
   const f = await fixture(t, {
       controller: { resident_limit: 4, concurrency: 2, dispatch: literalDispatch },
@@ -1423,10 +1467,16 @@ test("admission waits for a release under way only within its bound, and an abor
   };
   const killing = call("agent_kill", { agent: "one" }, "kill");
   const started = performance.now();
-  await assert.rejects(
-    call("agent_spawn", create({ agent: "two" }), "late"),
-    code("RESIDENT_LIMIT"),
-  );
+  await assert.rejects(call("agent_spawn", create({ agent: "two" }), "late"), (error) => {
+    const result = JSON.parse(error.message).error;
+    assert.equal(result.code, "RESIDENT_LIMIT");
+    assert.equal(
+      result.releasable,
+      undefined,
+      "an Agent whose kill is already in flight is not listed as releasable",
+    );
+    return true;
+  });
   assert(performance.now() - started >= 90, "the release under way was waited for");
   const abort = new AbortController();
   const aborted = call("agent_spawn", create({ agent: "two" }), "aborted", undefined, abort.signal);

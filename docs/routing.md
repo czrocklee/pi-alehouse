@@ -10,12 +10,12 @@ model preset; there are no built-in worker models.
 
 ## Delegation mode
 
-| Mode                | Guidance for the main model                                                                                                                     |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Manual              | Assign work only when you ask; suggest delegation when useful and collect existing work.                                                        |
-| Co-worker (default) | Take a disjoint share of the task in parallel while Agents do theirs.                                                                           |
-| Lead                | Own key decisions and core hands-on work; delegate separable diagnosis, implementation, verification and review.                                |
-| Supervisor          | Delegate discovery, diagnosis, design, implementation, verification and review; run parallel tasks, answer questions, follow up and synthesize. |
+| Mode                | Guidance for the main model                                                                                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Manual              | Assign work only when you ask; suggest delegation when useful and collect existing work.                                                                                                   |
+| Co-worker (default) | Take a disjoint share of the task in parallel while Agents do theirs.                                                                                                                      |
+| Lead                | Own key decisions and core hands-on work; delegate separable diagnosis, implementation, verification and review.                                                                           |
+| Supervisor          | Delegate discovery, diagnosis, design, implementation, verification and review; run parallel tasks, answer questions, iterate with the same Agent while its context helps, and synthesize. |
 
 **Eagerness** sets the handoff threshold in Co-worker and Lead: `reserved` for
 substantial, separable work; `balanced` (default) for independent work that

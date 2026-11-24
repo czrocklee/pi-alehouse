@@ -5,6 +5,7 @@ import {
   agentInterruptDescription,
   agentKillDescription,
   agentReadDescription,
+  agentRunDescription,
   agentWaitDescription,
   answerSchema,
   checkParentToolArguments,
@@ -104,4 +105,12 @@ test("observation and nonconsuming tools state their distinct communication effe
     spawnSchema.properties.after.description,
     /completed with limit_reached still passes/,
   );
+  assert.match(agentKillDescription, /free its slot when no further follow-up is planned/);
+  assert.match(agentKillDescription, /precede agent_spawn in the same batch/);
+  assert.match(
+    runSchema.properties.continues.description,
+    /[Ss]pecific earlier work in this Agent's context that this task builds on/,
+  );
+  assert.match(agentRunDescription, /Continue or iterate on an idle Agent's own earlier work/);
+  assert.match(agentRunDescription, /New work \(even on a related topic or role\)/);
 });

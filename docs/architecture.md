@@ -45,7 +45,7 @@ state transitions against the original Run identities.
 There is one Owner for the live parent session, with a FIFO admission queue.
 The earliest dependency-ready Run with an available slot can start; an unmet
 dependency or saturated provider need not block later eligible work. By default
-there are four executing slots per admitted provider ID and twelve resident
+there are four executing slots per admitted provider ID and sixteen resident
 reservations across the Owner, including queued and completed-unreleased Agents.
 Models under one provider ID share slots. This is not an account-wide or
 cross-process rate limit. Accepted request replay is scoped to the Owner and

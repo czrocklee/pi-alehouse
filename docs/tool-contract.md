@@ -76,10 +76,11 @@ default. There is [no execution deadline](task-dispatch.md#execution-limits).
 
 ## Run, send and explicit answer
 
-**Run** continues an idle Agent's own specific earlier work in its retained
-conversation. `continues` is request identity, not child input. Spawn for new
-work (even on a related topic), a fresh attempt after a reasoning impasse, or a
-different difficulty. Use `after` to pass previous output. An optional
+**Run** continues or iterates on an idle Agent's own specific earlier work in its
+retained conversation. `continues` is request identity, not child input: state
+the earlier work in that Agent's context that this task builds on. Spawn for new
+work (even on a related topic or role), a fresh attempt after a reasoning
+impasse, or a different difficulty. Use `after` to pass previous output. An optional
 `max_turns` (same range as spawn) affects only this new task; omission uses the
 spawn default, not the last task's budget. Run/send may wait up to 30 s for a
 finishing/stopping task to settle. Run rejects active work with `AGENT_BUSY`
@@ -179,15 +180,22 @@ new claim, steering or restoration of consumed alerts. Check `agent_list` if
 acceptance is uncertain. New commands recheck context, abort, admission and
 revision before effects; `DELEGATION_OFF` also rejects crossing a disable/re-enable.
 
-Defaults: 12 resident Agents, 16 queued tasks, 4 active tasks per provider
+Defaults: 16 resident Agents, 16 queued tasks, 4 active tasks per provider
 (shared by its models), 512 retained tasks and 67108864 retained/reserved UTF-16
 units of result text, reserving 1048576 units per task at admission. Queued tasks
-use no slot and a busy provider does not block another. For `QUEUE_FULL`, wait
+use no execution slot and a busy provider does not block another. For `QUEUE_FULL`, wait
 for room. `OWNER_HISTORY_LIMIT` has no eviction; ask the user to close the Owner
-and start fresh after confirmed closure. `RESIDENT_LIMIT`/`RESOURCE_OWNED`/
-`BUILD_DIR_BUSY` blocked **only** by release already underway can wait up to
-10 s, then repeat admission. Conflicts are checked before capacity; a later kill
-is not anticipated. Timeout or uncertain cleanup returns the rejection.
+and start fresh after confirmed closure. `RESIDENT_LIMIT` includes `releasable`
+when healthy finished resident Agents without pending questions, release already
+underway, or uncertain cleanup can be freed, and directs callers to `agent_kill`
+(including earlier in the same batch), or to wait/resolve another Agent's
+pending question and then kill a finished Agent, rather than switching new work
+to `agent_run` (a rejected `return_to` leaves `return_to.question_id` unreserved
+for retry). `RESIDENT_LIMIT`/`RESOURCE_OWNED`/`BUILD_DIR_BUSY` blocked **only**
+by release already underway can wait up to 10 s, then repeat admission. All
+request-specific preflights (including both halves of `return_to`) and live
+admission/Owner gates precede resident capacity; a later kill is not
+anticipated. Timeout or uncertain cleanup returns the rejection.
 
 `wait_ms` is an integer 0–300000. Spawn/run/send/answer default to 0; wait defaults
 to 300000. Wait `mode` defaults to `all`; `any` needs one selected task to end.
@@ -306,7 +314,9 @@ questions can repeat or reopen without resetting the presentation bit.
 Interrupt requests cooperative stop and returns a task row. Already settled,
 exited or budget-stopping work keeps its outcome; observe settlement with wait/read.
 The Agent remains reusable when healthy (even if its first task never started).
-Kill stops and permanently releases the Agent, not its history or name. Its
+Kill stops and permanently releases the Agent, not its history or name; use it
+when no further follow-up is planned, including earlier in the same batch before
+`agent_spawn` when slots are full. Its
 single 10 s stop/cleanup bound returns `agent_status: "released" | "exiting" |
 "cleanup_uncertain"`; only `released` confirms release, while tracked cleanup can
 continue after `exiting`. No forced release or rollback. List returns `agents`

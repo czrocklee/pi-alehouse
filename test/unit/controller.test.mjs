@@ -683,7 +683,7 @@ test("shipped default limits are pinned, not just mechanism", async () => {
       controller.stats().limits,
       {
         concurrency: 4,
-        resident: 12,
+        resident: 16,
         queue: 16,
         grace: 5,
         output: 1_048_576,

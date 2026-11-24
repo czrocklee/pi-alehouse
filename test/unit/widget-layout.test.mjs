@@ -40,19 +40,19 @@ const idle = (index) => ({
     cwd: "/w",
   },
 });
-function layoutFixture(t, rows, blocked, beerMugs = false) {
-  const views = Array.from({ length: 12 }, (_, index) => idle(index)),
+function layoutFixture(t, rows, blocked, beerMugs = false, count = 12, limit = count) {
+  const views = Array.from({ length: count }, (_, index) => idle(index)),
     opened = [];
   const widget = new AgentWidget(
     {
       list: () => structuredClone(views),
       stats: () => ({
-        resident: 12,
+        resident: views.filter((view) => view.resident).length,
         cleanup_uncertain: false,
         ...(blocked ? { parent_error: "BROKEN" } : {}),
       }),
     },
-    12,
+    limit,
   );
   t.after(() => widget.dispose());
   if (beerMugs) widget.setBeerMugs(true);
@@ -268,6 +268,41 @@ for (const beerMugs of [false, true])
       assert.deepEqual(h.paint().lines, frame.lines, "idle repaint preserves the complete roster");
     });
   }
+
+test("real SDK dock marks sixteen residents full only at sixteen and paginates within the sixteen-row cap", (t) => {
+  const partial = layoutFixture(t, 60, false, false, 15, 16);
+  assert.equal(partial.linesOf(partial.paint())[1], "▸ Subagents · ✓15");
+
+  const h = layoutFixture(t, 60, false, false, 16, 16);
+  let frame = h.paint(),
+    lines = h.linesOf(frame);
+  assert.equal(lines[1], "▸ Subagents (full) · ✓16");
+  assert.deepEqual(h.pointer(frame, 1), { handled: true, render: true });
+  let pages = 0;
+  for (;;) {
+    frame = h.paint();
+    lines = h.linesOf(frame);
+    const box = h.boxOf(frame);
+    assert(box.lines.length - 1 <= 16, "sixteen-row widget height cap holds at resident=16");
+    for (let y = 0; y < lines.length; y++) {
+      if (/^[├└]─ ✓/.test(lines[y])) assert.deepEqual(h.pointer(frame, y), { handled: true });
+    }
+    const nav = lines.findIndex((line) => /\d+\/\d+ Next/.test(line));
+    assert(nav >= 0);
+    const [, current, total] = lines[nav].match(/(\d+)\/(\d+)/);
+    pages++;
+    if (current === total) break;
+    assert.deepEqual(h.pointer(frame, nav, lines[nav].indexOf("Next")), {
+      handled: true,
+      render: true,
+    });
+  }
+  assert.equal(pages, 2);
+  assert.deepEqual(
+    h.opened,
+    h.views.map((view) => view.agent_id),
+  );
+});
 
 for (const beerMugs of [false, true])
   for (const columns of beerMugs ? [16, 17, 19, 25] : [15, 16, 18, 24]) {

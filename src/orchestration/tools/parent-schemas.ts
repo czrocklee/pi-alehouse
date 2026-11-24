@@ -103,7 +103,7 @@ const dispatchField = optional(
     {
       additionalProperties: false,
       description:
-        "Optional coordination (omit if unneeded), not permissions or execution evidence. Use literal paths relative to parent cwd or absolute: no padding, globs, shell quotes, []/{}, backslash, $, leading ~ or @; put other refs in prompt. Assign one full-suite owner after shared source is stable.",
+        "Optional coordination (omit if unneeded), not permissions or execution evidence. Literal paths relative to parent cwd or absolute: no padding, globs, shell quotes, []/{}, backslash, $, leading ~ or @; other refs in prompt. Assign one full-suite task after shared source is stable.",
     },
   ),
 );
@@ -177,7 +177,7 @@ export const runSchema = Type.Object(
     agent: agentName("An existing, idle Agent."),
     continues: text(
       PARENT_TEXT_LIMITS.continues,
-      "Name the specific earlier work this Agent is continuing; not sent to it. If none, use agent_spawn (with after if only its output is needed).",
+      "Specific earlier work in this Agent's context that this task builds on (not sent to it). If none, use agent_spawn (after if only output is needed).",
     ),
     prompt: text(
       PARENT_TEXT_LIMITS.prompt,
@@ -285,9 +285,9 @@ export const readSchema = Type.Object(
 export const listSchema = Type.Object({}, { additionalProperties: false });
 
 export const agentSpawnDescription =
-  "Create an Agent and submit its first task: the default for any new work or review. Execution may queue. Model, profile and context stay fixed; no nested delegation. If acceptance is unclear, check agent_list before repeating. Queued work is accepted; wait, do not respawn.";
+  "Create an Agent and submit its first task: the default for any new work or independent review. Execution may queue. Model, profile and context stay fixed; no nested delegation. If acceptance is unclear, check agent_list before repeating. Queued work is accepted; wait, do not respawn.";
 export const agentRunDescription =
-  "Continue an idle Agent's own earlier work; each turn re-reads its whole conversation. New work (even on a related topic), a fresh attempt after a reasoning impasse, or different profile/reasoning_difficulty/context: agent_spawn. max_turns overrides this task only. Running task: agent_send or agent_wait; pending question: agent_answer.";
+  "Continue or iterate on an idle Agent's own earlier work; each turn re-reads its retained conversation. New work (even on a related topic or role), a reasoning impasse, or different profile/reasoning_difficulty/context: agent_spawn. max_turns overrides this task only. Busy: agent_send/agent_wait; pending question: agent_answer.";
 export const agentSendDescription =
   "Add instructions to the Agent's current task, fixed at this call, not an answer or new task. delivery: joined=added to prompt, steered=sent while running, not_delivered=nothing sent. Delivery does not prove action.";
 export const agentAnswerDescription =
@@ -297,7 +297,7 @@ export const agentReadDescription = `Read a task's result/question and this Agen
 export const agentInterruptDescription =
   "Request a stop; the task has stopped only once wait/read shows a final status. An already ending task keeps its outcome. Keeps the conversation for follow-ups; consumes no alerts or completion notices.";
 export const agentKillDescription =
-  "Permanently end an Agent, requesting stop of its task. agent_status=exiting or cleanup_uncertain does not confirm release; released does. Name stays taken, results stay readable; consumes no alerts or completion notices.";
+  "Permanently end an Agent to free its slot when no further follow-up is planned (may precede agent_spawn in the same batch), or stop an active one. agent_status=exiting or cleanup_uncertain does not confirm release; released does. Name stays taken, results stay readable; consumes no alerts or completion notices.";
 export const agentListDescription =
   "Read-only roster with current/latest task labels. released lists up to 32 newest-created released Agents, not release order. Get pending questions through wait/read. Consumes no alerts or completion notices.";
 

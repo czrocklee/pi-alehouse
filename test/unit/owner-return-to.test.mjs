@@ -390,14 +390,22 @@ test("Off transition during second-plan preflight rejects both admissions", asyn
   assert.deepEqual(graph(f), before);
 });
 
-test("second-plan preflight failure and swallowed reentrancy leave the original question/claim untouched", async (t) => {
+test("second-plan preflight failure and live Off transition precede resident capacity without touching question/claim", async (t) => {
   let fail = false,
+    flipOff = false,
     reenter,
     f;
+  const admission = { enabled: true, revision: 1 };
   f = await fixture(t, {
     controller: {
+      resident_limit: 1,
+      admission: () => ({ ...admission }),
       dispatch: {
         prepare(declaration, context) {
+          if (flipOff && context.profile === "editor" && context.deferInputs) {
+            admission.enabled = false;
+            admission.revision++;
+          }
           if (fail && context.profile === "editor" && context.deferInputs) {
             if (reenter) {
               try {
@@ -413,14 +421,51 @@ test("second-plan preflight failure and swallowed reentrancy leave the original 
     },
   });
   const q = await asking(f, { dispatch: { ownership: ["owned"] } });
-  fail = true;
+  flipOff = true;
   let before = graph(f);
+  await assert.rejects(admit(f, q), errorCode("DELEGATION_OFF"));
+  assert.deepEqual(graph(f), before);
+  flipOff = false;
+  admission.enabled = true;
+  admission.revision++;
+  fail = true;
+  before = graph(f);
   await assert.rejects(admit(f, q), errorCode("PREFLIGHT_DENIED"));
   assert.deepEqual(graph(f), before);
   reenter = () => f.controller.cancel(q.run.run_id);
   before = graph(f);
   await assert.rejects(admit(f, q), errorCode("OBSERVATION_REENTRANCY"));
   assert.deepEqual(graph(f), before);
+});
+
+test("compound RESIDENT_LIMIT offers only finished non-asking Agents, preserves the question token, and replays after release", async (t) => {
+  const f = await fixture(t, { controller: { resident_limit: 2, concurrency: 2 } }),
+    c = f.controller,
+    q = await asking(f);
+  const done = await c.submit("done-peer", task("done", { name: "birch" }));
+  const donePort = await portFor(f, done);
+  donePort.finish("finished");
+  await ended(c, done);
+  const input = sourceTask(q);
+  const before = graph(f);
+  await assert.rejects(
+    c.submitPrepared("compound-full", input, (request) => request),
+    (error) => {
+      assert.equal(error.code, "RESIDENT_LIMIT");
+      assert.deepEqual(error.details.releasable_agent_ids, [done.agent_id]);
+      return true;
+    },
+  );
+  assert.deepEqual(graph(f), before);
+  assert.equal(c.view(q.run.run_id).question_id, q.token);
+  assert.equal((await c.kill(done.agent_id)).state, "released");
+  const accepted = await c.submitPrepared("compound-full", input, (request) => request);
+  const replay = await c.submitPrepared("compound-full", input, () => {
+    throw new Error("must not re-prepare accepted compound request");
+  });
+  assert.equal(replay.run_id, accepted.run_id);
+  assert.equal(replay.return_to_run_id, accepted.return_to_run_id);
+  await finishPair(f, accepted);
 });
 
 test("claim/tree lineage is inherited, reservation retained, then restored with the same lease on scout failure", async (t) => {

@@ -319,7 +319,7 @@ const positive = (value: number): boolean => Number.isSafeInteger(value) && valu
 /** Single source for shipped capacity and retention defaults, also used by UI assembly. */
 export const DEFAULT_OWNER_LIMITS = Object.freeze({
   concurrency: 4,
-  resident: 12,
+  resident: 16,
   queue: 16,
   grace: 5,
   output: 1_048_576,
@@ -854,6 +854,35 @@ export class OwnerController {
         : undefined;
     return blocker && this.releasing(blocker) ? [blocker] : [];
   }
+  /** Finished resident Agents with no pending question or active/uncertain
+   * release, whose slots an explicit agent_kill can reclaim. */
+  private releasableResidentIds(): string[] {
+    return [...this.agents.values()]
+      .filter(
+        (agent) =>
+          agent.resident &&
+          !agent.current &&
+          !agent.question &&
+          !agent.release &&
+          !agent.unavailable &&
+          !agent.exiting &&
+          !this.uncertainClaim(agent),
+      )
+      .map((agent) => agent.id);
+  }
+  private checkResidentCapacity(plans: readonly AdmissionPlan[]): void {
+    const newResidents = plans.filter((plan) => !plan.reuse).length;
+    if (!newResidents) return;
+    const current = [...this.agents.values()].filter((agent) => agent.resident).length;
+    if (current + newResidents <= this.limits.resident) return;
+    const releasable_agent_ids = this.releasableResidentIds();
+    throw new OrchestrationError("RESIDENT_LIMIT", {
+      resident_limit: this.limits.resident,
+      ...(releasable_agent_ids.length ? { releasable_agent_ids } : {}),
+      resolution:
+        "All Agent slots are in use, including queued tasks. Kill a finished Agent you no longer need (agent_kill, including earlier in the same batch); if no Agent is releasable, agent_wait for one to finish (or resolve another Agent's pending question) and kill it, then retry this agent_spawn. Do not switch new work to agent_run. Stopping Agents keep their slot until release completes.",
+    });
+  }
 
   /** Wait (bounded) for an Agent's ending task to settle before a request
    * that needs the Agent idle. Off fails fast rather than waiting. */
@@ -929,6 +958,9 @@ export class OwnerController {
     // Ports/clocks may change external authority while planning; no install yet.
     this.assertNewWorkAdmission(admission);
     this.assertOwnerAvailable();
+    // Check resident capacity after all request-specific preflights and live
+    // admission/Owner gates, so neither a target failure nor Off prompts a kill.
+    this.checkResidentCapacity(plans);
     this.installAdmissions(plans);
     // Notify every accepted Run before any failure settles. A consumer may
     // reenter (e.g. cancel) and pump synchronously: an unannounced Run never
@@ -1158,18 +1190,6 @@ export class OwnerController {
         undefined,
         staged,
       );
-    }
-    // Capacity after request-specific conflicts: a release under way can free a
-    // slot, but waiting for one must not hide a conflict no release resolves.
-    if (
-      !reuse &&
-      [...this.agents.values()].filter((a) => a.resident).length >= this.limits.resident
-    ) {
-      throw new OrchestrationError("RESIDENT_LIMIT", {
-        resident_limit: this.limits.resident,
-        resolution:
-          "All Agent slots are in use, including by Agents whose tasks are still queued. Kill a finished Agent you no longer need (agent_kill), or agent_wait for one to finish, then retry this agent_spawn. A kill already under way is waited for briefly; an Agent still stopping keeps its slot until agent_kill reports killed.",
-      });
     }
     const now = this.validateObservationEntry(() => ({
       wall: this.clock.wall(),

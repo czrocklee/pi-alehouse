@@ -79,14 +79,14 @@ const modelRows = async (controller, agentIds) => {
 };
 const openDefault = (t) => fixture(t, { omitLimits: true });
 
-test("default concurrency of four is per provider and resident twelve is the owner total", async (t) => {
+test("default concurrency of four is per provider and resident sixteen is the owner total", async (t) => {
   const { controller: c, ports } = await openDefault(t);
   assert.deepEqual(
     [c.stats().limits.concurrency, c.stats().limits.resident, c.stats().limits.queue],
-    [4, 12, 16],
+    [4, 16, 16],
   );
   const accepted = [];
-  for (const provider of ["alpha", "beta", "gamma"]) {
+  for (const provider of ["alpha", "beta", "gamma", "delta"]) {
     for (let i = 1; i <= 4; i++)
       accepted.push({
         provider,
@@ -94,58 +94,59 @@ test("default concurrency of four is per provider and resident twelve is the own
         ...(await c.submit(`${provider}-${i}`, work(`${provider}-${i}`, provider))),
       });
   }
-  await until(() => ports.filter((port) => port.streaming).length === 12);
-  assert.equal(c.stats().active, 12);
+  await until(() => ports.filter((port) => port.streaming).length === 16);
+  assert.equal(c.stats().active, 16);
   assert.equal(c.stats().queued, 0);
-  assert.equal(c.stats().resident, 12);
+  assert.equal(c.stats().resident, 16);
   assert.deepEqual(providerRow(c, "alpha"), { provider: "alpha", active: 4, queued: 0, limit: 4 });
   assert.deepEqual(providerRow(c, "beta"), { provider: "beta", active: 4, queued: 0, limit: 4 });
   assert.deepEqual(providerRow(c, "gamma"), { provider: "gamma", active: 4, queued: 0, limit: 4 });
+  assert.deepEqual(providerRow(c, "delta"), { provider: "delta", active: 4, queued: 0, limit: 4 });
   assertOwnerInvariants(c, "default split");
   const rejectFull = (id, prompt) =>
-    assert.rejects(c.submit(id, work(prompt, "delta")), (error) => {
+    assert.rejects(c.submit(id, work(prompt, "epsilon")), (error) => {
       assert.equal(error.code, "RESIDENT_LIMIT");
-      assert.equal(error.details.resident_limit, 12);
+      assert.equal(error.details.resident_limit, 16);
       return true;
     });
   await rejectFull("overflow", "overflow");
-  assert.equal(c.stats().runs, 12);
-  assert.equal(c.stats().resident, 12);
-  assert.equal(ports.length, 12, "the rejected provider never receives a session");
+  assert.equal(c.stats().runs, 16);
+  assert.equal(c.stats().resident, 16);
+  assert.equal(ports.length, 16, "the rejected provider never receives a session");
   const alphas = accepted.filter((run) => run.provider === "alpha");
   for (const run of alphas) portFor(ports, run.prompt).finish("alpha done");
   for (const run of alphas) await ended(c, run);
-  assert.equal(c.stats().active, 8);
-  assert.equal(c.stats().resident, 12, "completed-unreleased residents retain the owner cap");
+  assert.equal(c.stats().active, 12);
+  assert.equal(c.stats().resident, 16, "completed-unreleased residents retain the owner cap");
   assert.equal(
     alphas.every((run) => c.view(run.run_id).status === "completed" && c.view(run.run_id).resident),
     true,
   );
   await rejectFull("still-full", "still-full");
-  assert.equal(c.stats().runs, 12);
-  assert.equal(ports.length, 12);
+  assert.equal(c.stats().runs, 16);
+  assert.equal(ports.length, 16);
   assert.deepEqual(await c.kill(alphas[0].agent_id), {
     agent_id: alphas[0].agent_id,
     state: "released",
   });
   assert.equal(c.view(alphas[0].run_id).resident, false);
-  assert.equal(c.stats().resident, 11);
+  assert.equal(c.stats().resident, 15);
   const queued = await c.submit("beta-5", work("beta-5", "beta"));
   assert.equal(
     queued.status,
     "queued",
     "the freed slot admits work that still waits on its provider cap",
   );
-  assert.equal(c.stats().resident, 12);
+  assert.equal(c.stats().resident, 16);
   assert.equal(c.stats().queued, 1);
-  assert.equal(c.stats().runs, 13);
+  assert.equal(c.stats().runs, 17);
   assert.deepEqual(providerRow(c, "beta"), { provider: "beta", active: 4, queued: 1, limit: 4 });
   assert.equal(
     providerRow(c, "alpha"),
     undefined,
     "a completed provider with nothing queued is omitted",
   );
-  assert.equal(ports.length, 12, "a queued admission does not open a session");
+  assert.equal(ports.length, 16, "a queued admission does not open a session");
 });
 
 test("one provider shares its cap across model, profile and difficulty; FIFO skips a saturated head", async (t) => {

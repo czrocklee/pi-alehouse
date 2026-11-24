@@ -305,6 +305,25 @@ test("bounded error choices retain remainder counts and hide concrete routing in
   assert.equal(invalid.code, "INVALID_DIFFICULTY");
   for (const allowed of ["not an array", [], undefined])
     assert.equal(errorReply({ code: "X", details: { allowed } }).error.allowed, undefined);
+  const ids = Array.from({ length: 16 }, (_, i) => `internal-${i}`);
+  const rawJson = JSON.stringify(
+    errorReply({ code: "RESIDENT_LIMIT", details: { releasable_agent_ids: ids } }),
+  );
+  assert.doesNotMatch(
+    rawJson,
+    /releasable|internal-/,
+    "internal agent IDs are never exposed without a model name table",
+  );
+  const projectedReleasable = errorReply(
+    { code: "RESIDENT_LIMIT", details: { releasable_agent_ids: ids } },
+    { agent: (id) => `name-${id.split("-")[1]}`, run: () => undefined },
+  ).error;
+  assert.deepEqual(
+    projectedReleasable.releasable,
+    Array.from({ length: 16 }, (_, i) => `name-${i}`),
+  );
+  assert.doesNotMatch(JSON.stringify(projectedReleasable), /internal-|releasable_agent_ids/);
+  assert.equal(Object.hasOwn(projectedReleasable, "releasable_omitted"), false);
 });
 
 test("independent task/roster replies retain public build_dir_shared notes but hide live and final time telemetry", () => {

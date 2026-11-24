@@ -41,7 +41,7 @@ safely be replayed.
 - The four default execution slots are **per provider, per Owner**. Models on
   the same provider share that cap; providers sharing an account do not. An
   execution slot is freed after actual execution exit, before history and
-  cleanup need necessarily finish. The twelve resident Agent reservations
+  cleanup need necessarily finish. The sixteen resident Agent reservations
   include queued Agents and uncertain cleanup. Neither limit is a provider
   account rate limiter.
 - Execution drain and finalization can wait indefinitely. Inspect

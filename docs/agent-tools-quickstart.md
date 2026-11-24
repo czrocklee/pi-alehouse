@@ -56,7 +56,7 @@ If there is no `next_cursor`, omit the final call; otherwise copy it without
 [
   {"tool":"agent_spawn","arguments":{"agent":"alpha","profile":"worker","reasoning_difficulty":3,"label":"Investigate parser edge cases","prompt":"Investigate parser edge cases. Return detailed findings and evidence."}},
   {"tool":"agent_wait","arguments":{"agents":["alpha"],"wait_ms":300000}},
-  {"tool":"agent_run","arguments":{"agent":"alpha","continues":"Your parser edge-case investigation","label":"Prioritize remaining parser issue","prompt":"Continue that investigation: summarize the highest-priority remaining issue.","max_turns":32}},
+  {"tool":"agent_run","arguments":{"agent":"alpha","continues":"Parser edge-case findings in this conversation","label":"Prioritize remaining parser issue","prompt":"Continue that investigation: summarize the highest-priority remaining issue.","max_turns":32}},
   {"tool":"agent_wait","arguments":{"agents":["alpha"],"wait_ms":300000}},
   {"tool":"agent_read","arguments":{"agent":"alpha","task":1,"max_chars":32}},
   {"tool":"agent_read","arguments":{"agent":"alpha","cursor":"<INVALID_RESULT_CURSOR>"}}
@@ -110,7 +110,9 @@ its [permission guidance](tool-contract.md#scout-return_to).
 - To defer a repeating question, wait explicitly on other Agents. Canceling a
   wait doesn't cancel child work.
 - To stop work but keep the conversation, call `agent_interrupt`, then wait/read
-  for settlement. To free capacity, call `agent_kill`; only `agent_status: "released"`
-  confirms release. If cleanup stays uncertain, tell the user rather than retrying.
+  for settlement. To free capacity when no further follow-up is planned, call
+  `agent_kill` (which can precede `agent_spawn` in the same batch); only
+  `agent_status: "released"` confirms release. If cleanup stays uncertain, tell
+  the user rather than retrying.
 - To inspect the roster without draining messages, use `agent_list({})`. For new
   work blocked by Off, ask the user to enable delegation.
