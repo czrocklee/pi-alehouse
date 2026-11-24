@@ -643,6 +643,11 @@ export class OwnerController {
     return this.runs.size > 0;
   }
 
+  /** Confirmed closure only; false does not imply that effects are allowed. */
+  get isClosed(): boolean {
+    return this.closed;
+  }
+
   /** Conservative UI invalidation hint only. No clock/lease/admission sampling;
    * never reuse it as command authority or a retained task ordinal cache. */
   get presentationRevision(): number {

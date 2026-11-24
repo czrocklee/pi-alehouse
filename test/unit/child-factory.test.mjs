@@ -152,6 +152,7 @@ function fixture(t, profile = "editor") {
     blockFlushes: 0,
     blockUnsubscribes: 0,
     activities: [],
+    activityEnds: 0,
     rendererLookups: [],
     rendererBinds: [],
     rendererUnbinds: 0,
@@ -211,11 +212,11 @@ function fixture(t, profile = "editor") {
       end() {},
     },
     activities: {
-      track: (id, cwd) => {
-        seam.state.activities.push({ id, cwd });
+      track: (id, cwd, label, tools) => {
+        seam.state.activities.push({ id, cwd, label, tools });
         return {
           extension() {},
-          begin() {},
+          begin: () => () => seam.state.activityEnds++,
           recordInputOrigin(...args) {
             seam.state.inputOrigins.push(args);
           },
@@ -250,7 +251,9 @@ test("SDK, loader, activity and approval all retain the original admitted cwd ac
   assert.equal(assembly.options.cwd, cwd);
   assert.equal(assembly.options.sessionManager.getCwd(), cwd);
   assert.equal(seam.state.loaders[0].options.cwd, cwd);
-  assert.deepEqual(seam.state.activities, [{ id: f.agent.agent_id, cwd }]);
+  assert.deepEqual(seam.state.activities, [
+    { id: f.agent.agent_id, cwd, label: f.agent.name, tools: f.agent.settings.tools },
+  ]);
   for (const field of ["workspace", "workspace_details", "workspace_policy"])
     assert.equal(Object.hasOwn(port, field), false);
   const active = assembly.options.sessionManager
@@ -442,6 +445,7 @@ test("managed-block subscription follows actual SDK identity and seals on every 
   assert.equal(seam.state.blockRuns[1].id, port.session_id);
   assert.equal(seam.state.blockEnds, 3);
   assert.equal(seam.state.blockUnsubscribes, 2);
+  assert.equal(seam.state.activityEnds, 2);
   await port.dispose();
   assert.equal(seam.state.blockEnds, 4);
 });

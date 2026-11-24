@@ -1,21 +1,71 @@
 # Interface
 
-Use the Agent pane to follow work, the Delegation panel to change routing, and
-the footer to check context, usage and activity. In Pi's fullscreen renderer
-these panels float and support mouse input. In regular mode, Agents and
-Delegation dock in the editor area; use keyboard shortcuts if mouse input
-isn't available. Short or narrow terminals can hide actions: enlarge the
-terminal if an action or its confirmation doesn't fit.
+Use Agents to follow work, Changes to review reported edits, Delegation to
+change routing, and the footer to check context, usage and activity. In
+fullscreen, panels float and support mouse input. In regular mode, Agents,
+Changes and Delegation dock in the editor area. Use keyboard shortcuts when
+mouse input isn't available; enlarge the terminal if an action or confirmation
+doesn't fit.
 
 [Documentation home](README.md) · [Agents, tasks and sessions](orchestration.md)
 
 | To…                                           | Open…                                                                   |
 | --------------------------------------------- | ----------------------------------------------------------------------- |
 | Inspect an Agent or send it a message         | `Alt+A` or click its row                                                |
+| Review reported file changes across Agents    | Click the Changes count in fullscreen or run `/alehouse-changes`        |
 | Choose how to delegate or route new Agents    | `Alt+S`, bare `/alehouse-preset`, or the delegation value in the footer |
 | Save defaults or change appearance and skills | `/alehouse-settings` or **P Settings** in Delegation                    |
 | Change how permission asks are handled        | `/approval` or the approval value in the footer                         |
 | Inspect context or performance                | `/context` or `/stats` (also available from the footer)                 |
+
+## Changes
+
+`/alehouse-changes` (or the footer count in fullscreen) opens a snapshot for
+the current Owner, even when delegation is Off or no Agents remain. It starts
+in **Net**; reopen to refresh. Click again or rerun the command to cancel a
+popup waiting for room. Opening another Alehouse panel can close floating
+Changes; docked Changes keeps the editor area until closed. An incoming
+permission prompt closes Changes without reopening it afterward.
+
+- **Net** combines SDK edits against the first observed pre-edit text for
+  each path (UTF-8 decoded, LF normalized). Reverted paths are omitted.
+  **Unknown** is not zero: missing before text, overlapping edits or withheld
+  evidence can prevent a reliable diff. While a call waits for approval or
+  runs without an observed target, Net and its footer count can be unknown
+  across every path. A tool hook can retarget the call, so the requested path
+  is only provisional until Alehouse sees the effective target.
+- **History** keeps reverted paths and shows retained `edit` and `write`
+  reports oldest first, with Agent names and available diffs. Failed or
+  unconfirmed reports do not establish a change.
+
+Press `H` or click **Net** / **History** to switch, preserving the selected
+path or expanded view when possible. Use `↑` / `↓` or `PgUp` / `PgDn` to select
+and scroll. From the list, `Enter` (or click a row) opens one file; `A` or
+**Expand all** opens all previews. The wheel scrolls in fullscreen. Patch text
+appears only in previews, with notes for omissions and missing final newlines.
+`Esc` returns to the list, then closes it. **‹ Files**, **Collapse all**, or
+`A` in the expanded view also return to the list.
+
+Use **Reset** (`R` initially) to clear the Owner's retained reports and
+workspace hints across Agents, then return to an empty **Net** list. The
+panel counts hints without showing their paths; hints alone can be reset.
+Calls started before Reset cannot repopulate it. If the retained reports or
+hints changed since the displayed snapshot, the first action refreshes it
+instead. Review it and use the displayed action again to clear it. Reset
+neither undoes edits nor affects Agent work. A closed Owner remains
+inspectable but cannot be reset.
+
+The dim footer `+N −M` counts known Net lines. `+0 −0` means observed
+paths, zero net changes, and no known gaps. `…` marks incomplete coverage;
+`+? −?` means incomplete coverage with no countable changed lines. The count
+can disappear for lack of space or observations; use the command instead.
+
+Changes is bounded and in memory. It covers only this Owner's Agent `edit`
+and `write` reports, including targets outside the cwd, not parent tools,
+Bash or other writers. It runs no Git, reads no target files or journals, and
+does not resolve on-disk aliases. An empty view is not proof that nothing
+changed. Path whitespace and controls are escaped; even failed or denied
+requests can reveal paths. Filtering is not redaction: keep the view private.
 
 ## Agent widget
 
@@ -101,8 +151,8 @@ select its body text, not the borders or controls. In Agents, scroll up to
 stop following live output before dragging; movement of the viewport can
 cancel the selection. Pi's **copy on select** controls automatic copying on
 release. Alehouse adds no copy shortcut to focused panels. Regular or
-unsupported hosts keep native selection behavior. Close a floating panel by
-pressing and releasing on its `✕`.
+unsupported hosts keep native selection behavior. Where shown, close a
+floating panel by pressing and releasing on its `✕`.
 
 In fullscreen, an unmodified left click on the background closes only the
 focused centered panel (Agents, Stats or the centered model picker), without
@@ -160,6 +210,16 @@ or draining task is waiting for, or whether cleanup is still pending. For saved
 records, use `/alehouse-history` to list recent linked Runs and
 `/alehouse-history RUN_ID` to inspect one. History is read-only, not a way to
 resume an Agent. See [history](architecture.md#state-retention-and-history).
+
+Info can show up to eight recent workspace references from the Agent's SDK
+session, including literal `cd`, `git -C`, clone and worktree targets. A
+standalone `git clone` or `git worktree add` can show **Bash reported exit 0**:
+that is a result paired with a pre-hook request, not proof Git ran or the path
+exists. Compound calls provide candidates only. A clone destination from
+`mktemp -d` may be noted without resolving its path. Complex syntax and
+implicit destinations can be missed; redirect targets and comments are not
+workspace references. These private, unredacted hints do not resolve relative
+paths, probe the filesystem, change cwd or enter history or model context.
 
 ### Stop a task
 
@@ -288,8 +348,9 @@ requires fresh confirmation. A preference alone grants no permission.
 A parent or forwarded child permission prompt takes priority. The Agent pane
 steps aside and can return after the last prompt, with any draft only for the
 original Run; an armed Stop is cancelled. Delegation and an open model picker
-close without applying pending selections. Pinned usage and Context step aside
-and return; Stats closes. Use the permission prompt itself for the decision.
+close without applying pending selections. Pinned Usage and Context step aside
+and return; Changes and Stats close. Use the permission prompt itself for the
+decision.
 
 ## Session replacement confirmation
 
@@ -362,8 +423,8 @@ progress percentage is an estimate, not a deadline.
 
 ### Bottom-right popover column
 
-In fullscreen, Context, Usage, Approval and Delegation share a column in
-opening order. If a later panel won't fit, close a lower one or enlarge the
+In fullscreen, Context, Usage, Approval, Delegation and Changes share a column
+in opening order. If a later panel won't fit, close a lower one or enlarge the
 terminal. A waiting Delegation panel can still be cancelled with `Alt+S`.
 
 ## Health and Stats

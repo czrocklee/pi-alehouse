@@ -113,7 +113,7 @@ export function createChildSessionFactory(options: {
       gate = new ChildRunGate(),
       childSettings = options.settings();
     // Held, not re-fetched: this is the observer instance bound to the child.
-    const activity = options.activities.track(agent.agent_id, cwd);
+    const activity = options.activities.track(agent.agent_id, cwd, agent.name, profile.tools);
     // Attachment is lazy at first Run: failed assembly creates no parent-side
     // telemetry registration, even if loading failed before SDK shutdown bound.
     const stats = new WorkerStatsObserver(options.parentBus, options.parentId, agent.agent_id);
@@ -230,6 +230,7 @@ export function createChildSessionFactory(options: {
         parentBus: options.parentBus,
         gate,
         observeInput: (message, origin) => activity.recordInputOrigin(message, origin),
+        workspaceMonitor: activity.workspaceMonitor,
         invalidateApproval: () => {
           if (approvalRun) options.approvalBindings.end(child.session.sessionId, approvalRun);
         },
@@ -261,7 +262,7 @@ export function createChildSessionFactory(options: {
             prompt,
           });
           approvalRun = identity;
-          activity.begin();
+          const endActivity = activity.begin();
           callbacks = cb;
           // A rejected accepted Run (including port readiness/admission) is
           // attention-worthy even before SDK work starts. This marks health,
@@ -284,6 +285,7 @@ export function createChildSessionFactory(options: {
             kind = facts.kind;
             return facts;
           } finally {
+            endActivity?.();
             blocks.end();
             try {
               unsubscribeBlocks?.();

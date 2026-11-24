@@ -7,6 +7,7 @@ export const FAST_MODEL_INDICATOR: "alehouse-fast";
 export const FAST_MODEL_GLYPH: "⚡";
 export const ULTRAFAST_MODEL_GLYPH: "⚡⚡";
 export type SpeedModelGlyph = typeof FAST_MODEL_GLYPH | typeof ULTRAFAST_MODEL_GLYPH;
+export const CHANGES_INDICATOR: "alehouse-changes";
 export const WORKER_PRESET_INDICATOR: "alehouse-preset";
 export const APPROVAL_INDICATOR: "approval";
 export const HEALTH_INDICATOR: "session-health";

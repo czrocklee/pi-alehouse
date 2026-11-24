@@ -4,6 +4,19 @@ import { identifyingToolArgs } from "../presentation/tool-identity.ts";
 import { singleLineText } from "../presentation/plain-text.ts";
 import type { ActiveTool, GenerationPreview } from "./activity-types.ts";
 import { boundedPreview, LinePreview } from "./line-preview.ts";
+import {
+  isOwnerChangeTool,
+  type OwnerChangeCounts,
+  OwnerChangeMonitor,
+  type OwnerChangeReportsSnapshot,
+  type OwnerChangeRun,
+  type OwnerChangesSnapshot,
+} from "./owner-changes.ts";
+import {
+  EMPTY_WORKSPACE_OBSERVATIONS,
+  WorkspaceMonitor,
+  type WorkspaceObservation,
+} from "./workspace-monitor.ts";
 
 export interface SessionEntries {
   getEntries(): unknown[];
@@ -36,6 +49,8 @@ export interface ChildActivityObservation {
   readonly toolRenderersRevision?: unknown;
   historyState?(): ActivityHistoryState | undefined;
   snapshot(): ChildActivitySnapshot;
+  /** Recent Bash workspace references for the opt-in human Info page. */
+  workspaceSnapshot?(): readonly WorkspaceObservation[];
   entries(): unknown[] | undefined;
   inFlight(): unknown;
   /** Exact live message identity, never inferred from its body or position. */
@@ -70,7 +85,18 @@ export class ChildActivity implements ChildActivityObservation {
   private rendererLookup?: ToolRendererLookup;
   /** Stable per-instance opaque token; replaced only on binding changes. */
   private rendererToken: unknown = Object.freeze({});
-  constructor(private readonly cwd: string) {}
+  private changesRun?: OwnerChangeRun;
+  constructor(
+    private readonly cwd: string,
+    private readonly watchChanges?: () => OwnerChangeRun,
+    readonly workspaceMonitor?: WorkspaceMonitor,
+  ) {}
+
+  private endChangesRun(): void {
+    const run = this.changesRun;
+    this.changesRun = undefined;
+    run?.clear();
+  }
 
   private clearPreviews(): void {
     this.prose.clear();
@@ -86,6 +112,7 @@ export class ChildActivity implements ChildActivityObservation {
 
   readonly extension: ExtensionFactory = (pi) => {
     pi.on("session_start", (_event, ctx) => {
+      this.endChangesRun();
       this.sessions = ctx.sessionManager;
       this.history = undefined;
       // A new session (or reload) invalidates the bound resolver; the retained
@@ -104,6 +131,7 @@ export class ChildActivity implements ChildActivityObservation {
     // Disposal ends live activity, not retained failed-Run transcript access.
     // ChildActivityRegistry.retain owns the observation's eventual lifetime.
     pi.on("session_shutdown", () => {
+      this.endChangesRun();
       this.clearGeneration();
       this.running.clear();
       // Backstop retirement: the factory's dispose/catch unbinds first, because
@@ -111,6 +139,7 @@ export class ChildActivity implements ChildActivityObservation {
       this.retireToolRenderers();
     });
     pi.on("tool_execution_start", (event) => {
+      if (this.changesRun && isOwnerChangeTool(event.toolName)) this.changesRun.observe(event);
       this.revision++;
       const detail = identifyingToolArgs(event.toolName, event.args, this.cwd);
       this.preparingTool = undefined;
@@ -119,7 +148,13 @@ export class ChildActivity implements ChildActivityObservation {
         detail: detail ? boundedPreview(detail, 4096) : undefined,
       });
     });
+    if (this.watchChanges) {
+      pi.on("tool_result", (event) => {
+        if (this.changesRun && isOwnerChangeTool(event.toolName)) this.changesRun.observe(event);
+      });
+    }
     pi.on("tool_execution_end", (event) => {
+      if (this.changesRun && isOwnerChangeTool(event.toolName)) this.changesRun.observe(event);
       if (this.running.delete(event.toolCallId)) {
         this.uses++;
         this.revision++;
@@ -169,10 +204,16 @@ export class ChildActivity implements ChildActivityObservation {
     });
   };
   /** Submission boundary: reset before a child can report the new Run. */
-  begin(): void {
+  begin(): (() => void) | undefined {
     this.running.clear();
     this.clearGeneration();
     this.uses = 0;
+    if (!this.watchChanges) return undefined;
+    this.endChangesRun();
+    const changes = (this.changesRun = this.watchChanges());
+    return () => {
+      if (this.changesRun === changes) this.endChangesRun();
+    };
   }
   snapshot(): ChildActivitySnapshot {
     const thinking = this.thought.value();
@@ -187,6 +228,12 @@ export class ChildActivity implements ChildActivityObservation {
   }
   get presentationRevision(): number {
     return this.revision;
+  }
+  workspaceSnapshot(): readonly WorkspaceObservation[] {
+    return this.workspaceMonitor?.snapshot() ?? EMPTY_WORKSPACE_OBSERVATIONS;
+  }
+  resetWorkspaceHints(): void {
+    if (this.workspaceMonitor?.reset()) this.revision++;
   }
   historyState(): ActivityHistoryState | undefined {
     const session = this.sessions;
@@ -278,15 +325,75 @@ export class ChildActivity implements ChildActivityObservation {
 /** Owns activity observers independently from the widget's display lifetime. */
 export class ChildActivityRegistry {
   private readonly activities = new Map<string, ChildActivity>();
+  private readonly changes = new OwnerChangeMonitor();
+  private readonly emptyChanges: OwnerChangesSnapshot = Object.freeze({
+    groups: Object.freeze([]),
+    truncated: false,
+    workspaceHints: 0,
+  });
+  private changesEnabled = false;
+  private workspaceHints = 0;
+  // Do not independently retain an old report projection after edits invalidate it.
+  private snapshotCache?: WeakMap<OwnerChangeReportsSnapshot, OwnerChangesSnapshot>;
   readonly observations: ActivityObservationSource = {
     get: (agent_id) => this.activities.get(agent_id),
   };
-  track(agent_id: string, cwd: string): ChildActivity {
+  /** Enable only for a parent that can present the human Changes panel, before tracking children. */
+  enableOwnerChanges(): void {
+    this.changesEnabled = true;
+  }
+  track(
+    agent_id: string,
+    cwd: string,
+    agentLabel = agent_id,
+    tools?: readonly string[],
+  ): ChildActivity {
     const existing = this.activities.get(agent_id);
     if (existing) return existing;
-    const created = new ChildActivity(cwd);
+    const created = new ChildActivity(
+      cwd,
+      this.changesEnabled && (!tools || tools.some(isOwnerChangeTool))
+        ? this.changes.bind(agent_id, agentLabel, cwd)
+        : undefined,
+      this.changesEnabled && (!tools || tools.includes("bash"))
+        ? new WorkspaceMonitor((delta) => {
+            this.workspaceHints += delta;
+            this.snapshotCache = undefined;
+          })
+        : undefined,
+    );
     this.activities.set(agent_id, created);
     return created;
+  }
+  /** Human-only, covering all reports and the hints in every retained Agent observation. */
+  listOwnerChanges(): OwnerChangesSnapshot {
+    const reports = this.changes.snapshot();
+    if (!reports.groups.length && !reports.truncated && !this.workspaceHints)
+      return this.emptyChanges;
+    const cached = this.snapshotCache?.get(reports);
+    if (cached) return cached;
+    const snapshot = Object.freeze({ ...reports, workspaceHints: this.workspaceHints });
+    (this.snapshotCache ??= new WeakMap()).set(reports, snapshot);
+    return snapshot;
+  }
+  /** Cheap live presence for the human Reset control, including hint-only windows. */
+  hasOwnerChangeObservations(): boolean {
+    const { paths, partial } = this.changes.getCounts();
+    return this.workspaceHints > 0 || paths > 0 || partial;
+  }
+  /** Human display reset; unlike clear(), it keeps the current Run bindings. */
+  resetChanges(expected: OwnerChangesSnapshot): true | OwnerChangesSnapshot {
+    const current = this.listOwnerChanges();
+    if (current !== expected) return current;
+    for (const activity of this.activities.values()) activity.resetWorkspaceHints();
+    this.changes.reset();
+    return true;
+  }
+  getOwnerChangeCounts(): OwnerChangeCounts {
+    return this.changes.getCounts();
+  }
+  subscribeOwnerChangeCounts(listener: () => void): () => void {
+    return this.changes.subscribeCounts(listener);
   }
   retain(agent_ids: ReadonlySet<string>): void {
     for (const [id, activity] of this.activities) {
@@ -294,11 +401,13 @@ export class ChildActivityRegistry {
       // Retire the live resolver before dropping the observation, so a still
       // held UI reference stops calling into an untracked session.
       activity.retireToolRenderers();
+      activity.workspaceMonitor?.retire();
       this.activities.delete(id);
     }
   }
   clear(): void {
-    for (const activity of this.activities.values()) activity.retireToolRenderers();
-    this.activities.clear();
+    this.changesEnabled = false;
+    this.retain(new Set());
+    this.changes.clear();
   }
 }

@@ -7,6 +7,7 @@ import { shortcutHint } from "../../shared/shortcut-hint.mjs";
 import type { SpeedModelGlyph } from "../../shared/overlay-protocol.mjs";
 import { profileLabel } from "../tools/tool-names.ts";
 import type { ActiveTool, GenerationPreview } from "../runtime/activity-types.ts";
+import type { WorkspaceObservation } from "../runtime/workspace-monitor.ts";
 import { singleLineToolArgumentDisplay } from "../presentation/tool-argument-text.ts";
 import {
   contextPercent,
@@ -55,6 +56,7 @@ export interface DetailLive extends GenerationPreview {
 export interface DetailInput {
   view: RunView;
   live: DetailLive;
+  workspaceSnapshot?(): readonly WorkspaceObservation[];
 }
 
 /** A heuristic estimate, marked as approximate wherever it is shown. */
@@ -348,6 +350,20 @@ export function renderDetailFields(
   if (notes.length) {
     blank();
     for (const [label, color, text] of notes) field(label, text, color);
+  }
+
+  const workspace = input.workspaceSnapshot?.();
+  if (workspace?.length) {
+    blank();
+    field("workspace", "Recent Bash references · paths not verified", "muted");
+    for (const row of workspace)
+      field(
+        "",
+        row.kind === "temporary clone"
+          ? "temporary clone referenced (path unresolved)"
+          : `${row.kind}${row.bashExitZero ? " · Bash reported exit 0" : " candidate"} · ${row.path}`,
+        "muted",
+      );
   }
 
   return out;

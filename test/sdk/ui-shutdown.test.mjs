@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { ExtensionRunner, initTheme } from "@earendil-works/pi-coding-agent";
+import { FOOTER_INDICATOR_CLICK_EVENT } from "../../src/shared/overlay-protocol.mjs";
 import orchestrationExtension from "../../dist/orchestration/extension.js";
 import { OwnerController } from "../../dist/orchestration/core/owner-controller.js";
 import { FileOwnerLease } from "../../dist/orchestration/runtime/owner-lease.js";
@@ -211,11 +212,10 @@ for (const [fault, beerMugs] of [
       for (const stop of handlers.get("session_shutdown")) await stop({ reason: "quit" }, ctx);
     });
     for (const start of handlers.get("session_start")) await start({}, ctx);
-    // Exactly the seven public alehouse commands exist, and the footer status
-    // key carries the Alehouse name.
     assert.deepEqual(
       [...commands.keys()].filter((name) => name.startsWith("alehouse-")).toSorted(),
       [
+        "alehouse-changes",
         "alehouse-close",
         "alehouse-history",
         "alehouse-mode",
@@ -224,7 +224,7 @@ for (const [fault, beerMugs] of [
         "alehouse-settings",
         "alehouse-status",
       ],
-      "the real extension registers exactly the seven public alehouse commands",
+      "public Alehouse commands",
     );
     assert(
       statusKeys.includes("alehouse-preset"),
@@ -346,6 +346,7 @@ for (const [fault, beerMugs] of [
       "status-clear",
       "off:permissions:ui_prompt",
       "off:permissions:decision",
+      `off:${FOOTER_INDICATOR_CLICK_EVENT}`,
       "pane-close",
       "widget-clear",
       "activities-clear",

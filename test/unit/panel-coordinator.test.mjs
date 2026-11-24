@@ -8,14 +8,23 @@ import { applyAuditedPreset } from "../../dist/orchestration/extension.js";
 import { SettingsStore } from "../../src/shared/settings-store.mjs";
 import { stageWorkerSelection } from "../../dist/orchestration/ui/preferences-controls.js";
 import { createEventBus, initTheme, SessionManager } from "@earendil-works/pi-coding-agent";
-import { getKeybindings, matchesKey, stripTerminalSequences } from "@earendil-works/pi-tui";
+import {
+  getKeybindings,
+  matchesKey,
+  stripTerminalSequences,
+  TuiAltScreen,
+} from "@earendil-works/pi-tui";
 import { AgentWidget } from "../../dist/orchestration/ui/agent-widget.js";
 import { ChildActivityRegistry } from "../../dist/orchestration/runtime/activity-observer.js";
 import { settings } from "../support/controller-fixture.mjs";
 import { starterPath } from "../support/preset-config.mjs";
 import { emptyOwnerPanels } from "../support/preset-picker-fixture.mjs";
-import { PINNED_POPOVER_YIELD_EVENT } from "../../src/shared/overlay-protocol.mjs";
-import { joinPopoverStack } from "../../src/shared/popover-stack.mjs";
+import {
+  FOOTER_INDICATOR_CLICK_EVENT,
+  PINNED_POPOVER_YIELD_EVENT,
+  WORKER_PRESET_INDICATOR,
+} from "../../src/shared/overlay-protocol.mjs";
+import { joinPopoverStack, stackedOverlayOptions } from "../../src/shared/popover-stack.mjs";
 import { popoverChromeCloseHit } from "../../src/shared/popover-chrome.mjs";
 import { PRESET_PICKER_MIN_ROWS } from "../../dist/orchestration/ui/preset-picker.js";
 
@@ -871,6 +880,255 @@ for (const mode of ["fullscreen", "regular"])
     assert.equal(h.tui.hasOverlay(), false, "disposal removes the raw overlay too");
     assert.deepEqual(yields, []);
   });
+
+function changesHandoffPanels(t, { parked = false, resetChanges } = {}) {
+  const shortcuts = new Map(),
+    bus = createEventBus(),
+    notices = [],
+    overlays = [],
+    editorKeys = [],
+    custom = [];
+  const terminal = { rows: 24, columns: 100, hideCursor() {} };
+  const tui = new TuiAltScreen(terminal, false, undefined, {});
+  tui.requestRender = tui.requestImmediateRender = () => {};
+  const show = tui.showOverlay.bind(tui);
+  tui.showOverlay = (component, options) => {
+    const handle = show(component, options);
+    overlays.push({ component, handle, options });
+    return handle;
+  };
+  const editor = {
+    render: () => [],
+    invalidate() {},
+    handleInput(data) {
+      // Pi's extension shortcut dispatch is on the editor, not the TUI.
+      editorKeys.push(data);
+      for (const [key, spec] of shortcuts) if (matchesKey(data, key)) return spec.handler();
+    },
+  };
+  tui.setFocus(editor);
+  const pin = joinPopoverStack(tui);
+  const pinHeight = parked ? 20 : 14;
+  const sibling = tui.showOverlay(
+    {
+      render(width) {
+        pin.measure(pinHeight);
+        return Array(pinHeight).fill("·".repeat(width));
+      },
+      invalidate() {},
+    },
+    stackedOverlayOptions(pin, { width: 40, nonCapturing: true }),
+  );
+  const paint = () => {
+    for (let i = 0; i < 3; i++)
+      tui.compositeOverlays(Array(terminal.rows).fill(""), terminal.columns, terminal.rows);
+  };
+  paint();
+  let rosterClick;
+  const router = new PresetRouter(starterPath);
+  const panels = new PanelCoordinator({
+    pi: { events: bus, registerShortcut: (name, spec) => shortcuts.set(name, spec) },
+    widget: {
+      agents: () => [{ agent_id: "a" }],
+      onOpen: (handler) => (rosterClick = handler),
+    },
+    ready: () => true,
+    router: () => router,
+    publish: () => assert.fail("panel handoff must not apply a preset"),
+    showError: (error) => notices.push(String(error)),
+    resetChanges,
+  });
+  const fullTheme = { ...theme, bg: (_color, text) => text };
+  const ctx = {
+    mode: "tui",
+    ui: {
+      theme: fullTheme,
+      setWidget(_key, factory) {
+        factory?.(tui);
+      },
+      custom(factory, options) {
+        return new Promise((resolve) => {
+          let handle;
+          const component = factory(tui, fullTheme, getKeybindings(), (value) => {
+            handle.hide();
+            resolve(value);
+          });
+          custom.push(component);
+          handle = tui.showOverlay(component, options.overlayOptions());
+          options.onHandle(handle);
+        });
+      },
+      notify: (message) => notices.push(message),
+    },
+  };
+  panels.attachHost(ctx, bus);
+  t.after(() => {
+    panels.dispose();
+    sibling.hide();
+    pin.leave();
+  });
+  return {
+    panels,
+    ctx,
+    bus,
+    tui,
+    overlays,
+    editor,
+    editorKeys,
+    roster: () => rosterClick("a"),
+    sibling,
+    custom,
+    notices,
+    paint,
+  };
+}
+
+const changesSnapshot = { groups: [], truncated: true };
+
+for (const parked of [false, true])
+  for (const route of ["Alt+A", "Alt+S", "roster", "worker footer", "bare preset", "management"]) {
+    test(`${route} replaces ${parked ? "parked" : "visible"} floating Changes in the same input`, async (t) => {
+      const h = changesHandoffPanels(t, { parked });
+      const changes = h.panels.openChanges(h.ctx, () => changesSnapshot);
+      h.paint();
+      const old = h.overlays[1];
+      assert.equal(h.tui.getFocusedComponent(), parked ? h.editor : old.component);
+      assert.equal(!!old.handle.getBounds(), !parked);
+      const pinned = h.sibling.getBounds();
+      assert(pinned);
+      assert.equal(pinned.width, 76, "Changes temporarily widens the pinned column");
+
+      let action, releaseManagement;
+      if (route === "Alt+A" || route === "Alt+S") {
+        const data = route === "Alt+A" ? "\x1ba" : "\x1bs";
+        h.tui.handleTerminalInput(data);
+        assert.deepEqual(
+          h.editorKeys,
+          parked ? [data] : [],
+          "only a parked Changes leaves shortcut dispatch to the editor",
+        );
+      } else if (route === "roster") h.roster();
+      else if (route === "worker footer") {
+        const click = { key: WORKER_PRESET_INDICATOR, handled: false };
+        h.bus.emit(FOOTER_INDICATOR_CLICK_EVENT, click);
+        assert.equal(click.handled, true);
+      } else if (route === "bare preset") action = h.panels.selectPreset("", h.ctx);
+      else {
+        // The seam used by /alehouse-settings and /alehouse-preset-edit.
+        action = h.panels.withManagement(
+          () =>
+            new Promise((resolve) => {
+              releaseManagement = resolve;
+            }),
+        );
+      }
+
+      assert.equal(old.handle.getBounds(), undefined, "the exact old overlay is removed");
+      assert.deepEqual(old.component.render(76), [], "old content is retired synchronously");
+      if (route === "management") {
+        assert(releaseManagement, "the first slash intent starts its dialog sequence");
+        assert.equal(h.overlays.length, 2);
+        await changes;
+        let duplicate = false;
+        await h.panels.withManagement(async () => {
+          duplicate = true;
+        });
+        assert.equal(duplicate, false, "retiring Changes cannot release the new dialog's latch");
+        releaseManagement();
+      } else {
+        assert.equal(h.overlays.length, 3, "no second shortcut or click is needed");
+        const next = h.overlays[2];
+        const detail = route === "Alt+A" || route === "roster";
+        assert.equal(h.custom.length, detail ? 1 : 0);
+        assert.equal(
+          next.handle.isFocused(),
+          detail || !parked,
+          "the successor sees the freed rows and focus",
+        );
+        if (!detail) assert.equal(next.options.margin.bottom, pinned.height + 1);
+      }
+      assert(h.sibling.getBounds(), "the handoff leaves the unrelated pin alone");
+      assert(h.notices.every((message) => !/unavailable|failed/u.test(message)));
+      h.panels.dispose();
+      await changes;
+      await action;
+    });
+  }
+
+test("a permission prompt emitted during Changes removal takes priority over the successor", async (t) => {
+  const h = changesHandoffPanels(t);
+  const changes = h.panels.openChanges(h.ctx, () => changesSnapshot);
+  const old = h.overlays[1];
+  const hide = old.handle.hide;
+  old.handle.hide = () => {
+    h.bus.emit("permissions:ui_prompt", { requestId: "during-handoff" });
+    hide();
+  };
+  let starts = 0;
+  const command = async () => {
+    starts++;
+  };
+  await h.panels.withManagement(command);
+  await changes;
+  assert.equal(starts, 0, "the settings sequence never covers the ask");
+  await h.panels.selectPreset("", h.ctx);
+  assert.equal(h.overlays.length, 2, "nor can another panel open while it is pending");
+  h.bus.emit("permissions:decision", { requestId: "during-handoff" });
+  assert.equal(h.overlays.length, 2, "no Changes or successor is restored automatically");
+  await h.panels.withManagement(command);
+  assert.equal(starts, 1, "a new intent after the decision succeeds");
+});
+
+test("Changes Reset revalidates the snapshot and a retired callback cannot touch a replacement", async (t) => {
+  let resets = 0,
+    reads = 0,
+    duringRead;
+  const h = changesHandoffPanels(t, {
+    resetChanges: { available: () => true, run: () => (++resets, true) },
+  });
+  let live = changesSnapshot;
+  const list = () => {
+    reads++;
+    duringRead?.();
+    return live;
+  };
+  const changes = h.panels.openChanges(h.ctx, list);
+  const old = h.overlays[1];
+  const reset = old.component.options.reset.run;
+  live = { ...changesSnapshot };
+  assert.equal(
+    reset(changesSnapshot),
+    live,
+    "even equal content in a new snapshot must be reviewed",
+  );
+  assert.equal(reads, 2, "one initial read and one check");
+  assert.equal(resets, 0);
+  assert.equal(reset(live), true);
+  assert.equal(reads, 3);
+  assert.equal(resets, 1);
+  const hide = old.handle.hide;
+  old.handle.hide = () => {
+    assert.equal(reset(live), false, "Reset is already blocked before hiding invokes host code");
+    hide();
+  };
+  const toggle = h.panels.openChanges(h.ctx, () => assert.fail("toggle must not read"));
+  const replacement = h.panels.openChanges(h.ctx, list);
+  const next = h.overlays[2];
+  await toggle;
+  await changes;
+  assert.equal(reads, 4);
+  assert.equal(reset(live), false);
+  assert.equal(reads, 4, "a stale request does not read the new snapshot");
+  duringRead = () => h.bus.emit("permissions:ui_prompt", { requestId: "during-reset" });
+  assert.equal(
+    next.component.options.reset.run(live),
+    false,
+    "an ask during revalidation cancels Reset",
+  );
+  await replacement;
+  assert.equal(reads, 5, "the old async cleanup did not clear the replacement's ownership");
+  assert.equal(resets, 1);
+});
 
 test("without a captured TUI even a fullscreen roster projection keeps routing docked", async (t) => {
   const h = emptyOwnerPanels(t);

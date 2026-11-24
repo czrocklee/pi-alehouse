@@ -111,6 +111,7 @@ export interface AgentDetail {
   view: RunView;
   live: GenerationPreview & { active_tools: ActiveTool[]; tool_uses: number };
   cwd: string;
+  workspaceSnapshot?: ChildActivityObservation["workspaceSnapshot"];
   entries(): unknown[] | undefined;
   historyState?(): ActivityHistoryState | undefined;
   inFlight(): unknown;
@@ -314,6 +315,7 @@ export class AgentWidget {
         live: this.live(view.agent_id),
         cwd: view.effective_settings.cwd,
         // Resolve observations lazily as sessions start and retain diagnostics.
+        workspaceSnapshot: () => this.activities.get(view.agent_id)?.workspaceSnapshot?.() ?? [],
         entries: () => this.activities.get(view.agent_id)?.entries(),
         historyState: () => this.activities.get(view.agent_id)?.historyState?.(),
         inFlight: () => this.activities.get(view.agent_id)?.inFlight(),

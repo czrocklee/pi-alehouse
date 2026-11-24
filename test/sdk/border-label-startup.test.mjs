@@ -4,9 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createJiti } from "jiti";
-import { ExtensionRunner, initTheme } from "@earendil-works/pi-coding-agent";
+import { createEventBus, ExtensionRunner, initTheme } from "@earendil-works/pi-coding-agent";
+import { getKeybindings } from "@earendil-works/pi-tui";
 import { fixture, task, until } from "../support/controller-fixture.mjs";
 import { presetConfig, writePresetConfig } from "../support/preset-config.mjs";
+import {
+  CHANGES_INDICATOR,
+  FOOTER_INDICATOR_CLICK_EVENT,
+} from "../../src/shared/overlay-protocol.mjs";
 
 // Install owned HOME/XDG before initTheme and the dynamic jiti extension graph
 // below, so resource discovery on those paths cannot use the operator's state.
@@ -31,6 +36,9 @@ const jiti = createJiti(import.meta.url, { fsCache: false });
 const orchestrationExtension = (await jiti.import("../../src/orchestration/extension.ts")).default;
 const { OwnerController } = await jiti.import("../../src/orchestration/core/owner-controller.ts");
 const { FileOwnerLease } = await jiti.import("../../src/orchestration/runtime/owner-lease.ts");
+const { ChildActivityRegistry } = await jiti.import(
+  "../../src/orchestration/runtime/activity-observer.ts",
+);
 const { borderLabelsEnabled } = await jiti.import("../../src/shared/popover-chrome.mjs");
 
 /** One owner directory per test: several fresh extension instances (a same
@@ -130,31 +138,26 @@ async function startSession(t, c, preferences, options = {}) {
     statusKeys = [];
   const handlers = new Map(),
     commands = new Map(),
-    shortcuts = new Map();
+    shortcuts = new Map(),
+    statuses = new Map();
   let activeTools = [],
     component,
     pane,
     closePane;
-  const listeners = new Map();
-  const bus = {
-    on(channel, handler) {
-      const set = listeners.get(channel) ?? new Set();
-      set.add(handler);
-      listeners.set(channel, set);
-      return () => set.delete(handler);
-    },
-    emit(channel, data) {
-      for (const handler of listeners.get(channel) ?? []) handler(data);
-    },
-  };
+  const bus = createEventBus();
   // A fullscreen host floats the framed detail pane, whose popover chrome is
   // the shared surface the border-label switch drives.
-  const tui = { terminal: { columns: 100, rows: 40 }, mode: "fullscreen", requestRender() {} };
+  const tui = {
+    terminal: { columns: 100, rows: 40 },
+    mode: options.tuiMode ?? "fullscreen",
+    requestRender() {},
+  };
   const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const mode = options.mode ?? "tui";
   const ctx = {
     cwd: c.root,
-    mode: "tui",
-    hasUI: true,
+    mode,
+    hasUI: mode === "tui" || mode === "rpc",
     isProjectTrusted: () => false,
     thinkingLevel: "high",
     sessionManager: {
@@ -179,21 +182,19 @@ async function startSession(t, c, preferences, options = {}) {
         return options.select ? options.select(title, items) : items[0];
       },
       setStatus(key, value) {
-        if (value !== undefined) statusKeys.push(key);
+        if (value === undefined) statuses.delete(key);
+        else {
+          statusKeys.push(key);
+          statuses.set(key, value);
+        }
       },
       setWidget(_key, factory) {
         component = factory ? factory(tui, theme) : undefined;
       },
       custom(factory) {
         return new Promise((resolve) => {
-          let settled = false;
-          const done = () => {
-            if (settled) return;
-            settled = true;
-            resolve();
-          };
-          pane = factory(tui, theme, {}, done);
-          closePane = done;
+          pane = factory(tui, theme, getKeybindings(), resolve);
+          closePane = resolve;
         });
       },
       notify(text, level) {
@@ -245,6 +246,8 @@ async function startSession(t, c, preferences, options = {}) {
     notifications,
     selectCalls,
     statusKeys,
+    statuses,
+    bus,
     preferencesBytes,
     activeTools: () => [...activeTools],
     component: () => component,
@@ -256,6 +259,262 @@ async function startSession(t, c, preferences, options = {}) {
     },
   };
 }
+
+// Feed SDK-shaped events without executing a tool.
+function childReporter(t, registry, cwd) {
+  const activity = registry.track("fixture", cwd, "Worker");
+  const hooks = new Map();
+  activity.extension({ on: (type, handler) => hooks.set(type, handler) });
+  t.after(activity.begin());
+  let serial = 0;
+  return (path, hunk) => {
+    const toolName = hunk === undefined ? "write" : "edit";
+    const call = { toolName, toolCallId: `${serial++}`, isError: false };
+    const details = hunk && { patch: `--- ${path}\n+++ ${path}\n${hunk}`, diff: "Fixture diff" };
+    const emit = (type, fields) => hooks.get(type)({ ...call, type, ...fields });
+    emit("tool_execution_start", { args: { path } });
+    emit("tool_result", { input: { path }, details });
+    emit("tool_execution_end", { durationMs: 1, result: { details } });
+  };
+}
+
+const paneText = (pane) => pane.render(100).join("\n");
+
+test("Changes footer and command share the current Owner snapshot and Reset route", async (t) => {
+  const c = await ownerDirectory(t);
+  const subscribe = ChildActivityRegistry.prototype.subscribeOwnerChangeCounts;
+  let registry;
+  t.mock.method(ChildActivityRegistry.prototype, "subscribeOwnerChangeCounts", function (fn) {
+    registry = this;
+    return subscribe.call(this, fn);
+  });
+  const reset = t.mock.method(ChildActivityRegistry.prototype, "resetChanges");
+  const appended = [];
+  const s = await startSession(
+    t,
+    c,
+    { version: 2 },
+    {
+      tuiMode: "regular",
+      appendEntry: (type) => appended.push(type),
+    },
+  );
+  t.after(() => s.shutdown());
+  assert.deepEqual(s.errors, []);
+  assert(registry);
+  assert(!s.statuses.has(CHANGES_INDICATOR));
+
+  const command = s.commands.get("alehouse-changes").handler;
+  const open = (ctx = s.ctx) => command("", ctx);
+  const empty = open();
+  assert.match(paneText(s.pane()), /No retained net changes/u);
+  assert.equal(c.timers.size, 0, "Changes snapshots don't start redraw timers");
+  s.pane().handleInput("\x1b");
+  await empty;
+
+  const path = "reverted-footer-file";
+  const target = join(s.ctx.cwd, path);
+  await writeFile(target, "baseline on disk\n");
+  const report = childReporter(t, registry, s.ctx.cwd);
+  report(path, "@@ -1,1 +1,1 @@\n-baseline\n+temporary\n");
+  report(path, "@@ -1,1 +1,1 @@\n-temporary\n+baseline\n");
+  assert.equal(s.statuses.get(CHANGES_INDICATOR), "+0 −0", "reverted edits have known zero net");
+
+  const opening = open();
+  const keyboardPane = s.pane();
+  const keyboardText = paneText(keyboardPane);
+  assert.match(keyboardText, /Alehouse Changes[\s\S]*No retained net changes/u);
+  assert.doesNotMatch(keyboardText, /reverted-footer-file/u);
+  keyboardPane.handleInput("\x1b");
+  await opening;
+
+  const click = () => {
+    const event = { key: CHANGES_INDICATOR, handled: false };
+    s.bus.emit(FOOTER_INDICATOR_CLICK_EVENT, event);
+    return event.handled;
+  };
+  // Test the shared click event here; the footer fixture covers native dispatch.
+  assert.equal(click(), true);
+  const pointerPane = s.pane();
+  assert.notEqual(pointerPane, keyboardPane);
+  assert.equal(paneText(pointerPane), keyboardText);
+  pointerPane.handleInput("h");
+  assert.match(paneText(pointerPane), /reverted-footer-file\s+2 reports/u);
+  pointerPane.handleInput("\r");
+  assert.match(
+    paneText(pointerPane),
+    /Agent Worker[\s\S]*\+ \d+ │ temporary[\s\S]*Agent Worker[\s\S]*\+ \d+ │ baseline/u,
+  );
+  assert.equal(s.statuses.get(CHANGES_INDICATOR), "+0 −0", "History never replaces net counts");
+  const beforeReset = {
+    notices: [...s.notifications],
+    appended: [...appended],
+    tools: s.activeTools(),
+    stats: s.h.controller.stats(),
+  };
+  pointerPane.handleInput("r");
+  assert.equal(reset.mock.callCount(), 1);
+  const resetRows = paneText(pointerPane);
+  assert.match(resetRows, /\[Net\] History[\s\S]*No retained net changes/u);
+  assert.doesNotMatch(resetRows, /reverted-footer-file|temporary|Reset/u);
+  assert.deepEqual(registry.listOwnerChanges(), {
+    groups: [],
+    truncated: false,
+    workspaceHints: 0,
+  });
+  assert(!s.statuses.has(CHANGES_INDICATOR), "reset clears the footer immediately");
+  assert.deepEqual(s.notifications, beforeReset.notices);
+  assert.deepEqual(appended, beforeReset.appended);
+  assert.deepEqual(s.activeTools(), beforeReset.tools);
+  assert.deepEqual(s.h.controller.stats(), beforeReset.stats);
+  pointerPane.handleInput("\x1b");
+  assert.deepEqual(pointerPane.render(100), []);
+  assert.equal(await readFile(target, "utf8"), "baseline on disk\n");
+  report("after-reset-file");
+  assert.equal(s.statuses.get(CHANGES_INDICATOR), "+? −?", "later reports still reach the footer");
+
+  const wrongSession = open({ ...s.ctx, sessionManager: { ...s.ctx.sessionManager } });
+  const stalePane = s.pane();
+  assert.match(paneText(stalePane), /after-reset-file[\s\S]*Reset/u);
+  stalePane.handleInput("r");
+  assert.equal(reset.mock.callCount(), 1, "a nonmatching session cannot reset the live Owner");
+  assert.match(paneText(stalePane), /after-reset-file/u);
+  stalePane.handleInput("\x1b");
+  await wrongSession;
+
+  const activeInspection = open();
+  const livePane = s.pane();
+  assert.match(paneText(livePane), /after-reset-file[\s\S]*Reset/u);
+  await s.commands.get("alehouse-close").handler("", s.ctx);
+  assert.equal(s.h.controller.stats().closed, true);
+  assert.equal(s.statuses.get(CHANGES_INDICATOR), "+? −?", "Owner close retains human inspection");
+  assert.doesNotMatch(paneText(livePane), /Reset/u, "closure invalidates paint");
+  livePane.handleInput("r");
+  assert.equal(reset.mock.callCount(), 1, "an already open popup cannot reset a closed Owner");
+  assert.match(paneText(livePane), /after-reset-file/u);
+  livePane.handleInput("\x1b");
+  await activeInspection;
+
+  const closedInspection = open();
+  const closedOwnerPane = s.pane();
+  const closedText = paneText(closedOwnerPane);
+  assert.match(closedText, /after-reset-file/u);
+  assert.doesNotMatch(closedText, /Reset/u);
+  const noticeCount = s.notifications.length;
+  closedOwnerPane.handleInput("r");
+  assert.equal(reset.mock.callCount(), 1, "inspection of a closed Owner ignores R");
+  assert.equal(s.notifications.length, noticeCount, "disabled R does not show an error");
+
+  const retired = registry;
+  await s.shutdown();
+  await closedInspection;
+  closedOwnerPane.handleInput("r");
+  assert.equal(reset.mock.callCount(), 1, "retired popup input is inert");
+  assert.equal(click(), false);
+  assert(!s.statuses.has(CHANGES_INDICATOR));
+  assert.deepEqual(retired.listOwnerChanges().groups, []);
+
+  const resumed = await startSession(
+    t,
+    c,
+    { version: 2 },
+    { tuiMode: "regular", reason: "resume" },
+  );
+  t.after(() => resumed.shutdown());
+  assert.deepEqual(resumed.errors, []);
+  assert.notEqual(registry, retired, "session replacement creates a fresh Owner registry");
+  assert.deepEqual(registry.listOwnerChanges().groups, [], "resume does not hydrate old reports");
+  assert(!resumed.statuses.has(CHANGES_INDICATOR));
+  childReporter(t, registry, resumed.ctx.cwd)("resumed-changes-file");
+  assert.equal(
+    resumed.statuses.get(CHANGES_INDICATOR),
+    "+? −?",
+    "resumed TUI observes opaque writes",
+  );
+});
+
+test("a hint-only Changes window opened empty refreshes on Reset before clearing its Owner hints", async (t) => {
+  const c = await ownerDirectory(t);
+  const subscribe = ChildActivityRegistry.prototype.subscribeOwnerChangeCounts;
+  let registry;
+  t.mock.method(ChildActivityRegistry.prototype, "subscribeOwnerChangeCounts", function (fn) {
+    registry = this;
+    return subscribe.call(this, fn);
+  });
+  const appended = [];
+  const s = await startSession(
+    t,
+    c,
+    { version: 2 },
+    {
+      tuiMode: "regular",
+      appendEntry: (...entry) => appended.push(entry),
+    },
+  );
+  t.after(() => s.shutdown());
+  assert.deepEqual(s.errors, []);
+  const open = () => s.commands.get("alehouse-changes").handler("", s.ctx);
+  const opening = open();
+  const pane = s.pane();
+  assert.doesNotMatch(paneText(pane), /Reset/u);
+
+  const activity = registry.track("worker-with-hints", s.ctx.cwd, "Worker", ["bash"]);
+  const run = activity.workspaceMonitor.watchRun();
+  t.after(run.clear);
+  const report = (toolCallId) => {
+    const command = "cd /tmp/private-workspace-fixture";
+    run.observe({ type: "tool_execution_start", toolName: "bash", toolCallId, args: { command } });
+    run.observe({ type: "tool_execution_end", toolName: "bash", toolCallId, durationMs: 1 });
+  };
+  report("first");
+  assert.equal(activity.workspaceSnapshot().length, 1);
+  assert(!s.statuses.has(CHANGES_INDICATOR), "hints must not contribute footer counts");
+  assert.match(paneText(pane), /Reset \[R\]/u);
+  const priorEntries = [...appended];
+  pane.handleInput("r");
+  assert.equal(activity.workspaceSnapshot().length, 1, "the first action only refreshes");
+  const refreshed = paneText(pane);
+  assert.match(refreshed, /\b1 hint\b[^\n]*Updated[\s\S]*Reset \[Y\]/u);
+  assert.doesNotMatch(refreshed, /private-workspace-fixture/u);
+  pane.handleInput("r");
+  assert.equal(activity.workspaceSnapshot().length, 1, "a held key can't reset the refreshed view");
+  pane.handleInput("y");
+  assert.deepEqual(activity.workspaceSnapshot(), []);
+  assert.doesNotMatch(paneText(pane), /\b1 hint\b|Reset/u);
+  assert.deepEqual(appended, priorEntries, "Reset does not write observations to the journal");
+  pane.handleInput("\x1b");
+  await opening;
+
+  report("second");
+  const reopened = open();
+  const hintOnly = s.pane();
+  assert.match(paneText(hintOnly), /\b1 hint\b[\s\S]*No retained net changes[\s\S]*Reset \[R\]/u);
+  hintOnly.handleInput("r");
+  assert.deepEqual(
+    activity.workspaceSnapshot(),
+    [],
+    "a current hint-only snapshot resets in one action",
+  );
+  hintOnly.handleInput("\x1b");
+  await reopened;
+});
+
+test("RPC startup does not enable or bind human Changes, even with dialog UI", async (t) => {
+  const c = await ownerDirectory(t);
+  const enable = t.mock.method(ChildActivityRegistry.prototype, "enableOwnerChanges");
+  const subscribe = t.mock.method(ChildActivityRegistry.prototype, "subscribeOwnerChangeCounts");
+  const s = await startSession(t, c, { version: 2 }, { mode: "rpc" });
+  t.after(() => s.shutdown());
+  assert.deepEqual(s.errors, []);
+  assert.equal(s.ctx.hasUI, true);
+  assert(s.statuses.has("alehouse-preset"), "the RPC Owner did start successfully");
+  assert.equal(enable.mock.callCount(), 0);
+  assert.equal(subscribe.mock.callCount(), 0);
+  assert(!s.statuses.has(CHANGES_INDICATOR));
+  await s.commands.get("alehouse-changes").handler("", s.ctx);
+  assert.equal(s.pane(), undefined);
+  assert.match(s.notifications.at(-1).text, /requires the interactive TUI/u);
+});
 
 for (const failedRecord of ["alehouse:preset-selection:v1", "alehouse:delegation-mode:v1"]) {
   test(`a failed ${failedRecord} baseline never publishes ready routing`, async (t) => {

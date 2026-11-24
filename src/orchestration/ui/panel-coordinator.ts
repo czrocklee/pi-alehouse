@@ -6,9 +6,21 @@ import {
   type ExtensionContext,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { getKeybindings, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
+import {
+  getKeybindings,
+  matchesKey,
+  type KeybindingsManager,
+  type OverlayHandle,
+  type TUI,
+} from "@earendil-works/pi-tui";
 import { centeredPanelOptions } from "../../extensions/lib/centered-panel.ts";
-import { popoverStackRoom } from "../../shared/popover-stack.mjs";
+import {
+  focusOrigin,
+  focusRevealed,
+  joinPopoverStack,
+  popoverStackRoom,
+  stackedOverlayOptions,
+} from "../../shared/popover-stack.mjs";
 import {
   FOOTER_INDICATOR_CLICK_EVENT,
   WORKER_PRESET_INDICATOR,
@@ -16,6 +28,7 @@ import {
   type SpeedModelGlyph,
 } from "../../shared/overlay-protocol.mjs";
 import type { DelegationSetting } from "../delegation.ts";
+import type { OwnerChangesSnapshot } from "../runtime/owner-changes.ts";
 import { OrchestrationError } from "../core/ports.ts";
 import { HUMAN_STEER_MAX_UNITS } from "../presentation/human-steer-text.ts";
 import type {
@@ -34,6 +47,13 @@ import {
   type DetailInput,
 } from "./agent-detail.ts";
 import { AgentWidget, type AgentDetail } from "./agent-widget.ts";
+import {
+  changesMinRows,
+  ChangesPanel,
+  ChangesPanelRequest,
+  type ChangesPlacement,
+  type ChangesReset,
+} from "./changes-panel.ts";
 import { HIDE_TRANSIENT_OVERLAYS_EVENT } from "./overlay-request.ts";
 import {
   ApprovalWatch,
@@ -94,6 +114,16 @@ export interface PanelCoordinatorOptions {
   stopRun?: (run_id: string) => HumanStopResult;
   /** Host core command only: admits one human message to that exact Run, or throws. */
   steerRun?: (run_id: string, message: string) => { accepted: true };
+  resetChanges?: {
+    /** Presentation only. The command must still check authority at commit time. */
+    available(): boolean;
+    hasObservations?(): boolean;
+    /** Host command only: clears just the expected observations or returns the new snapshot. */
+    run(
+      ctx: Pick<ExtensionContext, "sessionManager">,
+      expected: OwnerChangesSnapshot,
+    ): true | OwnerChangesSnapshot;
+  };
   efforts?: (preset: PresetSnapshot, slot: Strength) => EffortCapabilities;
   /** Delegation mode: read live, and applied at once by the panel's slider. */
   delegation?: {
@@ -123,6 +153,13 @@ export interface PanelCoordinatorOptions {
 }
 
 type PickerState = { router: PresetRouter; candidate: PresetCandidate };
+type ChangesMount = (
+  tui: TUI,
+  theme: Theme,
+  keybindings: KeybindingsManager,
+  done: () => void,
+  placement?: ChangesPlacement,
+) => ChangesPanel | undefined;
 
 /** Floating pane width: 88% of the live terminal width, capped at 164 columns
  * so ultrawide terminals stay readable. Falls back to the plain percentage
@@ -142,6 +179,7 @@ export class PanelCoordinator {
   private closePane: (() => void) | undefined;
   private detailPane: DetailPane | undefined;
   private closePreset: (() => void) | undefined;
+  private changes?: { close: () => boolean; floating: boolean };
   private paneOverlay: OverlayHandle | undefined;
   private readonly yielding = new PaneYield();
   private host: Pick<ExtensionContext, "ui" | "mode"> | undefined;
@@ -221,6 +259,7 @@ export class PanelCoordinator {
         } catch (error) {
           this.observeDetailError(error);
         }
+        this.dismissChanges();
         this.closePreset?.();
         this.yieldHandlers.onPrompt(pending);
       },
@@ -297,6 +336,7 @@ export class PanelCoordinator {
     this.unwatchPromptStart = this.options.pi.on?.("ui_prompt_start", () => {
       this.promptBalance++;
       if (this.floatingPresetOpen) this.closePreset?.();
+      if (this.changes?.floating) this.dismissChanges();
     });
     this.unwatchPromptEnd = this.options.pi.on?.("ui_prompt_end", () => {
       this.promptBalance--;
@@ -335,6 +375,7 @@ export class PanelCoordinator {
       this.unwatchPromptEnd,
       this.closePreset,
       this.closePane,
+      this.changes?.close,
       () => this.options.widget.onOpen(undefined),
       () => this.options.widget.onRosterUpdate?.(undefined),
       this.clearHostWidget,
@@ -352,6 +393,7 @@ export class PanelCoordinator {
     this.floatingPresetOpen = false;
     this.closePreset = undefined;
     this.closePane = undefined;
+    this.changes = undefined;
     this.detailPane = undefined;
     this.paneOverlay = undefined;
     this.paneAgent = undefined;
@@ -474,19 +516,233 @@ export class PanelCoordinator {
     });
   }
 
+  private dismissChanges(): void {
+    this.changes?.close();
+  }
+
+  private relinquishFloatingChanges(): boolean {
+    const opening = this.changes;
+    if (!opening?.floating) return true;
+    // Hiding the old overlay calls back into the host. Do not proceed over an
+    // ask, a prompt or another owner that arrived during synchronous cleanup.
+    const available = () => this.promptBalance <= 0 && this.managementAvailable();
+    return available() && opening.close() && !this.changes && available();
+  }
+
+  /** Docked Changes holds the SDK custom slot. Floating Changes is replaceable
+   * even while waiting off screen. Neither reopens after a permission ask. */
+  async openChanges(
+    ctx: Pick<ExtensionContext, "ui" | "mode" | "sessionManager">,
+    list: () => OwnerChangesSnapshot,
+    toggle = false,
+  ): Promise<void> {
+    const host = this.host;
+    if (ctx.mode !== "tui") {
+      ctx.ui.notify("Alehouse Changes requires the interactive TUI.", "warning");
+      return;
+    }
+    if (!host || !this.options.ready()) {
+      ctx.ui.notify("Alehouse Changes is unavailable: the Owner is not ready.", "warning");
+      return;
+    }
+    // A waiting popup has no focus and the footer badge can be absent;
+    // the slash command must be able to dismiss it too.
+    if (this.changes && (toggle || this.changes.floating)) return this.dismissChanges();
+    if (this.promptBalance > 0 || !this.managementAvailable()) {
+      ctx.ui.notify(
+        "Alehouse Changes is unavailable while another panel, dialog or approval is active.",
+        "warning",
+      );
+      return;
+    }
+    const floatingTui = this.floating() ? this.tui : undefined;
+    const open = async () => {
+      const request = new ChangesPanelRequest();
+      let closing = false;
+      let mountingFloating = !!floatingTui;
+      const clear = () => {
+        if (this.changes === opening) this.changes = undefined;
+      };
+      const opening = (this.changes = {
+        floating: !!floatingTui,
+        close: () => {
+          if (closing) return false;
+          // Invalidate a retained Reset before hide/done invokes host code.
+          closing = true;
+          try {
+            request.close();
+            return true;
+          } catch (error) {
+            this.reportDetailError(error, host);
+            return false;
+          } finally {
+            // A docked request keeps its lease until ui.custom settles. Raw
+            // showOverlay can still owe us a handle if we closed mid-mount.
+            if (floatingTui && !mountingFloating) clear();
+          }
+        },
+      });
+      // Regular Changes itself owns an SDK prompt span. Only a raw floating
+      // mount must reject SDK prompt spans here; permissions block both modes.
+      const current = () =>
+        !closing &&
+        this.host === host &&
+        this.changes === opening &&
+        (!opening.floating || this.promptBalance <= 0) &&
+        this.modelSelectionAllowed();
+      const reset = this.options.resetChanges;
+      const onReset: ChangesReset | undefined = reset && {
+        available: () => current() && reset.available(),
+        hasObservations: () => reset.hasObservations?.() === true,
+        run: (expected) => {
+          try {
+            if (!current() || !reset.available()) return false;
+            const snapshot = list();
+            if (!current()) return false;
+            if (snapshot !== expected) return snapshot;
+            return reset.run(ctx, expected);
+          } catch (error) {
+            this.observeDetailError(error, host);
+            return false;
+          }
+        },
+      };
+      const mount: ChangesMount = (tui, theme, keybindings, done, placement) => {
+        if (!request.mount(done, !current())) return;
+        return request.own(
+          new ChangesPanel({
+            tui,
+            theme,
+            keybindings,
+            placement,
+            snapshot: list(),
+            close: opening.close,
+            reset: onReset,
+            // Pi's extension shortcuts run through the editor; a focused raw
+            // overlay has to forward them itself. Docked Changes stays modal.
+            switchPanel: floatingTui
+              ? (data) => {
+                  const detail = matchesKey(data, "alt+a");
+                  if (!(detail || matchesKey(data, "alt+s")) || !current()) return false;
+                  const next = detail ? this.mount() : this.togglePreset();
+                  next?.catch((error: unknown) => this.observeDetailError(error, host));
+                  return true;
+                }
+              : undefined,
+          }),
+        );
+      };
+      try {
+        if (floatingTui) {
+          const showing = this.showFloatingChanges(floatingTui, host, mount);
+          mountingFloating = false;
+          if (closing) clear();
+          await showing;
+        } else
+          await host.ui.custom<void>(
+            (tui, theme, keybindings, done) =>
+              mount(tui, theme, keybindings, () => done(undefined)) ?? {
+                render: () => [],
+                invalidate() {},
+              },
+            { overlay: false },
+          );
+      } catch (error) {
+        this.observeDetailError(error, host);
+      } finally {
+        clear();
+        try {
+          request.dispose();
+        } catch (error) {
+          this.observeDetailError(error, host);
+        }
+      }
+    };
+    if (floatingTui) await open();
+    else await this.withManagement(open);
+  }
+
+  private async showFloatingChanges(
+    tui: TUI,
+    host: Pick<ExtensionContext, "ui" | "mode">,
+    mount: ChangesMount,
+  ): Promise<void> {
+    // Like Delegation, Changes is an ordinary member of the pinned column,
+    // not a blocking SDK custom prompt. Closing it removes only its handle.
+    const origin = focusOrigin(tui);
+    const place = joinPopoverStack(tui);
+    let handle: OverlayHandle | undefined;
+    let settled = false;
+    const release = () => {
+      const mounted = handle;
+      handle = undefined;
+      try {
+        mounted?.hide();
+      } finally {
+        place.leave();
+      }
+    };
+    try {
+      await new Promise<void>((resolve) => {
+        const panel = mount(
+          tui,
+          host.ui.theme,
+          getKeybindings(),
+          () => {
+            settled = true;
+            // Release the renderer and stack slot before the next panel can
+            // measure room or capture focus, not in the Promise continuation.
+            try {
+              release();
+            } finally {
+              resolve();
+            }
+          },
+          {
+            rows: () => place.available(),
+            position: () =>
+              `${tui.terminal.columns}:${tui.terminal.rows}:${place.bottom}:${place.width}`,
+            measure: (height) => place.measure(height),
+          },
+        );
+        if (!panel || settled) return;
+        const invalidate = () => panel.invalidate();
+        const options = stackedOverlayOptions(place, {
+          width: 76,
+          minRows: changesMinRows,
+          onMove: invalidate,
+          onHide: invalidate,
+          onReveal: () => {
+            if (handle) focusRevealed(tui, handle, origin);
+          },
+        });
+        if (settled) return;
+        const waiting = place.available() < changesMinRows();
+        handle = tui.showOverlay(panel, options);
+        if (settled) release();
+        else if (waiting)
+          this.detailNotice(
+            `Changes is waiting for ${changesMinRows()} free rows above the pinned panels. Close a panel or enlarge the terminal. Click Changes or run /alehouse-changes again to cancel.`,
+            "info",
+            host,
+          );
+      });
+    } finally {
+      release();
+    }
+  }
+
+  private managementAvailable(): boolean {
+    return (
+      !this.managementOpen && !this.pickerOpen && !this.paneOpen && this.modelSelectionAllowed()
+    );
+  }
+
   /** One UI owner for both slash commands and picker routes. Acquire before
    * any await so footer/widget clicks cannot stack another orchestration custom UI. */
   async withManagement(action: () => Promise<void>): Promise<void> {
     const host = this.host;
-    if (
-      !host ||
-      !this.options.ready() ||
-      this.managementOpen ||
-      this.pickerOpen ||
-      this.paneOpen ||
-      !this.modelSelectionAllowed()
-    )
-      return;
+    if (!host || !this.managementAvailable() || !this.relinquishFloatingChanges()) return;
     this.managementOpen = true;
     try {
       await action();
@@ -524,6 +780,7 @@ export class PanelCoordinator {
       ctx.ui.notify("The agent detail pane needs the interactive TUI.", "warning");
       return;
     }
+    if (!this.relinquishFloatingChanges()) return;
     // A new opening supersedes an older permission-reopen intent. Otherwise
     // its timer could resurrect this pane after the user has already closed it.
     if (this.yieldTimer) {
@@ -577,7 +834,11 @@ export class PanelCoordinator {
               mounts.dropAbsent(new Set(currentAgents.keys()));
               return agents.map((agent) => ({
                 agent_id: agent.agent_id,
-                input: { view: agent.view, live: agent.live } satisfies DetailInput,
+                input: {
+                  view: agent.view,
+                  live: agent.live,
+                  workspaceSnapshot: agent.workspaceSnapshot,
+                } satisfies DetailInput,
               }));
             },
             freshSnapshot: () =>
@@ -838,7 +1099,8 @@ export class PanelCoordinator {
     }
   }
 
-  private observeDetailError(error: unknown, ctx = this.host): void {
+  /** Report a detached panel callback's failure only to its still-live host. */
+  observeDetailError(error: unknown, ctx = this.host): void {
     if (ctx !== this.host) return;
     this.reportDetailError(error, ctx);
   }
@@ -883,6 +1145,7 @@ export class PanelCoordinator {
       );
       return null;
     }
+    if (!this.relinquishFloatingChanges()) return null;
     if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
       this.pickerOpen = true;
       try {

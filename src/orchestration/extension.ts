@@ -80,6 +80,7 @@ import {
   workerToolSelection,
 } from "./tools/tool-names.ts";
 import { AgentWidget } from "./ui/agent-widget.ts";
+import { bindChangesFooter } from "./ui/changes-footer.ts";
 import { PanelCoordinator } from "./ui/panel-coordinator.ts";
 import { HIDE_TRANSIENT_OVERLAYS_EVENT } from "./ui/overlay-request.ts";
 import {
@@ -603,6 +604,22 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
       if (!ready || !controller) throw new OrchestrationError("ORCHESTRATION_NOT_READY");
       return requestHumanSteer(controller, run_id, message);
     },
+    resetChanges: {
+      available: () => ready && controller?.isClosed === false,
+      hasObservations: () => activities.hasOwnerChangeObservations(),
+      run: (ctx, expected) => {
+        if (
+          !ready ||
+          !controller ||
+          routingContext?.mode !== "tui" ||
+          routingContext.sessionManager !== ctx.sessionManager ||
+          ctx.sessionManager.getSessionId() !== controller.identity.owner_id
+        )
+          throw new OrchestrationError("ORCHESTRATION_NOT_READY");
+        controller.assertOwnerAvailable();
+        return activities.resetChanges(expected);
+      },
+    },
     delegation: {
       current: () => ({ ...delegation }),
       set: publishDelegation,
@@ -638,6 +655,14 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
       }
     },
   });
+  let unbindChangesFooter: (() => void) | undefined;
+  const disposeChangesFooter = () => {
+    const unbind = unbindChangesFooter;
+    unbindChangesFooter = undefined;
+    unbind?.();
+  };
+  const openChanges = (ctx: ExtensionContext, toggle = false) =>
+    panels.openChanges(ctx, () => activities.listOwnerChanges(), toggle);
   registerClearCommand(pi, (ctx) => {
     if (!ready || !router || routingContext?.sessionManager !== ctx.sessionManager)
       throw new Error("No active Alehouse settings to carry. Use /new for a fresh session.");
@@ -849,6 +874,7 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
     // independently before awaiting shutdown, while parent authority still exists.
     for (const cleanup of [
       () => ctx.ui.setStatus("alehouse-preset", undefined),
+      disposeChangesFooter,
       () => panels.dispose(),
       () => widget.dispose(),
       () => activities.clear(),
@@ -871,6 +897,10 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
     description: "Show this parent's Alehouse capacity and shutdown state",
     handler: async (_args, ctx) =>
       ctx.ui.notify(JSON.stringify(controller?.stats() ?? { ready: false }), "info"),
+  });
+  pi.registerCommand("alehouse-changes", {
+    description: "Inspect recent Agent content changes reported across this Owner",
+    handler: async (_args, ctx) => openChanges(ctx),
   });
   pi.on("session_start", async (event, ctx) => {
     assert(!controller, "An Alehouse owner cannot be rebound to another parent");
@@ -1084,6 +1114,18 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
       if (!hasExactSelection) pi.appendEntry(presetEntry, selectionRecord(current));
       if (!savedDelegation.length) pi.appendEntry(delegationEntry, delegationRecord(delegation));
       ctx.ui.setStatus("alehouse-preset", delegationStatus(current, delegation));
+      if (ctx.mode === "tui") {
+        // Each fresh interactive Owner opts in before child admission. RPC's
+        // dialog-capable UI does not have a human Changes panel.
+        activities.enableOwnerChanges();
+        unbindChangesFooter = bindChangesFooter(
+          ctx.ui,
+          pi.events,
+          activities,
+          () => openChanges(ctx, true),
+          (error) => panels.observeDetailError(error, ctx),
+        );
+      }
       ready = true;
       if (!isOffPreset(current)) {
         // All startup sources use the same local metadata checks. Check even
@@ -1130,6 +1172,7 @@ export default function orchestrationExtension(pi: ExtensionAPI, startup?: Orche
       unregisterSettings = undefined;
       // Startup can fail after UI binding too; presentation must not skip drain.
       for (const cleanup of [
+        disposeChangesFooter,
         () => panels.dispose(),
         () => widget.dispose(),
         () => activities.clear(),

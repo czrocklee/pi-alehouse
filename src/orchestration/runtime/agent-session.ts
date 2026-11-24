@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as pause } from "node:timers/promises";
 import type {
   AgentSession,
+  AgentSessionEvent,
   AgentSessionEventListener,
   EventBus,
   ExtensionFactory,
@@ -18,6 +19,7 @@ import { boundedOutput, OutputBuffer } from "../core/result-text.ts";
 import { addToLedger, normalizeUsage, type UsageLedger } from "../core/usage-ledger.ts";
 import { disposeChildSession } from "./child-session.ts";
 import { InputOriginCapture } from "./input-origin.ts";
+import type { WorkspaceMonitor } from "./workspace-monitor.ts";
 
 /** The adapter needs only the live journal controls beyond the core history port. */
 export interface RunJournalPort extends HistoryPort {
@@ -46,6 +48,21 @@ const printableFailure = (cause: unknown): unknown => {
  * fits well inside this; past it the port reports stop_uncertain instead of
  * hanging the core's drain indefinitely. */
 export const STOP_ABORT_TIMEOUT_MS = 30_000;
+
+const RUNTIME_EVENTS: ReadonlySet<AgentSessionEvent["type"]> = new Set([
+  "turn_start",
+  "turn_end",
+  "message_end",
+  "tool_execution_start",
+  "tool_execution_end",
+  "compaction_start",
+  "compaction_end",
+  "auto_retry_start",
+  "auto_retry_end",
+  "summarization_retry_scheduled",
+  "summarization_retry_attempt_start",
+  "summarization_retry_finished",
+]);
 
 /** Child Run gate, loaded LAST by the trusted child assembly.
  * Not an atomic run-token admission API: Pi 0.87.1 still awaits after this
@@ -112,6 +129,7 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
       invalidateApproval?(): void;
       /** Optional, read-only-to-execution message attribution for the human UI. */
       observeInput?(message: object, origin: InputOrigin): void;
+      workspaceMonitor?: WorkspaceMonitor;
       outputChars?: number;
       shutdownTimeoutMs?: number;
       /** Bound for the SDK abort in stop(); a timeout is reported, never awaited forever. */
@@ -420,6 +438,7 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
         this.abortTracked();
       }
     };
+    const workspace = this.options.workspaceMonitor?.watchRun();
     let unsubscribe: (() => void) | undefined;
     const onEvent: AgentSessionEventListener = (event) => {
       // A failed registration might have retained this listener without
@@ -462,8 +481,18 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
         compaction = undefined;
         retrying = false;
       }
-      if (event.type === "tool_execution_start") tools.add(event.toolCallId);
-      if (event.type === "tool_execution_end") tools.delete(event.toolCallId);
+      if (event.type === "tool_execution_start" || event.type === "tool_execution_end") {
+        const start = event.type === "tool_execution_start";
+        if (start) tools.add(event.toolCallId);
+        else tools.delete(event.toolCallId);
+        if (workspace && event.toolName === "bash" && (!start || gate.accepting)) {
+          try {
+            workspace.observe(event);
+          } catch {
+            /* Workspace hints are optional and cannot interrupt the Run. */
+          }
+        }
+      }
       if (event.type === "turn_start") control(() => callbacks.turnStart());
       if (event.type === "turn_end")
         control(() =>
@@ -534,23 +563,7 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
         if (message.stopReason === "error" || message.stopReason === "aborted")
           accrue(undefined, model);
       }
-      if (
-        [
-          "turn_start",
-          "turn_end",
-          "message_end",
-          "tool_execution_start",
-          "tool_execution_end",
-          "compaction_start",
-          "compaction_end",
-          "auto_retry_start",
-          "auto_retry_end",
-          "summarization_retry_scheduled",
-          "summarization_retry_attempt_start",
-          "summarization_retry_finished",
-        ].includes(event.type)
-      )
-        publish();
+      if (RUNTIME_EVENTS.has(event.type)) publish();
     };
     this.active = true;
     gate.accepting = false;
@@ -560,6 +573,7 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
       if (typeof remove !== "function") throw new Error("SDK_SUBSCRIBE_NO_UNSUBSCRIBE");
       unsubscribe = remove;
     } catch (caught) {
+      workspace?.clear();
       try {
         let failure = this.quarantine("sdk_subscribe_failed", caught);
         try {
@@ -675,6 +689,7 @@ export class PiAgentSessionAdapter implements PiExecutionPort {
         }
         const remove = unsubscribe;
         unsubscribe = undefined;
+        workspace?.clear();
         try {
           remove();
         } catch (caught) {

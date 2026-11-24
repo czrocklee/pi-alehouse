@@ -210,6 +210,11 @@ const ownerCases = {
     shape: "getter",
     check: (value) => assert.equal(value, true),
   },
+  isClosed: {
+    kind: "projection",
+    shape: "getter",
+    check: (value) => assert.equal(value, false),
+  },
   presentationRevision: {
     kind: "projection",
     shape: "getter",

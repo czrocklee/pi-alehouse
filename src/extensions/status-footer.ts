@@ -19,6 +19,7 @@ import {
   summaryOutputTokens,
 } from "./lib/compaction-progress.ts";
 import {
+  CHANGES_INDICATOR,
   FOOTER_INDICATOR_CLICK_EVENT,
   type FooterIndicatorClick,
 } from "../shared/overlay-protocol.mjs";
@@ -456,6 +457,8 @@ export default function (pi: ExtensionAPI) {
             const click: FooterIndicatorClick = { key: hit.key, handled: false };
             pi.events.emit(FOOTER_INDICATOR_CLICK_EVENT, click);
             if (click.handled) return { handled: true };
+            // A stale Changes span does not open Usage.
+            if (hit.key === CHANGES_INDICATOR) return undefined;
           }
           panels.toggleBreakdown();
           return { handled: true };

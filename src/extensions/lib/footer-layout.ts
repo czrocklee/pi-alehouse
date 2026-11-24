@@ -3,6 +3,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatTokenCount } from "../../shared/token-format.mjs";
 import {
   APPROVAL_INDICATOR,
+  CHANGES_INDICATOR,
   FAST_MODEL_INDICATOR,
   HEALTH_INDICATOR,
   PINNED_INDICATORS,
@@ -69,16 +70,6 @@ function formatCwd(cwd: string, home: string | undefined): string {
 
 /** Labels and paths must not turn the one-row dock into a multi-line footer. */
 const oneLine = (text: string): string => text.replace(/[\t\n\v\f\r\u0085\u2028\u2029]+/g, " ");
-
-/** The fitted right group may occupy the entire row on a narrow terminal. */
-const rightStart = (right: string, width: number): number =>
-  Math.max(0, width - visibleWidth(right));
-
-function alignFooter(left: string, right: string, width: number): string {
-  const start = rightStart(right, width);
-  const shortenedLeft = truncateToWidth(oneLine(left), Math.max(0, start - 1), "");
-  return `${shortenedLeft}${" ".repeat(Math.max(0, start - visibleWidth(shortenedLeft)))}${right}`;
-}
 
 export type PhysicalRoute = { id: string; thinkingLevel?: string };
 type FooterModel = { id: string; reasoning?: boolean };
@@ -364,15 +355,24 @@ const footerWidth = (segments: readonly FooterSegment[]): number =>
     0,
   );
 
-/** Fit whole controls before deriving click geometry. Never clip the right edge
- * or a permission mode into a misleading fragment. Published values stay intact. */
-function fitFooterSegments(segments: FooterSegment[], width: number): FooterSegment[] {
+/** Fit paint-local segments before deriving click geometry. */
+function fitFooterSegments(
+  selected: FooterSegment[],
+  width: number,
+  minimumContext: string,
+): FooterSegment[] {
   if (width <= 0) return [];
-  let selected = segments.map((segment) => ({ ...segment }));
   const used = (): number => footerWidth(selected);
-  if (used() <= width) return selected;
-
-  // Shed the hit rate first, keeping honest, complete token/cost figures.
+  const fullWidth = used();
+  const changes = selected.findIndex((segment) => segment.key === CHANGES_INDICATOR);
+  // Drop Changes before compacting other controls or crowding out context.
+  if (fullWidth <= width && (changes < 0 || fullWidth + visibleWidth(minimumContext) < width))
+    return selected;
+  if (changes >= 0) {
+    selected.splice(changes, 1);
+    if (used() <= width) return selected;
+  }
+  // Shed the hit rate next, keeping complete token/cost figures.
   for (const segment of selected)
     if (segment.key === undefined && segment.compact) segment.text = segment.compact;
   if (used() <= width) return selected;
@@ -424,9 +424,9 @@ function contextControl(
   usage: ContextUsage,
   theme: Theme,
   width: number,
+  fraction: string,
   progress?: string,
 ): string {
-  const fraction = `${formatTokens(usage.tokens)}/${formatTokens(usage.contextWindow > 0 ? usage.contextWindow : null)}`;
   const percent = usage.percent == null ? "?" : `${usage.percent.toFixed(1)}%`;
   const bar = formatContextBar(usage.percent);
   const tone =
@@ -501,6 +501,8 @@ export function paintFooter(input: FooterPaintInput): { row: string; hits: Foote
     .filter(({ text }) => text)
     // Fixed worker → approval → health order, not attention-based sorting.
     .sort((a, b) => pinned(a.key) - pinned(b.key));
+  const fraction = `${formatTokens(context.tokens)}/${formatTokens(context.contextWindow > 0 ? context.contextWindow : null)}`;
+  const minimumContext = input.progress ? `${fraction} ${input.progress}` : fraction;
   const segments = fitFooterSegments(
     [
       {
@@ -516,13 +518,21 @@ export function paintFooter(input: FooterPaintInput): { row: string; hits: Foote
       ...statuses,
     ],
     width,
+    minimumContext,
   );
-  const right = segments.map((segment, index) => joint(segments, index) + segment.text).join("");
-  const leftRoom = Math.max(0, rightStart(right, width) - 1);
-  const contextDisplay = contextControl(context, theme, leftRoom, input.progress);
+  const right = segments
+    .map(
+      ({ key, text }, index) =>
+        joint(segments, index) + (key === CHANGES_INDICATOR ? theme.fg("dim", text) : text),
+    )
+    .join("");
+  const rightX = Math.max(0, width - visibleWidth(right));
+  const leftRoom = Math.max(0, rightX - 1);
+  const contextDisplay = contextControl(context, theme, leftRoom, fraction, input.progress);
+  const contextWidth = visibleWidth(contextDisplay);
   const prefixRoom = Math.max(
     0,
-    leftRoom - visibleWidth(contextDisplay) - (contextDisplay ? FOOTER_SEPARATOR.length : 0),
+    leftRoom - contextWidth - (contextDisplay ? FOOTER_SEPARATOR.length : 0),
   );
 
   // A window whose reset has passed shows nothing until the next response.
@@ -588,9 +598,9 @@ export function paintFooter(input: FooterPaintInput): { row: string; hits: Foote
       : prefix || contextDisplay;
   // Geometry comes only from this fitted paint, including shortened worker
   // values. Hidden controls and separators have no indicator hit.
-  let x = rightStart(right, width);
+  let x = rightX;
   const hits: FooterHit[] = contextDisplay
-    ? [{ x: contextX, width: visibleWidth(contextDisplay), context: true }]
+    ? [{ x: contextX, width: contextWidth, context: true }]
     : [];
   segments.forEach((segment, index) => {
     x += joint(segments, index).length;
@@ -598,5 +608,7 @@ export function paintFooter(input: FooterPaintInput): { row: string; hits: Foote
     if (span > 0) hits.push({ x, width: span, key: segment.key });
     x += span;
   });
-  return { row: alignFooter(left, right, width), hits };
+  const fittedLeft = truncateToWidth(oneLine(left), leftRoom, "");
+  const gap = " ".repeat(Math.max(0, rightX - visibleWidth(fittedLeft)));
+  return { row: `${fittedLeft}${gap}${right}`, hits };
 }
