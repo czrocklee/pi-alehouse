@@ -1,6 +1,6 @@
 import { resolveTuiRenderer } from "./tui-renderer-identity.mjs";
 
-/** Fullscreen Pi 1.6.0 sends pointer events to a component only inside its
+/** Fullscreen Pi 1.6.1 sends pointer events to a component only inside its
  * overlay. Add a hit on the unoccupied backdrop, *after* native overlay hit
  * testing but before root controls/links. The SDK still owns press tracking,
  * drag cancellation, focus loss and click synthesis. No raw input parsing. */

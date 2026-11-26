@@ -45,8 +45,8 @@ const usage = {
 };
 
 async function ownerFixture(t, concurrency) {
-  assert.equal(sdkVersion, "1.6.0");
-  assert.equal(coreVersion, "1.6.0");
+  assert.equal(sdkVersion, "1.6.1");
+  assert.equal(coreVersion, "1.6.1");
   assert.equal(
     ALERT_QUEUE_FULL_RESOLUTION,
     resolution,

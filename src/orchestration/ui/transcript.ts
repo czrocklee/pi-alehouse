@@ -29,6 +29,7 @@ import {
   CompactionSummaryMessageComponent,
   parseSkillBlock,
   SkillInvocationMessageComponent,
+  truncateTail,
   UserMessageComponent,
   type Theme,
   type ToolRenderers,
@@ -938,7 +939,15 @@ export class TranscriptContent implements TranscriptRows {
       message.excludeFromContext,
     );
     if (message.output) bash.appendOutput(message.output);
-    bash.setComplete(message.exitCode, message.cancelled, undefined, message.fullOutputPath);
+    // History has only the retained output, not the original truncation stats.
+    // Pi's component reads the flag for its warning, even if the tail now fits.
+    bash.setComplete(
+      message.exitCode,
+      message.cancelled,
+      message.truncated ? { ...truncateTail(message.output), truncated: true } : undefined,
+      message.fullOutputPath,
+      message.fullOutputError,
+    );
     block.container.addChild(bash);
     this.visible = true;
   }

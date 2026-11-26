@@ -196,11 +196,13 @@ try {
   assert.equal(upgrades, 1, "the seven turns must reuse one actual WebSocket connection");
   assert.equal(wsBodies.length, 7);
   // A speed change must not lower the normal session's output or reasoning budget.
-  // A delta can inherit the effort from its previous response; a full request cannot.
+  // Pi sends the initial effort on the request; only later changes need an input item.
   const assertBudget = (body) => {
     assert.equal(body.max_output_tokens, model.maxTokens);
-    const effort = body.input.findLast((item) => item.type === "configuration_update");
-    if (!body.previous_response_id || effort) assert.equal(effort?.reasoning.effort, "high");
+    assert.equal(body.reasoning?.effort, "high");
+    for (const item of body.input) {
+      if (item.type === "configuration_update") assert.equal(item.reasoning?.effort, "high");
+    }
   };
   assert(model.maxTokens > 2048);
   for (const body of wsBodies) {

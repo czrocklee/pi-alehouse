@@ -46,7 +46,7 @@ async function controlledFixture() {
     JSON.parse(
       readFileSync(join(repo, "node_modules/@earendil-works/pi-coding-agent/package.json")),
     ).version,
-    "1.6.0",
+    "1.6.1",
   );
   assert.equal(
     JSON.parse(readFileSync(join(repo, "generated/authority/vendor/package.json"))).version,

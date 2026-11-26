@@ -25,14 +25,14 @@ MIT License
 
 Copyright (c) 2025 Nico Bailon
 
-## Pi 1.6.0 (`@earendil-works/*`)
+## Pi 1.6.1 (`@earendil-works/*`)
 
-The lockfile pins eight `@earendil-works` packages at **1.6.0**:
+The lockfile pins eight `@earendil-works` packages at **1.6.1**:
 `pi-agent-core`, `pi-ai`, `pi-codemode`, `pi-coding-agent`, `pi-mcp`,
 `pi-schema`, `pi-telemetry`, and `pi-tui`. Their installed `package.json`
 files declare `"license": "MIT"` but ship no top-level `LICENSE` file. The
 text below was reproduced and verified against
-https://github.com/earendil-works/pi/blob/v1.6.0/LICENSE.
+https://github.com/earendil-works/pi/blob/v1.6.1/LICENSE.
 
 `pi-schema` additionally ships `THIRD_PARTY_NOTICES/typebox-LICENSE` for its
 bundled TypeBox-derived code; retain that file when distributing the package.

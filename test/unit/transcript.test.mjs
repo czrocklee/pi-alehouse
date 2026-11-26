@@ -68,6 +68,35 @@ test("a branch rewrite before an unchanged last message replaces the consumed pr
   }
 });
 
+test("historical Bash execution shows recorded truncation even when the retained tail fits", () => {
+  const message = {
+    role: "bashExecution",
+    command: "printf example",
+    output: "RETAINED_BASH_TAIL",
+    exitCode: 0,
+    cancelled: false,
+    truncated: true,
+    timestamp: 0,
+  };
+  const plain = paneOver([message])();
+  assert.match(plain, /RETAINED_BASH_TAIL/);
+  assert.match(plain, /Output truncated/);
+  assert.doesNotMatch(plain, /[Ff]ull output/);
+
+  const saved = paneOver([{ ...message, fullOutputPath: "/tmp/retained-bash.log" }])();
+  assert.match(saved, /Output truncated\. Full output: \/tmp\/retained-bash\.log/);
+
+  const unsaved = paneOver([{ ...message, fullOutputError: "no space left on device" }])();
+  assert.match(
+    unsaved,
+    /Output truncated\. Could not save the full output: no space left on device/,
+  );
+
+  const complete = paneOver([{ ...message, truncated: false }])();
+  assert.match(complete, /RETAINED_BASH_TAIL/);
+  assert.doesNotMatch(complete, /Output truncated/);
+});
+
 const call = (id, name = "bash") => ({
   type: "toolCall",
   id,

@@ -1,4 +1,4 @@
-/** Pi 1.6.0's stable TUI reference forwards Object.valueOf() with the live
+/** Pi 1.6.1's stable TUI reference forwards Object.valueOf() with the live
  * renderer as `this`. Private hooks must modify that renderer, not the proxy's
  * unused target. Raw and structural hosts need no proxy support.
  * @param {object} [host] @returns {object | undefined}

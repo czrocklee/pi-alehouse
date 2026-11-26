@@ -64,14 +64,14 @@ function checkExtensions(args, rejected, loadsExtension = false) {
   assert.deepEqual(argv, args, `argv must remain byte/order identical: ${label}`);
 }
 
-test("launcher option parity targets the installed development Pi 1.6.0 parser", () => {
+test("launcher option parity targets the installed development Pi 1.6.1 parser", () => {
   const sdk = JSON.parse(
     readFileSync(
       new URL("../../node_modules/@earendil-works/pi-coding-agent/package.json", import.meta.url),
       "utf8",
     ),
   );
-  assert.equal(sdk.version, "1.6.0", "review the value-option inventory when upgrading Pi");
+  assert.equal(sdk.version, "1.6.1", "review the value-option inventory when upgrading Pi");
 });
 
 test("no-skills recognizes exact aliases, repeats and flags after positional messages", () => {

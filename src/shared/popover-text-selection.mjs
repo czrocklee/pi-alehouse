@@ -6,7 +6,7 @@
  * rectangle a panel actually painted. It is SDK-free and installs no input
  * listener, timer, clipboard fallback or raw-terminal parser.
  *
- * The six private seams verified against pi-tui 1.6.0 are:
+ * The six private seams verified against pi-tui 1.6.1 are:
  * - handleSelectionMouseEvent: fallback after native mouse handling and viewport
  *   dispatch. A fresh primary press chooses the visually topmost native
  *   overlay layout under the pointer; only that exact component's declared body

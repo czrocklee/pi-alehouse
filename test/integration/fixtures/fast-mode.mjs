@@ -269,10 +269,13 @@ async function runTurn(turn, { agent, spawn, tier, childTier = tier }) {
   assert.equal(body.model, childModelId, "the numbered slot sent a real Codex Astra body");
   assert.equal(body.max_output_tokens, astra.maxTokens);
   assert.equal(
-    body.input.findLast((item) => item.type === "configuration_update")?.reasoning.effort,
+    body.reasoning?.effort,
     slot.effort,
-    "the Agent keeps its configured effort independently of parent speed and thinking",
+    "the Agent starts at its configured effort independently of parent speed and thinking",
   );
+  for (const item of body.input) {
+    if (item.type === "configuration_update") assert.equal(item.reasoning?.effort, slot.effort);
+  }
   assert.equal(body.service_tier, childTier);
   assert.equal(Object.hasOwn(body, "service_tier"), childTier !== undefined);
   assert(sessionId && sessionId !== session.sessionId);

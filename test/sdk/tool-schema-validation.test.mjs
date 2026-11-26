@@ -20,7 +20,7 @@ const corePackageURL = pathToFileURL(
 );
 const corePackage = JSON.parse(readFileSync(corePackageURL, "utf8"));
 assert.equal(corePackage.name, "@earendil-works/pi-agent-core");
-assert.equal(corePackage.version, "1.6.0");
+assert.equal(corePackage.version, "1.6.1");
 assert.equal(
   corePackage.exports["."].import,
   "./dist/index.js",
@@ -31,7 +31,7 @@ const { wrapToolDefinitions } = await import(
   new URL("core/tools/tool-definition-wrapper.js", sdkEntry)
 );
 const sdkVersion = JSON.parse(readFileSync(new URL("../package.json", sdkEntry), "utf8")).version;
-assert.equal(sdkVersion, "1.6.0");
+assert.equal(sdkVersion, "1.6.1");
 
 const usage = {
   input: 0,

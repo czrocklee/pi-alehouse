@@ -31,7 +31,7 @@ resources, not `dist/`. Patch the source or generator, not built files. Keep the
 private patched permission-system 32.0.3 copy's upstream LICENSE and runtime
 assets. All consumers use the single generated authority entry. Web access uses
 the package-local pinned `pi-web-access` 0.48.0, not a global extension.
-Development pins Pi/AI/TUI 1.6.0 and TypeBox 1.3.27. These are not a production
+Development pins Pi/AI/TUI 1.6.1 and TypeBox 1.3.27. These are not a production
 host version lock or support matrix. Treat Pi components’ `render()` results
 as read-only: Pi can reuse the same array across frames. Copy before changing
 rows, and return a new array when the displayed content changes.
